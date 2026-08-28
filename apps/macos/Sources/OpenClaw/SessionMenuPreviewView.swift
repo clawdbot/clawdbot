@@ -120,7 +120,6 @@ struct SessionMenuPreviewSnapshot {
 }
 
 struct SessionMenuPreviewView: View {
-    let width: CGFloat
     let maxLines: Int
     let title: String
     let items: [SessionPreviewItem]
@@ -180,7 +179,7 @@ struct SessionMenuPreviewView: View {
         .padding(.vertical, 6)
         .padding(.leading, 16)
         .padding(.trailing, 11)
-        .frame(width: max(1, self.width), alignment: .leading)
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     private func previewRow(_ item: SessionPreviewItem) -> some View {
@@ -342,7 +341,7 @@ enum SessionMenuPreviewLoader {
         case "empty":
             return SessionMenuPreviewSnapshot(items: items, status: .empty)
         case "missing":
-            return SessionMenuPreviewSnapshot(items: items, status: .error("Session missing"))
+            return SessionMenuPreviewSnapshot(items: items, status: .error("Thread missing"))
         default:
             return SessionMenuPreviewSnapshot(items: items, status: .error("Preview unavailable"))
         }

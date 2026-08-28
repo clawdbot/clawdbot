@@ -48,6 +48,7 @@ extension CronSettings {
             self.editorError = nil
             self.showEditor = true
         }
+        .disabled(!job.payload.isEditableInMacApp)
         Divider()
         Button("Delete…", role: .destructive) {
             self.confirmDelete = job
@@ -87,6 +88,11 @@ extension CronSettings {
                     self.showEditor = true
                 }
                 .buttonStyle(.bordered)
+                .disabled(!job.payload.isEditableInMacApp)
+                .help(
+                    job.payload.isEditableInMacApp
+                        ? "Edit automation"
+                        : "Command and script payloads are read-only in the macOS app")
             }
         }
     }
@@ -143,7 +149,7 @@ extension CronSettings {
                     .font(.headline)
                 Spacer()
                 Button {
-                    Task { await self.store.refreshRuns(jobId: job.id) }
+                    self.store.refreshRuns(jobId: job.id)
                 } label: {
                     Label("Refresh", systemImage: "arrow.clockwise")
                 }
@@ -225,8 +231,8 @@ extension CronSettings {
                         if let thinking, !thinking.isEmpty { StatusPill(text: "think \(thinking)", tint: .secondary) }
                         if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
                         if job.supportsAnnounceDelivery {
-                            let delivery = job.delivery
-                            if let delivery {
+                            if let delivery = job.delivery {
+                                self.advancedDeliveryPills(delivery)
                                 if delivery.mode == .announce {
                                     StatusPill(text: "announce", tint: .secondary)
                                     if let channel = delivery.channel, !channel.isEmpty {
@@ -240,7 +246,48 @@ extension CronSettings {
                         }
                     }
                 }
+            case let .command(argv, cwd, _, _, timeoutSeconds, _, _, _, _):
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(argv.joined(separator: " "))
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        StatusPill(text: "command · read-only", tint: .secondary)
+                        if let cwd, !cwd.isEmpty { StatusPill(text: cwd, tint: .secondary) }
+                        if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
+                    }
+                }
+            case let .script(script, timeoutSeconds, toolBudget, _, _):
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(script)
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                    HStack(spacing: 8) {
+                        StatusPill(text: "script · read-only", tint: .secondary)
+                        if let timeoutSeconds { StatusPill(text: "\(timeoutSeconds)s", tint: .secondary) }
+                        if let toolBudget { StatusPill(text: "\(toolBudget) tools", tint: .secondary) }
+                    }
+                }
             }
+        }
+    }
+
+    @ViewBuilder
+    private func advancedDeliveryPills(_ delivery: CronDelivery) -> some View {
+        if let threadId = delivery.threadId?.value {
+            StatusPill.verbatim(
+                "threadId \(String(describing: threadId))",
+                tint: .secondary)
+        }
+        if let to = delivery.completionDestination?["to"]?.value as? String {
+            StatusPill.verbatim("completionDestination \(to)", tint: .secondary)
+        }
+        if let failure = delivery.failureDestination {
+            let target = failure["to"]?.value as? String
+                ?? failure["channel"]?.value as? String
+                ?? failure["accountId"]?.value as? String
+            let suffix = target.map { " \($0)" } ?? ""
+            StatusPill.verbatim("failureDestination" + suffix, tint: .secondary)
         }
     }
 }

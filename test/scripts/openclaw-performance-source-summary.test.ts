@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { buildMarkdown, parseArgs } from "../../scripts/openclaw-performance-source-summary.mjs";
+import { buildMarkdown, parseArgs } from "../../scripts/openclaw-performance-source-summary.mts";
 
 const tmpRoots: string[] = [];
 
@@ -19,10 +19,14 @@ function writeJson(filePath: string, value: unknown) {
 }
 
 function runCli(...args: string[]) {
-  return spawnSync(process.execPath, ["scripts/openclaw-performance-source-summary.mjs", ...args], {
-    cwd: path.resolve("."),
-    encoding: "utf8",
-  });
+  return spawnSync(
+    process.execPath,
+    ["--import", "tsx", "scripts/openclaw-performance-source-summary.mts", ...args],
+    {
+      cwd: path.resolve("."),
+      encoding: "utf8",
+    },
+  );
 }
 
 function expectNoNodeStack(stderr: string) {
@@ -46,6 +50,8 @@ function writeSourceFixture(sourceDir: string) {
           cpuCoreRatio: { p95: 0.25 },
           startupTrace: {
             "memory.ready.heapUsedMb": { p50: 30, p95: 32 },
+            "phase.load.total": { p50: 70, p95: 80 },
+            "phase.load.itemCount": { p50: 40, p95: 50 },
             "phase.load": { p50: 7, p95: 8 },
           },
         },
@@ -71,6 +77,9 @@ function writeSourceFixture(sourceDir: string) {
     },
   });
   writeJson(path.join(sourceDir, "extension-memory.json"), {
+    baseline: { maxRssMb: 50, status: "ok" },
+    combined: { maxRssMb: 180, status: "ok" },
+    counts: { totalEntries: 12 },
     topByDeltaMb: [
       { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
     ],
@@ -103,6 +112,47 @@ function writeSourceFixture(sourceDir: string) {
     },
     run: { primaryModel: "mock-openai/perf" },
     scenarios: [{ id: "mock-hello", status: "pass" }],
+  });
+}
+
+function writeSqliteV2Fixture(
+  sourceDir: string,
+  queries: Array<Record<string, unknown>> = [
+    {
+      database: "state",
+      id: "delivery.pending.load",
+      p50Ms: 10,
+      p95Ms: 12,
+      plan: {
+        fullTableScans: [],
+        indexes: ["idx_delivery_queue_pending"],
+        raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+        tempSorts: [],
+      },
+      rows: 1000,
+      runs: 12,
+      sql: "SELECT id FROM delivery_queue_entries WHERE queue_name = ? AND status = ?",
+    },
+  ],
+) {
+  writeJson(path.join(sourceDir, "sqlite-perf-smoke.json"), {
+    integrity: { agent: ["ok"], state: "ok" },
+    profile: "smoke",
+    queries,
+    rows: {
+      agentCacheEntries: 1000,
+      agentDatabases: 2,
+      channelIngressEvents: 1000,
+      cronJobs: 100,
+      cronTaskRuns: 1000,
+      deliveryQueueEntries: 1000,
+      pluginStateEntries: 1000,
+      stateRows: 4100,
+    },
+    schemaVersion: 2,
+    timingsMs: { checkpoint: 1, seed: 100, total: 150 },
+    versions: { agentSchema: 16, sqlite: "3.53.4", stateSchema: 13 },
+    walBytes: { agentAfter: [0], agentBefore: [1024], stateAfter: 0, stateBefore: 4096 },
   });
 }
 
@@ -165,6 +215,278 @@ describe("buildMarkdown", () => {
     expect(buildMarkdown(sourceDir, null)).toContain("gateway health json");
     expect(buildMarkdown(sourceDir, null)).toContain("## SQLite State Smoke");
     expect(buildMarkdown(sourceDir, null)).toContain("4100");
+    expect(buildMarkdown(sourceDir, null)).toContain("| default | phase.load | 7.0ms | 8.0ms |");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.total");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("phase.load.itemCount");
+    expect(buildMarkdown(sourceDir, null)).not.toContain("memory.ready.heapUsedMb");
+    expect(buildMarkdown(sourceDir, null)).toContain(
+      "Per-plugin rows are isolated cold imports and are not additive.",
+    );
+    expect(buildMarkdown(sourceDir, null)).toContain(
+      "| all 12 bundled plugins | 180.0MB | 130.0MB | ok |",
+    );
+    expect(buildMarkdown(sourceDir, null)).toContain("isolated delta from empty process");
+  });
+
+  it("compares reordered v2 SQLite scenarios only by shared scenario ID", () => {
+    const sourceDir = mkTmpRoot();
+    const baselineDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeSourceFixture(baselineDir);
+    writeSqliteV2Fixture(sourceDir, [
+      {
+        database: "state",
+        id: "delivery.pending.load",
+        p50Ms: 10,
+        p95Ms: 15,
+        plan: {
+          fullTableScans: [],
+          indexes: ["idx_delivery_queue_pending"],
+          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+          tempSorts: [],
+        },
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
+      },
+      {
+        database: "agent",
+        id: "agent-cache.plugin-model-catalog.list",
+        p50Ms: 1,
+        p95Ms: 2,
+        plan: {
+          fullTableScans: [],
+          indexes: ["sqlite_autoindex_cache_entries_1"],
+          raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
+          tempSorts: [],
+        },
+        rows: 100,
+        runs: 12,
+        sql: "SELECT key FROM cache_entries WHERE scope = ?",
+      },
+    ]);
+    writeSqliteV2Fixture(baselineDir, [
+      {
+        database: "agent",
+        id: "baseline-only",
+        p50Ms: 3,
+        p95Ms: 4,
+        plan: {
+          fullTableScans: [],
+          indexes: ["sqlite_autoindex_cache_entries_1"],
+          raw: ["SEARCH cache_entries USING INDEX sqlite_autoindex_cache_entries_1"],
+          tempSorts: [],
+        },
+        rows: 100,
+        runs: 12,
+        sql: "SELECT key FROM cache_entries WHERE scope = ?",
+      },
+      {
+        database: "state",
+        id: "delivery.pending.load",
+        p50Ms: 18,
+        p95Ms: 20,
+        plan: {
+          fullTableScans: [],
+          indexes: ["idx_delivery_queue_pending"],
+          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+          tempSorts: [],
+        },
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
+      },
+    ]);
+
+    const markdown = buildMarkdown(sourceDir, baselineDir);
+
+    expect(markdown).toContain("| current | v2 | smoke | 3.53.4 | 13 | 16 |");
+    expect(markdown).toContain(
+      "| delivery.pending.load | state | 1000 | 12 | 10.0ms | 15.0ms | 1000 | 12 | 20.0ms | -25.0% |",
+    );
+    expect(markdown).toContain(
+      "| agent-cache.plugin-model-catalog.list | agent | 100 | 12 | 1.0ms | 2.0ms | n/a | n/a | n/a | n/a |",
+    );
+    expect(markdown).not.toContain("| baseline-only |");
+  });
+
+  it("does not compare v2 SQLite scenarios with different workloads", () => {
+    for (const baselineQuery of [
+      {
+        database: "state",
+        rows: 999,
+        runs: 20,
+        sql: "SELECT id FROM delivery_queue_entries WHERE queue_name = ? AND status = ?",
+      },
+      {
+        database: "agent",
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries WHERE queue_name = ? AND status = ?",
+      },
+      {
+        database: "state",
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries WHERE status = ?",
+      },
+    ]) {
+      const sourceDir = mkTmpRoot();
+      const baselineDir = mkTmpRoot();
+      writeSourceFixture(sourceDir);
+      writeSourceFixture(baselineDir);
+      writeSqliteV2Fixture(sourceDir);
+      writeSqliteV2Fixture(baselineDir, [
+        {
+          ...baselineQuery,
+          id: "delivery.pending.load",
+          p50Ms: 18,
+          p95Ms: 20,
+          plan: {
+            fullTableScans: [],
+            indexes: ["idx_delivery_queue_pending"],
+            raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+            tempSorts: [],
+          },
+        },
+      ]);
+
+      expect(buildMarkdown(sourceDir, baselineDir)).toContain(
+        `| delivery.pending.load | state | 1000 | 12 | 10.0ms | 12.0ms | ${baselineQuery.rows} | ${baselineQuery.runs} | 20.0ms | n/a (workload differs) |`,
+      );
+    }
+  });
+
+  it("rejects duplicate and empty v2 SQLite scenario IDs", () => {
+    for (const ids of [
+      ["delivery.pending.load", "delivery.pending.load"],
+      ["delivery.pending.load", "   "],
+    ]) {
+      const sourceDir = mkTmpRoot();
+      writeSourceFixture(sourceDir);
+      writeSqliteV2Fixture(
+        sourceDir,
+        ids.map((id) => ({
+          database: "state",
+          id,
+          p50Ms: 1,
+          p95Ms: 2,
+          plan: {
+            fullTableScans: ["SCAN delivery_queue_entries"],
+            indexes: [],
+            raw: ["SCAN delivery_queue_entries"],
+            tempSorts: [],
+          },
+          rows: 1000,
+          runs: 12,
+          sql: "SELECT id FROM delivery_queue_entries",
+        })),
+      );
+
+      expect(() => buildMarkdown(sourceDir, null)).toThrow(
+        "[source-performance] invalid SQLite scenario ID:",
+      );
+    }
+  });
+
+  it("rejects malformed v2 SQLite metrics and normalized plans", () => {
+    const invalidQueries = [
+      {
+        database: "state",
+        id: "delivery.pending.load",
+        p50Ms: 10,
+        p95Ms: null,
+        plan: {
+          fullTableScans: ["SCAN delivery_queue_entries"],
+          indexes: [],
+          raw: ["SCAN delivery_queue_entries"],
+          tempSorts: [],
+        },
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries",
+      },
+      {
+        database: "state",
+        id: "delivery.pending.load",
+        p50Ms: 10,
+        p95Ms: 12,
+        plan: {
+          fullTableScans: [42],
+          indexes: [],
+          raw: ["SCAN delivery_queue_entries"],
+          tempSorts: [],
+        },
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries",
+      },
+      {
+        database: "state",
+        id: "delivery.pending.load",
+        p50Ms: 10,
+        p95Ms: 12,
+        plan: {
+          fullTableScans: [],
+          indexes: ["idx_fake"],
+          raw: ["SCAN delivery_queue_entries"],
+          tempSorts: [],
+        },
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries",
+      },
+    ];
+
+    for (const query of invalidQueries) {
+      const sourceDir = mkTmpRoot();
+      writeSourceFixture(sourceDir);
+      writeSqliteV2Fixture(sourceDir, [query]);
+
+      expect(() => buildMarkdown(sourceDir, null)).toThrow(
+        /\[source-performance\] invalid SQLite scenario (metrics|plan):/,
+      );
+    }
+  });
+
+  it("rejects control characters in v2 SQLite display fields", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeSqliteV2Fixture(sourceDir, [
+      {
+        database: "state",
+        id: "delivery.pending\nload",
+        p50Ms: 10,
+        p95Ms: 12,
+        plan: {
+          fullTableScans: [],
+          indexes: ["idx_delivery_queue_pending"],
+          raw: ["SEARCH delivery_queue_entries USING INDEX idx_delivery_queue_pending"],
+          tempSorts: [],
+        },
+        rows: 1000,
+        runs: 12,
+        sql: "SELECT id FROM delivery_queue_entries",
+      },
+    ]);
+
+    expect(() => buildMarkdown(sourceDir, null)).toThrow(
+      "[source-performance] invalid SQLite scenario ID:",
+    );
+  });
+
+  it("renders legacy SQLite artifacts without manufacturing baseline matches", () => {
+    const sourceDir = mkTmpRoot();
+    const baselineDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeSourceFixture(baselineDir);
+
+    const markdown = buildMarkdown(sourceDir, baselineDir);
+
+    expect(markdown).toContain("| current | legacy | smoke | n/a | n/a | n/a |");
+    expect(markdown).toContain(
+      "| legacy query 1 | unknown | 1 | n/a | 0.1ms | 0.2ms | n/a | n/a | n/a | n/a |",
+    );
   });
 
   it("rejects a missing source directory", () => {
@@ -221,6 +543,20 @@ describe("buildMarkdown", () => {
 
     expect(() => buildMarkdown(sourceDir, null)).toThrow(
       "[source-performance] incomplete gateway startup metrics for default:",
+    );
+  });
+
+  it("rejects extension memory artifacts without combined-process context", () => {
+    const sourceDir = mkTmpRoot();
+    writeSourceFixture(sourceDir);
+    writeJson(path.join(sourceDir, "extension-memory.json"), {
+      topByDeltaMb: [
+        { dir: "extensions/browser", maxRssMb: 80, deltaFromBaselineMb: 12, status: "ok" },
+      ],
+    });
+
+    expect(() => buildMarkdown(sourceDir, null)).toThrow(
+      "[source-performance] incomplete extension memory context:",
     );
   });
 

@@ -3,14 +3,13 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import {
-  deriveAspectRatioFromSize,
   normalizeDurationToClosestMax,
   resolveCapabilityModelCandidates,
   resolveClosestAspectRatio,
   resolveClosestResolution,
   resolveClosestSize,
-  resolveMediaProviderDefaultTimeoutMs,
   resolveMediaProviderRequestTimeoutMs,
+  resolveReferenceImageCapabilityError,
   throwCapabilityGenerationFailure,
 } from "./runtime-shared.js";
 
@@ -30,6 +29,28 @@ function parseModelRef(raw?: string) {
 }
 
 describe("media-generation runtime shared candidates", () => {
+  it.each([
+    [0, undefined, undefined],
+    [1, { enabled: false }, "provider/model does not support reference-image edit inputs"],
+    [
+      2,
+      { enabled: true, maxInputImages: 1 },
+      "provider/model supports at most 1 reference image, 2 requested",
+    ],
+    [11, { enabled: true }, "provider/model supports at most 10 reference images, 11 requested"],
+  ] as const)(
+    "validates finite reference-image capability for %s inputs",
+    (inputImageCount, edit, error) => {
+      expect(
+        resolveReferenceImageCapabilityError({
+          candidateRef: "provider/model",
+          inputImageCount,
+          edit,
+        }),
+      ).toBe(error);
+    },
+  );
+
   it("appends auth-backed provider defaults after explicit refs by default", () => {
     const cfg = {
       agents: {
@@ -100,6 +121,59 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
+  it("auto-detects config-only providers that do not implement custom readiness", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        models: {
+          providers: {
+            "media-config-only": {
+              apiKey: "config-only-media-key",
+              baseUrl: "https://media.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: undefined,
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "media-config-only",
+          defaultModel: "configured-video",
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([{ provider: "media-config-only", model: "configured-video" }]);
+  });
+
+  it("preserves an owner readiness veto even when generic config contains an API key", () => {
+    const candidates = resolveCapabilityModelCandidates({
+      cfg: {
+        models: {
+          providers: {
+            "media-config-only": {
+              apiKey: "config-only-media-key",
+              baseUrl: "https://media.example.test/v1",
+              models: [],
+            },
+          },
+        },
+      } as OpenClawConfig,
+      modelConfig: undefined,
+      parseModelRef,
+      listProviders: () => [
+        {
+          id: "media-config-only",
+          defaultModel: "configured-video",
+          isConfigured: () => false,
+        },
+      ],
+    });
+
+    expect(candidates).toEqual([]);
+  });
+
   it("orders auto-detected provider defaults by canonical aliases", () => {
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
@@ -134,7 +208,7 @@ describe("media-generation runtime shared candidates", () => {
     ]);
   });
 
-  it("disables implicit provider expansion when mediaGenerationAutoProviderFallback=false", () => {
+  it("keeps implicit provider expansion enabled when the retired opt-out is present", () => {
     let listProviderCalls = 0;
     const candidates = resolveCapabilityModelCandidates({
       cfg: {
@@ -160,8 +234,11 @@ describe("media-generation runtime shared candidates", () => {
       },
     });
 
-    expect(candidates).toEqual([{ provider: "google", model: "gemini-3.1-flash-image-preview" }]);
-    expect(listProviderCalls).toBe(0);
+    expect(candidates).toEqual([
+      { provider: "google", model: "gemini-3.1-flash-image-preview" },
+      { provider: "openai", model: "gpt-image-1" },
+    ]);
+    expect(listProviderCalls).toBe(1);
   });
 
   it("treats an explicit model override as exact-only", () => {
@@ -241,9 +318,6 @@ describe("media-generation runtime shared candidates", () => {
 
 describe("media-generation runtime shared normalization", () => {
   it("caps media provider timeouts to the timer-safe range", () => {
-    expect(resolveMediaProviderDefaultTimeoutMs(Number.MAX_SAFE_INTEGER)).toBe(
-      MAX_TIMER_TIMEOUT_MS,
-    );
     expect(
       resolveMediaProviderRequestTimeoutMs({
         timeoutMs: Number.MAX_SAFE_INTEGER,
@@ -258,13 +332,7 @@ describe("media-generation runtime shared normalization", () => {
     ).toBe(45_000);
   });
 
-  it("derives reduced aspect ratios from size strings", () => {
-    expect(deriveAspectRatioFromSize("1280x720")).toBe("16:9");
-    expect(deriveAspectRatioFromSize("1024x1536")).toBe("2:3");
-  });
-
   it("rejects unsafe size dimensions before deriving ratios", () => {
-    expect(deriveAspectRatioFromSize("9007199254740993x3")).toBeUndefined();
     expect(
       resolveClosestSize({
         requestedSize: "9007199254740993x3",

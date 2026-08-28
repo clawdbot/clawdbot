@@ -2,6 +2,7 @@
 // requester visibility, broadcast behavior, and approval manager integration.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../../infra/plugin-approvals.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
@@ -9,7 +10,7 @@ import { createPluginApprovalHandlers } from "./plugin-approval.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 function createManager() {
-  return new ExecApprovalManager<PluginApprovalRequestPayload>();
+  return new ExecApprovalManager<PluginApprovalRequestPayload>({ approvalKind: "plugin" });
 }
 
 function createLogGatewayMock() {
@@ -84,12 +85,7 @@ type MockCallSource = {
   };
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): unknown[] {
   expect(Array.isArray(value), label).toBe(true);
@@ -309,11 +305,13 @@ describe("createPluginApprovalHandlers", () => {
 
       const requestedBroadcast = broadcastCall(opts);
       expect(requestedBroadcast.event).toBe("plugin.approval.requested");
+      expect(requestedBroadcast.payload.approvalKind).toBe("plugin");
       expect(requestedBroadcast.payload.id).toBeTypeOf("string");
       expect(requestedBroadcast.options).toEqual({ dropIfSlow: true });
 
       // Resolve the approval so the handler can complete
       expect(manager.getSnapshot(approvalId)?.requestedByClientId).toBe("test-client");
+      expect(manager.getSnapshot(approvalId)?.request.detail).toBeNull();
       manager.resolve(approvalId, "allow-once");
 
       await handlerPromise;
@@ -322,6 +320,161 @@ describe("createPluginApprovalHandlers", () => {
       const finalResult = expectResponseOk(respond, 1);
       expect(finalResult.id).toBe(approvalId);
       expect(finalResult.decision).toBe("allow-once");
+    });
+
+    it("sanitizes title/description/detail at creation so every surface gets safe text", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          // Bidi override + zero-width space: the classic reviewer-spoof pair.
+          title: "Deploy‮yolped",
+          description: "safe​text",
+          // Passes the protocol's 16,384 raw cap but expands past it once
+          // invisibles become \u{...} escapes — the storage cap must re-apply.
+          detail: `line‪one${"‮".repeat(2_100)}`,
+          severity: "warning",
+          // Metadata is interpolated into channel approval text lines.
+          pluginId: "plug‮in",
+          toolName: "tool​run",
+          agentId: "agent‪x",
+          twoPhase: true,
+        },
+        { respond },
+      );
+      const handlerPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
+      const approvalId = await waitForAcceptedApproval(respond);
+      const stored = manager.getSnapshot(approvalId)?.request;
+      expect(stored?.title).toBe("Deploy\\u{202E}yolped");
+      expect(stored?.description).toBe("safe\\u{200B}text");
+      expect(stored?.detail?.startsWith("line\\u{202A}one")).toBe(true);
+      // Stored detail is capped like the durable presentation's copy.
+      expect(Array.from(stored?.detail ?? "").length).toBeLessThanOrEqual(16_384);
+      expect(stored?.detail?.endsWith("…[truncated]")).toBe(true);
+      expect(stored?.pluginId).toBe("plug\\u{202E}in");
+      expect(stored?.toolName).toBe("tool\\u{200B}run");
+      expect(stored?.agentId).toBe("agent\\u{202A}x");
+      // The live broadcast payload is built from the stored record, so it is
+      // now safe for channels/push/web without per-surface re-sanitizing.
+      const requestedBroadcast = broadcastCall(opts);
+      expect(requestedBroadcast.payload.request).toMatchObject({
+        title: "Deploy\\u{202E}yolped",
+        description: "safe\\u{200B}text",
+      });
+      manager.resolve(approvalId, "deny");
+      await handlerPromise;
+    });
+
+    it("rejects a title whose sanitized form exceeds the display limit", async () => {
+      const handlers = createPluginApprovalHandlers(manager);
+      const respond = vi.fn();
+      // 20 invisibles expand to \u{202E} escapes (8 chars each = 160 > 80 cap)
+      // while the raw title passes protocol validation at 26 code points.
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: `spoof${"‮".repeat(20)}x`,
+          description: "plain description",
+          twoPhase: true,
+        },
+        { respond },
+      );
+      await expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
+      const error = expectResponseRejected(respond);
+      expect(error.message).toContain("exceeds the display limit");
+    });
+
+    it("delivers requests to iOS push with the exec-equivalent visibility gate", async () => {
+      const handleRequested = vi.fn(async () => true);
+      const handlers = createPluginApprovalHandlers(manager, {
+        iosPushDelivery: { handleRequested },
+      });
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        {
+          title: "Sensitive action",
+          description: "Review on the paired iPhone",
+          approvalReviewerDeviceIds: ["ios-reviewer"],
+          twoPhase: true,
+        },
+        {
+          client: createClient({
+            clientId: "gateway-client",
+            approvalRuntime: true,
+          }),
+          context: createNoExecApprovalContext(),
+          respond,
+        },
+      );
+
+      const requestPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
+      const approvalId = await waitForAcceptedApproval(respond);
+
+      expect(handleRequested).toHaveBeenCalledTimes(1);
+      const requestCall = mockCall(handleRequested, 0, "iOS request delivery");
+      expect(requireRecord(requestCall[0], "iOS request").id).toBe(approvalId);
+      const deliveryOptions = requireRecord(requestCall[1], "iOS delivery options");
+      const isTargetVisible = deliveryOptions.isTargetVisible;
+      expect(isTargetVisible).toBeTypeOf("function");
+      const visibility = isTargetVisible as (target: {
+        deviceId: string;
+        scopes: readonly string[];
+      }) => boolean;
+      expect(
+        visibility({
+          deviceId: "ios-reviewer",
+          scopes: ["operator.approvals", "operator.read"],
+        }),
+      ).toBe(true);
+      expect(
+        visibility({
+          deviceId: "other-device",
+          scopes: ["operator.approvals", "operator.read"],
+        }),
+      ).toBe(false);
+
+      manager.resolve(approvalId, "allow-once");
+      await requestPromise;
+    });
+
+    it("sends an iOS cleanup wake when a plugin request expires", async () => {
+      const handleExpired = vi.fn(async () => {});
+      const handlers = createPluginApprovalHandlers(manager, {
+        iosPushDelivery: {
+          handleRequested: vi.fn(async () => true),
+          handleExpired,
+        },
+      });
+      const respond = vi.fn();
+      const opts = createMockOptions(
+        "plugin.approval.request",
+        { title: "Sensitive action", description: "Desc", twoPhase: true },
+        { context: createNoExecApprovalContext(), respond },
+      );
+
+      const requestPromise = expectDefined(
+        handlers["plugin.approval.request"],
+        'handlers["plugin.approval.request"] test invariant',
+      )(opts);
+      const approvalId = await waitForAcceptedApproval(respond);
+      manager.expire(approvalId, "timeout");
+      await requestPromise;
+
+      expect(handleExpired).toHaveBeenCalledTimes(1);
+      expect(
+        requireRecord(mockCall(handleExpired, 0, "expired push")[0], "expired request").id,
+      ).toBe(approvalId);
     });
 
     it("expires immediately when no approval route", async () => {
@@ -621,6 +774,7 @@ describe("createPluginApprovalHandlers", () => {
         {
           title: "Sensitive action",
           description: "Desc",
+          detail: '  {"command":"deploy --production"}  ',
           twoPhase: true,
         },
         { respond },
@@ -643,13 +797,25 @@ describe("createPluginApprovalHandlers", () => {
       const approvals = requireArray(listCall.result, "approval list");
       expect(approvals).toHaveLength(1);
       const approval = requireRecord(approvals[0], "approval");
+      expect(approval.approvalKind).toBe("plugin");
       const listedApprovalId = expectPluginApprovalId(approval.id, "listed approval id");
       const request = requireRecord(approval.request, "approval request");
       expect(request.title).toBe("Sensitive action");
       expect(request.description).toBe("Desc");
+      expect(request.detail).toBe('{"command":"deploy --production"}');
 
       expect(listedApprovalId).toBe(approvalId);
-      manager.resolve(approvalId, "allow-once");
+      const resolved = manager.resolveDetailed(approvalId, "allow-once", {
+        kind: "runtime",
+        id: null,
+      });
+      expect(resolved.outcome).toBe("resolved");
+      if (resolved.outcome === "resolved") {
+        expect(resolved.record.presentation).toMatchObject({
+          kind: "plugin",
+          detail: '{"command":"deploy --production"}',
+        });
+      }
       await handlerPromise;
     });
 
@@ -782,6 +948,33 @@ describe("createPluginApprovalHandlers", () => {
       expect(resolvedBroadcast.payload.id).toBe(record.id);
       expect(resolvedBroadcast.payload.decision).toBe("deny");
       expect(resolvedBroadcast.options).toEqual({ dropIfSlow: true });
+    });
+
+    it("sends an iOS cleanup wake when a plugin approval resolves", async () => {
+      const handleResolved = vi.fn(async () => {});
+      const handlers = createPluginApprovalHandlers(manager, {
+        iosPushDelivery: { handleResolved },
+      });
+      const record = registerApproval(manager);
+
+      await expectDefined(
+        handlers["plugin.approval.resolve"],
+        'handlers["plugin.approval.resolve"] test invariant',
+      )(
+        createMockOptions("plugin.approval.resolve", {
+          id: record.id,
+          decision: "deny",
+        }),
+      );
+
+      expect(handleResolved).toHaveBeenCalledTimes(1);
+      expect(
+        requireRecord(mockCall(handleResolved, 0, "resolved push")[0], "resolved event"),
+      ).toMatchObject({
+        id: record.id,
+        decision: "deny",
+        request: record.request,
+      });
     });
 
     it("resolves only plugin approvals owned by the caller", async () => {

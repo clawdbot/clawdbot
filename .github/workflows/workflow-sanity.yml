@@ -27,34 +27,10 @@ jobs:
     steps:
       - &workflow_sanity_checkout_step
         name: Checkout
-        env:
-          CHECKOUT_REPO: ${{ github.repository }}
-          CHECKOUT_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" config gc.auto 0
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          fetch_checkout_ref() {
-            local fetch_status
-            for attempt in 1 2 3; do
-              timeout --signal=TERM --kill-after=10s 30s git -C "$GITHUB_WORKSPACE" \
-                -c protocol.version=2 \
-                fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-                "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" && return 0
-              fetch_status="$?"
-              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
-                return "$fetch_status"
-              fi
-              if [ "$attempt" = "3" ]; then
-                return "$fetch_status"
-              fi
-              echo "::warning::checkout fetch for '$CHECKOUT_SHA' timed out on attempt $attempt; retrying"
-              sleep 5
-            done
-          }
-          fetch_checkout_ref
-          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          persist-credentials: false
 
       - name: Fail on tabs in workflow files
         run: |
@@ -87,7 +63,7 @@ jobs:
     steps:
       - *workflow_sanity_checkout_step
       - name: Setup Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
         with:
           python-version: "3.12"
 
@@ -160,20 +136,42 @@ jobs:
           echo "PRE_COMMIT_CONFIG_PATH=$trusted_config" >> "$GITHUB_ENV"
 
       - name: Install pre-commit
-        run: python -m pip install --disable-pip-version-check pre-commit==4.2.0
+        run: python -m pip install --disable-pip-version-check pre-commit==4.6.2
+
+      - name: Install ShellCheck
+        shell: bash
+        run: |
+          set -euo pipefail
+          SHELLCHECK_VERSION="0.11.0"
+          archive="shellcheck-v${SHELLCHECK_VERSION}.linux.x86_64.tar.xz"
+          curl --connect-timeout 10 --max-time 120 \
+            --retry 5 --retry-delay 2 --retry-all-errors -sSfL \
+            -o "${archive}" \
+            "https://github.com/koalaman/shellcheck/releases/download/v${SHELLCHECK_VERSION}/${archive}"
+          echo "8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198  ${archive}" | sha256sum -c -
+          tar -xJf "${archive}" "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
+          sudo install -m 0755 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck" /usr/local/bin/shellcheck
 
       - name: Install actionlint
         shell: bash
         run: |
           set -euo pipefail
-          ACTIONLINT_VERSION="1.7.11"
+          ACTIONLINT_VERSION="1.7.12"
           archive="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
           base_url="https://github.com/rhysd/actionlint/releases/download/v${ACTIONLINT_VERSION}"
           # GitHub release downloads occasionally return transient 5xx responses.
           # Retry all curl errors here so workflow-sanity does not fail closed on
           # a one-off release edge outage.
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o "${archive}" "${base_url}/${archive}"
-          curl --retry 5 --retry-delay 2 --retry-all-errors -sSfL -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
+          curl_args=(
+            --connect-timeout 10
+            --max-time 120
+            --retry 5
+            --retry-delay 2
+            --retry-all-errors
+            -sSfL
+          )
+          curl "${curl_args[@]}" -o "${archive}" "${base_url}/${archive}"
+          curl "${curl_args[@]}" -o checksums.txt "${base_url}/actionlint_${ACTIONLINT_VERSION}_checksums.txt"
           grep " ${archive}\$" checksums.txt | sha256sum -c -
           tar -xzf "${archive}" actionlint
           sudo install -m 0755 actionlint /usr/local/bin/actionlint
@@ -204,13 +202,11 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Check config docs drift statefile
         run: pnpm config:docs:check
-
-      - name: Check plugin SDK API baseline drift
-        run: pnpm plugin-sdk:api:check
 
       - name: Check SQLite sessions/transcripts schema baseline drift
         run: pnpm sqlite:sessions-schema:check

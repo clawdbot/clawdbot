@@ -1,8 +1,31 @@
 /** Tests plugin slot normalization and exclusive slot selection behavior. */
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
-import { applyExclusiveSlotSelection, hasKind, kindsEqual } from "./slots.js";
-import type { PluginKind } from "./types.js";
+import type { PluginKind } from "./plugin-kind.types.js";
+import {
+  applyExclusiveSlotSelection,
+  hasKind,
+  kindsEqual,
+  resetPluginSlotsToDefaults,
+} from "./slots.js";
+
+describe("resetPluginSlotsToDefaults", () => {
+  it("resets every slot owned by the plugin", () => {
+    expect(
+      resetPluginSlotsToDefaults(
+        { memory: "dual-plugin", contextEngine: "dual-plugin" },
+        "dual-plugin",
+      ),
+    ).toBeUndefined();
+  });
+
+  it("preserves slot state when the plugin owns no slot", () => {
+    const slots = { memory: "memory-core", contextEngine: "legacy" };
+
+    expect(resetPluginSlotsToDefaults(slots, "other-plugin")).toBe(slots);
+    expect(resetPluginSlotsToDefaults(undefined, "other-plugin")).toBeUndefined();
+  });
+});
 
 describe("applyExclusiveSlotSelection", () => {
   const createMemoryConfig = (plugins?: OpenClawConfig["plugins"]): OpenClawConfig => ({
@@ -63,6 +86,47 @@ describe("applyExclusiveSlotSelection", () => {
     expect(result.changed).toBe(false);
     expect(result.warnings).toHaveLength(0);
   }
+
+  it("keeps the default memory selection implicit", () => {
+    const config: OpenClawConfig = {
+      plugins: { entries: { "memory-core": { enabled: true } } },
+    };
+
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "memory-core",
+      selectedKind: "memory",
+      registry: { plugins: [{ id: "memory-core", kind: "memory" }] },
+    });
+
+    expectUnchangedSelection(result);
+    expect(result.config).toBe(config);
+  });
+
+  it("removes an explicit override when selecting the default memory plugin", () => {
+    const config: OpenClawConfig = {
+      plugins: {
+        slots: { memory: "memory" },
+        entries: { memory: { enabled: true }, "memory-core": { enabled: true } },
+      },
+    };
+
+    const result = applyExclusiveSlotSelection({
+      config,
+      selectedId: "memory-core",
+      selectedKind: "memory",
+      registry: {
+        plugins: [
+          { id: "memory", kind: "memory" },
+          { id: "memory-core", kind: "memory" },
+        ],
+      },
+    });
+
+    expect(result.changed).toBe(true);
+    expect(result.config.plugins).not.toHaveProperty("slots");
+    expect(result.config.plugins?.entries?.memory?.enabled).toBe(false);
+  });
 
   function buildSelectionRegistry(
     plugins: ReadonlyArray<{ id: string; kind?: PluginKind | PluginKind[] }>,

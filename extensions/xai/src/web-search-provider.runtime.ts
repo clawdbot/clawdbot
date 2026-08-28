@@ -25,7 +25,6 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   requestXaiWebSearch,
   resolveXaiInlineCitations,
   resolveXaiWebSearchEndpoint,
@@ -131,7 +130,9 @@ function runXaiWebSearch(params: {
   timeoutSeconds: number;
   inlineCitations: boolean;
   cacheTtlMs: number;
+  signal?: AbortSignal;
 }): Promise<Record<string, unknown>> {
+  params.signal?.throwIfAborted();
   const cacheKey = normalizeCacheKey(
     `grok:${params.endpoint}:${params.model}:${String(params.inlineCitations)}:${params.query}`,
   );
@@ -149,7 +150,9 @@ function runXaiWebSearch(params: {
       endpoint: params.endpoint,
       timeoutSeconds: params.timeoutSeconds,
       inlineCitations: params.inlineCitations,
+      ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     const payload = buildXaiWebSearchPayload({
       query: params.query,
       provider: "grok",
@@ -158,6 +161,7 @@ function runXaiWebSearch(params: {
       content: result.content,
       citations: result.citations,
       inlineCitations: result.inlineCitations,
+      truncated: result.truncated,
     });
 
     writeCache(XAI_WEB_SEARCH_CACHE, cacheKey, payload, params.cacheTtlMs);
@@ -179,7 +183,7 @@ function resolveXaiToolSearchConfig(ctx: {
 function resolveXaiWebSearchCredential(searchConfig?: Record<string, unknown>): string | undefined {
   return resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-    path: "tools.web.search.grok.apiKey",
+    path: "plugins.entries.xai.config.webSearch.apiKey",
     envVars: ["XAI_API_KEY"],
   });
 }
@@ -189,7 +193,7 @@ function resolveConfiguredXaiWebSearchCredential(
 ): string | undefined {
   return resolveWebSearchProviderCredential({
     credentialValue: getScopedCredentialValue(searchConfig, "grok"),
-    path: "tools.web.search.grok.apiKey",
+    path: "plugins.entries.xai.config.webSearch.apiKey",
     envVars: [],
   });
 }
@@ -354,7 +358,9 @@ export async function executeXaiWebSearchProviderTool(
     agentDir?: string;
   },
   args: Record<string, unknown>,
+  executionContext?: { signal?: AbortSignal },
 ): Promise<Record<string, unknown>> {
+  executionContext?.signal?.throwIfAborted();
   const searchConfig = resolveXaiToolSearchConfig(ctx);
   const auth = await resolveXaiWebSearchAuth(ctx, searchConfig);
 
@@ -380,6 +386,7 @@ export async function executeXaiWebSearchProviderTool(
     timeoutSeconds: resolveXaiWebSearchTimeoutSeconds(searchConfig),
     inlineCitations: resolveXaiInlineCitations(searchConfig),
     cacheTtlMs: resolveCacheTtlMs(searchConfig?.cacheTtlMinutes, DEFAULT_CACHE_TTL_MINUTES),
+    ...(executionContext?.signal ? { signal: executionContext.signal } : {}),
   };
   try {
     return await runXaiWebSearch({
@@ -415,14 +422,9 @@ export async function executeXaiWebSearchProviderTool(
 
 export const testing = {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
-  resolveXaiWebSearchAuth,
   resolveXaiInlineCitations,
   resolveXaiWebSearchCredential,
-  resolveXaiWebSearchEndpoint,
   resolveXaiWebSearchModel,
   resolveXaiWebSearchTimeoutSeconds,
-  requestXaiWebSearch,
 };
-export { testing as __testing };

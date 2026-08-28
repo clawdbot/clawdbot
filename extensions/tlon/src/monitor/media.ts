@@ -14,48 +14,63 @@ import { TLON_MEDIA_FETCH_TIMEOUTS } from "../media-fetch-timeouts.js";
 
 const MAX_IMAGES_PER_MESSAGE = 8;
 
-interface ExtractedImage {
-  url: string;
-  alt?: string;
-}
+type ExtractedImages = { images: Array<{ url: string }>; unavailableCount: number };
+type DownloadedMedia = { localPath: string; contentType: string };
+type TlonInboundMedia = { path: string; contentType: string };
+type TlonInboundMediaDownload = { attachments: TlonInboundMedia[]; unavailableCount: number };
 
-interface DownloadedMedia {
-  localPath: string;
-  contentType: string;
-  originalUrl: string;
+/** Keeps Tlon's shipped path-duplicating prompt bytes paired with ordered facts. */
+export function buildTlonInboundMediaPrompt(
+  messageText: string,
+  attachments: readonly TlonInboundMedia[],
+): { body: string; media: TlonInboundMedia[] } {
+  const media = attachments.map((attachment) => ({ ...attachment }));
+  if (media.length === 0) {
+    return { body: messageText, media };
+  }
+  const mediaLines = media
+    .map(
+      (attachment) =>
+        `[media attached: ${attachment.path} (${attachment.contentType}) | ${attachment.path}]`,
+    )
+    .join("\n");
+  return { body: `${mediaLines}\n${messageText}`, media };
 }
 
 /**
  * Extract image blocks from Tlon message content.
- * Returns array of image URLs found in the message.
+ * Returns up to the download cap plus the number omitted by that cap.
  */
-function extractImageBlocks(content: unknown): ExtractedImage[] {
+function extractImageBlocks(content: unknown): ExtractedImages {
   if (!content || !Array.isArray(content)) {
-    return [];
+    return { images: [], unavailableCount: 0 };
   }
 
-  const images: ExtractedImage[] = [];
+  const images: Array<{ url: string }> = [];
+  let unavailableCount = 0;
 
   for (const verse of content) {
     if (verse?.block?.image?.src) {
-      images.push({
-        url: verse.block.image.src,
-        alt: verse.block.image.alt,
-      });
       if (images.length >= MAX_IMAGES_PER_MESSAGE) {
-        break;
+        unavailableCount++;
+        continue;
       }
+      images.push({ url: verse.block.image.src });
     }
   }
 
-  return images;
+  return { images, unavailableCount };
 }
 
 /**
  * Download a media file from URL to local storage.
  * Returns the local path where the file was saved.
  */
-async function downloadMedia(url: string, mediaDir?: string): Promise<DownloadedMedia | null> {
+async function downloadMedia(
+  url: string,
+  mediaDir?: string,
+  maxBytes?: number,
+): Promise<DownloadedMedia | null> {
   try {
     // Validate URL is http/https before fetching
     const parsedUrl = new URL(url);
@@ -66,7 +81,7 @@ async function downloadMedia(url: string, mediaDir?: string): Promise<Downloaded
 
     const fetchOptions = {
       url,
-      maxBytes: MAX_IMAGE_BYTES,
+      maxBytes: Math.min(maxBytes ?? MAX_IMAGE_BYTES, MAX_IMAGE_BYTES),
       ...TLON_MEDIA_FETCH_TIMEOUTS,
       ssrfPolicy: undefined,
       requestInit: { method: "GET" },
@@ -77,7 +92,6 @@ async function downloadMedia(url: string, mediaDir?: string): Promise<Downloaded
       return {
         localPath: saved.path,
         contentType: saved.contentType ?? "application/octet-stream",
-        originalUrl: url,
       };
     }
 
@@ -94,7 +108,6 @@ async function downloadMedia(url: string, mediaDir?: string): Promise<Downloaded
     return {
       localPath,
       contentType: fetched.contentType ?? "application/octet-stream",
-      originalUrl: url,
     };
   } catch (error: unknown) {
     console.error(`[tlon-media] Error downloading ${url}: ${formatErrorMessage(error)}`);
@@ -131,23 +144,23 @@ function getExtensionFromUrl(url: string): string | null {
 export async function downloadMessageImages(
   content: unknown,
   mediaDir?: string,
-): Promise<Array<{ path: string; contentType: string }>> {
-  const images = extractImageBlocks(content);
-  if (images.length === 0) {
-    return [];
-  }
-
-  const attachments: Array<{ path: string; contentType: string }> = [];
+  maxBytes?: number,
+): Promise<TlonInboundMediaDownload> {
+  const { images, unavailableCount: overCapCount } = extractImageBlocks(content);
+  const attachments: TlonInboundMedia[] = [];
+  let unavailableCount = overCapCount;
 
   for (const image of images) {
-    const downloaded = await downloadMedia(image.url, mediaDir);
+    const downloaded = await downloadMedia(image.url, mediaDir, maxBytes);
     if (downloaded) {
       attachments.push({
         path: downloaded.localPath,
         contentType: downloaded.contentType,
       });
+    } else {
+      unavailableCount++;
     }
   }
 
-  return attachments;
+  return { attachments, unavailableCount };
 }

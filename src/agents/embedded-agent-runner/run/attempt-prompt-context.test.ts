@@ -1,3 +1,4 @@
+import { QUEUED_USER_MESSAGE_MARKER } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionSystemPromptReport } from "../../../config/sessions/types.js";
 import type { AgentMessage } from "../../runtime/index.js";
@@ -6,6 +7,8 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 const hoisted = vi.hoisted(() => ({
   info: vi.fn(),
+  promptPressureKeys: new Set<string>(),
+  reconcileToolResultPromptProjectionState: vi.fn(),
   resolveLiveToolResultAggregateMaxChars: vi.fn(() => 200),
   resolveLiveToolResultMaxChars: vi.fn(() => 100),
   truncateOversizedToolResultsInMessages: vi.fn(),
@@ -18,10 +21,22 @@ vi.mock("../logger.js", () => ({
 vi.mock("../tool-result-truncation.js", () => ({
   resolveLiveToolResultAggregateMaxChars: hoisted.resolveLiveToolResultAggregateMaxChars,
   resolveLiveToolResultMaxChars: hoisted.resolveLiveToolResultMaxChars,
+  reconcileToolResultPromptProjectionState: hoisted.reconcileToolResultPromptProjectionState,
+  toolResultWarningDedupe: {
+    promptPressure: {
+      check: (key: string) => {
+        if (hoisted.promptPressureKeys.has(key)) {
+          return true;
+        }
+        hoisted.promptPressureKeys.add(key);
+        return false;
+      },
+    },
+  },
   truncateOversizedToolResultsInMessages: hoisted.truncateOversizedToolResultsInMessages,
 }));
 
-import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-context.js";
+import { prepareEmbeddedAttemptPromptContext } from "./attempt-prompt-build.js";
 
 const messages = [
   {
@@ -43,7 +58,7 @@ function createAttempt(overrides?: Partial<EmbeddedRunAttemptParams>) {
     config: {},
     contextTokenBudget: 32_000,
     currentInboundContext: {
-      text: "Conversation info (untrusted metadata): channel=telegram",
+      text: "Conversation info: channel=telegram",
     },
     currentInboundEventKind: "user_request",
     sessionId: "session-1",
@@ -101,6 +116,8 @@ function createInput(options?: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  hoisted.promptPressureKeys.clear();
+  hoisted.reconcileToolResultPromptProjectionState.mockReset();
   hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
     messages: inputMessages,
     truncatedCount: 0,
@@ -111,6 +128,33 @@ beforeEach(() => {
 });
 
 describe("prepareEmbeddedAttemptPromptContext", () => {
+  it.each(["Please recall my preference.", "Current time: noon. Please recall my preference."])(
+    "preserves active-memory hook context at the model boundary: %s",
+    (prompt) => {
+      const memory = "Context:\n<active_memory_plugin>\nsaved preference\n</active_memory_plugin>";
+      const modelPrompt = `${memory}\n\n${prompt}`;
+      const fixture = createInput({
+        prompt: createPrompt({
+          effectivePrompt: modelPrompt,
+          promptBeforePromptBuildHooks: prompt,
+          promptBuildPrependContext: memory,
+          hasPromptBuildContext: true,
+          effectiveTranscriptPrompt: prompt,
+          transcriptPromptForRuntimeSplit: prompt,
+          promptForRuntimeContextSplit: prompt,
+          promptForModelBeforeRuntimeContextSplit: modelPrompt,
+          promptForRuntimeContextBeforeAnnotation: prompt,
+        }),
+      });
+
+      const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+      expect(result.promptForSession).toBe(prompt);
+      expect(result.llmBoundaryPromptForPrecheck).toBe(modelPrompt);
+      expect(result.runtimeContextMessageForCurrentTurn?.content).not.toContain("saved preference");
+    },
+  );
+
   it("keeps the transcript prompt bare while carrying inbound context to hooks", () => {
     const fixture = createInput();
 
@@ -122,9 +166,7 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
       timestamp: 123,
       text: "Visible request",
     });
-    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
-      "Conversation info (untrusted metadata)",
-    );
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain("Conversation info:");
     expect(result.hookMessagesForCurrentPrompt.some((message) => message.role === "custom")).toBe(
       true,
     );
@@ -135,11 +177,15 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(fixture.report.currentTurn).toEqual({
       kind: "user_request",
       promptChars: "Visible request".length,
-      runtimeContextChars: "Conversation info (untrusted metadata): channel=telegram".length,
+      runtimeContextChars: "Conversation info: channel=telegram".length,
       modelOnlyPromptChars: 0,
     });
     expect(fixture.replaceSessionMessages).not.toHaveBeenCalled();
     expect(fixture.setActiveSessionSystemPrompt).not.toHaveBeenCalled();
+    expect(hoisted.reconcileToolResultPromptProjectionState).toHaveBeenCalledWith(
+      messages,
+      projectionState,
+    );
     const clonedProjectionState = hoisted.truncateOversizedToolResultsInMessages.mock.calls[0]?.[4];
     expect(clonedProjectionState).not.toBe(projectionState);
   });
@@ -156,8 +202,31 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
 
     const result = prepareEmbeddedAttemptPromptContext(fixture.input);
 
-    expect(result.llmBoundaryPromptForPrecheck).toContain('"name": "Alice"');
+    expect(result.llmBoundaryPromptForPrecheck).toContain('"name":"Alice"');
     expect(result.llmBoundaryPromptForPrecheck).toContain("Visible request");
+  });
+
+  it("does not reconcile session projection state for raw probes", () => {
+    const fixture = createInput();
+
+    prepareEmbeddedAttemptPromptContext({ ...fixture.input, isRawModelRun: true });
+
+    expect(hoisted.reconcileToolResultPromptProjectionState).not.toHaveBeenCalled();
+  });
+
+  it("injects the latest heartbeat outcome only as hidden runtime context", () => {
+    const fixture = createInput();
+    const result = prepareEmbeddedAttemptPromptContext({
+      ...fixture.input,
+      heartbeatOutcomeContext: "Latest silent heartbeat outcome: deployment finished",
+    });
+
+    expect(result.promptForSession).toBe("Visible request");
+    expect(result.promptForModel).toBe("Visible request");
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(
+      "Latest silent heartbeat outcome: deployment finished",
+    );
+    expect(result.llmBoundaryPromptForPrecheck).not.toContain("deployment finished");
   });
 
   it("reports aggregate tool-result pressure for compact-then-truncate routing", () => {
@@ -178,6 +247,24 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     expect(hoisted.warn).toHaveBeenCalledWith(
       expect.stringContaining("aggregate tool-result pressure"),
     );
+  });
+
+  it("deduplicates aggregate pressure warnings per session key", () => {
+    hoisted.truncateOversizedToolResultsInMessages.mockImplementation((inputMessages) => ({
+      messages: [...inputMessages],
+      truncatedCount: 1,
+      aggregateTruncatedCount: 1,
+      aggregatePressureEngaged: true,
+      aggregateBudgetChars: 200,
+    }));
+    const attempt = createAttempt({ sessionId: "dup-session", sessionKey: "dup-session" });
+
+    prepareEmbeddedAttemptPromptContext(createInput({ attempt }).input);
+    expect(hoisted.warn).toHaveBeenCalledTimes(1);
+    hoisted.warn.mockClear();
+
+    prepareEmbeddedAttemptPromptContext(createInput({ attempt }).input);
+    expect(hoisted.warn).not.toHaveBeenCalled();
   });
 
   it("moves runtime-only context into the active system prompt", () => {
@@ -206,5 +293,80 @@ describe("prepareEmbeddedAttemptPromptContext", () => {
     );
     expect(fixture.report.currentTurn?.kind).toBe("room_event");
     expect(fixture.report.currentTurn?.runtimeContextChars).toBeGreaterThan(0);
+  });
+
+  it("keeps a pure heartbeat task active while persisting only the poll marker", () => {
+    const taskPrompt = "Check the deployment and report any failures.";
+    const transcriptPrompt = "[OpenClaw heartbeat poll]";
+    const fixture = createInput({
+      attempt: createAttempt({ currentInboundContext: undefined }),
+      prompt: createPrompt({
+        effectivePrompt: taskPrompt,
+        promptBeforePromptBuildHooks: taskPrompt,
+        effectiveTranscriptPrompt: transcriptPrompt,
+        transcriptPromptForRuntimeSplit: transcriptPrompt,
+        promptForRuntimeContextSplit: taskPrompt,
+        promptForModelBeforeRuntimeContextSplit: taskPrompt,
+        promptForRuntimeContextBeforeAnnotation: taskPrompt,
+      }),
+    });
+
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+    expect(result.promptForSession).toBe(transcriptPrompt);
+    expect(result.promptForModel).toBe(taskPrompt);
+    expect(result.promptSubmission.runtimeContext).toBeUndefined();
+    expect(result.runtimeContextMessageForCurrentTurn).toBeUndefined();
+  });
+
+  it("keeps the live orphan-repair heartbeat task active without parsing its marker", () => {
+    const taskPrompt = "Check the deployment and report any failures.";
+    const transcriptPrompt = "[OpenClaw heartbeat poll]";
+    const mergedModelPrompt = [QUEUED_USER_MESSAGE_MARKER, transcriptPrompt, "", taskPrompt].join(
+      "\n",
+    );
+    const fixture = createInput({
+      attempt: createAttempt({ currentInboundContext: undefined }),
+      prompt: createPrompt({
+        effectivePrompt: mergedModelPrompt,
+        promptBeforePromptBuildHooks: taskPrompt,
+        effectiveTranscriptPrompt: transcriptPrompt,
+        transcriptPromptForRuntimeSplit: transcriptPrompt,
+        promptForRuntimeContextSplit: mergedModelPrompt,
+        promptForModelBeforeRuntimeContextSplit: mergedModelPrompt,
+        promptForRuntimeContextBeforeAnnotation: mergedModelPrompt,
+      }),
+    });
+
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+    expect(result.promptForSession).toBe(transcriptPrompt);
+    expect(result.promptForModel).toBe(mergedModelPrompt);
+    expect(result.promptSubmission.runtimeContext).toBeUndefined();
+    expect(result.runtimeContextMessageForCurrentTurn).toBeUndefined();
+  });
+
+  it("still separates source context on a no-hook user turn", () => {
+    const sourceContext = "Cross-session source: agent:research";
+    const visiblePrompt = "Visible request";
+    const fixture = createInput({
+      attempt: createAttempt({ currentInboundContext: undefined }),
+      prompt: createPrompt({
+        effectivePrompt: visiblePrompt,
+        promptBeforePromptBuildHooks: visiblePrompt,
+        effectiveTranscriptPrompt: visiblePrompt,
+        transcriptPromptForRuntimeSplit: visiblePrompt,
+        promptForRuntimeContextSplit: `${sourceContext}\n\n${visiblePrompt}`,
+        promptForModelBeforeRuntimeContextSplit: visiblePrompt,
+        promptForRuntimeContextBeforeAnnotation: visiblePrompt,
+      }),
+    });
+
+    const result = prepareEmbeddedAttemptPromptContext(fixture.input);
+
+    expect(result.promptForSession).toBe(visiblePrompt);
+    expect(result.promptForModel).toBe(visiblePrompt);
+    expect(result.promptSubmission.runtimeContext).toBe(sourceContext);
+    expect(result.runtimeContextMessageForCurrentTurn?.content).toContain(sourceContext);
   });
 });

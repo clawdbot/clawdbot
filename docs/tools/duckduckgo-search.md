@@ -18,6 +18,12 @@ OpenClaw supports DuckDuckGo as a **key-free** `web_search` provider. No API key
 DuckDuckGo is never auto-selected, since auto-detection only considers providers with usable credentials. Set it explicitly:
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/duckduckgo-plugin
+    openclaw gateway restart
+    ```
+  </Step>
   <Step title="Configure">
     ```bash
     openclaw configure --section web

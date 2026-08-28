@@ -10,16 +10,9 @@
     "qwencloud",
     "modelstudio",
     "dashscope",
-    "qwen-oauth",
-    "qwen-portal",
-    "qwen-cli",
     "qwen-token-plan",
     "bailian-token-plan"
   ],
-  "providerAuthAliases": {
-    "qwen-portal": "qwen-oauth",
-    "qwen-cli": "qwen-oauth"
-  },
   "providerEndpoints": [
     {
       "endpointClass": "modelstudio-native",
@@ -31,10 +24,6 @@
         "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
         "https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1"
       ]
-    },
-    {
-      "endpointClass": "qwen-portal-native",
-      "baseUrls": ["https://portal.qwen.ai/v1"]
     }
   ],
   "providerRequest": {
@@ -51,15 +40,6 @@
       "dashscope": {
         "family": "modelstudio"
       },
-      "qwen-oauth": {
-        "family": "qwen-portal"
-      },
-      "qwen-portal": {
-        "family": "qwen-portal"
-      },
-      "qwen-cli": {
-        "family": "qwen-portal"
-      },
       "qwen-token-plan": {
         "family": "modelstudio"
       },
@@ -69,22 +49,57 @@
     }
   },
   "modelCatalog": {
-    "aliases": {
-      "qwen-portal": {
-        "provider": "qwen-oauth"
-      },
-      "qwen-cli": {
-        "provider": "qwen-oauth"
-      }
-    },
     "suppressions": [
       {
         "provider": "qwen",
+        "model": "qwen3.8-max",
+        "reason": "qwen3.8-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go or Token Plan endpoint.",
+        "when": {
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ]
+        }
+      },
+      {
+        "provider": "qwen",
+        "model": "qwen3.8-flash",
+        "reason": "qwen3.8-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go or Token Plan endpoint.",
+        "when": {
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ]
+        }
+      },
+      {
+        "provider": "modelstudio",
+        "model": "qwen3.8-max",
+        "reason": "qwen3.8-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go or Token Plan endpoint.",
+        "when": {
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ]
+        }
+      },
+      {
+        "provider": "modelstudio",
+        "model": "qwen3.8-flash",
+        "reason": "qwen3.8-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go or Token Plan endpoint.",
+        "when": {
+          "baseUrlHosts": [
+            "coding.dashscope.aliyuncs.com",
+            "coding-intl.dashscope.aliyuncs.com"
+          ]
+        }
+      },
+      {
+        "provider": "qwen",
         "model": "qwen3.6-flash",
         "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -92,8 +107,7 @@
         "model": "qwen3.7-max",
         "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -101,8 +115,7 @@
         "model": "qwen3.6-flash",
         "reason": "qwen3.6-flash is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       },
       {
@@ -110,141 +123,148 @@
         "model": "qwen3.7-max",
         "reason": "qwen3.7-max is not supported on the Qwen Coding Plan endpoint; use a Standard pay-as-you-go Qwen endpoint.",
         "when": {
-          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"],
-          "providerConfigApiIn": ["qwen", "modelstudio"]
+          "baseUrlHosts": ["coding.dashscope.aliyuncs.com", "coding-intl.dashscope.aliyuncs.com"]
         }
       }
     ],
     "providers": {
-      "qwen-oauth": {
-        "baseUrl": "https://portal.qwen.ai/v1",
+      "qwen": {
         "api": "openai-completions",
         "models": [
           {
             "id": "qwen3.5-plus",
-            "name": "qwen3.5-plus",
             "reasoning": false,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.6-flash",
+            "reasoning": true,
+            "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 65536
           },
           {
             "id": "qwen3.6-plus",
-            "name": "qwen3.6-plus",
             "reasoning": true,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1000000,
             "maxTokens": 65536
           },
           {
+            "id": "qwen3.7-max",
+            "reasoning": true,
+            "input": ["text"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.7-plus",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 65536
+          },
+          {
+            "id": "qwen3.8-max",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "high": "xhigh",
+              "max": "xhigh"
+            },
+            "compat": {
+              "codeMode": "capable",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "xhigh"
+              ],
+              "reasoningEffortMap": {
+                "minimal": "low",
+                "high": "xhigh",
+                "max": "xhigh"
+              }
+            }
+          },
+          {
+            "id": "qwen3.8-flash",
+            "reasoning": true,
+            "input": ["text", "image"],
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "high": "xhigh",
+              "max": "xhigh"
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "xhigh"
+              ],
+              "reasoningEffortMap": {
+                "minimal": "low",
+                "high": "xhigh",
+                "max": "xhigh"
+              }
+            }
+          },
+          {
             "id": "qwen3-max-2026-01-23",
-            "name": "qwen3-max-2026-01-23",
             "reasoning": false,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 65536
           },
           {
             "id": "qwen3-coder-next",
-            "name": "qwen3-coder-next",
             "reasoning": false,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
             "maxTokens": 65536
           },
           {
             "id": "qwen3-coder-plus",
-            "name": "qwen3-coder-plus",
             "reasoning": false,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1000000,
             "maxTokens": 65536
           },
           {
             "id": "MiniMax-M2.5",
-            "name": "MiniMax-M2.5",
             "reasoning": true,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 1000000,
             "maxTokens": 65536
           },
           {
             "id": "glm-5",
-            "name": "glm-5",
             "reasoning": false,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 202752,
-            "maxTokens": 65536
+            "maxTokens": 16384
           },
           {
             "id": "glm-4.7",
-            "name": "glm-4.7",
             "reasoning": false,
             "input": ["text"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 202752,
-            "maxTokens": 65536
+            "maxTokens": 16384
           },
           {
             "id": "kimi-k2.5",
-            "name": "kimi-k2.5",
             "reasoning": false,
             "input": ["text", "image"],
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            },
             "contextWindow": 262144,
-            "maxTokens": 65536
+            "maxTokens": 32768
           }
         ]
       },
@@ -252,15 +272,6 @@
         "baseUrl": "https://token-plan.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1",
         "api": "openai-completions",
         "models": [
-          {
-            "id": "qwen3.7-max",
-            "name": "qwen3.7-max",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 65536
-          },
           {
             "id": "qwen3.7-plus",
             "name": "qwen3.7-plus",
@@ -271,6 +282,77 @@
             "maxTokens": 65536
           },
           {
+            "id": "qwen3.8-max",
+            "name": "qwen3.8-max",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "high": "xhigh",
+              "max": "xhigh"
+            },
+            "compat": {
+              "codeMode": "capable",
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "xhigh"
+              ],
+              "reasoningEffortMap": {
+                "minimal": "low",
+                "high": "xhigh",
+                "max": "xhigh"
+              }
+            }
+          },
+          {
+            "id": "qwen3.8-flash",
+            "name": "qwen3.8-flash",
+            "reasoning": true,
+            "input": [
+              "text",
+              "image"
+            ],
+            "cost": {
+              "input": 0,
+              "output": 0,
+              "cacheRead": 0,
+              "cacheWrite": 0
+            },
+            "contextWindow": 1000000,
+            "maxTokens": 131072,
+            "thinkingLevelMap": {
+              "minimal": "low",
+              "high": "xhigh",
+              "max": "xhigh"
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "medium",
+                "xhigh"
+              ],
+              "reasoningEffortMap": {
+                "minimal": "low",
+                "high": "xhigh",
+                "max": "xhigh"
+              }
+            }
+          },
+          {
             "id": "qwen3.6-plus",
             "name": "qwen3.6-plus",
             "reasoning": true,
@@ -280,58 +362,15 @@
             "maxTokens": 65536
           },
           {
-            "id": "qwen3.6-flash",
-            "name": "qwen3.6-flash",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 65536
-          },
-          {
-            "id": "deepseek-v4-pro",
-            "name": "deepseek-v4-pro",
+            "id": "qwen3-coder-next",
+            "name": "qwen3-coder-next",
             "reasoning": true,
             "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 393216
-          },
-          {
-            "id": "deepseek-v4-flash",
-            "name": "deepseek-v4-flash",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 393216
-          },
-          {
-            "id": "deepseek-v3.2",
-            "name": "deepseek-v3.2",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 131072,
-            "maxTokens": 65536
-          },
-          {
-            "id": "kimi-k2.7-code",
-            "name": "kimi-k2.7-code",
-            "reasoning": true,
-            "input": ["text", "image"],
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 262144,
-            "maxTokens": 98304
-          },
-          {
-            "id": "kimi-k2.6",
-            "name": "kimi-k2.6",
-            "reasoning": true,
-            "input": ["text", "image"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 262144,
-            "maxTokens": 98304
+            "maxTokens": 65536,
+            "status": "deprecated",
+            "replacedBy": "qwen3.7-plus"
           },
           {
             "id": "kimi-k2.5",
@@ -341,24 +380,6 @@
             "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
             "contextWindow": 262144,
             "maxTokens": 98304
-          },
-          {
-            "id": "glm-5.2",
-            "name": "glm-5.2",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 1000000,
-            "maxTokens": 131072
-          },
-          {
-            "id": "glm-5.1",
-            "name": "glm-5.1",
-            "reasoning": true,
-            "input": ["text"],
-            "cost": { "input": 0, "output": 0, "cacheRead": 0, "cacheWrite": 0 },
-            "contextWindow": 202752,
-            "maxTokens": 131072
           },
           {
             "id": "glm-5",
@@ -382,7 +403,8 @@
       }
     },
     "discovery": {
-      "qwen-token-plan": "static"
+      "qwen": "runtime",
+      "qwen-token-plan": "refreshable"
     }
   },
   "contracts": {
@@ -393,8 +415,8 @@
     "qwen": {
       "capabilities": ["image", "video"],
       "defaultModels": {
-        "image": "qwen-vl-max-latest",
-        "video": "qwen-vl-max-latest"
+        "image": "qwen3.6-plus",
+        "video": "qwen3.6-plus"
       },
       "autoPriority": {
         "video": 15
@@ -406,10 +428,6 @@
       {
         "id": "qwen",
         "envVars": ["QWEN_API_KEY", "MODELSTUDIO_API_KEY", "DASHSCOPE_API_KEY"]
-      },
-      {
-        "id": "qwen-oauth",
-        "envVars": ["QWEN_API_KEY"]
       },
       {
         "id": "qwen-token-plan",
@@ -483,21 +501,6 @@
       "cliDescription": "Qwen Cloud Coding Plan API key (Global/Intl)"
     },
     {
-      "provider": "qwen-oauth",
-      "method": "api-key",
-      "choiceId": "qwen-oauth",
-      "appGuidedSecret": true,
-      "choiceLabel": "Qwen OAuth",
-      "choiceHint": "Portal token for portal.qwen.ai",
-      "groupId": "qwen",
-      "groupLabel": "Qwen Cloud",
-      "groupHint": "Standard / Coding Plan / OAuth",
-      "optionKey": "qwenOauthToken",
-      "cliFlag": "--qwen-oauth-token",
-      "cliOption": "--qwen-oauth-token <token>",
-      "cliDescription": "Qwen OAuth token"
-    },
-    {
       "provider": "qwen-token-plan",
       "method": "api-key",
       "choiceId": "qwen-token-plan",
@@ -506,7 +509,7 @@
       "choiceHint": "Endpoint: token-plan.ap-southeast-1.maas.aliyuncs.com",
       "groupId": "qwen",
       "groupLabel": "Qwen Cloud",
-      "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+      "groupHint": "Standard / Coding Plan / Token Plan",
       "optionKey": "qwenTokenPlanApiKey",
       "cliFlag": "--qwen-token-plan-api-key",
       "cliOption": "--qwen-token-plan-api-key <key>",
@@ -521,7 +524,7 @@
       "choiceHint": "Endpoint: token-plan.cn-beijing.maas.aliyuncs.com",
       "groupId": "qwen",
       "groupLabel": "Qwen Cloud",
-      "groupHint": "Standard / Coding Plan / Token Plan / OAuth",
+      "groupHint": "Standard / Coding Plan / Token Plan",
       "optionKey": "qwenTokenPlanApiKeyCn",
       "cliFlag": "--qwen-token-plan-api-key-cn",
       "cliOption": "--qwen-token-plan-api-key-cn <key>",

@@ -7,55 +7,32 @@ import module from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { isSupportedOpenClawNodeVersion } from "./node-version.mjs";
 
-const MIN_NODE_22 = { major: 22, minor: 22, patch: 3 };
-const MIN_NODE_24 = { major: 24, minor: 15, patch: 0 };
-const MIN_NODE_25 = { major: 25, minor: 9, patch: 0 };
-const RECOMMENDED_NODE_MAJOR = 24;
+const RECOMMENDED_NODE_MAJOR = 26;
 const SUPPORTED_NODE_RANGE = ">=22.22.3 <23, >=24.15.0 <25, or >=25.9.0";
 const COMPILE_CACHE_DISABLED_RESPAWNED_ENV = "OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED";
 
-const parseNodeVersion = (rawVersion) => {
-  const [majorRaw = "0", minorRaw = "0", patchRaw = "0"] = rawVersion.split(".");
-  return {
-    major: Number(majorRaw),
-    minor: Number(minorRaw),
-    patch: Number(patchRaw),
-  };
-};
-
-const isAtLeastNodeVersion = (version, minimum) => {
-  if (version.major !== minimum.major) {
-    return version.major > minimum.major;
-  }
-  if (version.minor !== minimum.minor) {
-    return version.minor > minimum.minor;
-  }
-  return version.patch >= minimum.patch;
-};
-
-const isSupportedNodeVersion = (version) => {
-  if (version.major === MIN_NODE_22.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_22);
-  }
-  if (version.major === MIN_NODE_24.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_24);
-  }
-  if (version.major === MIN_NODE_25.major) {
-    return isAtLeastNodeVersion(version, MIN_NODE_25);
-  }
-  return version.major > MIN_NODE_25.major;
-};
-
 const ensureSupportedRuntimeVersion = () => {
   if (process.versions.bun) {
+    // Bun >=1.4 (Rust rewrite) ships node:sqlite; feature-probe instead of
+    // rejecting Bun outright so capable Bun builds can run OpenClaw.
+    let hasNodeSqlite;
+    try {
+      hasNodeSqlite = Boolean(process.getBuiltinModule?.("node:sqlite"));
+    } catch {
+      hasNodeSqlite = false;
+    }
+    if (hasNodeSqlite) {
+      return;
+    }
     process.stderr.write(
-      "openclaw: the Bun runtime is unsupported because OpenClaw requires node:sqlite.\n" +
+      "openclaw: this Bun runtime is unsupported because it does not provide node:sqlite.\n" +
         `Use Node.js ${SUPPORTED_NODE_RANGE}; Bun remains supported for installs and package scripts.\n`,
     );
     process.exit(1);
   }
-  if (isSupportedNodeVersion(parseNodeVersion(process.versions.node))) {
+  if (isSupportedOpenClawNodeVersion(process.versions.node)) {
     return;
   }
 
@@ -82,6 +59,7 @@ const isSourceCheckoutLauncher = () =>
 const isNodeCompileCacheDisabled = () => process.env.NODE_DISABLE_COMPILE_CACHE !== undefined;
 const isNodeCompileCacheRequested = () =>
   Boolean(process.env.NODE_COMPILE_CACHE) && !isNodeCompileCacheDisabled();
+const isNativeHookRelayInvocation = (argv) => argv[2] === "hooks" && argv[3] === "relay";
 const sanitizeCompileCachePathSegment = (value) => {
   const normalized = value.replace(/[^A-Za-z0-9._-]+/g, "_").replace(/^_+|_+$/g, "");
   return normalized.length > 0 ? normalized : "unknown";
@@ -139,6 +117,8 @@ const runRespawnedChild = (command, args, env) => {
   let signalExitTimer = null;
   let signalForceKillTimer = null;
   let signalHardExitTimer = null;
+  let firstForwardedSignal = null;
+  let hardKillBackstopStarted = false;
   const detach = () => {
     for (const [signal, listener] of listeners) {
       process.off(signal, listener);
@@ -171,6 +151,7 @@ const runRespawnedChild = (command, args, env) => {
       // Best-effort shutdown fallback.
     }
     signalForceKillTimer = setTimeout(() => {
+      hardKillBackstopStarted = true;
       forceKillChild();
       signalHardExitTimer = setTimeout(() => {
         process.exit(1);
@@ -179,7 +160,8 @@ const runRespawnedChild = (command, args, env) => {
     }, respawnSignalForceKillGraceMs);
     signalForceKillTimer.unref?.();
   };
-  const scheduleParentExit = () => {
+  const scheduleParentExit = (signal) => {
+    firstForwardedSignal ??= signal;
     if (signalExitTimer) {
       return;
     }
@@ -195,7 +177,7 @@ const runRespawnedChild = (command, args, env) => {
       } catch {
         // Best-effort signal forwarding.
       }
-      scheduleParentExit();
+      scheduleParentExit(signal);
     };
     try {
       process.on(signal, listener);
@@ -207,7 +189,15 @@ const runRespawnedChild = (command, args, env) => {
   child.once("exit", (code, signal) => {
     detach();
     if (signal) {
-      process.exit(1);
+      const forwardedSignalExitCode =
+        !hardKillBackstopStarted && signal === firstForwardedSignal
+          ? signal === "SIGINT"
+            ? 130
+            : signal === "SIGTERM"
+              ? 143
+              : undefined
+          : undefined;
+      process.exit(forwardedSignalExitCode ?? 1);
     }
     process.exit(code ?? 1);
   });
@@ -273,23 +263,6 @@ const respawnWithPackagedCompileCacheIfNeeded = () => {
   );
 };
 
-const waitingForCompileCacheRespawn =
-  respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded();
-
-// https://nodejs.org/api/module.html#module-compile-cache
-if (
-  !waitingForCompileCacheRespawn &&
-  module.enableCompileCache &&
-  !isNodeCompileCacheDisabled() &&
-  !isSourceCheckoutLauncher()
-) {
-  try {
-    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
-  } catch {
-    // Ignore errors
-  }
-}
-
 const getErrorMessage = (err) =>
   err && typeof err === "object" && "message" in err && typeof err.message === "string"
     ? err.message
@@ -305,7 +278,9 @@ const isDirectModuleNotFoundError = (err, specifier) => {
     message.includes(`Cannot find module "${specifier}"`);
   const launcherPath = fileURLToPath(import.meta.url);
   const bunLauncherImporterMiss =
-    message.includes(` from '${launcherPath}'`) || message.includes(` from "${launcherPath}"`);
+    message.includes(` from '${launcherPath}'`) ||
+    message.includes(` from "${launcherPath}"`) ||
+    message.includes(` imported from ${launcherPath}`);
 
   const expectedUrl = new URL(specifier, import.meta.url);
   const expectedPath = fileURLToPath(expectedUrl);
@@ -392,6 +367,7 @@ const LAUNCHER_PRECOMPUTED_COMMAND_HELP = {
   nodes: { command: "nodes", metadataKey: "nodesHelpText" },
 };
 const LAUNCHER_PRECOMPUTED_SUBCOMMAND_HELP = new Set([
+  "config",
   "doctor",
   "gateway",
   "models",
@@ -431,13 +407,30 @@ const consumeLauncherRootOptionToken = (args, index) => {
   return 0;
 };
 
+// Mirror the entry's foreground Gmail policy before any built modules can load.
+// A compile-cache wrapper would kill its owner before descendant cleanup finishes.
+const isForegroundGmailRunInvocation = (argv) => {
+  const args = argv.slice(2);
+  const commandPath = [];
+  for (let index = 0; index < args.length && commandPath.length < 3; index += 1) {
+    const consumed = consumeLauncherRootOptionToken(args, index);
+    if (consumed > 0) {
+      index += consumed - 1;
+    } else if (!args[index] || args[index].startsWith("-")) {
+      break;
+    } else {
+      commandPath.push(args[index]);
+    }
+  }
+  return commandPath.join(" ") === "webhooks gmail run";
+};
+
 const hasLauncherContainerTarget = (argv) => {
   if (normalizeLauncherMetadataValue(process.env.OPENCLAW_CONTAINER)) {
     return true;
   }
   const args = argv.slice(2);
-  for (let index = 0; index < args.length; index += 1) {
-    const arg = args[index];
+  for (const arg of args) {
     if (!arg || arg === "--") {
       return false;
     }
@@ -514,7 +507,7 @@ const resolveLauncherHomeDir = () => {
   const explicit = normalizeLauncherHomeValue(process.env.OPENCLAW_HOME);
   const rawHome =
     explicit && (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\"))
-      ? explicit.replace(/^~(?=$|[\\/])/, resolveLauncherOsHomeDir())
+      ? explicit.replace(/^~(?=$|[\\/])/, () => resolveLauncherOsHomeDir())
       : (explicit ?? resolveLauncherOsHomeDir());
   return path.resolve(rawHome);
 };
@@ -631,8 +624,8 @@ function resolveLauncherCommit() {
     return envCommit;
   }
   return (
-    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./dist/build-info.json")?.commit) ??
+    readLauncherGitCommit() ??
     formatLauncherCommit(readLauncherJson("./package.json")?.gitHead) ??
     formatLauncherCommit(readLauncherJson("./package.json")?.githead)
   );
@@ -730,7 +723,7 @@ const tryOutputBareRootHelp = async () => {
   if (!isBareRootHelpInvocation(process.argv)) {
     return false;
   }
-  if (shouldDeferRootHelpToRuntimeEntry()) {
+  if (hasLauncherContainerTarget(process.argv) || shouldDeferRootHelpToRuntimeEntry()) {
     return false;
   }
   const precomputed = loadPrecomputedHelpText("rootHelpText");
@@ -773,6 +766,27 @@ const tryOutputPrecomputedCommandHelp = () => {
   process.stdout.write(precomputed);
   return true;
 };
+
+// Codex owns the relay timeout by PID. Keep the launcher as that exact process
+// so a timeout cannot strand a compile-cache respawn child.
+const waitingForCompileCacheRespawn =
+  !isForegroundGmailRunInvocation(process.argv) &&
+  !(process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) &&
+  (respawnWithoutCompileCacheIfNeeded() || respawnWithPackagedCompileCacheIfNeeded());
+
+// https://nodejs.org/api/module.html#module-compile-cache
+if (
+  !waitingForCompileCacheRespawn &&
+  module.enableCompileCache &&
+  !isNodeCompileCacheDisabled() &&
+  !isSourceCheckoutLauncher()
+) {
+  try {
+    module.enableCompileCache(resolvePackagedCompileCacheDirectory());
+  } catch {
+    // Ignore errors
+  }
+}
 
 if (!waitingForCompileCacheRespawn) {
   if (!isHelpFastPathDisabled() && (await tryOutputBareRootHelp())) {

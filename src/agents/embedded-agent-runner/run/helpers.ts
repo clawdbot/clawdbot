@@ -1,11 +1,9 @@
 /**
  * Shared run helpers for retry limits, model reporting, and final text.
  */
-import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { generateSecureToken } from "../../../infra/secure-random.js";
 import type { AssistantMessage } from "../../../llm/types.js";
 import { extractAssistantTextForPhase } from "../../../shared/chat-message-content.js";
-import { resolveAgentConfig } from "../../agent-scope-config.js";
 import { extractAssistantVisibleText } from "../../embedded-agent-utils.js";
 import {
   deriveContextPromptTokens,
@@ -15,7 +13,7 @@ import {
   type NormalizedUsage,
 } from "../../usage.js";
 import type { EmbeddedAgentMeta } from "../types.js";
-import { toLastCallUsage, toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
+import { toNormalizedUsage, type UsageAccumulator } from "../usage-accumulator.js";
 
 type UsageSnapshot = {
   input?: number;
@@ -53,18 +51,16 @@ export const MAX_SAME_MODEL_RATE_LIMIT_RETRIES = 3;
 const SAME_MODEL_RATE_LIMIT_BACKOFF_STEP_MS = 10_000;
 const SAME_MODEL_RATE_LIMIT_MAX_BACKOFF_MS = 60_000;
 
-export function resolveOverloadFailoverBackoffMs(cfg?: OpenClawConfig): number {
-  return cfg?.auth?.cooldowns?.overloadedBackoffMs ?? DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
+export function resolveOverloadFailoverBackoffMs(): number {
+  return DEFAULT_OVERLOAD_FAILOVER_BACKOFF_MS;
 }
 
-export function resolveOverloadProfileRotationLimit(cfg?: OpenClawConfig): number {
-  return cfg?.auth?.cooldowns?.overloadedProfileRotations ?? DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
+export function resolveOverloadProfileRotationLimit(): number {
+  return DEFAULT_MAX_OVERLOAD_PROFILE_ROTATIONS;
 }
 
-export function resolveRateLimitProfileRotationLimit(cfg?: OpenClawConfig): number {
-  return (
-    cfg?.auth?.cooldowns?.rateLimitedProfileRotations ?? DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS
-  );
+export function resolveRateLimitProfileRotationLimit(): number {
+  return DEFAULT_MAX_RATE_LIMIT_PROFILE_ROTATIONS;
 }
 
 /**
@@ -106,19 +102,18 @@ function scrubAnthropicRefusalMagic(prompt: string): string {
   );
 }
 
-/** Applies only outer-transport prompt rewrites; native model owners receive the prompt verbatim. */
+/** Anthropic's transport interprets this marker even for native-owned attempts. */
 export function resolveEmbeddedAttemptBasePrompt(params: {
-  nativeModelOwned: boolean;
   provider: string;
   prompt: string;
 }): string {
-  if (params.nativeModelOwned || params.provider !== "anthropic") {
+  if (params.provider !== "anthropic") {
     return params.prompt;
   }
   return scrubAnthropicRefusalMagic(params.prompt);
 }
 
-export function createCompactionDiagId(): string {
+export function createRunRecoveryDiagId(): string {
   return `ovf-${Date.now().toString(36)}-${generateSecureToken(4)}`;
 }
 
@@ -127,23 +122,14 @@ const RUN_RETRY_ITERATIONS_PER_PROFILE = 8;
 const MIN_RUN_RETRY_ITERATIONS = 32;
 const MAX_RUN_RETRY_ITERATIONS = 160;
 
+// This per-run bound multiplies whole-turn overload replays in
+// auto-reply/reply/agent-runner-error-handler.ts; keep their product test aligned.
 // Defensive guard for the outer run loop across all retry branches.
-export function resolveMaxRunRetryIterations(
-  profileCandidateCount: number,
-  cfg?: OpenClawConfig,
-  agentId?: string,
-): number {
-  const configRetries =
-    (cfg && agentId ? resolveAgentConfig(cfg, agentId)?.runRetries : undefined) ??
-    cfg?.agents?.defaults?.runRetries;
-
-  const base = Math.max(1, configRetries?.base ?? BASE_RUN_RETRY_ITERATIONS);
-  const perProfile = Math.max(0, configRetries?.perProfile ?? RUN_RETRY_ITERATIONS_PER_PROFILE);
-  const minLimit = Math.max(1, configRetries?.min ?? MIN_RUN_RETRY_ITERATIONS);
-  const maxLimit = Math.max(minLimit, configRetries?.max ?? MAX_RUN_RETRY_ITERATIONS);
-
-  const scaled = base + Math.max(1, profileCandidateCount) * perProfile;
-  return Math.min(maxLimit, Math.max(minLimit, scaled));
+export function resolveMaxRunRetryIterations(profileCandidateCount: number): number {
+  const scaled =
+    BASE_RUN_RETRY_ITERATIONS +
+    Math.max(1, profileCandidateCount) * RUN_RETRY_ITERATIONS_PER_PROFILE;
+  return Math.min(MAX_RUN_RETRY_ITERATIONS, Math.max(MIN_RUN_RETRY_ITERATIONS, scaled));
 }
 
 export function resolveActiveErrorContext(params: {
@@ -205,36 +191,52 @@ export function resolveReportedModelRef(params: {
 
 export function resolveLatestCallUsage(params: {
   currentAttemptCandidates: readonly (NormalizedUsage | undefined)[];
-  carriedCandidates: readonly (NormalizedUsage | undefined)[];
+  carriedUsage: NormalizedUsage | undefined;
+  transcriptFallback: NormalizedUsage | undefined;
 }): {
   currentAttempt: NormalizedUsage | undefined;
   latest: NormalizedUsage | undefined;
 } {
   const currentAttempt = params.currentAttemptCandidates.find(hasNonzeroUsage);
+  const carriedUsage = hasNonzeroUsage(params.carriedUsage) ? params.carriedUsage : undefined;
+  const transcriptFallback = hasNonzeroUsage(params.transcriptFallback)
+    ? params.transcriptFallback
+    : undefined;
   return {
     currentAttempt,
-    latest: currentAttempt ?? params.carriedCandidates.find(hasNonzeroUsage),
+    latest: currentAttempt ?? carriedUsage ?? transcriptFallback,
   };
+}
+
+export function normalizeAssistantUsageForContext(
+  assistant: { api?: string; usage?: unknown } | null | undefined,
+): NormalizedUsage | undefined {
+  if (
+    assistant?.api === "cli" &&
+    assistant.usage &&
+    typeof assistant.usage === "object" &&
+    !Array.isArray(assistant.usage) &&
+    (assistant.usage as { contextUsage?: unknown }).contextUsage === undefined
+  ) {
+    return { contextUsage: { state: "unavailable" } };
+  }
+  return normalizeUsage(assistant?.usage as UsageSnapshot | undefined);
 }
 
 export function buildUsageAgentMetaFields(params: {
   usageAccumulator: UsageAccumulator;
-  lastAssistantUsage?: UsageSnapshot | null;
+  latestUsage?: UsageSnapshot | null;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastTurnTotal?: number;
 }): Pick<EmbeddedAgentMeta, "usage" | "lastCallUsage" | "promptTokens"> {
   const usage = toNormalizedUsage(params.usageAccumulator);
-  if (usage && params.lastTurnTotal && params.lastTurnTotal > 0) {
-    usage.total = params.lastTurnTotal;
-  }
-  const lastAssistantUsage = normalizeUsage(params.lastAssistantUsage as never);
-  const lastCallUsage = hasNonzeroUsage(lastAssistantUsage)
-    ? lastAssistantUsage
+  const latestUsage = normalizeUsage(params.latestUsage as never);
+  const lastCallUsage = hasNonzeroUsage(latestUsage)
+    ? latestUsage
     : hasNonzeroUsage(params.lastRunPromptUsage)
       ? params.lastRunPromptUsage
-      : toLastCallUsage(params.usageAccumulator);
+      : undefined;
   const promptTokens = deriveContextPromptTokens({
-    lastCallUsage: params.lastRunPromptUsage,
+    lastCallUsage,
   });
   return {
     usage,
@@ -254,24 +256,25 @@ export function buildErrorAgentMeta(params: {
   sessionFile?: string;
   provider: string;
   model: string;
+  credentialSource?: EmbeddedAgentMeta["credentialSource"];
   contextTokens?: number;
   usageAccumulator: UsageAccumulator;
   lastRunPromptUsage: UsageSnapshot | undefined;
-  lastAssistant?: { usage?: unknown } | null;
-  lastTurnTotal?: number;
+  currentAttemptAssistant?: { api?: string; usage?: unknown } | null;
 }): EmbeddedAgentMeta {
   const usageMeta = buildUsageAgentMetaFields({
     usageAccumulator: params.usageAccumulator,
-    lastAssistantUsage: params.lastAssistant?.usage as UsageSnapshot | undefined,
+    latestUsage: normalizeAssistantUsageForContext(params.currentAttemptAssistant),
     lastRunPromptUsage: params.lastRunPromptUsage,
-    lastTurnTotal: params.lastTurnTotal,
   });
   return {
     sessionId: params.sessionId,
     ...(params.sessionFile ? { sessionFile: params.sessionFile } : {}),
     provider: params.provider,
     model: params.model,
+    ...(params.credentialSource ? { credentialSource: params.credentialSource } : {}),
     ...(params.contextTokens ? { contextTokens: params.contextTokens } : {}),
+    ...(params.contextTokens ? { contextTokensSource: "resolved" as const } : {}),
     ...(usageMeta.usage ? { usage: usageMeta.usage } : {}),
     ...(usageMeta.lastCallUsage ? { lastCallUsage: usageMeta.lastCallUsage } : {}),
     ...(usageMeta.promptTokens ? { promptTokens: usageMeta.promptTokens } : {}),

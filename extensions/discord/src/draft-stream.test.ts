@@ -1,9 +1,103 @@
 // Discord tests cover draft stream plugin behavior.
 import { MessageFlags, Routes } from "discord-api-types/v10";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import { createDiscordDraftStream } from "./draft-stream.js";
 
+function createCurrentPreviewHarness(remove = vi.fn(async () => undefined)) {
+  const rest = {
+    post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
+    patch: vi.fn(async () => undefined),
+    delete: remove,
+  };
+  const warn = vi.fn();
+  const stream = createDiscordDraftStream({
+    rest: rest as never,
+    channelId: "c1",
+    throttleMs: 250,
+    warn,
+  });
+  return { rest, stream, warn };
+}
+
 describe("createDiscordDraftStream", () => {
+  it("moves the visible draft to a newly adopted thread", async () => {
+    const rest = {
+      post: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "parent-draft" })
+        .mockResolvedValueOnce({ id: "thread-draft" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "parent",
+      throttleMs: 250,
+    });
+
+    stream.update("working");
+    await stream.flush();
+    stream.update("working harder");
+    await stream.retarget("thread-1");
+
+    expect(rest.delete).toHaveBeenCalledWith("/channels/parent/messages/parent-draft");
+    expect(rest.post).toHaveBeenLastCalledWith(
+      "/channels/thread-1/messages",
+      expect.objectContaining({ body: expect.objectContaining({ content: "working harder" }) }),
+    );
+    expect(stream.messageId()).toBe("thread-draft");
+  });
+
+  it("retries cleanup for a parent draft left behind by retargeting", async () => {
+    const rest = {
+      post: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "parent-draft" })
+        .mockResolvedValueOnce({ id: "thread-draft" }),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn().mockRejectedValueOnce(new Error("transient")).mockResolvedValue(undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "parent",
+      throttleMs: 250,
+    });
+
+    stream.update("working");
+    await stream.flush();
+    await stream.retarget("thread-1");
+    await stream.cleanupPendingMessages();
+
+    expect(rest.delete).toHaveBeenNthCalledWith(1, "/channels/parent/messages/parent-draft");
+    expect(rest.delete).toHaveBeenNthCalledWith(2, "/channels/parent/messages/parent-draft");
+  });
+
+  it("keeps the parent draft when the thread replacement cannot be created", async () => {
+    const rest = {
+      post: vi
+        .fn()
+        .mockResolvedValueOnce({ id: "parent-draft" })
+        .mockRejectedValueOnce(new Error("thread post failed")),
+      patch: vi.fn(async () => undefined),
+      delete: vi.fn(async () => undefined),
+    };
+    const stream = createDiscordDraftStream({
+      rest: rest as never,
+      channelId: "parent",
+      throttleMs: 250,
+    });
+
+    stream.update("working");
+    await stream.flush();
+
+    await expect(stream.retarget("thread-1")).rejects.toThrow("retarget replacement failed");
+    expect(rest.delete).not.toHaveBeenCalled();
+
+    await stream.cleanupPendingMessages();
+    expect(rest.delete).toHaveBeenCalledWith("/channels/parent/messages/parent-draft");
+  });
+
   it("holds the first preview until minInitialChars is reached", async () => {
     const rest = {
       post: vi.fn(async () => ({ id: "m1" })),
@@ -59,16 +153,7 @@ describe("createDiscordDraftStream", () => {
   });
 
   it("deletes the current preview without stopping later draft updates", async () => {
-    const rest = {
-      post: vi.fn().mockResolvedValueOnce({ id: "m1" }).mockResolvedValueOnce({ id: "m2" }),
-      patch: vi.fn(async () => undefined),
-      delete: vi.fn(async () => undefined),
-    };
-    const stream = createDiscordDraftStream({
-      rest: rest as never,
-      channelId: "c1",
-      throttleMs: 250,
-    });
+    const { rest, stream } = createCurrentPreviewHarness();
 
     stream.update("temporary commentary");
     await stream.flush();
@@ -86,6 +171,52 @@ describe("createDiscordDraftStream", () => {
     expect(rest.patch).not.toHaveBeenCalled();
     expect(stream.messageId()).toBe("m2");
   });
+
+  it("retries failed current-preview cleanup without reusing the stale message", async () => {
+    const remove = vi.fn().mockRejectedValueOnce(new Error("transient"));
+    const { rest, stream, warn } = createCurrentPreviewHarness(remove);
+
+    stream.update("temporary commentary");
+    await stream.flush();
+    await stream.deleteCurrentMessage();
+    stream.update("tool progress");
+    await stream.flush();
+    await stream.cleanupPendingMessages();
+
+    expect(rest.delete).toHaveBeenNthCalledWith(1, Routes.channelMessage("c1", "m1"));
+    expect(rest.delete).toHaveBeenNthCalledWith(2, Routes.channelMessage("c1", "m1"));
+    expect(rest.patch).not.toHaveBeenCalled();
+    expect(stream.messageId()).toBe("m2");
+    expect(warn).toHaveBeenCalledWith("discord stream preview cleanup failed: transient");
+  });
+
+  it.each(["clear", "deleteCurrentMessage"] as const)(
+    "%s claims a preview once and preserves its replacement during deletion",
+    async (method) => {
+      const deleteStarted = createDeferred<void>();
+      const finishDelete = createDeferred<void>();
+      const remove = vi.fn(async () => {
+        deleteStarted.resolve();
+        await finishDelete.promise;
+        return undefined;
+      });
+      const { rest, stream } = createCurrentPreviewHarness(remove);
+
+      stream.update("original preview");
+      await stream.flush();
+      const deleting = stream[method]();
+      await deleteStarted.promise;
+      await stream[method]();
+      stream.forceNewMessage();
+      stream.update("replacement preview");
+      await stream.flush();
+      finishDelete.resolve();
+      await deleting;
+
+      expect(rest.delete).toHaveBeenCalledExactlyOnceWith(Routes.channelMessage("c1", "m1"));
+      expect(stream.messageId()).toBe("m2");
+    },
+  );
 
   it("suppresses mentions in preview creates and edits", async () => {
     const rest = {

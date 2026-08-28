@@ -5,5 +5,4 @@ export {
   VLLM_MODEL_PLACEHOLDER,
   VLLM_PROVIDER_LABEL,
 } from "./defaults.js";
-export { buildVllmProvider } from "./models.js";
 export { createVllmQwenThinkingWrapper, wrapVllmProviderStream } from "./stream.js";

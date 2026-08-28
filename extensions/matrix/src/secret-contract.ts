@@ -12,6 +12,15 @@ import {
 } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import { getMatrixScopedEnvVarNames } from "./env-vars.js";
 
+function accountSecretOwner(accountId: string) {
+  return {
+    ownerKind: "account" as const,
+    ownerId: `matrix:${normalizeAccountId(accountId)}`,
+    requiredForGateway: false,
+    disposition: "isolate" as const,
+  };
+}
+
 export const secretTargetRegistryEntries = createChannelSecretTargetRegistryEntries({
   channelKey: "matrix",
   account: ["accessToken", "password"],
@@ -34,10 +43,20 @@ export function collectRuntimeConfigAssignments(params: {
     normalizeSecretStringValue(
       params.context.env[getMatrixScopedEnvVarNames("default").accessToken],
     ).length > 0;
-  const defaultAccountAccessTokenConfigured = surface.accounts.some(
-    ({ accountId, account }) =>
-      normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID &&
-      hasConfiguredSecretInputValue(account.accessToken, params.defaults),
+  const defaultScopedPasswordConfigured =
+    normalizeSecretStringValue(params.context.env[getMatrixScopedEnvVarNames("default").password])
+      .length > 0;
+  const defaultAccount = surface.hasExplicitAccounts
+    ? surface.accounts.find(({ accountId }) => normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID)
+    : undefined;
+  const defaultAccountEnabled = surface.channelEnabled && (defaultAccount?.enabled ?? true);
+  const defaultAccountAccessTokenConfigured = hasConfiguredSecretInputValue(
+    defaultAccount?.account.accessToken,
+    params.defaults,
+  );
+  const defaultAccountPasswordConfigured = hasConfiguredSecretInputValue(
+    defaultAccount?.account.password,
+    params.defaults,
   );
   const baseAccessTokenConfigured = hasConfiguredSecretInputValue(
     matrix.accessToken,
@@ -49,8 +68,13 @@ export function collectRuntimeConfigAssignments(params: {
     expected: "string",
     defaults: params.defaults,
     context: params.context,
-    active: surface.channelEnabled,
-    inactiveReason: "Matrix channel is disabled.",
+    active:
+      defaultAccountEnabled &&
+      !defaultAccountAccessTokenConfigured &&
+      !defaultScopedAccessTokenConfigured,
+    inactiveReason:
+      "Matrix channel or default account is disabled, or default-account access-token auth overrides the top-level accessToken.",
+    owner: accountSecretOwner(DEFAULT_ACCOUNT_ID),
     apply: (value) => {
       matrix.accessToken = value;
     },
@@ -62,15 +86,18 @@ export function collectRuntimeConfigAssignments(params: {
     defaults: params.defaults,
     context: params.context,
     active:
-      surface.channelEnabled &&
+      defaultAccountEnabled &&
       !(
         baseAccessTokenConfigured ||
         envAccessTokenConfigured ||
         defaultScopedAccessTokenConfigured ||
-        defaultAccountAccessTokenConfigured
+        defaultAccountAccessTokenConfigured ||
+        defaultAccountPasswordConfigured ||
+        defaultScopedPasswordConfigured
       ),
     inactiveReason:
-      "Matrix channel is disabled or access-token auth is configured for the default Matrix account.",
+      "Matrix channel or default account is disabled, or higher-precedence default-account auth is configured.",
+    owner: accountSecretOwner(DEFAULT_ACCOUNT_ID),
     apply: (value) => {
       matrix.password = value;
     },
@@ -88,6 +115,7 @@ export function collectRuntimeConfigAssignments(params: {
         context: params.context,
         active: enabled,
         inactiveReason: "Matrix account is disabled.",
+        owner: accountSecretOwner(accountId),
         apply: (value) => {
           account.accessToken = value;
         },
@@ -121,6 +149,7 @@ export function collectRuntimeConfigAssignments(params: {
           inheritedDefaultAccountAccessTokenConfigured
         ),
       inactiveReason: "Matrix account is disabled or this account has an accessToken configured.",
+      owner: accountSecretOwner(accountId),
       apply: (value) => {
         account.password = value;
       },

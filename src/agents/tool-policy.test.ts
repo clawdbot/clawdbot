@@ -7,12 +7,17 @@ import type { OpenClawConfig } from "../config/config.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  isRuntimeToolAllowed,
+  isRuntimeToolAllowedForConstruction,
+  isToolAllowedByPolicyName,
+} from "./tool-policy-match.js";
 import {
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
   expandToolGroups,
-  normalizeToolName,
+  hasRestrictiveAllowPolicy,
+  normalizeToolPolicyName,
   resolveToolProfilePolicy,
   TOOL_GROUPS,
 } from "./tool-policy.js";
@@ -33,7 +38,7 @@ describe("tool-policy", () => {
   it("resolves known profiles and ignores unknown ones", () => {
     const coding = resolveToolProfilePolicy("coding");
     expect(coding?.allow).toContain("read");
-    expect(coding?.allow).toContain("cron");
+    expect(coding?.allow).toContain("automations");
     expect(coding?.allow).not.toContain("gateway");
     expect(resolveToolProfilePolicy("nope")).toBeUndefined();
   });
@@ -48,9 +53,12 @@ describe("tool-policy", () => {
   });
 
   it("normalizes tool names and aliases", () => {
-    expect(normalizeToolName(" BASH ")).toBe("exec");
-    expect(normalizeToolName("apply-patch")).toBe("apply_patch");
-    expect(normalizeToolName("READ")).toBe("read");
+    expect(normalizeToolPolicyName(" BASH ")).toBe("exec");
+    expect(normalizeToolPolicyName("apply-patch")).toBe("apply_patch");
+    expect(normalizeToolPolicyName("READ")).toBe("read");
+    // Pre-rename scheduler tool name from persisted config (RFC 0026).
+    expect(normalizeToolPolicyName("cron")).toBe("automations");
+    expect(normalizeToolPolicyName("automations")).toBe("automations");
   });
 
   it("collects explicit allowlist entries", () => {
@@ -78,6 +86,19 @@ describe("tool-policy", () => {
     expect(collectExplicitAllowlist([pickSandboxToolPolicy({ alsoAllow: [" * "] })])).toEqual([
       "*",
     ]);
+  });
+
+  it("does not treat additive allow-all policies as restrictive", () => {
+    expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ alsoAllow: ["optional-demo"] }))).toBe(
+      false,
+    );
+    expect(
+      hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: [], alsoAllow: ["optional-demo"] })),
+    ).toBe(false);
+  });
+
+  it("still treats explicit bounded allowlists as restrictive", () => {
+    expect(hasRestrictiveAllowPolicy(pickSandboxToolPolicy({ allow: ["read"] }))).toBe(true);
   });
 });
 
@@ -151,18 +172,28 @@ describe("resolveSandboxToolPolicyForAgent", () => {
     } as unknown as OpenClawConfig;
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
-    expect(resolved.allow).toEqual(["read", "image"]);
+    expect(resolved.allow).toEqual(["read", "view_image"]);
     expect(resolved.deny).toEqual(["browser"]);
   });
 
-  it("does not auto-add image when explicitly denied", () => {
+  it("does not auto-add view_image when explicitly denied", () => {
     const cfg = {
-      tools: { sandbox: { tools: { allow: ["read"], deny: ["image"] } } },
+      tools: { sandbox: { tools: { allow: ["read"], deny: ["view_image"] } } },
     } as unknown as OpenClawConfig;
 
     const resolved = resolveSandboxToolPolicyForAgent(cfg, undefined);
     expect(resolved.allow).toEqual(["read"]);
-    expect(resolved.deny).toEqual(["image"]);
+    expect(resolved.deny).toEqual(["view_image"]);
+  });
+});
+
+describe("isToolAllowedByPolicyName — legacy scheduler tool name (RFC 0026)", () => {
+  it("allows the renamed tool through persisted legacy allow lists", () => {
+    expect(isToolAllowedByPolicyName("automations", { allow: ["cron"] })).toBe(true);
+  });
+
+  it("denies the renamed tool through persisted legacy deny lists", () => {
+    expect(isToolAllowedByPolicyName("automations", { deny: ["cron"] })).toBe(false);
   });
 });
 
@@ -183,5 +214,13 @@ describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write", "apply_patch"] })).toBe(
       false,
     );
+  });
+
+  it("keeps runtime write compatibility out of construction planning", () => {
+    expect(isRuntimeToolAllowed("apply_patch", ["write"])).toBe(true);
+    expect(isRuntimeToolAllowedForConstruction("apply_patch", ["write"])).toBe(false);
+    expect(isRuntimeToolAllowed("apply_patch", ["apply-patch"])).toBe(true);
+    expect(isRuntimeToolAllowed("apply_patch", ["apply_*"])).toBe(true);
+    expect(isRuntimeToolAllowed("apply_patch", ["group:fs"])).toBe(true);
   });
 });

@@ -1,7 +1,8 @@
 import { isContextOverflow } from "@openclaw/ai/internal/runtime";
 import type { AssistantMessage } from "../../llm/types.js";
 import { isRetryableAssistantError } from "../../llm/utils/retry.js";
-import { sleep } from "../utils/sleep.js";
+import { sleep } from "../../utils/sleep.js";
+import { classifyRateLimitWindow } from "../failover/retry-evidence.js";
 import { AgentSessionExtensions } from "./agent-session-extensions.js";
 import { type BashResult, executeBashWithOperations } from "./bash-executor.js";
 import type { BashExecutionMessage } from "./messages.js";
@@ -49,7 +50,13 @@ export abstract class AgentSessionExecution extends AgentSessionExtensions {
       return false;
     }
 
-    const delayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    const backoffDelayMs = settings.baseDelayMs * 2 ** (this.retryCount - 1);
+    const rateLimitWindow = classifyRateLimitWindow(message.errorMessage);
+    const retryAfterDelayMs =
+      rateLimitWindow.kind === "short" && rateLimitWindow.retryAfterSeconds !== undefined
+        ? Math.ceil(rateLimitWindow.retryAfterSeconds * 1000)
+        : 0;
+    const delayMs = Math.max(backoffDelayMs, retryAfterDelayMs);
 
     this.emit({
       type: "auto_retry_start",

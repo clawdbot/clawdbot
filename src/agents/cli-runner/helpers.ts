@@ -13,35 +13,34 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "@openclaw/normalization-core/string-coerce";
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ThinkLevel } from "../../auto-reply/thinking.js";
 import type { ChatType } from "../../channels/chat-type.js";
-import type { CliBackendConfig } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
 import { privateFileStore } from "../../infra/private-file-store.js";
 import { tempWorkspace } from "../../infra/private-temp-workspace.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import type { ImageContent } from "../../llm/types.js";
+import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
+import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
+import type { CliBackendConfig } from "../../plugins/cli-backend.types.js";
 import { listRegisteredPluginAgentPromptGuidance } from "../../plugins/command-registry-state.js";
 import type { BootstrapMode } from "../bootstrap-mode.js";
 import type { EmbeddedContextFile } from "../embedded-agent-helpers.js";
 import {
   detectAndLoadPromptImages,
   detectImageReferences,
-  loadImageFromRef,
 } from "../embedded-agent-runner/run/images.js";
+import type { MediaImageLayout } from "../embedded-agent-runner/run/prompt-image-metadata.js";
 import { resolveDefaultModelForAgent } from "../model-selection.js";
 import type { AgentTool } from "../runtime/index.js";
-import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
 import { detectRuntimeShell } from "../shell-utils.js";
 import { buildConfiguredAgentSystemPrompt } from "../system-prompt-config.js";
 import { buildSystemPromptParams } from "../system-prompt-params.js";
 import type { SilentReplyPromptMode } from "../system-prompt.types.js";
-import { sanitizeImageBlocks } from "../tool-images.js";
 import { cliBackendLog } from "./log.js";
 import { formatTomlConfigOverride } from "./toml-inline.js";
 /** Re-export CLI reliability helpers used by older runner call sites. */
@@ -55,41 +54,13 @@ const CLI_RUN_QUEUE = new KeyedAsyncQueue();
 const CLI_IMAGE_SWEEP_TTL_MS = 7 * 24 * 60 * 60 * 1_000;
 const sweptCliImageRoots = new Set<string>();
 
-function isClaudeCliProvider(providerId: string): boolean {
+export function isClaudeCliBackendId(providerId: string): boolean {
   return normalizeOptionalLowercaseString(providerId) === "claude-cli";
 }
 
 /** Enqueues a CLI run under a backend/session key to prevent unsafe overlap. */
 export function enqueueCliRun<T>(key: string, task: () => Promise<T>): Promise<T> {
   return CLI_RUN_QUEUE.enqueue(key, task);
-}
-
-/**
- * Hashes the (account, agent, auth-profile, session) tuple to a stable owner key
- * shared between the CLI run queue (`resolveCliRunQueueKey`) and the Claude live
- * session map (`buildClaudeLiveKey`). The two paths must agree byte-for-byte
- * within a single process so a fresh queued turn picks up the same live session
- * the registry already holds; the golden-hash test below pins the encoding.
- */
-export function buildClaudeOwnerKey(input: {
-  agentAccountId?: string;
-  agentId?: string;
-  authProfileId?: string;
-  sessionId?: string;
-  sessionKey?: string;
-}): string {
-  return crypto
-    .createHash("sha256")
-    .update(
-      JSON.stringify({
-        agentAccountId: input.agentAccountId,
-        agentId: input.agentId,
-        authProfileId: input.authProfileId,
-        sessionId: input.sessionId,
-        sessionKey: input.sessionKey,
-      }),
-    )
-    .digest("hex");
 }
 
 /** Resolves the serialization key for a CLI backend run. */
@@ -102,16 +73,15 @@ export function resolveCliRunQueueKey(params: {
   cliSessionId?: string;
   ownerKey?: string;
 }): string {
-  const requiresLiveSessionSerialization =
-    isClaudeCliProvider(params.backendId) && params.liveSession === "claude-stdio";
+  const requiresLiveSessionSerialization = params.liveSession !== undefined;
   if (params.serialize === false && !requiresLiveSessionSerialization) {
     return `${params.backendId}:${params.runId}`;
   }
-  if (isClaudeCliProvider(params.backendId)) {
-    const ownerKey = params.ownerKey?.trim();
-    if (requiresLiveSessionSerialization && ownerKey) {
-      return `${params.backendId}:owner:${ownerKey}`;
-    }
+  const ownerKey = params.ownerKey?.trim();
+  if (requiresLiveSessionSerialization && ownerKey) {
+    return `${params.backendId}:owner:${ownerKey}`;
+  }
+  if (isClaudeCliBackendId(params.backendId)) {
     const sessionId = params.cliSessionId?.trim();
     if (sessionId) {
       return `${params.backendId}:session:${sessionId}`;
@@ -141,12 +111,12 @@ export function buildCliAgentSystemPrompt(params: {
   runtimeChatType?: ChatType;
   runtimeCapabilities?: string[];
   ownerNumbers?: string[];
-  heartbeatPrompt?: string;
   docsPath?: string;
   sourcePath?: string;
   tools: AgentTool[];
   contextFiles?: EmbeddedContextFile[];
   bootstrapMode?: BootstrapMode;
+  bootstrapTruncationNotice?: string;
   skillsPrompt?: string;
   modelDisplay: string;
   agentId?: string;
@@ -159,7 +129,7 @@ export function buildCliAgentSystemPrompt(params: {
     agentId: params.agentId,
   });
   const defaultModelLabel = `${defaultModelRef.provider}/${defaultModelRef.model}`;
-  const { runtimeInfo, userTimezone, userTime, userTimeFormat } = buildSystemPromptParams({
+  const { runtimeInfo, userTimezone, userDate } = buildSystemPromptParams({
     config: params.config,
     agentId: params.agentId,
     workspaceDir: runtimeWorkspaceDir,
@@ -190,7 +160,6 @@ export function buildCliAgentSystemPrompt(params: {
     silentReplyPromptMode: params.silentReplyPromptMode,
     ownerNumbers: params.ownerNumbers,
     reasoningTagHint: false,
-    heartbeatPrompt: params.heartbeatPrompt,
     docsPath: params.docsPath,
     sourcePath: params.sourcePath,
     acpEnabled: isAcpRuntimeSpawnAvailable({ config: params.config }),
@@ -202,10 +171,10 @@ export function buildCliAgentSystemPrompt(params: {
     toolNames: params.tools.map((tool) => tool.name),
     skillsPrompt: params.skillsPrompt,
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
     contextFiles: params.contextFiles,
     bootstrapMode: params.bootstrapMode,
+    bootstrapTruncationNotice: params.bootstrapTruncationNotice,
   });
 }
 
@@ -362,44 +331,6 @@ function appendImagePathsToPrompt(prompt: string, paths: string[], prefix = ""):
   return `${trimmed}${separator}${paths.map((entry) => `${prefix}${entry}`).join("\n")}`;
 }
 
-/** Loads and sanitizes image references found in prompt text. */
-async function loadPromptRefImages(params: {
-  prompt: string;
-  workspaceDir: string;
-  maxBytes?: number;
-  workspaceOnly?: boolean;
-  sandbox?: { root: string; bridge: SandboxFsBridge };
-}): Promise<ImageContent[]> {
-  const refs = detectImageReferences(params.prompt);
-  if (refs.length === 0) {
-    return [];
-  }
-
-  const maxBytes = params.maxBytes ?? MAX_IMAGE_BYTES;
-  const seen = new Set<string>();
-  const images: ImageContent[] = [];
-  for (const ref of refs) {
-    const key = `${ref.type}:${ref.resolved}`;
-    if (seen.has(key)) {
-      continue;
-    }
-    seen.add(key);
-    const image = await loadImageFromRef(ref, params.workspaceDir, {
-      maxBytes,
-      workspaceOnly: params.workspaceOnly,
-      sandbox: params.sandbox,
-    });
-    if (image) {
-      images.push(image);
-    }
-  }
-
-  const { images: sanitizedImages } = await sanitizeImageBlocks(images, "prompt:images", {
-    maxBytes,
-  });
-  return sanitizedImages;
-}
-
 /** Writes CLI image payloads to private paths and returns their file paths. */
 async function writeCliImages(params: {
   backend: CliBackendConfig;
@@ -447,7 +378,7 @@ export async function writeCliSystemPromptFile(params: {
   );
   return {
     filePath,
-    cleanup: async () => await workspace.cleanup(),
+    cleanup: () => workspace.cleanup().then(() => undefined),
   };
 }
 
@@ -457,29 +388,42 @@ export async function prepareCliPromptImagePayload(params: {
   prompt: string;
   imagePrompt?: string;
   workspaceDir: string;
+  localRoots?: readonly string[];
   images?: ImageContent[];
   imageOrder?: PromptImageOrderEntry[];
+  mediaImageLayout?: MediaImageLayout;
+  media?: MediaFact[];
 }): Promise<{
   prompt: string;
   imagePaths?: string[];
   cleanupImages?: () => Promise<void>;
 }> {
   let prompt = params.prompt;
-  const resolvedImages =
-    params.imagePrompt !== undefined
-      ? (
-          await detectAndLoadPromptImages({
-            prompt: params.imagePrompt,
-            workspaceDir: params.workspaceDir,
-            model: { input: ["text", "image"] },
-            existingImages: params.images,
-            imageOrder: params.imageOrder,
-            maxBytes: MAX_IMAGE_BYTES,
-          })
-        ).images
-      : params.images && params.images.length > 0
-        ? params.images
-        : await loadPromptRefImages({ prompt, workspaceDir: params.workspaceDir });
+  const imagePrompt = params.imagePrompt ?? prompt;
+  const needsHydration =
+    params.imagePrompt !== undefined ||
+    Boolean(params.media?.length) ||
+    Boolean(params.mediaImageLayout) ||
+    (!params.images?.length && detectImageReferences(imagePrompt).length > 0);
+  const imageResult = needsHydration
+    ? await detectAndLoadPromptImages({
+        prompt: imagePrompt,
+        media: params.media,
+        workspaceDir: params.workspaceDir,
+        model: { input: ["text", "image"] },
+        existingImages: params.images,
+        imageOrder: params.imageOrder,
+        mediaImageLayout: params.mediaImageLayout,
+        maxBytes: MAX_IMAGE_BYTES,
+        localRoots: params.localRoots,
+      })
+    : undefined;
+  if (imageResult?.failedMediaCount) {
+    throw new Error(
+      `failed to hydrate ${imageResult.failedMediaCount} structured image attachment(s) for CLI input`,
+    );
+  }
+  const resolvedImages = imageResult?.images ?? params.images ?? [];
   if (resolvedImages.length === 0) {
     return { prompt };
   }
@@ -519,6 +463,7 @@ export function buildCliArgs(params: {
   promptArg?: string;
   useResume: boolean;
   forkResume?: boolean;
+  resumeAt?: string;
   sendSystemPromptOnResume?: boolean;
 }): string[] {
   const args: string[] = [...params.baseArgs];
@@ -557,8 +502,6 @@ export function buildCliArgs(params: {
       for (const entry of params.backend.sessionArgs) {
         args.push(entry.replaceAll("{sessionId}", params.sessionId));
       }
-    } else if (params.backend.sessionArg) {
-      args.push(params.backend.sessionArg, params.sessionId);
     }
   }
   if (params.useResume && params.forkResume) {
@@ -566,6 +509,12 @@ export function buildCliArgs(params: {
       throw new Error("CLI backend does not support forked session resume");
     }
     args.push(params.backend.forkArg);
+  }
+  if (params.resumeAt) {
+    if (!params.useResume || !params.backend.resumeAtArg) {
+      throw new Error("CLI backend does not support checkpointed session resume");
+    }
+    args.push(params.backend.resumeAtArg, params.resumeAt);
   }
   if (params.promptArg !== undefined) {
     let replacedPromptPlaceholder = false;

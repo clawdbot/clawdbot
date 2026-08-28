@@ -256,6 +256,53 @@ describe("matrix onboarding", () => {
     expect(matrixConfig?.accessToken).toBe("ops-token");
   });
 
+  it.each<{
+    authMode: string;
+    secretPrompt: string;
+    text: Record<string, string>;
+  }>([
+    {
+      authMode: "token",
+      secretPrompt: "Matrix access token",
+      text: {
+        "Matrix homeserver URL": "https://matrix.example.org",
+        "Matrix access token": "test-token",
+        "Matrix device name (optional)": "",
+      } satisfies Record<string, string>,
+    },
+    {
+      authMode: "password",
+      secretPrompt: "Matrix password",
+      text: {
+        "Matrix homeserver URL": "https://matrix.example.org",
+        "Matrix user ID": "@test:example.org",
+        "Matrix password": "test-password",
+        "Matrix device name (optional)": "",
+      } satisfies Record<string, string>,
+    },
+  ])("marks the $secretPrompt prompt as sensitive", async ({ authMode, secretPrompt, text }) => {
+    installMatrixTestRuntime();
+
+    const prompter = createMatrixWizardPrompter({
+      select: { "Matrix auth method": authMode },
+      text,
+      confirm: { "Enable end-to-end encryption (E2EE)?": false },
+      onConfirm: async () => false,
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: {} as CoreConfig,
+      prompter,
+    });
+
+    expect(result).not.toBe("skip");
+    const secretCall = vi
+      .mocked(prompter.text)
+      .mock.calls.find(([options]) => options.message === secretPrompt);
+    expect(secretCall?.[0]).toMatchObject({ message: secretPrompt, sensitive: true });
+    expect(secretCall?.[0]).not.toHaveProperty("initialValue");
+  });
+
   it("preserves SecretRef access tokens when keeping existing credentials", async () => {
     installMatrixTestRuntime();
 
@@ -402,7 +449,7 @@ describe("matrix onboarding", () => {
       onText: async (message) => {
         if (message === "Matrix invite auto-join allowlist (comma-separated)") {
           inviteAllowlistPrompts += 1;
-          return inviteAllowlistPrompts === 1 ? "Project Room" : "#ops:example.org";
+          return inviteAllowlistPrompts === 1 ? "!, Project Room" : "#ops:example.org";
         }
         throw new Error(`unexpected text prompt: ${message}`);
       },
@@ -423,9 +470,90 @@ describe("matrix onboarding", () => {
     expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
     expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual(["#ops:example.org"]);
     expect(notes.join("\n")).toContain(
-      "Use only stable Matrix invite targets for auto-join: !roomId:server, #alias:server, or *.",
+      "Use only stable Matrix invite targets for auto-join: !roomId:server (or the suffixless !roomId form on room version 12+), #alias:server, or *.",
     );
-    expect(notes.join("\n")).toContain("Invalid: Project Room");
+    expect(notes.join("\n")).toContain("Invalid: !, Project Room");
+  });
+
+  it("accepts a room version 12 auto-join target (no :server suffix) on the first entry", async () => {
+    // Room version 12 (MSC4291) dropped the trailing ":server" from room IDs.
+    installMatrixTestRuntime();
+    const notes: string[] = [];
+    let inviteAllowlistPrompts = 0;
+
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
+      notes,
+      inviteAutoJoin: "allowlist",
+      onText: async (message) => {
+        if (message === "Matrix invite auto-join allowlist (comma-separated)") {
+          inviteAllowlistPrompts += 1;
+          return "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70";
+        }
+        throw new Error(`unexpected text prompt: ${message}`);
+      },
+    });
+
+    const result = await runMatrixInteractiveConfigure({
+      cfg: createConfiguredMatrixTopLevelConfig(),
+      prompter,
+      configured: true,
+    });
+
+    expect(result).not.toBe("skip");
+    if (result === "skip") {
+      return;
+    }
+
+    expect(inviteAllowlistPrompts).toBe(1);
+    expect(result.cfg.channels?.matrix?.autoJoin).toBe("allowlist");
+    expect(result.cfg.channels?.matrix?.autoJoinAllowlist).toEqual([
+      "!UIZ0YzC99dC1AyEM6mGl0_XNP8u8xeCCt_Zk8Uhkp70",
+    ]);
+  });
+
+  it("advertises the suffixless Room v12 form in the invite auto-join placeholder", async () => {
+    installMatrixTestRuntime();
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
+      inviteAutoJoin: "allowlist",
+      onText: async (message) =>
+        message === "Matrix invite auto-join allowlist (comma-separated)" ? "#ops:example.org" : "",
+    });
+
+    await runMatrixInteractiveConfigure({
+      cfg: createConfiguredMatrixTopLevelConfig(),
+      prompter,
+      configured: true,
+    });
+
+    const invitePromptCall = vi
+      .mocked(prompter.text)
+      .mock.calls.find(
+        ([options]) => options.message === "Matrix invite auto-join allowlist (comma-separated)",
+      );
+    expect(invitePromptCall?.[0].placeholder).toBe("!roomId:server, !roomId, #alias:server, *");
+  });
+
+  it("advertises the suffixless Room v12 form in the group room setup placeholder", async () => {
+    installMatrixTestRuntime();
+    const prompter = createMatrixUpdateKeepCredentialsPrompter({
+      configureRoomsAccess: true,
+      roomsAllowlist: "!ops-room:example.org",
+    });
+
+    await runMatrixInteractiveConfigure({
+      cfg: createConfiguredMatrixTopLevelConfig(),
+      prompter,
+      configured: true,
+    });
+
+    const roomsPromptCall = vi
+      .mocked(prompter.text)
+      .mock.calls.find(
+        ([options]) => options.message === "Matrix rooms allowlist (comma-separated)",
+      );
+    expect(roomsPromptCall?.[0].placeholder).toBe(
+      "!roomId:server, !roomId, #alias:server, Project Room",
+    );
   });
 
   it("reports account-scoped DM config keys for named accounts", () => {

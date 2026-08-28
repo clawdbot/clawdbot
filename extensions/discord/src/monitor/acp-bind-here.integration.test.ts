@@ -20,8 +20,8 @@ import {
   registerSessionBindingAdapter,
   type SessionBindingBindInput,
   type SessionBindingRecord,
+  testing as sessionBindingTesting,
 } from "openclaw/plugin-sdk/conversation-runtime";
-import { testing as sessionBindingTesting } from "openclaw/plugin-sdk/conversation-runtime";
 import { preflightDiscordMessage } from "./message-handler.preflight.js";
 import {
   createDiscordMessage,
@@ -35,6 +35,9 @@ const baseCfg = {
   session: {
     mainKey: "main",
     scope: "per-sender",
+    threadBindings: {
+      enabled: true,
+    },
   },
   acp: {
     enabled: true,
@@ -42,13 +45,6 @@ const baseCfg = {
       enabled: true,
     },
     backend: "acpx",
-  },
-  channels: {
-    discord: {
-      threadBindings: {
-        enabled: true,
-      },
-    },
   },
 } satisfies OpenClawConfig;
 

@@ -2,6 +2,7 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { i18n } from "../i18n/index.ts";
 import "./resizable-divider.ts";
 
 let container: HTMLDivElement;
@@ -10,6 +11,7 @@ const originalPointerEvent = globalThis.PointerEvent;
 type ResizableDivider = HTMLElement & {
   orientation: "horizontal" | "vertical";
   splitRatio: number;
+  measureRatio?: () => number;
   updateComplete: Promise<boolean>;
 };
 
@@ -72,14 +74,14 @@ async function renderDivider() {
   return divider;
 }
 
-function dispatchPointer(target: EventTarget, type: string, clientX: number) {
+function dispatchPointer(target: EventTarget, type: string, clientX: number, pointerId = 7) {
   target.dispatchEvent(
     new PointerEvent(type, {
       bubbles: true,
       button: 0,
       cancelable: true,
       clientX,
-      pointerId: 7,
+      pointerId,
       pointerType: "touch",
     }),
   );
@@ -131,6 +133,28 @@ describe("resizable-divider", () => {
     await divider.updateComplete;
 
     expect(divider.getAttribute("aria-valuenow")).toBe("65");
+
+    divider.measureRatio = () => 0.55;
+    await divider.updateComplete;
+
+    expect(divider.getAttribute("aria-valuenow")).toBe("55");
+  });
+
+  it("localizes the fallback separator label", async () => {
+    i18n.registerTranslation("pt-BR", {
+      common: {
+        resizeSplitView: "Redimensionar visualização dividida",
+      },
+    });
+    await i18n.setLocale("pt-BR");
+    try {
+      render(html`<resizable-divider></resizable-divider>`, container);
+      const divider = container.querySelector<ResizableDivider>("resizable-divider");
+      await divider?.updateComplete;
+      expect(divider?.getAttribute("aria-label")).toBe("Redimensionar visualização dividida");
+    } finally {
+      await i18n.setLocale("en");
+    }
   });
 
   it("resizes with keyboard arrows, Home, and End", async () => {
@@ -180,9 +204,10 @@ describe("resizable-divider", () => {
     expectLastResizeRatio(resized, 0.65);
   });
 
-  it("uses pointer events for mouse, pen, and touch dragging", async () => {
+  it("keeps dragging owned by the initiating pointer", async () => {
     const divider = await renderDivider();
     const resized = vi.fn();
+    const resizeEnded = vi.fn();
     const setPointerCapture = vi.fn();
     const releasePointerCapture = vi.fn();
     const hasPointerCapture = vi.fn(() => true);
@@ -190,17 +215,74 @@ describe("resizable-divider", () => {
     divider.releasePointerCapture = releasePointerCapture;
     divider.hasPointerCapture = hasPointerCapture;
     divider.addEventListener("resize", resized);
+    divider.addEventListener("resize-end", resizeEnded);
 
     dispatchPointer(divider, "pointerdown", 100);
-    expect(document.activeElement).toBe(divider);
+    expect(document.activeElement).not.toBe(divider);
     expect([...divider.classList]).toEqual(["dragging"]);
     expect(setPointerCapture).toHaveBeenCalledWith(7);
 
-    dispatchPointer(document, "pointermove", 220);
-    expectLastResizeRatio(resized, 0.7);
+    dispatchPointer(divider, "pointerdown", 180, 8);
+    dispatchPointer(document, "pointermove", 220, 8);
+    dispatchPointer(document, "pointercancel", 220, 8);
+    dispatchPointer(document, "pointerup", 220, 8);
 
-    dispatchPointer(document, "pointerup", 220);
+    expect(setPointerCapture).toHaveBeenCalledTimes(1);
+    expect(resized).not.toHaveBeenCalled();
+    expect(resizeEnded).not.toHaveBeenCalled();
+    expect([...divider.classList]).toEqual(["dragging"]);
+
+    dispatchPointer(document, "pointermove", 220, 7);
+    dispatchPointer(document, "pointermove", 120, 7);
+    expect(resized).not.toHaveBeenCalled();
+    await nextFrame();
+    expectLastResizeRatio(resized, 0.65);
+    expect(resized).toHaveBeenCalledTimes(1);
+    expect(resizeEnded).not.toHaveBeenCalled();
+
+    dispatchPointer(document, "pointerup", 220, 7);
+    const endEvent = resizeEnded.mock.lastCall?.[0] as
+      | CustomEvent<{ splitRatio: number }>
+      | undefined;
+    expect(endEvent?.detail).toEqual({ splitRatio: 0.65 });
+    expect(resizeEnded).toHaveBeenCalledTimes(1);
     expect([...divider.classList]).toEqual([]);
     expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    expect(releasePointerCapture).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops dragging when the window loses focus", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const releasePointerCapture = vi.fn();
+    divider.setPointerCapture = vi.fn();
+    divider.releasePointerCapture = releasePointerCapture;
+    divider.hasPointerCapture = vi.fn(() => true);
+    divider.addEventListener("resize", resized);
+
+    dispatchPointer(divider, "pointerdown", 100);
+    window.dispatchEvent(new Event("blur"));
+
+    expect([...divider.classList]).toEqual([]);
+    expect(releasePointerCapture).toHaveBeenCalledWith(7);
+    dispatchPointer(document, "pointermove", 220);
+    expect(resized).not.toHaveBeenCalled();
+  });
+
+  it("commits the final pointer position when disconnected", async () => {
+    const divider = await renderDivider();
+    const resized = vi.fn();
+    const resizeEnded = vi.fn();
+    divider.setPointerCapture = vi.fn();
+    divider.releasePointerCapture = vi.fn();
+    divider.addEventListener("resize", resized);
+    divider.addEventListener("resize-end", resizeEnded);
+
+    dispatchPointer(divider, "pointerdown", 100);
+    dispatchPointer(document, "pointermove", 120);
+    divider.remove();
+
+    expectLastResizeRatio(resized, 0.65);
+    expectLastResizeRatio(resizeEnded, 0.65);
   });
 });

@@ -3,7 +3,7 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { assertQaSuiteArtifactWritten } from "./artifact-assertion.js";
-import { isRepoRootRelativeRef, toRepoRelativePath } from "./cli-paths.js";
+import { toRepoRelativePath } from "./cli-paths.js";
 import {
   buildPlaywrightEvidenceSummary,
   buildScriptEvidenceSummary,
@@ -16,18 +16,23 @@ import {
   resolveQaEvidenceProfile,
   validateQaEvidenceSummaryJson,
 } from "./evidence-summary.js";
+import { sanitizeQaProgressValue } from "./progress-format.js";
 import type { QaProviderMode } from "./providers/index.js";
 import type { QaSeedScenarioWithSource } from "./scenario-catalog.js";
 import type { QaScorecardEvidenceMode } from "./scorecard-taxonomy.js";
 import { shellQuote } from "./shell-quote.js";
 import {
-  killQaScenarioWindowsProcessTree,
-  resetQaScenarioCommandCleanupTimings,
+  formatQaScenarioCommandOutput,
   runQaScenarioCommandLifecycle,
-  setQaScenarioCommandCleanupTimings,
   type QaScenarioCommandExecution,
   type QaScenarioCommandResult,
 } from "./test-file-scenario-command-lifecycle.js";
+import { isDockerE2eScenario, runDockerE2eBatch } from "./test-file-scenario-docker-batch.js";
+import { readScriptProducerEvidence } from "./test-file-scenario-script-evidence.js";
+import {
+  readNativeVitestExecutionFailure,
+  resolveNativeVitestReportPath,
+} from "./test-file-scenario-vitest-report.js";
 export type { QaScenarioCommandExecution } from "./test-file-scenario-command-lifecycle.js";
 
 export type QaTestFileScenario = QaSeedScenarioWithSource & {
@@ -43,8 +48,12 @@ type QaTestFileScenarioRunParams = {
   commandTimeoutMs?: number;
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
+  envMode?: "replace";
+  failFast?: boolean;
+  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   primaryModel: string;
+  progress?: (message: string) => void;
   providerMode: QaProviderMode;
   repoRoot: string;
   runCommand?: QaScenarioCommandRunner;
@@ -71,6 +80,20 @@ type QaTestFileScenarioResult = {
   status: QaEvidenceStatus;
 };
 
+type QaTestFileExecutionUnit =
+  | {
+      kind: "docker-batch";
+      order: number;
+      scenarios: Parameters<typeof runDockerE2eBatch>[0]["scenarios"];
+      timeoutMs: number;
+    }
+  | {
+      kind: "scenario";
+      order: number;
+      scenario: QaTestFileScenario;
+      timeoutMs: number;
+    };
+
 export type QaTestFileScenarioRunResult = {
   evidence: QaEvidenceSummaryJson;
   evidencePath: string;
@@ -95,23 +118,48 @@ export function isQaTestFileScenario(
   );
 }
 
-function vitestSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+function vitestReporterArgs(
+  scenario: QaTestFileScenario,
+  context: { outputDir: string },
+): string[] {
+  return [
+    "--reporter=verbose",
+    "--reporter=json",
+    `--outputFile.json=${resolveNativeVitestReportPath(scenario, context.outputDir)}`,
+  ];
+}
+
+function vitestSteps(
+  scenario: QaTestFileScenario,
+  context: { outputDir: string },
+): QaScenarioCommandStep[] {
+  const e2eConfigArgs = scenario.execution.path.endsWith(".e2e.test.ts")
+    ? ["run", "--config", "test/vitest/vitest.e2e.config.ts"]
+    : [];
   return [
     {
       command: process.execPath,
-      args: ["scripts/run-vitest.mjs", scenario.execution.path, "--reporter=verbose"],
+      args: [
+        "scripts/run-vitest.mjs",
+        ...e2eConfigArgs,
+        scenario.execution.path,
+        ...vitestReporterArgs(scenario, context),
+      ],
     },
   ];
 }
 
-function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] {
+function playwrightSteps(
+  scenario: QaTestFileScenario,
+  context: { outputDir: string },
+): QaScenarioCommandStep[] {
   const testNamePattern =
     scenario.execution.kind === "playwright" ? scenario.execution.testNamePattern : undefined;
   const testNameArgs = testNamePattern ? ["--testNamePattern", testNamePattern] : [];
   return [
     {
       command: process.execPath,
-      args: ["scripts/ensure-playwright-chromium.mjs", "--skip-ffmpeg"],
+      args: ["--import", "tsx", "scripts/ensure-playwright-chromium.mts"],
     },
     {
       command: process.execPath,
@@ -123,7 +171,7 @@ function playwrightSteps(scenario: QaTestFileScenario): QaScenarioCommandStep[] 
         "--configLoader",
         "runner",
         scenario.execution.path,
-        "--reporter=verbose",
+        ...vitestReporterArgs(scenario, context),
         ...testNameArgs,
       ],
     },
@@ -192,9 +240,24 @@ function buildScenarioEvidenceTarget(scenario: QaTestFileScenario) {
   };
 }
 
+function coverageForScenario(scenario: QaTestFileScenario) {
+  return [
+    ...(scenario.coverage?.primary ?? []).map((id) => ({ id, role: "primary" as const })),
+    ...(scenario.coverage?.secondary ?? []).map((id) => ({ id, role: "secondary" as const })),
+  ];
+}
+
+function withScenarioCoverage(
+  entry: QaEvidenceSummaryJson["entries"][number],
+  scenario: QaTestFileScenario,
+) {
+  return { ...entry, coverage: coverageForScenario(scenario) };
+}
+
 async function runScenarioCommandSteps(params: {
   commandTimeoutMs: number;
   env: NodeJS.ProcessEnv;
+  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   repoRoot: string;
   runCommand: QaScenarioCommandRunner;
@@ -208,23 +271,30 @@ async function runScenarioCommandSteps(params: {
   for (const step of params.steps) {
     logChunks.push(`$ ${formatCommand(step)}\n`);
     try {
+      const isNativeVitestStep =
+        params.scenario.execution.kind !== "script" && step.args[0] === "scripts/run-vitest.mjs";
+      if (isNativeVitestStep) {
+        // A reused scenario output directory must not let a previous run's
+        // passing report authenticate a child that emitted no report.
+        await fs.rm(resolveNativeVitestReportPath(params.scenario, params.outputDir), {
+          force: true,
+        });
+      }
       const timeoutMs =
         params.scenario.execution.kind === "script"
           ? (params.scenario.execution.timeoutMs ?? params.commandTimeoutMs)
-          : undefined;
+          : params.commandTimeoutMs;
       const result = await params.runCommand({
         command: step.command,
         args: step.args,
         cwd: params.repoRoot,
         env: params.env,
-        ...(timeoutMs === undefined ? {} : { timeoutMs }),
+        ...(params.scenario.execution.kind === "script" && params.onCommandOutput
+          ? { onOutput: params.onCommandOutput }
+          : {}),
+        timeoutMs,
       });
-      if (result.stdout) {
-        logChunks.push(result.stdout);
-      }
-      if (result.stderr) {
-        logChunks.push(result.stderr);
-      }
+      logChunks.push(formatQaScenarioCommandOutput(result));
       if (result.failureMessage || result.exitCode !== 0 || result.signal) {
         failureMessage =
           result.failureMessage ??
@@ -232,6 +302,15 @@ async function runScenarioCommandSteps(params: {
             ? `${path.basename(step.command)} terminated by ${result.signal}`
             : `${path.basename(step.command)} exited with ${result.exitCode}`);
         break;
+      }
+      // Chromium installation and script producers do not execute Vitest tests.
+      // Only the final native test command can prove an assertion actually ran.
+      if (isNativeVitestStep) {
+        failureMessage = await readNativeVitestExecutionFailure(params);
+        if (failureMessage) {
+          logChunks.push(`${failureMessage}\n`);
+          break;
+        }
       }
     } catch (error) {
       failureMessage = formatErrorMessage(error);
@@ -254,11 +333,21 @@ async function runScenarioCommandSteps(params: {
 async function runQaTestFileScenario(params: {
   env: NodeJS.ProcessEnv;
   commandTimeoutMs: number;
+  onCommandOutput?: QaScenarioCommandExecution["onOutput"];
   outputDir: string;
   repoRoot: string;
   runCommand: QaScenarioCommandRunner;
   scenario: QaTestFileScenario;
 }) {
+  const requiresProducerEvidence =
+    params.scenario.execution.kind === "script" && !isDockerE2eScenario(params.scenario);
+  if (requiresProducerEvidence) {
+    const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
+    // The whole producer artifact root belongs to one command invocation. Clear
+    // it so neither a stale index nor a stale bundle can authenticate a no-op.
+    await fs.rm(scenarioOutputDir, { force: true, recursive: true });
+    await fs.mkdir(scenarioOutputDir, { recursive: true });
+  }
   const definition = testFileRunnerDefinitions[params.scenario.execution.kind];
   const result = await runScenarioCommandSteps({
     ...params,
@@ -267,12 +356,32 @@ async function runQaTestFileScenario(params: {
   if (params.scenario.execution.kind !== "script") {
     return result;
   }
-  const producerEvidenceResult = await readScriptProducerEvidence({
-    outputDir: params.outputDir,
-    repoRoot: params.repoRoot,
-    scenario: params.scenario,
-  });
+  let producerEvidenceResult: Pick<QaTestFileScenarioResult, "producerEvidence">;
+  try {
+    producerEvidenceResult = await readScriptProducerEvidence({
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+      scenario: params.scenario,
+      requireCurrentRunEvidence: requiresProducerEvidence,
+    });
+  } catch (error) {
+    if (result.status !== "pass") {
+      return result;
+    }
+    return {
+      ...result,
+      failureMessage: `Script producer evidence is invalid: ${formatErrorMessage(error)}`,
+      status: "fail" as const,
+    };
+  }
   if (!producerEvidenceResult.producerEvidence) {
+    if (requiresProducerEvidence && result.status === "pass") {
+      return {
+        ...result,
+        failureMessage: "Script exited successfully without writing fresh producer QA evidence.",
+        status: "fail" as const,
+      };
+    }
     return result;
   }
   if (result.status !== "pass") {
@@ -292,28 +401,85 @@ async function runQaTestFileScenario(params: {
   };
 }
 
+function resolveScenarioTimeoutMs(scenario: QaTestFileScenario, commandTimeoutMs: number) {
+  return scenario.execution.kind === "script"
+    ? resolvePositiveTimerTimeoutMs(scenario.execution.timeoutMs, commandTimeoutMs)
+    : commandTimeoutMs;
+}
+
+function buildExecutionUnits(params: {
+  commandTimeoutMs: number;
+  failFast: boolean;
+  scenarios: readonly QaTestFileScenario[];
+}): QaTestFileExecutionUnit[] {
+  const scenarioOrder = new Map(params.scenarios.map((scenario, index) => [scenario, index]));
+  const dockerBatchScenarios =
+    !params.failFast && params.scenarios[0]?.execution.kind === "script"
+      ? params.scenarios.filter(isDockerE2eScenario)
+      : [];
+  const dockerBatchGroups = new Map<number, typeof dockerBatchScenarios>();
+  for (const scenario of dockerBatchScenarios) {
+    const timeoutMs = resolveScenarioTimeoutMs(scenario, params.commandTimeoutMs);
+    const group = dockerBatchGroups.get(timeoutMs) ?? [];
+    group.push(scenario);
+    dockerBatchGroups.set(timeoutMs, group);
+  }
+  const batchedScenarioIds = new Set(dockerBatchScenarios.map((scenario) => scenario.id));
+  const units: QaTestFileExecutionUnit[] = [
+    ...[...dockerBatchGroups].map(([timeoutMs, scenarios]) => ({
+      kind: "docker-batch" as const,
+      order: Math.min(...scenarios.map((scenario) => scenarioOrder.get(scenario) ?? 0)),
+      scenarios,
+      timeoutMs,
+    })),
+    ...params.scenarios
+      .filter((scenario) => !batchedScenarioIds.has(scenario.id))
+      .map((scenario) => ({
+        kind: "scenario" as const,
+        order: scenarioOrder.get(scenario) ?? 0,
+        scenario,
+        timeoutMs: resolveScenarioTimeoutMs(scenario, params.commandTimeoutMs),
+      })),
+  ];
+  if (!params.failFast && params.scenarios[0]?.execution.kind === "script") {
+    // Native producers stay serial because they may rebuild shared dist output.
+    // Longest declared budgets run first so one late producer cannot starve at the suite deadline.
+    units.sort((left, right) => right.timeoutMs - left.timeoutMs || left.order - right.order);
+  } else {
+    units.sort((left, right) => left.order - right.order);
+  }
+  return units;
+}
+
 function statusFromProducerEvidence(params: {
   allowBlockedEvidence: boolean;
   producerEvidence: QaEvidenceSummaryJson | undefined;
 }): Pick<QaTestFileScenarioResult, "failureMessage" | "status"> {
   const { allowBlockedEvidence, producerEvidence } = params;
   if (!producerEvidence || producerEvidence.entries.length === 0) {
-    return { status: "pass" };
-  }
-  const blockingEntry = producerEvidence.entries.find(
-    (entry) =>
-      entry.result.status === "fail" ||
-      (!allowBlockedEvidence && entry.result.status === "blocked"),
-  );
-  if (blockingEntry) {
     return {
-      failureMessage:
-        blockingEntry.result.failure?.reason ??
-        `${blockingEntry.test.id} reported ${blockingEntry.result.status}`,
-      status: blockingEntry.result.status,
+      failureMessage: "Script exited successfully without reporting an executed producer check.",
+      status: "fail",
     };
   }
-  if (producerEvidence.entries.every((entry) => entry.result.status === "skipped")) {
+  const failedEntry = producerEvidence.entries.find((entry) => entry.result.status === "fail");
+  const blockedEntry = producerEvidence.entries.find((entry) => entry.result.status === "blocked");
+  if (failedEntry) {
+    return {
+      failureMessage:
+        failedEntry.result.failure?.reason ?? `${failedEntry.test.id} reported failed`,
+      status: "fail",
+    };
+  }
+  const hasPassed = producerEvidence.entries.some((entry) => entry.result.status === "pass");
+  if (blockedEntry && (!allowBlockedEvidence || !hasPassed)) {
+    return {
+      failureMessage:
+        blockedEntry.result.failure?.reason ?? `${blockedEntry.test.id} reported blocked`,
+      status: "blocked",
+    };
+  }
+  if (producerEvidence.entries.some((entry) => entry.result.status === "skipped")) {
     return { status: "skipped" };
   }
   return { status: "pass" };
@@ -341,13 +507,20 @@ function buildTestFileEvidence(params: {
   evidenceMode?: QaScorecardEvidenceMode;
   env?: NodeJS.ProcessEnv;
 }) {
-  const producerEntries = params.results.flatMap(
-    (result) => result.producerEvidence?.entries ?? [],
+  const producerEntries = params.results.flatMap((result) =>
+    // Producer artifacts own execution facts; the scenario catalog remains the
+    // sole owner of which semantic features those facts cover.
+    (result.producerEvidence?.entries ?? []).map((entry) =>
+      withScenarioCoverage(entry, result.scenario),
+    ),
   );
   if (producerEntries.length > 0) {
     const definition = testFileRunnerDefinitions[params.kind];
+    // Producer failures stay authoritative; parent terminal failures replace
+    // colliding non-fail results without discarding producer execution facts.
+    const producerEntryIds = new Set(producerEntries.map((entry) => entry.test.id));
     const fallbackResults = params.results.filter(
-      (result) => !result.producerEvidence || result.includeFallbackEvidence,
+      (result) => !result.producerEvidence?.entries.length || result.includeFallbackEvidence,
     );
     const evidenceMode =
       params.evidenceMode ??
@@ -379,16 +552,27 @@ function buildTestFileEvidence(params: {
       generatedAt: params.generatedAt,
       evidenceMode,
       profile: resolveQaEvidenceProfile({ env: params.env }),
-      entries: [
-        ...producerEntries.map((entry) => {
+      entries: params.results.flatMap((result) => [
+        ...(result.producerEvidence?.entries ?? []).map((entry) => {
+          const coveredEntry = withScenarioCoverage(entry, result.scenario);
+          const fallbackFailure = fallbackEvidence?.entries.find(
+            (fallback) =>
+              fallback.test.id === coveredEntry.test.id && fallback.result.status === "fail",
+          );
+          const resolvedEntry =
+            coveredEntry.result.status !== "fail" && fallbackFailure
+              ? Object.assign({}, coveredEntry, { result: fallbackFailure.result })
+              : coveredEntry;
           if (evidenceMode !== "slim") {
-            return entry;
+            return resolvedEntry;
           }
-          const { execution: _execution, ...withoutExecution } = entry;
+          const { execution: _execution, ...withoutExecution } = resolvedEntry;
           return withoutExecution;
         }),
-        ...(fallbackEvidence?.entries ?? []),
-      ],
+        ...(fallbackEvidence?.entries.filter(
+          (entry) => entry.test.id === result.scenario.id && !producerEntryIds.has(entry.test.id),
+        ) ?? []),
+      ]),
     });
   }
   const definition = testFileRunnerDefinitions[params.kind];
@@ -418,107 +602,6 @@ function buildTestFileEvidence(params: {
   });
 }
 
-async function readJsonFileIfExists(filePath: string): Promise<unknown> {
-  let text: string;
-  try {
-    text = await fs.readFile(filePath, "utf8");
-  } catch (error) {
-    if (
-      error &&
-      typeof error === "object" &&
-      "code" in error &&
-      (error as { code?: unknown }).code === "ENOENT"
-    ) {
-      return undefined;
-    }
-    throw error;
-  }
-  try {
-    return JSON.parse(text) as unknown;
-  } catch (error) {
-    throw new Error(`invalid JSON in ${filePath}: ${formatErrorMessage(error)}`, { cause: error });
-  }
-}
-
-// Producer artifact paths follow one convention: relative paths resolve against the
-// qa-evidence.json directory, absolute paths are taken as-is. Paths under the repo root
-// become repo-relative; paths outside it stay absolute so downstream consumers never see
-// `../` segments that would read as path traversal.
-function resolveScriptProducerArtifactPath(params: {
-  evidenceDir: string;
-  repoRoot: string;
-  artifactPath: string;
-}) {
-  const absolutePath = path.isAbsolute(params.artifactPath)
-    ? params.artifactPath
-    : path.join(params.evidenceDir, params.artifactPath);
-  const repoRelativePath = toRepoRelativePath(params.repoRoot, absolutePath);
-  return isRepoRootRelativeRef(repoRelativePath) ? repoRelativePath : path.normalize(absolutePath);
-}
-
-function normalizeScriptProducerEvidence(params: {
-  evidence: QaEvidenceSummaryJson;
-  evidencePath: string;
-  repoRoot: string;
-}): QaEvidenceSummaryJson {
-  // Input is already validated by the caller; this only rewrites artifact path strings,
-  // so the transformed shape stays schema-valid without re-parsing.
-  const evidenceDir = path.dirname(params.evidencePath);
-  return {
-    ...params.evidence,
-    entries: params.evidence.entries.map((entry) => ({
-      ...entry,
-      execution: entry.execution
-        ? {
-            ...entry.execution,
-            artifacts: entry.execution.artifacts.map((artifact) => ({
-              ...artifact,
-              path: resolveScriptProducerArtifactPath({
-                artifactPath: artifact.path,
-                evidenceDir,
-                repoRoot: params.repoRoot,
-              }),
-            })),
-          }
-        : undefined,
-    })),
-  };
-}
-
-async function readScriptProducerEvidence(params: {
-  outputDir: string;
-  repoRoot: string;
-  scenario: QaTestFileScenario;
-}): Promise<Pick<QaTestFileScenarioResult, "producerEvidence">> {
-  const scenarioOutputDir = path.join(params.outputDir, params.scenario.id);
-  const latestRun = (await readJsonFileIfExists(
-    path.join(scenarioOutputDir, "latest-run.json"),
-  )) as { qaEvidence?: unknown } | undefined;
-  const candidates = [
-    typeof latestRun?.qaEvidence === "string" ? latestRun.qaEvidence : undefined,
-    path.join(scenarioOutputDir, QA_EVIDENCE_FILENAME),
-  ].filter((candidate): candidate is string => Boolean(candidate));
-
-  for (const candidate of candidates) {
-    const evidencePath = path.isAbsolute(candidate)
-      ? candidate
-      : path.join(scenarioOutputDir, candidate);
-    const rawEvidence = await readJsonFileIfExists(evidencePath);
-    if (!rawEvidence) {
-      continue;
-    }
-    const evidence = validateQaEvidenceSummaryJson(rawEvidence);
-    return {
-      producerEvidence: normalizeScriptProducerEvidence({
-        evidence,
-        evidencePath,
-        repoRoot: params.repoRoot,
-      }),
-    };
-  }
-  return {};
-}
-
 function buildScenarioArtifactPaths(params: {
   repoRoot: string;
   results: readonly QaTestFileScenarioResult[];
@@ -538,6 +621,8 @@ async function writeTestFileEvidenceFile(params: {
   if (params.writeEvidenceFile ?? true) {
     await fs.writeFile(evidencePath, `${JSON.stringify(params.evidence, null, 2)}\n`, "utf8");
     await assertQaSuiteArtifactWritten("evidence", evidencePath);
+  } else {
+    await fs.rm(evidencePath, { force: true });
   }
   return { evidencePath };
 }
@@ -556,23 +641,58 @@ export async function runQaTestFileScenarios(
     params.commandTimeoutMs,
     DEFAULT_QA_TEST_FILE_COMMAND_TIMEOUT_MS,
   );
-  const env = {
-    ...process.env,
-    ...params.env,
-  };
+  const env = params.envMode === "replace" ? (params.env ?? {}) : { ...process.env, ...params.env };
   const results: QaTestFileScenarioResult[] = [];
-  for (const scenario of scenarios) {
-    results.push(
-      await runQaTestFileScenario({
+  const executionUnits = buildExecutionUnits({
+    commandTimeoutMs,
+    failFast: params.failFast === true,
+    scenarios,
+  });
+  for (const unit of executionUnits) {
+    if (unit.kind === "docker-batch") {
+      params.progress?.(
+        `native docker-batch start scenarios=${unit.scenarios.length} timeoutMs=${unit.timeoutMs}`,
+      );
+      const startedAt = Date.now();
+      const batchResults = await runDockerE2eBatch({
+        commandTimeoutMs: unit.timeoutMs,
         env,
-        commandTimeoutMs,
+        onCommandOutput: params.onCommandOutput,
         outputDir: params.outputDir,
         repoRoot: params.repoRoot,
         runCommand,
-        scenario,
-      }),
+        scenarios: unit.scenarios,
+      });
+      results.push(...batchResults);
+      params.progress?.(
+        `native docker-batch finish passed=${batchResults.filter((result) => result.status === "pass").length} failed=${batchResults.filter((result) => result.status !== "pass").length} durationMs=${Math.max(1, Date.now() - startedAt)}`,
+      );
+      continue;
+    }
+    const scenarioId = sanitizeQaProgressValue(unit.scenario.id);
+    params.progress?.(`native ${kind} start scenario=${scenarioId} timeoutMs=${unit.timeoutMs}`);
+    const result = await runQaTestFileScenario({
+      env,
+      commandTimeoutMs,
+      onCommandOutput: params.onCommandOutput,
+      outputDir: params.outputDir,
+      repoRoot: params.repoRoot,
+      runCommand,
+      scenario: unit.scenario,
+    });
+    results.push(result);
+    params.progress?.(
+      `native ${kind} finish scenario=${scenarioId} status=${result.status} durationMs=${result.durationMs}`,
     );
+    if (params.failFast && result.status !== "pass") {
+      break;
+    }
   }
+  const scenarioOrder = new Map(scenarios.map((scenario, index) => [scenario, index]));
+  results.sort(
+    (left, right) =>
+      (scenarioOrder.get(left.scenario) ?? 0) - (scenarioOrder.get(right.scenario) ?? 0),
+  );
   const generatedAt = new Date().toISOString();
   const artifactPaths = buildScenarioArtifactPaths({
     repoRoot: params.repoRoot,
@@ -602,13 +722,3 @@ export async function runQaTestFileScenarios(
     results,
   };
 }
-
-export const qaTestFileScenarioRunnerTesting = {
-  killQaScenarioWindowsProcessTree,
-  resetTimeoutCleanupTimings() {
-    resetQaScenarioCommandCleanupTimings();
-  },
-  setTimeoutCleanupTimings(params: { forceSettleMs: number; killGraceMs: number }) {
-    setQaScenarioCommandCleanupTimings(params);
-  },
-};

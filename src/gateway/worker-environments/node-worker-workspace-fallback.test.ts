@@ -1,0 +1,186 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import type { SpawnResult } from "../../process/exec.js";
+import { createNodeWorkerWorkspaceFallback } from "./node-worker-workspace-fallback.js";
+
+const runCommandWithTimeout = vi.hoisted(() => vi.fn());
+
+vi.mock("../../process/exec.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../process/exec.js")>()),
+  runCommandWithTimeout,
+}));
+
+const COMMIT = "a".repeat(40);
+const ADVERTISED_TIP = "b".repeat(40);
+const ORIGIN = "https://example.invalid/openclaw.git";
+const MANIFEST_REF = `sha256:${"c".repeat(64)}`;
+const REMOTE_WORKSPACE = "/node/workspace";
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+type WorkspaceExec = Parameters<typeof createNodeWorkerWorkspaceFallback>[0];
+
+function spawnResult(stdout = "", code = 0): SpawnResult {
+  return { stdout, stderr: "", code, signal: null, killed: false, termination: "exit" };
+}
+
+function cleanWorkspace(): string {
+  const root = tempDirs.make("node-worker-origin-workspace-");
+  runCommandWithTimeout.mockReset();
+  runCommandWithTimeout.mockImplementation(async (argv: string[]) => {
+    const args = argv.slice(argv.indexOf("-C") + 2);
+    switch (args.join(" ")) {
+      case "rev-parse --show-toplevel":
+        return spawnResult(root);
+      case "status --porcelain=v1 --untracked-files=all":
+        return spawnResult();
+      case "rev-parse HEAD":
+        return spawnResult(COMMIT);
+      case "remote get-url origin":
+        return spawnResult(ORIGIN);
+      case "config --get user.name":
+        return spawnResult("Gateway Repository Author");
+      case "config --get user.email":
+        return spawnResult("gateway-author@example.invalid");
+      case `ls-remote --heads --tags -- ${ORIGIN}`:
+        return spawnResult(`${ADVERTISED_TIP}\trefs/heads/main\n`);
+      default:
+        throw new Error(`unexpected local Git command: ${args.join(" ")}`);
+    }
+  });
+  return root;
+}
+
+describe("node worker workspace origin fallback", () => {
+  it("clones a clean commit without requiring it to be an advertised ref tip", async () => {
+    const localPath = cleanWorkspace();
+    const exec = vi.fn<WorkspaceExec>(async ({ argv }) => ({
+      ...spawnResult(argv[0] === "node" ? MANIFEST_REF : ""),
+      workspaceDir: REMOTE_WORKSPACE,
+    }));
+
+    await expect(
+      createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
+        { localPath, sessionId: "session-1", generation: 1 },
+        MANIFEST_REF,
+      ),
+    ).resolves.toEqual({
+      kind: "synced",
+      result: { mode: "git", remoteWorkspaceDir: REMOTE_WORKSPACE, manifestRef: MANIFEST_REF },
+    });
+
+    expect(exec.mock.calls.map(([command]) => command.argv)).toEqual([
+      expect.arrayContaining(["clone", "--filter=blob:none", ORIGIN]),
+      expect.arrayContaining(["checkout", COMMIT]),
+      expect.arrayContaining(["node", REMOTE_WORKSPACE, COMMIT]),
+    ]);
+    expect(runCommandWithTimeout).not.toHaveBeenCalledWith(
+      expect.arrayContaining(["ls-remote"]),
+      expect.anything(),
+    );
+  });
+
+  it.each([
+    { operation: "clone", reason: "clone-failed", commandCount: 1 },
+    { operation: "checkout", reason: "checkout-failed", commandCount: 2 },
+  ] as const)("preserves the $reason fallback", async ({ operation, reason, commandCount }) => {
+    const localPath = cleanWorkspace();
+    const exec = vi.fn<WorkspaceExec>(async ({ argv }) => ({
+      ...spawnResult("", argv.includes(operation) ? 1 : 0),
+      workspaceDir: REMOTE_WORKSPACE,
+    }));
+
+    await expect(
+      createNodeWorkerWorkspaceFallback(exec).trySyncWorkspace(
+        { localPath, sessionId: "session-1", generation: 1 },
+        MANIFEST_REF,
+      ),
+    ).resolves.toEqual({ kind: "fallback", reason });
+    expect(exec).toHaveBeenCalledTimes(commandCount);
+  });
+
+  it.each([
+    {
+      label: "fully inherited identity",
+      gitAuthor: undefined,
+      expected: ["Gateway Repository Author", "gateway-author@example.invalid"],
+    },
+    {
+      label: "configured name with inherited email",
+      gitAuthor: { name: "Configured Author" },
+      expected: ["Configured Author", "gateway-author@example.invalid"],
+    },
+    {
+      label: "inherited name with configured email",
+      gitAuthor: { email: "configured@example.invalid" },
+      expected: ["Gateway Repository Author", "configured@example.invalid"],
+    },
+  ])("projects $label into a materialized Git workspace", async ({ gitAuthor, expected }) => {
+    const localPath = cleanWorkspace();
+    const exec = vi.fn<WorkspaceExec>(async () => ({
+      ...spawnResult(),
+      workspaceDir: REMOTE_WORKSPACE,
+    }));
+    const result = {
+      mode: "git" as const,
+      remoteWorkspaceDir: REMOTE_WORKSPACE,
+      manifestRef: MANIFEST_REF,
+    };
+
+    await expect(
+      createNodeWorkerWorkspaceFallback(exec).finalizeSync(
+        { localPath, sessionId: "session-1", generation: 1, ...(gitAuthor ? { gitAuthor } : {}) },
+        result,
+      ),
+    ).resolves.toEqual(result);
+    expect(exec.mock.calls.map(([command]) => command.argv.slice(-2))).toEqual([
+      ["user.name", expected[0]],
+      ["user.email", expected[1]],
+    ]);
+  });
+
+  it("fails closed when a node rejects its Gateway Git author", async () => {
+    const localPath = cleanWorkspace();
+    const exec = vi.fn<WorkspaceExec>(async () => ({
+      ...spawnResult("", 1),
+      stderr: "node Git config rejected the author",
+      workspaceDir: REMOTE_WORKSPACE,
+    }));
+
+    await expect(
+      createNodeWorkerWorkspaceFallback(exec).finalizeSync(
+        { localPath, sessionId: "session-1", generation: 1 },
+        { mode: "git", remoteWorkspaceDir: REMOTE_WORKSPACE, manifestRef: MANIFEST_REF },
+      ),
+    ).rejects.toThrow("Worker workspace sync failed: node Git config rejected the author");
+  });
+
+  it("does not apply Git author configuration to a plain workspace", async () => {
+    const localPath = cleanWorkspace();
+    const exec = vi.fn<WorkspaceExec>();
+    const result = {
+      mode: "plain" as const,
+      remoteWorkspaceDir: REMOTE_WORKSPACE,
+      manifestRef: MANIFEST_REF,
+    };
+
+    await expect(
+      createNodeWorkerWorkspaceFallback(exec).finalizeSync(
+        { localPath, sessionId: "session-1", generation: 1, gitAuthor: { name: "Configured" } },
+        result,
+      ),
+    ).resolves.toEqual(result);
+    expect(exec).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed Git authors before inspecting a node workspace", async () => {
+    const localPath = cleanWorkspace();
+
+    await expect(
+      createNodeWorkerWorkspaceFallback(vi.fn<WorkspaceExec>()).trySyncWorkspace(
+        { localPath, sessionId: "session-1", generation: 1, gitAuthor: { name: "invalid\nname" } },
+        MANIFEST_REF,
+      ),
+    ).rejects.toThrow("Worker workspace Git author metadata is invalid");
+    expect(runCommandWithTimeout).not.toHaveBeenCalled();
+  });
+});

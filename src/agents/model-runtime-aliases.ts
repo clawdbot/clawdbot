@@ -5,6 +5,9 @@ import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveAgentDir } from "./agent-scope-config.js";
+import { resolveExplicitAuthOrderSelection } from "./auth-profiles/order.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
 import {
   isCliRuntimeModelBackendForProvider,
   listCliRuntimeModelBackendBindings,
@@ -12,8 +15,36 @@ import {
   resolveCliRuntimeCanonicalProvider,
   resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
+import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
-import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+import {
+  resolveProviderIdForAuth,
+  type ProviderAuthAliasLookupParams,
+} from "./provider-auth-aliases.js";
+
+const RETIRED_MODEL_PICKER_PROVIDERS = new Set(["codex", "codex-cli"]);
+
+/** True for retired provider ids that should stay out of model selection surfaces. */
+export function isRetiredModelPickerProvider(provider: string): boolean {
+  return RETIRED_MODEL_PICKER_PROVIDERS.has(normalizeProviderId(provider));
+}
+
+/** Creates a provider visibility predicate for model picker rendering. */
+export function createModelPickerVisibleProviderPredicate(
+  params: { config?: OpenClawConfig; env?: NodeJS.ProcessEnv; includeSetupRegistry?: boolean } = {},
+): (provider: string) => boolean {
+  const cliRuntimeProviders = new Set(
+    listCliRuntimeProviderIds({
+      config: params.config,
+      env: params.env,
+      includeSetupRegistry: params.includeSetupRegistry ?? false,
+    }),
+  );
+  return (provider: string): boolean => {
+    const normalized = normalizeProviderId(provider);
+    return !isRetiredModelPickerProvider(normalized) && !cliRuntimeProviders.has(normalized);
+  };
+}
 
 /** True for CLI runtime provider ids such as `claude-cli` and `google-gemini-cli`. */
 export function isCliRuntimeProvider(
@@ -123,7 +154,9 @@ export function shouldPreferActiveRuntimeAliasAuthLabel(params: {
   return (
     selectedAuth === "unknown" ||
     (Boolean(selectedAuth?.startsWith("api-key")) &&
-      (activeAuth.startsWith("oauth") || activeAuth.startsWith("token")))
+      (activeAuth.startsWith("oauth") ||
+        activeAuth.startsWith("token") ||
+        activeAuth.startsWith("native")))
   );
 }
 
@@ -145,22 +178,31 @@ function resolveConfiguredRuntime(params: {
   };
 }
 
-function resolveProfileRuntimeAlias(params: {
+type RuntimeAuthAliasParams = {
   cfg?: OpenClawConfig;
-  provider: string;
-  profileId: string;
-}): string | undefined {
-  const profile = params.cfg?.auth?.profiles?.[params.profileId];
-  if (!profile?.provider) {
-    return undefined;
-  }
+  metadataSnapshot?: ProviderAuthAliasLookupParams["metadataSnapshot"];
+};
+
+function resolveRuntimeAuthProvider(provider: string, params: RuntimeAuthAliasParams): string {
+  return resolveProviderIdForAuth(provider, {
+    config: params.cfg,
+    ...(params.metadataSnapshot ? { metadataSnapshot: params.metadataSnapshot } : {}),
+  });
+}
+
+function resolveProfileRuntimeAlias(
+  params: RuntimeAuthAliasParams & {
+    provider: string;
+    profileProvider: string | undefined;
+  },
+): string | undefined {
   const provider = normalizeProviderId(params.provider);
-  const profileProvider = normalizeProviderId(profile.provider);
+  const profileProvider = normalizeProviderId(params.profileProvider ?? "");
   if (!provider || !profileProvider) {
     return undefined;
   }
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: params.cfg });
-  const profileAuthKey = resolveProviderIdForAuth(profileProvider, { config: params.cfg });
+  const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
+  const profileAuthKey = resolveRuntimeAuthProvider(profileProvider, params);
   if (providerAuthKey !== profileAuthKey) {
     return undefined;
   }
@@ -174,46 +216,69 @@ function resolveProfileRuntimeAlias(params: {
   })?.runtime;
 }
 
-function resolveCliRuntimeFromAuthProfile(params: {
-  cfg?: OpenClawConfig;
-  provider: string;
-  authProfileId?: string;
-}): string | undefined {
-  if (!params.cfg?.auth?.profiles) {
-    return undefined;
-  }
+function resolveCliRuntimeFromAuthProfile(
+  params: RuntimeAuthAliasParams & {
+    provider: string;
+    authProfileId?: string;
+    agentId?: string;
+  },
+): string | undefined {
+  const configuredProfiles = params.cfg?.auth?.profiles ?? {};
+  // Login and auth-order commands own the credential store, not config metadata.
+  // Reuse its published snapshot without reopening SQLite on a request path.
+  const store = getPreparedRuntimeAuthProfileStoreSnapshotCore(
+    params.agentId ? resolveAgentDir(params.cfg ?? {}, params.agentId) : undefined,
+    resolveLegacyInheritedAuthDir(params.cfg ?? {}),
+  );
   if (params.authProfileId?.trim()) {
+    const profileId = params.authProfileId.trim();
     return resolveProfileRuntimeAlias({
-      cfg: params.cfg,
+      ...params,
       provider: params.provider,
-      profileId: params.authProfileId.trim(),
+      profileProvider: (configuredProfiles[profileId] ?? store?.profiles[profileId])?.provider,
     });
   }
 
   const provider = normalizeProviderId(params.provider);
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: params.cfg });
-  const orderedProfileIds = [
-    ...(params.cfg.auth.order?.[providerAuthKey] ?? []),
-    ...(providerAuthKey === provider ? [] : (params.cfg.auth.order?.[provider] ?? [])),
-  ];
-  for (const profileId of orderedProfileIds) {
-    const profile = params.cfg.auth.profiles[profileId];
+  const providerAuthKey = resolveRuntimeAuthProvider(provider, params);
+  const selection = resolveExplicitAuthOrderSelection({
+    storeOrder: store?.order,
+    configuredOrder: params.cfg?.auth?.order,
+    providerKey: provider,
+    providerAuthKey,
+  });
+  for (const profileId of selection.order ?? []) {
+    const profile = configuredProfiles[profileId] ?? store?.profiles[profileId];
     if (!profile?.provider) {
       continue;
     }
-    const profileAuthKey = resolveProviderIdForAuth(profile.provider, { config: params.cfg });
+    const profileAuthKey = resolveRuntimeAuthProvider(profile.provider, params);
     if (profileAuthKey !== providerAuthKey) {
       continue;
     }
-    return resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId });
+    return resolveProfileRuntimeAlias({
+      ...params,
+      provider,
+      profileProvider: profile.provider,
+    });
   }
 
-  const compatibleProfileIds = Object.entries(params.cfg.auth.profiles)
+  if (
+    selection.order !== undefined &&
+    (selection.order.length === 0 ||
+      selection.order.some((profileId) => store?.profiles[profileId] !== undefined))
+  ) {
+    // Keep empty orders and existing stored profiles authoritative. Only an order
+    // of missing profiles may use the canonical stale-profile repair below.
+    return undefined;
+  }
+
+  const compatibleProfileIds = Object.entries(configuredProfiles)
     .filter(([, profile]) => {
       if (!profile?.provider) {
         return false;
       }
-      return resolveProviderIdForAuth(profile.provider, { config: params.cfg }) === providerAuthKey;
+      return resolveRuntimeAuthProvider(profile.provider, params) === providerAuthKey;
     })
     .map(([profileId]) => profileId);
   if (compatibleProfileIds.length !== 1) {
@@ -221,17 +286,22 @@ function resolveCliRuntimeFromAuthProfile(params: {
   }
   const [profileId] = compatibleProfileIds;
   return profileId
-    ? resolveProfileRuntimeAlias({ cfg: params.cfg, provider, profileId })
+    ? resolveProfileRuntimeAlias({
+        ...params,
+        provider,
+        profileProvider: configuredProfiles[profileId]?.provider,
+      })
     : undefined;
 }
 
-export function resolveCliRuntimeExecutionProvider(params: {
-  provider: string;
-  cfg?: OpenClawConfig;
-  agentId?: string;
-  modelId?: string;
-  authProfileId?: string;
-}): string | undefined {
+export function resolveCliRuntimeExecutionProvider(
+  params: RuntimeAuthAliasParams & {
+    provider: string;
+    agentId?: string;
+    modelId?: string;
+    authProfileId?: string;
+  },
+): string | undefined {
   const provider = normalizeProviderId(params.provider);
   const { runtime, matchedProvider } = resolveConfiguredRuntime({ ...params, provider });
   if (runtime === "openclaw") {

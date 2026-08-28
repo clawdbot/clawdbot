@@ -1,7 +1,7 @@
 // Qa Lab plugin module implements jsonl replay behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   runRuntimeParityScenario,
   type RuntimeId,
@@ -52,23 +52,19 @@ type JsonlReplayMarkdownReport = {
   transcripts: JsonlReplayResult["transcripts"];
 };
 
-function readString(value: unknown): string | undefined {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
-}
-
 function readReplayMessage(record: Record<string, unknown>): Record<string, unknown> | undefined {
   if (isRecord(record.message)) {
     return record.message;
   }
-  return readString(record.role) ? record : undefined;
+  return normalizeOptionalString(record.role) ? record : undefined;
 }
 
 function readRole(message: Record<string, unknown>) {
-  return readString(message.role)?.toLowerCase();
+  return normalizeOptionalString(message.role)?.toLowerCase();
 }
 
 function isTextLikeContentBlock(block: Record<string, unknown>) {
-  const type = readString(block.type)?.toLowerCase();
+  const type = normalizeOptionalString(block.type)?.toLowerCase();
   return (
     !type ||
     type === "text" ||
@@ -97,7 +93,7 @@ function extractTextContent(content: unknown): string {
     if (!isRecord(block) || !isTextLikeContentBlock(block)) {
       continue;
     }
-    const text = readString(block.text) ?? readString(block.content);
+    const text = normalizeOptionalString(block.text) ?? normalizeOptionalString(block.content);
     if (text) {
       parts.push(text);
     }
@@ -171,7 +167,7 @@ function assertSupportedRuntimePair(runtimePair: JsonlReplayInput["runtimePair"]
 
 export function createMockJsonlReplayCellRunner(): JsonlReplayCellRunner {
   return async ({ runtime, turn }) => ({
-    scenarioStatus: "pass",
+    status: "pass",
     cell: {
       runtime,
       transcriptBytes: turn.transcriptPrefix,

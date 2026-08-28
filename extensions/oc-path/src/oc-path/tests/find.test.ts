@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { findOcPaths } from "../find.js";
 import { parseJsonc } from "../jsonc/parse.js";
 import { parseJsonl } from "../jsonl/parse.js";
-import { formatOcPath, hasWildcard, OcPathError, parseOcPath } from "../oc-path.js";
+import { formatOcPath, isPattern, OcPathError, parseOcPath } from "../oc-path.js";
 import { parseMd } from "../parse.js";
 import { resolveOcPath, setOcPath } from "../universal.js";
 
@@ -12,31 +12,31 @@ function requireFirstResult<T>(results: readonly T[]): T {
   return expectDefined(results[0], "first OC path match");
 }
 
-describe("hasWildcard", () => {
+describe("isPattern", () => {
   it("detects single-segment * in any slot", () => {
-    expect(hasWildcard(parseOcPath("oc://X/*/y"))).toBe(true);
-    expect(hasWildcard(parseOcPath("oc://X/a/*"))).toBe(true);
-    expect(hasWildcard(parseOcPath("oc://X/a/b/*"))).toBe(true);
+    expect(isPattern(parseOcPath("oc://X/*/y"))).toBe(true);
+    expect(isPattern(parseOcPath("oc://X/a/*"))).toBe(true);
+    expect(isPattern(parseOcPath("oc://X/a/b/*"))).toBe(true);
   });
 
   it("detects ** in any slot", () => {
-    expect(hasWildcard(parseOcPath("oc://X/**"))).toBe(true);
-    expect(hasWildcard(parseOcPath("oc://X/a/**/c"))).toBe(true);
+    expect(isPattern(parseOcPath("oc://X/**"))).toBe(true);
+    expect(isPattern(parseOcPath("oc://X/a/**/c"))).toBe(true);
   });
 
   it("detects wildcards inside dotted sub-segments", () => {
-    expect(hasWildcard(parseOcPath("oc://X/a.*.c"))).toBe(true);
-    expect(hasWildcard(parseOcPath("oc://X/a.**.c"))).toBe(true);
+    expect(isPattern(parseOcPath("oc://X/a.*.c"))).toBe(true);
+    expect(isPattern(parseOcPath("oc://X/a.**.c"))).toBe(true);
   });
 
   it("returns false for plain paths", () => {
-    expect(hasWildcard(parseOcPath("oc://X/a/b/c"))).toBe(false);
-    expect(hasWildcard(parseOcPath("oc://X/a.b.c"))).toBe(false);
+    expect(isPattern(parseOcPath("oc://X/a/b/c"))).toBe(false);
+    expect(isPattern(parseOcPath("oc://X/a.b.c"))).toBe(false);
   });
 
   it("treats `*` inside an identifier as literal", () => {
-    expect(hasWildcard(parseOcPath("oc://X/foo*bar"))).toBe(false);
-    expect(hasWildcard(parseOcPath("oc://X/a*"))).toBe(false);
+    expect(isPattern(parseOcPath("oc://X/foo*bar"))).toBe(false);
+    expect(isPattern(parseOcPath("oc://X/a*"))).toBe(false);
   });
 });
 
@@ -116,6 +116,31 @@ describe("findOcPaths — JSONC kind", () => {
         expect(m.match.leafType).toBe("boolean");
       }
     }
+  });
+
+  it.each([
+    {
+      name: "quotes positional object keys",
+      raw: '{"items":{"zeta.key":10,"alpha":20}}',
+      pattern: "oc://config/items/$first",
+      expectedPath: 'oc://config/items/"zeta.key"',
+      expectedValue: "10",
+    },
+    {
+      name: "emits positional array indexes",
+      raw: '{"items":[10,20,30]}',
+      pattern: "oc://config/items/$last",
+      expectedPath: "oc://config/items/2",
+      expectedValue: "30",
+    },
+  ])("$name", ({ raw, pattern, expectedPath, expectedValue }) => {
+    const ast = parseJsonc(raw).ast;
+    const out = findOcPaths(ast, parseOcPath(pattern));
+
+    expect(out).toHaveLength(1);
+    const result = requireFirstResult(out);
+    expect(formatOcPath(result.path)).toBe(expectedPath);
+    expect(result.match.kind === "leaf" && result.match.valueText).toBe(expectedValue);
   });
 });
 
@@ -253,9 +278,9 @@ describe("positional primitives — $first / $last", () => {
     expect(m?.kind === "leaf" && m.valueText).toBe("end");
   });
 
-  it("hasWildcard returns false for positional tokens", () => {
-    expect(hasWildcard(parseOcPath("oc://X/$first/id"))).toBe(false);
-    expect(hasWildcard(parseOcPath("oc://X/$last/id"))).toBe(false);
+  it("isPattern returns false for positional tokens", () => {
+    expect(isPattern(parseOcPath("oc://X/$first/id"))).toBe(false);
+    expect(isPattern(parseOcPath("oc://X/$last/id"))).toBe(false);
   });
 });
 

@@ -7,9 +7,11 @@ import { normalizeStringEntries } from "@openclaw/normalization-core/string-norm
 import { getChannelPlugin, listChannelPlugins } from "../channels/plugins/index.js";
 import {
   createMessageActionDiscoveryContext,
+  listMessageActionDiscoveryChannels,
   resolveMessageActionDiscoveryForPlugin,
   resolveMessageActionDiscoveryChannelId,
   resolveCurrentChannelMessageToolDiscoveryAdapter,
+  type PreparedMessageToolCatalog,
 } from "../channels/plugins/message-action-discovery.js";
 import {
   channelPluginHasNativeApprovalPromptUi,
@@ -23,7 +25,7 @@ import { normalizeAnyChannelId } from "../channels/registry.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
-export { copyChannelAgentToolMeta, getChannelAgentToolMeta } from "./channel-tool-metadata.js";
+export { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 
 type ChannelMessageActionDiscoveryParams = {
   cfg?: OpenClawConfig;
@@ -35,6 +37,7 @@ type ChannelMessageActionDiscoveryParams = {
   sessionId?: string | null;
   agentId?: string | null;
   requesterSenderId?: string | null;
+  preparedMessageToolCatalog?: PreparedMessageToolCatalog;
 };
 
 /**
@@ -50,7 +53,10 @@ export function listChannelSupportedActions(
   if (!channelId) {
     return [];
   }
-  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(channelId);
+  const pluginActions = resolveCurrentChannelMessageToolDiscoveryAdapter(
+    channelId,
+    params.preparedMessageToolCatalog,
+  );
   if (!pluginActions?.actions) {
     return [];
   }
@@ -69,7 +75,8 @@ export function listAllChannelSupportedActions(
   params: ChannelMessageActionDiscoveryParams,
 ): ChannelMessageActionName[] {
   const actions = new Set<ChannelMessageActionName>();
-  for (const plugin of listChannelPlugins()) {
+  const channels = listMessageActionDiscoveryChannels(params.preparedMessageToolCatalog);
+  for (const plugin of channels) {
     const channelActions = resolveMessageActionDiscoveryForPlugin({
       pluginId: plugin.id,
       actions: plugin.actions,

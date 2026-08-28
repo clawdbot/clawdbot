@@ -12,9 +12,11 @@ type BrowserProfileMode =
   | "local-extension"
   | "remote-cdp";
 
-type BrowserProfileCapabilities = {
+export type BrowserProfileCapabilities = {
   mode: BrowserProfileMode;
   isRemote: boolean;
+  /** Browser process reads paths from the same filesystem as OpenClaw. */
+  browserFilesystemLocal: boolean;
   /** Profile uses the Chrome DevTools MCP server (existing-session driver). */
   usesChromeMcp: boolean;
   usesPersistentPlaywright: boolean;
@@ -22,16 +24,28 @@ type BrowserProfileCapabilities = {
   supportsJsonTabEndpoints: boolean;
   supportsReset: boolean;
   supportsManagedTabLimit: boolean;
+  supportsBatchActions: boolean;
+  supportsDownloads: boolean;
+  supportsPdf: boolean;
+  requiresCompleteTargetEnumeration: boolean;
 };
 
 /** Return feature capabilities for a resolved browser profile. */
 export function getBrowserProfileCapabilities(
   profile: ResolvedBrowserProfile,
 ): BrowserProfileCapabilities {
+  const driverCapabilities = {
+    supportsBatchActions: profile.driver !== "existing-session",
+    supportsDownloads: profile.driver !== "existing-session",
+    supportsPdf: profile.driver !== "existing-session",
+    requiresCompleteTargetEnumeration: profile.driver === "extension",
+  };
   if (profile.driver === "existing-session") {
     return {
+      ...driverCapabilities,
       mode: "local-existing-session",
       isRemote: false,
+      browserFilesystemLocal: false,
       usesChromeMcp: true,
       usesPersistentPlaywright: false,
       supportsPerTabWs: false,
@@ -46,8 +60,10 @@ export function getBrowserProfileCapabilities(
   // remote CDP, but the endpoint is the loopback relay server.
   if (profile.driver === "extension") {
     return {
+      ...driverCapabilities,
       mode: "local-extension",
       isRemote: false,
+      browserFilesystemLocal: true,
       usesChromeMcp: false,
       usesPersistentPlaywright: true,
       supportsPerTabWs: false,
@@ -59,8 +75,10 @@ export function getBrowserProfileCapabilities(
 
   if (!profile.cdpIsLoopback) {
     return {
+      ...driverCapabilities,
       mode: "remote-cdp",
       isRemote: true,
+      browserFilesystemLocal: false,
       usesChromeMcp: false,
       usesPersistentPlaywright: true,
       supportsPerTabWs: false,
@@ -71,8 +89,12 @@ export function getBrowserProfileCapabilities(
   }
 
   return {
+    ...driverCapabilities,
     mode: "local-managed",
     isRemote: false,
+    // A loopback attach-only endpoint can terminate in Docker or a tunnel.
+    // Only an OpenClaw-owned browser is known to share this filesystem.
+    browserFilesystemLocal: !profile.attachOnly,
     usesChromeMcp: false,
     usesPersistentPlaywright: false,
     supportsPerTabWs: true,

@@ -26,7 +26,6 @@ vi.mock("../plugins/provider-auth-choices.js", () => ({
 }));
 
 import {
-  resolveLegacyAuthChoiceAliasesForCli,
   formatDeprecatedNonInteractiveAuthChoiceError,
   normalizeLegacyOnboardAuthChoice,
   resolveDeprecatedAuthChoiceReplacement,
@@ -36,7 +35,6 @@ function authChoiceManifestEnv(): NodeJS.ProcessEnv {
   return {
     OPENCLAW_BUNDLED_PLUGINS_DIR: "extensions",
     OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-    OPENCLAW_DISABLE_PERSISTED_PLUGIN_REGISTRY: "1",
     VITEST: "1",
   } as NodeJS.ProcessEnv;
 }
@@ -52,12 +50,6 @@ describe("auth choice legacy aliases", () => {
     expect(formatDeprecatedNonInteractiveAuthChoiceError("claude-cli", { env })).toBe(
       'Auth choice "claude-cli" is deprecated.\nUse "--auth-choice anthropic-cli".',
     );
-  });
-
-  it("sources deprecated cli aliases from plugin manifests", () => {
-    expect(resolveLegacyAuthChoiceAliasesForCli({ env: authChoiceManifestEnv() })).toEqual([
-      "claude-cli",
-    ]);
   });
 
   it("does not keep retired Codex setup choices alive outside doctor", () => {

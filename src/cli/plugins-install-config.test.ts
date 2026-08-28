@@ -12,7 +12,7 @@ import {
   resolvePluginInstallRequestContext,
   type PluginInstallRequestContext,
 } from "./plugin-install-config-policy.js";
-import { loadConfigForInstall } from "./plugins-install-command.js";
+import { loadConfigForInstall } from "./plugins-install-config.js";
 
 const hoisted = vi.hoisted(() => ({
   assertConfigPathForWriteMock: vi.fn(),
@@ -63,6 +63,8 @@ vi.mock("./plugins-location-bridges.js", () => ({
 const DISCORD_REPO_INSTALL_SPEC = repoInstallSpec("discord");
 const installWriteOptions = {
   assertConfigPathForWrite: assertConfigPathForWriteMock,
+  // Central install persistence stamps the journal origin onto every write.
+  auditOrigin: "plugin-install",
   expectedConfigPath: "/tmp/config.json5",
   ownedConfigPathForWrite: "/tmp/config.json5",
   includeFileHashesForWrite: { "/tmp/plugins.json5": "include-1" },
@@ -134,24 +136,21 @@ describe("loadConfigForInstall", () => {
       hookMutation: { mode: "allowed" },
       pluginMutation: { mode: "allowed" },
     });
-  });
-
-  it("returns valid source config unchanged", async () => {
-    const cfg = { plugins: {} } as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        valid: true,
-        sourceConfig: cfg,
-        config: cfg,
-        issues: [],
-      }),
-    );
-
-    const result = await loadConfigForInstall(discordNpmRequest);
     expect(result.config).toBe(cfg);
   });
 
-  it("falls back to snapshot config for explicit bundled-plugin reinstall when issues match the known upgrade failure", async () => {
+  it.each([
+    { path: "channels.discord", message: "unknown channel id: discord" },
+    { path: "channels.discord", message: "invalid config for plugin discord: must be object" },
+    {
+      path: "channels.discord.accounts.work",
+      message: "invalid config for plugin discord: must be object",
+    },
+    {
+      path: "channels.other-channel",
+      message: "invalid config for plugin discord: must be object",
+    },
+  ])("recovers requested-plugin upgrade issue $path: $message", async (issue) => {
     const snapshotCfg = {
       plugins: { installs: { discord: { source: "path", installPath: "/gone" } } },
     } as unknown as OpenClawConfig;
@@ -160,7 +159,7 @@ describe("loadConfigForInstall", () => {
         parsed: { plugins: { installs: { discord: {} } } },
         config: snapshotCfg,
         issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
+          issue,
           { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
         ],
       }),
@@ -168,40 +167,6 @@ describe("loadConfigForInstall", () => {
 
     const result = await loadConfigForInstall(discordNpmRequest);
     expect(readConfigFileSnapshotMock).toHaveBeenCalledTimes(1);
-    expect(result).toEqual({
-      config: snapshotCfg,
-      baseHash: "abc",
-      writeOptions: installWriteOptions,
-      hookMutation: { mode: "allowed" },
-      pluginMutation: { mode: "allowed" },
-    });
-  });
-
-  it("allows versioned npm:-prefixed bundled-plugin reinstall recovery", async () => {
-    const snapshotCfg = {
-      plugins: { installs: { discord: { source: "path", installPath: "/gone" } } },
-    } as unknown as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { installs: { discord: {} } } },
-        config: snapshotCfg,
-        issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
-          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
-        ],
-      }),
-    );
-
-    const request = resolvePluginInstallRequestContext({
-      rawSpec: "npm:@openclaw/discord@2026.5.22",
-    });
-    if (!request.ok) {
-      throw new Error(request.error);
-    }
-
-    expect(request.request.bundledPluginId).toBe("discord");
-    expect(request.request.allowInvalidConfigRecovery).toBe(true);
-    const result = await loadConfigForInstall(request.request);
     expect(result).toEqual({
       config: snapshotCfg,
       baseHash: "abc",
@@ -236,49 +201,50 @@ describe("loadConfigForInstall", () => {
     expect(request.request.installKind).toBe("plugin");
   });
 
-  it("allows versioned official npm spec reinstall recovery", async () => {
-    const snapshotCfg = {
-      plugins: {
-        installs: { discord: { source: "npm", installPath: "/gone" } },
-        load: { paths: ["/gone", "/keep"] },
-      },
-      channels: { discord: { token: "preserve-me" } },
-    } as unknown as OpenClawConfig;
-    readConfigFileSnapshotMock.mockResolvedValue(
-      makeSnapshot({
-        parsed: { plugins: { installs: { discord: {} }, load: { paths: ["/gone", "/keep"] } } },
-        config: snapshotCfg,
-        issues: [
-          { path: "channels.discord", message: "unknown channel id: discord" },
-          { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
-        ],
-      }),
-    );
-
-    const request = resolvePluginInstallRequestContext({
-      rawSpec: "@openclaw/discord@2026.5.22",
-    });
-    if (!request.ok) {
-      throw new Error(request.error);
-    }
-
-    expect(request.request.bundledPluginId).toBe("discord");
-    expect(request.request.allowInvalidConfigRecovery).toBe(true);
-    const result = await loadConfigForInstall(request.request);
-    expect(result).toEqual({
-      config: {
+  it.each(["@openclaw/discord@2026.5.22", "npm:@openclaw/discord@2026.5.22"])(
+    "allows versioned official reinstall recovery for %s",
+    async (rawSpec) => {
+      const snapshotCfg = {
         plugins: {
           installs: { discord: { source: "npm", installPath: "/gone" } },
-          load: { paths: ["/keep"] },
+          load: { paths: ["/gone", "/keep"] },
         },
         channels: { discord: { token: "preserve-me" } },
-      },
-      baseHash: "abc",
-      writeOptions: installWriteOptions,
-      hookMutation: { mode: "allowed" },
-      pluginMutation: { mode: "allowed" },
-    });
-  });
+      } as unknown as OpenClawConfig;
+      readConfigFileSnapshotMock.mockResolvedValue(
+        makeSnapshot({
+          parsed: { plugins: { installs: { discord: {} }, load: { paths: ["/gone", "/keep"] } } },
+          config: snapshotCfg,
+          issues: [
+            { path: "channels.discord", message: "unknown channel id: discord" },
+            { path: "plugins.load.paths", message: "plugin: plugin path not found: /gone" },
+          ],
+        }),
+      );
+
+      const request = resolvePluginInstallRequestContext({ rawSpec });
+      if (!request.ok) {
+        throw new Error(request.error);
+      }
+
+      expect(request.request.bundledPluginId).toBe("discord");
+      expect(request.request.allowInvalidConfigRecovery).toBe(true);
+      const result = await loadConfigForInstall(request.request);
+      expect(result).toEqual({
+        config: {
+          plugins: {
+            installs: { discord: { source: "npm", installPath: "/gone" } },
+            load: { paths: ["/keep"] },
+          },
+          channels: { discord: { token: "preserve-me" } },
+        },
+        baseHash: "abc",
+        writeOptions: installWriteOptions,
+        hookMutation: { mode: "allowed" },
+        pluginMutation: { mode: "allowed" },
+      });
+    },
+  );
 
   it("uses the canonical plugin install record to own a stale recovery load path", async () => {
     const snapshotCfg = {
@@ -914,10 +880,28 @@ describe("loadConfigForInstall", () => {
     },
   );
 
-  it("rejects unrelated invalid config even during bundled-plugin reinstall recovery", async () => {
+  it.each([
+    { path: "models.default", message: "invalid model ref" },
+    { path: "channels.discord", message: "invalid config for plugin telegram: must be object" },
+    {
+      path: "channels.discord",
+      message: "invalid config for plugin discord-extra: must be object",
+    },
+    { path: "channels.discord", message: "must be object" },
+    {
+      path: "plugins.entries.discord.config",
+      message: "invalid config for plugin discord: must be object",
+    },
+  ])("rejects unrelated issue $path: $message during plugin recovery", async (issue) => {
     readConfigFileSnapshotMock.mockResolvedValue(
       makeSnapshot({
-        issues: [{ path: "models.default", message: "invalid model ref" }],
+        issues: [
+          {
+            path: "channels.discord",
+            message: "invalid config for plugin discord: must be object",
+          },
+          issue,
+        ],
       }),
     );
 

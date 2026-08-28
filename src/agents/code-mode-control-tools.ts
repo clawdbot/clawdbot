@@ -2,16 +2,15 @@
  * Tags Code Mode exec/wait control tools and normalizes hook params for the
  * exec-compatible before-tool-call surface.
  */
+import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";
 import { isPlainObject } from "../utils.js";
-import { normalizeToolName } from "./tool-policy.js";
+import { normalizeToolPolicyName } from "./tool-policy.js";
 import type { AnyAgentTool } from "./tools/common.js";
 
 /** Model-visible Code Mode exec tool name. */
 export const CODE_MODE_EXEC_TOOL_NAME = "exec";
 /** Model-visible Code Mode wait tool name. */
 export const CODE_MODE_WAIT_TOOL_NAME = "wait";
-/** Direct tools whose structured results cannot cross the JSON-only guest bridge. */
-const CODE_MODE_DIRECT_TOOL_NAMES: ReadonlySet<string> = new Set(["computer", "image"]);
 /** Hook metadata kind for Code Mode exec tools. */
 const CODE_MODE_EXEC_TOOL_KIND = "code_mode_exec";
 
@@ -25,7 +24,12 @@ type CodeModeExecHookMetadata = {
   toolInputKind?: CodeModeExecToolInputKind;
 };
 
-const codeModeControlTools = new WeakSet<AnyAgentTool>();
+const codeModeControlTools = new WeakSet<object>();
+type CodeModeExecDescriptionTarget = Pick<AnyAgentTool, "description">;
+const codeModeExecDescriptionTargets = new WeakMap<
+  object,
+  { description: string; targets: Set<CodeModeExecDescriptionTarget> }
+>();
 
 /** Mark a tool as owned by code mode control flow. */
 export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
@@ -35,33 +39,55 @@ export function markCodeModeControlTool<T extends AnyAgentTool>(tool: T): T {
 
 /** Replicate code-mode identity from an original tool object to a wrapper. */
 export function copyCodeModeControlToolIdentity(
-  original: AnyAgentTool,
-  wrapper: AnyAgentTool,
+  original: object,
+  wrapper: CodeModeExecDescriptionTarget,
 ): void {
   if (codeModeControlTools.has(original)) {
     codeModeControlTools.add(wrapper);
+    const descriptionState = codeModeExecDescriptionTargets.get(original);
+    if (descriptionState && descriptionState.targets.size > 0) {
+      // Registry refresh recreates wrappers from retained definitions; every
+      // live copy must reflect the current authorized catalog.
+      wrapper.description = descriptionState.description;
+      descriptionState.targets.add(wrapper);
+      codeModeExecDescriptionTargets.set(wrapper, descriptionState);
+    }
   }
 }
 
+/** Keep catalog updates synchronized across every live exec definition and wrapper. */
+export function createCodeModeExecDescriptionUpdater(tool: AnyAgentTool): {
+  update: (description: string) => void;
+  dispose: () => void;
+} {
+  const state = { description: tool.description, targets: new Set([tool]) };
+  codeModeExecDescriptionTargets.set(tool, state);
+  return {
+    update(description) {
+      state.description = description;
+      for (const target of state.targets) {
+        target.description = description;
+      }
+    },
+    dispose: () => state.targets.clear(),
+  };
+}
+
 /** Return whether a tool was marked as code-mode owned. */
-export function isCodeModeControlTool(tool: AnyAgentTool): boolean {
+export function isCodeModeControlTool(tool: object): boolean {
   return codeModeControlTools.has(tool);
 }
 
-/** Return whether a provider payload tool may remain model-visible in Code Mode. */
-export function isCodeModeModelVisibleToolName(name: string): boolean {
+/** Return whether a tool is the marked Code Mode `exec` control tool (not a plain shell exec). */
+export function isCodeModeExecTool(tool: AnyAgentTool): boolean {
   return (
-    name === CODE_MODE_EXEC_TOOL_NAME ||
-    name === CODE_MODE_WAIT_TOOL_NAME ||
-    CODE_MODE_DIRECT_TOOL_NAMES.has(name)
+    isCodeModeControlTool(tool) && normalizeToolPolicyName(tool.name) === CODE_MODE_EXEC_TOOL_NAME
   );
 }
 
-function isCodeModeExecTool(tool: AnyAgentTool): boolean {
-  return isCodeModeControlTool(tool) && normalizeToolName(tool.name) === CODE_MODE_EXEC_TOOL_NAME;
-}
-
-function resolveCodeModeExecToolInputKind(params: unknown): CodeModeExecToolInputKind | undefined {
+export function resolveCodeModeExecToolInputKind(
+  params: unknown,
+): CodeModeExecToolInputKind | undefined {
   if (!isPlainObject(params)) {
     return undefined;
   }
@@ -79,15 +105,15 @@ function normalizeCodeModeExecParams(params: unknown): unknown {
   if (!isPlainObject(params)) {
     return params;
   }
-  const code = params.code;
-  const command = params.command;
-  if (typeof code === "string" && typeof command !== "string") {
+  const code = readNonBlankString(params.code);
+  const command = readNonBlankString(params.command);
+  if (code !== undefined && command === undefined) {
     // Code-mode accepts both `code` and generic exec `command`; keep them paired
     // so downstream hooks can read either shape.
-    return { ...params, command: params.code };
+    return { ...params, command: code };
   }
-  if (typeof command === "string" && typeof code !== "string") {
-    return { ...params, code: params.command };
+  if (command !== undefined && code === undefined) {
+    return { ...params, code: command };
   }
   return params;
 }
@@ -133,26 +159,21 @@ export function normalizeCodeModeExecBeforeHookParams(params: {
   return normalizeCodeModeExecParams(params.params);
 }
 
-/** Normalize before-hook params when only the code-mode tool kind is available. */
-export function normalizeCodeModeExecBeforeHookParamsForToolKind(params: {
-  toolKind: unknown;
-  params: unknown;
-}): unknown {
-  if (params.toolKind !== CODE_MODE_EXEC_TOOL_KIND) {
-    return params.params;
-  }
-  return normalizeCodeModeExecParams(params.params);
-}
+type CodeModeExecReconcileOwner = { tool: AnyAgentTool } | { toolKind: unknown };
 
-/** Reconcile hook-adjusted `code` and `command` fields after code-mode normalization. */
+/** Reconcile policy- or hook-adjusted aliases after raw-input normalization. */
 export function reconcileCodeModeExecBeforeHookParams(params: {
-  tool: AnyAgentTool;
+  owner: CodeModeExecReconcileOwner;
   originalParams: unknown;
   hookParams: unknown;
   adjustedParams: unknown;
 }): unknown {
+  const isCodeModeExecOwner =
+    "tool" in params.owner
+      ? isCodeModeExecTool(params.owner.tool)
+      : params.owner.toolKind === CODE_MODE_EXEC_TOOL_KIND;
   if (
-    !isCodeModeExecTool(params.tool) ||
+    !isCodeModeExecOwner ||
     !isPlainObject(params.originalParams) ||
     !isPlainObject(params.hookParams) ||
     !isPlainObject(params.adjustedParams)
@@ -167,9 +188,18 @@ export function reconcileCodeModeExecBeforeHookParams(params: {
 
   const adjustedCode = params.adjustedParams.code;
   const adjustedCommand = params.adjustedParams.command;
-  const adjustedCodeChanged = typeof adjustedCode === "string" && adjustedCode !== hookCode;
+  const adjustedCodeChanged =
+    Object.hasOwn(params.adjustedParams, "code") && adjustedCode !== hookCode;
   const adjustedCommandChanged =
-    typeof adjustedCommand === "string" && adjustedCommand !== hookCode;
+    Object.hasOwn(params.adjustedParams, "command") && adjustedCommand !== hookCode;
+  // Invalidation must dominate a simultaneous valid rewrite; otherwise runtime
+  // ignores the invalid alias and executes the other one.
+  if (adjustedCodeChanged && readNonBlankString(adjustedCode) === undefined) {
+    return { ...params.adjustedParams, command: adjustedCode };
+  }
+  if (adjustedCommandChanged && readNonBlankString(adjustedCommand) === undefined) {
+    return { ...params.adjustedParams, code: adjustedCommand };
+  }
   if (adjustedCodeChanged === adjustedCommandChanged) {
     return params.adjustedParams;
   }

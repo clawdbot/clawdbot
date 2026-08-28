@@ -1,5 +1,6 @@
 import type {
   ChannelApprovalCapabilityHandlerContext,
+  ChannelApprovalKind,
   ExpiredApprovalView,
   PendingApprovalView,
   ResolvedApprovalView,
@@ -43,7 +44,7 @@ type GoogleChatApprovalActionToken = {
 
 type GoogleChatPendingDelivery = {
   approvalId: string;
-  approvalKind: "exec" | "plugin";
+  approvalKind: ChannelApprovalKind;
   expiresAtMs: number;
   cardsV2: GoogleChatCardV2[];
   actionTokens: GoogleChatApprovalActionToken[];
@@ -77,7 +78,11 @@ function resolveHandlerAccount(
       cfg: params.cfg,
       accountId: params.accountId,
     });
-  if (!account.enabled || account.credentialSource === "none") {
+  if (
+    !account.enabled ||
+    account.credentialSource === "none" ||
+    account.tokenStatus === "configured_unavailable"
+  ) {
     return null;
   }
   return account;

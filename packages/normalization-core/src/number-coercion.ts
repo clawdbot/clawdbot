@@ -1,6 +1,18 @@
 /** Returns a number only when the input is already finite. */
 export function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
+  return Number.isFinite(value as number) ? (value as number) : undefined;
+}
+
+/** Returns a finite number only when it is greater than zero. */
+export function asPositiveFiniteNumber(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number && number > 0 ? number : undefined;
+}
+
+/** Returns a finite number only when it is zero or greater. */
+export function asNonNegativeFiniteNumber(value: unknown): number | undefined {
+  const number = asFiniteNumber(value);
+  return number && number < 0 ? undefined : number;
 }
 
 /** Returns a finite number only when it satisfies the supplied inclusive/exclusive bounds. */
@@ -97,7 +109,7 @@ export function parseStrictFiniteNumber(value: unknown): number | undefined {
 
 /** Returns positive safe integers without string coercion. */
 export function asPositiveSafeInteger(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isSafeInteger(value) && value > 0 ? value : undefined;
+  return Number.isSafeInteger(value) && (value as number) > 0 ? (value as number) : undefined;
 }
 
 /** Conservative upper bound for Node timer delays. */
@@ -115,6 +127,16 @@ export function asDateTimestampMs(value: unknown): number | undefined {
     min: -MAX_DATE_TIMESTAMP_MS,
     max: MAX_DATE_TIMESTAMP_MS,
   });
+}
+
+/** Parses Date-valid timestamp strings using JavaScript date-string semantics. */
+export function parseDateStringTimestampMs(value: unknown): number | undefined {
+  return typeof value === "string" ? asDateTimestampMs(Date.parse(value)) : undefined;
+}
+
+/** Reads finite numbers as milliseconds and parses strings using date-string semantics. */
+export function parseDateFirstTimestampMs(value: unknown): number | undefined {
+  return typeof value === "number" ? asFiniteNumber(value) : parseDateStringTimestampMs(value);
 }
 
 /** Checks whether a Date-valid timestamp is after the supplied/current time. */
@@ -214,6 +236,9 @@ export function finiteSecondsToTimerSafeMilliseconds(
     return undefined;
   }
   const boundedSeconds = opts.floorSeconds ? Math.floor(seconds) : seconds;
+  if (boundedSeconds >= MAX_TIMER_TIMEOUT_SECONDS) {
+    return MAX_TIMER_TIMEOUT_MS;
+  }
   const milliseconds = Math.floor(boundedSeconds * 1000);
   if (!Number.isFinite(milliseconds) || milliseconds <= 0) {
     return undefined;
@@ -267,24 +292,19 @@ export function parseStrictNonNegativeInteger(value: unknown): number | undefine
   return parsed !== undefined && parsed >= 0 ? parsed : undefined;
 }
 
+function safeMillisecondsFromSeconds(seconds: number | undefined): number | undefined {
+  const milliseconds = seconds === undefined ? undefined : seconds * 1000;
+  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+}
+
 /** Converts strict positive seconds to safe millisecond counts. */
 export function positiveSecondsToSafeMilliseconds(value: unknown): number | undefined {
-  const seconds = parseStrictPositiveInteger(value);
-  if (seconds === undefined) {
-    return undefined;
-  }
-  const milliseconds = seconds * 1000;
-  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  return safeMillisecondsFromSeconds(parseStrictPositiveInteger(value));
 }
 
 /** Converts strict non-negative seconds to safe millisecond counts. */
 export function nonNegativeSecondsToSafeMilliseconds(value: unknown): number | undefined {
-  const seconds = parseStrictNonNegativeInteger(value);
-  if (seconds === undefined) {
-    return undefined;
-  }
-  const milliseconds = seconds * 1000;
-  return Number.isSafeInteger(milliseconds) ? milliseconds : undefined;
+  return safeMillisecondsFromSeconds(parseStrictNonNegativeInteger(value));
 }
 
 /** Resolves an absolute expiration timestamp from a positive duration in milliseconds. */

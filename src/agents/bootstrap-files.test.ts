@@ -3,14 +3,24 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  upsertSessionEntryCore,
+  type SessionTranscriptRuntimeTarget,
+} from "../config/sessions/session-accessor.js";
 import {
   clearInternalHooks,
   registerInternalHook,
   type AgentBootstrapHookContext,
 } from "../hooks/internal-hooks.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { makeTempWorkspace } from "../test-helpers/workspace.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import {
   FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
   hasCompletedBootstrapTurn,
@@ -19,7 +29,24 @@ import {
   resolveBootstrapFilesForRun,
   resolveContextInjectionMode,
 } from "./bootstrap-files.js";
-import type { WorkspaceBootstrapFile } from "./workspace.js";
+import { SessionManager } from "./sessions/session-manager.js";
+import { resetLegacyWorkspaceStateCheckForTest } from "./workspace-legacy-state.test-support.js";
+import { mergeWorkspaceSetupState } from "./workspace-state-store.js";
+import {
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_USER_FILENAME,
+  loadExtraBootstrapFilesWithDiagnostics,
+  type WorkspaceBootstrapFile,
+} from "./workspace.js";
+
+const memoryRuntimeMocks = vi.hoisted(() => ({ classifyWorkspacePaths: vi.fn() }));
+
+vi.mock("../plugins/memory-runtime.js", () => ({
+  classifyActiveMemoryWorkspacePaths: (...args: unknown[]) =>
+    memoryRuntimeMocks.classifyWorkspacePaths(...args),
+}));
+
+let testState: OpenClawTestState | undefined;
 
 function registerExtraBootstrapFileHook() {
   registerInternalHook("agent:bootstrap", (event) => {
@@ -88,6 +115,53 @@ function registerDuplicateBootstrapFileHook() {
   });
 }
 
+function registerNamedBootstrapFileHook(
+  relativePath = "MEMORY.md",
+  name: WorkspaceBootstrapFile["name"] = "MEMORY.md",
+) {
+  registerInternalHook("agent:bootstrap", (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    context.bootstrapFiles = [
+      ...context.bootstrapFiles,
+      {
+        name,
+        path: path.join(context.workspaceDir, relativePath),
+        content: "hook memory",
+        missing: false,
+      },
+    ];
+  });
+}
+
+function registerLoadedBootstrapFilesHook(
+  relativePaths: string[],
+  name?: WorkspaceBootstrapFile["name"],
+) {
+  registerInternalHook("agent:bootstrap", async (event) => {
+    const context = event.context as AgentBootstrapHookContext;
+    const { files } = await loadExtraBootstrapFilesWithDiagnostics(
+      context.workspaceDir,
+      relativePaths,
+    );
+    if (name) {
+      for (const file of files) {
+        file.name = name;
+      }
+    }
+    context.bootstrapFiles = [...context.bootstrapFiles, ...files];
+  });
+}
+
+async function createDirectoryAlias(params: {
+  workspaceDir: string;
+  targetDir: string;
+  aliasName: string;
+}): Promise<string> {
+  const aliasDir = path.join(params.workspaceDir, params.aliasName);
+  await fs.symlink(params.targetDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+  return aliasDir;
+}
+
 function registerBootstrapFileHook(relativePath = "BOOTSTRAP.md") {
   registerInternalHook("agent:bootstrap", (event) => {
     const context = event.context as AgentBootstrapHookContext;
@@ -111,15 +185,10 @@ async function createHeartbeatAgentsWorkspace() {
 }
 
 async function writeCompletedWorkspaceState(workspaceDir: string): Promise<void> {
-  await fs.writeFile(
-    path.join(workspaceDir, "openclaw-workspace-state.json"),
-    `${JSON.stringify({
-      version: 1,
-      bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
-      setupCompletedAt: "2026-05-16T00:00:01.000Z",
-    })}\n`,
-    "utf8",
-  );
+  mergeWorkspaceSetupState(workspaceDir, {
+    bootstrapSeededAt: "2026-05-16T00:00:00.000Z",
+    setupCompletedAt: "2026-05-16T00:00:01.000Z",
+  });
 }
 
 async function writeLegacyCompletedWorkspaceState(workspaceDir: string): Promise<void> {
@@ -144,8 +213,87 @@ function expectHeartbeatExcludedAndAgentsKept(files: WorkspaceBootstrapFile[]) {
 }
 
 describe("resolveBootstrapFilesForRun", () => {
-  beforeEach(() => clearInternalHooks());
-  afterEach(() => clearInternalHooks());
+  beforeEach(async () => {
+    clearInternalHooks();
+    resetLegacyWorkspaceStateCheckForTest();
+    memoryRuntimeMocks.classifyWorkspacePaths
+      .mockReset()
+      .mockResolvedValue({ status: "unavailable" });
+    testState = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "openclaw-bootstrap-state-",
+    });
+  });
+
+  it("excludes lower-trust root memory before hooks while preserving trusted user context", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-memory-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "tainted memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "trusted user", "utf8");
+    registerNamedBootstrapFileHook(DEFAULT_MEMORY_FILENAME);
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({
+      status: "classified",
+      classifications: [
+        { relativePath: DEFAULT_MEMORY_FILENAME, originClass: "untrusted" },
+        { relativePath: DEFAULT_USER_FILENAME, originClass: "owner" },
+      ],
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).toContain(DEFAULT_USER_FILENAME);
+  });
+
+  it("fails closed when the memory runtime omits a requested root classification", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-missing-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "user", "utf8");
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({
+      status: "classified",
+      classifications: [{ relativePath: DEFAULT_MEMORY_FILENAME, originClass: "agent" }],
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+    });
+
+    expect(files.map((file) => file.name)).toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
+  });
+
+  it("excludes root memory for a selected runtime without provenance support", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-unsupported-provenance-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "memory", "utf8");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_USER_FILENAME), "user", "utf8");
+    memoryRuntimeMocks.classifyWorkspacePaths.mockResolvedValue({ status: "unsupported" });
+    const warnings: string[] = [];
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      config: {},
+      agentId: "main",
+      warn: (message) => warnings.push(message),
+    });
+
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_MEMORY_FILENAME);
+    expect(files.map((file) => file.name)).not.toContain(DEFAULT_USER_FILENAME);
+    expect(warnings).toContain(
+      "excluding automatic memory context: selected memory runtime does not support provenance classification",
+    );
+  });
+  afterEach(async () => {
+    clearInternalHooks();
+    closeOpenClawStateDatabaseForTest();
+    resetLegacyWorkspaceStateCheckForTest();
+    await testState?.cleanup();
+    testState = undefined;
+  });
 
   it("applies bootstrap hook overrides", async () => {
     registerExtraBootstrapFileHook();
@@ -170,10 +318,7 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => path.relative(workspaceDir, file.path))).toEqual([
       "AGENTS.md",
       "SOUL.md",
-      "TOOLS.md",
       "IDENTITY.md",
-      "USER.md",
-      "HEARTBEAT.md",
       "BOOTSTRAP.md",
     ]);
     expect(warnings).toHaveLength(3);
@@ -211,7 +356,31 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
   });
 
-  it("ignores stale workspace BOOTSTRAP.md when legacy setup state is completed", async () => {
+  it("treats USER.md as optional", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+
+    const files = await resolveBootstrapFilesForRun({ workspaceDir });
+
+    expect(files.map((file) => file.name)).not.toContain("USER.md");
+  });
+
+  it("refreshes USER.md on every turn for long-lived sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
+    const userPath = path.join(workspaceDir, "USER.md");
+    const sessionKey = `agent:main:webchat:direct:${randomUUID()}`;
+    await fs.writeFile(userPath, "Prefer concise answers.", "utf8");
+    const first = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+    await fs.writeFile(userPath, "Prefer detailed answers.", "utf8");
+    const second = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+    expect(first.find((file) => file.name === "USER.md")?.content).toBe("Prefer concise answers.");
+    expect(second.find((file) => file.name === "USER.md")?.content).toBe(
+      "Prefer detailed answers.",
+    );
+  });
+
+  it("keeps BOOTSTRAP.md until Doctor migrates legacy setup state", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
     await writeLegacyCompletedWorkspaceState(workspaceDir);
     await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "rules", "utf8");
@@ -220,7 +389,7 @@ describe("resolveBootstrapFilesForRun", () => {
     const files = await resolveBootstrapFilesForRun({ workspaceDir });
 
     expect(files.map((file) => file.name)).toContain("AGENTS.md");
-    expect(files.map((file) => file.name)).not.toContain("BOOTSTRAP.md");
+    expect(files.map((file) => file.name)).toContain("BOOTSTRAP.md");
   });
 
   it("keeps BOOTSTRAP.md when current setup state cannot be read", async () => {
@@ -286,69 +455,198 @@ describe("resolveBootstrapFilesForRun", () => {
     expect(files.map((file) => file.path)).not.toContain(path.join(workspaceDir, "BOOTSTRAP.md"));
   });
 
-  it("keeps subagent sessions to project and tool bootstrap files", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-subagent-");
-    await Promise.all(
-      [
-        ["AGENTS.md", "project rules"],
-        ["TOOLS.md", "tool rules"],
-        ["SOUL.md", "persona"],
-        ["IDENTITY.md", "identity"],
-        ["USER.md", "user profile"],
-        ["MEMORY.md", "memory"],
-        ["HEARTBEAT.md", "heartbeat"],
-        ["BOOTSTRAP.md", "setup"],
-      ].map(([fileName, content]) =>
-        fs.writeFile(
-          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
-          expectDefined(content, "content test invariant"),
-          "utf8",
-        ),
-      ),
-    );
+  it("keeps MEMORY.md for direct sessions", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-direct-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
+      sessionKey: "agent:main:discord:direct:user-1",
+    });
+
+    expect(files.map((file) => file.name)).toContain("MEMORY.md");
+  });
+
+  it.each(["group", "channel"] as const)(
+    "drops MEMORY.md for an opaque session with authoritative %s chat type",
+    async (chatType) => {
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-shared-");
+      await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+      const files = await resolveBootstrapFilesForRun({
+        workspaceDir,
+        sessionKey: "agent:main:opaque:binding",
+        chatType,
+      });
+
+      expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+    },
+  );
+
+  it.each(["direct", "group", "channel"] as const)(
+    "applies root-memory source privacy while keeping unrelated aliases for %s chats",
+    async (chatType) => {
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-shared-alias-");
+      const nestedDir = path.join(workspaceDir, "packages", "core");
+      await fs.mkdir(nestedDir, { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, DEFAULT_MEMORY_FILENAME),
+        "private memory",
+        "utf8",
+      );
+      await fs.writeFile(path.join(nestedDir, DEFAULT_MEMORY_FILENAME), "nested memory", "utf8");
+      const rootAliasDir = await createDirectoryAlias({
+        workspaceDir,
+        targetDir: workspaceDir,
+        aliasName: "root-memory-alias",
+      });
+      const nestedAliasDir = await createDirectoryAlias({
+        workspaceDir,
+        targetDir: nestedDir,
+        aliasName: "nested-memory-alias",
+      });
+      const rootAliasPath = path.join(rootAliasDir, DEFAULT_MEMORY_FILENAME);
+      const nestedAliasPath = path.join(nestedAliasDir, DEFAULT_MEMORY_FILENAME);
+      registerLoadedBootstrapFilesHook([
+        path.relative(workspaceDir, rootAliasPath),
+        path.relative(workspaceDir, nestedAliasPath),
+      ]);
+
+      const files = await resolveBootstrapFilesForRun({
+        workspaceDir,
+        sessionKey: "agent:main:opaque:binding",
+        chatType,
+      });
+
+      if (chatType === "direct") {
+        expect(files.map((file) => file.path)).toContain(rootAliasPath);
+      } else {
+        expect(files.map((file) => file.path)).not.toContain(rootAliasPath);
+      }
+      expect(files.map((file) => file.path)).toContain(nestedAliasPath);
+    },
+  );
+
+  it("does not let hooks re-add MEMORY.md to shared sessions", async () => {
+    registerNamedBootstrapFileHook();
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:c1",
+    });
+
+    expect(files.map((file) => file.name)).not.toContain("MEMORY.md");
+  });
+
+  it("does not let hooks relabel and re-add root MEMORY.md to shared sessions", async () => {
+    registerNamedBootstrapFileHook("MEMORY.md", "SOUL.md");
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-shared-alias-");
+    const rootMemoryPath = path.join(workspaceDir, "MEMORY.md");
+    await fs.writeFile(rootMemoryPath, "private memory", "utf8");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:c1",
+    });
+
+    expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
+  });
+
+  it("keeps hook-added nested MEMORY.md in shared sessions", async () => {
+    registerNamedBootstrapFileHook(path.join("packages", "core", "MEMORY.md"));
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-hook-nested-memory-");
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:slack:channel:c1",
+    });
+
+    expect(files.map((file) => path.relative(workspaceDir, file.path))).toContain(
+      path.join("packages", "core", "MEMORY.md"),
+    );
+  });
+
+  it("keeps missing hook records without source identity when policy allows them", async () => {
+    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-missing-hook-record-");
+    await fs.writeFile(path.join(workspaceDir, DEFAULT_MEMORY_FILENAME), "private memory", "utf8");
+    registerInternalHook("agent:bootstrap", (event) => {
+      const context = event.context as AgentBootstrapHookContext;
+      context.bootstrapFiles = [
+        ...context.bootstrapFiles,
+        {
+          name: "SOUL.md",
+          path: path.join(context.workspaceDir, "generated", "SOUL.md"),
+          missing: true,
+        },
+      ];
+    });
+
+    const files = await resolveBootstrapFilesForRun({
+      workspaceDir,
+      sessionKey: "agent:main:opaque:binding",
+      chatType: "channel",
+    });
+
+    expect(files).toContainEqual({
+      name: "SOUL.md",
+      path: path.join(workspaceDir, "generated", "SOUL.md"),
+      missing: true,
+    });
+  });
+
+  it.each([
+    {
+      mode: "subagent",
       sessionKey: "agent:main:subagent:worker",
-    });
-
-    expect(files.map((file) => file.name)).toStrictEqual(["AGENTS.md", "TOOLS.md"]);
-  });
-
-  it("keeps cron sessions on their existing minimal bootstrap files", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-cron-");
-    await Promise.all(
-      [
-        ["AGENTS.md", "project rules"],
-        ["TOOLS.md", "tool rules"],
-        ["SOUL.md", "persona"],
-        ["IDENTITY.md", "identity"],
-        ["USER.md", "user profile"],
-        ["MEMORY.md", "memory"],
-        ["HEARTBEAT.md", "heartbeat"],
-        ["BOOTSTRAP.md", "setup"],
-      ].map(([fileName, content]) =>
-        fs.writeFile(
-          path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
-          expectDefined(content, "content test invariant"),
-          "utf8",
-        ),
-      ),
-    );
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
+      relabeledName: "AGENTS.md",
+      expectedNames: ["AGENTS.md"],
+    },
+    {
+      mode: "cron",
       sessionKey: "agent:main:cron:daily:run:run-1",
-    });
+      relabeledName: "SOUL.md",
+      expectedNames: ["AGENTS.md", "SOUL.md", "IDENTITY.md", "USER.md"],
+    },
+  ] as const)(
+    "rejects loader aliases to root memory relabeled under the $mode allowlist",
+    async ({ sessionKey, relabeledName, expectedNames }) => {
+      const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-restricted-");
+      const rootMemoryPath = path.join(workspaceDir, DEFAULT_MEMORY_FILENAME);
+      const aliasDir = await createDirectoryAlias({
+        workspaceDir,
+        targetDir: workspaceDir,
+        aliasName: "root-memory-alias",
+      });
+      registerLoadedBootstrapFilesHook(
+        [path.relative(workspaceDir, path.join(aliasDir, DEFAULT_MEMORY_FILENAME))],
+        relabeledName,
+      );
+      await Promise.all(
+        [
+          ["AGENTS.md", "project rules"],
+          ["SOUL.md", "persona"],
+          ["IDENTITY.md", "identity"],
+          ["USER.md", "user profile"],
+          ["MEMORY.md", "memory"],
+          ["HEARTBEAT.md", "heartbeat"],
+          ["BOOTSTRAP.md", "setup"],
+        ].map(([fileName, content]) =>
+          fs.writeFile(
+            path.join(workspaceDir, expectDefined(fileName, "fileName test invariant")),
+            expectDefined(content, "content test invariant"),
+            "utf8",
+          ),
+        ),
+      );
 
-    expect(files.map((file) => file.name)).toStrictEqual([
-      "AGENTS.md",
-      "SOUL.md",
-      "TOOLS.md",
-      "IDENTITY.md",
-      "USER.md",
-    ]);
-  });
+      const files = await resolveBootstrapFilesForRun({ workspaceDir, sessionKey });
+
+      expect(files.map((file) => file.name)).toStrictEqual(expectedNames);
+      expect(files.map((file) => file.path)).not.toContain(rootMemoryPath);
+    },
+  );
 });
 
 describe("resolveBootstrapContextForRun", () => {
@@ -381,9 +679,8 @@ describe("resolveBootstrapContextForRun", () => {
     expect(contextFileNames.has("AGENTS.md")).toBe(true);
   });
 
-  it("uses heartbeat-only bootstrap files in lightweight heartbeat mode", async () => {
+  it("keeps bootstrap context empty in lightweight heartbeat mode", async () => {
     const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
     await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
@@ -392,8 +689,8 @@ describe("resolveBootstrapContextForRun", () => {
       runKind: "heartbeat",
     });
 
-    expect(files.map((file) => file.name)).toStrictEqual(["HEARTBEAT.md"]);
-    expect(files[0]?.content).toBe("check inbox");
+    // Heartbeat context comes from cron scratch via the heartbeat runner now.
+    expect(files).toStrictEqual([]);
   });
 
   it("keeps bootstrap context empty in lightweight cron mode", async () => {
@@ -409,247 +706,128 @@ describe("resolveBootstrapContextForRun", () => {
     expect(files).toStrictEqual([]);
   });
 
-  it("excludes HEARTBEAT.md from commitment-only context", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "global work", "utf8");
-    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "persona", "utf8");
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      runKind: "commitment-only",
-    });
-
-    expect(files.map((file) => file.name)).not.toContain("HEARTBEAT.md");
-    expect(files.map((file) => file.name)).toContain("SOUL.md");
-  });
-
-  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat prompt section is disabled", async () => {
+  it("never re-imports a leftover workspace HEARTBEAT.md into bootstrap context", async () => {
     const workspaceDir = await createHeartbeatAgentsWorkspace();
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            heartbeat: {
-              includeSystemPromptSection: false,
-            },
-          },
-          list: [{ id: "main" }],
-        },
-      },
-    });
-
-    expectHeartbeatExcludedAndAgentsKept(files);
-  });
-
-  it("drops HEARTBEAT.md for non-heartbeat runs when the heartbeat cadence is disabled", async () => {
-    const workspaceDir = await createHeartbeatAgentsWorkspace();
-
-    const files = await resolveBootstrapFilesForRun({
-      workspaceDir,
-      config: {
-        agents: {
-          defaults: {
-            heartbeat: {
-              every: "0m",
-            },
-          },
-          list: [{ id: "main" }],
-        },
-      },
-    });
-
-    expectHeartbeatExcludedAndAgentsKept(files);
-  });
-
-  it("keeps HEARTBEAT.md for actual heartbeat runs even when the prompt section is disabled", async () => {
-    const workspaceDir = await makeTempWorkspace("openclaw-bootstrap-");
-    await fs.writeFile(path.join(workspaceDir, "HEARTBEAT.md"), "check inbox", "utf8");
 
     const files = await resolveBootstrapFilesForRun({
       workspaceDir,
       runKind: "heartbeat",
       config: {
         agents: {
-          defaults: {
-            heartbeat: {
-              includeSystemPromptSection: false,
-            },
-          },
+          defaults: { heartbeat: {} },
           list: [{ id: "main" }],
         },
       },
     });
 
-    const fileNames = files.map((file) => file.name);
-    expect(fileNames).toContain("HEARTBEAT.md");
+    expectHeartbeatExcludedAndAgentsKept(files);
   });
 });
 
 describe("hasCompletedBootstrapTurn", () => {
   let tmpDir: string;
+  let sessionTarget: SessionTranscriptRuntimeTarget;
+  let sessionManager: SessionManager;
 
   beforeEach(async () => {
     tmpDir = await fs.mkdtemp(path.join(await fs.realpath("/tmp"), "openclaw-bootstrap-turn-"));
+    sessionTarget = {
+      agentId: "main",
+      sessionId: randomUUID(),
+      sessionKey: "agent:main:bootstrap-turn",
+      storePath: path.join(tmpDir, "sessions.json"),
+    };
+    await upsertSessionEntryCore(sessionTarget, {
+      sessionId: sessionTarget.sessionId,
+      updatedAt: Date.now(),
+    });
+    sessionManager = SessionManager.open(sessionTarget, tmpDir);
   });
 
   afterEach(async () => {
+    closeOpenClawAgentDatabasesForTest();
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  it("returns false when session file does not exist", async () => {
-    expect(await hasCompletedBootstrapTurn(path.join(tmpDir, "missing.jsonl"))).toBe(false);
+  it("returns false without a complete SQLite transcript identity", async () => {
+    expect(await hasCompletedBootstrapTurn()).toBe(false);
+    expect(await hasCompletedBootstrapTurn({ ...sessionTarget, storePath: undefined })).toBe(false);
   });
 
-  it("returns false for SQLite transcript markers", async () => {
-    expect(
-      await hasCompletedBootstrapTurn("sqlite:main:session-1:/tmp/openclaw/sessions.json"),
-    ).toBe(false);
+  it("returns false when the SQLite session has no transcript", async () => {
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("returns false for empty session files", async () => {
-    const sessionFile = path.join(tmpDir, "empty.jsonl");
-    await fs.writeFile(sessionFile, "", "utf8");
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  it("returns false when no full bootstrap marker has been recorded", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sessionManager.appendCustomEntry("openclaw:unrelated", { timestamp: 2 });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("returns false for header-only session files", async () => {
-    const sessionFile = path.join(tmpDir, "header-only.jsonl");
-    await fs.writeFile(sessionFile, `${JSON.stringify({ type: "session", id: "s1" })}\n`, "utf8");
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  it("reads a completion marker persisted by the SQLite session manager", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
   });
 
-  it("returns false when no assistant turn has been flushed yet", async () => {
-    const sessionFile = path.join(tmpDir, "user-only.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({ type: "session", id: "s1" }),
-        JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  it("invalidates a completion marker after compaction", async () => {
+    const firstEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    sessionManager.appendCompaction("trimmed", firstEntryId, 10);
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("returns false for assistant turns without a recorded full bootstrap marker", async () => {
-    const sessionFile = path.join(tmpDir, "assistant-no-marker.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({ type: "session", id: "s1" }),
-        JSON.stringify({ type: "message", message: { role: "user", content: "hello" } }),
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  it("accepts a newer full bootstrap marker after compaction", async () => {
+    const firstEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    sessionManager.appendCompaction("trimmed", firstEntryId, 10);
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
   });
 
-  it("returns true when a full bootstrap completion marker exists", async () => {
-    const sessionFile = path.join(tmpDir, "full-bootstrap.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "hi" } }),
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
+  it("invalidates a completion marker after a session reset", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    sessionManager.appendResetBoundary("reset");
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 
-  it("returns false when compaction happened after the last assistant turn", async () => {
-    const sessionFile = path.join(tmpDir, "post-compaction.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-        JSON.stringify({ type: "compaction", summary: "trimmed" }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(false);
+  it("accepts a newer full bootstrap marker after a session reset", async () => {
+    sessionManager.appendMessage({ role: "user", content: "hello", timestamp: 1 });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    sessionManager.appendResetBoundary("reset");
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 3 });
+
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
   });
 
-  it("returns true when a later full bootstrap marker happens after compaction", async () => {
-    const sessionFile = path.join(tmpDir, "assistant-after-compaction.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-        JSON.stringify({ type: "compaction", summary: "trimmed" }),
-        JSON.stringify({ type: "message", message: { role: "user", content: "new ask" } }),
-        JSON.stringify({ type: "message", message: { role: "assistant", content: "new reply" } }),
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 2 },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
-  });
+  it("ignores completion markers on an inactive transcript branch", async () => {
+    const firstEntryId = sessionManager.appendMessage({
+      role: "user",
+      content: "hello",
+      timestamp: 1,
+    });
+    sessionManager.appendCustomEntry(FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, { timestamp: 2 });
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(true);
 
-  it("ignores malformed JSON lines", async () => {
-    const sessionFile = path.join(tmpDir, "malformed.jsonl");
-    await fs.writeFile(
-      sessionFile,
-      [
-        "{broken",
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
-  });
-
-  it("finds a recent full bootstrap marker even when the scan starts mid-file", async () => {
-    const sessionFile = path.join(tmpDir, "large-prefix.jsonl");
-    const hugePrefix = "x".repeat(300 * 1024);
-    await fs.writeFile(
-      sessionFile,
-      [
-        JSON.stringify({ type: "message", message: { role: "user", content: hugePrefix } }),
-        JSON.stringify({
-          type: "custom",
-          customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE,
-          data: { timestamp: 1 },
-        }),
-      ].join("\n") + "\n",
-      "utf8",
-    );
-    expect(await hasCompletedBootstrapTurn(sessionFile)).toBe(true);
-  });
-
-  it("returns false for symbolic links", async () => {
-    const realFile = path.join(tmpDir, "real.jsonl");
-    const linkFile = path.join(tmpDir, "link.jsonl");
-    await fs.writeFile(
-      realFile,
-      `${JSON.stringify({ type: "custom", customType: FULL_BOOTSTRAP_COMPLETED_CUSTOM_TYPE, data: { timestamp: 1 } })}\n`,
-      "utf8",
-    );
-    await fs.symlink(realFile, linkFile);
-    expect(await hasCompletedBootstrapTurn(linkFile)).toBe(false);
+    sessionManager.appendLeafControl({
+      targetId: firstEntryId,
+      appendParentId: firstEntryId,
+    });
+    expect(await hasCompletedBootstrapTurn(sessionTarget)).toBe(false);
   });
 });
 

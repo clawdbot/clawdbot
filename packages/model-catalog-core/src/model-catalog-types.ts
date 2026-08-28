@@ -43,8 +43,11 @@ export type ModelCatalogCompatConfig = {
   supportsReasoningEffort?: boolean;
   /** Whether the model accepts the temperature parameter (GPT-5.6 family rejects it). */
   supportsTemperature?: boolean;
+  /** Whether the provider honors top-level `instructions` on Responses requests. */
+  supportsInstructions?: boolean;
   supportsUsageInStreaming?: boolean;
   supportsStrictMode?: boolean;
+  supportsJsonSchemaResponseFormat?: boolean;
   maxTokensField?: "max_completion_tokens" | "max_tokens";
   requiresToolResultName?: boolean;
   requiresAssistantAfterToolResult?: boolean;
@@ -60,13 +63,13 @@ export type ModelCatalogCompatConfig = {
   supportsLongCacheRetention?: boolean;
   supportsPromptCacheKey?: boolean;
   supportsTools?: boolean;
+  /** Code-mode tier consumed by `tools.codeMode.enabled: "auto"`; absent means "capable". */
+  codeMode?: "preferred" | "capable";
   requiresStringContent?: boolean;
   strictMessageKeys?: boolean;
   toolSchemaProfile?: string;
   unsupportedToolSchemaKeywords?: string[];
-  nativeWebSearchTool?: boolean;
   toolCallArgumentsEncoding?: string;
-  requiresMistralToolIds?: boolean;
   requiresOpenAiAnthropicToolPayload?: boolean;
   thinkingFormat?: ModelCatalogThinkingFormat;
   supportedReasoningEfforts?: string[];
@@ -218,6 +221,15 @@ export type ModelCatalogCost = {
   tieredPricing?: ModelCatalogTieredCost[];
 };
 
+/** Bounded provider-declared context-window choice for one model. */
+export type ModelCatalogContextWindowOption = {
+  id: string;
+  label: string;
+  contextWindow: number;
+};
+
+export const MODEL_CATALOG_MAX_CONTEXT_WINDOWS = 16;
+
 /** Provider manifest model entry. */
 export type ModelCatalogModel = {
   id: string;
@@ -228,11 +240,20 @@ export type ModelCatalogModel = {
   input?: ModelCatalogInput[];
   reasoning?: boolean;
   contextWindow?: number;
+  contextWindows?: ModelCatalogContextWindowOption[];
+  contextWindowDefault?: string;
   contextTokens?: number;
   maxTokens?: number;
   thinkingLevelMap?: ModelCatalogThinkingLevelMap;
   cost?: ModelCatalogCost;
   compat?: ModelCatalogCompatConfig;
+  /**
+   * Provider/model ref of the same upstream model in another bundled catalog,
+   * for vendors reachable through several provider ids under different model
+   * ids. Authoring metadata only: normalization drops it, and the shared-model
+   * contract test uses it to keep `compat` capability tiers from drifting apart.
+   */
+  upstreamModel?: string;
   mediaInput?: ModelCatalogMediaInputConfig;
   status?: ModelCatalogStatus;
   statusReason?: string;
@@ -246,6 +267,8 @@ export type ModelCatalogProvider = {
   baseUrl?: string;
   api?: ModelCatalogApi;
   headers?: Record<string, string>;
+  /** Provider-recommended primary model id. */
+  defaultModel?: string;
   /** Provider-recommended small model id for short internal utility tasks. */
   defaultUtilityModel?: string;
   models: ModelCatalogModel[];
@@ -279,9 +302,8 @@ export type ModelCatalog = {
 };
 
 /** Normalized model catalog row used by runtime lookup and UI surfaces. */
-export type NormalizedModelCatalogRow = {
+export type NormalizedModelCatalogRow = Omit<ModelCatalogModel, "upstreamModel"> & {
   provider: string;
-  id: string;
   ref: string;
   mergeKey: string;
   name: string;
@@ -289,18 +311,4 @@ export type NormalizedModelCatalogRow = {
   input: ModelCatalogInput[];
   reasoning: boolean;
   status: ModelCatalogStatus;
-  api?: ModelCatalogApi;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  contextWindow?: number;
-  contextTokens?: number;
-  maxTokens?: number;
-  thinkingLevelMap?: ModelCatalogThinkingLevelMap;
-  cost?: ModelCatalogCost;
-  compat?: ModelCatalogCompatConfig;
-  mediaInput?: ModelCatalogMediaInputConfig;
-  statusReason?: string;
-  replaces?: string[];
-  replacedBy?: string;
-  tags?: string[];
 };

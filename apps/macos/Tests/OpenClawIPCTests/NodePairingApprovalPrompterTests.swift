@@ -32,10 +32,6 @@ struct NodePairingApprovalPrompterTests {
             localNodeId: "node-1"))
     }
 
-    @Test func `node pairing approval prompter exercises`() async {
-        await NodePairingApprovalPrompter.exerciseForTesting()
-    }
-
     @Test func `a newer device pairing request supersedes queued requests for the same device`() {
         func request(_ requestId: String, deviceId: String, ts: Double) -> DevicePairingApprovalPrompter
             .PendingRequest
@@ -159,6 +155,28 @@ struct PairingCardPresentationTests {
         let notifyRows = PairingCardPresentation.accessRows(for: notifyOnly)
         #expect(notifyRows.allSatisfy { !$0.isElevated })
         #expect(notifyRows.map(\.text).contains("Commands: system.notify, contacts.search"))
+    }
+
+    @Test func `session catalog capabilities render as one provider summary`() {
+        let card = self.nodeCard(caps: [
+            "canvas",
+            "codex-app-server-threads",
+            "claude-sessions",
+            "browser",
+            "codex-cli-sessions",
+            "opencode-sessions",
+            "pi-sessions",
+            "file",
+        ])
+
+        let rows = PairingCardPresentation.accessRows(for: card)
+        #expect(rows.map(\.text) == [
+            "Canvas display",
+            "Sessions: Codex, Claude, OpenCode, Pi",
+            "Browser",
+            "File transfer",
+        ])
+        #expect(rows.filter { $0.id == "cap-group:sessions" }.count == 1)
     }
 
     @Test func `every requested access row renders and admin can not hide`() {
@@ -290,7 +308,7 @@ struct PairingApprovalCenterBulkDecisionTests {
         center.decideAll(rendered, .approve)
 
         var attempts = 0
-        while recorder.decided.count < 2 || !center.decisionsInFlight.isEmpty, attempts < 10_000 {
+        while recorder.decided.count < 2 || !center.decisionsInFlight.isEmpty, attempts < 10000 {
             attempts += 1
             await Task.yield()
         }
@@ -310,7 +328,7 @@ struct PairingApprovalCenterBulkDecisionTests {
         center.decideAll(rendered, .reject)
 
         var attempts = 0
-        while recorder.decided.count < 2, attempts < 10_000 {
+        while recorder.decided.count < 2, attempts < 10000 {
             attempts += 1
             await Task.yield()
         }
@@ -332,7 +350,7 @@ struct PairingApprovalCenterBulkDecisionTests {
         center.decideAll(rendered, .approve)
 
         var attempts = 0
-        while recorder.decided.isEmpty, attempts < 10_000 {
+        while recorder.decided.isEmpty, attempts < 10000 {
             attempts += 1
             await Task.yield()
         }

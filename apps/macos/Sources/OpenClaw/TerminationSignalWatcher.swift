@@ -48,10 +48,15 @@ final class TerminationSignalWatcher {
         // Ensure any pairing prompt can't accidentally approve during shutdown.
         NodePairingApprovalPrompter.shared.stop()
         DevicePairingApprovalPrompter.shared.stop()
-        NSApp.terminate(nil)
+        Self.scheduleExitFailsafe()
+        AppDelegate.requestTermination()
+    }
 
-        // Safety net: don't hang forever if something blocks termination.
-        DispatchQueue.main.asyncAfter(deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds) {
+    static func scheduleExitFailsafe() {
+        // Keep the last-resort exit independent of a stuck main actor or AppKit loop.
+        DispatchQueue.global(qos: .userInitiated).asyncAfter(
+            deadline: .now() + AppTerminationTiming.signalExitFailsafeSeconds)
+        {
             exit(0)
         }
     }

@@ -1,8 +1,8 @@
 // Webhook target helpers resolve and validate plugin webhook destinations.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { canonicalizePathVariant } from "../gateway/security-path.js";
 import { registerPluginHttpRoute } from "../plugins/http-registry.js";
 import type { FixedWindowRateLimiter } from "./webhook-memory-guards.js";
-import { normalizeWebhookPath } from "./webhook-path.js";
 import {
   beginWebhookRequestPipelineOrReject,
   type WebhookInFlightLimiter,
@@ -28,6 +28,41 @@ type RegisterPluginHttpRouteParams = Parameters<typeof registerPluginHttpRoute>[
 
 export { registerPluginHttpRoute };
 
+/** Normalize a webhook path to a leading slash without a trailing slash. */
+export function normalizeWebhookPath(raw: string): string {
+  const trimmed = raw.trim();
+  if (!trimmed) {
+    return "/";
+  }
+  const withSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  return withSlash.length > 1 && withSlash.endsWith("/") ? withSlash.slice(0, -1) : withSlash;
+}
+
+/** Canonicalize a webhook path for Gateway route identity and registry keys. */
+export function canonicalizeWebhookRouteKey(raw: string): string {
+  return canonicalizePathVariant(normalizeWebhookPath(raw));
+}
+
+/** Resolve a webhook path from explicit config, URL pathname, or a caller default. */
+export function resolveWebhookPath(params: {
+  webhookPath?: string;
+  webhookUrl?: string;
+  defaultPath?: string | null;
+}): string | null {
+  const trimmedPath = params.webhookPath?.trim();
+  if (trimmedPath) {
+    return normalizeWebhookPath(trimmedPath);
+  }
+  if (params.webhookUrl?.trim()) {
+    try {
+      return normalizeWebhookPath(new URL(params.webhookUrl).pathname || "/");
+    } catch {
+      return null;
+    }
+  }
+  return params.defaultPath ?? null;
+}
+
 /** Plugin HTTP route options supplied when webhook paths are registered lazily. */
 export type RegisterWebhookPluginRouteOptions = Omit<
   RegisterPluginHttpRouteParams,
@@ -45,7 +80,11 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
   /** Optional last-target hook forwarded to `registerWebhookTarget`. */
   onLastPathTargetRemoved?: RegisterWebhookTargetOptions<T>["onLastPathTargetRemoved"];
 }): RegisteredWebhookTarget<T> {
-  return registerWebhookTarget(params.targetsByPath, params.target, {
+  const canonicalTarget = {
+    ...params.target,
+    path: canonicalizeWebhookRouteKey(params.target.path),
+  };
+  return registerWebhookTarget(params.targetsByPath, canonicalTarget, {
     onFirstPathTarget: ({ path }) =>
       registerPluginHttpRoute({
         ...params.route,
@@ -58,10 +97,10 @@ export function registerWebhookTargetWithPluginRoute<T extends { path: string }>
   });
 }
 
-const pathTeardownByTargetMap = new WeakMap<Map<string, unknown[]>, Map<string, () => void>>();
+const pathTeardownByTargetMap = new WeakMap<object, Map<string, () => void>>();
 
 function getPathTeardownMap<T>(targetsByPath: Map<string, T[]>): Map<string, () => void> {
-  const mapKey = targetsByPath as unknown as Map<string, unknown[]>;
+  const mapKey = targetsByPath;
   const existing = pathTeardownByTargetMap.get(mapKey);
   if (existing) {
     return existing;
@@ -125,8 +164,13 @@ export function resolveWebhookTargets<T>(
   targetsByPath: Map<string, T[]>,
 ): { path: string; targets: T[] } | null {
   const url = new URL(req.url ?? "/", "http://localhost");
-  const path = normalizeWebhookPath(url.pathname);
-  const targets = targetsByPath.get(path);
+  const normalizedPath = normalizeWebhookPath(url.pathname);
+  const normalizedTargets = targetsByPath.get(normalizedPath);
+  if (normalizedTargets && normalizedTargets.length > 0) {
+    return { path: normalizedPath, targets: normalizedTargets };
+  }
+  const path = canonicalizeWebhookRouteKey(normalizedPath);
+  const targets = path === normalizedPath ? undefined : targetsByPath.get(path);
   if (!targets || targets.length === 0) {
     return null;
   }

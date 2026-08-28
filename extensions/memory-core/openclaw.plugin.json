@@ -1,13 +1,27 @@
 {
   "id": "memory-core",
+  "doctorContract": {
+    "stateMigrations": true
+  },
+  "name": "OpenClaw Memory",
+  "cliCommands": [
+    {
+      "name": "memory",
+      "description": "Search, inspect, and reindex memory files",
+      "hasSubcommands": true
+    }
+  ],
   "activation": {
     "onStartup": false
   },
   "kind": "memory",
   "contracts": {
-    "tools": ["memory_get", "memory_search"]
+    "tools": ["intent", "memory_get", "memory_search"]
   },
   "toolMetadata": {
+    "intent": {
+      "profiles": ["coding", "messaging"]
+    },
     "memory_get": {
       "replaySafe": true
     }
@@ -20,6 +34,10 @@
     }
   ],
   "uiHints": {
+    "dreaming.enabled": {
+      "label": "Dreaming Enabled",
+      "help": "Run the default background memory consolidation sweep. Disable to stop the managed schedule."
+    },
     "dreaming.frequency": {
       "label": "Dreaming Frequency",
       "placeholder": "0 3 * * *",
@@ -29,18 +47,47 @@
       "label": "Dreaming Model",
       "placeholder": "anthropic/claude-sonnet-4-6",
       "help": "Optional provider/model override for Dream Diary narrative subagent runs. Requires plugins.entries.memory-core.subagent.allowModelOverride."
+    },
+    "dreaming.phases.deep.maxPriorEntryLossFraction": {
+      "label": "Maximum Prior Entry Loss",
+      "help": "Maximum fraction of prior MEMORY.md entries an accepted consolidation rewrite may remove."
     }
   },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
     "properties": {
+      "memoryPolicy": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "excludeSessions": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "hookExternalContentSources": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "channels": {
+                "type": "array",
+                "items": { "type": "string" }
+              },
+              "chatTypes": {
+                "type": "array",
+                "items": { "type": "string", "enum": ["direct", "group", "channel"] }
+              }
+            }
+          }
+        }
+      },
       "dreaming": {
         "type": "object",
         "additionalProperties": false,
         "properties": {
           "enabled": {
-            "type": "boolean"
+            "type": "boolean",
+            "default": true
           },
           "frequency": {
             "type": "string"
@@ -131,15 +178,18 @@
                   "minScore": {
                     "type": "number",
                     "minimum": 0,
-                    "maximum": 1
+                    "maximum": 1,
+                    "default": 0.75
                   },
                   "minRecallCount": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "default": 3
                   },
                   "minUniqueQueries": {
                     "type": "integer",
-                    "minimum": 0
+                    "minimum": 0,
+                    "default": 3
                   },
                   "recencyHalfLifeDays": {
                     "type": "integer",
@@ -153,6 +203,12 @@
                     "type": "integer",
                     "minimum": 1,
                     "description": "Maximum estimated token count for each short-term recall snippet promoted into MEMORY.md. Provenance metadata remains attached to the entry."
+                  },
+                  "maxPriorEntryLossFraction": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1,
+                    "description": "Maximum fraction of prior MEMORY.md entries a consolidation rewrite may remove before OpenClaw rejects it and uses append-only fallback."
                   },
                   "execution": {
                     "type": "object",

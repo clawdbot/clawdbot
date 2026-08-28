@@ -1,8 +1,8 @@
 // Covers prompt-facing sandbox metadata and full-access availability rules.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { buildEmbeddedSandboxInfo } from "./embedded-agent-runner/sandbox-info.js";
 import {
+  buildEmbeddedSandboxInfo,
   resolveEmbeddedFullAccessState,
   resolveEmbeddedSandboxInfoExecPolicy,
 } from "./embedded-agent-runner/sandbox-info.js";
@@ -98,6 +98,24 @@ describe("buildEmbeddedSandboxInfo", () => {
         defaultLevel: "on",
         fullAccessAvailable: true,
       },
+    });
+  });
+
+  it("never advertises elevated host execution for a required sandbox", () => {
+    const sandbox = createSandboxContext({ required: true });
+
+    expect(
+      buildEmbeddedSandboxInfo(sandbox, {
+        enabled: true,
+        allowed: true,
+        defaultLevel: "full",
+        fullAccessAvailable: true,
+      })?.elevated,
+    ).toEqual({
+      allowed: false,
+      defaultLevel: "off",
+      fullAccessAvailable: false,
+      fullAccessBlockedReason: "host-policy",
     });
   });
 

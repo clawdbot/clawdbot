@@ -1,7 +1,16 @@
 // Doctor launchctl environment tests cover macOS gateway platform warnings for env overrides.
 import fs from "node:fs";
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+
+const processMocks = vi.hoisted(() => ({
+  runExec: vi.fn(),
+}));
+
+vi.mock("../process/exec.js", () => ({
+  runExec: processMocks.runExec,
+}));
+
 import {
   collectMacGatewayPlatformWarnings,
   noteMacLaunchctlGatewayEnvOverrides,
@@ -17,6 +26,10 @@ function requireNoteCall(noteFn: { mock: { calls: unknown[][] } }, index = 0): u
 }
 
 describe("noteMacLaunchctlGatewayEnvOverrides", () => {
+  beforeEach(() => {
+    processMocks.runExec.mockReset().mockResolvedValue({ stdout: "", stderr: "" });
+  });
+
   it("collects clear unsetenv instructions for token override", async () => {
     const noteFn = vi.fn();
     const getenv = vi.fn(async (name: string) =>
@@ -116,6 +129,34 @@ describe("noteMacLaunchctlGatewayEnvOverrides", () => {
     await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "linux", getenv, noteFn });
 
     expect(getenv).not.toHaveBeenCalled();
+    expect(noteFn).not.toHaveBeenCalled();
+  });
+
+  it("bounds launchctl getenv calls and ignores timeout failures", async () => {
+    const noteFn = vi.fn();
+    processMocks.runExec.mockRejectedValue(new Error("timed out"));
+    const cfg = {
+      gateway: {
+        auth: {
+          token: "config-token",
+        },
+      },
+    } as OpenClawConfig;
+
+    await noteMacLaunchctlGatewayEnvOverrides(cfg, { platform: "darwin", noteFn });
+
+    expect(processMocks.runExec).toHaveBeenNthCalledWith(
+      1,
+      "/bin/launchctl",
+      ["getenv", "OPENCLAW_GATEWAY_TOKEN"],
+      { logOutput: false, timeoutMs: 5_000 },
+    );
+    expect(processMocks.runExec).toHaveBeenNthCalledWith(
+      2,
+      "/bin/launchctl",
+      ["getenv", "OPENCLAW_GATEWAY_PASSWORD"],
+      { logOutput: false, timeoutMs: 5_000 },
+    );
     expect(noteFn).not.toHaveBeenCalled();
   });
 });

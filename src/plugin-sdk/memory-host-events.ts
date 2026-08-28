@@ -1,4 +1,10 @@
 /**
- * Public SDK subpath for memory host event log types and helpers.
+ * Public SDK subpath for memory host event types and helpers.
  */
-export * from "../memory-host-sdk/events.js";
+export {
+  appendMemoryHostEvent,
+  normalizeMemoryHostEventRecordForStorage,
+  readMemoryHostEventRecords,
+  readMemoryHostEvents,
+  resolveMemoryHostEventLogPath,
+} from "../memory-host-sdk/events.js";

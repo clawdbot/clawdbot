@@ -11,6 +11,7 @@ type IMessageGroupContext = {
   cfg: OpenClawConfig;
   accountId?: string | null;
   groupId?: string | null;
+  senderPolicyMode?: "always" | "never";
   senderId?: string | null;
   senderName?: string | null;
   senderUsername?: string | null;

@@ -1,4 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ProviderRouteOverridePresence } from "../plugin-sdk/provider-model-types.js";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "./types.models.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
@@ -7,6 +8,93 @@ type MergedModelProviderEntry = {
   providerKey: string;
   providerConfig: ModelProviderConfig;
 };
+
+const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
+  "amazon-bedrock",
+  "amazon-bedrock-mantle",
+  "anthropic",
+  "anthropic-vertex",
+  "arcee",
+  "azure-openai-responses",
+  "byteplus",
+  "byteplus-plan",
+  "cerebras",
+  "chutes",
+  "claude-cli",
+  "clawrouter",
+  "cloudflare-ai-gateway",
+  "codex",
+  "comfy",
+  "copilot-proxy",
+  "dashscope",
+  "deepinfra",
+  "deepseek",
+  "fal",
+  "fireworks",
+  "github-copilot",
+  "gmi",
+  "gmi-cloud",
+  "gmicloud",
+  "google",
+  "google-antigravity",
+  "google-gemini-cli",
+  "google-vertex",
+  "groq",
+  "huggingface",
+  "kilocode",
+  "kimi",
+  "kimi-coding",
+  "litellm",
+  "lmstudio",
+  "meta",
+  "microsoft-foundry",
+  "minimax",
+  "minimax-portal",
+  "mistral",
+  "modelstudio",
+  "moonshot",
+  "moonshot-ai",
+  "moonshotai",
+  "nvidia",
+  "novita",
+  "novita-ai",
+  "novitaai",
+  "ollama",
+  "ollama-cloud",
+  "openai",
+  "opencode",
+  "opencode-go",
+  "openrouter",
+  "qianfan",
+  "qwen",
+  "qwen-token-plan",
+  "qwencloud",
+  "sglang",
+  "stepfun",
+  "stepfun-plan",
+  "synthetic",
+  "tencent-tokenhub",
+  "tencent-tokenplan",
+  "together",
+  "venice",
+  "vercel-ai-gateway",
+  "vllm",
+  "volcengine",
+  "volcengine-plan",
+  "vydra",
+  "x-ai",
+  "xai",
+  "xiaomi",
+  "xiaomi-token-plan",
+  "z.ai",
+  "z-ai",
+  "zai",
+]);
+
+/** Identifies provider overlays already known to the bundled config contract. */
+export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
+  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
+}
 
 /** Indexes configured model rows after caller-owned model-id normalization. */
 export function resolveMergedModelProviderModels(params: {
@@ -36,25 +124,41 @@ function normalizeModelId(provider: string, modelId: string): string {
     : trimmed;
 }
 
-function readRecord(value: unknown): Record<string, unknown> | undefined {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 function hasNonEmptyRecord(value: unknown): boolean {
   const record = readRecord(value);
   return record !== undefined && Object.keys(record).length > 0;
+}
+
+function hasRequestCompatOverrides(compat: ModelDefinitionConfig["compat"]): boolean {
+  return Object.entries(compat ?? {}).some(([key, value]) => {
+    // Native runtimes consume affirmative reasoning capabilities as turn controls.
+    // Disabling reasoning, custom labels, and payload shaping still require the authored adapter.
+    if (key === "supportsReasoningEffort") {
+      return value !== true;
+    }
+    if (key === "supportedReasoningEfforts") {
+      return !(
+        Array.isArray(value) &&
+        value.length > 0 &&
+        value.every(
+          (effort) =>
+            typeof effort === "string" &&
+            /^(minimal|low|medium|high|xhigh|max|ultra)$/u.test(effort),
+        )
+      );
+    }
+    return true;
+  });
 }
 
 /** Projects authored request behavior without exposing values or local commands. */
 export function resolveModelProviderRouteOverridePresence(params: {
   provider: string;
   modelId?: string;
-  config?: OpenClawConfig;
+  authoredConfig?: OpenClawConfig;
   canonicalizeModelId?: (modelId: string) => string;
 }): ProviderRouteOverridePresence {
-  const providerConfig = resolveMergedModelProviderConfig(params.config, params.provider);
+  const providerConfig = resolveMergedModelProviderConfig(params.authoredConfig, params.provider);
   if (!providerConfig) {
     return "none";
   }
@@ -84,7 +188,7 @@ export function resolveModelProviderRouteOverridePresence(params: {
   return configuredModel &&
     (hasNonEmptyRecord(configuredModel.headers) ||
       hasNonEmptyRecord(configuredModel.params) ||
-      hasNonEmptyRecord(configuredModel.compat))
+      hasRequestCompatOverrides(configuredModel.compat))
     ? "present"
     : "none";
 }

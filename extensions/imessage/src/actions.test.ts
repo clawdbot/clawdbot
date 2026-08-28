@@ -26,6 +26,10 @@ const runtimeMock = vi.hoisted(() => ({
 }));
 
 const rememberIMessageReplyCacheMock = vi.hoisted(() => vi.fn());
+const remoteHostMock = vi.hoisted(() => ({
+  resolve: vi.fn(),
+  getCached: vi.fn(),
+}));
 
 const loggerMock = vi.hoisted(() => ({
   warn: vi.fn(),
@@ -63,6 +67,11 @@ vi.mock("./private-api-status.js", async () => {
 
 vi.mock("./actions.runtime.js", () => ({
   imessageActionsRuntime: runtimeMock,
+}));
+
+vi.mock("./remote-host.js", () => ({
+  resolveIMessageRemoteHost: remoteHostMock.resolve,
+  getCachedIMessageRemoteHost: remoteHostMock.getCached,
 }));
 
 vi.mock("./monitor-reply-cache.js", async () => {
@@ -120,6 +129,8 @@ describe("imessage message actions", () => {
     rememberIMessageReplyCacheMock.mockReset();
     probeMock.getCachedIMessagePrivateApiStatus.mockReset();
     probeMock.probeIMessagePrivateApi.mockReset();
+    remoteHostMock.resolve.mockReset().mockResolvedValue(undefined);
+    remoteHostMock.getCached.mockReset().mockReturnValue(undefined);
     loggerMock.warn.mockReset();
   });
 
@@ -655,6 +666,76 @@ describe("imessage message actions", () => {
     },
   );
 
+  it("routes a wrapper-only private action through the detected remote transport", async () => {
+    const text = "spaces ; $(touch /tmp/nope) `whoami` & |";
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: { editMessage: true },
+    });
+    remoteHostMock.resolve.mockResolvedValue("bot@messages-mac");
+    runtimeMock.editMessage.mockResolvedValue(undefined);
+
+    await imessageMessageActions.handleAction?.({
+      action: "edit",
+      cfg: {
+        channels: {
+          imessage: {
+            cliPath: "/gateway/imsg-ssh",
+            dbPath: "~/Library/Messages/chat.db",
+          },
+        },
+      },
+      params: {
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        text,
+      },
+    } as never);
+
+    expect(remoteHostMock.resolve).toHaveBeenCalledWith({
+      cliPath: "/gateway/imsg-ssh",
+      remoteHost: undefined,
+    });
+    expect(runtimeMock.editMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text,
+        options: expect.objectContaining({
+          cliPath: "/gateway/imsg-ssh",
+          dbPath: "~/Library/Messages/chat.db",
+          remoteHost: "bot@messages-mac",
+        }),
+      }),
+    );
+  });
+
+  it("fails closed before a private action can use an ambiguous SSH wrapper", async () => {
+    const text = "spaces ; $(touch /tmp/nope) `whoami` & |";
+    remoteHostMock.resolve.mockRejectedValue(
+      new Error(
+        "iMessage SSH cliPath wrapper is not the simple transparent form; configure channels.imessage.remoteHost explicitly.",
+      ),
+    );
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "edit",
+        cfg: {
+          channels: {
+            imessage: { cliPath: "/gateway/imsg-proxy-wrapper" },
+          },
+        },
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          messageId: "message-guid",
+          text,
+        },
+      } as never),
+    ).rejects.toThrow("configure channels.imessage.remoteHost explicitly");
+
+    expect(runtimeMock.editMessage).not.toHaveBeenCalled();
+  });
+
   it("allows owner and operator.admin group management", async () => {
     probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
       available: true,
@@ -984,6 +1065,7 @@ describe("imessage message actions", () => {
         {
           target: { kind: "chat_id", chatId: 42 },
           options: imsgOptions(),
+          conversationReadOrigin: "delegated",
         },
       ],
     ]);
@@ -1111,6 +1193,7 @@ describe("imessage message actions", () => {
         {
           target: { kind: "chat_identifier", chatIdentifier: "team-thread" },
           options: imsgOptions(),
+          conversationReadOrigin: "delegated",
         },
       ],
     ]);
@@ -1355,6 +1438,7 @@ describe("imessage message actions", () => {
               chatIdentifier: "iMessage;-;+12069106512",
             },
             options: imsgOptions(),
+            conversationReadOrigin: "direct-operator",
           },
         ],
       ]);
@@ -1644,5 +1728,119 @@ describe("imessage message actions", () => {
       expect(result?.details).toEqual({ ok: true, messageId: "sent-guid" });
     },
   );
+
+  it.each([
+    ["upload-file", "-_8="],
+    ["upload-file", "-_8"],
+    ["setGroupIcon", "-_8="],
+    ["setGroupIcon", "-_8"],
+    ["reply", "-_8="],
+    ["reply", "-_8"],
+  ])("preserves URL-safe base64 for %s (%s)", async (action, buffer) => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      cliCapabilities: { sendRichSupportsAttachment: true },
+    });
+    runtimeMock.sendAttachment.mockResolvedValue({ messageId: "sent-guid" });
+    runtimeMock.sendRichMessage.mockResolvedValue({ messageId: "reply-guid" });
+
+    await imessageMessageActions.handleAction?.({
+      action,
+      cfg: cfg(),
+      params: {
+        chatGuid: "iMessage;+;chat0000",
+        messageId: "message-guid",
+        text: "attachment",
+        filename: "photo.jpg",
+        buffer,
+      },
+      senderIsOwner: true,
+    } as never);
+
+    const expectedBuffer = Uint8Array.from([0xfb, 0xff]);
+    if (action === "reply") {
+      expect(runtimeMock.sendRichMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          attachment: expect.objectContaining({ buffer: expectedBuffer }),
+        }),
+      );
+    } else {
+      const nativeAction =
+        action === "setGroupIcon" ? runtimeMock.setGroupIcon : runtimeMock.sendAttachment;
+      expect(nativeAction).toHaveBeenCalledWith(
+        expect.objectContaining({ buffer: expectedBuffer }),
+      );
+    }
+  });
+
+  it("rejects a malformed base64 buffer for upload-file instead of sending garbage bytes", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "upload-file",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "photo.jpg",
+          buffer: "!!!not-base64!!!",
+        },
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.sendAttachment).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed base64 buffer for setGroupIcon instead of setting a garbage icon", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+    });
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "setGroupIcon",
+        cfg: cfg(),
+        params: {
+          chatGuid: "iMessage;+;chat0000",
+          filename: "icon.png",
+          buffer: "!!!not-base64!!!",
+        },
+        senderIsOwner: true,
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.setGroupIcon).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed base64 reply attachment instead of sending garbage bytes", async () => {
+    probeMock.getCachedIMessagePrivateApiStatus.mockReturnValue({
+      available: true,
+      v2Ready: true,
+      selectors: {},
+      cliCapabilities: { sendRichSupportsAttachment: true },
+    });
+    runtimeMock.resolveChatGuidForTarget.mockResolvedValue("iMessage;+;resolved-ident");
+
+    await expect(
+      imessageMessageActions.handleAction?.({
+        action: "reply",
+        cfg: cfg(),
+        params: {
+          chatIdentifier: "team-thread",
+          messageId: "message-guid",
+          text: "here it is",
+          buffer: "!!!not-base64!!!",
+          filename: "card.png",
+        },
+      } as never),
+    ).rejects.toThrow(/must be valid base64/);
+    expect(runtimeMock.sendRichMessage).not.toHaveBeenCalled();
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

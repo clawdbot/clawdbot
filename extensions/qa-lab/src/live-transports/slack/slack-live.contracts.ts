@@ -1,17 +1,16 @@
 // QA Lab Slack live domain contracts and wire schemas.
-import type { WebClient } from "@slack/web-api";
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import type { createSlackWebClient } from "@openclaw/slack/api.js";
+import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { z } from "zod";
 import type { startQaGatewayChild } from "../../gateway-child.js";
 import { splitQaModelRef } from "../../model-selection.js";
-import type { RuntimeId } from "../../runtime-parity.js";
-import type {
-  acquireQaCredentialLease,
-  startQaCredentialLeaseHeartbeat,
-} from "../shared/credential-lease.runtime.js";
-import type { startQaLiveLaneGateway } from "../shared/live-gateway.runtime.js";
-import type { LiveTransportScenarioDefinition } from "../shared/live-transport-scenarios.js";
+
+export type SlackQaWebClient = ReturnType<typeof createSlackWebClient>;
+export type SlackQaFetchFunction = NonNullable<
+  NonNullable<Parameters<typeof createSlackWebClient>[1]>["fetch"]
+>;
+type WebClient = SlackQaWebClient;
 
 export type SlackQaRuntimeEnv = {
   channelId: string;
@@ -33,8 +32,6 @@ export type SlackChannelReadinessMode = "connected" | "started";
 
 export const SLACK_QA_DEFAULT_READY_TIMEOUT_MS = 45_000;
 export const SLACK_QA_READY_STABILITY_MS = 3_000;
-export const SLACK_QA_GATEWAY_STOP_SETTLE_MS = 3_000;
-export const SLACK_QA_RETRYABLE_SCENARIO_ATTEMPTS = 2;
 export const SLACK_QA_APPROVAL_DECISION_TIMEOUT_MS = 30_000;
 export const SLACK_QA_APPROVAL_CHECKPOINT_DEFAULT_TIMEOUT_MS = 120_000;
 export const SLACK_QA_REACTION_VERIFY_TIMEOUT_MS = 15_000;
@@ -94,26 +91,6 @@ export const SLACK_QA_NATIVE_TABLE = {
 // These scenarios force the Codex harness, whose default provider set is intentionally narrow.
 const SLACK_QA_CODEX_PROVIDER_IDS = new Set(["codex", "openai"]);
 
-export type SlackQaScenarioId =
-  | "slack-allowlist-block"
-  | "slack-approval-exec-native"
-  | "slack-approval-plugin-native"
-  | "slack-canary"
-  | "slack-codex-approval-exec-native"
-  | "slack-codex-approval-plugin-native"
-  | "slack-chart-presentation-native"
-  | "slack-channel-disabled-warning"
-  | "slack-mention-gating"
-  | "slack-progress-commentary-false"
-  | "slack-progress-commentary-omitted"
-  | "slack-progress-commentary-true"
-  | "slack-progress-commentary-verbose-dedupe"
-  | "slack-reaction-glyph-native"
-  | "slack-table-invalid-blocks-fallback"
-  | "slack-table-presentation-native"
-  | "slack-top-level-reply-shape";
-
-export type SlackQaApprovalKind = "exec" | "plugin";
 export type SlackQaApprovalDecision = "allow-always" | "allow-once" | "deny";
 export const SLACK_QA_APPROVAL_ACTION_PREFIX = "openclaw:approval:v1:";
 export const SlackQaApprovalActionValueSchema = z
@@ -137,12 +114,9 @@ export function assertSlackCodexApprovalModelSupported(modelRef: string) {
   );
 }
 
-export function resolveSlackQaSutAccountId(value?: string) {
-  return normalizeAccountId(value?.trim() || "sut");
-}
-
 export type SlackQaMessageScenarioRun = {
   afterNoReply?: (context: SlackQaScenarioContext) => Promise<string | void>;
+  cleanup?: (context: Omit<SlackQaScenarioContext, "sentTs">) => Promise<void>;
   kind?: "message";
   expectReply: boolean;
   input: string;
@@ -181,7 +155,7 @@ export type SlackQaDirectTransportScenarioResult = {
 };
 
 export type SlackQaApprovalScenarioRun = {
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   decision: SlackQaApprovalDecision;
   kind: "approval";
   token: string;
@@ -195,7 +169,7 @@ export type SlackQaCodexApprovalScenarioRun = {
   token: string;
 };
 
-type SlackQaScenarioRun =
+export type SlackQaScenarioRun =
   | SlackQaApprovalScenarioRun
   | SlackQaCodexApprovalScenarioRun
   | SlackQaDirectTransportScenarioRun
@@ -206,12 +180,14 @@ type SlackQaBeforeRunResult =
   | void
   | {
       details?: string;
+      inputChannelId?: string;
       inputThreadTs?: string;
     };
 
 export type SlackQaConfigOverrides = {
   allowFrom?: string[];
   channelEnabled?: boolean;
+  groupDmEnabled?: boolean;
   approvals?: {
     exec?: boolean;
     plugin?: boolean;
@@ -225,6 +201,7 @@ export type SlackQaConfigOverrides = {
     verboseDefault?: "off" | "on" | "full";
   };
   replyToMode?: "all" | "off";
+  streamingMode?: "off";
   users?: string[];
 };
 
@@ -239,14 +216,16 @@ export type SlackQaScenarioContext = {
   waitForReady: () => Promise<void>;
 };
 
-export type SlackQaScenarioDefinition = LiveTransportScenarioDefinition<SlackQaScenarioId> & {
+export type SlackQaScenarioImplementation = {
   buildRun: (sutUserId: string) => SlackQaScenarioRun;
   configOverrides?: SlackQaConfigOverrides;
-  defaultEnabled?: boolean;
-  forcedRuntime?: RuntimeId;
 };
 
-export type SlackQaGatewayHarness = Awaited<ReturnType<typeof startQaLiveLaneGateway>>;
+export type SlackQaScenarioMetadata = {
+  id: string;
+  timeoutMs: number;
+  title: string;
+};
 
 export type SlackAuthIdentity = {
   botId?: string;
@@ -268,23 +247,9 @@ export type SlackObservedMessage = {
   userId?: string;
 };
 
-export type SlackObservedMessageArtifact = {
-  botId?: string;
-  channelId?: string;
-  matchedScenario?: boolean;
-  scenarioId?: string;
-  scenarioTitle?: string;
-  text?: string;
-  actionValues?: string[];
-  blockText?: string[];
-  threadTs?: string;
-  ts?: string;
-  userId?: string;
-};
-
 export type SlackApprovalArtifact = {
   approvalId: string;
-  approvalKind: SlackQaApprovalKind;
+  approvalKind: ChannelApprovalKind;
   appServerMethod?: SlackQaCodexApprovalMethod;
   channelId?: string;
   codexModelKey?: string;
@@ -318,43 +283,9 @@ export type SlackApprovalCheckpointMessage = {
   text: string;
 };
 
-export type SlackQaScenarioResult = {
-  approval?: SlackApprovalArtifact;
-  details: string;
-  id: string;
-  requestStartedAt?: string;
-  responseObservedAt?: string;
-  rttMs?: number;
-  rttMeasurement?: {
-    finalMatchedReplyRttMs: number;
-    requestStartedAt: string;
-    responseObservedAt: string;
-    source: "approval-request-to-resolution" | "request-to-observed-message";
-  };
-  standardId?: string;
-  status: "fail" | "pass";
-  title: string;
-};
-
-export type SlackQaRunResult = {
-  gatewayDebugDirPath?: string;
-  observedMessagesPath: string;
-  outputDir: string;
-  reportPath: string;
-  scenarios: SlackQaScenarioResult[];
-  summaryPath: string;
-};
-
-export type SlackCredentialLease = Awaited<
-  ReturnType<typeof acquireQaCredentialLease<SlackQaRuntimeEnv>>
->;
-export type SlackCredentialHeartbeat = ReturnType<typeof startQaCredentialLeaseHeartbeat>;
-
-export const SLACK_QA_CAPTURE_CONTENT_ENV = "OPENCLAW_QA_SLACK_CAPTURE_CONTENT";
 export const SLACK_QA_APPROVAL_CHECKPOINT_DIR_ENV = "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_DIR";
 export const SLACK_QA_APPROVAL_CHECKPOINT_TIMEOUT_MS_ENV =
   "OPENCLAW_QA_SLACK_APPROVAL_CHECKPOINT_TIMEOUT_MS";
-export const QA_REDACT_PUBLIC_METADATA_ENV = "OPENCLAW_QA_REDACT_PUBLIC_METADATA";
 export const SLACK_QA_WEB_API_TIMEOUT_MS = 45_000;
 export const SLACK_QA_ENV_KEYS = [
   "OPENCLAW_QA_SLACK_CHANNEL_ID",

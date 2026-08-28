@@ -1,5 +1,10 @@
 export const DISCORD_ACTIVITY_ROUTE_PREFIX = "/discord/activity";
 
+// The token route makes two sequential 15-second Discord API calls; the widget route makes one.
+// Keep the browser deadline outside those server budgets so valid slow responses are not aborted.
+const DISCORD_ACTIVITY_TOKEN_REQUEST_TIMEOUT_MS = 35_000;
+const DISCORD_ACTIVITY_WIDGET_REQUEST_TIMEOUT_MS = 20_000;
+
 export const DISCORD_ACTIVITY_SHELL_CSP =
   "default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; " +
   "connect-src 'self'; frame-src 'self'; img-src data:; base-uri 'none'; frame-ancestors *";
@@ -16,6 +21,8 @@ h1{font-size:18px;margin:0 0 8px;color:#f2f3f5}p{margin:0;color:#b5bac1;line-hei
 
 export const DISCORD_ACTIVITY_SHELL_JS = `import { DiscordSDK } from "./vendor/embedded-app-sdk.mjs";
 
+const tokenRequestTimeoutMs = ${DISCORD_ACTIVITY_TOKEN_REQUEST_TIMEOUT_MS};
+const widgetRequestTimeoutMs = ${DISCORD_ACTIVITY_WIDGET_REQUEST_TIMEOUT_MS};
 const app = document.querySelector("#app");
 function show(message, detail) {
   app.className = "";
@@ -41,13 +48,32 @@ function proxiedDocUrl(value) {
   return url.pathname + url.search;
 }
 async function readJson(response) {
-  const body = await response.json().catch(() => ({}));
+  let body;
+  try {
+    body = await response.json();
+  } catch (error) {
+    // Error responses may legitimately omit JSON details; successful responses must not
+    // turn an aborted or malformed body into an apparently valid empty payload.
+    if (response.ok) throw error;
+    body = {};
+  }
   if (!response.ok) {
     const error = new Error(typeof body.error === "string" ? body.error : "request failed");
     error.status = response.status;
     throw error;
   }
   return body;
+}
+async function fetchJsonWithDeadline(input, init, timeoutMs) {
+  // Activities also run in mobile webviews; avoid requiring the newer
+  // AbortSignal.timeout() static API just to enforce this request boundary.
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await readJson(await fetch(input, { ...init, signal: controller.signal }));
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 async function run() {
   const match = window.location.hostname.match(/^(\\d+)\\.discordsays\\.com$/i);
@@ -65,19 +91,25 @@ async function run() {
     prompt: "none",
     scope: ["identify"],
   });
-  const auth = await readJson(await fetch("./api/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ code }),
-  }));
+  const auth = await fetchJsonWithDeadline(
+    "./api/token",
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    },
+    tokenRequestTimeoutMs,
+  );
   await sdk.commands.authenticate({ access_token: auth.access_token });
   const query = new URLSearchParams({
     custom_id: sdk.customId ?? "",
     instance_id: sdk.instanceId,
   });
-  const widget = await readJson(await fetch("./api/widget?" + query, {
-    headers: { Authorization: "Bearer " + auth.session_token },
-  }));
+  const widget = await fetchJsonWithDeadline(
+    "./api/widget?" + query,
+    { headers: { Authorization: "Bearer " + auth.session_token } },
+    widgetRequestTimeoutMs,
+  );
   app.className = "widget";
   app.innerHTML = "";
   const bar = document.createElement("div");
@@ -92,9 +124,7 @@ async function run() {
   app.append(bar, frame);
 }
 run().catch((error) => {
-  if (error?.status === 403) {
-    show("Not authorized", "This Discord account is not allowed to open this widget.");
-  } else if (error?.status === 404) {
+  if (error?.status === 404) {
     show("Widget unavailable", "No widget could be resolved for this channel.");
   } else {
     show("Gateway offline", "The OpenClaw gateway could not load this widget. Try again shortly.");

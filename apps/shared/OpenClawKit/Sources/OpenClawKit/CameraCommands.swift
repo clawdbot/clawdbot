@@ -4,6 +4,57 @@ public enum OpenClawCameraCommand: String, Codable, Sendable {
     case list = "camera.list"
     case snap = "camera.snap"
     case clip = "camera.clip"
+    case ptzStatus = "camera.ptz.status"
+    case ptzControl = "camera.ptz.control"
+}
+
+public enum OpenClawCameraPTZOperation: String, Codable, Sendable {
+    case set
+    case move
+    case home
+}
+
+public struct OpenClawCameraPTZAxisValues: Codable, Sendable, Equatable {
+    public var panDegrees: Double?
+    public var tiltDegrees: Double?
+    public var zoomPercent: Double?
+
+    public init(
+        panDegrees: Double? = nil,
+        tiltDegrees: Double? = nil,
+        zoomPercent: Double? = nil)
+    {
+        self.panDegrees = panDegrees
+        self.tiltDegrees = tiltDegrees
+        self.zoomPercent = zoomPercent
+    }
+}
+
+public struct OpenClawCameraPTZStatusParams: Codable, Sendable, Equatable {
+    public var deviceId: String
+
+    public init(deviceId: String) {
+        self.deviceId = deviceId
+    }
+}
+
+public struct OpenClawCameraPTZControlParams: Codable, Sendable, Equatable {
+    public var deviceId: String
+    public var operation: OpenClawCameraPTZOperation
+    public var target: OpenClawCameraPTZAxisValues?
+    public var delta: OpenClawCameraPTZAxisValues?
+
+    public init(
+        deviceId: String,
+        operation: OpenClawCameraPTZOperation,
+        target: OpenClawCameraPTZAxisValues? = nil,
+        delta: OpenClawCameraPTZAxisValues? = nil)
+    {
+        self.deviceId = deviceId
+        self.operation = operation
+        self.target = target
+        self.delta = delta
+    }
 }
 
 public enum OpenClawCameraFacing: String, Codable, Sendable {

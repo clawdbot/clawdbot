@@ -1,14 +1,6 @@
 /** Max time allowed for plugin host cleanup hooks before failing shutdown. */
 const PLUGIN_HOST_CLEANUP_TIMEOUT_MS = 5_000;
 
-/** Error raised when a plugin host cleanup hook exceeds the shutdown timeout. */
-class PluginHostCleanupTimeoutError extends Error {
-  constructor(hookId: string) {
-    super(`plugin host cleanup timed out: ${hookId}`);
-    this.name = "PluginHostCleanupTimeoutError";
-  }
-}
-
 /** Runs plugin host cleanup with a bounded timeout and clears the timer afterward. */
 export async function withPluginHostCleanupTimeout<T>(
   hookId: string,
@@ -20,7 +12,7 @@ export async function withPluginHostCleanupTimeout<T>(
       Promise.resolve().then(cleanup),
       new Promise<never>((_, reject) => {
         timeout = setTimeout(() => {
-          reject(new PluginHostCleanupTimeoutError(hookId));
+          reject(new Error(`plugin host cleanup timed out: ${hookId}`));
         }, PLUGIN_HOST_CLEANUP_TIMEOUT_MS);
         timeout.unref?.();
       }),

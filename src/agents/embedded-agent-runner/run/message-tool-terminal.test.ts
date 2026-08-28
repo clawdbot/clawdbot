@@ -55,11 +55,23 @@ describe("message-tool-only source replies", () => {
       expected: true,
     },
     {
+      label: "gateway plugin send result",
+      context: createAfterToolCallContext({
+        toolName: "message",
+        args: { action: "send", message: "visible reply" },
+        result: {
+          content: [{ type: "text", text: '{"message":{"id":"qa-message-1"}}' }],
+          details: { message: { id: "qa-message-1" } },
+        },
+      }),
+      expected: true,
+    },
+    {
       label: "hook result delivery evidence",
       context: createAfterToolCallContext({
         toolName: "message",
         args: { action: "send", message: "visible reply" },
-        result: createSuppressedSendResult(),
+        result: { content: [], details: {} },
       }),
       hookResult: { details: { result: { messageId: "discord-message-2" } } },
       expected: true,
@@ -127,15 +139,6 @@ describe("message-tool-only source replies", () => {
       expected: false,
     },
     {
-      label: "dry-run hook result",
-      context: createAfterToolCallContext({
-        toolName: "message",
-        args: { action: "send", message: "preview reply" },
-      }),
-      hookResult: { details: { deliveryStatus: "dry_run" } },
-      expected: false,
-    },
-    {
       label: "dry-run serialized result",
       context: createAfterToolCallContext({
         toolName: "message",
@@ -192,12 +195,13 @@ describe("message-tool-only source replies", () => {
     ).resolves.toEqual({
       content: [{ type: "text", text: "rewritten" }],
       details: { rewritten: true },
+      terminate: true,
     });
     expect(previousAfterToolCall).toHaveBeenCalledTimes(1);
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
   });
 
-  it("records delivery evidence without rewriting the default result", async () => {
+  it("terminates after a delivered completed source reply", async () => {
     const agent = {} as unknown as Agent;
     const onDeliveredSourceReply = vi.fn();
     installMessageToolOnlyTerminalHook({
@@ -213,8 +217,93 @@ describe("message-tool-only source replies", () => {
           args: { action: "send", message: "visible reply" },
         }),
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({ terminate: true });
     expect(onDeliveredSourceReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("continues after delivered progress", async () => {
+    const agent = {} as unknown as Agent;
+    installMessageToolOnlyTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+    });
+
+    await expect(
+      agent.afterToolCall?.(
+        createAfterToolCallContext({
+          toolName: "message",
+          args: { action: "send", message: "still working", final: false },
+        }),
+      ),
+    ).resolves.toBeUndefined();
+  });
+
+  it.each([
+    {
+      label: "the exact source route",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: true,
+    },
+    {
+      label: "the same target in another account",
+      accountId: "account-2",
+      target: "chat123",
+      threadId: "thread-1",
+      expected: false,
+    },
+    {
+      label: "the same target in another thread",
+      accountId: "account-1",
+      target: "chat123",
+      threadId: "thread-2",
+      expected: false,
+    },
+    {
+      label: "another target",
+      accountId: "account-1",
+      target: "chat456",
+      threadId: "thread-1",
+      expected: false,
+    },
+  ])("records explicit sends only for $label", async (testCase) => {
+    const agent = {} as unknown as Agent;
+    const onDeliveredSourceReply = vi.fn();
+    installMessageToolOnlyTerminalHook({
+      agent,
+      sourceReplyDeliveryMode: "message_tool_only",
+      onDeliveredSourceReply,
+      config: {},
+      currentProvider: "test-channel",
+      currentAccountId: "account-1",
+      currentChannelId: "chat123",
+      currentThreadId: "thread-1",
+      sessionKey: "agent:main:test-channel:chat123",
+    } as Parameters<typeof installMessageToolOnlyTerminalHook>[0] & {
+      config: object;
+      currentProvider: string;
+      currentAccountId: string;
+      currentChannelId: string;
+      currentThreadId: string;
+      sessionKey: string;
+    });
+
+    await agent.afterToolCall?.(
+      createAfterToolCallContext({
+        toolName: "message",
+        args: {
+          action: "send",
+          channel: "test-channel",
+          accountId: testCase.accountId,
+          target: testCase.target,
+          threadId: testCase.threadId,
+          message: "explicit reply",
+        },
+      }),
+    );
+
+    expect(onDeliveredSourceReply.mock.calls.length > 0).toBe(testCase.expected);
   });
 
   it("leaves existing after-tool-call output alone when the send failed", async () => {
@@ -286,6 +375,11 @@ function createAfterToolCallContext(params: {
       details: {
         status: "ok",
         deliveryStatus: "sent",
+        messageDelivery: {
+          status: params.args.dryRun ? "dryRun" : params.isError ? "failed" : "settled",
+          partialDelivery: false,
+          createdThreadIds: [],
+        },
         sourceReplySink: "internal-ui",
         sourceReply: { text: params.args.message },
       },
@@ -314,7 +408,15 @@ function createDirectSendResult(params: { messageId: string }): AfterToolCallCon
   };
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: payload,
+    details: {
+      ...payload,
+      messageDelivery: {
+        status: "settled",
+        primaryPlatformMessageId: params.messageId,
+        partialDelivery: false,
+        createdThreadIds: [],
+      },
+    },
   };
 }
 
@@ -329,7 +431,14 @@ function createSuppressedSendResult(): AfterToolCallContext["result"] {
   };
   return {
     content: [{ type: "text", text: JSON.stringify(payload) }],
-    details: payload,
+    details: {
+      ...payload,
+      messageDelivery: {
+        status: "suppressed",
+        partialDelivery: false,
+        createdThreadIds: [],
+      },
+    },
   };
 }
 

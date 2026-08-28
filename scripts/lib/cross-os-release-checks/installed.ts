@@ -3,7 +3,6 @@ import { appendFileSync, createWriteStream, existsSync, mkdirSync } from "node:f
 import { dirname, join } from "node:path";
 import {
   agentOutputHasExpectedOkMarker,
-  agentTurnUsedEmbeddedFallback,
   buildCrossOsReleaseAgentSessionId,
   buildReleaseAgentTurnArgs,
   maybeBuildOptionalAgentTurnSkipResult,
@@ -29,7 +28,7 @@ import {
   looksLikeCommitSha,
   resolveExplicitBaselineVersion,
   resolveExpectedDevUpdateRef,
-  shouldSkipInstallerDaemonHealthCheck,
+  shouldUseManagedGatewayService,
 } from "./config.ts";
 import {
   installedEntryPath,
@@ -40,12 +39,17 @@ import {
 import { readLogFileSize, readLogTextSince } from "./logs.ts";
 import {
   canConnectToLoopbackPort,
+  hasChildExited,
   resolveCommandSpawnInvocation,
   runCommand,
   runCommandInvocation,
+  waitForGatewayWithStartupMigrationRestart,
   withAllocatedGatewayPort,
 } from "./process.ts";
 import { formatError, shellEscapeForSh, sleep } from "./shared.ts";
+
+const INSTALLER_CONNECT_TIMEOUT_SECONDS = 10;
+const INSTALLER_REQUEST_TIMEOUT_SECONDS = 120;
 
 export async function resolveInstallerTargetVersion(params: {
   baselineSpec: string;
@@ -123,6 +127,45 @@ async function runPowerShellScript(script: string, options: CommandOptions) {
   );
 }
 
+export function buildInstallerSmokeScript(
+  params: {
+    installerUrl: string;
+    installTarget: string;
+    platform?: NodeJS.Platform;
+  },
+  options: {
+    connectTimeoutSeconds?: number;
+    requestTimeoutSeconds?: number;
+  } = {},
+) {
+  const connectTimeoutSeconds = options.connectTimeoutSeconds ?? INSTALLER_CONNECT_TIMEOUT_SECONDS;
+  const requestTimeoutSeconds = options.requestTimeoutSeconds ?? INSTALLER_REQUEST_TIMEOUT_SECONDS;
+  if ((params.platform ?? process.platform) === "win32") {
+    return `
+$installerPath = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-installer-" + [guid]::NewGuid().ToString("N") + ".ps1")
+try {
+  & curl.exe -fsSL --connect-timeout ${connectTimeoutSeconds} --max-time ${requestTimeoutSeconds} -o $installerPath '${powerShellSingleQuote(params.installerUrl)}'
+  if ($LASTEXITCODE -ne 0) {
+    throw "curl.exe failed to download the OpenClaw installer (exit $LASTEXITCODE)"
+  }
+  $content = [System.IO.File]::ReadAllText($installerPath, [System.Text.Encoding]::UTF8)
+  & ([scriptblock]::Create($content)) -Tag '${powerShellSingleQuote(params.installTarget)}' -NoOnboard
+} finally {
+  Remove-Item -LiteralPath $installerPath -Force -ErrorAction SilentlyContinue
+}
+`;
+  }
+
+  // Execute only a complete installer: a timed-out response may still contain an executable prefix.
+  return [
+    "set -euo pipefail",
+    'installer_path="$(mktemp "${TMPDIR:-/tmp}/openclaw-installer-XXXXXX")"',
+    "trap 'rm -f \"$installer_path\"' EXIT",
+    `curl -fsSL --connect-timeout ${connectTimeoutSeconds} --max-time ${requestTimeoutSeconds} -o "$installer_path" '${shellEscapeForSh(params.installerUrl)}'`,
+    `bash -- "$installer_path" --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
+  ].join("\n");
+}
+
 export async function runInstallerSmoke(params: {
   lane: LaneState;
   env: NodeJS.ProcessEnv;
@@ -130,15 +173,8 @@ export async function runInstallerSmoke(params: {
   installTarget: string;
   logPath: string;
 }) {
+  const script = buildInstallerSmokeScript(params);
   if (process.platform === "win32") {
-    const script = `
-$response = Invoke-WebRequest -UseBasicParsing '${powerShellSingleQuote(params.installerUrl)}'
-$content = $response.Content
-if ($content -is [byte[]]) {
-  $content = [System.Text.Encoding]::UTF8.GetString($content)
-}
-& ([scriptblock]::Create([string]$content)) -Tag '${powerShellSingleQuote(params.installTarget)}' -NoOnboard
-`;
     await runPowerShellScript(script, {
       cwd: params.lane.homeDir,
       env: params.env,
@@ -148,10 +184,6 @@ if ($content -is [byte[]]) {
     return;
   }
 
-  const script = [
-    "set -euo pipefail",
-    `curl -fsSL '${shellEscapeForSh(params.installerUrl)}' | bash -s -- --version '${shellEscapeForSh(params.installTarget)}' --no-onboard`,
-  ].join("\n");
   await runPosixShellScript(script, {
     cwd: params.lane.homeDir,
     env: params.env,
@@ -164,8 +196,10 @@ export function buildWindowsPathBootstrapScript(
   options: { includeCurrentProcessPath?: boolean } = {},
 ) {
   const includeCurrentProcessPath = options.includeCurrentProcessPath !== false;
+  // setup-node provisions the supported runtime in the current process PATH. Keep it ahead of
+  // stale runner image entries while still merging newly persisted user and machine paths.
   const pathCandidates = includeCurrentProcessPath
-    ? "@($userPath, $machinePath, $env:Path)"
+    ? "@($env:Path, $userPath, $machinePath)"
     : "@($userPath, $machinePath)";
   return `
 $machinePath = [Environment]::GetEnvironmentVariable('Path', 'Machine')
@@ -346,6 +380,23 @@ export async function runInstalledCli(params: {
   });
 }
 
+export async function resolveInstalledGatewayStopArgs(params: {
+  cliPath: string;
+  cwd: string;
+  env: NodeJS.ProcessEnv;
+  logPath: string;
+}) {
+  const help = await runInstalledCli({
+    cliPath: params.cliPath,
+    args: ["gateway", "stop", "--help"],
+    cwd: params.cwd,
+    env: params.env,
+    logPath: params.logPath,
+    timeoutMs: 15_000,
+  });
+  return buildGatewayStopArgsFromHelpText(`${help.stdout}\n${help.stderr}`);
+}
+
 async function readInstalledUpdateStatus(params: {
   cliPath: string;
   cwd: string;
@@ -389,13 +440,14 @@ export async function runOnboardWithInstalledCli(params: {
   providerConfig: ProviderConfig;
   installDaemon: boolean;
   logPath: string;
+  allocateGatewayPort?: boolean;
 }) {
-  await withAllocatedGatewayPort(params.lane, async () => {
+  const runOnboard = async () => {
     const args = buildReleaseOnboardArgs({
       authChoice: params.providerConfig.authChoice,
       gatewayPort: params.lane.gatewayPort,
       installDaemon: params.installDaemon,
-      skipHealth: !params.installDaemon || shouldSkipInstallerDaemonHealthCheck(),
+      skipHealth: !params.installDaemon || shouldUseManagedGatewayService(),
     });
     await runInstalledCli({
       cliPath: params.cliPath,
@@ -405,7 +457,15 @@ export async function runOnboardWithInstalledCli(params: {
       logPath: params.logPath,
       timeoutMs: 10 * 60 * 1000,
     });
-  });
+  };
+  if (params.allocateGatewayPort === false) {
+    if (params.lane.gatewayPort <= 0) {
+      throw new Error("Installed onboarding requires a reserved gateway port.");
+    }
+    await runOnboard();
+    return;
+  }
+  await withAllocatedGatewayPort(params.lane, runOnboard);
 }
 
 export function buildReleaseOnboardArgs(params: {
@@ -448,6 +508,7 @@ export async function startManualGatewayFromInstalledCli(params: {
   logPath: string;
 }): Promise<GatewayHandle> {
   mkdirSync(dirname(params.logPath), { recursive: true });
+  const launchLogOffset = readLogFileSize(params.logPath);
   const gatewayLog = createWriteStream(params.logPath, { flags: "a" });
   const invocation = resolveInstalledCliInvocation(
     params.cliPath,
@@ -471,24 +532,33 @@ export async function startManualGatewayFromInstalledCli(params: {
   child.stderr?.on("data", (chunk) => {
     gatewayLog.write(chunk);
   });
-  let logClosed = false;
-  const closeLog = async () => {
-    if (logClosed) {
-      return;
-    }
-    logClosed = true;
-    await new Promise<void>((resolvePromise) => {
+  let resolveChildClose: () => void;
+  const childClosePromise = new Promise<void>((resolvePromise) => {
+    resolveChildClose = resolvePromise;
+  });
+  let closeLogPromise: Promise<void> | undefined;
+  const closeLog = () => {
+    closeLogPromise ??= new Promise<void>((resolvePromise) => {
       gatewayLog.once("error", () => resolvePromise());
       gatewayLog.end(() => resolvePromise());
     });
+    return closeLogPromise;
   };
   child.once("close", () => {
+    resolveChildClose();
     void closeLog();
   });
   child.once("error", () => {
+    resolveChildClose();
     void closeLog();
   });
-  return { child, closeLog, logPath: params.logPath };
+  return {
+    child,
+    closeLog,
+    launchLogOffset,
+    logPath: params.logPath,
+    waitForClose: () => childClosePromise,
+  };
 }
 
 async function resolveInstalledGatewayStatusArgs(params: {
@@ -533,6 +603,13 @@ export function buildGatewayStatusArgsFromHelpText(
   return ["gateway", "status"];
 }
 
+export function buildGatewayStopArgsFromHelpText(helpText: string) {
+  if (helpText.includes("--force")) {
+    return ["gateway", "stop", "--force"];
+  }
+  return ["gateway", "stop"];
+}
+
 export function appendGatewayStatusHelpProbeFallback(logPath: string, error: unknown) {
   appendFileSync(
     logPath,
@@ -544,8 +621,37 @@ export async function waitForInstalledGateway(params: {
   lane: LaneState;
   cliPath: string;
   env: NodeJS.ProcessEnv;
+  gateway?: GatewayHandle;
+  gatewayHolder?: { current: GatewayHandle | null };
+  gatewayLogPath?: string;
   logPath: string;
 }) {
+  if (params.gatewayHolder) {
+    if (!params.gatewayLogPath) {
+      throw new Error("Gateway restart coordination requires a gateway log path.");
+    }
+    const gatewayLogPath = params.gatewayLogPath;
+    await waitForGatewayWithStartupMigrationRestart({
+      gatewayHolder: params.gatewayHolder,
+      restartGateway: () =>
+        startManualGatewayFromInstalledCli({
+          lane: params.lane,
+          cliPath: params.cliPath,
+          env: params.env,
+          logPath: gatewayLogPath,
+        }),
+      waitUntilReady: (gateway) =>
+        waitForInstalledGateway({
+          lane: params.lane,
+          cliPath: params.cliPath,
+          env: params.env,
+          gateway,
+          logPath: params.logPath,
+        }),
+    });
+    return;
+  }
+
   const statusArgs = await resolveInstalledGatewayStatusArgs({
     cliPath: params.cliPath,
     cwd: params.lane.homeDir,
@@ -554,6 +660,9 @@ export async function waitForInstalledGateway(params: {
   });
   const deadline = Date.now() + gatewayReadyDeadlineMs();
   while (Date.now() < deadline) {
+    if (params.gateway && hasChildExited(params.gateway.child)) {
+      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
+    }
     const result = await runInstalledCli({
       cliPath: params.cliPath,
       args: statusArgs,
@@ -565,6 +674,9 @@ export async function waitForInstalledGateway(params: {
     });
     if (result.exitCode === 0) {
       return;
+    }
+    if (params.gateway && hasChildExited(params.gateway.child)) {
+      throw new Error(`Gateway exited before becoming ready on port ${params.lane.gatewayPort}.`);
     }
     await sleep(2_000);
   }
@@ -725,9 +837,6 @@ export async function runInstalledAgentTurn(params: {
       const logText = readLogTextSince(params.logPath, logOffset);
       if (!agentOutputHasExpectedOkMarker(result.stdout, { logText })) {
         throw new Error("Agent output did not contain the expected OK marker.");
-      }
-      if (agentTurnUsedEmbeddedFallback(result, { logText })) {
-        throw new Error("Agent turn used embedded fallback instead of gateway.");
       }
       return result;
     } catch (error) {

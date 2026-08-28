@@ -1,3 +1,4 @@
+import { addApprovalReactionHintToText } from "openclaw/plugin-sdk/approval-reaction-runtime";
 import {
   buildExecApprovalPendingReplyPayload,
   buildPluginApprovalPendingReplyPayload,
@@ -5,25 +6,32 @@ import {
 // Signal tests cover approval reactions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  addSignalApprovalReactionHintToText,
   addSignalApprovalReactionHintToStructuredPayload,
-  buildSignalApprovalReactionHint,
   clearSignalApprovalReactionTargetsForTest,
   maybeResolveSignalApprovalReaction,
   registerSignalApprovalReactionTargetForDeliveredPayload,
   registerSignalApprovalReactionTarget,
   resolveSignalApprovalReactionTargetWithPersistence,
 } from "./approval-reactions.js";
+import * as signalRuntime from "./runtime.js";
 
 const resolverMocks = vi.hoisted(() => ({
   resolveSignalApproval: vi.fn(),
   isApprovalNotFoundError: vi.fn(() => false),
 }));
 
-vi.mock("./approval-resolver.js", () => ({
-  resolveSignalApproval: resolverMocks.resolveSignalApproval,
-  isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
+vi.mock("openclaw/plugin-sdk/approval-gateway-runtime", () => ({
+  resolveApprovalOverGateway: resolverMocks.resolveSignalApproval,
 }));
+vi.mock("openclaw/plugin-sdk/error-runtime", async () => {
+  const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/error-runtime")>(
+    "openclaw/plugin-sdk/error-runtime",
+  );
+  return {
+    ...actual,
+    isApprovalNotFoundError: resolverMocks.isApprovalNotFoundError,
+  };
+});
 
 const approvalRoute = {
   deliveryMode: "session" as const,
@@ -41,48 +49,6 @@ describe("Signal approval reactions", () => {
     });
     resolverMocks.isApprovalNotFoundError.mockReset();
     resolverMocks.isApprovalNotFoundError.mockReturnValue(false);
-  });
-
-  it("renders thumbs-only reaction choices for allowed decisions", () => {
-    expect(buildSignalApprovalReactionHint(["allow-once", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n👎 Deny",
-    );
-  });
-
-  it("exposes allow-always as a reaction choice when allowed", () => {
-    expect(buildSignalApprovalReactionHint(["allow-once", "allow-always", "deny"])).toBe(
-      "React with:\n\n👍 Allow Once\n♾️ Allow Always\n👎 Deny",
-    );
-  });
-
-  it("appends thumbs-only reaction choices to outbound approval prompts", () => {
-    expect(
-      addSignalApprovalReactionHintToText({
-        text: "Exec approval required\nID: exec-1\n\nReply with: /approve exec-1 allow-once|deny",
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    ).toBe(
-      "Exec approval required\nID: exec-1\n\nReact with:\n\n👍 Allow Once\n👎 Deny\n\nReply with: /approve exec-1 allow-once|deny",
-    );
-  });
-
-  it("does not duplicate reaction choices on native approval prompts", () => {
-    const prompt = [
-      "Plugin approval required",
-      "Reply with: /approve plugin:abc allow-once|allow-always|deny",
-      "",
-      "React with:",
-      "",
-      "👍 Allow Once",
-      "👎 Deny",
-    ].join("\n");
-
-    expect(
-      addSignalApprovalReactionHintToText({
-        text: prompt,
-        allowedDecisions: ["allow-once", "deny"],
-      }),
-    ).toBe(prompt);
   });
 
   it("registers delivered structured approval payloads for reactions", async () => {
@@ -212,6 +178,42 @@ describe("Signal approval reactions", () => {
         targetAuthor: "+15550009999",
       }),
     ).resolves.toBeNull();
+  });
+
+  it("rejects persisted targets containing an invalid approval decision", async () => {
+    const runtime = vi.spyOn(signalRuntime, "getOptionalSignalRuntime").mockReturnValue({
+      state: {
+        openKeyedStore: () => ({
+          register: async () => {},
+          lookup: async () => ({
+            version: 1,
+            target: {
+              approvalId: "exec-corrupt",
+              approvalKind: "exec",
+              allowedDecisions: ["allow-once", "invalid"],
+              targetAuthorKeys: ["+15550009999"],
+              route: { deliveryMode: "session" },
+            },
+          }),
+          delete: async () => false,
+        }),
+      },
+    } as never);
+    try {
+      clearSignalApprovalReactionTargetsForTest();
+      await expect(
+        resolveSignalApprovalReactionTargetWithPersistence({
+          accountId: "default",
+          conversationKey: "+15551230000",
+          messageId: "corrupt-message",
+          reactionKey: "👍",
+          targetAuthor: "+15550009999",
+        }),
+      ).resolves.toBeNull();
+    } finally {
+      clearSignalApprovalReactionTargetsForTest();
+      runtime.mockRestore();
+    }
   });
 
   it("registers only delivered chunks that contain visible reaction hints", async () => {
@@ -470,7 +472,7 @@ describe("Signal approval reactions", () => {
     });
     const deliveredPayload = {
       ...payload,
-      text: addSignalApprovalReactionHintToText({
+      text: addApprovalReactionHintToText({
         text: payload.text ?? "",
         allowedDecisions: ["allow-once", "deny"],
       }),
@@ -758,6 +760,8 @@ describe("Signal approval reactions", () => {
       approvalId: "plugin:abc",
       approvalKind: "plugin",
       decision: "allow-once",
+      channel: "signal",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });
@@ -818,6 +822,8 @@ describe("Signal approval reactions", () => {
       approvalId: "exec-default-to",
       approvalKind: "exec",
       decision: "allow-once",
+      channel: "signal",
+      accountId: "default",
       senderId: "+15551230000",
       gatewayUrl: undefined,
     });

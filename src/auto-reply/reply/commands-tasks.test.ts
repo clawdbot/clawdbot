@@ -2,12 +2,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import {
-  completeTaskRunByRunId,
-  createQueuedTaskRun,
-  createRunningTaskRun,
-  failTaskRunByRunId,
+  completeTaskRunByRunIdCore,
+  createQueuedTaskRunCore,
+  createRunningTaskRunCore,
+  failTaskRunByRunIdCore,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { handleTasksCommand } from "./commands-tasks.js";
 import {
   baseCommandTestConfig,
@@ -55,7 +55,7 @@ describe("handleTasksCommand task board", () => {
   });
 
   it("lists active and recent tasks for the current session", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:tasks-running",
@@ -63,21 +63,21 @@ describe("handleTasksCommand task board", () => {
       task: "active background task",
       progressSummary: "still working",
     });
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:tasks-queued",
       runId: "run-tasks-queued",
       task: "queued background task",
     });
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:acp:tasks-failed",
       runId: "run-tasks-failed",
       task: "failed background task",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-tasks-failed",
       endedAt: Date.now(),
       error: "approval denied",
@@ -93,8 +93,30 @@ describe("handleTasksCommand task board", () => {
     expect(reply.text).toContain("approval denied");
   });
 
+  it("shows blocked completions as warnings instead of successes", async () => {
+    createRunningTaskRunCore({
+      runtime: "subagent",
+      requesterSessionKey: "agent:main:main",
+      childSessionKey: "agent:main:subagent:tasks-blocked",
+      runId: "run-tasks-blocked",
+      task: "Incomplete background task",
+    });
+    completeTaskRunByRunIdCore({
+      runId: "run-tasks-blocked",
+      endedAt: Date.now(),
+      terminalOutcome: "blocked",
+      terminalSummary: "Required completion did not produce a final deliverable.",
+    });
+
+    const reply = await buildTasksReplyForTest();
+
+    expect(reply.text).toContain("⚠️ Incomplete background task");
+    expect(reply.text).toContain("Subagent · blocked");
+    expect(reply.text).not.toContain("✅ Incomplete background task");
+  });
+
   it("lists session-backed video generation tasks for the current session", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "cli",
       taskKind: "video_generation",
       sourceId: "video_generate:openai",
@@ -117,7 +139,7 @@ describe("handleTasksCommand task board", () => {
   });
 
   it("lists session-backed image generation tasks for the current session", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "cli",
       taskKind: "image_generation",
       sourceId: "image_generate:openai",
@@ -140,7 +162,7 @@ describe("handleTasksCommand task board", () => {
   });
 
   it("sanitizes leaked internal runtime context from visible task details", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:acp:tasks-sanitized-failed",
@@ -148,7 +170,7 @@ describe("handleTasksCommand task board", () => {
       task: "Visible failed task",
       progressSummary: "still working",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-tasks-sanitized-failed",
       endedAt: Date.now(),
       error: [
@@ -170,7 +192,7 @@ describe("handleTasksCommand task board", () => {
   });
 
   it("sanitizes inline internal runtime fences from visible task titles", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "cli",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:main",
@@ -182,7 +204,7 @@ describe("handleTasksCommand task board", () => {
       ].join("\n"),
       progressSummary: "done",
     });
-    completeTaskRunByRunId({
+    completeTaskRunByRunIdCore({
       runId: "run-tasks-inline-fence",
       endedAt: Date.now(),
       terminalSummary: "Finished.",
@@ -198,14 +220,14 @@ describe("handleTasksCommand task board", () => {
   });
 
   it("hides stale completed tasks from the task board", async () => {
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:tasks-stale",
       runId: "run-tasks-stale",
       task: "stale completed task",
     });
-    completeTaskRunByRunId({
+    completeTaskRunByRunIdCore({
       runId: "run-tasks-stale",
       endedAt: Date.now() - 10 * 60_000,
       terminalSummary: "done a while ago",
@@ -219,7 +241,7 @@ describe("handleTasksCommand task board", () => {
   });
 
   it("falls back to agent-local counts when the current session has no visible tasks", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:other-session",
       childSessionKey: "agent:main:subagent:tasks-agent-fallback",
@@ -240,7 +262,7 @@ describe("handleTasksCommand task board", () => {
   });
 
   it("counts session-backed video generation tasks in agent-local fallback", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "cli",
       taskKind: "video_generation",
       sourceId: "video_generate:openai",
@@ -265,7 +287,7 @@ describe("handleTasksCommand task board", () => {
   });
 
   it("uses the canonical target session agent for agent-local fallback counts", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:target:other-session",
       childSessionKey: "agent:target:subagent:tasks-target-fallback",

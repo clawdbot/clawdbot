@@ -1,28 +1,34 @@
-name: Real behavior proof
+name: PR context and evidence
 
 on:
   pull_request_target: # zizmor: ignore[dangerous-triggers] trusted base checkout only; no untrusted PR code execution
-    types: [opened, edited, synchronize, reopened, ready_for_review, labeled, unlabeled]
+    types: [opened, edited, synchronize, reopened, ready_for_review]
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref || github.run_id }}
-  cancel-in-progress: true
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number }}
+  cancel-in-progress: ${{ github.event.action == 'synchronize' }}
 
 permissions: {}
 
 jobs:
   real-behavior-proof:
-    name: Real behavior proof
+    name: PR context and evidence
+    if: >-
+      ${{
+        github.event.action != 'edited' ||
+        github.event.changes.body ||
+        github.event.changes.base
+      }}
     permissions:
       contents: read
       issues: read
       pull-requests: read
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Old PR events can carry a stale base SHA that predates current
           # trusted checker scripts. Use the workflow revision instead.
@@ -45,7 +51,7 @@ jobs:
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
           permission-issues: read
           permission-members: read
-      - name: Check real behavior proof
+      - name: Check PR context and evidence
         env:
           GH_APP_TOKEN: ${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}
           GITHUB_TOKEN: ${{ github.token }}

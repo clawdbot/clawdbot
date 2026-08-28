@@ -7,6 +7,21 @@ import Testing
 @Suite(.serialized)
 @MainActor
 struct UpdateOrchestrationTests {
+    @MainActor
+    @Test func `post update performs no service work under active profile`() async {
+        await TestIsolation.withIsolatedState {
+            let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "work"])
+            NodeServiceManager._testResetPersistentServiceCalls()
+            GatewayLaunchAgentManager.clearTestingDaemonCommandCalls()
+
+            #expect(!PostUpdateController.shared.startIfNeeded(profile: profile))
+            let snapshot = NodeServiceManager._testPersistentServiceCallSnapshot()
+            #expect(snapshot.commands.isEmpty)
+            #expect(snapshot.ownershipReads == 0)
+            #expect(GatewayLaunchAgentManager.testingDaemonCommandCallsSnapshot().isEmpty)
+        }
+    }
+
     @Test func `Sparkle receipt appears only after the target app launches`() throws {
         let suite = "UpdateOrchestrationTests.post-update.\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suite))
@@ -313,9 +328,14 @@ struct UpdateOrchestrationTests {
             OpenClawConfigFile.normalizedGatewayUpdateChannel("  BETA \n")) == ["beta"])
         #expect(OpenClawConfigFile.normalizedGatewayUpdateChannel(" \n") == nil)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "stable").isEmpty)
-        #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable").isEmpty)
+        #expect(allowedSparkleChannels(forGatewayUpdateChannel: "extended-stable") == ["extended-stable"])
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: "future").isEmpty)
         #expect(allowedSparkleChannels(forGatewayUpdateChannel: nil).isEmpty)
+        #expect(isSparkleUpdateAllowed(itemChannel: nil, forGatewayUpdateChannel: "stable"))
+        #expect(!isSparkleUpdateAllowed(itemChannel: nil, forGatewayUpdateChannel: "extended-stable"))
+        #expect(isSparkleUpdateAllowed(
+            itemChannel: "extended-stable",
+            forGatewayUpdateChannel: "extended-stable"))
     }
 
     #if canImport(Sparkle)
@@ -325,6 +345,38 @@ struct UpdateOrchestrationTests {
         #expect(!updater.isAvailable)
         updater.checkForUpdates(nil)
         #expect(!updater.isAvailable)
+    }
+
+    @Test func `Sparkle keeps legacy stable fallback when Gateway omits update channel`() async {
+        var starts = 0
+        let updater = SparkleUpdaterController(
+            savedAutoUpdate: false,
+            gatewayUpdateChannelResolver: { nil },
+            onStart: { starts += 1 })
+
+        updater.startAfterResolvingGatewayUpdateChannel()
+        for _ in 0..<10 where !updater.isAvailable {
+            await Task.yield()
+        }
+
+        #expect(updater.isAvailable)
+        #expect(starts == 1)
+    }
+
+    @Test func `Sparkle keeps legacy stable fallback when Gateway channel lookup fails`() async {
+        var starts = 0
+        let updater = SparkleUpdaterController(
+            savedAutoUpdate: false,
+            gatewayUpdateChannelResolver: { throw CancellationError() },
+            onStart: { starts += 1 })
+
+        updater.startAfterResolvingGatewayUpdateChannel()
+        for _ in 0..<10 where !updater.isAvailable {
+            await Task.yield()
+        }
+
+        #expect(updater.isAvailable)
+        #expect(starts == 1)
     }
     #endif
 
@@ -358,14 +410,14 @@ struct UpdateOrchestrationTests {
 
     @Test func `automatic repair is limited to incompatible managed install`() {
         let managed = CLIInstaller.managedExecutableLocation()
-        #expect(CLIInstallPrompter.shouldAutomaticallyRepair(status: .incompatible(
-            location: managed,
-            found: "2026.7.1",
-            required: "2026.7.2"), launchAgentUsesManagedCLI: true, launchAgentWriteDisabled: false))
-        #expect(!CLIInstallPrompter.shouldAutomaticallyRepair(status: .incompatible(
-            location: "/opt/homebrew/bin/openclaw",
-            found: "2026.7.1",
-            required: "2026.7.2"), launchAgentUsesManagedCLI: true, launchAgentWriteDisabled: false))
+        #expect(CLIInstallPrompter.shouldAutomaticallyRepair(
+            status: .incompatible(location: managed, found: "2026.7.1", required: "2026.7.2"),
+            launchAgentUsesManagedCLI: true,
+            launchAgentWriteDisabled: false))
+        #expect(!CLIInstallPrompter.shouldAutomaticallyRepair(
+            status: .incompatible(location: "/opt/homebrew/bin/openclaw", found: "2026.7.1", required: "2026.7.2"),
+            launchAgentUsesManagedCLI: true,
+            launchAgentWriteDisabled: false))
         #expect(!CLIInstallPrompter.shouldAutomaticallyRepair(
             status: .missing(location: managed),
             launchAgentUsesManagedCLI: true,
@@ -383,10 +435,10 @@ struct UpdateOrchestrationTests {
             launchAgentUsesManagedCLI: true,
             launchAgentWriteDisabled: true))
         // Never silently downgrade a gateway the user moved ahead of the app.
-        #expect(!CLIInstallPrompter.shouldAutomaticallyRepair(status: .incompatible(
-            location: managed,
-            found: "2026.7.3",
-            required: "2026.7.2"), launchAgentUsesManagedCLI: true, launchAgentWriteDisabled: false))
+        #expect(!CLIInstallPrompter.shouldAutomaticallyRepair(
+            status: .incompatible(location: managed, found: "2026.7.3", required: "2026.7.2"),
+            launchAgentUsesManagedCLI: true,
+            launchAgentWriteDisabled: false))
         // Extended-stable pins an older gateway on purpose; keep the prompt.
         #expect(!CLIInstallPrompter.shouldAutomaticallyRepair(
             status: .incompatible(location: managed, found: "2026.7.1", required: "2026.7.2"),
@@ -435,33 +487,79 @@ struct UpdateOrchestrationTests {
         #expect(!CLIInstallPrompter.isManagedUpgrade(found: "garbage", required: "2026.7.2"))
     }
 
-    @Test func `managed Gateway ownership ignores the generated environment wrapper`() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let wrapper = "\(home)/.openclaw/state/service-env/ai.openclaw.gateway-env-wrapper.sh"
-        let environment = "\(home)/.openclaw/state/service-env/ai.openclaw.gateway.env"
-        let managedEntry = "\(home)/.openclaw/lib/node_modules/openclaw/dist/index.js"
+    @Test(arguments: [
+        [String](),
+        ["--max-old-space-size=8192"],
+        ["--max-heap-size=4096", "--max-old-space-size=3072"],
+        ["--max-old-space-size-percentage=50"],
+    ])
+    func `managed Gateway ownership follows entrypoint after emitted heap controls`(heapArguments: [String]) {
+        let managedRoot = CLIInstaller.installPrefix()
+        let wrapper = "\(managedRoot)/state/service-env/ai.openclaw.gateway-env-wrapper.sh"
+        let environment = "\(managedRoot)/state/service-env/ai.openclaw.gateway.env"
+        let managedEntry = "\(managedRoot)/lib/node_modules/openclaw/dist/index.js"
+        let externalEntry = "/opt/homebrew/lib/node_modules/openclaw/dist/index.js"
+        let wrappers = [[], [wrapper, environment], ["/bin/sh", wrapper, environment]]
 
-        #expect(CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: [
-            wrapper,
-            environment,
-            "/usr/local/bin/node",
-            managedEntry,
-            "gateway",
-        ]))
-        #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: [
-            wrapper,
-            environment,
-            "/usr/local/bin/node",
-            "/opt/homebrew/lib/node_modules/openclaw/dist/index.js",
-            "gateway",
-        ]))
-        #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: [
-            wrapper,
-            environment,
-            "\(home)/.openclaw/tools/node/bin/node",
-            "/opt/homebrew/lib/node_modules/openclaw/dist/index.js",
-            "gateway",
-        ]))
+        for prefix in wrappers {
+            for runtime in ["/usr/local/bin/node", "\(managedRoot)/tools/node/bin/node"] {
+                for (entrypoint, expected) in [(managedEntry, true), (externalEntry, false)] {
+                    let arguments = prefix + [runtime] + heapArguments + [entrypoint, "gateway", "--port", "18789"]
+                    #expect(CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: arguments) == expected)
+                    #expect(PostUpdateController.ownsManagedRuntime(
+                        connectionMode: .local,
+                        programArguments: arguments,
+                        gatewayUpdateChannel: nil,
+                        installPolicy: "exact",
+                        launchAgentWriteDisabled: false) == expected)
+                }
+            }
+        }
+    }
+
+    @Test func `managed Gateway ownership never comes from native values or application arguments`() {
+        let managedRoot = CLIInstaller.installPrefix()
+        let managedEntry = "\(managedRoot)/lib/node_modules/openclaw/dist/index.js"
+        let externalEntry = "/opt/homebrew/lib/node_modules/openclaw/dist/index.js"
+        let managedValue = "\(managedRoot)/preload.js"
+        let nativeArguments = [
+            ["--require", managedValue],
+            ["-r", managedValue],
+            ["--import", managedValue],
+            ["--require=\(managedValue)"],
+            ["--import=\(managedValue)"],
+            ["--icu-data-dir", managedRoot],
+            ["--max-old-space-size=8192", "--require", managedValue],
+        ]
+
+        for runtime in ["/usr/local/bin/node", "\(managedRoot)/tools/node/bin/node"] {
+            for flags in nativeArguments {
+                #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(
+                    programArguments: [runtime] + flags + [externalEntry, "gateway"]))
+            }
+            #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(
+                programArguments: [runtime, "--max-old-space-size=8192", externalEntry, "gateway", managedEntry]))
+            #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(
+                programArguments: [runtime, "--max-old-space-size=8192"]))
+        }
+        #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(
+            programArguments: ["/opt/homebrew/bin/openclaw", managedEntry]))
+    }
+
+    @Test func `managed Gateway ownership preserves direct CLI and node host commands`() {
+        let managed = CLIInstaller.managedExecutableLocation()
+        let managedEntry = "\(CLIInstaller.installPrefix())/lib/node_modules/openclaw/dist/index.js"
+        for prefix in [[managed], ["/usr/local/bin/node", managedEntry], ["/usr/local/bin/bun", managedEntry]] {
+            #expect(CLIInstallPrompter.launchAgentUsesManagedCLI(programArguments: prefix + ["gateway"]))
+            #expect(PostUpdateController.ownsManagedRuntime(
+                connectionMode: .remote,
+                programArguments: prefix + ["node", "run"],
+                gatewayUpdateChannel: nil,
+                installPolicy: "exact",
+                launchAgentWriteDisabled: true))
+        }
+        #expect(!CLIInstallPrompter.launchAgentUsesManagedCLI(
+            programArguments: ["/opt/homebrew/bin/openclaw", "gateway", managedEntry]))
     }
 
     @Test func `managed repair gates cover bridge and repair alike`() {

@@ -7,13 +7,13 @@ import android.content.Context
 import android.content.ContextWrapper
 import android.graphics.Bitmap
 import android.graphics.Canvas
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.util.LruCache
 import android.view.View
 import android.view.ViewGroup
-import android.webkit.JavascriptInterface
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -43,11 +43,21 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.sp
 import androidx.core.graphics.createBitmap
-import androidx.core.net.toUri
+import androidx.webkit.JavaScriptReplyProxy
+import androidx.webkit.WebMessageCompat
+import androidx.webkit.WebViewAssetLoader
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.doubleOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.json.JSONObject
 import java.io.ByteArrayInputStream
 import java.lang.ref.WeakReference
 import java.util.Locale
+import kotlin.math.ceil
 import android.graphics.Color as AndroidColor
 
 private const val MATH_BITMAP_CACHE_BYTES = 4 * 1024 * 1024
@@ -56,8 +66,11 @@ private const val MATH_RENDER_TIMEOUT_MS = 3000L
 private const val MATH_WIDTH_BUCKET_PX = 64
 private const val MATH_MAX_BITMAP_DIMENSION = 8192
 private const val MATH_MAX_BITMAP_PIXELS = MATH_BITMAP_CACHE_BYTES / 4
-private const val KATEX_ASSET_ROOT = "file:///android_asset/katex/"
+private const val KATEX_ASSET_HOST = "appassets.androidplatform.net"
+private const val KATEX_ORIGIN = "https://$KATEX_ASSET_HOST"
+private const val KATEX_ASSET_ROOT = "$KATEX_ORIGIN/assets/katex/"
 private const val KATEX_SHELL_URL = "${KATEX_ASSET_ROOT}index.html"
+private const val KATEX_BRIDGE_NAME = "ChatMathBridge"
 
 internal data class ChatMathRenderKey(
   val latex: String,
@@ -286,6 +299,47 @@ private data class RenderStyle(
 private val ChatMathRenderRequest.renderStyle: RenderStyle
   get() = RenderStyle(textColor = textColor, fontSizePx = fontSizePx, density = density)
 
+internal data class ChatMathRenderMessage(
+  val id: String,
+  val widthCssPx: Double,
+  val heightCssPx: Double,
+  val success: Boolean,
+)
+
+internal fun parseChatMathRenderMessage(payload: String?): ChatMathRenderMessage? =
+  runCatching {
+    val value = Json.parseToJsonElement(payload.orEmpty()).jsonObject
+    val id =
+      value["id"]
+        ?.jsonPrimitive
+        ?.takeIf { primitive -> primitive.isString }
+        ?.content
+        ?: return@runCatching null
+    val widthCssPx = value["widthCssPx"]?.jsonPrimitive?.doubleOrNull ?: return@runCatching null
+    val heightCssPx = value["heightCssPx"]?.jsonPrimitive?.doubleOrNull ?: return@runCatching null
+    val success = value["success"]?.jsonPrimitive?.booleanOrNull ?: return@runCatching null
+    ChatMathRenderMessage(
+      id = id,
+      widthCssPx = widthCssPx,
+      heightCssPx = heightCssPx,
+      success = success,
+    )
+  }.getOrNull()
+
+internal fun bitmapDimension(
+  cssPixels: Double,
+  density: Float,
+): Int? {
+  val scale = density.toDouble()
+  if (!cssPixels.isFinite() || cssPixels <= 0.0 || !scale.isFinite() || scale <= 0.0) return null
+  if (cssPixels > MATH_MAX_BITMAP_DIMENSION.toDouble() / scale) return null
+  val pixels = ceil(cssPixels * scale)
+  return pixels
+    .takeIf { value ->
+      value.isFinite() && value in 1.0..MATH_MAX_BITMAP_DIMENSION.toDouble()
+    }?.toInt()
+}
+
 /** Process-singleton entry point. Its sole WebView and all queue state stay on the main thread. */
 internal object ChatMathRenderer {
   private val handler = Handler(Looper.getMainLooper())
@@ -332,6 +386,11 @@ private class ChatMathWebViewBackend(
   host: ViewGroup,
 ) : ChatMathRenderBackend<Bitmap> {
   private val mainHandler = Handler(Looper.getMainLooper())
+  private val assetLoader =
+    WebViewAssetLoader
+      .Builder()
+      .addPathHandler("/assets/", WebViewAssetLoader.AssetsPathHandler(application))
+      .build()
   private var ready = false
   private var nextRenderId = 0L
   private var active: ActiveRender? = null
@@ -376,7 +435,10 @@ private class ChatMathWebViewBackend(
     request: ChatMathRenderRequest,
     completion: (ChatMathRenderResult<Bitmap>) -> Unit,
   ) {
-    if (host.get() == null) {
+    if (
+      host.get() == null ||
+      !WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+    ) {
       completion(ChatMathRenderResult.TransientFailure)
       return
     }
@@ -387,75 +449,91 @@ private class ChatMathWebViewBackend(
 
   // JavaScript is required only for the bundled KaTeX shell. The client blocks network loads,
   // rejects every URL outside the asset root, and receives LaTeX as a JSON value rather than HTML.
-  @SuppressLint("SetJavaScriptEnabled")
+  // WebKit 1.17's lint detector reports Kotlin WebViewClient constructors even when this callback exists.
+  @SuppressLint("SetJavaScriptEnabled", "MissingOnRenderProcessGone")
   @Suppress("DEPRECATION")
-  private fun createWebView(context: Context): WebView =
-    WebView(context).apply {
-      alpha = 0f
-      visibility = View.VISIBLE
-      isClickable = false
-      setBackgroundColor(AndroidColor.TRANSPARENT)
-      setLayerType(View.LAYER_TYPE_SOFTWARE, null)
-      setWillNotDraw(false)
-      settings.apply {
-        javaScriptEnabled = true
-        allowFileAccess = true
-        allowContentAccess = false
-        allowFileAccessFromFileURLs = false
-        allowUniversalAccessFromFileURLs = false
-        blockNetworkLoads = true
-        domStorageEnabled = false
-        databaseEnabled = false
-        cacheMode = WebSettings.LOAD_NO_CACHE
-        mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-        offscreenPreRaster = true
-      }
-      addJavascriptInterface(RenderBridge(), "ChatMathBridge")
-      webViewClient =
-        object : WebViewClient() {
-          override fun shouldInterceptRequest(
-            view: WebView?,
-            request: WebResourceRequest?,
-          ): WebResourceResponse? {
-            val url = request?.url?.toString().orEmpty()
-            return if (isAllowedAssetUrl(url)) null else emptyResponse()
-          }
-
-          override fun shouldOverrideUrlLoading(
-            view: WebView?,
-            request: WebResourceRequest?,
-          ): Boolean = !isAllowedAssetUrl(request?.url?.toString().orEmpty())
-
-          override fun onPageFinished(
-            view: WebView?,
-            url: String?,
-          ) {
-            if (url == KATEX_SHELL_URL) {
-              ready = true
-              evaluateActiveRender()
-            }
-          }
-
-          override fun onRenderProcessGone(
-            view: WebView,
-            detail: RenderProcessGoneDetail,
-          ): Boolean {
-            if (webView !== view) return true
-            val interrupted = active
-            active = null
-            ready = false
-            (view.parent as? ViewGroup)?.removeView(view)
-            view.destroy()
-            mainHandler.post {
-              webView = createWebView(application)
-              attachWebView(webView)
-              interrupted?.completion?.invoke(ChatMathRenderResult.TransientFailure)
-            }
-            return true
-          }
+  private fun createWebView(context: Context): WebView {
+    val view =
+      WebView(context).apply {
+        alpha = 0f
+        visibility = View.VISIBLE
+        isClickable = false
+        setBackgroundColor(AndroidColor.TRANSPARENT)
+        setLayerType(View.LAYER_TYPE_SOFTWARE, null)
+        setWillNotDraw(false)
+        settings.apply {
+          javaScriptEnabled = true
+          allowFileAccess = false
+          allowContentAccess = false
+          allowFileAccessFromFileURLs = false
+          allowUniversalAccessFromFileURLs = false
+          blockNetworkLoads = true
+          domStorageEnabled = false
+          databaseEnabled = false
+          cacheMode = WebSettings.LOAD_NO_CACHE
+          mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
+          offscreenPreRaster = true
         }
-      loadUrl(KATEX_SHELL_URL)
+        webViewClient =
+          object : WebViewClient() {
+            override fun shouldInterceptRequest(
+              view: WebView?,
+              request: WebResourceRequest?,
+            ): WebResourceResponse? {
+              val url = request?.url ?: return emptyResponse()
+              if (!isAllowedAssetUrl(url)) return emptyResponse()
+              return assetLoader.shouldInterceptRequest(url) ?: emptyResponse()
+            }
+
+            override fun shouldOverrideUrlLoading(
+              view: WebView?,
+              request: WebResourceRequest?,
+            ): Boolean = !isAllowedAssetUrl(request?.url)
+
+            override fun onPageFinished(
+              view: WebView?,
+              url: String?,
+            ) {
+              if (
+                url == KATEX_SHELL_URL &&
+                WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)
+              ) {
+                ready = true
+                evaluateActiveRender()
+              }
+            }
+
+            override fun onRenderProcessGone(
+              view: WebView,
+              detail: RenderProcessGoneDetail,
+            ): Boolean {
+              if (webView !== view) return true
+              val interrupted = active
+              active = null
+              ready = false
+              (view.parent as? ViewGroup)?.removeView(view)
+              removeRenderMessageListener(view)
+              view.destroy()
+              mainHandler.post {
+                webView = createWebView(application)
+                attachWebView(webView)
+                interrupted?.completion?.invoke(ChatMathRenderResult.TransientFailure)
+              }
+              return true
+            }
+          }
+      }
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+      WebViewCompat.addWebMessageListener(
+        view,
+        KATEX_BRIDGE_NAME,
+        setOf(KATEX_ORIGIN),
+        RenderMessageBridge(),
+      )
+      view.loadUrl(KATEX_SHELL_URL)
     }
+    return view
+  }
 
   private fun attachWebView(view: WebView) {
     val currentHost = host.get() ?: return
@@ -497,32 +575,31 @@ private class ChatMathWebViewBackend(
     webView.evaluateJavascript("window.renderMath($payload);", null)
   }
 
-  private inner class RenderBridge {
-    @JavascriptInterface
-    fun onRenderComplete(
-      id: String,
-      widthCssPx: Double,
-      heightCssPx: Double,
-      success: Boolean,
+  private inner class RenderMessageBridge : WebViewCompat.WebMessageListener {
+    override fun onPostMessage(
+      view: WebView,
+      message: WebMessageCompat,
+      sourceOrigin: Uri,
+      isMainFrame: Boolean,
+      replyProxy: JavaScriptReplyProxy,
     ) {
+      if (!isMainFrame || !isTrustedKatexOrigin(sourceOrigin)) return
+      val renderMessage = parseChatMathRenderMessage(message.data) ?: return
       mainHandler.post {
-        val render = active?.takeIf { item -> item.id == id } ?: return@post
+        val render = active?.takeIf { item -> item.id == renderMessage.id } ?: return@post
         val density = render.request.density
-        if (!success) {
+        if (!renderMessage.success) {
           active = null
           render.completion(ChatMathRenderResult.Failure)
           return@post
         }
-        val width =
-          kotlin.math
-            .ceil(widthCssPx * density)
-            .toInt()
-            .coerceAtLeast(1)
-        val height =
-          kotlin.math
-            .ceil(heightCssPx * density)
-            .toInt()
-            .coerceAtLeast(1)
+        val width = bitmapDimension(renderMessage.widthCssPx, density)
+        val height = bitmapDimension(renderMessage.heightCssPx, density)
+        if (width == null || height == null) {
+          active = null
+          render.completion(ChatMathRenderResult.Failure)
+          return@post
+        }
         if (!isSafeBitmapSize(width, height)) {
           active = null
           render.completion(ChatMathRenderResult.Failure)
@@ -536,7 +613,7 @@ private class ChatMathWebViewBackend(
         webView.layout(0, 0, width, height)
         webView.scrollTo(0, 0)
         webView.postVisualStateCallback(
-          id.toLong(),
+          render.id.toLong(),
           object : WebView.VisualStateCallback() {
             override fun onComplete(requestId: Long) {
               val current = active?.takeIf { item -> item.id == requestId.toString() } ?: return
@@ -564,6 +641,12 @@ private class ChatMathWebViewBackend(
     }
   }
 
+  private fun removeRenderMessageListener(view: WebView) {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+      WebViewCompat.removeWebMessageListener(view, KATEX_BRIDGE_NAME)
+    }
+  }
+
   private data class ActiveRender(
     val id: String,
     val request: ChatMathRenderRequest,
@@ -578,14 +661,13 @@ private tailrec fun Context.findActivity(): Activity? =
     else -> null
   }
 
-private fun isAllowedAssetUrl(url: String): Boolean =
-  runCatching {
-    val uri = url.toUri()
-    uri.scheme == "file" &&
-      uri.host.isNullOrEmpty() &&
-      uri.path.orEmpty().startsWith("/android_asset/katex/") &&
-      uri.pathSegments.none { segment -> segment == ".." }
-  }.getOrDefault(false)
+private fun isTrustedKatexOrigin(uri: Uri): Boolean = uri.scheme == "https" && uri.host == KATEX_ASSET_HOST && uri.port == -1
+
+private fun isAllowedAssetUrl(uri: Uri?): Boolean =
+  uri != null &&
+    isTrustedKatexOrigin(uri) &&
+    uri.path.orEmpty().startsWith("/assets/katex/") &&
+    uri.pathSegments.none { segment -> segment == ".." }
 
 private fun emptyResponse(): WebResourceResponse = WebResourceResponse("text/plain", Charsets.UTF_8.name(), ByteArrayInputStream(ByteArray(0)))
 

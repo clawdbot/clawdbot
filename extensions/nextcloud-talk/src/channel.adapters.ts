@@ -8,6 +8,7 @@ import {
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
+  inspectNextcloudTalkAccount,
   listNextcloudTalkAccountIds,
   resolveDefaultNextcloudTalkAccountId,
   resolveNextcloudTalkAccount,
@@ -23,6 +24,7 @@ export const nextcloudTalkConfigAdapter = createScopedChannelConfigAdapter<
   sectionKey: "nextcloud-talk",
   listAccountIds: listNextcloudTalkAccountIds,
   resolveAccount: adaptScopedAccountAccessor(resolveNextcloudTalkAccount),
+  inspectAccount: adaptScopedAccountAccessor(inspectNextcloudTalkAccount),
   defaultAccountId: resolveDefaultNextcloudTalkAccountId,
   clearBaseFields: ["botSecret", "botSecretFile", "baseUrl", "name"],
   resolveAllowFrom: (account) => account.config.allowFrom,

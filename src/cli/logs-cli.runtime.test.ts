@@ -40,13 +40,25 @@ describe("execFileUtf8Tail", () => {
   it("keeps a bounded stderr tail for failed commands", async () => {
     const result = await execFileUtf8Tail(
       process.execPath,
-      ["-e", "process.stderr.write('😀' + 'x'.repeat(64 * 1024)); process.exit(1)"],
+      ["-e", "process.stderr.write('😀' + 'x'.repeat(64 * 1024)); process.exitCode = 1"],
       { maxBytes: 1024 },
     );
     expect(result.code).toBe(1);
     expect(result.stderr).toBe("x".repeat(64 * 1024));
     expect(result.stderr).not.toContain("�");
     expect(result.truncated).toBe(false);
+  });
+
+  it("terminates a stalled command at the configured deadline", async () => {
+    const startedAt = Date.now();
+
+    const result = await execFileUtf8Tail(process.execPath, ["-e", "setTimeout(() => {}, 1_000)"], {
+      maxBytes: 1024,
+      timeoutMs: 25,
+    });
+
+    expect(Date.now() - startedAt).toBeLessThan(500);
+    expect(result).toMatchObject({ code: 124, stdout: "", truncated: false });
   });
 
   it("returns a soft failure when command launch fails", async () => {

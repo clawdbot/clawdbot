@@ -19,9 +19,12 @@ type AgentAttemptLifecycleEvent = {
 };
 
 /** Creates callbacks that update lifecycle flags for persistence decisions. */
-export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycleState): {
+export function createAgentAttemptLifecycleCallbacks(
+  state: AgentAttemptLifecycleState,
+  onRuntimeTurnStarted?: () => void | Promise<void>,
+): {
   onUserMessagePersisted: (message: Extract<AgentMessage, { role: "user" }>) => void;
-  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void;
+  onAgentEvent: (evt: AgentAttemptLifecycleEvent) => void | Promise<void>;
 } {
   return {
     onUserMessagePersisted: () => {
@@ -30,6 +33,14 @@ export function createAgentAttemptLifecycleCallbacks(state: AgentAttemptLifecycl
     onAgentEvent: (evt) => {
       if (evt.stream !== "lifecycle" || typeof evt.data?.phase !== "string") {
         return;
+      }
+      if (evt.data.phase === "start") {
+        // A same-candidate retry replaces deferred terminal state from the
+        // preceding attempt; retaining it would abort a recovered run.
+        state.lifecycleError = undefined;
+        state.lifecycleFinishing = false;
+        state.lifecycleEnded = false;
+        return onRuntimeTurnStarted?.();
       }
       if (typeof evt.data.error === "string" && evt.data.error.trim()) {
         state.lifecycleError = evt.data.error;

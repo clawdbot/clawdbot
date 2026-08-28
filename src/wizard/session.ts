@@ -1,34 +1,54 @@
 // Wizard session helpers track onboarding session ids and state.
 import { randomUUID } from "node:crypto";
-import { createDeferred, type Deferred } from "../shared/deferred.js";
-import { WizardCancelledError, type WizardProgress, type WizardPrompter } from "./prompts.js";
+import type { WizardStep as ProtocolWizardStep } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import {
+  DEVICE_CODE_PHISHING_WARNING,
+  WizardCancelledError,
+  type WizardProgress,
+  type WizardPrompter,
+} from "./prompts.js";
 
 // WizardSession exposes interactive setup as a step/answer protocol for remote
 // clients while reusing the same WizardPrompter contract as the local CLI.
-type WizardStepOption = {
-  value: unknown;
-  label: string;
-  hint?: string;
-};
+export type WizardStep = ProtocolWizardStep;
 
-export type WizardStep = {
-  id: string;
-  type: "note" | "select" | "text" | "confirm" | "multiselect" | "progress" | "action";
-  title?: string;
-  message?: string;
-  format?: "plain";
-  options?: WizardStepOption[];
-  initialValue?: unknown;
-  placeholder?: string;
-  sensitive?: boolean;
-  executor?: "gateway" | "client";
-  externalUrl?: string;
-  deviceCode?: {
-    code: string;
-    expiresInMinutes?: number;
-    message?: string;
-  };
-};
+type WizardStepInputRequirement = "always" | "never" | "client-executor";
+
+const WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE = {
+  note: "never",
+  select: "always",
+  text: "always",
+  confirm: "always",
+  multiselect: "always",
+  progress: "never",
+  action: "client-executor",
+} as const satisfies Record<WizardStep["type"], WizardStepInputRequirement>;
+
+/** Whether a step needs a user answer instead of client or gateway acknowledgement. */
+export function wizardStepAwaitsInput(step: WizardStep): boolean {
+  const requirement = WIZARD_STEP_INPUT_REQUIREMENT_BY_TYPE[step.type];
+  switch (requirement) {
+    case "always":
+      return true;
+    case "never":
+      return false;
+    case "client-executor":
+      return step.executor === "client";
+  }
+  const unhandledRequirement: never = requirement;
+  return unhandledRequirement;
+}
+
+/** Remove secret prefill before a wizard step crosses a client boundary. */
+export function sanitizeWizardStepForClient(step: WizardStep): WizardStep {
+  if (step.sensitive !== true || step.initialValue === undefined) {
+    return step;
+  }
+  const safe = { ...step };
+  delete safe.initialValue;
+  return safe;
+}
 
 type WizardSessionStatus = "running" | "done" | "cancelled" | "error";
 
@@ -39,6 +59,7 @@ type WizardNextResult = {
   error?: string;
   channels?: string[];
   accounts?: Array<{ channel: string; accountId: string }>;
+  preparedModelRef?: string;
 };
 
 function normalizeTextAnswer(value: unknown): string | undefined {
@@ -76,7 +97,12 @@ class WizardSessionPrompter implements WizardPrompter {
   }
 
   async note(message: string, title?: string): Promise<void> {
-    await this.prompt({ type: "note", title, message, executor: "client" });
+    await this.prompt({
+      type: "note",
+      title,
+      message,
+      executor: "client",
+    });
   }
 
   async deviceCode(params: {
@@ -88,9 +114,12 @@ class WizardSessionPrompter implements WizardPrompter {
     const fallbackMessage = [
       params.message ?? "Enter this one-time code on the provider's sign-in page.",
       `Code: ${params.code}`,
-      ...(params.expiresInMinutes
-        ? [`Code expires in ${params.expiresInMinutes} minutes. Never share it.`]
-        : []),
+      ...(params.expiresInMinutes ? [`Code expires in ${params.expiresInMinutes} minutes.`] : []),
+      // Device-code phishing works by getting the victim to enter the attacker's
+      // code, so the warning has to cover received codes, not just shared ones.
+      // Unconditional: codes delivered over a chat channel are the risky case and
+      // carry no expiry hint. Matches the Codex CLI prompt.
+      DEVICE_CODE_PHISHING_WARNING,
     ].join("\n");
     await this.prompt({
       type: "note",
@@ -106,7 +135,12 @@ class WizardSessionPrompter implements WizardPrompter {
   }
 
   async plain(message: string): Promise<void> {
-    await this.prompt({ type: "note", message, format: "plain", executor: "client" });
+    await this.prompt({
+      type: "note",
+      message,
+      format: "plain",
+      executor: "client",
+    });
   }
 
   async select<T>(params: {
@@ -183,13 +217,28 @@ class WizardSessionPrompter implements WizardPrompter {
       initialValue: params.initialValue,
       executor: "client",
     });
-    return Boolean(res);
+    // Answers cross the wire as unknown values; truthy strings are not consent.
+    return res === true;
   }
 
-  progress(_label: string): WizardProgress {
+  progress(label: string): WizardProgress {
+    let stopped = false;
+    this.session.pushProgress(label);
     return {
-      update: (_message) => {},
-      stop: (_message) => {},
+      update: (message) => {
+        if (!stopped) {
+          this.session.pushProgress(message);
+        }
+      },
+      stop: (message) => {
+        if (stopped) {
+          return;
+        }
+        stopped = true;
+        if (message) {
+          this.session.pushProgress(message);
+        }
+      },
     };
   }
 
@@ -217,10 +266,14 @@ class WizardSessionPrompter implements WizardPrompter {
 export class WizardSession {
   private readonly abortController = new AbortController();
   private readonly expiryTimer: ReturnType<typeof setTimeout> | undefined;
+  private readonly runnerPromise: Promise<void>;
   private currentStep: WizardStep | null = null;
+  private progressSteps: WizardStep[] = [];
+  private deliveredProgressStepIds = new Set<string>();
   private stepDeferred: Deferred<WizardStep | null> | null = null;
   private pendingTerminalResolution = false;
   private cancellationLocked = false;
+  private settled = false;
   private pendingExternalUrl: string | undefined;
   private answerDeferred = new Map<
     string,
@@ -233,6 +286,7 @@ export class WizardSession {
   private status: WizardSessionStatus = "running";
   private error: string | undefined;
   private configuredAccounts: Array<{ channel: string; accountId: string }> | undefined;
+  private preparedModelRef: string | undefined;
 
   constructor(
     private runner: (
@@ -247,10 +301,15 @@ export class WizardSession {
       this.expiryTimer = setTimeout(() => this.cancel(), options.timeoutMs);
       this.expiryTimer.unref?.();
     }
-    void this.run(prompter);
+    this.runnerPromise = this.run(prompter);
   }
 
   async next(): Promise<WizardNextResult> {
+    const progressStep = this.progressSteps.shift();
+    if (progressStep) {
+      this.rememberDeliveredProgressStep(progressStep.id);
+      return { done: false, step: progressStep, status: this.status };
+    }
     if (this.currentStep) {
       return { done: false, step: this.currentStep, status: this.status };
     }
@@ -262,7 +321,7 @@ export class WizardSession {
       return this.terminalResult();
     }
     if (!this.stepDeferred) {
-      this.stepDeferred = createDeferred();
+      this.stepDeferred = createDeferredCore();
     }
     const step = await this.stepDeferred.promise;
     if (step) {
@@ -272,15 +331,19 @@ export class WizardSession {
   }
 
   private terminalResult(): WizardNextResult {
-    if (!this.configuredAccounts) {
-      return { done: true, status: this.status, error: this.error };
-    }
     return {
       done: true,
       status: this.status,
       error: this.error,
-      channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
-      accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
+      ...(this.configuredAccounts
+        ? {
+            channels: [...new Set(this.configuredAccounts.map((entry) => entry.channel))],
+            accounts: this.configuredAccounts.map((entry) => ({ ...entry })),
+          }
+        : {}),
+      ...(this.status === "done" && this.preparedModelRef
+        ? { preparedModelRef: this.preparedModelRef }
+        : {}),
     };
   }
 
@@ -289,9 +352,20 @@ export class WizardSession {
     this.configuredAccounts = accounts.map((entry) => ({ ...entry }));
   }
 
+  /** Record the exact provider-owned model prepared by a setup flow. */
+  setPreparedModelRef(modelRef: string) {
+    this.preparedModelRef = modelRef;
+  }
+
   async answer(stepId: string, value: unknown): Promise<string | undefined> {
     const pending = this.answerDeferred.get(stepId);
     if (!pending) {
+      // Gateway-owned progress steps never block the provider run. Older
+      // clients still acknowledge every rendered step, so accept that stale
+      // acknowledgement while newer clients poll without an answer.
+      if (this.deliveredProgressStepIds.delete(stepId)) {
+        return undefined;
+      }
       throw new Error("wizard: no pending step");
     }
     const normalizedValue = pending.text ? normalizeTextAnswer(value) : value;
@@ -322,6 +396,8 @@ export class WizardSession {
       pending.deferred.reject(new WizardCancelledError());
     }
     this.answerDeferred.clear();
+    this.progressSteps = [];
+    this.deliveredProgressStepIds.clear();
     this.resolveStep(null);
     return true;
   }
@@ -338,6 +414,41 @@ export class WizardSession {
   pushStep(step: WizardStep) {
     this.currentStep = step;
     this.resolveStep(step);
+  }
+
+  pushProgress(message: string) {
+    if (this.status !== "running") {
+      return;
+    }
+    const step: WizardStep = {
+      id: randomUUID(),
+      type: "progress",
+      message,
+      executor: "gateway",
+    };
+    if (this.stepDeferred) {
+      this.rememberDeliveredProgressStep(step.id);
+      this.resolveStep(step);
+      return;
+    }
+    // Keep the oldest unread event and the newest snapshot. This preserves the
+    // initial label while bounding bursty pull updates between client polls.
+    if (this.progressSteps.length >= 2) {
+      this.progressSteps[this.progressSteps.length - 1] = step;
+      return;
+    }
+    this.progressSteps.push(step);
+  }
+
+  private rememberDeliveredProgressStep(stepId: string) {
+    this.deliveredProgressStepIds.add(stepId);
+    if (this.deliveredProgressStepIds.size <= 64) {
+      return;
+    }
+    const oldest = this.deliveredProgressStepIds.values().next().value;
+    if (oldest) {
+      this.deliveredProgressStepIds.delete(oldest);
+    }
   }
 
   queueExternalUrl(url: string) {
@@ -368,6 +479,7 @@ export class WizardSession {
         this.error = String(err);
       }
     } finally {
+      this.settled = true;
       if (this.expiryTimer) {
         clearTimeout(this.expiryTimer);
       }
@@ -383,7 +495,7 @@ export class WizardSession {
       throw new Error("wizard: session not running");
     }
     this.pushStep(step);
-    const deferred = createDeferred<unknown>();
+    const deferred = createDeferredCore<unknown>();
     this.answerDeferred.set(step.id, { deferred, text: step.type === "text", validate });
     return await deferred.promise;
   }
@@ -404,6 +516,16 @@ export class WizardSession {
 
   getStatus(): WizardSessionStatus {
     return this.status;
+  }
+
+  /** Whether the runner has stopped and can no longer mutate setup state. */
+  isSettled(): boolean {
+    return this.settled;
+  }
+
+  /** Resolves after the runner can no longer mutate setup state. */
+  whenSettled(): Promise<void> {
+    return this.runnerPromise;
   }
 
   getError(): string | undefined {

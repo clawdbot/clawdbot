@@ -1,9 +1,10 @@
 /**
  * @deprecated Compatibility shim only. Keep old plugins working, but do not
  * add new imports here and do not use this subpath from repo code.
- * Prefer focused openclaw/plugin-sdk/<domain> runtime subpaths instead.
+ * Prefer injected runtime APIs or documented typed-public subpaths instead.
  */
 
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
 export * from "./delivery-queue-runtime.js";
 
 export * from "../infra/backoff.js";
@@ -18,8 +19,17 @@ export {
 } from "../infra/diagnostic-events.js";
 export * from "../infra/diagnostic-flags.js";
 export * from "../infra/env.js";
-export * from "../infra/errors.js";
-import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+export {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+  formatErrorMessage,
+  formatUncaughtError,
+  hasErrnoCode,
+  isErrno,
+  readErrorName,
+  stringifyNonErrorCause,
+  toErrorObject,
+} from "../infra/errors.js";
 
 /** @deprecated Shipped compat only (removed from core in #104546); no core caller. Removal with the next plugin-SDK major. */
 export type ErrorKind = "refusal" | "timeout" | "rate_limit" | "context_length" | "unknown";
@@ -240,14 +250,53 @@ export * from "../infra/net/undici-global-dispatcher.js";
 export * from "../infra/net/ssrf.js";
 export * from "../infra/outbound/identity.js";
 export * from "../infra/outbound/sanitize-text.js";
-export * from "../infra/parse-finite-number.js";
+export {
+  clampTimerTimeoutMs,
+  finiteSecondsToTimerSafeMilliseconds,
+  MAX_TIMER_TIMEOUT_MS,
+  MAX_TIMER_TIMEOUT_SECONDS,
+  nonNegativeSecondsToSafeMilliseconds,
+  parseFiniteNumber,
+  parseStrictFiniteNumber,
+  parseStrictInteger,
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+  positiveSecondsToSafeMilliseconds,
+  resolveExpiresAtMsFromDurationOrEpoch,
+  resolveExpiresAtMsFromDurationSeconds,
+  resolveExpiresAtMsFromEpochSeconds,
+} from "@openclaw/normalization-core/number-coercion";
 export * from "../infra/outbound/send-deps.js";
 export * from "../infra/retry.js";
 export * from "../infra/retry-policy.js";
 export * from "../infra/scp-host.ts";
-export * from "../infra/secret-file.js";
+export {
+  DEFAULT_SECRET_FILE_MAX_BYTES,
+  loadSecretFileSync,
+  PRIVATE_SECRET_DIR_MODE,
+  PRIVATE_SECRET_FILE_MODE,
+  readSecretFileSync,
+  tryReadSecretFileSync,
+  writePrivateSecretFileAtomic,
+  type SecretFileReadOptions,
+  type SecretFileReadResult,
+} from "../infra/secret-file.js";
 export * from "../infra/secure-random.js";
-export * from "../infra/system-events.js";
+export {
+  consumeSelectedSystemEventEntries,
+  consumeSystemEventEntries,
+  drainSystemEventEntries,
+  drainSystemEvents,
+  enqueueSystemEvent,
+  enqueueSystemEventEntry,
+  hasSystemEvents,
+  isSystemEventContextChanged,
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+  resolveSystemEventDeliveryContext,
+  type SystemEvent,
+} from "../infra/system-events.js";
 export * from "../infra/system-message.ts";
 export * from "../infra/tmp-openclaw-dir.js";
 export * from "../infra/transport-ready.js";

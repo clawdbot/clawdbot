@@ -4,47 +4,97 @@ import {
   errorShape,
   validateSessionsMessagesSubscribeParams,
   validateSessionsMessagesUnsubscribeParams,
+  validateSessionsListParams,
+  validateSessionsViewerPresenceSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { canReviewOperatorApproval } from "../operator-approval-authorization.js";
 import { APPROVALS_SCOPE } from "../operator-scopes.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { sessionObserverScopeKey } from "../session-observer-model.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { resolveSessionStoreAgentId } from "../session-store-key.js";
+import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
+import { resolveSessionStoreKey } from "../session-utils.js";
+import { sessionsListHandler } from "./sessions-read.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-function resolveSessionMessageSubscriptionKey(params: {
-  canonicalKey: string;
-  agentId?: string;
-  defaultAgentId?: string;
-}): string {
-  const agentId = params.agentId
-    ? normalizeAgentId(params.agentId)
-    : params.canonicalKey === "global" && params.defaultAgentId
-      ? normalizeAgentId(params.defaultAgentId)
-      : undefined;
-  // Global session message subscriptions need per-agent channels to avoid cross-agent fanout.
-  return params.canonicalKey === "global" && agentId
-    ? `agent:${agentId}:global`
-    : params.canonicalKey;
-}
-
 export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
-  "sessions.subscribe": ({ client, context, respond }) => {
+  "sessions.subscribe": async (options) => {
+    const { client, context, params, respond } = options;
+    if (!assertValidParams(params, validateSessionsListParams, "sessions.subscribe", respond)) {
+      return;
+    }
     const connId = client?.connId?.trim();
     if (connId) {
+      // Subscribe before projecting the snapshot so mutations during the read
+      // become live events; the UI queues one trailing refresh when needed.
       context.subscribeSessionEvents(connId);
     }
-    respond(true, { subscribed: Boolean(connId) }, undefined);
-  },
-  "sessions.unsubscribe": ({ client, context, respond }) => {
-    const connId = client?.connId?.trim();
-    if (connId) {
-      context.unsubscribeSessionEvents(connId);
+    if (!connId || Object.keys(params).length === 0) {
+      respond(true, { subscribed: Boolean(connId) }, undefined);
+      return;
     }
-    respond(true, { subscribed: false }, undefined);
+    await sessionsListHandler({
+      ...options,
+      params,
+      respond: (ok, payload, error, meta) => {
+        respond(ok, ok ? { subscribed: true, list: payload } : undefined, error, meta);
+      },
+    });
+  },
+  "sessions.viewers.set": ({ params, client, context, respond }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateSessionsViewerPresenceSetParams,
+        "sessions.viewers.set",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const connId = client?.connId?.trim();
+    const declarations = context.sessionViewerPresence;
+    if (!connId || !declarations) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "session viewer presence unavailable"),
+      );
+      return;
+    }
+    const cfg = context.getRuntimeConfig();
+    const canonicalKeys: string[] = [];
+    for (const rawKey of params.sessionKeys) {
+      const trimmed = rawKey.trim();
+      if (!trimmed) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid sessions.viewers.set params"),
+        );
+        return;
+      }
+      const requested = resolveRequestedSessionAgentId(
+        cfg,
+        trimmed,
+        parseAgentSessionKey(trimmed) ? undefined : params.agentId,
+      );
+      if (!requested.ok) {
+        respond(false, undefined, requested.error);
+        return;
+      }
+      const canonicalKey = resolveSessionStoreKey({
+        cfg,
+        sessionKey: trimmed,
+        storeAgentId: requested.agentId,
+      });
+      canonicalKeys.push(sessionObserverScopeKey(canonicalKey, requested.agentId));
+    }
+    const sessionKeys = declarations.replace(connId, canonicalKeys);
+    respond(true, { sessionKeys }, undefined);
   },
   "sessions.messages.subscribe": ({ params, client, context, respond }) => {
     if (
@@ -75,18 +125,21 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { canonicalKey } = loadSessionEntry(key, { agentId: requestedAgentId });
-    const subscriptionKey = resolveSessionMessageSubscriptionKey({
-      canonicalKey,
-      agentId: requestedAgentId,
-      defaultAgentId: resolveDefaultAgentId(cfg),
+    const canonicalKey = resolveSessionStoreKey({
+      cfg,
+      sessionKey: key,
+      ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
     });
+    const subscriptionKey = resolveSessionSubscriptionKey(
+      canonicalKey,
+      requestedAgentId ?? resolveSessionStoreAgentId(cfg, canonicalKey),
+    );
     if (connId) {
       let approvalReplay;
       if (p.includeApprovals === true) {
@@ -95,7 +148,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
         const rollbackSubscription = context.subscribeSessionMessageEvents(
           connId,
           subscriptionKey,
-          { includeApprovals: true },
+          { includeApprovals: true, provisional: true },
         );
         try {
           approvalReplay = context.listSessionPendingApprovals?.(subscriptionKey, client);
@@ -118,6 +171,7 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           );
           return;
         }
+        rollbackSubscription?.commit?.();
       } else {
         context.subscribeSessionMessageEvents(connId, subscriptionKey);
       }
@@ -156,18 +210,21 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
       return;
     }
     const cfg = context.getRuntimeConfig();
-    const requestedAgent = resolveRequestedGlobalAgentId(cfg, key, p.agentId);
+    const requestedAgent = resolveRequestedSessionAgentId(cfg, key, p.agentId);
     if (!requestedAgent.ok) {
       respond(false, undefined, requestedAgent.error);
       return;
     }
     const requestedAgentId = requestedAgent.agentId;
-    const { canonicalKey } = loadSessionEntry(key, { agentId: requestedAgentId });
-    const subscriptionKey = resolveSessionMessageSubscriptionKey({
-      canonicalKey,
-      agentId: requestedAgentId,
-      defaultAgentId: resolveDefaultAgentId(cfg),
+    const canonicalKey = resolveSessionStoreKey({
+      cfg,
+      sessionKey: key,
+      ...(requestedAgentId ? { storeAgentId: requestedAgentId } : {}),
     });
+    const subscriptionKey = resolveSessionSubscriptionKey(
+      canonicalKey,
+      requestedAgentId ?? resolveSessionStoreAgentId(cfg, canonicalKey),
+    );
     if (connId) {
       context.unsubscribeSessionMessageEvents(connId, subscriptionKey);
     }

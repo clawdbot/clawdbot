@@ -13,8 +13,8 @@ OpenClaw's built-in harness. The Copilot CLI session owns the low-level
 agent loop: native tool execution, native compaction (`infiniteSessions`), and
 CLI-managed thread state under `copilotHome`. OpenClaw still owns chat
 channels, session files, model selection, dynamic tools (bridged), approvals,
-media delivery, the visible transcript mirror, `/btw` side questions (see
-[Side questions (`/btw`)](#side-questions-btw)), and `openclaw doctor`.
+media delivery, the visible chat transcript, `/btw` side questions (see
+[Side questions (`/btw`)](/plugins/copilot#side-questions-%2Fbtw)), and `openclaw doctor`.
 
 For the broader model/provider/runtime split, start with
 [Agent runtimes](/concepts/agent-runtimes).
@@ -182,7 +182,7 @@ Precedence, applied per agent during `runCopilotAttempt`:
 Each agent gets its own `copilotHome` so Copilot CLI tokens, sessions, and
 config never leak between agents on the same machine. Default:
 `<agentDir>/copilot` (keeps SDK state out of the same directory as
-OpenClaw's `models.json` / `auth-profiles.json`), or
+OpenClaw's `models.json` / `openclaw-agent.sqlite`), or
 `~/.openclaw/agents/<agentId>/copilot` when no agent directory is supplied.
 Override with `copilotHome: <path>` on the attempt input for a custom
 location (for example, a shared mount for migration).
@@ -209,8 +209,7 @@ plus a small set of env defaults inside `extensions/copilot/src/`:
 | `enableSessionTelemetry` | Optional SDK session telemetry flag.                                                                                                                                                                                                                                                            |
 
 OpenClaw plugin hooks need no Copilot-specific attempt configuration. The
-harness runs `before_prompt_build` (and the legacy `before_agent_start`
-compatibility hook), `llm_input`, `llm_output`, and `agent_end` through the
+harness runs `before_prompt_build`, `llm_input`, `llm_output`, and `agent_end` through the
 standard harness helpers. Successful SDK compactions also run
 `before_compaction` and `after_compaction`. Bridged OpenClaw tools run
 `before_tool_call` and report `after_tool_call`; `hooksConfig` remains for
@@ -229,22 +228,32 @@ When `harness.compact` runs, the Copilot SDK harness:
 3. Returns the SDK compaction outcome without writing compatibility marker
    files under the workspace.
 
-The OpenClaw-side transcript mirror (below) keeps receiving post-compaction
+The OpenClaw-side transcript journal (below) keeps receiving post-compaction
 messages, so user-facing chat history stays consistent.
 
-## Transcript mirroring
+## Transcript persistence
 
-`runCopilotAttempt` dual-writes each turn's mirrorable messages into the
-OpenClaw audit transcript via
-`extensions/copilot/src/dual-write-transcripts.ts`. The mirror is scoped per
-session (`copilot:${sessionId}`) and keyed per message
-(`${role}:${sha256_16(role,content)}`), so re-emitted prior-turn entries
-collide with existing on-disk keys instead of duplicating.
+`runCopilotAttempt` gives each attempt a transcript journal
+(`createAttemptTranscriptJournal` in
+`extensions/copilot/src/attempt-transcript-journal.ts`) that persists every
+turn's messages into the OpenClaw session transcript. Journal identity is
+turn-scoped, not content-scoped: the initial user turn is keyed
+`${runId}:user` and SDK-sourced events are keyed
+`copilot-sdk:${sdkSessionId}:${eventId}`, with claimed event ids plus an
+idempotency scan at the transcript store, so re-emitted prior-turn entries
+cannot duplicate.
 
-Two layers of failure containment wrap the mirror so a transcript write
-failure never fails the attempt: an internal best-effort wrapper, plus a
-defense-in-depth `.catch(...)` at the attempt level. Failures are logged, not
-surfaced.
+Assistant turns and their tool results are journaled as structurally complete
+groups, so a crash between groups leaves a valid transcript prefix.
+`before_message_write` hooks may redact content but cannot change role or
+tool topology; a structurally destructive rewrite suppresses the whole group
+instead of persisting a false replay.
+
+Persistence failures fail closed. The first write failure marks the journal
+failed, aborts the in-flight SDK session, and flags the attempt's replay as
+unvalidated so the next run creates a fresh SDK session instead of trusting a
+partial transcript. Only the post-append transcript update notification is
+best-effort and logged.
 
 ## Side questions (`/btw`)
 
@@ -261,13 +270,13 @@ keeps `/btw` behavior identical to other non-Codex runtimes.
 
 ## Doctor
 
-`extensions/copilot/doctor-contract-api.ts` is auto-loaded by
-`src/plugins/doctor-contract-registry.ts`. It contributes:
+The Copilot plugin contributes doctor repair metadata through its manifest and
+doctor contract:
 
 - An empty `legacyConfigRules` (no retired fields yet).
 - A no-op `normalizeCompatibilityConfig` (kept so future field retirements
   have a stable in-tree home).
-- One `sessionRouteStateOwners` entry: provider `github-copilot`, runtime
+- Its manifest declares one `sessionRouteStateOwners` entry: provider `github-copilot`, runtime
   `copilot`, CLI session key `copilot`, auth profile prefix `github-copilot:`.
 
 ## Limitations
@@ -279,10 +288,10 @@ keeps `/btw` behavior identical to other non-Codex runtimes.
   surface.
 - PI session state does not migrate when an agent switches to `copilot`.
   Selection is per attempt; existing PI sessions remain valid.
-- `ask_user` uses the same OpenClaw prompt-and-reply path as the Codex
-  harness: when the Copilot SDK asks for user input, OpenClaw posts a
-  blocking prompt to the active channel/TUI, and the next queued user
-  message resolves the SDK request.
+- `ask_user` uses the provider-neutral gateway question runtime. The Control
+  UI shows the same question card as other OpenClaw questions, supported
+  channels render choice buttons, and the next queued plain-text message
+  resolves that gateway record before the SDK request returns.
 
 ## Permissions and ask_user
 
@@ -361,10 +370,11 @@ a configured `github-copilot` auth profile). When the resolved mode is
 `useLoggedInUser`, the session-level field is omitted so the SDK keeps
 deriving identity from the logged-in identity.
 
-`ask_user` uses `SessionConfig.onUserInputRequest`. The bridge accepts choice
-indexes or labels for fixed-choice requests, accepts free-form answers when
-the SDK request allows them, and cancels a pending request when the OpenClaw
-attempt is aborted.
+`ask_user` uses `SessionConfig.onUserInputRequest`. The bridge registers SDK
+choices or option-less free-text prompts as gateway questions, accepts choice
+indexes or labels for fixed-choice requests, and accepts free-form answers
+when the SDK request allows them. Aborting the OpenClaw attempt cancels the
+gateway record and returns an empty SDK answer.
 
 ## Related
 

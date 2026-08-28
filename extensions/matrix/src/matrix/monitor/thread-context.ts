@@ -1,7 +1,8 @@
 // Matrix plugin module implements thread context behavior.
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixClient } from "../sdk.js";
-import { summarizeMatrixMessageContextEvent, trimMatrixMaybeString } from "./context-summary.js";
+import { summarizeMatrixMessageContextEvent } from "./context-summary.js";
 import type { MatrixRawEvent } from "./types.js";
 
 const MAX_TRACKED_THREAD_STARTERS = 256;
@@ -27,11 +28,11 @@ function summarizeMatrixThreadStarterEvent(event: MatrixRawEvent): string | unde
     return truncateThreadStarterBody(body);
   }
   const content = event.content as { msgtype?: unknown };
-  const msgtype = trimMatrixMaybeString(content.msgtype);
+  const msgtype = normalizeOptionalString(content.msgtype);
   if (msgtype) {
     return `Matrix ${msgtype} message`;
   }
-  const eventType = trimMatrixMaybeString(event.type);
+  const eventType = normalizeOptionalString(event.type);
   return eventType ? `Matrix ${eventType} event` : undefined;
 }
 
@@ -89,7 +90,7 @@ export function createMatrixThreadContextResolver(params: {
     }
 
     const rawEvent = rootEvent as MatrixRawEvent;
-    const senderId = trimMatrixMaybeString(rawEvent.sender);
+    const senderId = normalizeOptionalString(rawEvent.sender);
     const senderName =
       senderId &&
       (await params.getMemberDisplayName(input.roomId, senderId).catch(() => undefined));

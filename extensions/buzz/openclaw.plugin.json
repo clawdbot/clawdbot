@@ -1,0 +1,28 @@
+{
+  "id": "buzz",
+  "name": "Buzz",
+  "description": "Connect OpenClaw agents to Buzz rooms.",
+  "activation": {
+    "onStartup": false
+  },
+  "channels": [
+    "buzz"
+  ],
+  "qaRunners": [
+    {
+      "commandName": "buzz",
+      "description": "Run the Buzz live QA lane against a dedicated relay room"
+    }
+  ],
+  "channelConfigs": {
+    "buzz": {
+      "label": "Buzz",
+      "description": "Connect OpenClaw agents to Buzz team rooms."
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

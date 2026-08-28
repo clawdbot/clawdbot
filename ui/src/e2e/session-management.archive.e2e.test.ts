@@ -1,0 +1,1036 @@
+import path from "node:path";
+import { expect, it } from "vitest";
+import { expectRequestCountStable } from "./chat-flow.test-support.ts";
+import {
+  activateSelfRemovingControl,
+  captureUiProof,
+  captureUiProofEnabled,
+  controlUiSessionPath,
+  controlUiSessionUrl,
+  createSessionManagementE2eSuite,
+  installMockGateway,
+  requireRecord,
+  sessionRow,
+  sessionsListResponse,
+  uiProofArtifactDir,
+  waitForConfirmModal,
+  waitForPatch,
+} from "./session-management.test-support.ts";
+
+const suite = createSessionManagementE2eSuite();
+
+async function confirmDelete(page: import("playwright").Page, proofName?: string) {
+  const dialog = await waitForConfirmModal(page);
+  if (proofName) {
+    await captureUiProof(page, proofName);
+  }
+  await dialog.getByRole("button", { name: "Delete", exact: true }).click();
+}
+
+suite.define(() => {
+  it("removes an agent-archived selected session without closing its transcript", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+      ...(captureUiProofEnabled ? { recordVideo: { dir: uiProofArtifactDir } } : {}),
+    });
+    const page = await context.newPage();
+    const main = sessionRow("agent:main:main", "Main", 1);
+    const target = sessionRow("agent:main:archive-from-agent", "Archive from agent", 2);
+    const gateway = await installMockGateway(page, {
+      historyMessages: [
+        { role: "assistant", content: [{ type: "text", text: "Work completed." }] },
+      ],
+      methodResponses: { "sessions.list": sessionsListResponse([main, target]) },
+      sessionArchiveFiltering: true,
+      sessionKey: main.key,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, target.key));
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${target.key}"]`);
+      const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      const notice = pane.locator(".agent-chat__disabled-banner");
+      await row.waitFor({ state: "visible" });
+      await pane.getByText("Work completed.", { exact: true }).waitFor();
+      await captureUiProof(page, "agent-archive-before.png");
+
+      // The agent's deferred self-archive reaches clients as a committed patch,
+      // without running the sidebar menu's optimistic mutation path.
+      const archived = { ...target, archived: true, archivedAt: 3, updatedAt: 3 };
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, archived]));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...archived,
+        agentId: "main",
+        sessionKey: target.key,
+        reason: "patch",
+      });
+      await notice.waitFor({ state: "visible" });
+      await captureUiProof(page, "agent-archive-received.png");
+      await row.waitFor({ state: "detached", timeout: 10_000 });
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
+      await pane.getByText("Work completed.", { exact: true }).waitFor();
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      await captureUiProof(page, "agent-archive-after.png");
+
+      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page
+        .locator(".sidebar-session-sort-menu")
+        .getByRole("menuitemradio", { name: "Archived" })
+        .click();
+      await row.waitFor({ state: "visible" });
+      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page
+        .locator(".sidebar-session-sort-menu")
+        .getByRole("menuitemradio", { name: "Active", exact: true })
+        .click();
+      await row.waitFor({ state: "detached" });
+
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...target,
+        agentId: "main",
+        sessionKey: target.key,
+        reason: "patch",
+        archived: false,
+        archivedAt: null,
+        updatedAt: 4,
+      });
+      await row.waitFor({ state: "visible" });
+      await notice.waitFor({ state: "detached" });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("refreshes the archived sidebar after restoring a session during a stale roster load", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const updatedAt = Date.parse("2026-07-01T16:00:00.000Z");
+    const main = sessionRow("agent:main:main", "Main", updatedAt);
+    const archived = sessionRow("agent:main:restore-pending", "Restore pending", updatedAt - 1, {
+      archived: true,
+    });
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([main, archived]),
+        "sessions.patch": {},
+      },
+      sessionArchiveFiltering: true,
+      sessionKey: main.key,
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      await page.getByRole("button", { name: "Filter & sort" }).click();
+      await page
+        .locator(".sidebar-session-sort-menu")
+        .getByRole("menuitemradio", { name: "Archived" })
+        .click();
+
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const archivedRow = sidebar.locator(`[data-session-key="${archived.key}"]`);
+      await archivedRow.waitFor({ state: "visible" });
+      await captureUiProof(page, "filtered-roster-forced-refresh-before.png");
+
+      const archivedRequests = async () =>
+        (await gateway.getRequests("sessions.list")).filter(
+          (request) => requireRecord(request.params).archived === true,
+        );
+      const initialRequests = (await archivedRequests()).length;
+      await gateway.deferNext("sessions.list", { archived: true });
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...archived,
+        reason: "update",
+        sessionKey: archived.key,
+      });
+      await expect.poll(archivedRequests).toHaveLength(initialRequests + 1);
+
+      await archivedRow.hover();
+      await archivedRow.getByRole("button", { name: "Open session menu" }).click();
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Restore session" }));
+      await waitForPatch(
+        gateway,
+        (params) => params.key === archived.key && params.archived === false,
+      );
+
+      await gateway.resolveDeferred("sessions.list", sessionsListResponse([archived]));
+
+      await expect.poll(archivedRequests).toHaveLength(initialRequests + 2);
+      await archivedRow.waitFor({ state: "detached" });
+      await captureUiProof(page, "filtered-roster-forced-refresh-after.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("deletes every archived thread exactly once when the paged roster reorders", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const keys = ["agent:main:first", "agent:main:repeated", "agent:main:moved"];
+    const archived = keys.map((key, index) =>
+      sessionRow(key, key.split(":").at(-1) ?? key, 3 - index, { archived: true }),
+    );
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse([archived[0]], { totalCount: 1 }),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
+      const remove = page.getByRole("button", { name: /Delete all archived/ });
+      await remove.waitFor();
+      await gateway.setMethodResponse("sessions.list", {
+        sequence: [
+          sessionsListResponse([archived[0], archived[1]], {
+            hasMore: true,
+            nextOffset: 2,
+            totalCount: 3,
+          }),
+          sessionsListResponse([archived[1]], {
+            offset: 2,
+            totalCount: 3,
+          }),
+          sessionsListResponse(archived, { totalCount: 3 }),
+        ],
+      });
+      await remove.click();
+      await confirmDelete(page, "styled-confirm-delete-archived.png");
+
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.delete")).map(
+            (request) => requireRecord(request.params).key,
+          ),
+        )
+        .toEqual(keys);
+      for (const request of await gateway.getRequests("sessions.delete")) {
+        expect(requireRecord(request.params)).toMatchObject({
+          archivedOnly: true,
+          deleteTranscript: true,
+        });
+      }
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("never deletes a hidden thread selected before changing the roster search", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const alpha = "agent:main:alpha";
+    const bravo = "agent:main:bravo";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: true },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(alpha, "Alpha", Date.parse("2026-07-01T15:00:00.000Z")),
+          sessionRow(bravo, "Bravo", Date.parse("2026-07-01T14:00:00.000Z")),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const rowFor = (label: string) =>
+        page.locator(".session-data-row").filter({ hasText: label });
+
+      await rowFor("Alpha").locator('input[type="checkbox"]').check();
+      await page.locator(".data-table-bulk-bar").getByText("1 selected").waitFor();
+      await page.locator('.sessions-toolbar__search input[type="text"]').fill("Bravo");
+
+      await expect.poll(() => rowFor("Alpha").count()).toBe(0);
+      await expect.poll(() => page.locator(".data-table-bulk-bar").count()).toBe(0);
+
+      await rowFor("Bravo").locator('input[type="checkbox"]').check();
+      await page
+        .locator(".data-table-bulk-bar")
+        .getByRole("button", { name: "Delete", exact: true })
+        .click();
+      await confirmDelete(page);
+      await gateway.waitForRequest("sessions.delete");
+
+      await expect
+        .poll(async () =>
+          (await gateway.getRequests("sessions.delete")).map(
+            (request) => requireRecord(request.params).key,
+          ),
+        )
+        .toEqual([bravo]);
+      const request = (await gateway.getRequests("sessions.delete"))[0];
+      expect(requireRecord(request?.params)).toMatchObject({
+        key: bravo,
+        deleteTranscript: true,
+      });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("archives a session from the Sessions page context menu and kebab", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(
+            "agent:main:research",
+            "Research notes",
+            Date.parse("2026-07-01T15:00:00.000Z"),
+            { hasActiveRun: true, status: "running" },
+          ),
+        ]),
+        "sessions.patch": {},
+      },
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions`);
+      const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+
+      await row.click({ button: "right" });
+      const menuHost = page.locator("openclaw-session-menu");
+      await menuHost
+        .getByRole("menuitem", { name: "Archive session" })
+        .waitFor({ state: "visible" });
+      await page.keyboard.press("Escape");
+
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      const archiveItem = menuHost.getByRole("menuitem", { name: "Archive session" });
+      expect(await archiveItem.isDisabled()).toBe(false);
+      expect(await menuHost.getByRole("menuitem", { name: "Delete…" }).isDisabled()).toBe(true);
+      await activateSelfRemovingControl(archiveItem);
+      const patch = await waitForPatch(
+        gateway,
+        (params) => params.key === "agent:main:research" && params.archived === true,
+      );
+      expect(requireRecord(patch.params)).toMatchObject({
+        archived: true,
+        expectedSessionId: "session:agent:main:research",
+        key: "agent:main:research",
+      });
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(1);
+      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
+      expect(await gateway.getRequests("agent.wait")).toEqual([]);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("removes an archived current thread from the sidebar before the patch resolves", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      recordVideo: captureUiProofEnabled
+        ? { dir: uiProofArtifactDir, size: { height: 900, width: 1280 } }
+        : undefined,
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const proofVideo = page.video();
+    const sessionKey = "agent:main:research";
+    const gateway = await installMockGateway(page, {
+      deferredMethods: ["sessions.patch"],
+      historyMessages: [
+        { role: "assistant", content: [{ type: "text", text: "Research thread content" }] },
+      ],
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(sessionKey, "Research notes", Date.parse("2026-07-01T15:00:00.000Z")),
+        ]),
+      },
+      sessionArchiveFiltering: true,
+      sessionKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      const row = page.locator(`[data-session-key="${sessionKey}"]`);
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await page.getByText("Research thread content").waitFor({ state: "visible" });
+      await captureUiProof(page, "archive-current-thread-before.png");
+      await row.hover();
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await activateSelfRemovingControl(page.getByRole("menuitem", { name: "Archive session" }));
+      await gateway.waitForRequest("sessions.patch");
+
+      await expect.poll(() => row.count()).toBe(0);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
+      await page.getByText("Research thread content").waitFor({ state: "visible" });
+      await captureUiProof(page, "archive-current-thread-pending.png");
+
+      await gateway.resolveDeferred("sessions.patch");
+      await expect.poll(() => row.count()).toBe(0);
+      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
+      await page.getByText("Research thread content").waitFor({ state: "visible" });
+      await captureUiProof(page, "archive-current-thread-complete.png");
+    } finally {
+      await context.close();
+      if (proofVideo) {
+        await proofVideo.saveAs(path.join(uiProofArtifactDir, "archive-current-thread.webm"));
+      }
+    }
+  });
+
+  // Batch archiving used to serialize one sessions.patch transaction per row.
+  // The whole selection now crosses the Gateway once and settles from one list.
+
+  it("archives a mixed active and idle sidebar multi-select in one RPC", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const batchKeys = ["agent:main:batch-a", "agent:main:batch-b", "agent:main:batch-c"] as const;
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", baseTime),
+          sessionRow(batchKeys[0], "Batch A", baseTime - 1_000),
+          sessionRow(batchKeys[1], "Batch B", baseTime - 2_000, {
+            hasActiveRun: true,
+            status: "running",
+          }),
+          sessionRow(batchKeys[2], "Batch C", baseTime - 3_000),
+        ]),
+        "sessions.patchMany": {
+          outcomes: batchKeys.map((key) => ({ ok: true, key, agentId: "main" })),
+        },
+      },
+      sessionArchiveFiltering: true,
+      sessionKey: "agent:main:main",
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const rowFor = (key: string) =>
+        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await rowFor(batchKeys[0]).waitFor({ state: "visible", timeout: 10_000 });
+      for (const key of batchKeys.slice(1)) {
+        await rowFor(key).waitFor({ state: "visible" });
+      }
+      const listCountBeforeBatch = (await gateway.getRequests("sessions.list")).length;
+
+      for (const key of batchKeys) {
+        await rowFor(key).click({ modifiers: ["Alt"] });
+      }
+      await rowFor(batchKeys[0]).click({ button: "right" });
+      const batchMenu = page.locator("openclaw-session-menu");
+      const archiveItem = batchMenu.getByRole("menuitem", { name: `Archive ${batchKeys.length}` });
+      await archiveItem.waitFor({ state: "visible", timeout: 10_000 });
+      expect(await archiveItem.isDisabled()).toBe(false);
+      expect(
+        await batchMenu.getByRole("menuitem", { name: `Delete ${batchKeys.length}…` }).isDisabled(),
+      ).toBe(true);
+      await captureUiProof(page, "sidebar-multi-select-archive-menu.png");
+      await page.keyboard.press("A");
+
+      const patchMany = await gateway.waitForRequest("sessions.patchMany");
+      const patchManyParams = requireRecord(patchMany.params);
+      expect(patchManyParams.patch).toEqual({ archived: true });
+      expect(patchManyParams.targets).toEqual(
+        batchKeys.map((key) => ({
+          key,
+          agentId: "main",
+          expectedSessionId: `session:${key}`,
+        })),
+      );
+      expect(await gateway.getRequests("sessions.patch")).toEqual([]);
+      expect(await gateway.getRequests("sessions.abort")).toEqual([]);
+      expect(await gateway.getRequests("agent.wait")).toEqual([]);
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length, { timeout: 10_000 })
+        .toBe(listCountBeforeBatch + 1);
+      for (const key of batchKeys) {
+        await rowFor(key).waitFor({ state: "detached" });
+      }
+      await expect.poll(() => page.locator("[data-sidebar-session-error]").count()).toBe(0);
+      await expect
+        .poll(() => page.locator(".app-toast").textContent())
+        .toContain("Archived 3 sessions");
+      await captureUiProof(page, "sidebar-multi-select-archive-settled.png");
+      await page.waitForTimeout(500);
+      expect((await gateway.getRequests("sessions.list")).length).toBe(listCountBeforeBatch + 1);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps the selected session through archive refreshes and restores the composer", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const sessionRows = Array.from({ length: 15 }, (_, index) => {
+      const row = sessionRow(
+        `agent:main:archive-refresh-${index}`,
+        `Archive refresh ${index}`,
+        baseTime - (index + 1) * 1_000,
+      );
+      return index === 2
+        ? {
+            ...row,
+            displayName: undefined,
+            label: undefined,
+            derivedTitle: `Archive refresh ${index}`,
+            parentSessionKey: "agent:main:main",
+            sessionId: `archive-refresh-${index}`,
+          }
+        : row;
+    });
+    const selected = sessionRows[2]!;
+    const selectedWithoutDerivedTitle = { ...selected, derivedTitle: undefined };
+    const archivedAt = baseTime + 1_000;
+    const archivedBy = { type: "human" as const, id: "profile-mira", label: "Mira" };
+    const batchRows = [sessionRows[0]!, sessionRows[1]!, sessionRows[3]!];
+    const gateway = await installMockGateway(page, {
+      featureMethods: [
+        "chat.metadata",
+        "chat.startup",
+        "progressCard.get",
+        "sessions.patch",
+        "sessions.patchMany",
+      ],
+      historyMessages: [
+        {
+          id: "archived-reply",
+          role: "assistant",
+          timestamp: baseTime - 2_000,
+          content: "Reply retained in the transcript.",
+          openclawDelivery: { replyToCurrent: true },
+        },
+      ],
+      methodResponses: {
+        "progressCard.get": {
+          card: {
+            revision: 1,
+            sessionKey: selected.key,
+            steps: [
+              { step: "Inspect archive", status: "completed" },
+              { step: "Finish archive", status: "in_progress" },
+            ],
+            updatedAt: baseTime,
+          },
+        },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", baseTime),
+          ...sessionRows,
+        ]),
+        "sessions.patchMany": {
+          outcomes: batchRows.map((row) => ({ ok: true, key: row.key, agentId: "main" })),
+        },
+        "sessions.patch": {},
+      },
+      sessionArchiveFiltering: true,
+      sessionKey: "agent:main:main",
+    });
+
+    const assertSelectedRoute = async (expectSidebarRow = true) => {
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(selected.key));
+      if (!expectSidebarRow) {
+        return;
+      }
+      const row = page.locator(`.sidebar-recent-session[data-session-key="${selected.key}"]`);
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(() => row.getAttribute("class"))
+        .toContain("sidebar-recent-session--active");
+    };
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const rowFor = (key: string) =>
+        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });
+      await rowFor(selected.key).locator("a").first().click();
+      await assertSelectedRoute();
+      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      const replyPreview = activePane.locator(".chat-reply-preview", {
+        hasText: "Replying to current message",
+      });
+      const progressCard = activePane.locator('[data-progress-card-placement="composer"]');
+      await replyPreview.waitFor({ state: "visible" });
+      await progressCard.waitFor({ state: "visible" });
+      await page.evaluate((sessionKey) => {
+        const titleHistory: string[] = [];
+        const paneTitleHistory: string[] = [];
+        const documentTitleHistory: string[] = [];
+        const sessionStateHistory: Array<{
+          gatewaySessionKey?: string;
+          loading?: boolean;
+          selectedTitle?: string;
+        }> = [];
+        const recordTitle = () => {
+          const row = [...document.querySelectorAll<HTMLElement>(".sidebar-recent-session")].find(
+            (candidate) => candidate.dataset.sessionKey === sessionKey,
+          );
+          const title = row
+            ?.querySelector(".sidebar-recent-session__name")
+            ?.textContent?.replace(/\s+/g, " ")
+            .trim();
+          if (title && titleHistory.at(-1) !== title) {
+            titleHistory.push(title);
+          }
+          const paneTitle = document
+            .querySelector(".chat-pane__session-title")
+            ?.textContent?.replace(/\s+/g, " ")
+            .trim();
+          if (paneTitle && paneTitleHistory.at(-1) !== paneTitle) {
+            paneTitleHistory.push(paneTitle);
+          }
+          if (document.title && documentTitleHistory.at(-1) !== document.title) {
+            documentTitleHistory.push(document.title);
+          }
+        };
+        new MutationObserver(recordTitle).observe(document.documentElement, {
+          childList: true,
+          characterData: true,
+          subtree: true,
+        });
+        recordTitle();
+        (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory = titleHistory;
+        (
+          window as Window & {
+            archivePaneTitleHistory?: string[];
+            archiveDocumentTitleHistory?: string[];
+          }
+        ).archivePaneTitleHistory = paneTitleHistory;
+        (
+          window as Window & {
+            archivePaneTitleHistory?: string[];
+            archiveDocumentTitleHistory?: string[];
+            archiveSessionStateHistory?: typeof sessionStateHistory;
+          }
+        ).archiveDocumentTitleHistory = documentTitleHistory;
+        const shell = document.querySelector("openclaw-app-shell") as HTMLElement & {
+          runtime?: {
+            context?: {
+              gateway?: { snapshot?: { sessionKey?: string } };
+              sessions?: {
+                subscribe: (
+                  listener: (state: {
+                    loading?: boolean;
+                    result?: { sessions?: Array<{ key: string; derivedTitle?: string }> } | null;
+                  }) => void,
+                ) => () => void;
+              };
+            };
+          };
+        };
+        shell.runtime?.context?.sessions?.subscribe((state) => {
+          const selectedRow = state.result?.sessions?.find((session) => session.key === sessionKey);
+          sessionStateHistory.push({
+            gatewaySessionKey: shell.runtime?.context?.gateway?.snapshot?.sessionKey,
+            loading: state.loading,
+            selectedTitle: selectedRow?.derivedTitle,
+          });
+        });
+        (
+          window as Window & {
+            archiveSessionStateHistory?: typeof sessionStateHistory;
+          }
+        ).archiveSessionStateHistory = sessionStateHistory;
+      }, selected.key);
+
+      for (const row of batchRows) {
+        await rowFor(row.key).click({ modifiers: ["Alt"] });
+      }
+      await rowFor(batchRows[0]!.key).click({ button: "right" });
+      const batchMenu = page.locator("openclaw-session-menu");
+      await activateSelfRemovingControl(
+        batchMenu.getByRole("menuitem", { name: `Archive ${batchRows.length}` }),
+      );
+      await gateway.waitForRequest("sessions.patchMany");
+      for (const row of batchRows) {
+        await gateway.emitGatewayEvent("sessions.changed", {
+          ...row,
+          archived: true,
+          reason: "update",
+          sessionKey: row.key,
+        });
+        await assertSelectedRoute();
+      }
+
+      const selectedRow = rowFor(selected.key);
+      await gateway.setMethodResponse("sessions.describe", {
+        session: { ...selectedWithoutDerivedTitle, archived: true, archivedAt, archivedBy },
+      });
+      await selectedRow.hover();
+      await selectedRow.getByRole("button", { name: "Open session menu" }).click();
+      await activateSelfRemovingControl(
+        page.locator("openclaw-session-menu").getByRole("menuitem", {
+          name: "Archive session",
+        }),
+      );
+      await waitForPatch(
+        gateway,
+        (params) => params.key === selected.key && params.archived === true,
+      );
+      const archiveToast = page.locator("openclaw-toast-host .app-toast");
+      await expect.poll(() => archiveToast.textContent()).toContain("Session archived");
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...selected,
+        archived: true,
+        archivedAt,
+        archivedBy,
+        reason: "update",
+        sessionKey: selected.key,
+      });
+      await selectedRow.waitFor({ state: "detached", timeout: 10_000 });
+
+      await assertSelectedRoute(false);
+      expect(
+        await page.evaluate(
+          () => (window as Window & { archiveTitleHistory?: string[] }).archiveTitleHistory ?? [],
+        ),
+      ).toEqual(["Archive refresh 2"]);
+      const sessionStateHistory = await page.evaluate(
+        () =>
+          (
+            window as Window & {
+              archiveSessionStateHistory?: Array<{
+                gatewaySessionKey?: string;
+                loading?: boolean;
+                selectedTitle?: string;
+              }>;
+            }
+          ).archiveSessionStateHistory ?? [],
+      );
+      const missingTitleSnapshot = sessionStateHistory.find(
+        (snapshot) => snapshot.selectedTitle !== "Archive refresh 2",
+      );
+      if (missingTitleSnapshot) {
+        throw new Error(`Selected title changed: ${JSON.stringify(sessionStateHistory)}`);
+      }
+      expect(
+        await page.evaluate(
+          () =>
+            (
+              window as Window & {
+                archivePaneTitleHistory?: string[];
+              }
+            ).archivePaneTitleHistory ?? [],
+        ),
+      ).toEqual(["Archive refresh 2"]);
+      expect(
+        await page.evaluate(
+          () =>
+            (
+              window as Window & {
+                archiveDocumentTitleHistory?: string[];
+              }
+            ).archiveDocumentTitleHistory ?? [],
+        ),
+      ).not.toContain("New session — OpenClaw");
+      const archivedNotice = activePane.locator(".agent-chat__disabled-banner");
+      await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
+      await expect.poll(() => activePane.locator(".agent-chat__input").count()).toBe(0);
+      await expect.poll(() => replyPreview.locator(".session-run-spinner").count()).toBe(0);
+      await expect.poll(() => progressCard.count()).toBe(0);
+      const archiveEvent = activePane.locator(".chat-notice", { hasText: "Archived by Mira" });
+      await archiveEvent.waitFor({ state: "visible", timeout: 10_000 });
+      await captureUiProof(page, "archive-attribution-notice-after.png");
+      await expect
+        .poll(() => activePane.locator(".chat-bubble", { hasText: "Archived by Mira" }).count())
+        .toBe(0);
+
+      await archiveToast.getByRole("button", { name: "Dismiss" }).click();
+      await archiveToast.waitFor({ state: "detached" });
+      await activateSelfRemovingControl(archivedNotice.getByRole("button", { name: "Unarchive" }));
+      await waitForPatch(
+        gateway,
+        (params) => params.key === selected.key && params.archived === false,
+      );
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...selected,
+        archived: false,
+        archivedAt: null,
+        archivedBy: null,
+        reason: "update",
+        sessionKey: selected.key,
+      });
+
+      await assertSelectedRoute();
+      await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
+      await archiveEvent.waitFor({ state: "detached", timeout: 10_000 });
+      await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
+      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await progressCard.waitFor({ state: "visible" });
+      await expect
+        .poll(() =>
+          activePane.evaluate(
+            (element) => (element as HTMLElement & { sessionKey?: string }).sessionKey,
+          ),
+        )
+        .toBe(selected.key);
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("keeps archive state after navigating away and back", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
+    const main = sessionRow("agent:main:main", "Main", baseTime);
+    const target = {
+      ...sessionRow(
+        "agent:main:dashboard:navigation-target",
+        "Navigation target",
+        baseTime - 1_000,
+      ),
+      parentSessionKey: main.key,
+      sessionId: "navigation-target",
+    };
+    const archived = {
+      ...sessionRow(
+        "agent:main:dashboard:navigation-archive",
+        "Navigation archive",
+        baseTime - 2_000,
+      ),
+      parentSessionKey: main.key,
+      sessionId: "navigation-archive",
+    };
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([main, target, archived]),
+        "sessions.patch": {},
+      },
+      sessionKey: main.key,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, archived.key));
+      const sidebar = page.locator("openclaw-app-sidebar");
+      const rowFor = (key: string) =>
+        sidebar.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
+      const archivedRow = rowFor(archived.key);
+      await archivedRow.waitFor({ state: "visible", timeout: 10_000 });
+      await archivedRow.hover();
+      await archivedRow.getByRole("button", { name: "Open session menu" }).click();
+      await activateSelfRemovingControl(
+        page.locator("openclaw-session-menu").getByRole("menuitem", {
+          name: "Archive session",
+        }),
+      );
+      await waitForPatch(
+        gateway,
+        (params) => params.key === archived.key && params.archived === true,
+      );
+      const archivedNotice = page
+        .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+        .locator(".agent-chat__disabled-banner");
+      await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
+
+      await rowFor(target.key).click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(target.key));
+      await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
+
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse([main, target]));
+      let listRequestCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...target,
+        updatedAt: baseTime + 1_000,
+        reason: "update",
+        sessionKey: target.key,
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(listRequestCount);
+
+      await gateway.setMethodResponse(
+        "sessions.list",
+        sessionsListResponse([
+          { ...main, updatedAt: baseTime + 2_000 },
+          { ...target, updatedAt: baseTime + 3_000 },
+          { ...archived, archived: false, updatedAt: baseTime + 3_000 },
+        ]),
+      );
+      listRequestCount = (await gateway.getRequests("sessions.list")).length;
+      await gateway.emitGatewayEvent("sessions.changed", {
+        ...target,
+        updatedAt: baseTime + 2_000,
+        reason: "update",
+        sessionKey: target.key,
+      });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(listRequestCount);
+
+      await page.goBack();
+      await expect
+        .poll(() => new URL(page.url()).pathname)
+        .toBe(controlUiSessionPath(archived.key));
+      await archivedNotice.waitFor({ state: "visible", timeout: 10_000 });
+      await expect.poll(() => archivedNotice.textContent()).toContain("This session is archived.");
+      await archivedRow.waitFor({ state: "detached", timeout: 10_000 });
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("recovers a deleted active chat without repeatedly resolving its missing session", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const routeErrors: string[] = [];
+    page.on("console", (message) => {
+      if (message.type() === "error" && message.text().includes("route")) {
+        routeErrors.push(message.text());
+      }
+    });
+    const deletedKey = "agent:main:deleted-thread";
+    const mainKey = "agent:main:main";
+    const updatedAt = Date.parse("2026-07-01T16:00:00.000Z");
+    const mainSession = sessionRow(mainKey, "Main", updatedAt);
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          mainSession,
+          sessionRow(deletedKey, "Deleted thread", updatedAt - 1_000),
+        ]),
+      },
+      sessionKey: mainKey,
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, deletedKey));
+      const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
+      await activePane
+        .locator(".agent-chat__input textarea")
+        .waitFor({ state: "visible", timeout: 10_000 });
+
+      const requestsBeforeDeletion = (await gateway.getRequests("sessions.list")).length;
+      await gateway.setMethodResponse("sessions.list", sessionsListResponse([mainSession]));
+      await gateway.emitGatewayEvent("sessions.changed", {
+        agentId: "main",
+        reason: "delete",
+        sessionKey: deletedKey,
+      });
+
+      await expect
+        .poll(() => new URL(page.url()).pathname, { timeout: 15_000 })
+        .toBe(controlUiSessionPath(mainKey));
+      await expect
+        .poll(() =>
+          activePane.evaluate(
+            (element) => (element as HTMLElement & { sessionKey?: string }).sessionKey,
+          ),
+        )
+        .toBe(mainKey);
+      await activePane
+        .locator(".agent-chat__input textarea")
+        .waitFor({ state: "visible", timeout: 10_000 });
+      await expect
+        .poll(async () => (await gateway.getRequests("sessions.list")).length)
+        .toBeGreaterThan(requestsBeforeDeletion);
+      await expect
+        .poll(
+          async () => {
+            const count = (await gateway.getRequests("sessions.list")).length;
+            await new Promise((resolve) => {
+              setTimeout(resolve, 350);
+            });
+            return (await gateway.getRequests("sessions.list")).length - count;
+          },
+          { timeout: 5_000 },
+        )
+        .toBe(0);
+
+      const settledRequestCount = (await gateway.getRequests("sessions.list")).length;
+      await expectRequestCountStable(gateway, "sessions.list", settledRequestCount);
+      expect(routeErrors).toEqual([]);
+      await captureUiProof(page, "deleted-active-session-fallback.png");
+    } finally {
+      await context.close();
+    }
+  });
+
+  it("archive-gates a row-menu delete and keeps the row when the Gateway reports no deletion", async () => {
+    const context = await suite.browser.newContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const key = "agent:main:research";
+    const gateway = await installMockGateway(page, {
+      methodResponses: {
+        "sessions.delete": { ok: true, deleted: false },
+        "sessions.list": sessionsListResponse([
+          sessionRow("agent:main:main", "Main", Date.parse("2026-07-01T16:00:00.000Z")),
+          sessionRow(key, "Research notes", Date.parse("2026-07-01T15:00:00.000Z"), {
+            archived: true,
+          }),
+        ]),
+      },
+      sessionKey: "agent:main:main",
+    });
+    try {
+      await page.goto(`${suite.server.baseUrl}sessions?status=archived`);
+      const row = page.locator(".session-data-row").filter({ hasText: "Research notes" });
+      await row.waitFor({ state: "visible", timeout: 10_000 });
+
+      await row.getByRole("button", { name: "Open session menu" }).click();
+      await activateSelfRemovingControl(
+        page.locator("openclaw-session-menu").getByRole("menuitem", { name: "Delete…" }),
+      );
+      await confirmDelete(page);
+
+      const request = await gateway.waitForRequest("sessions.delete");
+      expect(requireRecord(request.params)).toMatchObject({
+        archivedOnly: true,
+        deleteTranscript: true,
+        expectedSessionId: `session:${key}`,
+        key,
+      });
+      await row.waitFor({ state: "visible" });
+    } finally {
+      await context.close();
+    }
+  });
+});

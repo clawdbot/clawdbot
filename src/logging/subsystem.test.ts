@@ -1,10 +1,12 @@
 // Subsystem logger tests cover per-subsystem log routing and filtering.
 import fs from "node:fs";
 import path from "node:path";
+import { Logger as TsLogger } from "tslog";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { setConsoleSubsystemFilter, shouldLogSubsystemToConsole } from "./console.js";
 import { createSuiteLogPathTracker } from "./log-test-helpers.js";
-import { resetLogger, setLoggerOverride } from "./logger.js";
+import { applyLoggingConfig, resetLogger, setLoggerOverride } from "./logger.js";
+import { testApi } from "./logger.test-support.js";
 import { loggingState } from "./state.js";
 import { createSubsystemLogger } from "./subsystem.js";
 
@@ -39,6 +41,7 @@ afterEach(() => {
   loggingState.rawConsole = null;
   resetLogger();
   vi.unstubAllEnvs();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -148,7 +151,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
-  it("keeps setup-inference probe warnings in the file log while suppressing console", () => {
+  it("keeps setup-inference probe warnings in the file log while suppressing console", async () => {
     const file = logPathTracker.nextPath();
     setLoggerOverride({ level: "warn", consoleLevel: "warn", file });
     const warn = installConsoleMethodSpy("warn");
@@ -166,6 +169,7 @@ describe("createSubsystemLogger().isEnabled", () => {
     });
 
     expect(warn).not.toHaveBeenCalled();
+    await testApi.flushFileLogQueueForTests();
     const fileLog = fs.readFileSync(file, "utf8");
     expect(fileLog).toContain("embedded run failover decision");
     expect(fileLog).toContain("embedded run agent end");
@@ -295,7 +299,47 @@ describe("createSubsystemLogger().isEnabled", () => {
     expect(written).toContain("sk-raw…3456");
   });
 
-  it("keeps long-lived subsystem loggers on the current-day rolling file", () => {
+  it("wraps raw subsystem output when console style is JSON", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle: "json" });
+    const logSpy = installConsoleMethodSpy("log");
+
+    createSubsystemLogger("gateway/auth").raw("raw diagnostic");
+
+    expect(logSpy).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(firstMockArgAsString(logSpy))).toMatchObject({
+      level: "info",
+      subsystem: "gateway/auth",
+      message: "raw diagnostic",
+    });
+  });
+
+  it.each(["pretty", "compact"] as const)(
+    "keeps raw subsystem output unchanged in %s style",
+    (consoleStyle) => {
+      setLoggerOverride({ level: "silent", consoleLevel: "info", consoleStyle });
+      const logSpy = installConsoleMethodSpy("log");
+
+      createSubsystemLogger("gateway/auth").raw("raw diagnostic");
+
+      expect(logSpy).toHaveBeenCalledWith("raw diagnostic");
+    },
+  );
+
+  it("preserves structured subsystem fields through the shared JSON formatter", () => {
+    setLoggerOverride({ level: "silent", consoleLevel: "warn", consoleStyle: "json" });
+    const warn = installConsoleMethodSpy("warn");
+
+    createSubsystemLogger("gateway/auth").warn("authentication retry", { attempt: 2 });
+
+    expect(JSON.parse(firstMockArgAsString(warn))).toMatchObject({
+      level: "warn",
+      subsystem: "gateway/auth",
+      message: "authentication retry",
+      attempt: 2,
+    });
+  });
+
+  it("keeps long-lived subsystem loggers on the current-day rolling file", async () => {
     const logDir = path.dirname(logPathTracker.nextPath());
     const firstDay = path.join(logDir, "openclaw-2026-01-01.log");
     const secondDay = path.join(logDir, "openclaw-2026-01-02.log");
@@ -307,9 +351,46 @@ describe("createSubsystemLogger().isEnabled", () => {
     log.info("first day subsystem log");
     vi.setSystemTime(new Date("2026-01-02T08:00:00Z"));
     log.info("second day subsystem log");
+    await testApi.flushFileLogQueueForTests();
 
     expect(fs.readFileSync(firstDay, "utf8")).toContain("first day subsystem log");
     expect(fs.readFileSync(secondDay, "utf8")).toContain("second day subsystem log");
     expect(fs.readFileSync(firstDay, "utf8")).not.toContain("second day subsystem log");
+  });
+
+  it("reuses its file child until logger invalidation advances the generation", () => {
+    const firstFile = logPathTracker.nextPath();
+    const secondFile = logPathTracker.nextPath();
+    const getSubLogger = vi.spyOn(TsLogger.prototype, "getSubLogger");
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file: firstFile });
+    const log = createSubsystemLogger("diagnostics");
+
+    log.info("first line");
+    log.info("second line");
+    expect(getSubLogger).toHaveBeenCalledTimes(1);
+
+    resetLogger();
+    setLoggerOverride({ level: "info", consoleLevel: "silent", file: secondFile });
+    log.info("after reset");
+    expect(getSubLogger).toHaveBeenCalledTimes(2);
+  });
+
+  it("publishes applied config and rebuilds its child for the new generation", () => {
+    const firstFile = logPathTracker.nextPath();
+    const secondFile = logPathTracker.nextPath();
+    vi.stubEnv("OPENCLAW_TEST_FILE_LOG", "1");
+    applyLoggingConfig({ level: "info", consoleLevel: "silent", file: firstFile });
+    const getSubLogger = vi.spyOn(TsLogger.prototype, "getSubLogger");
+    const log = createSubsystemLogger("diagnostics");
+
+    log.info("first line");
+    log.info("second line");
+    expect(getSubLogger).toHaveBeenCalledTimes(1);
+    expect(log.isEnabled("debug", "file")).toBe(false);
+
+    applyLoggingConfig({ level: "debug", consoleLevel: "silent", file: secondFile });
+    expect(log.isEnabled("debug", "file")).toBe(true);
+    log.debug("after applied config");
+    expect(getSubLogger).toHaveBeenCalledTimes(2);
   });
 });

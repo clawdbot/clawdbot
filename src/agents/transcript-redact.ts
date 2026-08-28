@@ -1,190 +1,74 @@
+import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-payload-policy";
 /**
  * Agent transcript redaction helpers.
  *
  * Applies logging redaction rules to persisted messages while preserving unchanged object identity.
  */
-import {
-  sanitizeInlineImageBase64,
-  sanitizeInlineImageDataUrlForStorage,
-} from "@openclaw/media-core/inline-image-data-url";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
+import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
 import {
-  getDefaultRedactPatterns,
-  redactSensitiveFieldValue,
+  redactModelVisibleSensitiveFieldValueWithConfig,
+  redactModelVisibleToolPayloadTextWithConfig,
+  redactSensitiveFieldValueWithConfig,
   redactSensitiveText,
+  redactToolPayloadTextWithConfig,
 } from "../logging/redact.js";
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import {
+  copyCodeModeSourceAppend,
+  readCodeModeSourceFields,
+  type CodeModeSourceAppend,
+} from "./transcript-code-mode-source.js";
+import {
+  sanitizeTranscriptImageDataUrlField,
+  sanitizeTranscriptImageRecord,
+  shouldPreserveNestedTranscriptImageDataUrlFields,
+  shouldPreserveTranscriptImagePayload,
+} from "./transcript-redact-images.js";
+import { sanitizeCompactionReplayState } from "./transcript-redact-replay.js";
 
-function resolveTranscriptRedactPatterns(patterns?: string[]) {
-  return patterns && patterns.length > 0 ? [...patterns, ...getDefaultRedactPatterns()] : undefined;
-}
-
-function redactTranscriptOptions(cfg?: OpenClawConfig) {
+function resolveTranscriptLoggingConfig(cfg?: OpenClawConfig) {
   const configuredLogging = readLoggingConfig();
-  const mode = cfg?.logging?.redactSensitive ?? configuredLogging?.redactSensitive;
-  const patterns = resolveTranscriptRedactPatterns(
-    cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns,
-  );
-  if (mode === undefined && patterns === undefined) {
-    return undefined;
-  }
-  return {
-    ...(mode !== undefined ? { mode } : {}),
-    ...(patterns !== undefined ? { patterns } : {}),
-  };
+  const redactPatterns = cfg?.logging?.redactPatterns ?? configuredLogging?.redactPatterns;
+  return redactPatterns ? { redactPatterns } : undefined;
 }
 
-function isTranscriptRedactionDisabled(cfg?: OpenClawConfig): boolean {
-  return (cfg?.logging?.redactSensitive ?? readLoggingConfig()?.redactSensitive) === "off";
-}
-
-function redactTranscriptText(value: string, cfg?: OpenClawConfig): string {
-  if (cfg?.logging?.redactSensitive === "off") {
-    return value;
-  }
-  return redactSensitiveText(value, redactTranscriptOptions(cfg));
+function redactTranscriptText(
+  value: string,
+  cfg?: OpenClawConfig,
+  modelVisibleToolResult = false,
+): string {
+  const loggingConfig = resolveTranscriptLoggingConfig(cfg);
+  return modelVisibleToolResult
+    ? redactModelVisibleToolPayloadTextWithConfig(value, loggingConfig)
+    : redactToolPayloadTextWithConfig(value, loggingConfig);
 }
 
 function redactTranscriptStructuredFieldValue(
   key: string,
   value: string,
   cfg?: OpenClawConfig,
+  modelVisibleToolResult = false,
 ): string {
-  if (cfg?.logging?.redactSensitive === "off") {
-    return value;
-  }
-  return redactSensitiveFieldValue(key, value, redactTranscriptOptions(cfg));
+  // Preserve pagination state only in transcripts; value-pattern and global log redaction remain.
+  return /^(?:next[_-]?)?page[_-]?token$|^page[_-]?cursor$/i.test(key)
+    ? redactTranscriptText(value, cfg, modelVisibleToolResult)
+    : modelVisibleToolResult
+      ? redactModelVisibleSensitiveFieldValueWithConfig(
+          key,
+          value,
+          resolveTranscriptLoggingConfig(cfg),
+        )
+      : redactSensitiveFieldValueWithConfig(key, value, resolveTranscriptLoggingConfig(cfg));
 }
 
 function isPlainTranscriptObject(value: object): value is Record<string, unknown> {
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
-}
-
-function isImageMimeType(value: unknown): value is string {
-  return typeof value === "string" && /^image\//iu.test(value.trim());
-}
-
-function normalizeImageMimeType(value: unknown): string | undefined {
-  return isImageMimeType(value) ? value.trim().toLowerCase() : undefined;
-}
-
-function imageMimeTypeForRecord(value: Record<string, unknown>): string | undefined {
-  return (
-    normalizeImageMimeType(value.mimeType) ??
-    normalizeImageMimeType(value.mediaType) ??
-    normalizeImageMimeType(value.media_type)
-  );
-}
-
-function imageMimeTypeFieldsForRecord(value: Record<string, unknown>): string[] {
-  return ["mimeType", "mediaType", "media_type"].filter((key) => isImageMimeType(value[key]));
-}
-
-function sanitizeOpaqueImageBase64(
-  base64: string,
-  mimeType: string | undefined,
-): { mimeType: string; base64: string } | undefined {
-  return mimeType ? sanitizeInlineImageBase64({ mimeType, base64 }) : undefined;
-}
-
-function isValidOpaqueImageBase64(base64: string, mimeType: string | undefined): boolean {
-  return sanitizeOpaqueImageBase64(base64, mimeType) !== undefined;
-}
-
-function isTranscriptImageContentBlock(value: Record<string, unknown>): boolean {
-  return (
-    value.type === "image" &&
-    typeof value.data === "string" &&
-    isValidOpaqueImageBase64(value.data, imageMimeTypeForRecord(value))
-  );
-}
-
-function isImageBase64SourceBlock(value: Record<string, unknown>): boolean {
-  return (
-    value.type === "base64" &&
-    typeof value.data === "string" &&
-    isValidOpaqueImageBase64(value.data, imageMimeTypeForRecord(value))
-  );
-}
-
-function sanitizeImageRecord(source: Record<string, unknown>): Record<string, unknown> | undefined {
-  const isImageBlock = source.type === "image";
-  const isBase64SourceBlock = source.type === "base64";
-  if ((!isImageBlock && !isBase64SourceBlock) || typeof source.data !== "string") {
-    return undefined;
-  }
-  const mimeTypeFields = imageMimeTypeFieldsForRecord(source);
-  if (mimeTypeFields.length === 0) {
-    return undefined;
-  }
-  const sanitized = sanitizeOpaqueImageBase64(source.data, imageMimeTypeForRecord(source));
-  if (!sanitized) {
-    return undefined;
-  }
-  const hasCanonicalMimeTypes = mimeTypeFields.every((key) => source[key] === sanitized.mimeType);
-  if (source.data === sanitized.base64 && hasCanonicalMimeTypes) {
-    return source;
-  }
-  const next: Record<string, unknown> = { ...source, data: sanitized.base64 };
-  for (const field of mimeTypeFields) {
-    next[field] = sanitized.mimeType;
-  }
-  return next;
-}
-
-function startsWithDataUrl(value: string): boolean {
-  return value.slice(0, "data:".length).toLowerCase() === "data:";
-}
-
-function sanitizeImageDataUrlField(
-  source: Record<string, unknown>,
-  key: string,
-  value: string,
-): string | undefined {
-  if (!startsWithDataUrl(value)) {
-    return undefined;
-  }
-  const isImageDataUrlField =
-    (source.type === "input_image" && key === "image_url") ||
-    ((source.type === "image" || source.type === "image_url") && key === "url") ||
-    (source.type === "image" && (key === "source" || key === "data"));
-  return isImageDataUrlField ? sanitizeInlineImageDataUrlForStorage(value) : undefined;
-}
-
-function shouldPreserveOpaqueImagePayload(
-  source: Record<string, unknown>,
-  key: string,
-  item: unknown,
-  preserveImageDataUrlFields: boolean,
-): boolean {
-  if (typeof item !== "string") {
-    return false;
-  }
-  if (
-    key === "data" &&
-    (isTranscriptImageContentBlock(source) || isImageBase64SourceBlock(source))
-  ) {
-    return true;
-  }
-  if (preserveImageDataUrlFields && key === "url") {
-    return startsWithDataUrl(item) && sanitizeInlineImageDataUrlForStorage(item) !== undefined;
-  }
-  return sanitizeImageDataUrlField(source, key, item) !== undefined;
-}
-
-function shouldPreserveNestedImageDataUrlFields(
-  source: Record<string, unknown>,
-  key: string,
-): boolean {
-  return (
-    key === "image_url" &&
-    (source.type === "image_url" || source.type === "input_image" || source.type === "image")
-  );
 }
 
 type TranscriptValueLocation =
@@ -200,13 +84,6 @@ type TranscriptAssistantRoute = {
   provider?: string;
 };
 
-const OPENAI_RESPONSES_APIS = new Set([
-  "openai-responses",
-  "azure-openai-responses",
-  "openai-chatgpt-responses",
-  "openclaw-openai-responses-transport",
-  "openclaw-azure-openai-responses-transport",
-]);
 const GOOGLE_REASONING_APIS = new Set([
   "google-generative-ai",
   "google-vertex",
@@ -225,10 +102,19 @@ const OPENAI_COMPLETIONS_APIS = new Set([
 const OPAQUE_REPLAY_TOKEN_RE = /^[A-Za-z0-9+/_-]+={0,2}$/;
 const GOOGLE_THOUGHT_SIGNATURE_RE =
   /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-f0-9]{16}$/;
+// Transport replay fences use the two-word base-36 output from shortHash.
+const OPENAI_REPLAY_CONTEXT_HASH_RE = /^[a-z0-9]{2,16}$/;
+
+function isOpenAIReplayContextHash(value: unknown): value is string {
+  return typeof value === "string" && OPENAI_REPLAY_CONTEXT_HASH_RE.test(value);
+}
+
+function isOpenAIResponsesApi(api: string): boolean {
+  return OPENAI_RESPONSES_APIS.has(api);
+}
 
 function isOpenAIResponsesRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_RESPONSES_APIS.has(route.api);
+  return typeof route?.api === "string" && isOpenAIResponsesApi(route.api);
 }
 
 function isGoogleReasoningRoute(route: TranscriptAssistantRoute | undefined): boolean {
@@ -239,9 +125,8 @@ function isAnthropicReasoningRoute(route: TranscriptAssistantRoute | undefined):
   return typeof route?.api === "string" && ANTHROPIC_REASONING_APIS.has(route.api);
 }
 
-function isOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
-  return typeof route?.api === "string" && OPENAI_COMPLETIONS_APIS.has(route.api);
-}
+const isOpenAICompletionsRoute = (route?: TranscriptAssistantRoute) =>
+  OPENAI_COMPLETIONS_APIS.has(route?.api ?? "");
 
 function isGoogleOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefined): boolean {
   return (
@@ -249,6 +134,17 @@ function isGoogleOpenAICompletionsRoute(route: TranscriptAssistantRoute | undefi
     (route?.provider === "google" ||
       route?.endpointClass === "google-generative-ai" ||
       route?.endpointClass === "google-vertex")
+  );
+}
+
+function isVeniceGeminiOpenAICompletionsRoute(
+  route: TranscriptAssistantRoute | undefined,
+): boolean {
+  return (
+    isOpenAICompletionsRoute(route) &&
+    route?.provider === "venice" &&
+    typeof route.model === "string" &&
+    /(?:^|\/)gemini-/.test(route.model.trim().toLowerCase())
   );
 }
 
@@ -310,7 +206,7 @@ function resolveTranscriptAssistantRoute(
     ? findNormalizedProviderValue(cfg?.models?.providers, provider)
     : undefined;
   const modelConfig = model
-    ? providerConfig?.models.find((candidate) => candidate.id === model)
+    ? providerConfig?.models?.find((candidate) => candidate.id === model)
     : undefined;
   const baseUrl = modelConfig?.baseUrl ?? providerConfig?.baseUrl;
   const endpointClass = baseUrl ? resolveProviderEndpoint(baseUrl).endpointClass : undefined;
@@ -338,6 +234,17 @@ function isOpenAIResponseItemId(
 ): boolean {
   return isSafeReplayIdentifier(value, isGitHubCopilotResponsesRoute(route) ? 64 : 512);
 }
+
+const replaySanitizerHelpers = {
+  isAnthropicReasoningRoute,
+  isOpenAIReplayContextHash,
+  isOpenAIResponseItemId,
+  isOpenAIResponsesApi,
+  isOpenAIResponsesRoute,
+  isPlainTranscriptObject,
+  isStructurallyValidOpaqueReplayToken,
+  redactTranscriptText,
+};
 
 function isOpenAITextSignature(
   value: string,
@@ -401,15 +308,9 @@ function sanitizeOpenAIReasoningReplayMetadata(
     value.provider !== route?.provider ||
     value.api !== route.api ||
     value.model !== route.model ||
-    (value.baseUrlHash !== undefined &&
-      (typeof value.baseUrlHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.baseUrlHash))) ||
-    (value.sessionHash !== undefined &&
-      (typeof value.sessionHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.sessionHash))) ||
-    (value.authProfileHash !== undefined &&
-      (typeof value.authProfileHash !== "string" ||
-        !OPENAI_REPLAY_CONTEXT_HASH_RE.test(value.authProfileHash)))
+    (value.baseUrlHash !== undefined && !isOpenAIReplayContextHash(value.baseUrlHash)) ||
+    (value.sessionHash !== undefined && !isOpenAIReplayContextHash(value.sessionHash)) ||
+    (value.authProfileHash !== undefined && !isOpenAIReplayContextHash(value.authProfileHash))
   ) {
     return undefined;
   }
@@ -453,7 +354,11 @@ function shouldPreserveOpaqueProviderPayload(
   if (isGoogleReasoningRoute(route) && isGoogleSlot) {
     return isGoogleThoughtSignature(item);
   }
-  if (isGoogleOpenAICompletionsRoute(route) && type === "toolCall" && key === "thoughtSignature") {
+  if (
+    (isGoogleOpenAICompletionsRoute(route) || isVeniceGeminiOpenAICompletionsRoute(route)) &&
+    type === "toolCall" &&
+    key === "thoughtSignature"
+  ) {
     // The OpenAI-compatible transport captures provider-owned opaque signatures
     // such as SIG-OPAQUE-ABC==; native Google routes require standard base64.
     return isStructurallyValidOpaqueReplayToken(item);
@@ -583,12 +488,15 @@ function redactTranscriptStructuredValue(
   preserveImageDataUrlFields = false,
   location: TranscriptValueLocation = "nested",
   assistantRoute?: TranscriptAssistantRoute,
+  modelVisibleToolResult = false,
+  sourceFields?: ReadonlyMap<string, string>,
+  sourceSlots?: ReadonlyMap<object, ReadonlyMap<string, string>>,
 ): unknown {
   if (typeof value === "string") {
     if (fieldKey) {
-      return redactTranscriptStructuredFieldValue(fieldKey, value, cfg);
+      return redactTranscriptStructuredFieldValue(fieldKey, value, cfg, modelVisibleToolResult);
     }
-    return redactTranscriptText(value, cfg);
+    return redactTranscriptText(value, cfg, modelVisibleToolResult);
   }
   if (Array.isArray(value)) {
     if (seen.has(value)) {
@@ -605,6 +513,9 @@ function redactTranscriptStructuredValue(
         preserveImageDataUrlFields,
         location === "assistant-content-array" ? "assistant-content-block" : "nested",
         assistantRoute,
+        modelVisibleToolResult,
+        undefined,
+        sourceSlots,
       );
       changed ||= next !== item;
       return next;
@@ -627,7 +538,7 @@ function redactTranscriptStructuredValue(
   }
 
   seen.add(value);
-  const sanitizedImageRecord = sanitizeImageRecord(value);
+  const sanitizedImageRecord = sanitizeTranscriptImageRecord(value);
   const source = sanitizedImageRecord ?? value;
   const currentAssistantRoute =
     location === "root" && source.role === "assistant"
@@ -638,6 +549,37 @@ function redactTranscriptStructuredValue(
     next = { ...source };
   }
   for (const [key, item] of Object.entries(source)) {
+    // The append transaction owns this control-plane identity. Redacting it would
+    // make stored dedupe disagree with the admitted message identity.
+    if (location === "root" && key === "idempotencyKey") {
+      continue;
+    }
+    // Correlation keys must match live events; nested payload lookalikes are still redacted.
+    if (
+      typeof item === "string" &&
+      ((location === "root" && source.role === "toolResult" && key === "toolCallId") ||
+        (location === "assistant-content-block" && source.type === "toolCall" && key === "id"))
+    ) {
+      continue;
+    }
+    if (location === "root" && source.role === "assistant" && key === "providerReplay") {
+      const sanitizedReplay = sanitizeCompactionReplayState(
+        item,
+        currentAssistantRoute,
+        cfg,
+        replaySanitizerHelpers,
+      );
+      if (sanitizedReplay !== undefined) {
+        if (sanitizedReplay !== item) {
+          next ??= { ...source };
+          next[key] = sanitizedReplay;
+        }
+        continue;
+      }
+      next ??= { ...source };
+      delete next[key];
+      continue;
+    }
     if (
       location === "assistant-content-block" &&
       (isOpenAIResponsesRoute(currentAssistantRoute) ||
@@ -673,7 +615,11 @@ function redactTranscriptStructuredValue(
     }
     if (
       location === "assistant-content-block" &&
+      // These transports use the same validated v1 phase signature for pre-tool commentary;
+      // stripping it would resurface narration after reload or session resume.
       (isOpenAIResponsesRoute(currentAssistantRoute) ||
+        isOpenAICompletionsRoute(currentAssistantRoute) ||
+        isAnthropicReasoningRoute(currentAssistantRoute) ||
         isCustomProviderRoute(currentAssistantRoute)) &&
       source.type === "text" &&
       key === "textSignature" &&
@@ -707,12 +653,12 @@ function redactTranscriptStructuredValue(
       continue;
     }
     if (typeof item === "string") {
-      const sanitizedDataUrl =
-        preserveImageDataUrlFields && key === "url"
-          ? startsWithDataUrl(item)
-            ? sanitizeInlineImageDataUrlForStorage(item)
-            : undefined
-          : sanitizeImageDataUrlField(source, key, item);
+      const sanitizedDataUrl = sanitizeTranscriptImageDataUrlField({
+        source,
+        key,
+        value: item,
+        preserveImageDataUrlFields,
+      });
       if (sanitizedDataUrl !== undefined) {
         if (sanitizedDataUrl !== item) {
           next ??= { ...source };
@@ -721,20 +667,33 @@ function redactTranscriptStructuredValue(
         continue;
       }
     }
-    if (shouldPreserveOpaqueImagePayload(source, key, item, preserveImageDataUrlFields)) {
+    if (shouldPreserveTranscriptImagePayload(source, key, item, preserveImageDataUrlFields)) {
       continue;
     }
-    const redacted = redactTranscriptStructuredValue(
-      item,
-      cfg,
-      key,
-      seen,
-      preserveImageDataUrlFields || shouldPreserveNestedImageDataUrlFields(source, key),
-      location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
-        ? "assistant-content-array"
-        : "nested",
-      currentAssistantRoute,
-    );
+    const redacted =
+      typeof item === "string" && sourceFields?.get(key) === item
+        ? redactSourceInputTextWithConfig(item, resolveTranscriptLoggingConfig(cfg))
+        : redactTranscriptStructuredValue(
+            item,
+            cfg,
+            key,
+            seen,
+            preserveImageDataUrlFields ||
+              shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
+            location === "root" &&
+              source.role === "assistant" &&
+              key === "content" &&
+              Array.isArray(item)
+              ? "assistant-content-array"
+              : "nested",
+            currentAssistantRoute,
+            modelVisibleToolResult ||
+              (location === "root" && source.role === "toolResult" && key === "content"),
+            location === "assistant-content-block" && key === "arguments"
+              ? sourceSlots?.get(source)
+              : undefined,
+            sourceSlots,
+          );
     if (redacted === item) {
       continue;
     }
@@ -746,16 +705,25 @@ function redactTranscriptStructuredValue(
 }
 
 /** Return a redacted transcript message according to logging config. */
-export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
-  if (isTranscriptRedactionDisabled(cfg)) {
-    return message;
-  }
-  return redactTranscriptStructuredValue(
+export function redactTranscriptMessage(
+  message: AgentMessage,
+  cfg?: OpenClawConfig,
+  sourceAppend?: CodeModeSourceAppend,
+): AgentMessage {
+  const redacted = redactTranscriptStructuredValue(
     message,
     cfg,
     undefined,
     new WeakSet<object>(),
     false,
     "root",
+    undefined,
+    false,
+    undefined,
+    readCodeModeSourceFields(message, sourceAppend),
   ) as AgentMessage;
+  copyCodeModeSourceAppend(message, redacted, sourceAppend, (source) =>
+    redactSourceInputTextWithConfig(source, resolveTranscriptLoggingConfig(cfg)),
+  );
+  return redacted;
 }

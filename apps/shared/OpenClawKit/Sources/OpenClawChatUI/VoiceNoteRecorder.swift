@@ -1,4 +1,7 @@
 import AVFAudio
+#if os(macOS)
+import AVFoundation
+#endif
 import Foundation
 import Observation
 import OpenClawKit
@@ -313,6 +316,17 @@ public final class OpenClawVoiceNoteAudioCapture: NSObject, VoiceNoteAudioCaptur
                     continuation.resume(returning: granted)
                 }
             }
+        @unknown default:
+            return false
+        }
+        #elseif os(macOS)
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
+            return true
+        case .denied, .restricted:
+            return false
+        case .notDetermined:
+            return await AVCaptureDevice.requestAccess(for: .audio)
         @unknown default:
             return false
         }

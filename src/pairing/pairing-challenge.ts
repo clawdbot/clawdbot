@@ -5,7 +5,7 @@ import { buildPairingReply } from "./pairing-messages.js";
 
 type PairingMeta = Record<string, string | undefined>;
 
-export type PairingChallengeParams = {
+type PairingChallengeParams = {
   channel: string;
   accountId?: string;
   senderId: string;

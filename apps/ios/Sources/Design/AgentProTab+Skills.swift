@@ -146,7 +146,7 @@ extension AgentProTab {
                 if !self.clawHubResults.isEmpty {
                     VStack(spacing: 0) {
                         let results = Array(self.clawHubResults.prefix(8))
-                        ForEach(Array(results.enumerated()), id: \.element.slug) { index, result in
+                        ForEach(Array(results.enumerated()), id: \.element.reference) { index, result in
                             self.clawHubResultRow(result)
                             if index < results.count - 1 {
                                 Divider().padding(.leading, 42)
@@ -160,17 +160,25 @@ extension AgentProTab {
     }
 
     func clawHubResultRow(_ result: ClawHubSearchResultLite) -> some View {
-        let installing = clawHubInstallSlug == result.slug
+        let installing = clawHubInstallSlug == result.reference
         return HStack(alignment: .top, spacing: 10) {
             ProIconBadge(systemName: "sparkles", color: OpenClawBrand.accent)
             VStack(alignment: .leading, spacing: 3) {
                 Text(result.displayName)
                     .font(OpenClawType.subheadSemiBold)
                     .lineLimit(1)
-                Text(result.summary ?? result.slug)
+                // This surface installs directly, so the publisher reference always shows:
+                // same-slug rows are otherwise identical and the button would look ambiguous.
+                Text(result.summary.map { "\($0) · \(result.reference)" } ?? result.reference)
                     .font(OpenClawType.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
+                if result.isUnscannedSource {
+                    // No review card on this surface, so the trust warning has to live in the row.
+                    Text("Not scanned by ClawHub")
+                        .font(OpenClawType.caption)
+                        .foregroundStyle(OpenClawBrand.warn)
+                }
             }
             Spacer(minLength: 8)
             Button {
@@ -195,7 +203,7 @@ extension AgentProTab {
             ProCard(padding: 0, radius: AgentLayout.cardRadius) {
                 let skills = self.filteredSkills
                 if skills.isEmpty {
-                    self.emptyDetailRow(
+                    agentProEmptyDetailRow(
                         icon: "sparkles",
                         title: self.gatewayConnected ? "No skills found" : "Skills unavailable",
                         detail: self.gatewayConnected
@@ -609,8 +617,8 @@ extension AgentProTab {
     func skillEditorMetadata(_ skill: SkillStatusEntryLite) -> some View {
         ProCard(radius: AgentLayout.cardRadius) {
             VStack(alignment: .leading, spacing: 8) {
-                self.detailMetric(label: "Key", value: skill.effectiveSkillKey)
-                self.detailMetric(label: "Source", value: self.normalized(skill.source) ?? "unknown")
+                agentProDetailMetric(label: "Key", value: skill.effectiveSkillKey)
+                agentProDetailMetric(label: "Source", value: self.normalized(skill.source) ?? "unknown")
                 if let filePath = self.normalized(skill.filePath) {
                     Text(filePath)
                         .font(OpenClawType.monoCaption2)
@@ -741,11 +749,11 @@ extension AgentProTab {
     @MainActor
     func installClawHubSkill(_ result: ClawHubSearchResultLite) async {
         guard liveGatewayConnected else { return }
-        clawHubInstallSlug = result.slug
+        clawHubInstallSlug = result.reference
         clawHubErrorText = nil
         defer { self.clawHubInstallSlug = nil }
         do {
-            let params = ClawHubInstallParams(slug: result.slug)
+            let params = ClawHubInstallParams(slug: result.reference)
             _ = try await self.requestGateway(method: "skills.install", params: params, timeoutSeconds: 125)
             await appModel.refreshGatewayOverviewIfConnected()
             await refreshOverview(force: true)

@@ -7,7 +7,7 @@ import { stringEnum } from "../schema/typebox.js";
 import {
   type AnyAgentTool,
   jsonResult,
-  readStringParam,
+  readToolStringParam,
   textResult,
   ToolInputError,
 } from "./common.js";
@@ -102,33 +102,42 @@ const GATEWAY_ACTIONS = ["config.get", "config.schema.lookup"] as const;
 const GatewayToolSchema = Type.Object({
   action: stringEnum(GATEWAY_ACTIONS),
   ...gatewayCallOptionSchemaProperties(),
-  path: Type.Optional(Type.String()),
+  path: Type.Optional(
+    Type.String({
+      description: "Required for config.schema.lookup; optional for config.get.",
+    }),
+  ),
 });
 
 export function createGatewayTool(): AnyAgentTool {
   return {
     label: "Gateway",
     name: "gateway",
-    description: "Read gateway config + schema. Writes/restart: use openclaw tool.",
+    description: "Read gateway config + schema. Writes/restart unavailable; ask human.",
     parameters: GatewayToolSchema,
-    execute: async (_toolCallId, args) => {
+    execute: async (_toolCallId, args, signal) => {
       const params = args as Record<string, unknown>;
-      const action = readStringParam(params, "action", { required: true });
+      const action = readToolStringParam(params, "action", { required: true });
       const gatewayOpts = readGatewayCallOptions(params);
 
       if (action === "config.get") {
-        const path = readStringParam(params, "path");
-        const snapshot = await callGatewayTool("config.get", gatewayOpts, {});
+        const path = readToolStringParam(params, "path");
+        const snapshot = await callGatewayTool("config.get", gatewayOpts, {}, { signal });
         const result = selectGatewayConfigGetResult(snapshot, path);
         return createGatewayConfigGetToolResult(result);
       }
       if (action === "config.schema.lookup") {
-        const path = readStringParam(params, "path", {
+        const path = readToolStringParam(params, "path", {
           required: true,
           label: "path",
         });
         try {
-          const result = await callGatewayTool("config.schema.lookup", gatewayOpts, { path });
+          const result = await callGatewayTool(
+            "config.schema.lookup",
+            gatewayOpts,
+            { path },
+            { signal },
+          );
           return jsonResult({ ok: true, result });
         } catch (error) {
           if (isConfigSchemaPathNotFoundError(error)) {

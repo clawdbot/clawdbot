@@ -9,6 +9,7 @@ import type { ChannelMeta } from "../../channels/plugins/types.public.js";
 import { isStaticallyChannelConfigured } from "../../config/channel-configured-shared.js";
 import { applyPluginAutoEnable } from "../../config/plugin-auto-enable.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { InstalledPluginIndex } from "../../plugins/installed-plugin-index.js";
 import { listManifestChannelContributionIds } from "../../plugins/manifest-contribution-ids.js";
 import type { ChannelChoice } from "../onboard-types.js";
 import {
@@ -22,9 +23,7 @@ type ChannelCatalogEntry = {
 };
 
 /** Return true when channel metadata should appear in setup/onboarding choices. */
-export function shouldShowChannelInSetup(
-  meta: Pick<ChannelMeta, "exposure" | "showConfigured" | "showInSetup">,
-): boolean {
+export function shouldShowChannelInSetup(meta: Pick<ChannelMeta, "exposure">): boolean {
   return isChannelVisibleInSetup(meta);
 }
 
@@ -45,6 +44,7 @@ export function listManifestInstalledChannelIds(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  index?: InstalledPluginIndex;
 }): Set<ChannelChoice> {
   const resolvedConfig = applyPluginAutoEnable({
     config: params.cfg,
@@ -56,6 +56,7 @@ export function listManifestInstalledChannelIds(params: {
       config: resolvedConfig,
       workspaceDir,
       env: params.env ?? process.env,
+      ...(params.index ? { index: params.index } : {}),
     }).map((channelId) => channelId as ChannelChoice),
   );
 }

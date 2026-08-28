@@ -1,4 +1,6 @@
 // Line plugin module implements status behavior.
+import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   buildTokenChannelStatusSummary,
@@ -7,7 +9,7 @@ import {
   createDependentCredentialStatusIssueCollector,
 } from "openclaw/plugin-sdk/status-helpers";
 import { hasLineCredentials } from "./account-helpers.js";
-import { DEFAULT_ACCOUNT_ID, type ChannelPlugin, type ResolvedLineAccount } from "./channel-api.js";
+import type { ResolvedLineAccount } from "./types.js";
 
 const loadLineProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
 
@@ -32,6 +34,9 @@ export const lineStatusAdapter: NonNullable<ChannelPlugin<ResolvedLineAccount>["
       configured: hasLineCredentials(account),
       extra: {
         tokenSource: account.tokenSource,
+        signingSecretSource: account.signingSecretSource,
+        tokenStatus: account.tokenStatus,
+        signingSecretStatus: account.signingSecretStatus,
         mode: "webhook",
       },
     }),

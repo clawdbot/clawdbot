@@ -169,6 +169,7 @@ Notes:
 - `onchar` still responds to explicit @mentions.
 - `channels.mattermost.requireMention` is still honored, but `chatmode` is preferred. Per-channel `groups.<channelId>.requireMention` settings win over both.
 - After the bot sends a visible reply in a channel thread, later messages in that same thread are answered without a new @mention or `onchar` prefix, so multi-turn thread conversations keep flowing. Participation is remembered for 7 days after the bot last replied in that thread and persists across gateway restarts. Threads the bot has only observed are unaffected; start a new top-level message to require an explicit mention again.
+- Set `channels.mattermost.implicitMentions.threadParticipation: false` to stop participated-thread follow-ups from bypassing mention gating. Account overrides use `channels.mattermost.accounts.<id>.implicitMentions`. Mattermost does not currently produce `replyToBot` or `quotedBot` facts, so those flags have no effect here.
 
 ## Threading and sessions
 
@@ -252,6 +253,14 @@ Use these target formats with `openclaw message send` or cron/webhooks:
 
 Outbound sends support at most one attachment per message; split multiple files into separate sends.
 
+Set `channels.mattermost.mediaMaxMb` to limit each inbound download and outbound
+attachment in MiB. `accounts.<id>.mediaMaxMb` overrides the channel root, then
+`agents.defaults.mediaMaxMb` supplies the fallback. Without any configured cap,
+inbound downloads retain their 8 MiB default and outbound media retains the
+shared loader defaults. Outbound images may be optimized. With a configured cap,
+download or upload failures fail the send instead of posting the unchecked original
+URL. Without a configured cap, the existing URL fallback remains available.
+
 <Warning>
 Bare opaque IDs (like `64ifufp...`) are **ambiguous** in Mattermost (user ID vs channel ID).
 
@@ -321,6 +330,20 @@ Preview streaming is **on by default** in `partial` mode. Configure via `channel
 
   </Accordion>
 </AccordionGroup>
+
+## Read channel history (message tool)
+
+Use `message action=read` or the CLI to read posts from a channel that the configured Mattermost bot can access:
+
+```bash
+openclaw message read --channel mattermost --target channel:<channelId> --limit 5 --json
+```
+
+- Results follow Mattermost's ordered post list and include normalized `timestampMs` and `timestampUtc` fields.
+- `limit` defaults to 60 and is capped at Mattermost's maximum of 200. Use either `before=<postId>` or `after=<postId>` for pagination; the two cursors cannot be combined.
+- Direct operator calls rely on Mattermost's channel membership and `read_channel` permission. A provider 403 remains a normal, visible tool error.
+- Delegated reads of the current Mattermost conversation are allowed for the current account. Cross-channel delegated reads additionally require the destination channel ID under `channels.mattermost.groups`, a `"*"` groups entry, or `groupPolicy: "open"`. Cross-account and cross-channel DM reads fail closed.
+- History reads are disabled by default. Set `channels.mattermost.actions.messages: true` to enable them. Override the setting per account with `channels.mattermost.accounts.<id>.actions.messages`.
 
 ## Reactions (message tool)
 

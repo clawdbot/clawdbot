@@ -33,6 +33,11 @@ describe("createDedupeCache", () => {
     expect(cache.peek("a", 500)).toBe(true);
     expect(cache.peek("b", 500)).toBe(false);
     expect(cache.peek("c", 500)).toBe(true);
+
+    expect(cache.check("b", 600)).toBe(false);
+    expect(cache.peek("a", 700)).toBe(false);
+    expect(cache.peek("b", 700)).toBe(true);
+    expect(cache.peek("c", 700)).toBe(true);
   });
 
   it("clears itself when maxSize floors to zero", () => {
@@ -54,5 +59,30 @@ describe("createDedupeCache", () => {
 
     expect(cache.size()).toBe(0);
     expect(cache.peek("a", 300)).toBe(false);
+  });
+
+  it("releases an owned entry only for its current owner", () => {
+    const cache = createDedupeCache({ ttlMs: 1_000, maxSize: 10 });
+    const staleOwner = {};
+    const currentOwner = {};
+
+    cache.check("a", 100, staleOwner);
+    cache.delete("a");
+    cache.check("a", 200, currentOwner);
+    cache.delete("a", staleOwner);
+    expect(cache.peek("a", 300)).toBe(true);
+    expect(cache.check("a", 300)).toBe(true);
+
+    cache.delete("a", currentOwner);
+    expect(cache.peek("a", 400)).toBe(false);
+  });
+
+  it("prunes other entries at the exact TTL boundary", () => {
+    const cache = createDedupeCache({ ttlMs: 1_000, maxSize: 10 });
+
+    cache.check("expired", 100);
+    cache.check("current", 1_100);
+
+    expect(cache.size()).toBe(1);
   });
 });

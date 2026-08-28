@@ -32,7 +32,6 @@ export {
 } from "openclaw/plugin-sdk/core";
 export { buildComputedAccountStatusSnapshot } from "openclaw/plugin-sdk/channel-status";
 export { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export {
   listSkillCommandsForAgents,
   resolveControlCommandGate,
@@ -76,9 +75,7 @@ export {
   applySetupAccountConfigPatch,
   migrateBaseNameToDefaultAccount,
 } from "openclaw/plugin-sdk/setup";
-export {
-  getAgentScopedMediaLocalRoots,
-  resolveChannelMediaMaxBytes,
-} from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
+export { getAgentScopedMediaLocalRoots } from "openclaw/plugin-sdk/media-runtime";
 export { normalizeProviderId } from "openclaw/plugin-sdk/provider-model-shared";
 export { setMattermostRuntime } from "./src/runtime.js";

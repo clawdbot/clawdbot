@@ -128,13 +128,10 @@ export function retainTelegramGroupHistoryPromptContext(params: {
     if (!isTelegramChatWindowPromptContext(entry)) {
       return [entry];
     }
-    if (entryKeys.size === 0) {
-      return [];
-    }
     const payload = telegramChatWindowPayload(entry);
     const messages = telegramPromptMessages(payload).filter((message) => {
       const key = telegramPromptMessageKey(message);
-      return Boolean(key && entryKeys.has(key));
+      return message["is_reply_target"] === true || Boolean(key && entryKeys.has(key));
     });
     if (messages.length === 0) {
       return [];
@@ -181,6 +178,7 @@ export function mergeTelegramGroupHistoryPromptContext(params: {
     return leftTimestamp - rightTimestamp;
   });
   const mergedEntry: TelegramPromptContextEntry = {
+    ...baseEntry,
     label: "Conversation context",
     source: baseEntry?.source ?? "telegram",
     type: "chat_window",

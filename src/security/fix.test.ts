@@ -186,7 +186,6 @@ describe("security fix", () => {
         signal: { groupPolicy: "open" },
         imessage: { groupPolicy: "open" },
       },
-      logging: { redactSensitive: "off" },
     } satisfies OpenClawConfig;
     const fixed = await runConfigFixScenario({
       prefix: "group-policy",
@@ -194,7 +193,6 @@ describe("security fix", () => {
       channelPlugins: [createWhatsAppConfigFixTestPlugin(["+15551234567"])],
     });
     expect(fixed.res.changes).toEqual([
-      'logging.redactSensitive=off -> "tools"',
       "channels.telegram.groupPolicy=open -> allowlist",
       "channels.whatsapp.groupPolicy=open -> allowlist",
       "channels.discord.groupPolicy=open -> allowlist",
@@ -278,43 +276,26 @@ describe("security fix", () => {
     const includesDir = path.join(stateDir, "includes");
     await fs.mkdir(includesDir, { recursive: true });
     const includePath = path.join(includesDir, "extra.json5");
-    await fs.writeFile(includePath, "{ logging: { redactSensitive: 'off' } }\n", "utf-8");
+    await fs.writeFile(includePath, "{}\n", "utf-8");
     await fs.chmod(includePath, 0o644);
 
     const configPath = path.join(stateDir, "openclaw.json");
-    await fs.writeFile(
-      configPath,
-      `{ "$include": "./includes/extra.json5", channels: { whatsapp: { groupPolicy: "open" } } }\n`,
-      "utf-8",
-    );
+    await fs.writeFile(configPath, `{ "$include": "./includes/extra.json5" }\n`, "utf-8");
     await fs.chmod(configPath, 0o644);
 
     const credsDir = path.join(stateDir, "credentials");
     await fs.mkdir(credsDir, { recursive: true });
-    const allowFromPath = path.join(credsDir, "whatsapp-allowFrom.json");
-    await fs.writeFile(
-      allowFromPath,
-      `${JSON.stringify({ version: 1, allowFrom: ["+15550002222"] }, null, 2)}\n`,
-      "utf-8",
-    );
-    await fs.chmod(allowFromPath, 0o644);
+    const credentialPath = path.join(credsDir, "oauth.json");
+    await fs.writeFile(credentialPath, "{}\n", "utf-8");
+    await fs.chmod(credentialPath, 0o644);
 
     const agentDir = path.join(stateDir, "agents", "main", "agent");
-    await fs.mkdir(agentDir, { recursive: true });
     const authDatabasePath = path.join(agentDir, "openclaw-agent.sqlite");
-    await fs.writeFile(authDatabasePath, "sqlite\n", "utf-8");
-    await fs.writeFile(`${authDatabasePath}-wal`, "wal\n", "utf-8");
-    await fs.writeFile(`${authDatabasePath}-shm`, "shm\n", "utf-8");
-    await fs.writeFile(`${authDatabasePath}-journal`, "journal\n", "utf-8");
     const authProfilesPath = path.join(agentDir, "auth-profiles.json");
-    await fs.writeFile(authProfilesPath, "{}\n", "utf-8");
-    await fs.chmod(authProfilesPath, 0o644);
 
     const sessionsDir = path.join(stateDir, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
     const sessionsStorePath = path.join(sessionsDir, "sessions.json");
-    await fs.writeFile(sessionsStorePath, "{}\n", "utf-8");
-    await fs.chmod(sessionsStorePath, 0o644);
     const transcriptPath = path.join(sessionsDir, "sess-main.jsonl");
     await fs.writeFile(transcriptPath, '{"type":"session"}\n', "utf-8");
     await fs.chmod(transcriptPath, 0o644);
@@ -332,7 +313,7 @@ describe("security fix", () => {
       configPath,
       canonicalIncludePath,
       credsDir,
-      allowFromPath,
+      credentialPath,
       path.join(stateDir, "agents", "main"),
       agentDir,
       authDatabasePath,
@@ -344,6 +325,32 @@ describe("security fix", () => {
       sessionsStorePath,
       transcriptPath,
     ]);
+  });
+
+  it("tightens the live legacy main auth store for a named default roster", async () => {
+    const stateDir = await createStateDir("named-default-legacy-auth");
+    const configPath = path.join(stateDir, "openclaw.json");
+    await fs.writeFile(
+      configPath,
+      JSON.stringify({ agents: { entries: { ops: { default: true } } } }),
+      "utf-8",
+    );
+    const legacyAuthPath = path.join(stateDir, "agents", "main", "agent", "auth-profiles.json");
+    await fs.mkdir(path.dirname(legacyAuthPath), { recursive: true });
+    await fs.writeFile(legacyAuthPath, "{}\n", "utf-8");
+    await fs.chmod(legacyAuthPath, 0o644);
+
+    const result = await fixSecurityFootguns({
+      env: createFixEnv(stateDir, configPath),
+      stateDir,
+      configPath,
+      channelPlugins: [],
+    });
+
+    expect(result.actions).toContainEqual(
+      expect.objectContaining({ kind: "chmod", ok: true, path: legacyAuthPath, mode: 0o600 }),
+    );
+    expectPerms((await fs.stat(legacyAuthPath)).mode & 0o777, 0o600);
   });
 
   it.runIf(process.platform !== "win32")(

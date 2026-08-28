@@ -18,8 +18,8 @@ vi.mock("./sessions/index.js", async () => {
   };
 });
 
-let isOversizedForSummary: typeof import("./compaction.js").isOversizedForSummary;
-let summarizeWithFallback: typeof import("./compaction.js").summarizeWithFallback;
+let estimateMessagesTokens: typeof import("./compaction.js").estimateMessagesTokens;
+let summarizeWithFallback: typeof import("./compaction.test-support.js").summarizeWithFallback;
 
 function makeAssistantToolCall(timestamp: number): AssistantMessage {
   return makeAgentAssistantMessage({
@@ -46,7 +46,8 @@ function makeToolResultWithDetails(timestamp: number): ToolResultMessage<{ raw: 
 
 describe("compaction toolResult details stripping", () => {
   beforeAll(async () => {
-    ({ isOversizedForSummary, summarizeWithFallback } = await import("./compaction.js"));
+    ({ estimateMessagesTokens } = await import("./compaction.js"));
+    ({ summarizeWithFallback } = await import("./compaction.test-support.js"));
   });
 
   beforeEach(() => {
@@ -156,7 +157,7 @@ describe("compaction toolResult details stripping", () => {
     expect(serialized).not.toContain("secret runtime context");
   });
 
-  it("ignores toolResult.details when evaluating oversized messages", () => {
+  it("ignores toolResult.details when estimating compaction tokens", () => {
     agentSessionMocks.estimateTokens.mockImplementation((message: unknown) => {
       const record = message as { details?: unknown };
       return record.details ? 10_000 : 10;
@@ -172,6 +173,8 @@ describe("compaction toolResult details stripping", () => {
       timestamp: 2,
     };
 
-    expect(isOversizedForSummary(toolResult, 1_000)).toBe(false);
+    // Sanitization strips details before estimation; the raw payload must
+    // never inflate compaction token pressure.
+    expect(estimateMessagesTokens([toolResult])).toBeLessThan(1_000);
   });
 });

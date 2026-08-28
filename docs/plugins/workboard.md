@@ -105,9 +105,20 @@ poll, and **Refresh** remains available as manual recovery.
 When more than one board exists, the toolbar includes a **Board** filter backed
 by persisted board metadata rather than only the currently visible cards. Empty
 and archived boards therefore remain selectable. Cards without an explicit
-board id belong to the canonical `default` board. The selected board is stored
-in the `?board=` query parameter, so the filtered Workboard URL can be bookmarked
-or shared; choosing **All boards** removes the parameter.
+board id belong to the canonical `default` board. Each board has a canonical
+`/workboard/<boardId>` page that can be bookmarked, shared, or pinned in the
+sidebar. The previously shipped `/workboard?board=<boardId>` form remains a
+compatibility alias and redirects to that page while preserving other query
+parameters. Choosing **All boards** returns to `/workboard`.
+
+A board can store an `automationJobId` reference to the automation job that
+owns its AI-categorization prompt, model, schedule, and run history. The board
+page shows an **Automation** link when that reference is present. Matching
+session events nudge the attached automation to run immediately, with events
+for the same board coalesced for 60 seconds. The automation's schedule remains
+the backstop. Disabled and auto-disabled automations are never nudged. Deleting
+the board does not delete or otherwise mutate the
+operator-owned automation job.
 
 Cards are stored in the plugin's own Gateway state and move with the rest of
 that Gateway's OpenClaw state (see [Storage](#storage)).
@@ -129,11 +140,11 @@ resulting task, run id, and session key back onto the card. Each linked
 execution also records an attempt summary (engine, mode, model, run id,
 timestamps, status, rolling failure count) so repeated failures stay visible.
 
-The dashboard refreshes task status from the Gateway task ledger, matching
-tasks to cards by task id, run id, or linked session key. A queued/running
-task keeps the card's lifecycle active; a finished, failed, timed-out, or
-cancelled task moves the card toward `review` or `blocked` using the same sync
-rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
+The dashboard refreshes task status from the Gateway task ledger for its
+lifecycle display, matching tasks to cards by task id, run id, or linked
+session key. Card status changes are persisted by the Gateway-side Workboard
+plugin using the linked run and session lifecycle (see
+[Session lifecycle sync](#session-lifecycle-sync)).
 
 ## Agent tools
 
@@ -160,6 +171,16 @@ rule as linked sessions (see [Session lifecycle sync](#session-lifecycle-sync)).
 | `workboard_unblock`                                                                                                                              | Move blocked work back to `todo`.                                                                                                                                                         |
 | `workboard_move`                                                                                                                                 | Move a card to another status; claimed cards require the caller's agent claim scope.                                                                                                      |
 | `workboard_dispatch`                                                                                                                             | Nudge dependency promotion or stale-claim cleanup without launching workers; worker launch uses Gateway or slash-command dispatch.                                                        |
+
+Proof statuses are worker-reported outcomes, not independent verification. A `passed`
+entry means the worker reports that its command or check succeeded; consumers that need
+an independent quality gate should inspect the attached command, URL, or artifact and
+run their own verifier. `workboard_proof` returns the new record's `proofId`. When
+`workboard_complete` reports that same proof's terminal status, pass `proofId` so the
+pending record is resolved in place without losing its identity or timestamp. A proof that
+already has the same terminal status is reused unchanged. Completion proof without
+`proofId` remains append-only, so a later retry cannot rewrite older history merely because
+its command or note is identical.
 
 Claimed cards reject agent-tool mutations from other agents unless the caller
 holds the claim token returned by `workboard_claim`. Every card returned by an
@@ -302,6 +323,13 @@ still offers start controls to restart into a fresh session. If an active
 linked session stops reporting recent activity, Workboard marks the card
 `stale` and stores that as metadata until the lifecycle clears it.
 
+Lifecycle writes are owned by the Gateway-side Workboard plugin, so they do
+not depend on an open browser tab. Agent and subagent completion hooks persist
+terminal outcomes immediately. A bounded session sweep runs once per minute to
+reconcile active, idle, missing, and stale session state. Each store mutation
+emits the normal `plugin.workboard.changed` invalidation, so an open dashboard
+reloads the canonical card instead of writing its own lifecycle projection.
+
 While a card is in an active work state, Workboard follows the linked session:
 
 | Linked session state                  | Card status |
@@ -337,6 +365,23 @@ the template id is stored as card metadata.
 6. Let lifecycle sync move running work into `review`/`blocked`, then manually
    move the card to `done` when accepted.
 
+### Session-board widgets
+
+Workboard ships three native widgets for session dashboards (see
+[Dashboards](/web/dashboards)). The agent pins them with its `dashboard` tool
+using `content: { kind: "plugin", pluginKind, props }`, and they render as
+first-party UI with live data — no sandbox frame or capability grant:
+
+- `workboard:card` with `props: { cardId }` shows one card with its status
+  control, priority, and assigned agent.
+- `workboard:board` with optional `props: { boardId }` shows the full Kanban
+  board with draggable cards and status controls. Without `boardId` it shows
+  every board; with `boardId` it shows only that board.
+- `workboard:mini` with optional `props: { boardId, limit }` shows per-status
+  counts plus the top ready/running cards, and links to the full board page.
+  Without `boardId` it aggregates every board; with `boardId` it scopes to that
+  board (cards created without an explicit board id live on `default`).
+
 ## Diagnostics
 
 Diagnostics are computed from local card metadata. Built-in checks flag:
@@ -349,15 +394,16 @@ Diagnostics are computed from local card metadata. Built-in checks flag:
 | `repeated_failures`         | Card's tracked failure count reaches 2 or more.                                |
 | `missing_proof`             | `done` card with no proof, artifacts, or attachments.                          |
 | `orphaned_session`          | `running` card with a `sessionKey` but no `execution` metadata.                |
+| `archived_but_active`       | Archived card remains in any non-`done` lifecycle status.                      |
 
 ## Permissions
 
 Gateway RPC methods live under `workboard.*`:
 
-| Scope            | Methods                                                                                                                                                                                                                                                                                                                                                                            |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `operator.read`  | `cards.list`, `cards.export`, `cards.diagnostics`, attachment list/get, notification event reads, `boards.list`, `cards.stats`, `cards.runs`                                                                                                                                                                                                                                       |
-| `operator.write` | `cards.diagnostics.refresh`, create/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
+| Scope            | Methods                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `operator.read`  | `cards.list`, `cards.export`, `cards.diagnostics`, attachment list/get, notification event reads, `boards.list`, `cards.stats`, `cards.runs`                                                                                                                                                                                                                                                            |
+| `operator.write` | `cards.diagnostics.refresh`, create/captureSession/update/move/delete/comment/link/linkDependency/proof/artifact, attachment add/delete, worker log, protocol violation, claim/heartbeat/release/promote/reassign/reclaim/complete/block/unblock/start, `cards.dispatch`, `cards.bulk`, archive, `boards.upsert`/`archive`/`delete`, `cards.specify`/`decompose`, notification subscribe/delete/advance |
 
 No RPC method requires `operator.admin`. Browsers connected with read-only
 operator access can inspect the board but cannot mutate cards. An admin scope

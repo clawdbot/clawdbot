@@ -1,10 +1,11 @@
+import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 // Converts queue directives into normalized queue settings.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { parseDurationMs } from "../../../cli/parse-duration.js";
-import { parseStrictPositiveInteger } from "../../../infra/parse-finite-number.js";
 import { skipDirectiveArgPrefix, takeDirectiveToken } from "../directive-parsing.js";
 import { normalizeQueueDropPolicy, normalizeQueueMode } from "./normalize.js";
-import type { QueueDropPolicy, QueueMode } from "./types.js";
+import type { QueueDropPolicy } from "./types.js";
 
 /** Parses debounce durations in `/queue` directives. */
 function parseQueueDebounce(raw?: string): number | undefined {

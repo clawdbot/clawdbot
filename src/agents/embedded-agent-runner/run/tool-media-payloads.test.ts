@@ -48,6 +48,150 @@ describe("mergeAttemptToolMediaPayloads", () => {
     ]);
   });
 
+  it("marks harness-owned media when source replies require the message tool", () => {
+    const [mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        toolMediaUrls: ["/tmp/generated.png"],
+        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(mediaReply).toEqual({
+      mediaUrls: ["/tmp/generated.png"],
+      mediaUrl: "/tmp/generated.png",
+      audioAsVoice: undefined,
+      trustedLocalMedia: undefined,
+    });
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("does not mark generic tool media as host-owned", () => {
+    const [mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        toolMediaUrls: ["/tmp/reply.opus"],
+        toolAudioAsVoice: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(mediaReply).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: undefined,
+    });
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
+  });
+
+  it("ignores host-owned provenance outside the delivered tool media set", () => {
+    const [mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        toolMediaUrls: ["/tmp/tool.png"],
+        hostOwnedToolMediaUrls: ["/tmp/forged.png"],
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(mediaReply).toMatchObject({
+      mediaUrls: ["/tmp/tool.png"],
+      mediaUrl: "/tmp/tool.png",
+    });
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toBeUndefined();
+  });
+
+  it("keeps generic and host-owned media in separate delivery payloads", () => {
+    const [genericReply, hostOwnedReply] =
+      mergeAttemptToolMediaPayloads({
+        toolMediaUrls: ["/tmp/reply.opus", "/tmp/generated.png"],
+        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+        toolAudioAsVoice: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(genericReply).toEqual({
+      mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+      trustedLocalMedia: undefined,
+    });
+    expect(getReplyPayloadMetadata(genericReply ?? {})).toBeUndefined();
+    expect(hostOwnedReply).toEqual({
+      mediaUrls: ["/tmp/generated.png"],
+      mediaUrl: "/tmp/generated.png",
+      audioAsVoice: undefined,
+      trustedLocalMedia: undefined,
+    });
+    expect(getReplyPayloadMetadata(hostOwnedReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("does not mark text-bearing source replies as host-owned", () => {
+    const [reply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "hidden final" }],
+        toolMediaUrls: ["/tmp/generated.png"],
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(reply).toEqual({
+      text: "hidden final",
+      mediaUrls: ["/tmp/generated.png"],
+      mediaUrl: "/tmp/generated.png",
+    });
+    expect(getReplyPayloadMetadata(reply ?? {})).toBeUndefined();
+  });
+
+  it("keeps host-owned media deliverable beside suppressed assistant text", () => {
+    const [textReply, mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "Done" }],
+        toolMediaUrls: ["/tmp/generated.png"],
+        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(textReply).toEqual({ text: "Done" });
+    expect(getReplyPayloadMetadata(textReply ?? {})).toBeUndefined();
+    expect(mediaReply).toEqual({
+      mediaUrls: ["/tmp/generated.png"],
+      mediaUrl: "/tmp/generated.png",
+      audioAsVoice: undefined,
+      trustedLocalMedia: undefined,
+    });
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
+  it("merges generic media with assistant text while splitting host-owned media", () => {
+    const [textReply, mediaReply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: "Done" }],
+        toolMediaUrls: ["/tmp/reply.opus", "/tmp/generated.png"],
+        hostOwnedToolMediaUrls: ["/tmp/generated.png"],
+        toolAudioAsVoice: true,
+        sourceReplyDeliveryMode: "message_tool_only",
+      }) ?? [];
+
+    expect(textReply).toEqual({
+      text: "Done",
+      mediaUrls: ["/tmp/reply.opus"],
+      mediaUrl: "/tmp/reply.opus",
+      audioAsVoice: true,
+    });
+    expect(getReplyPayloadMetadata(textReply ?? {})).toBeUndefined();
+    expect(mediaReply).toEqual({
+      mediaUrls: ["/tmp/generated.png"],
+      mediaUrl: "/tmp/generated.png",
+      audioAsVoice: undefined,
+      trustedLocalMedia: undefined,
+    });
+    expect(getReplyPayloadMetadata(mediaReply ?? {})).toMatchObject({
+      deliverDespiteSourceReplySuppression: true,
+    });
+  });
+
   it("preserves reply metadata when attaching tool media to a visible reply", () => {
     const visibleReply = setReplyPayloadMetadata(
       { text: "done" },
@@ -73,6 +217,48 @@ describe("mergeAttemptToolMediaPayloads", () => {
       assistantMessageIndex: 7,
       deliverDespiteSourceReplySuppression: true,
     });
+  });
+
+  it("uses exact structured Markdown references to select tool media", () => {
+    const selected = "/root/.openclaw/media/tool-image-generation/our-agent-soviet-meme.png";
+    const unselected = "/root/.openclaw/media/tool-image-generation/alternate.png";
+    const visibleReply = setReplyPayloadMetadata(
+      { text: `Our agent.\n\n![Our Agent meme](${selected})` },
+      { assistantMessageIndex: 7 },
+    );
+
+    const [reply] =
+      mergeAttemptToolMediaPayloads({
+        payloads: [visibleReply],
+        toolMediaUrls: [selected, unselected],
+        toolTrustedLocalMedia: true,
+      }) ?? [];
+
+    expect(reply).toEqual({
+      text: "Our agent.",
+      mediaUrls: [selected],
+      mediaUrl: selected,
+      audioAsVoice: undefined,
+      trustedLocalMedia: true,
+    });
+    expect(getReplyPayloadMetadata(reply ?? {})).toEqual({ assistantMessageIndex: 7 });
+  });
+
+  it("keeps unmatched local Markdown visible without selecting it", () => {
+    const input = "Caption\n\n![not tool media](/tmp/unrelated.png)";
+
+    expect(
+      mergeAttemptToolMediaPayloads({
+        payloads: [{ text: input }],
+        toolMediaUrls: ["/tmp/pending.png"],
+      }),
+    ).toEqual([
+      {
+        text: input,
+        mediaUrls: ["/tmp/pending.png"],
+        mediaUrl: "/tmp/pending.png",
+      },
+    ]);
   });
 
   it("preserves trusted local media provenance when merging tool media", () => {

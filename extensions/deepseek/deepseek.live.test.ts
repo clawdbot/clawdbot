@@ -1,16 +1,16 @@
 // Deepseek tests cover deepseek plugin behavior.
 import {
-  completeSimple,
   streamSimple,
   type AssistantMessage,
   type Context,
   type Model,
 } from "openclaw/plugin-sdk/llm";
+import { createSolidPngBuffer } from "openclaw/plugin-sdk/test-fixtures";
 import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-live";
 import { Type } from "typebox";
 import { describe, expect, it } from "vitest";
 import { buildDeepSeekProvider } from "./provider-catalog.js";
@@ -37,15 +37,6 @@ const ZERO_USAGE: AssistantMessage["usage"] = {
   },
 };
 
-function forceDeepSeekNonThinkingPath(payload: unknown): void {
-  if (!payload || typeof payload !== "object") {
-    return;
-  }
-  const request = payload as Record<string, unknown>;
-  request.thinking = { type: "disabled" };
-  delete request.reasoning_effort;
-}
-
 function resolveDeepSeekLiveModel(): Model<"openai-completions"> {
   const provider = buildDeepSeekProvider();
   const model = provider.models?.find((entry) => entry.id === DEEPSEEK_LIVE_MODEL);
@@ -60,27 +51,17 @@ function resolveDeepSeekLiveModel(): Model<"openai-completions"> {
   } as Model<"openai-completions">;
 }
 
-function resolveDeepSeekV4LiveModel(): Model<"openai-completions"> {
-  const provider = buildDeepSeekProvider();
-  const requestedModel =
-    DEEPSEEK_LIVE_MODEL === "deepseek-v4-flash" || DEEPSEEK_LIVE_MODEL === "deepseek-v4-pro"
-      ? DEEPSEEK_LIVE_MODEL
-      : "deepseek-v4-flash";
-  const model = provider.models?.find((entry) => entry.id === requestedModel);
-  if (!model) {
-    throw new Error(`DeepSeek bundled catalog does not include ${requestedModel}`);
+function createDeepSeekLiveStream(thinkingLevel: "off" | "high") {
+  const streamFn = createDeepSeekV4ThinkingWrapper(streamSimple, thinkingLevel);
+  if (!streamFn) {
+    throw new Error("expected DeepSeek V4 thinking stream wrapper");
   }
-  return {
-    provider: "deepseek",
-    baseUrl: provider.baseUrl,
-    ...model,
-    api: "openai-completions",
-  } as Model<"openai-completions">;
+  return streamFn;
 }
 
 describeLive("deepseek plugin live", () => {
   it("returns assistant text from the bundled V4 model catalog", async () => {
-    const res = await completeSimple(
+    const stream = await createDeepSeekLiveStream("off")(
       resolveDeepSeekLiveModel(),
       {
         messages: createSingleUserPromptMessage(),
@@ -88,9 +69,9 @@ describeLive("deepseek plugin live", () => {
       {
         apiKey: DEEPSEEK_KEY,
         maxTokens: 64,
-        onPayload: forceDeepSeekNonThinkingPath,
       },
     );
+    const res = await stream.result();
 
     if (res.stopReason === "error") {
       throw new Error(res.errorMessage || "DeepSeek returned error with no message");
@@ -99,6 +80,43 @@ describeLive("deepseek plugin live", () => {
     const text = extractNonEmptyAssistantText(res.content);
     expect(text.length).toBeGreaterThan(0);
   }, 60_000);
+
+  it.runIf(DEEPSEEK_LIVE_MODEL === "deepseek-v4-flash-vision-exp")(
+    "recognizes image content through the selected vision model",
+    async () => {
+      const model = resolveDeepSeekLiveModel();
+      expect(model.input).toContain("image");
+      const stream = await createDeepSeekLiveStream("off")(
+        model,
+        {
+          messages: [
+            {
+              role: "user",
+              content: [
+                {
+                  type: "text",
+                  text: "What single color fills this image? Reply with exactly RED, BLUE, or GREEN.",
+                },
+                {
+                  type: "image",
+                  data: createSolidPngBuffer(64, 64, { r: 0, g: 255, b: 0 }).toString("base64"),
+                  mimeType: "image/png",
+                },
+              ],
+              timestamp: Date.now(),
+            },
+          ],
+        },
+        { apiKey: DEEPSEEK_KEY, maxTokens: 64 },
+      );
+      const result = await stream.result();
+      if (result.stopReason === "error") {
+        throw new Error(result.errorMessage || "DeepSeek vision returned error with no message");
+      }
+      expect(extractNonEmptyAssistantText(result.content).trim()).toMatch(/^green[.!]?$/i);
+    },
+    60_000,
+  );
 
   it("accepts V4 thinking replay after a prior provider tool call", async () => {
     const toolCallId = "call_deepseek_live_replay_1";
@@ -142,12 +160,7 @@ describeLive("deepseek plugin live", () => {
       ],
     };
     let capturedPayload: Record<string, unknown> | undefined;
-    const streamFn = createDeepSeekV4ThinkingWrapper(streamSimple, "high");
-    if (!streamFn) {
-      throw new Error("expected DeepSeek V4 thinking stream wrapper");
-    }
-
-    const stream = streamFn(resolveDeepSeekV4LiveModel(), context, {
+    const stream = createDeepSeekLiveStream("high")(resolveDeepSeekLiveModel(), context, {
       apiKey: DEEPSEEK_KEY,
       maxTokens: 64,
       onPayload: (payload) => {
@@ -202,12 +215,7 @@ describeLive("deepseek plugin live", () => {
       ],
     };
     let capturedPayload: Record<string, unknown> | undefined;
-    const streamFn = createDeepSeekV4ThinkingWrapper(streamSimple, "high");
-    if (!streamFn) {
-      throw new Error("expected DeepSeek V4 thinking stream wrapper");
-    }
-
-    const stream = streamFn(resolveDeepSeekV4LiveModel(), context, {
+    const stream = createDeepSeekLiveStream("high")(resolveDeepSeekLiveModel(), context, {
       apiKey: DEEPSEEK_KEY,
       maxTokens: 64,
       onPayload: (payload) => {

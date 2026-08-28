@@ -1,6 +1,6 @@
 {
   "name": "@openclaw/nostr",
-  "version": "2026.7.2",
+  "version": "2026.8.1",
   "description": "OpenClaw Nostr channel plugin for NIP-04 encrypted direct messages.",
   "repository": {
     "type": "git",
@@ -8,7 +8,7 @@
   },
   "type": "module",
   "dependencies": {
-    "nostr-tools": "2.23.9",
+    "nostr-tools": "2.24.3",
     "zod": "4.4.3"
   },
   "devDependencies": {
@@ -16,7 +16,7 @@
     "openclaw": "workspace:*"
   },
   "peerDependencies": {
-    "openclaw": ">=2026.7.2"
+    "openclaw": ">=2026.8.1"
   },
   "peerDependenciesMeta": {
     "openclaw": {
@@ -30,6 +30,13 @@
     "setupEntry": "./setup-entry.ts",
     "channel": {
       "id": "nostr",
+      "configuredState": {
+        "env": {
+          "anyOf": [
+            "NOSTR_PRIVATE_KEY"
+          ]
+        }
+      },
       "label": "Nostr",
       "selectionLabel": "Nostr (NIP-04 DMs)",
       "docsPath": "/channels/nostr",
@@ -37,16 +44,36 @@
       "blurb": "Decentralized protocol; encrypted DMs via NIP-04.",
       "order": 55,
       "quickstartAllowFrom": true,
-      "cliAddOptions": [
-        {
-          "flags": "--private-key <key>",
-          "description": "Nostr private key (nsec... or hex)"
-        },
-        {
-          "flags": "--relay-urls <list>",
-          "description": "Nostr relay URLs (comma-separated)"
-        }
-      ]
+      "setup": {
+        "fields": [
+          {
+            "key": "privateKey",
+            "kind": "string",
+            "sensitive": true,
+            "cli": {
+              "flags": "--private-key <key>",
+              "description": "Nostr private key"
+            }
+          },
+          {
+            "key": "relayUrls",
+            "kind": "string",
+            "cli": {
+              "flags": "--relay-urls <urls>",
+              "description": "Nostr relay URLs"
+            }
+          },
+          {
+            "key": "useEnv",
+            "kind": "boolean",
+            "cli": {
+              "flags": "--use-env",
+              "description": "Use NOSTR_PRIVATE_KEY"
+            },
+            "envVars": ["NOSTR_PRIVATE_KEY"]
+          }
+        ]
+      }
     },
     "install": {
       "npmSpec": "@openclaw/nostr",
@@ -54,10 +81,10 @@
       "minHostVersion": ">=2026.4.10"
     },
     "compat": {
-      "pluginApi": ">=2026.7.2"
+      "pluginApi": ">=2026.8.1"
     },
     "build": {
-      "openclawVersion": "2026.7.2"
+      "openclawVersion": "2026.8.1"
     },
     "release": {
       "publishToClawHub": true,

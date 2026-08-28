@@ -1,12 +1,18 @@
 import Foundation
+import OSLog
 
 enum LaunchAgentManager {
+    private static let logger = Logger(subsystem: "ai.openclaw", category: "app.login-agent")
     private static var plistURL: URL {
         FileManager().homeDirectoryForCurrentUser
             .appendingPathComponent("Library/LaunchAgents/ai.openclaw.mac.plist")
     }
 
-    static func status() async -> Bool {
+    static func status(profile: AppProfile = .current) async -> Bool {
+        if profile.isActive {
+            self.logger.info("login-agent status skipped (unavailable under app profile)")
+            return false
+        }
         guard FileManager().fileExists(atPath: self.plistURL.path) else { return false }
         return await self.isLoaded()
     }
@@ -20,9 +26,14 @@ enum LaunchAgentManager {
     static func set(
         enabled: Bool,
         bundlePath: String,
+        profile: AppProfile = .current,
         loaded: Bool? = nil,
         writePlist: ((String) -> Void)? = nil) async -> Bool
     {
+        if profile.isActive {
+            self.logger.info("login-agent change skipped (unavailable under app profile)")
+            return false
+        }
         if enabled {
             let persist = writePlist ?? { self.writePlist(bundlePath: $0) }
             persist(bundlePath)
@@ -50,8 +61,13 @@ enum LaunchAgentManager {
         try? plist.write(to: self.plistURL, atomically: true, encoding: .utf8)
     }
 
-    static func plistContents(bundlePath: String) -> String {
-        """
+    static func plistContents(
+        bundlePath: String,
+        preferredPaths: [String] = CommandResolver.preferredPaths()) -> String
+    {
+        let path = self.escapePlistText(preferredPaths.joined(separator: ":"))
+        let profileEnvironment = self.profileEnvironmentPlistEntries()
+        return """
         <?xml version="1.0" encoding="UTF-8"?>
         <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
         <plist version="1.0">
@@ -60,41 +76,72 @@ enum LaunchAgentManager {
           <string>ai.openclaw.mac</string>
           <key>ProgramArguments</key>
           <array>
-            <string>\(bundlePath)/Contents/MacOS/OpenClaw</string>
+            <string>\(self.escapePlistText(bundlePath))/Contents/MacOS/OpenClaw</string>
           </array>
           <key>WorkingDirectory</key>
-          <string>\(FileManager().homeDirectoryForCurrentUser.path)</string>
+          <string>\(self.escapePlistText(FileManager().homeDirectoryForCurrentUser.path))</string>
           <key>RunAtLoad</key>
           <true/>
           <key>EnvironmentVariables</key>
           <dict>
             <key>PATH</key>
-            <string>\(CommandResolver.preferredPaths().joined(separator: ":"))</string>
+            <string>\(path)</string>\(profileEnvironment)
           </dict>
           <key>StandardOutPath</key>
-          <string>\(LogLocator.launchdLogPath)</string>
+          <string>\(self.escapePlistText(LogLocator.launchdLogPath))</string>
           <key>StandardErrorPath</key>
-          <string>\(LogLocator.launchdLogPath)</string>
+          <string>\(self.escapePlistText(LogLocator.launchdLogPath))</string>
         </dict>
         </plist>
         """
     }
 
+    private static func profileEnvironmentPlistEntries() -> String {
+        ["OPENCLAW_CONFIG_PATH", "OPENCLAW_STATE_DIR"].compactMap { key in
+            guard let value = OpenClawEnv.path(key) else { return nil }
+            return """
+
+                        <key>\(key)</key>
+                        <string>\(self.escapePlistText(value))</string>
+            """
+        }.joined()
+    }
+
+    private static func escapePlistText(_ value: String) -> String {
+        value
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+            .replacingOccurrences(of: "'", with: "&apos;")
+    }
+
     @discardableResult
     private static func runLaunchctl(_ args: [String]) async -> Int32 {
-        await Task.detached(priority: .utility) { () -> Int32 in
-            let process = Process()
-            process.launchPath = "/bin/launchctl"
-            process.arguments = args
-            let pipe = Pipe()
-            process.standardOutput = pipe
-            process.standardError = pipe
-            do {
-                _ = try process.runAndReadToEnd(from: pipe)
-                return process.terminationStatus
-            } catch {
-                return -1
-            }
-        }.value
+        #if DEBUG
+        self.testingLaunchctlCalls.append(args)
+        #endif
+        do {
+            return try await BoundedProcess.run(
+                path: "/bin/launchctl",
+                arguments: args,
+                timeout: 5).terminationStatus
+        } catch {
+            return -1
+        }
     }
 }
+
+#if DEBUG
+extension LaunchAgentManager {
+    private nonisolated(unsafe) static var testingLaunchctlCalls: [[String]] = []
+
+    static func _testResetLaunchctlCalls() {
+        self.testingLaunchctlCalls = []
+    }
+
+    static func _testLaunchctlCallSnapshot() -> [[String]] {
+        self.testingLaunchctlCalls
+    }
+}
+#endif

@@ -6,6 +6,11 @@
   },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
+  "modelCatalog": {
+    "discovery": {
+      "vercel-ai-gateway": "refreshable"
+    }
+  },
   "modelIdNormalization": {
     "providers": {
       "vercel-ai-gateway": {

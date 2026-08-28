@@ -41,11 +41,24 @@ export const GatewaySuspendBlockerSchema = closedObject({
   task: Type.Optional(GatewaySuspendTaskBlockerSchema),
 });
 
-export const GatewaySuspendPrepareParamsSchema = closedObject({ requestId: SuspensionTokenSchema });
+export const GatewaySuspendPrepareParamsSchema = closedObject({
+  requestId: SuspensionTokenSchema,
+  terminalPolicy: Type.Optional(Type.Union([Type.Literal("preserve"), Type.Literal("terminate")])),
+  drain: Type.Optional(Type.Boolean()),
+});
 
 export const GatewaySuspendPrepareBusyResultSchema = closedObject({
   status: Type.Literal("busy"),
   reason: Type.Union([Type.Literal("active-work"), Type.Literal("gateway-draining")]),
+  retryAfterMs: CountSchema,
+  activeCount: CountSchema,
+  blockers: Type.Array(GatewaySuspendBlockerSchema),
+});
+
+export const GatewaySuspendPrepareDrainingResultSchema = closedObject({
+  status: Type.Literal("draining"),
+  suspensionId: SuspensionTokenSchema,
+  expiresAtMs: CountSchema,
   retryAfterMs: CountSchema,
   activeCount: CountSchema,
   blockers: Type.Array(GatewaySuspendBlockerSchema),
@@ -61,6 +74,7 @@ export const GatewaySuspendPrepareReadyResultSchema = closedObject({
 
 export const GatewaySuspendPrepareResultSchema = Type.Union([
   GatewaySuspendPrepareBusyResultSchema,
+  GatewaySuspendPrepareDrainingResultSchema,
   GatewaySuspendPrepareReadyResultSchema,
 ]);
 
@@ -72,6 +86,14 @@ export const GatewaySuspendStatusRunningResultSchema = closedObject({
   status: Type.Literal("running"),
 });
 
+export const GatewaySuspendStatusDrainingResultSchema = closedObject({
+  status: Type.Literal("draining"),
+  expiresAtMs: CountSchema,
+  retryAfterMs: CountSchema,
+  activeCount: CountSchema,
+  blockers: Type.Array(GatewaySuspendBlockerSchema),
+});
+
 export const GatewaySuspendStatusReadyResultSchema = closedObject({
   status: Type.Literal("ready"),
   expiresAtMs: CountSchema,
@@ -79,6 +101,7 @@ export const GatewaySuspendStatusReadyResultSchema = closedObject({
 
 export const GatewaySuspendStatusResultSchema = Type.Union([
   GatewaySuspendStatusRunningResultSchema,
+  GatewaySuspendStatusDrainingResultSchema,
   GatewaySuspendStatusReadyResultSchema,
 ]);
 

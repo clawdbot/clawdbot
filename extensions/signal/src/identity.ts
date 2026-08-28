@@ -1,4 +1,5 @@
 // Signal plugin module implements identity behavior.
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { looksLikeUuid } from "./uuid.js";
@@ -104,29 +105,28 @@ export function normalizeSignalAllowRecipient(entry: string): string | undefined
   return parsed.kind === "phone" ? parsed.e164 : parsed.raw;
 }
 
-export function isSignalSenderAllowed(sender: SignalSender, allowFrom: string[]): boolean {
-  if (allowFrom.length === 0) {
-    return false;
-  }
-  const parsed = allowFrom
-    .map(parseSignalAllowEntry)
-    .filter((entry): entry is SignalAllowEntry => entry !== null);
-  if (parsed.some((entry) => entry.kind === "any")) {
-    return true;
-  }
+export function isSignalSenderAllowed(sender: SignalSender, allowFrom: readonly string[]): boolean {
+  const normalizedAllowFrom = allowFrom.flatMap((entry) => {
+    const parsed = parseSignalAllowEntry(entry);
+    if (!parsed) {
+      return [];
+    }
+    if (parsed.kind === "any") {
+      return ["*"];
+    }
+    return [parsed.kind === "phone" ? `phone:${parsed.e164}` : `uuid:${parsed.raw}`];
+  });
   // A sender carries an alias when signal-cli has both forms cached locally
   // (e.g. after the daemon resolved a number → uuid for an outbound send).
   // Treat both forms as the same identity so an allowlist entry approved as
   // one form keeps matching after the other becomes available.
   const senderE164 = sender.kind === "phone" ? sender.e164 : sender.aliases?.e164;
   const senderUuid = sender.kind === "uuid" ? sender.raw : sender.aliases?.uuid;
-  return parsed.some((entry) => {
-    if (entry.kind === "phone") {
-      return senderE164 !== undefined && entry.e164 === senderE164;
-    }
-    if (entry.kind === "uuid") {
-      return senderUuid !== undefined && entry.raw === senderUuid;
-    }
-    return false;
-  });
+  return resolveAllowlistMatchByCandidates({
+    allowList: normalizedAllowFrom,
+    candidates: [
+      { value: senderE164 ? `phone:${senderE164}` : undefined, source: "phone" },
+      { value: senderUuid ? `uuid:${senderUuid}` : undefined, source: "uuid" },
+    ],
+  }).allowed;
 }

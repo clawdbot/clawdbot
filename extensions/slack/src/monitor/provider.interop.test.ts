@@ -1,6 +1,12 @@
 // Slack tests cover provider.interop plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import { createSlackBoltApp, resolveSlackBoltInterop } from "./provider-support.js";
+import { WebSocketServer } from "ws";
+import {
+  createSlackBoltApp,
+  gracefulStopSlackApp,
+  resolveSlackBoltInterop,
+  startSlackSocketAndWaitForDisconnect,
+} from "./provider-support.js";
 
 describe("resolveSlackBoltInterop", () => {
   function FakeApp() {}
@@ -145,7 +151,7 @@ describe("createSlackBoltApp", () => {
         SocketModeReceiver: FakeSocketModeReceiver as never,
       },
       slackMode: "socket",
-      botToken: "xoxb-test",
+      token: "xoxb-test",
       appToken: "xapp-test",
       slackWebhookPath: "/slack/events",
       clientOptions,
@@ -187,7 +193,7 @@ describe("createSlackBoltApp", () => {
           SocketModeReceiver: FakeSocketModeReceiver as never,
         },
         slackMode: "socket",
-        botToken: "xoxb-test",
+        token: "xoxb-test",
         appToken: "xapp-test",
         slackWebhookPath: "/slack/events",
         clientOptions: {},
@@ -230,7 +236,7 @@ describe("createSlackBoltApp", () => {
         SocketModeReceiver: FakeSocketModeReceiver as never,
       },
       slackMode: "socket",
-      botToken: "xoxb-test",
+      token: "xoxb-test",
       appToken: "xapp-test",
       slackWebhookPath: "/slack/events",
       clientOptions: {},
@@ -268,6 +274,20 @@ describe("createSlackBoltApp", () => {
           event: { type: "message", user: "U_BOT" },
         },
         forwarded: false,
+      },
+      {
+        args: {
+          context: { botUserId: "U_USER" },
+          event: { type: "message", user: "U_USER", channel_type: "im" },
+        },
+        forwarded: false,
+      },
+      {
+        args: {
+          context: { botUserId: "U_USER" },
+          event: { type: "message", user: "U_OTHER", channel_type: "im" },
+        },
+        forwarded: true,
       },
       {
         args: {
@@ -321,7 +341,7 @@ describe("createSlackBoltApp", () => {
         SocketModeReceiver: FakeObservedSocketModeReceiver as never,
       },
       slackMode: "socket",
-      botToken: "xoxb-test",
+      token: "xoxb-test",
       appToken: "xapp-test",
       slackWebhookPath: "/slack/events",
       clientOptions: {},
@@ -342,7 +362,133 @@ describe("createSlackBoltApp", () => {
     ]);
   });
 
-  it("passes Socket Mode ping/pong options through Slack's public receiver API", () => {
+  it("cancels a pending native reconnect when the app is stopped and started again", async () => {
+    vi.useFakeTimers();
+    try {
+      const slackBoltModule = await import("@slack/bolt");
+      const { app, receiver } = createSlackBoltApp({
+        interop: resolveSlackBoltInterop({
+          defaultImport: slackBoltModule.default,
+          namespaceImport: slackBoltModule,
+        }),
+        slackMode: "socket",
+        token: "xoxb-test",
+        appToken: "xapp-test",
+        slackWebhookPath: "/slack/events",
+        clientOptions: {},
+      });
+      if (!receiver || typeof receiver !== "object") {
+        throw new Error("expected a Socket Mode receiver");
+      }
+      const client = Reflect.get(receiver, "client");
+      if (!client || typeof client !== "object") {
+        throw new Error("expected a Socket Mode client");
+      }
+      const start = vi.fn(async () => {
+        Reflect.set(client, "shuttingDown", false);
+      });
+      Reflect.set(client, "start", start);
+      const delayReconnectAttempt = Reflect.get(client, "delayReconnectAttempt");
+      if (typeof delayReconnectAttempt !== "function") {
+        throw new Error("expected a native reconnect scheduler");
+      }
+
+      void delayReconnectAttempt.call(client, start);
+      await gracefulStopSlackApp(app);
+      await app.start();
+      await vi.advanceTimersByTimeAsync(15_000);
+
+      expect(start).toHaveBeenCalledTimes(1);
+      await gracefulStopSlackApp(app);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("recovers a transient error and close through one real SDK socket lifecycle", async () => {
+    const socketServer = new WebSocketServer({ port: 0 });
+    await new Promise<void>((resolve) => {
+      socketServer.once("listening", resolve);
+    });
+    const address = socketServer.address();
+    if (!address || typeof address === "string") {
+      throw new Error("expected a TCP Socket Mode test server");
+    }
+    let connectionAttempts = 0;
+    let peakActiveConnections = 0;
+    socketServer.on("connection", (socket) => {
+      connectionAttempts += 1;
+      peakActiveConnections = Math.max(peakActiveConnections, socketServer.clients.size);
+      socket.send(JSON.stringify({ type: "hello", num_connections: socketServer.clients.size }));
+    });
+
+    const slackBoltModule = await import("@slack/bolt");
+    const { app, receiver } = createSlackBoltApp({
+      interop: resolveSlackBoltInterop({
+        defaultImport: slackBoltModule.default,
+        namespaceImport: slackBoltModule,
+      }),
+      slackMode: "socket",
+      token: "xoxb-test",
+      appToken: "xapp-test",
+      slackWebhookPath: "/slack/events",
+      clientOptions: {
+        fetch: async () =>
+          new Response(
+            JSON.stringify({
+              ok: true,
+              url: `ws://127.0.0.1:${address.port}`,
+            }),
+            { headers: { "content-type": "application/json" } },
+          ),
+      },
+    });
+    if (!receiver || typeof receiver !== "object") {
+      throw new Error("expected a Socket Mode receiver");
+    }
+    const client = Reflect.get(receiver, "client");
+    if (!client || typeof client !== "object") {
+      throw new Error("expected a Socket Mode client");
+    }
+    Reflect.set(client, "clientPingTimeoutMS", 20);
+    const appStart = vi.spyOn(app, "start");
+    const abortController = new AbortController();
+    const lifecycle = startSlackSocketAndWaitForDisconnect({
+      app,
+      abortSignal: abortController.signal,
+    });
+    let lifecycleSettled = false;
+    const lifecycleOutcome = lifecycle.then((value) => {
+      lifecycleSettled = true;
+      return value;
+    });
+
+    try {
+      await vi.waitFor(() => expect(socketServer.clients.size).toBe(1));
+      Reflect.get(client, "emit").call(client, "error", new Error("transient transport error"));
+      for (const socket of socketServer.clients) {
+        socket.terminate();
+      }
+      await vi.waitFor(() => expect(connectionAttempts).toBe(2));
+      await vi.waitFor(() => expect(socketServer.clients.size).toBe(1));
+
+      expect(appStart).toHaveBeenCalledTimes(1);
+      expect(peakActiveConnections).toBe(1);
+      expect(lifecycleSettled).toBe(false);
+    } finally {
+      abortController.abort();
+      await lifecycleOutcome;
+      await gracefulStopSlackApp(app);
+      for (const socket of socketServer.clients) {
+        socket.terminate();
+      }
+      await new Promise<void>((resolve, reject) => {
+        socketServer.close((error) => (error ? reject(error) : resolve()));
+      });
+    }
+  });
+
+  it("uses Slack's fixed Socket Mode receiver policy", () => {
     const clientOptions = { teamId: "T1" };
     const { receiver } = createSlackBoltApp({
       interop: {
@@ -351,15 +497,10 @@ describe("createSlackBoltApp", () => {
         SocketModeReceiver: FakeSocketModeReceiver as never,
       },
       slackMode: "socket",
-      botToken: "xoxb-test",
+      token: "xoxb-test",
       appToken: "xapp-test",
       slackWebhookPath: "/slack/events",
       clientOptions,
-      socketMode: {
-        clientPingTimeout: 20_000,
-        serverPingTimeout: 45_000,
-        pingPongLoggingEnabled: true,
-      },
     });
 
     const receiverArgs = (receiver as unknown as FakeSocketModeReceiver).args;
@@ -369,9 +510,7 @@ describe("createSlackBoltApp", () => {
     expect(receiverArgs).toEqual({
       appToken: "xapp-test",
       autoReconnectEnabled: true,
-      clientPingTimeout: 20_000,
-      serverPingTimeout: 45_000,
-      pingPongLoggingEnabled: true,
+      clientPingTimeout: 15_000,
       logger: receiverLogger,
       installerOptions: {
         clientOptions,
@@ -388,7 +527,7 @@ describe("createSlackBoltApp", () => {
         SocketModeReceiver: FakeSocketModeReceiver as never,
       },
       slackMode: "http",
-      botToken: "xoxb-test",
+      token: "xoxb-test",
       signingSecret: "secret",
       slackWebhookPath: "/slack/events",
       clientOptions,
@@ -410,6 +549,37 @@ describe("createSlackBoltApp", () => {
     expect((app as unknown as FakeApp).middleware).toHaveLength(1);
   });
 
+  it.each(["socket", "http"] as const)(
+    "routes %s Events API receive through the durable receiver wrapper",
+    async (slackMode) => {
+      const wrappedReceiver = { durable: true };
+      const wrapReceiver = vi.fn(() => wrappedReceiver as never);
+      const { app, receiver } = createSlackBoltApp({
+        interop: {
+          App: FakeApp as never,
+          HTTPReceiver: FakeHTTPReceiver as never,
+          SocketModeReceiver: FakeSocketModeReceiver as never,
+        },
+        slackMode,
+        token: "test-bot-token",
+        ...(slackMode === "socket"
+          ? { appToken: "test-app-token" }
+          : { signingSecret: "test-signing-secret" }),
+        slackWebhookPath: "/slack/events",
+        clientOptions: {},
+        wrapReceiver,
+      });
+
+      expect(wrapReceiver).toHaveBeenCalledWith(receiver);
+      expect((app as unknown as FakeApp).args.receiver).toBe(wrappedReceiver);
+      const receiverArgs = (receiver as unknown as FakeHTTPReceiver | FakeSocketModeReceiver).args;
+      expect(receiverArgs.processEventErrorHandler).toBeTypeOf("function");
+      await expect(
+        (receiverArgs.processEventErrorHandler as () => Promise<boolean>)(),
+      ).resolves.toBe(false);
+    },
+  );
+
   it("prevents Bolt's constructor-time token verification side effect", () => {
     let eagerAuthTestCalls = 0;
     class BoltLikeEagerAuthApp extends FakeApp {
@@ -428,7 +598,7 @@ describe("createSlackBoltApp", () => {
         SocketModeReceiver: FakeSocketModeReceiver as never,
       },
       slackMode: "socket",
-      botToken: "xoxb-invalid",
+      token: "xoxb-invalid",
       appToken: "xapp-test",
       slackWebhookPath: "/slack/events",
       clientOptions: {},

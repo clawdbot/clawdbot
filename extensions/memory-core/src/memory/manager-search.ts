@@ -4,6 +4,9 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/memory-core-host-engine-f
 import {
   cosineSimilarity,
   parseEmbedding,
+  type MemoryEntryProvenance,
+  type MemoryOriginClass,
+  type MemorySessionKind,
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
@@ -11,15 +14,12 @@ import {
   normalizeStringEntriesLower,
   uniqueStrings,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { vectorToBlob } from "./vector-blob.js";
+import type { VectorKnnRequest, VectorKnnResponse } from "./manager-search-knn.js";
 
 const FTS_QUERY_TOKEN_RE = /[\p{L}\p{N}_]+/gu;
 const SHORT_CJK_TRIGRAM_RE = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\u3131-\u3163]/u;
 const EXACT_PATH_SPECIFICITY_SQL_FUNCTION = "openclaw_memory_exact_path_specificity";
 const NORMALIZED_PATH_CONTAINS_SQL_FUNCTION = "openclaw_memory_normalized_path_contains";
-const VECTOR_KNN_OVERSAMPLE_FACTOR = 8;
-// sqlite-vec v0.1.9 rejects KNN queries with k above 4096.
-const MAX_VECTOR_KNN_K = 4096;
 
 // Scan fallback vector rows in bounded batches so large chunk tables (no usable
 // vec0 index) cannot pin the main thread for multi-second windows and starve
@@ -43,12 +43,67 @@ type SearchRowResult = {
   score: number;
   snippet: string;
   source: SearchSource;
+  provenance?: MemoryEntryProvenance;
 };
+
+const MEMORY_ORIGIN_CLASSES: ReadonlySet<string> = new Set([
+  "owner",
+  "agent",
+  "untrusted",
+  "system",
+]);
+const MEMORY_SESSION_KINDS: ReadonlySet<string> = new Set([
+  "interactive",
+  "cron",
+  "heartbeat",
+  "subagent",
+  "unknown",
+]);
+
+function readChunkProvenance(
+  db: DatabaseSync,
+  chunkId: string,
+): { provenance: MemoryEntryProvenance } | Record<string, never> {
+  const row = db
+    .prepare(
+      `SELECT origin_class, session_kind, observed_at, supersedes_key
+       FROM memory_index_chunk_provenance WHERE chunk_id = ?`,
+    )
+    .get(chunkId) as
+    | {
+        origin_class?: unknown;
+        session_kind?: unknown;
+        observed_at?: unknown;
+        supersedes_key?: unknown;
+      }
+    | undefined;
+  if (
+    !row ||
+    typeof row.origin_class !== "string" ||
+    !MEMORY_ORIGIN_CLASSES.has(row.origin_class) ||
+    typeof row.session_kind !== "string" ||
+    !MEMORY_SESSION_KINDS.has(row.session_kind) ||
+    typeof row.observed_at !== "number"
+  ) {
+    return {};
+  }
+  return {
+    provenance: {
+      originClass: row.origin_class as MemoryOriginClass,
+      sessionKind: row.session_kind as MemorySessionKind,
+      observedAt: row.observed_at,
+      ...(typeof row.supersedes_key === "string" && row.supersedes_key.trim()
+        ? { supersedesKey: row.supersedes_key }
+        : {}),
+    },
+  };
+}
 
 type PathKeywordSearchResult = SearchRowResult & {
   textScore: 0;
   pathScore: number;
   exactPathSpecificity: ExactPathSpecificity;
+  hasBodyMatch: false;
 };
 
 function comparePathKeywordSearchResults(
@@ -282,16 +337,6 @@ function buildMatchQueryFromTerms(terms: string[]): string | null {
   return quoted.join(" AND ");
 }
 
-function readCount(row: Record<string, unknown> | undefined): number {
-  if (typeof row?.count === "bigint") {
-    return Number(row.count);
-  }
-  if (typeof row?.count === "number") {
-    return row.count;
-  }
-  return 0;
-}
-
 function resolveProviderModels(primary: string, aliases: string[] | undefined): string[] {
   return Array.from(new Set([primary, ...(aliases ?? []).filter(Boolean)]));
 }
@@ -392,15 +437,17 @@ export async function searchVector(params: {
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
+  signal?: AbortSignal;
   ensureVectorReady: (dimensions: number) => Promise<boolean>;
+  runVectorKnn?: (request: VectorKnnRequest, signal?: AbortSignal) => Promise<VectorKnnResponse>;
   sourceFilterVec: { sql: string; params: SearchSource[] };
   sourceFilterChunks: { sql: string; params: SearchSource[] };
 }): Promise<SearchRowResult[]> {
   if (params.queryVec.length === 0 || params.limit <= 0) {
     return [];
   }
+  params.signal?.throwIfAborted();
   const providerModels = resolveProviderModels(params.providerModel, params.providerModelAliases);
-  const vectorModelFilter = buildModelFilter("c.model", providerModels);
   const searchFallback = () =>
     searchChunksByEmbedding({
       db: params.db,
@@ -410,81 +457,42 @@ export async function searchVector(params: {
       queryVec: params.queryVec,
       limit: params.limit,
       snippetMaxChars: params.snippetMaxChars,
+      signal: params.signal,
     });
-  if (await params.ensureVectorReady(params.queryVec.length)) {
-    // Use sqlite-vec's native KNN (MATCH ? AND k = ?) for candidate selection,
-    // which runs in ~O(log N + k) via the vec0 index, instead of the previous
-    // full-table scan over vec_distance_cosine(). Keep vec_distance_cosine() in
-    // the SELECT so `score = 1 - dist` stays in the cosine [0, 1] range the
-    // downstream merge/minScore pipeline expects. (memory_index_chunks_vec is created with
-    // sqlite-vec's default L2 distance, so v.distance cannot be used directly
-    // for scoring.)
-    const qBlob = vectorToBlob(params.queryVec);
-    const runVectorQuery = (candidateLimit: number) =>
-      params.db
-        .prepare(
-          `SELECT c.id, c.path, c.start_line, c.end_line, c.text,\n` +
-            `       c.source,\n` +
-            `       vec_distance_cosine(v.embedding, ?) AS dist\n` +
-            `  FROM ${params.vectorTable} v\n` +
-            `  JOIN memory_index_chunks c ON c.id = v.id\n` +
-            ` WHERE v.embedding MATCH ? AND k = ? AND ${vectorModelFilter}${params.sourceFilterVec.sql}\n` +
-            ` ORDER BY dist ASC\n` +
-            ` LIMIT ?`,
-        )
-        .all(
-          qBlob,
-          qBlob,
-          candidateLimit,
-          ...providerModels,
-          ...params.sourceFilterVec.params,
-          params.limit,
-        ) as Array<{
-        id: string;
-        path: string;
-        start_line: number;
-        end_line: number;
-        text: string;
-        source: SearchSource;
-        dist: number;
-      }>;
-
-    const candidateLimit = Math.min(params.limit * VECTOR_KNN_OVERSAMPLE_FACTOR, MAX_VECTOR_KNN_K);
-    let rows = runVectorQuery(candidateLimit);
-    if (rows.length < params.limit) {
-      const matchingChunkCount = readCount(
-        params.db
-          .prepare(
-            `SELECT COUNT(*) AS count FROM memory_index_chunks c WHERE ${vectorModelFilter}${params.sourceFilterVec.sql}`,
-          )
-          .get(...providerModels, ...params.sourceFilterVec.params),
-      );
-      if (matchingChunkCount > rows.length) {
-        const vectorCount = readCount(
-          params.db.prepare(`SELECT COUNT(*) AS count FROM ${params.vectorTable}`).get(),
-        );
-        const widenedLimit = Math.min(vectorCount, MAX_VECTOR_KNN_K);
-        if (widenedLimit > candidateLimit) {
-          rows = runVectorQuery(widenedLimit);
-        }
-        const requiredMatches = Math.min(params.limit, matchingChunkCount);
-        if (vectorCount > MAX_VECTOR_KNN_K && rows.length < requiredMatches) {
-          // Post-KNN model/source filters can hide every eligible row beyond
-          // sqlite-vec's ceiling; the bounded scan preserves filtered recall.
-          return await searchFallback();
-        }
-      }
+  const vectorReady = await params.ensureVectorReady(params.queryVec.length);
+  params.signal?.throwIfAborted();
+  if (vectorReady) {
+    if (!params.runVectorKnn) {
+      throw new Error("memory vector KNN subprocess is unavailable");
     }
-
-    return rows.map((row) => ({
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score: 1 - row.dist,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    }));
+    const response = await params.runVectorKnn(
+      {
+        vectorTable: params.vectorTable,
+        providerModels,
+        queryVec: params.queryVec,
+        limit: params.limit,
+        snippetMaxChars: params.snippetMaxChars,
+        sourceFilter: params.sourceFilterVec,
+      },
+      params.signal,
+    );
+    if (response.fallbackScanRequired) {
+      return await searchFallback();
+    }
+    return response.rows.map((row) =>
+      Object.assign(
+        {
+          id: row.id,
+          path: row.path,
+          startLine: row.start_line,
+          endLine: row.end_line,
+          score: 1 - row.dist,
+          snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
+          source: row.source,
+        },
+        readChunkProvenance(params.db, row.id),
+      ),
+    );
   }
 
   return await searchFallback();
@@ -498,6 +506,7 @@ async function searchChunksByEmbedding(params: {
   queryVec: number[];
   limit: number;
   snippetMaxChars: number;
+  signal?: AbortSignal;
 }): Promise<SearchRowResult[]> {
   if (params.limit <= 0) {
     return [];
@@ -540,6 +549,9 @@ async function searchChunksByEmbedding(params: {
     for (const row of batch) {
       const score = cosineSimilarity(params.queryVec, parseEmbedding(row.embedding));
       if (Number.isFinite(score)) {
+        // Provenance is returned metadata, not a ranking input; enrich only the
+        // retained top-N below so the streaming scan stays one query per batch
+        // instead of one provenance read per candidate.
         const result: SearchRowResult = {
           id: row.id,
           path: row.path,
@@ -569,8 +581,13 @@ async function searchChunksByEmbedding(params: {
       break;
     }
     await yieldToEventLoop();
+    params.signal?.throwIfAborted();
   }
   topResults.sort((a, b) => b.score - a.score);
+  // Read provenance once for the final retained set, not per scored candidate.
+  for (const result of topResults) {
+    Object.assign(result, readChunkProvenance(params.db, result.id));
+  }
   return topResults;
 }
 
@@ -585,7 +602,8 @@ export async function searchKeyword(params: {
   buildFtsQuery: (raw: string) => string | null;
   bm25RankToScore: (rank: number) => number;
   boostFallbackRanking?: boolean;
-}): Promise<Array<SearchRowResult & { textScore: number }>> {
+  rankingQuery?: string;
+}): Promise<Array<SearchRowResult & { textScore: number; hasBodyMatch: true }>> {
   if (params.limit <= 0) {
     return [];
   }
@@ -666,25 +684,36 @@ export async function searchKeyword(params: {
   }
 
   return rows.map((row) => {
-    const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 1;
+    // LIKE fallback only confirms substring recall — it has no BM25 ranking, so
+    // treating it as a perfect text match (textScore = 1) let weak substring
+    // hits combine with vectorScore in the hybrid merge and produce spurious
+    // finalScore = 1.0 for non-identical content. Score these as a zero text
+    // signal so only the vector score contributes to contentScore; boost mode
+    // still derives a lexicalBoost from query/text overlap via
+    // scoreFallbackKeywordResult below.
+    const textScore = usedMatch ? params.bm25RankToScore(row.rank) : 0;
     const score = params.boostFallbackRanking
       ? scoreFallbackKeywordResult({
-          query: params.query,
+          query: params.rankingQuery ?? params.query,
           path: row.path,
           text: row.text,
           ftsScore: textScore,
         })
       : textScore;
-    return {
-      id: row.id,
-      path: row.path,
-      startLine: row.start_line,
-      endLine: row.end_line,
-      score,
-      textScore,
-      snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
-      source: row.source,
-    };
+    return Object.assign(
+      {
+        id: row.id,
+        path: row.path,
+        startLine: row.start_line,
+        endLine: row.end_line,
+        score,
+        textScore,
+        hasBodyMatch: true as const,
+        snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
+        source: row.source,
+      },
+      readChunkProvenance(params.db, row.id),
+    );
   });
 }
 
@@ -799,8 +828,8 @@ export async function searchPathKeyword(params: {
       exactRows = loadExactRows(false);
     }
   }
-  const exactResults = exactRows.map(
-    (row): PathKeywordSearchResult => ({
+  const exactResults = exactRows.map((row): PathKeywordSearchResult => {
+    const result: PathKeywordSearchResult = {
       id: row.id,
       path: row.path,
       startLine: row.start_line,
@@ -809,10 +838,16 @@ export async function searchPathKeyword(params: {
       textScore: 0,
       pathScore: 0,
       exactPathSpecificity: row.exact_path_specificity,
+      hasBodyMatch: false,
       snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
       source: row.source,
-    }),
-  );
+    };
+    const provenance = readChunkProvenance(params.db, row.id);
+    if ("provenance" in provenance) {
+      result.provenance = provenance.provenance;
+    }
+    return result;
+  });
   if (!pathPlans.some((entry) => entry.matchQuery || entry.substringTerms.length > 0)) {
     return exactResults;
   }
@@ -944,9 +979,11 @@ export async function searchPathKeyword(params: {
         textScore: 0,
         pathScore,
         exactPathSpecificity,
+        hasBodyMatch: false,
         snippet: truncateUtf16Safe(row.text, params.snippetMaxChars),
         source: row.source,
       };
+      Object.assign(result, readChunkProvenance(params.db, row.id));
       const existing = lexicalById.get(result.id);
       if (!existing) {
         lexicalById.set(result.id, result);

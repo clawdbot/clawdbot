@@ -1,16 +1,16 @@
-// Covers update status, dependency status, and registry fetch helpers.
+// Covers update version resolution, Git install labels, and registry fetch helpers.
 import fs from "node:fs/promises";
 import http from "node:http";
 import type { AddressInfo } from "node:net";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { withTempDir } from "../test-helpers/temp-dir.js";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { useMockHttp } from "../test-utils/mock-http.js";
+import { fetchNpmPackageTargetStatus } from "./update-check-package-target.js";
 import {
   checkUpdateStatus,
   compareSemverStrings,
-  fetchNpmPackageTargetStatus,
   fetchNpmTagVersion,
   formatGitInstallLabel,
   resolveExtendedStablePackage,
@@ -101,6 +101,7 @@ describe("resolveNpmChannelTag", () => {
         "openclaw@latest",
         "version",
         "engines.node",
+        "openclaw.schemaVersions",
         "--json",
         "--global",
       ],
@@ -118,6 +119,7 @@ describe("resolveNpmChannelTag", () => {
         {
           version: "2026.7.1",
           engines: { node: ">=22.22.3" },
+          openclaw: { schemaVersions: { state: 3, agent: 11 } },
         },
       ]),
       stderr: "",
@@ -134,11 +136,12 @@ describe("resolveNpmChannelTag", () => {
       target: "latest",
       version: "2026.7.1",
       nodeEngine: ">=22.22.3",
+      schemaVersions: { state: 3, agent: 11 },
     });
   });
 
   it("uses npm global scope, user config auth, and ignores project npmrc for real metadata", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-npm-view-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-update-check-npm-view-" }, async (base) => {
       const requests: Array<{ url: string; authorization?: string }> = [];
       const server = http.createServer((req, res) => {
         requests.push({
@@ -233,6 +236,51 @@ describe("resolveNpmChannelTag", () => {
       version: "2026.6.8",
       nodeEngine: ">=22.19.0",
     });
+  });
+
+  it("times out when the public registry response body stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      const fetchMock = vi.fn<typeof fetch>(async (_input, init) => {
+        const signal = init?.signal;
+        if (!signal) {
+          throw new Error("missing registry request signal");
+        }
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              signal.addEventListener("abort", () => controller.error(signal.reason), {
+                once: true,
+              });
+            },
+          }),
+          { headers: { "content-type": "application/json" } },
+        );
+      });
+      vi.stubGlobal("fetch", fetchMock);
+
+      const resultPromise = Promise.race([
+        fetchNpmPackageTargetStatus({ target: "latest", timeoutMs: 50 }),
+        new Promise<never>((_resolve, reject) => {
+          setTimeout(() => reject(new Error("registry response body exceeded timeoutMs")), 2000);
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(2000);
+
+      await expect(resultPromise).resolves.toMatchObject({
+        target: "latest",
+        version: null,
+        nodeEngine: null,
+        error: "TimeoutError: request timed out",
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://registry.npmjs.org/openclaw/latest",
+        expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      vi.useRealTimers();
+    }
   });
 
   it("cancels public registry HTTP failure bodies", async () => {
@@ -557,148 +605,56 @@ describe("formatGitInstallLabel", () => {
   });
 });
 
-describe("checkUpdateStatus", () => {
-  it("returns unknown install status when root is missing", async () => {
-    await expect(
-      checkUpdateStatus({ root: null, includeRegistry: false, timeoutMs: 1000 }),
-    ).resolves.toEqual({
+describe("checkUpdateStatus registry behavior", () => {
+  it.each([
+    { channel: "stable", tag: "latest" },
+    { channel: "beta", tag: "beta" },
+    { channel: "dev", tag: "dev" },
+  ] as const)("preserves $channel registry failures in status", async ({ channel, tag }) => {
+    for (const queryTag of channel === "beta" ? ["beta", "latest"] : [tag]) {
+      mockHttp.intercept({
+        url: `https://registry.npmjs.org/openclaw/${queryTag}`,
+        reply: { status: 503, body: "unavailable" },
+      });
+    }
+
+    const status = await checkUpdateStatus({
       root: null,
-      installKind: "unknown",
-      packageManager: "unknown",
-      registry: undefined,
+      includeRegistry: true,
+      registryChannel: channel,
+      timeoutMs: 1000,
     });
+
+    expect(status.registry).toEqual({ latestVersion: null, tag, error: "HTTP 503" });
   });
 
-  it("detects package installs for non-git roots", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-" }, async (root) => {
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ packageManager: "npm@10.0.0" }),
-        "utf8",
-      );
-      await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");
-      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
+  it.each(["beta", "latest"])(
+    "uses the available beta-channel target when %s fails",
+    async (failedTag) => {
+      const selectedTag = failedTag === "beta" ? "latest" : "beta";
+      for (const tag of ["beta", "latest"]) {
+        mockHttp.intercept({
+          url: `https://registry.npmjs.org/openclaw/${tag}`,
+          reply:
+            tag === failedTag
+              ? { status: 503, body: "unavailable" }
+              : { json: { version: "2026.6.6" } },
+        });
+      }
 
       const status = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
-      expect(status.root).toBe(root);
-      expect(status.installKind).toBe("package");
-      expect(status.packageManager).toBe("npm");
-      expect(status.git).toBeUndefined();
-      expect(status.registry).toBeUndefined();
-      expect(status.deps?.manager).toBe("npm");
-    });
-  });
-
-  it("reports missing and stale dependency markers for package installs", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-deps-" }, async (root) => {
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
-        "utf8",
-      );
-      const lockfilePath = path.join(root, "pnpm-lock.yaml");
-      await fs.writeFile(lockfilePath, "lock", "utf8");
-
-      const missing = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
-      expect(missing.deps).toMatchObject({
-        manager: "pnpm",
-        status: "missing",
-        reason: "node_modules marker missing",
-      });
-
-      const markerPath = path.join(root, "node_modules", ".modules.yaml");
-      await fs.mkdir(path.dirname(markerPath), { recursive: true });
-      await fs.writeFile(markerPath, "marker", "utf8");
-      const staleDate = new Date(Date.now() - 10_000);
-      const freshDate = new Date();
-      await fs.utimes(markerPath, staleDate, staleDate);
-      await fs.utimes(lockfilePath, freshDate, freshDate);
-
-      const stale = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
-      expect(stale.deps).toMatchObject({
-        manager: "pnpm",
-        status: "stale",
-        reason: "lockfile newer than install marker",
-      });
-
-      const newerMarker = new Date(Date.now() + 2_000);
-      await fs.utimes(markerPath, newerMarker, newerMarker);
-      const ok = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
-      expect(ok.deps?.status).toBe("ok");
-    });
-  });
-
-  it("detects npm package installs that ship pnpm package metadata with shrinkwrap", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-npm-shrinkwrap-" }, async (root) => {
-      await fs.writeFile(
-        path.join(root, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@11.2.2" }),
-        "utf8",
-      );
-      await fs.writeFile(path.join(root, "npm-shrinkwrap.json"), "{}", "utf8");
-      await fs.mkdir(path.join(root, "node_modules"), { recursive: true });
-
-      const status = await checkUpdateStatus({
-        root,
-        includeRegistry: false,
-        fetchGit: false,
+        root: null,
+        includeRegistry: true,
+        registryChannel: "beta",
         timeoutMs: 1000,
       });
 
-      expect(status.installKind).toBe("package");
-      expect(status.packageManager).toBe("npm");
-      expect(status.deps?.manager).toBe("npm");
-      expect(status.deps?.lockfilePath).toBe(path.join(root, "npm-shrinkwrap.json"));
-    });
-  });
-
-  it("treats symlinked git installs as git roots", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-git-" }, async (base) => {
-      const repoRoot = path.join(base, "repo");
-      const linkedRoot = path.join(base, "linked-openclaw");
-      await fs.mkdir(repoRoot, { recursive: true });
-      await fs.writeFile(
-        path.join(repoRoot, "package.json"),
-        JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),
-        "utf8",
-      );
-      await runCommandWithTimeout(["git", "init"], { cwd: repoRoot, timeoutMs: 1000 });
-      await fs.symlink(repoRoot, linkedRoot);
-
-      const status = await checkUpdateStatus({
-        root: linkedRoot,
-        includeRegistry: false,
-        fetchGit: false,
-        timeoutMs: 1000,
-      });
-      expect(status.root).toBe(linkedRoot);
-      expect(status.installKind).toBe("git");
-      expect(status.git?.root).toBe(linkedRoot);
-    });
-  });
+      expect(status.registry).toEqual({ latestVersion: "2026.6.6", tag: selectedTag });
+    },
+  );
 
   it("reports unsupported_git_channel for Git status without querying npm", async () => {
-    await withTempDir({ prefix: "openclaw-update-check-git-channel-" }, async (root) => {
+    await withTestDir({ prefix: "openclaw-update-check-git-channel-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
         JSON.stringify({ name: "openclaw", packageManager: "pnpm@10.0.0" }),

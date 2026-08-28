@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawPluginApi } from "../api.js";
 import type { VoiceCallConfig } from "./config.js";
-import type { CoreAgentDeps } from "./core-bridge.js";
 import { buildRealtimeVoiceInstructions } from "./realtime-agent-context.js";
 import { createVoiceCallBaseConfig } from "./test-fixtures.js";
 
@@ -45,7 +45,7 @@ function createConfig(overrides?: Partial<VoiceCallConfig["realtime"]>): VoiceCa
   return config;
 }
 
-function createAgentRuntime(workspaceDir: string): CoreAgentDeps {
+function createAgentRuntime(workspaceDir: string): OpenClawPluginApi["runtime"]["agent"] {
   return {
     resolveAgentIdentity: vi.fn(() => ({
       name: "Claw Voice",
@@ -55,7 +55,7 @@ function createAgentRuntime(workspaceDir: string): CoreAgentDeps {
       creature: "operator",
     })),
     resolveAgentWorkspaceDir: vi.fn(() => workspaceDir),
-  } as unknown as CoreAgentDeps;
+  } as unknown as OpenClawPluginApi["runtime"]["agent"];
 }
 
 describe("buildRealtimeVoiceInstructions", () => {
@@ -81,6 +81,7 @@ describe("buildRealtimeVoiceInstructions", () => {
       }),
       coreConfig,
       agentRuntime: createAgentRuntime(workspaceDir),
+      agentId: "voice",
     });
 
     expect(instructions).toContain("OpenClaw agent voice context:");
@@ -114,6 +115,7 @@ describe("buildRealtimeVoiceInstructions", () => {
       config,
       coreConfig: { agents: { list: [{ id: agentId }] } } as OpenClawConfig,
       agentRuntime: createAgentRuntime("/unused"),
+      agentId,
     });
 
     expect(instructions).toBe(`Base voice instructions.\n\n${expectedContext}\n[truncated]`);

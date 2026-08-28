@@ -1,345 +1,317 @@
-// Doctor-only import for the retired commitments JSON store.
-import { createHash, randomUUID } from "node:crypto";
-import fs from "node:fs";
+// Doctor-only removal for the retired commitments JSON store.
 import path from "node:path";
-import type { DatabaseSync } from "node:sqlite";
+import { root, type Root } from "@openclaw/fs-safe";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  coerceCommitmentRecord,
-  commitmentImmutableIdentity,
-  commitmentRecordFromRow,
-  commitmentRecordsEqual,
-  commitmentRecordToRow,
-  commitmentRecordToUpdate,
-  type CommitmentRow,
-  type CommitmentsDatabase,
-} from "../commitments/store-record.js";
-import type { CommitmentRecord } from "../commitments/types.js";
-import {
-  openOpenClawStateDatabase,
+  openExistingOpenClawStateDatabaseReadOnly,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import {
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-  getNodeSqliteKysely,
-} from "./kysely-sync.js";
+  markLegacyMigrationSourceRemoved,
+  readLegacyMigrationReceipt,
+  readLegacyMigrationReceiptFromDatabase,
+  recordLegacyMigrationReceipt,
+  resolveLegacyMigrationSourceKey,
+} from "./state-migrations.receipts.js";
+import {
+  LegacyMigrationSourceClaim,
+  legacyMigrationSourceOrClaimMayExist,
+  legacyMigrationSourceSnapshotsMatch,
+  readLegacyMigrationSourceSnapshot,
+  type LegacyMigrationSourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
-type LegacySourceSnapshot = {
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  raw: string;
-  sha256: string;
-  size: number;
+const LEGACY_COMMITMENTS_PATH = "commitments/commitments.json";
+const DOCTOR_CLAIM_SUFFIX = ".doctor-discarding";
+const MAX_LEGACY_COMMITMENTS_BYTES = 16 * 1024 * 1024;
+const MIGRATION_KIND = "legacy-commitments-json";
+const LEGACY_STORE_KEYS = new Set(["version", "commitments"]);
+const utf8Decoder = new TextDecoder("utf-8", { fatal: true });
+
+type LegacyCommitmentsSnapshot = LegacyMigrationSourceSnapshot & {
+  recordCount: number;
 };
 
-const LEGACY_STORE_KEYS = new Set(["version", "commitments"]);
-const ACTIVE_STATUSES = ["pending", "snoozed"] as const;
-
 function resolveLegacyCommitmentsPath(stateDir: string): string {
-  return path.join(stateDir, "commitments", "commitments.json");
+  return path.join(stateDir, LEGACY_COMMITMENTS_PATH);
 }
 
-/** Detect retired commitment state only when an explicit doctor flow opts in. */
-export function detectLegacyCommitments(params: {
+/** Detect the exact retired store only when an explicit Doctor flow opts in. */
+export async function detectLegacyCommitments(params: {
   stateDir: string;
+  env?: NodeJS.ProcessEnv;
   doctorOnlyStateMigrations?: boolean;
-}): LegacyStateDetection["commitments"] {
+}): Promise<NonNullable<LegacyStateDetection["commitments"]>> {
   const sourcePath = resolveLegacyCommitmentsPath(params.stateDir);
+  let hasPendingReceipt = false;
+  if (
+    params.doctorOnlyStateMigrations === true &&
+    !legacyMigrationSourceOrClaimMayExist(sourcePath, DOCTOR_CLAIM_SUFFIX)
+  ) {
+    try {
+      const database = await openExistingOpenClawStateDatabaseReadOnly({ env: params.env });
+      try {
+        const receipt = database
+          ? readLegacyMigrationReceiptFromDatabase(
+              database.db,
+              resolveLegacyMigrationSourceKey("commitments-json", sourcePath),
+            )
+          : null;
+        hasPendingReceipt = receipt !== null && !receipt.removedSource;
+      } finally {
+        database?.walMaintenance.close();
+      }
+    } catch {
+      // Detection must not replace the schema repair diagnostics for an older or unhealthy DB.
+    }
+  }
   return {
     sourcePath,
-    hasLegacy: params.doctorOnlyStateMigrations === true && fs.existsSync(sourcePath),
+    hasLegacy:
+      params.doctorOnlyStateMigrations === true &&
+      (legacyMigrationSourceOrClaimMayExist(sourcePath, DOCTOR_CLAIM_SUFFIX) || hasPendingReceipt),
   };
 }
 
-function readLegacySourceSnapshot(sourcePath: string): LegacySourceSnapshot {
-  const before = fs.lstatSync(sourcePath);
-  if (!before.isFile() || before.isSymbolicLink()) {
-    throw new Error("legacy commitments source is not a regular non-symlink file");
+function parseLegacyCommitments(buffer: Buffer): number {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(utf8Decoder.decode(buffer));
+  } catch {
+    throw new Error("retired commitments store is not valid UTF-8 JSON");
   }
-  const raw = fs.readFileSync(sourcePath, "utf8");
-  const after = fs.lstatSync(sourcePath);
   if (
-    !after.isFile() ||
-    after.isSymbolicLink() ||
-    before.dev !== after.dev ||
-    before.ino !== after.ino ||
-    before.size !== after.size ||
-    before.mtimeMs !== after.mtimeMs
+    !isRecord(parsed) ||
+    parsed.version !== 1 ||
+    !Array.isArray(parsed.commitments) ||
+    Object.keys(parsed).some((key) => !LEGACY_STORE_KEYS.has(key))
   ) {
-    throw new Error("legacy commitments source changed while doctor was reading it");
+    throw new Error(
+      "retired commitments store must contain only version 1 and a commitments array",
+    );
   }
-  return {
-    dev: after.dev,
-    ino: after.ino,
-    mtimeMs: after.mtimeMs,
-    raw,
-    sha256: createHash("sha256").update(raw).digest("hex"),
-    size: after.size,
-  };
+  return parsed.commitments.length;
 }
 
-function sourceSnapshotsMatch(left: LegacySourceSnapshot, right: LegacySourceSnapshot): boolean {
-  return (
-    left.dev === right.dev &&
-    left.ino === right.ino &&
-    left.mtimeMs === right.mtimeMs &&
-    left.sha256 === right.sha256 &&
-    left.size === right.size
-  );
-}
-
-function assertLegacySourceUnchanged(sourcePath: string, snapshot: LegacySourceSnapshot): void {
-  if (!sourceSnapshotsMatch(readLegacySourceSnapshot(sourcePath), snapshot)) {
-    throw new Error("legacy commitments source changed after doctor loaded it");
-  }
-}
-
-function parseLegacyCommitments(raw: string): CommitmentRecord[] {
-  const parsed = JSON.parse(raw) as unknown;
-  if (!isRecord(parsed) || parsed.version !== 1 || !Array.isArray(parsed.commitments)) {
-    throw new Error("legacy commitments store must be a version 1 JSON object");
-  }
-  const unexpectedKey = Object.keys(parsed).find((key) => !LEGACY_STORE_KEYS.has(key));
-  if (unexpectedKey) {
-    throw new Error(`legacy commitments store has unexpected field ${unexpectedKey}`);
-  }
-  const records: CommitmentRecord[] = [];
-  const ids = new Set<string>();
-  for (const [index, rawRecord] of parsed.commitments.entries()) {
-    const record = coerceCommitmentRecord(rawRecord);
-    if (!record) {
-      throw new Error(`legacy commitment at index ${index} is invalid`);
-    }
-    if (ids.has(record.id)) {
-      throw new Error(`legacy commitments store contains duplicate id ${record.id}`);
-    }
-    ids.add(record.id);
-    records.push(record);
-  }
-  return records;
-}
-
-function sameLogicalScope(left: CommitmentRecord, right: CommitmentRecord): boolean {
-  return (
-    left.agentId === right.agentId &&
-    left.sessionKey === right.sessionKey &&
-    left.channel === right.channel &&
-    (left.accountId ?? "") === (right.accountId ?? "") &&
-    (left.to ?? "") === (right.to ?? "") &&
-    (left.threadId ?? "") === (right.threadId ?? "") &&
-    (left.senderId ?? "") === (right.senderId ?? "") &&
-    left.dedupeKey === right.dedupeKey
-  );
-}
-
-function findActiveLogicalRow(
-  db: DatabaseSync,
-  record: CommitmentRecord,
-): CommitmentRow | undefined {
-  if (record.status !== "pending" && record.status !== "snoozed") {
-    return undefined;
-  }
-  const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(db);
-  const candidates = executeSqliteQuerySync(
-    db,
-    commitmentsDb
-      .selectFrom("commitments")
-      .selectAll()
-      .where("agent_id", "=", record.agentId)
-      .where("session_key", "=", record.sessionKey)
-      .where("channel", "=", record.channel)
-      .where("dedupe_key", "=", record.dedupeKey)
-      .where("status", "in", [...ACTIVE_STATUSES])
-      .orderBy("updated_at_ms", "desc")
-      .orderBy("id", "asc"),
-  ).rows;
-  return candidates.find((candidate) =>
-    sameLogicalScope(commitmentRecordFromRow(candidate), record),
-  );
-}
-
-function updateCommitmentRow(db: DatabaseSync, record: CommitmentRecord): void {
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<CommitmentsDatabase>(db)
-      .updateTable("commitments")
-      .set(commitmentRecordToUpdate(record))
-      .where("id", "=", record.id),
-  );
-}
-
-function restoreClaimAfterCleanupFailure(claimPath: string, sourcePath: string): string | null {
-  if (!fs.existsSync(claimPath) || fs.existsSync(sourcePath)) {
-    return null;
-  }
-  try {
-    fs.renameSync(claimPath, sourcePath);
-    return null;
-  } catch (error) {
-    return `; claimed source remains at ${claimPath} because restore also failed: ${String(error)}`;
-  }
-}
-
-function claimAndRemoveSource(params: {
-  sourcePath: string;
-  snapshot: LegacySourceSnapshot;
-  beforeClaim?: () => void;
-  removeSource?: (sourcePath: string) => void;
-}): void {
-  params.beforeClaim?.();
-  const claimPath = `${params.sourcePath}.doctor-importing-${process.pid}-${randomUUID()}`;
-  fs.renameSync(params.sourcePath, claimPath);
-  try {
-    const claimed = readLegacySourceSnapshot(claimPath);
-    if (!sourceSnapshotsMatch(claimed, params.snapshot)) {
-      throw new Error("legacy commitments source changed before doctor could claim it");
-    }
-    (params.removeSource ?? fs.unlinkSync)(claimPath);
-  } catch (error) {
-    const restoreFailure = restoreClaimAfterCleanupFailure(claimPath, params.sourcePath);
-    throw new Error(`${String(error)}${restoreFailure ?? ""}`, { cause: error });
-  }
-}
-
-/** Import, verify, and remove the retired JSON store during explicit doctor repair. */
-export function migrateLegacyCommitments(params: {
-  detected: LegacyStateDetection["commitments"];
+async function readLegacyCommitmentsSnapshot(params: {
+  stateRoot: Root;
   stateDir: string;
+  sourcePath: string;
+}): Promise<LegacyCommitmentsSnapshot> {
+  const snapshot = await readLegacyMigrationSourceSnapshot({
+    ...params,
+    maxBytes: MAX_LEGACY_COMMITMENTS_BYTES,
+    label: "commitments",
+  });
+  return { ...snapshot, recordCount: parseLegacyCommitments(snapshot.buffer) };
+}
+
+function recordDiscardDecision(params: {
+  env: NodeJS.ProcessEnv;
+  sourcePath: string;
+  snapshot: LegacyCommitmentsSnapshot;
+}): { recreated: boolean; sourceKey: string } {
+  const sourceKey = resolveLegacyMigrationSourceKey("commitments-json", params.sourcePath);
+  const runId = `${sourceKey}:${params.snapshot.sha256.slice(0, 16)}`;
+  const now = Date.now();
+  let recreated = false;
+  runOpenClawStateWriteTransaction(
+    ({ db }) => {
+      recreated = readLegacyMigrationReceiptFromDatabase(db, sourceKey)?.removedSource === true;
+      const reportJson = JSON.stringify({
+        source: MIGRATION_KIND,
+        target: null,
+        decision: "retired-source-discarded",
+        sourceSha256: params.snapshot.sha256,
+        sourceRecordCount: params.snapshot.recordCount,
+        importedRecordCount: 0,
+        archivedRecordCount: 0,
+        exportedRecordCount: 0,
+      });
+      recordLegacyMigrationReceipt(db, {
+        sourceKey,
+        migrationKind: MIGRATION_KIND,
+        sourcePath: params.sourcePath,
+        targetTable: "commitments",
+        sourceSha256: params.snapshot.sha256,
+        sourceSizeBytes: params.snapshot.size,
+        sourceRecordCount: params.snapshot.recordCount,
+        runId,
+        now,
+        reportJson,
+        upsert: true,
+      });
+    },
+    { env: params.env },
+    { operationLabel: "state-migration.commitments" },
+  );
+  return { recreated, sourceKey };
+}
+
+async function migrateWithExclusiveStateOwnership(params: {
+  stateRoot: Root;
+  detected: NonNullable<LegacyStateDetection["commitments"]>;
+  stateDir: string;
+  env: NodeJS.ProcessEnv;
   beforeClaim?: () => void;
   beforeVerify?: () => void;
-  removeSource?: (sourcePath: string) => void;
-}): MigrationMessages {
-  const changes: string[] = [];
-  const warnings: string[] = [];
-  const notices: string[] = [];
-  if (!params.detected.hasLegacy) {
-    return { changes, warnings };
-  }
-
-  let snapshot: LegacySourceSnapshot;
-  let legacyRecords: CommitmentRecord[];
+  removeSource?: (sourcePath: string) => Promise<void> | void;
+}): Promise<MigrationMessages> {
+  const sourcePath = params.detected.sourcePath;
+  const sourceKey = resolveLegacyMigrationSourceKey("commitments-json", sourcePath);
+  const source = new LegacyMigrationSourceClaim<LegacyCommitmentsSnapshot>({
+    stateRoot: params.stateRoot,
+    stateDir: params.stateDir,
+    sourcePath,
+    label: "commitments",
+    claimSuffix: DOCTOR_CLAIM_SUFFIX,
+    readSnapshot: (candidate) =>
+      readLegacyCommitmentsSnapshot({
+        stateRoot: params.stateRoot,
+        stateDir: params.stateDir,
+        sourcePath: candidate,
+      }),
+  });
   try {
-    snapshot = readLegacySourceSnapshot(params.detected.sourcePath);
-    legacyRecords = parseLegacyCommitments(snapshot.raw);
-  } catch (error) {
-    warnings.push(
-      `Failed reading legacy commitments state ${params.detected.sourcePath}: ${String(error)}`,
-    );
-    return { changes, warnings };
-  }
-
-  const expectedRows = new Map<string, CommitmentRecord>();
-  let importedCount = 0;
-  let newerSqliteCount = 0;
-  let activeDuplicateCount = 0;
-  try {
-    assertLegacySourceUnchanged(params.detected.sourcePath, snapshot);
-    runOpenClawStateWriteTransaction(
-      ({ db }) => {
-        const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(db);
-        for (const legacyRecord of legacyRecords) {
-          const existingRow = executeSqliteQueryTakeFirstSync(
-            db,
-            commitmentsDb.selectFrom("commitments").selectAll().where("id", "=", legacyRecord.id),
-          );
-          if (existingRow) {
-            const existing = commitmentRecordFromRow(existingRow);
-            if (
-              commitmentImmutableIdentity(existing) !== commitmentImmutableIdentity(legacyRecord)
-            ) {
-              throw new Error(`commitment ${legacyRecord.id} has conflicting immutable identity`);
-            }
-            if (existing.updatedAtMs > legacyRecord.updatedAtMs) {
-              expectedRows.set(existing.id, existing);
-              newerSqliteCount += 1;
-              continue;
-            }
-            if (existing.updatedAtMs === legacyRecord.updatedAtMs) {
-              if (!commitmentRecordsEqual(existing, legacyRecord)) {
-                throw new Error(
-                  `commitment ${legacyRecord.id} diverges between JSON and SQLite at the same timestamp`,
-                );
-              }
-              expectedRows.set(existing.id, existing);
-              continue;
-            }
-            updateCommitmentRow(db, legacyRecord);
-            expectedRows.set(legacyRecord.id, legacyRecord);
-            importedCount += 1;
-            continue;
-          }
-
-          const activeLogicalRow = findActiveLogicalRow(db, legacyRecord);
-          if (activeLogicalRow) {
-            const activeRecord = commitmentRecordFromRow(activeLogicalRow);
-            expectedRows.set(activeRecord.id, activeRecord);
-            activeDuplicateCount += 1;
-            continue;
-          }
-          executeSqliteQuerySync(
-            db,
-            commitmentsDb.insertInto("commitments").values(commitmentRecordToRow(legacyRecord)),
-          );
-          expectedRows.set(legacyRecord.id, legacyRecord);
-          importedCount += 1;
+    await source.recover("retired commitments source conflicts with its interrupted Doctor claim");
+    if (!(await source.exists())) {
+      const receipt = readLegacyMigrationReceipt(sourceKey, params.env);
+      if (receipt && !receipt.removedSource) {
+        try {
+          markLegacyMigrationSourceRemoved(sourceKey, params.env, "state-migration.commitments");
+          return {
+            changes: ["Finalized the retired commitments JSON discard receipt."],
+            warnings: [],
+          };
+        } catch (error) {
+          return {
+            changes: [],
+            warnings: [
+              `Retired commitments JSON was removed, but its receipt could not be finalized: ${String(error)}`,
+            ],
+          };
         }
-      },
-      { env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir } },
-    );
-  } catch (error) {
-    warnings.push(`Failed migrating legacy commitments state: ${String(error)}`);
-    return { changes, warnings };
-  }
-
-  try {
-    params.beforeVerify?.();
-    const database = openOpenClawStateDatabase({
-      env: { ...process.env, OPENCLAW_STATE_DIR: params.stateDir },
-    });
-    const commitmentsDb = getNodeSqliteKysely<CommitmentsDatabase>(database.db);
-    for (const expected of expectedRows.values()) {
-      const row = executeSqliteQueryTakeFirstSync(
-        database.db,
-        commitmentsDb.selectFrom("commitments").selectAll().where("id", "=", expected.id),
-      );
-      if (!row || !commitmentRecordsEqual(commitmentRecordFromRow(row), expected)) {
-        throw new Error(`SQLite verification failed for commitment ${expected.id}`);
       }
+      return { changes: [], warnings: [] };
     }
-    assertLegacySourceUnchanged(params.detected.sourcePath, snapshot);
   } catch (error) {
-    warnings.push(`Failed verifying legacy commitments migration: ${String(error)}`);
-    return { changes, warnings };
+    return {
+      changes: [],
+      warnings: [`Failed recovering retired commitments JSON: ${String(error)}`],
+    };
+  }
+
+  let snapshot: LegacyCommitmentsSnapshot;
+  try {
+    snapshot = await source.read();
+    params.beforeVerify?.();
+    if (!legacyMigrationSourceSnapshotsMatch(snapshot, await source.read())) {
+      throw new Error("retired commitments source changed after Doctor loaded it");
+    }
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Failed reading retired commitments JSON: ${String(error)}`],
+    };
   }
 
   try {
-    claimAndRemoveSource({
-      sourcePath: params.detected.sourcePath,
+    await source.claim({
       snapshot,
+      mismatchMessage: "retired commitments source changed before Doctor could claim it",
       beforeClaim: params.beforeClaim,
-      removeSource: params.removeSource,
     });
+  } catch (error) {
+    const restoreError = await source.restore();
+    return {
+      changes: [],
+      warnings: [
+        `Failed claiming retired commitments JSON: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+      ],
+    };
+  }
+
+  let decision: ReturnType<typeof recordDiscardDecision>;
+  try {
+    decision = recordDiscardDecision({
+      env: params.env,
+      sourcePath,
+      snapshot,
+    });
+  } catch (error) {
+    const restoreError = await source.restore();
+    return {
+      changes: [],
+      warnings: [
+        `Failed recording retired commitments discard: ${String(error)}${restoreError ? `; restore failure: ${restoreError}` : ""}`,
+      ],
+    };
+  }
+
+  try {
+    if (!legacyMigrationSourceSnapshotsMatch(snapshot, await source.read(true))) {
+      throw new Error("retired commitments Doctor claim changed before cleanup");
+    }
+    await source.remove({
+      removeSource: params.removeSource,
+      sourceReappearedMessage: "retired commitments source reappeared during cleanup",
+      sourceRemainingMessage: "retired commitments source remains after cleanup",
+      claimRemainingMessage: "retired commitments Doctor claim remains after cleanup",
+    });
+  } catch (error) {
+    return {
+      changes: [],
+      warnings: [`Retired commitments discard was recorded, but cleanup failed: ${String(error)}`],
+    };
+  }
+
+  const warnings: string[] = [];
+  try {
+    markLegacyMigrationSourceRemoved(decision.sourceKey, params.env, "state-migration.commitments");
   } catch (error) {
     warnings.push(
-      `Migrated commitments but could not remove legacy source ${params.detected.sourcePath}: ${String(error)}`,
+      `Retired commitments JSON was removed, but its receipt could not be finalized: ${String(error)}`,
     );
-    return { changes, warnings };
   }
+  const rowLabel = snapshot.recordCount === 1 ? "row" : "rows";
+  return {
+    changes: [
+      decision.recreated
+        ? `Discarded recreated retired commitments JSON with ${snapshot.recordCount} ${rowLabel}; no data was imported, archived, or exported.`
+        : `Discarded retired commitments JSON with ${snapshot.recordCount} ${rowLabel}; no data was imported, archived, or exported.`,
+    ],
+    warnings,
+  };
+}
 
-  if (importedCount > 0) {
-    changes.push(`Migrated ${importedCount} commitment(s) → shared SQLite state`);
+/** Discard retired persistent state while excluding active Gateway owners. */
+export async function migrateLegacyCommitments(params: {
+  detected: NonNullable<LegacyStateDetection["commitments"]>;
+  stateDir: string;
+  env?: NodeJS.ProcessEnv;
+  beforeClaim?: () => void;
+  beforeVerify?: () => void;
+  removeSource?: (sourcePath: string) => Promise<void> | void;
+}): Promise<MigrationMessages> {
+  if (!params.detected.hasLegacy) {
+    return { changes: [], warnings: [] };
   }
-  changes.push("Removed legacy commitments JSON after SQLite verification");
-  if (newerSqliteCount > 0) {
-    notices.push(`Kept ${newerSqliteCount} newer shared SQLite commitment(s) over legacy JSON`);
-  }
-  if (activeDuplicateCount > 0) {
-    notices.push(
-      `Kept ${activeDuplicateCount} canonical active SQLite commitment(s) over legacy logical duplicates`,
-    );
-  }
-  return notices.length > 0 ? { changes, warnings, notices } : { changes, warnings };
+  return await withLegacyMigrationStateLock({
+    stateDir: params.stateDir,
+    env: params.env,
+    label: "retired commitments JSON",
+    releaseLabel: "Commitments",
+    errorLabel: "Failed retiring commitments JSON",
+    retryGuidance: "Stop the Gateway, then run `openclaw doctor --fix` again.",
+    run: async (env) => {
+      const stateRoot = await root(params.stateDir, {
+        hardlinks: "reject",
+        maxBytes: MAX_LEGACY_COMMITMENTS_BYTES,
+        symlinks: "reject",
+      });
+      return await migrateWithExclusiveStateOwnership({ ...params, env, stateRoot });
+    },
+  });
 }

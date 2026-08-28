@@ -6,7 +6,7 @@ import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
   ensureModelsFileModeForModelsJson,
   writeModelsFileAtomicForModelsJson,
-} from "./models-config.js";
+} from "./models-config.test-support.js";
 
 const tempDirs = new Set<string>();
 

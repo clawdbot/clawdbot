@@ -13,6 +13,7 @@ export function expectChannelSurfaceContract(params: {
     | "id"
     | "actions"
     | "setup"
+    | "setupContract"
     | "status"
     | "outbound"
     | "messaging"
@@ -39,8 +40,7 @@ export function expectChannelSurfaceContract(params: {
   }
 
   if (surface === "setup") {
-    expect(plugin.setup).toBeDefined();
-    expect(typeof plugin.setup?.applyAccountConfig).toBe("function");
+    expect(typeof (plugin.setupContract ?? plugin.setup)?.applyAccountConfig).toBe("function");
     return;
   }
 
@@ -73,10 +73,8 @@ export function expectChannelSurfaceContract(params: {
     expect(
       [
         messaging?.normalizeTarget,
-        messaging?.parseExplicitTarget,
         messaging?.inferTargetChatType,
         messaging?.buildCrossContextPresentation,
-        messaging?.enableInteractiveReplies,
         messaging?.hasStructuredReplyPayload,
         messaging?.formatTargetDisplay,
         messaging?.resolveOutboundSessionRoute,

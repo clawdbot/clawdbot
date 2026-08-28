@@ -15,6 +15,7 @@ enum DebugActions {
             defer: false)
         window.title = "Agent Events"
         window.isReleasedWhenClosed = false
+        window.isRestorable = false
         window.contentView = NSHostingView(rootView: AgentEventsWindow())
         window.center()
         window.makeKeyAndOrderFront(nil)
@@ -59,8 +60,8 @@ enum DebugActions {
         }
     }
 
-    static func sendTestNotification() async {
-        _ = await NotificationManager().send(title: "OpenClaw", body: "Test notification", sound: nil)
+    static func sendTestNotification() async -> TestNotificationOutcome {
+        await TestNotificationAction.send()
     }
 
     static func sendDebugVoice() async -> Result<String, DebugActionError> {
@@ -107,7 +108,6 @@ enum DebugActions {
                 }
 
             case .unconfigured:
-                await GatewayConnection.shared.shutdown()
                 await ControlChannel.shared.disconnect()
             }
         }
@@ -158,12 +158,12 @@ enum DebugActions {
     }
 
     static var verboseLoggingEnabledMain: Bool {
-        UserDefaults.standard.bool(forKey: self.verboseDefaultsKey)
+        AppDefaults.standard.bool(forKey: self.verboseDefaultsKey)
     }
 
     static func toggleVerboseLoggingMain() async -> Bool {
         let newValue = !self.verboseLoggingEnabledMain
-        UserDefaults.standard.set(newValue, forKey: self.verboseDefaultsKey)
+        AppDefaults.standard.set(newValue, forKey: self.verboseDefaultsKey)
         _ = try? await ControlChannel.shared.request(
             method: "system-event",
             params: ["text": AnyHashable("verbose-main:\(newValue ? "on" : "off")")])
@@ -174,17 +174,22 @@ enum DebugActions {
     static func restartApp() {
         let url = Bundle.main.bundleURL
         let task = Process()
-        // Relaunch shortly after this instance exits so we get a true restart even in debug.
-        task.launchPath = "/bin/sh"
-        task.arguments = ["-c", "sleep 0.2; open -n \"$1\"", "_", url.path]
+        // The replacement must wait until cleanup releases this profile's instance lock.
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = [
+            "-c",
+            "while /bin/kill -0 \"$1\" 2>/dev/null; do /bin/sleep 0.1; done; shift; exec /usr/bin/open -n \"$@\"",
+            "openclaw-restart",
+            String(ProcessInfo.processInfo.processIdentifier),
+        ] + (AppProfile.current.name.map { ["--env", "OPENCLAW_PROFILE=\($0)"] } ?? []) + [url.path]
         try? task.run()
-        NSApp.terminate(nil)
+        AppDelegate.requestTermination()
     }
 
     @MainActor
     static func restartOnboarding() {
-        UserDefaults.standard.set(false, forKey: self.onboardingSeenKey)
-        UserDefaults.standard.set(0, forKey: onboardingVersionKey)
+        AppDefaults.standard.set(false, forKey: self.onboardingSeenKey)
+        AppDefaults.standard.set(0, forKey: onboardingVersionKey)
         AppStateStore.shared.onboardingSeen = false
         OnboardingController.shared.restart()
     }
@@ -233,16 +238,30 @@ enum DebugActions {
                 kind: .node,
                 requestId: "demo-node-1",
                 subjectId: "19cec1c3301a7469d4fd71f5f81339508390dadda91b34aee15faf2849dccdc7",
-                displayName: "Peter's MacBook Pro",
+                displayName: "Demo Mac",
                 platform: "macos 26.5",
                 deviceFamily: "Mac",
                 modelIdentifier: "MacBookPro18,3",
                 version: "2026.6.11",
                 coreVersion: "2026.6.10",
-                remoteIp: "192.168.1.42",
+                remoteIp: "192.0.2.42",
                 role: nil,
                 scopes: [],
-                caps: ["screen", "camera", "file"],
+                caps: [
+                    "canvas",
+                    "screen",
+                    "computer",
+                    "codex-app-server-threads",
+                    "claude-sessions",
+                    "browser",
+                    "codex-cli-sessions",
+                    "file",
+                    "local-inference",
+                    "mcp",
+                    "opencode-sessions",
+                    "pi-sessions",
+                    "system",
+                ],
                 commands: ["system.run", "system.notify"],
                 isRepair: false,
                 previouslyPaired: false,

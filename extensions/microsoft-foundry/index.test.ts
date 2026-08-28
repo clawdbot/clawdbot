@@ -1,38 +1,31 @@
 // Microsoft Foundry tests cover index plugin behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ProviderAuthMethod } from "openclaw/plugin-sdk/core";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { shouldTestFoundryTextConnection } from "./auth.js";
-import { getAccessTokenResultAsync } from "./cli.js";
+import { azLoginDeviceCodeWithOptions, execAz, getAccessTokenResultAsync } from "./cli.js";
 import plugin from "./index.js";
 import {
-  buildFoundryConnectionTest,
-  isValidTenantIdentifier,
   promptApiKeyEndpointAndModel,
   promptEndpointAndModelManually,
   selectFoundryDeployment,
 } from "./onboard.js";
-import { resetFoundryRuntimeAuthCaches } from "./runtime.js";
 import {
   COGNITIVE_SERVICES_RESOURCE,
   FOUNDRY_ANTHROPIC_SCOPE,
   buildFoundryAuthResult,
   extractFoundryEndpoint,
   formatFoundryApiLabel,
-  isAnthropicFoundryDeployment,
   isFoundryMaiImageModel,
   normalizeFoundryEndpoint,
   requiresFoundryMaxCompletionTokens,
   requiresFoundryEntraIdClaudeAuth,
-  supportsFoundryReasoningContent,
-  supportsFoundryReasoningEffort,
-  supportsFoundryImageInput,
   usesFoundryResponsesByDefault,
 } from "./shared.js";
-
 const execFileMock = vi.hoisted(() => vi.fn());
 const execFileSyncMock = vi.hoisted(() => vi.fn());
+const runCommandWithTimeoutMock = vi.hoisted(() => vi.fn());
 const ensureAuthProfileStoreMock = vi.hoisted(() =>
   vi.fn(() => ({
     profiles: {},
@@ -51,6 +44,7 @@ vi.mock("openclaw/plugin-sdk/process-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/process-runtime")>();
   return {
     ...actual,
+    runCommandWithTimeout: runCommandWithTimeoutMock,
     runExec: execFileMock,
   };
 });
@@ -132,6 +126,8 @@ const defaultFoundryModelId = "gpt-5.4";
 const defaultFoundryProfileId = "microsoft-foundry:entra";
 const defaultFoundryAgentDir = "/tmp/test-agent";
 const defaultAzureCliLoginError = "Please run 'az login' to setup account.";
+let runtimeAuthTestSequence = 0;
+let runtimeAuthTestTenantId = "tenant-0";
 
 function buildFoundryModel(
   overrides: Partial<{
@@ -218,7 +214,7 @@ function buildEntraProfileStore(
           modelId: "custom-deployment",
           modelName: defaultFoundryModelId,
           api: "openai-responses",
-          tenantId: "tenant-id",
+          tenantId: runtimeAuthTestTenantId,
           ...overrides,
         },
       },
@@ -285,7 +281,8 @@ function mockAzureCliLoginFailure(delayMs?: number) {
 
 describe("microsoft-foundry plugin", () => {
   beforeEach(() => {
-    resetFoundryRuntimeAuthCaches();
+    runtimeAuthTestSequence += 1;
+    runtimeAuthTestTenantId = `tenant-${runtimeAuthTestSequence}`;
     execFileMock.mockReset();
     execFileSyncMock.mockReset();
     ensureAuthProfileStoreMock.mockReset();
@@ -378,6 +375,17 @@ describe("microsoft-foundry plugin", () => {
 
     expect(execFileMock.mock.calls[0]?.[1]).toEqual(
       expect.arrayContaining(["--scope", FOUNDRY_ANTHROPIC_SCOPE]),
+    );
+  });
+
+  it("hard-stops a synchronous Azure CLI command at its timeout", () => {
+    execFileSyncMock.mockReturnValue("ok");
+    execAz(["version", "--output", "none"]);
+
+    expect(execFileSyncMock).toHaveBeenCalledWith(
+      "az",
+      ["version", "--output", "none"],
+      expect.objectContaining({ timeout: 30_000, killSignal: "SIGKILL" }),
     );
   });
 
@@ -797,6 +805,8 @@ describe("microsoft-foundry plugin", () => {
     const model = config.models?.providers?.["microsoft-foundry"]?.models[0];
     expect(model?.id).toBe("gpt-5.4");
     expect(model?.reasoning).toBe(true);
+    expect(model?.contextWindow).toBe(1_050_000);
+    expect(model?.maxTokens).toBe(128_000);
     expect(model?.compat?.supportsReasoningEffort).toBe(true);
   });
 
@@ -854,12 +864,6 @@ describe("microsoft-foundry plugin", () => {
     );
   });
 
-  it("accepts tenant domains as valid tenant identifiers", () => {
-    expect(isValidTenantIdentifier("contoso.onmicrosoft.com")).toBe(true);
-    expect(isValidTenantIdentifier("00000000-0000-0000-0000-000000000000")).toBe(true);
-    expect(isValidTenantIdentifier("not a tenant")).toBe(false);
-  });
-
   it("defaults Azure OpenAI model families to the documented API surfaces", () => {
     expect(usesFoundryResponsesByDefault("gpt-5.4")).toBe(true);
     expect(usesFoundryResponsesByDefault("gpt-5.2-codex")).toBe(true);
@@ -871,16 +875,6 @@ describe("microsoft-foundry plugin", () => {
     expect(requiresFoundryMaxCompletionTokens("gpt-5-chat")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("o3")).toBe(true);
     expect(requiresFoundryMaxCompletionTokens("gpt-4o")).toBe(false);
-    expect(supportsFoundryReasoningEffort("gpt-5.4")).toBe(true);
-    expect(supportsFoundryReasoningEffort("gpt-5-chat")).toBe(false);
-    expect(supportsFoundryReasoningEffort("gpt-5.1-chat")).toBe(true);
-    expect(supportsFoundryReasoningEffort("o3")).toBe(true);
-    expect(supportsFoundryReasoningEffort("o1-mini")).toBe(false);
-    expect(supportsFoundryReasoningEffort("MAI-DS-R1")).toBe(false);
-    expect(supportsFoundryReasoningContent("MAI-DS-R1")).toBe(true);
-    expect(supportsFoundryImageInput("gpt-5.4")).toBe(true);
-    expect(supportsFoundryImageInput("gpt-4o")).toBe(true);
-    expect(supportsFoundryImageInput("MAI-DS-R1")).toBe(false);
     expect(isFoundryMaiImageModel("MAI-Image-2.5-Flash")).toBe(true);
     expect(isFoundryMaiImageModel("MAI-Image-2e")).toBe(true);
     expect(isFoundryMaiImageModel("MAI-DS-R1")).toBe(false);
@@ -924,26 +918,67 @@ describe("microsoft-foundry plugin", () => {
       authMethod: "entra-id",
     });
 
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/mai-image-prod",
     });
+    expect(result.configPatch?.agents?.defaults).not.toHaveProperty("imageGenerationModel");
     expect(result.defaultModel).toBeUndefined();
     expect(requireFoundryProviderPatch(result).models[0]?.name).toBe("MAI-Image-2.5");
   });
 
-  it("skips chat connection probes for MAI image deployments", () => {
+  it("skips chat connection probes for MAI image deployments", async () => {
+    execFileSyncMock.mockImplementation((_command, args) => {
+      const azArgs = args as string[];
+      if (azArgs[0] === "version") {
+        return "";
+      }
+      if (azArgs[0] === "account" && azArgs[1] === "show") {
+        return JSON.stringify({
+          name: "Foundry Account",
+          id: "account-id",
+          tenantId: "tenant-id",
+          user: { name: "operator@example.com" },
+        });
+      }
+      if (azArgs[0] === "account" && azArgs[1] === "list") {
+        return "[]";
+      }
+      throw new Error(`unexpected az command: ${azArgs.join(" ")}`);
+    });
+    const provider = registerProvider();
+    const authMethod = provider.auth.find((method: ProviderAuthMethod) => method.id === "entra-id");
+    if (!authMethod) {
+      throw new Error("expected Microsoft Foundry Entra auth method");
+    }
+    const text = vi
+      .fn()
+      .mockResolvedValueOnce("https://example.services.ai.azure.com")
+      .mockResolvedValueOnce("prod-image");
+    const select = vi
+      .fn()
+      .mockResolvedValueOnce("mai-image")
+      .mockResolvedValueOnce("MAI-Image-2.5");
+
+    const result = await authMethod.run({
+      config: {},
+      agentDir: defaultFoundryAgentDir,
+      prompter: {
+        confirm: vi.fn(async () => true),
+        note: vi.fn(async () => undefined),
+        text,
+        select,
+      },
+    } as never);
+
     expect(
-      shouldTestFoundryTextConnection({
-        modelId: "prod-image",
-        modelNameHint: "MAI-Image-2.5",
+      execFileSyncMock.mock.calls.some((call) => {
+        const args = call[1];
+        return Array.isArray(args) && args[0] === "account" && args[1] === "get-access-token";
       }),
     ).toBe(false);
-    expect(
-      shouldTestFoundryTextConnection({
-        modelId: "prod-chat",
-        modelNameHint: "gpt-5.4",
-      }),
-    ).toBe(true);
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
+      primary: "microsoft-foundry/prod-image",
+    });
   });
 
   it("classifies custom API-key MAI image deployments during manual setup", async () => {
@@ -978,7 +1013,7 @@ describe("microsoft-foundry plugin", () => {
       modelNameHint: "MAI-Image-2.5",
       api: "openai-completions",
     });
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/prod-image",
     });
     expect(result.defaultModel).toBeUndefined();
@@ -1142,7 +1177,7 @@ describe("microsoft-foundry plugin", () => {
       ],
     });
 
-    expect(result.configPatch?.agents?.defaults?.imageGenerationModel).toEqual({
+    expect(result.configPatch?.agents?.defaults?.mediaModels?.image).toEqual({
       primary: "microsoft-foundry/custom-image-prod",
     });
     expect(result.defaultModel).toBeUndefined();
@@ -1262,19 +1297,6 @@ describe("microsoft-foundry plugin", () => {
     expect(Object.hasOwn(provider, "apiKey")).toBe(true);
     expect(Object.hasOwn(provider, "authHeader")).toBe(true);
     expect(Object.hasOwn(provider, "headers")).toBe(true);
-  });
-
-  it("uses the minimum supported response token count for GPT-5 connection tests", () => {
-    const testRequest = buildFoundryConnectionTest({
-      endpoint: "https://example.services.ai.azure.com",
-      modelId: "gpt-5.4",
-      modelNameHint: "gpt-5.4",
-      api: "openai-responses",
-    });
-
-    expect(testRequest.url).toContain("/responses");
-    expect(testRequest.body.model).toBe("gpt-5.4");
-    expect(testRequest.body.max_output_tokens).toBe(16);
   });
 
   it("marks Foundry responses models to omit explicit store=false payloads", () => {
@@ -1415,7 +1437,43 @@ describe("microsoft-foundry plugin", () => {
   });
 
   it.each([
+    ["gpt-5.6", 1_050_000, 128_000],
+    ["gpt-5.6-sol", 1_050_000, 128_000],
+    ["gpt-5.6-terra", 1_050_000, 128_000],
+    ["gpt-5.6-luna", 1_050_000, 128_000],
+    ["gpt-5.5", 1_050_000, 128_000],
+    ["gpt-5.4", 1_050_000, 128_000],
+    ["gpt-5.4-pro", 1_050_000, 128_000],
+    ["gpt-5.4-mini", 400_000, 128_000],
+    ["gpt-5.4-nano", 400_000, 128_000],
+    ["gpt-5-chat", 128_000, 16_384],
+    ["gpt-4o-mini", 128_000, 16_384],
+  ] as const)(
+    "uses Foundry-native token limits for %s",
+    (modelNameHint, contextWindow, maxTokens) => {
+      const result = buildFoundryAuthResult({
+        profileId: "microsoft-foundry:default",
+        apiKey: "test-api-key",
+        endpoint: "https://example.services.ai.azure.com",
+        modelId: `prod-${modelNameHint}`,
+        modelNameHint,
+        api: modelNameHint.startsWith("gpt-5") ? "openai-responses" : "openai-completions",
+        authMethod: "api-key",
+      });
+
+      expect(result.configPatch?.models?.providers?.["microsoft-foundry"]?.models[0]).toMatchObject(
+        {
+          name: modelNameHint,
+          contextWindow,
+          maxTokens,
+        },
+      );
+    },
+  );
+
+  it.each([
     ["claude-mythos-preview", 128_000],
+    ["claude-opus-5", 128_000],
     ["claude-fable-5", 128_000],
     ["claude-opus-4.8", 128_000],
     ["claude-opus-4.7", 128_000],
@@ -1475,13 +1533,31 @@ describe("microsoft-foundry plugin", () => {
     expect(
       provider.resolveThinkingProfile?.({
         provider: "microsoft-foundry",
+        modelId: "prod-opus",
+        params: { canonicalModelId: "claude-opus-5" },
+      }),
+    ).toMatchObject({
+      defaultLevel: "high",
+      levels: [
+        { id: "off" },
+        { id: "minimal" },
+        { id: "low" },
+        { id: "medium" },
+        { id: "high" },
+        { id: "xhigh" },
+        { id: "adaptive" },
+        { id: "max" },
+      ],
+    });
+    expect(
+      provider.resolveThinkingProfile?.({
+        provider: "microsoft-foundry",
         modelId: "prod-fable",
         params: { canonicalModelId: "claude-fable-5" },
       }),
     ).toMatchObject({
       defaultLevel: "high",
       levels: [
-        { id: "off" },
         { id: "minimal" },
         { id: "low" },
         { id: "medium" },
@@ -1791,36 +1867,6 @@ describe("microsoft-foundry plugin", () => {
     ).toBe("https://example.services.ai.azure.com");
   });
 
-  it("includes api-version for non GPT-5 chat completion connection tests", () => {
-    const testRequest = buildFoundryConnectionTest({
-      endpoint: "https://example.services.ai.azure.com",
-      modelId: "FW-GLM-5",
-      modelNameHint: "FW-GLM-5",
-      api: "openai-completions",
-    });
-
-    expect(testRequest.url).toContain("/chat/completions");
-    expect(testRequest.body.model).toBe("FW-GLM-5");
-    expect(testRequest.body.max_tokens).toBe(1);
-  });
-
-  it("builds Anthropic Messages connection tests for Claude deployments", () => {
-    const testRequest = buildFoundryConnectionTest({
-      endpoint: "https://example.services.ai.azure.com/openai/v1",
-      modelId: "prod-fable",
-      modelNameHint: "claude-fable-5",
-      api: "anthropic-messages",
-    });
-
-    expect(testRequest.url).toBe("https://example.services.ai.azure.com/anthropic/v1/messages");
-    expect(testRequest.body).toEqual({
-      model: "prod-fable",
-      messages: [{ role: "user", content: "hi" }],
-      max_tokens: 1,
-      thinking: { type: "adaptive" },
-    });
-  });
-
   it("returns actionable Azure CLI login errors", async () => {
     mockAzureCliLoginFailure();
 
@@ -2024,19 +2070,71 @@ describe("selectFoundryDeployment", () => {
   });
 });
 
-describe("isAnthropicFoundryDeployment", () => {
-  it.each(["claude-opus-4-6", "Claude-Sonnet-4", "claude-3.5-haiku", "CLAUDE-instant"])(
-    "detects Anthropic model: %s",
-    (name) => {
-      expect(isAnthropicFoundryDeployment(name)).toBe(true);
-    },
-  );
+describe("azLoginDeviceCodeWithOptions utf-8 chunk boundary", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    runCommandWithTimeoutMock.mockReset();
+  });
 
-  it.each(["gpt-5.4", "o4-mini", "phi-4", "llama-3", undefined, null, ""])(
-    "rejects non-Anthropic model: %s",
-    (name) => {
-      expect(isAnthropicFoundryDeployment(name)).toBe(false);
-    },
-  );
+  it("reassembles split-byte UTF-8 across both spawned process streams", async () => {
+    runCommandWithTimeoutMock.mockImplementationOnce(
+      async (
+        _argv: string[],
+        options: {
+          onOutputChunk?: (chunk: Buffer, stream: "stdout" | "stderr") => void;
+        },
+      ) => {
+        const writeSplitUtf8 = (stream: "stdout" | "stderr", text: string) => {
+          const bytes = Buffer.from(text);
+          options.onOutputChunk?.(bytes.subarray(0, 2), stream);
+          options.onOutputChunk?.(bytes.subarray(2), stream);
+        };
+        writeSplitUtf8("stderr", "😊");
+        writeSplitUtf8("stdout", "🚀");
+        return {
+          stdout: "",
+          stderr: "",
+          code: 1,
+          signal: null,
+          killed: false,
+          termination: "exit",
+          noOutputTimedOut: false,
+        };
+      },
+    );
+    const stdoutWriteSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
+    const stderrWriteSpy = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+
+    const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("az login exited with code 1: 😊🚀");
+    expect(stdoutWriteSpy).toHaveBeenCalledWith("🚀");
+    expect(stderrWriteSpy).toHaveBeenCalledWith("😊");
+  });
+
+  it("allows post-auth work after the 15-minute device-code lifetime", async () => {
+    runCommandWithTimeoutMock.mockResolvedValueOnce({
+      stdout: "",
+      stderr: "",
+      code: 124,
+      signal: null,
+      killed: true,
+      termination: "timeout",
+      noOutputTimedOut: false,
+    });
+
+    const err = await azLoginDeviceCodeWithOptions({}).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect((err as Error).message).toBe("az login timed out after 20 minutes");
+    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+      ["az", "login", "--use-device-code"],
+      expect.objectContaining({
+        killProcessTree: true,
+        outputCapture: "discard",
+        timeoutMs: 20 * 60 * 1000,
+      }),
+    );
+  });
 });
+
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

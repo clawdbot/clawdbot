@@ -326,7 +326,7 @@ export class LogbookService {
     if (media?.image?.enabled === false) {
       return { source: "missing" };
     }
-    const entries = [...(media?.image?.models ?? []), ...(media?.models ?? [])];
+    const entries = media?.models ?? [];
     for (const entry of entries) {
       const usable =
         entry.type !== "cli" &&
@@ -362,23 +362,10 @@ export class LogbookService {
     // retries could loop model spend on a persistently failing batch.
     store.resetErrorBatches();
     if (!store.nextPendingBatch()) {
-      const frames = store.unbatchedActiveFrames(2000);
       // Force-close the current window so "analyze now" needs no elapsed time.
-      const selection = selectBatchFrames({
-        frames,
-        windowMs: this.config.analysisIntervalMinutes * 60_000,
-        nowMs: Date.now(),
-        force: true,
-      });
-      if (!selection) {
+      if (!this.enqueueNextBatch(true)) {
         return { started: false, reason: "no unanalyzed activity captured yet" };
       }
-      store.createBatch({
-        day: dayKeyFor(selection.startMs),
-        startMs: selection.startMs,
-        endMs: selection.endMs,
-        frameIds: selection.frameIds,
-      });
     }
     void this.analysisTick();
     return { started: true };
@@ -416,26 +403,31 @@ export class LogbookService {
     }
   }
 
-  private enqueueElapsedWindow(): void {
+  private enqueueNextBatch(force = false): boolean {
     const store = this.requireStore();
+    const selection = selectBatchFrames({
+      frames: store.unbatchedActiveFrames(2000),
+      windowMs: this.config.analysisIntervalMinutes * 60_000,
+      nowMs: Date.now(),
+      force,
+    });
+    if (!selection) {
+      return false;
+    }
+    store.createBatch({
+      day: dayKeyFor(selection.startMs),
+      startMs: selection.startMs,
+      endMs: selection.endMs,
+      frameIds: selection.frameIds,
+    });
+    return true;
+  }
+
+  private enqueueElapsedWindow(): void {
     // Windows close on elapsed wall-clock or on a capture gap; both cases are
     // resolved by selectBatchFrames against the oldest unbatched frame.
-    while (true) {
-      const frames = store.unbatchedActiveFrames(2000);
-      const selection = selectBatchFrames({
-        frames,
-        windowMs: this.config.analysisIntervalMinutes * 60_000,
-        nowMs: Date.now(),
-      });
-      if (!selection) {
-        return;
-      }
-      store.createBatch({
-        day: dayKeyFor(selection.startMs),
-        startMs: selection.startMs,
-        endMs: selection.endMs,
-        frameIds: selection.frameIds,
-      });
+    while (this.enqueueNextBatch()) {
+      // Continue until all elapsed windows are queued.
     }
   }
 

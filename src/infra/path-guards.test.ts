@@ -2,9 +2,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import {
-  isNotFoundPathError,
   isPathInside,
+  isPathStrictlyInside,
   normalizeWindowsPathForComparison,
+  normalizeWindowsPathPreservingCase,
 } from "./path-guards.js";
 
 function setPlatform(platform: NodeJS.Platform): void {
@@ -25,14 +26,33 @@ describe("normalizeWindowsPathForComparison", () => {
   });
 });
 
-describe("node path error helpers", () => {
+describe("normalizeWindowsPathPreservingCase", () => {
+  // Callers create files from paths derived off this, so case must survive. The
+  // equivalence case below pins that case is the *only* thing that differs from the
+  // comparison variant; these rows pin the concrete shapes.
   it.each([
-    [{ code: "ENOENT" }, true],
-    [{ code: "ENOTDIR" }, true],
-    [{ code: "EACCES" }, false],
-    [{ code: 404 }, false],
-  ])("classifies not-found path error for %j", (value, expected) => {
-    expect(isNotFoundPathError(value)).toBe(expected);
+    ["\\\\?\\C:\\Users\\Peter/Repo", "C:\\Users\\Peter\\Repo"],
+    ["\\\\?\\UNC\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
+    ["\\\\?\\unc\\Server\\Share\\Folder", "\\\\Server\\Share\\Folder"],
+    ["C:\\Users\\User\\OpenClaw\\src/Components", "C:\\Users\\User\\OpenClaw\\src\\Components"],
+    ["C:\\Users\\User\\OpenClaw  ", "C:\\Users\\User\\OpenClaw  "],
+  ])("normalizes windows path %s without lowercasing", (input, expected) => {
+    expect(normalizeWindowsPathPreservingCase(input)).toBe(expected);
+  });
+
+  it("matches the comparison variant except for case", () => {
+    for (const input of [
+      "\\\\?\\C:\\Users\\Peter/Repo",
+      "\\\\?\\UNC\\Server\\Share\\Folder",
+      "\\\\?\\unc\\Server\\Share\\Folder",
+      "C:\\Users\\User\\OpenClaw\\src/Components",
+      "C:\\Users\\User\\OpenClaw  ",
+      "  C:\\Users\\User\\OpenClaw  ",
+    ]) {
+      expect(normalizeWindowsPathPreservingCase(input).toLowerCase()).toBe(
+        normalizeWindowsPathForComparison(input),
+      );
+    }
   });
 });
 
@@ -41,6 +61,7 @@ describe("isPathInside", () => {
     ["/workspace/root", "/workspace/root", true],
     ["/workspace/root", "/workspace/root/nested/file.txt", true],
     ["/workspace/root", "/workspace/root/..file.txt", true],
+    ["/workspace/root", "/workspace/root/..cache/cache.json", true],
     ["/workspace/root", "/workspace/root/../escape.txt", false],
     ["/workspace/root", "/workspace/rootless/file.txt", false],
     ["/workspace/root", "/workspace/root/a/b/c/d/e/file.txt", true],
@@ -66,6 +87,29 @@ describe("isPathInside", () => {
       [String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`, false],
     ] as const) {
       expect(isPathInside(basePath, targetPath)).toBe(expected);
+    }
+  });
+});
+
+describe("isPathStrictlyInside", () => {
+  it.each([
+    ["/workspace/root", "/workspace/root", false],
+    ["/workspace/root", "/workspace/root/child", true],
+    ["/workspace/root", "/workspace/root/..cache/cache.json", true],
+    ["/workspace/root", "/workspace/root/../escape", false],
+  ])("checks strict posix containment %s -> %s", (basePath, targetPath, expected) => {
+    expect(isPathStrictlyInside(basePath, targetPath)).toBe(expected);
+  });
+
+  it("uses win32 path semantics for strict containment checks", () => {
+    setPlatform("win32");
+
+    for (const [basePath, targetPath, expected] of [
+      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root`, false],
+      [String.raw`C:\workspace\root`, String.raw`C:\workspace\root\..cache\file.txt`, true],
+      [String.raw`C:\workspace\root`, String.raw`D:\workspace\root\file.txt`, false],
+    ] as const) {
+      expect(isPathStrictlyInside(basePath, targetPath)).toBe(expected);
     }
   });
 });

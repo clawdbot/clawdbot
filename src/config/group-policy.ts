@@ -1,4 +1,3 @@
-// Normalizes group-policy config for channel and runtime decisions.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -8,6 +7,7 @@ import { createDedupeCache } from "../infra/dedupe.js";
 import { resolveAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import { normalizeMessageChannel } from "../utils/message-channel-core.js";
+import { resolveMergedAccountConfig } from "./channel-account-config.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 import {
   parseToolsBySenderTypedKey,
@@ -60,6 +60,8 @@ function resolveChannelGroupConfig(
 }
 
 type GroupToolPolicySender = {
+  /** Skip sender-specific overlays for trusted non-ingress executions. */
+  senderPolicyMode?: "always" | "never";
   messageProvider?: string | null;
   senderId?: string | null;
   senderName?: string | null;
@@ -345,23 +347,14 @@ export function resolveChannelGroups(
   if (!channelConfig) {
     return undefined;
   }
-  const accountGroups = resolveAccountEntry(channelConfig.accounts, normalizedAccountId)?.groups;
-  // In a single-account setup, treat an explicit empty account groups map
-  // (`accounts.<id>.groups: {}`) the same as undefined for fallback: the empty
-  // literal is almost always a config-migration artifact, not an intentional
-  // "block all groups" declaration — the explicit way to block is
-  // `groupPolicy: "disabled"` (or omitting the group from a populated
-  // allowlist). Without this, an empty `{}` paired with the default
-  // `groupPolicy: "allowlist"` silently denies every group update even though
-  // root `channels.<channel>.groups` is populated. Multi-account contexts keep
-  // the existing semantics so per-account explicit-empty groups still scope
-  // disable a single account without affecting siblings.
-  const isMultiAccount = Object.keys(channelConfig.accounts ?? {}).length > 1;
-  if (!isMultiAccount) {
-    const hasAccountGroups = accountGroups && Object.keys(accountGroups).length > 0;
-    return hasAccountGroups ? accountGroups : channelConfig.groups;
-  }
-  return accountGroups ?? channelConfig.groups;
+  // Single-account empty maps inherit; in multi-account setups they opt out.
+  return resolveMergedAccountConfig({
+    channelConfig,
+    accounts: channelConfig.accounts,
+    accountId: normalizedAccountId,
+    inheritEmptyKeys:
+      Object.keys(channelConfig.accounts ?? {}).length > 1 ? {} : { groups: "object" },
+  }).groups;
 }
 
 type ChannelGroupPolicyMode = "open" | "allowlist" | "disabled";
@@ -486,28 +479,34 @@ export function resolveChannelGroupToolsPolicy(
     }
   }
   const defaultConfig = groups?.["*"];
-  const groupSenderPolicy = resolveToolsBySender({
-    toolsBySender: groupConfig?.toolsBySender,
-    messageProvider: params.messageProvider ?? params.channel,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const groupSenderPolicy =
+    params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: groupConfig?.toolsBySender,
+          messageProvider: params.messageProvider ?? params.channel,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        });
   if (groupSenderPolicy) {
     return groupSenderPolicy;
   }
   if (groupConfig?.tools) {
     return groupConfig.tools;
   }
-  const defaultSenderPolicy = resolveToolsBySender({
-    toolsBySender: defaultConfig?.toolsBySender,
-    messageProvider: params.messageProvider ?? params.channel,
-    senderId: params.senderId,
-    senderName: params.senderName,
-    senderUsername: params.senderUsername,
-    senderE164: params.senderE164,
-  });
+  const defaultSenderPolicy =
+    params.senderPolicyMode === "never"
+      ? undefined
+      : resolveToolsBySender({
+          toolsBySender: defaultConfig?.toolsBySender,
+          messageProvider: params.messageProvider ?? params.channel,
+          senderId: params.senderId,
+          senderName: params.senderName,
+          senderUsername: params.senderUsername,
+          senderE164: params.senderE164,
+        });
   if (defaultSenderPolicy) {
     return defaultSenderPolicy;
   }

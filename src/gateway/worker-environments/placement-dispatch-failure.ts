@@ -1,11 +1,13 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessage } from "../../infra/errors.js";
-import { redactSensitiveText } from "../../logging/redact.js";
+import { supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { placementTurnOwner, type WorkerPlacementExecutionMode } from "./placement-record.js";
 import type {
   createWorkerSessionPlacementStore,
   WorkerSessionPlacementRecord,
 } from "./placement-store.js";
+import type { WorkerPlacementAuthorization } from "./service-contract.js";
 import type { WorkerEnvironmentService } from "./service.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export type WorkerDispatchPlacement = WorkerSessionPlacementRecord;
 export type WorkerActiveDispatchPlacement = Extract<
@@ -13,9 +15,9 @@ export type WorkerActiveDispatchPlacement = Extract<
   { state: "active" }
 >;
 export type WorkerFailedDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "failed" }>;
-export type WorkerStartingDispatchPlacement = Extract<
+export type WorkerProvisioningDispatchPlacement = Extract<
   WorkerDispatchPlacement,
-  { state: "starting" }
+  { state: "provisioning" }
 >;
 type WorkerDrainingDispatchPlacement = Extract<WorkerDispatchPlacement, { state: "draining" }>;
 type WorkerReconcilingDispatchPlacement = Extract<
@@ -26,35 +28,73 @@ type WorkerReconcilingDispatchPlacement = Extract<
 export type WorkerDispatchPlacementStore = Pick<
   ReturnType<typeof createWorkerSessionPlacementStore>,
   | "adoptActive"
+  | "acceptIdleWorkspaceReconciliation"
+  | "claimReclaimWorkspaceResult"
+  | "claimTurn"
+  | "closeWorkerTurnToolState"
+  | "beginPlacementMove"
+  | "preparePlacementMove"
+  | "cancelPlacementMove"
+  | "completePlacementMoveSourceToLocal"
+  | "completeAbandonedPlacementMoveSourceToLocal"
+  | "completePlacementMoveToWorker"
+  | "getPlacementMove"
+  | "listPlacementMoves"
+  | "recordPlacementMoveError"
   | "fail"
   | "get"
+  | "loadWorkspaceReconciliation"
+  | "beginWorkspaceReconciliation"
+  | "abortWorkspaceReconciliation"
+  | "listWorkspaceReconciliationOwners"
+  | "list"
+  | "listPendingWorkspaceResults"
+  | "markWorkspaceResultPending"
+  | "handoffWorkspaceResultRecovery"
+  | "workspaceResultInstanceId"
+  | "validateWorkspaceResultClaim"
+  | "recordStagedWorkspaceResult"
+  | "recordWorkspaceResultConflict"
+  | "acceptWorkspaceResult"
+  | "cancelWorkspaceResultAndReleaseTurn"
+  | "completeWorkspaceResultAndReleaseTurn"
+  | "failWorkspaceResultAndReleaseTurn"
+  | "abandonWorkspaceResult"
   | "listForReconcile"
+  | "releaseTurn"
   | "startDispatch"
   | "startDrain"
+  | "startWorkspaceResultDrain"
   | "startReconcile"
   | "transition"
+  | "updateWorkspaceBaseManifest"
 >;
 
 export type WorkerDispatchEnvironmentService = Pick<
   WorkerEnvironmentService,
-  "attachSession" | "create" | "destroy" | "get" | "reconcileOnce" | "startTunnel" | "stopTunnel"
+  | "attachSession"
+  | "create"
+  | "createFromProfileSnapshot"
+  | "destroy"
+  | "get"
+  | "reconcileEnvironment"
+  | "reconcileOnce"
+  | "startTunnel"
+  | "stopTunnel"
+  | "supportsProviderExecutionMode"
 >;
 
 export type WorkerActivationBarrier = (params: {
   sessionId: string;
   sessionKey: string;
   agentId: string;
+  executionMode: WorkerPlacementExecutionMode;
+  authorize?: WorkerPlacementAuthorization;
   activate: () => WorkerActiveDispatchPlacement;
 }) => Promise<WorkerActiveDispatchPlacement>;
 
 const RECOVERY_ERROR_LIMIT = 1_024;
-
-function boundedError(error: unknown): string {
-  const redacted = redactSensitiveText(formatErrorMessage(error), { mode: "tools" })
-    .replace(/\s+/gu, " ")
-    .trim();
-  return truncateUtf16Safe(redacted || "unknown dispatch failure", RECOVERY_ERROR_LIMIT);
-}
+const boundedError = boundedWorkerError;
 
 export function isUnavailableEnvironment(
   environment: NonNullable<ReturnType<WorkerEnvironmentService["get"]>>,
@@ -65,6 +105,28 @@ export function isUnavailableEnvironment(
     environment.state === "destroyed" ||
     environment.state === "failed" ||
     environment.state === "orphaned"
+  );
+}
+
+export function isCurrentActiveWorkerEnvironment(
+  placement: WorkerActiveDispatchPlacement | WorkerDrainingDispatchPlacement,
+  environment: ReturnType<WorkerEnvironmentService["get"]>,
+): boolean {
+  return Boolean(
+    environment &&
+    environment.state === "attached" &&
+    environment.destroyRequestedAtMs === null &&
+    placement.environmentId &&
+    environment.environmentId === placement.environmentId &&
+    placement.activeOwnerEpoch !== null &&
+    environment.ownerEpoch === placement.activeOwnerEpoch &&
+    placement.workerBundleHash &&
+    environment.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
+    // A persisted bundle hash can still match a worker using an older launch shape.
+    // Recovery may reuse only the currently admitted execution-context dialect.
+    supportsWorkerExecutionContextLaunch(environment.bootstrapReceipt) &&
+    environment.attachedSessionIds.length === 1 &&
+    environment.attachedSessionIds[0] === placement.sessionId,
   );
 }
 
@@ -87,13 +149,16 @@ export function createPlacementFailureActions(deps: {
   const cleanupEnvironment = async (params: {
     environmentId: string;
     ownerEpoch: number | null;
+    authorize?: WorkerPlacementAuthorization;
   }): Promise<string[]> => {
     const teardownErrors: string[] = [];
+    params.authorize?.();
     try {
       await environments.stopTunnel(params.environmentId, params.ownerEpoch ?? undefined);
     } catch (error) {
       teardownErrors.push(`tunnel stop: ${boundedError(error)}`);
     }
+    params.authorize?.();
     try {
       await environments.destroy(params.environmentId);
     } catch (error) {
@@ -122,7 +187,10 @@ export function createPlacementFailureActions(deps: {
     );
   };
 
-  const retryFailedTeardown = async (placement: WorkerFailedDispatchPlacement): Promise<void> => {
+  const retryFailedTeardown = async (
+    placement: WorkerFailedDispatchPlacement,
+    authorize?: WorkerPlacementAuthorization,
+  ): Promise<void> => {
     if (!placement.environmentId) {
       return;
     }
@@ -138,6 +206,7 @@ export function createPlacementFailureActions(deps: {
     const teardownErrors = await cleanupEnvironment({
       environmentId: placement.environmentId,
       ownerEpoch: placement.activeOwnerEpoch,
+      ...(authorize ? { authorize } : {}),
     });
     if (teardownErrors.length > 0) {
       const recoveryError = [placement.recoveryError, ...teardownErrors].filter(Boolean).join("; ");
@@ -179,40 +248,44 @@ export function createPlacementFailureActions(deps: {
     return reconciling;
   };
 
-  const advanceReclaimed = (placement: WorkerDrainingDispatchPlacement): void => {
-    // Lost-worker recovery has no live workspace to pull back. Deliberate inbound
-    // reconciliation remains a separate migration workflow.
-    const reconciling = startReconcile(placement);
-    const reclaimed = placements.transition({
-      sessionId: reconciling.sessionId,
-      from: "reconciling",
-      to: "reclaimed",
-      expectedGeneration: reconciling.generation,
-    });
-    if (reclaimed.state !== "reclaimed") {
-      throw new Error("Worker placement reclaim did not produce a reclaimed placement");
-    }
-  };
-
-  const finishDrainingFailure = (
-    placement: WorkerDrainingDispatchPlacement,
+  const finishReconcilingFailure = (
+    placement: WorkerReconcilingDispatchPlacement,
     error: unknown,
     teardownErrors: readonly string[],
   ): void => {
-    const reconciling = startReconcile(placement);
     const recoveryError = [boundedError(error), ...teardownErrors].join("; ");
-    updateFailure(reconciling, new Error(truncateUtf16Safe(recoveryError, RECOVERY_ERROR_LIMIT)));
+    updateFailure(placement, new Error(truncateUtf16Safe(recoveryError, RECOVERY_ERROR_LIMIT)));
   };
 
   const failDraining = async (
     placement: WorkerDrainingDispatchPlacement,
     error: unknown,
+    options: { forceClaimFence?: boolean } = {},
   ): Promise<void> => {
+    if (placement.turnClaim && !options.forceClaimFence) {
+      // Draining closes new admission. The admitted turn still owns result
+      // reconciliation; startup recovery explicitly fences stale claims.
+      return;
+    }
+    const current = placements.get(placement.sessionId);
+    if (current?.state !== "draining") {
+      return;
+    }
+    if (current.turnClaim) {
+      await placements.closeWorkerTurnToolState({
+        sessionId: current.sessionId,
+        claimId: current.turnClaim.claimId,
+        runId: current.turnClaim.runId,
+        placementGeneration: current.turnClaim.generation,
+        owner: placementTurnOwner(current),
+      });
+    }
+    const reconciling = startReconcile(current);
     const teardownErrors = await cleanupEnvironment({
-      environmentId: placement.environmentId,
-      ownerEpoch: placement.activeOwnerEpoch,
+      environmentId: current.environmentId,
+      ownerEpoch: current.activeOwnerEpoch,
     });
-    finishDrainingFailure(placement, error, teardownErrors);
+    finishReconcilingFailure(reconciling, error, teardownErrors);
   };
 
   const reclaimActive = async (
@@ -222,7 +295,17 @@ export function createPlacementFailureActions(deps: {
   ): Promise<void> => {
     const draining = startDrain(placement);
     if (draining.turnClaim) {
-      await failDraining(draining, claimedTurnError);
+      await failDraining(draining, claimedTurnError, { forceClaimFence: true });
+      return;
+    }
+    const reconciling = startReconcile(draining);
+    if (
+      !environment ||
+      environment.state === "destroyed" ||
+      environment.state === "failed" ||
+      environment.state === "orphaned"
+    ) {
+      finishReconcilingFailure(reconciling, claimedTurnError, []);
       return;
     }
     if (environment && !isUnavailableEnvironment(environment)) {
@@ -231,23 +314,29 @@ export function createPlacementFailureActions(deps: {
         ownerEpoch: placement.activeOwnerEpoch,
       });
       if (teardownErrors.length > 0) {
-        finishDrainingFailure(
-          draining,
+        finishReconcilingFailure(
+          reconciling,
           new Error(`Worker reclaim teardown failed: ${teardownErrors.join("; ")}`),
           [],
         );
         return;
       }
     }
-    advanceReclaimed(draining);
+    placements.transition({
+      sessionId: reconciling.sessionId,
+      from: "reconciling",
+      to: "reclaimed",
+      expectedGeneration: reconciling.generation,
+    });
   };
 
   const failActive = async (
     placement: WorkerActiveDispatchPlacement,
     error: unknown,
+    options: { forceClaimFence?: boolean } = {},
   ): Promise<void> => {
     const draining = startDrain(placement);
-    await failDraining(draining, error);
+    await failDraining(draining, error, options);
   };
 
   return {

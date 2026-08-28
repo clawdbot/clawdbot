@@ -7,6 +7,7 @@ import { consumeRootOptionToken, FLAG_TERMINATOR } from "../infra/cli-root-optio
 import { resolveCliArgvInvocation } from "./argv-invocation.js";
 import { scanCliRootOptions } from "./root-option-scan.js";
 import { takeCliRootOptionValue } from "./root-option-value.js";
+import { resolveSubprocessExitCode } from "./subprocess-exit-code.js";
 
 type CliContainerParseResult =
   | { ok: true; container: string | null; argv: string[] }
@@ -30,6 +31,7 @@ type ContainerRuntimeExec = {
 };
 
 const CONTAINER_ALLOW_LOOPBACK_PROXY_URL_ENV = "OPENCLAW_CONTAINER_ALLOW_LOOPBACK_PROXY_URL";
+const CONTAINER_RUNTIME_PROBE_TIMEOUT_MS = 10_000;
 
 export function parseCliContainerArgs(argv: string[]): CliContainerParseResult {
   let container: string | null = null;
@@ -74,8 +76,17 @@ function isContainerRunning(params: {
     params.exec.command,
     [...params.exec.argsPrefix, "inspect", "--format", "{{.State.Running}}", params.containerName],
     params.exec.command === "sudo"
-      ? { encoding: "utf8", stdio: ["inherit", "pipe", "inherit"] }
-      : { encoding: "utf8" },
+      ? {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          stdio: ["inherit", "pipe", "inherit"],
+          timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS,
+        }
+      : {
+          encoding: "utf8",
+          killSignal: "SIGKILL",
+          timeout: CONTAINER_RUNTIME_PROBE_TIMEOUT_MS,
+        },
   );
   return result.status === 0 && result.stdout.trim() === "true";
 }
@@ -184,7 +195,7 @@ function isLoopbackProxyHostname(hostname: string): boolean {
     return true;
   }
   if (isIP(normalizedHostname) === 4) {
-    return normalizedHostname.split(".", 1)[0] === "127";
+    return normalizedHostname.startsWith("127.");
   }
   const ipv6Hostname = normalizedHostname.replace(/^\[|\]$/g, "");
   if (isIP(ipv6Hostname) !== 6) {
@@ -309,8 +320,11 @@ export function maybeRunCliInContainer(
       env: buildContainerExecEnv(resolvedDeps.env),
     },
   );
+  if (result.error) {
+    throw result.error;
+  }
   return {
     handled: true,
-    exitCode: typeof result.status === "number" ? result.status : 1,
+    exitCode: resolveSubprocessExitCode(result.status, result.signal),
   };
 }

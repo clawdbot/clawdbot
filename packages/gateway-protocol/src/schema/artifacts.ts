@@ -18,10 +18,10 @@ const ArtifactQueryParamsProperties = {
 };
 
 /** Shared artifact filter payload used by list-style requests. */
-export const ArtifactQueryParamsSchema = closedObject(ArtifactQueryParamsProperties);
+const ArtifactQueryParamsSchema = closedObject(ArtifactQueryParamsProperties);
 
 /** Artifact lookup payload with a required artifact id plus optional scope filters. */
-export const ArtifactGetParamsSchema = closedObject({
+const ArtifactGetParamsSchema = closedObject({
   ...ArtifactQueryParamsProperties,
   artifactId: NonEmptyString,
 });
@@ -68,6 +68,7 @@ export const ArtifactsDownloadResultSchema = closedObject({
   encoding: Type.Optional(Type.Literal("base64")),
   data: Type.Optional(Type.String()),
   url: Type.Optional(NonEmptyString),
+  expiresAt: Type.Optional(NonEmptyString),
 });
 
 // Wire types derive directly from local schema consts so public d.ts graphs never

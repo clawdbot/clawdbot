@@ -3,9 +3,10 @@ import Testing
 @testable import OpenClaw
 
 struct GatewayStatusBuilderTests {
-    @Test func `paused problem keeps error status`() {
+    @Test(arguments: [nil, "gateway.example.com"] as [String?])
+    func `paused problem keeps error status`(_ gatewayServerName: String?) {
         let state = GatewayStatusBuilder.build(
-            gatewayServerName: nil,
+            gatewayServerName: gatewayServerName,
             lastGatewayProblem: GatewayConnectionProblem(
                 kind: .pairingRequired,
                 owner: .gateway,
@@ -19,9 +20,10 @@ struct GatewayStatusBuilderTests {
         #expect(state == .error)
     }
 
-    @Test func `transient problem keeps error status while reconnecting`() {
+    @Test(arguments: [nil, "gateway.example.com"] as [String?])
+    func `transient problem keeps error status while reconnecting`(_ gatewayServerName: String?) {
         let state = GatewayStatusBuilder.build(
-            gatewayServerName: nil,
+            gatewayServerName: gatewayServerName,
             lastGatewayProblem: GatewayConnectionProblem(
                 kind: .timeout,
                 owner: .network,
@@ -34,12 +36,43 @@ struct GatewayStatusBuilderTests {
         #expect(state == .error)
     }
 
-    @Test func `chat gateway pill labels match display state`() {
-        #expect(ChatProTab.gatewayPillTitle(state: .disconnected, isGatewayUsable: false) == "Offline")
-        #expect(ChatProTab.gatewayPillTitle(state: .connecting, isGatewayUsable: false) == "Connecting")
-        #expect(ChatProTab.gatewayPillTitle(state: .error, isGatewayUsable: false) == "Attention")
-        #expect(ChatProTab.gatewayPillTitle(state: .connected, isGatewayUsable: true) == "Connected")
-        #expect(ChatProTab.gatewayPillTitle(state: .connected, isGatewayUsable: false) == "Unavailable")
+    @Test func `chat gateway status labels match display state`() {
+        #expect(ChatProTab.gatewayStatusTitle(state: .disconnected, isGatewayUsable: false) == "Offline")
+        #expect(ChatProTab.gatewayStatusTitle(state: .connecting, isGatewayUsable: false) == "Connecting")
+        #expect(ChatProTab.gatewayStatusTitle(state: .error, isGatewayUsable: false) == "Attention")
+        #expect(ChatProTab.gatewayStatusTitle(state: .connected, isGatewayUsable: true) == "Connected")
+        #expect(ChatProTab.gatewayStatusTitle(state: .connected, isGatewayUsable: false) == "Unavailable")
+    }
+
+    @Test func `chat gateway status tones separate healthy issue and offline states`() {
+        #expect(ChatProTab.gatewayStatusTone(state: .connected, isGatewayUsable: true) == .success)
+        #expect(ChatProTab.gatewayStatusTone(state: .connected, isGatewayUsable: false) == .warning)
+        #expect(ChatProTab.gatewayStatusTone(state: .connecting, isGatewayUsable: false) == .warning)
+        #expect(ChatProTab.gatewayStatusTone(state: .error, isGatewayUsable: false) == .warning)
+        #expect(ChatProTab.gatewayStatusTone(state: .disconnected, isGatewayUsable: false) == .error)
+    }
+
+    @Test func `chat gateway status expands on tap or whenever gateway needs attention`() {
+        #expect(!ChatProTab.gatewayStatusShouldExpand(
+            state: .connected,
+            isGatewayUsable: true,
+            isManuallyExpanded: false))
+        #expect(ChatProTab.gatewayStatusShouldExpand(
+            state: .connected,
+            isGatewayUsable: true,
+            isManuallyExpanded: true))
+        #expect(ChatProTab.gatewayStatusShouldExpand(
+            state: .connecting,
+            isGatewayUsable: false,
+            isManuallyExpanded: false))
+        #expect(ChatProTab.gatewayStatusShouldExpand(
+            state: .error,
+            isGatewayUsable: false,
+            isManuallyExpanded: false))
+        #expect(ChatProTab.gatewayStatusShouldExpand(
+            state: .disconnected,
+            isGatewayUsable: false,
+            isManuallyExpanded: false))
     }
 
     @Test func `chat agent badge rejects placeholder question mark`() {

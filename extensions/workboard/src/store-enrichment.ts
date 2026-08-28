@@ -8,7 +8,6 @@ import type {
 import type { PersistedWorkboardAttachment } from "./persistence-types.js";
 import {
   assertCanMutateClaimedCard,
-  capText,
   cardRunId,
   cardSessionKey,
   closeRunningAttempts,
@@ -30,6 +29,7 @@ import type {
   WorkboardWorkerLogInput,
 } from "./store-inputs.js";
 import {
+  capText,
   clearDiagnostics,
   normalizeArtifact,
   normalizeAttachmentInput,
@@ -45,14 +45,18 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
   ): Promise<WorkboardCard> {
     const now = Date.now();
     const proof = normalizeProofInput(input, now);
-    return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
-      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-      return {
-        ...metadata,
-        proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-      };
-    });
+    return await this.updateMetadata(
+      id,
+      (existing) => {
+        assertCanMutateClaimedCard(existing, scope);
+        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+        return {
+          ...metadata,
+          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
+        };
+      },
+      { preserveProofId: proof.id },
+    );
   }
 
   async addProofWithArtifact(
@@ -67,15 +71,19 @@ export class WorkboardEnrichmentStore extends WorkboardCoreStore {
     if (!artifact) {
       throw new Error("artifact url or path is required.");
     }
-    return await this.updateMetadata(id, (existing) => {
-      assertCanMutateClaimedCard(existing, scope);
-      const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
-      return {
-        ...metadata,
-        proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
-        artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
-      };
-    });
+    return await this.updateMetadata(
+      id,
+      (existing) => {
+        assertCanMutateClaimedCard(existing, scope);
+        const metadata = clearDiagnostics(existing.metadata, ["missing_proof"]);
+        return {
+          ...metadata,
+          proof: [...(metadata.proof ?? []), proof].slice(-MAX_CARD_PROOF),
+          artifacts: [...(metadata.artifacts ?? []), artifact].slice(-MAX_CARD_ARTIFACTS),
+        };
+      },
+      { preserveProofId: proof.id },
+    );
   }
 
   async addArtifact(

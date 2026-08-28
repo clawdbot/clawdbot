@@ -1,7 +1,13 @@
 // Coverage for deciding when embedded run results should trigger model fallback.
 import { describe, expect, it } from "vitest";
-import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../../auto-reply/reply/agent-runner-failure-copy.js";
+import { GENERIC_EXTERNAL_RUN_FAILURE_TEXT } from "../failover/user-copy.js";
+import { runWithModelFallback } from "../model-fallback-runner.js";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "./result-fallback-classifier.js";
+
+const supplementalSpeechPayload = {
+  mediaUrl: "file:///tmp/answer.mp3",
+  ttsSupplement: { spokenText: "answer", visibleTextAlreadyDelivered: true },
+};
 
 describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   it("does not fallback when sessions_spawn accepted a child session", () => {
@@ -47,6 +53,27 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       reason: "auth",
       code: "embedded_error_payload",
       rawError: '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
+    });
+  });
+
+  it("classifies Google invalid-key result payloads before fallback settlement", () => {
+    const rawError =
+      "Google Generative AI API error (400): API key not valid. Please pass a valid API key. [code=INVALID_ARGUMENT]";
+
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "google",
+      model: "gemini-3.1-pro-preview",
+      result: {
+        payloads: [{ isError: true, text: rawError }],
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `google/gemini-3.1-pro-preview ended with a provider error: ${rawError}`,
+      reason: "auth",
+      code: "embedded_error_payload",
+      rawError,
     });
   });
 
@@ -106,26 +133,61 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("classifies generic external runner failure text as fallback-worthy", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        meta: {
-          durationMs: 42,
-        },
+  it.each([
+    {
+      name: "a generic external runner failure",
+      payload: { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
+      code: "generic_external_run_failure",
+    },
+    {
+      name: "a transient status notice without a final reply",
+      payload: { text: "Still working", isStatusNotice: true },
+      code: "empty_result",
+    },
+    {
+      name: "supplemental speech without a final reply",
+      payload: supplementalSpeechPayload,
+      code: "empty_result",
+    },
+  ])("advances to the configured fallback after $name", async ({ payload, code }) => {
+    const runs: Array<{ provider: string; model: string }> = [];
+    const result = await runWithModelFallback({
+      cfg: undefined,
+      provider: "external",
+      model: "primary",
+      fallbacksOverride: ["external/fallback"],
+      skipAuthProfileRuntime: true,
+      run: async (provider, model) => {
+        runs.push({ provider, model });
+        return runs.length === 1
+          ? {
+              payloads: [payload],
+              meta: { durationMs: 1 },
+            }
+          : { payloads: [{ text: "fallback ok" }], meta: { durationMs: 1 } };
       },
+      classifyResult: ({ provider, model, result: runResult }) =>
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider,
+          model,
+          result: runResult,
+        }),
     });
 
-    expect(result).toEqual({
-      message:
-        "claude-cli/claude-sonnet-4-6 ended with a generic external runner failure: " +
-        GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+    expect(runs).toEqual([
+      { provider: "external", model: "primary" },
+      { provider: "external", model: "fallback" },
+    ]);
+    expect(result.result.payloads).toEqual([{ text: "fallback ok" }]);
+    expect(result.attempts[0]).toMatchObject({
+      provider: "external",
+      model: "primary",
       reason: "format",
-      code: "generic_external_run_failure",
-      rawError: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      code,
     });
+    if (code === "generic_external_run_failure") {
+      expect(result.attempts[0]?.error).toBe(GENERIC_EXTERNAL_RUN_FAILURE_TEXT);
+    }
   });
 
   it("classifies Codex subscription usage-limit payloads as rate-limit fallback", () => {
@@ -174,80 +236,60 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     expect(result).toBeNull();
   });
 
-  it("does not retry generic external runner failure text mixed with non-text visible content", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [
-          {
-            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-            mediaUrl: "https://example.com/failure-screenshot.png",
-            channelData: { delivered: true },
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
+  it.each([
+    {
+      name: "non-text visible content",
+      payload: {
+        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        mediaUrl: "https://example.com/failure-screenshot.png",
+        channelData: { delivered: true },
       },
-    });
-
-    expect(result).toBeNull();
-  });
-
-  it("does not retry generic external runner failure text mixed with interactive content", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [
-          {
-            text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
-            interactive: { type: "button", label: "Retry" },
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
+    },
+    {
+      name: "interactive content",
+      payload: {
+        text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+        interactive: { type: "button", label: "Retry" },
       },
-    });
-
-    expect(result).toBeNull();
+    },
+  ])("does not retry generic external runner failure text with $name", ({ payload }) => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: { payloads: [payload], meta: { durationMs: 42 } },
+      }),
+    ).toBeNull();
   });
 
   it("does not retry generic external runner failure text after committed delivery", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        messagingToolSentTexts: ["already delivered"],
-        meta: {
-          durationMs: 42,
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+          messagingToolSentTexts: ["already delivered"],
+          meta: { durationMs: 42 },
         },
-      },
-    });
-
-    expect(result).toBeNull();
+      }),
+    ).toBeNull();
   });
 
-  it("preserves hook block results with generic external runner failure text", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "claude-cli",
-      model: "claude-sonnet-4-6",
-      result: {
-        payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
-        meta: {
-          durationMs: 42,
-          error: {
-            kind: "hook_block",
-            message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+  it("preserves hook blocks with generic external runner failure text", () => {
+    expect(
+      classifyEmbeddedAgentRunResultForModelFallback({
+        provider: "external",
+        model: "primary",
+        result: {
+          payloads: [{ text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT }],
+          meta: {
+            durationMs: 42,
+            error: { kind: "hook_block", message: GENERIC_EXTERNAL_RUN_FAILURE_TEXT },
           },
         },
-      },
-    });
-
-    expect(result).toBeNull();
+      }),
+    ).toBeNull();
   });
 
   it("preserves hook block results with auth-like error payload text", () => {
@@ -291,31 +333,6 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
 
     expect(result).toBeNull();
-  });
-
-  it("uses provider-scoped failover matching for business-denial payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "openrouter",
-      model: "claude-3.5-sonnet",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "Key limit exceeded",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
-
-    expect(result).toEqual({
-      message: "openrouter/claude-3.5-sonnet ended with a provider error: Key limit exceeded",
-      reason: "billing",
-      code: "embedded_error_payload",
-      rawError: "Key limit exceeded",
-    });
   });
 
   it("does not retry unclassified non-GPT error payloads", () => {
@@ -399,17 +416,129 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     });
   });
 
-  it("does not fallback after structured replay state records potential side effects", () => {
+  it.each([
+    {
+      label: "a yielded empty result records potential side effects",
+      meta: { replayInvalid: true, yielded: true, stopReason: "end_turn" },
+    },
+    {
+      label: "an exact terminal tool batch intentionally completes the turn",
+      meta: { intentionalTerminalCompletion: "tool-batch" as const },
+    },
+  ])("does not fallback after $label", ({ meta }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
       model: "gpt-5.5",
       result: {
         payloads: [],
-        meta: {
-          durationMs: 42,
-          replayInvalid: true,
-          agentHarnessResultClassification: "reasoning-only",
-        },
+        meta: { durationMs: 42, ...meta },
+      },
+    });
+
+    expect(result).toBeNull();
+  });
+
+  it.each([
+    {
+      name: "empty",
+      payloads: [],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "whitespace-only",
+      payloads: [{ text: "   " }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "reasoning-only",
+      payloads: [{ isReasoning: true, text: "thinking about the answer" }],
+      code: "reasoning_only_result",
+      suffix: "with reasoning only",
+    },
+    {
+      name: "mixed reasoning-plus-blank",
+      payloads: [{ isReasoning: true, text: "thinking about the answer" }, { text: "   " }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "commentary-only",
+      payloads: [{ isCommentary: true, text: "progress only" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "compaction-notice-only",
+      payloads: [{ isCompactionNotice: true, text: "Compacting context" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "fallback-notice-only",
+      payloads: [{ isFallbackNotice: true, text: "Switching providers" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "status-notice-only",
+      payloads: [{ isStatusNotice: true, text: "Still working" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "supplemental-speech-only",
+      payloads: [supplementalSpeechPayload],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "explicitly hidden",
+      payloads: [{ visible: false, text: "internal" }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+    {
+      name: "blank error",
+      payloads: [{ isError: true, text: " " }],
+      code: "empty_result",
+      suffix: "without a visible assistant reply",
+    },
+  ])("classifies $name non-GPT completions as fallback-worthy", ({ payloads, code, suffix }) => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads,
+        meta: { durationMs: 42 },
+      },
+    });
+
+    expect(result).toEqual({
+      message: `zai/glm-5.2 ended ${suffix}`,
+      reason: "format",
+      code,
+    });
+  });
+
+  it.each([
+    {
+      name: "mixed reasoning-plus-visible text",
+      payloads: [{ isReasoning: true, text: "thinking" }, { text: "Here is the answer" }],
+    },
+    { name: "media-only", payloads: [{ mediaUrl: "https://example.test/result.png" }] },
+    {
+      name: "rich error",
+      payloads: [{ isError: true, mediaUrl: "https://example.test/error.png" }],
+    },
+  ])("keeps $name completions successful", ({ payloads }) => {
+    const result = classifyEmbeddedAgentRunResultForModelFallback({
+      provider: "zai",
+      model: "glm-5.2",
+      result: {
+        payloads,
+        meta: { durationMs: 42 },
       },
     });
 

@@ -4,15 +4,48 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "no
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
+import { resolveInstalledPluginPackageOwnership } from "../../src/plugins/installed-plugin-package-ownership.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openOpenClawStateDatabase,
+} from "../../src/state/openclaw-state-db.js";
 
-const PLUGIN_UPDATE_DOCKER_SCRIPT = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
 const CORRUPT_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/corrupt-update-scenario.sh";
 const PLUGIN_UPDATE_PROBE_SCRIPT = "scripts/e2e/lib/plugin-update/probe.mjs";
 const PLUGIN_UPDATE_REGISTRY_SCRIPT = "scripts/e2e/lib/plugin-update/registry-server.mjs";
 const CORRUPT_PLUGIN_ID = "demo-corrupt-plugin";
+const PLUGIN_INDEX_MODULE_URL = pathToFileURL(
+  path.resolve("scripts/e2e/lib/plugin-index-sqlite.mjs"),
+).href;
+
+function seedInstallState(root: string, initialized: boolean) {
+  const stateDir = path.join(root, ".openclaw");
+  const configPath = path.join(stateDir, "openclaw.json");
+  const env = {
+    ...process.env,
+    HOME: root,
+    OPENCLAW_CONFIG_PATH: configPath,
+    OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+    OPENCLAW_STATE_DIR: stateDir,
+    OPENCLAW_VERSION: "2026.8.1",
+    VITEST: "true",
+  };
+  if (initialized) {
+    const database = openOpenClawStateDatabase({ env });
+    closeOpenClawStateDatabaseByPath(database.path);
+  }
+  execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "seed"], {
+    encoding: "utf8",
+    env,
+    stdio: "pipe",
+  });
+  return { configPath, env, stateDir };
+}
 
 function runProbe(command: string, payload: unknown): void {
   const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-probe-"));
@@ -75,20 +108,62 @@ async function waitForPortFile(portFile: string): Promise<number> {
 }
 
 describe("plugin update unchanged Docker E2E", () => {
-  it("seeds current plugin install ledger state before checking config stability", () => {
-    const runner = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
-    const scenario = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
-    const probe = readFileSync(PLUGIN_UPDATE_PROBE_SCRIPT, "utf8");
+  it.each([false, true])(
+    "seeds plugin ownership with initialized state=%s",
+    async (initialized) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-seed-"));
+      try {
+        const { configPath, env, stateDir } = seedInstallState(root, initialized);
+        const config = JSON.parse(readFileSync(configPath, "utf8")) as {
+          plugins?: Record<string, unknown>;
+        };
+        expect(config).toEqual({ plugins: {} });
+        expect(
+          JSON.parse(
+            execFileSync("node", [PLUGIN_UPDATE_PROBE_SCRIPT, "snapshot"], {
+              encoding: "utf8",
+              env,
+            }),
+          ),
+        ).toMatchObject({ source: "npm", resolvedVersion: "0.9.0" });
 
-    expect(runner).toContain("scripts/e2e/lib/plugin-update/unchanged-scenario.sh");
-    expect(scenario).toContain('node "$probe" seed');
-    expect(probe).toContain("writeJson(process.env.OPENCLAW_CONFIG_PATH, { plugins: {} });");
-    expect(probe).not.toContain(
-      "writeJson(process.env.OPENCLAW_CONFIG_PATH, { plugins: { installs",
-    );
-    expect(probe).toContain("installRecords: {");
-    expect(probe).toContain('"lossless-claw": {');
-  });
+        const { readPluginInstallIndex } = await import(PLUGIN_INDEX_MODULE_URL);
+        const persisted = readPluginInstallIndex({ configPath, stateDir });
+        expect(persisted.installRecords).toMatchObject({
+          "lossless-claw": {
+            source: "npm",
+            installPath: "~/.openclaw/extensions/lossless-claw",
+          },
+        });
+        expect(persisted.plugins).toEqual([
+          expect.objectContaining({
+            pluginId: "lossless-claw",
+            installOwner: "lossless-claw",
+            rootDir: path.join(stateDir, "extensions", "lossless-claw"),
+          }),
+        ]);
+
+        const database = openOpenClawStateDatabase({ env });
+        closeOpenClawStateDatabaseByPath(database.path);
+        const liveIndex = loadInstalledPluginIndex({
+          config,
+          env,
+          stateDir,
+        });
+        expect(
+          resolveInstalledPluginPackageOwnership(liveIndex, "lossless-claw", env),
+        ).toMatchObject({
+          ok: true,
+          value: {
+            installOwner: "lossless-claw",
+            pluginIds: ["lossless-claw"],
+          },
+        });
+      } finally {
+        rmSync(root, { recursive: true, force: true });
+      }
+    },
+  );
 
   it("bounds the update command and prints diagnostics on hangs", () => {
     const script = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
@@ -202,6 +277,7 @@ describe("plugin update unchanged Docker E2E", () => {
     const script = readFileSync(CORRUPT_UPDATE_SCENARIO_SCRIPT, "utf8");
 
     expect(script).toContain('plugins install "npm:@openclaw/demo-corrupt-plugin@0.0.1" --force');
+    expect(script).toContain("config set plugins.allow '[\"demo-corrupt-plugin\"]'");
     expect(script).toContain("OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS");
     expect(script).toContain(
       "openclaw_e2e_read_positive_int_env OPENCLAW_UPDATE_CORRUPT_PLUGIN_TIMEOUT_SECONDS 900",
@@ -230,6 +306,26 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(script.match(/openclaw_e2e_print_log \/tmp\/openclaw-update-corrupt-/g)).toHaveLength(8);
     expect(script).not.toContain("cat /tmp/openclaw-update-corrupt-");
+    expect(script.match(/assert-disabled-policy-preserved/g)).toHaveLength(2);
+  });
+
+  it("requires corrupt update failures to preserve the explicit allow policy", () => {
+    expect(() =>
+      runProbe("assert-disabled-policy-preserved", {
+        plugins: {
+          allow: [CORRUPT_PLUGIN_ID],
+          entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
+        },
+      }),
+    ).not.toThrow();
+
+    const revokedPolicy = runProbeStatus("assert-disabled-policy-preserved", {
+      plugins: {
+        entries: { [CORRUPT_PLUGIN_ID]: { enabled: false } },
+      },
+    });
+    expect(revokedPolicy.status).not.toBe(0);
+    expect(revokedPolicy.stderr).toContain("expected plugins.allow to preserve");
   });
 
   it("requires disabled-after-failure corrupt plugin updates to stay warnings", () => {

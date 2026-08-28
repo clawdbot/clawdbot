@@ -1,29 +1,37 @@
 // Package manager tests cover resource discovery boundaries for package,
 // project, and npm-declared agent resources.
-import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdir, stat, symlink, writeFile } from "node:fs/promises";
+import { join, relative } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 import { DefaultPackageManager } from "./package-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
-const tempDirs: string[] = [];
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-async function makeTempDir(prefix: string): Promise<string> {
-  const dir = await mkdtemp(join(tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
-
-afterEach(async () => {
-  await Promise.all(tempDirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
-});
+type PackageManagerInternals = {
+  parseSource(
+    source: string,
+  ):
+    | { type: "npm"; spec: string; name: string; pinned: boolean }
+    | { type: "git"; host: string; path: string }
+    | { type: "local"; path: string };
+  getNpmInstallPath(
+    source: { type: "npm"; spec: string; name: string; pinned: boolean },
+    scope: "user" | "project" | "temporary",
+  ): string;
+  getGitInstallPath(
+    source: { type: "git"; host: string; path: string },
+    scope: "user" | "project" | "temporary",
+  ): string;
+};
 
 describe("DefaultPackageManager", () => {
   it("keeps manifest resource entries inside the package root", async () => {
     // Manifest globs are package-owned; path traversal or symlink hops must not
     // expose arbitrary host files as skills.
-    const root = await makeTempDir("openclaw-package-manager-");
+    const root = tempDirs.make("openclaw-package-manager-");
     const packageRoot = join(root, "package");
     const outsideRoot = join(root, "outside");
     const insideSkill = join(packageRoot, "skills", "inside", "SKILL.md");
@@ -61,7 +69,7 @@ describe("DefaultPackageManager", () => {
   });
 
   it("expands manifest resource globs without hidden paths", async () => {
-    const root = await makeTempDir("openclaw-package-manager-");
+    const root = tempDirs.make("openclaw-package-manager-");
     const packageRoot = join(root, "package");
     const visibleSkill = join(packageRoot, "skills", "visible", "SKILL.md");
     const hiddenSkill = join(packageRoot, "skills", ".hidden", "SKILL.md");
@@ -88,7 +96,7 @@ describe("DefaultPackageManager", () => {
   });
 
   it("keeps convention-discovered resource entries inside the package root", async () => {
-    const root = await makeTempDir("openclaw-package-manager-");
+    const root = tempDirs.make("openclaw-package-manager-");
     const packageRoot = join(root, "package");
     const outsideRoot = join(root, "outside");
     const insideSkill = join(packageRoot, "skills", "inside", "SKILL.md");
@@ -120,7 +128,7 @@ describe("DefaultPackageManager", () => {
   });
 
   it("keeps auto-discovered project skills inside their skill root", async () => {
-    const root = await makeTempDir("openclaw-package-manager-");
+    const root = tempDirs.make("openclaw-package-manager-");
     const agentsSkillsRoot = join(root, ".agents", "skills");
     const insideSkill = join(agentsSkillsRoot, "group", "deep", "t", "SKILL.md");
     const ignoredSkill = join(agentsSkillsRoot, "group", "deep", "i", "SKILL.md");
@@ -160,10 +168,36 @@ describe("DefaultPackageManager", () => {
     );
   });
 
+  it("loads home-scoped personal skills only for the default state directory", async () => {
+    const root = tempDirs.make("openclaw-package-manager-personal-");
+    const home = join(root, "home");
+    const workspace = join(root, "workspace");
+    const personalSkill = join(home, ".agents", "skills", "personal", "SKILL.md");
+    await mkdir(join(home, ".agents", "skills", "personal"), { recursive: true });
+    await mkdir(workspace, { recursive: true });
+    await writeFile(personalSkill, "# Personal\n", "utf-8");
+
+    const resolveSkillPaths = async (stateDir: string) =>
+      await withEnvAsync(
+        { HOME: home, OPENCLAW_HOME: undefined, OPENCLAW_STATE_DIR: stateDir },
+        async () => {
+          const manager = new DefaultPackageManager({
+            cwd: workspace,
+            agentDir: join(stateDir, "agents", "main", "agent"),
+            settingsManager: SettingsManager.inMemory({}),
+          });
+          return (await manager.resolve()).skills.map((skill) => skill.path);
+        },
+      );
+
+    expect(await resolveSkillPaths(join(home, ".openclaw"))).toContain(personalSkill);
+    expect(await resolveSkillPaths(join(root, "scratch-state"))).not.toContain(personalSkill);
+  });
+
   it("keeps auto-discovered project resources inside their resource roots", async () => {
     // Project resources may be auto-discovered, but each resource type remains
     // confined to its expected root.
-    const root = await makeTempDir("openclaw-package-manager-");
+    const root = tempDirs.make("openclaw-package-manager-");
     const configRoot = join(root, ".openclaw");
     const outsideRoot = join(root, "outside");
     const insidePrompt = join(configRoot, "prompts", "inside.md");
@@ -235,7 +269,7 @@ describe("DefaultPackageManager", () => {
   });
 
   it("does not auto-install missing npm package resources", async () => {
-    const root = await makeTempDir("openclaw-package-manager-");
+    const root = tempDirs.make("openclaw-package-manager-");
     const manager = new DefaultPackageManager({
       cwd: root,
       agentDir: join(root, "agent"),
@@ -248,5 +282,88 @@ describe("DefaultPackageManager", () => {
     expect(resolved.skills).toEqual([]);
     expect(resolved.prompts).toEqual([]);
     expect(resolved.themes).toEqual([]);
+  });
+
+  it("honors filters on direct local extension files", async () => {
+    const root = tempDirs.make("openclaw-package-manager-filter-");
+    const extensionPath = join(root, "extension.ts");
+    await writeFile(extensionPath, "export default {};\n", "utf-8");
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({
+        packages: [{ source: extensionPath, extensions: [] }],
+      }),
+    });
+
+    expect((await manager.resolve()).extensions).toEqual([
+      expect.objectContaining({ path: extensionPath, enabled: false }),
+    ]);
+  });
+
+  it("treats object local directories without filters like string sources", async () => {
+    const root = tempDirs.make("openclaw-package-manager-object-");
+    const extensionDir = join(root, "extension");
+    const extensionPath = join(extensionDir, "index.ts");
+    await mkdir(extensionDir);
+    await writeFile(extensionPath, "export default {};\n", "utf-8");
+    const resolveSource = async (source: string | { source: string; extensions?: string[] }) =>
+      await new DefaultPackageManager({
+        cwd: root,
+        agentDir: join(root, "agent"),
+        settingsManager: SettingsManager.inMemory({ packages: [source] }),
+      }).resolve();
+
+    expect(await resolveSource({ source: extensionDir })).toEqual(
+      await resolveSource(extensionDir),
+    );
+    expect((await resolveSource({ source: extensionDir, extensions: [] })).extensions).toEqual([
+      expect.objectContaining({ path: extensionDir, enabled: false }),
+    ]);
+  });
+
+  it.each([
+    ["local", "./missing-extension.ts"],
+    ["npm", "npm:@openclaw/missing-test"],
+    ["git", "https://github.com/openclaw/missing-test.git"],
+  ])("reports missing %s package sources through the owner callback", async (_kind, source) => {
+    const root = tempDirs.make("openclaw-package-manager-missing-");
+    const onMissing = vi.fn(async () => "skip" as const);
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir: join(root, "agent"),
+      settingsManager: SettingsManager.inMemory({ packages: [source] }),
+    });
+
+    const resolved = await manager.resolve(onMissing);
+
+    expect(onMissing).toHaveBeenCalledOnce();
+    expect(onMissing).toHaveBeenCalledWith(source);
+    expect(resolved).toEqual({ extensions: [], skills: [], prompts: [], themes: [] });
+  });
+
+  it("keeps temporary package paths in a private per-agent directory", async () => {
+    const root = tempDirs.make("openclaw-package-manager-temp-");
+    const agentDir = join(root, "agent");
+    const manager = new DefaultPackageManager({
+      cwd: root,
+      agentDir,
+      settingsManager: SettingsManager.inMemory({}),
+    }) as unknown as PackageManagerInternals;
+    const npmSource = manager.parseSource("npm:@openclaw/example");
+    const gitSource = manager.parseSource("https://github.com/openclaw/example.git");
+    if (npmSource.type !== "npm" || gitSource.type !== "git") {
+      throw new Error("Expected package sources");
+    }
+
+    const npmPath = manager.getNpmInstallPath(npmSource, "temporary");
+    const gitPath = manager.getGitInstallPath(gitSource, "temporary");
+    const tempRoot = join(agentDir, "tmp", "resources");
+
+    expect(relative(tempRoot, npmPath).startsWith("..")).toBe(false);
+    expect(relative(tempRoot, gitPath).startsWith("..")).toBe(false);
+    if (process.platform !== "win32") {
+      expect((await stat(tempRoot)).mode & 0o777).toBe(0o700);
+    }
   });
 });

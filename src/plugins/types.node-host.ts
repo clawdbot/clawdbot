@@ -11,6 +11,11 @@ export type OpenClawPluginNodeHostCommandAvailabilityContext = {
 export type OpenClawPluginNodeHostCommandIo = {
   emitChunk(chunk: string): Promise<void>;
   onInput(callback: (payloadJSON: string) => void): void;
+  /** Complete binary messages; available when the node host dispatches a duplex command. */
+  frames?: {
+    send(message: Uint8Array): Promise<void>;
+    onMessage(listener: (message: Uint8Array) => void | Promise<void>): () => void;
+  };
   signal: AbortSignal;
 };
 
@@ -19,6 +24,16 @@ export type OpenClawPluginNodeHostCommandContext = {
   sendNodeEvent(event: string, payload: unknown): Promise<unknown>;
   /** Agent session that owns this invocation, when the caller supplied one. */
   sessionKey?: string;
+  /** Aborts when the Gateway cancels this specific node-host invocation. */
+  signal?: AbortSignal;
+  /** Protect one exact node-owned placement workspace for this invocation's lifetime. */
+  acquireManagedWorkspace?: (request: {
+    workspaceDir: string;
+    environmentId: string;
+    sessionId: string;
+    ownerEpoch: number;
+    sessionKey: string;
+  }) => { workspaceDir: string; release: () => void };
 };
 
 type OpenClawPluginNodeHostCommandBase = {
@@ -32,6 +47,10 @@ type OpenClawPluginNodeHostCommandBase = {
     context: OpenClawPluginNodeHostCommandAvailabilityContext,
     onChange: () => void,
   ) => (() => void) | void;
+  /** Release command-owned state when the active Gateway connection closes. */
+  onDisconnect?: () => Promise<void> | void;
+  /** Optional Computer Use declaration published with this command's node manifest. */
+  computerUse?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => unknown;
   agentTool?: {
     name: string;
     description: string;

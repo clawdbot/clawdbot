@@ -32,7 +32,7 @@ let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
 let replyRunRegistry: typeof import("./reply-run-registry.js").replyRunRegistry;
 let getActiveReplyRunCount: typeof import("./reply-run-registry.js").getActiveReplyRunCount;
 let createReplyOperation: typeof import("./reply-run-registry.js").createReplyOperation;
-let replyRunTesting: typeof import("./reply-run-registry.js").testing;
+let replyRunTesting: typeof import("./reply-run-registry.test-support.js").testing;
 
 function shouldUseAcpReplyDispatchHook(eventUnknown: unknown): boolean {
   const event = eventUnknown as {
@@ -156,12 +156,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ tryDispatchAcpReplyHook } = await import("../../plugin-sdk/acp-runtime.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-    ({
-      replyRunRegistry,
-      getActiveReplyRunCount,
-      createReplyOperation,
-      testing: replyRunTesting,
-    } = await import("./reply-run-registry.js"));
+    ({ replyRunRegistry, getActiveReplyRunCount, createReplyOperation } =
+      await import("./reply-run-registry.js"));
+    ({ testing: replyRunTesting } = await import("./reply-run-registry.test-support.js"));
   });
 
   beforeEach(() => {
@@ -205,7 +202,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     );
     sessionStoreMocks.loadSessionStore.mockReset().mockReturnValue({});
     sessionStoreMocks.readSessionEntry.mockReset().mockReturnValue(undefined);
-    sessionStoreMocks.resolveStorePath.mockReset().mockReturnValue("/tmp/mock-sessions.json");
+    sessionStoreMocks.resolveSessionStorePathCore
+      .mockReset()
+      .mockReturnValue("/tmp/mock-sessions.json");
     sessionStoreMocks.resolveSessionStoreEntry.mockReset().mockReturnValue({ existing: undefined });
     acpMocks.listAcpSessionEntries.mockReset().mockResolvedValue([]);
     acpMocks.readAcpSessionEntry.mockReset().mockReturnValue(null);
@@ -302,7 +301,9 @@ describe("dispatchReplyFromConfig ACP abort", () => {
       () => {
         expect(runtime.runTurn).toHaveBeenCalledTimes(1);
       },
-      { timeout: 5_000 },
+      // Import-bound dispatch startup can exceed 5s on contended CI runners
+      // (flaked on shard reruns); waitFor returns immediately once satisfied.
+      { timeout: 15_000 },
     );
     abortController.abort();
     const outcome = await raceWithTimeoutResult(
@@ -657,7 +658,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({
-        outcome: "completed",
+        outcome: "skipped",
         reason: "reply_operation_aborted",
       }),
     );
@@ -1094,7 +1095,7 @@ describe("dispatchReplyFromConfig ACP abort", () => {
     });
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({
-        outcome: "completed",
+        outcome: "skipped",
         reason: "reply_operation_aborted",
       }),
     );

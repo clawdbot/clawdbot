@@ -64,7 +64,7 @@ local proof.
   "version": "1.0.0",
   "type": "module",
   "dependencies": {
-    "typebox": "1.1.39"
+    "typebox": "1.3.16"
   },
   "peerDependencies": {
     "openclaw": ">=2026.3.24-beta.2"
@@ -137,9 +137,15 @@ local proof.
           name: "my_tool",
           description: "Echo one input value",
           parameters: Type.Object({ input: Type.String() }),
+          outputSchema: Type.Object(
+            { input: Type.String() },
+            { additionalProperties: false },
+          ),
           async execute(_id, params) {
+            const details = { input: params.input };
             return {
               content: [{ type: "text", text: `Got: ${params.input}` }],
+              details,
             };
           },
         });
@@ -238,23 +244,44 @@ loads the owning plugin runtime.
 
 Tool factories receive trusted runtime context, including `deliveryContext`,
 `nativeChannelId` for the active platform conversation when available, and
-`requesterSenderId`.
+`requesterSenderId`. A factory can use
+`toolContext.delivery?.send({ text, mediaUrl })` to send text or media to the
+current conversation. The property is unavailable outside an active channel
+turn or when the channel uses Gateway-owned delivery. OpenClaw binds the route,
+account, thread, and media access policy; the capability expires when the turn
+ends.
 
 ```typescript
 register(api) {
   api.registerTool(
-    {
+    (toolContext) => ({
       name: "workflow_tool",
       description: "Run a workflow",
       parameters: Type.Object({ pipeline: Type.String() }),
+      outputSchema: Type.Object(
+        { pipeline: Type.String() },
+        { additionalProperties: false },
+      ),
       async execute(_id, params) {
-        return { content: [{ type: "text", text: params.pipeline }] };
+        await toolContext.delivery?.send({
+          text: `Workflow started: ${params.pipeline}`,
+        });
+        return {
+          content: [{ type: "text", text: params.pipeline }],
+          details: { pipeline: params.pipeline },
+        };
       },
-    },
-    { optional: true },
+    }),
+    { name: "workflow_tool", optional: true },
   );
 }
 ```
+
+`outputSchema` is optional. It describes the structured `details` value used by
+[Code Mode](/tools/code-mode) and [Tool Search](/tools/tool-search). Catalog
+calls reject invalid schemas before execution and validate the final value after
+tool hooks. Omit it for tools without a stable JSON result. See
+[Tool plugins](/plugins/tool-plugins#output-contracts) for the full contract.
 
 Every tool registered with `api.registerTool(...)` must also be declared in the
 plugin manifest:
@@ -285,6 +312,11 @@ Optional tools control whether a tool is exposed to the model. Use
 or hook should ask for approval after the model selects it and before the
 action runs.
 
+`toolMetadata.<tool>.profiles` adds a plugin tool to named built-in profile
+allowlists. For example, `"profiles": ["coding", "messaging"]` exposes it in
+those profiles without adding a core catalog entry. Explicit operator
+allowlists and deny rules remain authoritative.
+
 Use optional tools for side effects, unusual binaries, or capabilities that
 should not be exposed by default. Tool names must not conflict with core tool
 names; conflicts are skipped and reported in plugin diagnostics. Malformed
@@ -314,12 +346,6 @@ import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
 ```
 
-Do not import from the deprecated root barrel:
-
-```typescript
-import { definePluginEntry } from "openclaw/plugin-sdk";
-```
-
 Within your plugin package, use local barrel files such as `api.ts` and
 `runtime-api.ts` for internal imports. Do not import your own plugin through an
 SDK path. Provider-specific helpers should stay in the provider package unless
@@ -333,6 +359,12 @@ and resolve to `operator.admin`. The
 routes that declare `contracts.gatewayMethodDispatch: ["authenticated-request"]`.
 
 For the full import map, see [Plugin SDK overview](/plugins/sdk-overview).
+
+OpenClaw SDK compatibility fields carry TypeScript `@deprecated` annotations,
+which editors surface as migration warnings. To enforce them at build time,
+enable a type-aware rule such as
+[`@typescript-eslint/no-deprecated`](https://typescript-eslint.io/rules/no-deprecated/).
+Oxlint is not type-aware, so it cannot enforce these annotations.
 
 ## Pre-submission checklist
 

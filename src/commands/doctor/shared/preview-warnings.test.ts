@@ -70,6 +70,7 @@ const staleAuthOrderState = vi.hoisted(() => ({
 
 const activeToolSchemaState = vi.hoisted(() => ({
   warnings: [] as string[],
+  params: undefined as { runWithPluginMetadataSnapshot?: unknown } | undefined,
 }));
 
 const commandSecretState = vi.hoisted(() => ({
@@ -315,12 +316,27 @@ vi.mock("./stale-auth-order.js", () => ({
 }));
 
 vi.mock("./active-tool-schema-warnings.js", () => ({
-  collectActiveToolSchemaProjectionWarnings: () => activeToolSchemaState.warnings,
+  collectActiveToolSchemaProjectionWarnings: async (params: {
+    runWithPluginMetadataSnapshot?: unknown;
+  }) => {
+    activeToolSchemaState.params = params;
+    return activeToolSchemaState.warnings;
+  },
 }));
 
 vi.mock("./codex-route-warnings.js", () => ({
   collectCodexRouteWarnings: vi.fn(() => []),
 }));
+
+async function useRealCodexRouteWarningsOnce(): Promise<void> {
+  const mocked = await import("./codex-route-warnings.js");
+  const actual = await vi.importActual<typeof import("./codex-route-warnings.js")>(
+    "./codex-route-warnings.js",
+  );
+  vi.mocked(mocked.collectCodexRouteWarnings).mockImplementationOnce(
+    actual.collectCodexRouteWarnings,
+  );
+}
 
 vi.mock("./context-engine-host-compat.js", () => ({
   collectContextEngineHostCompatibilityWarnings: vi.fn(async () => []),
@@ -379,6 +395,7 @@ describe("doctor preview warnings", () => {
     staleOAuthShadowState.warnings = [];
     staleAuthOrderState.warnings = [];
     activeToolSchemaState.warnings = [];
+    activeToolSchemaState.params = undefined;
     commandSecretState.targetIds = new Set<string>();
     commandSecretState.resolvedConfig = undefined;
     commandSecretState.diagnostics = [];
@@ -525,6 +542,7 @@ describe("doctor preview warnings", () => {
   });
 
   it("warns when a normalized legacy Codex provider cannot be auto-merged", async () => {
+    await useRealCodexRouteWarningsOnce();
     const warnings = await collectDoctorPreviewWarnings({
       cfg: {
         models: {
@@ -551,7 +569,7 @@ describe("doctor preview warnings", () => {
       "models.providers.openai-codex cannot be merged automatically",
     );
     expect(warning).toContain("models.providers.openai.params");
-    expect(warning).toContain("Move the affected model/provider defaults manually");
+    expect(warning).toContain("remove the legacy provider entry");
   });
 
   it("sanitizes empty-allowlist warning paths before returning preview output", async () => {
@@ -685,6 +703,23 @@ describe("doctor preview warnings", () => {
     expect(
       warnings.some((warning) => warning.includes('active tool "fuzzplugin_move_angles"')),
     ).toBe(true);
+  });
+
+  it("scopes active tool schema preview checks to the Doctor metadata lifecycle", async () => {
+    const runWithPluginMetadataSnapshot = <T>(
+      _scope: { config: OpenClawConfig; workspaceDir?: string },
+      run: () => T,
+    ): T => run();
+
+    await collectDoctorPreviewWarnings({
+      cfg: {},
+      doctorFixCommand: "openclaw doctor --fix",
+      runWithPluginMetadataSnapshot,
+    });
+
+    expect(activeToolSchemaState.params?.runWithPluginMetadataSnapshot).toBe(
+      runWithPluginMetadataSnapshot,
+    );
   });
 
   it("warns but skips auto-removal when plugin discovery has errors", async () => {
@@ -906,7 +941,7 @@ describe("doctor preview warnings", () => {
         tools: {
           profile: "messaging",
           exec: {
-            security: "allowlist",
+            mode: "allowlist",
           },
         },
       },
@@ -931,7 +966,7 @@ describe("doctor preview warnings", () => {
             tools: {
               allow: ["message"],
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
             },
           },
@@ -960,7 +995,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
             },
           },
@@ -993,7 +1028,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 "openai/gpt-5": {
@@ -1027,7 +1062,7 @@ describe("doctor preview warnings", () => {
             },
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 "openai/gpt-5": {
@@ -1059,7 +1094,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 openai: {
@@ -1087,7 +1122,7 @@ describe("doctor preview warnings", () => {
         profile: "messaging",
         alsoAllow: ["exec", "process"],
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
         },
       },
     });
@@ -1100,7 +1135,7 @@ describe("doctor preview warnings", () => {
       tools: {
         profile: "custom-profile",
         exec: {
-          security: "allowlist",
+          mode: "allowlist",
         },
         byProvider: {
           openai: {
@@ -1114,7 +1149,7 @@ describe("doctor preview warnings", () => {
             id: "sage",
             tools: {
               exec: {
-                security: "allowlist",
+                mode: "allowlist",
               },
               byProvider: {
                 openai: {

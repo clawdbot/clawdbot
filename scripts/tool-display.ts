@@ -14,7 +14,7 @@ const outputPath = path.join(
 );
 const toolSources = [
   path.join(repoRoot, "src/agents/apply-patch.ts"),
-  path.join(repoRoot, "src/agents/bash-tools.exec.ts"),
+  path.join(repoRoot, "src/agents/bash-tools.exec-run.ts"),
   path.join(repoRoot, "src/agents/bash-tools.process.ts"),
   path.join(repoRoot, "src/auto-reply/reply/acp-projector.ts"),
 ];
@@ -93,5 +93,18 @@ function collectToolNamesFromFile(sourcePath: string, names: Set<string>) {
 }
 
 function serializeToolDisplayConfig(config: ToolDisplayConfig = TOOL_DISPLAY_CONFIG): string {
-  return `${JSON.stringify(config, null, 2)}\n`;
+  const tools = Object.entries(config.tools);
+  return [
+    "{",
+    `  "version": ${JSON.stringify(config.version)},`,
+    `  "fallback": ${JSON.stringify(config.fallback)},`,
+    '  "tools": {',
+    ...tools.map(
+      ([name, spec], index) =>
+        `    ${JSON.stringify(name)}: ${JSON.stringify(spec)}${index === tools.length - 1 ? "" : ","}`,
+    ),
+    "  }",
+    "}",
+    "",
+  ].join("\n");
 }

@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { formatErrorMessage as errorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../../shared/pid-alive.js";
 import { lockWorktreeForProcess, unlockWorktree } from "./git-lock.js";
@@ -52,10 +53,6 @@ type LeaseCleanup = {
 const pendingLeaseCleanups = new Set<LeaseCleanup>();
 let exitCleanupRegistered = false;
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 async function withGitLockTransition<T>(id: string, operation: () => Promise<T>): Promise<T> {
   const previous = gitLockTransitionTails.get(id) ?? Promise.resolve();
   let finish!: () => void;
@@ -92,7 +89,11 @@ async function retainGitLock(env: NodeJS.ProcessEnv, id: string): Promise<void> 
       await lockWorktreeForProcess(record);
       held.gitLocked = true;
     } catch (error) {
-      log.warn(`worktree git lock unavailable for ${id}: ${errorMessage(error)}`);
+      heldGitLocks.delete(id);
+      throw new Error(
+        `managed worktree is unusable because its Git removal guard could not be acquired: ${record.path}; repair the checkout or create a new worktree before retrying: ${errorMessage(error)}`,
+        { cause: error },
+      );
     }
   });
 }
@@ -264,9 +265,6 @@ export async function acquireWorktreeRunLease(
     now: Date.now(),
     checks: ownerChecks,
   });
-  // Serialize refcount and Git transitions so a cleanup retry cannot unlock a
-  // newer same-process holder after a prior generation's unlock failed.
-  await retainGitLock(env, id);
   const cleanup: LeaseCleanup = {
     env,
     id,
@@ -275,6 +273,19 @@ export async function acquireWorktreeRunLease(
     refcountReleased: false,
     gitUnlockPending: false,
   };
+  // Serialize refcount and Git transitions so a cleanup retry cannot unlock a
+  // newer same-process holder after a prior generation's unlock failed.
+  try {
+    await retainGitLock(env, id);
+  } catch (error) {
+    // The failed retain already discarded its in-memory holder; cleanup owns only
+    // the durable row and keeps it fenced if deletion cannot complete yet.
+    cleanup.refcountReleased = true;
+    if (!(await runLeaseCleanup(cleanup))) {
+      pendingLeaseCleanups.add(cleanup);
+    }
+    throw error;
+  }
   let released = false;
   return {
     id,
@@ -293,7 +304,7 @@ export async function acquireWorktreeRunLease(
 
 export function claimWorktreeRemoval(
   env: NodeJS.ProcessEnv,
-  params: { worktreeId: string; token: string; force: boolean },
+  params: { worktreeId: string; token: string },
 ): void {
   const pid = process.pid;
   claimWorktreeRemovalRow(env, {
@@ -321,7 +332,7 @@ export function hasLiveWorktreeRunLease(env: NodeJS.ProcessEnv, worktreeId: stri
   return hasLiveWorktreeRunLeaseRow(env, worktreeId, ownerChecks);
 }
 
-export const testing = {
+const testing = {
   setProcessStartTimeResolverForTest(resolver: ((pid: number) => number | null) | null): void {
     resolveSelfStartTime = resolver ?? getFileLockProcessStartTime;
     ownerChecks = { ...ownerChecks, getProcessStartTime: resolver ?? undefined };
@@ -348,3 +359,9 @@ export const testing = {
     unlockWorktreeImpl = unlockWorktree;
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.worktreeRunLeaseTestApi")] = {
+    testing,
+  };
+}

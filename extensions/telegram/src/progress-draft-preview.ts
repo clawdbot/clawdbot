@@ -50,16 +50,16 @@ function renderTelegramProgressStringLine(text: string): string {
   return renderTelegramHtmlText(clipped);
 }
 
+function renderTelegramProgressText(text: string): string {
+  return text.split(/\r?\n/u).map(renderTelegramProgressStringLine).filter(Boolean).join("<br>");
+}
+
 function renderTelegramProgressLine(line: ChannelProgressDraftCompositorLine): string {
   if (typeof line === "string") {
-    return line.split(/\r?\n/u).map(renderTelegramProgressStringLine).filter(Boolean).join("<br>");
+    return renderTelegramProgressText(line);
   }
-  if (!line.icon && line.label === "Commentary") {
-    return line.text
-      .split(/\r?\n/u)
-      .map(renderTelegramProgressStringLine)
-      .filter(Boolean)
-      .join("<br>");
+  if (!line.icon && (!line.label || line.label === "Commentary")) {
+    return renderTelegramProgressText(line.text);
   }
   const label = [line.icon, line.label].filter(Boolean).join(" ");
   const parts = [`<b>${escapeTelegramProgressHtml(label)}</b>`];
@@ -109,20 +109,20 @@ function markdownLineToRichText(text: string): RichText {
   return clipped;
 }
 
+function progressTextToRichText(text: string): RichText | undefined {
+  const parts = text
+    .split(/\r?\n/u)
+    .map(markdownLineToRichText)
+    .filter((part) => part !== "");
+  return parts.length ? joinRichText(parts, "\n") : undefined;
+}
+
 function progressLineToRichText(line: ChannelProgressDraftCompositorLine): RichText | undefined {
   if (typeof line === "string") {
-    const parts = line
-      .split(/\r?\n/u)
-      .map(markdownLineToRichText)
-      .filter((part) => part !== "");
-    return parts.length ? joinRichText(parts, "\n") : undefined;
+    return progressTextToRichText(line);
   }
-  if (!line.icon && line.label === "Commentary") {
-    const parts = line.text
-      .split(/\r?\n/u)
-      .map(markdownLineToRichText)
-      .filter((part) => part !== "");
-    return parts.length ? joinRichText(parts, "\n") : undefined;
+  if (!line.icon && (!line.label || line.label === "Commentary")) {
+    return progressTextToRichText(line.text);
   }
   const label = [line.icon, line.label].filter(Boolean).join(" ");
   const parts: RichText[] = [boldRichText(label)];
@@ -145,6 +145,15 @@ function buildProgressRichBlocks(parts: RichText[]): InputRichBlock[] {
   return [paragraphBlock(joinRichText(parts, "\n"))];
 }
 
+function isStatusHeadlineWorkLine(
+  line: ChannelProgressDraftCompositorLine,
+): line is Exclude<ChannelProgressDraftCompositorLine, string> {
+  if (typeof line === "string") {
+    return false;
+  }
+  return !line.id?.startsWith("reasoning:") && !line.id?.startsWith("commentary:");
+}
+
 export function renderTelegramProgressDraftPreview(
   text: string,
   lines: readonly ChannelProgressDraftCompositorLine[],
@@ -157,26 +166,39 @@ export function renderTelegramProgressDraftPreview(
       .split(/\r?\n/u)
       .map((line) => line.trim())
       .filter(Boolean);
+    const workLines = lines.filter(isStatusHeadlineWorkLine);
+    const renderedLines = workLines.map(renderTelegramProgressLine).filter(Boolean);
     if (!richMessages) {
-      const html =
+      const renderedStatusLines =
         statusLines.length > 1
           ? [
               `<b>${escapeTelegramProgressHtml(statusLines[0] ?? "")}</b>`,
               ...statusLines.slice(1).map(renderTelegramProgressStringLine),
-            ].join("<br>")
-          : statusLines.map(renderTelegramProgressStringLine).join("<br>");
-      return { text: html, parseMode: "HTML" };
+            ]
+          : statusLines.map(renderTelegramProgressStringLine);
+      return { text: [...renderedStatusLines, ...renderedLines].join("<br>"), parseMode: "HTML" };
     }
-    const richParts: RichText[] =
+    const richStatusParts: RichText[] =
       statusLines.length > 1
         ? [boldRichText(statusLines[0] ?? ""), ...statusLines.slice(1).map(markdownLineToRichText)]
         : statusLines.map(markdownLineToRichText);
+    const richLineParts = workLines
+      .map(progressLineToRichText)
+      .filter((part): part is RichText => part !== undefined);
+    const plainLineTexts = workLines
+      .map((line) => line.text)
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const plainText = [...statusLines, ...plainLineTexts].join("\n");
     return {
-      text: trimmed,
-      richMessage: buildTelegramRichBlocksPlan(buildProgressRichBlocks(richParts), {
-        skipEntityDetection: true,
-        plainText: trimmed,
-      }).richMessage,
+      text: plainText,
+      richMessage: buildTelegramRichBlocksPlan(
+        buildProgressRichBlocks([...richStatusParts, ...richLineParts]),
+        {
+          skipEntityDetection: true,
+          plainText,
+        },
+      ).richMessage,
     };
   }
   const renderedLines = lines.map(renderTelegramProgressLine).filter(Boolean);

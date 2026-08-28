@@ -5,10 +5,10 @@ scenario:
   surface: channel
   coverage:
     primary:
-      - channels.group-visible-replies
+      - channels.outbound-group-reply
     secondary:
-      - channels.qa-channel
-      - tools.message
+      - channels.qa-channel-outbound
+      - channels.outbound-message
   objective: Verify a group-sourced QA channel turn replies visibly through message(action=send) in the same room.
   gatewayConfigPatch:
     messages:
@@ -18,6 +18,7 @@ scenario:
     - Agent receives a synthetic shared-room turn.
     - Mock provider calls the shared message tool instead of relying on final-answer delivery.
     - The visible reply lands once in the same group transcript.
+    - The source turn settles with a durably recorded successful message-tool result.
   docsRefs:
     - docs/channels/groups.md
     - docs/channels/qa-channel.md
@@ -47,6 +48,12 @@ flow:
             - ref: env
             - 60000
         - call: reset
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `group:${config.conversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo }, dmScope: env.cfg.session?.dmScope, identityLinks: env.cfg.session?.identityLinks })"
         - set: requestCursorBefore
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
@@ -82,6 +89,21 @@ flow:
                 params: [candidate]
                 expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'group' && !candidate.threadId && candidate.text.includes(config.expectedMarker)"
             - expr: liveTurnTimeoutMs(env, 180000)
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                expr: "env.gateway.call('sessions.list', {}, { timeoutMs: 30000 }).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === false))"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 100
+        - call: readSessionTranscriptSummary
+          saveAs: transcriptSummary
+          args:
+            - ref: env
+            - ref: sessionKey
+        - assert:
+            expr: "transcriptSummary.successfulToolCallCounts.message === 1"
+            message: visible group reply did not persist exactly one successful message-tool result
         - set: matchingOutbound
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && message.conversation.kind === 'group' && String(message.text ?? '').includes(config.expectedMarker))"
@@ -89,4 +111,4 @@ flow:
             expr: matchingOutbound.length === 1
             message:
               expr: "`expected exactly one visible group reply, saw ${matchingOutbound.length}`"
-      detailsExpr: "`${outbound.conversation.kind}:${outbound.conversation.id}:${outbound.text}`"
+      detailsExpr: "JSON.stringify({ verdict: 'PASS', configuredGroupScope: 'per-group (default)', sessionKey, sessionKeysSeen: [sessionKey], reply: { kind: outbound.conversation.kind, id: outbound.conversation.id, text: outbound.text } })"

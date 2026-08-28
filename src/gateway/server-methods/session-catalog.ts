@@ -4,6 +4,7 @@ import {
   ErrorCodes,
   errorShape,
   type SessionCatalog,
+  type SessionCatalogLocator,
   type SessionsCatalogArchiveParams,
   type SessionsCatalogContinueParams,
   type SessionsCatalogListParams,
@@ -13,7 +14,9 @@ import {
   validateSessionsCatalogListParams,
   validateSessionsCatalogReadParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { getPluginRegistryState } from "../../plugins/runtime-state.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import type {
   SessionCatalogCreateTarget,
   SessionCatalogProvider,
@@ -22,11 +25,33 @@ import { bindPluginSessionConversation } from "../../plugins/session-conversatio
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { recordSessionStateEvent } from "../../sessions/session-state-events.js";
 import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links.js";
+import { authorizeGatewaySessionCreation } from "../operator-role-policy.js";
+import type { GatewayBroadcastToConnIdsFn } from "../server-broadcast-types.js";
 import { resolveAgentIdOrRespondError } from "./agent-id-shared.js";
-import type { GatewayRequestHandlers, RespondFn } from "./types.js";
+import { authorizeSessionCatalogThread } from "./session-catalog-authorization.js";
+import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
+import {
+  allowProcessHomeFallback,
+  createSessionCatalogRequestNodeSnapshot,
+  listSessionCatalogProvider,
+  resolveSessionCatalogRegistry,
+} from "./session-catalog-provider-access.js";
+import { catalogStartHandler } from "./session-catalog-terminal-start.js";
+import {
+  filterSessionCatalogHost,
+  resolveSessionCatalogVisibility,
+} from "./session-catalog-visibility.js";
+import type {
+  GatewayClient,
+  GatewayRequestContext,
+  GatewayRequestHandlers,
+  RespondFn,
+} from "./types.js";
 import { assertValidParams } from "./validation.js";
 
 const SESSION_CATALOG_SEARCH_MAX_UTF16_UNITS = 500;
+const SESSION_CATALOG_SHARE_WINDOW_MS = 3_000;
+const SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES = 128;
 
 function normalizeSessionCatalogSearch(search: string | undefined): string | undefined {
   const normalized = normalizeOptionalString(search);
@@ -46,8 +71,41 @@ function catalogError(error: unknown): { code: string; message: string } {
   };
 }
 
+type CatalogRegistrationSnapshot = {
+  registry: PluginRegistry | null;
+  source: PluginRegistry["sessionCatalogs"] | undefined;
+  registrations: PluginRegistry["sessionCatalogs"];
+  providers: SessionCatalogProvider[];
+};
+
+let cachedCatalogRegistrations: CatalogRegistrationSnapshot | undefined;
+
+function catalogRegistrationSnapshot(): CatalogRegistrationSnapshot {
+  const registry = resolveSessionCatalogRegistry();
+  const source = registry?.sessionCatalogs;
+  if (
+    cachedCatalogRegistrations?.registry === registry &&
+    cachedCatalogRegistrations.source === source
+  ) {
+    return cachedCatalogRegistrations;
+  }
+  const sortedRegistrations = (source ?? []).toSorted((left, right) =>
+    left.provider.id.localeCompare(right.provider.id),
+  );
+  // Plugin registration arrays are process-stable until the active registry seam changes. Hoisting
+  // this sort avoids rebuilding identical order every poll; registry/list identity invalidates it.
+  // A stale snapshot would route requests to retired plugin instances, so callers share this owner.
+  cachedCatalogRegistrations = {
+    registry,
+    source,
+    registrations: sortedRegistrations,
+    providers: sortedRegistrations.map((entry) => entry.provider),
+  };
+  return cachedCatalogRegistrations;
+}
+
 function providers(): SessionCatalogProvider[] {
-  return registrations().map((entry) => entry.provider);
+  return catalogRegistrationSnapshot().providers;
 }
 
 export function resolveSessionCatalogProvider(
@@ -57,9 +115,7 @@ export function resolveSessionCatalogProvider(
 }
 
 function registrations() {
-  return (getPluginRegistryState()?.activeRegistry?.sessionCatalogs ?? []).toSorted((left, right) =>
-    left.provider.id.localeCompare(right.provider.id),
-  );
+  return catalogRegistrationSnapshot().registrations;
 }
 
 type SessionCatalogCreateTargetResolution =
@@ -70,26 +126,84 @@ type ProviderCreateTargetResolution =
   | { ok: true; target: SessionCatalogCreateTarget }
   | { ok: false; message: string };
 
+const providerCreateTargetsByConfig = new WeakMap<
+  OpenClawConfig,
+  WeakMap<SessionCatalogProvider, Map<string, ProviderCreateTargetResolution>>
+>();
+
+type CatalogListResult = { catalogs: SessionCatalog[] };
+
+type CatalogListProgressSubscriber = {
+  broadcastToConnIds: GatewayBroadcastToConnIdsFn;
+  connId: string;
+  progressId: string;
+};
+
+type CatalogListCacheEntry = {
+  expiresAt?: number;
+  progressSubscribers: Map<string, CatalogListProgressSubscriber>;
+  result: Promise<CatalogListResult>;
+};
+
+type CatalogListCacheState = {
+  registrations: CatalogRegistrationSnapshot;
+  entries: Map<string, CatalogListCacheEntry>;
+};
+
+const catalogListsByConfig = new WeakMap<OpenClawConfig, CatalogListCacheState>();
+
+function providerCreateTargetCache(
+  config: OpenClawConfig,
+  provider: SessionCatalogProvider,
+): Map<string, ProviderCreateTargetResolution> {
+  let byProvider = providerCreateTargetsByConfig.get(config);
+  if (!byProvider) {
+    byProvider = new WeakMap();
+    providerCreateTargetsByConfig.set(config, byProvider);
+  }
+  let byAgent = byProvider.get(provider);
+  if (!byAgent) {
+    byAgent = new Map();
+    byProvider.set(provider, byAgent);
+  }
+  return byAgent;
+}
+
 function resolveProviderCreateTarget(
   provider: SessionCatalogProvider,
-  agentId?: string,
+  agentId: string,
+  config: OpenClawConfig,
 ): ProviderCreateTargetResolution {
+  const cache = providerCreateTargetCache(config, provider);
+  const cached = cache.get(agentId);
+  if (cached) {
+    // The provider contract makes create targets config-derived. A reload changes config identity;
+    // retaining the old target would advertise a model no longer allowed.
+    return cached;
+  }
+  let resolution: ProviderCreateTargetResolution;
   try {
     const target = provider.resolveCreateSession?.({ agentId });
     const model = target?.model.trim();
     const agentRuntime = target?.agentRuntime.trim();
-    return model && agentRuntime
-      ? { ok: true, target: { model, agentRuntime } }
-      : { ok: false, message: `session catalog ${provider.id} cannot create sessions` };
+    resolution =
+      model && agentRuntime
+        ? { ok: true, target: { model, agentRuntime } }
+        : { ok: false, message: `session catalog ${provider.id} cannot create sessions` };
   } catch (error) {
+    // Resolver exceptions are not config state. Retry them on the next request so a transient
+    // provider initialization failure cannot suppress session creation until config reload.
     return { ok: false, message: catalogError(error).message };
   }
+  cache.set(agentId, resolution);
+  return resolution;
 }
 
 /** Resolves a catalog-owned create target at the start of sessions.create. */
-export function resolveSessionCatalogCreateTarget(
+export function resolveRegisteredCatalogCreateTarget(
   catalogId: string,
   agentId: string,
+  config: OpenClawConfig,
 ): SessionCatalogCreateTargetResolution {
   const registration = registrations().find((entry) => entry.provider.id === catalogId);
   if (!registration) {
@@ -99,10 +213,46 @@ export function resolveSessionCatalogCreateTarget(
       unknownCatalog: true,
     };
   }
-  const resolved = resolveProviderCreateTarget(registration.provider, agentId);
+  const resolved = resolveProviderCreateTarget(registration.provider, agentId, config);
   return resolved.ok
     ? { ok: true, target: { ...resolved.target, pluginOwnerId: registration.pluginId } }
     : resolved;
+}
+
+function sessionCatalogListKey(params: {
+  agentId: string;
+  request: SessionsCatalogListParams;
+  search?: string;
+  allowProcessHomeFallback: boolean;
+  visibilityKey: string;
+}): string {
+  const cursors = params.request.cursors
+    ? Object.entries(params.request.cursors).toSorted(([left], [right]) =>
+        left.localeCompare(right),
+      )
+    : null;
+  return JSON.stringify([
+    params.agentId,
+    params.request.catalogId ?? null,
+    params.search ?? null,
+    params.request.limitPerHost ?? null,
+    params.request.hostIds ?? null,
+    cursors,
+    params.allowProcessHomeFallback,
+    params.visibilityKey,
+  ]);
+}
+
+function catalogListCache(
+  config: OpenClawConfig,
+  registrationSnapshot: CatalogRegistrationSnapshot,
+): Map<string, CatalogListCacheEntry> {
+  let state = catalogListsByConfig.get(config);
+  if (!state || state.registrations !== registrationSnapshot) {
+    state = { registrations: registrationSnapshot, entries: new Map() };
+    catalogListsByConfig.set(config, state);
+  }
+  return state.entries;
 }
 
 function providerOrRespond(
@@ -118,6 +268,35 @@ function providerOrRespond(
     );
   }
   return provider;
+}
+
+async function authorizeCatalogRequest(params: {
+  access: "read" | "mutate";
+  request: SessionCatalogLocator & { agentId?: string };
+  provider: SessionCatalogProvider;
+  respond: RespondFn;
+  context: GatewayRequestContext;
+  client: GatewayClient | null;
+}): Promise<{ agentId: string; allowProcessHomeFallback: boolean } | null> {
+  const resolvedAgent = resolveAgentIdOrRespondError({
+    rawAgentId: params.request.agentId,
+    respond: params.respond,
+    cfg: params.context.getRuntimeConfig(),
+    normalize: normalizeOptionalString,
+  });
+  if (!resolvedAgent) {
+    return null;
+  }
+  const authorization = await authorizeSessionCatalogThread({
+    access: params.access,
+    agentId: resolvedAgent.agentId,
+    client: params.client,
+    context: params.context,
+    provider: params.provider,
+    request: params.request,
+    respond: params.respond,
+  });
+  return authorization ? { agentId: resolvedAgent.agentId, ...authorization } : null;
 }
 
 function registrationOrRespond(catalogId: string, respond: RespondFn) {
@@ -156,7 +335,7 @@ function catalogResult(
 }
 
 export const sessionCatalogHandlers: GatewayRequestHandlers = {
-  "sessions.catalog.list": async ({ params, respond, context }) => {
+  "sessions.catalog.list": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -168,15 +347,31 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const request = params as SessionsCatalogListParams;
+    if (request.cursors !== undefined && request.catalogId === undefined) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "catalogId is required when cursors are provided"),
+      );
+      return;
+    }
+    const catalogRegistrations = catalogRegistrationSnapshot();
     let selected: SessionCatalogProvider[];
     if (request.catalogId) {
-      const provider = providerOrRespond(request.catalogId, respond);
+      const provider = catalogRegistrations.providers.find(
+        (candidate) => candidate.id === request.catalogId,
+      );
       if (!provider) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, `unknown session catalog: ${request.catalogId}`),
+        );
         return;
       }
       selected = [provider];
     } else {
-      selected = providers();
+      selected = catalogRegistrations.providers;
     }
     const config = context.getRuntimeConfig();
     const resolvedAgent = resolveAgentIdOrRespondError({
@@ -189,27 +384,144 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     const search = normalizeSessionCatalogSearch(request.search);
-    const catalogList = await Promise.all(
-      selected.map(async (provider): Promise<SessionCatalog> => {
-        const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId);
-        const createSession = createTarget.ok ? { model: createTarget.target.model } : undefined;
-        try {
-          const hosts = await provider.list({
-            search,
-            limitPerHost: request.limitPerHost,
-            hostIds: request.hostIds,
-            ...("cursors" in request ? { cursors: request.cursors } : {}),
-          });
-          return catalogResult(provider, hosts, undefined, createSession);
-        } catch (error) {
-          return catalogResult(provider, [], catalogError(error), createSession);
-        }
-      }),
-    );
-    respond(true, { catalogs: catalogList });
+    const allowHomeFallback = allowProcessHomeFallback(context.logGateway);
+    const visibility = resolveSessionCatalogVisibility(client, config);
+    const progressId = request.progressId;
+    const progressConnId = progressId && client?.connId ? client.connId : undefined;
+    const listKey = sessionCatalogListKey({
+      agentId: resolvedAgent.agentId,
+      request,
+      search,
+      allowProcessHomeFallback: allowHomeFallback,
+      visibilityKey: visibility.cacheKey,
+    });
+    const cache = catalogListCache(config, catalogRegistrations);
+    const cached = cache.get(listKey);
+    if (cached && (cached.expiresAt === undefined || cached.expiresAt > Date.now())) {
+      // progressId is connection-owned and excluded from the work key. Active followers register
+      // for the remaining host frames; settled followers receive only the authoritative result.
+      if (cached.expiresAt === undefined && progressConnId && progressId) {
+        cached.progressSubscribers.set(`${progressConnId}\0${progressId}`, {
+          broadcastToConnIds: context.broadcastToConnIds,
+          connId: progressConnId,
+          progressId,
+        });
+      }
+      cache.delete(listKey);
+      cache.set(listKey, cached);
+      respond(true, await cached.result);
+      return;
+    }
+    if (cached) {
+      cache.delete(listKey);
+    }
+    const progressSubscribers = new Map<string, CatalogListProgressSubscriber>();
+    if (progressConnId && progressId) {
+      progressSubscribers.set(`${progressConnId}\0${progressId}`, {
+        broadcastToConnIds: context.broadcastToConnIds,
+        connId: progressConnId,
+        progressId,
+      });
+    }
+    const operation = (async () => {
+      const requestEntries = createSessionCatalogRequestEntrySnapshot({
+        cfg: config,
+        fallbackAgentId: resolvedAgent.agentId,
+      });
+      const listNodes = createSessionCatalogRequestNodeSnapshot();
+      const catalogList = await Promise.all(
+        selected.map(async (provider): Promise<SessionCatalog> => {
+          const createTarget = resolveProviderCreateTarget(provider, resolvedAgent.agentId, config);
+          const createSession = createTarget.ok
+            ? {
+                model: createTarget.target.model,
+                ...(provider.startTerminalSession ? { startTerminal: true as const } : {}),
+              }
+            : undefined;
+          const onHost = (host: SessionCatalog["hosts"][number]) => {
+            const visibleHost = filterSessionCatalogHost(
+              requestEntries.projectHostCreatedActors(host),
+              visibility,
+              {
+                config,
+                fallbackAgentId: resolvedAgent.agentId,
+                sessionEntries: requestEntries.sessionEntries,
+              },
+            );
+            const catalog = catalogResult(provider, [visibleHost], undefined, createSession);
+            // Progressive frames are an optimization. The final RPC response remains
+            // authoritative when a slow client drops an intermediate host update.
+            for (const subscriber of progressSubscribers.values()) {
+              subscriber.broadcastToConnIds(
+                "sessions.catalog.host",
+                {
+                  progressId: subscriber.progressId,
+                  agentId: resolvedAgent.agentId,
+                  catalog,
+                },
+                new Set([subscriber.connId]),
+                { dropIfSlow: true },
+              );
+            }
+          };
+          try {
+            const hosts = await listSessionCatalogProvider(provider, {
+              agentId: resolvedAgent.agentId,
+              allowProcessHomeFallback: allowHomeFallback,
+              search,
+              limitPerHost: request.limitPerHost,
+              hostIds: request.hostIds,
+              ...(request.cursors !== undefined ? { cursors: request.cursors } : {}),
+              sessionEntries: requestEntries.sessionEntries,
+              listNodes,
+              onHost,
+            });
+            return catalogResult(
+              provider,
+              hosts.map((host) =>
+                filterSessionCatalogHost(
+                  requestEntries.projectHostCreatedActors(host),
+                  visibility,
+                  {
+                    config,
+                    fallbackAgentId: resolvedAgent.agentId,
+                    sessionEntries: requestEntries.sessionEntries,
+                  },
+                ),
+              ),
+              undefined,
+              createSession,
+            );
+          } catch (error) {
+            return catalogResult(provider, [], catalogError(error), createSession);
+          }
+        }),
+      );
+      return { catalogs: catalogList };
+    })();
+    const entry: CatalogListCacheEntry = { progressSubscribers, result: operation };
+    // Exact request/config/registration results remain shareable for 3s after settling. This catches
+    // out-of-phase clients but expires before the UI's 5s fast follow, so changed rows surface there.
+    // Expired and rejected work is removed; retaining it would mask provider recovery or new sessions.
+    cache.set(listKey, entry);
+    pruneMapToMaxSize(cache, SESSION_CATALOG_LIST_CACHE_MAX_ENTRIES);
+    try {
+      const result = await operation;
+      if (cache.get(listKey) === entry) {
+        entry.expiresAt = Date.now() + SESSION_CATALOG_SHARE_WINDOW_MS;
+      }
+      respond(true, result);
+    } catch (error) {
+      if (cache.get(listKey) === entry) {
+        cache.delete(listKey);
+      }
+      throw error;
+    } finally {
+      progressSubscribers.clear();
+    }
   },
 
-  "sessions.catalog.read": async ({ params, respond }) => {
+  "sessions.catalog.read": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -226,8 +538,26 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const authorization = await authorizeCatalogRequest({
+        access: "read",
+        request,
+        provider,
+        respond,
+        context,
+        client,
+      });
+      if (!authorization) {
+        return;
+      }
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.read(providerRequest));
+      respond(
+        true,
+        await provider.read({
+          ...providerRequest,
+          agentId: authorization.agentId,
+          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+        }),
+      );
     } catch (error) {
       const details = catalogError(error);
       respond(
@@ -238,7 +568,7 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.continue": async ({ params, respond, client }) => {
+  "sessions.catalog.continue": async ({ params, respond, client, context }) => {
     if (
       !assertValidParams(
         params,
@@ -260,11 +590,36 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const authorization = await authorizeCatalogRequest({
+        access: "mutate",
+        request,
+        provider,
+        respond,
+        context,
+        client,
+      });
+      if (!authorization) {
+        return;
+      }
+      const creationError = authorizeGatewaySessionCreation({
+        cfg: context.getRuntimeConfig(),
+        client,
+        agentId: authorization.agentId,
+      });
+      if (creationError) {
+        respond(false, undefined, creationError);
+        return;
+      }
       const { catalogId: _catalogId, ...providerRequest } = request;
       // Fail closed for unscoped callers: providers gate high-authority
       // continues (e.g. node-executing bindings) on these scopes.
       const clientScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
-      const result = await provider.continueSession({ ...providerRequest, clientScopes });
+      const result = await provider.continueSession({
+        ...providerRequest,
+        agentId: authorization.agentId,
+        allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+        clientScopes,
+      });
       if (result.conversationBinding) {
         // operator.write on Continue is the approval boundary. Per-turn plugin and
         // node command authorization still applies after this binding is installed.
@@ -317,7 +672,12 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
     }
   },
 
-  "sessions.catalog.archive": async ({ params, respond }) => {
+  "sessions.catalog.startTerminal": catalogStartHandler(
+    resolveSessionCatalogProvider,
+    resolveRegisteredCatalogCreateTarget,
+  ),
+
+  "sessions.catalog.archive": async ({ params, respond, context, client }) => {
     if (
       !assertValidParams(
         params,
@@ -338,8 +698,26 @@ export const sessionCatalogHandlers: GatewayRequestHandlers = {
       return;
     }
     try {
+      const authorization = await authorizeCatalogRequest({
+        access: "mutate",
+        request,
+        provider,
+        respond,
+        context,
+        client,
+      });
+      if (!authorization) {
+        return;
+      }
       const { catalogId: _catalogId, ...providerRequest } = request;
-      respond(true, await provider.archive(providerRequest));
+      respond(
+        true,
+        await provider.archive({
+          ...providerRequest,
+          agentId: authorization.agentId,
+          allowProcessHomeFallback: authorization.allowProcessHomeFallback,
+        }),
+      );
     } catch (error) {
       const details = catalogError(error);
       respond(

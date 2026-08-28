@@ -1,9 +1,9 @@
 // Slack plugin module implements edit text behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
 import { buildSlackCompleteBlocksFallbackText } from "./blocks-fallback.js";
-import { SLACK_EDIT_TEXT_LIMIT } from "./limits.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
 import { appendSlackNativeDataPlainTextFallback } from "./native-data-blocks.js";
-import { truncateSlackText } from "./truncate.js";
+import { truncateSlackTextByUtf8Bytes } from "./truncate.js";
 
 export function buildSlackEditTextPayload(
   content: string,
@@ -26,10 +26,10 @@ export function buildSlackEditTextPayload(
       : blockText && !blockText.includes(trimmedContent)
         ? `${trimmedContent}\n\n${blockText}`
         : blockText || trimmedContent;
-    return truncateSlackText(fallbackText, SLACK_EDIT_TEXT_LIMIT);
+    return truncateSlackTextByUtf8Bytes(fallbackText, SLACK_EDIT_TEXT_MAX_BYTES);
   }
   if (blockText) {
-    return truncateSlackText(blockText, SLACK_EDIT_TEXT_LIMIT);
+    return truncateSlackTextByUtf8Bytes(blockText, SLACK_EDIT_TEXT_MAX_BYTES);
   }
   return " ";
 }

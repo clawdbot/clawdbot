@@ -1,11 +1,49 @@
 // Prepares parent-context fork metadata for guarded reply session initialization.
-import type { SessionEntry } from "../../config/sessions.js";
+import { buildMainSessionRecoveryClearPatch } from "../../agents/main-session-recovery/main-session-recovery-clear.js";
+import type { InternalSessionEntry, SessionEntry } from "../../config/sessions.js";
+import {
+  isRestartRecoveryTombstone,
+  SessionRestartRecoveryTombstoneError,
+} from "../../config/sessions/lifecycle.js";
+import { sessionEntryForkedFromParent } from "../../config/sessions/session-entry-lineage.js";
+import { isModelSelectionLocked } from "../../sessions/model-overrides.js";
 import { forkSessionFromParent, resolveParentForkDecision } from "./session-fork.js";
+
+export function canReplaceRestartTombstoneFromParent(params: {
+  actorType: "agent" | "human" | "system";
+  entry?: SessionEntry;
+  hasParentForkSource: boolean;
+  hasPluginOwnedBinding?: boolean;
+  inboundAccessAuthorized?: boolean;
+  inboundEventKind?: string;
+  nativeCommandTarget?: string;
+  sessionKey?: string;
+}): boolean {
+  return (
+    params.hasParentForkSource &&
+    isRestartRecoveryTombstone(params.entry) &&
+    !isModelSelectionLocked(params.entry) &&
+    !sessionEntryForkedFromParent(params.entry) &&
+    params.hasPluginOwnedBinding !== true &&
+    params.entry?.pluginOwnerId === undefined &&
+    params.inboundAccessAuthorized === true &&
+    params.inboundEventKind !== "room_event" &&
+    params.actorType === "human" &&
+    (params.nativeCommandTarget === undefined || params.nativeCommandTarget === params.sessionKey)
+  );
+}
+
+function restartTombstoneParentReplacementError(sessionKey: string): Error {
+  return new SessionRestartRecoveryTombstoneError(
+    `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`,
+  );
+}
 
 export async function prepareReplySessionParentFork(params: {
   agentId: string;
   alreadyForked: boolean;
   parentSessionKey?: string;
+  requireParentForkReplacement?: boolean;
   readEntry: (sessionKey: string) => SessionEntry | undefined;
   sessionEntry: SessionEntry;
   sessionKey: string;
@@ -21,6 +59,9 @@ export async function prepareReplySessionParentFork(params: {
   }
   const parentEntry = params.readEntry(params.parentSessionKey);
   if (!parentEntry?.sessionId) {
+    if (params.requireParentForkReplacement === true) {
+      throw restartTombstoneParentReplacementError(params.sessionKey);
+    }
     return params.sessionEntry;
   }
   const decision = await resolveParentForkDecision({
@@ -45,19 +86,31 @@ export async function prepareReplySessionParentFork(params: {
     storePath: params.storePath,
   });
   if (!fork) {
+    if (params.requireParentForkReplacement === true) {
+      throw restartTombstoneParentReplacementError(params.sessionKey);
+    }
     return params.sessionEntry;
   }
   params.warn(
     `forking from parent session: parentKey=${params.parentSessionKey} → sessionKey=${params.sessionKey} ` +
       `parentTokens=${decision.parentTokens ?? "unknown"}`,
   );
-  params.warn(`forked session created: file=${fork.sessionFile}`);
-  return {
+  // The fork replaces this thread's transcript identity; recovery state from
+  // the preseed row must not govern a later interruption of the fork.
+  const forkedEntry: InternalSessionEntry = {
     ...params.sessionEntry,
+    ...buildMainSessionRecoveryClearPatch(params.sessionEntry),
     sessionId: fork.sessionId,
-    sessionFile: fork.sessionFile,
+    lifecycleRunId: undefined,
+    lastRunId: undefined,
+    forkSource: {
+      sessionKey: params.parentSessionKey,
+      sessionId: parentEntry.sessionId,
+    },
     forkedFromParent: true,
     totalTokens: undefined,
     totalTokensFresh: false,
+    totalTokensVersion: undefined,
   };
+  return forkedEntry;
 }

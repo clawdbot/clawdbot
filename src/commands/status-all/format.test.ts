@@ -171,10 +171,46 @@ describe("status-all format", () => {
         label: "systemd",
         installed: true,
         loadedText: "not loaded",
-        runtimeStatus: "failed",
-        runtimePid: 42,
+        runtime: { status: "failed", pid: 42 },
       }),
     ).toBe("systemd not loaded · failed (pid 42)");
+  });
+
+  it.each([
+    {
+      installed: false,
+      loadedText: "unknown",
+      expected: "LaunchAgent unknown (inspection failed: permission denied)",
+    },
+    {
+      installed: null,
+      loadedText: "unknown",
+      expected: "LaunchAgent unknown (inspection failed: permission denied)",
+    },
+    {
+      installed: true,
+      managedByOpenClaw: true,
+      loadedText: "unknown",
+      runtimeShort: "running (pid 42)",
+      expected:
+        "LaunchAgent installed · unknown (inspection failed: permission denied) · running (pid 42)",
+    },
+    {
+      installed: true,
+      managedByOpenClaw: false,
+      loadedText: "running (externally managed)",
+      runtime: { status: "running", pid: 42 },
+      expected:
+        "LaunchAgent running (externally managed) (inspection failed: permission denied) · running (pid 42)",
+    },
+  ])("keeps inspection errors visible: $expected", ({ expected, ...service }) => {
+    expect(
+      formatStatusServiceValue({
+        ...service,
+        label: "LaunchAgent",
+        loadState: { status: "unknown", detail: "permission denied" },
+      }),
+    ).toBe(expected);
   });
 
   it("builds gateway json payloads consistently", () => {
@@ -202,6 +238,37 @@ describe("status-all format", () => {
       error: null,
       authWarning: "warn",
     });
+  });
+
+  it("redacts credential-bearing Gateway URLs from text and JSON status", () => {
+    const gatewayConnection = {
+      url: "wss://user:password@gateway.example/ws?token=secret&key=api-key&X-Amz-Signature=signed",
+      urlSource: "cli --url",
+    };
+
+    const summary = buildGatewayStatusSummaryParts({
+      gatewayMode: "remote",
+      remoteUrlMissing: false,
+      gatewayConnection,
+      gatewayReachable: false,
+      gatewayProbe: { error: "unreachable" },
+      gatewayProbeAuth: null,
+    });
+    const json = buildGatewayStatusJsonPayload({
+      gatewayMode: "remote",
+      gatewayConnection,
+      remoteUrlMissing: false,
+      gatewayReachable: false,
+      gatewayProbe: { error: "unreachable" },
+      gatewaySelf: null,
+    });
+    const output = JSON.stringify({ summary, json });
+
+    expect(output).toContain("gateway.example/ws");
+    expect(output).not.toContain("password");
+    expect(output).not.toContain("secret");
+    expect(output).not.toContain("api-key");
+    expect(output).not.toContain("signed");
   });
 
   it("builds shared gateway surface values for node and gateway views", () => {

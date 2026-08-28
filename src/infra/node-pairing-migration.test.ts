@@ -3,9 +3,15 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
 import { createSuiteTempRootTracker } from "../test-helpers/temp-dir.js";
-import { approveDevicePairing, getPairedDevice, requestDevicePairing } from "./device-pairing.js";
+import { approveDevicePairing } from "./device-pairing-approval.js";
+import {
+  approveNodePairing,
+  listNodePairing,
+  recordPairedNodeConnection,
+  requestNodePairing,
+} from "./device-pairing-node.js";
+import { getPairedDevice, requestDevicePairing } from "./device-pairing.js";
 import { migrateLegacyNodePairingStore } from "./node-pairing-migration.js";
-import { listNodePairing } from "./node-pairing.js";
 import { resolvePairingPaths } from "./pairing-files.js";
 
 const suiteRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-node-pairing-migration-" });
@@ -85,7 +91,6 @@ describe("migrateLegacyNodePairingStore", () => {
   test("keeps an existing device surface over stale legacy rows", async () => {
     const baseDir = await suiteRootTracker.make("case");
     await seedNodeDevice(baseDir, "node-current");
-    const { requestNodePairing, approveNodePairing } = await import("./node-pairing.js");
     const pending = await requestNodePairing(
       { nodeId: "node-current", caps: ["screen"], commands: ["screen.snapshot"] },
       baseDir,
@@ -111,5 +116,54 @@ describe("migrateLegacyNodePairingStore", () => {
       orphaned: 0,
     });
     expect((await getPairedDevice("node-current", baseDir))?.nodeSurface?.caps).toEqual(["screen"]);
+  });
+
+  test("drops legacy client-instance aliases and reapproves the canonical device id", async () => {
+    const baseDir = await suiteRootTracker.make("case");
+    await seedNodeDevice(baseDir, "canonical-device-id");
+    const { pairedPath } = resolvePairingPaths(baseDir, "nodes");
+    await writeJson(pairedPath, {
+      "legacy-client-instance-id": {
+        nodeId: "legacy-client-instance-id",
+        commands: ["system.notify"],
+        createdAtMs: 1_000,
+        approvedAtMs: 2_000,
+        lastConnectedAtMs: 3_000,
+      },
+    });
+
+    await expect(migrateLegacyNodePairingStore({ baseDir })).resolves.toEqual({
+      migrated: 0,
+      orphaned: 1,
+    });
+    await expect(
+      recordPairedNodeConnection("legacy-client-instance-id", 4_000, baseDir),
+    ).resolves.toEqual({
+      recorded: false,
+    });
+
+    const pending = await requestNodePairing(
+      { nodeId: "canonical-device-id", commands: ["system.notify"] },
+      baseDir,
+    );
+    await expect(
+      approveNodePairing(
+        pending.request.requestId,
+        { callerScopes: ["operator.pairing", "operator.write"] },
+        baseDir,
+      ),
+    ).resolves.toMatchObject({ node: { nodeId: "canonical-device-id" } });
+    await expect(
+      recordPairedNodeConnection("canonical-device-id", 4_000, baseDir),
+    ).resolves.toEqual({
+      recorded: true,
+      firstConnection: true,
+    });
+    await expect(
+      recordPairedNodeConnection("canonical-device-id", 5_000, baseDir),
+    ).resolves.toEqual({
+      recorded: true,
+      firstConnection: false,
+    });
   });
 });

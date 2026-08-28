@@ -37,7 +37,9 @@ function getSilentTrailingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}\\s*$`, "i");
+  // Keep main's whitespace/Markdown boundaries: punctuation-attached tokens
+  // can be visible text. Consume repeated tokens only after a real delimiter.
+  const regex = new RegExp(`(?:^|\\s+|\\*+)${escaped}(?:\\s+${escaped})*\\s*$`, "i");
   silentTrailingRegexByToken.set(token, regex);
   return regex;
 }
@@ -258,8 +260,9 @@ function getSilentLeadingRegex(token: string): RegExp {
     return cached;
   }
   const escaped = escapeRegExp(token);
-  // Match one or more leading occurrences of the token, each optionally followed by whitespace
-  const regex = new RegExp(`^(?:\\s*${escaped})+\\s*`, "i");
+  // Keep the final separator distinct: earlier blank lines or spacing between
+  // repeated sentinels do not establish a boundary for the visible remainder.
+  const regex = new RegExp(`^\\s*${escaped}((?:\\s*${escaped})*)(\\s*)`, "i");
   silentLeadingRegexByToken.set(token, regex);
   return regex;
 }
@@ -284,7 +287,16 @@ export function startsWithSilentToken(
   if (!text) {
     return false;
   }
-  return getSilentLeadingAttachedRegex(token).test(text);
+  if (getSilentLeadingAttachedRegex(token).test(text)) {
+    return true;
+  }
+  const leading = getSilentLeadingRegex(token).exec(text);
+  // Only the separator after the final sentinel establishes a boundary; a
+  // leading blank line must not turn same-line token mentions into controls.
+  if (!leading || !/[\r\n]/.test(leading[2] ?? "")) {
+    return false;
+  }
+  return text.slice(leading[0].length).trimStart().length > 0;
 }
 
 export function isSilentReplyPrefixText(
@@ -294,23 +306,22 @@ export function isSilentReplyPrefixText(
   if (!text) {
     return false;
   }
+  const tokenUpper = token.toUpperCase();
   const trimmed = text.trimStart();
-  if (!trimmed) {
-    return false;
-  }
-  // Guard against suppressing natural-language "No..." text while still
-  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
-  if (trimmed !== trimmed.toUpperCase()) {
+  // Uppercasing never shortens text, so overlong candidates cannot match.
+  // Reject before scanning each streamed reply's growing buffer.
+  if (!trimmed || trimmed.length > tokenUpper.length) {
     return false;
   }
   const normalized = trimmed.toUpperCase();
-  if (!normalized) {
+  // Guard against suppressing natural-language "No..." text while still
+  // catching uppercase lead fragments like "NO" from streamed NO_REPLY.
+  if (trimmed !== normalized) {
     return false;
   }
   if (normalized.length < 2) {
     return false;
   }
-  const tokenUpper = token.toUpperCase();
   if (!tokenUpper.startsWith(normalized)) {
     return false;
   }

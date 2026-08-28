@@ -16,14 +16,14 @@ vi.mock("../tools/computer-tool.js", () => ({
 }));
 
 vi.mock("../tools/cron-tool.js", () => ({
-  createCronTool: () => stubTool("cron"),
+  createCronTool: () => stubTool("automations"),
 }));
 
 vi.mock("../tools/gateway-tool.js", () => ({
   createGatewayTool: () => stubTool("gateway"),
 }));
 
-vi.mock("../tools/message-tool.js", () => ({
+vi.mock("../tools/message-tool-execution.js", () => ({
   createMessageTool: () => stubTool("message"),
 }));
 
@@ -45,10 +45,6 @@ vi.mock("../tools/session-status-tool.js", () => ({
 
 vi.mock("../tools/tts-tool.js", () => ({
   createTtsTool: () => stubTool("tts"),
-}));
-
-vi.mock("../tools/update-plan-tool.js", () => ({
-  createUpdatePlanTool: () => stubTool("update_plan"),
 }));
 
 vi.mock("../../channels/plugins/index.js", () => ({

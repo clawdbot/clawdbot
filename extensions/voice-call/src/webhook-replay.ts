@@ -9,17 +9,23 @@ const REPLAY_CACHE_MAX_ENTRIES = 10_000;
 const REPLAY_CACHE_PRUNE_INTERVAL = 64;
 
 type WebhookReplayCache = {
-  seenUntil: Map<string, number>;
+  seenUntil: Map<string, { expiresAt: number }>;
   calls: number;
 };
 
+type WebhookReplayReservation = {
+  isReplay: boolean;
+  verifiedRequestKey: string;
+  releaseReplay?: () => void;
+};
+
 export function createWebhookReplayCache(): WebhookReplayCache {
-  return { seenUntil: new Map<string, number>(), calls: 0 };
+  return { seenUntil: new Map<string, { expiresAt: number }>(), calls: 0 };
 }
 
 function pruneWebhookReplayCache(cache: WebhookReplayCache, now: number): void {
-  for (const [key, expiresAt] of cache.seenUntil) {
-    if (!isFutureDateTimestampMs(expiresAt, { nowMs: now })) {
+  for (const [key, reservation] of cache.seenUntil) {
+    if (!isFutureDateTimestampMs(reservation.expiresAt, { nowMs: now })) {
       cache.seenUntil.delete(key);
     }
   }
@@ -32,7 +38,10 @@ function pruneWebhookReplayCache(cache: WebhookReplayCache, now: number): void {
   }
 }
 
-export function markWebhookReplay(cache: WebhookReplayCache, replayKey: string): boolean {
+export function reserveWebhookReplay(
+  cache: WebhookReplayCache,
+  replayKey: string,
+): WebhookReplayReservation {
   const now = Date.now();
   cache.calls += 1;
   if (cache.calls % REPLAY_CACHE_PRUNE_INTERVAL === 0) {
@@ -40,16 +49,27 @@ export function markWebhookReplay(cache: WebhookReplayCache, replayKey: string):
   }
 
   const existing = cache.seenUntil.get(replayKey);
-  if (existing !== undefined && isFutureDateTimestampMs(existing, { nowMs: now })) {
-    return true;
+  if (existing !== undefined && isFutureDateTimestampMs(existing.expiresAt, { nowMs: now })) {
+    return { isReplay: true, verifiedRequestKey: replayKey };
   }
 
   const expiresAt = resolveExpiresAtMsFromDurationMs(REPLAY_WINDOW_MS, { nowMs: now });
-  if (expiresAt !== undefined) {
-    cache.seenUntil.set(replayKey, expiresAt);
+  if (expiresAt === undefined) {
+    return { isReplay: false, verifiedRequestKey: replayKey };
   }
+  const reservation = { expiresAt };
+  cache.seenUntil.set(replayKey, reservation);
   if (cache.seenUntil.size > REPLAY_CACHE_MAX_ENTRIES) {
     pruneWebhookReplayCache(cache, now);
   }
-  return false;
+  return {
+    isReplay: false,
+    verifiedRequestKey: replayKey,
+    // An older failed delivery must never clear a newer same-key reservation.
+    releaseReplay: () => {
+      if (cache.seenUntil.get(replayKey) === reservation) {
+        cache.seenUntil.delete(replayKey);
+      }
+    },
+  };
 }

@@ -5,11 +5,7 @@ import { saveMediaBuffer } from "openclaw/plugin-sdk/media-store";
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import { wrapExternalContent } from "openclaw/plugin-sdk/security-runtime";
 import { appendFileTransferAudit } from "../shared/audit.js";
-import {
-  IMAGE_MIME_INLINE_SET,
-  TEXT_INLINE_MAX_BYTES,
-  TEXT_INLINE_MIME_SET,
-} from "../shared/mime.js";
+import { IMAGE_MIME_INLINE_SET, TEXT_INLINE_MAX_BYTES } from "../shared/mime.js";
 import { humanSize } from "../shared/params.js";
 import {
   FILE_FETCH_DEFAULT_MAX_BYTES,
@@ -76,7 +72,12 @@ export function createFileFetchTool(): AnyAgentTool {
       // Extension-derived image MIME can accompany an empty payload when there
       // are no bytes to sniff. Keep those fetches on the saved-path text fallback.
       const isInlineImage = IMAGE_MIME_INLINE_SET.has(mimeType) && base64.length > 0;
-      const isInlineText = TEXT_INLINE_MIME_SET.has(mimeType) && size <= TEXT_INLINE_MAX_BYTES;
+      const isInlineText =
+        size <= TEXT_INLINE_MAX_BYTES &&
+        (mimeType.startsWith("text/") ||
+          mimeType === "application/json" ||
+          mimeType === "application/xml" ||
+          mimeType === "application/yaml");
 
       const content: Array<
         { type: "text"; text: string } | { type: "image"; data: string; mimeType: string }
@@ -84,7 +85,8 @@ export function createFileFetchTool(): AnyAgentTool {
       if (isInlineImage) {
         content.push({ type: "image", data: base64, mimeType });
       } else if (isInlineText) {
-        const text = buffer.toString("utf-8");
+        const decodedText = buffer.toString("utf-8");
+        const text = decodedText.startsWith("\uFEFF") ? decodedText.slice(1) : decodedText;
         const wrappedText = wrapExternalContent(
           `Fetched ${canonicalPath} (${humanSize(size)}, ${mimeType}, sha256:${shortHash}) saved at ${localPath}\n\n--- contents ---\n${text}`,
           { source: "unknown" },

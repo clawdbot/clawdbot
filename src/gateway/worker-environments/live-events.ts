@@ -4,28 +4,38 @@ import type {
   WorkerLiveEventParams,
   WorkerLiveEventResult,
 } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
-import {
-  capLiveExecResult,
-  sanitizeToolArgs,
-  sanitizeToolResult,
-} from "../../agents/embedded-agent-subscribe.tools.js";
-import { normalizeToolName } from "../../agents/tool-policy.js";
-import {
-  onSessionIdentityMutation,
-  type SessionIdentityMutation,
-} from "../../config/sessions/session-accessor.js";
+import { onSessionIdentityMutation } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
-  claimAgentRunContext,
+  emitAgentEventIfCurrent,
   emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
+import {
+  claimAgentRunContext,
   getAgentRunContext,
+  getAgentRunContextOwnership,
   getAgentRunContextOwnerStatus,
   registerAgentRunContext,
   releaseAgentRunContext,
-} from "../../infra/agent-events.js";
+} from "../../infra/agent-run-registry.js";
+import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { WorkerConnectionIdentity } from "./connection-identity.js";
-import { resolveWorkerSessionTarget } from "./session-target.js";
+import {
+  createWorkerLiveTrajectoryRecorder,
+  isDefinitiveWorkerTerminalEvent,
+  prepareWorkerLiveEventData,
+  recordWorkerLiveTrajectoryEvent,
+  type WorkerLiveTrajectoryRecorder,
+} from "./live-event-projection.js";
+import {
+  isValidLiveSessionBinding,
+  matchesSessionIdentityMutation,
+  prepareBoundLiveSessionSafely,
+  type BoundLiveSession,
+  type LiveEventTarget,
+  type WorkerLiveSessionBinding,
+} from "./live-event-session-binding.js";
 
 const DEFAULT_WINDOW_SIZE = 128;
 const DEFAULT_MAX_PENDING_BYTES = 512 * 1024;
@@ -41,30 +51,20 @@ type PendingLiveEvent = {
 type OwnedLiveRun = {
   claimId: string;
   controlUiVisible: boolean;
+  emissionMode: "exclusive" | "shared";
   lifecycleGeneration: string;
+  trajectoryRecorder: WorkerLiveTrajectoryRecorder;
 };
 
-type LiveEventTarget = {
-  agentId?: string;
-  sessionId: string;
-  sessionKey: string;
-};
-
-type WorkerLiveSessionBinding = Readonly<{
-  environmentId: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
-
-type BoundLiveSession = WorkerLiveSessionBinding & { target: LiveEventTarget };
-
-type WorkerLiveCredentialRotation = Readonly<{
-  credentialHash: string;
-  environmentId: string;
-  previousCredentialHash: string;
-  runEpoch: number;
-  sessionId: string;
-}>;
+type WorkerLiveCredentialRotation = Readonly<
+  {
+    credentialHash: string;
+    environmentId: string;
+    previousCredentialHash: string;
+    runEpoch: number;
+    sessionId: string;
+  } & ({ newProcessTurn: true; ackedSeq: number } | { newProcessTurn?: false })
+>;
 
 type LiveEventWindow = {
   activeRuns: Map<string, OwnedLiveRun>;
@@ -101,94 +101,6 @@ function invalidEvent(): WorkerLiveEventFailure {
 
 function capacityExceeded(): WorkerLiveEventFailure {
   return { ok: false, details: { reason: "capacity-exceeded" } };
-}
-
-function resolveLiveEventTarget(
-  config: OpenClawConfig,
-  sessionId: string,
-): LiveEventTarget | undefined {
-  const target = resolveWorkerSessionTarget(config, sessionId);
-  if (!target) {
-    return undefined;
-  }
-  return {
-    ...(target.agentId ? { agentId: target.agentId } : {}),
-    sessionId: target.sessionId,
-    sessionKey: target.sessionKey,
-  };
-}
-
-function prepareBoundLiveSession(
-  config: OpenClawConfig,
-  binding: WorkerLiveSessionBinding,
-): BoundLiveSession | undefined {
-  if (!isValidLiveSessionBinding(binding)) {
-    return undefined;
-  }
-  const target = resolveLiveEventTarget(config, binding.sessionId);
-  return target ? { ...binding, target } : undefined;
-}
-
-function isValidLiveSessionBinding(binding: WorkerLiveSessionBinding): boolean {
-  return (
-    binding.environmentId.length > 0 &&
-    binding.sessionId.length > 0 &&
-    Number.isSafeInteger(binding.runEpoch) &&
-    binding.runEpoch >= 0
-  );
-}
-
-function prepareBoundLiveSessionSafely(
-  config: OpenClawConfig,
-  binding: WorkerLiveSessionBinding,
-): BoundLiveSession | undefined {
-  try {
-    return prepareBoundLiveSession(config, binding);
-  } catch {
-    return undefined;
-  }
-}
-
-function matchesSessionIdentityMutation(
-  binding: WorkerLiveSessionBinding,
-  prepared: BoundLiveSession | undefined,
-  mutation: SessionIdentityMutation,
-): boolean {
-  const targets =
-    "current" in mutation ? [mutation.previous, mutation.current] : [mutation.previous];
-  return targets.some(
-    (target) =>
-      target.sessionId === binding.sessionId ||
-      (prepared ? target.sessionKeys.includes(prepared.target.sessionKey) : false),
-  );
-}
-
-function prepareLiveEventData(event: WorkerLiveEventParams["event"]): Record<string, unknown> {
-  const payload = structuredClone(event.payload) as Record<string, unknown>;
-  if (event.kind !== "tool") {
-    return payload;
-  }
-  const toolName = normalizeToolName(event.payload.name);
-  payload.name = toolName;
-  if (event.payload.phase === "start") {
-    payload.args = sanitizeToolArgs(event.payload.args);
-  } else if (event.payload.phase === "update") {
-    const partialResult = sanitizeToolResult(event.payload.partialResult);
-    payload.partialResult = toolName === "exec" ? capLiveExecResult(partialResult) : partialResult;
-  } else {
-    const result = sanitizeToolResult(event.payload.result);
-    payload.result = toolName === "exec" ? capLiveExecResult(result) : result;
-  }
-  return payload;
-}
-
-function isDefinitiveTerminal(event: WorkerLiveEventParams["event"]): boolean {
-  return (
-    event.kind === "lifecycle" &&
-    (event.payload.phase === "end" ||
-      (event.payload.phase === "error" &&
-        (event.payload.aborted === true || event.payload.fallbackExhaustedFailure === true)))
-  );
 }
 
 export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOptions) {
@@ -261,6 +173,26 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       window.environmentId === rotation.environmentId &&
       window.runEpoch === rotation.runEpoch
     ) {
+      if (rotation.newProcessTurn === true) {
+        if (
+          !Number.isSafeInteger(rotation.ackedSeq) ||
+          rotation.ackedSeq < 0 ||
+          rotation.ackedSeq > window.ackedSeq
+        ) {
+          return false;
+        }
+        // A per-turn credential is an unforgeable process boundary. Retire only
+        // the prior process's transient state and rewind previews to the durable
+        // ACK cursor; cron may intentionally reuse its durable run id.
+        for (const [runId, owned] of window.activeRuns) {
+          releaseAgentRunContext(runId, owned.claimId);
+        }
+        window.activeRuns.clear();
+        window.ackedSeq = rotation.ackedSeq;
+        window.pending.clear();
+        window.pendingBytes = 0;
+        window.terminalRuns.clear();
+      }
       window.credentialHash = rotation.credentialHash;
       return true;
     }
@@ -444,7 +376,25 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         return resyncRequired(0);
       }
       if (windows.size >= maxSessions) {
-        return capacityExceeded();
+        // Attached sessions keep windows for the gateway's lifetime, so at the cap
+        // evict the oldest registry-quiescent window (stale activeRuns look busy);
+        // it rebinds via resync. Reject only when every window has an active run.
+        let evicted = false;
+        for (const candidate of windows.values()) {
+          const busy = [...candidate.activeRuns.entries()].some(
+            ([runId, owned]) =>
+              getAgentRunContextOwnerStatus(runId, owned.claimId, owned.lifecycleGeneration) ===
+              "active",
+          );
+          if (!busy) {
+            clearWindow(candidate);
+            evicted = true;
+            break;
+          }
+        }
+        if (!evicted) {
+          return capacityExceeded();
+        }
       }
       window = {
         activeRuns: new Map(),
@@ -503,7 +453,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       }
       const pendingRunId = pending.request.runId;
       if (countedRunIds.has(pendingRunId)) {
-        if (isDefinitiveTerminal(pending.request.event)) {
+        if (isDefinitiveWorkerTerminalEvent(pending.request.event)) {
           return true;
         }
         continue;
@@ -569,22 +519,22 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     }
     const lifecycleGeneration = getAgentEventLifecycleGeneration();
     const existingContext = getAgentRunContext(runId);
-    // A dispatch-owned turn context (e.g. a worker-routed turn) owns the run's
-    // Control UI visibility; adopt it so worker live events keep reaching the
-    // visible clients that started the turn. Identity still has to match, so a
-    // foreign run is rejected; only the visibility preference is inherited. With
-    // no pre-existing turn context we scope live events to this session.
+    // Existing dispatch contexts must admit their outer terminal. Ownerless contexts still need
+    // worker-owned cleanup so a definitive worker terminal cannot leave the session active.
     const controlUiVisible = existingContext?.isControlUiVisible ?? false;
-    const adoptExistingUnowned = existingContext !== undefined;
     if (
       existingContext &&
       (existingContext.sessionId !== window.sessionId ||
         existingContext.sessionKey !== window.target.sessionKey ||
-        existingContext.agentId !== window.target.agentId ||
+        (existingContext.agentId !== undefined &&
+          existingContext.agentId !== window.target.agentId) ||
         existingContext.lifecycleGeneration !== lifecycleGeneration)
     ) {
       return invalidEvent();
     }
+    const hasExistingTrackedOwner =
+      getAgentRunContextOwnership(runId)?.lifecycleGeneration === lifecycleGeneration;
+    const emissionMode: OwnedLiveRun["emissionMode"] = existingContext ? "shared" : "exclusive";
     const claimId = claimAgentRunContext(
       runId,
       {
@@ -596,14 +546,13 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
         sessionKey: window.target.sessionKey,
       },
       {
-        adoptExistingUnowned,
-        exclusive: true,
+        exclusive: existingContext === undefined,
         onClearRequested: (clearedClaimId) => {
           if (window.activeRuns.get(runId)?.claimId === clearedClaimId) {
             fenceReleasedRun(window, runId);
           }
         },
-        ownsContext: true,
+        ownsContext: !hasExistingTrackedOwner,
         trackOwner: true,
       },
     );
@@ -613,7 +562,9 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     const claimed = {
       claimId,
       controlUiVisible,
+      emissionMode,
       lifecycleGeneration,
+      trajectoryRecorder: createWorkerLiveTrajectoryRecorder({ runId, target: window.target }),
     };
     window.activeRuns.set(runId, claimed);
     return claimed;
@@ -628,20 +579,28 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
     if ("ok" in owned) {
       return owned;
     }
-    const definitiveTerminal = isDefinitiveTerminal(request.event);
+    const definitiveTerminal = isDefinitiveWorkerTerminalEvent(request.event);
     if (definitiveTerminal) {
       // Emission runs synchronous listeners that can clear this claim reentrantly.
       // Fence first so terminal delivery cannot reopen the run ID.
       window.terminalRuns.set(request.runId, request.seq);
     }
-    emitAgentEventForOwner(
-      {
-        runId: request.runId,
-        stream: request.event.kind,
-        data: prepareLiveEventData(request.event),
-      },
-      owned.claimId,
-    );
+    const event = {
+      runId: request.runId,
+      stream: request.event.kind,
+      data: prepareWorkerLiveEventData(request.event),
+    };
+    if (owned.emissionMode === "shared") {
+      if (!emitAgentEventIfCurrent(event)) {
+        if (definitiveTerminal) {
+          window.terminalRuns.delete(request.runId);
+        }
+        return invalidEvent();
+      }
+    } else {
+      emitAgentEventForOwner(event, owned.claimId);
+    }
+    recordWorkerLiveTrajectoryEvent(owned.trajectoryRecorder, request.event);
     // Gateway handler owns cleanup so detach can revoke deferred terminal delivery.
     return undefined;
   };
@@ -762,12 +721,7 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
       // Refresh recency first so a re-fenced environment keeps its newest stale-owner epoch.
       fencedEnvironmentEpochs.delete(environmentId);
       fencedEnvironmentEpochs.set(environmentId, fencedEpoch);
-      if (fencedEnvironmentEpochs.size > MAX_FENCED_ENVIRONMENTS) {
-        const oldestEnvironmentId = fencedEnvironmentEpochs.keys().next().value;
-        if (oldestEnvironmentId) {
-          fencedEnvironmentEpochs.delete(oldestEnvironmentId);
-        }
-      }
+      pruneMapToMaxSize(fencedEnvironmentEpochs, MAX_FENCED_ENVIRONMENTS);
     }
   };
 
@@ -788,4 +742,3 @@ export function createWorkerLiveEventReceiver(options: WorkerLiveEventReceiverOp
 }
 
 export type WorkerLiveEventReceiver = ReturnType<typeof createWorkerLiveEventReceiver>;
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,0 +1,8 @@
+{
+  "name": "openclaw-release-vercel-cli",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "vercel": "59.1.4"
+  }
+}

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-node_version="24.15.0"
-pnpm_spec="pnpm@11.2.2+sha512.36e6621fad506178936455e70247b8808ef4ec25797a9f437a93281a020484e2607f6a469a22e982987c3dbb8866e3071514ab10a4a1749e06edcd1ec118436f"
+node_version="24.19.0"
+pnpm_spec="pnpm@11.22.0+sha512.1ff870c4c6133dfd88fb2afc46dd13d47f09c9794b438c6fdb47ca98caf3bc16381ee0be93a091b8e3824cf01f889f46d7d9e20910fb0be1ab0fb5baa80dd621"
 
 if [[ $# -lt 2 ]]; then
   echo "usage: $0 <expected-head-sha> <command> [args...]" >&2
@@ -13,12 +13,12 @@ shift
 unset NODE_OPTIONS
 
 imds_token="$(
-  /usr/bin/curl -fsS -X PUT \
+  /usr/bin/curl -fsS --connect-timeout 2 --max-time 5 -X PUT \
     -H "X-aws-ec2-metadata-token-ttl-seconds: 60" \
     http://169.254.169.254/latest/api/token
 )"
 iam_status="$(
-  /usr/bin/curl -sS -o /dev/null -w "%{http_code}" \
+  /usr/bin/curl -sS --connect-timeout 2 --max-time 5 -o /dev/null -w "%{http_code}" \
     -H "X-aws-ec2-metadata-token: ${imds_token}" \
     http://169.254.169.254/latest/meta-data/iam/security-credentials/
 )"
@@ -67,19 +67,28 @@ trap cleanup EXIT
   /usr/bin/grep "  ${archive}\$" SHASUMS256.txt | /usr/bin/sha256sum -c -
 )
 
-sudo /bin/rm -rf -- "$install_root" "$corepack_home"
-sudo /usr/bin/mkdir -p "$install_root" "$corepack_home"
-sudo /usr/bin/tar -xJf "$tmp_dir/$archive" -C "$install_root" --strip-components=1
-sudo /usr/bin/env \
+# Only public toolchain artifacts need shared access; keep caller state private.
+sudo /bin/bash -s -- "$install_root" "$corepack_home" "$tmp_dir/$archive" "$pnpm_spec" <<'INSTALL'
+set -euo pipefail
+umask 022
+install_root="$1"
+corepack_home="$2"
+archive_path="$3"
+pnpm_spec="$4"
+/bin/rm -rf -- "$install_root" "$corepack_home"
+/usr/bin/mkdir -p "$install_root" "$corepack_home"
+/usr/bin/tar -xJf "$archive_path" -C "$install_root" --strip-components=1
+/usr/bin/env \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" enable --install-directory "$install_root/bin"
-sudo /usr/bin/env \
+/usr/bin/env \
   COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   COREPACK_HOME="$corepack_home" \
   PATH="$install_root/bin:/usr/bin:/bin" \
   "$install_root/bin/corepack" prepare "$pnpm_spec" --activate
+INSTALL
 
 for tool in node npm npx corepack pnpm pnpx; do
   if [[ -e "$install_root/bin/$tool" ]]; then

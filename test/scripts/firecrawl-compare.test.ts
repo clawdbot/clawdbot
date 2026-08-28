@@ -3,6 +3,10 @@ import { describe, expect, it } from "vitest";
 import { testing as firecrawlCompareTesting } from "../../scripts/firecrawl-compare.ts";
 
 describe("firecrawl-compare", () => {
+  it("does not split surrogate pairs when truncating output", () => {
+    expect(firecrawlCompareTesting.truncate(`ab🤖cd`, 3)).toBe("ab…");
+  });
+
   it("fetches local HTML under the byte cap", async () => {
     const result = await firecrawlCompareTesting.fetchHtml("https://example.test/page", {
       fetchImpl: (() =>

@@ -17,9 +17,11 @@ Each worktree lives at:
 <openclaw-state-dir>/worktrees/<repo-fingerprint>/<name>
 ```
 
-The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 hash over the canonical git common directory and origin URL. A supplied name must match `[a-z0-9][a-z0-9-]{0,63}`. Without a name, OpenClaw generates `wt-` followed by eight random hexadecimal characters.
+The repository fingerprint is the first 16 hexadecimal characters of a SHA-256 hash over the canonical git common directory and origin URL. A supplied name must match `[a-z0-9][a-z0-9-]{0,63}`. Without a name, OpenClaw generates a readable crustacean-themed name such as `brisk-lobster`. Inferred names already occupied by any registered worktree (including the caller's own removed checkout), local branch, or unmanaged path get a numeric suffix such as `brisk-lobster-2`; only a supplied name reuses or restores the caller's existing record.
 
 OpenClaw creates branch `openclaw/<name>` at the requested base ref. Without a base ref, it fetches `origin`, uses the remote default branch when available, and falls back to local `HEAD` when the repository is offline or has no usable remote.
+
+Each `git worktree add` checkout during creation or snapshot restore has a five-minute timeout, including a creation retry from local `HEAD`. Other managed-worktree Git commands keep their two-minute timeout. The separate `.openclaw/worktree-setup.sh` step also keeps its own two-minute timeout.
 
 ## Provision ignored files
 
@@ -30,7 +32,7 @@ Add `.worktreeinclude` at the source repository root to copy selected ignored, u
 fixtures/generated/**
 ```
 
-Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite destination files or follow symlinked directories, and it preserves copied file modes.
+Only files reported by git as both ignored and untracked are eligible. Tracked files are already present through git and are never copied by this step. OpenClaw does not overwrite or change destination files that already exist, does not follow symlinked directories, and preserves copied file modes. It records only paths it actually creates, so later manifest edits cannot make those files disappear from cleanup protection.
 
 ## Run repository setup
 
@@ -43,31 +45,46 @@ OPENCLAW_WORKTREE_PATH=<managed worktree>
 
 A nonzero exit aborts creation and removes the new worktree and branch. This is a repository-local contract; there is no OpenClaw config key for it.
 
+Setup failures report the exit code or termination signal, or an actual timeout after 120 seconds, with a bounded excerpt of recent output rather than the full setup log. If setup times out, inspect `.openclaw/worktree-setup.sh` and its dependencies for slow downloads, unavailable services, or commands waiting for interactive input.
+
 ## Session worktrees
 
-Start an isolated chat from the active agent's git workspace with a worktree-backed session: enable **Worktree** on the Control UI's New session page (which also offers a base-branch picker and an optional worktree name), or use the Chat actions menu on iOS or the overflow action beside New Chat on Android. The option is available only for a git-backed agent where the client has that capability; clients that cannot preflight it surface the gateway error instead.
+Start an isolated chat from a Git-backed folder with a worktree session: on the Control UI's New session page, use the **Place** picker to choose a Gateway source folder, then select **Worktree** (with an optional base branch and worktree name). Choosing a paired device or cloud profile forces this managed-worktree path from the selected Gateway source; remote placement never browses or binds a node working directory. When the name is omitted, OpenClaw derives it from the explicit session label or the concise title generated from the first message, then falls back to a crustacean-themed name. The choice appears for a Git-backed folder or a selected remote Git repository; ordinary folders can run directly only on the Gateway and show no Git isolation control. iOS exposes the same choice from Chat actions, and Android exposes it beside New Chat, when the active agent workspace is Git-backed.
 
-Coding agents can also call `spawn_task` when they discover confirmed follow-up work outside the current task. The Control UI shows a suggestion chip without starting anything, while a Gateway-backed TUI shows an interactive prompt with the same actions. Selecting **Start in worktree** creates a fresh session-owned worktree from the suggested project and sends the self-contained prompt as its first turn; dismissing the suggestion leaves the repository untouched. Suggestions and their IDs are ephemeral and do not survive a Gateway restart.
+The Place picker's **Projects** section can start the same worktree flow from a registered project ID. The Gateway resolves the recorded checkout path, so this path remains available at `operator.write`; selecting an arbitrary host folder still requires `operator.admin`.
+
+Coding agents can also call `suggest_task` when they discover confirmed follow-up work outside the current task. The Control UI shows a suggestion chip without starting anything, while a Gateway-backed TUI shows an interactive prompt with the same actions. Selecting **Start in worktree** creates a fresh session-owned worktree from the suggested project and sends the self-contained prompt as its first turn; dismissing the suggestion leaves the repository untouched. Suggestions and their IDs are ephemeral and do not survive a Gateway restart.
 
 OpenClaw exposes these tools only to operator sessions with an actionable Gateway UI. Channel sessions and local/embedded TUI sessions do not receive them until those surfaces have a portable typed task-action contract.
 
-The resulting managed worktree is owned by the session, and every agent run in that session uses its checkout. When the workspace is a repository subdirectory, the worktree is anchored at the repository root and the session runs from the matching subdirectory inside it. Session worktree creation uses the method's `operator.write` scope, but repository checkout hooks and the `.openclaw/worktree-setup.sh` step run only for `operator.admin` callers because they execute repository code; `.worktreeinclude` provisioning still applies to every caller. Deleting the session removes the worktree only when doing so is lossless. Dirty worktrees or branches with unpushed commits stay available; hourly cleanup snapshots session worktrees after 7 idle days, treating recent session activity as worktree activity. Removed worktrees remain restorable from their snapshots as described below.
+The resulting managed worktree is owned by the session, and every agent run in that session uses its checkout. When the workspace is a repository subdirectory, the worktree is anchored at the repository root and the session runs from the matching subdirectory inside it. Session worktree creation uses the method's `operator.write` scope. Repository checkout/ref hooks and filesystem monitors are always disabled. The `.openclaw/worktree-setup.sh` step runs only for an `operator.admin` caller; retries evaluate the current caller's scope rather than retaining the original caller's permission. `.worktreeinclude` provisioning still applies to every caller. Deleting the session attempts to snapshot and remove its managed worktree, including dirty worktrees and branches with unpushed commits. Hourly cleanup also snapshots session worktrees after 7 idle days, treating recent session activity as worktree activity. Removed worktrees remain restorable from their snapshots as described below.
 
-`sessions.create` may include an absolute `cwd` together with `worktree: true` when a task targets a project other than the configured agent workspace. That explicit host path requires `operator.admin`; ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace.
+`sessions.create` may include an absolute `cwd` to run directly in another Gateway folder or to choose the source checkout together with `worktree: true`. Connections with `operator.write` may use a Gateway `cwd` contained in any configured agent workspace; realpath containment prevents symlinks from escaping that boundary. Gateway paths outside those workspaces require `operator.admin`. Ordinary worktree chat creation remains `operator.write` and stays anchored to the configured workspace. New Session dispatches a completed worktree session to paired devices or cloud profiles instead of passing a paired-node working directory to creation.
 
-`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. The created worktree is returned in the create result and persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show the checkout and branch. Deleting a session reports a preserved dirty checkout as `worktreePreserved` instead of silently leaving it behind.
+`sessions.create` also accepts `worktreeBaseRef` and `worktreeName` alongside `worktree: true` to pick the base ref and the worktree name (the branch becomes `openclaw/<name>`); both stay at `operator.write`. If `worktreeName` is omitted, the session label or generated first-message title supplies the readable branch name, with a crustacean-themed fallback. For a new session with an initial message or task, creation returns the admitted session and run before worktree preparation finishes. The chat shows the submitted message and naming, checkout, and setup progress; failures remain visible and retryable in the same session. The agent starts only after the finalized worktree is bound. Creation without an initial turn still waits for preparation and returns the worktree in the create result. The bound checkout is persisted on the session row as `worktree: { id, branch, repoRoot }`, so session lists can show its checkout and branch. When session deletion cannot finish that cleanup, `worktreePreserved` identifies the active worktree record that needs attention and reports one bounded reason: owner mismatch, active use or competing cleanup, a foreign Git lock, snapshot failure, or another cleanup failure. These reasons describe cleanup and ownership, not whether the checkout is dirty or has unpushed commits.
+
+## Troubleshoot creation
+
+If **New session** reports `git worktree add failed`, read the termination reason and the final Git error lines. `Preparing worktree` and `Updating files` are progress, not the cause of failure. Error messages collapse carriage-return progress redraws and bound the diagnostic tail so it cannot flood the banner.
+
+`timed out after 300 seconds` means a worktree checkout reached its five-minute limit. Other Git commands report `timed out after 120 seconds` at their two-minute limit. Check repository access and available disk space on the Gateway host. A signal or nonzero exit status alone does not establish a timeout; use any accompanying `fatal:` or `error:` detail to investigate. An output-limit error means the command exceeded its output capture limit.
+
+Before another creation attempt, inspect `git -C <repo-root> worktree list` and `git -C <repo-root> branch --list 'openclaw/*'` for partial state. A failed creation does not guarantee that its checkout and branch were removed. Do not delete a checkout or branch without checking whether it contains work you need.
 
 ## Snapshots, cleanup, and restore
 
-Removal first creates a synthetic commit containing tracked and non-ignored untracked files, and pins it at `refs/openclaw/snapshots/<id>`. Gitignored files are excluded from the repository object database; files selected by `.worktreeinclude` are copied again during restore. If snapshot creation fails, removal stops. An explicit force delete can continue without a snapshot.
+Removal first creates a synthetic commit containing tracked and non-ignored untracked files, then pins it at `refs/openclaw/snapshots/<id>`. Ignored files never enter the repository object database. OpenClaw stores only the ignored files it actually provisioned in chunked shared-state database rows; the recorded path set remains authoritative even if `.worktreeinclude` later changes or disappears. Restore reads those bytes from the immutable snapshot and reapplies their complete modes. Automatic cleanup preserves a live worktree when a recorded path can no longer be snapshotted safely. If snapshot creation fails, removal stops unless an explicit force delete discards snapshot safety.
+
+Nested Git repositories and linked worktrees are separate ownership boundaries. Automatic cleanup preserves the outer worktree even when a nested linked worktree shares its Git common directory. A nested OpenClaw-managed worktree is cleaned only through its own managed-worktree record.
 
 OpenClaw applies these cleanup rules:
 
 - At run end, it removes a worktree only when `git status --porcelain` is empty and `git log HEAD --not --remotes --oneline` finds no unpushed commits. Otherwise it only releases the activity lock.
 - Hourly cleanup snapshots and removes unlocked Workboard- and session-owned worktrees idle for more than 7 days, even when dirty. Manual worktrees are never automatically removed.
-- When `worktrees.cleanup.maxCount` or `worktrees.cleanup.maxTotalSizeGb` is configured, cleanup also snapshots and removes the least recently active Workboard- and session-owned worktrees until the total count and disk size fit the limits. All managed worktrees count toward the totals, but manual and otherwise protected worktrees are never limit-evicted, so a limit can remain exceeded until eligible worktrees exist. 0 or unset disables a limit.
 - Snapshot records remain restorable for 30 days. Cleanup then deletes the snapshot ref and registry row.
 - A live OpenClaw process lock and any foreign or unrecognized git worktree lock protect a worktree from garbage collection.
+
+Run-end cleanup records its outcome on the worktree record: lossless removal, retention because the checkout is busy, dirty, unpushed, or has provisioned-file drift, or failure with an error reason. Inspect the recorded outcome with `openclaw worktrees list --json` or `worktrees.list`.
 
 Restore recreates `openclaw/<name>` at the original pre-snapshot commit, then rebuilds the snapshot differences as unstaged modifications and untracked files. This keeps the synthetic snapshot commit out of branch history. The snapshot ref remains recorded as provenance.
 
@@ -81,7 +98,7 @@ openclaw worktrees restore <id> [--json]
 openclaw worktrees gc [--json]
 ```
 
-The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot. Its **Cleanup** section edits the `worktrees.cleanup` retention limits described in the [configuration reference](/gateway/configuration-reference#worktrees).
+The Control UI **Worktrees** page under Settings provides the same actions plus creation with a base-branch picker, shows each worktree's owner (manual, Workboard, or the owning session with a link into its chat), and offers a force retry when a removal reports a failed snapshot.
 
 ## Gateway methods
 
@@ -94,7 +111,7 @@ The Control UI **Worktrees** page under Settings provides the same actions plus 
 | `worktrees.restore`  | Restore a removed worktree from its snapshot.                           |
 | `worktrees.gc`       | Run idle, orphan, and retention cleanup now.                            |
 
-`worktrees.list` requires `operator.read`, and the mutating methods require `operator.admin`. `worktrees.branches` needs `operator.write` for configured agent workspaces, while any other host path requires `operator.admin` (matching the `sessions.create` cwd bar). It reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref.
+`worktrees.list` requires `operator.read`. `worktrees.create` and `worktrees.branches` require `operator.write` for configured agent workspaces and registered projects; arbitrary host paths still require `operator.admin`. All creation disables repository Git hooks; write-scoped creation also skips `.openclaw/worktree-setup.sh`. Removing, restoring, and garbage-collecting worktrees remain admin-only. Branch listing reads existing refs only and never fetches, and remote-only branches come back remote-qualified (`origin/feature-a`) so every returned name resolves as a base ref. New Session can also request a typed repository status from this method; a plain directory or unavailable checkout returns no branches instead of forcing the UI to infer Git capability from an error string.
 
 ## Workboard workspaces
 

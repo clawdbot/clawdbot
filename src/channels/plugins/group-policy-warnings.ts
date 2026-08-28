@@ -10,6 +10,7 @@ import {
 } from "../../config/runtime-group-policy.js";
 import type { GroupPolicy } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { SecurityAuditFinding } from "../../security/audit.types.js";
 
 type GroupPolicyWarningCollector = (groupPolicy: GroupPolicy) => string[];
 type AccountGroupPolicyWarningCollector<ResolvedAccount> = (params: {
@@ -72,18 +73,39 @@ export function projectAccountConfigWarningCollector<
   );
 }
 
-export function createConditionalWarningCollector<Params>(
-  ...collectors: Array<(params: Params) => string | string[] | null | undefined | false>
-): WarningCollector<Params> {
+function createSecurityAuditFindingCollector<Params>(options: {
+  collectWarnings: (params: Params) => string[];
+  checkId: string;
+  severity: SecurityAuditFinding["severity"];
+  title: string;
+}): (params: Params) => SecurityAuditFinding[] {
   return (params) =>
-    collectors.flatMap((collector) => {
-      const next = collector(params);
-      if (!next) {
-        return [];
-      }
-      return Array.isArray(next) ? next : [next];
-    });
+    options
+      .collectWarnings(params)
+      .map((message) => message.trim())
+      .filter(Boolean)
+      .map((message) => ({
+        checkId: options.checkId,
+        severity: options.severity,
+        title: options.title,
+        detail: message.replace(/^-\s*/, ""),
+      }));
 }
+
+export const createConditionalWarningCollector = Object.assign(
+  <Params>(
+    ...collectors: Array<(params: Params) => string | string[] | null | undefined | false>
+  ): WarningCollector<Params> =>
+    (params) =>
+      collectors.flatMap((collector) => {
+        const next = collector(params);
+        if (!next) {
+          return [];
+        }
+        return Array.isArray(next) ? next : [next];
+      }),
+  { findings: createSecurityAuditFindingCollector },
+);
 
 export function composeAccountWarningCollectors<
   ResolvedAccount,

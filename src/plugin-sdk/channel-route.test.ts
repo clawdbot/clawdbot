@@ -5,14 +5,11 @@ import { describe, expect, it } from "vitest";
 import {
   channelRouteCompactKey,
   channelRouteDedupeKey,
-  channelRouteIdentityKey,
-  channelRouteKey,
   channelRouteTargetsMatchExact,
   channelRouteTargetsShareConversation,
   channelRoutesMatchExact,
   channelRoutesShareConversation,
   normalizeChannelRouteRef,
-  resolveChannelRouteTargetWithParser,
   stringifyRouteThreadId,
 } from "./channel-route.js";
 
@@ -48,7 +45,6 @@ describe("plugin-sdk channel-route", () => {
 
     expect(stringifyRouteThreadId(route?.thread?.id)).toBe("42");
     expect(channelRouteCompactKey(route)).toBe("telegram|-100123||42");
-    expect(channelRouteKey(route)).toBe(channelRouteCompactKey(route));
   });
 
   it("builds compact route keys from raw route-like input", () => {
@@ -78,16 +74,6 @@ describe("plugin-sdk channel-route", () => {
         threadId: "42",
       }),
     );
-  });
-
-  it("keeps deprecated identity key alias wired to the dedupe key", () => {
-    const input = {
-      channel: "telegram",
-      to: "-100123",
-      accountId: "work",
-      threadId: "42",
-    };
-    expect(channelRouteIdentityKey(input)).toBe(channelRouteDedupeKey(input));
   });
 
   it("matches exact routes when numeric and string thread ids are equivalent", () => {
@@ -181,27 +167,5 @@ describe("plugin-sdk channel-route", () => {
         }),
       }),
     ).toBe(false);
-  });
-
-  it("keeps deprecated parser wrapper wired for public SDK compatibility", () => {
-    expect(
-      resolveChannelRouteTargetWithParser({
-        channel: "Mock",
-        rawTarget: " room-a:topic:77 ",
-        fallbackThreadId: 11,
-        parseExplicitTarget: (_channel, rawTarget) => {
-          const match = /^(.*):topic:(\d+)$/u.exec(rawTarget);
-          return match
-            ? { to: match[1] ?? rawTarget, threadId: Number.parseInt(match[2] ?? "", 10) }
-            : null;
-        },
-      }),
-    ).toEqual({
-      channel: "mock",
-      rawTo: "room-a:topic:77",
-      to: "room-a",
-      threadId: 77,
-      chatType: undefined,
-    });
   });
 });

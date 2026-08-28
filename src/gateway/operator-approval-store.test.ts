@@ -23,10 +23,11 @@ import {
   expireDueOperatorApprovals,
   forceDenyOperatorApproval,
   getOperatorApprovalDetailed,
-  getOperatorApprovalDetailedByLocator,
   insertOperatorApproval,
   listPendingOperatorApprovals,
+  listTerminalOperatorApprovals,
   OPERATOR_APPROVAL_MAX_AUDIENCE_SESSION_KEYS,
+  OperatorApprovalHistoryCursorError,
   pruneTerminalOperatorApprovals,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
@@ -43,7 +44,9 @@ function getOperatorApproval(params: Parameters<typeof getOperatorApprovalDetail
 const tempDirs: string[] = [];
 
 function createDatabaseOptions(): OpenClawStateDatabaseOptions {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-operator-approval-"));
+  const stateDir = fs.realpathSync(
+    fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-operator-approval-")),
+  );
   tempDirs.push(stateDir);
   return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
 }
@@ -171,8 +174,9 @@ describe("operator approval store", () => {
       inserted.record,
     );
     expect(
-      getOperatorApprovalDetailedByLocator({
-        locator: inserted.record.resolutionRef,
+      getOperatorApprovalDetailed({
+        id: inserted.record.resolutionRef,
+        allowTransportRef: true,
         nowMs: 2_000,
         databaseOptions,
       }),
@@ -181,6 +185,129 @@ describe("operator approval store", () => {
       inserted.record,
       expect.objectContaining({ id: "plugin", kind: "plugin" }),
     ]);
+  });
+
+  it("lists terminal history newest-first with kind filtering and keyset pagination", () => {
+    const databaseOptions = createDatabaseOptions();
+    const entries: NewOperatorApproval[] = [
+      approval("exec-old", { createdAtMs: 1_000 }),
+      approval("plugin-new", { kind: "plugin", createdAtMs: 1_001 }),
+      approval("system-middle", {
+        kind: "system-agent",
+        presentation: {
+          kind: "system-agent",
+          title: "Approve system change",
+          description: "Apply the proposed system-agent change.",
+          proposalHash: "a".repeat(64),
+          agentId: "main",
+          allowedDecisions: ["allow-once", "deny"],
+        },
+        createdAtMs: 1_002,
+      }),
+      approval("still-pending", { createdAtMs: 1_003 }),
+    ];
+    for (const entry of entries) {
+      expect(insertOperatorApproval({ approval: entry, databaseOptions })).toMatchObject({
+        outcome: "inserted",
+      });
+    }
+    for (const [id, nowMs] of [
+      ["exec-old", 2_000],
+      ["system-middle", 3_000],
+      ["plugin-new", 3_000],
+    ] as const) {
+      expect(
+        resolveOperatorApproval({
+          id,
+          decision: "deny",
+          resolver: { kind: "device", id: "reviewer-device" },
+          nowMs,
+          databaseOptions,
+        }),
+      ).toMatchObject({ outcome: "resolved" });
+    }
+
+    const firstPage = listTerminalOperatorApprovals({ limit: 2, nowMs: 3_000, databaseOptions });
+    expect(firstPage.records.map((record) => record.id)).toEqual(["system-middle", "plugin-new"]);
+    expect(firstPage.nextCursor).toEqual(expect.any(String));
+    if (!firstPage.nextCursor) {
+      throw new Error("expected terminal history cursor");
+    }
+
+    const cursorPayload = JSON.parse(
+      Buffer.from(firstPage.nextCursor, "base64url").toString("utf8"),
+    ) as Record<string, unknown>;
+    const nonEmittedCursor = Buffer.from(
+      JSON.stringify({ ...cursorPayload, extra: true }),
+      "utf8",
+    ).toString("base64url");
+    for (const cursor of [
+      `${firstPage.nextCursor}!`,
+      `${firstPage.nextCursor}=`,
+      nonEmittedCursor,
+    ]) {
+      expect(() =>
+        listTerminalOperatorApprovals({ cursor, nowMs: 3_000, databaseOptions }),
+      ).toThrow(OperatorApprovalHistoryCursorError);
+    }
+
+    const secondPage = listTerminalOperatorApprovals({
+      cursor: firstPage.nextCursor,
+      limit: 2,
+      nowMs: 3_000,
+      databaseOptions,
+    });
+    expect(secondPage.records.map((record) => record.id)).toEqual(["exec-old"]);
+    expect(secondPage.nextCursor).toBeUndefined();
+
+    expect(
+      listTerminalOperatorApprovals({ kind: "plugin", nowMs: 3_000, databaseOptions }).records.map(
+        (record) => record.id,
+      ),
+    ).toEqual(["plugin-new"]);
+  });
+
+  it("excludes terminal rows resolved before the 30-day retention cutoff", () => {
+    const databaseOptions = createDatabaseOptions();
+    const day = 24 * 60 * 60_000;
+    const now = 100 * day;
+    expect(
+      insertOperatorApproval({
+        approval: approval("old", { createdAtMs: 1_000, expiresAtMs: now }),
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "inserted" });
+    expect(
+      insertOperatorApproval({
+        approval: approval("recent", { createdAtMs: now - 2 * day, expiresAtMs: now }),
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "inserted" });
+    // Resolve one row 40 days ago (past the window) and one 1 day ago (inside).
+    expect(
+      resolveOperatorApproval({
+        id: "old",
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer-device" },
+        nowMs: now - 40 * day,
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "resolved" });
+    expect(
+      resolveOperatorApproval({
+        id: "recent",
+        decision: "deny",
+        resolver: { kind: "device", id: "reviewer-device" },
+        nowMs: now - day,
+        databaseOptions,
+      }),
+    ).toMatchObject({ outcome: "resolved" });
+
+    expect(
+      listTerminalOperatorApprovals({ nowMs: now, databaseOptions }).records.map(
+        (record) => record.id,
+      ),
+    ).toEqual(["recent"]);
   });
 
   it("filters an audience before applying the replay limit across scan pages", () => {
@@ -304,7 +431,7 @@ describe("operator approval store", () => {
     expect(record).toMatchObject({ status: "expired", terminalReason: "timeout" });
   });
 
-  it("preserves protocol-valid boundary whitespace as opaque approval identity", () => {
+  it("preserves BOM, NBSP, and boundary spaces as opaque approval identity", () => {
     const databaseOptions = createDatabaseOptions();
     for (const [index, id] of ["\uFEFF", "\u00A0", " approval-edge "].entries()) {
       const inserted = insertOperatorApproval({
@@ -356,23 +483,6 @@ describe("operator approval store", () => {
     }
   });
 
-  it("preserves protocol-valid boundary whitespace as opaque approval identity", () => {
-    const databaseOptions = createDatabaseOptions();
-    for (const [index, id] of ["\uFEFF", "\u00A0", " approval-edge "].entries()) {
-      const inserted = insertOperatorApproval({
-        approval: approval(id, { createdAtMs: 1_000 + index }),
-        databaseOptions,
-      });
-
-      expect(inserted).toMatchObject({ outcome: "inserted", record: { id } });
-      expect(getOperatorApproval({ id, nowMs: 2_000, databaseOptions })).toMatchObject({
-        id,
-        status: "pending",
-      });
-    }
-    expect(getOperatorApproval({ id: "approval-edge", nowMs: 2_000, databaseOptions })).toBeNull();
-  });
-
   it("keeps canonical ids and transport references in disjoint lookup namespaces", () => {
     const databaseOptions = createDatabaseOptions();
     const inserted = insertOperatorApproval({
@@ -390,8 +500,9 @@ describe("operator approval store", () => {
       }),
     ).toEqual({ outcome: "conflict" });
     expect(
-      getOperatorApprovalDetailedByLocator({
-        locator: inserted.record.resolutionRef,
+      getOperatorApprovalDetailed({
+        id: inserted.record.resolutionRef,
+        allowTransportRef: true,
         nowMs: 2_000,
         databaseOptions,
       }),

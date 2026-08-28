@@ -1,12 +1,16 @@
+import { toErrorObject as toLintErrorObject } from "@openclaw/normalization-core/error-coercion";
 // Guarded fetch SSRF tests cover redirect hardening, pinned dispatcher setup,
 // trusted proxy modes, and safe header retention.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { readResponseWithLimit } from "../http-body.js";
 import {
   fetchConfiguredLocalOriginWithSsrFGuard,
   fetchWithSsrFGuard,
   GUARDED_FETCH_MODE,
   retainSafeHeadersForCrossOriginRedirectHeaders,
 } from "./fetch-guard.js";
+import { PinnedDispatcherPool } from "./pinned-dispatcher-pool.js";
 import {
   ensureGlobalUndiciStreamTimeouts,
   resetGlobalUndiciStreamTimeoutsForTests,
@@ -120,12 +124,7 @@ function getSecondRequestHeaders(fetchImpl: ReturnType<typeof vi.fn>): Headers {
   return new Headers(secondInit.headers);
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function getFirstRequestInit(fetchImpl: ReturnType<typeof vi.fn>): RequestInit {
   const [call] = fetchImpl.mock.calls;
@@ -272,11 +271,13 @@ describe("fetchWithSsrFGuard hardening", () => {
     if (params.expectEnvProxy) {
       expect(envHttpProxyAgentCtor).toHaveBeenCalledTimes(1);
       expect(envHttpProxyAgentCtor).toHaveBeenCalledWith({
+        factory: expect.any(Function),
         connect: {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
         },
         clientFactory: expect.any(Function),
+        proxyTunnel: true,
         proxyTls: {
           autoSelectFamily: true,
           autoSelectFamilyAttemptTimeout: 300,
@@ -718,8 +719,10 @@ describe("fetchWithSsrFGuard hardening", () => {
     });
 
     expect(proxyAgentCtor).toHaveBeenCalledWith({
+      factory: expect.any(Function),
       uri: "http://proxy.example:7890",
       clientFactory: expect.any(Function),
+      proxyTunnel: true,
       proxyTls: {
         autoSelectFamily: true,
         autoSelectFamilyAttemptTimeout: 300,
@@ -747,6 +750,20 @@ describe("fetchWithSsrFGuard hardening", () => {
       lookupFn,
     });
     expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("rejects HTTPS-to-HTTP redirects when the caller requires HTTPS", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(redirectResponse("http://cdn.example/asset"));
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/favicon.ico",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+        requireHttps: true,
+      }),
+    ).rejects.toThrow(/must use https/i);
+    expect(fetchImpl).toHaveBeenCalledOnce();
   });
 
   it("does not carry exact-origin trust across private-host redirects to another port", async () => {
@@ -803,10 +820,35 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(blockedFetchImpl).not.toHaveBeenCalled();
   });
 
-  it("blocks exact-origin private DNS when it resolves to link-local metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "169.254.169.254", family: 4 },
-    ]) as unknown as LookupFn;
+  it.each([
+    {
+      title: "blocks exact-origin private DNS when it resolves to link-local metadata IPs",
+      address: "169.254.169.254",
+      family: 4,
+    },
+    {
+      title:
+        "blocks exact-origin private DNS when it resolves to embedded IPv6 link-local metadata IPs",
+      address: "64:ff9b::a9fe:a9fe",
+      family: 6,
+    },
+    {
+      title: "blocks exact-origin private DNS when it resolves to local-use NAT64 IPs",
+      address: "64:ff9b:1:808:808:808:a9fe:a9fe",
+      family: 6,
+    },
+    {
+      title: "blocks exact-origin private DNS when it resolves to non-link-local metadata IPs",
+      address: "100.100.100.200",
+      family: 4,
+    },
+    {
+      title: "blocks exact-origin private DNS when it resolves to IPv6 cloud metadata IPs",
+      address: "fd00:ec2::254",
+      family: 6,
+    },
+  ])("$title", async ({ address, family }) => {
+    const lookupFn: LookupFn = vi.fn(async () => [{ address, family }]) as unknown as LookupFn;
     const fetchImpl = vi.fn(async () => okResponse());
 
     await expect(
@@ -820,55 +862,32 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
-  it("blocks exact-origin private DNS when it resolves to embedded IPv6 link-local metadata IPs", async () => {
+  it("allows local-use NAT64 DNS only with explicit private-network opt-in", async () => {
     const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "64:ff9b::a9fe:a9fe", family: 6 },
+      { address: "64:ff9b:1:808:808:808:a9fe:a9fe", family: 6 },
     ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
+    const blockedFetchImpl = vi.fn(async () => okResponse());
 
     await expect(
       fetchWithSsrFGuard({
         url: "http://model.lan:11434/v1/models",
-        fetchImpl,
+        fetchImpl: blockedFetchImpl,
         lookupFn,
         policy: { allowedOrigins: ["http://model.lan:11434"] },
       }),
     ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
+    expect(blockedFetchImpl).not.toHaveBeenCalled();
 
-  it("blocks exact-origin private DNS when it resolves to non-link-local metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "100.100.100.200", family: 4 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
+    const allowedFetchImpl = vi.fn(async () => okResponse());
+    const result = await fetchWithSsrFGuard({
+      url: "http://model.lan:11434/v1/models",
+      fetchImpl: allowedFetchImpl,
+      lookupFn,
+      policy: { allowedOrigins: ["http://model.lan:11434"], allowPrivateNetwork: true },
+    });
 
-    await expect(
-      fetchWithSsrFGuard({
-        url: "http://model.lan:11434/v1/models",
-        fetchImpl,
-        lookupFn,
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
-  });
-
-  it("blocks exact-origin private DNS when it resolves to IPv6 cloud metadata IPs", async () => {
-    const lookupFn: LookupFn = vi.fn(async () => [
-      { address: "fd00:ec2::254", family: 6 },
-    ]) as unknown as LookupFn;
-    const fetchImpl = vi.fn(async () => okResponse());
-
-    await expect(
-      fetchWithSsrFGuard({
-        url: "http://model.lan:11434/v1/models",
-        fetchImpl,
-        lookupFn,
-        policy: { allowedOrigins: ["http://model.lan:11434"] },
-      }),
-    ).rejects.toThrow(/private|internal|blocked/i);
-    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(allowedFetchImpl).toHaveBeenCalledTimes(1);
+    await result.release();
   });
 
   it.each([
@@ -946,6 +965,101 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     await result.release();
   });
+
+  it("preserves redirects when response body cancellation rejects", async () => {
+    const unhandledRejections: unknown[] = [];
+    const onUnhandledRejection = (reason: unknown) => {
+      unhandledRejections.push(reason);
+    };
+    const cancel = vi.fn(() => {
+      throw new Error("redirect cancellation failed");
+    });
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(new ReadableStream<Uint8Array>({ cancel }), {
+          status: 302,
+          headers: { location: "https://cdn.example.com/asset" },
+        }),
+      )
+      .mockResolvedValueOnce(okResponse("redirected"));
+    process.on("unhandledRejection", onUnhandledRejection);
+    let result: Awaited<ReturnType<typeof fetchWithSsrFGuard>> | undefined;
+
+    try {
+      result = await fetchWithSsrFGuard({
+        url: "https://api.example.com/start",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      });
+
+      const reader = result.response.body?.getReader();
+      if (!reader) {
+        throw new Error("expected redirected response body");
+      }
+      try {
+        const firstChunk = await reader.read();
+        expect(firstChunk.done).toBe(false);
+        expect(new TextDecoder().decode(firstChunk.value)).toBe("redirected");
+        await expect(reader.read()).resolves.toEqual({ done: true, value: undefined });
+      } finally {
+        reader.releaseLock();
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      expect(unhandledRejections).toStrictEqual([]);
+    } finally {
+      await result?.release();
+      process.off("unhandledRejection", onUnhandledRejection);
+      expect(process.listeners("unhandledRejection")).not.toContain(onUnhandledRejection);
+    }
+  });
+
+  it.each(["/next", undefined])(
+    "settles redirects before retained capture cancellation (location: %s)",
+    async (location) => {
+      const cancel = vi.fn();
+      const response = new Response(new ReadableStream<Uint8Array>({ cancel }), {
+        status: 302,
+        headers: location ? { location } : {},
+      });
+      const capture = response.clone();
+      const fetchImpl = vi.fn().mockResolvedValueOnce(response).mockResolvedValueOnce(okResponse());
+      const request = fetchWithSsrFGuard({
+        url: "https://public.example/start",
+        fetchImpl,
+        lookupFn: createPublicLookup(),
+      }).then(
+        async (result) => {
+          try {
+            return (await readResponseWithLimit(result.response, 32)).toString("utf8");
+          } finally {
+            await result.release();
+          }
+        },
+        (error: unknown) => error,
+      );
+
+      try {
+        const result = await raceWithTimeoutResult(request, 500, undefined);
+        if (location) {
+          expect(result).toBe("ok");
+        } else {
+          expect(result).toBeInstanceOf(Error);
+          expect(result).toMatchObject({ message: "Redirect missing location header (302)" });
+        }
+        expect(fetchImpl).toHaveBeenCalledTimes(location ? 2 : 1);
+        expect(response.bodyUsed).toBe(true);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        await capture.body?.cancel();
+        await request;
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
 
   it("strips sensitive headers when redirect crosses origins", async () => {
     const lookupFn = createPublicLookup();
@@ -1581,6 +1695,67 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 
   it.each([
+    { name: "the default loopback policy", mode: undefined, routing: "direct" },
+    { name: "gateway-only loopback policy", mode: "gateway-only", routing: "direct" },
+    { name: "explicit proxy loopback policy", mode: "proxy", routing: "proxy" },
+    { name: "explicit blocked loopback policy", mode: "block", routing: "blocked" },
+  ] satisfies Array<{
+    name: string;
+    mode: ManagedProxyLoopbackMode | undefined;
+    routing: "direct" | "proxy" | "blocked";
+  }>)(
+    "applies $name to the real dashboard document-readiness consumer",
+    async ({ mode, routing }) => {
+      vi.stubEnv("OPENCLAW_PROXY_LOOPBACK_MODE", "");
+      installManagedProxyRuntime(mode);
+      vi.stubEnv("NO_PROXY", "127.0.0.1");
+      vi.stubEnv("no_proxy", "127.0.0.1");
+      const fetchImpl = vi.fn(
+        async () => new Response(null, { status: 200, headers: { "content-type": "text/html" } }),
+      );
+      const lookupFn = createLoopbackLookup();
+      const { waitForControlUiDocument } = await import("../../commands/control-ui-handoff.js");
+
+      const readiness = await waitForControlUiDocument({
+        url: "http://127.0.0.1:18789/dashboard/",
+        deps: {
+          fetch: async (request) =>
+            await fetchConfiguredLocalOriginWithSsrFGuard({ ...request, fetchImpl, lookupFn }),
+        },
+      });
+
+      expect(lookupFn).toHaveBeenCalledWith("127.0.0.1", { all: true });
+      if (routing === "blocked") {
+        expect(readiness).toEqual({
+          ready: false,
+          reason: expect.stringContaining("blocked by proxy.loopbackMode"),
+        });
+        expect(fetchImpl).not.toHaveBeenCalled();
+        expect(agentCtor).not.toHaveBeenCalled();
+        expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(readiness).toEqual({ ready: true });
+      expect(fetchImpl).toHaveBeenCalledOnce();
+      expect(getFirstRequestInit(fetchImpl).method).toBe("HEAD");
+      if (routing === "direct") {
+        expect(agentCtor).toHaveBeenCalledOnce();
+        expect(envHttpProxyAgentCtor).not.toHaveBeenCalled();
+        return;
+      }
+
+      expect(agentCtor).not.toHaveBeenCalled();
+      expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
+      const options = requireRecord(
+        firstMockCall(envHttpProxyAgentCtor)?.[0],
+        "managed proxy options",
+      );
+      expect(options.noProxy).toBe("");
+    },
+  );
+
+  it.each([
     {
       name: "localhost when any resolved address is public",
       url: "http://localhost:11434/api/embed",
@@ -1653,6 +1828,39 @@ describe("fetchWithSsrFGuard hardening", () => {
       expectedEnvProxyCalls: 1,
       expectedFinalUrl: testCase.expectedFinalUrl,
     });
+  });
+
+  it("forces managed loopback proxy routing despite NO_PROXY while preserving target TLS", async () => {
+    installManagedProxyRuntime("proxy");
+    vi.stubEnv("NO_PROXY", "127.0.0.1");
+    vi.stubEnv("no_proxy", "127.0.0.1");
+    const checkServerIdentity = vi.fn();
+    const fetchImpl = vi.fn(async () => okResponse());
+    const baseUrl = "https://127.0.0.1:18789";
+
+    const result = await fetchConfiguredLocalOriginWithSsrFGuard({
+      url: `${baseUrl}/dashboard/`,
+      configuredLocalOriginBaseUrl: baseUrl,
+      fetchImpl,
+      lookupFn: createLoopbackLookup(),
+      policy: { allowedOrigins: [baseUrl] },
+      dispatcherPolicy: {
+        mode: "direct",
+        connect: { ca: "gateway-certificate", checkServerIdentity },
+      },
+    });
+
+    expect(agentCtor).not.toHaveBeenCalled();
+    expect(envHttpProxyAgentCtor).toHaveBeenCalledOnce();
+    const options = requireRecord(
+      firstMockCall(envHttpProxyAgentCtor)?.[0],
+      "managed proxy options",
+    );
+    expect(options.noProxy).toBe("");
+    expect(options.requestTls).toEqual({ ca: "gateway-certificate", checkServerIdentity });
+    expect(requireRecord(options.proxyTls, "managed proxy TLS options")).not.toHaveProperty("ca");
+    expect(process.env.http_proxy).toBe("http://127.0.0.1:7890");
+    await result.release();
   });
 
   it("ignores hidden managed-proxy bypass markers on the public guarded fetch helper", async () => {
@@ -1871,6 +2079,79 @@ describe("fetchWithSsrFGuard hardening", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expectAgentConstructorOptions({ bodyTimeout: 123_456, headersTimeout: 123_456 });
     await result.release();
+  });
+
+  it("revalidates DNS before reusing an exact direct pinned dispatcher", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
+    const lookupFn = createPublicLookup();
+    const dispatchers: unknown[] = [];
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
+      dispatchers.push((init as RequestInit & { dispatcher?: unknown })?.dispatcher);
+      return okResponse();
+    });
+
+    const first = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      dispatcherPool: pool,
+    });
+    await first.release();
+    const second = await fetchWithSsrFGuard({
+      url: "https://public.example/other",
+      fetchImpl,
+      lookupFn,
+      dispatcherPool: pool,
+    });
+
+    expect(lookupFn).toHaveBeenCalledTimes(2);
+    expect(agentCtor).toHaveBeenCalledOnce();
+    expect(dispatchers[1]).toBe(dispatchers[0]);
+    expect(first.dispatcherReused).toBe(false);
+    expect(second.dispatcherReused).toBe(true);
+    await second.release();
+    await pool.closeAll();
+  });
+
+  it("blocks a private DNS rebind before consulting a warm dispatcher", async () => {
+    (globalThis as Record<string, unknown>)[TEST_UNDICI_RUNTIME_DEPS_KEY] = {
+      Agent: agentCtor,
+      EnvHttpProxyAgent: envHttpProxyAgentCtor,
+      ProxyAgent: proxyAgentCtor,
+      fetch: vi.fn(async () => okResponse()),
+    };
+    const pool = new PinnedDispatcherPool({ maxEntries: 2, idleTtlMs: 60_000 });
+    const lookupFn = vi
+      .fn()
+      .mockResolvedValueOnce([{ address: "93.184.216.34", family: 4 }])
+      .mockResolvedValueOnce([{ address: "127.0.0.1", family: 4 }]) as unknown as LookupFn;
+    const fetchImpl = vi.fn(async () => okResponse());
+    const first = await fetchWithSsrFGuard({
+      url: "https://public.example/resource",
+      fetchImpl,
+      lookupFn,
+      dispatcherPool: pool,
+    });
+    await first.release();
+
+    await expect(
+      fetchWithSsrFGuard({
+        url: "https://public.example/other",
+        fetchImpl,
+        lookupFn,
+        dispatcherPool: pool,
+      }),
+    ).rejects.toThrow(/private|internal|blocked/i);
+
+    expect(fetchImpl).toHaveBeenCalledOnce();
+    expect(agentCtor).toHaveBeenCalledOnce();
+    await pool.closeAll();
   });
 
   it("rejects timed-out fetches even when dispatcher close stalls", async () => {
@@ -2301,17 +2582,4 @@ describe("fetchWithSsrFGuard hardening", () => {
   });
 });
 
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -3,12 +3,18 @@
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { buildAggregatesFromSessions } from "./metrics.ts";
+import * as usageQuery from "./query.ts";
 import type { UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
 import { renderUsage } from "./view.ts";
 
 const noop = vi.fn();
 
-function usageSession(key: string, agentId: string, provider: string): UsageSessionEntry {
+function usageSession(
+  key: string,
+  agentId: string,
+  provider: string,
+  totalsOverrides: Partial<UsageTotals> = {},
+): UsageSessionEntry {
   const totals: UsageTotals = {
     input: 100,
     output: 20,
@@ -21,6 +27,7 @@ function usageSession(key: string, agentId: string, provider: string): UsageSess
     cacheReadCost: 0,
     cacheWriteCost: 0,
     missingCostEntries: 0,
+    ...totalsOverrides,
   };
   return {
     key,
@@ -54,7 +61,6 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
   return {
     data: {
       loading: false,
-      requestPending: false,
       error: null,
       sessions: [],
       agents: [],
@@ -62,8 +68,10 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       totals: null,
       aggregates: null,
       costDaily: [],
-      cacheRefresh: "ready",
+      cacheRefresh: "complete",
       providerUsage: [],
+      providerUsageStalled: false,
+      providerUsageUnavailable: false,
     },
     filters: {
       startDate: "2026-05-14",
@@ -93,10 +101,12 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       timeSeriesBreakdownMode: "total",
       timeSeries: null,
       timeSeriesLoading: false,
+      timeSeriesStatus: { error: null, hasLoaded: false, stale: false },
       timeSeriesCursorStart: null,
       timeSeriesCursorEnd: null,
       sessionLogs: null,
       sessionLogsLoading: false,
+      sessionLogsStatus: { error: null, hasLoaded: false, stale: false },
       sessionLogsExpanded: false,
       logFilters: {
         roles: [],
@@ -144,13 +154,99 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
         onTimeSeriesModeChange: noop,
         onTimeSeriesBreakdownChange: noop,
         onTimeSeriesCursorRangeChange: noop,
+        onRetryTimeSeries: noop,
+        onRetrySessionLogs: noop,
       },
     },
     ...overrides,
   };
 }
 
+it("renders shared skeletons while initial usage is loading", () => {
+  const container = document.createElement("div");
+  const props = createUsageProps();
+  render(renderUsage(createUsageProps({ data: { ...props.data, loading: true } })), container);
+
+  const blocks = container.querySelectorAll(".usage-skeleton-block");
+  expect(blocks).toHaveLength(3);
+  expect([...blocks].every((block) => block.classList.contains("skeleton"))).toBe(true);
+});
+
 describe("renderUsage", () => {
+  it("surfaces a provider-usage failure instead of hiding the panel", () => {
+    const container = document.createElement("div");
+    const base = createUsageProps();
+    render(
+      renderUsage(createUsageProps({ data: { ...base.data, providerUsageUnavailable: true } })),
+      container,
+    );
+
+    expect(container.textContent).toContain(
+      "Provider usage is unavailable; the last request failed. Refresh to retry.",
+    );
+  });
+
+  it("keeps the provider panel hidden when usage is empty without a failure", () => {
+    const container = document.createElement("div");
+    render(renderUsage(createUsageProps()), container);
+
+    expect(container.textContent).not.toContain("Provider usage is unavailable");
+  });
+
+  it("keeps pending sessions on their selected local or UTC activity day", () => {
+    const localOffsetMs = -7 * 60 * 60 * 1000;
+    const localYear = vi
+      .spyOn(Date.prototype, "getFullYear")
+      .mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs).getUTCFullYear();
+      });
+    const localMonth = vi
+      .spyOn(Date.prototype, "getMonth")
+      .mockImplementation(function (this: Date) {
+        return new Date(this.getTime() + localOffsetMs).getUTCMonth();
+      });
+    const localDay = vi.spyOn(Date.prototype, "getDate").mockImplementation(function (this: Date) {
+      return new Date(this.getTime() + localOffsetMs).getUTCDate();
+    });
+
+    try {
+      const pendingSession = {
+        key: "agent:main:pending-cache",
+        label: "Pending cache",
+        agentId: "main",
+        updatedAt: Date.parse("2026-05-14T00:30:00.000Z"),
+        usage: null,
+      } satisfies UsageSessionEntry;
+
+      for (const { timeZone, selectedDay, visible } of [
+        { timeZone: "utc", selectedDay: "2026-05-14", visible: true },
+        { timeZone: "local", selectedDay: "2026-05-13", visible: true },
+        { timeZone: "local", selectedDay: "2026-05-14", visible: false },
+      ] as const) {
+        const container = document.createElement("div");
+        render(
+          renderUsage(
+            createUsageProps({
+              data: { ...createUsageProps().data, sessions: [pendingSession] },
+              filters: {
+                ...createUsageProps().filters,
+                selectedDays: [selectedDay],
+                timeZone,
+              },
+            }),
+          ),
+          container,
+        );
+
+        expect(container.querySelector(".session-bar-row") !== null).toBe(visible);
+      }
+    } finally {
+      localYear.mockRestore();
+      localMonth.mockRestore();
+      localDay.mockRestore();
+    }
+  });
+
   it("keeps insight aggregates scoped to the selected agent", () => {
     const container = document.createElement("div");
     const sessions = [
@@ -206,6 +302,47 @@ describe("renderUsage", () => {
     expect(providers?.textContent).not.toContain("openai");
   });
 
+  it.each(["session", "day"] as const)(
+    "preserves missing-cost attribution in %s-filtered JSON exports",
+    (filter) => {
+      const base = createUsageProps();
+      const missing = { missingCostEntries: 2, missingCostByModel: { "fixture/unpriced": 2 } };
+      const session = usageSession("agent:main:priced", "main", "fixture", missing);
+      const totals = session.usage;
+      if (!totals) {
+        throw new Error("usage session fixture must include totals");
+      }
+      const download = vi.spyOn(usageQuery, "downloadTextFile").mockImplementation(() => {});
+      try {
+        const container = document.createElement("div");
+        render(
+          renderUsage(
+            createUsageProps({
+              data: {
+                ...base.data,
+                sessions: [session],
+                costDaily: [{ ...totals, date: "2026-05-14" }],
+              },
+              filters: {
+                ...base.filters,
+                selectedSessions: filter === "session" ? [session.key] : [],
+                selectedDays: filter === "day" ? ["2026-05-14"] : [],
+              },
+            }),
+          ),
+          container,
+        );
+        container
+          .querySelector(".usage-export-menu")
+          ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "json" } } }));
+        expect(download).toHaveBeenCalledOnce();
+        expect(JSON.parse(download.mock.calls[0]?.[1] ?? "{}")).toMatchObject({ totals: missing });
+      } finally {
+        download.mockRestore();
+      }
+    },
+  );
+
   it("keeps selected session labels on UTF-16 boundaries", () => {
     const container = document.createElement("div");
     const label = `${"a".repeat(19)}🚀${"b".repeat(28)}🚀tail`;
@@ -260,66 +397,6 @@ describe("renderUsage", () => {
     expect(container.querySelector(".usage-header")).not.toBeNull();
   });
 
-  it("keeps cached totals visible without labeling a background rebuild as loading", () => {
-    const container = document.createElement("div");
-    const session = usageSession("agent:main:main", "main", "openai");
-
-    render(
-      renderUsage(
-        createUsageProps({
-          data: {
-            ...createUsageProps().data,
-            sessions: [session],
-            totals: session.usage,
-            cacheRefresh: "rebuilding",
-          },
-        }),
-      ),
-      container,
-    );
-
-    const notice = container.querySelector<HTMLElement>(".usage-cache-notice");
-    expect(container.querySelector(".settings-status")).toBeNull();
-    expect(notice?.getAttribute("role")).toBe("status");
-    expect(notice?.getAttribute("aria-live")).toBe("polite");
-    expect(notice?.textContent).toContain("Rebuilding usage data");
-    expect(notice?.textContent).toContain("latest available totals and session results");
-    expect(container.querySelector(".usage-metric-badge strong")?.textContent?.trim()).toBe("120");
-  });
-
-  it("distinguishes foreground refreshes and paused automatic cache checks", () => {
-    const container = document.createElement("div");
-    const session = usageSession("agent:main:main", "main", "openai");
-    const baseData = {
-      ...createUsageProps().data,
-      sessions: [session],
-      totals: session.usage,
-    };
-
-    render(
-      renderUsage(
-        createUsageProps({
-          data: { ...baseData, loading: true, requestPending: true },
-        }),
-      ),
-      container,
-    );
-    expect(container.querySelector(".settings-status")?.textContent?.trim()).toBe("Refreshing…");
-
-    render(
-      renderUsage(
-        createUsageProps({
-          data: { ...baseData, cacheRefresh: "paused" },
-        }),
-      ),
-      container,
-    );
-    const notice = container.querySelector<HTMLElement>(".usage-cache-notice");
-    expect(notice?.textContent).toContain("Usage data may be incomplete");
-    expect(notice?.textContent).toContain("select Refresh to check again");
-    expect(notice?.querySelector(".usage-loading-spinner")).toBeNull();
-  });
-
   it("leaves agent scoping to the shared page header control", () => {
     const container = document.createElement("div");
 
@@ -368,6 +445,58 @@ describe("renderUsage", () => {
       ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));
 
     expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
+  });
+
+  it("reports a stalled provider refresh instead of hiding the section", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            providerUsage: [],
+            providerUsageStalled: true,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const callout = container.querySelector(".usage-callout");
+    expect(callout?.textContent?.trim()).toBe(
+      "Provider usage did not finish loading. Refresh to retry.",
+    );
+  });
+
+  it("keeps available provider usage visible when refresh stalls", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            providerUsage: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                windows: [{ label: "Weekly", usedPercent: 25 }],
+              },
+            ],
+            providerUsageStalled: true,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".usage-callout")?.textContent).toContain(
+      "Provider usage did not finish loading",
+    );
+    const card = container.querySelector(".provider-usage-card");
+    expect(card?.textContent).toContain("OpenAI");
+    expect(card?.textContent).toContain("Weekly");
   });
 
   it("renders provider plans, quotas, and billing independently of session usage", () => {
@@ -652,5 +781,48 @@ describe("renderUsage", () => {
       );
       expect(container.querySelector(".cost-window-analysis")).toBeNull();
     }
+  });
+
+  it("shows the empty state for an all-zero successful response", () => {
+    const zeroTotals = {
+      totalTokens: 0,
+      totalCost: 0,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      missingCostEntries: 0,
+    };
+    const container = document.createElement("div");
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            // The gateway always returns a totals object, even with no usage.
+            totals: zeroTotals as UsageProps["data"]["totals"],
+          },
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector(".usage-empty-state")).not.toBeNull();
+  });
+
+  it("does not render the empty state under an error callout", () => {
+    const container = document.createElement("div");
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            error: "usage failed",
+          },
+        }),
+      ),
+      container,
+    );
+    expect(container.querySelector(".usage-callout")).not.toBeNull();
+    expect(container.querySelector(".usage-empty-state")).toBeNull();
   });
 });

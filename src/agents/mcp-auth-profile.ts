@@ -3,6 +3,7 @@
  */
 import crypto from "node:crypto";
 import type { FetchLike } from "@modelcontextprotocol/sdk/shared/transport.js";
+import { filterStringRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { BundleMcpConfig, BundleMcpServerConfig } from "../plugins/bundle-mcp.js";
 import { resolveApiKeyForProfile } from "./auth-profiles/oauth.js";
@@ -12,6 +13,7 @@ import {
   withoutMcpAuthorizationHeader,
   withSameOriginMcpHttpHeaders,
 } from "./mcp-http-fetch.js";
+import { operatorMcpOAuthIdentity } from "./mcp-oauth-identity.js";
 import { resolveMcpOAuthAccessToken, type McpOAuthConfig } from "./mcp-oauth.js";
 import { resolveMcpTransportConfig } from "./mcp-transport-config.js";
 
@@ -19,20 +21,6 @@ type McpAuthProfileOptions = {
   cfg?: OpenClawConfig;
   agentDir?: string;
 };
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function normalizeStringHeaders(value: unknown): Record<string, string> | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  const entries = Object.entries(value).filter(
-    (entry): entry is [string, string] => typeof entry[1] === "string",
-  );
-  return entries.length > 0 ? Object.fromEntries(entries) : undefined;
-}
 
 /** Returns the refresh-capable auth profile selected for one MCP server. */
 export function resolveMcpAuthProfileId(rawServer: unknown): string | undefined {
@@ -134,8 +122,7 @@ async function resolveMcpBearerToken(params: {
     resourceUrl: resolved.url,
   });
   return await resolveMcpOAuthAccessToken({
-    serverName: params.serverName,
-    serverUrl: resolved.url,
+    identity: operatorMcpOAuthIdentity(params.serverName, resolved.url),
     config: resolved.oauth as McpOAuthConfig | undefined,
     fetchFn,
   });
@@ -232,7 +219,7 @@ export async function resolveMcpBearerBundleConfig(
       nextEnv[envVar] = token;
       authorization = `Bearer \${${envVar}}`;
     }
-    const headers = withoutMcpAuthorizationHeader(normalizeStringHeaders(server.headers));
+    const headers = withoutMcpAuthorizationHeader(filterStringRecord(server.headers));
     nextServers ??= { ...params.config.mcpServers };
     nextServers[serverName] = stripOpenClawOnlyOAuthConfig({
       ...server,

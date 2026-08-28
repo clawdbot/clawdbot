@@ -11,6 +11,9 @@ import {
 import { ensureAuthProfileStore } from "../agents/auth-profiles/store.js";
 import { resolveContextTokensForModel, waitForContextWindowCacheLoad } from "../agents/context.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
+import { resolveAgentHarnessAutoSelectionHint } from "../agents/harness/auto-selection.js";
+import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
+import { listRegisteredAgentHarnesses } from "../agents/harness/registry.js";
 import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
 import {
   areRuntimeModelRefsEquivalent,
@@ -18,7 +21,6 @@ import {
 } from "../agents/model-runtime-aliases.js";
 import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
-import { resolveProviderIdForAuth } from "../agents/provider-auth-aliases.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import {
   resolveInternalSessionKey,
@@ -26,7 +28,7 @@ import {
 } from "../agents/tools/sessions-helpers.js";
 import { normalizeGroupActivation } from "../auto-reply/group-activation.js";
 import { resolveSelectedAndActiveModel } from "../auto-reply/model-runtime.js";
-import { resolveSupportedThinkingLevel, type ThinkLevel } from "../auto-reply/thinking.js";
+import type { ThinkLevel } from "../auto-reply/thinking.js";
 import { toAgentModelListLike } from "../config/model-input.js";
 import type { SessionEntry } from "../config/sessions.js";
 import { hasSessionAutoModelFallbackProvenance } from "../config/sessions/model-override-provenance.js";
@@ -36,27 +38,34 @@ import {
   loadProviderUsageSummary,
   resolveUsageProviderId,
 } from "../infra/provider-usage.js";
+import { resolveActiveProviderThinkingProfile } from "../plugins/provider-thinking-active.js";
 import { normalizeAccountId } from "../routing/account-id.js";
 import { resolveNormalizedAccountEntry } from "../routing/account-lookup.js";
-import { createLazyPromise, createLazyRuntimeModule } from "../shared/lazy-runtime.js";
+import { createLazyPromise } from "../shared/lazy-runtime.js";
 import {
   listTasksForAgentIdForStatus,
   listTasksForSessionKeyForStatus,
 } from "../tasks/task-status-access.js";
 import {
   buildTaskStatusSnapshot,
+  formatTaskStatus,
   formatTaskStatusDetail,
   formatTaskStatusTitle,
 } from "../tasks/task-status.js";
+import {
+  deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.shared.js";
 // Status text helpers render runtime status summaries for CLI output.
-import { resolveUsageCredentialType } from "./codex-synthetic-usage.js";
 import {
   buildCodexSyntheticUsageAuth,
+  resolveUsageCredentialType,
   shouldUseCodexSyntheticUsageForRuntime,
 } from "./codex-synthetic-usage.js";
 import { resolveActiveFallbackState } from "./fallback-notice-state.js";
+import type { StatusMessageParts } from "./status-message.js";
 import { formatCompactPluginHealthLine } from "./status-plugin-health.js";
-import { appendSessionCostLine, buildStatusUptimeLine } from "./status-runtime-lines.js";
+import { appendSessionCostLine, buildStatusUptimeValue } from "./status-runtime-lines.js";
 import type { BuildStatusTextParams } from "./status-text.types.js";
 
 // Status text assembly gathers runtime/model/session/task facts, then delegates
@@ -82,8 +91,8 @@ function resolveStatusChannelFeatureLine(params: {
   const telegramConfig = params.cfg.channels?.telegram;
   const accountId = normalizeAccountId(
     params.statusAccountId ??
-      params.sessionEntry?.lastAccountId ??
-      params.sessionEntry?.origin?.accountId ??
+      deliveryContextFromSession(params.sessionEntry)?.accountId ??
+      sessionDeliveryOrigin(params.sessionEntry)?.accountId ??
       telegramConfig?.defaultAccount,
   );
   const accountConfig = resolveNormalizedAccountEntry(
@@ -93,28 +102,27 @@ function resolveStatusChannelFeatureLine(params: {
   );
   const richMessagesSetting = accountConfig?.richMessages ?? telegramConfig?.richMessages;
   if (richMessagesSetting === true) {
-    return "Telegram rich messages: on · Bot API 10.1 sendRichMessage enabled";
+    return "Telegram rich messages: on · Bot API 10.2 sendRichMessage enabled";
   }
   return accountConfig?.richMessages === false
     ? "Telegram rich messages: off · enable richMessages for this Telegram account"
     : "Telegram rich messages: off · set channels.telegram.richMessages=true for tables/details/rich media";
 }
 
-const loadStatusMessageRuntime = createLazyPromise(
-  () =>
-    import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
-  { cacheRejections: true },
+// Status loaders keep the lazy-promise eviction default: a transient module-load
+// failure on one /status request self-heals on the next instead of poisoning
+// every reply. Deliberately not createLazyRuntimeModule, whose sticky rejection
+// cache would pin the failure for the process lifetime.
+const loadStatusMessageRuntime = createLazyPromise(() =>
+  import("./status-message.runtime.js").then((module) => module.loadStatusMessageRuntimeModule()),
 );
-const loadAgentHarnessSelectionRuntime = createLazyRuntimeModule(
-  () => import("../agents/harness/selection.js"),
-);
-const loadStatusSubagentsRuntime = createLazyRuntimeModule(
-  () => import("./status-subagents.runtime.js"),
-);
+const loadAgentThinkingRuntime = createLazyPromise(() => import("../agents/thinking-runtime.js"));
+const loadThinkingLevelRuntime = createLazyPromise(() => import("../auto-reply/thinking.js"));
+const loadStatusSubagentsRuntime = createLazyPromise(() => import("./status-subagents.runtime.js"));
 
-const loadStatusQueueRuntime = createLazyRuntimeModule(() => import("./status-queue.runtime.js"));
+const loadStatusQueueRuntime = createLazyPromise(() => import("./status-queue.runtime.js"));
 
-const loadStatusPluginHealthRuntime = createLazyRuntimeModule(
+const loadStatusPluginHealthRuntime = createLazyPromise(
   () => import("./status-plugin-health.runtime.js"),
 );
 
@@ -175,11 +183,7 @@ function resolveCodexSyntheticUsageAuthProfileId(params: {
     if (!credential) {
       return undefined;
     }
-    const credentialProvider = normalizeOptionalLowercaseString(credential.provider);
-    const resolvedProvider = resolveProviderIdForAuth(credential.provider, { config: params.cfg });
-    return resolvedProvider === "openai" ||
-      credentialProvider === "openai-codex" ||
-      credentialProvider === "codex-cli"
+    return normalizeOptionalLowercaseString(credential.provider) === "openai"
       ? normalizedProfileId
       : undefined;
   } catch {
@@ -201,7 +205,8 @@ function formatSessionTaskLine(sessionKey: string): string | undefined {
         : "recently finished";
   const title = formatTaskStatusTitle(task);
   const detail = formatTaskStatusDetail(task);
-  const parts = [headline, task.runtime, title, detail].filter(Boolean);
+  const blocked = formatTaskStatus(task) === "blocked" ? "blocked" : undefined;
+  const parts = [headline, blocked, task.runtime, title, detail].filter(Boolean);
   return parts.length ? `📌 Tasks: ${parts.join(" · ")}` : undefined;
 }
 
@@ -214,22 +219,42 @@ async function resolveStatusHarnessId(params: {
   sessionEntry?: SessionEntry;
 }): Promise<string | undefined> {
   try {
-    const { selectAgentHarness } = await loadAgentHarnessSelectionRuntime();
-    const agentHarnessRuntimeOverride = resolveSessionRuntimeOverrideForProvider({
+    const sessionRuntime = resolveSessionRuntimeOverrideForProvider({
       provider: params.provider,
       entry: params.sessionEntry,
       cfg: params.cfg,
     });
-    const selected = selectAgentHarness({
+    const configuredRuntime = resolveAgentHarnessPolicy({
       provider: params.provider,
       modelId: params.model,
       config: params.cfg,
       agentId: params.agentId,
       sessionKey: params.sessionKey,
-      agentHarnessRuntimeOverride,
+    }).runtime;
+    const runtime = sessionRuntime ?? configuredRuntime;
+    if (runtime !== "auto") {
+      return normalizeOptionalLowercaseString(runtime) || undefined;
+    }
+    const registeredHarnesses = listRegisteredAgentHarnesses();
+    if (
+      registeredHarnesses.every(
+        ({ harness }) =>
+          resolveAgentHarnessAutoSelectionHint({ harness, provider: params.provider }) !==
+          undefined,
+      )
+    ) {
+      return "openclaw";
+    }
+    const { resolveEffectiveAgentRuntime } = await loadAgentThinkingRuntime();
+    const id = resolveEffectiveAgentRuntime({
+      cfg: params.cfg,
+      provider: params.provider,
+      modelId: params.model,
+      agentId: params.agentId,
+      sessionKey: params.sessionKey,
+      sessionEntry: params.sessionEntry,
     });
-    const id = normalizeOptionalLowercaseString(selected.id);
-    return id || undefined;
+    return normalizeOptionalLowercaseString(id) || undefined;
   } catch {
     // Harness selection is nice-to-have for display. Status should still render
     // if dynamic harness modules are unavailable.
@@ -281,6 +306,14 @@ async function resolveRuntimePluginHealthLine(): Promise<string | undefined> {
 // Public status text builder for CLI/chat status commands. It resolves dynamic
 // runtime details just-in-time and returns the formatted multiline status body.
 export async function buildStatusText(params: BuildStatusTextParams): Promise<string> {
+  return (await buildStatusReplyParts(params)).text;
+}
+
+// Status body plus its structured presentation mirror, for chat replies whose
+// channel can render native tables; plain channels keep the text verbatim.
+export async function buildStatusReplyParts(
+  params: BuildStatusTextParams,
+): Promise<StatusMessageParts> {
   const {
     cfg,
     sessionEntry,
@@ -292,6 +325,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     provider,
     model,
     contextTokens,
+    thinkingCatalog,
     resolvedThinkLevel,
     resolvedFastMode,
     resolvedVerboseLevel,
@@ -419,6 +453,8 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     shouldUseCodexSyntheticUsageForRuntime({
       provider: usageStatusProvider,
       effectiveHarness,
+      // A runtime fallback does not erase the session's Codex binding or its rate limits.
+      sessionHarnessId: sessionEntry?.agentHarnessId,
     });
   const codexUsageAuthProfileId = useCodexSyntheticUsage
     ? resolveCodexSyntheticUsageAuthProfileId({
@@ -514,14 +550,16 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     if (!taskLine && !params.skipDefaultTaskLookup) {
       taskLine = formatAgentTaskCountsLine(statusAgentId);
     }
-    const { buildSubagentsStatusLine, countPendingDescendantRuns, listControlledSubagentRuns } =
+    const { buildControlledSubagentRunsReadContext, buildSubagentsStatusLine } =
       await loadStatusSubagentsRuntime();
-    const runs = listControlledSubagentRuns(requesterKey);
+    const subagentReadContext = buildControlledSubagentRunsReadContext(requesterKey);
+    const runs = subagentReadContext.runs;
     const verboseEnabled = resolvedVerboseLevel && resolvedVerboseLevel !== "off";
     subagentsLine = buildSubagentsStatusLine({
       runs,
       verboseEnabled,
-      pendingDescendantsForRun: (entry) => countPendingDescendantRuns(entry.childSessionKey),
+      pendingDescendantsForRun: (entry) =>
+        subagentReadContext.countPendingDescendantRuns(entry.childSessionKey),
     });
   }
   const groupActivation = isGroup
@@ -554,35 +592,16 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     statusAccountId: params.statusAccountId,
     sessionEntry,
   });
-  const { buildStatusMessage } = await loadStatusMessageRuntime();
+  const { buildStatusMessageParts } = await loadStatusMessageRuntime();
   await waitForContextWindowCacheLoad();
   const explicitThinkingDefault =
     (agentConfig?.thinkingDefault as ThinkLevel | undefined) ??
     (agentDefaults.thinkingDefault as ThinkLevel | undefined);
-  const configuredContextTokens =
-    typeof agentConfig?.contextTokens === "number" && agentConfig.contextTokens > 0
-      ? agentConfig.contextTokens
-      : typeof agentDefaults.contextTokens === "number" && agentDefaults.contextTokens > 0
-        ? agentDefaults.contextTokens
-        : undefined;
   const runtimeContextTokens = resolveStatusRuntimeContextTokens({
     cfg,
     provider: activeStatusProvider,
     model: modelRefs.active.model || model,
   });
-  const selectedContextTokens = resolveStatusRuntimeContextTokens({
-    cfg,
-    provider: selectedStatusProvider,
-    model: modelRefs.selected.model || selectedLookupModel,
-  });
-  const statusAgentContextTokens =
-    typeof contextTokens === "number" &&
-    contextTokens > 0 &&
-    (activeRuntimeIsAuthoritative ||
-      contextTokens === configuredContextTokens ||
-      contextTokens === selectedContextTokens)
-      ? contextTokens
-      : undefined;
   const statusRuntimeContextTokens = activeRuntimeIsAuthoritative
     ? (runtimeContextTokens ??
       (fallbackState.active && typeof contextTokens === "number" && contextTokens > 0
@@ -595,13 +614,42 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     (await resolveDefaultThinkingLevel()) ??
     (sessionEntry?.thinkingLevel as ThinkLevel | undefined) ??
     "off";
-  const effectiveThinkLevel = resolveSupportedThinkingLevel({
-    provider: selectedLookupProvider,
-    model: selectedLookupModel,
-    level: requestedThinkLevel,
-    agentRuntime: effectiveHarness,
-  });
-  return buildStatusMessage({
+  // Active profiles can forbid `off` (for example, always-thinking models). Absence means
+  // there is no prepared policy fact, so status must not fall back to manifest discovery.
+  const activeThinkingProfile =
+    requestedThinkLevel === "off"
+      ? resolveActiveProviderThinkingProfile({
+          provider: selectedLookupProvider,
+          context: {
+            provider: selectedLookupProvider,
+            modelId: selectedLookupModel,
+            agentRuntime: effectiveHarness,
+          },
+        })
+      : undefined;
+  const activeProfileSupportsOff = activeThinkingProfile?.levels.some(
+    (level) => level.id === "off",
+  );
+  const effectiveThinkLevel =
+    requestedThinkLevel === "off" &&
+    (activeThinkingProfile == null || activeProfileSupportsOff === true)
+      ? "off"
+      : (await loadThinkingLevelRuntime()).resolveSupportedThinkingLevel({
+          provider: selectedLookupProvider,
+          model: selectedLookupModel,
+          level: requestedThinkLevel,
+          catalog: thinkingCatalog,
+          agentRuntime: effectiveHarness,
+          // Status uses loaded provider facts unless Codex needs OpenAI's static thinking contract.
+          providerPolicySource:
+            normalizeOptionalLowercaseString(effectiveHarness) === "codex" &&
+            ["codex", "openai"].includes(
+              normalizeOptionalLowercaseString(selectedLookupProvider) ?? "",
+            )
+              ? "active-or-bundled"
+              : "active",
+        });
+  return buildStatusMessageParts({
     config: cfg,
     agent: {
       ...agentDefaults,
@@ -610,9 +658,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
         primary: params.primaryModelLabelOverride ?? `${provider}/${model}`,
         ...(agentFallbacksOverride === undefined ? {} : { fallbacks: agentFallbacksOverride }),
       },
-      ...(statusAgentContextTokens !== undefined
-        ? { contextTokens: statusAgentContextTokens }
-        : {}),
       thinkingDefault: explicitThinkingDefault,
       verboseDefault: agentDefaults.verboseDefault,
       reasoningDefault: agentConfig?.reasoningDefault ?? agentDefaults.reasoningDefault,
@@ -620,7 +665,6 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     },
     agentId: statusAgentId,
     configuredDefaultModelLabel,
-    explicitConfiguredContextTokens: configuredContextTokens,
     runtimeContextTokens: statusRuntimeContextTokens,
     sessionEntry,
     sessionKey,
@@ -636,7 +680,7 @@ export async function buildStatusText(params: BuildStatusTextParams): Promise<st
     resolvedElevated: resolvedElevatedLevel,
     modelAuth: selectedModelAuth,
     activeModelAuth,
-    uptimeLine: buildStatusUptimeLine(),
+    uptimeValue: buildStatusUptimeValue(),
     usageLine: usageLine ?? undefined,
     queue: {
       mode: queueSettings.mode,

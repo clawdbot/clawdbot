@@ -1,14 +1,14 @@
 // Tests applying parsed directives to get-reply execution options.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../../sessions/model-overrides.js";
-import { parseInlineDirectives } from "./directive-handling.parse.js";
+import { parseInlineSessionDirectives } from "./directive-handling.parse.js";
 import { applyInlineDirectiveOverrides } from "./get-reply-directives-apply.js";
 import { createFastTestModelSelectionState } from "./model-selection.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const mocks = vi.hoisted(() => ({
-  fastLane: vi.fn(),
-  persist: vi.fn(),
+  handleDirective: vi.fn(),
+  applyModelSelection: vi.fn(),
   systemEvent: vi.fn(),
 }));
 
@@ -16,17 +16,17 @@ vi.mock("../../infra/system-events.js", () => ({
   enqueueSystemEvent: (...args: unknown[]) => mocks.systemEvent(...args),
 }));
 
-vi.mock("./directive-handling.fast-lane.js", () => ({
-  applyInlineDirectivesFastLane: (...args: unknown[]) => mocks.fastLane(...args),
+vi.mock("./directive-handling.impl.js", () => ({
+  handleDirectiveOnly: (...args: unknown[]) => mocks.handleDirective(...args),
 }));
 
 vi.mock("./directive-handling.persist.runtime.js", () => ({
-  persistInlineDirectives: (...args: unknown[]) => mocks.persist(...args),
+  applySessionModelSelection: (...args: unknown[]) => mocks.applyModelSelection(...args),
 }));
 
 beforeEach(() => {
-  mocks.fastLane.mockReset();
-  mocks.persist.mockReset();
+  mocks.handleDirective.mockReset();
+  mocks.applyModelSelection.mockReset();
   mocks.systemEvent.mockReset();
 });
 
@@ -35,24 +35,46 @@ describe("applyInlineDirectiveOverrides", () => {
     {
       rejectedRef: "ollama/Gemma4-26b-a4-it-gguf",
       reason: "disallowed" as const,
+      modelPolicyConfigPath: undefined,
+      modelPolicyRepairConfigPath: undefined,
       expected:
-        "Model override ollama/Gemma4-26b-a4-it-gguf is not allowed for this agent; reverted to openai/gpt-5.5. Add ollama/Gemma4-26b-a4-it-gguf to agents.defaults.models or pick an allowed model with /model list.",
+        "Model override ollama/Gemma4-26b-a4-it-gguf is not allowed for this agent by modelPolicy.allow; reverted to openai/gpt-5.5. Add ollama/Gemma4-26b-a4-it-gguf to modelPolicy.allow or pick an allowed model with /model list.",
     },
     {
       rejectedRef: undefined,
       reason: "disallowed" as const,
+      modelPolicyConfigPath: undefined,
+      modelPolicyRepairConfigPath: undefined,
       expected: "Model override not allowed for this agent; reverted to openai/gpt-5.5.",
     },
     {
       rejectedRef: "openai/gpt-4o",
       reason: "stale" as const,
+      modelPolicyConfigPath: undefined,
+      modelPolicyRepairConfigPath: undefined,
       expected:
         "Stored model override openai/gpt-4o is stale for this session; reverted to openai/gpt-5.5. Pick a model again with /model if you still want to override the default.",
     },
+    {
+      rejectedRef: "external/sensitive",
+      reason: "disallowed" as const,
+      modelPolicyConfigPath: "agents.defaults.models",
+      modelPolicyRepairConfigPath: "agents.defaults.modelPolicy.allow",
+      expected:
+        "Model override external/sensitive is not allowed for this agent by agents.defaults.models; reverted to openai/gpt-5.5. Add external/sensitive to agents.defaults.modelPolicy.allow or pick an allowed model with /model list.",
+    },
   ])(
     "emits the $reason reset event before rejecting a locked mixed directive",
-    async ({ rejectedRef, reason, expected }) => {
-      const directives = parseInlineDirectives("hello /model openai/gpt-5.4 --runtime openclaw");
+    async ({
+      rejectedRef,
+      reason,
+      modelPolicyConfigPath,
+      modelPolicyRepairConfigPath,
+      expected,
+    }) => {
+      const directives = parseInlineSessionDirectives(
+        "hello /model openai/gpt-5.4 --runtime openclaw",
+      );
       const typing = {
         onReplyStart: async () => {},
         startTypingLoop: async () => {},
@@ -81,6 +103,8 @@ describe("applyInlineDirectiveOverrides", () => {
         resetModelOverride: true,
         resetModelOverrideRef: rejectedRef,
         resetModelOverrideReason: reason,
+        modelPolicyConfigPath,
+        modelPolicyRepairConfigPath,
       });
 
       const result = await applyInlineDirectiveOverrides({
@@ -130,11 +154,11 @@ describe("applyInlineDirectiveOverrides", () => {
 
       expect(result).toEqual({
         kind: "reply",
-        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE },
+        reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
       });
       expect(typing.cleanup).toHaveBeenCalledOnce();
-      expect(mocks.fastLane).not.toHaveBeenCalled();
-      expect(mocks.persist).not.toHaveBeenCalled();
+      expect(mocks.handleDirective).not.toHaveBeenCalled();
+      expect(mocks.applyModelSelection).not.toHaveBeenCalled();
       expect(mocks.systemEvent).toHaveBeenCalledWith(expected, {
         sessionKey: "agent:main:main",
         contextKey: "model:reset:openai/gpt-5.5",
@@ -151,19 +175,12 @@ describe("applyInlineDirectiveOverrides", () => {
     },
   );
 
-  it("stops a mixed inline turn when final directive persistence loses", async () => {
-    const directives = parseInlineDirectives("hello /elevated full");
-    mocks.fastLane.mockResolvedValue({
-      directiveAck: { text: "Elevated FULL enabled." },
-      provider: "openai",
-      model: "gpt-5.5",
-      sessionChangesApplied: true,
-    });
-    mocks.persist.mockResolvedValue({
-      provider: "openai",
-      model: "gpt-5.5",
-      contextTokens: 8192,
-      sessionChangesApplied: false,
+  it("stops a mixed inline turn when its single directive transaction loses", async () => {
+    const directives = parseInlineSessionDirectives("hello /elevated full");
+    const errorText = "Session settings were not applied because the session changed. Retry.";
+    mocks.handleDirective.mockImplementation(async (params) => {
+      params.persistenceState.outcome = { kind: "rejected", errorText };
+      return { text: errorText };
     });
     const typing = {
       onReplyStart: async () => {},
@@ -224,27 +241,19 @@ describe("applyInlineDirectiveOverrides", () => {
 
     expect(result).toEqual({
       kind: "reply",
-      reply: { text: "Session settings were not applied because the session changed. Retry." },
+      reply: { text: errorText, isError: true },
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
+    expect(mocks.handleDirective).toHaveBeenCalledOnce();
   });
 
-  it("stops a mixed inline turn when final thinking validation fails", async () => {
+  it("stops a mixed inline turn when its transaction rejects unsupported thinking", async () => {
     const errorText =
       'Thinking level "ultra" is not supported for openai/gpt-5.6-luna. Use one of: off, low, medium, high, max.';
-    const directives = parseInlineDirectives("/think ultra please solve");
-    mocks.fastLane.mockResolvedValue({
-      directiveAck: { text: errorText },
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      sessionChangesApplied: true,
-    });
-    mocks.persist.mockResolvedValue({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      contextTokens: 372_000,
-      sessionChangesApplied: true,
-      errorText,
+    const directives = parseInlineSessionDirectives("/think ultra please solve");
+    mocks.handleDirective.mockImplementation(async (params) => {
+      params.persistenceState.outcome = { kind: "rejected", errorText };
+      return { text: errorText };
     });
     const typing = {
       onReplyStart: async () => {},
@@ -303,7 +312,8 @@ describe("applyInlineDirectiveOverrides", () => {
       typing,
     });
 
-    expect(result).toEqual({ kind: "reply", reply: { text: errorText } });
+    expect(result).toEqual({ kind: "reply", reply: { text: errorText, isError: true } });
     expect(typing.cleanup).toHaveBeenCalledOnce();
+    expect(mocks.handleDirective).toHaveBeenCalledOnce();
   });
 });

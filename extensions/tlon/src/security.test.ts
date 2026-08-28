@@ -17,6 +17,7 @@ import {
   isBotMentioned,
   extractMessageText,
   resolveAuthorizedMessageText,
+  resolveTlonGroupMentionDecision,
 } from "./monitor/utils.js";
 import { normalizeShip } from "./targets.js";
 
@@ -234,6 +235,57 @@ describe("Security: Bot Mention Detection", () => {
       expect(isBotMentioned("hello nimbus!", botShip, nickname)).toBe(true);
       expect(isBotMentioned("nimbus?", botShip, nickname)).toBe(true);
     });
+  });
+});
+
+describe("Security: Group Mention Policy", () => {
+  it("allows participated-thread follow-ups by default", () => {
+    expect(
+      resolveTlonGroupMentionDecision({
+        cfg: {},
+        accountId: "default",
+        wasMentioned: false,
+        botParticipatedInThread: true,
+      }),
+    ).toMatchObject({
+      shouldSkip: false,
+      matchedImplicitMentionKinds: ["bot_thread_participant"],
+    });
+  });
+
+  it("allows account policy to disable participated-thread follow-ups", () => {
+    const cfg = {
+      channels: {
+        tlon: {
+          implicitMentions: { threadParticipation: true },
+          accounts: {
+            work: { implicitMentions: { threadParticipation: false } },
+          },
+        },
+      },
+    } as never;
+    expect(
+      resolveTlonGroupMentionDecision({
+        cfg,
+        accountId: "work",
+        wasMentioned: false,
+        botParticipatedInThread: true,
+      }),
+    ).toMatchObject({ shouldSkip: true, matchedImplicitMentionKinds: [] });
+  });
+
+  it("keeps explicit mentions enabled when thread participation is disabled", () => {
+    const cfg = {
+      channels: { tlon: { implicitMentions: { threadParticipation: false } } },
+    } as never;
+    expect(
+      resolveTlonGroupMentionDecision({
+        cfg,
+        accountId: "default",
+        wasMentioned: true,
+        botParticipatedInThread: true,
+      }),
+    ).toMatchObject({ shouldSkip: false, effectiveWasMentioned: true });
   });
 });
 

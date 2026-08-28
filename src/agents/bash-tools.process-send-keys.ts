@@ -75,7 +75,7 @@ export async function handleProcessSendKeys(params: {
       {
         type: "text",
         text:
-          `Sent ${data.length} bytes to session ${params.sessionId}.` +
+          `Sent ${Buffer.byteLength(data, "utf8")} bytes to session ${params.sessionId}.` +
           (warnings.length ? `\nWarnings:\n- ${warnings.join("\n- ")}` : ""),
       },
     ],

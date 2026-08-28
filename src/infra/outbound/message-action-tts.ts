@@ -1,8 +1,8 @@
 // Message-action TTS helpers lazily apply session/config driven speech output
 // to send payloads without loading TTS providers for ordinary sends.
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
-import { resolveStorePath } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import { createLazyRuntimeModule } from "../../shared/lazy-runtime.js";
@@ -24,8 +24,10 @@ function resolveMessageActionSessionTtsAuto(params: {
     return undefined;
   }
   try {
-    const storePath = resolveStorePath(params.cfg.session?.store, { agentId: params.agentId });
-    return loadSessionEntry({
+    const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
+      agentId: params.agentId,
+    });
+    return loadSessionEntryReadOnly({
       agentId: params.agentId,
       sessionKey,
       storePath,
@@ -55,7 +57,9 @@ export async function maybeApplyTtsToMessageActionSendPayload(params: {
     sessionKey: params.sessionKey,
     agentId: params.agentId,
   });
+  const explicitTts = getReplyPayloadMetadata(params.payload)?.ttsExplicit === true;
   if (
+    !explicitTts &&
     !shouldAttemptTtsPayload({
       cfg: params.cfg,
       ttsAuto,

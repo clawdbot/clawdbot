@@ -1,13 +1,14 @@
-// Web search runtime tests cover provider resolution and search execution.
 import { mkdtempSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
+// Web search runtime tests cover provider resolution and search execution.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { getRuntimeAuthProfileStoreCredentialsRevision } from "../agents/auth-profiles/runtime-snapshots.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
+  getRuntimeAuthProfileStoreCredentialsRevision,
   replaceRuntimeAuthProfileStoreSnapshots,
-} from "../agents/auth-profiles/store.js";
+} from "../agents/auth-profiles/runtime-snapshots.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
@@ -140,12 +141,7 @@ function createOAuthAuthProfileStore(params: {
   };
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function mockCallParam(mock: ReturnType<typeof vi.fn>, index = 0): Record<string, unknown> {
   return requireRecord(mock.mock.calls[index]?.[0]);
@@ -165,20 +161,24 @@ function createDuckDuckGoSearchProvider(
 }
 
 describe("web search runtime", () => {
+  let hasUsableWebSearchProvider: typeof import("./runtime.js").hasUsableWebSearchProvider;
   let runWebSearch: typeof import("./runtime.js").runWebSearch;
   let activateSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").activateSecretsRuntimeSnapshot;
   let clearSecretsRuntimeSnapshot: typeof import("../secrets/runtime.js").clearSecretsRuntimeSnapshot;
+  let clearRuntimeConfigSnapshot: typeof import("../config/config.js").clearRuntimeConfigSnapshot;
   let setRuntimeConfigSnapshot: typeof import("../config/config.js").setRuntimeConfigSnapshot;
   const tempDirs: string[] = [];
 
   beforeAll(async () => {
-    ({ runWebSearch } = await import("./runtime.js"));
+    ({ hasUsableWebSearchProvider, runWebSearch } = await import("./runtime.js"));
     ({ activateSecretsRuntimeSnapshot, clearSecretsRuntimeSnapshot } =
       await import("../secrets/runtime.js"));
-    ({ setRuntimeConfigSnapshot } = await import("../config/config.js"));
+    ({ clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } =
+      await import("../config/config.js"));
   });
 
   beforeEach(() => {
+    clearRuntimeConfigSnapshot();
     resolveManifestContractOwnerPluginIdMock.mockReset();
     resolvePluginWebSearchProvidersMock.mockReset();
     resolveRuntimeWebSearchProvidersMock.mockReset();
@@ -188,6 +188,7 @@ describe("web search runtime", () => {
   });
 
   afterEach(() => {
+    clearRuntimeConfigSnapshot();
     clearSecretsRuntimeSnapshot();
     clearRuntimeAuthProfileStoreSnapshots();
     for (const tempDir of tempDirs.splice(0)) {
@@ -220,6 +221,23 @@ describe("web search runtime", () => {
       provider: "custom",
       result: { query: "hello", ok: true },
     });
+  });
+
+  it("accepts the prepared provider selection without rediscovering providers", () => {
+    expect(
+      hasUsableWebSearchProvider({
+        config: {},
+        runtimeWebSearch: {
+          providerSource: "auto-detect",
+          selectedProvider: "brave",
+          selectedProviderKeySource: "config",
+          diagnostics: [],
+        },
+        preferRuntimeProviders: true,
+      }),
+    ).toBe(true);
+    expect(resolveRuntimeWebSearchProvidersMock).not.toHaveBeenCalled();
+    expect(resolvePluginWebSearchProvidersMock).not.toHaveBeenCalled();
   });
 
   it("passes the run abort signal to provider execution", async () => {
@@ -436,7 +454,7 @@ describe("web search runtime", () => {
       runWebSearch({
         config: {
           agents: {
-            list: [{ id: "main", agentDir }],
+            list: [{ id: "main", default: true, agentDir }],
           },
         },
         args: { query: "oauth-backed web search" },
@@ -474,18 +492,27 @@ describe("web search runtime", () => {
       provider,
       createDuckDuckGoSearchProvider(),
     ]);
+    const config = {
+      agents: {
+        list: [
+          { id: "main", default: true, agentDir: defaultAgentDir },
+          { id: "side", agentDir: activeAgentDir },
+        ],
+      },
+    } satisfies OpenClawConfig;
+
+    expect(
+      hasUsableWebSearchProvider({
+        agentDir: activeAgentDir,
+        config,
+        preferRuntimeProviders: true,
+      }),
+    ).toBe(true);
 
     await expect(
       runWebSearch({
         agentDir: activeAgentDir,
-        config: {
-          agents: {
-            list: [
-              { id: "main", default: true, agentDir: defaultAgentDir },
-              { id: "side", agentDir: activeAgentDir },
-            ],
-          },
-        },
+        config,
         args: { query: "active-agent oauth-backed web search" },
       }),
     ).resolves.toEqual({

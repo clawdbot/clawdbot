@@ -6,8 +6,8 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 
 const SCRIPT_PATHS = [
-  "scripts/test-cli-startup-bench-budget.mjs",
-  "scripts/test-update-cli-startup-bench.mjs",
+  "scripts/test-cli-startup-bench-budget.mts",
+  "scripts/test-update-cli-startup-bench.mts",
 ];
 
 describe("CLI startup benchmark script spawners", () => {
@@ -22,16 +22,134 @@ describe("CLI startup benchmark script spawners", () => {
 
   it("builds the source CLI before generating a startup budget report", () => {
     const source = fs.readFileSync(
-      path.resolve(process.cwd(), "scripts/test-cli-startup-bench-budget.mjs"),
+      path.resolve(process.cwd(), "scripts/test-cli-startup-bench-budget.mts"),
       "utf8",
     );
 
-    expect(source).toContain(
-      'spawnSync(process.execPath, ["scripts/ensure-cli-startup-build.mjs"]',
+    expect(source).toMatch(
+      /spawnSync\(\s*process\.execPath,\s*\[\s*"--import",\s*"tsx",\s*"scripts\/ensure-cli-startup-build\.mts"\s*\]/u,
     );
-    expect(source.indexOf("scripts/ensure-cli-startup-build.mjs")).toBeLessThan(
+    expect(source.indexOf("scripts/ensure-cli-startup-build.mts")).toBeLessThan(
       source.indexOf("scripts/bench-cli-startup.ts"),
     );
+  });
+
+  it("reuses warm state for gateway health while isolating fresh-state samples", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-state-scope-test-"));
+    try {
+      const fixturePath = path.join(tmpDir, "record-home.mjs");
+      const homeLogPath = path.join(tmpDir, "homes.log");
+      fs.writeFileSync(
+        fixturePath,
+        [
+          'import { appendFileSync } from "node:fs";',
+          "appendFileSync(process.env.OPENCLAW_BENCH_HOME_LOG, `${process.env.HOME}\\n`);",
+          "console.log('{\"ok\":true}');",
+          "",
+        ].join("\n"),
+      );
+
+      const runCase = (caseId: string) => {
+        fs.rmSync(homeLogPath, { force: true });
+        const reportPath = path.join(tmpDir, `${caseId}.json`);
+        execFileSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            fixturePath,
+            "--case",
+            caseId,
+            "--runs",
+            "2",
+            "--warmup",
+            "1",
+            "--output",
+            reportPath,
+          ],
+          {
+            cwd: process.cwd(),
+            env: {
+              ...process.env,
+              OPENCLAW_BENCH_HOME_LOG: homeLogPath,
+            },
+            stdio: "pipe",
+          },
+        );
+        return {
+          homes: fs.readFileSync(homeLogPath, "utf8").trim().split("\n"),
+          report: JSON.parse(fs.readFileSync(reportPath, "utf8")),
+        };
+      };
+
+      const warmed = runCase("gatewayHealthJsonWarmState");
+      const warmedHomes = warmed.homes;
+      expect(warmedHomes).toHaveLength(3);
+      expect(new Set(warmedHomes).size).toBe(1);
+      expect(warmedHomes.every((home) => !fs.existsSync(home))).toBe(true);
+      const warmedCase = warmed.report.primary.cases[0];
+      expect(warmedCase.warmupSamples).toHaveLength(1);
+      expect(warmedCase.samples).toHaveLength(2);
+      for (const sample of [...warmedCase.warmupSamples, ...warmedCase.samples]) {
+        expect(new Date(sample.startedAt).toISOString()).toBe(sample.startedAt);
+        expect(new Date(sample.endedAt).toISOString()).toBe(sample.endedAt);
+        expect(Date.parse(sample.endedAt)).toBeGreaterThanOrEqual(Date.parse(sample.startedAt));
+      }
+
+      for (const caseId of ["gatewayHealthJson", "gatewayHealthJsonFreshState"]) {
+        const sampleHomes = runCase(caseId).homes;
+        expect(sampleHomes).toHaveLength(3);
+        expect(new Set(sampleHomes).size).toBe(3);
+        expect(sampleHomes.every((home) => !fs.existsSync(home))).toBe(true);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
+  });
+
+  it("requires authenticated gateway health probes to exit successfully", () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bench-connected-test-"));
+    try {
+      const fixturePath = path.join(tmpDir, "transport-error.mjs");
+      fs.writeFileSync(
+        fixturePath,
+        [
+          'console.log(\'{"ok":false,"gateway_transport_error":"closed"}\');',
+          "process.exitCode = 1;",
+          "",
+        ].join("\n"),
+      );
+
+      const runCase = (caseId: string) =>
+        spawnSync(
+          process.execPath,
+          [
+            "--import",
+            "tsx",
+            "scripts/bench-cli-startup.ts",
+            "--entry",
+            fixturePath,
+            "--case",
+            caseId,
+            "--runs",
+            "1",
+            "--warmup",
+            "0",
+          ],
+          { cwd: process.cwd(), encoding: "utf8" },
+        );
+
+      expect(runCase("gatewayHealthJson").status).toBe(0);
+      for (const caseId of ["gatewayHealthJsonWarmState", "gatewayHealthJsonFreshState"]) {
+        const result = runCase(caseId);
+        expect(result.status).toBe(1);
+        expect(result.stderr).toContain(`${caseId} sample 1: exited with code 1`);
+      }
+    } finally {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   });
 
   it("does not require unrelated fixture cases for a narrowed preset", () => {
@@ -40,6 +158,7 @@ describe("CLI startup benchmark script spawners", () => {
       const baselinePath = path.join(tmpDir, "baseline.json");
       const reportPath = path.join(tmpDir, "current.json");
       const makeCase = (id: string, name: string) => ({
+        contract: null,
         id,
         name,
         samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: 10, exitCode: 0, signal: null }],
@@ -65,7 +184,9 @@ describe("CLI startup benchmark script spawners", () => {
         execFileSync(
           process.execPath,
           [
-            "scripts/test-cli-startup-bench-budget.mjs",
+            "--import",
+            "tsx",
+            "scripts/test-cli-startup-bench-budget.mts",
             "--baseline",
             baselinePath,
             "--report",
@@ -81,7 +202,9 @@ describe("CLI startup benchmark script spawners", () => {
         execFileSync(
           process.execPath,
           [
-            "scripts/test-cli-startup-bench-budget.mjs",
+            "--import",
+            "tsx",
+            "scripts/test-cli-startup-bench-budget.mts",
             "--baseline",
             baselinePath,
             "--report",
@@ -133,7 +256,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -181,7 +306,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -236,7 +363,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -302,7 +431,9 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -331,7 +462,9 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -350,7 +483,9 @@ describe("CLI startup benchmark script spawners", () => {
         [
           "--import",
           archShimPath,
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -373,18 +508,18 @@ describe("CLI startup benchmark script spawners", () => {
       const baselinePath = path.join(tmpDir, "baseline.json");
       const reportPath = path.join(tmpDir, "current.json");
       const timedOutCase = {
-        id: "version",
-        name: "--version",
         contract: {
           firstOutputBudgetMs: 1000,
           exitBudgetMs: 2000,
         },
+        id: "version",
+        name: "--version",
         samples: [
           {
             ms: 10,
             firstOutputMs: 5,
             maxRssMb: 10,
-            exitCode: 0,
+            exitCode: null,
             signal: null,
             timedOut: true,
           },
@@ -401,7 +536,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -427,6 +564,7 @@ describe("CLI startup benchmark script spawners", () => {
       const baselinePath = path.join(tmpDir, "baseline.json");
       const reportPath = path.join(tmpDir, "current.json");
       const missingRssCase = {
+        contract: null,
         id: "version",
         name: "--version",
         samples: [{ ms: 10, firstOutputMs: 5, maxRssMb: null, exitCode: 0, signal: null }],
@@ -442,7 +580,9 @@ describe("CLI startup benchmark script spawners", () => {
       const result = spawnSync(
         process.execPath,
         [
-          "scripts/test-cli-startup-bench-budget.mjs",
+          "--import",
+          "tsx",
+          "scripts/test-cli-startup-bench-budget.mts",
           "--baseline",
           baselinePath,
           "--report",
@@ -456,20 +596,25 @@ describe("CLI startup benchmark script spawners", () => {
       expect(result.stderr).toContain(
         "[test-cli-startup-bench-budget] --version did not report max RSS.",
       );
+      expect(result.stderr).not.toContain("current report has no cases");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
   });
 
   it("rejects malformed startup budget env vars before reading reports", () => {
-    const result = spawnSync(process.execPath, ["scripts/test-cli-startup-bench-budget.mjs"], {
-      cwd: process.cwd(),
-      encoding: "utf8",
-      env: {
-        ...process.env,
-        OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20pct",
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "tsx", "scripts/test-cli-startup-bench-budget.mts"],
+      {
+        cwd: process.cwd(),
+        encoding: "utf8",
+        env: {
+          ...process.env,
+          OPENCLAW_STARTUP_BENCH_MAX_RSS_REGRESSION_PCT: "20pct",
+        },
       },
-    });
+    );
 
     expect(result.status).toBe(1);
     expect(result.stdout).toBe("");
@@ -482,7 +627,13 @@ describe("CLI startup benchmark script spawners", () => {
   it("rejects malformed startup budget CLI values before reading reports", () => {
     const malformed = spawnSync(
       process.execPath,
-      ["scripts/test-cli-startup-bench-budget.mjs", "--max-duration-regression-pct", "1e2ms"],
+      [
+        "--import",
+        "tsx",
+        "scripts/test-cli-startup-bench-budget.mts",
+        "--max-duration-regression-pct",
+        "1e2ms",
+      ],
       { cwd: process.cwd(), encoding: "utf8" },
     );
     expect(malformed.status).toBe(1);
@@ -494,7 +645,12 @@ describe("CLI startup benchmark script spawners", () => {
 
     const missing = spawnSync(
       process.execPath,
-      ["scripts/test-cli-startup-bench-budget.mjs", "--max-first-output-regression-pct"],
+      [
+        "--import",
+        "tsx",
+        "scripts/test-cli-startup-bench-budget.mts",
+        "--max-first-output-regression-pct",
+      ],
       { cwd: process.cwd(), encoding: "utf8" },
     );
     expect(missing.status).toBe(1);

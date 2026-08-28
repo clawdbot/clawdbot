@@ -5,12 +5,12 @@ import {
   registerSingleProviderPlugin,
   resolveProviderPluginChoice,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { clearLiveCatalogCacheForTests } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
-import {
-  clearNvidiaFeaturedModelCacheForTests,
-  NVIDIA_FEATURED_MODELS_URL,
-} from "./provider-catalog.js";
+
+const NVIDIA_FEATURED_MODELS_URL =
+  "https://assets.ngc.nvidia.com/products/api-catalog/featured-models.json";
 
 const ssrfRuntimeMocks = vi.hoisted(() => ({
   fetchWithSsrFGuard: vi.fn(),
@@ -39,17 +39,28 @@ async function registerNvidiaProvider() {
 }
 
 afterEach(() => {
-  clearNvidiaFeaturedModelCacheForTests();
+  clearLiveCatalogCacheForTests();
   ssrfRuntimeMocks.fetchWithSsrFGuard.mockReset();
   ssrfRuntimeMocks.ssrfPolicyFromHttpBaseUrlAllowedHostname.mockClear();
 });
 
 function mockFeaturedCatalogResponse(payload: unknown, status = 200) {
-  ssrfRuntimeMocks.fetchWithSsrFGuard.mockResolvedValueOnce({
-    response: Response.json(payload, { status }),
-    finalUrl: NVIDIA_FEATURED_MODELS_URL,
+  const featured =
+    (payload as { "featured-models"?: Array<{ model: string }> })["featured-models"] ?? [];
+  ssrfRuntimeMocks.fetchWithSsrFGuard.mockImplementation(async ({ url }: { url: string }) => ({
+    response: Response.json(
+      url === NVIDIA_FEATURED_MODELS_URL
+        ? payload
+        : {
+            data: featured.map(({ model }) => ({
+              id: model.includes("/") ? model : `nvidia/${model}`,
+            })),
+          },
+      { status },
+    ),
+    finalUrl: url,
     release: vi.fn(),
-  });
+  }));
 }
 
 function registerNvidiaPluginApi() {
@@ -208,18 +219,18 @@ describe("nvidia provider hooks", () => {
 
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3.5-lightning-30b-a3b",
       "nvidia/nemotron-3-super-120b-a12b",
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",
       "minimaxai/minimax-m3",
       "deepseek-ai/deepseek-v4-pro",
-      "qwen/qwen3.5-397b-a17b",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
     expect(ssrfRuntimeMocks.fetchWithSsrFGuard).not.toHaveBeenCalled();
   });
 
-  it("surfaces the bundled NVIDIA models when authenticated featured catalog fetch fails", async () => {
+  it("surfaces the bundled NVIDIA models when authenticated live discovery fails", async () => {
     mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
     const provider = await registerNvidiaProvider();
 
@@ -227,18 +238,18 @@ describe("nvidia provider hooks", () => {
 
     expect(entries?.map((entry) => entry.id)).toEqual([
       "nvidia/nemotron-3-ultra-550b-a55b",
+      "nvidia/nemotron-3.5-lightning-30b-a3b",
       "nvidia/nemotron-3-super-120b-a12b",
       "z-ai/glm-5.2",
       "moonshotai/kimi-k2.6",
       "minimaxai/minimax-m3",
       "deepseek-ai/deepseek-v4-pro",
-      "qwen/qwen3.5-397b-a17b",
     ]);
     expect(entries?.every((entry) => entry.provider === "nvidia")).toBe(true);
-    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(1);
+    expect(ssrfRuntimeMocks.fetchWithSsrFGuard).toHaveBeenCalledTimes(2);
   });
 
-  it("surfaces live featured NVIDIA models via augmentModelCatalog", async () => {
+  it("surfaces republished NVIDIA featured models via augmentModelCatalog", async () => {
     mockFeaturedCatalogResponse({
       "featured-models": [
         {
@@ -247,13 +258,22 @@ describe("nvidia provider hooks", () => {
           context: 196608,
           "max-output": 8192,
         },
+        {
+          model: "qwen/qwen3.5-397b-a17b",
+          "model-name": "Qwen3.5 397B A17B",
+          context: 262144,
+          "max-output": 32768,
+        },
       ],
     });
     const provider = await registerNvidiaProvider();
 
     const entries = await provider.augmentModelCatalog?.(buildAugmentCatalogContext("nvapi-test"));
 
-    expect(entries?.map((entry) => entry.id)).toEqual(["minimaxai/minimax-m3"]);
+    expect(entries?.map((entry) => entry.id)).toEqual([
+      "minimaxai/minimax-m3",
+      "qwen/qwen3.5-397b-a17b",
+    ]);
   });
 
   it("opts into literal provider-prefix preservation", async () => {
@@ -285,6 +305,12 @@ describe("nvidia provider hooks", () => {
           context: 196608,
           "max-output": 8192,
         },
+        {
+          model: "qwen/qwen3.5-397b-a17b",
+          "model-name": "Qwen3.5 397B A17B",
+          context: 262144,
+          "max-output": 32768,
+        },
       ],
     });
     const { registeredModelCatalogProviders } = registerNvidiaPluginApi();
@@ -296,12 +322,12 @@ describe("nvidia provider hooks", () => {
     const staticRows = await catalogProvider?.staticCatalog?.(buildCatalogContext());
     expect(staticRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
       "static:nvidia/nvidia/nemotron-3-ultra-550b-a55b",
+      "static:nvidia/nvidia/nemotron-3.5-lightning-30b-a3b",
       "static:nvidia/nvidia/nemotron-3-super-120b-a12b",
       "static:nvidia/z-ai/glm-5.2",
       "static:nvidia/moonshotai/kimi-k2.6",
       "static:nvidia/minimaxai/minimax-m3",
       "static:nvidia/deepseek-ai/deepseek-v4-pro",
-      "static:nvidia/qwen/qwen3.5-397b-a17b",
     ]);
 
     await expect(catalogProvider?.liveCatalog?.(buildCatalogContext())).resolves.toEqual([]);
@@ -309,10 +335,11 @@ describe("nvidia provider hooks", () => {
     const liveRows = await catalogProvider?.liveCatalog?.(buildCatalogContext("nvapi-test"));
     expect(liveRows?.map((entry) => `${entry.source}:${entry.provider}/${entry.model}`)).toEqual([
       "live:nvidia/minimaxai/minimax-m3",
+      "live:nvidia/qwen/qwen3.5-397b-a17b",
     ]);
   });
 
-  it("keeps static rows out of the live catalog when the featured catalog is unavailable", async () => {
+  it("keeps static rows out of the live catalog when discovery is unavailable", async () => {
     mockFeaturedCatalogResponse({ error: "unavailable" }, 503);
     const { registeredModelCatalogProviders } = registerNvidiaPluginApi();
     const catalogProvider = registeredModelCatalogProviders[0];

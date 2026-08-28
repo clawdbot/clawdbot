@@ -1,12 +1,16 @@
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { FileLockOptions } from "../../infra/file-lock.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 
 const fetchWithSsrFGuardMock = vi.hoisted(() => vi.fn());
 const spawnSyncMock = vi.hoisted(() => vi.fn());
 const extractArchiveMock = vi.hoisted(() => vi.fn());
+const withFileLockMock = vi.hoisted(() =>
+  vi.fn(async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => fn()),
+);
 
 vi.mock("../../infra/net/fetch-guard.js", () => ({
   fetchWithSsrFGuard: fetchWithSsrFGuardMock,
@@ -21,6 +25,10 @@ vi.mock("../../infra/archive.js", () => ({
   extractArchive: extractArchiveMock,
 }));
 
+vi.mock("../../infra/file-lock.js", () => ({
+  withFileLock: withFileLockMock,
+}));
+
 let originalAgentDir: string | undefined;
 let tempAgentDir: string | undefined;
 
@@ -30,6 +38,11 @@ beforeEach(() => {
   setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
   fetchWithSsrFGuardMock.mockReset();
   extractArchiveMock.mockReset();
+  withFileLockMock
+    .mockReset()
+    .mockImplementation(
+      async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => fn(),
+    );
   spawnSyncMock.mockReturnValue({
     error: new Error("ENOENT"),
     status: null,
@@ -41,6 +54,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.clearAllMocks();
   vi.resetModules();
+  vi.unstubAllEnvs();
   if (originalAgentDir === undefined) {
     deleteTestEnvValue("OPENCLAW_AGENT_DIR");
   } else {
@@ -53,6 +67,88 @@ afterEach(() => {
 });
 
 describe("ensureTool", () => {
+  it("single-flights concurrent installs of the same tool", async () => {
+    const { ensureTool } = await import("./tools-manager.js");
+    const releaseCheckRelease = vi.fn(async () => {});
+    const downloadRelease = vi.fn(async () => {});
+    let resolveReleaseCheck!: (value: {
+      response: Response;
+      release: typeof releaseCheckRelease;
+      finalUrl: string;
+    }) => void;
+    const releaseCheck = new Promise<Parameters<typeof resolveReleaseCheck>[0]>((resolve) => {
+      resolveReleaseCheck = resolve;
+    });
+    extractArchiveMock.mockImplementation(async (params: { destDir: string }) => {
+      writeFileSync(join(params.destDir, "fd"), "binary");
+    });
+    fetchWithSsrFGuardMock.mockReturnValueOnce(releaseCheck).mockResolvedValueOnce({
+      response: new Response("archive-bytes", { status: 200 }),
+      release: downloadRelease,
+      finalUrl: "https://github.com/sharkdp/fd/releases/download/v10.3.0/archive.tar.gz",
+    });
+    withFileLockMock.mockImplementationOnce(
+      async (lockPath: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {
+        expect(existsSync(dirname(lockPath))).toBe(true);
+        return fn();
+      },
+    );
+
+    const installs = [ensureTool("fd", true), ensureTool("fd", true)];
+
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledOnce();
+    resolveReleaseCheck({
+      response: new Response(JSON.stringify({ tag_name: "v10.3.0" }), { status: 200 }),
+      release: releaseCheckRelease,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+    await expect(Promise.all(installs)).resolves.toEqual([
+      join(tempAgentDir!, "bin", "fd"),
+      join(tempAgentDir!, "bin", "fd"),
+    ]);
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledTimes(2);
+    expect(extractArchiveMock).toHaveBeenCalledOnce();
+    expect(withFileLockMock).toHaveBeenCalledOnce();
+    const lockOptions = withFileLockMock.mock.calls[0]?.[1];
+    if (!lockOptions) {
+      throw new Error("expected tool installation lock options");
+    }
+    const minimumLockWaitMs = Array.from({ length: lockOptions.retries.retries }, (_, attempt) =>
+      Math.min(
+        lockOptions.retries.maxTimeout,
+        Math.max(
+          lockOptions.retries.minTimeout,
+          lockOptions.retries.minTimeout * lockOptions.retries.factor ** attempt,
+        ),
+      ),
+    ).reduce((total, delay) => total + delay, 0);
+    expect(minimumLockWaitMs).toBeGreaterThan(lockOptions.stale);
+  });
+
+  it("reuses an installation published while waiting for the file lock", async () => {
+    const binaryPath = join(tempAgentDir!, "bin", "fd");
+    withFileLockMock.mockImplementationOnce(
+      async (_path: string, _options: FileLockOptions, fn: () => Promise<unknown>) => {
+        mkdirSync(join(tempAgentDir!, "bin"), { recursive: true });
+        writeFileSync(binaryPath, "binary");
+        return fn();
+      },
+    );
+    const { ensureTool } = await import("./tools-manager.js");
+
+    await expect(ensureTool("fd", true)).resolves.toBe(binaryPath);
+
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
+  it("treats trimmed on as the canonical offline opt-in", async () => {
+    vi.stubEnv("OPENCLAW_OFFLINE", " ON ");
+    const { ensureTool } = await import("./tools-manager.js");
+
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
+  });
+
   it("cancels release-check error bodies before releasing guarded fetches", async () => {
     const { ensureTool } = await import("./tools-manager.js");
     const release = vi.fn(async () => {});
@@ -126,7 +222,7 @@ describe("ensureTool", () => {
     expect(extractArchiveMock).toHaveBeenCalledWith(
       expect.objectContaining({
         archivePath: expect.stringContaining(".zip"),
-        destDir: expect.stringContaining("extract_tmp_rg_"),
+        destDir: expect.stringMatching(/install_tmp_rg_.+[\\/]extract$/),
         timeoutMs: 60_000,
         limits: {
           maxArchiveBytes: 100 * 1024 * 1024,
@@ -150,7 +246,7 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await expect(
       testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
@@ -179,7 +275,7 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await expect(
       testing.downloadFile("https://example.com/archive.tar.gz", destination, 10),
@@ -201,12 +297,46 @@ describe("ensureTool", () => {
       finalUrl: "https://example.com/archive.tar.gz",
     });
     const destination = join(tempAgentDir!, "archive.tar.gz");
-    const { testing } = await import("./tools-manager.js");
+    const { testing } = await import("./tools-manager.test-support.js");
 
     await testing.downloadFile("https://example.com/archive.tar.gz", destination, body.byteLength);
 
     expect(release).toHaveBeenCalledOnce();
     expect(readFileSync(destination)).toEqual(Buffer.from(body));
+  });
+
+  it("bounds GitHub release metadata reads", async () => {
+    let reads = 0;
+    let canceled = false;
+    const response = new Response(
+      new ReadableStream<Uint8Array>({
+        pull(controller) {
+          if (reads >= 20) {
+            controller.close();
+            return;
+          }
+          reads += 1;
+          controller.enqueue(new Uint8Array(512 * 1024));
+        },
+        cancel() {
+          canceled = true;
+        },
+      }),
+      { status: 200, headers: { "content-type": "application/json" } },
+    );
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response,
+      release,
+      finalUrl: "https://api.github.com/repos/sharkdp/fd/releases/latest",
+    });
+
+    const { ensureTool } = await import("./tools-manager.js");
+    await expect(ensureTool("fd", true)).resolves.toBeUndefined();
+
+    expect(reads).toBeLessThan(20);
+    expect(canceled).toBe(true);
+    expect(release).toHaveBeenCalledOnce();
   });
 });
 
@@ -243,6 +373,11 @@ describe("ensureTool exit-status handling", () => {
       stdout: Buffer.alloc(0),
     });
     await expect(ensureTool("fd", true)).resolves.toBe("fd");
+    expect(spawnSyncMock).toHaveBeenCalledWith("fd", ["--version"], {
+      killSignal: "SIGKILL",
+      stdio: "pipe",
+      timeout: 5_000,
+    });
     expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
   });
 });

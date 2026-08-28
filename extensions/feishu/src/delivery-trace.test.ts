@@ -1,7 +1,7 @@
 // Feishu delivery trace goldens: replayable wire-level lifecycle recordings.
 //
-// IN events are fed straight into the reply-dispatcher wiring (the options
-// createReplyDispatcherWithTyping receives plus replyOptions callbacks); OUT
+// IN events are fed straight into the reply-dispatcher plan (dispatcher,
+// delivery, and replyOptions callbacks); OUT
 // events are recorded at the mocked Lark SDK client and the mocked CardKit
 // HTTP fetch, so streaming-card entity calls are captured at the wire seam.
 // Refresh goldens with OPENCLAW_TRACE_UPDATE=1 (see delivery-trace harness docs).
@@ -14,9 +14,8 @@ import {
   type WireRecorder,
 } from "openclaw/plugin-sdk/channel-contract-testing";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
-import { afterAll, afterEach, beforeAll, describe, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FeishuConfigSchema } from "./config-schema.js";
-import type { ReplyPayload } from "./reply-dispatcher-runtime-api.js";
 import type { ResolvedFeishuAccount } from "./types.js";
 
 type RecordedWireCall = Parameters<WireRecorder["recordWireCall"]>[0];
@@ -25,23 +24,17 @@ type CreateFeishuReplyDispatcher =
 type StreamingStartBackoffMap =
   typeof import("./reply-dispatcher-state.js").streamingStartBackoffUntilByAccount;
 
-type FeishuDispatcherOptions = {
-  onReplyStart?: () => Promise<void> | void;
-  onIdle?: () => Promise<void> | void;
-  onCleanup?: () => void;
-  deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<void> | void;
-};
-
 type FeishuTraceState = {
   recordWireCall: (call: RecordedWireCall) => void;
   account: ResolvedFeishuAccount | null;
   larkClient: unknown;
   cardKitFetch: typeof fetch | null;
-  dispatcherOptions: FeishuDispatcherOptions | null;
   messageCount: number;
   reactionCount: number;
   cardCount: number;
   setupCount: number;
+  loadedMedia: { buffer: Buffer; fileName: string; contentType: string } | null;
+  omitNextMessageReceipt: boolean;
   wireFaults: Array<{ fault: "rate-limit"; retryAfterMs: number }>;
 };
 
@@ -51,11 +44,12 @@ const traceState = vi.hoisted(
     account: null,
     larkClient: null,
     cardKitFetch: null,
-    dispatcherOptions: null,
     messageCount: 0,
     reactionCount: 0,
     cardCount: 0,
     setupCount: 0,
+    loadedMedia: null,
+    omitNextMessageReceipt: false,
     wireFaults: [],
   }),
 );
@@ -97,6 +91,14 @@ vi.mock("./runtime.js", async () => {
   const textChunking = await import("openclaw/plugin-sdk/text-chunking");
   const markdownTables = await import("openclaw/plugin-sdk/markdown-table-runtime");
   const runtime = {
+    media: {
+      loadWebMedia: async () => {
+        if (!traceState.loadedMedia) {
+          throw new Error("trace media not initialized");
+        }
+        return traceState.loadedMedia;
+      },
+    },
     channel: {
       text: {
         resolveTextChunkLimit: replyChunking.resolveTextChunkLimit,
@@ -105,13 +107,6 @@ vi.mock("./runtime.js", async () => {
         chunkMarkdownTextWithMode: replyChunking.chunkMarkdownTextWithMode,
         convertMarkdownTables: textChunking.convertMarkdownTables,
         resolveMarkdownTableMode: markdownTables.resolveMarkdownTableMode,
-      },
-      reply: {
-        createReplyDispatcherWithTyping: (options: FeishuDispatcherOptions) => {
-          traceState.dispatcherOptions = options;
-          return { dispatcher: {}, replyOptions: {}, markDispatchIdle: () => {} };
-        },
-        resolveHumanDelayConfig: () => undefined,
       },
     },
     logging: { shouldLogVerbose: () => false },
@@ -142,6 +137,7 @@ vi.mock("./streaming-card.js", async (importOriginal) => {
 });
 
 let createFeishuReplyDispatcher: CreateFeishuReplyDispatcher;
+let feishuOutbound: typeof import("./outbound.js").feishuOutbound;
 let streamingStartBackoffUntilByAccount: StreamingStartBackoffMap;
 
 beforeAll(async () => {
@@ -149,6 +145,7 @@ beforeAll(async () => {
   // Reload only after this file's hoisted mocks are registered.
   vi.resetModules();
   ({ createFeishuReplyDispatcher } = await import("./reply-dispatcher.js"));
+  ({ feishuOutbound } = await import("./outbound.js"));
   ({ streamingStartBackoffUntilByAccount } = await import("./reply-dispatcher-state.js"));
 });
 
@@ -164,7 +161,8 @@ afterEach(() => {
   traceState.account = null;
   traceState.larkClient = null;
   traceState.cardKitFetch = null;
-  traceState.dispatcherOptions = null;
+  traceState.omitNextMessageReceipt = false;
+  traceState.loadedMedia = null;
   traceState.wireFaults = [];
   streamingStartBackoffUntilByAccount.clear();
 });
@@ -189,19 +187,30 @@ function nextMessageId(): string {
 }
 
 function createRecordingLarkClient() {
-  const messageSendResult = (messageId: string) => ({
-    code: 0,
-    msg: "ok",
-    data: { message_id: messageId },
-  });
+  const messageSendResult = (messageId: string) => {
+    const data = traceState.omitNextMessageReceipt ? {} : { message_id: messageId };
+    traceState.omitNextMessageReceipt = false;
+    return { code: 0, msg: "ok", data };
+  };
   return {
     im: {
+      file: {
+        create: (args: { data: { file_name: string; file_type: string } }) => {
+          traceState.recordWireCall({
+            method: "im.file.create",
+            payload: { file_name: args.data.file_name, file_type: args.data.file_type },
+            result: { file_key: "file-trace" },
+          });
+          return Promise.resolve({ file_key: "file-trace" });
+        },
+      },
       message: {
         create: (args: {
           params: { receive_id_type: string };
           data: { receive_id: string; msg_type: string; content: string; root_id?: string };
         }) => {
           const messageId = nextMessageId();
+          const response = messageSendResult(messageId);
           traceState.recordWireCall({
             method: "im.message.create",
             target: args.data.receive_id,
@@ -211,15 +220,16 @@ function createRecordingLarkClient() {
               content: parseJsonRecord(args.data.content),
               ...(args.data.root_id ? { root_id: args.data.root_id } : {}),
             },
-            result: { message_id: messageId },
+            result: response.data,
           });
-          return Promise.resolve(messageSendResult(messageId));
+          return Promise.resolve(response);
         },
         reply: (args: {
           path: { message_id: string };
           data: { msg_type: string; content: string; reply_in_thread?: boolean };
         }) => {
           const messageId = nextMessageId();
+          const response = messageSendResult(messageId);
           traceState.recordWireCall({
             method: "im.message.reply",
             target: args.path.message_id,
@@ -228,9 +238,9 @@ function createRecordingLarkClient() {
               content: parseJsonRecord(args.data.content),
               ...(args.data.reply_in_thread ? { reply_in_thread: true } : {}),
             },
-            result: { message_id: messageId },
+            result: response.data,
           });
-          return Promise.resolve(messageSendResult(messageId));
+          return Promise.resolve(response);
         },
         delete: (args: { path: { message_id: string } }) => {
           traceState.recordWireCall({
@@ -373,10 +383,7 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
     sendTarget: "oc-trace-chat",
     replyToMessageId: "om-inbound",
   });
-  const options = traceState.dispatcherOptions;
-  if (!options) {
-    throw new Error("dispatcher options were not captured");
-  }
+  const options = created.dispatcherOptions;
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -387,13 +394,13 @@ function setupFeishuTrace(recorder: WireRecorder, scenario: DeliveryTraceScenari
         created.replyOptions.onPartialReply?.({ text: step.text });
         break;
       case "block-final":
-        await options.deliver({ text: step.text }, { kind: "block" });
+        await created.delivery.deliver({ text: step.text }, { kind: "block" });
         break;
       case "tool-progress":
         created.replyOptions.onToolStart?.({ name: step.name, phase: step.phase });
         break;
       case "final":
-        await options.deliver(
+        await created.delivery.deliver(
           {
             ...(step.text !== undefined ? { text: step.text } : {}),
             ...(step.mediaUrls ? { mediaUrls: step.mediaUrls } : {}),
@@ -428,6 +435,159 @@ const FEISHU_TRACE_SCENARIOS: readonly DeliveryTraceScenarioName[] = [
 ];
 
 describe("feishu delivery trace goldens", () => {
+  it("updates the accepted card without a duplicate send when its message receipt is absent", async () => {
+    const events = await runDeliveryTraceScenario({
+      scenario: deliveryTraceScenarios["final-only"],
+      setup: (recorder) => {
+        const dispatch = setupFeishuTrace(recorder, "final-only");
+        traceState.omitNextMessageReceipt = true;
+        return dispatch;
+      },
+    });
+    const messages = events.filter(
+      (event) => event.kind === "im.message.reply" || event.kind === "im.message.create",
+    );
+
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({ data: { result: {} } });
+    expect(
+      events.some((event) =>
+        event.kind.startsWith("PUT /cardkit/v1/cards/card-1/elements/content/content"),
+      ),
+    ).toBe(true);
+    expect(events.some((event) => event.kind === "PATCH /cardkit/v1/cards/card-1/settings")).toBe(
+      true,
+    );
+    expect(streamingStartBackoffUntilByAccount.has("main")).toBe(false);
+  });
+
+  it.each(["outbound", "dispatcher"] as const)(
+    "preserves caption visibility when %s voice-looking media resolves to a PDF",
+    async (surface) => {
+      const acceptedMessageIds: string[] = [];
+      const events = await runDeliveryTraceScenario({
+        scenario: {
+          name: `feishu-${surface}-authoritative-voice-media`,
+          steps: [{ kind: "final", text: "Critical caption must remain visible" }],
+        },
+        setup: (recorder) => {
+          setupFeishuTrace(recorder, "final-only");
+          traceState.loadedMedia = {
+            buffer: Buffer.from("%PDF-1.7 trace document"),
+            fileName: "report.pdf",
+            contentType: "application/pdf",
+          };
+          traceState.account = {
+            ...makeTraceAccount("final-only"),
+            config: FeishuConfigSchema.parse({ renderMode: "raw", streaming: { mode: "off" } }),
+          };
+          return async (step) => {
+            if (step.kind !== "final") {
+              throw new Error("unexpected authoritative-media trace step");
+            }
+            if (surface === "outbound") {
+              await feishuOutbound.sendMedia?.({
+                cfg: {},
+                to: "oc-trace-chat",
+                text: step.text ?? "",
+                mediaUrl: "https://example.com/download.ogg",
+                onDeliveryResult: async (result) => {
+                  acceptedMessageIds.push(result.messageId);
+                },
+              });
+              return;
+            }
+            const dispatcher = createFeishuReplyDispatcher({
+              cfg: {} as never,
+              agentId: "agent",
+              runtime: {} as never,
+              chatId: "oc-trace-chat",
+              sendTarget: "oc-trace-chat",
+            });
+            await dispatcher.delivery.deliver(
+              { text: step.text, mediaUrl: "https://example.com/download.ogg" },
+              { kind: "final" },
+            );
+          };
+        },
+      });
+      const sends = events.filter((event) => event.kind === "im.message.create");
+
+      expect(events.find((event) => event.kind === "im.file.create")).toMatchObject({
+        data: { payload: { file_name: "report.pdf", file_type: "pdf" } },
+      });
+      expect(sends).toHaveLength(2);
+      expect(sends).toMatchObject([
+        { data: { payload: { msg_type: "file" } } },
+        {
+          data: {
+            payload: {
+              msg_type: "post",
+              content: {
+                zh_cn: { content: [[{ tag: "md", text: "Critical caption must remain visible" }]] },
+              },
+            },
+          },
+        },
+      ]);
+      if (surface === "outbound") {
+        expect(acceptedMessageIds).toEqual(["om-1", "om-2"]);
+      }
+    },
+  );
+
+  it.each([
+    { label: "inferred native voice", audioAsVoice: false },
+    { label: "explicit voice intent", audioAsVoice: true },
+  ])("does not repeat visible TTS text when $label resolves to a PDF", async (voice) => {
+    const events = await runDeliveryTraceScenario({
+      scenario: {
+        name: `feishu-visible-tts-${voice.audioAsVoice ? "explicit" : "inferred"}`,
+        steps: [{ kind: "final", text: "Already-visible TTS answer" }],
+      },
+      setup: (recorder) => {
+        setupFeishuTrace(recorder, "final-only");
+        traceState.loadedMedia = {
+          buffer: Buffer.from("%PDF-1.7 trace document"),
+          fileName: "report.pdf",
+          contentType: "application/pdf",
+        };
+        traceState.account = {
+          ...makeTraceAccount("final-only"),
+          config: FeishuConfigSchema.parse({ renderMode: "raw", streaming: { mode: "off" } }),
+        };
+        const dispatcher = createFeishuReplyDispatcher({
+          cfg: {} as never,
+          agentId: "agent",
+          runtime: {} as never,
+          chatId: "oc-trace-chat",
+          sendTarget: "oc-trace-chat",
+        });
+        return async (step) => {
+          if (step.kind !== "final") {
+            throw new Error("unexpected visible-TTS trace step");
+          }
+          await dispatcher.delivery.deliver(
+            {
+              text: step.text,
+              mediaUrl: "https://example.com/download.ogg",
+              ...(voice.audioAsVoice ? { audioAsVoice: true } : {}),
+              ttsSupplement: {
+                spokenText: step.text ?? "",
+                visibleTextAlreadyDelivered: true,
+              },
+            },
+            { kind: "final" },
+          );
+        };
+      },
+    });
+
+    const sends = events.filter((event) => event.kind === "im.message.create");
+    expect(sends).toHaveLength(1);
+    expect(sends[0]).toMatchObject({ data: { payload: { msg_type: "file" } } });
+  });
+
   for (const scenarioName of FEISHU_TRACE_SCENARIOS) {
     it(`records ${scenarioName}`, async () => {
       const events = await runDeliveryTraceScenario({

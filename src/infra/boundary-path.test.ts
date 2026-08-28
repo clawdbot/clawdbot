@@ -1,10 +1,19 @@
 // Tests path boundary enforcement for safe file access.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
-import { withTempDir } from "../test-helpers/temp-dir.js";
-import { resolveRootPath, resolveRootPathSync } from "./boundary-path.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { withTestDir } from "../test-helpers/temp-dir.js";
+import {
+  resolveIdentityPathViaExistingAncestorSync,
+  resolveRootPath,
+  resolveRootPathSync,
+} from "./boundary-path.js";
 import { isPathInside } from "./path-guards.js";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 function createSeededRandom(seed: number): () => number {
   let state = seed >>> 0;
@@ -14,13 +23,60 @@ function createSeededRandom(seed: number): () => number {
   };
 }
 
+describe("resolveIdentityPathViaExistingAncestorSync", () => {
+  it("continues through native realpath failures to preserve ancestor identity", () => {
+    const aliasRoot = path.resolve("identity-alias");
+    const targetPath = path.join(aliasRoot, "locked", "leaf");
+    const lockedPath = path.dirname(targetPath);
+    const canonicalRoot = path.resolve("identity-real");
+    const calls: string[] = [];
+
+    vi.spyOn(fsSync.realpathSync, "native").mockImplementation((candidate) => {
+      const resolved = path.resolve(String(candidate));
+      calls.push(resolved);
+      if (resolved === aliasRoot) {
+        return canonicalRoot;
+      }
+      throw new Error("simulated realpath failure");
+    });
+
+    expect(resolveIdentityPathViaExistingAncestorSync(targetPath)).toBe(
+      path.join(canonicalRoot, "locked", "leaf"),
+    );
+    expect(calls).toEqual([targetPath, lockedPath, aliasRoot]);
+  });
+
+  it("falls back lexically only after native realpath fails through the root", () => {
+    const targetPath = path.resolve("identity-alias", "locked", "leaf");
+    const calls: string[] = [];
+    const expectedCalls: string[] = [];
+    let cursor = targetPath;
+    while (true) {
+      expectedCalls.push(cursor);
+      const parent = path.dirname(cursor);
+      if (parent === cursor) {
+        break;
+      }
+      cursor = parent;
+    }
+
+    vi.spyOn(fsSync.realpathSync, "native").mockImplementation((candidate) => {
+      calls.push(path.resolve(String(candidate)));
+      throw new Error("simulated realpath failure");
+    });
+
+    expect(resolveIdentityPathViaExistingAncestorSync(targetPath)).toBe(targetPath);
+    expect(calls).toEqual(expectedCalls);
+  });
+});
+
 describe("resolveRootPath", () => {
   it("resolves symlink parents with non-existent leafs inside root", async () => {
     if (process.platform === "win32") {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const targetDir = path.join(root, "target-dir");
       const linkPath = path.join(root, "alias");
@@ -47,7 +103,7 @@ describe("resolveRootPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const linkPath = path.join(root, "alias-out");
@@ -78,7 +134,7 @@ describe("resolveRootPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const outsideFile = path.join(outside, "target.txt");
@@ -114,7 +170,7 @@ describe("resolveRootPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-boundary-path-" }, async (base) => {
       const root = path.join(base, "workspace");
       const aliasRoot = path.join(base, "workspace-alias");
       const fileName = "plugin.js";
@@ -145,7 +201,7 @@ describe("resolveRootPath", () => {
       return;
     }
 
-    await withTempDir({ prefix: "openclaw-boundary-path-fuzz-" }, async (base) => {
+    await withTestDir({ prefix: "openclaw-boundary-path-fuzz-" }, async (base) => {
       const root = path.join(base, "workspace");
       const outside = path.join(base, "outside");
       const safeTarget = path.join(root, "safe-target");

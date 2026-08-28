@@ -1,11 +1,12 @@
 /** Validates and streams one approval-gated Claude CLI turn on a headless node. */
-import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { StringDecoder } from "node:string_decoder";
-import { signalProcessTree } from "../process/kill-tree.js";
-import { resolveSafeChildProcessInvocation } from "../process/windows-command.js";
+import { logWarn } from "../logger.js";
+import { getProcessSupervisor } from "../process/supervisor/index.js";
+import type { RunExit, SpawnSecretInput } from "../process/supervisor/types.js";
 import { truncateUtf8Suffix } from "../utils/utf8-truncate.js";
 import type { NodeHostClient } from "./client.js";
 import type { ClaudeCliNodeRunParams } from "./invoke-agent-cli-claude-params.js";
@@ -33,6 +34,7 @@ export async function runClaudeCliNodeCommand(params: {
   argv: string[];
   cwd: string | undefined;
   env: Record<string, string> | undefined;
+  secretInput?: SpawnSecretInput;
   timeoutMs: number | undefined;
   signal?: AbortSignal;
 }): Promise<RunResult> {
@@ -60,197 +62,160 @@ export async function runClaudeCliNodeCommand(params: {
     if (params.signal?.aborted) {
       return cancelledResult();
     }
-    return await new Promise<RunResult>((resolve) => {
-      let settled = false;
-      let hardTimedOut = false;
-      let idleTimedOut = false;
-      let cancelled = false;
-      let truncated = false;
-      let outputBytes = 0;
-      let stderr = "";
-      const decoder = new StringDecoder("utf8");
-      const stderrDecoder = new StringDecoder("utf8");
-      const terminalDecoder = new StringDecoder("utf8");
-      let terminalLineBuffer = "";
-      let terminalLineTouchesTruncation = false;
-      let terminalResultLine: string | undefined;
-      const invocation = resolveSafeChildProcessInvocation({
+    const supervisor = getProcessSupervisor();
+    const runId = randomUUID();
+    let cancelled = false;
+    let truncated = false;
+    let outputBytes = 0;
+    let stderr = "";
+    let terminalLineBuffer = "";
+    let terminalLineTouchesTruncation = false;
+    let terminalResultLine: string | undefined;
+    const decoder = new StringDecoder("utf8");
+    const stderrDecoder = new StringDecoder("utf8");
+    const terminalDecoder = new StringDecoder("utf8");
+    const progress = createNodeInvokeProgressWriter({
+      client: params.client,
+      frame: params.frame,
+      idleTimeoutMs: params.request.idleTimeoutMs,
+      onError: () => supervisor.cancel(runId),
+    });
+    const abortRun = () => {
+      cancelled = true;
+      supervisor.cancel(runId);
+    };
+    const retain = (chunk: Buffer) => {
+      const remaining = Math.max(0, OUTPUT_CAP_BYTES - outputBytes);
+      const retained = chunk.subarray(0, remaining);
+      outputBytes += retained.length;
+      truncated ||= retained.length !== chunk.length;
+      return retained;
+    };
+    const captureTerminalLines = (raw: Buffer, touchesTruncation: boolean) => {
+      terminalLineBuffer += terminalDecoder.write(raw);
+      terminalLineTouchesTruncation ||= touchesTruncation;
+      for (let newline = terminalLineBuffer.indexOf("\n"); newline >= 0;) {
+        const line = terminalLineBuffer.slice(0, newline).replace(/\r$/u, "");
+        terminalLineBuffer = terminalLineBuffer.slice(newline + 1);
+        if (
+          terminalLineTouchesTruncation &&
+          Buffer.byteLength(line, "utf8") <= TERMINAL_EVENT_MAX_BYTES &&
+          isClaudeResultLine(line)
+        ) {
+          terminalResultLine = line;
+        }
+        terminalLineTouchesTruncation = touchesTruncation;
+        newline = terminalLineBuffer.indexOf("\n");
+      }
+      if (Buffer.byteLength(terminalLineBuffer, "utf8") > TERMINAL_EVENT_MAX_BYTES) {
+        terminalLineBuffer = "";
+        terminalLineTouchesTruncation = false;
+      }
+    };
+
+    let exit: RunExit | undefined;
+    let runError: Error | undefined;
+    params.signal?.addEventListener("abort", abortRun, { once: true });
+    try {
+      const runPromise = supervisor.spawn({
+        runId,
+        sessionId: params.request.sessionKey ?? params.frame.id,
+        backendId: "node-host-claude",
+        mode: "child",
         argv,
         cwd: params.cwd,
-        env: params.env ?? process.env,
-      });
-      const child = spawn(invocation.command, invocation.args, {
-        cwd: params.cwd,
         env: params.env,
-        stdio: ["pipe", "pipe", "pipe"],
-        ...(process.platform !== "win32" ? { detached: true } : {}),
-        windowsHide: invocation.windowsHide,
-        windowsVerbatimArguments: invocation.windowsVerbatimArguments,
+        exactEnv: true,
+        input: params.request.stdin ?? "",
+        secretInput: params.secretInput,
+        timeoutMs: params.timeoutMs ?? params.request.timeoutMs,
+        noOutputTimeoutMs: params.request.idleTimeoutMs,
+        captureOutput: false,
+        onStdoutRaw: (raw) => {
+          const retained = retain(raw);
+          captureTerminalLines(retained, false);
+          if (retained.length < raw.length) {
+            captureTerminalLines(raw.subarray(retained.length), true);
+          }
+          if (retained.length === 0) {
+            progress.queueHeartbeat();
+            return;
+          }
+          void progress.write(decoder.write(retained));
+        },
+        onStderrRaw: (raw) => {
+          retain(raw);
+          stderr = truncateUtf8Suffix(`${stderr}${stderrDecoder.write(raw)}`, STDERR_TAIL_BYTES);
+          progress.queueHeartbeat();
+        },
       });
-
-      const kill = () => {
-        const pid = child.pid;
-        if (typeof pid === "number" && pid > 0) {
-          signalProcessTree(pid, "SIGKILL", { detached: process.platform !== "win32" });
-        }
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          // Best effort; close/error settles the result.
-        }
-      };
-      const progress = createNodeInvokeProgressWriter({
-        client: params.client,
-        frame: params.frame,
-        idleTimeoutMs: params.request.idleTimeoutMs,
-        onError: kill,
-      });
-      const abortRun = () => {
-        cancelled = true;
-        kill();
-      };
-      params.signal?.addEventListener("abort", abortRun, { once: true });
       if (params.signal?.aborted) {
         abortRun();
       }
-      const hardTimer = setTimeout(() => {
-        hardTimedOut = true;
-        kill();
-      }, params.timeoutMs ?? params.request.timeoutMs);
-      let idleTimer: ReturnType<typeof setTimeout>;
-      const resetIdleTimer = () => {
-        clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => {
-          idleTimedOut = true;
-          kill();
-        }, params.request.idleTimeoutMs);
-      };
-      resetIdleTimer();
+      const run = await runPromise;
+      if (promptDir && run.waitForExtinction) {
+        const ownedPromptDir = promptDir;
+        promptDir = undefined;
+        // Descendants may still own this file after their root result is already visible.
+        void run
+          .waitForExtinction()
+          .then(() => fs.rm(ownedPromptDir, { recursive: true, force: true }))
+          .catch((error: unknown) => {
+            logWarn(`Claude CLI system prompt cleanup failed: ${String(error)}`);
+          });
+      }
+      exit = await run.wait();
+    } catch (error) {
+      runError = error instanceof Error ? error : new Error(String(error));
+    } finally {
+      params.signal?.removeEventListener("abort", abortRun);
+      progress.stopHeartbeats();
+    }
 
-      const retain = (chunk: Buffer): Buffer => {
-        if (outputBytes >= OUTPUT_CAP_BYTES) {
-          truncated = true;
-          return Buffer.alloc(0);
-        }
-        const remaining = OUTPUT_CAP_BYTES - outputBytes;
-        const retained = chunk.length > remaining ? chunk.subarray(0, remaining) : chunk;
-        outputBytes += retained.length;
-        if (retained.length !== chunk.length) {
-          truncated = true;
-        }
-        return retained;
-      };
+    void progress.write(decoder.end());
+    terminalLineBuffer += terminalDecoder.end();
+    stderr = truncateUtf8Suffix(`${stderr}${stderrDecoder.end()}`, STDERR_TAIL_BYTES);
+    if (
+      terminalLineTouchesTruncation &&
+      Buffer.byteLength(terminalLineBuffer, "utf8") <= TERMINAL_EVENT_MAX_BYTES &&
+      isClaudeResultLine(terminalLineBuffer)
+    ) {
+      terminalResultLine = terminalLineBuffer;
+    }
+    if (truncated && terminalResultLine) {
+      void progress.write(`\n${terminalResultLine}\n`);
+    }
+    await progress.flush();
+    progress.stop();
 
-      const captureTerminalLines = (raw: Buffer, touchesTruncation: boolean) => {
-        terminalLineBuffer += terminalDecoder.write(raw);
-        terminalLineTouchesTruncation ||= touchesTruncation;
-        while (true) {
-          const newline = terminalLineBuffer.indexOf("\n");
-          if (newline < 0) {
-            break;
-          }
-          const line = terminalLineBuffer.slice(0, newline).replace(/\r$/u, "");
-          terminalLineBuffer = terminalLineBuffer.slice(newline + 1);
-          if (
-            terminalLineTouchesTruncation &&
-            Buffer.byteLength(line, "utf8") <= TERMINAL_EVENT_MAX_BYTES &&
-            isClaudeResultLine(line)
-          ) {
-            terminalResultLine = line;
-          }
-          terminalLineTouchesTruncation = touchesTruncation;
-        }
-        if (Buffer.byteLength(terminalLineBuffer, "utf8") > TERMINAL_EVENT_MAX_BYTES) {
-          terminalLineBuffer = "";
-          terminalLineTouchesTruncation = false;
-        }
-      };
-      child.stdout.on("data", (raw: Buffer) => {
-        const retained = retain(raw);
-        if (retained.length > 0) {
-          captureTerminalLines(retained, false);
-        }
-        if (retained.length < raw.length) {
-          captureTerminalLines(raw.subarray(retained.length), true);
-        }
-        // The Gateway's inactivity timer observes stdout progress events only;
-        // keep the node-local kill timer on the same signal to avoid orphan runs.
-        resetIdleTimer();
-        if (retained.length === 0) {
-          progress.queueHeartbeat();
-          return;
-        }
-        const text = decoder.write(retained);
-        void progress.write(text, child.stdout);
-      });
-      child.stderr.on("data", (raw: Buffer) => {
-        retain(raw);
-        stderr = truncateUtf8Suffix(`${stderr}${stderrDecoder.write(raw)}`, STDERR_TAIL_BYTES);
-        resetIdleTimer();
-        progress.queueHeartbeat();
-      });
-      child.stdin.on("error", () => {});
-      child.stdin.end(params.request.stdin ?? "");
-
-      const finish = async (exitCode: number | null, error?: Error) => {
-        if (settled) {
-          return;
-        }
-        settled = true;
-        clearTimeout(hardTimer);
-        clearTimeout(idleTimer);
-        progress.stopHeartbeats();
-        params.signal?.removeEventListener("abort", abortRun);
-        const finalText = decoder.end();
-        if (finalText) {
-          void progress.write(finalText);
-        }
-        const terminalText = terminalDecoder.end();
-        if (terminalText) {
-          terminalLineBuffer += terminalText;
-        }
-        const finalStderr = stderrDecoder.end();
-        if (finalStderr) {
-          stderr = truncateUtf8Suffix(`${stderr}${finalStderr}`, STDERR_TAIL_BYTES);
-        }
-        if (
-          terminalLineTouchesTruncation &&
-          Buffer.byteLength(terminalLineBuffer, "utf8") <= TERMINAL_EVENT_MAX_BYTES &&
-          isClaudeResultLine(terminalLineBuffer)
-        ) {
-          terminalResultLine = terminalLineBuffer;
-        }
-        if (truncated && terminalResultLine) {
-          void progress.write(`\n${terminalResultLine}\n`);
-        }
-        await progress.flush();
-        progress.stop();
-        const timeoutMessage = idleTimedOut
-          ? "Claude CLI produced no output before the idle timeout"
-          : hardTimedOut
-            ? "Claude CLI exceeded the hard timeout"
-            : "";
-        const finalError = progress.error ?? error;
-        const cancelledMessage = cancelled ? "Claude CLI invocation cancelled" : "";
-        resolve({
-          exitCode: exitCode ?? (idleTimedOut || hardTimedOut ? 124 : cancelled ? 130 : 1),
-          timedOut: idleTimedOut || hardTimedOut,
-          noOutputTimedOut: idleTimedOut,
-          success: exitCode === 0 && !idleTimedOut && !hardTimedOut && !cancelled && !finalError,
-          stdout: "",
-          stderr: truncateUtf8Suffix(
-            [stderr, timeoutMessage, cancelledMessage, finalError?.message]
-              .filter(Boolean)
-              .join("\n"),
-            STDERR_TAIL_BYTES,
-          ),
-          error: finalError?.message ?? null,
-          truncated,
-        });
-      };
-      child.once("error", (error) => void finish(null, error));
-      child.once("close", (code) => void finish(code));
-    });
+    const idleTimedOut = !cancelled && exit?.noOutputTimedOut === true;
+    const timedOut = !cancelled && exit?.timedOut === true;
+    const timeoutMessage = idleTimedOut
+      ? "Claude CLI produced no output before the idle timeout"
+      : timedOut
+        ? "Claude CLI exceeded the hard timeout"
+        : "";
+    const finalError = progress.error ?? runError;
+    return {
+      exitCode: cancelled ? 130 : (exit?.exitCode ?? (timedOut ? 124 : 1)),
+      timedOut,
+      noOutputTimedOut: idleTimedOut,
+      success: exit?.exitCode === 0 && !timedOut && !cancelled && !finalError,
+      stdout: "",
+      stderr: truncateUtf8Suffix(
+        [
+          stderr,
+          timeoutMessage,
+          cancelled ? "Claude CLI invocation cancelled" : "",
+          finalError?.message,
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        STDERR_TAIL_BYTES,
+      ),
+      error: finalError?.message ?? null,
+      truncated,
+    };
   } finally {
     if (promptDir) {
       await fs.rm(promptDir, { recursive: true, force: true });

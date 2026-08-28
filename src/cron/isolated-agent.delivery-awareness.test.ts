@@ -5,12 +5,16 @@ import "./isolated-agent.mocks.js";
 import { beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { CliDeps } from "../cli/deps.js";
 import { resolveDefaultSessionStorePath } from "../config/sessions.js";
-import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
+import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
+import {
+  peekSystemEventEntries,
+  peekSystemEvents,
+  resetSystemEventsForTest,
+} from "../infra/system-events.js";
 import { createCliDeps, mockAgentPayloads } from "./isolated-agent.delivery.test-helpers.js";
 import { runCronIsolatedAgentTurn } from "./isolated-agent.js";
 import { makeCfg, makeJob, withTempCronHome } from "./isolated-agent.test-harness.js";
 import { setupIsolatedAgentTurnMocks } from "./isolated-agent.test-setup.js";
-import { resetCompletedDirectCronDeliveriesForTests } from "./isolated-agent/delivery-dispatch.js";
 
 async function writeDefaultAgentSessionStoreEntries(
   entries: Record<string, Record<string, unknown>>,
@@ -51,7 +55,6 @@ async function runAnnounceTurn(params: {
 describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
   beforeAll(async () => {
     setupIsolatedAgentTurnMocks();
-    resetCompletedDirectCronDeliveriesForTests();
     resetSystemEventsForTest();
     await withTempCronHome(async (home) => {
       const storePath = await writeDefaultAgentSessionStoreEntries({});
@@ -67,7 +70,6 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
 
   beforeEach(() => {
     setupIsolatedAgentTurnMocks();
-    resetCompletedDirectCronDeliveriesForTests();
     resetSystemEventsForTest();
   });
 
@@ -95,6 +97,62 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
     });
   });
 
+  it("appends the exact run-session inspection link only to the final visible delivery payload", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeDefaultAgentSessionStoreEntries({});
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "first cron update" }, { text: "final cron summary" }]);
+
+      const result = await runAnnounceTurn({
+        home,
+        storePath,
+        sessionKey: "cron:job-1",
+        deps,
+        cfgOverrides: {
+          gateway: { publicOrigin: "https://control.example", controlUi: { basePath: "/console" } },
+        },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.delivered).toBe(true);
+      expect(result.sessionKey).toMatch(/^agent:main:cron:job-1:run:/);
+      expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        1,
+        "123",
+        "first cron update",
+        expect.any(Object),
+      );
+      expect(deps.sendMessageTelegram).toHaveBeenNthCalledWith(
+        2,
+        "123",
+        `final cron summary\nInspect: https://control.example/console/chat/main/${result.sessionKey?.replace(/^agent:main:/, "").replaceAll(":", "/")}`,
+        expect.any(Object),
+      );
+    });
+  });
+
+  it("does not turn a suppressed silent reply into an inspection-link announcement", async () => {
+    await withTempCronHome(async (home) => {
+      const storePath = await writeDefaultAgentSessionStoreEntries({});
+      const deps = createCliDeps();
+      mockAgentPayloads([{ text: "NO_REPLY" }]);
+
+      const result = await runAnnounceTurn({
+        home,
+        storePath,
+        sessionKey: "cron:job-1",
+        deps,
+        cfgOverrides: { gateway: { publicOrigin: "https://control.example" } },
+        delivery: { mode: "announce", channel: "telegram", to: "123" },
+      });
+
+      expect(result.status).toBe("ok");
+      expect(result.delivered).toBeFalsy();
+      expect(deps.sendMessageTelegram).not.toHaveBeenCalled();
+    });
+  });
+
   it("uses the global main queue when session scope is global", async () => {
     await withTempCronHome(async (home) => {
       const storePath = await writeDefaultAgentSessionStoreEntries({});
@@ -119,6 +177,9 @@ describe("runCronIsolatedAgentTurn cron delivery awareness", () => {
       expect(result.status).toBe("ok");
       expect(result.delivered).toBe(true);
       expect(peekSystemEvents("global")).toEqual(["global cron digest"]);
+      const globalEvents = peekSystemEventEntries("global");
+      expect(selectAgentSystemEvents(globalEvents, "main")).toHaveLength(1);
+      expect(selectAgentSystemEvents(globalEvents, "other")).toEqual([]);
     });
   });
 

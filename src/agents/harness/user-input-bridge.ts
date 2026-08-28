@@ -1,3 +1,5 @@
+import { markReplyPayloadForSourceSuppressionDelivery } from "../../auto-reply/reply-payload.js";
+import type { MessagePresentation } from "../../interactive/payload.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 
 export type AgentHarnessUserInputOption = {
@@ -9,6 +11,7 @@ export type AgentHarnessUserInputQuestion = {
   id: string;
   header: string;
   question: string;
+  multiSelect?: boolean;
   isOther?: boolean;
   isSecret?: boolean;
   options?: readonly AgentHarnessUserInputOption[] | null;
@@ -23,6 +26,16 @@ export type AgentHarnessUserInputPromptOptions = {
   formatText?: (text: string) => string;
   secretWarning?: string;
   otherLabel?: string;
+  presentation?: MessagePresentation;
+};
+
+type AgentHarnessQuestionPromptPayload = {
+  text: string;
+  presentation?: MessagePresentation;
+  presentationTextMode?: "fallback";
+  channelData: {
+    askUser: { questionId: string; optionValues?: string[] };
+  };
 };
 
 type PromptDeliveryParams = Pick<EmbeddedRunAttemptParams, "onBlockReply" | "onPartialReply">;
@@ -69,10 +82,145 @@ export async function deliverAgentHarnessUserInputPrompt(
 ): Promise<void> {
   const text = formatAgentHarnessUserInputPrompt(questions, options);
   if (params.onBlockReply) {
-    await params.onBlockReply({ text });
+    await params.onBlockReply(
+      markReplyPayloadForSourceSuppressionDelivery({ text, presentation: options.presentation }),
+    );
     return;
   }
   await params.onPartialReply?.({ text });
+}
+
+/** Builds the portable one-question presentation shared by tools and harnesses. */
+function buildAgentHarnessQuestionPresentation(params: {
+  questionId: string;
+  questions: readonly AgentHarnessUserInputQuestion[];
+  formatText?: (text: string) => string;
+}): MessagePresentation | undefined {
+  // Button taps resolve atomically, so multi-question and multi-select records
+  // remain text-only until partial answer state has one shared owner.
+  if (params.questions.length !== 1) {
+    return undefined;
+  }
+  const [question] = params.questions;
+  const options = question?.options ?? [];
+  const formatText = params.formatText ?? ((text: string) => text);
+  if (!question || question.multiSelect || question.isSecret || options.length === 0) {
+    return undefined;
+  }
+  // The question stays in its own leading text block so reaction/native
+  // adapters can keep it while replacing the tap-only guidance below.
+  const optionGuidance = [
+    ...options.map(
+      (option) =>
+        `- ${formatText(option.label)}${option.description ? `: ${formatText(option.description)}` : ""}`,
+    ),
+    "",
+    question.isOther
+      ? "Tap an option, or reply with the option text or your own answer."
+      : "Tap an option, or reply with the option number or text.",
+  ].join("\n");
+  return {
+    blocks: [
+      { type: "text", text: formatText(question.question) },
+      { type: "text", text: optionGuidance },
+      {
+        type: "buttons",
+        buttons: [
+          ...options.map((option) => ({
+            label: formatText(option.label),
+            action: {
+              type: "question" as const,
+              questionId: params.questionId,
+              optionValue: option.label,
+            },
+          })),
+          ...(question.isOther
+            ? [
+                {
+                  label: "Other…",
+                  action: {
+                    type: "question" as const,
+                    questionId: params.questionId,
+                    intent: "custom-input" as const,
+                  },
+                },
+              ]
+            : []),
+        ],
+      },
+    ],
+  };
+}
+
+/** Builds the exact question payload consumed by web chat and native channels. */
+export function buildAgentHarnessQuestionPromptPayload(params: {
+  questionId: string;
+  questions: readonly AgentHarnessUserInputQuestion[];
+  options?: AgentHarnessUserInputPromptOptions;
+}): AgentHarnessQuestionPromptPayload {
+  const prompt = formatAgentHarnessUserInputPrompt(params.questions, params.options);
+  // Callers may supply a fully-authored presentation; only build one otherwise.
+  const presentation =
+    params.options?.presentation ??
+    buildAgentHarnessQuestionPresentation({
+      ...params,
+      formatText: params.options?.formatText,
+    });
+  const [question] = params.questions;
+  const candidateOptionValues =
+    params.questions.length === 1 && question && !question.multiSelect && !question.isSecret
+      ? (question.options?.map((option) => option.label) ?? [])
+      : [];
+  const normalizedOptionValues = candidateOptionValues.map((option) => option.trim().toLowerCase());
+  const optionValues =
+    candidateOptionValues.length >= 2 &&
+    candidateOptionValues.length <= 4 &&
+    normalizedOptionValues.every(Boolean) &&
+    new Set(normalizedOptionValues).size === candidateOptionValues.length
+      ? candidateOptionValues
+      : undefined;
+  return markReplyPayloadForSourceSuppressionDelivery({
+    text: `${prompt}\n\n${questionReplyGuidance(params.questions)}`,
+    ...(presentation ? { presentation, presentationTextMode: "fallback" as const } : {}),
+    // Native callbacks need Gateway option order even when presentation controls are reordered.
+    channelData: {
+      askUser: { questionId: params.questionId, ...(optionValues ? { optionValues } : {}) },
+    },
+  });
+}
+
+function questionReplyGuidance(questions: readonly AgentHarnessUserInputQuestion[]): string {
+  if (questions.length !== 1) {
+    return "Reply by number or question id. Use a declared option where choices are fixed.";
+  }
+  const [question] = questions;
+  if (!question || (question.options?.length ?? 0) === 0) {
+    return "Reply with your answer.";
+  }
+  if (question.multiSelect) {
+    return "Reply with comma-separated option numbers or text, or your own answer.";
+  }
+  return question.isOther
+    ? "Reply with the number, the option text, or your own answer."
+    : "Reply with the number or option text.";
+}
+
+/** Delivers a gateway-backed question through the harness block-reply surface. */
+export async function deliverAgentHarnessQuestionPrompt(
+  params: PromptDeliveryParams,
+  questionId: string,
+  questions: readonly AgentHarnessUserInputQuestion[],
+  options?: AgentHarnessUserInputPromptOptions,
+  signal?: AbortSignal,
+): Promise<void> {
+  signal?.throwIfAborted();
+  const payload = buildAgentHarnessQuestionPromptPayload({ questionId, questions, options });
+  if (params.onBlockReply) {
+    await params.onBlockReply(payload, signal ? { abortSignal: signal } : undefined);
+    return;
+  }
+  signal?.throwIfAborted();
+  await params.onPartialReply?.({ text: payload.text });
 }
 
 export function buildAgentHarnessUserInputAnswers(
@@ -83,13 +231,16 @@ export function buildAgentHarnessUserInputAnswers(
   if (questions.length === 1) {
     const question = questions[0];
     if (question) {
-      const answer = normalizeAgentHarnessUserInputAnswer(inputText, question);
-      answers[question.id] = { answers: answer ? [answer] : [] };
+      answers[question.id] = {
+        answers: normalizeAgentHarnessUserInputAnswers(inputText, question),
+      };
     }
     return { answers };
   }
 
   const keyed = parseKeyedAnswers(inputText);
+  // Unkeyed multi-question replies are positional. Preserve blank lines so a
+  // skipped answer cannot shift every later response onto the wrong question.
   const fallbackLines = inputText.split(/\r?\n/).map((line) => line.trim());
   questions.forEach((question, index) => {
     const key =
@@ -98,10 +249,32 @@ export function buildAgentHarnessUserInputAnswers(
       keyed.get(question.question.toLowerCase()) ??
       keyed.get(String(index + 1));
     const answer = key ?? fallbackLines[index] ?? "";
-    const normalized = answer ? normalizeAgentHarnessUserInputAnswer(answer, question) : undefined;
-    answers[question.id] = { answers: normalized ? [normalized] : [] };
+    answers[question.id] = {
+      answers: answer ? normalizeAgentHarnessUserInputAnswers(answer, question) : [],
+    };
   });
   return { answers };
+}
+
+function normalizeAgentHarnessUserInputAnswers(
+  answer: string,
+  question: AgentHarnessUserInputQuestion,
+): string[] {
+  if (!question.multiSelect) {
+    const normalized = normalizeAgentHarnessUserInputAnswer(answer, question);
+    return normalized ? [normalized] : [];
+  }
+  // A declared label can contain list delimiters. Match it whole before
+  // splitting a reply that selects several options.
+  const declaredAnswer = normalizeAgentHarnessUserInputOption(answer, question);
+  if (declaredAnswer) {
+    return [declaredAnswer];
+  }
+  const normalized = answer
+    .split(/[,;\n]/u)
+    .map((part) => normalizeAgentHarnessUserInputAnswer(part, question))
+    .filter((part): part is string => Boolean(part));
+  return [...new Set(normalized)];
 }
 
 export function normalizeAgentHarnessUserInputAnswer(
@@ -109,7 +282,24 @@ export function normalizeAgentHarnessUserInputAnswer(
   question: AgentHarnessUserInputQuestion,
 ): string | undefined {
   const trimmed = answer.trim();
+  const declaredAnswer = normalizeAgentHarnessUserInputOption(trimmed, question);
+  if (declaredAnswer) {
+    return declaredAnswer;
+  }
+  if ((question.options?.length ?? 0) > 0 && !question.isOther) {
+    return undefined;
+  }
+  return trimmed || undefined;
+}
+
+function normalizeAgentHarnessUserInputOption(
+  answer: string,
+  question: AgentHarnessUserInputQuestion,
+): string | undefined {
+  const trimmed = answer.trim();
   const options = question.options ?? [];
+  // Numeric replies use the one-based option numbers emitted in the prompt.
+  // Convert to zero-based only at the options-array boundary.
   const optionIndex = /^\d+$/.test(trimmed) ? Number(trimmed) - 1 : -1;
   const indexed = optionIndex >= 0 ? options[optionIndex] : undefined;
   if (indexed) {
@@ -119,10 +309,7 @@ export function normalizeAgentHarnessUserInputAnswer(
   if (exact) {
     return exact.label;
   }
-  if (options.length > 0 && !question.isOther) {
-    return undefined;
-  }
-  return trimmed || undefined;
+  return undefined;
 }
 
 function parseKeyedAnswers(inputText: string): Map<string, string> {

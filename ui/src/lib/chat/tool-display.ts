@@ -1,15 +1,15 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI module implements tool display behavior.
 import SHARED_TOOL_DISPLAY_JSON from "../../../../apps/shared/OpenClawKit/Sources/OpenClawKit/Resources/tool-display.json" with { type: "json" };
 import {
   defaultTitle,
   formatToolDetailText,
-  normalizeToolName,
+  normalizeToolDisplayName,
   resolveToolVerbAndDetailForArgs,
   type ToolDisplaySpec as ToolDisplaySpecBase,
 } from "../../../../src/agents/tool-display-common.js";
 import type { ToolDetailMode } from "../../../../src/agents/tool-display-exec.js";
-import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-contract.js";
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
+import type { ControlUiEmbedSandboxMode } from "../../../../src/gateway/control-ui-bootstrap-contract.js";
 
 const A2UI_PATH = "/__openclaw__/a2ui";
 const CANVAS_HOST_PATH = "/__openclaw__/canvas";
@@ -111,7 +111,7 @@ export function resolveToolDisplay(params: {
   meta?: string;
   detailMode?: ToolDetailMode;
 }): ToolDisplay {
-  const name = normalizeToolName(params.name);
+  const name = normalizeToolDisplayName(params.name);
   const key = normalizeLowercaseStringOrEmpty(name);
   const spec = TOOL_MAP[key];
   const icon = spec?.icon ?? FALLBACK.icon ?? "puzzle";
@@ -125,7 +125,7 @@ export function resolveToolDisplay(params: {
     fallbackDetailKeys: FALLBACK.detailKeys,
     detailMode: "first",
     toolDetailMode: params.detailMode,
-    detailCoerce: { includeFalse: true, includeZero: true },
+    detailCoerce: { includeFalsy: true },
   });
   const { verb } = toolDisplayParts;
   let { detail } = toolDisplayParts;
@@ -180,6 +180,16 @@ function sanitizeCanvasEntryUrl(
   } catch {
     return undefined;
   }
+}
+
+/**
+ * True when the preview entry URL points at a hosted Canvas document rather
+ * than an externally allowed embed URL. Prompt authority (widget sendPrompt)
+ * is granted only to internal Canvas documents.
+ */
+export function isInternalCanvasEntryUrl(entryUrl: string | undefined): boolean {
+  const rawEntryUrl = entryUrl?.trim();
+  return Boolean(rawEntryUrl && sanitizeCanvasEntryUrl(rawEntryUrl, false));
 }
 
 export function resolveCanvasIframeUrl(

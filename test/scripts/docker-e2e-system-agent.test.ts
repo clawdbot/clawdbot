@@ -8,15 +8,23 @@ function readScript(pathname: string): string {
 
 describe("OpenClaw Docker E2E scripts", () => {
   it("keeps first-run checks wired to packaged CLI and OpenClaw behavior", () => {
+    const shell = readScript("scripts/e2e/system-agent-first-run-docker.sh");
     const source = readScript("test/e2e/qa-lab/runtime/system-agent-first-run-docker-client.ts");
     const spec = readScript("scripts/e2e/system-agent-first-run-spec.json");
 
+    expect(shell).toContain('-e "OPENCLAW_SUPERVISOR_MODE=external"');
     expect(source).toContain("../../../../dist/cli/run-main.js");
     expect(source).toContain("../../../../dist/system-agent/setup-inference.js");
     expect(source).toContain("shouldStartOnboardingForFreshInstall");
     expect(source).toContain("OpenClaw did not fail closed without inference");
     expect(source).toContain("activateSetupInference({");
-    expect(source).toContain('runPackagedCli(["setup", "--message", "overview"])');
+    expect(source).toContain("verifySetupInference");
+    expect(source).toContain("runSystemAgent");
+    expect(source).toContain("runPackagedOneShot(message, command.approve)");
+    expect(source).toContain('"--modern"');
+    expect(source).toContain(
+      "modern compatibility entrypoint did not expose OpenClaw after activation",
+    );
     expect(source).toContain("const PACKAGED_CLI_TIMEOUT_MS = 60_000");
     expect(source).toContain("inference activation did not send the live model probe");
     expect(source).toContain("function resolveDefaultModel(config: OpenClawConfig)");
@@ -24,20 +32,22 @@ describe("OpenClaw Docker E2E scripts", () => {
     expect(source).toContain("Fake Claude planner selected an inference-backed typed setup.");
     expect(source).toContain("[openclaw] interpreted: ${plannerCommand}");
     expect(source).toContain("expected one fuzzy setup planner prompt");
-    expect(source).toContain('runPackagedCli(["plugins", "list", "--json"])');
+    expect(source).toContain("OpenClaw did not enable Discord");
+    expect(source).toContain("OpenClaw did not write Discord token SecretRef");
     expect(source).toContain(
-      "Telegram channel config did not auto-enable the packaged Telegram plugin",
+      "(OPENCLAW_SUPERVISOR_MODE=external). Use that supervisor to start the gateway.",
     );
+    expect(source).toContain("OpenClaw setup probed systemd before honoring external supervision");
     expect(source).toContain("OpenClaw first-run Docker E2E passed");
     expect(spec).toContain('"auditOperations"');
     expect(spec).toContain('"openclaw.setup"');
-    expect(spec).toContain('"model": "claude-cli/claude-opus-4-8"');
+    expect(spec).toContain('"model": "claude-cli/claude-opus-5"');
     expect(spec).toContain('"planner": true');
-    expect(spec).toContain('"telegramEnv": "TELEGRAM_BOT_TOKEN"');
-    expect(spec).toContain("config set-ref channels.telegram.botToken env {telegramEnv}");
+    expect(source).toContain('const DISCORD_CREDENTIAL_ENV = ["DISCORD", "BOT", "TOKEN"]');
+    expect(spec).toContain("config set-ref channels.discord.token env {discordEnv}");
     expect(spec).not.toContain("plugins.allow");
-    expect(spec).not.toContain("plugins.entries.telegram.enabled");
-    expect(spec).not.toContain("channels.discord");
+    expect(spec).not.toContain("plugins.entries.discord.enabled");
+    expect(spec).not.toContain("channels.telegram");
   });
 
   it("keeps rescue checks wired through auto-reply command handling", () => {

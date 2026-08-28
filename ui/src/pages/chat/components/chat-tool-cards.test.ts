@@ -40,12 +40,9 @@ function pointerClick(element: Element) {
 
 describe("tool-cards", () => {
   it("routes MCP App previews through the dedicated double-iframe host", async () => {
-    vi.resetModules();
-    const { renderToolPreview: renderToolPreviewWithLazyMock } =
-      await import("./chat-tool-cards.ts");
     const container = document.createElement("div");
     render(
-      renderToolPreviewWithLazyMock(
+      renderToolPreview(
         {
           kind: "canvas",
           surface: "assistant_message",
@@ -72,7 +69,7 @@ describe("tool-cards", () => {
 
     const toolContainer = document.createElement("div");
     render(
-      renderToolPreviewWithLazyMock(
+      renderToolPreview(
         {
           kind: "canvas",
           surface: "assistant_message",
@@ -137,6 +134,27 @@ describe("tool-cards", () => {
     container.remove();
   });
 
+  it("keeps a running card closed by default", () => {
+    const container = document.createElement("div");
+    render(
+      renderToolCard(
+        {
+          id: "msg:running",
+          name: "bash",
+          args: { command: "pnpm test" },
+          live: true,
+        },
+        { expanded: false, runActive: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-msg-body")).toBeNull();
+    expect(container.querySelector(".chat-tool-msg-summary")?.getAttribute("aria-expanded")).toBe(
+      "false",
+    );
+  });
+
   it("renders expanded cards with key-value args and an output section", () => {
     const container = document.createElement("div");
     const toggle = vi.fn();
@@ -162,14 +180,12 @@ describe("tool-cards", () => {
       "https://example.com",
     );
     const blocks = Array.from(container.querySelectorAll(".chat-tool-card__block"));
-    expect(
-      blocks.map((block) => block.querySelector(".chat-tool-card__block-label")?.textContent),
-    ).toEqual(["Tool output"]);
+    expect(blocks[0]?.querySelector(".chat-tool-card__block-label")).toBeNull();
     expect(blocks[0]?.querySelector("code")?.textContent).toBe("Opened page");
   });
 
-  it("renders multi-file patch headers, changed rows, and raw output together", () => {
-    const container = document.createElement("div");
+  it("switches a completed patch between mutually exclusive diff and raw bodies", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
     render(
       renderToolCard(
         {
@@ -218,12 +234,177 @@ describe("tool-cards", () => {
       ),
     ).toEqual(["new a", "new b"]);
 
-    const rawToggle = container.querySelector<HTMLButtonElement>(".chat-tool-card__raw-toggle");
-    expect(rawToggle?.textContent?.trim()).toBe("Raw details");
-    rawToggle?.click();
-    expect(container.querySelector(".chat-tool-card__raw-body code")?.textContent).toBe(
-      "Applied patch",
+    const tabGroup = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+      "wa-tab-group",
     );
+    const tabs = Array.from(
+      container.querySelectorAll<HTMLElement & { updateComplete: Promise<unknown> }>("wa-tab"),
+    );
+    await tabGroup?.updateComplete;
+    await Promise.all(tabs.map((tab) => tab.updateComplete));
+    expect(
+      tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
+    ).toBe("Tool detail view");
+    expect(tabs.map((tab) => [tab.textContent?.trim(), tab.getAttribute("aria-selected")])).toEqual(
+      [
+        ["Diff", "true"],
+        ["Raw", "false"],
+      ],
+    );
+    const diffBody = container.querySelector<HTMLElement>('wa-tab-panel[name="diff"]');
+    const rawBody = container.querySelector<HTMLElement>('wa-tab-panel[name="raw"]');
+    expect(diffBody?.hasAttribute("active")).toBe(true);
+    expect(rawBody?.hasAttribute("active")).toBe(false);
+
+    tabs[1]?.click();
+    await tabGroup?.updateComplete;
+    await Promise.all(tabs.map((tab) => tab.updateComplete));
+    expect(diffBody?.hasAttribute("active")).toBe(false);
+    expect(rawBody?.hasAttribute("active")).toBe(true);
+    expect(rawBody?.querySelector("code")?.textContent).toBe("Applied patch");
+    expect(tabs.map((tab) => tab.getAttribute("aria-selected"))).toEqual(["false", "true"]);
+
+    tabGroup?.setAttribute("aria-label", "Translated tool detail view");
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:multi",
+          name: "apply_patch",
+          args: {
+            changes: [{ path: "src/a.ts", kind: { type: "update" }, diff: "-old\n+new\n" }],
+          },
+          outputText: "Applied patch",
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+    await tabGroup?.updateComplete;
+    expect(
+      tabGroup?.shadowRoot?.querySelector('[role="tablist"]')?.getAttribute("aria-label"),
+    ).toBe("Tool detail view");
+    container.remove();
+  });
+
+  it("shows failed edit output before the attempted diff", async () => {
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderToolCard(
+        {
+          id: "msg:edit:failed",
+          name: "edit",
+          args: { path: "src/a.ts", oldText: "before", newText: "after" },
+          outputText: "Patch context did not match",
+          completed: true,
+          isError: true,
+        },
+        { expanded: true, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    const tabGroup = container.querySelector<HTMLElement & { updateComplete: Promise<unknown> }>(
+      "wa-tab-group",
+    );
+    await tabGroup?.updateComplete;
+
+    expect(container.querySelector('wa-tab[panel="raw"]')?.hasAttribute("active")).toBe(true);
+    expect(container.querySelector('wa-tab-panel[name="raw"]')?.hasAttribute("active")).toBe(true);
+    expect(container.querySelector('wa-tab-panel[name="raw"] code')?.textContent).toBe(
+      "Patch context did not match",
+    );
+    container.remove();
+  });
+
+  it("labels a completed Codex file creation from its recorded operation", () => {
+    const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: "msg:patch:add",
+          name: "apply_patch",
+          args: {
+            changes: [
+              {
+                path: "src/new.ts",
+                kind: { type: "add" },
+                diff: "export const created = true;\n",
+              },
+            ],
+          },
+          completed: true,
+        },
+        { expanded: false, onOpenWorkspaceFile, onToggleExpanded: vi.fn() },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row__verb")?.textContent).toBe("Created");
+    expect(container.querySelector(".chat-tool-row__file-link")?.textContent?.trim()).toBe(
+      "new.ts",
+    );
+    container.querySelector<HTMLButtonElement>(".chat-tool-row__file-link")?.click();
+    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "src/new.ts" });
+  });
+
+  it.each([
+    {
+      label: "multi-file",
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: src/a.ts",
+        "@@",
+        "-old",
+        "+new",
+        "*** Add File: src/b.ts",
+        "+added",
+        "*** End Patch",
+      ].join("\n"),
+      target: "2 files",
+    },
+    {
+      label: "moved",
+      patch: [
+        "*** Begin Patch",
+        "*** Update File: src/old.ts",
+        "*** Move to: src/new.ts",
+        "@@",
+        "-old",
+        "+new",
+        "*** End Patch",
+      ].join("\n"),
+      target: "old.ts → new.ts",
+    },
+    {
+      // A successful delete removes its own target, so the workspace loader
+      // would only ever report "Failed to load".
+      label: "deleted",
+      patch: ["*** Begin Patch", "*** Delete File: src/gone.ts", "*** End Patch"].join("\n"),
+      target: "gone.ts",
+    },
+  ])("keeps $label patch summaries non-navigable", ({ patch, target }) => {
+    const container = document.createElement("div");
+    const onOpenWorkspaceFile = vi.fn();
+    const onToggleExpanded = vi.fn();
+    render(
+      renderToolCard(
+        {
+          id: `msg:patch:${target}`,
+          name: "apply_patch",
+          args: { patch },
+          completed: true,
+        },
+        { expanded: false, onOpenWorkspaceFile, onToggleExpanded },
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".chat-tool-row--file")).toBeNull();
+    expect(container.querySelector(".chat-tool-row__target")?.textContent).toBe(target);
+    container.querySelector<HTMLButtonElement>(".chat-tool-msg-summary")?.click();
+    expect(onToggleExpanded).toHaveBeenCalledOnce();
+    expect(onOpenWorkspaceFile).not.toHaveBeenCalled();
   });
 
   it("renders edit and write rows from their result outcome", () => {
@@ -242,11 +423,11 @@ describe("tool-cards", () => {
     const states = [
       {
         name: "running",
-        card: { live: true },
+        card: { live: true, liveDiffStat: { added: 12, removed: 3 } },
         runActive: true,
         verb: "running",
         label: "Attempted changes",
-        hasStat: false,
+        hasStat: true,
         failed: false,
       },
       {
@@ -312,13 +493,95 @@ describe("tool-cards", () => {
         );
         expect(container.querySelector(".chat-diff")?.getAttribute("aria-label")).toBe(state.label);
         expect(container.querySelector(".chat-diffstat") !== null).toBe(state.hasStat);
-        expect(container.querySelector(".chat-tool-row__badge")?.textContent === "failed").toBe(
-          state.failed,
-        );
-        expect(container.querySelector(".chat-tool-msg-summary--error") !== null).toBe(
-          state.failed,
-        );
+        if (state.failed) {
+          expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("failed");
+        }
+        expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
       }
+    }
+  });
+
+  it.each(
+    [
+      {
+        name: "edit",
+        args: { path: "src/edit.ts", oldText: "old edit", newText: "new edit" },
+        copiedText: "new edit",
+      },
+      {
+        name: "write",
+        args: { path: "src/write.ts", content: "new file\n" },
+        copiedText: "new file",
+      },
+      {
+        name: "apply_patch",
+        args: {
+          changes: [
+            {
+              path: "src/patch.ts",
+              kind: { type: "update" },
+              diff: "--- a/src/patch.ts\n+++ b/src/patch.ts\n@@ -1 +1 @@\n-old patch\n+new patch\n",
+            },
+          ],
+        },
+        copiedText: "new patch",
+      },
+    ].flatMap((tool) =>
+      [
+        { failed: false, feedback: "Copied!" },
+        { failed: true, feedback: "Copy failed" },
+      ].map((outcome) => ({
+        name: tool.name,
+        args: tool.args,
+        copiedText: tool.copiedText,
+        failed: outcome.failed,
+        feedback: outcome.feedback,
+      })),
+    ),
+  )("shows $feedback after copying a completed $name diff", async (tool) => {
+    const writeText = tool.failed
+      ? vi.fn().mockRejectedValue(new DOMException("Clipboard access denied", "NotAllowedError"))
+      : vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const container = document.body.appendChild(document.createElement("div"));
+    const onOpenSidebar = vi.fn();
+
+    try {
+      render(
+        renderToolCard(
+          {
+            id: `msg:${tool.name}:copy`,
+            name: tool.name,
+            args: tool.args,
+            completed: true,
+          },
+          { expanded: true, onToggleExpanded: vi.fn(), onOpenSidebar },
+        ),
+        container,
+      );
+
+      const copyButton = container.querySelector<HTMLButtonElement>(
+        '.chat-tool-card__actions button[aria-label="Copy"]',
+      );
+      expect(copyButton).toBeInstanceOf(HTMLButtonElement);
+      copyButton!.click();
+
+      await vi.waitFor(() => expect(copyButton!.getAttribute("aria-label")).toBe(tool.feedback));
+
+      expect(writeText).toHaveBeenCalledWith(expect.stringContaining(tool.copiedText));
+      const feedback = copyButton!.parentElement?.querySelector<HTMLElement>('[role="status"]');
+      expect(feedback?.textContent).toBe(tool.feedback);
+      expect(feedback?.hidden).toBe(false);
+
+      const sidebarButton = container.querySelector<HTMLButtonElement>(
+        `.chat-tool-card__actions button[aria-label="${t("chat.toolCards.openDetails")}"]`,
+      );
+      expect(sidebarButton).toBeInstanceOf(HTMLButtonElement);
+      sidebarButton!.click();
+      expect(onOpenSidebar).toHaveBeenCalledOnce();
+    } finally {
+      container.remove();
+      vi.unstubAllGlobals();
     }
   });
 
@@ -670,7 +933,8 @@ describe("tool-cards", () => {
     expect(container.querySelector(".chat-tool-card__preview-frame")).toBeNull();
     expect(rawToggle).toBeInstanceOf(HTMLButtonElement);
     expect(rawBody).toBeInstanceOf(HTMLElement);
-    expect([...rawToggle!.classList]).toEqual(["chat-tool-card__raw-toggle"]);
+    expect(rawToggle!.classList).toContain("chat-inline-disclosure");
+    expect(rawToggle!.classList).toContain("chat-tool-card__raw-toggle");
     expect(rawToggle!.textContent?.trim()).toBe("Raw details");
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("false");
     expect(rawBody!.hidden).toBe(true);
@@ -679,7 +943,7 @@ describe("tool-cards", () => {
 
     expect(rawToggle!.getAttribute("aria-expanded")).toBe("true");
     expect(rawBody!.hidden).toBe(false);
-    expect(rawBody!.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool output");
+    expect(rawBody!.querySelector(".chat-tool-card__block-label")).toBeNull();
     expect(rawBody!.querySelector("code.markdown-block-art")).toBeNull();
     expect(JSON.parse(rawBody!.querySelector("code")?.textContent ?? "{}")).toEqual({
       kind: "canvas",
@@ -776,169 +1040,7 @@ describe("tool-cards", () => {
     expect(sidebar.entryUrl).toBe("/__openclaw__/canvas/documents/cv_sidebar/index.html");
   });
 
-  it("renders an error summary without a redundant Error badge", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:err:1",
-          name: "web_search",
-          args: { query: "python stable version" },
-          inputText: '{\n  "query": "python stable version"\n}',
-          outputText: JSON.stringify({
-            error: "missing_brave_api_key",
-            message: "BRAVE_API_KEY is not configured",
-          }),
-        },
-        { expanded: true, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
-    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
-    expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(summaryButton?.querySelector(".chat-tool-msg-summary__label")?.textContent).toBe(
-      "Tool error",
-    );
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
-    const expandedCard = container.querySelector(".chat-tool-card");
-    expect(expandedCard?.classList.contains("chat-tool-card--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
-    expect(
-      Array.from(container.querySelectorAll(".chat-tool-card__block-label")).map(
-        (label) => label.textContent,
-      ),
-    ).toContain("Tool error");
-  });
-
-  it("renders a Tool error label when output has a status-only error payload", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:err:status-only",
-          name: "sessions_spawn",
-          outputText: JSON.stringify({ status: "error" }),
-        },
-        { expanded: true, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
-    expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
-    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
-  });
-
-  it("renders a Tool error label when output is the literal 'Tool not found'", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:err:2",
-          name: "Unknown",
-          outputText: "Tool not found",
-        },
-        { expanded: false, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
-    const summaryButton = container.querySelector("button.chat-tool-msg-summary");
-    expect(summaryButton?.classList.contains("chat-tool-msg-summary--error")).toBe(true);
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
-  });
-
-  it("renders a Tool error label when the tool card has an explicit error flag", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:err:explicit",
-          name: "lookup",
-          outputText: "lookup failed",
-          isError: true,
-        },
-        { expanded: true, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool error");
-    expect(container.textContent).not.toMatch(/\bTool output\b/);
-    expect(container.querySelector(".chat-tool-msg-summary--error")).not.toBeNull();
-    expect(container.querySelector(".chat-tool-card--error")).not.toBeNull();
-  });
-
-  it("renders a plain error detail when a failed tool has no output", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:err:no-output",
-          name: "lookup",
-          isError: true,
-        },
-        { expanded: true, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
-
-    expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
-    expect(container.querySelector(".chat-tool-card__block-label")?.textContent).toBe("Tool error");
-    expect(container.querySelector(".chat-tool-card__block-content")?.textContent).toBe(
-      "No output — tool failed.",
-    );
-  });
-
-  it("respects an explicit success flag even when the payload looks like an error", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:err:status-false",
-          name: "web_search",
-          outputText: JSON.stringify({
-            error: "missing_brave_api_key",
-          }),
-          isError: false,
-        },
-        { expanded: false, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Web Search");
-    expect(container.textContent).not.toContain("Tool error");
-    expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
-    expect(container.querySelector(".chat-tool-msg-summary__error-badge")).toBeNull();
-  });
-
-  it("keeps Tool output labelling for successful results", () => {
-    const container = document.createElement("div");
-    render(
-      renderToolCard(
-        {
-          id: "msg:ok:1",
-          name: "browser.open",
-          outputText: "Opened page",
-        },
-        { expanded: true, onToggleExpanded: vi.fn() },
-      ),
-      container,
-    );
-
-    expect(container.textContent).toContain("Tool output");
-    expect(container.textContent).not.toContain("Tool error");
-    expect(container.querySelector(".chat-tool-msg-summary--error")).toBeNull();
-    expect(container.querySelector(".chat-tool-card__status-badge")).toBeNull();
-  });
-  it("does not add a full-message request for ambiguous tool details", () => {
+  it("opens ambiguous tool details with the same sidebar output", () => {
     const container = document.createElement("div");
     const onOpenSidebar = vi.fn();
     render(
@@ -965,7 +1067,10 @@ describe("tool-cards", () => {
     sidebarButton!.click();
 
     const sidebar = requireFirstMockArg(onOpenSidebar, "sidebar open");
-    expect(sidebar.kind).toBe("markdown");
-    expect(sidebar.fullMessageRequest).toBeUndefined();
+    expect(sidebar).toEqual({
+      kind: "markdown",
+      content: "## Browser.open\n\n**Tool:** `browser.open`\n\n### Tool output\nOpened page",
+      rawText: "Opened page",
+    });
   });
 });

@@ -66,12 +66,8 @@ public enum AsyncTimeout {
         operation: @escaping @Sendable () async throws -> T) async throws -> T
     {
         let clamped = max(0, seconds)
-        if clamped == 0 {
-            return try await operation()
-        }
-
         // Unstructured racers let the caller return without awaiting a cancellation-ignoring loser.
-        // The actor resumes once and cancels both tasks; noncooperative work may still finish later,
+        // The actor resumes once and cancels every racer; noncooperative work may still finish later,
         // so callers must own resource cleanup and stale-result safety.
         let race = AsyncTimeoutRace<T>()
         return try await withTaskCancellationHandler {
@@ -85,22 +81,25 @@ public enum AsyncTimeout {
                     await race.resolveFailure(error)
                 }
             }
-            let timeoutTask = Task {
-                do {
-                    try await Task.sleep(nanoseconds: UInt64(clamped * 1_000_000_000))
-                    await race.resolveFailure(onTimeout())
-                } catch is CancellationError {
-                    // The operation or caller resolved the race first.
-                } catch {
-                    await race.resolveFailure(error)
+            var tasks = [operationTask]
+            if clamped > 0 {
+                let timeoutTask = Task {
+                    do {
+                        try await Task.sleep(nanoseconds: UInt64(clamped * 1_000_000_000))
+                        await race.resolveFailure(onTimeout())
+                    } catch is CancellationError {
+                        // The operation or caller resolved the race first.
+                    } catch {
+                        await race.resolveFailure(error)
+                    }
                 }
+                tasks.append(timeoutTask)
             }
             if Task.isCancelled {
-                operationTask.cancel()
-                timeoutTask.cancel()
+                tasks.forEach { $0.cancel() }
                 throw CancellationError()
             }
-            return try await race.wait(for: [operationTask, timeoutTask])
+            return try await race.wait(for: tasks)
         } onCancel: {
             Task { await race.resolveFailure(CancellationError()) }
         }

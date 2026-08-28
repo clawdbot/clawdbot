@@ -1,14 +1,16 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { requestSessionCreate } from "../sessions/index.ts";
+import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   normalizeString,
   replaceCard,
   workboardCardRunId,
   workboardCardSessionKey,
 } from "./card-state.ts";
-import { formatError, isRecord } from "./normalization-utils.ts";
-import { normalizeCardPayload, normalizeTaskSummary } from "./normalization.ts";
+import { formatError } from "./normalization-utils.ts";
+import { normalizeCardPayload } from "./normalization.ts";
 import {
   getWorkboardState,
   invalidateWorkboardLoads,
@@ -37,29 +39,12 @@ const WORKBOARD_ENGINE_MODELS = {
 } as const;
 const WORKBOARD_SESSION_LABEL_MAX_CHARS = 512;
 
-function buildCardPrompt(card: WorkboardCard): string {
-  const lines = [`Work on this OpenClaw Workboard card: ${card.title}`];
-  if (card.notes?.trim()) {
-    lines.push("", card.notes.trim());
-  }
-  if (card.labels.length > 0) {
-    lines.push("", `Labels: ${card.labels.join(", ")}`);
-  }
-  const parents = card.metadata?.links
-    ?.filter((link) => link.type === "parent" && link.targetCardId)
-    .map((link) => link.targetCardId);
-  if (parents?.length) {
-    lines.push("", `Parents: ${parents.join(", ")}`);
-  }
-  if (card.metadata?.automation?.skills?.length) {
-    lines.push("", `Suggested skills: ${card.metadata.automation.skills.join(", ")}`);
-  }
-  if (card.metadata?.automation?.workspace) {
-    const workspace = card.metadata.automation.workspace;
-    lines.push("", `Workspace: ${workspace.kind}${workspace.path ? ` ${workspace.path}` : ""}`);
-  }
-  lines.push("", "When done, summarize what changed and what remains.");
-  return lines.join("\n");
+function engineModel(engine: WorkboardExecutionEngine | null | undefined): string | undefined {
+  return engine === "codex"
+    ? WORKBOARD_ENGINE_MODELS.codex
+    : engine === "claude"
+      ? WORKBOARD_ENGINE_MODELS.claude
+      : undefined;
 }
 
 function buildCardSessionLabel(card: WorkboardCard): string {
@@ -71,32 +56,6 @@ function buildCardSessionLabel(card: WorkboardCard): string {
   }
   const titleMax = WORKBOARD_SESSION_LABEL_MAX_CHARS - suffixText.length;
   return `${truncateUtf16Safe(title, titleMax - 3).trimEnd()}...${suffixText}`;
-}
-
-function sanitizeSessionSegment(value: string | undefined, fallback: string): string {
-  const sanitized = (value ?? fallback)
-    .trim()
-    .replace(/[^a-zA-Z0-9_-]/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  return (sanitized || fallback).slice(0, 96);
-}
-
-function buildCardTaskSessionKey(card: WorkboardCard): string {
-  const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
-  const cardId = sanitizeSessionSegment(card.id, "card");
-  const suffix = `subagent:workboard-${boardId}-${cardId}`;
-  const sessionKey = card.agentId
-    ? `agent:${sanitizeSessionSegment(card.agentId, "agent")}:${suffix}`
-    : suffix;
-  const existing = workboardCardSessionKey(card)?.trim();
-  return existing === sessionKey ? existing : sessionKey;
-}
-
-function buildCardRunIdempotencyKey(card: WorkboardCard): string {
-  const boardId = sanitizeSessionSegment(card.metadata?.automation?.boardId, "default");
-  const cardId = sanitizeSessionSegment(card.id, "card");
-  return `workboard:${boardId}:${cardId}:${card.updatedAt}`;
 }
 
 function isScheduledForLater(card: WorkboardCard, now = Date.now()): boolean {
@@ -116,15 +75,16 @@ function buildWorkboardExecution(params: {
   status: WorkboardExecutionStatus;
 }): WorkboardExecution {
   const now = Date.now();
+  const model = engineModel(params.engine);
   return {
-    id: params.card.execution?.id ?? `${params.card.id}:${params.engine}`,
+    id: params.card.execution?.id ?? `${params.card.id}:agent-session`,
     kind: "agent-session",
     engine: params.engine,
     mode: params.mode,
     status: params.status,
-    model: WORKBOARD_ENGINE_MODELS[params.engine],
     startedAt: now,
     updatedAt: now,
+    ...(model ? { model } : {}),
     ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     ...(params.runId ? { runId: params.runId } : {}),
   };
@@ -165,29 +125,31 @@ async function findTaskForStartedRun(params: {
   return null;
 }
 
+function workboardRunWasAborted(result: unknown): boolean {
+  return (
+    isRecord(result) &&
+    (result.aborted === true || (Array.isArray(result.runIds) && result.runIds.length > 0))
+  );
+}
+
 async function abortWorkboardSessionRun(params: {
   client: GatewayBrowserClient;
   sessionKey: string;
   runId?: string;
 }): Promise<boolean> {
-  let abortResult = await params.client.request("chat.abort", {
+  const targetedAbort = await params.client.request("chat.abort", {
     sessionKey: params.sessionKey,
     ...(params.runId ? { runId: params.runId } : {}),
   });
-  let aborted =
-    isRecord(abortResult) &&
-    (abortResult.aborted === true ||
-      (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
-  if (!aborted && params.runId) {
-    abortResult = await params.client.request("chat.abort", {
-      sessionKey: params.sessionKey,
-    });
-    aborted =
-      isRecord(abortResult) &&
-      (abortResult.aborted === true ||
-        (Array.isArray(abortResult.runIds) && abortResult.runIds.length > 0));
+  const aborted = workboardRunWasAborted(targetedAbort);
+  if (aborted || !params.runId) {
+    return aborted;
   }
-  return aborted;
+  // A card run id that no longer names the live run aborts nothing, so retry
+  // session-wide before reporting failure; otherwise Stop strands an active run.
+  return workboardRunWasAborted(
+    await params.client.request("chat.abort", { sessionKey: params.sessionKey }),
+  );
 }
 
 function taskIsActive(task: WorkboardTaskSummary | undefined): task is WorkboardTaskSummary {
@@ -228,6 +190,7 @@ export async function startWorkboardCard(params: {
   }
   const engine = params.engine;
   const mode = params.mode ?? "autonomous";
+  const model = engineModel(engine);
   state.error = null;
   if (mode === "autonomous" && isScheduledForLater(params.card)) {
     state.error = "Scheduled cards cannot start before their scheduled time.";
@@ -237,128 +200,63 @@ export async function startWorkboardCard(params: {
   invalidateWorkboardLoads(params.host);
   state.busyCardIds.add(params.card.id);
   params.requestUpdate?.();
-  let preflightCard: WorkboardCard | null = null;
-  let createdSessionKey: string | null = null;
-  let createdRunId: string | undefined;
   try {
-    const shouldClearManualSchedule =
-      mode === "manual" && params.card.metadata?.automation?.scheduledAt !== undefined;
-    const shouldUnscheduleManual = mode === "manual" && params.card.status === "scheduled";
-    const nextCardStatus =
-      mode === "autonomous" ? "running" : shouldUnscheduleManual ? "todo" : params.card.status;
-    const nextExecutionStatus = mode === "autonomous" ? "running" : "idle";
-    let card = params.card;
     if (mode === "autonomous") {
-      const preflightPayload = await params.client.request("workboard.cards.update", {
+      const separator = model?.indexOf("/") ?? -1;
+      const payload = await params.client.request("workboard.cards.start", {
         id: params.card.id,
-        patch: { status: nextCardStatus },
+        ...(separator > 0
+          ? { provider: model?.slice(0, separator), model: model?.slice(separator + 1) }
+          : {}),
       });
-      preflightCard = normalizeCardPayload(preflightPayload);
-      if (preflightCard) {
-        replaceCard(state, preflightCard);
-        card = preflightCard;
-      }
-    }
-    const created =
-      mode === "autonomous"
-        ? await params.client.request("agent", {
-            sessionKey: buildCardTaskSessionKey(card),
-            ...(card.agentId ? { agentId: card.agentId } : {}),
-            label: buildCardSessionLabel(card),
-            ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
-            message: buildCardPrompt(card),
-            deliver: false,
-            bootstrapContextMode: "lightweight",
-            idempotencyKey: buildCardRunIdempotencyKey(card),
-          })
-        : await requestSessionCreate(params.client, {
-            ...(card.agentId ? { agentId: card.agentId } : {}),
-            label: buildCardSessionLabel(card),
-            ...(engine ? { model: WORKBOARD_ENGINE_MODELS[engine] } : {}),
-          });
-    const sessionKey =
-      isRecord(created) && typeof created.sessionKey === "string" && created.sessionKey.trim()
-        ? created.sessionKey.trim()
-        : isRecord(created) && typeof created.key === "string" && created.key.trim()
-          ? created.key.trim()
-          : mode === "autonomous"
-            ? buildCardTaskSessionKey(card)
-            : null;
-    const runId =
-      isRecord(created) && typeof created.runId === "string" && created.runId.trim()
-        ? created.runId.trim()
-        : undefined;
-    if (mode === "autonomous" && !runId) {
-      throw new Error("Gateway agent method returned an invalid runId.");
-    }
-    createdSessionKey = sessionKey;
-    createdRunId = runId;
-    const task =
-      mode === "autonomous" && sessionKey
-        ? await findTaskForStartedRun({
-            client: params.client,
-            card,
-            sessionKey,
-            runId,
-          })
+      const card = normalizeCardPayload(payload);
+      replaceCard(state, card);
+      const sessionKey = workboardCardSessionKey(card);
+      const runId = workboardCardRunId(card);
+      const task = sessionKey
+        ? await findTaskForStartedRun({ client: params.client, card, sessionKey, runId })
         : null;
+      if (task) {
+        state.tasksByCardId.set(card.id, task);
+      } else {
+        state.tasksByCardId.delete(card.id);
+      }
+      return sessionKey ?? null;
+    }
+    const shouldClearManualSchedule = params.card.metadata?.automation?.scheduledAt !== undefined;
+    const shouldUnscheduleManual = params.card.status === "scheduled";
+    const nextCardStatus = shouldUnscheduleManual ? "todo" : params.card.status;
+    const created = await requestSessionCreate(params.client, {
+      ...(params.card.agentId ? { agentId: params.card.agentId } : {}),
+      label: buildCardSessionLabel(params.card),
+      ...(model ? { model } : {}),
+    });
+    const sessionKey = created.key.trim() || null;
     const payload = await params.client.request("workboard.cards.update", {
       id: params.card.id,
       patch: {
         status: nextCardStatus,
         ...(shouldClearManualSchedule ? { scheduledAt: null } : {}),
         ...(sessionKey ? { sessionKey } : {}),
-        runId: runId ?? null,
-        taskId: task?.taskId ?? null,
+        runId: null,
+        taskId: null,
         ...(engine
           ? {
               execution: buildWorkboardExecution({
-                card,
+                card: params.card,
                 engine,
                 mode,
                 sessionKey,
-                runId,
-                status: nextExecutionStatus,
+                status: "idle",
               }),
             }
           : { execution: null }),
       },
     });
     replaceCard(state, normalizeCardPayload(payload));
-    if (task) {
-      state.tasksByCardId.set(params.card.id, task);
-    } else {
-      state.tasksByCardId.delete(params.card.id);
-    }
+    state.tasksByCardId.delete(params.card.id);
     return sessionKey;
   } catch (error) {
-    if (mode === "autonomous" && createdSessionKey) {
-      try {
-        await abortWorkboardSessionRun({
-          client: params.client,
-          sessionKey: createdSessionKey,
-          runId: createdRunId,
-        });
-      } catch {
-        // Preserve the card-start failure; the user-facing repair is the rollback below.
-      }
-    }
-    if (preflightCard) {
-      try {
-        const rollbackPayload = await params.client.request("workboard.cards.update", {
-          id: params.card.id,
-          patch: {
-            status: params.card.status,
-            startedAt: params.card.startedAt ?? null,
-            completedAt: params.card.completedAt ?? null,
-            ...(params.card.execution !== undefined ? { execution: params.card.execution } : {}),
-          },
-        });
-        replaceCard(state, normalizeCardPayload(rollbackPayload) ?? params.card);
-      } catch {
-        replaceCard(state, params.card);
-      }
-    }
     state.error = formatError(error);
     return null;
   } finally {

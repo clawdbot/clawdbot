@@ -17,6 +17,7 @@ import {
 } from "./accounts.js";
 import { resolveSignalTarget } from "./aliases.js";
 import { SignalChannelConfigSchema } from "./config-schema.js";
+import { signalDoctor } from "./doctor.js";
 import { createSignalSetupWizardProxy } from "./setup-core.js";
 
 const SIGNAL_CHANNEL = "signal" as const;
@@ -34,7 +35,7 @@ const signalConfigAdapterBase = createScopedChannelConfigAdapter<ResolvedSignalA
   listAccountIds: (cfg) => listSignalAccountIds(cfg),
   resolveAccount: adaptScopedAccountAccessor((params) => resolveSignalAccount(params)),
   defaultAccountId: (cfg) => resolveDefaultSignalAccountId(cfg),
-  clearBaseFields: ["account", "configPath", "httpUrl", "httpHost", "httpPort", "cliPath", "name"],
+  clearBaseFields: ["account", "accountUuid", "transport", "name"],
   resolveAllowFrom: (account: ResolvedSignalAccount) => account.config.allowFrom,
   formatAllowFrom: (allowFrom) =>
     normalizeStringifiedEntries(allowFrom)
@@ -74,13 +75,14 @@ export const signalSecurityAdapter = createRestrictSendersChannelSecurity<Resolv
   groupPolicyPath: "channels.signal.groupPolicy",
   groupAllowFromPath: "channels.signal.groupAllowFrom",
   mentionGated: false,
+  findingTitle: "Signal security warning",
   policyPathSuffix: "dmPolicy",
   normalizeDmEntry: (raw) => normalizeE164(raw.replace(/^signal:/i, "").trim()),
 });
 
 export function createSignalPluginBase(params: {
   setupWizard?: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setup"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedSignalAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedSignalAccount>,
   | "id"
@@ -92,10 +94,11 @@ export function createSignalPluginBase(params: {
   | "configSchema"
   | "config"
   | "security"
-  | "setup"
+  | "setupContract"
   | "messaging"
+  | "doctor"
 > {
-  const base = createChannelPluginBase({
+  const base = createChannelPluginBase<ResolvedSignalAccount>({
     id: SIGNAL_CHANNEL,
     meta: {
       ...getChatChannelMeta(SIGNAL_CHANNEL),
@@ -111,6 +114,7 @@ export function createSignalPluginBase(params: {
     },
     reload: { configPrefixes: ["channels.signal"] },
     configSchema: SignalChannelConfigSchema,
+    doctor: signalDoctor,
     config: {
       ...signalConfigAdapter,
       isConfigured: (account) => account.configured,
@@ -124,7 +128,7 @@ export function createSignalPluginBase(params: {
         }),
     },
     security: signalSecurityAdapter,
-    setup: params.setup,
+    setupContract: params.setupContract,
   });
   return {
     ...base,
@@ -142,7 +146,8 @@ export function createSignalPluginBase(params: {
     | "configSchema"
     | "config"
     | "security"
-    | "setup"
+    | "setupContract"
     | "messaging"
+    | "doctor"
   >;
 }

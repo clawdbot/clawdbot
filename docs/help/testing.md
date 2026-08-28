@@ -15,7 +15,7 @@ regressions for real-world provider/model bugs.
 <Note>
 **QA stack (qa-lab, qa-channel, live transport lanes)** is documented separately:
 
-- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring, and Matrix profiles.
+- [QA overview](/concepts/qa-e2e-automation) - architecture, command surface, scenario authoring, and the Matrix live lane.
 - [Maturity scorecard](/maturity/scorecard) - how release QA evidence supports stability and LTS decisions.
 - [QA channel](/channels/qa-channel) - the synthetic transport plugin used by repo-backed scenarios.
 
@@ -125,6 +125,12 @@ When debugging real providers/models (requires real creds):
   - Installs the packaged OpenClaw tarball in Docker, runs OpenAI API-key
     onboarding, and verifies the Codex plugin plus `@openai/codex` dependency
     were downloaded into the managed npm project root on demand.
+- Codex npm-plugin live package smoke: `pnpm test:docker:live-codex-npm-plugin`
+  - Installs the candidate OpenClaw package and exact Codex plugin into Docker,
+    then uses a real OpenAI key for CLI preflight and same-session turns.
+  - Its zero-retry medium-thinking follow-through turn must send progress, keep
+    working through randomized workspace reads and an exact artifact write,
+    then send completion. A progress-only terminal turn fails the lane.
 - Live plugin tool dependency smoke: `pnpm test:docker:live-plugin-tool`
   - Packs a fixture plugin with a real `slugify` dependency, installs it
     through `npm-pack:`, verifies the dependency under the managed npm
@@ -140,7 +146,7 @@ When debugging real providers/models (requires real creds):
     `openclaw setup` CLI fails closed without inference. It then
     tests and activates fake Claude through the packaged activation module.
     Only afterward does a fuzzy packaged CLI request reach the planner and
-    resolve to typed setup, followed by one-shot model, agent, Discord plugin,
+    resolve to typed setup, followed by one-shot model, agent, Discord config,
     and SecretRef operations. It validates config and audit entries. This is
     supporting gate/operation evidence, not an interactive onboarding or
     OpenClaw agent/tool/approval proof. The same lane is exposed in QA Lab by
@@ -162,20 +168,19 @@ These commands sit beside the main test suites when you need QA-lab realism.
 CI runs QA Lab in dedicated workflows. Agentic parity is nested under
 `QA-Lab - All Lanes` and release validation, not a standalone PR workflow.
 Broad validation should use `Full Release Validation` with
-`rerun_group=qa-parity` or the release-checks QA group. Stable/default release
-checks keep exhaustive live/Docker soak behind `run_release_soak=true`; the
-`full` profile forces soak on. `QA-Lab - All Lanes` runs nightly on `main` and
-from manual dispatch with the mock parity lane, live Matrix lane,
-Convex-managed live Telegram lane, and Convex-managed live Discord lane as
-parallel jobs. Scheduled QA and release checks run the Matrix release profile
-through the shared live adapter. The Matrix CLI and manual workflow input
-default remain `all`; manual `all` dispatches fan out the transport, media, and
-E2EE profiles, while focused dispatches can select `fast`, `release`, or
-`transport`. `OpenClaw Release Checks` runs parity plus the reusable Matrix
-live-adapter profile and Telegram lane before release approval. Release
+`rerun_group=qa-parity` for parity or `rerun_group=qa-live` for live QA.
+The direct `OpenClaw Release Checks` child alone may use `rerun_group=qa` as a
+manual aggregate of both groups. Stable/full, soak-enabled, and explicit
+`qa-live` release checks include the QA-live Matrix and Telegram lanes. Bounded
+beta-publish `all` without soak runs parity but defers those live lanes to
+postpublish-confidence. `QA-Lab - All Lanes` runs
+nightly on `main` and from manual dispatch with the mock parity lane, live
+Matrix lane, Convex-managed live Telegram lane, and Convex-managed live Discord
+lane as parallel jobs. Scheduled QA and selected release checks run the
+catalog-derived Matrix selection through the shared live adapter. Release
 transport checks use `mock-openai/gpt-5.6-luna` so they stay deterministic and
-avoid normal provider-plugin startup. These live transport gateways
-disable memory search; memory behavior stays covered by the QA parity suites.
+avoid normal provider-plugin startup. These live transport gateways disable
+memory search; memory behavior stays covered by the QA parity suites.
 
 Full release live media shards use
 `ghcr.io/openclaw/openclaw-live-media-runner:ubuntu-24.04`, which already has
@@ -263,10 +268,10 @@ inside every shard.
     onboarding, configures Telegram through the installed CLI, then reuses
     the live Telegram QA lane with that installed package as the SUT
     Gateway.
-  - The wrapper mounts only the `qa-lab` harness source from the checkout;
-    the installed package owns `dist`, `openclaw/plugin-sdk`, and bundled
-    plugin runtime, so the lane does not mix current checkout plugins into
-    the package under test.
+  - The trusted checkout owns the QA harness source, taxonomy, scenarios,
+    dependencies, and private SDK build. The installed package remains the
+    absolute CLI, Gateway, and bundled-plugin runtime under test, and its CLI
+    writes the package candidate's persisted auth state.
   - Defaults to `OPENCLAW_NPM_TELEGRAM_PACKAGE_SPEC=openclaw@beta`; set
     `OPENCLAW_NPM_TELEGRAM_PACKAGE_TGZ=/path/to/openclaw-current.tgz` or
     `OPENCLAW_CURRENT_PACKAGE_TGZ` to test a resolved local tarball instead
@@ -276,9 +281,15 @@ inside every shard.
     `OPENCLAW_NPM_TELEGRAM_RTT_SAMPLES`,
     `OPENCLAW_NPM_TELEGRAM_RTT_TIMEOUT_MS`, or
     `OPENCLAW_NPM_TELEGRAM_RTT_MAX_FAILURES` to tune the run.
-    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts a comma-separated list of
-    Telegram QA check IDs to sample; when unset, the default RTT-capable
-    check is `telegram-mentioned-message-reply`.
+    `OPENCLAW_NPM_TELEGRAM_RTT_CHECKS` accepts zero or exactly one canonical
+    Telegram QA scenario id. When omitted, the normal lane samples
+    `channel-canary`; focused non-RTT scenario runs stay probe-free. An explicit
+    RTT scenario is included in scenario selection automatically, so callers do
+    not need to repeat it in `OPENCLAW_NPM_TELEGRAM_SCENARIOS`. Multiple ids
+    fail immediately, while unknown or inapplicable ids fail canonical scenario
+    validation. The package runner promotes the selected RTT scenario once to
+    the first position before the remaining taxonomy-backed fail-fast release
+    scenarios.
   - Uses the same Telegram env credentials or Convex credential source as
     `pnpm openclaw qa telegram`. For CI/release automation, set
     `OPENCLAW_NPM_TELEGRAM_CREDENTIAL_SOURCE=convex` plus
@@ -295,7 +306,11 @@ inside every shard.
     and `maintainer` outside CI.
   - GitHub Actions exposes this lane as the manual maintainer workflow
     `NPM Telegram Beta E2E`. It does not run on merge. The workflow uses the
-    `qa-live-shared` environment and Convex CI credential leases.
+    `qa-live-shared` environment and Convex CI credential leases. Set its
+    optional `rtt_scenario` input to select the repeated RTT scenario, or leave
+    it empty for the default behavior above. Enable
+    `allow_older_binary_destructive_actions` only for intentional historical
+    downgrade or recovery proof; it remains false by default.
 - GitHub Actions also exposes `Package Acceptance` for side-run product proof
   against one candidate package. It accepts a Git ref, published npm spec,
   HTTPS tarball URL plus SHA-256, trusted-URL policy, or tarball artifact
@@ -398,12 +413,24 @@ gh workflow run package-acceptance.yml --ref main \
 - `pnpm openclaw qa aimock`
   - Starts only the local AIMock provider server for direct protocol smoke
     testing.
+- `pnpm openclaw qa buzz`
+  - Runs the Buzz live QA lane against a real relay room using dedicated driver
+    and SUT identities.
+  - Local runs use `--credential-file <path>` with `relayUrl`, `roomId`,
+    `driverPrivateKey`, and `sutPrivateKey`. Closed relays may also need
+    `driverAuthTag` and `sutAuthTag`. Hosted relays require `wss://`; `ws://` is
+    accepted only for loopback development relays.
+  - Defaults to `mock-openai` and runs canary and mention-gating scenarios
+    through the real Buzz plugin path.
+  - Supports `--credential-source convex` with a pooled `kind: "buzz"` row.
+    Both public keys must be relay/room members, and the SUT must have the
+    **Bot** room role. Never use a human owner or admin private key.
 - `pnpm openclaw qa matrix`
   - Runs the Matrix live QA lane against a disposable Docker-backed Tuwunel
     homeserver. Source-checkout only - packaged installs do not ship
     `qa-lab`.
   - Full CLI, profile/scenario catalog, env vars, and artifact layout:
-    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-smoke-lanes).
+    [Matrix smoke lanes](/concepts/qa-e2e-automation#matrix-live-lane).
 - `pnpm openclaw qa telegram`
   - Runs the Telegram live QA lane against a real private group using the
     driver and SUT bot tokens from env.
@@ -436,22 +463,26 @@ redacted QA report/evidence bundle in a Crabbox desktop browser, records MP4
 evidence, generates a motion-trimmed GIF, uploads the artifact bundle, and
 posts inline PR evidence through the Mantis GitHub App when `pr_number` is
 set. Maintainers can start it from the Actions UI through `Mantis Scenario`
-(`scenario_id: telegram-live`) or directly from a pull request comment:
-
-```text
-@openclaw-mantis telegram
-@openclaw-mantis telegram scenario=telegram-status-command
-@openclaw-mantis telegram scenarios=telegram-status-command,telegram-mentioned-message-reply
-```
+(`scenario_id: telegram-live`).
 
 `Mantis Telegram Desktop Proof` is the agentic native Telegram Desktop
 before/after wrapper for PR visual proof. Start it from the Actions UI with
 freeform `instructions`, through `Mantis Scenario` (`scenario_id:
-telegram-desktop-proof`), or from a PR comment:
+telegram-desktop-proof`), or from a maintainer PR comment:
 
 ```text
-@openclaw-mantis telegram desktop proof
+@openclaw-mantis
+@openclaw-mantis verify the streamed reply stays visible while it arrives
 ```
+
+ClawSweeper's `mantis: telegram-visible-proof` label starts this workflow
+automatically for branches in `openclaw/openclaw`. Fork PRs require the
+maintainer comment. Mantis reacts with 👀 when it accepts a comment, then
+posts the active workflow link in its evidence comment and replaces that same
+comment with the result. Any text after the mention is optional proof guidance.
+Manual requests stop before desktop setup and comment
+`There was nothing visible to test in this PR at all.` when the diff has no
+Telegram-visible behavior.
 
 The Mantis agent reads the PR, decides what Telegram-visible behavior proves
 the change, runs the real-user Crabbox Telegram Desktop proof lane on
@@ -478,7 +509,7 @@ table through the Mantis GitHub App when `pr_number` is set.
 
 Live transport lanes share one standard contract so new transports do not
 drift; the per-lane coverage matrix lives in
-[QA overview - Live transport coverage](/concepts/qa-e2e-automation#live-transport-coverage).
+[QA overview - Live transport coverage](/concepts/qa-e2e-automation#buzz%2C-discord%2C-slack%2C-telegram%2C-and-whatsapp-qa-reference).
 `qa-channel` is the broad synthetic suite and is not part of that matrix.
 
 ### Shared Telegram credentials via Convex (v1)
@@ -486,8 +517,8 @@ drift; the per-lane coverage matrix lives in
 When `--credential-source convex` (or `OPENCLAW_QA_CREDENTIAL_SOURCE=convex`)
 is enabled for live transport QA, QA lab acquires an exclusive lease from a
 Convex-backed pool, heartbeats that lease while the lane is running, and
-releases the lease on shutdown. The section name predates Discord, Slack, and
-WhatsApp support; the lease contract is shared across kinds.
+releases the lease on shutdown. The section name predates Buzz, Discord, Slack,
+and WhatsApp support; the lease contract is shared across kinds.
 
 Reference Convex project scaffold: `qa/convex-credential-broker/`
 
@@ -573,6 +604,7 @@ Payload shape for Telegram real-user kind:
 
 Broker-validated multi-channel payloads:
 
+- Buzz: `{ relayUrl: string, roomId: string, driverPrivateKey: string, sutPrivateKey: string, driverAuthTag?: string, sutAuthTag?: string }`
 - Discord: `{ guildId: string, channelId: string, driverBotToken: string, sutBotToken: string, sutApplicationId: string, voiceChannelId?: string }`
 - WhatsApp: `{ driverPhoneE164: string, sutPhoneE164: string, driverAuthArchiveBase64: string, sutAuthArchiveBase64: string, groupJid?: string }`
 
@@ -676,6 +708,17 @@ Native dependency policy:
       after 5 minutes with no stdout or stderr output. Set
       `OPENCLAW_VITEST_NO_OUTPUT_TIMEOUT_MS=0` to disable the watchdog for
       an intentionally silent investigation.
+    - `scripts/run-tsgo.mjs` leaves tsgo unbounded by default, preserving the
+      behavior of existing local workflows. Set `OPENCLAW_TSGO_TIMEOUT_MS` to
+      a positive millisecond value to make a wedged compiler fail loudly
+      instead of blocking its caller forever. On expiry the whole tsgo process
+      tree is killed and the run fails. Values above Node's timer
+      ceiling saturate at it instead of collapsing to a 1ms deadline; `0`, a
+      negative, a fraction, or anything above `Number.MAX_SAFE_INTEGER` is
+      rejected and fails the run. Surrounding whitespace is trimmed first;
+      the remaining value must use plain decimal digits without leading zeros,
+      so values such as `1e5` or `007` are rejected. Unset the variable to
+      disable the watchdog.
 
   </Accordion>
 
@@ -723,7 +766,7 @@ Native dependency policy:
       committed diff and prints wall time plus macOS max RSS.
     - `pnpm test:perf:changed:bench -- --worktree` benchmarks the current
       dirty tree by routing the changed file list through
-      `scripts/test-projects.mjs` and the root Vitest config.
+      `scripts/test-projects.mts` and the root Vitest config.
     - `pnpm test:perf:profile:main` writes a main-thread CPU profile for
       Vitest/Vite startup and transform overhead.
     - `pnpm test:perf:profile:runner` writes runner CPU+heap profiles for
@@ -763,10 +806,10 @@ Native dependency policy:
 - Files: `src/**/*.e2e.test.ts`, `test/**/*.e2e.test.ts`, and bundled-plugin E2E tests under `extensions/`
 - Runtime defaults:
   - Uses Vitest `threads` with `isolate: false`, matching the rest of the repo.
-  - Uses adaptive workers (CI: up to 2, local: 1 by default).
+  - Uses one worker by default to keep non-isolated gateway state deterministic.
   - Runs in silent mode by default to reduce console I/O overhead.
 - Useful overrides:
-  - `OPENCLAW_E2E_WORKERS=<n>` to force worker count (capped at 16).
+  - `OPENCLAW_E2E_WORKERS=<n>` to opt into parallel workers (capped at 16).
   - `OPENCLAW_E2E_VERBOSE=1` to re-enable verbose console output.
 - Scope:
   - Multi-instance gateway end-to-end behavior
@@ -797,7 +840,9 @@ Native dependency policy:
 - Scope:
   - Reuses an active local OpenShell gateway
   - Creates a sandbox from a temporary local Dockerfile
-  - Exercises OpenClaw's OpenShell backend over real `sandbox ssh-config` + SSH exec
+  - Exercises remote and default mirrored OpenShell backends over real SSH
+  - Creates an isolated non-default OpenShell workspace and custom workspace roots
+  - Verifies nested mirrored file writes and excludes host Git metadata and hooks
   - Verifies remote-canonical filesystem behavior through the sandbox fs bridge
 - Expectations:
   - Opt-in only; not part of the default `pnpm test:e2e` run
@@ -808,7 +853,7 @@ Native dependency policy:
   - `OPENCLAW_E2E_OPENSHELL=1` to enable the test when running the broader e2e suite manually
   - `OPENCLAW_E2E_OPENSHELL_COMMAND=/path/to/openshell` to point at a non-default CLI binary or wrapper script
   - `OPENCLAW_E2E_OPENSHELL_CONFIG_HOME=/path/to/config` to expose the registered gateway config to the isolated test
-  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the Docker gateway IP used by the host policy fixture
+  - `OPENCLAW_E2E_OPENSHELL_HOST_IP=172.18.0.1` to override the sandbox-visible `host.openshell.internal` address used by the network policy fixture; Docker Desktop may resolve this differently from the bridge gateway
 
 ### Live (real providers + real models)
 
@@ -864,9 +909,9 @@ These Docker runners split into two buckets:
   `OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS=45000`, and
   `OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS=90000`. Set `OPENCLAW_LIVE_MAX_MODELS`
   or the gateway env vars when you explicitly want a smaller cap or larger scan.
-- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mjs`; planner logic lives in `scripts/lib/docker-e2e-plan.mjs`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=5`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` (and other `OPENCLAW_DOCKER_ALL_<RESOURCE>_LIMIT` overrides) only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
+- `test:docker:all` builds the live Docker image once via `test:docker:live-build`, packs OpenClaw once as an npm tarball through `scripts/package-openclaw-for-docker.mjs`, then builds/reuses two `scripts/e2e/Dockerfile` images. The bare image is only the Node/Git runner for install/update/plugin-dependency lanes; those lanes mount the prebuilt tarball. The functional image installs the same tarball into `/app` for built-app functionality lanes. Docker lane definitions live in `scripts/lib/docker-e2e-scenarios.mts`; planner logic lives in `scripts/lib/docker-e2e-plan.mts`; `scripts/test-docker-all.mjs` executes the selected plan. The aggregate uses a weighted local scheduler: `OPENCLAW_DOCKER_ALL_PARALLELISM` controls process slots, while resource caps keep heavy live, npm-install, and multi-service lanes from all starting at once. If a single lane is heavier than the active caps, the scheduler can still start it when the pool is empty and then keeps it running alone until capacity is available again. Defaults are 10 slots, `OPENCLAW_DOCKER_ALL_LIVE_LIMIT=9`, `OPENCLAW_DOCKER_ALL_NPM_LIMIT=5`, and `OPENCLAW_DOCKER_ALL_SERVICE_LIMIT=7`; tune `OPENCLAW_DOCKER_ALL_WEIGHT_LIMIT` or `OPENCLAW_DOCKER_ALL_DOCKER_LIMIT` (and other `OPENCLAW_DOCKER_ALL_<RESOURCE>_LIMIT` overrides) only when the Docker host has more headroom. The runner performs a Docker preflight by default, removes stale OpenClaw E2E containers, prints status every 30 seconds, stores successful lane timings in `.artifacts/docker-tests/lane-timings.json`, and uses those timings to start longer lanes first on later runs. Use `OPENCLAW_DOCKER_ALL_DRY_RUN=1` to print the weighted lane manifest without building or running Docker, or `node scripts/test-docker-all.mjs --plan-json` to print the CI plan for selected lanes, package/image needs, and credentials.
 - `Package Acceptance` is the GitHub-native package gate for "does this installable tarball work as a product?" It resolves one candidate package from `source=npm`, `source=ref`, `source=url`, `source=trusted-url`, or `source=artifact`, uploads it as `package-under-test`, then runs the reusable Docker E2E lanes against that exact tarball instead of repacking the selected ref. Profiles are ordered by breadth: `smoke`, `package`, `product`, and `full` (plus `custom` for an explicit lane list). See [Testing updates and plugins](/help/testing-updates-plugins) for the package/update/plugin contract, published-upgrade survivor matrix, release defaults, and failure triage.
-- Build and release checks run `scripts/check-cli-bootstrap-imports.mjs` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if that pre-dispatch bootstrap graph statically imports any external package (Commander, prompt UI, undici, logging, and similar startup-heavy deps all count) before command dispatch; it also caps the bundled gateway run chunk at 70 KB and rejects static imports of known cold gateway paths (`control-ui-assets`, `diagnostic-stability-bundle`, `onboard-helpers`, `process-respawn`, `restart-sentinel`, `server-close`, `server-reload-handlers`) from that chunk. `scripts/release-check.ts` separately smoke-tests the packed CLI with `--help`, `onboard --help`, `doctor --help`, `status --json --timeout 1`, `config schema`, and `models list --provider openai`.
+- Build and release checks run `scripts/check-cli-bootstrap-imports.mts` after tsdown. The guard walks the static built graph from `dist/entry.js` and `dist/cli/run-main.js` and fails if that pre-dispatch bootstrap graph statically imports any external package (Commander, prompt UI, undici, logging, and similar startup-heavy deps all count) before command dispatch; it also caps the bundled gateway run chunk at 70 KB and rejects static imports of known cold gateway paths (`control-ui-assets`, `diagnostic-stability-bundle`, `onboard-helpers`, `process-respawn`, `restart-sentinel`, `server-close`, `server-reload-handlers`) from that chunk. `scripts/release-check.ts` separately smoke-tests the packed CLI with `--help`, `onboard --help`, `doctor --help`, `status --json --timeout 1`, `config schema`, and `models list --provider openai`.
 - Package Acceptance legacy compatibility is capped at `2026.4.25` (`2026.4.25-beta.*` included). Through that cutoff, the harness tolerates only shipped-package metadata gaps: omitted private QA inventory entries, missing `gateway install --wrapper`, missing patch files in the tarball-derived git fixture, missing persisted `update.channel`, legacy plugin install-record locations, missing marketplace install-record persistence, and config metadata migration during `plugins update`. For packages after `2026.4.25`, those paths are strict failures.
 - Container smoke runners: `test:docker:openwebui`, `test:docker:onboard`, `test:docker:npm-onboard-channel-agent`, `test:docker:release-user-journey`, `test:docker:release-typed-onboarding`, `test:docker:release-media-memory`, `test:docker:release-upgrade-user-journey`, `test:docker:release-plugin-marketplace`, `test:docker:skill-install`, `test:docker:update-channel-switch`, `test:docker:upgrade-survivor`, `test:docker:published-upgrade-survivor`, `test:docker:session-runtime-context`, `test:docker:agents-delete-shared-workspace`, `test:docker:gateway-network`, `test:docker:browser-cdp-snapshot`, `test:docker:mcp-channels`, `test:docker:agent-bundle-mcp-tools`, `test:docker:cron-mcp-cleanup`, `test:docker:plugins`, `test:docker:plugin-update`, `test:docker:plugin-lifecycle-matrix`, and `test:docker:config-reload` boot one or more real containers and verify higher-level integration paths.
 - Docker/Bash E2E lanes that install the packed OpenClaw tarball through `scripts/lib/openclaw-e2e-instance.sh` cap `npm install` at `OPENCLAW_E2E_NPM_INSTALL_TIMEOUT` (default `600s`; set `0` to disable the wrapper for debugging).
@@ -896,7 +941,7 @@ without mutating the host auth store:
 - Upgrade survivor smoke: `pnpm test:docker:upgrade-survivor` installs the packed OpenClaw tarball over a dirty old-user fixture with agents, channel config, plugin allowlists, stale plugin dependency state, and existing workspace/session files. It runs package update plus non-interactive doctor without live provider or channel keys, then starts a loopback Gateway and checks config/state preservation plus startup/status budgets.
 - Published upgrade survivor smoke: `pnpm test:docker:published-upgrade-survivor` installs `openclaw@latest` by default, seeds realistic existing-user files, configures that baseline with a baked command recipe, validates the resulting config, updates that published install to the candidate tarball, runs non-interactive doctor, writes `.artifacts/upgrade-survivor/summary.json`, then starts a loopback Gateway and checks configured intents, state preservation, startup, `/healthz`, `/readyz`, and RPC status budgets. Override one baseline with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC`, ask the aggregate scheduler to expand exact local baselines with `OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS` such as `openclaw@2026.5.2 openclaw@2026.4.23 openclaw@2026.4.15`, and expand issue-shaped fixtures with `OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS` such as `reported-issues`; the reported-issues set includes `configured-plugin-installs` for automatic external OpenClaw plugin install repair. Package Acceptance exposes those as `published_upgrade_survivor_baseline`, `published_upgrade_survivor_baselines`, and `published_upgrade_survivor_scenarios`, resolves meta baseline tokens such as `last-stable-4` or `all-since-2026.4.23`, and Full Release Validation expands the release-soak package gate to `last-stable-4 2026.4.23 2026.5.2 2026.4.15` plus `reported-issues`.
 - Session runtime context smoke: `pnpm test:docker:session-runtime-context` verifies hidden runtime context transcript persistence plus doctor repair of affected duplicated prompt-rewrite branches.
-- Bun global install smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g` in an isolated home, and verifies `openclaw infer image providers --json` returns bundled image providers instead of hanging. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
+- Bun global install and runtime smoke: `bash scripts/e2e/bun-global-install-smoke.sh` packs the current tree, installs it with `bun install -g --trust` in an isolated home, verifies OpenClaw's lifecycle scripts ran, and executes the installed package with Bun 1.4 or newer. It checks representative CLI state, bundled image providers, a mocked local agent turn, Gateway readiness and health, and a mocked agent turn through the Bun-hosted Gateway. Reuse a prebuilt tarball with `OPENCLAW_BUN_GLOBAL_SMOKE_PACKAGE_TGZ=/path/to/openclaw-*.tgz`, skip the host build with `OPENCLAW_BUN_GLOBAL_SMOKE_HOST_BUILD=0`, or copy `dist/` from a built Docker image with `OPENCLAW_BUN_GLOBAL_SMOKE_DIST_IMAGE=openclaw-dockerfile-smoke:local`.
 - Installer Docker smoke: `bash scripts/test-install-sh-docker.sh` shares one npm cache across its root, update, and direct-npm containers. Update smoke defaults to npm `latest` as the stable baseline before upgrading to the candidate tarball. Override with `OPENCLAW_INSTALL_SMOKE_UPDATE_BASELINE=2026.4.22` locally, or with the Install Smoke workflow's `update_baseline_version` input on GitHub. Non-root installer checks keep an isolated npm cache so root-owned cache entries do not mask user-local install behavior. Set `OPENCLAW_INSTALL_SMOKE_NPM_CACHE_DIR=/path/to/cache` to reuse the root/update/direct-npm cache across local reruns.
 - Install Smoke CI skips the duplicate direct-npm global update with `OPENCLAW_INSTALL_SMOKE_SKIP_NPM_GLOBAL=1`; run the script locally without that env when direct `npm install -g` coverage is needed.
 - Agents delete shared workspace CLI smoke: `pnpm test:docker:agents-delete-shared-workspace` (script: `scripts/e2e/agents-delete-shared-workspace-docker.sh`) builds the root Dockerfile image by default, seeds two agents with one workspace in an isolated container home, runs `agents delete --json`, and verifies valid JSON plus retained workspace behavior. Reuse the install-smoke image with `OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_IMAGE=openclaw-dockerfile-smoke:local OPENCLAW_AGENTS_DELETE_SHARED_WORKSPACE_E2E_SKIP_BUILD=1`.

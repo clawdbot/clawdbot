@@ -22,14 +22,21 @@ import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   supportsClaudeAdaptiveThinking,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import {
+  loadBedrockControlPlaneSdk,
+  runBedrockControlPlaneRequest,
+  type BedrockControlPlaneSdk,
+} from "./control-plane.js";
 import { resolveBedrockConfigApiKey } from "./discovery-shared.js";
 import { resolveBedrockNativeThinkingLevelMap } from "./thinking-policy.js";
 
@@ -65,13 +72,12 @@ const KNOWN_CONTEXT_WINDOWS: Record<string, number> = {
   "anthropic.claude-mythos-5": 1_000_000,
   // AWS publishes Sonnet 5 on both bedrock-runtime (Invoke/Converse) and Mantle.
   "anthropic.claude-sonnet-5": 1_000_000,
+  "anthropic.claude-opus-5": 1_000_000,
   "anthropic.claude-3-7-sonnet-20250219-v1:0": 200_000,
   "anthropic.claude-opus-4-8": 1_000_000,
   "anthropic.claude-opus-4-7": 1_000_000,
   "anthropic.claude-opus-4-6-v1": 1_000_000,
-  "anthropic.claude-opus-4-6-v1:0": 1_000_000,
   "anthropic.claude-sonnet-4-6": 1_000_000,
-  "anthropic.claude-sonnet-4-6-v1:0": 1_000_000,
   "anthropic.claude-sonnet-4-5-20250929-v1:0": 200_000,
   "anthropic.claude-sonnet-4-20250514-v1:0": 200_000,
   "anthropic.claude-opus-4-5-20251101-v1:0": 200_000,
@@ -145,7 +151,8 @@ function resolveKnownContextWindow(modelId: string): number | undefined {
     if (
       resolveClaudeFable5ModelIdentity({ id: candidate }) ||
       resolveClaudeMythos5ModelIdentity({ id: candidate }) ||
-      resolveClaudeSonnet5ModelIdentity({ id: candidate })
+      resolveClaudeSonnet5ModelIdentity({ id: candidate }) ||
+      resolveClaudeOpus5ModelIdentity({ id: candidate })
     ) {
       return 1_000_000;
     }
@@ -182,7 +189,8 @@ function resolveKnownThinkingLevelMap(
 function resolveKnownMaxTokens(modelId: string): number | undefined {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) ||
     resolveClaudeMythos5ModelIdentity({ id: modelId }) ||
-    resolveClaudeSonnet5ModelIdentity({ id: modelId })
+    resolveClaudeSonnet5ModelIdentity({ id: modelId }) ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId })
     ? 128_000
     : undefined;
 }
@@ -190,7 +198,8 @@ function resolveKnownMaxTokens(modelId: string): number | undefined {
 function resolveKnownInput(modelId: string): ModelDefinitionConfig["input"] | undefined {
   return resolveClaudeFable5ModelIdentity({ id: modelId }) ||
     resolveClaudeMythos5ModelIdentity({ id: modelId }) ||
-    resolveClaudeSonnet5ModelIdentity({ id: modelId })
+    resolveClaudeSonnet5ModelIdentity({ id: modelId }) ||
+    resolveClaudeOpus5ModelIdentity({ id: modelId })
     ? ["text", "image"]
     : undefined;
 }
@@ -207,38 +216,6 @@ type BedrockModelSummary = NonNullable<ListFoundationModelsCommandOutput["modelS
 type InferenceProfileSummary = NonNullable<
   ListInferenceProfilesCommandOutput["inferenceProfileSummaries"]
 >[number];
-
-type BedrockDiscoverySdk = {
-  createClient(region: string): BedrockClient;
-  createListFoundationModelsCommand(): unknown;
-  createListInferenceProfilesCommand(input: { nextToken?: string }): unknown;
-};
-
-async function loadBedrockDiscoverySdk(): Promise<BedrockDiscoverySdk> {
-  const { BedrockClient, ListFoundationModelsCommand, ListInferenceProfilesCommand } =
-    await import("@aws-sdk/client-bedrock");
-  return {
-    createClient: (region) => new BedrockClient({ region }),
-    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
-    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
-  };
-}
-
-function createInjectedClientDiscoverySdk(): BedrockDiscoverySdk {
-  class ListFoundationModelsCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-  class ListInferenceProfilesCommand {
-    constructor(readonly input: Record<string, unknown> = {}) {}
-  }
-  return {
-    createClient() {
-      throw new Error("clientFactory is required for injected Bedrock discovery commands");
-    },
-    createListFoundationModelsCommand: () => new ListFoundationModelsCommand({}),
-    createListInferenceProfilesCommand: (input) => new ListInferenceProfilesCommand(input),
-  };
-}
 
 type BedrockDiscoveryCacheEntry = {
   expiresAt: number;
@@ -419,15 +396,17 @@ function resolveBaseModelId(profile: InferenceProfileSummary): string | undefine
  */
 async function fetchInferenceProfileSummaries(
   client: BedrockClient,
-  createListInferenceProfilesCommand: BedrockDiscoverySdk["createListInferenceProfilesCommand"],
+  createListInferenceProfilesCommand: BedrockControlPlaneSdk["createListInferenceProfilesCommand"],
 ): Promise<InferenceProfileSummary[]> {
   try {
     const profiles: InferenceProfileSummary[] = [];
     let nextToken: string | undefined;
     do {
-      const response: ListInferenceProfilesCommandOutput = await client.send(
-        createListInferenceProfilesCommand({ nextToken }) as never,
-      );
+      const command = createListInferenceProfilesCommand({ nextToken });
+      const response = await runBedrockControlPlaneRequest({
+        operation: "Bedrock ListInferenceProfiles",
+        send: (options) => client.send(command, options),
+      });
       for (const summary of response.inferenceProfileSummaries ?? []) {
         profiles.push(summary);
       }
@@ -528,12 +507,6 @@ function resolveInferenceProfiles(
 // Public API
 // ---------------------------------------------------------------------------
 
-/** Reset Bedrock discovery cache for tests. */
-export function resetBedrockDiscoveryCacheForTest(): void {
-  discoveryCache.clear();
-  hasLoggedBedrockError = false;
-}
-
 /** Discover Bedrock models and inference profiles for one region/config. */
 export async function discoverBedrockModels(params: {
   region: string;
@@ -572,9 +545,7 @@ export async function discoverBedrockModels(params: {
     }
   }
 
-  const sdk = params.clientFactory
-    ? createInjectedClientDiscoverySdk()
-    : await loadBedrockDiscoverySdk();
+  const sdk = await loadBedrockControlPlaneSdk();
   const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
   if (!params.clientFactory) {
     await refreshAwsSharedConfigCacheForBedrock();
@@ -582,63 +553,71 @@ export async function discoverBedrockModels(params: {
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
-    // Discover foundation models and inference profiles in parallel.
-    // Both API calls are independent, but we need the foundation model data
-    // to resolve inference profile capabilities — so we fetch in parallel,
-    // then build the lookup map before processing profiles.
-    const [rawFoundationResponse, profileSummaries] = await Promise.all([
-      client.send(sdk.createListFoundationModelsCommand() as never),
-      fetchInferenceProfileSummaries(client, (input) =>
-        sdk.createListInferenceProfilesCommand(input),
-      ),
-    ]);
-    const foundationResponse = rawFoundationResponse as ListFoundationModelsCommandOutput;
+    try {
+      // Discover foundation models and inference profiles in parallel.
+      // Both API calls are independent, but we need the foundation model data
+      // to resolve inference profile capabilities — so we fetch in parallel,
+      // then build the lookup map before processing profiles.
+      const foundationCommand = sdk.createListFoundationModelsCommand();
+      const [foundationResponse, profileSummaries] = await Promise.all([
+        runBedrockControlPlaneRequest({
+          operation: "Bedrock ListFoundationModels",
+          send: (options) => client.send(foundationCommand, options),
+        }),
+        fetchInferenceProfileSummaries(client, (input) =>
+          sdk.createListInferenceProfilesCommand(input),
+        ),
+      ]);
 
-    const discovered: ModelDefinitionConfig[] = [];
-    const seenIds = new Set<string>();
-    const foundationModels = new Map<string, ModelDefinitionConfig>();
+      const discovered: ModelDefinitionConfig[] = [];
+      const seenIds = new Set<string>();
+      const foundationModels = new Map<string, ModelDefinitionConfig>();
 
-    // Foundation models first — build both the results list and the lookup map.
-    for (const summary of foundationResponse.modelSummaries ?? []) {
-      if (!shouldIncludeSummary(summary, providerFilter)) {
-        continue;
-      }
-      const def = toModelDefinition(summary, {
-        contextWindow: defaultContextWindow,
-        maxTokens: defaultMaxTokens,
-      });
-      discovered.push(def);
-      const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
-      seenIds.add(normalizedId);
-      foundationModels.set(normalizedId, def);
-    }
-
-    // Merge inference profiles — inherit capabilities from foundation models.
-    const inferenceProfiles = resolveInferenceProfiles(
-      profileSummaries,
-      { contextWindow: defaultContextWindow, maxTokens: defaultMaxTokens },
-      providerFilter,
-      foundationModels,
-    );
-    for (const profile of inferenceProfiles) {
-      const normalizedId = normalizeLowercaseStringOrEmpty(profile.id);
-      if (!seenIds.has(normalizedId)) {
-        discovered.push(profile);
+      // Foundation models first — build both the results list and the lookup map.
+      for (const summary of foundationResponse.modelSummaries ?? []) {
+        if (!shouldIncludeSummary(summary, providerFilter)) {
+          continue;
+        }
+        const def = toModelDefinition(summary, {
+          contextWindow: defaultContextWindow,
+          maxTokens: defaultMaxTokens,
+        });
+        discovered.push(def);
+        const normalizedId = normalizeLowercaseStringOrEmpty(def.id);
         seenIds.add(normalizedId);
+        foundationModels.set(normalizedId, def);
       }
-    }
 
-    // Sort: global cross-region profiles first (recommended for most users —
-    // better capacity, automatic failover, no data sovereignty constraints),
-    // then remaining profiles/models alphabetically.
-    return discovered.toSorted((a, b) => {
-      const aGlobal = a.id.startsWith("global.") ? 0 : 1;
-      const bGlobal = b.id.startsWith("global.") ? 0 : 1;
-      if (aGlobal !== bGlobal) {
-        return aGlobal - bGlobal;
+      // Merge inference profiles — inherit capabilities from foundation models.
+      const inferenceProfiles = resolveInferenceProfiles(
+        profileSummaries,
+        { contextWindow: defaultContextWindow, maxTokens: defaultMaxTokens },
+        providerFilter,
+        foundationModels,
+      );
+      for (const profile of inferenceProfiles) {
+        const normalizedId = normalizeLowercaseStringOrEmpty(profile.id);
+        if (!seenIds.has(normalizedId)) {
+          discovered.push(profile);
+          seenIds.add(normalizedId);
+        }
       }
-      return a.name.localeCompare(b.name);
-    });
+
+      // Sort: global cross-region profiles first (recommended for most users —
+      // better capacity, automatic failover, no data sovereignty constraints),
+      // then remaining profiles/models alphabetically.
+      return discovered.toSorted((a, b) => {
+        const aGlobal = a.id.startsWith("global.") ? 0 : 1;
+        const bGlobal = b.id.startsWith("global.") ? 0 : 1;
+        if (aGlobal !== bGlobal) {
+          return aGlobal - bGlobal;
+        }
+        return a.name.localeCompare(b.name);
+      });
+    } finally {
+      // Discovery owns the short-lived control-plane client and its socket agents.
+      client.destroy();
+    }
   })();
 
   if (refreshIntervalSeconds > 0) {
@@ -696,7 +675,11 @@ export async function resolveImplicitBedrockProvider(params: {
     return null;
   }
 
-  const region = discoveryConfig?.region ?? env.AWS_REGION ?? env.AWS_DEFAULT_REGION ?? "us-east-1";
+  const region =
+    discoveryConfig?.region ??
+    normalizeOptionalString(env.AWS_REGION) ??
+    normalizeOptionalString(env.AWS_DEFAULT_REGION) ??
+    "us-east-1";
   const models = await discoverBedrockModels({
     region,
     config: discoveryConfig,

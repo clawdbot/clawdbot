@@ -49,7 +49,6 @@ on:
       - "extensions/nextcloud-talk/src/**"
       - "extensions/nostr/src/**"
       - "extensions/qa-channel/src/**"
-      - "extensions/qqbot/src/**"
       - "extensions/signal/src/**"
       - "extensions/slack/src/**"
       - "extensions/synology-chat/src/**"
@@ -111,7 +110,6 @@ on:
       - "src/gateway/resolve-configured-secret-input-string*.ts"
       - "src/gateway/security-path*.ts"
       - "src/gateway/server-methods/secrets*.ts"
-      - "src/gateway/server-startup-memory.ts"
       - "src/gateway/method-scopes.ts"
       - "packages/gateway-protocol/src/**"
       - "src/gateway/server-methods/**"
@@ -241,7 +239,7 @@ jobs:
                 src/auto-reply/reply/post-compaction-context.ts|src/auto-reply/reply/queue/*|src/auto-reply/reply/startup-context.ts|src/commands/doctor-session-*.ts|src/commands/session-store-targets.ts|src/commands/sessions*.ts|src/infra/diagnostic-*.ts|src/infra/diagnostics-timeline.ts|src/infra/session-delivery-queue*.ts|src/logging/diagnostic*.ts)
                   session_diagnostics=true
                   ;;
-                extensions/discord/src/*|extensions/feishu/src/*|extensions/googlechat/src/*|extensions/imessage/src/*|extensions/irc/src/*|extensions/line/src/*|extensions/matrix/src/*|extensions/mattermost/src/*|extensions/msteams/src/*|extensions/nextcloud-talk/src/*|extensions/nostr/src/*|extensions/qa-channel/src/*|extensions/qqbot/src/*|extensions/signal/src/*|extensions/slack/src/*|extensions/synology-chat/src/*|extensions/telegram/src/*|extensions/tlon/src/*|extensions/twitch/src/*|extensions/whatsapp/src/*|extensions/zalo/src/*|extensions/zalouser/src/*|src/channels/*)
+                extensions/discord/src/*|extensions/feishu/src/*|extensions/googlechat/src/*|extensions/imessage/src/*|extensions/irc/src/*|extensions/line/src/*|extensions/matrix/src/*|extensions/mattermost/src/*|extensions/msteams/src/*|extensions/nextcloud-talk/src/*|extensions/nostr/src/*|extensions/qa-channel/src/*|extensions/signal/src/*|extensions/slack/src/*|extensions/synology-chat/src/*|extensions/telegram/src/*|extensions/tlon/src/*|extensions/twitch/src/*|extensions/whatsapp/src/*|extensions/zalo/src/*|extensions/zalouser/src/*|src/channels/*)
                   channel=true
                   ;;
                 src/config/*)
@@ -257,7 +255,7 @@ jobs:
                 packages/gateway-protocol/src/*|packages/gateway-protocol/src/**/*|src/gateway/method-scopes.ts|src/gateway/server-methods/*|src/gateway/server-methods.ts|src/gateway/server-methods-list.ts)
                   gateway=true
                   ;;
-                packages/memory-host-sdk/*|src/commands/doctor/cron/dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/gateway/server-startup-memory.ts|src/memory/*|src/memory-host-sdk/*)
+                packages/memory-host-sdk/*|src/commands/doctor/cron/dreaming-payload-migration.ts|src/commands/doctor-memory-search.ts|src/memory/*|src/memory-host-sdk/*)
                   memory=true
                   ;;
                 src/infra/outbound/base-session-key.ts|src/infra/outbound/delivery-queue*.ts|src/infra/outbound/outbound-session.ts|src/infra/outbound/session-binding*.ts|src/infra/outbound/session-context.ts|src/infra/outbound/targets-session.ts)
@@ -337,18 +335,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-core-auth-secrets-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/core-auth-secrets"
 
@@ -360,18 +358,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-config-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/config-boundary"
 
@@ -383,18 +381,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-gateway-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/gateway-runtime-boundary"
 
@@ -406,18 +404,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-channel-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/channel-runtime-boundary"
 
@@ -429,7 +427,7 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
@@ -447,6 +445,7 @@ jobs:
           added_lines="$(mktemp)"
           raw_socket_scan_lines="$(mktemp)"
           codex_transport="extensions/codex/src/app-server/transport-websocket.ts"
+          network_codeql_contract_pattern='^\.github/codeql/(codeql-network-runtime-boundary-critical-quality\.yml|openclaw-boundary/queries/(raw-socket-callsite-classification|managed-proxy-runtime-mutation)\.ql)$'
 
           gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '.[].filename' > "$changed_files"
           gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/files" --jq '
@@ -472,10 +471,10 @@ jobs:
             | "\($file): \(.)"
           ' > "$raw_socket_scan_lines"
 
-          if grep -Fxq "$codex_transport" "$changed_files"; then
-            # This transport has an exact owner/function allowlist in the raw-socket
-            # CodeQL query, so its raw socket calls run there. Proxy policy tokens
-            # remain in the fast scan below.
+          # Query/config edits need semantic analysis; the fast diff scan cannot validate QL.
+          # The Codex transport also has an exact owner/function allowlist in the query.
+          if grep -Eq "$network_codeql_contract_pattern" "$changed_files" || \
+             grep -Fxq "$codex_transport" "$changed_files"; then
             echo "full_codeql=true" >> "$GITHUB_OUTPUT"
           else
             echo "full_codeql=false" >> "$GITHUB_OUTPUT"
@@ -489,7 +488,7 @@ jobs:
 
       - name: Initialize CodeQL
         if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-network-runtime-boundary-critical-quality.yml
@@ -497,7 +496,7 @@ jobs:
       - name: Analyze
         id: analyze
         if: ${{ github.event_name != 'pull_request' || steps.network-diff-scan.outputs.full_codeql == 'true' }}
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           output: sarif-results
           category: "/codeql-critical-quality/network-runtime-boundary"
@@ -542,18 +541,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-agent-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/agent-runtime-boundary"
 
@@ -565,18 +564,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-mcp-process-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/mcp-process-runtime-boundary"
 
@@ -588,18 +587,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-memory-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/memory-runtime-boundary"
 
@@ -611,18 +610,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-session-diagnostics-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/session-diagnostics-boundary"
 
@@ -634,18 +633,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-plugin-sdk-reply-runtime-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/plugin-sdk-reply-runtime"
 
@@ -657,18 +656,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-provider-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/provider-runtime-boundary"
 
@@ -679,18 +678,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-ui-control-plane-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/ui-control-plane"
 
@@ -701,18 +700,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-web-media-runtime-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/web-media-runtime-boundary"
 
@@ -724,18 +723,18 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-plugin-boundary-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/plugin-boundary"
 
@@ -747,17 +746,17 @@ jobs:
     timeout-minutes: 25
     steps:
       - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: javascript-typescript
           config-file: ./.github/codeql/codeql-plugin-sdk-package-contract-critical-quality.yml
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-critical-quality/plugin-sdk-package-contract"

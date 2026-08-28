@@ -1,6 +1,10 @@
 // Openai tests cover memory embedding adapter plugin behavior.
-import type { MemoryEmbeddingProvider } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveRemoteEmbeddingBearerClient,
+  type MemoryEmbeddingProvider,
+} from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
+import { hashText } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createOpenAiEmbeddingProvider: vi.fn(),
@@ -22,11 +26,15 @@ import { openAiMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter
 const provider: MemoryEmbeddingProvider = {
   id: "openai",
   model: "text-embedding-3-small",
-  embedQuery: async () => [1, 0],
-  embedBatch: async (texts) => texts.map(() => [1, 0]),
+  embed: async () => [1, 0],
+  embedBatch: async (inputs) => inputs.map(() => [1, 0]),
 };
 
 describe("OpenAI memory embedding adapter", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
   beforeEach(() => {
     mocks.createOpenAiEmbeddingProvider.mockReset();
     mocks.runOpenAiEmbeddingBatches.mockClear();
@@ -42,6 +50,149 @@ describe("OpenAI memory embedding adapter", () => {
       },
     });
   });
+
+  it("keeps native OpenAI embedding cache identity stable across OpenClaw versions", async () => {
+    const createForVersion = async (version: string) => {
+      vi.stubEnv("OPENCLAW_VERSION", version);
+      const client = await resolveRemoteEmbeddingBearerClient({
+        provider: "openai",
+        defaultBaseUrl: "https://api.openai.com/v1",
+        options: {
+          config: { models: {} } as never,
+          model: "text-embedding-3-small",
+          remote: { apiKey: "fixture-secret" },
+        },
+      });
+      mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
+        provider,
+        client: { ...client, model: "text-embedding-3-small" },
+      });
+      const result = await openAiMemoryEmbeddingProviderAdapter.create({
+        config: {} as never,
+        provider: "openai",
+        model: "text-embedding-3-small",
+        fallback: "none",
+      });
+      return { headers: client.headers, cacheKeyData: result.runtime?.cacheKeyData };
+    };
+
+    const previous = await createForVersion("2026.7.1");
+    const current = await createForVersion("2026.7.2");
+
+    expect(previous.headers).toMatchObject({
+      Authorization: "Bearer fixture-secret",
+      version: "2026.7.1",
+      "User-Agent": "openclaw/2026.7.1",
+    });
+    expect(current.headers).toMatchObject({
+      Authorization: "Bearer fixture-secret",
+      version: "2026.7.2",
+      "User-Agent": "openclaw/2026.7.2",
+    });
+    expect(current.cacheKeyData).toEqual(previous.cacheKeyData);
+    expect(hashText(JSON.stringify(current.cacheKeyData))).toBe(
+      hashText(JSON.stringify(previous.cacheKeyData)),
+    );
+    expect(current.cacheKeyData).toMatchObject({
+      provider: "openai",
+      baseUrl: "https://api.openai.com/v1",
+      model: "text-embedding-3-small",
+      headers: [
+        ["Content-Type", "application/json"],
+        ["originator", "openclaw"],
+      ],
+    });
+    expect(JSON.stringify(current.cacheKeyData)).not.toContain("fixture-secret");
+  });
+
+  it.each([
+    {
+      name: "proxy",
+      providerId: "bailian-embedding",
+      baseUrl: "https://embeddings.example/v1",
+      headerName: "X-Api-Key",
+      rotatedHeaderName: "x-aPI-kEY",
+    },
+    {
+      name: "Azure OpenAI",
+      providerId: "openai",
+      baseUrl: "https://qa-resource.openai.azure.com/openai/v1",
+      headerName: "api-key",
+      rotatedHeaderName: "Api-Key",
+    },
+  ])(
+    "keeps rotated $name credentials out of tenant-specific embedding cache identity",
+    async ({ providerId, baseUrl, headerName, rotatedHeaderName }) => {
+      const createForTenant = async (
+        tenant: string,
+        proxyApiKey: string,
+        proxyHeaderName = headerName,
+      ) => {
+        const client = await resolveRemoteEmbeddingBearerClient({
+          provider: providerId,
+          defaultBaseUrl: baseUrl,
+          options: {
+            config: { models: {} } as never,
+            model: "text-embedding-v3",
+            remote: {
+              baseUrl,
+              apiKey: "fixture-secret",
+              headers: {
+                [proxyHeaderName]: proxyApiKey,
+                "X-Deployment": tenant,
+                "X-Tenant": tenant,
+                version: "tenant-api-v2",
+                "User-Agent": "tenant-client/2",
+              },
+            },
+          },
+        });
+        expect(client.headers).toMatchObject({
+          Authorization: "Bearer fixture-secret",
+          [proxyHeaderName]: proxyApiKey,
+          "X-Deployment": tenant,
+        });
+        mocks.createOpenAiEmbeddingProvider.mockResolvedValueOnce({
+          provider,
+          client: { ...client, model: "text-embedding-v3" },
+        });
+        return await openAiMemoryEmbeddingProviderAdapter.create({
+          config: {} as never,
+          provider: providerId,
+          model: "text-embedding-v3",
+          fallback: "none",
+        });
+      };
+
+      const first = await createForTenant("tenant-a", "proxy-key-before-rotation");
+      const rotated = await createForTenant(
+        "tenant-a",
+        "proxy-key-after-rotation",
+        rotatedHeaderName,
+      );
+      const second = await createForTenant("tenant-b", "proxy-key-after-rotation");
+      const headers = first.runtime?.cacheKeyData?.headers;
+
+      expect(headers).toEqual(
+        expect.arrayContaining([
+          ["X-Deployment", "tenant-a"],
+          ["X-Tenant", "tenant-a"],
+          ["version", "tenant-api-v2"],
+          ["User-Agent", "tenant-client/2"],
+        ]),
+      );
+      expect(first.runtime?.cacheKeyData).toEqual(rotated.runtime?.cacheKeyData);
+      expect(hashText(JSON.stringify(first.runtime?.cacheKeyData))).toBe(
+        hashText(JSON.stringify(rotated.runtime?.cacheKeyData)),
+      );
+      expect(first.runtime?.cacheKeyData).not.toEqual(second.runtime?.cacheKeyData);
+      expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain("fixture-secret");
+      expect(JSON.stringify(first.runtime?.cacheKeyData)).not.toContain(
+        "proxy-key-before-rotation",
+      );
+      expect(first.runtime?.cacheKeyData).toMatchObject({ provider: providerId, baseUrl });
+    },
+  );
 
   it("sends document input_type in OpenAI batch embedding requests", async () => {
     const result = await openAiMemoryEmbeddingProviderAdapter.create({

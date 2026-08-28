@@ -2,13 +2,13 @@ title: Native command active session target evidence
 
 scenario:
   id: native-command-session-target
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
     primary:
       - channels.native-command-session-target
     secondary:
-      - channels.native-commands
+      - channels.channel-native-commands
   objective: Verify a channel-native `/stop` command aborts the active routed conversation session instead of its separate slash-command session.
   successCriteria:
     - A real delayed agent turn is active on the routed channel conversation session.
@@ -32,6 +32,7 @@ scenario:
     summary: Start a real delayed channel turn, abort it through native `/stop`, then prove the conversation is unblocked.
     config:
       requiredProviderMode: mock-openai
+      requiredChannelDriver: crabline
       conversationId: native-stop-target
       senderId: qa-native-operator
       delayedPrompt: "Subagent recovery worker native command target proof. Wait until stopped."
@@ -54,6 +55,14 @@ flow:
             - ref: env
             - 60000
         - resetTransport: true
+        # Telegram maps the logical QA conversation onto the leased physical group.
+        # The adapter delivery target is therefore the canonical routing peer.
+        - set: delivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.conversationId}` })"
+        - set: sessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: env.cfg.agents?.list?.find((agent) => agent.default)?.id ?? env.cfg.agents?.list?.[0]?.id ?? 'qa', channel: delivery.channel, accountId: transport.accountId, peer: { kind: 'group', id: delivery.replyTo } })"
         - sendInbound:
             conversation:
               id:
@@ -69,7 +78,7 @@ flow:
           args:
             - lambda:
                 async: true
-                expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.hasActiveRun === true))"
+                expr: "env.gateway.call('sessions.list', {}).then((result) => result.sessions?.find((session) => session.key === sessionKey && session.hasActiveRun === true))"
             - expr: liveTurnTimeoutMs(env, 30000)
             - 100
         - set: startIndex

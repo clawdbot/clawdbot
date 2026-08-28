@@ -7,6 +7,7 @@ import type {
   ApprovalResolveResult,
   ExpiredApprovalSnapshot,
   PendingApprovalSnapshot,
+  PluginApprovalPresentation,
 } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -41,7 +42,7 @@ function pendingApproval(
       commandPreview: "printf …",
       warningText: null,
       host: "gateway",
-      nodeId: null,
+      nodeId: "runner-1",
       agentId: "main",
       allowedDecisions: ["allow-once", "deny"],
     },
@@ -71,12 +72,39 @@ function expiredApproval(): ExpiredApprovalSnapshot {
   } as ExpiredApprovalSnapshot;
 }
 
-function createGateway(client: GatewayBrowserClient, connected = true) {
+function pluginApproval(
+  severity: NonNullable<PluginApprovalPresentation["severity"]> = "warning",
+): PendingApprovalSnapshot {
+  return pendingApproval({
+    id: "plugin:approval-1",
+    urlPath: "/approve/plugin%3Aapproval-1",
+    presentation: {
+      kind: "plugin",
+      title: "Claude native tool: Bash",
+      description: '{"command":"printf …"}',
+      detail: '{"command":"printf \\"line one\\nline two\\""}',
+      severity,
+      pluginId: "claude-cli",
+      toolName: "Bash",
+      agentId: "main",
+      allowedDecisions: ["allow-once", "deny"],
+    },
+  });
+}
+
+function createGateway(
+  client: GatewayBrowserClient,
+  connected = true,
+  hello: ApplicationGatewaySnapshot["hello"] = {
+    auth: { role: "operator" },
+  } as ApplicationGatewaySnapshot["hello"],
+) {
   let snapshot: ApplicationGatewaySnapshot = {
     client,
-    connected,
-    reconnecting: false,
-    hello: null,
+    phase: connected ? "connected" : "stopped",
+    offlineStable: false,
+    canvasPluginSurfaceUrl: null,
+    hello,
     assistantAgentId: "main",
     sessionKey: "main",
     lastError: null,
@@ -106,21 +134,16 @@ function createGateway(client: GatewayBrowserClient, connected = true) {
 function createPage(params: {
   client: GatewayBrowserClient;
   connected?: boolean;
+  hello?: ApplicationGatewaySnapshot["hello"];
   id?: string;
-  withBootFallback?: boolean;
 }) {
-  const source = createGateway(params.client, params.connected);
+  const source = createGateway(params.client, params.connected, params.hello);
   const page = document.createElement(APPROVAL_PAGE_ELEMENT_NAME) as TestApprovalPage;
   const provider = createApplicationContextProvider({
     basePath: "",
     gateway: source.gateway,
   } as unknown as ApplicationContext);
   page.approvalId = params.id ?? "exec:approval-1";
-  if (params.withBootFallback) {
-    const fallback = document.createElement("main");
-    fallback.className = "approval-page approval-page--booting";
-    page.append(fallback);
-  }
   provider.append(page);
   document.body.append(provider);
   return { page, source };
@@ -148,17 +171,228 @@ afterEach(async () => {
 });
 
 describe("ApprovalPage", () => {
-  it("replaces the host boot fallback instead of duplicating the page", async () => {
-    const request = vi.fn(async () => ({ approval: pendingApproval() }));
+  it("keeps a no-auth approval readable without enabling its decisions", async () => {
+    const request = vi.fn(
+      async (_method: string) => ({ approval: pendingApproval() }) satisfies ApprovalGetResult,
+    );
     const { page } = createPage({
       client: { request } as unknown as GatewayBrowserClient,
-      withBootFallback: true,
+      hello: null,
     });
 
     await settle(page);
 
-    expect(page.querySelectorAll(".approval-page")).toHaveLength(1);
-    expect(page.querySelector(".approval-page--booting")).toBeNull();
+    const decision = page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement;
+    expect(request).toHaveBeenCalledWith("approval.get", { id: "exec:approval-1" });
+    expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
+    expect(decision.disabled).toBe(true);
+    expect(page.querySelector(".approval-page__heading p")?.textContent?.trim()).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
+    decision.click();
+    await settle(page);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request.mock.calls.some(([method]) => method === "approval.resolve")).toBe(false);
+  });
+
+  it.each([
+    { name: "read-only", scopes: ["operator.read"] },
+    { name: "write-only", scopes: ["operator.write"] },
+    { name: "explicitly ungranted", scopes: [] },
+  ])("does not request or disclose a durable approval to a $name operator", async ({ scopes }) => {
+    const request = vi.fn(async () => ({ approval: pendingApproval() }));
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: {
+        auth: { role: "operator", scopes },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await settle(page);
+
+    expect(request).not.toHaveBeenCalled();
+    expect(page.querySelector(".approval-page")?.getAttribute("data-state")).toBe("missing-scope");
+    expect(page.querySelector('[role="alert"]')?.textContent).toContain("operator.approvals");
+    expect(page.querySelector(".approval-page__preview")).toBeNull();
+    expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+  });
+
+  it.each([
+    { name: "reviewer", auth: { role: "operator", scopes: ["operator.approvals"] } },
+    { name: "administrator", auth: { role: "operator", scopes: ["operator.admin"] } },
+    { name: "legacy authenticated operator", auth: { role: "operator" } },
+  ])("loads a durable approval for a $name", async ({ auth }) => {
+    const request = vi.fn(async () => ({ approval: pendingApproval() }));
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: { auth } as ApplicationGatewaySnapshot["hello"],
+    });
+
+    await settle(page);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(request).toHaveBeenCalledWith("approval.get", { id: "exec:approval-1" });
+    expect(page.querySelector('[data-decision="allow-once"]')).not.toBeNull();
+  });
+
+  it.each([
+    { name: "reviewer", scopes: ["operator.approvals"] },
+    { name: "administrator", scopes: ["operator.admin"] },
+  ])("allows an authenticated $name to resolve a durable approval", async ({ scopes }) => {
+    const request = vi.fn(
+      async (method: string): Promise<unknown> =>
+        method === "approval.get"
+          ? ({ approval: pendingApproval() } satisfies ApprovalGetResult)
+          : ({ applied: true, approval: allowedApproval() } satisfies ApprovalResolveResult),
+    );
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: { auth: { role: "operator", scopes } } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+
+    (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
+    await settle(page);
+
+    expect(request).toHaveBeenCalledWith("approval.resolve", {
+      id: "exec:approval-1",
+      kind: "exec",
+      decision: "allow-once",
+    });
+    expect(page.querySelector("h1")?.textContent).toBe("Approved here");
+  });
+
+  it("rejects an in-flight resolution when only the approval grant is revoked", async () => {
+    let resolveDecision!: (value: ApprovalResolveResult) => void;
+    const staleDecision = new Promise<ApprovalResolveResult>((resolve) => {
+      resolveDecision = resolve;
+    });
+    const request = vi.fn(
+      (method: string): Promise<unknown> =>
+        method === "approval.get"
+          ? Promise.resolve({ approval: pendingApproval() } satisfies ApprovalGetResult)
+          : staleDecision,
+    );
+    const { page, source } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+    (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
+    await page.updateComplete;
+
+    source.update({ hello: null });
+    await settle(page);
+    expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
+    expect((page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).disabled).toBe(
+      true,
+    );
+    expect(page.querySelector(".approval-page__heading p")?.textContent?.trim()).toBe(
+      "Review only. Sign in with approval access to record a decision.",
+    );
+
+    resolveDecision({ applied: true, approval: allowedApproval() });
+    await settle(page);
+
+    expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
+    expect(page.querySelector("h1")?.textContent).not.toBe("Approved here");
+    expect(request.mock.calls.filter(([method]) => method === "approval.resolve")).toHaveLength(1);
+  });
+
+  it("redacts a pending approval and rejects a retained action after a scope downgrade", async () => {
+    const request = vi.fn(
+      async (_method: string) => ({ approval: pendingApproval() }) satisfies ApprovalGetResult,
+    );
+    const { page, source } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+    const staleDecision = page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement;
+
+    source.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    staleDecision.click();
+    await settle(page);
+
+    expect(request).toHaveBeenCalledOnce();
+    expect(page.querySelector(".approval-page")?.getAttribute("data-state")).toBe("missing-scope");
+    expect(page.querySelector(".approval-page__preview")).toBeNull();
+    expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+    expect(request.mock.calls.some(([method]) => method === "approval.resolve")).toBe(false);
+  });
+
+  it("redacts approval details when one snapshot disconnects and revokes access", async () => {
+    const request = vi.fn(async () => ({ approval: pendingApproval() }));
+    const { page, source } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+    expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
+
+    source.update({
+      phase: "stopped",
+      client: null,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+
+    expect(page.querySelector(".approval-page__preview")).toBeNull();
+    expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
+    expect(page.textContent).not.toContain("printf safe");
+    expect(page.querySelector(".approval-page")?.getAttribute("data-state")).toBe(
+      "connection-error",
+    );
+    expect(request).toHaveBeenCalledOnce();
+  });
+
+  it("rejects a pre-revocation lookup when approval access is restored", async () => {
+    let resolveStale!: (value: ApprovalGetResult) => void;
+    const staleLookup = new Promise<ApprovalGetResult>((resolve) => {
+      resolveStale = resolve;
+    });
+    const request = vi
+      .fn()
+      .mockReturnValueOnce(staleLookup)
+      .mockResolvedValueOnce({ approval: allowedApproval() } satisfies ApprovalGetResult);
+    const { page, source } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+
+    source.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.read"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    source.update({
+      hello: {
+        auth: { role: "operator", scopes: ["operator.approvals"] },
+      } as ApplicationGatewaySnapshot["hello"],
+    });
+    await settle(page);
+    resolveStale({ approval: pendingApproval() });
+    await settle(page);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(page.querySelector("h1")?.textContent).toBe("Approved");
+    expect(page.querySelectorAll("[data-decision]")).toHaveLength(0);
   });
 
   it("loads a durable approval and sends a kind-bound resolution", async () => {
@@ -179,6 +413,13 @@ describe("ApprovalPage", () => {
       "Waiting for your decision",
     );
     expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");
+    expect(page.querySelector(".approval-page__card--severity-warning")).not.toBeNull();
+    expect(page.querySelector('[data-approval-chip="agent"]')?.textContent).toBe("main");
+    expect(page.querySelector('[data-approval-chip="plugin"]')).toBeNull();
+    expect(page.querySelector('[data-approval-chip="tool"]')).toBeNull();
+    expect(
+      [...page.querySelectorAll(".approval-page__meta-row dt")].map((label) => label.textContent),
+    ).toEqual(["Host", "Node"]);
 
     (page.querySelector('[data-decision="allow-once"]') as HTMLButtonElement).click();
     await settle(page);
@@ -190,6 +431,45 @@ describe("ApprovalPage", () => {
     });
     expect(page.querySelector("h1")?.textContent).toBe("Approved here");
     expect(document.activeElement).toBe(page.querySelector("h1"));
+  });
+
+  it("renders reviewer-only plugin detail in a preformatted block", async () => {
+    const approval = pluginApproval();
+    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: approval.id,
+    });
+
+    await settle(page);
+
+    expect(page.querySelector("pre.approval-page__preview.mono")?.textContent).toBe(
+      approval.presentation.kind === "plugin" ? approval.presentation.detail : undefined,
+    );
+    expect(page.querySelector('[data-approval-chip="plugin"]')?.textContent).toBe("claude-cli");
+    expect(page.querySelector('[data-approval-chip="tool"]')?.textContent).toBe("Bash");
+    expect(page.querySelector('[data-approval-chip="agent"]')?.textContent).toBe("main");
+    expect(page.querySelectorAll(".approval-page__meta-row")).toHaveLength(0);
+    expect(page.textContent).not.toContain("Severity:");
+    expect(page.textContent).not.toContain("Plugin:");
+    expect(page.textContent).not.toContain("Agent:");
+  });
+
+  it.each([
+    ["info", "info"],
+    ["warning", "warning"],
+    ["critical", "danger"],
+  ] as const)("maps plugin severity %s to the %s page accent", async (severity, expected) => {
+    const approval = pluginApproval(severity);
+    const request = vi.fn(async () => ({ approval }) satisfies ApprovalGetResult);
+    const { page } = createPage({
+      client: { request } as unknown as GatewayBrowserClient,
+      id: approval.id,
+    });
+
+    await settle(page);
+
+    expect(page.querySelector(`.approval-page__card--severity-${expected}`)).not.toBeNull();
   });
 
   it("keeps the selected decision named while a resolution is in flight", async () => {
@@ -320,8 +600,8 @@ describe("ApprovalPage", () => {
     const { page, source } = createPage({ client });
     await settle(page);
 
-    source.update({ connected: false, reconnecting: true });
-    source.update({ connected: true, reconnecting: false });
+    source.update({ phase: "reconnecting" });
+    source.update({ phase: "connected" });
     await settle(page);
     resolveFirst({ approval: pendingApproval() });
     await settle(page);
@@ -387,7 +667,7 @@ describe("ApprovalPage", () => {
     const { page, source } = createPage({ client });
     await settle(page);
 
-    source.update({ connected: false, reconnecting: true });
+    source.update({ phase: "reconnecting" });
     await page.updateComplete;
 
     expect(page.querySelector(".approval-page__preview")?.textContent).toBe("printf safe");

@@ -30,10 +30,27 @@ const slackSecretRefConfig = {
   },
 } satisfies OpenClawConfig;
 
+const slackStreamingConfig = {
+  channels: {
+    slack: {
+      streaming: {
+        mode: "progress",
+        nativeTransport: true,
+        progress: { style: "compact", nativeTaskCards: true },
+      },
+    },
+  },
+} satisfies OpenClawConfig;
+
 describe("Slack config types", () => {
   it("accepts SecretRef-backed token fields", () => {
     expect(slackSecretRefConfig.channels.slack.relay.authToken).toMatchObject({
       id: "SLACK_RELAY_AUTH_TOKEN",
     });
+  });
+
+  it("extends generic streaming config with Slack progress presentation", () => {
+    expect(slackStreamingConfig.channels.slack.streaming.progress.style).toBe("compact");
+    expect(slackStreamingConfig.channels.slack.streaming.progress.nativeTaskCards).toBe(true);
   });
 });

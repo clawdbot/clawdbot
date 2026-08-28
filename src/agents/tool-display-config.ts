@@ -5,6 +5,7 @@
  * icons, and detail keys without embedding presentation data in tool handlers.
  */
 import type { ToolDisplaySpec as ToolDisplaySpecBase } from "./tool-display-common.js";
+import { MESSAGE_TOOL_DISPLAY_SPEC } from "./tool-display-message-config.js";
 
 type ToolDisplaySpec = ToolDisplaySpecBase & {
   emoji?: string;
@@ -15,6 +16,10 @@ type ToolDisplayConfig = {
   fallback: ToolDisplaySpec;
   tools: Record<string, ToolDisplaySpec>;
 };
+
+function displayAction(label: string, detailKeys?: string[]) {
+  return detailKeys === undefined ? { label } : { label, detailKeys };
+}
 
 /** Static display metadata for known tools plus fallback detail-key selection. */
 export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
@@ -54,6 +59,26 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Computer",
       detailKeys: ["action", "coordinate", "text", "node", "nodeId", "screenIndex"],
     },
+    mobile_ui: {
+      emoji: "📱",
+      title: "Mobile UI",
+      detailKeys: ["action", "mobileAction", "snapshotId", "node", "nodeId"],
+    },
+    screen: {
+      emoji: "🖥️",
+      title: "Screen",
+      detailKeys: ["action", "sessionKey", "dock"],
+    },
+    terminal: {
+      emoji: "⌨️",
+      title: "Terminal",
+      detailKeys: ["action", "sessionId", "command", "cwd"],
+    },
+    portal: {
+      emoji: "🌐",
+      title: "Portal",
+      detailKeys: ["action", "port", "id", "title", "path"],
+    },
     process: {
       emoji: "🧰",
       title: "Process",
@@ -88,186 +113,91 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🌐",
       title: "Browser",
       actions: {
-        status: {
-          label: "status",
-        },
-        start: {
-          label: "start",
-        },
-        stop: {
-          label: "stop",
-        },
-        tabs: {
-          label: "tabs",
-        },
-        open: {
-          label: "open",
-          detailKeys: ["targetUrl"],
-        },
-        focus: {
-          label: "focus",
-          detailKeys: ["targetId"],
-        },
-        close: {
-          label: "close",
-          detailKeys: ["targetId"],
-        },
-        snapshot: {
-          label: "snapshot",
-          detailKeys: ["targetUrl", "targetId", "ref", "element", "format"],
-        },
-        screenshot: {
-          label: "screenshot",
-          detailKeys: ["targetUrl", "targetId", "ref", "element"],
-        },
-        navigate: {
-          label: "navigate",
-          detailKeys: ["targetUrl", "targetId"],
-        },
-        console: {
-          label: "console",
-          detailKeys: ["level", "targetId"],
-        },
-        pdf: {
-          label: "pdf",
-          detailKeys: ["targetId"],
-        },
-        upload: {
-          label: "upload",
-          detailKeys: ["paths", "ref", "inputRef", "element", "targetId"],
-        },
-        dialog: {
-          label: "dialog",
-          detailKeys: ["accept", "promptText", "targetId"],
-        },
-        act: {
-          label: "act",
-          detailKeys: [
-            "request.kind",
-            "request.ref",
-            "request.selector",
-            "request.text",
-            "request.value",
-          ],
-        },
+        status: displayAction("status"),
+        start: displayAction("start"),
+        stop: displayAction("stop"),
+        tabs: displayAction("tabs"),
+        open: displayAction("open", ["targetUrl"]),
+        focus: displayAction("focus", ["targetId"]),
+        close: displayAction("close", ["targetId"]),
+        snapshot: displayAction("snapshot", ["targetUrl", "targetId", "ref", "element", "format"]),
+        screenshot: displayAction("screenshot", ["targetUrl", "targetId", "ref", "element"]),
+        navigate: displayAction("navigate", ["targetUrl", "targetId"]),
+        console: displayAction("console", ["level", "targetId"]),
+        pdf: displayAction("pdf", ["targetId"]),
+        upload: displayAction("upload", ["paths", "ref", "inputRef", "element", "targetId"]),
+        dialog: displayAction("dialog", ["accept", "promptText", "targetId"]),
+        act: displayAction("act", [
+          "request.kind",
+          "request.ref",
+          "request.selector",
+          "request.text",
+          "request.value",
+        ]),
       },
     },
     canvas: {
       emoji: "🖼️",
       title: "Canvas",
       actions: {
-        present: {
-          label: "present",
-          detailKeys: ["target", "node", "nodeId"],
-        },
-        hide: {
-          label: "hide",
-          detailKeys: ["node", "nodeId"],
-        },
-        navigate: {
-          label: "navigate",
-          detailKeys: ["url", "node", "nodeId"],
-        },
-        eval: {
-          label: "eval",
-          detailKeys: ["javaScript", "node", "nodeId"],
-        },
-        snapshot: {
-          label: "snapshot",
-          detailKeys: ["format", "node", "nodeId"],
-        },
-        a2ui_push: {
-          label: "A2UI push",
-          detailKeys: ["jsonlPath", "node", "nodeId"],
-        },
-        a2ui_reset: {
-          label: "A2UI reset",
-          detailKeys: ["node", "nodeId"],
-        },
+        present: displayAction("present", ["target", "node", "nodeId"]),
+        hide: displayAction("hide", ["node", "nodeId"]),
+        navigate: displayAction("navigate", ["url", "node", "nodeId"]),
       },
+    },
+    dashboard: {
+      emoji: "📋",
+      title: "Dashboard",
+      detailKeys: ["action", "tabId", "name", "title"],
     },
     nodes: {
       emoji: "📱",
       title: "Nodes",
       actions: {
-        status: {
-          label: "status",
-        },
-        describe: {
-          label: "describe",
-          detailKeys: ["node", "nodeId"],
-        },
-        pending: {
-          label: "pending",
-        },
-        approve: {
-          label: "approve",
-          detailKeys: ["requestId"],
-        },
-        reject: {
-          label: "reject",
-          detailKeys: ["requestId"],
-        },
-        notify: {
-          label: "notify",
-          detailKeys: ["node", "nodeId", "title", "body"],
-        },
-        camera_snap: {
-          label: "camera snap",
-          detailKeys: ["node", "nodeId", "facing", "deviceId"],
-        },
-        camera_list: {
-          label: "camera list",
-          detailKeys: ["node", "nodeId"],
-        },
-        camera_clip: {
-          label: "camera clip",
-          detailKeys: ["node", "nodeId", "facing", "duration", "durationMs"],
-        },
-        screen_record: {
-          label: "screen record",
-          detailKeys: ["node", "nodeId", "duration", "durationMs", "fps", "screenIndex"],
-        },
-        screen_snapshot: {
-          label: "screen snapshot",
-          detailKeys: ["node", "nodeId", "screenIndex", "maxWidth"],
-        },
+        status: displayAction("status"),
+        describe: displayAction("describe", ["node", "nodeId"]),
+        pending: displayAction("pending"),
+        approve: displayAction("approve", ["requestId"]),
+        reject: displayAction("reject", ["requestId"]),
+        notify: displayAction("notify", ["node", "nodeId", "title", "body"]),
+        camera_snap: displayAction("camera snap", ["node", "nodeId", "facing", "deviceId"]),
+        camera_list: displayAction("camera list", ["node", "nodeId"]),
+        camera_clip: displayAction("camera clip", [
+          "node",
+          "nodeId",
+          "facing",
+          "duration",
+          "durationMs",
+        ]),
+        camera_ptz: displayAction("camera PTZ", ["ptzOperation", "node", "nodeId", "deviceId"]),
+        screen_record: displayAction("screen record", [
+          "node",
+          "nodeId",
+          "duration",
+          "durationMs",
+          "fps",
+          "screenIndex",
+        ]),
+        screen_snapshot: displayAction("screen snapshot", [
+          "node",
+          "nodeId",
+          "screenIndex",
+          "maxWidth",
+        ]),
       },
     },
     cron: {
       emoji: "⏰",
       title: "Cron",
       actions: {
-        status: {
-          label: "status",
-        },
-        list: {
-          label: "list",
-        },
-        add: {
-          label: "add",
-          detailKeys: ["job.name", "job.id", "job.schedule", "job.cron"],
-        },
-        update: {
-          label: "update",
-          detailKeys: ["id"],
-        },
-        remove: {
-          label: "remove",
-          detailKeys: ["id"],
-        },
-        run: {
-          label: "run",
-          detailKeys: ["id"],
-        },
-        runs: {
-          label: "runs",
-          detailKeys: ["id"],
-        },
-        wake: {
-          label: "wake",
-          detailKeys: ["text", "mode"],
-        },
+        status: displayAction("status"),
+        list: displayAction("list"),
+        add: displayAction("add", ["job.name", "job.id", "job.schedule", "job.cron"]),
+        update: displayAction("update", ["id"]),
+        remove: displayAction("remove", ["id"]),
+        run: displayAction("run", ["id"]),
+        runs: displayAction("runs", ["id"]),
+        wake: displayAction("wake", ["text", "mode"]),
       },
     },
     get_goal: {
@@ -285,12 +215,22 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Update Goal",
       detailKeys: ["status"],
     },
-    update_plan: {
+    progress_card: {
       emoji: "🗺️",
-      title: "Update Plan",
-      detailKeys: ["explanation", "plan.0.step"],
+      title: "Progress Card",
+      detailKeys: ["plan.0.step", "markdown"],
     },
-    spawn_task: {
+    ask_user: {
+      emoji: "❓",
+      title: "Ask User",
+      detailKeys: ["questions.0.question"],
+    },
+    secrets: {
+      emoji: "🔑",
+      title: "Secrets",
+      detailKeys: ["action", "name", "kind"],
+    },
+    suggest_task: {
       emoji: "✨",
       title: "Suggest Task",
       detailKeys: ["title", "tldr", "cwd"],
@@ -335,18 +275,32 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Session Status",
       detailKeys: ["sessionKey", "model"],
     },
+    github_publish: {
+      emoji: "🔀",
+      title: "GitHub Publish",
+      detailKeys: ["title"],
+    },
+    github_identity_status: {
+      emoji: "🔐",
+      title: "GitHub Identity Status",
+      detailKeys: [],
+    },
     sessions: {
       emoji: "🗂️",
       title: "Session Settings",
       actions: {
-        patch: {
-          label: "update",
-          detailKeys: ["sessionKey", "label", "pinned", "archived", "model", "thinkingLevel"],
-        },
-        group_list: { label: "groups" },
-        group_set: { label: "set groups", detailKeys: ["names"] },
-        group_rename: { label: "rename group", detailKeys: ["name", "to"] },
-        group_delete: { label: "delete group", detailKeys: ["name"] },
+        patch: displayAction("update", [
+          "sessionKey",
+          "label",
+          "pinned",
+          "archived",
+          "model",
+          "thinkingLevel",
+        ]),
+        group_list: displayAction("groups"),
+        group_set: displayAction("set groups", ["names"]),
+        group_rename: displayAction("rename group", ["name", "to"]),
+        group_delete: displayAction("delete group", ["name"]),
       },
     },
     sessions_list: {
@@ -363,6 +317,21 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
         "includeLastMessage",
         "messageLimit",
       ],
+    },
+    conversations_list: {
+      emoji: "💬",
+      title: "Conversations",
+      detailKeys: ["channel", "limit"],
+    },
+    conversations_send: {
+      emoji: "📨",
+      title: "Conversation Send",
+      detailKeys: ["conversationRef"],
+    },
+    conversations_turn: {
+      emoji: "↔️",
+      title: "Conversation Turn",
+      detailKeys: ["conversationRef", "timeoutSeconds"],
     },
     sessions_send: {
       emoji: "📨",
@@ -383,33 +352,25 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       emoji: "🎙️",
       title: "Transcripts",
       actions: {
-        start: {
-          label: "start",
-          detailKeys: [
-            "sessionId",
-            "title",
-            "providerId",
-            "accountId",
-            "guildId",
-            "channelId",
-            "meetingUrl",
-          ],
-        },
-        stop: {
-          label: "stop",
-          detailKeys: ["sessionId"],
-        },
-        status: {
-          label: "status",
-        },
-        import: {
-          label: "import",
-          detailKeys: ["sessionId", "title", "providerId", "meetingUrl", "speakerLabel"],
-        },
-        summarize: {
-          label: "summarize",
-          detailKeys: ["sessionId"],
-        },
+        start: displayAction("start", [
+          "sessionId",
+          "title",
+          "providerId",
+          "accountId",
+          "guildId",
+          "channelId",
+          "meetingUrl",
+        ]),
+        stop: displayAction("stop", ["sessionId"]),
+        status: displayAction("status"),
+        import: displayAction("import", [
+          "sessionId",
+          "title",
+          "providerId",
+          "meetingUrl",
+          "speakerLabel",
+        ]),
+        summarize: displayAction("summarize", ["sessionId"]),
       },
     },
     sessions_spawn: {
@@ -417,22 +378,15 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Sub-agent",
       detailKeys: ["label", "task", "agentId", "model", "thinking", "runTimeoutSeconds", "cleanup"],
     },
+    agents_wait: { emoji: "⏳", title: "Wait for Agents", detailKeys: ["ids", "timeoutSeconds"] },
+    structured_output: { emoji: "🧾", title: "Structured Output", detailKeys: ["result"] },
     subagents: {
       emoji: "🤖",
       title: "Subagents",
       actions: {
-        list: {
-          label: "list",
-          detailKeys: ["recentMinutes"],
-        },
-        kill: {
-          label: "kill",
-          detailKeys: ["target"],
-        },
-        steer: {
-          label: "steer",
-          detailKeys: ["target"],
-        },
+        list: displayAction("list", ["recentMinutes"]),
+        kill: displayAction("kill", ["target"]),
+        steer: displayAction("steer", ["target"]),
       },
     },
     agents_list: {
@@ -465,194 +419,66 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "Code Execution",
       detailKeys: ["task"],
     },
-    message: {
-      emoji: "✉️",
-      title: "Message",
-      actions: {
-        send: {
-          label: "send",
-          detailKeys: ["provider", "to", "media", "replyTo", "threadId"],
-        },
-        poll: {
-          label: "poll",
-          detailKeys: ["provider", "to", "pollQuestion"],
-        },
-        react: {
-          label: "react",
-          detailKeys: ["provider", "to", "messageId", "emoji", "remove"],
-        },
-        reactions: {
-          label: "reactions",
-          detailKeys: ["provider", "to", "messageId", "limit"],
-        },
-        read: {
-          label: "read",
-          detailKeys: ["provider", "to", "limit"],
-        },
-        edit: {
-          label: "edit",
-          detailKeys: ["provider", "to", "messageId"],
-        },
-        delete: {
-          label: "delete",
-          detailKeys: ["provider", "to", "messageId"],
-        },
-        pin: {
-          label: "pin",
-          detailKeys: ["provider", "to", "messageId"],
-        },
-        unpin: {
-          label: "unpin",
-          detailKeys: ["provider", "to", "messageId"],
-        },
-        "list-pins": {
-          label: "list pins",
-          detailKeys: ["provider", "to"],
-        },
-        permissions: {
-          label: "permissions",
-          detailKeys: ["provider", "channelId", "to"],
-        },
-        "thread-create": {
-          label: "thread create",
-          detailKeys: ["provider", "channelId", "threadName"],
-        },
-        "thread-list": {
-          label: "thread list",
-          detailKeys: ["provider", "guildId", "channelId"],
-        },
-        "thread-reply": {
-          label: "thread reply",
-          detailKeys: ["provider", "channelId", "messageId"],
-        },
-        search: {
-          label: "search",
-          detailKeys: ["provider", "guildId", "query"],
-        },
-        sticker: {
-          label: "sticker",
-          detailKeys: ["provider", "to", "stickerId"],
-        },
-        "member-info": {
-          label: "member",
-          detailKeys: ["provider", "guildId", "userId"],
-        },
-        "role-info": {
-          label: "roles",
-          detailKeys: ["provider", "guildId"],
-        },
-        "emoji-list": {
-          label: "emoji list",
-          detailKeys: ["provider", "guildId"],
-        },
-        "emoji-upload": {
-          label: "emoji upload",
-          detailKeys: ["provider", "guildId", "emojiName"],
-        },
-        "sticker-upload": {
-          label: "sticker upload",
-          detailKeys: ["provider", "guildId", "stickerName"],
-        },
-        "role-add": {
-          label: "role add",
-          detailKeys: ["provider", "guildId", "userId", "roleId"],
-        },
-        "role-remove": {
-          label: "role remove",
-          detailKeys: ["provider", "guildId", "userId", "roleId"],
-        },
-        "channel-info": {
-          label: "channel",
-          detailKeys: ["provider", "channelId"],
-        },
-        "channel-list": {
-          label: "channels",
-          detailKeys: ["provider", "guildId"],
-        },
-        "voice-status": {
-          label: "voice",
-          detailKeys: ["provider", "guildId", "userId"],
-        },
-        "event-list": {
-          label: "events",
-          detailKeys: ["provider", "guildId"],
-        },
-        "event-create": {
-          label: "event create",
-          detailKeys: ["provider", "guildId", "eventName"],
-        },
-        timeout: {
-          label: "timeout",
-          detailKeys: ["provider", "guildId", "userId"],
-        },
-        kick: {
-          label: "kick",
-          detailKeys: ["provider", "guildId", "userId"],
-        },
-        ban: {
-          label: "ban",
-          detailKeys: ["provider", "guildId", "userId"],
-        },
-      },
-    },
+    message: MESSAGE_TOOL_DISPLAY_SPEC,
     apply_patch: {
       emoji: "🩹",
       title: "Apply Patch",
       detailKeys: [],
     },
+    // Historical transcripts retain the old name. This display-only entry
+    // preserves their presentation without restoring a runtime tool alias.
     image: {
       emoji: "🖼️",
       title: "Image",
+      detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
+    },
+    view_image: {
+      emoji: "🖼️",
+      title: "View Image",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "model"],
     },
     image_generate: {
       emoji: "🎨",
       title: "Image Generation",
       actions: {
-        generate: {
-          label: "generate",
-          detailKeys: ["prompt", "model", "count", "resolution", "aspectRatio"],
-        },
-        list: {
-          label: "list",
-          detailKeys: ["provider", "model"],
-        },
+        generate: displayAction("generate", [
+          "prompt",
+          "model",
+          "count",
+          "resolution",
+          "aspectRatio",
+        ]),
+        list: displayAction("list", ["provider", "model"]),
       },
     },
     music_generate: {
       emoji: "🎵",
       title: "Music Generation",
       actions: {
-        generate: {
-          label: "generate",
-          detailKeys: ["prompt", "model", "durationSeconds", "format", "instrumental"],
-        },
-        list: {
-          label: "list",
-          detailKeys: ["provider", "model"],
-        },
+        generate: displayAction("generate", [
+          "prompt",
+          "model",
+          "durationSeconds",
+          "format",
+          "instrumental",
+        ]),
+        list: displayAction("list", ["provider", "model"]),
       },
     },
     video_generate: {
       emoji: "🎬",
       title: "Video Generation",
       actions: {
-        generate: {
-          label: "generate",
-          detailKeys: [
-            "prompt",
-            "model",
-            "durationSeconds",
-            "resolution",
-            "aspectRatio",
-            "audio",
-            "watermark",
-          ],
-        },
-        list: {
-          label: "list",
-          detailKeys: ["provider", "model"],
-        },
+        generate: displayAction("generate", [
+          "prompt",
+          "model",
+          "durationSeconds",
+          "resolution",
+          "aspectRatio",
+          "audio",
+          "watermark",
+        ]),
+        list: displayAction("list", ["provider", "model"]),
       },
     },
     pdf: {
@@ -660,15 +486,7 @@ export const TOOL_DISPLAY_CONFIG: ToolDisplayConfig = {
       title: "PDF",
       detailKeys: ["path", "paths", "url", "urls", "prompt", "pageRange", "model"],
     },
-    sessions_yield: {
-      emoji: "⏸️",
-      title: "Yield",
-      detailKeys: ["message"],
-    },
-    tts: {
-      emoji: "🔊",
-      title: "TTS",
-      detailKeys: ["text", "channel"],
-    },
+    sessions_yield: { emoji: "⏸️", title: "Yield" },
+    tts: { emoji: "🔊", title: "TTS", detailKeys: ["text", "channel"] },
   },
 };

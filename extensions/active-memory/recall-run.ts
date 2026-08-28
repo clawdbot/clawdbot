@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import {
@@ -13,7 +14,6 @@ import {
 import { readSessionTranscriptEvents } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { tempWorkspace, resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import {
-  applyActiveMemoryRuntimeConfigSnapshot,
   isMissingRegisteredMemoryToolsError,
   requireTransientWorkspaceDir,
   resolvePersistentTranscriptBaseDir,
@@ -21,7 +21,7 @@ import {
 } from "./config.js";
 import { buildRecallPrompt } from "./prompt.js";
 import { getModelRef } from "./query.js";
-import { toSingleLineLogValue } from "./recall-state.js";
+import { toSingleLineErrorMessage } from "./recall-state.js";
 import { resolveRecallRunChannelContext } from "./session.js";
 import {
   attachPartialTimeoutData,
@@ -39,6 +39,7 @@ import {
   ACTIVE_MEMORY_RECALL_LANE,
   type ActiveMemoryFastMode,
   type ActiveMemoryTranscriptSource,
+  type ConversationRecallContext,
   type RecallSubagentResult,
   type ResolvedActiveRecallPluginConfig,
 } from "./types.js";
@@ -140,6 +141,7 @@ async function cleanupActiveMemoryRecallSession(params: {
 
 async function runRecallSubagent(params: {
   api: OpenClawPluginApi;
+  runtimeConfig: OpenClawConfig;
   config: ResolvedActiveRecallPluginConfig;
   agentId: string;
   parentSessionKey?: string;
@@ -151,16 +153,18 @@ async function runRecallSubagent(params: {
   currentModelProviderId?: string;
   currentModelId?: string;
   modelRef?: { provider: string; model: string };
+  conversationRecall?: ConversationRecallContext;
   storePath: string;
   fastMode?: ActiveMemoryFastMode;
   abortSignal?: AbortSignal;
   onTranscriptSources?: (sources: readonly ActiveMemoryTranscriptSource[]) => void;
+  onEmbeddedRunSettled?: () => void;
 }): Promise<RecallSubagentResult> {
-  const workspaceDir = resolveAgentWorkspaceDir(params.api.config, params.agentId);
-  const agentDir = resolveAgentDir(params.api.config, params.agentId);
+  const workspaceDir = resolveAgentWorkspaceDir(params.runtimeConfig, params.agentId);
+  const agentDir = resolveAgentDir(params.runtimeConfig, params.agentId);
   const modelRef =
     params.modelRef ??
-    getModelRef(params.api, params.agentId, params.config, {
+    getModelRef(params.runtimeConfig, params.agentId, params.config, {
       modelProviderId: params.currentModelProviderId,
       modelId: params.currentModelId,
     });
@@ -258,52 +262,59 @@ async function runRecallSubagent(params: {
       messageProvider: params.messageProvider,
       channelId: params.channelId,
     });
-    const embeddedConfig = applyActiveMemoryRuntimeConfigSnapshot(params.api.config, params.config);
     const embeddedTimeoutMs = params.config.timeoutMs + params.config.setupGraceTimeoutMs;
-    const result = await params.api.runtime.agent.runEmbeddedAgent({
-      sessionId: subagentSessionId,
-      sessionKey: subagentSessionKey,
-      agentId: params.agentId,
-      sessionTarget: {
-        agentId: params.agentId,
+    const result = await params.api.runtime.agent
+      .runEmbeddedAgent({
         sessionId: subagentSessionId,
         sessionKey: subagentSessionKey,
-        storePath,
-      },
-      messageChannel,
-      messageProvider,
-      sessionFile: runtimeSessionFile,
-      workspaceDir,
-      agentDir,
-      config: embeddedConfig,
-      prompt,
-      provider: modelRef.provider,
-      model: modelRef.model,
-      lane: ACTIVE_MEMORY_RECALL_LANE,
-      timeoutMs: embeddedTimeoutMs,
-      runId: subagentSessionId,
-      trigger: "manual",
-      toolsAllow: [...params.config.toolsAllow],
-      disableMessageTool: true,
-      allowGatewaySubagentBinding: true,
-      bootstrapContextMode: "lightweight",
-      verboseLevel: "off",
-      thinkLevel: params.config.thinking,
-      fastMode: params.fastMode,
-      reasoningLevel: "off",
-      silentExpected: true,
-      authProfileFailurePolicy: "local",
-      cleanupBundleMcpOnRunEnd: true,
-      abortSignal: params.abortSignal,
-      onAgentToolResult: (event) => {
-        const evidence = readMemoryToolResultEvidence({
-          ...event,
-          toolsAllow: params.config.toolsAllow,
-        });
-        harnessHasUsableMemoryResult ||= evidence.hasUsableMemoryResult;
-        harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
-      },
-    });
+        agentId: params.agentId,
+        sessionTarget: {
+          agentId: params.agentId,
+          sessionId: subagentSessionId,
+          sessionKey: subagentSessionKey,
+          storePath,
+        },
+        messageChannel,
+        messageProvider,
+        sessionFile: runtimeSessionFile,
+        workspaceDir,
+        agentDir,
+        config: params.runtimeConfig,
+        prompt,
+        provider: modelRef.provider,
+        model: modelRef.model,
+        lane: ACTIVE_MEMORY_RECALL_LANE,
+        timeoutMs: embeddedTimeoutMs,
+        runId: subagentSessionId,
+        trigger: "manual",
+        conversationRecall: params.conversationRecall,
+        toolsAllow: [...params.config.toolsAllow],
+        disableMessageTool: true,
+        allowGatewaySubagentBinding: true,
+        bootstrapContextMode: "lightweight",
+        verboseLevel: "off",
+        thinkLevel: params.config.thinking,
+        fastMode: params.fastMode,
+        reasoningLevel: "off",
+        silentExpected: true,
+        authProfileFailurePolicy: "local",
+        // On subscription-only claude-cli setups, direct provider API calls
+        // either fail with a billing rejection or silently draw metered extra
+        // usage; route recall through the CLI backend so it runs on plan
+        // limits like the session's main turns.
+        cliBackendDispatch: "subscription-auth",
+        cleanupBundleMcpOnRunEnd: true,
+        abortSignal: params.abortSignal,
+        onAgentToolResult: (event) => {
+          const evidence = readMemoryToolResultEvidence({
+            ...event,
+            toolsAllow: params.config.toolsAllow,
+          });
+          harnessHasUsableMemoryResult ||= evidence.hasUsableMemoryResult;
+          harnessHasUnavailableMemorySearchResult ||= evidence.hasUnavailableMemorySearchResult;
+        },
+      })
+      .finally(params.onEmbeddedRunSettled);
     const activeSessionFile =
       readActiveMemorySessionFileFromRunResult(result) ?? runtimeSessionFile;
     transcriptSources = collectActiveMemoryTranscriptSources({
@@ -363,6 +374,7 @@ async function runRecallSubagent(params: {
         partialReply,
         transcriptState.searchDebug,
         transcriptState.hasUnavailableMemorySearchResult || harnessHasUnavailableMemorySearchResult,
+        transcriptState.hasUsableMemoryResult || harnessHasUsableMemoryResult,
       );
     }
     if (
@@ -375,7 +387,7 @@ async function runRecallSubagent(params: {
       return { rawReply: "NONE", resultStatus: "unavailable" };
     }
     if (!params.abortSignal?.aborted) {
-      const message = toSingleLineLogValue(error instanceof Error ? error.message : String(error));
+      const message = toSingleLineErrorMessage(error);
       params.api.logger.warn?.(
         `active-memory: memory sub-agent failed, skipping recall: ${message}`,
       );
@@ -390,9 +402,7 @@ async function runRecallSubagent(params: {
             sources: transcriptSources,
             sessionFile: artifactSessionFile,
           }).catch((error: unknown) => {
-            const message = toSingleLineLogValue(
-              error instanceof Error ? error.message : String(error),
-            );
+            const message = toSingleLineErrorMessage(error);
             params.api.logger.debug?.(
               `active-memory: failed to persist recall transcript ${artifactSessionFile}: ${message}`,
             );
@@ -404,9 +414,7 @@ async function runRecallSubagent(params: {
           sessionKey: subagentSessionKey,
           storePath,
         }).catch((error: unknown) => {
-          const message = toSingleLineLogValue(
-            error instanceof Error ? error.message : String(error),
-          );
+          const message = toSingleLineErrorMessage(error);
           params.api.logger.warn?.(
             `active-memory: failed to clean up recall session ${subagentSessionKey}: ${message}`,
           );

@@ -1,3 +1,5 @@
+import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
+import { isHttpUrl, isWebSocketUrl } from "@openclaw/net-policy/url-protocol";
 // Managed proxy lifecycle installs Proxyline, injects process proxy env, and
 // restores inherited/direct routing when owner handles stop.
 import {
@@ -6,10 +8,6 @@ import {
   type ProxylineUndiciOptions,
 } from "@openclaw/proxyline";
 import type { ProxyConfig } from "../../../config/zod-schema.proxy.js";
-
-type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
-import { isLoopbackIpAddress } from "@openclaw/net-policy/ip";
-import { isHttpUrl, isWebSocketUrl } from "@openclaw/net-policy/url-protocol";
 import { logInfo, logWarn } from "../../../logger.js";
 import { forceResetGlobalDispatcher } from "../undici-global-dispatcher.js";
 import {
@@ -24,6 +22,8 @@ import {
   loadManagedProxyTlsOptionsSync,
   resolveManagedProxyCaFileForUrl,
 } from "./proxy-tls.js";
+
+type ProxyLoopbackMode = NonNullable<NonNullable<ProxyConfig>["loopbackMode"]>;
 
 /** Process-wide managed proxy handle returned to CLI/gateway startup owners. */
 export type ProxyHandle = {
@@ -199,12 +199,15 @@ export function ensureInheritedManagedProxyRoutingActive(): void {
 
 /** Starts process-wide managed proxy routing and returns the owner stop handle. */
 export async function startProxy(config: ProxyConfig | undefined): Promise<ProxyHandle | null> {
-  if (config?.enabled !== true) {
+  if (
+    config?.enabled === false ||
+    (!config?.proxyUrl?.trim() && !process.env["OPENCLAW_PROXY_URL"]?.trim())
+  ) {
     return null;
   }
 
   const proxyUrl = resolveProxyUrl(config);
-  const loopbackMode = config.loopbackMode ?? "gateway-only";
+  const loopbackMode = config?.loopbackMode ?? "gateway-only";
   const proxyCaFile = resolveManagedProxyCaFileForUrl({ proxyUrl, config });
   const proxyTls = await loadManagedProxyTlsOptions(proxyCaFile);
   const activeProxyUrl = getActiveManagedProxyUrl();

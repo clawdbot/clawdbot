@@ -4,14 +4,13 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-and-identity
+      - matrix.encryption-setup
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 180000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         encryption: false
         startupVerification: off

@@ -16,7 +16,7 @@ available API keys.
 <Note>
 `video_generate` only appears when at least one video-generation provider is
 available. If it is missing from your agent tools, set a provider API key or
-configure `agents.defaults.videoGenerationModel`.
+configure `agents.defaults.mediaModels.video`.
 </Note>
 
 `video_generate` has three runtime modes, resolved from the reference inputs
@@ -42,7 +42,7 @@ active mode before submission and reports supported modes in `action=list`.
   </Step>
   <Step title="Pick a default model (optional)">
     ```bash
-    openclaw config set agents.defaults.videoGenerationModel.primary "google/veo-3.1-fast-generate-preview"
+    openclaw config set agents.defaults.mediaModels.video.primary "google/veo-3.1-fast-generate-preview"
     ```
   </Step>
   <Step title="Ask the agent">
@@ -105,8 +105,8 @@ openclaw tasks cancel <lookup>
 | Provider              | Default model                   | Text | Image ref                                            | Video ref                                       | Auth                                     |
 | --------------------- | ------------------------------- | :--: | ---------------------------------------------------- | ----------------------------------------------- | ---------------------------------------- |
 | Alibaba               | `wan2.6-t2v`                    |  ✓   | Yes (remote URL)                                     | Yes (remote URL)                                | `MODELSTUDIO_API_KEY`                    |
-| BytePlus (1.0)        | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (I2V models only; first + last frame) | -                                               | `BYTEPLUS_API_KEY`                       |
-| BytePlus Seedance 1.5 | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus plugin       | `seedance-1-0-pro-250528`       |  ✓   | Up to 2 images (first + last frame)                  | -                                               | `BYTEPLUS_API_KEY`                       |
+| BytePlus 1.5 plugin   | `seedance-1-5-pro-251215`       |  ✓   | Up to 2 images (first + last frame via role)         | -                                               | `BYTEPLUS_API_KEY`                       |
 | BytePlus Seedance 2.0 | `dreamina-seedance-2-0-260128`  |  ✓   | Up to 9 reference images                             | Up to 3 videos                                  | `BYTEPLUS_API_KEY`                       |
 | ComfyUI               | `workflow`                      |  ✓   | 1 image                                              | -                                               | `COMFY_API_KEY` or `COMFY_CLOUD_API_KEY` |
 | DeepInfra             | `Pixverse/Pixverse-T2V`         |  ✓   | -                                                    | -                                               | `DEEPINFRA_API_KEY`                      |
@@ -146,7 +146,7 @@ the shared live sweep:
 | Qwen       |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` skipped because this provider needs remote `http(s)` video URLs                              |
 | Runway     |     ✓      |       ✓        |       ✓        | `generate`, `imageToVideo`; `videoToVideo` runs only when the selected model is `runway/gen4_aleph`                                     |
 | Together   |     ✓      |       ✓        |       -        | `generate`, `imageToVideo`                                                                                                              |
-| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because bundled `veo3` is text-only and bundled `kling` requires a remote image URL           |
+| Vydra      |     ✓      |       ✓        |       -        | `generate`; shared `imageToVideo` skipped because `veo3` is text-only and `kling` requires a remote image URL                           |
 | xAI        |     ✓      |       ✓        |       ✓        | Classic supports all modes; Video 1.5 is image-to-video only; remote MP4 input keeps `videoToVideo` out of the shared sweep             |
 
 ## Tool parameters
@@ -219,7 +219,7 @@ dimensions). Providers that do not declare it surface the value via
 </ParamField>
 <ParamField path="model" type="string">Provider/model override (e.g. `runway/gen4.5`).</ParamField>
 <ParamField path="filename" type="string">Output filename hint.</ParamField>
-<ParamField path="timeoutMs" type="number">Optional provider operation timeout in milliseconds. When omitted, OpenClaw uses `agents.defaults.videoGenerationModel.timeoutMs` if configured, otherwise the plugin-authored provider default when one exists.</ParamField>
+<ParamField path="timeoutMs" type="number">Optional provider operation timeout in milliseconds. When omitted, OpenClaw uses `agents.defaults.mediaModels.video.timeoutMs` if configured, otherwise the plugin-authored provider default when one exists.</ParamField>
 <ParamField path="providerOptions" type="object">
   Provider-specific options as a JSON object (e.g. `{"seed": 42, "draft": true}`).
   Providers that declare a typed schema validate the keys and types; unknown
@@ -289,8 +289,8 @@ aggregated error includes the skip reason for each.
 OpenClaw resolves the model in this order:
 
 1. **`model` tool parameter** - if the agent specifies one in the call.
-2. **`videoGenerationModel.primary`** from config.
-3. **`videoGenerationModel.fallbacks`** in order.
+2. **`agents.defaults.mediaModels.video.primary`** from config.
+3. **`agents.defaults.mediaModels.video.fallbacks`** in order.
 4. **Auto-detection** - providers that have valid auth, starting with the
    current default provider, then remaining providers in alphabetical
    order.
@@ -298,17 +298,19 @@ OpenClaw resolves the model in this order:
 If a provider fails, the next candidate is tried automatically. If all
 candidates fail, the error includes details from each attempt.
 
-Set `agents.defaults.mediaGenerationAutoProviderFallback: false` to use
-only the explicit `model`, `primary`, and `fallbacks` entries.
+Automatic fallback across authenticated providers is always enabled. A per-call
+`model` remains authoritative.
 
 ```json5
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "google/veo-3.1-fast-generate-preview",
-        fallbacks: ["runway/gen4.5", "qwen/wan2.6-t2v"],
-        timeoutMs: 180000, // optional per-tool provider request timeout override
+      mediaModels: {
+        video: {
+          primary: "google/veo-3.1-fast-generate-preview",
+          fallbacks: ["runway/gen4.5", "qwen/wan2.6-t2v"],
+          timeoutMs: 180000, // optional per-tool provider request timeout override
+        },
       },
     },
   },
@@ -322,24 +324,22 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
     Uses DashScope / Model Studio async endpoint. Reference images and
     videos must be remote `http(s)` URLs.
   </Accordion>
-  <Accordion title="BytePlus (1.0)">
+  <Accordion title="BytePlus plugin">
+    Requires the official `@openclaw/byteplus-provider` plugin.
     Provider id: `byteplus`.
 
     Models: `seedance-1-0-pro-250528` (default),
-    `seedance-1-0-pro-t2v-250528`, `seedance-1-0-pro-fast-251015`,
-    `seedance-1-0-lite-t2v-250428`, `seedance-1-0-lite-i2v-250428`.
+    `seedance-1-5-pro-251215`.
 
-    T2V models (`*-t2v-*`) do not accept image inputs; I2V models and
-    general `*-pro-*` models support a single reference image (first
-    frame). Pass the image positionally or set `role: "first_frame"`.
-    T2V model IDs are automatically switched to the corresponding I2V
-    variant when an image is provided.
+    Uses the unified `content[]` API. Supports up to 2 input images
+    (`first_frame` + `last_frame`). Pass images positionally or set each
+    image's `role` explicitly.
 
     Supported `providerOptions` keys: `seed` (number), `draft` (boolean -
     forces 480p), `camera_fixed` (boolean).
 
   </Accordion>
-  <Accordion title="BytePlus Seedance 1.5">
+  <Accordion title="BytePlus Seedance 1.5 plugin">
     Requires the [`@openclaw/byteplus-modelark`](https://www.npmjs.com/package/@openclaw/byteplus-modelark)
     plugin (external, not bundled). Provider id: `byteplus-seedance15`. Model:
     `seedance-1-5-pro-251215`.
@@ -419,7 +419,7 @@ only the explicit `model`, `primary`, and `fallbacks` entries.
   </Accordion>
   <Accordion title="Vydra">
     Uses `https://www.vydra.ai/api/v1` directly to avoid auth-dropping
-    redirects. `veo3` is bundled as text-to-video only; `kling` requires
+    redirects. `veo3` is text-to-video only; `kling` requires
     a remote image URL.
   </Accordion>
   <Accordion title="xAI">
@@ -527,9 +527,11 @@ Set the default video-generation model in your OpenClaw config:
 {
   agents: {
     defaults: {
-      videoGenerationModel: {
-        primary: "qwen/wan2.6-t2v",
-        fallbacks: ["qwen/wan2.6-r2v-flash"],
+      mediaModels: {
+        video: {
+          primary: "qwen/wan2.6-t2v",
+          fallbacks: ["qwen/wan2.6-r2v-flash"],
+        },
       },
     },
   },
@@ -539,7 +541,7 @@ Set the default video-generation model in your OpenClaw config:
 Or via the CLI:
 
 ```bash
-openclaw config set agents.defaults.videoGenerationModel.primary "qwen/wan2.6-t2v"
+openclaw config set agents.defaults.mediaModels.video.primary "qwen/wan2.6-t2v"
 ```
 
 ## Related

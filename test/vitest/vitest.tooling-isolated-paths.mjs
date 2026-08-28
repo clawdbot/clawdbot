@@ -1,9 +1,13 @@
 // Tooling tests that need fresh module or process state instead of the shared serial worker.
 export const toolingIsolatedTestFiles = [
   "test/plugins/bundled-provider-auth-literal-parity.test.ts",
+  "test/plugins/bundled-provider-auth-literal-parity.2.test.ts",
+  "test/plugins/bundled-provider-auth-literal-parity.3.test.ts",
   "test/scripts/check-extension-package-tsc-boundary.test.ts",
+  "test/scripts/check-plugin-sdk-wildcard-reexports.test.ts",
   "test/scripts/control-ui-i18n.test.ts",
   "test/scripts/openclaw-e2e-instance.test.ts",
+  "test/scripts/test-projects-build-admission.test.ts",
 ];
 
 const toolingIsolatedTestFileSet = new Set(toolingIsolatedTestFiles);

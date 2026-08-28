@@ -5,37 +5,14 @@
   "activation": {
     "onStartup": false
   },
-  "channels": ["raft"],
+  "channels": [
+    "raft"
+  ],
   "channelConfigs": {
     "raft": {
       "label": "Raft",
-      "description": "Raft External Agent CLI wake bridge.",
-      "schema": {
-        "type": "object",
-        "additionalProperties": false,
-        "properties": {
-          "name": { "type": "string" },
-          "enabled": { "type": "boolean" },
-          "profile": { "type": "string", "minLength": 1 },
-          "defaultAccount": { "type": "string" },
-          "accounts": {
-            "type": "object",
-            "additionalProperties": {
-              "type": "object",
-              "additionalProperties": false,
-              "properties": {
-                "name": { "type": "string" },
-                "enabled": { "type": "boolean" },
-                "profile": { "type": "string", "minLength": 1 }
-              }
-            }
-          }
-        }
-      }
+      "description": "Raft External Agent CLI wake bridge."
     }
-  },
-  "channelEnvVars": {
-    "raft": ["RAFT_PROFILE"]
   },
   "configSchema": {
     "type": "object",

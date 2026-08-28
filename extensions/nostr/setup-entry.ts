@@ -7,4 +7,8 @@ export default defineBundledChannelSetupEntry({
     specifier: "./setup-plugin-api.js",
     exportName: "nostrSetupPlugin",
   },
+  secrets: {
+    specifier: "./secret-contract-api.js",
+    exportName: "channelSecrets",
+  },
 });

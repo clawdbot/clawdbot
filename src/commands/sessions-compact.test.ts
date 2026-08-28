@@ -6,7 +6,7 @@ import { sessionsCompactCommand } from "./sessions-compact.js";
 
 const callGatewayCli = vi.hoisted(() => vi.fn());
 
-vi.mock("../cli/gateway-cli/call.js", () => ({ callGatewayCli }));
+vi.mock("../cli/gateway-rpc.js", () => ({ callGatewayFromCliWithTransport: callGatewayCli }));
 
 function createRuntime() {
   return {
@@ -27,6 +27,16 @@ beforeEach(() => {
 });
 
 describe("sessionsCompactCommand", () => {
+  it("rejects a blank agent before calling the Gateway", async () => {
+    const runtime = createRuntime();
+
+    await expect(
+      sessionsCompactCommand({ key: "agent:main:main", agent: "" }, runtime),
+    ).rejects.toThrow("--agent must not be blank");
+
+    expect(callGatewayCli).not.toHaveBeenCalled();
+  });
+
   it("prints the token delta and does not exit on a successful compaction", async () => {
     callGatewayCli.mockResolvedValue({
       ok: true,

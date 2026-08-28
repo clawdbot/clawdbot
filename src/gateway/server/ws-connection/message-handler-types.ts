@@ -11,6 +11,7 @@ import type { createSubsystemLogger } from "../../../logging/subsystem.js";
 import type { DeviceBootstrapProfile } from "../../../shared/device-bootstrap-profile.js";
 import type { AuthRateLimiter } from "../../auth-rate-limit.js";
 import type { GatewayAuthResult, ResolvedGatewayAuth } from "../../auth.js";
+import type { GatewayAttributedIngress } from "../../ingress-attribution.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { NodePairingAutoApproveClientIpSource } from "../../node-pairing-auto-approve.types.js";
 import type { NodeReapprovalCoordinator } from "../../node-reapproval-coordinator.js";
@@ -18,21 +19,25 @@ import type { PluginNodeCapabilitySurface } from "../../plugin-node-capability.j
 import type { GatewayRole } from "../../role-policy.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "../../server-methods/types.js";
 import type { GatewayWsClient, WsHandshakePhase } from "../ws-types.js";
-import type { resolveControlUiAuthPolicy } from "./connect-policy.js";
+import type { ControlUiPairingKind } from "./connect-policy.js";
 import type { resolvePairingLocality } from "./handshake-auth-helpers.js";
+import type { GatewayNodeLifecycleDispatchTracker } from "./node-lifecycle-dispatch.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
-type ControlUiAuthPolicy = ReturnType<typeof resolveControlUiAuthPolicy>;
 type PairingLocalityKind = ReturnType<typeof resolvePairingLocality>;
 
 export type WsOriginCheckMetrics = {
   hostHeaderFallbackAccepted: number;
 };
 
+type WsSendResult = { kind: "sent" | "unavailable" } | { kind: "serialization"; error: unknown };
+
 export type GatewayWsMessageHandlerParams = {
   socket: WebSocket;
   upgradeReq: IncomingMessage;
+  ingressAttribution: GatewayAttributedIngress;
   connId: string;
+  bootId: string;
   remoteAddr?: string;
   remotePort?: number;
   localAddr?: string;
@@ -54,13 +59,15 @@ export type GatewayWsMessageHandlerParams = {
   browserRateLimiter?: AuthRateLimiter;
   nodeReapprovalCoordinator?: NodeReapprovalCoordinator;
   isStartupPending?: () => boolean;
+  isPendingWorkerNodeSetup?: (setupId: string, deviceId: string) => boolean;
   gatewayMethods: string[];
   events: string[];
   extraHandlers: GatewayRequestHandlers;
   getMethodRegistry?: () => GatewayMethodRegistry;
   buildRequestContext: () => GatewayRequestContext;
+  nodeLifecycleDispatch: GatewayNodeLifecycleDispatchTracker;
   refreshHealthSnapshot: GatewayRequestContext["refreshHealthSnapshot"];
-  send: (obj: unknown) => void;
+  send: (obj: unknown) => WsSendResult;
   close: (code?: number, reason?: string) => void;
   isClosed: () => boolean;
   clearHandshakeTimer: () => void;
@@ -104,10 +111,10 @@ export type GatewayConnectPhaseContext = {
   isWebchatConnect: (params: ConnectParams | null | undefined) => boolean;
   runDetachedConnectWork: (run: () => Promise<void>, onError: (error: unknown) => void) => void;
   pendingNodePairingCleanup: {
-    value?: import("../../../infra/node-pairing.js").NodePairingCleanupClaim;
+    value?: import("../../../infra/device-pairing-node.js").NodePairingCleanupClaim;
   };
   broadcastNodePairingResult: (
-    result: import("../../../infra/node-pairing.js").RequestNodePairingResult,
+    result: import("../../../infra/device-pairing-node.js").RequestNodePairingResult,
   ) => void;
   releasePendingNodePairingCleanup: () => Promise<void>;
 };
@@ -119,11 +126,12 @@ export type AuthenticatedGatewayConnect = {
   usesLegacyNodeProtocol: boolean;
   role: GatewayRole;
   scopes: string[];
+  hasRequestedScopes: boolean;
   isControlUi: boolean;
   isBrowserOperatorUi: boolean;
   isWebchat: boolean;
   isNativeAppUi: boolean;
-  controlUiAuthPolicy: ControlUiAuthPolicy;
+  startupPending: boolean;
   device: ConnectParams["device"] | null | undefined;
   devicePublicKey: string | null;
   deviceAuthPayloadVersion: "v2" | "v3" | null;
@@ -141,7 +149,7 @@ export type AuthenticatedGatewayConnect = {
   issuedBootstrapProfile: DeviceBootstrapProfile | null;
   handoffBootstrapProfile: DeviceBootstrapProfile | null;
   trustedProxyAuthOk: boolean;
-  skipControlUiPairingForDevice: boolean;
+  controlUiPairingKind: ControlUiPairingKind;
   skipLocalBackendSelfPairing: boolean;
   rejectUnauthorized: (failedAuth: GatewayAuthResult) => void;
 };

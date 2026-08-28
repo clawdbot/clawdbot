@@ -14,6 +14,15 @@ export class ReplySessionInitConflictError extends Error {
   }
 }
 
+const SESSION_INIT_CONFLICT_MESSAGE_RE = /^reply session initialization conflicted for \S+$/u;
+
+function isReplySessionInitConflictError(error: unknown): boolean {
+  return (
+    error instanceof ReplySessionInitConflictError ||
+    SESSION_INIT_CONFLICT_MESSAGE_RE.test(error instanceof Error ? error.message : String(error))
+  );
+}
+
 const SESSION_INIT_CONFLICT_MAX_ATTEMPTS = 5;
 const SESSION_INIT_CONFLICT_BACKOFF_POLICY = {
   initialMs: 250,
@@ -30,26 +39,34 @@ export async function runWithSessionInitConflictRetry<T>(
   attempt: () => Promise<T>,
   options?: {
     maxAttempts?: number;
+    retryDelaysMs?: readonly number[];
     signal?: AbortSignal;
     sleep?: (ms: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<T> {
-  const maxAttempts = options?.maxAttempts ?? SESSION_INIT_CONFLICT_MAX_ATTEMPTS;
+  const retryDelaysMs = options?.retryDelaysMs;
+  const maxRetries = Math.min(
+    (options?.maxAttempts ??
+      (retryDelaysMs ? retryDelaysMs.length + 1 : SESSION_INIT_CONFLICT_MAX_ATTEMPTS)) - 1,
+    retryDelaysMs?.length ?? Number.POSITIVE_INFINITY,
+  );
   const sleep = options?.sleep ?? sleepWithAbort;
   for (let attemptIndex = 0; ; attemptIndex += 1) {
     try {
       return await attempt();
     } catch (error) {
       if (
-        !(error instanceof ReplySessionInitConflictError) ||
-        attemptIndex >= maxAttempts - 1 ||
+        !isReplySessionInitConflictError(error) ||
+        attemptIndex >= maxRetries ||
         options?.signal?.aborted === true
       ) {
         throw error;
       }
-      const backoffMs = computeBackoff(SESSION_INIT_CONFLICT_BACKOFF_POLICY, attemptIndex + 1);
+      const backoffMs =
+        retryDelaysMs?.[attemptIndex] ??
+        computeBackoff(SESSION_INIT_CONFLICT_BACKOFF_POLICY, attemptIndex + 1);
       log.debug(
-        `reply session initialization conflicted; retrying in ${backoffMs}ms (attempt ${attemptIndex + 2}/${maxAttempts})`,
+        `reply session initialization conflicted; retrying in ${backoffMs}ms (attempt ${attemptIndex + 2}/${maxRetries + 1})`,
       );
       // Cancellation must interrupt the wait itself; otherwise shutdown can
       // sleep through the backoff and start one more session-init attempt.

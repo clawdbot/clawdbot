@@ -1,9 +1,9 @@
 // Terminal Core module implements note behavior.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { note as clackNote } from "@clack/prompts";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { splitGraphemes, visibleWidth } from "./ansi.js";
 import { stylePromptTitle } from "./prompt-style.js";
-import { normalizeLowercaseStringOrEmpty } from "./string.js";
 
 const MIN_NOTE_COLUMNS = 80;
 const URL_PREFIX_RE = /^(https?:\/\/|file:\/\/)/i;
@@ -206,31 +206,39 @@ export function resolveNoteOutputColumns(message: string, columns: number): numb
   return Math.max(columns, widestLine + 6);
 }
 
-function createNoteOutput(columns: number): NodeJS.WriteStream {
-  if (process.stdout.columns === columns) {
-    return process.stdout;
+function createNoteOutput(output: NodeJS.WriteStream, columns: number): NodeJS.WriteStream {
+  if (output.columns === columns) {
+    return output;
   }
-  const output = Object.create(process.stdout) as NodeJS.WriteStream;
-  Object.defineProperty(output, "columns", {
+  const adaptedOutput = Object.create(output) as NodeJS.WriteStream;
+  Object.defineProperty(adaptedOutput, "columns", {
     value: columns,
     configurable: true,
   });
-  output.write = process.stdout.write.bind(process.stdout);
-  return output;
+  adaptedOutput.write = output.write.bind(output);
+  return adaptedOutput;
 }
 
-export function note(message: unknown, title?: string) {
+export function noteToStream(
+  message: unknown,
+  title: string | undefined,
+  output: NodeJS.WriteStream,
+) {
   if (
     suppressNotesStorage.getStore() === true ||
     isSuppressedByEnv(process.env.OPENCLAW_SUPPRESS_NOTES)
   ) {
     return;
   }
-  const columns = resolveNoteColumns(process.stdout.columns);
+  const columns = resolveNoteColumns(output.columns);
   const wrappedMessage = wrapNoteMessage(message, { columns });
   clackNote(wrappedMessage, stylePromptTitle(title), {
-    output: createNoteOutput(resolveNoteOutputColumns(wrappedMessage, columns)),
+    output: createNoteOutput(output, resolveNoteOutputColumns(wrappedMessage, columns)),
   });
+}
+
+export function note(message: unknown, title?: string) {
+  noteToStream(message, title, process.stdout);
 }
 
 export function withSuppressedNotes<T>(callback: () => T): T {

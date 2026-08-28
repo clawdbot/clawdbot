@@ -73,24 +73,7 @@ describe("WhatsApp prompt config Zod validation", () => {
     }
   });
 
-  it("accepts deprecated exposeErrorText as a no-op compatibility key", () => {
-    const result = WhatsAppConfigSchema.safeParse({
-      exposeErrorText: false,
-      accounts: {
-        work: {
-          exposeErrorText: true,
-        },
-      },
-    });
-
-    expect(result.success).toBe(true);
-    if (result.success) {
-      expect(Object.hasOwn(result.data, "exposeErrorText")).toBe(false);
-      expect(Object.hasOwn(result.data.accounts?.work ?? {}, "exposeErrorText")).toBe(false);
-    }
-  });
-
-  it("keeps deprecated exposeErrorText out of generated config surfaces", () => {
+  it("keeps exposeErrorText out of generated config surfaces", () => {
     const schema = WhatsAppConfigSchema.toJSONSchema({
       target: "draft-07",
       unrepresentable: "any",

@@ -1,8 +1,14 @@
 // Covers bundling rules encoded in the root tsdown config.
 import { readFileSync } from "node:fs";
+import path from "node:path";
 import { bundledPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
-import tsdownConfig from "../../tsdown.config.ts";
+import tsdownConfig, {
+  createStateSchemaInlinePlugin,
+  STATE_SCHEMA_INLINE_PLUGIN_NAME,
+} from "../../tsdown.config.ts";
+import { OPENCLAW_AGENT_SCHEMA_SQL } from "../state/openclaw-agent-schema.js";
+import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 
 type TsdownConfigEntry = {
   deps?: {
@@ -12,6 +18,7 @@ type TsdownConfigEntry = {
   entry?: Record<string, string> | string[];
   inputOptions?: TsdownInputOptions;
   outDir?: string;
+  plugins?: Array<{ name?: string }>;
 };
 
 type TsdownLog = {
@@ -82,14 +89,81 @@ function readGatewayRunLoopSource(): string {
   return readFileSync(new URL("../cli/gateway-cli/run-loop.ts", import.meta.url), "utf8");
 }
 
-function readAgentModelDiscoveryCacheSource(): string {
-  return readFileSync(
-    new URL("../agents/embedded-agent-runner/model-discovery-cache.ts", import.meta.url),
-    "utf8",
-  );
+function readAgentAuthDiscoverySource(): string {
+  return readFileSync(new URL("../agents/agent-auth-discovery.ts", import.meta.url), "utf8");
 }
 
 describe("tsdown config", () => {
+  it.each([
+    {
+      exportName: "OPENCLAW_STATE_SCHEMA_SQL",
+      modulePath: "src/state/openclaw-state-schema.ts",
+      schemaPath: "src/state/openclaw-state-schema.sql",
+      sourceValue: OPENCLAW_STATE_SCHEMA_SQL,
+    },
+    {
+      exportName: "OPENCLAW_AGENT_SCHEMA_SQL",
+      modulePath: "src/state/openclaw-agent-schema.ts",
+      schemaPath: "src/state/openclaw-agent-schema.sql",
+      sourceValue: OPENCLAW_AGENT_SCHEMA_SQL,
+    },
+  ])("inlines canonical schema bytes for $modulePath", (schema) => {
+    const rootDir = process.cwd();
+    const watchedPaths: string[] = [];
+    const plugin = createStateSchemaInlinePlugin(rootDir);
+    let cacheKeyGenerator: ((context: { id: string }) => string | undefined) | undefined;
+    plugin.configureVitest({
+      experimental_defineCacheKeyGenerator: (generator) => {
+        cacheKeyGenerator = generator;
+      },
+    });
+    const result = plugin.load.call(
+      { addWatchFile: (filePath: string) => watchedPaths.push(filePath) },
+      path.resolve(rootDir, schema.modulePath),
+    );
+    const schemaPath = path.resolve(rootDir, schema.schemaPath);
+    const canonicalSql = readFileSync(schemaPath, "utf8");
+
+    expect(result).not.toBeNull();
+    const match = result?.code.match(
+      new RegExp(`^export const ${schema.exportName} = (.*);\\n$`, "su"),
+    );
+    expect(match?.[1]).toBeDefined();
+    expect(JSON.parse(match?.[1] ?? "null")).toBe(canonicalSql);
+    expect(schema.sourceValue).toBe(canonicalSql);
+    expect(watchedPaths).toEqual([schemaPath]);
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, schema.modulePath) })).toBe(
+      canonicalSql,
+    );
+    expect(cacheKeyGenerator?.({ id: path.resolve(rootDir, "src/index.ts") })).toBeUndefined();
+  });
+
+  it("installs schema inlining only on executable runtime graphs", () => {
+    const configs = asConfigArray(tsdownConfig);
+    const unifiedGraph = requireUnifiedDistGraph();
+    const workerGraph = configs.find((config) => {
+      const entry = config.entry;
+      return (
+        typeof entry === "object" &&
+        entry !== null &&
+        !Array.isArray(entry) &&
+        (entry as Record<string, unknown>)["worker/worker"] === "src/worker/worker-deploy-entry.ts"
+      );
+    });
+    const inlinePlugins = configs.flatMap(
+      (config) =>
+        config.plugins?.filter((plugin) => plugin.name === STATE_SCHEMA_INLINE_PLUGIN_NAME) ?? [],
+    );
+
+    expect(unifiedGraph.plugins).toContainEqual(
+      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
+    expect(workerGraph?.plugins).toContainEqual(
+      expect.objectContaining({ name: STATE_SCHEMA_INLINE_PLUGIN_NAME }),
+    );
+    expect(inlinePlugins).toHaveLength(2);
+  });
+
   it("keeps core, plugin runtime, plugin-sdk, bundled root plugins, and bundled hooks in one dist graph", () => {
     const distGraph = requireUnifiedDistGraph();
 
@@ -102,6 +176,10 @@ describe("tsdown config", () => {
       "cli/gateway-lifecycle.runtime",
       "agents/compaction-planning.worker",
       "agents/model-provider-auth.worker",
+      "config/sessions/session-accessor.sqlite-archive.worker",
+      "infra/sqlite-readonly-location.worker",
+      "state/openclaw-database-verify.worker",
+      "system-agent/setup-inference-detection.worker",
       "plugins/memory-state",
       "subagent-registry.runtime",
       "task-registry-control.runtime",
@@ -109,6 +187,7 @@ describe("tsdown config", () => {
       "media-understanding/apply.runtime",
       "index",
       "commands/status.summary.runtime",
+      "docker-healthcheck",
       "provider-dispatcher.runtime",
       "plugins/hook-runner-global",
       "plugins/provider-discovery.runtime",
@@ -118,13 +197,17 @@ describe("tsdown config", () => {
       "web-fetch/runtime",
       "mcp/openclaw-tools-serve",
       "mcp/plugin-tools-serve",
-      "plugin-sdk/compat",
-      "plugin-sdk/index",
       bundledEntry("active-memory"),
       "bundled/boot-md/handler",
     ]) {
       expect(keys).toContain(entry);
     }
+  });
+
+  it("builds the Docker healthcheck as a stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["docker-healthcheck"]).toBe("src/docker-healthcheck.ts");
   });
 
   it("keeps root-package-excluded external plugins out of the root dist graph", () => {
@@ -169,15 +252,23 @@ describe("tsdown config", () => {
     );
   });
 
+  it("keeps Gateway plugin reload targets behind one stable dist entry", () => {
+    const distGraph = requireUnifiedDistGraph();
+
+    expect(entrySources(distGraph)["gateway/plugin-channel-reload-targets"]).toBe(
+      "src/gateway/plugin-channel-reload-targets.ts",
+    );
+  });
+
   it("keeps PI model discovery synthetic auth refs behind one stable runtime dist entry", () => {
     const distGraph = requireUnifiedDistGraph();
     const importSpecifiers = [
-      ...readAgentModelDiscoveryCacheSource().matchAll(
+      ...readAgentAuthDiscoverySource().matchAll(
         /from ["']([^"']*synthetic-auth\.runtime\.js)["']/gu,
       ),
     ].map((match) => match[1]);
 
-    expect(importSpecifiers).toEqual(["../../plugins/synthetic-auth.runtime.js"]);
+    expect(importSpecifiers).toEqual(["../plugins/synthetic-auth.runtime.js"]);
     expect(entrySources(distGraph)["plugins/synthetic-auth.runtime"]).toBe(
       "src/plugins/synthetic-auth.runtime.ts",
     );
@@ -235,7 +326,6 @@ describe("tsdown config", () => {
       expect(neverBundle("@vitest/expect")).toBe(true);
       expect(neverBundle("jimp")).toBe(true);
       expect(neverBundle("matrix-js-sdk/lib/client.js")).toBe(true);
-      expect(neverBundle("qrcode-terminal/lib/main.js")).toBe(true);
       expect(neverBundle("sharp")).toBe(true);
       expect(neverBundle("vitest")).toBe(true);
       expect(neverBundle("not-a-runtime-dependency")).toBe(false);
@@ -250,7 +340,6 @@ describe("tsdown config", () => {
         "@vitest/expect",
         "jimp",
         "matrix-js-sdk",
-        "qrcode-terminal",
         "sharp",
         "vitest",
       ]) {
@@ -262,7 +351,6 @@ describe("tsdown config", () => {
     }
     const externalize = external;
     expect(externalize("jimp", undefined, false)).toBe(true);
-    expect(externalize("qrcode-terminal/lib/main.js", undefined, false)).toBe(true);
     expect(externalize("sharp", undefined, false)).toBe(true);
   });
 

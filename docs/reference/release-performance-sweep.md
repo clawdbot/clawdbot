@@ -3,7 +3,7 @@ summary: "Visual summary and technical evidence for the May 2026 performance, pa
 read_when:
   - You are validating the May 2026 performance and package-size cleanup
   - You need the numbers behind the OpenClaw performance and dependency blog post
-  - You are changing release gates, package shrinkwrap, or plugin dependency boundaries
+  - You need historical context before changing current policy at /gateway/security/dependency-locking
 title: "Release performance sweep"
 ---
 
@@ -274,8 +274,8 @@ that made npm materialize a large nested OpenClaw dependency tree and all 12
 `@napi-rs/canvas` platform packages. The nested tree is smaller in `v2026.5.28`,
 and the canvas platform fanout no longer lands in the local audit.
 
-For a plain-English explanation of shrinkwrap and the maintainer-level package
-checks, see [npm shrinkwrap](/gateway/security/shrinkwrap).
+For the current dependency review and package policy, see
+[dependency locking](/gateway/security/dependency-locking).
 
 ## Supply-chain interpretation
 

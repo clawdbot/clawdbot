@@ -1,21 +1,29 @@
 // Memory host dreaming helpers record and load memory dreaming artifacts.
-import path from "node:path";
 import { parseBoolean } from "@openclaw/normalization-core/boolean-coercion";
+import {
+  parseStrictNonNegativeInteger,
+  parseStrictPositiveInteger,
+} from "@openclaw/normalization-core/number-coercion";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  lowercasePreservingWhitespace,
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
+  normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import {
+  listAgentIds,
+  resolveAgentWorkspaceDir,
+  resolveDefaultAgentId,
+} from "../agents/agent-scope.js";
+import { resolveWorkspaceStateIdentity } from "../agents/workspace-state-identity.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 
-export const DEFAULT_MEMORY_DREAMING_ENABLED = false;
-export const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
-export const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
-export const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
-export const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
+const DEFAULT_MEMORY_DREAMING_ENABLED = true;
+const DEFAULT_MEMORY_DREAMING_TIMEZONE = undefined;
+const DEFAULT_MEMORY_DREAMING_VERBOSE_LOGGING = false;
+const DEFAULT_MEMORY_DREAMING_STORAGE_MODE = "separate";
+const DEFAULT_MEMORY_DREAMING_SEPARATE_REPORTS = false;
 export const DEFAULT_MEMORY_DREAMING_FREQUENCY = "0 3 * * *";
 export const DEFAULT_MEMORY_DREAMING_PLUGIN_ID = "memory-core";
 export const MANAGED_MEMORY_DREAMING_CRON_NAME = "Memory Dreaming Promotion";
@@ -28,47 +36,44 @@ export const LEGACY_MEMORY_LIGHT_DREAMING_EVENT_TEXT = "__openclaw_memory_core_l
 export const LEGACY_MEMORY_REM_DREAMING_CRON_NAME = "Memory REM Dreaming";
 export const LEGACY_MEMORY_REM_DREAMING_CRON_TAG = "[managed-by=memory-core.dreaming.rem]";
 export const LEGACY_MEMORY_REM_DREAMING_EVENT_TEXT = "__openclaw_memory_core_rem_sleep__";
-
-export const DEFAULT_MEMORY_LIGHT_DREAMING_CRON_EXPR = "0 */6 * * *";
-export const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
-export const DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT = 100;
-export const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
-
-export const DEFAULT_MEMORY_DEEP_DREAMING_CRON_EXPR = "0 3 * * *";
+const DEFAULT_MEMORY_LIGHT_DREAMING_LOOKBACK_DAYS = 2;
+const DEFAULT_MEMORY_LIGHT_DREAMING_LIMIT = 100;
+const DEFAULT_MEMORY_LIGHT_DREAMING_DEDUPE_SIMILARITY = 0.9;
 export const DEFAULT_MEMORY_DEEP_DREAMING_LIMIT = 10;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.8;
+// Deterministic calibration scores 3-day/3-query durable facts at 0.750-0.756,
+// versus repeated filler at 0.489-0.549 and high-relevance one-offs at 0.529-0.606.
+export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_SCORE = 0.75;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_RECALL_COUNT = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MIN_UNIQUE_QUERIES = 3;
 export const DEFAULT_MEMORY_DEEP_DREAMING_RECENCY_HALF_LIFE_DAYS = 14;
-export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
+const DEFAULT_MEMORY_DEEP_DREAMING_MAX_AGE_DAYS = 30;
 export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS = 160;
+export const DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION = 0.25;
 
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED = true;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH = 0.35;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_LOOKBACK_DAYS = 30;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MAX_CANDIDATES = 20;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MIN_CONFIDENCE = 0.9;
-export const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_AUTO_WRITE_MIN_CONFIDENCE = 0.97;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_ENABLED = true;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_TRIGGER_BELOW_HEALTH = 0.35;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_LOOKBACK_DAYS = 30;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MAX_CANDIDATES = 20;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_MIN_CONFIDENCE = 0.9;
+const DEFAULT_MEMORY_DEEP_DREAMING_RECOVERY_AUTO_WRITE_MIN_CONFIDENCE = 0.97;
+const DEFAULT_MEMORY_REM_DREAMING_LOOKBACK_DAYS = 7;
+const DEFAULT_MEMORY_REM_DREAMING_LIMIT = 10;
+const DEFAULT_MEMORY_REM_DREAMING_MIN_PATTERN_STRENGTH = 0.75;
 
-export const DEFAULT_MEMORY_REM_DREAMING_CRON_EXPR = "0 5 * * 0";
-export const DEFAULT_MEMORY_REM_DREAMING_LOOKBACK_DAYS = 7;
-export const DEFAULT_MEMORY_REM_DREAMING_LIMIT = 10;
-export const DEFAULT_MEMORY_REM_DREAMING_MIN_PATTERN_STRENGTH = 0.75;
+const DEFAULT_MEMORY_DREAMING_SPEED = "balanced";
+const DEFAULT_MEMORY_DREAMING_THINKING = "medium";
+const DEFAULT_MEMORY_DREAMING_BUDGET = "medium";
 
-export const DEFAULT_MEMORY_DREAMING_SPEED = "balanced";
-export const DEFAULT_MEMORY_DREAMING_THINKING = "medium";
-export const DEFAULT_MEMORY_DREAMING_BUDGET = "medium";
+type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
+type MemoryDreamingThinking = "low" | "medium" | "high";
+type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
+type MemoryDreamingStorageMode = "inline" | "separate" | "both";
 
-export type MemoryDreamingSpeed = "fast" | "balanced" | "slow";
-export type MemoryDreamingThinking = "low" | "medium" | "high";
-export type MemoryDreamingBudget = "cheap" | "medium" | "expensive";
-export type MemoryDreamingStorageMode = "inline" | "separate" | "both";
+type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
+type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
+type MemoryRemDreamingSource = "memory" | "daily" | "deep";
 
-export type MemoryLightDreamingSource = "daily" | "sessions" | "recall";
-export type MemoryDeepDreamingSource = "daily" | "memory" | "sessions" | "logs" | "recall";
-export type MemoryRemDreamingSource = "memory" | "daily" | "deep";
-
-export type MemoryDreamingExecutionConfig = {
+type MemoryDreamingExecutionConfig = {
   speed: MemoryDreamingSpeed;
   thinking: MemoryDreamingThinking;
   budget: MemoryDreamingBudget;
@@ -83,7 +88,7 @@ export type MemoryDreamingStorageConfig = {
   separateReports: boolean;
 };
 
-export type MemoryLightDreamingConfig = {
+type MemoryLightDreamingConfig = {
   enabled: boolean;
   cron: string;
   lookbackDays: number;
@@ -93,7 +98,7 @@ export type MemoryLightDreamingConfig = {
   execution: MemoryDreamingExecutionConfig;
 };
 
-export type MemoryDeepDreamingRecoveryConfig = {
+type MemoryDeepDreamingRecoveryConfig = {
   enabled: boolean;
   triggerBelowHealth: number;
   lookbackDays: number;
@@ -102,7 +107,7 @@ export type MemoryDeepDreamingRecoveryConfig = {
   autoWriteMinConfidence: number;
 };
 
-export type MemoryDeepDreamingConfig = {
+type MemoryDeepDreamingConfig = {
   enabled: boolean;
   cron: string;
   limit: number;
@@ -112,12 +117,13 @@ export type MemoryDeepDreamingConfig = {
   recencyHalfLifeDays: number;
   maxAgeDays?: number;
   maxPromotedSnippetTokens?: number;
+  maxPriorEntryLossFraction: number;
   sources: MemoryDeepDreamingSource[];
   recovery: MemoryDeepDreamingRecoveryConfig;
   execution: MemoryDreamingExecutionConfig;
 };
 
-export type MemoryRemDreamingConfig = {
+type MemoryRemDreamingConfig = {
   enabled: boolean;
   cron: string;
   lookbackDays: number;
@@ -129,7 +135,7 @@ export type MemoryRemDreamingConfig = {
 
 export type MemoryDreamingPhaseName = "light" | "deep" | "rem";
 
-export type MemoryDreamingConfig = {
+type MemoryDreamingConfig = {
   enabled: boolean;
   frequency: string;
   timezone?: string;
@@ -145,12 +151,12 @@ export type MemoryDreamingConfig = {
   };
 };
 
-export type MemoryDreamingWorkspace = {
+type MemoryDreamingWorkspace = {
   workspaceDir: string;
   agentIds: string[];
 };
 
-export type MemoryDreamingWorkspaceOptions = {
+type MemoryDreamingWorkspaceOptions = {
   primaryWorkspaceDir?: string | null;
   primaryAgentId?: string | null;
   env?: NodeJS.ProcessEnv;
@@ -170,47 +176,17 @@ const DEFAULT_MEMORY_DEEP_DREAMING_SOURCES: MemoryDeepDreamingSource[] = [
 ];
 const DEFAULT_MEMORY_REM_DREAMING_SOURCES: MemoryRemDreamingSource[] = ["memory", "daily", "deep"];
 
-function normalizeTrimmedString(value: unknown): string | undefined {
-  if (typeof value !== "string") {
-    return undefined;
-  }
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
 function normalizeNonNegativeInt(value: unknown, fallback: number): number {
-  const normalized = normalizeStringifiedOptionalString(value);
-  if (typeof value === "string" && !normalized) {
-    return fallback;
-  }
-  const num = typeof value === "string" ? Number(normalized) : Number(value);
-  if (!Number.isFinite(num)) {
-    return fallback;
-  }
-  const floored = Math.floor(num);
-  if (floored < 0) {
-    return fallback;
-  }
-  return floored;
+  // Config integers are decimal-only; Number() would accept hex/exponent forms.
+  return parseStrictNonNegativeInteger(value) ?? fallback;
 }
 
 function normalizeOptionalPositiveInt(value: unknown): number | undefined {
   if (value === undefined || value === null) {
     return undefined;
   }
-  const normalized = normalizeStringifiedOptionalString(value);
-  if (typeof value === "string" && !normalized) {
-    return undefined;
-  }
-  const num = typeof value === "string" ? Number(normalized) : Number(value);
-  if (!Number.isFinite(num)) {
-    return undefined;
-  }
-  const floored = Math.floor(num);
-  if (floored <= 0) {
-    return undefined;
-  }
-  return floored;
+  // Same strict decimal contract as normalizeNonNegativeInt for optional fields.
+  return parseStrictPositiveInteger(value);
 }
 
 function normalizeBoolean(value: unknown, fallback: boolean): boolean {
@@ -299,7 +275,7 @@ function resolveExecutionConfig(
     typeof temperatureRaw === "number" && Number.isFinite(temperatureRaw) && temperatureRaw >= 0
       ? Math.min(2, temperatureRaw)
       : undefined;
-  const model = normalizeTrimmedString(record?.model) ?? fallback.model;
+  const model = normalizeOptionalString(record?.model) ?? fallback.model;
 
   return {
     speed: normalizeSpeed(record?.speed) ?? fallback.speed,
@@ -310,11 +286,6 @@ function resolveExecutionConfig(
     ...(typeof temperature === "number" ? { temperature } : {}),
     ...(typeof timeoutMs === "number" ? { timeoutMs } : {}),
   };
-}
-
-function normalizePathForComparison(input: string): string {
-  const normalized = path.resolve(input);
-  return process.platform === "win32" ? lowercasePreservingWhitespace(normalized) : normalized;
 }
 
 function formatLocalIsoDay(epochMs: number): string {
@@ -331,7 +302,7 @@ export function resolveMemoryDreamingPluginId(
   const root = asNullableRecord(cfg);
   const plugins = asNullableRecord(root?.plugins);
   const slots = asNullableRecord(plugins?.slots);
-  const configuredSlot = normalizeTrimmedString(slots?.memory);
+  const configuredSlot = normalizeOptionalString(slots?.memory);
   if (configuredSlot && normalizeLowercaseStringOrEmpty(configuredSlot) !== "none") {
     return configuredSlot;
   }
@@ -349,24 +320,21 @@ export function resolveMemoryDreamingPluginConfig(
   return asNullableRecord(memoryPlugin?.config) ?? undefined;
 }
 
-/** @deprecated Use resolveMemoryDreamingPluginConfig. */
-export const resolveMemoryCorePluginConfig = resolveMemoryDreamingPluginConfig;
-
 export function resolveMemoryDreamingConfig(params: {
   pluginConfig?: Record<string, unknown>;
   cfg?: OpenClawConfig;
 }): MemoryDreamingConfig {
   const dreaming = asNullableRecord(params.pluginConfig?.dreaming);
   const frequency =
-    normalizeTrimmedString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
+    normalizeOptionalString(dreaming?.frequency) ?? DEFAULT_MEMORY_DREAMING_FREQUENCY;
   const timezone =
-    normalizeTrimmedString(dreaming?.timezone) ??
-    normalizeTrimmedString(params.cfg?.agents?.defaults?.userTimezone) ??
+    normalizeOptionalString(dreaming?.timezone) ??
+    normalizeOptionalString(params.cfg?.agents?.defaults?.userTimezone) ??
     DEFAULT_MEMORY_DREAMING_TIMEZONE;
   const storage = asNullableRecord(dreaming?.storage);
   const execution = asNullableRecord(dreaming?.execution);
   const phases = asNullableRecord(dreaming?.phases);
-  const topLevelModel = normalizeTrimmedString(dreaming?.model);
+  const topLevelModel = normalizeOptionalString(dreaming?.model);
 
   const defaultExecution = resolveExecutionConfig(execution?.defaults, {
     speed: DEFAULT_MEMORY_DREAMING_SPEED,
@@ -449,6 +417,10 @@ export function resolveMemoryDreamingConfig(params: {
             : {}),
         maxPromotedSnippetTokens:
           maxPromotedSnippetTokens ?? DEFAULT_MEMORY_DEEP_DREAMING_MAX_PROMOTED_SNIPPET_TOKENS,
+        maxPriorEntryLossFraction: normalizeScore(
+          deep?.maxPriorEntryLossFraction,
+          DEFAULT_MEMORY_DEEP_DREAMING_MAX_PRIOR_ENTRY_LOSS_FRACTION,
+        ),
         sources: normalizeStringArray(
           deep?.sources,
           ["daily", "memory", "sessions", "logs", "recall"] as const,
@@ -608,20 +580,7 @@ export function resolveMemoryDreamingWorkspaces(
   cfg: OpenClawConfig,
   options: MemoryDreamingWorkspaceOptions = {},
 ): MemoryDreamingWorkspace[] {
-  const configured = Array.isArray(cfg.agents?.list) ? cfg.agents.list : [];
-  const agentIds: string[] = [];
-  const seenAgents = new Set<string>();
-  for (const entry of configured) {
-    if (!entry || typeof entry !== "object" || typeof entry.id !== "string") {
-      continue;
-    }
-    const id = normalizeOptionalLowercaseString(entry.id);
-    if (!id || seenAgents.has(id)) {
-      continue;
-    }
-    seenAgents.add(id);
-    agentIds.push(id);
-  }
+  const agentIds = listAgentIds(cfg);
   if (agentIds.length === 0) {
     agentIds.push(resolveDefaultAgentId(cfg));
   }
@@ -633,7 +592,7 @@ export function resolveMemoryDreamingWorkspaces(
       return;
     }
     const agentId = normalizeOptionalLowercaseString(agentIdRaw) || resolveDefaultAgentId(cfg);
-    const key = normalizePathForComparison(workspaceDir);
+    const key = resolveWorkspaceStateIdentity(workspaceDir).workspacePath;
     const existing = byWorkspace.get(key);
     if (existing) {
       if (!existing.agentIds.includes(agentId)) {
@@ -647,9 +606,9 @@ export function resolveMemoryDreamingWorkspaces(
   for (const agentId of agentIds) {
     addWorkspace(resolveAgentWorkspaceDir(cfg, agentId, options.env), agentId);
   }
-  addWorkspace(
-    options.primaryWorkspaceDir ?? undefined,
-    options.primaryAgentId ?? resolveDefaultAgentId(cfg),
-  );
+  const primaryWorkspaceDir = options.primaryWorkspaceDir?.trim();
+  if (primaryWorkspaceDir) {
+    addWorkspace(primaryWorkspaceDir, options.primaryAgentId ?? resolveDefaultAgentId(cfg));
+  }
   return [...byWorkspace.values()];
 }

@@ -4,16 +4,15 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.native-commands
+      - matrix.mention-gates
     secondary:
-      - channels.group-messages
+      - channels.channel-native-commands
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 8000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         groupPolicy: open
 

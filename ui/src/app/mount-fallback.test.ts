@@ -9,8 +9,12 @@ const indexHtmlPath = path.resolve(
 );
 type TestWindow = Window & typeof globalThis;
 
+async function readIndexHtml(): Promise<string> {
+  return readFile(indexHtmlPath, "utf8");
+}
+
 async function readIndexHtmlWithDelay(delayMs: number): Promise<string> {
-  const html = await readFile(indexHtmlPath, "utf8");
+  const html = await readIndexHtml();
   return html.replace(
     'data-openclaw-mount-timeout-ms="12000"',
     `data-openclaw-mount-timeout-ms="${delayMs}"`,
@@ -31,6 +35,20 @@ function createIsolatedWindow(): TestWindow {
     throw new Error("failed to create isolated frame window");
   }
   return frameWindow;
+}
+
+function installStartupPaintShell(window: TestWindow, html: string): void {
+  const parsed = new window.DOMParser().parseFromString(html, "text/html");
+  window.document.head.innerHTML = parsed.head.innerHTML;
+  window.document.body.innerHTML = parsed.body.innerHTML;
+
+  const startupScript = Array.from(
+    parsed.querySelectorAll<HTMLScriptElement>("script:not([src])"),
+  ).find((script) => script.textContent?.includes("var THEMES = {"));
+  if (!startupScript?.textContent) {
+    throw new Error("Expected inline startup theme script in index.html");
+  }
+  window.eval(startupScript.textContent);
 }
 
 function installFallbackShell(window: TestWindow, html: string): void {
@@ -60,14 +78,60 @@ function requireElementById<T extends HTMLElement>(
   return element;
 }
 
+describe("Control UI document shell", () => {
+  it("requests the web app manifest with credentials", async () => {
+    const parsed = new DOMParser().parseFromString(await readIndexHtml(), "text/html");
+    const manifest = parsed.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+
+    expect(manifest?.getAttribute("crossorigin")).toBe("use-credentials");
+  });
+});
+
 describe("Control UI mount fallback", () => {
   afterEach(() => {
     document.body.innerHTML = "";
   });
 
-  it("shows the static troubleshooting panel when the app element is never registered", async () => {
+  it.each([
+    ["claw dark", { theme: "claw", themeMode: "dark" }, "dark", "rgb(14, 16, 21)"],
+    ["OpenKnot dark", { theme: "knot", themeMode: "dark" }, "openknot", "rgb(8, 8, 8)"],
+    ["Dash light", { theme: "dash", themeMode: "light" }, "dash-light", "rgb(247, 242, 236)"],
+    [
+      "Absolutely dark",
+      { theme: "absolutely", themeMode: "dark" },
+      "absolutely",
+      "rgb(28, 28, 26)",
+    ],
+    [
+      "Absolutely light",
+      { theme: "absolutely", themeMode: "light" },
+      "absolutely-light",
+      "rgb(250, 249, 245)",
+    ],
+    ["Tide dark", { theme: "tide", themeMode: "dark" }, "tide", "rgb(16, 21, 27)"],
+    ["Beacon dark", { theme: "beacon", themeMode: "dark" }, "beacon", "rgb(0, 0, 0)"],
+    ["Beacon light", { theme: "beacon", themeMode: "light" }, "beacon-light", "rgb(255, 255, 255)"],
+    ["Phosphor dark", { theme: "phosphor", themeMode: "dark" }, "phosphor", "rgb(10, 15, 10)"],
+  ])(
+    "paints %s before the app stylesheet loads",
+    async (_name, settings, expectedTheme, expectedBackground) => {
+      const frameWindow = createIsolatedWindow();
+      frameWindow.localStorage.clear();
+      frameWindow.localStorage.setItem("openclaw.control.settings.v1", JSON.stringify(settings));
+      installStartupPaintShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+      expect(frameWindow.document.documentElement.dataset.theme).toBe(expectedTheme);
+      expect(
+        frameWindow.getComputedStyle(frameWindow.document.documentElement).backgroundColor,
+      ).toBe(expectedBackground);
+      expect(frameWindow.getComputedStyle(frameWindow.document.body).backgroundColor).toBe(
+        expectedBackground,
+      );
+    },
+  );
+
+  it("shows the static troubleshooting panel when the app never renders", async () => {
     const frameWindow = createIsolatedWindow();
-    expect(frameWindow.customElements.get("openclaw-app")).toBeUndefined();
     installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
     await waitForWindowTimeout(frameWindow, 10);
 
@@ -98,20 +162,25 @@ describe("Control UI mount fallback", () => {
     expect(fallback.hidden).toBe(false);
   });
 
-  it("keeps the fallback hidden when the app element registers before the timeout", async () => {
+  it("keeps the fallback visible until the app completes its first render", async () => {
     const frameWindow = createIsolatedWindow();
-    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(25));
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
     if (!frameWindow.customElements.get("openclaw-app")) {
       frameWindow.customElements.define("openclaw-app", class extends frameWindow.HTMLElement {});
     }
     await frameWindow.customElements.whenDefined("openclaw-app");
-    await waitForWindowTimeout(frameWindow, 35);
+    await waitForWindowTimeout(frameWindow, 10);
 
     const fallback = requireElementById(
       frameWindow,
       "openclaw-mount-fallback",
       frameWindow.HTMLElement,
     );
+    expect(fallback.hidden).toBe(false);
+    expect([...frameWindow.document.body.classList]).toEqual(["openclaw-mount-fallback-active"]);
+
+    frameWindow.dispatchEvent(new frameWindow.Event("openclaw-control-ui-rendered"));
+
     expect(fallback.hidden).toBe(true);
     expect([...frameWindow.document.body.classList]).toEqual([]);
   });
@@ -125,22 +194,59 @@ describe("Control UI mount fallback", () => {
 
     await vi.waitFor(() => expect(fetch).toHaveBeenCalled());
 
-    expect(fetch).toHaveBeenNthCalledWith(1, expect.stringContaining("openclaw_mount_recovery="), {
-      cache: "no-store",
-      credentials: "same-origin",
+    expect(fetch).toHaveBeenNthCalledWith(
+      1,
+      expect.stringContaining("openclaw_mount_recovery="),
+      expect.objectContaining({
+        cache: "no-store",
+        credentials: "same-origin",
+        signal: expect.any(frameWindow.AbortSignal),
+      }),
+    );
+  });
+
+  it("times out stalled recovery probes so automatic retries can continue", async () => {
+    const frameWindow = createIsolatedWindow();
+    const signals: AbortSignal[] = [];
+    const fetch = vi.fn((_url: string, init?: RequestInit) => {
+      const signal = init?.signal;
+      if (!(signal instanceof frameWindow.AbortSignal)) {
+        throw new Error("Expected recovery probe to include an abort signal");
+      }
+      signals.push(signal);
+      return new Promise<Response>((_resolve, reject) => {
+        signal.addEventListener("abort", () => reject(new Error("request aborted")), {
+          once: true,
+        });
+      });
     });
+    Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
+
+    await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+
+    expect(signals).toHaveLength(6);
+    await vi.waitFor(() => expect(signals.every((signal) => signal.aborted)).toBe(true));
   });
 
   it("bounds automatic recovery attempts while the gateway is unavailable", async () => {
     const frameWindow = createIsolatedWindow();
     const fetch = vi.fn().mockRejectedValue(new Error("gateway unavailable"));
+    const unregister = vi.fn().mockResolvedValue(true);
+    const getRegistrations = vi.fn().mockResolvedValue([{ unregister }]);
     Object.defineProperty(frameWindow, "fetch", { configurable: true, value: fetch });
+    Object.defineProperty(frameWindow.navigator, "serviceWorker", {
+      configurable: true,
+      value: { getRegistrations },
+    });
     installFallbackShell(frameWindow, await readIndexHtmlWithDelay(1));
 
     await vi.waitFor(() => expect(fetch).toHaveBeenCalledTimes(6));
+    await vi.waitFor(() => expect(unregister).toHaveBeenCalled());
     await waitForWindowTimeout(frameWindow, 10);
 
     expect(fetch).toHaveBeenCalledTimes(6);
+    expect(getRegistrations).toHaveBeenCalled();
     expect(
       requireElementById(
         frameWindow,

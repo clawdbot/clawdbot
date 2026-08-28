@@ -1,4 +1,4 @@
-// Session message dispatch, steering, and active-run cancellation.
+// Session message RPC adapters over canonical chat.send dispatch.
 import { randomUUID } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -7,25 +7,21 @@ import {
   errorShape,
   validateSessionsSendParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
-import {
-  abortEmbeddedAgentRun,
-  isEmbeddedAgentRunActive,
-  waitForEmbeddedAgentRunEnd,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { clearSessionQueues } from "../../auto-reply/reply/queue/cleanup.js";
 import { resolveSessionWorkStartError, type SessionEntry } from "../../config/sessions.js";
+import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-accessor.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-create-service.js";
+import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { reactivateCompletedSubagentSession } from "../session-subagent-reactivation.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
-import { loadSessionEntry, resolveDeletedAgentIdFromSessionKey } from "../session-utils.js";
-import { asWorkerInferenceControl } from "../worker-environments/inference-control.js";
+import {
+  loadSessionEntry,
+  loadGatewaySessionEntryReadOnly,
+  resolveDeletedAgentIdFromSessionKey,
+} from "../session-utils.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { chatHandlers } from "./chat.js";
-import { hasTrackedActiveSessionRun } from "./session-active-runs.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { shouldAttachPendingMessageSeq } from "./session-create-initial-turn.js";
-import { resolveAbortSessionKey } from "./sessions-abort.js";
 import { sessionCreateHandlers } from "./sessions-create.js";
 import { isAgentMainSessionKey, requireSessionKey } from "./sessions-shared.js";
 import type {
@@ -98,7 +94,7 @@ async function createAgentMainSessionForSend(params: {
   }
 
   const createdKey = normalizeOptionalString(createResult.payload?.key) ?? params.canonicalKey;
-  const loaded = loadSessionEntry(createdKey);
+  const loaded = loadGatewaySessionEntryReadOnly(createdKey, { agentId });
   if (!loaded.entry?.sessionId) {
     return {
       ok: false,
@@ -113,98 +109,6 @@ async function createAgentMainSessionForSend(params: {
   };
 }
 
-export async function interruptSessionRunIfActive(params: {
-  req: GatewayRequestHandlerOptions["req"];
-  context: GatewayRequestContext;
-  client: GatewayClient | null;
-  isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
-  requestedKey: string;
-  canonicalKey: string;
-  agentId?: string;
-  sessionId?: string;
-}): Promise<{ interrupted: boolean; error?: ReturnType<typeof errorShape> }> {
-  const cfg = params.context.getRuntimeConfig();
-  const hasTrackedRun = hasTrackedActiveSessionRun({
-    context: params.context,
-    requestedKey: params.requestedKey,
-    canonicalKey: params.canonicalKey,
-    agentId: params.agentId,
-    defaultAgentId: resolveDefaultAgentId(cfg),
-  });
-  const hasEmbeddedRun =
-    typeof params.sessionId === "string" && params.sessionId
-      ? isEmbeddedAgentRunActive(params.sessionId)
-      : false;
-  const hasWorkerRun =
-    typeof params.sessionId === "string" && params.sessionId
-      ? (asWorkerInferenceControl(params.context.workerEnvironmentService)?.hasInferenceForSession(
-          params.sessionId,
-        ) ?? false)
-      : false;
-
-  if (!hasTrackedRun && !hasEmbeddedRun && !hasWorkerRun) {
-    return { interrupted: false };
-  }
-
-  if (hasTrackedRun || hasWorkerRun) {
-    let abortOk = true;
-    let abortError: ReturnType<typeof errorShape> | undefined;
-    const abortSessionKey = resolveAbortSessionKey({
-      context: params.context,
-      requestedKey: params.requestedKey,
-      canonicalKey: params.canonicalKey,
-    });
-
-    await expectDefined(
-      chatHandlers["chat.abort"],
-      "chat.abort handler",
-    )({
-      req: params.req,
-      params: {
-        sessionKey: abortSessionKey,
-        ...(params.canonicalKey === "global" && params.agentId ? { agentId: params.agentId } : {}),
-      },
-      respond: (ok, _payload, error) => {
-        abortOk = ok;
-        abortError = error;
-      },
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-    });
-
-    if (!abortOk) {
-      return {
-        interrupted: true,
-        error:
-          abortError ?? errorShape(ErrorCodes.UNAVAILABLE, "failed to interrupt active session"),
-      };
-    }
-  }
-
-  if (hasEmbeddedRun && params.sessionId) {
-    abortEmbeddedAgentRun(params.sessionId);
-  }
-
-  // Clear queued follow-up work for both requested aliases and the canonical session id.
-  clearSessionQueues([params.requestedKey, params.canonicalKey, params.sessionId]);
-
-  if (hasEmbeddedRun && params.sessionId) {
-    const ended = await waitForEmbeddedAgentRunEnd(params.sessionId, 15_000);
-    if (!ended) {
-      return {
-        interrupted: true,
-        error: errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Session ${params.requestedKey} is still active; try again in a moment.`,
-        ),
-      };
-    }
-  }
-
-  return { interrupted: true };
-}
-
 async function handleSessionSend(params: {
   method: "sessions.send" | "sessions.steer";
   req: GatewayRequestHandlerOptions["req"];
@@ -213,7 +117,7 @@ async function handleSessionSend(params: {
   context: GatewayRequestContext;
   client: GatewayClient | null;
   isWebchatConnect: GatewayRequestHandlerOptions["isWebchatConnect"];
-  interruptIfActive: boolean;
+  queueMode?: "interrupt";
 }) {
   if (
     !assertValidParams(params.params, validateSessionsSendParams, params.method, params.respond)
@@ -260,39 +164,52 @@ async function handleSessionSend(params: {
       ? rawIdempotencyKey.trim()
       : undefined;
   const idempotencyKey = explicitIdempotencyKey ?? randomUUID();
-  const dispatchChatSend = async (respond: RespondFn) => {
-    await expectDefined(
-      chatHandlers["chat.send"],
-      "chat.send handler",
-    )({
+  const respond = params.respond;
+  const dispatchChatSend = async (
+    dispatchRespond: RespondFn,
+    onAdmissionOwned?: () => Promise<boolean>,
+  ) => {
+    const options: GatewayRequestHandlerOptions = {
       req: params.req,
       params: {
         sessionKey: canonicalKey,
-        ...(canonicalKey === "global" && requestedAgentId ? { agentId: requestedAgentId } : {}),
+        ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
         message: (p as { message: string }).message,
         thinking: (p as { thinking?: string }).thinking,
         attachments: (p as { attachments?: unknown[] }).attachments,
         timeoutMs: (p as { timeoutMs?: number }).timeoutMs,
         idempotencyKey,
+        ...(params.queueMode ? { queueMode: params.queueMode } : {}),
       },
-      respond,
+      respond: dispatchRespond,
       context: params.context,
       client: params.client,
       isWebchatConnect: params.isWebchatConnect,
-    });
+    };
+    if (onAdmissionOwned) {
+      await handleDirectExternalChatSend(options, onAdmissionOwned);
+      return;
+    }
+    await expectDefined(chatHandlers["chat.send"], "chat.send handler")(options);
   };
-  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
+    allowPendingWorkspace: true,
+  });
   if (archivedSessionError) {
     // An explicit retry may already have a terminal chat.send result. Let the
     // owning handler replay that result before it applies the archive guard.
     if (explicitIdempotencyKey) {
-      await dispatchChatSend(params.respond);
+      await dispatchChatSend(respond);
       return;
     }
-    params.respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return;
   }
-  if (!entry?.sessionId && !params.interruptIfActive && isAgentMainSessionKey(cfg, canonicalKey)) {
+  if (
+    !entry?.sessionId &&
+    params.queueMode !== "interrupt" &&
+    isAgentMainSessionKey(cfg, canonicalKey)
+  ) {
     // Sending to an empty agent main session should create it; steering still requires an active row.
     const created = await createAgentMainSessionForSend({
       req: params.req,
@@ -302,7 +219,7 @@ async function handleSessionSend(params: {
       isWebchatConnect: params.isWebchatConnect,
     });
     if (!created.ok) {
-      params.respond(false, undefined, created.error);
+      respond(false, undefined, created.error);
       return;
     }
     entry = created.entry;
@@ -310,45 +227,64 @@ async function handleSessionSend(params: {
     storePath = created.storePath;
   }
   if (!entry?.sessionId) {
-    params.respond(
+    respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`));
+    return;
+  }
+  const admittedEntry = entry;
+  const admittedSessionId = entry.sessionId;
+
+  const readNextMessageSeq = async () =>
+    (await readSessionMessageCountAsync({
+      agentId: requestedAgentId,
+      sessionEntry: admittedEntry,
+      sessionId: admittedSessionId,
+      sessionKey: canonicalKey,
+      storePath,
+    })) + 1;
+  let messageSeq: number | undefined;
+  try {
+    messageSeq = await readNextMessageSeq();
+  } catch (error) {
+    if (!isSessionTranscriptProjectionUnavailableError(error)) {
+      throw error;
+    }
+    // Projection rebuilds are transient and happen before dispatch, so callers
+    // can safely retry the same idempotency key without duplicating a turn.
+    respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `session not found: ${key}`),
+      errorShape(ErrorCodes.UNAVAILABLE, "session transcript is rebuilding; retry shortly", {
+        details: { method: params.method },
+        retryable: true,
+        retryAfterMs: 250,
+      }),
     );
     return;
   }
 
-  let interruptedActiveRun = false;
-  if (params.interruptIfActive) {
-    const interruptResult = await interruptSessionRunIfActive({
-      req: params.req,
-      context: params.context,
-      client: params.client,
-      isWebchatConnect: params.isWebchatConnect,
-      requestedKey: key,
-      canonicalKey,
-      agentId: requestedAgentId,
-      sessionId: entry.sessionId,
-    });
-    if (interruptResult.error) {
-      params.respond(false, undefined, interruptResult.error);
-      return;
-    }
-    interruptedActiveRun = interruptResult.interrupted;
-  }
+  const onAdmissionOwned =
+    params.queueMode === "interrupt"
+      ? async (): Promise<boolean> => {
+          try {
+            // Canonical interrupt admission has drained the captured owner.
+            messageSeq = await readNextMessageSeq();
+          } catch (error) {
+            if (!isSessionTranscriptProjectionUnavailableError(error)) {
+              throw error;
+            }
+            // Interruption may already have committed side effects. The sequence is
+            // optional, so preserve delivery and let transcript events reconcile it.
+            messageSeq = undefined;
+          }
+          return true;
+        }
+      : undefined;
 
-  const messageSeq =
-    (await readSessionMessageCountAsync({
-      agentId: requestedAgentId,
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey: canonicalKey,
-      storePath,
-    })) + 1;
   let sendAcked = false;
   let sendPayload: unknown;
   let sendCached = false;
   let startedRunId: string | undefined;
+  let interruptedActiveRun = false;
   await dispatchChatSend((ok, payload, error, meta) => {
     sendAcked = ok;
     sendPayload = payload;
@@ -359,42 +295,43 @@ async function handleSessionSend(params: {
       typeof (payload as { runId?: unknown }).runId === "string"
         ? (payload as { runId: string }).runId
         : undefined;
+    interruptedActiveRun =
+      ok &&
+      payload !== null &&
+      typeof payload === "object" &&
+      "interruptedActiveRun" in payload &&
+      payload.interruptedActiveRun === true;
     if (ok && shouldAttachPendingMessageSeq({ payload, cached: meta?.cached === true })) {
-      params.respond(
+      respond(
         true,
         {
           ...(payload && typeof payload === "object" ? payload : {}),
-          messageSeq,
-          ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
+          ...(messageSeq !== undefined ? { messageSeq } : {}),
         },
         undefined,
         meta,
       );
       return;
     }
-    params.respond(
+    respond(
       ok,
-      ok && payload && typeof payload === "object"
-        ? {
-            ...payload,
-            ...(interruptedActiveRun ? { interruptedActiveRun: true } : {}),
-          }
-        : payload,
+      ok && payload && typeof payload === "object" ? { ...payload } : payload,
       error,
       meta,
     );
-  });
+  }, onAdmissionOwned);
   if (sendAcked) {
     if (shouldAttachPendingMessageSeq({ payload: sendPayload, cached: sendCached })) {
       await reactivateCompletedSubagentSession({
         sessionKey: canonicalKey,
         runId: startedRunId,
         task: (p as { message: string }).message,
+        gatewayContextResolver: params.context.resolveGatewayContext,
       });
     }
     emitSessionsChanged(params.context, {
       sessionKey: canonicalKey,
-      ...(canonicalKey === "global" && requestedAgentId ? { agentId: requestedAgentId } : {}),
+      ...(requestedAgentId ? { agentId: requestedAgentId } : {}),
       reason: interruptedActiveRun ? "steer" : "send",
     });
   }
@@ -410,7 +347,6 @@ export const sessionMessagingHandlers: GatewayRequestHandlers = {
       context,
       client,
       isWebchatConnect,
-      interruptIfActive: false,
     });
   },
   "sessions.steer": async ({ req, params, respond, context, client, isWebchatConnect }) => {
@@ -422,7 +358,7 @@ export const sessionMessagingHandlers: GatewayRequestHandlers = {
       context,
       client,
       isWebchatConnect,
-      interruptIfActive: true,
+      queueMode: "interrupt",
     });
   },
 };

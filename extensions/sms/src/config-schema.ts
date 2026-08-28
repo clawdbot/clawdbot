@@ -2,6 +2,7 @@
 import {
   AllowFromListSchema,
   buildChannelConfigSchema,
+  buildMultiAccountChannelSchema,
   DmPolicySchema,
   requireOpenAllowFrom,
 } from "openclaw/plugin-sdk/channel-config-schema";
@@ -15,6 +16,8 @@ const SmsAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
+    configWrites: z.boolean().optional(),
+    mediaMaxMb: z.number().positive().optional(),
     accountSid: z.string().optional(),
     authToken: SecretInputSchema.optional(),
     fromNumber: z.string().optional(),
@@ -27,8 +30,11 @@ const SmsAccountConfigSchema = z
     allowFrom: AllowFromListSchema,
     textChunkLimit: z.number().int().positive().optional(),
   })
-  .strict()
-  .superRefine((value, ctx) => {
+  .strict();
+
+const SmsConfigSchema = buildMultiAccountChannelSchema(SmsAccountConfigSchema, {
+  optionalAccount: true,
+  refine: (value, ctx) => {
     requireChannelOpenAllowFrom({
       channel: "sms",
       policy: value.dmPolicy,
@@ -36,18 +42,14 @@ const SmsAccountConfigSchema = z
       ctx,
       requireOpenAllowFrom,
     });
-  });
-
-const SmsConfigSchema = SmsAccountConfigSchema.extend({
-  accounts: z.record(z.string(), SmsAccountConfigSchema.optional()).optional(),
-  defaultAccount: z.string().optional(),
+  },
 });
 
 export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, {
   uiHints: {
     "": {
       label: "SMS",
-      help: "Twilio SMS channel configuration for inbound webhooks and outbound text replies.",
+      help: "Twilio SMS/MMS channel configuration for inbound webhooks and outbound replies.",
     },
     accountSid: {
       label: "Twilio Account SID",
@@ -59,7 +61,8 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     },
     fromNumber: {
       label: "SMS From Number",
-      help: "Twilio SMS-capable phone number in E.164 format, for example +15551234567.",
+      help: "Twilio SMS-capable phone number in E.164 format; outbound attachments also require MMS capability.",
+      presentation: "phone-number",
     },
     messagingServiceSid: {
       label: "Twilio Messaging Service SID",
@@ -68,10 +71,11 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     defaultTo: {
       label: "SMS Default To Number",
       help: "Optional default outbound phone number used when a send flow omits an explicit SMS target.",
+      presentation: "phone-number",
     },
     publicWebhookUrl: {
       label: "SMS Public Webhook URL",
-      help: "Public URL configured in Twilio for incoming messages. Must match Twilio's signed URL exactly.",
+      help: "Public URL configured in Twilio for incoming messages. Must match Twilio's signed URL exactly; outbound MMS also requires this same path to be reachable over HTTPS.",
     },
     webhookPath: {
       label: "SMS Webhook Path",
@@ -84,7 +88,11 @@ export const SmsChannelConfigSchema = buildChannelConfigSchema(SmsConfigSchema, 
     allowFrom: {
       label: "SMS Allow From",
       help: "Allowed sender phone numbers in E.164 format, or * when dmPolicy is open.",
+      presentation: "phone-number",
     },
+    "accounts.*.fromNumber": { presentation: "phone-number" },
+    "accounts.*.defaultTo": { presentation: "phone-number" },
+    "accounts.*.allowFrom.*": { presentation: "phone-number" },
     textChunkLimit: {
       label: "SMS Text Chunk Limit",
       help: "Maximum characters per outbound SMS chunk before OpenClaw splits long replies.",

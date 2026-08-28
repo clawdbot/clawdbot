@@ -16,7 +16,7 @@ Adds policy-backed doctor checks for workspace conformance.
 
 ## Surface
 
-plugin
+CLI commands: `openclaw policy`
 
 <!-- openclaw-plugin-reference:manual-start -->
 
@@ -35,6 +35,10 @@ OpenClaw settings and workspace declarations as evidence, and reports drift
 through `openclaw policy check` and `openclaw doctor --lint`. A clean policy
 check emits policy, evidence, findings, and attestation hashes that operators
 can record for audit.
+
+`openclaw policy check`, `watch`, and workspace-relative `compare` accept
+`--agent <id>`. Explicit multi-agent fleets must select the workspace owner;
+the plugin does not infer one from roster order.
 
 `openclaw policy compare --baseline <file>` compares one policy file to another
 policy file. It is config-level conformance only: it uses policy rule metadata
@@ -65,7 +69,7 @@ Named policy scopes under `scopes.<scopeName>` can add stricter normal policy
 sections for the selector they list. `agentIds` supports `tools`,
 `agents.workspace`, `sandbox`, and `dataHandling.memory`; `channelIds` supports
 `ingress.channels`.
-Runtime agent ids that are not explicitly listed in `agents.list[]` are checked
+Runtime agent ids that are not explicitly listed in `agents.entries.*` are checked
 against inherited global/default posture rather than silently passing with no
 evidence. Every scope present in `policy.jsonc` must be valid and enforceable
 for its selector. Overlay rules are additional claims, so they do not weaken

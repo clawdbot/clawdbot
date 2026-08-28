@@ -4,28 +4,11 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import type { Command } from "commander";
+import type { PushTestResult } from "../../../packages/gateway-protocol/src/index.js";
 import { defaultRuntime } from "../../runtime.js";
 import { getNodesTheme, runNodesCommand } from "./cli-utils.js";
-import { callGatewayCli, nodesCallOpts, resolveNodeId } from "./rpc.js";
+import { callNodesGatewayCli, nodesCallOpts, resolveCliNodeId } from "./rpc.js";
 import type { NodesRpcOpts } from "./types.js";
-
-type NodesPushOpts = NodesRpcOpts & {
-  node?: string;
-  title?: string;
-  body?: string;
-  environment?: string;
-};
-
-function normalizeEnvironment(value: unknown): "sandbox" | "production" | null {
-  if (typeof value !== "string") {
-    return null;
-  }
-  const normalized = normalizeOptionalLowercaseString(value);
-  if (normalized === "sandbox" || normalized === "production") {
-    return normalized;
-  }
-  return null;
-}
 
 /** Register the node push-test command. */
 export function registerNodesPushCommand(nodes: Command) {
@@ -37,15 +20,15 @@ export function registerNodesPushCommand(nodes: Command) {
       .option("--title <text>", "Push title", "OpenClaw")
       .option("--body <text>", "Push body")
       .option("--environment <sandbox|production>", "Override APNs environment")
-      .action(async (opts: NodesPushOpts) => {
+      .action(async (opts: NodesRpcOpts & { environment?: string }) => {
         await runNodesCommand("push", async () => {
-          const nodeId = await resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
-          const title = normalizeOptionalString(opts.title) || "OpenClaw";
-          const body = normalizeOptionalString(opts.body) || `Push test for node ${nodeId}`;
-          const environment = normalizeEnvironment(opts.environment);
-          if (opts.environment && !environment) {
+          const environment = normalizeOptionalLowercaseString(opts.environment);
+          if (opts.environment && environment !== "sandbox" && environment !== "production") {
             throw new Error("invalid --environment (use sandbox|production)");
           }
+          const nodeId = await resolveCliNodeId(opts, normalizeOptionalString(opts.node) ?? "");
+          const title = normalizeOptionalString(opts.title) || "OpenClaw";
+          const body = normalizeOptionalString(opts.body) || `Push test for node ${nodeId}`;
 
           const params: Record<string, unknown> = {
             nodeId,
@@ -56,20 +39,10 @@ export function registerNodesPushCommand(nodes: Command) {
             params.environment = environment;
           }
 
-          const result = await callGatewayCli("push.test", opts, params);
-          if (opts.json) {
-            defaultRuntime.writeJson(result);
-            return;
-          }
-
+          const result = await callNodesGatewayCli("push.test", opts, params);
           const parsed =
             typeof result === "object" && result !== null
-              ? (result as {
-                  ok?: unknown;
-                  status?: unknown;
-                  reason?: unknown;
-                  environment?: unknown;
-                })
+              ? (result as Partial<PushTestResult>)
               : {};
           const ok = parsed.ok === true;
           const status = typeof parsed.status === "number" ? parsed.status : 0;
@@ -79,11 +52,19 @@ export function registerNodesPushCommand(nodes: Command) {
             typeof parsed.environment === "string"
               ? (normalizeOptionalString(parsed.environment) ?? "unknown")
               : "unknown";
-          const { ok: okLabel, error: errorLabel } = getNodesTheme();
-          const label = ok ? okLabel : errorLabel;
-          defaultRuntime.log(label(`push.test status=${status} ok=${ok} env=${env}`));
-          if (reason) {
-            defaultRuntime.log(`reason: ${reason}`);
+          if (opts.json) {
+            defaultRuntime.writeJson(result);
+          } else {
+            const { ok: okLabel, error: errorLabel } = getNodesTheme();
+            const label = ok ? okLabel : errorLabel;
+            defaultRuntime.log(label(`push.test status=${status} ok=${ok} env=${env}`));
+            if (reason) {
+              defaultRuntime.log(`reason: ${reason}`);
+            }
+          }
+          if (!ok) {
+            // Defer termination so the complete human/JSON result reaches stdout.
+            process.exitCode = 1;
           }
         });
       }),

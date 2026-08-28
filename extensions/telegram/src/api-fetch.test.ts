@@ -1,7 +1,7 @@
 // Telegram tests cover api fetch plugin behavior.
 import { createRequire } from "node:module";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { fetchTelegramChatId } from "./api-fetch.js";
+import { fetchTelegramChatId, lookupTelegramChatId } from "./api-fetch.js";
 
 const TELEGRAM_GETCHAT_JSON_CAP_BYTES = 4 * 1024 * 1024;
 
@@ -177,6 +177,82 @@ describe("fetchTelegramChatId", () => {
     expect(cancelCount).toBe(1);
   });
 
+  it("cancels non-success getChat response bodies before returning", async () => {
+    const cancel = vi.fn();
+    let observedSignal: AbortSignal | undefined;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("service unavailable"));
+          },
+          cancel,
+        }),
+        { status: 503 },
+      );
+    });
+
+    const result = await Promise.race([
+      fetchTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+      new Promise<"stalled">((resolve) => {
+        setTimeout(() => resolve("stalled"), 250);
+      }),
+    ]);
+
+    expect(result).toBeNull();
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
+  it("does not wait for a cloned capture branch before returning", async () => {
+    let observedSignal: AbortSignal | undefined;
+    let captureSettled = false;
+    const fetchImpl = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+      observedSignal = init?.signal ?? undefined;
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("service unavailable"));
+            observedSignal?.addEventListener(
+              "abort",
+              () => controller.error(observedSignal?.reason),
+              { once: true },
+            );
+          },
+        }),
+        { status: 503 },
+      );
+      const clone = response.clone();
+      void clone
+        .arrayBuffer()
+        .catch(() => undefined)
+        .finally(() => {
+          captureSettled = true;
+        });
+      return response;
+    });
+
+    const result = await Promise.race([
+      fetchTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        fetchImpl: fetchImpl as unknown as typeof fetch,
+      }),
+      new Promise<"stalled">((resolve) => {
+        setTimeout(() => resolve("stalled"), 250);
+      }),
+    ]);
+
+    expect(result).toBeNull();
+    await vi.waitFor(() => expect(captureSettled).toBe(true));
+    expect(observedSignal?.aborted).toBe(true);
+  });
+
   it("keeps the getChat timeout active until the response body read settles", async () => {
     vi.useFakeTimers();
     let observedSignal: AbortSignal | undefined;
@@ -215,6 +291,37 @@ describe("fetchTelegramChatId", () => {
     expect(abortReason).toBeInstanceOf(Error);
     expect((abortReason as Error).name).toBe("TimeoutError");
     expect((abortReason as Error).message).toBe("request timed out");
+  });
+});
+
+describe("lookupTelegramChatId", () => {
+  it.each([
+    {
+      name: "success",
+      setup: () => proxyMocks.undiciFetch.mockResolvedValueOnce(getChatOkResponse(12345)),
+      expected: "12345",
+    },
+    {
+      name: "transport failure",
+      setup: () => proxyMocks.undiciFetch.mockRejectedValueOnce(new Error("network failed")),
+      expected: null,
+    },
+  ])("closes its owned transport after $name", async ({ setup, expected }) => {
+    proxyMocks.undiciFetch.mockReset();
+    setup();
+
+    await expect(
+      lookupTelegramChatId({
+        token: "abc",
+        chatId: "@user",
+        network: { autoSelectFamily: false },
+      }),
+    ).resolves.toBe(expected);
+
+    const init = proxyMocks.undiciFetch.mock.calls[0]?.[1] as
+      | (RequestInit & { dispatcher?: { destroyed?: boolean } })
+      | undefined;
+    expect(init?.dispatcher?.destroyed).toBe(true);
   });
 });
 

@@ -1,8 +1,9 @@
 /** Tests fast-path secret collection for channel contract API credentials. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const { loadPluginMetadataSnapshotMock } = vi.hoisted(() => ({
-  loadPluginMetadataSnapshotMock: vi.fn(() => ({ plugins: [] })),
+  loadPluginMetadataSnapshotMock: vi.fn((_params: unknown) => ({ plugins: [] })),
 }));
 const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
   loadBundledPluginPublicArtifactModuleSyncMock: vi.fn(
@@ -26,8 +27,14 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (params: unknown) =>
+    createPluginMetadataSnapshotFixture(loadPluginMetadataSnapshotMock(params)),
+  resolvePluginMetadataSnapshot: (params: unknown) => {
+    const snapshot = loadPluginMetadataSnapshotMock(params);
+    return createPluginMetadataSnapshotFixture({ plugins: snapshot.plugins });
+  },
 }));
 
 vi.mock("../plugins/public-surface-loader.js", () => ({
@@ -69,5 +76,10 @@ describe("channel contract api explicit fast path", () => {
       artifactBasename: "contract-api.js",
     });
     expect(loadPluginMetadataSnapshotMock).toHaveBeenCalledTimes(1);
+    expect(loadPluginMetadataSnapshotMock.mock.calls[0]?.[0]).toMatchObject({
+      config: {},
+      workspaceDir: expect.any(String),
+      allowWorkspaceScopedCurrent: true,
+    });
   });
 });

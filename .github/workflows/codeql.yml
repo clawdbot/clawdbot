@@ -28,7 +28,6 @@ on:
       - "extensions/file-transfer/src/**"
       - "extensions/google-meet/src/**"
       - "extensions/imessage/src/**"
-      - "extensions/memory-core/src/memory/qmd-manager.ts"
       - "extensions/memory-wiki/src/obsidian.ts"
       - "extensions/microsoft-foundry/cli.ts"
       - "extensions/ollama/src/wsl2-crash-loop-check.ts"
@@ -105,13 +104,13 @@ jobs:
     steps:
       - name: Checkout
         if: ${{ matrix.category != 'actions' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
 
       - name: Checkout Actions security sources
         if: ${{ matrix.category == 'actions' }}
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: false
           sparse-checkout: |
@@ -120,12 +119,12 @@ jobs:
             .github/codeql
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/init@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           languages: ${{ matrix.language }}
           config-file: ${{ matrix.config_file }}
 
       - name: Analyze
-        uses: github/codeql-action/analyze@8aad20d150bbac5944a9f9d289da16a4b0d87c1e # v4
+        uses: github/codeql-action/analyze@ff2f1c621b7f889edc0d3c761ac2e6a3f8cdb0dd # v4.37.7
         with:
           category: "/codeql-security-high/${{ matrix.category }}"

@@ -1,0 +1,277 @@
+name: Vercel Container Registry Publish
+
+on:
+  workflow_call:
+    inputs:
+      advisory:
+        description: Keep automated release mirroring non-blocking
+        required: true
+        type: boolean
+      version:
+        description: Docker release version without the v prefix
+        required: true
+        type: string
+      source_digests:
+        description: Newline-delimited alias=sha256:<64 lowercase hex> entries
+        required: true
+        type: string
+      include_browser:
+        description: Whether the tagged Docker release includes browser images
+        required: true
+        type: boolean
+    secrets:
+      VERCEL_TOKEN:
+        required: true
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Docker release version without the v prefix
+        required: true
+        type: string
+      source_digests:
+        description: Newline-delimited alias=sha256:<64 lowercase hex> entries
+        required: true
+        type: string
+      include_browser:
+        description: Whether the tagged Docker release includes browser images
+        required: true
+        type: boolean
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  NODE_VERSION: "24.19.0"
+
+concurrency:
+  # Alias promotion is read-then-write. Serialize VCR independently so a slow
+  # mirror never holds the Docker publication lock.
+  group: vcr-release-publish
+  cancel-in-progress: false
+
+jobs:
+  validate_recovery:
+    if: ${{ !inputs.advisory }}
+    runs-on: ubuntu-24.04
+    permissions: {}
+    steps:
+      - name: Require a main-branch recovery dispatch
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "::error::Vercel registry recovery must be dispatched from main; got ${WORKFLOW_REF}." >&2
+            exit 1
+          fi
+
+  approve_recovery:
+    needs: validate_recovery
+    if: ${{ !inputs.advisory }}
+    runs-on: ubuntu-24.04
+    environment: docker-release
+    permissions: {}
+    steps:
+      - name: Approve Vercel registry recovery
+        env:
+          VERSION: ${{ inputs.version }}
+        run: echo "Approved Vercel Container Registry mirror recovery for ${VERSION}"
+
+  publish:
+    needs: [validate_recovery, approve_recovery]
+    if: ${{ always() && (inputs.advisory || (needs.validate_recovery.result == 'success' && needs.approve_recovery.result == 'success')) }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # Release mirroring is advisory; approved recovery must fail visibly.
+    continue-on-error: ${{ inputs.advisory == true }}
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout trusted registry tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Setup trusted Node runtime
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+
+      # Materialize the complete CLI dependency closure before the production
+      # token enters any step environment. The committed lock and integrity
+      # checks keep registry and Sandbox operations on reviewed executable code.
+      - name: Materialize locked Vercel CLI
+        id: vercel_cli
+        run: |
+          set -euo pipefail
+          bash scripts/materialize-vercel-cli.sh \
+            .github/release/vercel-cli \
+            "${RUNNER_TEMP}/vercel-cli" \
+            "${GITHUB_OUTPUT}"
+
+      - name: Validate Vercel Container Registry configuration
+        env:
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_VCR_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+        run: |
+          set -euo pipefail
+          for name in VERCEL_PROJECT_ID VERCEL_SCOPE VERCEL_TOKEN VERCEL_VCR_IMAGE; do
+            if [[ -z "${!name}" ]]; then
+              echo "::error::${name} is required for Vercel Container Registry publishing."
+              exit 1
+            fi
+          done
+          if [[ "${VERCEL_VCR_IMAGE}" != vcr.vercel.com/*/*/* ]]; then
+            echo "::error::VERCEL_VCR_IMAGE must be a full vcr.vercel.com/team/project/repository image name."
+            exit 1
+          fi
+
+      - name: Authenticate Docker to Vercel Container Registry
+        env:
+          VERCEL_CLI: ${{ steps.vercel_cli.outputs.cli }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -euo pipefail
+          "${VERCEL_CLI}" vcr login docker \
+            --project "${VERCEL_PROJECT_ID}" \
+            --scope "${VERCEL_SCOPE}" \
+            --format json
+
+      - name: Copy and verify immutable release images
+        id: copy_images
+        env:
+          INCLUDE_BROWSER: ${{ inputs.include_browser }}
+          SOURCE_DIGESTS: ${{ inputs.source_digests }}
+          SOURCE_IMAGE: ghcr.io/${{ github.repository }}
+          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          browser_args=()
+          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
+            browser_args+=(--include-browser)
+          fi
+          source_ref_args=()
+          while IFS='=' read -r alias digest; do
+            [[ -z "${alias}" ]] && continue
+            source_ref_args+=(--source-ref "${alias}=${SOURCE_IMAGE}@${digest}")
+          done <<< "${SOURCE_DIGESTS}"
+          node scripts/vercel-container-registry-publish.mjs \
+            --version "${VERSION}" \
+            "${source_ref_args[@]}" \
+            --target-image "${TARGET_IMAGE}" \
+            "${browser_args[@]}"
+
+      # VCR tag status can remain null after an image is usable, so Sandbox
+      # creation is the authoritative readiness check for this publication.
+      - name: Run custom-image Sandbox smoke
+        id: sandbox_smoke
+        env:
+          VERCEL_AUTH_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+          VERCEL_CLI: ${{ steps.vercel_cli.outputs.cli }}
+          VERCEL_PROJECT_ID: ${{ vars.VERCEL_PROJECT_ID }}
+          VERCEL_SCOPE: ${{ vars.VERCEL_SCOPE }}
+          VERCEL_VCR_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          repository="${VERCEL_VCR_IMAGE##*/}"
+          retry_deadline=$((SECONDS + 600))
+          attempt=1
+          while true; do
+            set +e
+            output="$(
+              "${VERCEL_CLI}" sandbox run \
+                --silent \
+                --rm \
+                --non-persistent \
+                --network-policy deny-all \
+                --timeout 3m \
+                --project "${VERCEL_PROJECT_ID}" \
+                --scope "${VERCEL_SCOPE}" \
+                --image "${repository}:${VERSION}" \
+                --workdir /app \
+                --env "EXPECTED_VERSION=${VERSION}" \
+                -- /bin/sh -lc 'test "$(node -p "require(\"./package.json\").version")" = "${EXPECTED_VERSION}" && node openclaw.mjs --version' \
+                2>&1
+            )"
+            status=$?
+            set -e
+            printf '%s\n' "${output}"
+            if [[ "${status}" -eq 0 ]]; then
+              break
+            fi
+            if [[ "${output}" != *"image_not_ready"* ]]; then
+              exit "${status}"
+            fi
+            if (( SECONDS >= retry_deadline )); then
+              echo "::error::Vercel image preparation remained image_not_ready for 10 minutes."
+              exit "${status}"
+            fi
+            delay=10
+            remaining=$((retry_deadline - SECONDS))
+            if (( delay > remaining )); then
+              delay="${remaining}"
+            fi
+            echo "::notice::Vercel image is not ready; retrying Sandbox smoke in ${delay}s (attempt ${attempt})."
+            sleep "${delay}"
+            attempt=$((attempt + 1))
+          done
+
+      - name: Promote and verify channel aliases
+        id: promote_aliases
+        env:
+          INCLUDE_BROWSER: ${{ inputs.include_browser }}
+          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          browser_args=()
+          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
+            browser_args+=(--include-browser)
+          fi
+          node scripts/vercel-container-registry-publish.mjs \
+            --version "${VERSION}" \
+            --target-image "${TARGET_IMAGE}" \
+            --promote-aliases \
+            "${browser_args[@]}"
+
+      - name: Summarize Vercel publication
+        if: ${{ always() }}
+        env:
+          ADVISORY: ${{ inputs.advisory }}
+          COPY_OUTCOME: ${{ steps.copy_images.outcome }}
+          INCLUDE_BROWSER: ${{ inputs.include_browser }}
+          PROMOTE_OUTCOME: ${{ steps.promote_aliases.outcome }}
+          SMOKE_OUTCOME: ${{ steps.sandbox_smoke.outcome }}
+          TARGET_IMAGE: ${{ vars.VERCEL_VCR_IMAGE }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          variants="default, slim"
+          if [[ "${INCLUDE_BROWSER}" == "true" ]]; then
+            variants="${variants}, browser"
+          fi
+          status="passed"
+          if [[ "${COPY_OUTCOME}" != "success" || "${SMOKE_OUTCOME}" != "success" || "${PROMOTE_OUTCOME}" != "success" ]]; then
+            status="failed"
+            if [[ "${ADVISORY}" == "true" ]]; then
+              status="failed (non-blocking)"
+              echo "::warning::VCR mirror failed; Docker publication and GitHub release finalization are unaffected."
+            fi
+          fi
+          {
+            echo "## Vercel Container Registry"
+            echo "- Image: ${TARGET_IMAGE}:${VERSION}"
+            echo "- Variants: ${variants}"
+            echo "- Platforms: linux/amd64, linux/arm64"
+            echo "- Status: ${status}"
+            echo "- Copy: ${COPY_OUTCOME}"
+            echo "- Sandbox smoke: ${SMOKE_OUTCOME}"
+            echo "- Alias promotion: ${PROMOTE_OUTCOME}"
+          } >> "${GITHUB_STEP_SUMMARY}"

@@ -1,6 +1,7 @@
 // Memory Core plugin module implements concept vocabulary behavior.
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
 
 export const MAX_CONCEPT_TAGS = 8;
 
@@ -247,7 +248,6 @@ const PROTECTED_GLOSSARY = [
   "kv",
   "network",
   "openai",
-  "qmd",
   "router",
   "s3",
   "vlan",
@@ -291,10 +291,6 @@ const HANGUL_RE = /\p{Script=Hangul}/u;
 const DEFAULT_WORD_SEGMENTER =
   typeof Intl.Segmenter === "function" ? new Intl.Segmenter("und", { granularity: "word" }) : null;
 
-function containsLetterOrNumber(value: string): boolean {
-  return LETTER_OR_NUMBER_RE.test(value);
-}
-
 function classifyConceptTagScript(tag: string): ConceptTagScriptFamily {
   const normalized = tag.normalize("NFKC");
   const hasLatin = LATIN_RE.test(normalized);
@@ -330,27 +326,28 @@ function isKanaOnlyToken(value: string): boolean {
   );
 }
 
-function normalizeConceptToken(rawToken: string, fromGlossary = false): string | null {
+export function normalizeConceptToken(rawToken: string): string | null {
   const normalized = normalizeLowercaseStringOrEmpty(
     rawToken
       .normalize("NFKC")
       .replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "")
       .replaceAll("_", "-"),
   );
-  if (!normalized || !containsLetterOrNumber(normalized) || normalized.length > 32) {
+  if (!normalized || !LETTER_OR_NUMBER_RE.test(normalized) || normalized.length > 32) {
     return null;
   }
   if (
-    /^\d+$/.test(normalized) ||
-    /^\d{4}-\d{2}-\d{2}$/u.test(normalized) ||
+    /^\p{N}+(?:[./-]\p{N}+)*$/u.test(normalized) ||
     /^\d{4}-\d{2}-\d{2}\.[\p{L}\p{N}]+$/u.test(normalized)
   ) {
     return null;
   }
   const script = classifyConceptTagScript(normalized);
-  // Glossary entries are an explicit allowlist of short technical terms (e.g. "kv", "s3"); they
-  // bypass the per-script minimum length that would otherwise discard them.
-  if (!fromGlossary && normalized.length < minimumTokenLengthForScript(script)) {
+  // Recognize the glossary here so extraction and stored REM tags share the same short-token policy.
+  if (
+    normalized.length < minimumTokenLengthForScript(script) &&
+    !PROTECTED_GLOSSARY.includes(normalized)
+  ) {
     return null;
   }
   if (isKanaOnlyToken(normalized) && normalized.length < 3) {
@@ -368,34 +365,18 @@ function normalizeConceptToken(rawToken: string, fromGlossary = false): string |
 // Precomputed so derive() does not reclassify on every call.
 const GLOSSARY_ENTRIES = PROTECTED_GLOSSARY.map((entry) => ({
   entry,
-  wholeWord: entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry)),
+  // Unicode boundaries must inspect code points, not half of an astral letter or number.
+  wholeWord:
+    entry.length < minimumTokenLengthForScript(classifyConceptTagScript(entry))
+      ? new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(entry)}(?![\\p{L}\\p{N}])`, "u")
+      : undefined,
 }));
-
-function isAlphanumericAt(source: string, index: number): boolean {
-  const ch = source[index];
-  return ch !== undefined && LETTER_OR_NUMBER_RE.test(ch);
-}
-
-// True when `entry` occurs as a delimiter-bounded token, not inside a longer word. Keeps short
-// glossary entries like "kv"/"s3" from firing inside "mkv"/"css3" once they bypass the length gate.
-function includesStandaloneTerm(source: string, entry: string): boolean {
-  let from = source.indexOf(entry);
-  while (from !== -1) {
-    if (!isAlphanumericAt(source, from - 1) && !isAlphanumericAt(source, from + entry.length)) {
-      return true;
-    }
-    from = source.indexOf(entry, from + 1);
-  }
-  return false;
-}
 
 function collectGlossaryMatches(source: string): string[] {
   const normalizedSource = normalizeLowercaseStringOrEmpty(source.normalize("NFKC"));
   const matches: string[] = [];
   for (const { entry, wholeWord } of GLOSSARY_ENTRIES) {
-    const present = wholeWord
-      ? includesStandaloneTerm(normalizedSource, entry)
-      : normalizedSource.includes(entry);
+    const present = wholeWord ? wholeWord.test(normalizedSource) : normalizedSource.includes(entry);
     if (present) {
       matches.push(entry);
     }
@@ -416,28 +397,15 @@ function collectSegmentTokens(source: string): string[] {
   return source.split(/[^\p{L}\p{N}]+/u).filter(Boolean);
 }
 
-function pushNormalizedTag(
-  tags: string[],
-  rawToken: string,
-  limit: number,
-  fromGlossary = false,
-): void {
-  const normalized = normalizeConceptToken(rawToken, fromGlossary);
-  if (!normalized || tags.includes(normalized)) {
-    return;
-  }
-  tags.push(normalized);
-  if (tags.length > limit) {
-    tags.splice(limit);
-  }
-}
-
 export function deriveConceptTags(params: {
   path: string;
   snippet: string;
   limit?: number;
 }): string[] {
-  const source = `${path.basename(params.path)} ${params.snippet}`;
+  // Recall annotations are control metadata; deriving tags from them can turn
+  // project identities into promoted triggers instead of user-visible concepts.
+  const visibleSnippet = params.snippet.replace(/<!--[\s\S]*?-->/gu, " ");
+  const source = `${path.basename(params.path)} ${visibleSnippet}`;
   const limit = Number.isFinite(params.limit)
     ? Math.max(0, Math.floor(params.limit as number))
     : MAX_CONCEPT_TAGS;
@@ -446,14 +414,18 @@ export function deriveConceptTags(params: {
   }
 
   const tags: string[] = [];
-  const tokenSources: Array<{ tokens: string[]; fromGlossary: boolean }> = [
-    { tokens: collectGlossaryMatches(source), fromGlossary: true },
-    { tokens: collectCompoundTokens(source), fromGlossary: false },
-    { tokens: collectSegmentTokens(source), fromGlossary: false },
+  const tokenSources = [
+    collectGlossaryMatches(source),
+    collectCompoundTokens(source),
+    collectSegmentTokens(source),
   ];
-  for (const { tokens, fromGlossary } of tokenSources) {
+  for (const tokens of tokenSources) {
     for (const rawToken of tokens) {
-      pushNormalizedTag(tags, rawToken, limit, fromGlossary);
+      const normalized = normalizeConceptToken(rawToken);
+      if (!normalized || tags.includes(normalized)) {
+        continue;
+      }
+      tags.push(normalized);
       if (tags.length >= limit) {
         return tags;
       }

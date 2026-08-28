@@ -40,6 +40,7 @@ async function safeFetch(params: SafeFetchParams) {
       allowHosts,
       authAllowHosts: authorizationAllowHosts ?? [],
     },
+    resolveFn: request.resolveFn ?? publicResolve,
   });
 }
 
@@ -195,26 +196,74 @@ describe("safeFetch", () => {
     expect(called).toBe(false);
   });
 
-  it("returns the redirect response when dispatcher is provided by an outer guard", async () => {
-    const redirectedTo = "https://cdn.sharepoint.com/storage/file.pdf";
-    const fetchMock = mockFetchWithRedirect({
-      "https://teams.sharepoint.com/file.pdf": redirectedTo,
-    });
-    const res = await safeFetch({
-      url: "https://teams.sharepoint.com/file.pdf",
-      allowHosts: ["sharepoint.com"],
-      fetchFn: fetchMock as unknown as typeof fetch,
-      requestInit: { dispatcher: {} } as RequestInit,
-      resolveFn: publicResolve,
-    });
-    expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe(redirectedTo);
-    expect(fetchMock).toHaveBeenCalledOnce();
+  it.each([301, 302, 303, 307, 308])(
+    "returns dispatcher-mode %i responses to the outer guard",
+    async (status) => {
+      const redirectedTo = "https://cdn.sharepoint.com/storage/file.pdf";
+      const response = new Response(null, {
+        status,
+        headers: { location: redirectedTo },
+      });
+      const fetchMock = vi.fn(async (_url: string, _init?: RequestInit) => response);
+      const resolveFn = vi.fn(publicResolve);
+      const headers = new Headers({ Authorization: "Bearer fixture-token" });
+      const res = await safeFetch({
+        url: "https://teams.sharepoint.com/file.pdf",
+        allowHosts: ["sharepoint.com"],
+        authorizationAllowHosts: ["teams.sharepoint.com"],
+        fetchFn: fetchMock as unknown as typeof fetch,
+        requestInit: { dispatcher: {}, headers } as RequestInit,
+        resolveFn,
+      });
+      expect(res).toBe(response);
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(resolveFn).toHaveBeenCalledExactlyOnceWith("teams.sharepoint.com");
+      const sentHeaders = new Headers(fetchMock.mock.calls[0]?.[1]?.headers);
+      expect(sentHeaders.get("authorization")).toBeNull();
+      expect(headers.get("authorization")).toBe("Bearer fixture-token");
+    },
+  );
+
+  it.each([200, 302])(
+    "returns dispatcher-mode %i responses without a location unchanged",
+    async (status) => {
+      const response = new Response(null, { status });
+      const fetchMock = vi.fn(async () => response);
+      const res = await safeFetch({
+        url: "https://teams.sharepoint.com/file.pdf",
+        allowHosts: ["sharepoint.com"],
+        fetchFn: fetchMock as typeof fetch,
+        requestInit: { dispatcher: {} } as RequestInit,
+      });
+      expect(res).toBe(response);
+      expect(fetchMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    ["private DNS", privateResolve("127.0.0.1")],
+    ["failed DNS", failingResolve],
+  ])("blocks dispatcher-mode fetch before dispatch on %s", async (_label, resolveFn) => {
+    const fetchMock = vi.fn();
+    await expect(
+      safeFetch({
+        url: "https://teams.sharepoint.com/file.pdf",
+        allowHosts: ["sharepoint.com"],
+        fetchFn: fetchMock as typeof fetch,
+        requestInit: { dispatcher: {} } as RequestInit,
+        resolveFn,
+      }),
+    ).rejects.toThrow("Initial download URL blocked");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("still enforces allowlist checks before returning dispatcher-mode redirects", async () => {
+  it.each([
+    ["https://evil.example.com/steal", "blocked by allowlist"],
+    ["http://teams.sharepoint.com/file.pdf", "blocked by allowlist"],
+    ["https://[invalid", "Invalid redirect URL"],
+  ])("rejects dispatcher-mode redirect %s", async (location, error) => {
     const fetchMock = mockFetchWithRedirect({
-      "https://teams.sharepoint.com/file.pdf": "https://evil.example.com/steal",
+      "https://teams.sharepoint.com/file.pdf": location,
     });
     await expect(
       safeFetch({
@@ -224,7 +273,7 @@ describe("safeFetch", () => {
         requestInit: { dispatcher: {} } as RequestInit,
         resolveFn: publicResolve,
       }),
-    ).rejects.toThrow("blocked by allowlist");
+    ).rejects.toThrow(error);
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
@@ -533,6 +582,11 @@ describe("Graph shared-link helpers", () => {
     ["https://graph.microsoft.com/v1.0/me", false],
     ["https://smba.trafficmanager.net/amer/v3", false],
     ["https://example.com/file.pdf", false],
+    ["https://notonedrive.com/x", false],
+    ["https://evil1drv.ms/x", false],
+    ["https://fakeonedrive.live.com/x", false],
+    ["https://evilsharepoint.com/x", false],
+    ["http://onedrive.com/x", false],
     ["not-a-url", false],
   ])("isGraphSharedLinkUrl(%s) === %s", (url, expected) => {
     expect(isGraphSharedLinkUrl(url)).toBe(expected);
@@ -591,62 +645,69 @@ describe("Graph shared-link helpers", () => {
 describe("msteams inline image limits", () => {
   const smallPngDataUrl = "data:image/png;base64,aGVsbG8="; // "hello" (5 bytes)
 
-  it("rejects inline data images above per-image limit", () => {
+  it.each([
+    ["AA==", "00"],
+    ["AAA=", "0000"],
+    ["AAAA", "000000"],
+    ["Z E = =", "64"],
+    ["A\tA==", "00"],
+  ])("enforces exact decoded-size limits for %s", (payload, hex) => {
+    const data = Buffer.from(hex, "hex");
     const attachments = [
       {
         contentType: "text/html",
-        content: `<img src="${smallPngDataUrl}" />`,
+        content: `<img src="data:image/png;base64,${payload}" />`,
       },
     ];
-    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 4 });
-    expect(out).toStrictEqual([]);
+    expect(
+      extractInlineImageCandidates(attachments, { maxInlineBytes: data.length - 1 }),
+    ).toStrictEqual([{ kind: "unavailable" }]);
+    expect(
+      extractInlineImageCandidates(attachments, { maxInlineBytes: data.length }),
+    ).toStrictEqual([{ kind: "data", data, contentType: "image/png" }]);
   });
 
-  it("accepts inline data images within limit", () => {
-    const attachments = [
-      {
-        contentType: "text/html",
-        content: `<img src="${smallPngDataUrl}" />`,
-      },
-    ];
-    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
-    expect(out.length).toBe(1);
-    expect(out[0]?.kind).toBe("data");
-    if (out[0]?.kind === "data") {
-      expect(out[0].data.byteLength).toBeGreaterThan(0);
-      expect(out[0].contentType).toBe("image/png");
-    }
-  });
+  it.each(["aGV=sbG8=", "A===", "AA", "-AAA", "A!AA"])(
+    "rejects malformed inline base64 %s",
+    (payload) => {
+      const attachments = [
+        {
+          contentType: "text/html",
+          content: `<img src="data:image/png;base64,${payload}" />`,
+        },
+      ];
+      const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
+      expect(out).toStrictEqual([{ kind: "unavailable" }]);
+    },
+  );
 
-  it("rejects inline data images with malformed base64 padding", () => {
-    const attachments = [
-      {
-        contentType: "text/html",
-        content: `<img src="data:image/png;base64,aGV=sbG8=" />`,
-      },
-    ];
-    const out = extractInlineImageCandidates(attachments, { maxInlineBytes: 10 });
-    expect(out).toStrictEqual([]);
-  });
-
-  it("enforces cumulative inline size limit across attachments", () => {
-    const attachments = [
-      {
-        contentType: "text/html",
-        content: `<img src="${smallPngDataUrl}" />`,
-      },
-      {
-        contentType: "text/html",
-        content: `<img src="${smallPngDataUrl}" />`,
-      },
-    ];
-    const out = extractInlineImageCandidates(attachments, {
-      maxInlineBytes: 10,
-      maxInlineTotalBytes: 6,
-    });
-    expect(out.length).toBe(1);
-    expect(out[0]?.kind).toBe("data");
-  });
+  it.each([
+    [9, ["data", "unavailable", "unavailable"]],
+    [10, ["data", "data", "unavailable"]],
+  ])(
+    "enforces cumulative inline size limit %i across attachments",
+    (maxInlineTotalBytes, kinds) => {
+      const attachments = [
+        {
+          contentType: "text/html",
+          content: `<img src="${smallPngDataUrl}" />`,
+        },
+        {
+          contentType: "text/html",
+          content: `<img src="${smallPngDataUrl}" />`,
+        },
+        {
+          contentType: "text/html",
+          content: `<img src="${smallPngDataUrl}" />`,
+        },
+      ];
+      const out = extractInlineImageCandidates(attachments, {
+        maxInlineBytes: 10,
+        maxInlineTotalBytes,
+      });
+      expect(out.map((candidate) => candidate.kind)).toEqual(kinds);
+    },
+  );
 });
 
 describe("normalizeContentType case-insensitivity", () => {

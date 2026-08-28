@@ -1,9 +1,66 @@
 // Slack tests cover format plugin behavior.
 import { describe, expect, it } from "vitest";
-import { markdownToSlackMrkdwnChunks, normalizeSlackOutboundText } from "./format.js";
+import {
+  chunkSlackMrkdwnText,
+  markdownToSlackMrkdwnChunks,
+  normalizeSlackOutboundText,
+} from "./format.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
 
+describe("chunkSlackMrkdwnText", () => {
+  it("preserves ordinary whitespace at Slack section boundaries", () => {
+    const text = `${"x".repeat(2_998)}  tail`;
+    const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it("keeps short inline-code spans together until the actual section boundary", () => {
+    const text = `${"a`b`".repeat(750)}x`;
+    const chunks = chunkSlackMrkdwnText(text, 3_000);
+
+    expect(chunks).toHaveLength(2);
+    expect(chunks.join("")).toBe(text);
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it.each(["`", "```"])("balances long %s code sections without losing their content", (marker) => {
+    const content = "x".repeat(3_100);
+    const chunks = chunkSlackMrkdwnText(`${marker}${content}${marker}`, 3_000);
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.startsWith(marker) && chunk.endsWith(marker))).toBe(true);
+    expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(
+      content,
+    );
+    expect(chunks.every((chunk) => chunk.length <= 3_000)).toBe(true);
+  });
+
+  it.each([
+    ["inline", "`", [1, 2]],
+    ["fenced", "```", [1, 5, 6]],
+  ] as const)("preserves content when a %s code wrapper cannot fit", (_name, marker, limits) => {
+    for (const limit of limits) {
+      expect(chunkSlackMrkdwnText(`${marker}x${marker}`, limit)).toEqual(["x"]);
+    }
+  });
+
+  it.each(["`", "```"])("does not emit marker-only sections for oversized %s links", (marker) => {
+    const token = `<https://example.com/${"x".repeat(3_000)}>`;
+    const chunks = chunkSlackMrkdwnText(`${marker}${token}${marker}`, 3_000);
+
+    expect(chunks.every((chunk) => chunk.length > marker.length * 2)).toBe(true);
+    expect(chunks.map((chunk) => chunk.slice(marker.length, -marker.length)).join("")).toBe(token);
+  });
+});
+
 describe("normalizeSlackOutboundText", () => {
+  it("leaves table parsing off for callers without an authored-text table mode", () => {
+    const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
+    expect(normalizeSlackOutboundText(table)).toBe(table);
+  });
+
   it("marks assistant-authored transcript role headers after parsing Markdown", () => {
     expect(normalizeSlackOutboundText("**user**[Thu 2026-07-02] question")).toBe(
       "`user[Thu 2026-07-02]` question",
@@ -95,6 +152,66 @@ describe("normalizeSlackOutboundText", () => {
     expect(normalizeSlackOutboundText(undefined as unknown as string)).toBe("");
   });
 
+  it("drops emphasis markers that Slack cannot parse at adjacent word boundaries", () => {
+    const cases = [
+      [
+        "そう。*「生産性が上がる」という前提が怪しい*んですよね。",
+        "そう。「生産性が上がる」という前提が怪しいんですよね。",
+      ],
+      ["これは*重要*。", "これは重要。"],
+      ["これは**重要**です。", "これは重要です。"],
+      ["this is *very*important", "this is veryimportant"],
+      ["this is **very**important", "this is veryimportant"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(normalizeSlackOutboundText(input)).toBe(expected);
+    }
+  });
+
+  it("drops emphasis markers beside CJK punctuation and non-ASCII symbols", () => {
+    const cases = [
+      ["_今回の改善はちゃんと効いてます_。", "今回の改善はちゃんと効いてます。"],
+      ["*重要*。", "重要。"],
+      ["（*重要*）", "（重要）"],
+      ["**重要**。", "重要。"],
+      ["__重要__。", "重要。"],
+      ["***重要***。", "重要。"],
+      ["___重要___。", "重要。"],
+      ["【_重要_】", "【重要】"],
+      ["€*important*€", "€important€"],
+      ["💡*important*💡", "💡important💡"],
+      ["×*important*→", "×important→"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(normalizeSlackOutboundText(input)).toBe(expected);
+    }
+  });
+
+  it("preserves emphasis beside Slack-safe punctuation", () => {
+    const cases = [
+      ["*important*.", "_important_."],
+      ["**important**.", "*important*."],
+      ["“*important*”", "“_important_”"],
+      ["—*important*—", "—_important_—"],
+      ["…*important*…", "…_important_…"],
+      ["*重要*", "_重要_"],
+      ["_重要_", "_重要_"],
+      ["**重要**", "*重要*"],
+      ["__重要__", "*重要*"],
+      ["**重要**.", "*重要*."],
+      ["This is _very_ important.", "This is _very_ important."],
+      ["*This 日本語 text*.", "_This 日本語 text_."],
+      ["**This 日本語 text**.", "*This 日本語 text*."],
+      ["snake_case", "snake_case"],
+      ["変数_foo_bar", "変数_foo_bar"],
+      ["foo_日本語_bar", "foo_日本語_bar"],
+      ["`_コード_`", "`_コード_`"],
+    ] as const;
+    for (const [input, expected] of cases) {
+      expect(normalizeSlackOutboundText(input)).toBe(expected);
+    }
+  });
+
   it("re-chunks on rendered length and still prefers word boundaries", () => {
     const chunks = markdownToSlackMrkdwnChunks("alpha <<", 8);
 
@@ -104,6 +221,14 @@ describe("normalizeSlackOutboundText", () => {
         .map((chunk, index) => ({ index, length: chunk.length }))
         .filter((chunk) => chunk.length > 8),
     ).toStrictEqual([]);
+  });
+
+  it("keeps unsafe emphasis boundaries plain when chunking", () => {
+    expect(markdownToSlackMrkdwnChunks("これは*重要*です。", 100)).toEqual(["これは重要です。"]);
+    expect(markdownToSlackMrkdwnChunks("*重要*。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("**重要**。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("___重要___。", 100)).toEqual(["重要。"]);
+    expect(markdownToSlackMrkdwnChunks("€**important**€", 100)).toEqual(["€important€"]);
   });
 });
 

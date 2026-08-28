@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "../config/config.js";
 import { resolveHeartbeatVisibility } from "./heartbeat-visibility.js";
 
 describe("resolveHeartbeatVisibility", () => {
-  function createChannelDefaultsHeartbeatConfig(heartbeat: {
+  function createChannelDefaultsHeartbeatConfig(heartbeatVisibility: {
     showOk?: boolean;
     showAlerts?: boolean;
     useIndicator?: boolean;
@@ -12,7 +12,7 @@ describe("resolveHeartbeatVisibility", () => {
     return {
       channels: {
         defaults: {
-          heartbeat,
+          heartbeatVisibility,
         },
       },
     } as OpenClawConfig;
@@ -22,12 +22,12 @@ describe("resolveHeartbeatVisibility", () => {
     return {
       channels: {
         telegram: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
           },
           accounts: {
             primary: {
-              heartbeat: {
+              heartbeatVisibility: {
                 showOk: false,
               },
             },
@@ -68,14 +68,14 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         defaults: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: false,
             showAlerts: true,
             useIndicator: true,
           },
         },
         telegram: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
           },
         },
@@ -95,20 +95,20 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         defaults: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: false,
             showAlerts: true,
             useIndicator: true,
           },
         },
         telegram: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: false,
             showAlerts: false,
           },
           accounts: {
             primary: {
-              heartbeat: {
+              heartbeatVisibility: {
                 showOk: true,
                 showAlerts: true,
               },
@@ -135,12 +135,12 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         defaults: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: false,
           },
         },
         telegram: {
-          heartbeat: {
+          heartbeatVisibility: {
             showAlerts: false,
           },
           accounts: {
@@ -185,7 +185,7 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         whatsapp: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
             showAlerts: false,
           },
@@ -206,7 +206,7 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         discord: {
-          heartbeat: {
+          heartbeatVisibility: {
             useIndicator: false,
           },
         },
@@ -226,7 +226,7 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         slack: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
             showAlerts: true,
             useIndicator: true,
@@ -276,7 +276,7 @@ describe("resolveHeartbeatVisibility", () => {
     const cfg = {
       channels: {
         defaults: {
-          heartbeat: {
+          heartbeatVisibility: {
             showOk: true,
           },
         },

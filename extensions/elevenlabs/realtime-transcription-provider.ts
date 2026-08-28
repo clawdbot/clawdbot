@@ -9,12 +9,14 @@ import {
 } from "openclaw/plugin-sdk/realtime-transcription";
 import { normalizeResolvedSecretInputString } from "openclaw/plugin-sdk/secret-input";
 import {
+  asFiniteNumberInRange,
   asOptionalRecord as readRecord,
+  asSafeIntegerInRange,
   normalizeOptionalString,
   parseFiniteNumber as readFiniteNumber,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveElevenLabsApiKeyWithProfileFallback } from "./config-api.js";
-import { normalizeElevenLabsBaseUrl } from "./shared.js";
+import { normalizeElevenLabsRealtimeBaseUrl } from "./shared.js";
 
 type ElevenLabsRealtimeTranscriptionProviderConfig = {
   apiKey?: string;
@@ -81,19 +83,17 @@ function normalizeCommitStrategy(value: unknown): "manual" | "vad" | undefined {
 
 function normalizePositiveSafeInteger(value: unknown): number | undefined {
   const parsed = readFiniteNumber(value);
-  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed > 0 ? parsed : undefined;
+  return asSafeIntegerInRange(parsed, { min: 1 });
 }
 
 function normalizeFiniteRange(value: unknown, min: number, max: number): number | undefined {
   const parsed = readFiniteNumber(value);
-  return parsed !== undefined && parsed >= min && parsed <= max ? parsed : undefined;
+  return asFiniteNumberInRange(parsed, { min, max });
 }
 
 function normalizeIntegerRange(value: unknown, min: number, max: number): number | undefined {
   const parsed = readFiniteNumber(value);
-  return parsed !== undefined && Number.isSafeInteger(parsed) && parsed >= min && parsed <= max
-    ? parsed
-    : undefined;
+  return asSafeIntegerInRange(parsed, { min, max });
 }
 
 function normalizeProviderConfig(
@@ -128,12 +128,6 @@ function normalizeProviderConfig(
       2_000,
     ),
   };
-}
-
-function normalizeElevenLabsRealtimeBaseUrl(value?: string): string {
-  const url = new URL(normalizeElevenLabsBaseUrl(value));
-  url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
-  return url.toString().replace(/\/+$/, "");
 }
 
 function toElevenLabsRealtimeWsUrl(config: ElevenLabsRealtimeTranscriptionSessionConfig): string {
@@ -175,15 +169,7 @@ function readErrorDetail(event: ElevenLabsRealtimeTranscriptionEvent): string {
 function createElevenLabsRealtimeTranscriptionSession(
   config: ElevenLabsRealtimeTranscriptionSessionConfig,
 ): RealtimeTranscriptionSession {
-  let lastTranscript: string | undefined;
-
-  const emitTranscript = (text: string) => {
-    if (text === lastTranscript) {
-      return;
-    }
-    lastTranscript = text;
-    config.onTranscript?.(text);
-  };
+  let pendingTimestampEcho: string | undefined;
 
   const sendAudioChunk = (
     audio: Buffer,
@@ -202,10 +188,12 @@ function createElevenLabsRealtimeTranscriptionSession(
     transport: RealtimeTranscriptionWebSocketTransport,
   ) => {
     if (event.message_type === "session_started") {
+      pendingTimestampEcho = undefined;
       transport.markReady();
       return;
     }
-    if (!transport.isReady() && event.message_type?.includes("error")) {
+    const isError = typeof event.error === "string" || event.message_type?.includes("error");
+    if (!transport.isReady() && isError) {
       transport.failConnect(new Error(readErrorDetail(event)));
       return;
     }
@@ -218,11 +206,17 @@ function createElevenLabsRealtimeTranscriptionSession(
       case "committed_transcript":
       case "committed_transcript_with_timestamps":
         if (event.text) {
-          emitTranscript(event.text);
+          // A committed segment can have one matching timestamp companion, never another turn.
+          const hasTimestamps = event.message_type !== "committed_transcript";
+          const isEcho = hasTimestamps && pendingTimestampEcho === event.text;
+          pendingTimestampEcho = hasTimestamps ? undefined : event.text;
+          if (!isEcho) {
+            config.onTranscript?.(event.text);
+          }
         }
         return;
       default:
-        if (event.message_type?.includes("error")) {
+        if (isError) {
           config.onError?.(new Error(readErrorDetail(event)));
         }
     }
@@ -253,6 +247,16 @@ function createElevenLabsRealtimeTranscriptionSession(
   });
 }
 
+function resolveElevenLabsRealtimeApiKey(
+  config: ElevenLabsRealtimeTranscriptionProviderConfig,
+): string | null | undefined {
+  return (
+    config.apiKey ??
+    resolveElevenLabsApiKeyWithProfileFallback() ??
+    normalizeOptionalString(process.env.XI_API_KEY)
+  );
+}
+
 export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscriptionProviderPlugin {
   return {
     id: "elevenlabs",
@@ -262,22 +266,17 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     autoSelectOrder: 40,
     resolveConfig: ({ rawConfig }) => normalizeProviderConfig(rawConfig),
     isConfigured: ({ providerConfig }) =>
-      Boolean(
-        normalizeProviderConfig(providerConfig).apiKey ||
-        resolveElevenLabsApiKeyWithProfileFallback() ||
-        process.env.XI_API_KEY,
-      ),
+      Boolean(resolveElevenLabsRealtimeApiKey(normalizeProviderConfig(providerConfig))),
     createSession: (req) => {
       const config = normalizeProviderConfig(req.providerConfig);
-      const apiKey =
-        config.apiKey || resolveElevenLabsApiKeyWithProfileFallback() || process.env.XI_API_KEY;
+      const apiKey = resolveElevenLabsRealtimeApiKey(config);
       if (!apiKey) {
         throw new Error("ElevenLabs API key missing");
       }
       return createElevenLabsRealtimeTranscriptionSession({
         ...req,
         apiKey,
-        baseUrl: normalizeElevenLabsBaseUrl(config.baseUrl),
+        baseUrl: normalizeElevenLabsRealtimeBaseUrl(config.baseUrl),
         modelId: config.modelId ?? ELEVENLABS_REALTIME_DEFAULT_MODEL,
         audioFormat: config.audioFormat ?? ELEVENLABS_REALTIME_DEFAULT_AUDIO_FORMAT,
         sampleRate: config.sampleRate ?? ELEVENLABS_REALTIME_DEFAULT_SAMPLE_RATE,
@@ -291,8 +290,3 @@ export function buildElevenLabsRealtimeTranscriptionProvider(): RealtimeTranscri
     },
   };
 }
-
-export const testing = {
-  normalizeProviderConfig,
-  toElevenLabsRealtimeWsUrl,
-};

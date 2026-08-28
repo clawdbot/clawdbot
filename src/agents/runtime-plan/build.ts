@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 /**
  * Builds prepared runtime plans consumed by embedded agent runs. A plan
  * centralizes provider hooks, auth, tool schema policy, transcript policy,
@@ -5,10 +6,8 @@
  */
 import type { TSchema } from "typebox";
 import { isSilentReplyPayloadText, SILENT_REPLY_TOKEN } from "../../auto-reply/tokens.js";
-import { projectConfigOntoRuntimeSourceSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
-import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   resolveProviderRuntimePluginHandle,
@@ -43,9 +42,7 @@ function formatResolvedRef(params: { provider: string; modelId: string }): strin
 }
 
 function asOpenClawConfig(value: unknown): OpenClawConfig | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as OpenClawConfig)
-    : undefined;
+  return asOptionalRecord(value) as OpenClawConfig | undefined;
 }
 
 function asProviderRuntimeModel(
@@ -54,40 +51,43 @@ function asProviderRuntimeModel(
   return value !== undefined ? (value as ProviderRuntimeModel) : undefined;
 }
 
-function isProviderRuntimePluginHandle(
-  value: BuildAgentRuntimePlanParams["providerRuntimeHandle"] | ProviderRuntimePluginHandle,
-): value is ProviderRuntimePluginHandle {
-  return value !== undefined && "plugin" in value;
+type RuntimePlanMetadataParams = BuildAgentRuntimeDeliveryPlanParams & {
+  metadataSnapshot?: BuildAgentRuntimePlanParams["metadataSnapshot"];
+};
+
+function resolvePreparedMetadataSnapshot(
+  params: RuntimePlanMetadataParams,
+): PluginMetadataSnapshot | undefined {
+  return params.metadataSnapshot as PluginMetadataSnapshot | undefined;
 }
 
-function resolveProviderRuntimeHandleForPlugins(params: {
-  provider: string;
-  modelId?: string;
-  config?: OpenClawConfig;
-  workspaceDir?: string;
-  runtimeHandle?: BuildAgentRuntimePlanParams["providerRuntimeHandle"];
-  resolveWhenMissing?: boolean;
-}): ProviderRuntimePluginHandle | undefined {
+function resolvePreparedProviderRuntimeHandle(
+  params: RuntimePlanMetadataParams,
+): ProviderRuntimePluginHandle & { modelId: string; prepared: true } {
   if (
-    isProviderRuntimePluginHandle(params.runtimeHandle) &&
-    (params.runtimeHandle.plugin ||
-      !params.modelId ||
-      params.runtimeHandle.modelId === params.modelId)
+    params.providerRuntimeHandle?.prepared === true &&
+    params.providerRuntimeHandle.provider === params.provider &&
+    params.providerRuntimeHandle.modelId === params.modelId &&
+    params.providerRuntimeHandle.workspaceDir === params.workspaceDir
   ) {
-    return params.runtimeHandle;
+    return params.providerRuntimeHandle as ProviderRuntimePluginHandle & {
+      modelId: string;
+      prepared: true;
+    };
   }
-  if (!params.runtimeHandle && !params.resolveWhenMissing) {
-    return undefined;
-  }
-  return resolveProviderRuntimePluginHandle({
-    provider: params.runtimeHandle?.provider ?? params.provider,
+  const metadataSnapshot = resolvePreparedMetadataSnapshot(params);
+  return {
+    ...resolveProviderRuntimePluginHandle({
+      provider: params.provider,
+      modelId: params.modelId,
+      config: asOpenClawConfig(params.config),
+      workspaceDir: params.workspaceDir,
+      env: process.env,
+      ...(metadataSnapshot ? { pluginMetadataSnapshot: metadataSnapshot } : {}),
+    }),
     modelId: params.modelId,
-    config: asOpenClawConfig(params.runtimeHandle?.config) ?? params.config,
-    workspaceDir: params.runtimeHandle?.workspaceDir ?? params.workspaceDir,
-    env: params.runtimeHandle?.env ?? process.env,
-    applyAutoEnable: params.runtimeHandle?.applyAutoEnable,
-    bundledProviderVitestCompat: params.runtimeHandle?.bundledProviderVitestCompat,
-  });
+    prepared: true,
+  };
 }
 
 /** Build delivery-specific runtime decisions for one provider/model. */
@@ -95,13 +95,7 @@ export function buildAgentRuntimeDeliveryPlan(
   params: BuildAgentRuntimeDeliveryPlanParams,
 ): AgentRuntimeDeliveryPlan {
   const config = asOpenClawConfig(params.config);
-  const providerRuntimeHandle = resolveProviderRuntimeHandleForPlugins({
-    provider: params.provider,
-    modelId: params.modelId,
-    config,
-    workspaceDir: params.workspaceDir,
-    runtimeHandle: params.providerRuntimeHandle,
-  });
+  const providerRuntimeHandle = resolvePreparedProviderRuntimeHandle(params);
   return {
     isSilentPayload(payload): boolean {
       return (
@@ -133,7 +127,7 @@ export function buildAgentRuntimeDeliveryPlan(
 }
 
 /** Build run-outcome classification hooks for model fallback decisions. */
-export function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
+function buildAgentRuntimeOutcomePlan(): AgentRuntimeOutcomePlan {
   return {
     classifyRunResult: classifyEmbeddedAgentRunResultForModelFallback,
   };
@@ -145,26 +139,11 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
   const model = asProviderRuntimeModel(params.model);
   const modelApi = params.modelApi ?? params.model?.api ?? undefined;
   const transport = params.resolvedTransport;
-  const toolPlanningConfig = config ? projectConfigOntoRuntimeSourceSnapshot(config) : undefined;
-  let toolPlanningMetadataSnapshot: PluginMetadataSnapshot | undefined;
-  const loadToolPlanningMetadataSnapshot = () => {
-    // Metadata is process-stable for one run; load lazily because many attempts
-    // never need prepared tool planning.
-    toolPlanningMetadataSnapshot ??= loadManifestMetadataSnapshot({
-      config: toolPlanningConfig,
-      ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
-      env: process.env,
-    });
-    return toolPlanningMetadataSnapshot;
-  };
-  const providerRuntimeHandleForPlugins = resolveProviderRuntimeHandleForPlugins({
-    provider: params.provider,
-    modelId: params.modelId,
-    config,
-    workspaceDir: params.workspaceDir,
-    runtimeHandle: params.providerRuntimeHandle,
-    resolveWhenMissing: true,
-  });
+  const toolPlanningMetadataSnapshot = resolvePreparedMetadataSnapshot(params);
+  const preparedPlanning = toolPlanningMetadataSnapshot
+    ? { metadataSnapshot: toolPlanningMetadataSnapshot }
+    : undefined;
+  const providerRuntimeHandleForPlugins = resolvePreparedProviderRuntimeHandle(params);
   const auth =
     params.preparedAuthPlan ??
     buildAgentRuntimeAuthPlan({
@@ -178,6 +157,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       modelRoute: params.modelRoute,
       config,
       workspaceDir: params.workspaceDir,
+      metadataSnapshot: toolPlanningMetadataSnapshot,
       harnessId: params.harnessId,
       harnessRuntime: params.harnessRuntime,
       allowHarnessAuthProfileForwarding: params.allowHarnessAuthProfileForwarding,
@@ -294,9 +274,7 @@ export function buildAgentRuntimePlan(params: BuildAgentRuntimePlanParams): Agen
       },
     },
     tools: {
-      preparedPlanning: {
-        loadMetadataSnapshot: loadToolPlanningMetadataSnapshot,
-      },
+      preparedPlanning,
       normalize<TSchemaType extends TSchema = TSchema, TResult = unknown>(
         tools: AgentTool<TSchemaType, TResult>[],
         overrides?: {

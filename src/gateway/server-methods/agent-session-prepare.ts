@@ -1,17 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { existsSync } from "node:fs";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { hasGeneratedMediaCompletionEvent } from "../../agents/internal-event-contract.js";
 import {
   evaluateSessionFreshness,
   hasTerminalMainSessionTranscriptNewerThanRegistrySync,
-  resolveAgentIdFromSessionKey,
   resolveAgentMainSessionKey,
   resolveChannelResetConfig,
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
   resolveSessionLifecycleTimestamps,
   resolveSessionResetPolicy,
   resolveSessionResetType,
@@ -22,16 +17,18 @@ import {
 } from "../../config/sessions.js";
 import { hasProviderOwnedSession } from "../../config/sessions/entry-freshness.js";
 import { readTranscriptStatsSync } from "../../config/sessions/session-accessor.js";
-import { parseSqliteSessionFileMarker } from "../../config/sessions/sqlite-marker.js";
 import { resolveMaintenanceConfigFromInput } from "../../config/sessions/store-maintenance.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../../sessions/session-key-utils.js";
-import { loadSessionEntry } from "../session-utils.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import {
   respondDeletedAgentSession,
   type RestoredCronContinuation,
-} from "./agent-handler-helpers.js";
+} from "../agent-turn/agent-handler-helpers.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { loadSessionEntry } from "../session-utils.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
@@ -64,6 +61,7 @@ type PreparedAgentSession = {
 };
 
 export function prepareAgentSession(params: {
+  cfg: OpenClawConfig;
   requestedSessionKey: string;
   requestedSessionId?: string;
   expectedExistingSessionId?: string;
@@ -76,9 +74,19 @@ export function prepareAgentSession(params: {
   preAttachmentSession?: { canonicalKey: string; sessionId?: string };
   respond: GatewayRequestHandlerOptions["respond"];
 }): PreparedAgentSession | undefined {
+  const requestedSessionAgent = resolveRequestedSessionAgentId(
+    params.cfg,
+    params.requestedSessionKey,
+    params.agentId,
+  );
+  if (!requestedSessionAgent.ok) {
+    params.respond(false, undefined, requestedSessionAgent.error);
+    return undefined;
+  }
+  const requestedAgentId = requestedSessionAgent.agentId;
   const { cfg, storePath, entry, canonicalKey, legacyKey, storeKeys } = loadSessionEntry(
     params.requestedSessionKey,
-    { ...(params.agentId ? { agentId: params.agentId } : {}), clone: false },
+    { agentId: requestedAgentId, clone: false },
   );
   if (params.expectedExistingSessionId && entry?.sessionId !== params.expectedExistingSessionId) {
     params.respond(
@@ -196,17 +204,14 @@ export function prepareAgentSession(params: {
     return undefined;
   }
 
-  const canonicalSessionAgentId =
-    canonicalKey === "global"
-      ? (params.agentId ?? resolveDefaultAgentId(cfg))
-      : resolveAgentIdFromSessionKey(canonicalKey);
+  const canonicalSessionAgentId = parseAgentSessionKey(canonicalKey)?.agentId ?? requestedAgentId;
   const now = Date.now();
   const resetPolicy = resolveSessionResetPolicy({
     sessionCfg: cfg.session,
     resetType: resolveSessionResetType({ sessionKey: canonicalKey }),
     resetOverride: resolveChannelResetConfig({
       sessionCfg: cfg.session,
-      channel: entry?.lastChannel ?? entry?.channel ?? params.recipientChannel,
+      channel: sessionDeliveryChannel(entry) ?? params.recipientChannel,
     }),
   });
   const lifecycleTimestamps = entry
@@ -214,6 +219,7 @@ export function prepareAgentSession(params: {
         entry,
         storePath,
         agentId: canonicalSessionAgentId,
+        sessionKey: canonicalKey,
       })
     : undefined;
   const skipImplicitExpiry =
@@ -239,31 +245,16 @@ export function prepareAgentSession(params: {
     if (candidateEntry?.status !== "failed" || !candidateEntry.sessionId?.trim()) {
       return false;
     }
-    const sqliteMarker = parseSqliteSessionFileMarker(candidateEntry.sessionFile);
-    if (sqliteMarker) {
-      if (sqliteMarker.sessionId !== candidateEntry.sessionId) {
-        return true;
-      }
-      try {
-        return (
-          readTranscriptStatsSync({
-            agentId: sqliteMarker.agentId,
-            sessionId: sqliteMarker.sessionId,
-            sessionKey: canonicalKey,
-            storePath: sqliteMarker.storePath,
-            sessionEntry: candidateEntry,
-          }).eventCount === 0
-        );
-      } catch {
-        return true;
-      }
-    }
     try {
-      const options = resolveSessionFilePathOptions({
-        storePath,
-        agentId: canonicalSessionAgentId,
-      });
-      return !existsSync(resolveSessionFilePath(candidateEntry.sessionId, candidateEntry, options));
+      return (
+        readTranscriptStatsSync({
+          agentId: canonicalSessionAgentId,
+          sessionId: candidateEntry.sessionId,
+          sessionKey: canonicalKey,
+          storePath,
+          sessionEntry: candidateEntry,
+        }).eventCount === 0
+      );
     } catch {
       return true;
     }

@@ -17,7 +17,7 @@ vi.mock("../auto-reply/reply/commands-status.js", () => ({
 }));
 
 vi.mock("../gateway/session-utils.js", () => ({
-  loadSessionEntry,
+  loadGatewaySessionEntryReadOnly: loadSessionEntry,
 }));
 
 vi.mock("../agents/agent-scope.js", () => ({
@@ -41,7 +41,7 @@ vi.mock("../auto-reply/reply/directive-handling.levels.js", () => ({
   resolveCurrentDirectiveLevels,
 }));
 
-const { resolveDirectStatusReplyForSession } = await import("./command-status.runtime.js");
+const { resolveDirectStatusReplyForSessionCore } = await import("./command-status.runtime.js");
 
 function expectResolvedReasoningLevel(value: unknown, expected: string) {
   expect((value as { resolvedReasoningLevel?: unknown }).resolvedReasoningLevel).toBe(expected);
@@ -55,7 +55,7 @@ function requireBuildStatusReplyParams(index = 0): unknown {
   return call[0];
 }
 
-describe("resolveDirectStatusReplyForSession", () => {
+describe("resolveDirectStatusReplyForSessionCore", () => {
   beforeEach(() => {
     buildStatusReply.mockReset();
     loadSessionEntry.mockReset();
@@ -87,6 +87,7 @@ describe("resolveDirectStatusReplyForSession", () => {
     resolveDefaultModelForAgent.mockReturnValue({ provider: "openai", model: "gpt-5.4" });
     resolveDefaultModel.mockReturnValue({ defaultProvider: "openai", defaultModel: "gpt-5.4" });
     createModelSelectionState.mockResolvedValue({
+      resolveThinkingCatalog: vi.fn(async () => []),
       resolveDefaultThinkingLevel: vi.fn(async () => "off"),
       resolveDefaultReasoningLevel: vi.fn(async () => "on"),
     });
@@ -100,7 +101,7 @@ describe("resolveDirectStatusReplyForSession", () => {
   });
 
   it("treats agentCfg reasoningDefault as explicit for direct /status", async () => {
-    const result = await resolveDirectStatusReplyForSession({
+    const result = await resolveDirectStatusReplyForSessionCore({
       cfg: {},
       sessionKey: "main",
       channel: "cli",
@@ -139,7 +140,7 @@ describe("resolveDirectStatusReplyForSession", () => {
       currentElevatedLevel: "off",
     });
 
-    const result = await resolveDirectStatusReplyForSession({
+    const result = await resolveDirectStatusReplyForSessionCore({
       cfg: {},
       sessionKey: "main",
       channel: "cli",
@@ -176,7 +177,7 @@ describe("resolveDirectStatusReplyForSession", () => {
       currentElevatedLevel: "off",
     });
 
-    const result = await resolveDirectStatusReplyForSession({
+    const result = await resolveDirectStatusReplyForSessionCore({
       cfg: {},
       sessionKey: "main",
       channel: "cli",
@@ -208,7 +209,7 @@ describe("resolveDirectStatusReplyForSession", () => {
       currentElevatedLevel: "off",
     });
 
-    const result = await resolveDirectStatusReplyForSession({
+    const result = await resolveDirectStatusReplyForSessionCore({
       cfg: {},
       sessionKey: "main",
       channel: "cli",
@@ -240,7 +241,7 @@ describe("resolveDirectStatusReplyForSession", () => {
       currentElevatedLevel: "off",
     });
 
-    const result = await resolveDirectStatusReplyForSession({
+    const result = await resolveDirectStatusReplyForSessionCore({
       cfg: {},
       sessionKey: "main",
       channel: "cli",

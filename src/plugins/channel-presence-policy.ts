@@ -1,15 +1,17 @@
 // Resolves channel presence policy advertised by plugin metadata.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { isChannelConfigMetadataKey } from "../channels/config-metadata.js";
 import {
   hasMeaningfulChannelConfig,
   listExplicitlyDisabledChannelIdsForConfig,
   listPotentialConfiguredChannelPresenceSignals,
+  type AmbientEnvTriggerPolicy,
   type ChannelPresenceSignalSource,
 } from "../channels/config-presence.js";
+import { hasChannelPackageState } from "../channels/plugins/package-state-probes.js";
+import { resolveConfigWidePluginManifestRegistry } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { isSafeChannelEnvVarTriggerName } from "../secrets/channel-env-var-names.js";
 import { resolveManifestActivationPluginIds } from "./activation-planner.js";
 import {
   createPluginActivationSource,
@@ -17,6 +19,7 @@ import {
   resolveEffectivePluginActivationState,
 } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
 import {
   hasExplicitManifestOwnerTrust,
   isActivatedManifestOwner,
@@ -26,8 +29,6 @@ import {
 } from "./manifest-owner-policy.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry-contributions.js";
-
-const IGNORED_CHANNEL_CONFIG_KEYS = new Set(["defaults", "modelByChannel"]);
 
 /** Source classes that can make a channel appear configured for read-only scopes. */
 export type ConfiguredChannelPresenceSource =
@@ -56,6 +57,8 @@ export type ConfiguredChannelPresencePolicyEntry = {
   blockedReasons: ConfiguredChannelBlockedReason[];
 };
 
+const AMBIENT_ENV_SOURCES = new Set<ConfiguredChannelPresenceSource>(["env", "manifest-env"]);
+
 const ANNOUNCE_SUPPRESSING_BLOCKED_REASONS = new Set<ConfiguredChannelBlockedReason>([
   "plugins-disabled",
   "blocked-by-denylist",
@@ -69,15 +72,6 @@ function normalizeChannelIds(channelIds: Iterable<string>): string[] {
       return normalized ? [normalized] : [];
     }),
   );
-}
-
-function hasNonEmptyEnvValue(env: NodeJS.ProcessEnv, key: string): boolean {
-  if (!isSafeChannelEnvVarTriggerName(key)) {
-    return false;
-  }
-  const trimmed = key.trim();
-  const value = env[trimmed] ?? env[trimmed.toUpperCase()];
-  return typeof value === "string" && value.trim().length > 0;
 }
 
 /** True when config contains meaningful enabled channel settings. */
@@ -107,11 +101,14 @@ export function listExplicitConfiguredChannelIdsForConfig(config: OpenClawConfig
     return [];
   }
   return Object.keys(channels)
-    .filter(
-      (channelId) =>
-        !IGNORED_CHANNEL_CONFIG_KEYS.has(channelId) &&
-        hasExplicitChannelConfig({ config, channelId }),
-    )
+    .flatMap((rawChannelId) => {
+      const channelId = rawChannelId.trim();
+      return channelId &&
+        !isChannelConfigMetadataKey(channelId) &&
+        hasExplicitChannelConfig({ config, channelId: rawChannelId })
+        ? [channelId]
+        : [];
+    })
     .toSorted((left, right) => left.localeCompare(right));
 }
 
@@ -131,8 +128,13 @@ function listManifestEnvConfiguredChannelSignals(params: {
   activationSourceConfig?: OpenClawConfig;
   config: OpenClawConfig;
   env: NodeJS.ProcessEnv;
-}): Array<{ channelId: string; source: "manifest-env" }> {
+  envSignalChannelIds: ReadonlySet<string>;
+}): {
+  contractChannelIds: Set<string>;
+  signals: Array<{ channelId: string; source: "manifest-env" }>;
+} {
   const signals: Array<{ channelId: string; source: "manifest-env" }> = [];
+  const contractChannelIds = new Set<string>();
   const seen = new Set<string>();
   const trustConfig = params.activationSourceConfig ?? params.config;
   const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
@@ -147,8 +149,38 @@ function listManifestEnvConfiguredChannelSignals(params: {
       continue;
     }
     for (const channelId of record.channels) {
-      const envVars = record.channelEnvVars?.[channelId] ?? [];
-      if (!envVars.some((envVar) => hasNonEmptyEnvValue(params.env, envVar))) {
+      const packageChannel = record.packageChannel;
+      const configuredState =
+        normalizeOptionalLowercaseString(packageChannel?.id) ===
+        normalizeOptionalLowercaseString(channelId)
+          ? packageChannel?.configuredState
+          : undefined;
+      const allOf = configuredState?.env?.allOf ?? [];
+      const anyOf = configuredState?.env?.anyOf ?? [];
+      const hasModuleContract = Boolean(configuredState?.specifier && configuredState.exportName);
+      if (allOf.length === 0 && anyOf.length === 0 && !hasModuleContract) {
+        continue;
+      }
+      const normalizedChannelId = normalizeOptionalLowercaseString(channelId);
+      if (!normalizedChannelId) {
+        continue;
+      }
+      contractChannelIds.add(normalizedChannelId);
+      if (
+        (hasModuleContract && !params.envSignalChannelIds.has(normalizedChannelId)) ||
+        !packageChannel ||
+        !hasChannelPackageState({
+          entry: {
+            pluginId: record.id,
+            origin: record.origin,
+            rootDir: record.rootDir,
+            channel: packageChannel,
+          },
+          metadataKey: "configuredState",
+          cfg: params.config,
+          env: params.env,
+        })
+      ) {
         continue;
       }
       if (seen.has(channelId)) {
@@ -158,7 +190,10 @@ function listManifestEnvConfiguredChannelSignals(params: {
       signals.push({ channelId, source: "manifest-env" });
     }
   }
-  return signals.toSorted((left, right) => left.channelId.localeCompare(right.channelId));
+  return {
+    contractChannelIds,
+    signals: signals.toSorted((left, right) => left.channelId.localeCompare(right.channelId)),
+  };
 }
 
 function normalizeActivationBlockedReason(reason?: string): ConfiguredChannelBlockedReason {
@@ -325,6 +360,12 @@ function loadInstalledChannelManifestRecords(params: {
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
 }): readonly PluginManifestRecord[] {
+  if (!params.workspaceDir) {
+    return resolveConfigWidePluginManifestRegistry({
+      config: params.config,
+      env: params.env,
+    }).plugins;
+  }
   return loadPluginManifestRegistryForPluginRegistry({
     config: params.config,
     workspaceDir: params.workspaceDir,
@@ -340,12 +381,12 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   includePersistedAuthState?: boolean;
+  ambientEnvTriggers?: AmbientEnvTriggerPolicy;
   manifestRecords?: readonly PluginManifestRecord[];
+  discovery?: PluginDiscoveryResult;
 }): ConfiguredChannelPresencePolicyEntry[] {
   const env = params.env ?? process.env;
-  const workspaceDir =
-    params.workspaceDir ??
-    resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config));
+  const workspaceDir = params.workspaceDir;
   const records =
     params.manifestRecords ??
     loadInstalledChannelManifestRecords({
@@ -356,27 +397,57 @@ export function resolveConfiguredChannelPresencePolicy(params: {
 
   const disabledChannelIds = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
   const entrySources = new Map<string, Set<ConfiguredChannelPresenceSource>>();
+  const potentialSignals = listPotentialConfiguredChannelPresenceSignals(params.config, env, {
+    includePersistedAuthState: params.includePersistedAuthState,
+    ambientEnvTriggers: params.ambientEnvTriggers,
+    discovery: params.discovery,
+  });
+  const manifestEnv =
+    params.ambientEnvTriggers === "suppress"
+      ? undefined
+      : listManifestEnvConfiguredChannelSignals({
+          records,
+          config: params.config,
+          activationSourceConfig: params.activationSourceConfig,
+          env,
+          envSignalChannelIds: new Set(
+            potentialSignals
+              .filter((signal) => signal.source === "env")
+              .map((signal) => normalizeOptionalLowercaseString(signal.channelId))
+              .filter((channelId): channelId is string => Boolean(channelId)),
+          ),
+        });
+  const configuredManifestEnvChannelIds = new Set(
+    manifestEnv?.signals.map((signal) => normalizeOptionalLowercaseString(signal.channelId)),
+  );
   for (const channelId of listExplicitConfiguredChannelIdsForConfig(params.config)) {
     addPolicySignal(entrySources, channelId, "explicit-config");
   }
-  for (const signal of listPotentialConfiguredChannelPresenceSignals(params.config, env, {
-    includePersistedAuthState: params.includePersistedAuthState,
-  })) {
-    if (signal.source === "config") {
+  for (const signal of potentialSignals) {
+    const channelId = normalizeOptionalLowercaseString(signal.channelId);
+    if (
+      signal.source === "config" ||
+      (signal.source === "env" &&
+        channelId &&
+        manifestEnv?.contractChannelIds.has(channelId) &&
+        !configuredManifestEnvChannelIds.has(channelId))
+    ) {
       continue;
     }
     addPolicySignal(entrySources, signal.channelId, signal.source);
   }
-  for (const signal of listManifestEnvConfiguredChannelSignals({
-    records,
-    config: params.config,
-    activationSourceConfig: params.activationSourceConfig,
-    env,
-  })) {
+  for (const signal of manifestEnv?.signals ?? []) {
     addPolicySignal(entrySources, signal.channelId, signal.source);
   }
   for (const channelId of disabledChannelIds) {
     entrySources.delete(channelId);
+  }
+  if (params.ambientEnvTriggers === "suppress") {
+    for (const [channelId, sources] of entrySources) {
+      if (sources.size > 0 && [...sources].every((source) => AMBIENT_ENV_SOURCES.has(source))) {
+        entrySources.delete(channelId);
+      }
+    }
   }
 
   const activationSource = createPluginActivationSource({
@@ -421,6 +492,95 @@ export function resolveConfiguredChannelPresencePolicy(params: {
   return entries;
 }
 
+function listChannelIdsForGatewayPolicy(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+  includePersistedAuthState: boolean,
+): string[] {
+  return resolveConfiguredChannelPresencePolicy({
+    ...params,
+    includePersistedAuthState,
+  })
+    .filter(
+      (entry) =>
+        entry.effective ||
+        // A bundled disabled-by-default owner remains eligible even when an
+        // untrusted sibling manifest for the same channel is also blocked.
+        entry.blockedReasons.includes("bundled-disabled-by-default"),
+    )
+    .map((entry) => entry.channelId);
+}
+
+export function listGatewayActivatedChannelIds(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+): string[] {
+  // Persisted credentials are migration evidence, not activation consent.
+  return listChannelIdsForGatewayPolicy(params, false);
+}
+
+export function listChannelIdsForOwnershipMigration(
+  params: Omit<
+    Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
+    "includePersistedAuthState"
+  >,
+): string[] {
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir;
+  const records =
+    params.manifestRecords ??
+    loadInstalledChannelManifestRecords({ config: params.config, workspaceDir, env });
+  const trustConfig = params.activationSourceConfig ?? params.config;
+  const normalizedConfig = normalizePluginsConfig(trustConfig.plugins);
+  const persistedTrustedChannelIds = listPotentialConfiguredChannelPresenceSignals(
+    params.config,
+    env,
+    {
+      includePersistedAuthState: true,
+      ambientEnvTriggers: params.ambientEnvTriggers,
+      discovery: params.discovery,
+    },
+  )
+    .filter((signal) => signal.source === "persisted-auth")
+    .map((signal) => signal.channelId)
+    .filter((channelId) =>
+      records.some(
+        (plugin) =>
+          recordDeclaresChannel(plugin, channelId) &&
+          isChannelPluginEligibleForScopedOwnership({
+            plugin,
+            normalizedConfig,
+            rootConfig: trustConfig,
+          }),
+      ),
+    );
+  // Migration preserves trusted persisted state even when activation is disabled.
+  return normalizeChannelIds([
+    ...listChannelIdsForGatewayPolicy(params, true),
+    ...persistedTrustedChannelIds,
+  ]);
+}
+
+/** Lists channels that suppression removes because their only presence is ambient env. */
+export function listAmbientOnlyConfiguredChannelIds(
+  params: Omit<Parameters<typeof resolveConfiguredChannelPresencePolicy>[0], "ambientEnvTriggers">,
+): string[] {
+  return resolveConfiguredChannelPresencePolicy({
+    ...params,
+    ambientEnvTriggers: "allow",
+  })
+    .filter(
+      (entry) =>
+        entry.sources.length > 0 &&
+        entry.sources.every((source) => AMBIENT_ENV_SOURCES.has(source)),
+    )
+    .map((entry) => entry.channelId);
+}
+
 /** Lists effective channel ids available to read-only scoped discovery. */
 export function listConfiguredChannelIdsForReadOnlyScope(
   params: Parameters<typeof resolveConfiguredChannelPresencePolicy>[0],
@@ -444,6 +604,7 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   manifestRecords?: readonly PluginManifestRecord[];
+  discovery?: PluginDiscoveryResult;
 }): string[] {
   const disabledChannelIds = new Set(listExplicitlyDisabledChannelIdsForConfig(params.config));
   const trustConfig = params.activationSourceConfig ?? params.config;
@@ -455,6 +616,7 @@ export function listConfiguredAnnounceChannelIdsForConfig(params: {
     env: params.env,
     includePersistedAuthState: false,
     manifestRecords: params.manifestRecords,
+    discovery: params.discovery,
   });
   const policyDisabledChannelIds = new Set(
     policy
@@ -557,6 +719,8 @@ export function resolveConfiguredChannelPluginIds(params: {
   activationSourceConfig?: OpenClawConfig;
   workspaceDir?: string;
   env: NodeJS.ProcessEnv;
+  manifestRecords?: readonly PluginManifestRecord[];
+  discovery?: PluginDiscoveryResult;
 }): string[] {
   const configuredChannelIds = normalizeChannelIds([
     ...listConfiguredChannelIdsForReadOnlyScope({
@@ -564,6 +728,8 @@ export function resolveConfiguredChannelPluginIds(params: {
       activationSourceConfig: params.activationSourceConfig,
       workspaceDir: params.workspaceDir,
       env: params.env,
+      manifestRecords: params.manifestRecords,
+      discovery: params.discovery,
     }),
     ...listExplicitConfiguredChannelIdsForConfig(params.activationSourceConfig ?? params.config),
   ]);

@@ -4,15 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
-  collectCurrentSuppressions,
-  diffBaseline,
-  findBaselineExpansion,
+  collectCurrentSuppressionState,
   hasAllRuleDisable,
   hasMaxLinesDisable,
   isGovernedSourcePath,
   main,
-  parseBaseline,
-} from "../../scripts/check-max-lines-ratchet.mjs";
+} from "../../scripts/check-max-lines-ratchet.mts";
 
 const tempDirs: string[] = [];
 const nestedGitEnvKeys = [
@@ -91,15 +88,6 @@ describe("check-max-lines-ratchet", () => {
     expect(isGovernedSourcePath("ui/src/i18n/locales/en.ts")).toBe(false);
     expect(isGovernedSourcePath("src/wizard/i18n/locales/en.ts")).toBe(false);
     expect(isGovernedSourcePath("src/schema.generated.ts")).toBe(false);
-  });
-
-  it("reports new suppressions, stale debt, and baseline growth", () => {
-    const baseline = parseBaseline("# debt\nsrc/a.ts\nsrc/b.ts\n");
-    expect(diffBaseline(["src/b.ts", "src/c.ts"], baseline)).toEqual({
-      added: ["src/c.ts"],
-      stale: ["src/a.ts"],
-    });
-    expect(findBaselineExpansion(baseline, new Set(["src/a.ts"]))).toEqual(["src/b.ts"]);
   });
 
   it("rejects baseline growth even when the new suppression is listed", () => {
@@ -233,7 +221,7 @@ describe("check-max-lines-ratchet", () => {
     expect(main(root)).toBe(1);
   });
 
-  it("compares divergent worktrees against their main merge base", () => {
+  it("compares an explicit moving base at the branch fork", () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-max-lines-diverged-"));
     tempDirs.push(root);
     fs.mkdirSync(path.join(root, "config"), { recursive: true });
@@ -259,7 +247,7 @@ describe("check-max-lines-ratchet", () => {
     git(root, ["update-ref", "refs/remotes/origin/main", "HEAD"]);
     git(root, ["checkout", "release"]);
 
-    expect(main(root)).toBe(0);
+    expect(main(root, ["--base", "origin/main"])).toBe(0);
   });
 
   it("falls back to main when no merge base is available", () => {
@@ -326,7 +314,7 @@ describe("check-max-lines-ratchet", () => {
     fs.writeFileSync(path.join(root, filePath), "/* oxlint-disable max-lines */\n");
     git(root, ["add", "."]);
 
-    expect(collectCurrentSuppressions(root, { staged: true })).toEqual([filePath]);
+    expect(collectCurrentSuppressionState(root, { staged: true }).explicit).toEqual([filePath]);
   });
 
   it("checks untracked sources and tolerates unstaged deletions", () => {

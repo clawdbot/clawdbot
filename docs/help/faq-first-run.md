@@ -57,12 +57,10 @@ and troubleshooting see the main [FAQ](/help/faq).
     | Skip reason | Meaning |
     | --- | --- |
     | `quiet-hours` | Outside the configured active-hours window |
-    | `empty-heartbeat-file` | `HEARTBEAT.md` exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
-    | `no-tasks-due` | Task mode is active but no task interval is due yet |
+    | `empty-heartbeat-file` | Heartbeat monitor scratch exists but only has blank, comment, header, fence, or empty-checklist scaffolding |
     | `alerts-disabled` | All heartbeat visibility is off (`showOk`, `showAlerts`, and `useIndicator` all disabled) |
 
-    In task mode, due timestamps advance only after a real heartbeat run completes.
-    Skipped runs do not mark tasks as completed.
+    Older heartbeat `tasks:` blocks migrate to independently scheduled cron jobs with `openclaw doctor --fix`.
 
     Docs: [Heartbeat](/gateway/heartbeat), [Automation](/automation).
 
@@ -109,7 +107,6 @@ and troubleshooting see the main [FAQ](/help/faq).
 
     - **Tailscale Serve** (recommended): keep bind loopback, run `openclaw gateway --tailscale serve`, open `https://<magicdns>/`. With `gateway.auth.allowTailscale: true`, identity headers satisfy Control UI/WebSocket auth (no pasted shared secret, assumes a trusted gateway host); HTTP APIs still need shared-secret auth unless you deliberately use private-ingress `none` or trusted-proxy HTTP auth.
       Concurrent bad-auth Serve attempts from the same client are serialized before the failed-auth limiter records them, so a second bad retry can already show `retry later`.
-    - **Tailnet bind**: run `openclaw gateway --bind tailnet --token "<token>"` (or configure password auth), open `http://<tailscale-ip>:18789/`, paste the matching shared secret in dashboard settings.
     - **Identity-aware reverse proxy**: keep the Gateway behind a trusted proxy, set `gateway.auth.mode: "trusted-proxy"`, open the proxy URL. Same-host loopback proxies need explicit `gateway.auth.trustedProxy.allowLoopback: true`.
     - **SSH tunnel**: `ssh -N -L 18789:127.0.0.1:18789 user@gateway-host`, then open `http://127.0.0.1:18789/`. Shared-secret auth still applies over the tunnel; paste the configured token or password if prompted.
 
@@ -129,7 +126,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     You rarely need both:
 
     - If the chat already supports commands and replies, same-chat `/approve` works through the shared path.
-    - When a supported native channel can infer approvers safely, OpenClaw auto-enables DM-first native approvals if `channels.<channel>.execApprovals.enabled` is unset or `"auto"`.
+    - For supported native clients, set `channels.<channel>.execApprovals.enabled: "auto"` or `true` and configure approvers or the channel's supported owner identity. Discord and Slack require explicit enablement; Telegram treats unset as `"auto"`.
     - When native approval cards/buttons are available, that UI is primary; only mention a manual `/approve` command if the tool result says chat approvals are unavailable.
     - Use `approvals.exec` only when prompts must also reach other chats or explicit ops rooms.
     - Use `channels.<channel>.execApprovals.target: "channel"` or `"both"` only when you want approval prompts posted back into the originating room/topic.
@@ -141,8 +138,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="What runtime do I need?">
-    Node **22.22.3+**, **24.15+**, or **25.9+** is required (Node 24 recommended). `pnpm` is the repo package manager.
-    Bun can install dependencies and run package scripts, but it cannot run the OpenClaw CLI or Gateway because it lacks `node:sqlite`.
+    Node **22.22.3+**, **24.15+**, or **25.9+** is the primary and default runtime (Node 26 recommended). `pnpm` is the repo package manager.
+    Bun 1.4+ builds with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node host as an explicit opt-in.
   </Accordion>
 
   <Accordion title="Does it run on Raspberry Pi?">
@@ -161,7 +158,8 @@ and troubleshooting see the main [FAQ](/help/faq).
     the Gateway (models call out to cloud APIs), even a modest Pi handles the load.
 
     A small Pi/VPS can also host just the Gateway while you pair **nodes** on your
-    laptop/phone for local screen/camera/canvas or command execution. See [Nodes](/nodes).
+    laptop/phone for local screen/camera or command execution. A paired Mac can
+    also present hosted widgets in its native panel. See [Nodes](/nodes).
 
     Full setup walkthrough: [Raspberry Pi](/install/raspberry-pi).
 
@@ -434,7 +432,7 @@ and troubleshooting see the main [FAQ](/help/faq).
     treat the host as the source of truth and back it up.
 
     Pair **nodes** (Mac/iOS/Android/headless) to that cloud Gateway for local
-    screen/camera/canvas or command execution on your laptop while the Gateway stays in
+    screen/camera or command execution on your laptop while the Gateway stays in
     the cloud.
 
     Hub: [Platforms](/platforms). Remote access: [Gateway remote](/gateway/remote).
@@ -473,9 +471,10 @@ and troubleshooting see the main [FAQ](/help/faq).
     2. **Workspace** - location + bootstrap files.
     3. **Gateway** - port, bind address, auth mode, Tailscale exposure.
     4. **Channels** - built-in and official plugin chat channels: iMessage, Discord, Feishu, Google Chat, Mattermost, Microsoft Teams, QQ Bot, Signal, Slack, Telegram, WhatsApp, and more.
-    5. **Daemon** - LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task.
-    6. **Health check** - starts the Gateway and verifies it is running.
-    7. **Skills** - installs recommended skills and optional dependencies.
+    5. **Web search** - configures an optional search provider.
+    6. **Skills** - installs recommended skills and optional dependencies.
+    7. **Daemon** - LaunchAgent (macOS), systemd user unit (Linux/WSL2), or native Windows Scheduled Task.
+    8. **Health check** - starts the Gateway and verifies it is running.
 
     It sets duration expectations up front and warns if your configured model is unknown
     or missing auth. Full breakdown: [Onboarding (CLI)](/start/wizard).
@@ -608,18 +607,16 @@ and troubleshooting see the main [FAQ](/help/faq).
 
   </Accordion>
 
-  <Accordion title="How do I set up Gemini CLI OAuth?">
-    Gemini CLI uses a **plugin auth flow**, not a client id or secret in `openclaw.json`.
+  <Accordion title="Can I use Gemini CLI or Antigravity OAuth?">
+    OpenClaw does not offer new Gemini CLI OAuth or Antigravity OAuth setup.
+    Connect Google with an AI Studio API key or Vertex AI instead.
 
-    1. Install Gemini CLI locally so `gemini` is on `PATH`:
-       - Homebrew: `brew install gemini-cli`
-       - npm: `npm install -g @google/gemini-cli`
-    2. Enable the plugin: `openclaw plugins enable google`
-    3. Login: `openclaw models auth login --provider google-gemini-cli --set-default`
-    4. Default model after login: `google/gemini-3.1-pro-preview` (runtime `google-gemini-cli`)
-    5. Requests failing after login? Set `GOOGLE_CLOUD_PROJECT` or `GOOGLE_CLOUD_PROJECT_ID` on the gateway host and retry.
+    The optional `google-gemini-cli` runtime remains available for advanced
+    setups using a supported Google API-key profile. Existing valid legacy
+    Gemini CLI OAuth profiles remain executable for compatibility, but OpenClaw
+    cannot create or repair them.
 
-    OAuth tokens are stored in auth profiles on the gateway host. Details: [Google](/providers/google), [Model providers](/concepts/model-providers).
+    Details: [Google](/providers/google), [Model providers](/concepts/model-providers).
 
   </Accordion>
 
@@ -667,7 +664,8 @@ and troubleshooting see the main [FAQ](/help/faq).
   <Accordion title="If I buy a Mac mini to run OpenClaw, can I connect it to my MacBook Pro?">
     Yes. The **Mac mini can run the Gateway**, and your MacBook Pro connects as a **node**
     (companion device). Nodes do not run the Gateway - they add capabilities like
-    screen/camera/canvas and `system.run` on that device.
+    screen/camera and `system.run` on that device. A Mac node can also present
+    hosted widgets in its native panel.
 
     Common pattern: Gateway on the always-on Mac mini; MacBook Pro runs the macOS app or a
     node host and pairs to the Gateway. Check with `openclaw nodes status` / `openclaw nodes list`.
@@ -677,9 +675,10 @@ and troubleshooting see the main [FAQ](/help/faq).
   </Accordion>
 
   <Accordion title="Can I use Bun?">
-    You can use Bun to install dependencies or run package scripts. The OpenClaw CLI and
-    Gateway require **Node** because the canonical state store uses `node:sqlite`; Bun does
-    not provide that API.
+    Yes. Node remains the primary, default, and recommended runtime, but Bun 1.4+
+    with WAL-reset-safe `node:sqlite` can run the CLI, Gateway, and managed node
+    host as an explicit opt-in. Bun can also run package scripts; use
+    `pnpm install` for dependency installation.
   </Accordion>
 
   <Accordion title="Telegram: what goes in allowFrom?">

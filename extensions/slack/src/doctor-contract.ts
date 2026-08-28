@@ -4,7 +4,14 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  defineChannelAliasMigration,
+  defineKeyMoveMigration,
+  hasLegacyAccountStreamingAliases,
+  normalizeChannelConfigEntries,
+  stripRetiredChannelKeys,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { resolveSlackNativeStreaming, resolveSlackStreamingMode } from "./streaming-compat.js";
 
 const streamingAliasMigration = defineChannelAliasMigration({
@@ -19,67 +26,175 @@ const streamingAliasMigration = defineChannelAliasMigration({
   dm: { root: true, accounts: true },
 });
 
-function hasLegacySlackChannelAllowAlias(value: unknown): boolean {
-  const channels = asObjectRecord(asObjectRecord(value)?.channels);
-  if (!channels) {
-    return false;
+const dmReplyModeMigration = defineKeyMoveMigration({
+  from: ["dm", "replyToMode"],
+  to: ["replyToModeByChatType", "direct"],
+});
+
+const threadMentionPolicyMigration = defineKeyMoveMigration({
+  from: ["thread", "requireExplicitMention"],
+  to: ["implicitMentions", "threadParticipation"],
+  // The retired boolean controlled only participated threads; the canonical
+  // setting expresses the inverse while reply-to-bot policy stays independent.
+  map: (value) => (typeof value === "boolean" ? { value: !value } : null),
+  pruneEmptySource: true,
+  movedMessage: ({ sourcePath, targetPath, mappedValue }) =>
+    `Moved ${sourcePath} → ${targetPath} (${String(mappedValue)}).`,
+});
+
+const channelAllowMigration = defineKeyMoveMigration({
+  scope: ["channels", "*"],
+  from: ["allow"],
+  to: ["enabled"],
+});
+
+function hasInteractiveRepliesCapability(value: unknown): boolean {
+  const capabilities = asObjectRecord(value)?.capabilities;
+  if (Array.isArray(capabilities)) {
+    return capabilities.some(
+      (entry) => typeof entry === "string" && entry.trim().toLowerCase() === "interactivereplies",
+    );
   }
-  return Object.values(channels).some((channel) =>
-    Object.hasOwn(asObjectRecord(channel) ?? {}, "allow"),
+  const capabilitiesRecord = asObjectRecord(capabilities);
+  return Boolean(
+    capabilitiesRecord &&
+    (Object.keys(capabilitiesRecord).length === 0 ||
+      Object.hasOwn(capabilitiesRecord, "interactiveReplies")),
   );
 }
 
-function normalizeSlackChannelAllowAliases(params: {
-  channels: Record<string, unknown>;
+function hasEnterpriseOrgInstall(value: unknown): boolean {
+  return Object.hasOwn(asObjectRecord(value) ?? {}, "enterpriseOrgInstall");
+}
+
+function removeInteractiveRepliesCapability(params: {
+  entry: Record<string, unknown>;
   pathPrefix: string;
   changes: string[];
-}): { channels: Record<string, unknown>; changed: boolean } {
-  let changed = false;
-  const nextChannels = { ...params.channels };
-  for (const [channelId, channelValue] of Object.entries(params.channels)) {
-    const channel = asObjectRecord(channelValue);
-    if (!channel || !Object.hasOwn(channel, "allow")) {
-      continue;
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const capabilities = params.entry.capabilities;
+  let nextCapabilities: unknown[] | Record<string, unknown>;
+  let removedEmptyObject = false;
+  if (Array.isArray(capabilities)) {
+    nextCapabilities = capabilities.filter(
+      (entry) =>
+        !(typeof entry === "string" && entry.trim().toLowerCase() === "interactivereplies"),
+    );
+    if (nextCapabilities.length === capabilities.length) {
+      return { entry: params.entry, changed: false };
     }
-    const nextChannel = { ...channel };
-    if (nextChannel.enabled === undefined) {
-      nextChannel.enabled = channel.allow;
-      params.changes.push(
-        `Moved ${params.pathPrefix}.${channelId}.allow → ${params.pathPrefix}.${channelId}.enabled.`,
-      );
-    } else {
-      params.changes.push(
-        `Removed ${params.pathPrefix}.${channelId}.allow (${params.pathPrefix}.${channelId}.enabled already set).`,
-      );
+  } else {
+    const capabilitiesRecord = asObjectRecord(capabilities);
+    if (
+      !capabilitiesRecord ||
+      (Object.keys(capabilitiesRecord).length > 0 &&
+        !Object.hasOwn(capabilitiesRecord, "interactiveReplies"))
+    ) {
+      return { entry: params.entry, changed: false };
     }
-    delete nextChannel.allow;
-    nextChannels[channelId] = nextChannel;
-    changed = true;
+    removedEmptyObject = Object.keys(capabilitiesRecord).length === 0;
+    const { interactiveReplies: _retired, ...rest } = capabilitiesRecord;
+    nextCapabilities = rest;
   }
-  return { channels: nextChannels, changed };
+
+  const entry = { ...params.entry };
+  const isEmpty = Array.isArray(nextCapabilities)
+    ? nextCapabilities.length === 0
+    : Object.keys(nextCapabilities).length === 0;
+  if (isEmpty) {
+    delete entry.capabilities;
+  } else {
+    entry.capabilities = nextCapabilities;
+  }
+  params.changes.push(
+    removedEmptyObject
+      ? `Removed retired empty ${params.pathPrefix}.capabilities object; use typed presentation actions instead.`
+      : `Removed retired ${params.pathPrefix}.capabilities.interactiveReplies; use typed presentation actions instead.`,
+  );
+  return { entry, changed: true };
 }
 
 export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
   ...streamingAliasMigration.legacyConfigRules,
   {
+    path: ["channels", "slack", "enterpriseOrgInstall"],
+    message:
+      'channels.slack.enterpriseOrgInstall is retired; Slack now detects org-wide installations automatically. Run "openclaw doctor --fix".',
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.enterpriseOrgInstall is retired; Slack now detects org-wide installations automatically. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasEnterpriseOrgInstall),
+  },
+  {
+    path: ["channels", "slack"],
+    message:
+      'channels.slack.capabilities.interactiveReplies is retired; use typed presentation actions instead. Run "openclaw doctor --fix".',
+    match: hasInteractiveRepliesCapability,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.capabilities.interactiveReplies is retired; use typed presentation actions instead. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, hasInteractiveRepliesCapability),
+  },
+  {
+    path: ["channels", "slack"],
+    message:
+      'channels.slack.dm.replyToMode moved to replyToModeByChatType.direct. Run "openclaw doctor --fix".',
+    match: dmReplyModeMigration.hasLegacy,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.dm.replyToMode moved to replyToModeByChatType.direct. Run "openclaw doctor --fix".',
+    match: (value) => hasLegacyAccountStreamingAliases(value, dmReplyModeMigration.hasLegacy),
+  },
+  {
+    path: ["channels", "slack"],
+    message:
+      'channels.slack.thread.requireExplicitMention is legacy; use channels.slack.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
+    match: threadMentionPolicyMigration.hasLegacy,
+  },
+  {
+    path: ["channels", "slack", "accounts"],
+    message:
+      'channels.slack.accounts.<id>.thread.requireExplicitMention is legacy; use channels.slack.accounts.<id>.implicitMentions.threadParticipation instead. Run "openclaw doctor --fix".',
+    match: (value) =>
+      hasLegacyAccountStreamingAliases(value, threadMentionPolicyMigration.hasLegacy),
+  },
+  {
     path: ["channels", "slack"],
     message:
       'channels.slack.channels.<id>.allow is legacy; use channels.slack.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: hasLegacySlackChannelAllowAlias,
+    match: channelAllowMigration.hasLegacy,
   },
   {
     path: ["channels", "slack", "accounts"],
     message:
       'channels.slack.accounts.<id>.channels.<id>.allow is legacy; use channels.slack.accounts.<id>.channels.<id>.enabled instead. Run "openclaw doctor --fix".',
-    match: (value) => {
-      const accounts = asObjectRecord(value);
-      if (!accounts) {
-        return false;
-      }
-      return Object.values(accounts).some((account) => hasLegacySlackChannelAllowAlias(account));
-    },
+    match: (value) => hasLegacyAccountStreamingAliases(value, channelAllowMigration.hasLegacy),
   },
 ];
+
+function normalizeSlackEntry(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const retiredInteractiveReplies = removeInteractiveRepliesCapability(params);
+  const dm = dmReplyModeMigration.normalize({
+    ...params,
+    entry: retiredInteractiveReplies.entry,
+  });
+  const thread = threadMentionPolicyMigration.normalize({ ...params, entry: dm.entry });
+  const channels = channelAllowMigration.normalize({ ...params, entry: thread.entry });
+  return {
+    entry: channels.entry,
+    changed: retiredInteractiveReplies.changed || dm.changed || thread.changed || channels.changed,
+  };
+}
 
 export function normalizeCompatibilityConfig({
   cfg,
@@ -87,67 +202,24 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const changes: string[] = [];
-  const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg, changes });
-  const rawEntry = asObjectRecord(
-    (aliases.config.channels as Record<string, unknown> | undefined)?.slack,
-  );
-  if (!rawEntry) {
-    return { config: cfg, changes: [] };
-  }
-  let updated = rawEntry;
-  let changed = aliases.config !== cfg;
-
-  const channels = asObjectRecord(updated.channels);
-  if (channels) {
-    const normalized = normalizeSlackChannelAllowAliases({
-      channels,
-      pathPrefix: "channels.slack.channels",
-      changes,
-    });
-    if (normalized.changed) {
-      updated = { ...updated, channels: normalized.channels };
-      changed = true;
-    }
-  }
-
-  const accounts = asObjectRecord(updated.accounts);
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts = { ...accounts };
-    for (const [accountId, accountValue] of Object.entries(accounts)) {
-      const account = asObjectRecord(accountValue);
-      const channelEntries = asObjectRecord(account?.channels);
-      if (!account || !channelEntries) {
-        continue;
-      }
-      const normalized = normalizeSlackChannelAllowAliases({
-        channels: channelEntries,
-        pathPrefix: `channels.slack.accounts.${accountId}.channels`,
-        changes,
-      });
-      if (!normalized.changed) {
-        continue;
-      }
-      nextAccounts[accountId] = { ...account, channels: normalized.channels };
-      accountsChanged = true;
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return { config: cfg, changes: [] };
-  }
-  return {
-    config: {
-      ...aliases.config,
-      channels: {
-        ...aliases.config.channels,
-        slack: updated as unknown as NonNullable<OpenClawConfig["channels"]>["slack"],
-      } as OpenClawConfig["channels"],
-    },
+  const retired = stripRetiredChannelKeys({
+    cfg,
+    channelId: "slack",
+    keys: new Set(["enterpriseOrgInstall"]),
+    scope: "root-and-accounts",
+    onRemove: ({ key, pathPrefix }) =>
+      changes.push(
+        `Removed retired ${pathPrefix}.${key}; Slack detects org-wide installations automatically.`,
+      ),
+  });
+  const aliases = streamingAliasMigration.normalizeChannelConfig({
+    cfg: retired.config,
     changes,
-  };
+  });
+  return normalizeChannelConfigEntries({
+    cfg: aliases.config,
+    channelId: "slack",
+    changes,
+    normalizeEntry: normalizeSlackEntry,
+  });
 }

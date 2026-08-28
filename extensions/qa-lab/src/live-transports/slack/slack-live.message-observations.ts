@@ -1,5 +1,4 @@
 // QA Lab Slack scenario reply observation and channel readiness.
-import type { WebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { startQaGatewayChild } from "../../gateway-child.js";
@@ -11,6 +10,7 @@ import {
   type SlackAuthIdentity,
   type SlackObservedMessage,
   type SlackMessage,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import {
   listSlackMessages,
@@ -312,7 +312,7 @@ export async function waitForSlackChannelStable(
   );
 }
 
-export function isSlackChannelReadyForQa(
+function isSlackChannelReadyForQa(
   status: SlackChannelStatus | undefined,
   mode: SlackChannelReadinessMode,
 ): boolean {
@@ -327,7 +327,7 @@ export function isSlackChannelReadyForQa(
   return mode === "started" || status.connected === true;
 }
 
-export function resolveSlackChannelReadySince(params: {
+function resolveSlackChannelReadySince(params: {
   observedAt: number;
   previousReadySince: number | undefined;
   status: SlackChannelStatus;
@@ -338,7 +338,7 @@ export function resolveSlackChannelReadySince(params: {
   return params.previousReadySince ?? params.observedAt;
 }
 
-export function resolveSlackQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
+function resolveSlackQaReadyTimeoutMs(env: NodeJS.ProcessEnv = process.env) {
   const raw = env.OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS;
   if (!raw) {
     return SLACK_QA_DEFAULT_READY_TIMEOUT_MS;

@@ -6,11 +6,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
-import {
-  legacyOAuthSidecarInternalTestUtils,
-  legacyOAuthSidecarTestUtils,
-  loadLegacyOAuthSidecarMaterial,
-} from "./legacy-oauth-sidecar.js";
+import { loadLegacyOAuthSidecarMaterial } from "./legacy-oauth-sidecar.js";
 
 const states: OpenClawTestState[] = [];
 
@@ -48,13 +44,12 @@ async function writeLegacySidecarThatNeedsKeychain(): Promise<{
     version: 1,
     profileId,
     provider: "openai-codex",
-    encrypted: legacyOAuthSidecarTestUtils.encryptLegacyOAuthMaterial({
-      ref,
-      profileId,
-      provider: "openai-codex",
-      seed: "only-in-keychain",
-      material: { access: "a", refresh: "b", idToken: "c" },
-    }),
+    encrypted: {
+      algorithm: "aes-256-gcm",
+      iv: "AQIDBAUGBwgJCgsM",
+      tag: "G1t3MG1wjsZq17LOSqvu8w",
+      ciphertext: "nkPkvPO-ZilcU9XIoVzMfskmxKVmknxIjFkNw3yLMhiP3d5--KdbiMub",
+    },
   });
   return { state, ref, profileId };
 }
@@ -63,7 +58,6 @@ afterEach(async () => {
   for (const state of states.splice(0)) {
     await state.cleanup();
   }
-  legacyOAuthSidecarInternalTestUtils.resetKeychainOnlyMigrationHint();
 });
 
 describe("loadLegacyOAuthSidecarMaterial keychain-only headless warning", () => {
@@ -96,48 +90,32 @@ describe("loadLegacyOAuthSidecarMaterial keychain-only headless warning", () => 
     return env;
   }
 
-  it("emits a single doctor-pointer warning when only Keychain can decrypt and prompts are disabled", async () => {
+  it("emits one doctor-pointer warning only on Darwin", async () => {
     const { state, ref, profileId } = await writeLegacySidecarThatNeedsKeychain();
     const env = envWithoutVitestSignals(state);
+    const load = () =>
+      loadLegacyOAuthSidecarMaterial({
+        ref,
+        profileId,
+        provider: "openai-codex",
+        allowKeychainPrompt: false,
+        env,
+      });
 
-    const firstAttempt = loadLegacyOAuthSidecarMaterial({
-      ref,
-      profileId,
-      provider: "openai-codex",
-      allowKeychainPrompt: false,
-      env,
-    });
-    expect(firstAttempt).toBeNull();
+    restorePlatform();
+    restorePlatform = setPlatform("linux");
+    expect(load()).toBeNull();
+    expect(warnSpy).not.toHaveBeenCalled();
+
+    restorePlatform();
+    restorePlatform = setPlatform("darwin");
+    expect(load()).toBeNull();
     expect(warnSpy).toHaveBeenCalledTimes(1);
     const [firstMessage] = warnSpy.mock.calls[0] as [unknown];
     expect(String(firstMessage)).toContain("openclaw doctor --fix");
     expect(String(firstMessage)).toContain("macOS Keychain");
 
-    const secondAttempt = loadLegacyOAuthSidecarMaterial({
-      ref,
-      profileId,
-      provider: "openai-codex",
-      allowKeychainPrompt: false,
-      env,
-    });
-    expect(secondAttempt).toBeNull();
+    expect(load()).toBeNull();
     expect(warnSpy).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not emit the doctor-pointer warning on non-darwin platforms", async () => {
-    restorePlatform();
-    restorePlatform = setPlatform("linux");
-    const { state, ref, profileId } = await writeLegacySidecarThatNeedsKeychain();
-    const env = envWithoutVitestSignals(state);
-
-    const attempt = loadLegacyOAuthSidecarMaterial({
-      ref,
-      profileId,
-      provider: "openai-codex",
-      allowKeychainPrompt: false,
-      env,
-    });
-    expect(attempt).toBeNull();
-    expect(warnSpy).not.toHaveBeenCalled();
   });
 });

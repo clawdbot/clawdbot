@@ -1,19 +1,13 @@
 // Telegram plugin module implements state migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { ChannelLegacyStateMigrationPlan } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import {
-  type PersistentDedupeLegacyJsonImportEntry,
-  createPersistentDedupeImportEntry,
-  listPersistentDedupeLegacyJsonFileEntries,
-  resolvePersistentDedupePluginStateNamespace,
-  shouldReplacePersistentDedupeEntry,
-} from "openclaw/plugin-sdk/persistent-dedupe";
-import { createPluginStateSyncKeyedStore } from "openclaw/plugin-sdk/runtime-doctor";
-import { statRegularFileSync } from "openclaw/plugin-sdk/security-runtime";
-import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import { fileExists } from "openclaw/plugin-sdk/security-runtime";
+import { resolveStorePath } from "openclaw/plugin-sdk/session-store-paths";
 import { isRecord, uniqueStrings } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { listTelegramAccountIds, resolveDefaultTelegramAccountId } from "./account-selection.js";
 import {
   listTelegramLegacyBotInfoCacheEntries,
@@ -29,34 +23,24 @@ import {
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
   TELEGRAM_MESSAGE_CACHE_PERSISTED_VERSION,
-} from "./message-cache.js";
-import {
-  buildTelegramMessageDispatchAccountReplayKey,
-  resolveTelegramMessageDispatchLegacyPath,
-  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
-  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
-  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
-  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
-  TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
-} from "./message-dispatch-dedupe.js";
+} from "./message-cache-persistence.js";
 import { parseTelegramMessageThreadId } from "./outbound-params.js";
 import {
   listTelegramLegacySentMessageCacheEntries,
   TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
   TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
-} from "./sent-message-cache.js";
+} from "./sent-message-cache.legacy-state.js";
 import {
   listTelegramLegacyStickerCacheEntries,
   TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
   TELEGRAM_STICKER_CACHE_NAMESPACE,
-} from "./sticker-cache-store.js";
+} from "./sticker-cache-store.legacy-state.js";
 import {
   listTelegramLegacyThreadBindingEntries,
+  resolveTelegramThreadBindingsPath,
   TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   TELEGRAM_THREAD_BINDINGS_NAMESPACE,
-  testing as telegramThreadBindingTesting,
-} from "./thread-bindings.js";
-import { resolveTelegramToken } from "./token.js";
+} from "./thread-bindings-store.js";
 import {
   listTelegramLegacyTopicNameCacheEntries,
   resolveTopicNameCacheNamespace,
@@ -72,22 +56,6 @@ import {
   TELEGRAM_UPDATE_OFFSET_NAMESPACE,
 } from "./update-offset-store.js";
 
-const TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE = "telegram.message-dispatch-dedupe";
-const TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_MAX_ENTRIES = 4_096;
-
-type TelegramLegacyMessageDispatchDedupeRecord = {
-  namespace: string;
-  entries: Record<string, number>;
-};
-
-function fileExists(pathValue: string): boolean {
-  try {
-    return !statRegularFileSync(pathValue).missing;
-  } catch {
-    return false;
-  }
-}
-
 function resolveLegacySessionStorePath(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
@@ -95,13 +63,106 @@ function resolveLegacySessionStorePath(params: {
   return path.join(resolveMigrationStateDir(params), "sessions", "sessions.json");
 }
 
+function resolveAgentSessionStorePath(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  agentId: string;
+}): string {
+  return resolveStorePath(params.cfg.session?.store, {
+    env: params.env,
+    agentId: params.agentId,
+  });
+}
+
+function listLegacyAgentSessionStoreSources(params: {
+  cfg: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  stateDir?: string;
+  resolveSourcePath: (storePath: string) => string;
+  preserveLegacyAccountScope?: boolean;
+}): Array<{ sourcePath: string; targetStorePath: string }> {
+  const asSource = (targetStorePath: string) => ({
+    sourcePath: params.resolveSourcePath(targetStorePath),
+    targetStorePath,
+  });
+  const sources = uniqueStrings(
+    [...listAgentIds(params.cfg), "main"].map((agentId) =>
+      resolveAgentSessionStorePath({ ...params, agentId }),
+    ),
+  )
+    .map(asSource)
+    .filter(({ sourcePath }) => fileExists(sourcePath));
+  const legacySourcePath = params.resolveSourcePath(resolveLegacySessionStorePath(params));
+  if (
+    !fileExists(legacySourcePath) ||
+    sources.some(({ sourcePath }) => sourcePath === legacySourcePath)
+  ) {
+    return sources;
+  }
+  // Only the global sidecar needs a selected owner; agent-local sidecars retain theirs.
+  const targetAgentId =
+    params.preserveLegacyAccountScope &&
+    params.cfg.agents?.entries === undefined &&
+    params.cfg.agents?.list === undefined
+      ? resolveDefaultTelegramAccountId(params.cfg)
+      : resolveTelegramLegacyStateOwnerAgentId(params.cfg);
+  return [
+    ...sources,
+    {
+      sourcePath: legacySourcePath,
+      targetStorePath: resolveAgentSessionStorePath({ ...params, agentId: targetAgentId }),
+    },
+  ];
+}
+
+function resolveTelegramLegacyStateOwnerAgentId(cfg: OpenClawConfig): string {
+  const configuredAccountIds = listTelegramAccountIds(cfg);
+  const accountIds =
+    configuredAccountIds.length > 0 ? configuredAccountIds : [resolveDefaultTelegramAccountId(cfg)];
+  const ownerAgentIds = uniqueStrings(
+    accountIds.map((accountId) => resolveTelegramAccountOwnerAgentId({ cfg, accountId })),
+  );
+  if (ownerAgentIds.length === 1) {
+    return ownerAgentIds[0]!;
+  }
+  throw new Error(
+    `Legacy Telegram state has multiple routed owners (${ownerAgentIds.join(", ")}); preserve it until one migration owner is configured.`,
+  );
+}
+
 function resolveMigrationStateDir(params: { env: NodeJS.ProcessEnv; stateDir?: string }): string {
   return (
     params.stateDir ??
     path.dirname(
-      path.dirname(path.dirname(path.dirname(resolveStorePath(undefined, { env: params.env })))),
+      path.dirname(
+        path.dirname(
+          path.dirname(resolveStorePath(undefined, { env: params.env, agentId: "main" })),
+        ),
+      ),
     )
   );
+}
+
+type TelegramStateImportPlan = Extract<
+  ChannelLegacyStateMigrationPlan,
+  { kind: "plugin-state-import" }
+>;
+
+function telegramStateImport(
+  params: Omit<
+    TelegramStateImportPlan,
+    "kind" | "targetPath" | "pluginId" | "scopeKey" | "cleanupSource" | "preview"
+  > & { scopeKey?: string },
+): TelegramStateImportPlan {
+  return {
+    ...params,
+    kind: "plugin-state-import",
+    targetPath: `plugin state:${params.namespace}`,
+    pluginId: "telegram",
+    scopeKey: params.scopeKey ?? "",
+    cleanupSource: "rename",
+    preview: `- ${params.label}: ${params.sourcePath} → plugin state (${params.namespace})`,
+  };
 }
 
 function parseLegacyMessageCacheJson(text: string): unknown[] | undefined {
@@ -184,110 +245,6 @@ function listTelegramLegacyMessageCacheEntries(persistedPath: string) {
   return Array.from(entries, ([key, value]) => ({ key, value }));
 }
 
-function readLegacyMessageDispatchDedupeRecord(
-  value: unknown,
-): TelegramLegacyMessageDispatchDedupeRecord | undefined {
-  if (!isRecord(value) || typeof value.namespace !== "string") {
-    return undefined;
-  }
-  if (!isRecord(value.entries)) {
-    return undefined;
-  }
-  const entries: Record<string, number> = {};
-  for (const [key, seenAt] of Object.entries(value.entries)) {
-    if (typeof seenAt === "number" && Number.isFinite(seenAt) && seenAt > 0) {
-      entries[key] = seenAt;
-    }
-  }
-  return { namespace: value.namespace, entries };
-}
-
-function remainingMessageDispatchDedupeTtlMs(seenAt: number, now: number): number | undefined {
-  const ttlMs = TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS - Math.max(0, now - seenAt);
-  return ttlMs > 0 ? ttlMs : undefined;
-}
-
-function openTelegramLegacyMessageDispatchBucketStore(env: NodeJS.ProcessEnv) {
-  return createPluginStateSyncKeyedStore<unknown>("telegram", {
-    namespace: TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE,
-    maxEntries: TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_MAX_ENTRIES,
-    env,
-  });
-}
-
-function readTelegramLegacyMessageDispatchBuckets(params: {
-  accountId: string;
-  env: NodeJS.ProcessEnv;
-  now?: number;
-}): { importEntries: PersistentDedupeLegacyJsonImportEntry[]; recordKeys: string[] } {
-  const store = openTelegramLegacyMessageDispatchBucketStore(params.env);
-  const latestSeenAtByKey = new Map<string, number>();
-  const recordKeys: string[] = [];
-  for (const entry of store.entries()) {
-    const record = readLegacyMessageDispatchDedupeRecord(entry.value);
-    if (!record) {
-      continue;
-    }
-    // Lock rows persist as `<accountId>:lock` buckets without dedupe entries;
-    // track them as removable so cleanup empties the retired namespace.
-    const ownsRecord =
-      record.namespace === params.accountId || record.namespace.startsWith(`${params.accountId}:`);
-    if (!ownsRecord) {
-      continue;
-    }
-    recordKeys.push(entry.key);
-    if (record.namespace !== params.accountId) {
-      continue;
-    }
-    for (const [key, seenAt] of Object.entries(record.entries)) {
-      latestSeenAtByKey.set(key, Math.max(latestSeenAtByKey.get(key) ?? 0, seenAt));
-    }
-  }
-  const now = params.now ?? Date.now();
-  const importEntries = [...latestSeenAtByKey.entries()].flatMap(([key, seenAt]) => {
-    const ttlMs = remainingMessageDispatchDedupeTtlMs(seenAt, now);
-    return ttlMs == null
-      ? []
-      : [
-          createPersistentDedupeImportEntry({
-            key: buildTelegramMessageDispatchAccountReplayKey({
-              accountId: params.accountId,
-              key,
-            }),
-            seenAt,
-            ttlMs,
-          }),
-        ];
-  });
-  return { importEntries, recordKeys };
-}
-
-function removeTelegramLegacyMessageDispatchBuckets(params: {
-  accountId: string;
-  env: NodeJS.ProcessEnv;
-}): void {
-  const store = openTelegramLegacyMessageDispatchBucketStore(params.env);
-  for (const key of readTelegramLegacyMessageDispatchBuckets(params).recordKeys) {
-    store.delete(key);
-  }
-}
-
-function mapTelegramMessageDispatchDedupeImportEntries(params: {
-  accountId: string;
-  entries: PersistentDedupeLegacyJsonImportEntry[];
-}): PersistentDedupeLegacyJsonImportEntry[] {
-  return params.entries.map((entry) =>
-    createPersistentDedupeImportEntry({
-      key: buildTelegramMessageDispatchAccountReplayKey({
-        accountId: params.accountId,
-        key: entry.value.key,
-      }),
-      seenAt: entry.value.seenAt,
-      ...(entry.ttlMs != null ? { ttlMs: entry.ttlMs } : {}),
-    }),
-  );
-}
-
 function listTelegramLegacySidecarAccountIds(params: {
   cfg: OpenClawConfig;
   stateDir: string;
@@ -317,29 +274,22 @@ function detectTelegramMessageCacheLegacyStateMigration(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const storePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
-  const runtimePersistedPath = resolveTelegramMessageCachePath(storePath);
-  const legacyStorePath = resolveLegacySessionStorePath(params);
-  const legacyPersistedPath = resolveTelegramMessageCachePath(legacyStorePath);
-  const scopeKey = resolveTelegramMessageCachePersistentScopeKey(runtimePersistedPath);
-  return uniqueStrings([runtimePersistedPath, legacyPersistedPath]).flatMap((persistedPath) => {
-    if (!fileExists(persistedPath)) {
-      return [];
-    }
-    return {
-      kind: "plugin-state-import",
+  const sources = listLegacyAgentSessionStoreSources({
+    ...params,
+    resolveSourcePath: resolveTelegramMessageCachePath,
+  });
+  return sources.map(({ sourcePath, targetStorePath }) =>
+    telegramStateImport({
       label: "Telegram prompt-context message cache",
-      sourcePath: persistedPath,
-      targetPath: `plugin state:${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE}`,
-      pluginId: "telegram",
+      sourcePath,
       namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
       maxEntries: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
-      scopeKey,
-      cleanupSource: "rename",
-      preview: `- Telegram prompt-context message cache: ${persistedPath} → plugin state (${TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE})`,
-      readEntries: () => listTelegramLegacyMessageCacheEntries(persistedPath),
-    };
-  });
+      scopeKey: resolveTelegramMessageCachePersistentScopeKey(
+        resolveTelegramMessageCachePath(targetStorePath),
+      ),
+      readEntries: () => listTelegramLegacyMessageCacheEntries(sourcePath),
+    }),
+  );
 }
 
 function detectTelegramBotInfoCacheLegacyStateMigration(params: {
@@ -351,32 +301,29 @@ function detectTelegramBotInfoCacheLegacyStateMigration(params: {
     if (!fileExists(persistedPath)) {
       return [];
     }
-    return {
-      kind: "plugin-state-import",
+    return telegramStateImport({
       label: "Telegram startup bot info cache",
       sourcePath: persistedPath,
-      targetPath: `plugin state:${TELEGRAM_BOT_INFO_CACHE_NAMESPACE}`,
-      pluginId: "telegram",
       namespace: TELEGRAM_BOT_INFO_CACHE_NAMESPACE,
       maxEntries: TELEGRAM_BOT_INFO_CACHE_MAX_ENTRIES,
-      scopeKey: "",
-      cleanupSource: "rename",
-      preview: `- Telegram startup bot info cache: ${persistedPath} → plugin state (${TELEGRAM_BOT_INFO_CACHE_NAMESPACE})`,
       readEntries: () => {
         return listTelegramLegacyBotInfoCacheEntries({
           accountId,
           persistedPath,
         });
       },
-    };
+    });
   });
 }
 
-function detectTelegramUpdateOffsetLegacyStateMigration(params: {
+async function detectTelegramUpdateOffsetLegacyStateMigration(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
   stateDir?: string;
-}): ChannelLegacyStateMigrationPlan[] {
+}): Promise<ChannelLegacyStateMigrationPlan[]> {
+  // token.js pulls provider-auth's config graph; keep it lazy so setup/doctor
+  // closure cold-load stays light.
+  const { resolveTelegramToken } = await import("./token.js");
   const stateDir = resolveMigrationStateDir(params);
   return listTelegramLegacySidecarAccountIds({
     cfg: params.cfg,
@@ -399,17 +346,11 @@ function detectTelegramUpdateOffsetLegacyStateMigration(params: {
     } catch {
       botToken = undefined;
     }
-    return {
-      kind: "plugin-state-import",
+    return telegramStateImport({
       label: "Telegram update offset",
       sourcePath: persistedPath,
-      targetPath: `plugin state:${TELEGRAM_UPDATE_OFFSET_NAMESPACE}`,
-      pluginId: "telegram",
       namespace: TELEGRAM_UPDATE_OFFSET_NAMESPACE,
       maxEntries: TELEGRAM_UPDATE_OFFSET_MAX_ENTRIES,
-      scopeKey: "",
-      cleanupSource: "rename",
-      preview: `- Telegram update offset: ${persistedPath} → plugin state (${TELEGRAM_UPDATE_OFFSET_NAMESPACE})`,
       readEntries: () => listTelegramLegacyUpdateOffsetEntries({ accountId, persistedPath }),
       shouldReplaceExistingEntry: ({ existingValue, incomingValue }) =>
         shouldReplaceTelegramUpdateOffsetEntry({
@@ -417,7 +358,7 @@ function detectTelegramUpdateOffsetLegacyStateMigration(params: {
           incomingValue,
           botToken,
         }),
-    };
+    });
   });
 }
 
@@ -431,19 +372,13 @@ function detectTelegramStickerCacheLegacyStateMigration(params: {
     return [];
   }
   return [
-    {
-      kind: "plugin-state-import",
+    telegramStateImport({
       label: "Telegram sticker cache",
       sourcePath: persistedPath,
-      targetPath: `plugin state:${TELEGRAM_STICKER_CACHE_NAMESPACE}`,
-      pluginId: "telegram",
       namespace: TELEGRAM_STICKER_CACHE_NAMESPACE,
       maxEntries: TELEGRAM_STICKER_CACHE_MAX_ENTRIES,
-      scopeKey: "",
-      cleanupSource: "rename",
-      preview: `- Telegram sticker cache: ${persistedPath} → plugin state (${TELEGRAM_STICKER_CACHE_NAMESPACE})`,
       readEntries: () => listTelegramLegacyStickerCacheEntries({ persistedPath }),
-    },
+    }),
   ];
 }
 
@@ -452,35 +387,24 @@ function detectTelegramSentMessageCacheLegacyStateMigration(params: {
   env: NodeJS.ProcessEnv;
   stateDir?: string;
 }): ChannelLegacyStateMigrationPlan[] {
-  const storePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
-  const legacyStorePath = resolveLegacySessionStorePath(params);
-  const sources = uniqueStrings([storePath, legacyStorePath]).map((sourceStorePath) => ({
-    targetStorePath: storePath,
-    sourcePath: `${sourceStorePath}.telegram-sent-messages.json`,
-  }));
-  return sources.flatMap((source) => {
-    if (!fileExists(source.sourcePath)) {
-      return [];
-    }
-    return {
-      kind: "plugin-state-import",
+  const sources = listLegacyAgentSessionStoreSources({
+    ...params,
+    resolveSourcePath: (storePath) => `${storePath}.telegram-sent-messages.json`,
+  });
+  return sources.map(({ sourcePath, targetStorePath }) =>
+    telegramStateImport({
       label: "Telegram sent-message cache",
-      sourcePath: source.sourcePath,
-      targetPath: `plugin state:${TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE}`,
-      pluginId: "telegram",
+      sourcePath,
       namespace: TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE,
       maxEntries: TELEGRAM_SENT_MESSAGE_CACHE_MAX_ENTRIES,
-      scopeKey: "",
-      cleanupSource: "rename",
       cleanupWhenEmpty: true,
-      preview: `- Telegram sent-message cache: ${source.sourcePath} → plugin state (${TELEGRAM_SENT_MESSAGE_CACHE_NAMESPACE})`,
       readEntries: () =>
         listTelegramLegacySentMessageCacheEntries({
-          cfg: { session: { store: source.targetStorePath } },
-          persistedPath: source.sourcePath,
+          persistedPath: sourcePath,
+          targetStorePath,
         }),
-    };
-  });
+    }),
+  );
 }
 
 function detectTelegramThreadBindingLegacyStateMigration(params: {
@@ -495,116 +419,24 @@ function detectTelegramThreadBindingLegacyStateMigration(params: {
     prefix: "thread-bindings-",
     suffix: ".json",
   }).flatMap((accountId) => {
-    const persistedPath = telegramThreadBindingTesting.resolveBindingsPath(accountId, params.env);
+    const persistedPath = resolveTelegramThreadBindingsPath(accountId, params.env);
     if (!fileExists(persistedPath)) {
       return [];
     }
-    return {
-      kind: "plugin-state-import",
+    return telegramStateImport({
       label: "Telegram thread bindings",
       sourcePath: persistedPath,
-      targetPath: `plugin state:${TELEGRAM_THREAD_BINDINGS_NAMESPACE}`,
-      pluginId: "telegram",
       namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
       maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
-      scopeKey: "",
-      cleanupSource: "rename",
-      preview: `- Telegram thread bindings: ${persistedPath} → plugin state (${TELEGRAM_THREAD_BINDINGS_NAMESPACE})`,
       readEntries: () => listTelegramLegacyThreadBindingEntries({ accountId, persistedPath }),
-    };
-  });
-}
-
-function detectTelegramMessageDispatchLegacyStateMigration(params: {
-  cfg: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
-  stateDir?: string;
-}): ChannelLegacyStateMigrationPlan[] {
-  const storePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
-  const legacyStorePath = resolveLegacySessionStorePath(params);
-  const env = params.stateDir ? { ...params.env, OPENCLAW_STATE_DIR: params.stateDir } : params.env;
-  const namespace = resolvePersistentDedupePluginStateNamespace({
-    namespace: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE,
-    namespacePrefix: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_NAMESPACE_PREFIX,
-  });
-  return listTelegramAccountIds(params.cfg).flatMap((accountId) => {
-    const sources = uniqueStrings([storePath, legacyStorePath]).map((sourceStorePath) => ({
-      sourcePath: resolveTelegramMessageDispatchLegacyPath({
-        storePath: sourceStorePath,
-        namespace: accountId,
-      }),
-    }));
-    const jsonPlans: ChannelLegacyStateMigrationPlan[] = sources.flatMap((source) => {
-      const sourcePath = source.sourcePath;
-      if (!fileExists(sourcePath)) {
-        return [];
-      }
-      return {
-        kind: "plugin-state-import",
-        label: "Telegram message dispatch dedupe",
-        sourcePath,
-        targetPath: `plugin state:${namespace}`,
-        pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
-        namespace,
-        maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
-        defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
-        scopeKey: "",
-        cleanupSource: "rename",
-        cleanupWhenEmpty: true,
-        preview: `- Telegram message dispatch dedupe: ${sourcePath} → plugin state (${namespace})`,
-        shouldReplaceExistingEntry: ({ existingValue, incomingValue }) =>
-          shouldReplacePersistentDedupeEntry({ existingValue, incomingValue }),
-        readEntries: async () =>
-          mapTelegramMessageDispatchDedupeImportEntries({
-            accountId,
-            entries: await listPersistentDedupeLegacyJsonFileEntries({
-              filePath: source.sourcePath,
-              ttlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
-            }),
-          }),
-      };
     });
-    let legacyRecordKeys: string[];
-    try {
-      legacyRecordKeys = readTelegramLegacyMessageDispatchBuckets({ accountId, env }).recordKeys;
-    } catch {
-      legacyRecordKeys = [];
-    }
-    // Emit the plan while any retired bucket rows remain (even TTL-expired ones)
-    // so doctor --fix imports live entries and then deletes the legacy source.
-    if (legacyRecordKeys.length === 0) {
-      return jsonPlans;
-    }
-    const pluginStatePlan: ChannelLegacyStateMigrationPlan = {
-      kind: "plugin-state-import",
-      label: "Telegram message dispatch dedupe",
-      sourcePath: `plugin state:${TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE}:${accountId}`,
-      targetPath: `plugin state:${namespace}`,
-      pluginId: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_PLUGIN_ID,
-      namespace,
-      maxEntries: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_STATE_MAX_ENTRIES,
-      defaultTtlMs: TELEGRAM_MESSAGE_DISPATCH_DEDUPE_TTL_MS,
-      scopeKey: "",
-      cleanupWhenEmpty: true,
-      preview: `- Telegram message dispatch dedupe: plugin state (${TELEGRAM_MESSAGE_DISPATCH_LEGACY_BUCKET_NAMESPACE}) → plugin state (${namespace})`,
-      shouldReplaceExistingEntry: ({ existingValue, incomingValue }) =>
-        shouldReplacePersistentDedupeEntry({ existingValue, incomingValue }),
-      readEntries: () => readTelegramLegacyMessageDispatchBuckets({ accountId, env }).importEntries,
-      removeSource: () => removeTelegramLegacyMessageDispatchBuckets({ accountId, env }),
-    };
-    return jsonPlans.concat(pluginStatePlan);
   });
 }
 
-function topicNameCacheImportSource(params: {
-  sourceStorePath: string;
-  targetStorePath?: string;
-}): { sourcePath: string; namespace: string } {
-  const targetStorePath = params.targetStorePath ?? params.sourceStorePath;
-  const scope = resolveTopicNameCacheScope(targetStorePath);
+function topicNameCacheImportSource(sourcePath: string, targetStorePath: string) {
   return {
-    sourcePath: resolveTopicNameCachePath(params.sourceStorePath),
-    namespace: resolveTopicNameCacheNamespace(scope),
+    sourcePath,
+    namespace: resolveTopicNameCacheNamespace(resolveTopicNameCacheScope(targetStorePath)),
   };
 }
 
@@ -618,47 +450,35 @@ function detectTelegramTopicNameCacheLegacyStateMigration(params: {
       env: params.env,
       agentId: accountId,
     });
-    return topicNameCacheImportSource({ sourceStorePath: storePath });
+    return topicNameCacheImportSource(resolveTopicNameCachePath(storePath), storePath);
   });
-  const defaultStorePath = resolveStorePath(params.cfg.session?.store, { env: params.env });
-  const defaultAccountStorePath = resolveStorePath(params.cfg.session?.store, {
-    env: params.env,
-    agentId: resolveDefaultTelegramAccountId(params.cfg),
-  });
-  const legacyStorePath = resolveLegacySessionStorePath(params);
-  const sourcesByKey = new Map(
-    [
-      ...accountSources,
-      topicNameCacheImportSource({ sourceStorePath: defaultStorePath }),
-      topicNameCacheImportSource({
-        sourceStorePath: legacyStorePath,
-        targetStorePath: defaultAccountStorePath,
-      }),
-    ].map((source) => [`${source.sourcePath}\0${source.namespace}`, source] as const),
+  const sessionSources = listLegacyAgentSessionStoreSources({
+    ...params,
+    resolveSourcePath: resolveTopicNameCachePath,
+    // Pre-roster topic caches used the account id as their session-store scope.
+    preserveLegacyAccountScope: true,
+  }).map(({ sourcePath, targetStorePath }) =>
+    topicNameCacheImportSource(sourcePath, targetStorePath),
   );
-  return [...sourcesByKey.values()].flatMap((source) => {
-    if (!fileExists(source.sourcePath)) {
-      return [];
-    }
-    return {
-      kind: "plugin-state-import",
+  const sourcesByKey = new Map(
+    [...accountSources.filter((source) => fileExists(source.sourcePath)), ...sessionSources].map(
+      (source) => [`${source.sourcePath}\0${source.namespace}`, source] as const,
+    ),
+  );
+  return [...sourcesByKey.values()].map((source) =>
+    telegramStateImport({
       label: "Telegram forum topic-name cache",
       sourcePath: source.sourcePath,
-      targetPath: `plugin state:${source.namespace}`,
-      pluginId: "telegram",
       namespace: source.namespace,
       maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
-      scopeKey: "",
-      cleanupSource: "rename",
-      preview: `- Telegram forum topic-name cache: ${source.sourcePath} → plugin state (${source.namespace})`,
       readEntries: () => {
         return listTelegramLegacyTopicNameCacheEntries({
           persistedPath: source.sourcePath,
           maxEntries: TELEGRAM_TOPIC_NAME_CACHE_MAX_ENTRIES,
         });
       },
-    };
-  });
+    }),
+  );
 }
 
 export async function detectTelegramLegacyStateMigrations(params: {
@@ -667,13 +487,12 @@ export async function detectTelegramLegacyStateMigrations(params: {
   stateDir?: string;
 }): Promise<ChannelLegacyStateMigrationPlan[]> {
   const plans: ChannelLegacyStateMigrationPlan[] = [];
-  plans.push(...detectTelegramUpdateOffsetLegacyStateMigration(params));
+  plans.push(...(await detectTelegramUpdateOffsetLegacyStateMigration(params)));
   plans.push(...detectTelegramBotInfoCacheLegacyStateMigration(params));
   plans.push(...detectTelegramStickerCacheLegacyStateMigration(params));
   plans.push(...detectTelegramMessageCacheLegacyStateMigration(params));
   plans.push(...detectTelegramSentMessageCacheLegacyStateMigration(params));
   plans.push(...detectTelegramTopicNameCacheLegacyStateMigration(params));
   plans.push(...detectTelegramThreadBindingLegacyStateMigration(params));
-  plans.push(...detectTelegramMessageDispatchLegacyStateMigration(params));
   return plans;
 }

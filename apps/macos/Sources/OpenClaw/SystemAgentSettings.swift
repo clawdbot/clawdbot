@@ -17,23 +17,30 @@ struct SystemAgentSettings: View {
         sessionPrefix: "mac-settings-openclaw")
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 20) {
-            SettingsPageHeader(
-                title: "OpenClaw",
-                subtitle: "Your AI-powered setup helper. It can check status, fix config, " +
-                    "switch models, and connect channels.")
+        GeometryReader { geometry in
+            ScrollView(.vertical) {
+                VStack(alignment: .leading, spacing: 20) {
+                    SettingsPageHeader(
+                        title: "OpenClaw",
+                        subtitle: """
+                        Your AI-powered setup helper. It can check status, fix config, \
+                        switch models, and connect channels.
+                        """)
 
-            SettingsCardGroup("Chat") {
-                SystemAgentOnboardingChatView(model: self.chat)
-                    .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+                    SettingsCardGroup("Chat") {
+                        SystemAgentOnboardingChatView(model: self.chat)
+                            .frame(maxWidth: .infinity, minHeight: 320, maxHeight: .infinity)
+                    }
+                    .frame(maxHeight: .infinity)
+
+                    Text("Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .settingsDetailContent()
+                .frame(minHeight: geometry.size.height, alignment: .top)
             }
-            .frame(maxHeight: .infinity)
-
-            Text("Tip: try “status”, “doctor”, “set default model …”, or “connect telegram”.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
         }
-        .settingsDetailContent()
         .task(id: self.isActive) {
             guard self.isActive else { return }
             Self.configureChatCallbacks(
@@ -48,8 +55,8 @@ struct SystemAgentSettings: View {
         for chat: SystemAgentOnboardingChatModel,
         onReplyReceived: @escaping () -> Void)
     {
-        chat.onAgentHandoff = {
-            AppNavigationActions.openChat()
+        chat.onAgentHandoff = { agentDraft in
+            AppNavigationActions.openChat(draft: agentDraft?.composerValue)
         }
         chat.onReplyReceived = onReplyReceived
     }

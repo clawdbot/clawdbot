@@ -1,7 +1,13 @@
+import { spawnSync } from "node:child_process";
 // Daemon install integration tests cover service install paths with filesystem fixtures.
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceInstallArgs,
+} from "../../daemon/service-types.js";
 import { makeTempWorkspace } from "../../test-helpers/workspace.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createCliRuntimeCapture } from "../test-runtime-capture.js";
@@ -13,14 +19,20 @@ const serviceMock = vi.hoisted(() => ({
   loadedText: "loaded",
   notLoadedText: "not loaded",
   stage: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
-  install: vi.fn(async (_opts?: { environment?: Record<string, string | undefined> }) => {}),
+  install: vi.fn(async (_opts?: GatewayServiceInstallArgs) => {}),
   uninstall: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
   isLoaded: vi.fn(async () => false),
-  readCommand: vi.fn(async () => null),
+  readCommand: vi.fn<() => Promise<GatewayServiceCommandConfig | null>>(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
+
+vi.mock("../../config/paths.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../config/paths.js")>("../../config/paths.js");
+  return { ...actual, isDefaultInstallIdentity: () => true };
+});
 
 vi.mock("../../daemon/service.js", () => ({
   resolveGatewayService: () => serviceMock,
@@ -30,7 +42,7 @@ vi.mock("../../runtime.js", () => ({
   defaultRuntime,
 }));
 
-const { runDaemonInstall } = await import("./install.js");
+const { mergeInstallInvocationEnv, runDaemonInstall } = await import("./install.js");
 const { clearConfigCache, clearRuntimeConfigSnapshot } = await import("../../config/config.js");
 
 async function readJson(filePath: string): Promise<Record<string, unknown>> {
@@ -70,6 +82,7 @@ describe("runDaemonInstall integration", () => {
     process.env.OPENCLAW_GATEWAY_TOKEN = "";
     process.env.OPENCLAW_GATEWAY_PASSWORD = "";
     serviceMock.isLoaded.mockResolvedValue(false);
+    serviceMock.readCommand.mockResolvedValue(null);
     await fs.writeFile(configPath, JSON.stringify({}, null, 2));
     clearConfigCache();
   });
@@ -134,6 +147,24 @@ describe("runDaemonInstall integration", () => {
     expect(runtimeLogs.join("\n")).toContain("Refusing to install or rewrite the gateway service");
   });
 
+  it.each([
+    { force: undefined, label: "normal install" },
+    { force: true, label: "forced reinstall" },
+  ])("does not bypass system ownership during $label", async ({ force }) => {
+    serviceMock.install.mockRejectedValueOnce(
+      new Error(
+        "System systemd unit openclaw-gateway.service already owns this gateway unit name. --force does not override system ownership.",
+      ),
+    );
+
+    await expect(runDaemonInstall({ json: true, force })).rejects.toThrow("__exit__:1");
+
+    expect(serviceMock.install).toHaveBeenCalledTimes(1);
+    const joined = runtimeLogs.join("\n");
+    expect(joined).toContain("System systemd unit openclaw-gateway.service");
+    expect(joined).toContain("--force does not override system ownership");
+  });
+
   it("auto-mints token when no source exists without embedding it into service env", async () => {
     await fs.writeFile(
       configPath,
@@ -150,6 +181,7 @@ describe("runDaemonInstall integration", () => {
       ),
     );
     clearConfigCache();
+    serviceMock.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
 
     await runDaemonInstall({ json: true });
 
@@ -162,4 +194,211 @@ describe("runDaemonInstall integration", () => {
     const installEnv = serviceMock.install.mock.calls[0]?.[0]?.environment;
     expect(installEnv?.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
   });
+
+  it.each([
+    {
+      name: "operator heap cap",
+      options: "--max-old-space-size=512",
+      overrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      expected: [],
+    },
+    {
+      name: "same-value empty override",
+      options: "",
+      overrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      expected: [],
+    },
+    {
+      name: "UnsetEnvironment",
+      options: undefined,
+      overrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      expected: [],
+    },
+    {
+      name: "inline reset",
+      options: undefined,
+      overrides: { environment: { resetInline: true } },
+      expected: [],
+    },
+    {
+      name: "file reset",
+      options: undefined,
+      source: "file",
+      overrides: { environment: { resetFiles: true } },
+      expected: [],
+    },
+    {
+      name: "unknown environment authority",
+      options: "",
+      overrides: { environment: true },
+      expected: [],
+    },
+    {
+      name: "legacy effective difference",
+      options: "--max-old-space-size=512",
+      overrides: undefined,
+      expected: [],
+    },
+    {
+      name: "PATH-only override",
+      options: "",
+      overrides: { environment: { keys: ["PATH"] } },
+      expected: ["--max-old-space-size=16384"],
+    },
+    {
+      name: "stored managed argv",
+      options: "--max-old-space-size=512",
+      baseArgs: ["--max-old-space-size=1024"],
+      overrides: { environment: { keys: ["NODE_OPTIONS"] } },
+      expected: ["--max-old-space-size=1024"],
+    },
+  ] satisfies Array<{
+    name: string;
+    options: string | undefined;
+    source?: "file";
+    baseArgs?: string[];
+    overrides: GatewayServiceCommandConfig["managedOverrides"];
+    expected: string[];
+  }>)(
+    "preserves $name through the real install plan without importing operator values",
+    async (testCase) => {
+      const originalArgv = process.argv;
+      const physical = vi.spyOn(os, "totalmem").mockReturnValue(64 * 1024 ** 3);
+      const constrained = vi.spyOn(process, "constrainedMemory").mockReturnValue(0);
+      const entry = path.join(tempHome, "dist", "index.js");
+      await fs.mkdir(path.dirname(entry), { recursive: true });
+      await fs.writeFile(entry, "");
+      process.argv = [process.execPath, entry];
+      const programArguments = [
+        process.execPath,
+        ...(testCase.baseArgs ?? []),
+        entry,
+        "gateway",
+        "--port",
+        "19991",
+      ];
+      serviceMock.readCommand.mockResolvedValue({
+        programArguments,
+        environment: {
+          ...(testCase.options === undefined ? {} : { NODE_OPTIONS: testCase.options }),
+          PATH: "/operator/bin",
+        },
+        managedDefinition: {
+          programArguments,
+          environment: { NODE_OPTIONS: "" },
+          ...(testCase.source
+            ? { environmentValueSources: { NODE_OPTIONS: testCase.source } }
+            : {}),
+        },
+        managedOverrides: testCase.overrides,
+      });
+      try {
+        serviceMock.isLoaded.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+        await runDaemonInstall({ json: true, force: true });
+        expect(serviceMock.install).toHaveBeenCalledOnce();
+        const plan = serviceMock.install.mock.calls[0]?.[0];
+        expect(plan?.environment?.NODE_OPTIONS).toBe("");
+        expect(plan?.environment?.PATH).not.toContain("/operator/bin");
+        const generatedArgs = plan?.programArguments ?? [];
+        const heapArgs = generatedArgs.slice(1, generatedArgs.indexOf(entry));
+        expect(heapArgs).toEqual(testCase.expected);
+        if (testCase.name === "operator heap cap") {
+          const measure = (flags: string[]) => {
+            const child = spawnSync(
+              process.execPath,
+              [
+                ...flags,
+                "-e",
+                "console.log(require('node:v8').getHeapStatistics().heap_size_limit)",
+              ],
+              { env: { NODE_OPTIONS: testCase.options }, encoding: "utf8" },
+            );
+            expect(child.status, child.stderr).toBe(0);
+            return Number(child.stdout);
+          };
+          expect(measure(heapArgs)).toBe(measure([]));
+        }
+      } finally {
+        process.argv = originalArgv;
+        physical.mockRestore();
+        constrained.mockRestore();
+      }
+    },
+  );
+});
+
+describe("mergeInstallInvocationEnv", () => {
+  it("canonicalizes Windows install env keys while filtering dangerous loader env", () => {
+    const env = mergeInstallInvocationEnv({
+      env: {
+        Path: "C:\\Windows\\System32",
+        openai_api_key: "service-openai-key",
+        NODE_OPTIONS: "--require C:\\temp\\untrusted.js",
+      },
+      platform: "win32",
+    });
+
+    expect(env).toMatchObject({
+      PATH: "C:\\Windows\\System32",
+      OPENAI_API_KEY: "service-openai-key",
+    });
+    expect(env.Path).toBeUndefined();
+    expect(env.openai_api_key).toBeUndefined();
+    expect(env.NODE_OPTIONS).toBeUndefined();
+  });
+
+  it.each([
+    { platform: "darwin" as const, caKey: "NODE_EXTRA_CA_CERTS" },
+    { platform: "linux" as const, caKey: "NODE_EXTRA_CA_CERTS" },
+    { platform: "win32" as const, caKey: "node_extra_ca_certs" },
+  ])(
+    "preserves installed additive Node CA trust without unsafe overrides on $platform",
+    ({ platform, caKey }) => {
+      const env = mergeInstallInvocationEnv({
+        env: { PATH: "/usr/bin" },
+        existingServiceEnv: {
+          [caKey]: " /opt/openclaw/corporate-ca.pem ",
+          NODE_TLS_REJECT_UNAUTHORIZED: "0",
+          HTTPS_PROXY: "https://attacker.invalid",
+          NODE_OPTIONS: "--require /tmp/untrusted.js",
+          BASH_ENV: "/tmp/untrusted.sh",
+          LD_PRELOAD: "/tmp/untrusted.so",
+          OPENAI_API_KEY: "existing-service-key",
+        },
+        platform,
+      });
+
+      expect(env).toMatchObject({
+        NODE_EXTRA_CA_CERTS: "/opt/openclaw/corporate-ca.pem",
+        OPENAI_API_KEY: "existing-service-key",
+        PATH: "/usr/bin",
+      });
+      expect(env.NODE_TLS_REJECT_UNAUTHORIZED).toBeUndefined();
+      expect(env.HTTPS_PROXY).toBeUndefined();
+      expect(env.NODE_OPTIONS).toBeUndefined();
+      expect(env.BASH_ENV).toBeUndefined();
+      expect(env.LD_PRELOAD).toBeUndefined();
+      if (platform === "win32") {
+        expect(env.node_extra_ca_certs).toBeUndefined();
+      }
+    },
+  );
+
+  it.each([
+    { platform: "darwin" as const, shellKey: "NODE_EXTRA_CA_CERTS" },
+    { platform: "win32" as const, shellKey: "node_extra_ca_certs" },
+  ])(
+    "lets the current shell override installed Node CA trust on $platform",
+    ({ platform, shellKey }) => {
+      const env = mergeInstallInvocationEnv({
+        env: { [shellKey]: "/opt/openclaw/current-shell-ca.pem" },
+        existingServiceEnv: {
+          NODE_EXTRA_CA_CERTS: "/opt/openclaw/previous-service-ca.pem",
+        },
+        platform,
+      });
+
+      expect(env.NODE_EXTRA_CA_CERTS).toBe("/opt/openclaw/current-shell-ca.pem");
+    },
+  );
 });

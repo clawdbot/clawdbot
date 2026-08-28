@@ -52,8 +52,8 @@ const {
   resolveManifestProviderAuthChoices,
   resolveProviderOnboardAuthFlags,
 } = await import("./provider-auth-choices.js");
-const { resetProviderAuthAliasMapCacheForTest, resolveProviderIdForAuth } =
-  await import("../agents/provider-auth-aliases.js");
+const { resolveProviderIdForAuth } = await import("../agents/provider-auth-aliases.js");
+const { clearPluginMetadataLifecycleCaches } = await import("./plugin-metadata-lifecycle.js");
 
 function createManifestPlugin(id: string, providerAuthChoices: Array<Record<string, unknown>>) {
   return {
@@ -128,7 +128,7 @@ describe("provider auth choice manifest helpers", () => {
     );
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReset();
     officialCatalogMocks.listOfficialExternalProviderCatalogEntries.mockReturnValue([]);
-    resetProviderAuthAliasMapCacheForTest();
+    clearPluginMetadataLifecycleCaches();
   });
 
   it("flattens manifest auth choices", () => {
@@ -321,6 +321,8 @@ describe("provider auth choice manifest helpers", () => {
             cliFlag: "--openai-api-key",
             cliOption: "--openai-api-key <key>",
             appGuidedSecret: true,
+            appGuidedActionLabel: "Connect account",
+            appGuidedDiscovery: true,
           },
         ],
       },
@@ -366,6 +368,8 @@ describe("provider auth choice manifest helpers", () => {
         cliFlag: "--openai-api-key",
         cliOption: "--openai-api-key <key>",
         appGuidedSecret: true,
+        appGuidedActionLabel: "Connect account",
+        appGuidedDiscovery: true,
       },
     ]);
     expect(

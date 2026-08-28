@@ -5,7 +5,7 @@ read_when:
 title: "Microsoft Teams"
 ---
 
-Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
+Status: text + DM attachments are supported; channel/group file sending requires `sharePointSiteId` + Graph permissions (see [Sending files in group chats](#sending-files-in-group-chats)). Polls and approval prompts are sent via Adaptive Cards. Message actions expose explicit `upload-file` for file-first sends.
 
 ## Bundled plugin
 
@@ -133,6 +133,8 @@ Disable with:
 
 ## Access control (DMs + groups)
 
+Microsoft Teams has one account per channel configuration. Set policies directly under `channels.msteams`; an `accounts` map is not supported.
+
 **DM access**
 
 - Default: `channels.msteams.dmPolicy = "pairing"`. Unknown senders are ignored until approved.
@@ -142,8 +144,8 @@ Disable with:
 
 **Group access**
 
-- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). `channels.defaults.groupPolicy` can override the shared default when `channels.msteams.groupPolicy` is unset.
-- `channels.msteams.groupAllowFrom` controls which senders or static sender access groups can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`).
+- Default: `channels.msteams.groupPolicy = "allowlist"` (blocked unless you add `groupAllowFrom`). Set `channels.msteams.groupPolicy` explicitly to choose another policy; the root schema default takes precedence over `channels.defaults.groupPolicy`.
+- `channels.msteams.groupAllowFrom` controls which senders, static sender access groups, or group/channel conversation IDs can trigger in group chats/channels (falls back to `channels.msteams.allowFrom`). Conversation IDs can use `19:...@thread.tacv2`, `19:...@thread.v2`, or `19:...@thread.skype`; preserve the exact ID casing. OpenClaw ignores `;messageid=...` suffixes. Conversation IDs never grant personal-DM access.
 - Set `groupPolicy: "open"` to allow any member (still mention-gated by default).
 - To block **all** channels, set `channels.msteams.groupPolicy: "disabled"`.
 
@@ -165,6 +167,9 @@ Example:
 - Scope group/channel replies by listing teams and channels under `channels.msteams.teams`.
 - Use stable Teams conversation IDs from Teams links as keys, not mutable display names (see [Team and Channel IDs](#team-and-channel-ids-common-gotcha)).
 - When `groupPolicy="allowlist"` and a teams allowlist is present, only listed teams/channels are accepted (mention-gated).
+- `groupAllowFrom` authorizes group senders, not delegated Graph reads of other channels. If an existing configuration only sets `groupAllowFrom`, keep the default `groupPolicy: "allowlist"` and configure the target under `channels.msteams.teams.<team>.channels`.
+- Alternatively, deliberately set `groupPolicy: "open"` for broader delegated reads. This also admits **any group sender** (still mention-gated by default), so it is less restrictive than a scoped team/channel route.
+- Direct-operator reads and reads in the current conversation do not require an additional team/channel route.
 - The configure wizard accepts `Team/Channel` entries and stores them for you.
 - On startup, OpenClaw resolves team/channel and user allowlist names to IDs (when Graph permissions allow) and logs the mapping. Unresolved names are kept as typed but ignored for routing unless `channels.msteams.dangerouslyAllowNameMatching: true` is set.
 
@@ -175,10 +180,11 @@ Example:
   channels: {
     msteams: {
       groupPolicy: "allowlist",
+      groupAllowFrom: ["00000000-0000-0000-0000-000000000000"],
       teams: {
-        "My Team": {
+        "19:team-id@thread.tacv2": {
           channels: {
-            General: { requireMention: true },
+            "19:channel-id@thread.tacv2": { requireMention: true },
           },
         },
       },
@@ -647,12 +653,13 @@ This applies to channels and group chats only. It adds one Graph message lookup 
 
 ### Webhook timeouts
 
-Teams delivers messages via HTTP webhook. OpenClaw applies fixed HTTP server timeouts to that webhook listener: 30s inactivity, 30s total request, 15s to receive headers. Optional inbound media and context enrichment has a shared 10-second budget, but the Teams SDK still waits for the agent turn before returning the webhook response. If the full turn exceeds Teams' retry window, you may see:
-
-- Teams retrying the message (causing duplicates).
-- Dropped replies.
-
-Replies are sent proactively once the agent responds, but slow agent runs can still surface retries or duplicates on the Teams side.
+Teams delivers messages via HTTP webhook. OpenClaw applies fixed HTTP server
+timeouts to that webhook listener: 30s inactivity, 30s total request, and 15s
+to receive headers. Optional inbound media and context enrichment has a shared
+10-second budget. The SDK returns after the raw activity is durably appended;
+the agent turn drains independently and replies proactively. If request
+handling or durable admission misses the transport window, Teams may retry the
+activity, and the ingress tombstone rejects a repeated event ID.
 
 ### Teams cloud and service URL support
 
@@ -712,7 +719,7 @@ Teams markdown is more limited than Slack or Discord:
 
 - Basic formatting works: **bold**, _italic_, `code`, links.
 - Complex markdown (tables, nested lists) may not render correctly.
-- Adaptive Cards are supported for polls and semantic presentation sends (see below).
+- Adaptive Cards are supported for approval prompts, polls, and semantic presentation sends (see below).
 
 ## Configuration
 
@@ -725,13 +732,14 @@ Key settings (see [/gateway/configuration](/gateway/configuration) for shared ch
 - `channels.msteams.webhook.port` (default `3978`).
 - `channels.msteams.webhook.path` (default `/api/messages`).
 - `channels.msteams.dmPolicy`: `pairing | allowlist | open | disabled` (default `pairing`).
-- `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). The wizard resolves names to IDs during setup when Graph access is available.
+- `channels.msteams.allowFrom`: DM allowlist (AAD object IDs recommended). Stable AAD object IDs also authorize approval actions. The wizard resolves names to IDs during setup when Graph access is available.
+- `channels.msteams.defaultTo`: default outbound target; a stable AAD object ID can also authorize approval actions.
 - `channels.msteams.dangerouslyAllowNameMatching`: break-glass toggle to re-enable mutable UPN/display-name matching and direct team/channel name routing.
 - `channels.msteams.textChunkLimit`: outbound text chunk size in characters (default `4000`, and hard-capped at `4000` regardless of a higher configured value).
 - `channels.msteams.streaming.chunkMode`: `length` (default) or `newline` to split on blank lines (paragraph boundaries) before length chunking.
 - `channels.msteams.mediaAllowHosts`: allowlist for inbound attachment hosts (defaults to Microsoft/Teams domains: Graph, SharePoint/OneDrive, Teams CDN, Bot Framework, Azure Media Services).
 - `channels.msteams.mediaAuthAllowHosts`: allowlist for attaching Authorization headers on media retries (defaults to Graph + Bot Framework hosts).
-- `channels.msteams.graphMediaFallback`: opt into Graph message lookups when channel/group HTML omits file markers (default `false`; see [Channel/group file recovery](#channelgroup-file-recovery-graphmediafallback)).
+- `channels.msteams.graphMediaFallback`: opt into Graph message lookups when channel/group HTML omits file markers (default `false`; see [Channel/group file recovery](/channels/msteams#channel%2Fgroup-file-recovery-graphmediafallback)).
 - `channels.msteams.mediaMaxMb`: per-channel media size limit override in MB. Falls back to `agents.defaults.mediaMaxMb` when unset.
 - `channels.msteams.requireMention`: require @mention in channels/groups (default `true`).
 - `channels.msteams.replyStyle`: `thread | top-level` (see [Reply style](#reply-style-threads-vs-posts)).
@@ -851,7 +859,7 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
 
 1. **Add Graph API permissions** in Entra ID (Azure AD) → App Registration:
    - `Sites.ReadWrite.All` (Application) - upload files to SharePoint.
-   - `Chat.Read.All` (Application) - optional, enables per-user sharing links.
+   - `ChatMember.Read.All` (Application) - least-privileged tenant-wide permission for group-chat file sends. `Chat.Read.All` also works and already covers this when group-chat history is enabled. As a per-chat alternative, use the `ChatMember.Read.Chat` [resource-specific consent permission](https://learn.microsoft.com/en-us/microsoftteams/platform/graph-api/rsc/resource-specific-consent).
 2. **Grant admin consent** for the tenant.
 3. **Get your SharePoint site ID:**
 
@@ -882,25 +890,51 @@ Bots use an application identity, while Microsoft Graph's `/me` resource [requir
 
 ### Sharing behavior
 
-| Permission                              | Sharing behavior                                          |
-| --------------------------------------- | --------------------------------------------------------- |
-| `Sites.ReadWrite.All` only              | Organization-wide sharing link (anyone in org can access) |
-| `Sites.ReadWrite.All` + `Chat.Read.All` | Per-user sharing link (only chat members can access)      |
+| Context and permission                                                  | Sharing behavior                                          |
+| ----------------------------------------------------------------------- | --------------------------------------------------------- |
+| Channel + `Sites.ReadWrite.All`                                         | Organization-wide sharing link (anyone in org can access) |
+| Group chat + `Sites.ReadWrite.All` + a supported chat-member read grant | Per-user sharing link (only chat members can access)      |
+| Group chat without a supported chat-member read grant                   | Send fails closed                                         |
 
-Per-user sharing is more secure since only chat participants can access the file. If `Chat.Read.All` is missing, the bot falls back to organization-wide sharing.
+Per-user sharing is more secure since only chat participants can access the file. OpenClaw requires a successful member lookup for group chats; timeouts, transport failures, empty results, and Graph API denials fail the send instead of widening access to the organization.
 
 ### Fallback behavior
 
-| Scenario                                          | Result                                           |
-| ------------------------------------------------- | ------------------------------------------------ |
-| Group chat + file + `sharePointSiteId` configured | Upload to SharePoint, send a native file card    |
-| Group chat + file + no `sharePointSiteId`         | Fail with an actionable configuration error      |
-| Personal chat + file                              | FileConsentCard flow (works without SharePoint)  |
-| Any context + image                               | Base64-encoded inline (works without SharePoint) |
+| Scenario                                                         | Result                                           |
+| ---------------------------------------------------------------- | ------------------------------------------------ |
+| Group chat + file + SharePoint and member permissions configured | Upload to SharePoint, send a native file card    |
+| Group chat + file + missing SharePoint or member permissions     | Fail with an actionable configuration error      |
+| Channel + file + `sharePointSiteId` configured                   | Upload to SharePoint, send a native file card    |
+| Personal chat + file                                             | FileConsentCard flow (works without SharePoint)  |
+| Any context + image                                              | Base64-encoded inline (works without SharePoint) |
 
 ### Files stored location
 
 Uploaded files are stored in a `/OpenClawShared/` folder in the configured SharePoint site's default document library.
+
+## Native approval cards
+
+Microsoft Teams can deliver exec and plugin approval requests as Adaptive Cards in the originating conversation. Each card describes the requested command or plugin action and provides only the decisions allowed for that request, such as **Approve once**, **Always allow**, and **Deny**. After a decision or expiration, OpenClaw updates the original card with its final status.
+
+Enable the existing top-level approval forwarding settings for each approval type you want to receive:
+
+```json5
+{
+  approvals: {
+    exec: { enabled: true, mode: "session" },
+    plugin: { enabled: true, mode: "session" },
+  },
+  channels: {
+    msteams: {
+      allowFrom: ["00000000-0000-0000-0000-000000000000"],
+    },
+  },
+}
+```
+
+`approvals.exec` and `approvals.plugin` are independent; enabling one does not enable the other. Native card delivery also requires a configured Teams bot and at least one approver resolved from `channels.msteams.allowFrom` or `channels.msteams.defaultTo`. Approvers must be stable AAD object IDs; display names, email addresses, group entries, and conversation IDs do not grant approval access. OpenClaw checks the clicking user's AAD object ID before resolving the request.
+
+No Teams-specific approval configuration is required. The existing `/approve <id> <decision>` command remains available as a text fallback when native delivery is unavailable. For forwarding modes and supported decisions, see [Approval forwarding to chat channels](/tools/exec-approvals-advanced#approval-forwarding-to-chat-channels).
 
 ## Polls (Adaptive Cards)
 

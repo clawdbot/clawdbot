@@ -13,6 +13,8 @@ export function collectConfigAssignments(params: {
   config: OpenClawConfig;
   /** Resolver context carrying source config, env, cache, assignments, and warnings. */
   context: ResolverContext;
+  /** Explicit diagnostic owner for agent-scoped core assignments. */
+  agentId?: string;
   /** Optional installed plugin roots for channel/plugin contract lookup. */
   loadablePluginOrigins?: ReadonlyMap<string, PluginOrigin>;
 }): void {
@@ -22,6 +24,7 @@ export function collectConfigAssignments(params: {
     config: params.config,
     defaults,
     context: params.context,
+    agentId: params.agentId,
   });
 
   collectChannelConfigAssignments({

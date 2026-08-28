@@ -26,7 +26,7 @@ struct AppCoverageTests {
 
         #expect(appModel.isBackgrounded)
         #expect(appModel.voiceWake._test_isSuppressedForBackground())
-        let blocked = await appModel._test_handleInvoke(BridgeInvokeRequest(
+        let blocked = await appModel.handleInvoke(BridgeInvokeRequest(
             id: "initial-scene-blocked",
             command: OpenClawTalkCommand.pttStart.rawValue))
         #expect(!blocked.ok)
@@ -35,11 +35,11 @@ struct AppCoverageTests {
 
         #expect(!appModel.isBackgrounded)
         #expect(!appModel.voiceWake._test_isSuppressedForBackground())
-        let admitted = await appModel._test_handleInvoke(BridgeInvokeRequest(
+        let admitted = await appModel.handleInvoke(BridgeInvokeRequest(
             id: "initial-scene-active",
             command: OpenClawTalkCommand.pttStart.rawValue))
         #expect(admitted.ok)
-        _ = await appModel._test_handleInvoke(BridgeInvokeRequest(
+        _ = await appModel.handleInvoke(BridgeInvokeRequest(
             id: "initial-scene-cleanup",
             command: OpenClawTalkCommand.pttCancel.rawValue))
     }

@@ -5,14 +5,20 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAuthProfileOrder } from "./auth-profiles/order.js";
 import { loadAuthProfileStoreForRuntime } from "./auth-profiles/store.js";
 import { resolveCliBackendConfig } from "./cli-backends.js";
+import { resolveBundledCliBackendAuthPolicy } from "./cli-runner/cli-backend-auth-policy.js";
 
 const GOOGLE_GEMINI_CLI_PROVIDER_ID = "google-gemini-cli";
 const GOOGLE_PROVIDER_ID = "google";
+const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 
 type CliExecutionAuthProfileSelection = {
   authProfileId?: string;
   authProfileIdSource?: "auto" | "user";
 };
+
+export class CliExecutionAuthProfileError extends Error {
+  override name = "CliExecutionAuthProfileError";
+}
 
 export function cliBackendAcceptsAuthProfileForwarding(params: {
   provider: string;
@@ -22,14 +28,14 @@ export function cliBackendAcceptsAuthProfileForwarding(params: {
   const backend = resolveCliBackendConfig(params.provider, params.config, {
     agentId: params.agentId,
   });
-  return backend?.id === GOOGLE_GEMINI_CLI_PROVIDER_ID;
+  return backend?.id === GOOGLE_GEMINI_CLI_PROVIDER_ID || backend?.id === CLAUDE_CLI_PROVIDER_ID;
 }
 
 /**
- * Resolve the profile a CLI backend may consume. Gemini CLI prefers its own
- * OAuth identity, then bridges a canonical Google API key when that model is
- * explicitly routed through the CLI runtime. A user-locked profile must fail
- * closed here; falling through would silently run the request as another user.
+ * Resolve the profile a CLI backend may consume. Claude and Gemini use their
+ * native profile identities; Gemini may additionally bridge a canonical
+ * Google API key. A user-locked profile must fail closed here because falling
+ * through would silently run the request as another user.
  */
 export function resolveCliExecutionAuthProfileId(params: {
   cliExecutionProvider: string;
@@ -37,13 +43,21 @@ export function resolveCliExecutionAuthProfileId(params: {
   config: OpenClawConfig;
   agentDir: string;
   selected?: CliExecutionAuthProfileSelection;
+  loadAuthProfileStoreForRuntime?: typeof loadAuthProfileStoreForRuntime;
 }): string | undefined {
-  const store = loadAuthProfileStoreForRuntime(params.agentDir, {
+  const loadStore = params.loadAuthProfileStoreForRuntime ?? loadAuthProfileStoreForRuntime;
+  const store = loadStore(params.agentDir, {
     readOnly: true,
     allowKeychainPrompt: false,
     externalCliProviderIds: [params.cliExecutionProvider],
   });
+  const nativeAuthProfileIds = resolveBundledCliBackendAuthPolicy(
+    params.cliExecutionProvider,
+  )?.nativeAuthProfileIds;
   const selectedAuthProfileId = params.selected?.authProfileId?.trim();
+  if (selectedAuthProfileId && nativeAuthProfileIds?.includes(selectedAuthProfileId)) {
+    return undefined;
+  }
   if (selectedAuthProfileId) {
     const credential = store.profiles[selectedAuthProfileId];
     if (credential?.provider === params.cliExecutionProvider) {
@@ -59,9 +73,11 @@ export function resolveCliExecutionAuthProfileId(params: {
     }
     if (params.selected?.authProfileIdSource !== "auto") {
       if (!credential) {
-        throw new Error(`No credentials found for profile "${selectedAuthProfileId}".`);
+        throw new CliExecutionAuthProfileError(
+          `No credentials found for profile "${selectedAuthProfileId}".`,
+        );
       }
-      throw new Error(
+      throw new CliExecutionAuthProfileError(
         `CLI backend "${params.cliExecutionProvider}" cannot use auth profile "${selectedAuthProfileId}" owned by "${credential.provider}".`,
       );
     }
@@ -73,7 +89,7 @@ export function resolveCliExecutionAuthProfileId(params: {
     provider: params.cliExecutionProvider,
   })[0];
   if (cliProfileId) {
-    return cliProfileId;
+    return nativeAuthProfileIds?.includes(cliProfileId) ? undefined : cliProfileId;
   }
 
   if (

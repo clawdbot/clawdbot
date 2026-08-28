@@ -2,12 +2,18 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { configureAiTransportHost } from "../host.js";
 import type { Context, Model } from "../types.js";
 
-const openAiMockState = vi.hoisted(() => ({ configs: [] as unknown[] }));
+const openAiMockState = vi.hoisted(() => ({
+  configs: [] as unknown[],
+  params: [] as unknown[],
+  requestOptions: [] as unknown[],
+}));
 
 vi.mock("openai", () => ({
   default: class MockOpenAI {
     responses = {
-      create: vi.fn(() => {
+      create: vi.fn((params: unknown, requestOptions: unknown) => {
+        openAiMockState.params.push(params);
+        openAiMockState.requestOptions.push(requestOptions);
         throw new Error("stop after constructor");
       }),
     };
@@ -18,6 +24,7 @@ vi.mock("openai", () => ({
   },
 }));
 
+import { createOpenAIResponsesClient } from "../transports/openai-responses-client.js";
 import { streamOpenAIResponses } from "./openai-responses.js";
 
 const context = {
@@ -43,6 +50,8 @@ function model(overrides: Partial<Model<"openai-responses">> = {}) {
 describe("OpenAI Responses provider", () => {
   afterEach(() => {
     openAiMockState.configs = [];
+    openAiMockState.params = [];
+    openAiMockState.requestOptions = [];
     configureAiTransportHost({});
   });
 
@@ -57,6 +66,39 @@ describe("OpenAI Responses provider", () => {
     expect(result.stopReason).toBe("error");
     expect(openAiMockState.configs).toHaveLength(1);
     expect((openAiMockState.configs[0] as { fetch?: unknown }).fetch).toBe(hostFetch);
+  });
+
+  it("fails closed before constructing an OpenAI client for another provider without an endpoint", async () => {
+    const missingEndpointModel = {
+      ...model(),
+      provider: "openrouter",
+      baseUrl: undefined,
+    } as unknown as Model<"openai-responses">;
+
+    const result = await streamOpenAIResponses(missingEndpointModel, context, {
+      apiKey: "sentinel-openrouter-key",
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(result.errorMessage).toContain('Provider "openrouter" requires an explicit base URL');
+    expect(() =>
+      createOpenAIResponsesClient(missingEndpointModel, context, "sentinel-openrouter-key"),
+    ).toThrow('Provider "openrouter" requires an explicit base URL');
+    expect(openAiMockState.configs).toEqual([]);
+
+    const configuredModel = {
+      ...missingEndpointModel,
+      baseUrl: "https://openrouter.ai/api/v1",
+    };
+    await streamOpenAIResponses(configuredModel, context, {
+      apiKey: "sentinel-openrouter-key",
+    }).result();
+    expect(() =>
+      createOpenAIResponsesClient(configuredModel, context, "sentinel-openrouter-key"),
+    ).not.toThrow();
+    expect(
+      openAiMockState.configs.map((config) => (config as { baseURL?: string }).baseURL),
+    ).toEqual(["https://openrouter.ai/api/v1", "https://openrouter.ai/api/v1"]);
   });
 
   it("keeps Cloudflare composed upstream auth opaque in SDK headers", async () => {
@@ -82,5 +124,16 @@ describe("OpenAI Responses provider", () => {
       "Bearer oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end",
     );
     expect(config.fetch).toBe(hostFetch);
+  });
+
+  it("clamps small output limits and disables implicit SDK retries", async () => {
+    const result = await streamOpenAIResponses(model(), context, {
+      apiKey: String(1),
+      maxTokens: 1,
+    }).result();
+
+    expect(result.stopReason).toBe("error");
+    expect(openAiMockState.params[0]).toMatchObject({ max_output_tokens: 16, store: false });
+    expect(openAiMockState.requestOptions[0]).toMatchObject({ maxRetries: 0 });
   });
 });

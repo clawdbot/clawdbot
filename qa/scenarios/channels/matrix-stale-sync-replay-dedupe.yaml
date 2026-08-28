@@ -4,14 +4,14 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.reconnect
+      - matrix.conversation-routing-and-delivery
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 90000
     retryCount: 0
+    suiteIsolation: isolated
     config:
-      requiredChannelDriver: live
       matrixTopology:
         defaultRoomKey: main
         rooms:

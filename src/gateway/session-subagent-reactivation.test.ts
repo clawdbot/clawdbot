@@ -6,10 +6,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const getLatestSubagentRunByChildSessionKeyMock = vi.fn();
 const replaceSubagentRunAfterSteerMock = vi.fn();
 
-vi.mock("../agents/subagent-registry-read.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/subagent-registry-read.js")>(
-    "../agents/subagent-registry-read.js",
-  );
+vi.mock("../agents/subagents/registry/subagent-registry-read.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../agents/subagents/registry/subagent-registry-read.js")
+  >("../agents/subagents/registry/subagent-registry-read.js");
   return {
     ...actual,
     getLatestSubagentRunByChildSessionKey: (...args: unknown[]) =>
@@ -17,7 +17,7 @@ vi.mock("../agents/subagent-registry-read.js", async () => {
   };
 });
 
-vi.mock("./session-subagent-reactivation.runtime.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-registry-runtime.js", () => ({
   replaceSubagentRunAfterSteer: (...args: unknown[]) => replaceSubagentRunAfterSteerMock(...args),
 }));
 
@@ -31,6 +31,7 @@ describe("reactivateCompletedSubagentSession", () => {
 
   it("reactivates the newest ended row even when stale active rows still exist for the same child session", async () => {
     const childSessionKey = "agent:main:subagent:followup-race";
+    const resolveGatewayContext = vi.fn(() => ({ owner: "gateway-b" }) as never);
     const latestEndedRun = {
       runId: "run-current-ended",
       childSessionKey,
@@ -39,9 +40,12 @@ describe("reactivateCompletedSubagentSession", () => {
       task: "current ended task",
       cleanup: "keep" as const,
       createdAt: 20,
-      startedAt: 21,
-      endedAt: 22,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 21,
+        endedAt: 22,
+        outcome: { status: "ok" as const },
+      },
     };
 
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
@@ -51,6 +55,7 @@ describe("reactivateCompletedSubagentSession", () => {
       reactivateCompletedSubagentSession({
         sessionKey: childSessionKey,
         runId: "run-next",
+        gatewayContextResolver: resolveGatewayContext,
       }),
     ).resolves.toBe(true);
 
@@ -60,7 +65,28 @@ describe("reactivateCompletedSubagentSession", () => {
       nextRunId: "run-next",
       fallback: latestEndedRun,
       runTimeoutSeconds: 0,
+      gatewayContextResolver: resolveGatewayContext,
     });
+  });
+
+  it("does not replace an ended row after its Gateway owner retires", async () => {
+    getLatestSubagentRunByChildSessionKeyMock.mockReturnValue({
+      runId: "run-ended",
+      runTimeoutSeconds: 0,
+      execution: { endedAt: 1 },
+    });
+    const resolveGatewayContext = vi.fn(() => undefined);
+
+    await expect(
+      reactivateCompletedSubagentSession({
+        sessionKey: "agent:main:subagent:retired-owner",
+        runId: "run-next",
+        gatewayContextResolver: resolveGatewayContext,
+      }),
+    ).resolves.toBe(false);
+
+    expect(resolveGatewayContext).toHaveBeenCalledOnce();
+    expect(replaceSubagentRunAfterSteerMock).not.toHaveBeenCalled();
   });
 
   it("threads the exact follow-up task into the replacement so restart redispatch rewraps the new prompt instead of the stale original", async () => {
@@ -79,9 +105,12 @@ describe("reactivateCompletedSubagentSession", () => {
       task: "stale original task",
       cleanup: "keep" as const,
       createdAt: 30,
-      startedAt: 31,
-      endedAt: 32,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 31,
+        endedAt: 32,
+        outcome: { status: "ok" as const },
+      },
     };
 
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
@@ -114,9 +143,12 @@ describe("reactivateCompletedSubagentSession", () => {
       task: "stale original task",
       cleanup: "keep" as const,
       createdAt: 40,
-      startedAt: 41,
-      endedAt: 42,
-      outcome: { status: "ok" as const },
+      execution: {
+        status: "terminal" as const,
+        startedAt: 41,
+        endedAt: 42,
+        outcome: { status: "ok" as const },
+      },
     };
     getLatestSubagentRunByChildSessionKeyMock.mockReturnValue(latestEndedRun);
     replaceSubagentRunAfterSteerMock.mockReturnValue(true);

@@ -6,14 +6,17 @@ import {
   formatTrimmedAllowFromEntries,
 } from "openclaw/plugin-sdk/channel-config-helpers";
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
-import { createChannelPluginBase } from "openclaw/plugin-sdk/core";
+import {
+  createChannelPluginBase,
+  getChatChannelMeta,
+  type ChannelPlugin,
+} from "openclaw/plugin-sdk/core";
 import {
   listIMessageAccountIds,
   resolveDefaultIMessageAccountId,
   resolveIMessageAccount,
   type ResolvedIMessageAccount,
 } from "./accounts.js";
-import { getChatChannelMeta, type ChannelPlugin } from "./channel-api.js";
 import { IMessageChannelConfigSchema } from "./config-schema.js";
 import {
   resolveIMessageAttachmentRoots,
@@ -53,12 +56,13 @@ export const imessageSecurityAdapter =
     groupPolicyPath: "channels.imessage.groupPolicy",
     groupAllowFromPath: "channels.imessage.groupAllowFrom",
     mentionGated: false,
+    findingTitle: "iMessage security warning",
     policyPathSuffix: "dmPolicy",
   });
 
 export function createIMessagePluginBase(params: {
   setupWizard?: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setupWizard"]>;
-  setup: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setup"]>;
+  setupContract: NonNullable<ChannelPlugin<ResolvedIMessageAccount>["setupContract"]>;
 }): Pick<
   ChannelPlugin<ResolvedIMessageAccount>,
   | "id"
@@ -69,7 +73,7 @@ export function createIMessagePluginBase(params: {
   | "configSchema"
   | "config"
   | "security"
-  | "setup"
+  | "setupContract"
   | "messaging"
 > {
   const base = createChannelPluginBase({
@@ -77,7 +81,7 @@ export function createIMessagePluginBase(params: {
     meta: {
       ...getChatChannelMeta(IMESSAGE_CHANNEL),
       aliases: ["imsg"],
-      showConfigured: false,
+      exposure: { configured: false },
     },
     setupWizard: params.setupWizard,
     capabilities: {
@@ -109,7 +113,7 @@ export function createIMessagePluginBase(params: {
         }),
     },
     security: imessageSecurityAdapter,
-    setup: params.setup,
+    setupContract: params.setupContract,
   });
   return {
     ...base,
@@ -132,7 +136,7 @@ export function createIMessagePluginBase(params: {
     | "configSchema"
     | "config"
     | "security"
-    | "setup"
+    | "setupContract"
     | "messaging"
   >;
 }

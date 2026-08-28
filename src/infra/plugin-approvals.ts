@@ -1,4 +1,6 @@
 // Defines plugin approval request/resolution payloads and actions.
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { summarizeApprovalScope, type ApprovalScope } from "./approval-scope.js";
 import type { ExecApprovalDecision } from "./exec-approvals.js";
 
 // Plugin approval types and renderers mirror exec approval decisions while
@@ -17,13 +19,18 @@ export type PluginApprovalRequestPayload = {
   pluginId?: string | null;
   title: string;
   description: string;
+  detail?: string | null;
   severity?: "info" | "warning" | "critical" | null;
+  /** Owner-declared blast-radius facts; display-only, never authorization. */
+  scope?: ApprovalScope | null;
   toolName?: string | null;
   toolCallId?: string | null;
   allowedDecisions?: readonly ExecApprovalDecision[] | null;
   actions?: readonly PluginApprovalActionView[] | null;
   agentId?: string | null;
   sessionKey?: string | null;
+  /** Host-derived source run; never accepted from plugin approval RPC params. */
+  runId?: string | null;
   turnSourceChannel?: string | null;
   turnSourceTo?: string | null;
   turnSourceAccountId?: string | null;
@@ -32,6 +39,8 @@ export type PluginApprovalRequestPayload = {
 
 /** Timed plugin approval request persisted while awaiting a decision. */
 export type PluginApprovalRequest = {
+  /** Descriptive wire metadata; readers derive it from the payload when absent. */
+  approvalKind?: "plugin";
   id: string;
   request: PluginApprovalRequestPayload;
   createdAtMs: number;
@@ -51,11 +60,31 @@ export const DEFAULT_PLUGIN_APPROVAL_TIMEOUT_MS = 120_000;
 export const MAX_PLUGIN_APPROVAL_TIMEOUT_MS = 600_000;
 export const PLUGIN_APPROVAL_TITLE_MAX_LENGTH = 80;
 export const PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH = 512;
+export const PLUGIN_APPROVAL_DETAIL_MAX_LENGTH = 16_384;
+const PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX = "…[truncated]";
 export const DEFAULT_PLUGIN_APPROVAL_DECISIONS = [
   "allow-once",
   "allow-always",
   "deny",
 ] as const satisfies readonly ExecApprovalDecision[];
+
+/** Caps reviewer-only plugin detail by Unicode code point without splitting surrogate pairs. */
+export function truncatePluginApprovalDetail(value: string): string {
+  const contentLimit =
+    PLUGIN_APPROVAL_DETAIL_MAX_LENGTH - Array.from(PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX).length;
+  let codePointCount = 0;
+  let contentCodeUnitLength = 0;
+  for (const char of value) {
+    codePointCount += 1;
+    if (codePointCount <= contentLimit) {
+      contentCodeUnitLength += char.length;
+    }
+    if (codePointCount > PLUGIN_APPROVAL_DETAIL_MAX_LENGTH) {
+      return `${truncateUtf16Safe(value, contentCodeUnitLength)}${PLUGIN_APPROVAL_DETAIL_TRUNCATION_SUFFIX}`;
+    }
+  }
+  return value;
+}
 
 /** Clamp a plugin approval timeout to the supported runtime bounds. */
 export function resolvePluginApprovalTimeoutMs(value: unknown): number {
@@ -105,7 +134,11 @@ export function buildPluginApprovalRequestMessage(
   const icon = severity === "critical" ? "🚨" : severity === "info" ? "ℹ️" : "🛡️";
   lines.push(`${icon} Plugin approval required`);
   lines.push(`Title: ${request.request.title}`);
+  // Reviewer-only detail stays off channel messages; channels receive the bounded description.
   lines.push(`Description: ${request.request.description}`);
+  if (request.request.scope) {
+    lines.push(`Scope: ${summarizeApprovalScope(request.request.scope)}`);
+  }
   if (request.request.toolName) {
     lines.push(`Tool: ${request.request.toolName}`);
   }

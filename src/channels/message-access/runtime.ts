@@ -8,6 +8,7 @@ import {
   uniqueStrings,
 } from "@openclaw/normalization-core/string-normalization";
 import type { PairingChannel } from "../../pairing/pairing-store.types.js";
+import { recordChannelIngressResolution } from "./admission-evidence.js";
 import { decideChannelIngress } from "./decision.js";
 import { resolveChannelIngressEffectiveAllowFromLists } from "./effective-allow-from.js";
 import {
@@ -137,7 +138,7 @@ function useAccessGroupsFromConfig(params: {
   useAccessGroups?: boolean | null;
   cfg?: ChannelIngressCommandPresetInput["cfg"];
 }): boolean {
-  return params.useAccessGroups ?? params.cfg?.commands?.useAccessGroups !== false;
+  return params.useAccessGroups ?? true;
 }
 
 function channelIngressCommand(
@@ -193,6 +194,8 @@ function resolveResolverPolicy(params: {
     groupAllowFromFallbackToAllowFrom:
       params.input.policy?.groupAllowFromFallbackToAllowFrom ??
       params.base.groupAllowFromFallbackToAllowFrom,
+    minIdentifierAuthentication:
+      params.input.policy?.minIdentifierAuthentication ?? params.base.minIdentifierAuthentication,
     mutableIdentifierMatching:
       params.input.policy?.mutableIdentifierMatching ?? params.base.mutableIdentifierMatching,
     ...(params.input.policy?.activation ? { activation: params.input.policy.activation } : {}),
@@ -221,6 +224,7 @@ export function createChannelIngressResolver(
       identity: base.identity,
       subject: input.subject,
       conversation: input.conversation,
+      contextBinding: input.contextBinding,
       event: channelIngressEvent({
         isGroup,
         ...eventDefaults,
@@ -660,7 +664,7 @@ export async function resolveChannelMessageIngress(
   const routeAccess = projectRouteAccess({ ingress, route: params.route });
   const commandAccess = projectCommandAccess({ ingress, policy });
   const activationAccess = projectActivationAccess({ ingress });
-  return {
+  const result: ResolvedChannelMessageIngress = {
     state,
     ingress,
     senderAccess,
@@ -668,4 +672,33 @@ export async function resolveChannelMessageIngress(
     commandAccess,
     activationAccess,
   };
+  return recordChannelIngressResolution({
+    result,
+    channelId,
+    accountId: params.accountId,
+    rawPrincipalRef: params.subject.stableId,
+    scope: {
+      conversation: {
+        kind: params.conversation.kind,
+        id: params.conversation.id,
+        parentId: params.conversation.parentId,
+        threadId: params.conversation.threadId,
+      },
+      contextBinding: params.contextBinding,
+    },
+    participantOutcomeAffecting:
+      senderAccess.gate?.match?.matched === true &&
+      (senderAccess.reasonCode === "dm_policy_allowlisted" ||
+        senderAccess.reasonCode === "group_policy_allowed") &&
+      !(isGroup
+        ? state.allowlists.group.hasWildcard
+        : state.allowlists.dm.hasWildcard || state.allowlists.pairingStore.hasWildcard),
+    identifierAuthentication: ingress.graph.gates.some(
+      (gate) => gate.identifierAuthentication?.affectedMatch,
+    )
+      ? "affected"
+      : ingress.graph.gates.some((gate) => gate.identifierAuthentication?.evaluated)
+        ? "evaluated"
+        : "not-evaluated",
+  });
 }

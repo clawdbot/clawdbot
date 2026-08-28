@@ -2,15 +2,17 @@
 import { randomUUID } from "node:crypto";
 import type { SystemRunApprovalPlan } from "../infra/exec-approvals.js";
 import { NODE_AGENT_CLI_CLAUDE_RUN_COMMAND } from "../infra/node-commands.js";
+import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "./node-command-policy.js";
 import type { NodeInvokeResult } from "./node-registry.js";
-import { getFallbackGatewayContext } from "./server-plugin-fallback-context.js";
 
 export async function invokeNodeClaudeCliRun(params: {
   nodeId: string;
   argv: string[];
   stdin: string;
   cwd?: string;
+  env?: Record<string, string>;
+  clearEnv?: string[];
   systemPrompt?: string;
   agentId?: string;
   sessionKey?: string;
@@ -21,7 +23,7 @@ export async function invokeNodeClaudeCliRun(params: {
   onProgress: (chunk: string) => void;
   signal?: AbortSignal;
 }): Promise<NodeInvokeResult> {
-  const context = getFallbackGatewayContext();
+  const context = getPluginRuntimeGatewayRequestScope()?.context;
   if (!context) {
     return {
       ok: false,
@@ -59,11 +61,14 @@ export async function invokeNodeClaudeCliRun(params: {
   return await context.nodeRegistry.invoke({
     nodeId: params.nodeId,
     expectedConnId: node.connId,
+    ...(node.pairingGeneration ? { expectedPairingGeneration: node.pairingGeneration } : {}),
     command: NODE_AGENT_CLI_CLAUDE_RUN_COMMAND,
     params: {
       argv: params.argv,
       stdin: params.stdin,
       ...(params.cwd ? { cwd: params.cwd } : {}),
+      ...(params.env ? { env: params.env } : {}),
+      ...(params.clearEnv ? { clearEnv: params.clearEnv } : {}),
       ...(params.systemPrompt !== undefined ? { systemPrompt: params.systemPrompt } : {}),
       ...(params.agentId ? { agentId: params.agentId } : {}),
       ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),

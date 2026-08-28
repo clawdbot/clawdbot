@@ -75,7 +75,8 @@ struct SystemRunSettingsView: View {
         SettingsCardGroup("Exec Approvals Unavailable") {
             SettingsCardRow(
                 title: "Settings could not be read",
-                subtitle: self.model.readErrorMessage ?? "Retry to load the persisted policy.",
+                subtitle: self.model.readErrorMessage.map(SettingsTextValue.verbatim) ??
+                    "Retry to load the persisted policy.",
                 showsDivider: false)
             {
                 Button("Retry") {
@@ -144,7 +145,7 @@ struct SystemRunSettingsView: View {
             SettingsCardGroup("Policy") {
                 SettingsCardRow(
                     title: "Command access",
-                    subtitle: self.model.security.policyDescription)
+                    subtitle: .localized(self.model.security.policyDescription))
                 {
                     Picker("Command access", selection: Binding(
                         get: { self.model.security },
@@ -161,7 +162,7 @@ struct SystemRunSettingsView: View {
 
                 SettingsCardRow(
                     title: "Prompt behavior",
-                    subtitle: self.model.ask.policyDescription)
+                    subtitle: .localized(self.model.ask.policyDescription))
                 {
                     Picker("Prompt behavior", selection: Binding(
                         get: { self.model.ask },
@@ -204,6 +205,23 @@ struct SystemRunSettingsView: View {
 
     private var allowlistView: some View {
         VStack(alignment: .leading, spacing: 16) {
+            if self.model.obsoleteGeneratedApprovalCount > 0 {
+                SettingsCardGroup("Approval Update") {
+                    SettingsCardRow(
+                        title: "Some approvals need renewal",
+                        subtitle: .localized(
+                            "Older generated approvals are inactive because they were not tied " +
+                                "to a working directory. Manual rules are unchanged."),
+                        showsDivider: false)
+                    {
+                        Button("Remove Inactive") {
+                            self.model.removeObsoleteGeneratedApprovals()
+                        }
+                        .buttonStyle(.bordered)
+                    }
+                }
+            }
+
             SettingsCardGroup("Automatic Trust") {
                 SettingsCardToggleRow(
                     title: "Auto-allow skill CLIs",
@@ -472,6 +490,11 @@ extension ExecAsk {
 @MainActor
 @Observable
 final class ExecApprovalsSettingsModel {
+    private enum SettingsReadAttempt {
+        case loaded
+        case failed(ExecApprovalsReadError)
+    }
+
     private static let defaultsScopeId = "__defaults__"
     private static let readUnavailableMessage = "Exec approval settings are unavailable. Retry to refresh."
     @ObservationIgnored private let resolveApprovalsAsync:
@@ -493,6 +516,16 @@ final class ExecApprovalsSettingsModel {
     var skillBins: [String] = []
     var policyLoadState: ExecApprovalsPolicyLoadState = .loading
     var mutationErrorMessage: String?
+
+    var obsoleteGeneratedApprovalCount: Int {
+        self.entries.count { entry in
+            let pattern = entry.pattern.trimmingCharacters(in: .whitespacesAndNewlines)
+            return entry.source == "allow-always" &&
+                !pattern.hasPrefix("=command:") &&
+                !pattern.hasPrefix("=node-command:") &&
+                entry.argPattern?.hasPrefix("sha256:cwd-argv:v1:") != true
+        }
+    }
 
     var policyAvailable: Bool {
         self.policyLoadState.isAvailable
@@ -591,6 +624,18 @@ final class ExecApprovalsSettingsModel {
         }
     }
 
+    func removeObsoleteGeneratedApprovals() {
+        switch ExecApprovalsStore.removeObsoleteGeneratedAllowAlwaysEntries() {
+        case .success:
+            let agentId = self.selectedAgentId
+            Task { [weak self] in
+                await self?.loadSettings(for: agentId)
+            }
+        case let .failure(error):
+            self.mutationErrorMessage = error.localizedDescription
+        }
+    }
+
     func loadSettings(for agentId: String) async {
         let task = self.startSettingsRead(for: agentId)
         await task.value
@@ -673,11 +718,18 @@ final class ExecApprovalsSettingsModel {
                 }
             }
             guard self.readGeneration == generation, self.selectedAgentId == agentId else { return }
-            if await self.loadSettingsOnceAsync(
+            let attemptResult = await self.loadSettingsOnceAsync(
                 for: agentId,
                 generation: generation)
-            {
+            switch attemptResult {
+            case .loaded:
                 return
+            case let .failed(.migrationRequired(error)):
+                self.policyLoadState = .unavailable(
+                    ExecApprovalsReadError.migrationRequired(error).message)
+                return
+            case .failed(.unavailable):
+                continue
             }
         }
         guard self.readGeneration == generation else { return }
@@ -686,21 +738,33 @@ final class ExecApprovalsSettingsModel {
 
     private func loadSettingsOnceAsync(
         for agentId: String,
-        generation: Int) async -> Bool
+        generation: Int) async -> SettingsReadAttempt
     {
         if agentId == Self.defaultsScopeId {
             let result = await self.resolveDefaultsAsync()
-            guard self.readGeneration == generation, self.selectedAgentId == agentId else { return false }
-            guard case let .success(defaults) = result else { return false }
-            self.apply(defaults: defaults)
-            return true
+            guard self.readGeneration == generation, self.selectedAgentId == agentId else {
+                return .failed(.unavailable)
+            }
+            switch result {
+            case let .success(defaults):
+                self.apply(defaults: defaults)
+                return .loaded
+            case let .failure(error):
+                return .failed(error)
+            }
         }
 
         let result = await self.resolveApprovalsAsync(agentId)
-        guard self.readGeneration == generation, self.selectedAgentId == agentId else { return false }
-        guard case let .success(resolved) = result else { return false }
-        self.apply(resolved: resolved)
-        return true
+        guard self.readGeneration == generation, self.selectedAgentId == agentId else {
+            return .failed(.unavailable)
+        }
+        switch result {
+        case let .success(resolved):
+            self.apply(resolved: resolved)
+            return .loaded
+        case let .failure(error):
+            return .failed(error)
+        }
     }
 
     func setSecurity(_ security: ExecSecurity) {
@@ -836,9 +900,6 @@ final class ExecApprovalsSettingsModel {
         case .success:
             applyPersisted()
             self.mutationErrorMessage = nil
-            if self.isDefaultsScope {
-                AppStateStore.shared.retryExecApprovalModeRead()
-            }
             self.startSettingsRead(for: self.selectedAgentId, showLoading: showLoading)
             return true
         case let .failure(error):

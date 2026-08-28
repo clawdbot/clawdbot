@@ -151,10 +151,19 @@ function hasTimeoutSignal(error: unknown, message: string): boolean {
   );
 }
 
+/**
+ * Canonical transient HTTP status predicate for provider operations.
+ * Shared by structured-error classification and the guarded POST gate so
+ * these paths cannot drift.
+ */
+export function isTransientProviderHttpStatus(status: number): boolean {
+  return status === 429 || status === 500 || status === 502 || status === 503 || status === 504;
+}
+
 function isTransientProviderOperationError(error: unknown, message: string): boolean {
   const status = readErrorStatus(error);
   if (status !== undefined) {
-    return status === 500 || status === 502 || status === 503 || status === 504;
+    return isTransientProviderHttpStatus(status);
   }
   if (
     /\b(?:HTTP\s*)?(?:400|401|403|404)\b/i.test(message) ||
@@ -164,7 +173,7 @@ function isTransientProviderOperationError(error: unknown, message: string): boo
   ) {
     return false;
   }
-  if (/\b(?:HTTP\s*)?(?:500|502|503|504)\b/i.test(message)) {
+  if (/\b(?:HTTP\s*)?(?:429|500|502|503|504)\b/i.test(message)) {
     return true;
   }
   if (hasTransientNetworkSignal(error, message)) {
@@ -240,16 +249,26 @@ export async function executeProviderOperationWithRetry<T>(params: {
   stage: ProviderOperationRetryStage;
   operation: () => Promise<T>;
   retry?: TransientProviderRetryConfig;
+  signal?: AbortSignal;
 }): Promise<T> {
   const retryConfig = providerOperationRetryConfig(params.stage, params.retry);
-  const retryOptions = resolveTransientProviderRetryOptions(retryConfig);
+  const resolvedRetryOptions = resolveTransientProviderRetryOptions(retryConfig);
+  const retrySignal =
+    params.signal && resolvedRetryOptions?.signal
+      ? AbortSignal.any([params.signal, resolvedRetryOptions.signal])
+      : (params.signal ?? resolvedRetryOptions?.signal);
+  const retryOptions = resolvedRetryOptions
+    ? { ...resolvedRetryOptions, ...(retrySignal ? { signal: retrySignal } : {}) }
+    : undefined;
   const maxAttempts = resolveTransientProviderAttempts(retryOptions);
   let lastError: unknown;
 
   for (let attemptNumber = 1; attemptNumber <= maxAttempts; attemptNumber += 1) {
+    retrySignal?.throwIfAborted();
     try {
       return await params.operation();
     } catch (error) {
+      retrySignal?.throwIfAborted();
       lastError = error;
       const message = formatErrorMessage(error);
       if (

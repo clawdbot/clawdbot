@@ -1,13 +1,13 @@
+import {
+  formatModelTransportDebugBaseUrl,
+  formatModelTransportDebugUrl,
+} from "@openclaw/ai/transports";
 /**
  * Regression coverage for model transport debug URL formatting.
  * Ensures credentials, query strings, and fragments stay out of diagnostics.
  */
 import { describe, expect, it } from "vitest";
-import {
-  formatModelTransportDebugBaseUrl,
-  formatModelTransportDebugUrl,
-} from "./model-transport-url.js";
-import { testing as openAITesting } from "./openai-transport-stream.js";
+import { testing as openAITesting } from "./openai-transport-stream.test-support.js";
 
 describe("model transport diagnostic URLs", () => {
   it("redacts credentials and request secrets from fetch URLs", () => {

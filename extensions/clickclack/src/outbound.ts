@@ -3,16 +3,22 @@
  * and direct messages.
  */
 import { createHash } from "node:crypto";
+import { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 import {
   createMessageReceiptFromOutboundResults,
   type ChannelMessageUnknownSendContext,
   type ChannelMessageUnknownSendReconciliationResult,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   loadOutboundMediaFromUrl,
   type OutboundMediaLoadOptions,
 } from "openclaw/plugin-sdk/outbound-media";
-import { sanitizeAssistantVisibleText } from "openclaw/plugin-sdk/text-chunking";
+import {
+  FormatCapabilityProfile,
+  renderMarkdownWithMarkers,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
 import { resolveClickClackAccount } from "./accounts.js";
 import { createClickClackClient, type ClickClackClient } from "./http-client.js";
 import { resolveChannelId, resolveWorkspaceId } from "./resolve.js";
@@ -20,6 +26,19 @@ import { parseClickClackTarget } from "./target.js";
 import type { ClickClackMessage, ClickClackMessageProvenance, CoreConfig } from "./types.js";
 
 const CLICKCLACK_MAX_UPLOAD_BYTES = 64 * 1024 * 1024;
+
+const CLICKCLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({
+  mechanism: "markdown",
+  chunk: { limit: 1024 * 1024, unit: "bytes" },
+});
+
+function renderClickClackMarkdown(markdown: string): string {
+  return renderMarkdownWithMarkers(
+    { text: markdown, styles: [], links: [] },
+    { styleMarkers: {}, escapeText: (text) => text },
+    CLICKCLACK_FORMAT_PROFILE,
+  );
+}
 
 async function createTargetMessage(params: {
   client: ClickClackClient;
@@ -143,7 +162,7 @@ function createOutboundContext(params: {
 }) {
   const account = resolveClickClackAccount({ cfg: params.cfg, accountId: params.accountId });
   const client = createClickClackClient({
-    baseUrl: account.baseUrl,
+    baseUrl: account.apiEndpoint,
     token: account.token,
     correlationId: params.correlationId,
   });
@@ -174,7 +193,7 @@ export async function sendClickClackText(params: {
 }): Promise<string | undefined> {
   // Custom inbound replies bypass shared outbound normalization, so this private
   // sender owns ClickClack assistant-text sanitization for every delivery path.
-  const text = sanitizeAssistantVisibleText(params.text);
+  const text = renderClickClackMarkdown(sanitizeAssistantVisibleText(params.text));
   if (!text) {
     return undefined;
   }
@@ -221,15 +240,23 @@ export async function sendClickClackMedia(params: {
     deliveryQueueId: params.deliveryQueueId,
     deliveryPartIndex: params.deliveryPartIndex,
   });
+  const { account, client } = createOutboundContext(params);
+  const maxBytes = Math.min(
+    resolveChannelMediaMaxBytes({
+      cfg: params.cfg,
+      accountId: account.accountId,
+      resolveChannelLimitMb: () => account.config.mediaMaxMb,
+    }) ?? CLICKCLACK_MAX_UPLOAD_BYTES,
+    CLICKCLACK_MAX_UPLOAD_BYTES,
+  );
   const preloadedMedia = nonces.upload
     ? undefined
     : await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes: CLICKCLACK_MAX_UPLOAD_BYTES,
+        maxBytes,
         mediaAccess: params.mediaAccess,
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,
       });
-  const { account, client } = createOutboundContext(params);
   const workspaceId = await resolveWorkspaceId(client, account.workspace);
   const persistedUpload = nonces.upload
     ? await client.findUploadByNonce({ workspaceId, nonce: nonces.upload })
@@ -241,14 +268,14 @@ export async function sendClickClackMedia(params: {
     const media =
       preloadedMedia ??
       (await loadOutboundMediaFromUrl(params.mediaUrl, {
-        maxBytes: CLICKCLACK_MAX_UPLOAD_BYTES,
+        maxBytes,
         mediaAccess: params.mediaAccess,
         mediaLocalRoots: params.mediaLocalRoots,
         mediaReadFile: params.mediaReadFile,
       }));
-    const filename = media.fileName?.trim() || "attachment";
-    mediaFilename = filename;
     const contentType = media.contentType?.trim() || "application/octet-stream";
+    const filename = media.fileName?.trim() || `attachment${extensionForMime(contentType) ?? ""}`;
+    mediaFilename = filename;
     await dispatch();
     upload = await client.createUpload({
       workspaceId,
@@ -259,7 +286,10 @@ export async function sendClickClackMedia(params: {
     });
   }
   const text =
-    sanitizeAssistantVisibleText(params.text) || mediaFilename || upload.filename || "attachment";
+    renderClickClackMarkdown(sanitizeAssistantVisibleText(params.text)) ||
+    mediaFilename ||
+    upload.filename ||
+    "attachment";
   // Upload-first ordering lets crash recovery identify the durable object before
   // it creates or repairs the corresponding message.
   const message = await createTargetMessage({

@@ -12,7 +12,7 @@ import {
 } from "./whatsapp-live.observations.js";
 
 export const WHATSAPP_QA_TRANSIENT_DRIVER_ATTEMPTS = 5;
-export const WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS = 10_000;
+const WHATSAPP_QA_DRIVER_RECONNECT_DELAY_MS = 10_000;
 
 type WhatsAppQaNoReplyTarget =
   | {
@@ -166,7 +166,7 @@ export async function waitForWhatsAppScenarioSutMessage(
   });
 }
 
-export function findUnexpectedWhatsAppNoReplyMessage(
+function findUnexpectedWhatsAppNoReplyMessage(
   params: {
     allowQuietWindowMessage?: (message: WhatsAppQaDriverObservedMessage) => boolean;
     messages: WhatsAppQaDriverObservedMessage[];

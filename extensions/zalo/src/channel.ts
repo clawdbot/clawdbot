@@ -21,6 +21,7 @@ import {
 import {
   buildOpenGroupPolicyRestrictSendersWarning,
   buildOpenGroupPolicyWarning,
+  createConditionalWarningCollector,
   createOpenProviderGroupPolicyWarningCollector,
 } from "openclaw/plugin-sdk/channel-policy";
 import {
@@ -30,16 +31,22 @@ import {
 import { buildTokenChannelStatusSummary } from "openclaw/plugin-sdk/channel-status";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createStaticReplyToModeResolver } from "openclaw/plugin-sdk/conversation-runtime";
-import { createChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { listResolvedDirectoryUserEntriesFromAllowFrom } from "openclaw/plugin-sdk/directory-runtime";
+import {
+  createChannelDirectoryAdapter,
+  listResolvedDirectoryUserEntriesFromAllowFrom,
+} from "openclaw/plugin-sdk/directory-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { sendPayloadWithChunkedTextAndMedia } from "openclaw/plugin-sdk/reply-payload";
 import {
   createComputedAccountStatusAdapter,
   createDefaultChannelRuntimeState,
 } from "openclaw/plugin-sdk/status-helpers";
-import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import {
+  chunkTextForOutbound,
+  sanitizeAssistantVisibleText,
+} from "openclaw/plugin-sdk/text-chunking";
+import {
+  inspectZaloAccount,
   listZaloAccountIds,
   resolveDefaultZaloAccountId,
   resolveZaloAccount,
@@ -51,7 +58,7 @@ import { ZaloConfigSchema } from "./config-schema.js";
 import type { ZaloProbeResult } from "./probe.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { resolveZaloOutboundSessionRoute } from "./session-route.js";
-import { createZaloSetupWizardProxy, zaloSetupAdapter } from "./setup-core.js";
+import { createZaloSetupWizardProxy, zaloSetupContract } from "./setup-core.js";
 import { collectZaloStatusIssues } from "./status-issues.js";
 
 const meta = {
@@ -128,6 +135,10 @@ const zaloMessageAdapter = defineChannelMessageAdapter({
   },
 });
 
+function isZaloAccountConfigured(account: ResolvedZaloAccount): boolean {
+  return account.tokenStatus ? account.tokenStatus !== "missing" : Boolean(account.token?.trim());
+}
+
 const zaloConfigAdapter = createScopedChannelConfigAdapter<ResolvedZaloAccount>({
   sectionKey: "zalo",
   listAccountIds: listZaloAccountIds,
@@ -181,13 +192,19 @@ const collectZaloSecurityWarnings = createOpenProviderGroupPolicyWarningCollecto
     ];
   },
 });
+const collectZaloOpenGroupFindings = createConditionalWarningCollector.findings({
+  collectWarnings: collectZaloSecurityWarnings,
+  checkId: "channels.zalo.groups.open",
+  severity: "critical",
+  title: "Zalo security warning",
+});
 
 export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
   createChatChannelPlugin({
     base: {
       id: "zalo",
       meta,
-      setup: zaloSetupAdapter,
+      setupContract: zaloSetupContract,
       setupWizard: zaloSetupWizard,
       capabilities: {
         chatTypes: ["direct", "group"],
@@ -202,14 +219,16 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       configSchema: buildChannelConfigSchema(ZaloConfigSchema),
       config: {
         ...zaloConfigAdapter,
-        isConfigured: (account) => Boolean(account.token?.trim()),
+        inspectAccount: adaptScopedAccountAccessor(inspectZaloAccount),
+        isConfigured: isZaloAccountConfigured,
         describeAccount: (account): ChannelAccountSnapshot =>
           describeWebhookAccountSnapshot({
             account,
-            configured: Boolean(account.token?.trim()),
+            configured: isZaloAccountConfigured(account),
             mode: account.config.webhookUrl ? "webhook" : "polling",
             extra: {
               tokenSource: account.tokenSource,
+              tokenStatus: account.tokenStatus,
             },
           }),
       },
@@ -225,6 +244,10 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       messaging: {
         targetPrefixes: ["zalo", "zl"],
         normalizeTarget: normalizeZaloMessagingTarget,
+        inferTargetChatType: ({ to }) => {
+          const target = normalizeZaloMessagingTarget(to);
+          return target ? (/^group:/i.test(target) ? "group" : "direct") : undefined;
+        },
         resolveOutboundSessionRoute: (params) => resolveZaloOutboundSessionRoute(params),
         targetResolver: {
           looksLikeId: looksLikeZaloChatId,
@@ -248,7 +271,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
         probeAccount: async ({ account, timeoutMs }) =>
           await (await loadZaloChannelRuntime()).probeZaloAccount({ account, timeoutMs }),
         resolveAccountSnapshot: ({ account }) => {
-          const configured = Boolean(account.token?.trim());
+          const configured = isZaloAccountConfigured(account);
           return {
             accountId: account.accountId,
             name: account.name,
@@ -256,6 +279,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
             configured,
             extra: {
               tokenSource: account.tokenSource,
+              tokenStatus: account.tokenStatus,
               mode: account.config.webhookUrl ? "webhook" : "polling",
               dmPolicy: account.config.dmPolicy ?? "pairing",
             },
@@ -270,7 +294,7 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
     },
     security: {
       resolveDmPolicy: resolveZaloDmPolicy,
-      collectWarnings: collectZaloSecurityWarnings,
+      collectWarnings: collectZaloOpenGroupFindings,
     },
     pairing: {
       text: {
@@ -289,6 +313,9 @@ export const zaloPlugin: ChannelPlugin<ResolvedZaloAccount, ZaloProbeResult> =
       chunker: chunkTextForOutbound,
       chunkerMode: "text",
       textChunkLimit: zaloTextChunkLimit,
+      // Core strips only conservative runtime markers. This delivery profile also
+      // removes model/tool XML and failed-tool traces before Zalo chunking.
+      sanitizeText: ({ text }) => sanitizeAssistantVisibleText(text),
       sendPayload: async (ctx) =>
         await sendPayloadWithChunkedTextAndMedia({
           ctx,

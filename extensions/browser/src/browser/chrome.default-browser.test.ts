@@ -1,5 +1,5 @@
 // Browser tests cover chromeefault browser plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:child_process", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
@@ -12,11 +12,15 @@ vi.mock("node:child_process", async () => {
 });
 vi.mock("node:fs", async () => {
   const { mockNodeBuiltinModule } = await import("openclaw/plugin-sdk/test-node-mocks");
+  const actual = await vi.importActual<typeof import("node:fs")>("node:fs");
+  const accessSync = vi.fn();
   const existsSync = vi.fn();
+  const readdirSync = vi.fn();
   const readFileSync = vi.fn();
+  const statSync = vi.fn();
   return mockNodeBuiltinModule(
-    () => vi.importActual<typeof import("node:fs")>("node:fs"),
-    { existsSync, readFileSync },
+    async () => actual,
+    { accessSync, constants: actual.constants, existsSync, readdirSync, readFileSync, statSync },
     { mirrorToDefault: true },
   );
 });
@@ -32,7 +36,8 @@ vi.mock("node:os", async () => {
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import os from "node:os";
-const { resolveBrowserExecutableForPlatform } = await import("./chrome.executables.js");
+const { resolveBrowserExecutableForPlatform, resolveGoogleChromeExecutableForPlatform } =
+  await import("./chrome.executables.js");
 
 describe("browser default executable detection", () => {
   const launchServicesPlist = "com.apple.launchservices.secure.plist";
@@ -64,12 +69,33 @@ describe("browser default executable detection", () => {
     });
   }
 
+  function mockExecutableAccessDeniedFor(inaccessiblePath: string): void {
+    vi.mocked(fs.accessSync).mockImplementation((candidate) => {
+      if (String(candidate) === inaccessiblePath) {
+        throw new Error("EACCES");
+      }
+    });
+  }
+
   beforeEach(() => {
     vi.mocked(execFileSync).mockReset();
+    vi.mocked(fs.accessSync).mockReset();
     vi.mocked(fs.existsSync).mockReset();
+    vi.mocked(fs.readdirSync).mockReset();
+    vi.mocked(fs.statSync).mockReset();
+    vi.mocked(fs.statSync).mockImplementation((candidate) => {
+      if (!fs.existsSync(candidate)) {
+        throw new Error("ENOENT");
+      }
+      return { isFile: () => true } as fs.Stats;
+    });
     vi.mocked(fs.readFileSync).mockReset();
     vi.mocked(os.homedir).mockReset();
     vi.mocked(os.homedir).mockReturnValue("/Users/test");
+  });
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
   });
 
   it("prefers default Chromium browser on macOS", () => {
@@ -83,6 +109,46 @@ describe("browser default executable detection", () => {
 
     expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
     expect(exe?.kind).toBe("chrome");
+  });
+
+  it("skips non-executable Linux auto-discovery candidates", () => {
+    const firstCandidate = "/usr/bin/google-chrome";
+    const executableCandidate = "/usr/bin/google-chrome-stable";
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => {
+      return [firstCandidate, executableCandidate].includes(String(candidate));
+    });
+    mockExecutableAccessDeniedFor(firstCandidate);
+
+    const config = {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0];
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chrome",
+      path: executableCandidate,
+    });
+    expect(resolveGoogleChromeExecutableForPlatform("linux")).toEqual({
+      kind: "chrome",
+      path: executableCandidate,
+    });
+  });
+
+  it("skips directories in the Playwright browser cache", () => {
+    const browserCache = "/tmp/browsers";
+    const directoryCandidate = `${browserCache}/chromium-100/chrome-linux64/chrome`;
+    const executableCandidate = `${browserCache}/chromium-100/chrome-linux/chrome`;
+    vi.stubEnv("PLAYWRIGHT_BROWSERS_PATH", browserCache);
+    vi.mocked(fs.readdirSync).mockReturnValue(["chromium-100"] as never);
+    vi.mocked(fs.statSync).mockImplementation((candidate) => {
+      const value = String(candidate);
+      if (value !== directoryCandidate && value !== executableCandidate) {
+        throw new Error("ENOENT");
+      }
+      return { isFile: () => value === executableCandidate } as fs.Stats;
+    });
+
+    const config = {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0];
+    expect(resolveBrowserExecutableForPlatform(config, "linux")).toEqual({
+      kind: "chromium",
+      path: executableCandidate,
+    });
   });
 
   it("detects Edge via LaunchServices bundle ID (com.microsoft.edgemac)", () => {
@@ -166,6 +232,52 @@ describe("browser default executable detection", () => {
     expect(exe?.path).toContain("Google Chrome.app/Contents/MacOS/Google Chrome");
   });
 
+  it("preserves vendor-first macOS browser discovery across system and user applications", () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    expect(
+      resolveBrowserExecutableForPlatform(
+        {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+        "darwin",
+      ),
+    ).toBeNull();
+    expect(
+      vi
+        .mocked(fs.existsSync)
+        .mock.calls.map(([candidate]) => String(candidate))
+        .filter((candidate) => candidate.includes(".app/Contents/MacOS/")),
+    ).toEqual([
+      "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Users/test/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+      "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+      "/Users/test/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+      "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Users/test/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+      "/Applications/Chromium.app/Contents/MacOS/Chromium",
+      "/Users/test/Applications/Chromium.app/Contents/MacOS/Chromium",
+      "/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+      "/Users/test/Applications/Google Chrome Canary.app/Contents/MacOS/Google Chrome Canary",
+    ]);
+  });
+
+  it.each([
+    ["chrome", "Google Chrome"],
+    ["brave", "Brave Browser"],
+    ["edge", "Microsoft Edge"],
+    ["chromium", "Chromium"],
+    ["canary", "Google Chrome Canary"],
+  ])("preserves the %s kind for a user-installed macOS browser", (kind, appName) => {
+    const expectedPath = `/Users/test/Applications/${appName}.app/Contents/MacOS/${appName}`;
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === expectedPath);
+
+    expect(
+      resolveBrowserExecutableForPlatform(
+        {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+        "darwin",
+      ),
+    ).toEqual({ kind, path: expectedPath });
+  });
+
   it("resolves an Opera default-browser launcher to the directly owned binary on Windows", () => {
     const installDir = "C:\\Users\\test\\AppData\\Local\\Programs\\Opera";
     const launcher = `${installDir}\\launcher.exe`;
@@ -212,6 +324,97 @@ describe("browser default executable detection", () => {
     );
 
     expect(exe?.path.toLowerCase()).toMatch(/\\google\\chrome\\application\\chrome\.exe$/);
+  });
+
+  it("treats blank Windows install roots as absent and preserves default path order", () => {
+    vi.stubEnv("LOCALAPPDATA", " \t ");
+    vi.stubEnv("ProgramFiles", "");
+    vi.stubEnv("ProgramFiles(x86)", "   ");
+    vi.mocked(os.homedir).mockReturnValue("C:\\Users\\test");
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+
+    expect(
+      resolveBrowserExecutableForPlatform(
+        {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+        "win32",
+      ),
+    ).toBeNull();
+    expect(vi.mocked(fs.existsSync).mock.calls.map(([candidate]) => String(candidate))).toEqual([
+      "C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Users\\test\\AppData\\Local\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      "C:\\Users\\test\\AppData\\Local\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Users\\test\\AppData\\Local\\Chromium\\Application\\chrome.exe",
+      "C:\\Users\\test\\AppData\\Local\\Google\\Chrome SxS\\Application\\chrome.exe",
+      "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe",
+      "C:\\Program Files\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      "C:\\Program Files (x86)\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      "C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe",
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+    ]);
+  });
+
+  it("keeps explicit Windows install roots and their discovery precedence", () => {
+    vi.stubEnv("LOCALAPPDATA", "D:\\User Apps");
+    vi.stubEnv("ProgramFiles", "D:\\System Apps");
+    vi.stubEnv("ProgramFiles(x86)", "D:\\System Apps x86");
+    const expected = "D:\\System Apps x86\\Google\\Chrome\\Application\\chrome.exe";
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === expected);
+
+    expect(
+      resolveBrowserExecutableForPlatform(
+        {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+        "win32",
+      ),
+    ).toEqual({ kind: "chrome", path: expected });
+    expect(vi.mocked(fs.existsSync).mock.calls.map(([candidate]) => String(candidate))).toEqual([
+      "D:\\User Apps\\Google\\Chrome\\Application\\chrome.exe",
+      "D:\\User Apps\\BraveSoftware\\Brave-Browser\\Application\\brave.exe",
+      "D:\\User Apps\\Microsoft\\Edge\\Application\\msedge.exe",
+      "D:\\User Apps\\Chromium\\Application\\chrome.exe",
+      "D:\\User Apps\\Google\\Chrome SxS\\Application\\chrome.exe",
+      "D:\\System Apps\\Google\\Chrome\\Application\\chrome.exe",
+      expected,
+    ]);
+  });
+
+  it("keeps custom-root precedence for Google Chrome-only discovery", () => {
+    vi.stubEnv("LOCALAPPDATA", "D:\\User Apps");
+    vi.stubEnv("ProgramFiles", "D:\\System Apps");
+    vi.stubEnv("ProgramFiles(x86)", "D:\\System Apps x86");
+    const expected = "D:\\System Apps x86\\Google\\Chrome\\Application\\chrome.exe";
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === expected);
+
+    expect(resolveGoogleChromeExecutableForPlatform("win32")).toEqual({
+      kind: "chrome",
+      path: expected,
+    });
+    expect(vi.mocked(fs.existsSync).mock.calls.map(([candidate]) => String(candidate))).toEqual([
+      "D:\\User Apps\\Google\\Chrome\\Application\\chrome.exe",
+      "D:\\User Apps\\Google\\Chrome SxS\\Application\\chrome.exe",
+      "D:\\System Apps\\Google\\Chrome\\Application\\chrome.exe",
+      expected,
+    ]);
+  });
+
+  it("expands blank Windows registry roots with platform defaults before fallback scanning", () => {
+    vi.stubEnv("ProgramFiles", "   ");
+    const expected = "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe";
+    vi.mocked(execFileSync)
+      .mockReturnValueOnce("ProgId    REG_SZ    ChromeHTML")
+      .mockReturnValueOnce(
+        `(Default)    REG_SZ    "%ProgramFiles%\\Google\\Chrome\\Application\\chrome.exe" "%1"`,
+      );
+    vi.mocked(fs.existsSync).mockImplementation((candidate) => String(candidate) === expected);
+
+    expect(
+      resolveBrowserExecutableForPlatform(
+        {} as Parameters<typeof resolveBrowserExecutableForPlatform>[0],
+        "win32",
+      ),
+    ).toEqual({ kind: "chrome", path: expected });
+    expect(vi.mocked(fs.existsSync)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fs.existsSync)).toHaveBeenCalledWith(expected);
   });
 
   it("canonicalizes an explicitly configured Opera launcher", () => {

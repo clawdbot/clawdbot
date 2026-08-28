@@ -1,7 +1,7 @@
 // Test routing roots for model provider extension suites.
 import { bundledPluginRoot } from "../../scripts/lib/bundled-plugin-paths.mjs";
 
-export const providerExtensionIds = [
+const providerExtensionIds = [
   "amazon-bedrock",
   "amazon-bedrock-mantle",
   "anthropic",
@@ -34,7 +34,7 @@ export const providerExtensionIds = [
   "zai",
 ];
 
-export const providerOpenAiExtensionIds = ["openai"];
+const providerOpenAiExtensionIds = ["openai"];
 
 export const providerExtensionTestRoots = providerExtensionIds.map((id) => bundledPluginRoot(id));
 export const providerOpenAiExtensionTestRoots = providerOpenAiExtensionIds.map((id) =>

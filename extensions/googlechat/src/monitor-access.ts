@@ -2,7 +2,7 @@
 import {
   channelIngressRoutes,
   createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
+  type ChannelIngressContextBinding,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import type { ChannelBotLoopProtectionConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
@@ -22,65 +22,9 @@ import {
 import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { sendGoogleChatMessage } from "./api.js";
 import { buildGoogleChatGroupPolicyScope } from "./group-policy.js";
+import { googleChatIngressIdentity, normalizeGoogleChatUserId } from "./ingress-identity.js";
 import type { GoogleChatCoreRuntime } from "./monitor-types.js";
 import type { GoogleChatAnnotation, GoogleChatMessage, GoogleChatSpace } from "./types.js";
-
-function normalizeUserId(raw?: string | null): string {
-  const trimmed = normalizeOptionalString(raw) ?? "";
-  if (!trimmed) {
-    return "";
-  }
-  return normalizeLowercaseStringOrEmpty(trimmed.replace(/^users\//i, ""));
-}
-
-const GOOGLECHAT_EMAIL_KIND = "plugin:googlechat-email" as const;
-
-function normalizeEntryValue(raw?: string | null): string {
-  return normalizeLowercaseStringOrEmpty(raw ?? "");
-}
-
-function normalizeGoogleChatStableEntry(entry: string): string | null {
-  const withoutProvider = normalizeEntryValue(entry).replace(
-    /^(googlechat|google-chat|gchat):/i,
-    "",
-  );
-  if (!withoutProvider) {
-    return null;
-  }
-  return withoutProvider.startsWith("users/") ? normalizeUserId(withoutProvider) : withoutProvider;
-}
-
-function normalizeGoogleChatEmailEntry(entry: string): string | null {
-  const withoutProvider = normalizeEntryValue(entry).replace(
-    /^(googlechat|google-chat|gchat):/i,
-    "",
-  );
-  if (withoutProvider.startsWith("users/")) {
-    return null;
-  }
-  const stable = normalizeGoogleChatStableEntry(entry);
-  return stable?.includes("@") ? stable : null;
-}
-
-const googleChatIngressIdentity = defineStableChannelIngressIdentity({
-  key: "sender-id",
-  normalizeEntry: normalizeGoogleChatStableEntry,
-  normalizeSubject: normalizeUserId,
-  aliases: [
-    {
-      key: "email",
-      kind: GOOGLECHAT_EMAIL_KIND,
-      normalizeEntry: normalizeGoogleChatEmailEntry,
-      normalizeSubject: normalizeEntryValue,
-      dangerous: true,
-    },
-  ],
-  isWildcardEntry: (entry) => normalizeEntryValue(entry) === "*",
-  resolveEntryId: ({ entryIndex, fieldKey }) =>
-    fieldKey === "stableId"
-      ? `entry-${entryIndex + 1}:user`
-      : `entry-${entryIndex + 1}:${fieldKey}`,
-});
 
 type GoogleChatGroupEntry = {
   requireMention?: boolean;
@@ -144,7 +88,7 @@ function extractMentionInfo(annotations: GoogleChatAnnotation[], botUser?: strin
     if (botTargets.has(userName)) {
       return true;
     }
-    return normalizeUserId(userName) === "app";
+    return normalizeGoogleChatUserId(userName) === "app";
   });
   return { hasAnyMention, wasMentioned };
 }
@@ -207,11 +151,15 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   senderName: string;
   senderEmail?: string;
   rawBody: string;
+  contextBinding: ChannelIngressContextBinding;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
   logVerbose: (message: string) => void;
 }): Promise<
   | {
       ok: true;
+      channelIngress: Awaited<
+        ReturnType<ReturnType<typeof createChannelIngressResolver>["message"]>
+      >;
       commandAuthorized: boolean | undefined;
       effectiveWasMentioned: boolean | undefined;
       groupBotLoopProtection: ChannelBotLoopProtectionConfig | undefined;
@@ -264,8 +212,8 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
   const groupEntry = groupConfigResolved.entry;
   const groupUsers = groupEntry?.users ?? account.config.groupAllowFrom ?? [];
   let effectiveWasMentioned: boolean | undefined;
-  const dmPolicy = account.config.dm?.policy ?? "pairing";
-  const rawConfigAllowFrom = normalizeStringEntries(account.config.dm?.allowFrom);
+  const dmPolicy = account.config.dmPolicy ?? "pairing";
+  const rawConfigAllowFrom = normalizeStringEntries(account.config.allowFrom);
   const shouldComputeAuth = core.channel.commands.shouldComputeCommandAuthorized(rawBody, config);
   const groupActivation = (() => {
     if (!isGroup) {
@@ -342,6 +290,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
       kind: isGroup ? "group" : "direct",
       id: spaceId,
     },
+    contextBinding: params.contextBinding,
     route,
     allowFrom: rawConfigAllowFrom,
     groupAllowFrom,
@@ -465,6 +414,7 @@ export async function applyGoogleChatInboundAccessPolicy(params: {
 
   return {
     ok: true,
+    channelIngress: resolvedAccess,
     commandAuthorized,
     effectiveWasMentioned,
     groupBotLoopProtection: groupEntry?.botLoopProtection,

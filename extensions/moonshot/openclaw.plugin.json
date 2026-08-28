@@ -5,7 +5,9 @@
   },
   "enabledByDefault": true,
   "providerCatalogEntry": "./provider-discovery.ts",
-  "providers": ["moonshot"],
+  "providers": [
+    "moonshot"
+  ],
   "providerAuthAliases": {
     "moonshotai": "moonshot",
     "moonshot-ai": "moonshot"
@@ -13,7 +15,10 @@
   "providerEndpoints": [
     {
       "endpointClass": "moonshot-native",
-      "baseUrls": ["https://api.moonshot.ai/v1", "https://api.moonshot.cn/v1"]
+      "baseUrls": [
+        "https://api.moonshot.ai/v1",
+        "https://api.moonshot.cn/v1"
+      ]
     }
   ],
   "providerRequest": {
@@ -49,25 +54,51 @@
       "moonshot": {
         "baseUrl": "https://api.moonshot.ai/v1",
         "api": "openai-completions",
+        "defaultModel": "kimi-k3",
         "models": [
           {
-            "id": "kimi-k2.6",
-            "name": "Kimi K2.6",
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
+            "id": "kimi-k3",
+            "name": "Kimi K3",
+            "reasoning": true,
+            "thinkingLevelMap": {
+              "off": null,
+              "minimal": null,
+              "low": "low",
+              "medium": null,
+              "high": "high",
+              "xhigh": "max",
+              "max": "max"
+            },
+            "input": [
+              "text",
+              "image"
+            ],
+            "contextWindow": 1048576,
+            "maxTokens": 1048576,
             "cost": {
-              "input": 0.95,
-              "output": 4,
-              "cacheRead": 0.16,
+              "input": 3,
+              "output": 15,
+              "cacheRead": 0.3,
               "cacheWrite": 0
+            },
+            "compat": {
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": [
+                "low",
+                "high",
+                "max"
+              ],
+              "codeMode": "preferred"
             }
           },
           {
             "id": "kimi-k2.7-code",
             "name": "Kimi K2.7 Code",
             "reasoning": true,
-            "input": ["text", "image"],
+            "input": [
+              "text",
+              "image"
+            ],
             "contextWindow": 262144,
             "maxTokens": 262144,
             "cost": {
@@ -78,56 +109,19 @@
             }
           },
           {
-            "id": "kimi-k2.5",
-            "name": "Kimi K2.5",
-            "input": ["text", "image"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
-            "cost": {
-              "input": 0.6,
-              "output": 3,
-              "cacheRead": 0.1,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-thinking",
-            "name": "Kimi K2 Thinking",
+            "id": "kimi-k2.7-code-highspeed",
+            "name": "Kimi K2.7 Code HighSpeed",
             "reasoning": true,
-            "input": ["text"],
+            "input": [
+              "text",
+              "image"
+            ],
             "contextWindow": 262144,
             "maxTokens": 262144,
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-thinking-turbo",
-            "name": "Kimi K2 Thinking Turbo",
-            "reasoning": true,
-            "input": ["text"],
-            "contextWindow": 262144,
-            "maxTokens": 262144,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
-            }
-          },
-          {
-            "id": "kimi-k2-turbo",
-            "name": "Kimi K2 Turbo",
-            "input": ["text"],
-            "contextWindow": 256000,
-            "maxTokens": 16384,
-            "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
+              "input": 1.9,
+              "output": 8,
+              "cacheRead": 0.38,
               "cacheWrite": 0
             }
           }
@@ -135,14 +129,17 @@
       }
     },
     "discovery": {
-      "moonshot": "static"
+      "moonshot": "refreshable"
     }
   },
   "setup": {
     "providers": [
       {
         "id": "moonshot",
-        "envVars": ["MOONSHOT_API_KEY", "KIMI_API_KEY"]
+        "envVars": [
+          "MOONSHOT_API_KEY",
+          "KIMI_API_KEY"
+        ]
       }
     ]
   },
@@ -154,8 +151,8 @@
       "appGuidedSecret": true,
       "choiceLabel": "Moonshot API key (.ai)",
       "groupId": "moonshot",
-      "groupLabel": "Moonshot AI (Kimi K2.6)",
-      "groupHint": "Kimi K2.6",
+      "groupLabel": "Moonshot AI (Kimi)",
+      "groupHint": "Kimi API models \u00b7 https://platform.kimi.ai/docs/pricing/chat",
       "optionKey": "moonshotApiKey",
       "cliFlag": "--moonshot-api-key",
       "cliOption": "--moonshot-api-key <key>",
@@ -168,8 +165,8 @@
       "appGuidedSecret": true,
       "choiceLabel": "Moonshot API key (.cn)",
       "groupId": "moonshot",
-      "groupLabel": "Moonshot AI (Kimi K2.6)",
-      "groupHint": "Kimi K2.6",
+      "groupLabel": "Moonshot AI (Kimi)",
+      "groupHint": "Kimi API models \u00b7 https://platform.kimi.ai/docs/pricing/chat",
       "optionKey": "moonshotApiKey",
       "cliFlag": "--moonshot-api-key",
       "cliOption": "--moonshot-api-key <key>",
@@ -192,12 +189,19 @@
     }
   },
   "contracts": {
-    "mediaUnderstandingProviders": ["moonshot"],
-    "webSearchProviders": ["kimi"]
+    "mediaUnderstandingProviders": [
+      "moonshot"
+    ],
+    "webSearchProviders": [
+      "kimi"
+    ]
   },
   "mediaUnderstandingProviderMetadata": {
     "moonshot": {
-      "capabilities": ["image", "video"],
+      "capabilities": [
+        "image",
+        "video"
+      ],
       "defaultModels": {
         "image": "kimi-k2.6",
         "video": "kimi-k2.6"
@@ -206,9 +210,6 @@
         "video": 20
       }
     }
-  },
-  "configContracts": {
-    "compatibilityRuntimePaths": ["tools.web.search.apiKey"]
   },
   "configSchema": {
     "type": "object",
@@ -219,7 +220,10 @@
         "additionalProperties": false,
         "properties": {
           "apiKey": {
-            "type": ["string", "object"]
+            "type": [
+              "string",
+              "object"
+            ]
           },
           "baseUrl": {
             "type": "string"

@@ -3,16 +3,20 @@ package ai.openclaw.app.node
 import ai.openclaw.app.BuildConfig
 import ai.openclaw.app.CameraHudKind
 import ai.openclaw.app.gateway.GatewaySession
+import ai.openclaw.app.takeUtf16Safe
 import android.content.Context
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import java.util.concurrent.atomic.AtomicReference
 
 internal const val CAMERA_CLIP_MAX_RAW_BYTES: Long = 18L * 1024L * 1024L
+private const val CAMERA_DEBUG_STACK_TRACE_MAX_CHARS = 2_000
 
 /**
  * Raw MP4 size guard before base64 encoding the clip into a node.invoke response.
@@ -84,7 +88,7 @@ class CameraHandler(
           throw err
         } catch (err: Throwable) {
           camLog("inner error: ${err::class.java.simpleName}: ${err.message}")
-          camLog("stack: ${err.stackTraceToString().take(2000)}")
+          camLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           val (code, message) = invokeErrorFromThrowable(err)
           showCameraHud(message, CameraHudKind.Error, 2200)
           return GatewaySession.InvokeResult.error(code = code, message = message)
@@ -96,7 +100,7 @@ class CameraHandler(
       throw err
     } catch (err: Throwable) {
       camLog("outer error: ${err::class.java.simpleName}: ${err.message}")
-      camLog("stack: ${err.stackTraceToString().take(2000)}")
+      camLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera snap failed")
     }
   }
@@ -119,6 +123,7 @@ class CameraHandler(
         message = "MIC_BUSY: another audio capture is active",
       )
     }
+    val ownedClipFile = AtomicReference<java.io.File?>()
     try {
       clipLogFile?.writeText("") // clear
       clipLog("starting, params=$paramsJson includeAudio=$includeAudio")
@@ -127,14 +132,17 @@ class CameraHandler(
       val filePayload =
         try {
           clipLog("calling camera.clip()")
-          val r = camera.clip(paramsJson)
+          val r =
+            camera.clip(paramsJson) { file ->
+              check(ownedClipFile.compareAndSet(null, file)) { "camera clip already owns a file" }
+            }
           clipLog("success, file size=${r.file.length()}")
           r
         } catch (err: CancellationException) {
           throw err
         } catch (err: Throwable) {
           clipLog("inner error: ${err::class.java.simpleName}: ${err.message}")
-          clipLog("stack: ${err.stackTraceToString().take(2000)}")
+          clipLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
           val (code, message) = invokeErrorFromThrowable(err)
           showCameraHud(message, CameraHudKind.Error, 2400)
           return GatewaySession.InvokeResult.error(code = code, message = message)
@@ -142,8 +150,6 @@ class CameraHandler(
       val rawBytes = filePayload.file.length()
       if (!isCameraClipWithinPayloadLimit(rawBytes)) {
         clipLog("payload too large: bytes=$rawBytes max=$CAMERA_CLIP_MAX_RAW_BYTES")
-        // Delete oversized clips before returning so cache files do not accumulate after failed invokes.
-        withContext(Dispatchers.IO) { filePayload.file.delete() }
         showCameraHud("Clip too large", CameraHudKind.Error, 2400)
         return GatewaySession.InvokeResult.error(
           code = "PAYLOAD_TOO_LARGE",
@@ -152,14 +158,7 @@ class CameraHandler(
         )
       }
 
-      val bytes =
-        withContext(Dispatchers.IO) {
-          try {
-            filePayload.file.readBytes()
-          } finally {
-            filePayload.file.delete()
-          }
-        }
+      val bytes = withContext(Dispatchers.IO) { filePayload.file.readBytes() }
       val base64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
       clipLog("returning base64 payload")
       showCameraHud("Clip captured", CameraHudKind.Success, 1800)
@@ -170,11 +169,20 @@ class CameraHandler(
       throw err
     } catch (err: Throwable) {
       clipLog("outer error: ${err::class.java.simpleName}: ${err.message}")
-      clipLog("stack: ${err.stackTraceToString().take(2000)}")
+      clipLog("stack: ${err.stackTraceToString().takeUtf16Safe(CAMERA_DEBUG_STACK_TRACE_MAX_CHARS)}")
       return GatewaySession.InvokeResult.error(code = "UNAVAILABLE", message = err.message ?: "camera clip failed")
     } finally {
-      // Prevent talk/transcription capture from competing with camera audio after every exit path.
-      if (ownsAudioCapture) setCameraAudioCaptureActive(false)
+      try {
+        ownedClipFile.getAndSet(null)?.let { file ->
+          // Nest dispatcher changes so cancellation cannot replace the original failure.
+          withContext(NonCancellable) {
+            withContext(Dispatchers.IO) { file.delete() }
+          }
+        }
+      } finally {
+        // Prevent talk/transcription capture from competing with camera audio after every exit path.
+        if (ownsAudioCapture) setCameraAudioCaptureActive(false)
+      }
     }
   }
 

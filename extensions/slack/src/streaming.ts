@@ -75,8 +75,6 @@ type AppendSlackStreamParams = {
 
 type StopSlackStreamParams = {
   session: SlackStreamSession;
-  /** Optional final markdown text to append before stopping. */
-  text?: string;
   /** Optional final stream chunks to append before stopping. */
   chunks?: AnyChunk[];
   metadata?: MessageMetadata;
@@ -247,7 +245,7 @@ type StopSlackStreamResult = {
  * Stop (finalize) a Slack stream.
  *
  * After calling this the stream message becomes a normal Slack message.
- * Optionally include final text to append before stopping.
+ * Optionally include final chunks to append before stopping.
  *
  * If Slack's `chat.stopStream` responds with a definitive recipient/channel
  * rejection while text is still buffered locally, this function throws a
@@ -268,7 +266,7 @@ type StopSlackStreamResult = {
 export async function stopSlackStream(
   params: StopSlackStreamParams,
 ): Promise<StopSlackStreamResult> {
-  const { session, text, chunks, metadata } = params;
+  const { session, chunks, metadata } = params;
 
   if (session.stopped) {
     logVerbose("slack-stream: stream already stopped, ignoring duplicate stop");
@@ -276,21 +274,12 @@ export async function stopSlackStream(
   }
 
   session.stopped = true;
-  if (text) {
-    session.pendingText += text;
-  }
-
-  logVerbose(
-    `slack-stream: stopping stream in ${session.channel} thread=${session.threadTs}${
-      text ? ` (final text: ${text.length} chars)` : ""
-    }`,
-  );
+  logVerbose(`slack-stream: stopping stream in ${session.channel} thread=${session.threadTs}`);
 
   try {
     const stopResponse = await session.streamer.stop(
-      text || chunks?.length || metadata
+      chunks?.length || metadata
         ? {
-            ...(text ? { markdown_text: text } : {}),
             ...(chunks?.length ? { chunks } : {}),
             ...(metadata ? { metadata } : {}),
           }
@@ -371,7 +360,7 @@ function extractSlackErrorCode(err: unknown): string | undefined {
 }
 
 export function markSlackStreamFallbackDelivered(session: SlackStreamSession): void {
-  const nativeStreamWasStarted = session.delivered;
+  const nativeStreamWasStarted = session.delivered || Boolean(session.streamer.ts);
   session.pendingText = "";
   // @slack/web-api 7.16.0 retains its private buffer after a failed flush.
   // Clear fallback-owned text before retrying stop(), or the SDK resends it.

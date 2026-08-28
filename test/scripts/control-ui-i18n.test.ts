@@ -7,19 +7,160 @@ import { pathToFileURL } from "node:url";
 import * as ts from "typescript";
 import { describe, expect, it } from "vitest";
 import {
+  assertControlUiGeneratedArtifactsIsolated,
+  resolveAllowedGeneratedMixBranch,
+  shouldStrictControlUiI18n,
+} from "../../scripts/ci-changed-scope.mjs";
+import {
   analyzeControlUiCatalogs,
-  assertScopedCatalogFallbackUpdate,
   flattenControlUiCatalog,
+  formatControlUiCatalogFallbackDriftError,
+  verifyControlUiReferencedKeys,
 } from "../../scripts/control-ui-i18n-verify.ts";
 import {
   appendBoundedProcessOutput,
+  assertNoControlUiFallbacks,
   buildBatchPrompt,
+  filterPlaceholderCompatibleTranslations,
   parseTranslationBatchReply,
   runProcess,
   shouldReuseExistingTranslation,
 } from "../../scripts/control-ui-i18n.ts";
 import { collectControlUiRawCopyFromSource } from "../../scripts/lib/control-ui-i18n-raw-copy.ts";
+import { waitForPidFile } from "../helpers/process-wait.js";
 import { createTempDirTracker } from "../helpers/temp-dir.js";
+
+describe("control-ui-i18n generated ownership", () => {
+  it("keeps generated locale snapshots out of source PRs", () => {
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/en.ts",
+        "ui/src/i18n/locales/de.ts",
+        "ui/src/i18n/.i18n/de.meta.json",
+      ]),
+    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/.i18n/catalog-fallbacks.json",
+        "ui/src/i18n/.i18n/de.meta.json",
+        "ui/src/i18n/.i18n/de.tm.jsonl",
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/de.ts",
+        "ui/src/i18n/.i18n/glossary.de.json",
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/.i18n/catalog-fallbacks.json",
+        "ui/src/i18n/.i18n/raw-copy-baseline.json",
+      ]),
+    ).toThrow("Control UI generated locale artifacts must be isolated from source changes");
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([
+        "ui/src/i18n/locales/en.ts",
+        "ui/src/i18n/.i18n/raw-copy-baseline.json",
+      ]),
+    ).not.toThrow();
+
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        ["package.json", "ui/src/i18n/locales/de.ts"],
+        "release/2026.7.3",
+      ),
+    ).not.toThrow();
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        ["package.json", "ui/src/i18n/locales/de.ts"],
+        "main",
+      ),
+    ).not.toThrow();
+
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/de.ts"])).toBe(false);
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/.i18n/de.tm.jsonl"])).toBe(true);
+    expect(shouldStrictControlUiI18n(["ui/src/i18n/locales/en.ts"])).toBe(false);
+    expect(shouldStrictControlUiI18n(null)).toBe(true);
+  });
+
+  it("allows only a complete canonical translation-memory ownership migration", () => {
+    const locales = readdirSync(path.resolve("ui/src/i18n/.i18n"))
+      .filter((fileName) => fileName.endsWith(".tm.jsonl"))
+      .map((fileName) => fileName.slice(0, -".tm.jsonl".length));
+    const owners = [
+      ".gitattributes",
+      "scripts/ci-changed-scope.mjs",
+      "scripts/control-ui-i18n.ts",
+      "scripts/control-ui-i18n-verify.ts",
+      "scripts/lib/control-ui-i18n-catalog.ts",
+      "scripts/lib/control-ui-i18n-sync-plan.ts",
+      "ui/AGENTS.md",
+      "ui/config/control-ui-locales.ts",
+      "ui/vite.config.ts",
+    ];
+    const adapters = locales.map((locale) => `ui/src/i18n/locales/${locale}.ts`);
+    const generated = [
+      "ui/src/i18n/.i18n/catalog-fallbacks.json",
+      ...locales.flatMap((locale) => [
+        `ui/src/i18n/.i18n/${locale}.tm.jsonl`,
+        `ui/src/i18n/.i18n/${locale}.meta.json`,
+      ]),
+    ];
+    const migration = [...owners, ...adapters, ...generated];
+
+    expect(() => assertControlUiGeneratedArtifactsIsolated(migration)).not.toThrow();
+    expect(() => assertControlUiGeneratedArtifactsIsolated(migration.slice(1))).toThrow(
+      "Control UI generated locale artifacts must be isolated",
+    );
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated(
+        migration.filter((filePath) => filePath !== generated[1]),
+      ),
+    ).toThrow("Control UI generated locale artifacts must be isolated");
+    expect(() =>
+      assertControlUiGeneratedArtifactsIsolated([...migration, "ui/src/i18n/.i18n/other.tm.jsonl"]),
+    ).toThrow("Control UI generated locale artifacts must be isolated");
+  });
+
+  it("allows generated release output on trusted release and main runs only", () => {
+    const trustedActions = {
+      GITHUB_ACTIONS: "true",
+      OPENCLAW_ALLOW_RELEASE_GENERATED_MIX: "true",
+    };
+
+    expect(
+      resolveAllowedGeneratedMixBranch(
+        {
+          ...trustedActions,
+          GITHUB_EVENT_NAME: "push",
+          GITHUB_REF: "refs/heads/main",
+        },
+        "main",
+      ),
+    ).toBe("main");
+    expect(
+      resolveAllowedGeneratedMixBranch(
+        {
+          ...trustedActions,
+          GITHUB_EVENT_NAME: "pull_request",
+          GITHUB_REF: "refs/pull/1/merge",
+        },
+        "main",
+      ),
+    ).toBe("");
+    expect(resolveAllowedGeneratedMixBranch(trustedActions, "release/2026.7.3")).toBe(
+      "release/2026.7.3",
+    );
+    expect(resolveAllowedGeneratedMixBranch({ GITHUB_ACTIONS: "true" }, "release/2026.7.3")).toBe(
+      "",
+    );
+  });
+});
 
 function processIsAlive(pid: number): boolean {
   try {
@@ -59,6 +200,14 @@ async function waitForChildClose(
 }
 
 describe("control-ui-i18n process runner", () => {
+  it("points strict catalog drift at the generated release repair", () => {
+    const message = formatControlUiCatalogFallbackDriftError();
+
+    expect(message).toContain("pnpm ui:i18n:sync");
+    expect(message).toContain("pnpm release:prep");
+    expect(message).not.toContain("pnpm ui:i18n:baseline");
+  });
+
   it("builds a deterministic fallback list without accepting catalog drift", () => {
     const source = flattenControlUiCatalog(
       { group: { first: "First {count}", second: "Second" } },
@@ -104,39 +253,32 @@ describe("control-ui-i18n process runner", () => {
     );
   });
 
-  it("allows scoped sync to remove only that locale's approved fallbacks", () => {
-    const current = {
-      fallbacks: { "group.second": ["de", "fr"] },
-      sourceHash: "source",
-      version: 1,
-    };
+  it("rejects literal keys and template prefixes missing from the English catalog", () => {
+    const source = flattenControlUiCatalog(
+      { common: { ok: "OK" }, workboard: { status: { ready: "Ready" } } },
+      "en",
+    );
+    const content = [
+      't("common.ok");',
+      't("common.missing");',
+      "t(`workboard.status.${status}`);",
+      "t(`workboard.missing.${status}`);",
+    ].join("\n");
 
     expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["fr"] } },
-        "de",
-      ),
-    ).not.toThrow();
-    expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["de"] } },
-        "de",
-      ),
-    ).toThrow("unrelated catalog fallback drift");
-    expect(() =>
-      assertScopedCatalogFallbackUpdate(
-        current,
-        { ...current, fallbacks: { "group.second": ["de", "es", "fr"] } },
-        "de",
-      ),
-    ).toThrow("unrelated catalog fallback drift");
+      verifyControlUiReferencedKeys(source, [{ content, relativeFile: "ui/src/pages/example.ts" }]),
+    ).toThrowError(
+      [
+        "control-ui referenced translation key verification failed.",
+        'ui/src/pages/example.ts:2: missing English catalog key "common.missing"',
+        'ui/src/pages/example.ts:4: missing English catalog subtree "workboard.missing."',
+      ].join("\n"),
+    );
   });
 
   it("finds raw text and attributes split by template interpolation", () => {
     const source =
-      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`;';
+      'const jsx = <button aria-label="Archive" />; const view = html`<button title="Delete ${name}">Delete ${name}</button>`; const image = html`<img alt="Preview" />`; menu.setAttribute("aria-label", "Selection actions"); reply.setAttribute("aria-label", `Reply to ${name}`); file.setAttribute("title", "Open " + fileName);';
     const sourceFile = ts.createSourceFile(
       "ui/src/pages/example.ts",
       source,
@@ -153,8 +295,12 @@ describe("control-ui-i18n process runner", () => {
       }).map(({ kind, text }) => ({ kind, text })),
     ).toEqual([
       { kind: "html-attribute", text: "Archive" },
+      { kind: "html-attribute", text: "Preview" },
       { kind: "html-attribute", text: "Delete" },
       { kind: "html-text", text: "Delete" },
+      { kind: "html-attribute", text: "Selection actions" },
+      { kind: "html-attribute", text: "Reply to" },
+      { kind: "html-attribute", text: "Open" },
     ]);
   });
 
@@ -174,7 +320,7 @@ describe("control-ui-i18n process runner", () => {
     );
 
     expect(result.status, result.stderr).toBe(0);
-    expect(result.stdout).toContain("catalog:");
+    expect(result.stdout).toContain("source:");
     expect(result.stdout).not.toContain("provider=openai");
     expect(result.stdout).not.toContain("provider=anthropic");
   });
@@ -203,6 +349,21 @@ describe("control-ui-i18n process runner", () => {
         "ar",
       ),
     ).toEqual(new Map([["configView.viewPendingChange", "Pending change ({count})"]]));
+  });
+
+  it("makes placeholder-incompatible existing copy pending for bot repair", () => {
+    const reusable = filterPlaceholderCompatibleTranslations(
+      new Map([
+        ["changed", "Waiting for {total}"],
+        ["same", "Waiting for {count}"],
+      ]),
+      new Map([
+        ["changed", "Warten auf {count}"],
+        ["same", "Warten auf {count}"],
+      ]),
+    );
+
+    expect([...reusable]).toEqual([["same", "Warten auf {count}"]]);
   });
 
   it("feeds the exact validation failure back into a retry prompt", () => {
@@ -236,6 +397,21 @@ describe("control-ui-i18n process runner", () => {
     expect(fallbacks).toEqual([]);
   });
 
+  it("makes the strict gate reject recorded English fallbacks", () => {
+    expect(() =>
+      assertNoControlUiFallbacks([
+        { fallbackCount: 0, locale: "de" },
+        { fallbackCount: 2, locale: "fr" },
+      ]),
+    ).toThrow("fr: 2 fallback keys");
+    expect(() =>
+      assertNoControlUiFallbacks([
+        { fallbackCount: 0, locale: "de" },
+        { fallbackCount: 0, locale: "fr" },
+      ]),
+    ).not.toThrow();
+  });
+
   it("refreshes recorded fallback copy when sync is forced without a provider", () => {
     expect(
       shouldReuseExistingTranslation({
@@ -259,6 +435,21 @@ describe("control-ui-i18n process runner", () => {
 
     expect(first).toEqual({ text: "bcdef", truncatedChars: 1 });
     expect(second).toEqual({ text: "fghij", truncatedChars: 5 });
+  });
+
+  it("does not split a UTF-16 surrogate pair at the tail boundary", () => {
+    // "ab😀cdef" is 8 UTF-16 code units: a, b, <high>, <low>, c, d, e, f.
+    // maxChars = 5 forces a tail slice whose boundary lands inside the surrogate pair.
+    // The raw `slice(-5)` would return "<low>cdef" (leading dangling low surrogate).
+    // sliceUtf16Safe advances past the low surrogate, retaining "cdef" (4 units);
+    // truncatedChars must reflect the 4 actually-dropped units, not maxChars.
+    const result = appendBoundedProcessOutput({ text: "", truncatedChars: 0 }, "ab😀cdef", 5);
+    expect(result.text.length).toBeLessThanOrEqual(5);
+    // No dangling surrogate (high 0xd800-0xdbff or low 0xdc00-0xdfff) at either edge.
+    expect(result.text.charCodeAt(0)).toBeLessThan(0xd800);
+    expect(result.text.charCodeAt(result.text.length - 1)).toBeLessThan(0xd800);
+    expect(result.text).toBe("cdef");
+    expect(result.truncatedChars).toBe(4);
   });
 
   it("bounds failure diagnostics to the newest output", async () => {
@@ -316,7 +507,7 @@ describe("control-ui-i18n process runner", () => {
           }),
         ).rejects.toThrow(`timed out after 500ms`);
 
-        const grandchildPid = Number(readFileSync(markerPath, "utf8"));
+        const grandchildPid = await waitForPidFile(markerPath, 1_000);
         await waitForProcessExit(grandchildPid);
       } finally {
         tempDirs.cleanup();
@@ -390,13 +581,11 @@ describe("control-ui-i18n process runner", () => {
 
         try {
           const deadline = Date.now() + 30_000;
+          grandchildPid = await waitForPidFile(grandchildPidPath, 30_000);
           let fastReady = false;
           while (Date.now() < deadline) {
             try {
               fastReady = readFileSync(fastReadyPath, "utf8") === "ready";
-            } catch {}
-            try {
-              grandchildPid = Number(readFileSync(grandchildPidPath, "utf8"));
             } catch {}
             if (fastReady && grandchildPid > 0 && processIsAlive(grandchildPid)) {
               break;

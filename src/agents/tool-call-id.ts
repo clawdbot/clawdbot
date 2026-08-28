@@ -1,10 +1,15 @@
+import type { AgentMessage } from "@openclaw/agent-core";
+import {
+  extractToolCallsFromAssistant as extractPairingToolCalls,
+  extractToolResultId as extractPairingToolResultId,
+  extractToolResultIds as extractPairingToolResultIds,
+} from "../../packages/agent-core/src/harness/session/tool-result-pairing.js";
 /**
  * Tool call id normalization and extraction helpers.
  *
  * Keeps provider-specific id formats replay-safe while preserving allowed native ids.
  */
-import { sha256HexPrefix } from "../infra/crypto-digest.js";
-import type { AgentMessage } from "./runtime/index.js";
+import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { isThinkingLikeBlock } from "./thinking-block.js";
 import { isAllowedToolCallName, normalizeAllowedToolNames } from "./tool-call-shared.js";
 
@@ -66,63 +71,17 @@ function sanitizeToolCallId(id: string, mode: ToolCallIdMode = "strict"): string
 export function extractToolCallsFromAssistant(
   msg: Extract<AgentMessage, { role: "assistant" }>,
 ): ToolCallLike[] {
-  const content = msg.content;
-  if (!Array.isArray(content)) {
-    return [];
-  }
-
-  const toolCalls: ToolCallLike[] = [];
-  for (const block of content) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-    const rec = block as { type?: unknown; id?: unknown; name?: unknown };
-    if (typeof rec.id !== "string" || !rec.id) {
-      continue;
-    }
-    if (typeof rec.type === "string" && TOOL_CALL_TYPES.has(rec.type)) {
-      toolCalls.push({
-        id: rec.id,
-        name: typeof rec.name === "string" ? rec.name : undefined,
-      });
-    }
-  }
-  return toolCalls;
+  return extractPairingToolCalls(msg);
 }
 
 export function extractToolResultId(
   msg: Extract<AgentMessage, { role: "toolResult" }>,
 ): string | null {
-  return extractToolResultIds(msg)[0] ?? null;
+  return extractPairingToolResultId(msg);
 }
 
 export function extractToolResultIds(msg: Extract<AgentMessage, { role: "toolResult" }>): string[] {
-  const ids: string[] = [];
-  const record = msg as {
-    toolCallId?: unknown;
-    toolUseId?: unknown;
-    tool_call_id?: unknown;
-    tool_use_id?: unknown;
-    callId?: unknown;
-    call_id?: unknown;
-  };
-  for (const value of [
-    record.toolCallId,
-    record.toolUseId,
-    record.tool_call_id,
-    record.tool_use_id,
-    record.callId,
-    record.call_id,
-  ]) {
-    if (typeof value !== "string") {
-      continue;
-    }
-    const id = value.trim();
-    if (id && !ids.includes(id)) {
-      ids.push(id);
-    }
-  }
-  return ids;
+  return extractPairingToolResultIds(msg);
 }
 
 function hasToolCallInput(block: ReplaySafeToolCallBlock): boolean {
@@ -206,7 +165,7 @@ function collectReplaySafeThinkingToolIds(
 }
 
 function shortHash(text: string, length = 8): string {
-  return sha256HexPrefix(text, length);
+  return sha256HexPrefixCore(text, length);
 }
 
 function isNativeAnthropicToolUseId(id: string): boolean {
@@ -404,7 +363,7 @@ function rewriteAssistantToolCallIds(params: {
       return block;
     }
     changed = true;
-    return Object.assign({}, block as unknown as Record<string, unknown>, { id: nextId });
+    return Object.assign({}, block, { id: nextId });
   });
 
   if (!changed) {
@@ -413,7 +372,8 @@ function rewriteAssistantToolCallIds(params: {
   return { ...params.message, content: next as typeof params.message.content };
 }
 
-function rewriteToolResultIds(params: {
+/** Keeps every persisted tool-result ID alias aligned with its canonical call. */
+export function rewriteToolResultIds(params: {
   message: Extract<AgentMessage, { role: "toolResult" }>;
   resolveId: (id: string) => string;
 }): Extract<AgentMessage, { role: "toolResult" }> {

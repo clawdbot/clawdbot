@@ -3,6 +3,8 @@ import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { createHostedMarketplaceFeedFixture } from "./plugins-marketplace-feed.test-support.js";
 
 const mocks = vi.hoisted(() => {
   const defaultRuntime = {
@@ -16,6 +18,7 @@ const mocks = vi.hoisted(() => {
   return {
     defaultRuntime,
     getRuntimeConfig: vi.fn(),
+    listMarketplacePlugins: vi.fn(),
     loadConfiguredHostedOfficialExternalPluginCatalogEntries: vi.fn(),
   };
 });
@@ -40,6 +43,10 @@ vi.mock("../plugins/official-external-plugin-catalog.js", async (importOriginal)
       mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries,
   };
 });
+
+vi.mock("../plugins/marketplace.js", () => ({
+  listMarketplacePlugins: mocks.listMarketplacePlugins,
+}));
 
 async function createTimelinePath(): Promise<string> {
   const dir = await mkdtemp(path.join(tmpdir(), "openclaw-marketplace-entries-"));
@@ -69,69 +76,37 @@ describe("plugins marketplace entries", () => {
     vi.unstubAllEnvs();
   });
 
-  it("lists entries from the configured marketplace feed as JSON", async () => {
-    const config = {
-      marketplaces: {
-        feeds: { acme: { url: "https://packages.acme.example/openclaw/feed" } },
-        sources: { "acme-npm": { type: "npm" as const } },
-      },
-    };
+  it("lists entries from an explicitly selected marketplace feed as JSON", async () => {
+    const config = {};
     mocks.getRuntimeConfig.mockReturnValue(config);
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted-snapshot",
-      entries: [
-        {
-          name: "@acme/calendar",
-          version: "1.2.3",
-          kind: "plugin",
-          state: "available",
-          publisher: { trust: "official" },
-          install: {
-            candidates: [{ sourceRef: "acme-npm", package: "@acme/calendar", version: "1.2.3" }],
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({
+        source: "hosted-snapshot",
+        entries: [
+          {
+            name: "@acme/calendar",
+            version: "1.2.3",
+            kind: "plugin",
+            state: "available",
+            publisher: { trust: "official" },
+            install: {
+              candidates: [
+                { sourceRef: "public-npm", package: "@acme/calendar", version: "1.2.3" },
+              ],
+            },
+            openclaw: { plugin: { id: "acme-calendar", label: "Acme Calendar" } },
           },
-          openclaw: {
-            plugin: { id: "acme-calendar", label: "Acme Calendar" },
-          },
-        },
-      ],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
-        url: "https://packages.acme.example/openclaw/feed",
-        status: 200,
-        checksum: "feed-sha",
-      },
-      snapshot: {
-        body: "{}",
-        metadata: {
-          url: "https://packages.acme.example/openclaw/feed",
-          status: 200,
-          checksum: "feed-sha",
-        },
-        savedAt: "2026-06-23T01:02:03.000Z",
-      },
-      trust: {
-        mode: "signed",
-        signedBy: "acme-root-2026",
-        signatureCount: 1,
-        threshold: 1,
-        verifiedAt: "2026-06-23T01:02:03.000Z",
-      },
-      error: "hosted catalog feed offline mode",
-    });
+        ],
+      }),
+    );
 
     const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceEntriesCommand({ feedProfile: "acme", offline: true, json: true });
 
-    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith(
-      config,
-      { feedProfile: "acme", offline: true },
-    );
+    expect(mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries).toHaveBeenCalledWith({
+      feedProfile: "acme",
+      offline: true,
+    });
     expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
       expect.objectContaining({
         source: "hosted-snapshot",
@@ -195,6 +170,30 @@ describe("plugins marketplace entries", () => {
     expect(output).not.toContain("#frag");
   });
 
+  it("keeps replacement metacharacters literal while redacting feed URLs", async () => {
+    const publicUrl = ["https://", "feed.example.invalid", "/$&"].join("");
+    const privateQuery = ["marker=", ["test", "-", "secret"].join("")].join("");
+    const rawUrl = [publicUrl, "?", privateQuery].join("");
+    mocks.getRuntimeConfig.mockReturnValue({});
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
+      source: "bundled-fallback",
+      entries: [],
+      error: `hosted catalog feed fetch failed for ${rawUrl}`,
+      metadata: { url: rawUrl, status: 503 },
+    });
+
+    const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
+    await runPluginMarketplaceEntriesCommand({ feedUrl: rawUrl, json: true });
+
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({
+        metadata: expect.objectContaining({ url: publicUrl }),
+        error: `hosted catalog feed fetch failed for ${publicUrl}`,
+      }),
+    );
+    expect(JSON.stringify(mocks.defaultRuntime.writeJson.mock.calls)).not.toContain(privateQuery);
+  });
+
   it("prints bundled fallback entries without failing", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
     mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
@@ -229,39 +228,9 @@ describe("plugins marketplace entries", () => {
 
   it("prints bounded signed feed trust state in text output", async () => {
     mocks.getRuntimeConfig.mockReturnValue({});
-    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue({
-      source: "hosted-snapshot",
-      entries: [],
-      feed: {
-        schemaVersion: 1,
-        id: "acme-marketplace",
-        generatedAt: "2026-06-23T00:00:00.000Z",
-        sequence: 7,
-        entries: [],
-      },
-      metadata: {
-        url: "https://packages.acme.example/openclaw/feed",
-        status: 200,
-        checksum: "feed-sha",
-      },
-      snapshot: {
-        body: "{}",
-        metadata: {
-          url: "https://packages.acme.example/openclaw/feed",
-          status: 200,
-          checksum: "feed-sha",
-        },
-        savedAt: "2026-06-23T01:02:03.000Z",
-      },
-      trust: {
-        mode: "signed",
-        signedBy: "acme-root-2026",
-        signatureCount: 1,
-        threshold: 1,
-        verifiedAt: "2026-06-23T01:02:03.000Z",
-      },
-      error: "hosted catalog feed offline mode",
-    });
+    mocks.loadConfiguredHostedOfficialExternalPluginCatalogEntries.mockResolvedValue(
+      createHostedMarketplaceFeedFixture({ source: "hosted-snapshot" }),
+    );
 
     const { runPluginMarketplaceEntriesCommand } = await import("./plugins-cli.runtime.js");
     await runPluginMarketplaceEntriesCommand({ offline: true });
@@ -346,5 +315,82 @@ describe("plugins marketplace entries", () => {
     expect(JSON.stringify(event)).not.toContain("acme-root-2026");
     expect(JSON.stringify(event)).not.toContain("secret");
     expect(JSON.stringify(event)).not.toContain("token=leak");
+  });
+});
+
+describe("plugins marketplace list", () => {
+  const source = "owner/repo";
+  const manifest = {
+    name: "QA Marketplace",
+    version: "1.0.0",
+    plugins: [{ name: "demo", source: { kind: "path", path: "./plugins/demo" } }],
+  };
+
+  beforeEach(() => {
+    mocks.defaultRuntime.error.mockClear();
+    mocks.defaultRuntime.exit.mockClear();
+    mocks.defaultRuntime.log.mockClear();
+    mocks.defaultRuntime.writeJson.mockClear();
+    mocks.listMarketplacePlugins.mockReset();
+  });
+
+  function mockMarketplaceListResult(result: { ok: boolean; error?: string }) {
+    mocks.listMarketplacePlugins.mockImplementationOnce(
+      async ({ logger }: { logger?: { info?: (message: string) => void } }) => {
+        logger?.info?.(`Cloning marketplace source ${source}...`);
+        return result.ok
+          ? { ok: true, sourceLabel: source, manifest }
+          : { ok: false, error: result.error };
+      },
+    );
+  }
+
+  it("keeps remote source progress out of JSON output", async () => {
+    mockMarketplaceListResult({ ok: true });
+    const { runPluginMarketplaceListCommand } = await import("./plugins-cli.runtime.js");
+
+    await runPluginMarketplaceListCommand(source, { json: true });
+
+    expect(mocks.listMarketplacePlugins).toHaveBeenCalledOnce();
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.writeJson).toHaveBeenCalledExactlyOnceWith({
+      source,
+      name: manifest.name,
+      version: manifest.version,
+      plugins: manifest.plugins,
+    });
+  });
+
+  it("preserves remote source progress and marketplace entries in human output", async () => {
+    mockMarketplaceListResult({ ok: true });
+    const { runPluginMarketplaceListCommand } = await import("./plugins-cli.runtime.js");
+
+    await runPluginMarketplaceListCommand(source, {});
+
+    const output = mocks.defaultRuntime.log.mock.calls.map(([line]) => String(line));
+    expect(output[0]).toBe(`Cloning marketplace source ${source}...`);
+    expect(output.join("\n")).toContain("demo");
+    expect(mocks.defaultRuntime.writeJson).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+  });
+
+  it("hands quiet remote source failures to the canonical JSON error renderer", async () => {
+    const message = "mock git remote unavailable";
+    mockMarketplaceListResult({ ok: false, error: message });
+    const { runPluginMarketplaceListCommand } = await import("./plugins-cli.runtime.js");
+
+    const failure = await runPluginMarketplaceListCommand(source, { json: true }).catch(
+      (error: unknown) => error,
+    );
+
+    expect(failure).toBeInstanceOf(ExpectedCliError);
+    expect(formatCliJsonFailure(failure)).toEqual({
+      ok: false,
+      error: { type: "cli_error", message },
+    });
+    expect(mocks.defaultRuntime.log).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.defaultRuntime.exit).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,6 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
+import { modelProviderErrorMessage } from "./config-mutation.ts";
 import {
   buildDefaultModelsPatch,
   buildProviderApiKeyPatch,
@@ -6,6 +8,12 @@ import {
 } from "./mutations.ts";
 
 describe("model provider config patches", () => {
+  it("redacts secrets in displayed mutation failures", () => {
+    expect(modelProviderErrorMessage(new Error("OPENAI_API_KEY=sk-1234567890abcdef"))).toBe(
+      "OPENAI_API_KEY=sk-123...cdef",
+    );
+  });
+
   it("sets and removes provider API keys with minimal merge patches", () => {
     expect(buildProviderApiKeyPatch("openai", "new-key")).toEqual({
       models: { providers: { openai: { apiKey: "new-key" } } },

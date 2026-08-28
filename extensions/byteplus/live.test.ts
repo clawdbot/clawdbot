@@ -4,7 +4,7 @@ import {
   createSingleUserPromptMessage,
   extractNonEmptyAssistantText,
   isLiveTestEnabled,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { BYTEPLUS_CODING_BASE_URL } from "./models.js";
 

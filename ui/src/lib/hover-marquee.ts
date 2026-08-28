@@ -7,6 +7,7 @@ const MARQUEE_SPEED_PX_PER_SEC = 80;
 const MARQUEE_MIN_DURATION_MS = 300;
 const MARQUEE_HOVER_DELAY_MS = 500;
 const pendingMarquees = new WeakMap<HTMLElement, number>();
+let marqueeResizeObserver: ResizeObserver | undefined;
 
 function findMarqueeLabel(host: HTMLElement): HTMLElement | null {
   return host.classList.contains("hover-marquee")
@@ -23,9 +24,37 @@ function clearPendingMarquee(label: HTMLElement): void {
   pendingMarquees.delete(label);
 }
 
-export function startHoverMarquee(host: HTMLElement): void {
+function observeMarquee(label: HTMLElement): void {
+  if (!marqueeResizeObserver && typeof ResizeObserver === "function") {
+    // Row endcaps can resize an adopted title without replacing its label.
+    // Remeasure the active animation so presence and badge changes cannot clip it.
+    marqueeResizeObserver = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (!(entry.target instanceof HTMLElement)) {
+          continue;
+        }
+        const resizedLabel = entry.target;
+        const host = resizedLabel.closest<HTMLElement>(".session-row-host");
+        if (!host?.matches(":hover")) {
+          marqueeResizeObserver?.unobserve(resizedLabel);
+          continue;
+        }
+        clearPendingMarquee(resizedLabel);
+        resizedLabel.classList.remove("hover-marquee--scrolling");
+        startHoverMarquee(host);
+      }
+    });
+  }
+  marqueeResizeObserver?.observe(label);
+}
+
+function startHoverMarquee(host: HTMLElement): void {
   const label = findMarqueeLabel(host);
-  if (!label || label.classList.contains("hover-marquee--scrolling")) {
+  if (!label) {
+    return;
+  }
+  observeMarquee(label);
+  if (label.classList.contains("hover-marquee--scrolling")) {
     return;
   }
   clearPendingMarquee(label);
@@ -35,6 +64,8 @@ export function startHoverMarquee(host: HTMLElement): void {
   const indent = Number.parseFloat(getComputedStyle(label).textIndent) || 0;
   const shift = label.scrollWidth - indent - label.clientWidth;
   if (shift <= 1) {
+    label.style.removeProperty("--hover-marquee-shift");
+    label.style.removeProperty("--hover-marquee-duration");
     return;
   }
   const durationMs = Math.max(
@@ -53,11 +84,36 @@ export function startHoverMarquee(host: HTMLElement): void {
   );
 }
 
-export function stopHoverMarquee(host: HTMLElement): void {
+function stopHoverMarquee(host: HTMLElement): void {
   const label = findMarqueeLabel(host);
   if (!label) {
     return;
   }
   clearPendingMarquee(label);
   label.classList.remove("hover-marquee--scrolling");
+  marqueeResizeObserver?.unobserve(label);
+}
+
+export function startHoverMarqueeFromEvent(event: Event): void {
+  if (event.currentTarget instanceof HTMLElement) {
+    startHoverMarquee(event.currentTarget);
+  }
+}
+
+export function stopHoverMarqueeFromEvent(event: Event): void {
+  if (event.currentTarget instanceof HTMLElement) {
+    stopHoverMarquee(event.currentTarget);
+  }
+}
+
+export function restartHoverMarqueeIfHovered(element: Element | undefined): void {
+  if (!(element instanceof HTMLElement)) {
+    return;
+  }
+  queueMicrotask(() => {
+    const host = element.isConnected ? element.closest<HTMLElement>(".session-row-host") : null;
+    if (host?.matches(":hover")) {
+      startHoverMarquee(host);
+    }
+  });
 }

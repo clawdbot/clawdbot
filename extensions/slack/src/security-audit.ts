@@ -1,12 +1,12 @@
 // Slack plugin module implements security audit behavior.
 import { coerceNativeSetting, normalizeAllowFromList } from "openclaw/plugin-sdk/channel-policy";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { readChannelAllowFromStore } from "openclaw/plugin-sdk/conversation-runtime";
 import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
 import type { ResolvedSlackAccount } from "./accounts.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 export async function collectSlackSecurityAuditFindings(params: {
   cfg: OpenClawConfig;
@@ -41,19 +41,6 @@ export async function collectSlackSecurityAuditFindings(params: {
       globalSetting: params.cfg.commands?.nativeSkills,
     });
   if (!slashCommandEnabled) {
-    return findings;
-  }
-
-  const useAccessGroups = params.cfg.commands?.useAccessGroups !== false;
-  if (!useAccessGroups) {
-    findings.push({
-      checkId: "channels.slack.commands.slash.useAccessGroups_off",
-      severity: "critical",
-      title: "Slack slash commands bypass access groups",
-      detail:
-        "Slack slash/native commands are enabled while commands.useAccessGroups=false; this can allow unrestricted /… command execution from channels/users you didn't explicitly authorize.",
-      remediation: "Set commands.useAccessGroups=true (recommended).",
-    });
     return findings;
   }
 

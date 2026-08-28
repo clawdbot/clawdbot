@@ -2,6 +2,7 @@
 // Owner schema module import keeps the ProtocolSchemas registry out of the
 // public plugin-sdk dts graph (check-plugin-sdk-exports guards this).
 import type { NodePluginToolDescriptor } from "../../../packages/gateway-protocol/src/schema/nodes.js";
+import type { AgentWaitResult } from "../../agents/run-wait.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { OperatorScope } from "../../gateway/operator-scopes.js";
 import type { PluginRuntimeCore, RuntimeLogger } from "./types-core.js";
@@ -12,17 +13,23 @@ type PluginRuntimeChannel = import("./types-channel.js").PluginRuntimeChannel;
 
 // ── Subagent runtime types ──────────────────────────────────────────
 
-export type SubagentRunParams = {
+type SubagentRunParams = {
   sessionKey: string;
   message: string;
+  /** Run with an exact empty tool surface. */
+  disableTools?: boolean;
   /** Add exact tools registered by the calling plugin to the worker's normal tool surface. */
   toolsAlsoAllow?: string[];
   provider?: string;
   model?: string;
   extraSystemPrompt?: string;
+  /** Use the bounded subagent prompt instead of the full conversation prompt. */
+  promptMode?: "minimal";
   lane?: string;
   lightContext?: boolean;
   deliver?: boolean;
+  /** Deliver the completion to the authenticated requester of the current hook invocation. */
+  completionDelivery?: "current-requester";
   idempotencyKey?: string;
   cwd?: string;
 };
@@ -33,18 +40,20 @@ type PluginManagedWorktree = {
   branch: string;
 };
 
-export type SubagentRunResult = {
+type SubagentRunResult = {
   runId: string;
+  /** Canonical accepted session identity. Optional for explicit/custom runtimes. */
+  sessionKey?: string;
+  runtime?: {
+    harness: string;
+    provider: string;
+    model: string;
+  };
 };
 
 type SubagentWaitParams = {
   runId: string;
   timeoutMs?: number;
-};
-
-type SubagentWaitResult = {
-  status: "ok" | "error" | "timeout";
-  error?: string;
 };
 
 type SubagentGetSessionMessagesParams = {
@@ -55,12 +64,6 @@ type SubagentGetSessionMessagesParams = {
 type SubagentGetSessionMessagesResult = {
   messages: unknown[];
 };
-
-/** @deprecated Use SubagentGetSessionMessagesParams. */
-type SubagentGetSessionParams = SubagentGetSessionMessagesParams;
-
-/** @deprecated Use SubagentGetSessionMessagesResult. */
-type SubagentGetSessionResult = SubagentGetSessionMessagesResult;
 
 type SubagentDeleteSessionParams = {
   sessionKey: string;
@@ -75,10 +78,16 @@ type RuntimeNodeListResult = {
   nodes: Array<{
     nodeId: string;
     displayName?: string;
+    platform?: string;
+    clientId?: string;
     remoteIp?: string;
     connected?: boolean;
+    connectedAtMs?: number;
+    lastSeenAtMs?: number;
     caps?: string[];
     commands?: string[];
+    /** True only for the node host installed alongside this Gateway. */
+    gatewayLocal?: boolean;
     /** Advertised commands currently permitted by Gateway node-command policy. */
     invocableCommands?: string[];
     nodePluginTools?: NodePluginToolDescriptor[];
@@ -91,8 +100,19 @@ type RuntimeNodeInvokeParams = {
   params?: unknown;
   timeoutMs?: number;
   idempotencyKey?: string;
+  sessionKey?: string;
+  /** Cancel the invocation and any work already dispatched to a first-party node. */
+  signal?: AbortSignal;
   /** Requested Gateway scopes. Honored only for bundled or trusted official plugins. */
   scopes?: OperatorScope[];
+};
+
+/** A lifecycle-bound, complete-message binary channel for one node invocation. */
+type RuntimeNodeDuplexChannel = {
+  send: (message: Uint8Array) => Promise<void>;
+  onMessage: (listener: (message: Uint8Array) => void | Promise<void>) => () => void;
+  closed: Promise<unknown>;
+  close: () => void;
 };
 
 export type RuntimeGatewayRequestOptions = {
@@ -115,17 +135,22 @@ export type PluginRuntime = PluginRuntimeCore & {
   };
   subagent: {
     run: (params: SubagentRunParams) => Promise<SubagentRunResult>;
-    waitForRun: (params: SubagentWaitParams) => Promise<SubagentWaitResult>;
+    waitForRun: (params: SubagentWaitParams) => Promise<AgentWaitResult>;
     getSessionMessages: (
       params: SubagentGetSessionMessagesParams,
     ) => Promise<SubagentGetSessionMessagesResult>;
-    /** @deprecated Use getSessionMessages. */
-    getSession: (params: SubagentGetSessionParams) => Promise<SubagentGetSessionResult>;
     deleteSession: (params: SubagentDeleteSessionParams) => Promise<void>;
   };
   nodes: {
     list: (params?: RuntimeNodeListParams) => Promise<RuntimeNodeListResult>;
     invoke: (params: RuntimeNodeInvokeParams) => Promise<unknown>;
+    /** Open a connection-scoped binary node command inside the trusted Gateway runtime. */
+    openDuplex: (
+      params: RuntimeNodeInvokeParams & {
+        maxMessageBytes?: number;
+        maxOutstandingDeliveryBytes?: number;
+      },
+    ) => Promise<RuntimeNodeDuplexChannel>;
   };
   sandbox: {
     resolveWorkspaceAuthority: (params: {
@@ -177,6 +202,9 @@ export type PluginRuntime = PluginRuntimeCore & {
 };
 
 export type CreatePluginRuntimeOptions = {
+  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+  gateway?: PluginRuntime["gateway"];
+  hooks?: PluginRuntime["hooks"];
   subagent?: PluginRuntime["subagent"];
   nodes?: PluginRuntime["nodes"];
   allowGatewaySubagentBinding?: boolean;

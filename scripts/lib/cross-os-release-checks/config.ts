@@ -1,16 +1,18 @@
 import type { ChildProcess } from "node:child_process";
 import { basename, dirname, resolve, win32 as pathWin32 } from "node:path";
+import { parsePermissiveBooleanToken } from "../arg-utils.mts";
 import { trimForSummary } from "./shared.ts";
 
-export type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
-export type CrossOsMode = "fresh" | "upgrade" | "both";
-export type CrossOsOsId = "ubuntu" | "windows" | "macos";
-export type ProviderId = "openai" | "anthropic" | "minimax";
+type CrossOsSuite = "packaged-fresh" | "installer-fresh" | "packaged-upgrade" | "dev-update";
+type CrossOsMode = "fresh" | "upgrade" | "both";
+type CrossOsOsId = "ubuntu" | "windows" | "macos";
+type ProviderId = "openai" | "anthropic" | "minimax";
 export type ProviderConfig = {
   extensionId: string;
   secretEnv: string;
   authChoice: string;
   model: string;
+  requiredCompanionPackages: readonly string[];
   baseUrl?: string;
   timeoutSeconds?: number;
 };
@@ -42,7 +44,9 @@ export type LaneState = {
 export type GatewayHandle = {
   child: ChildProcess;
   closeLog: () => Promise<void>;
+  launchLogOffset: number;
   logPath: string;
+  waitForClose: () => Promise<void>;
 };
 export type CommandResult = { exitCode: number; stdout: string; stderr: string };
 export type AgentTurnResult = CommandResult | { status: number; stdout: string; stderr: string };
@@ -62,6 +66,9 @@ export type CommandInvocation = {
 };
 export type Cleanup = () => Promise<void> | void;
 export type LaneBaseParams = {
+  companions: Readonly<
+    ReturnType<typeof import("./companions.ts").resolveCrossOsCompanionPackages>
+  >;
   logsDir: string;
   providerConfig: ProviderConfig;
   providerSecretValue: string;
@@ -126,6 +133,7 @@ const providerConfig = {
     secretEnv: "OPENAI_API_KEY",
     authChoice: "openai-api-key",
     model: "openai/gpt-5.6-luna",
+    requiredCompanionPackages: ["@openclaw/codex"],
     baseUrl: "https://api.openai.com/v1",
     timeoutSeconds: CROSS_OS_AGENT_TURN_TIMEOUT_SECONDS,
   },
@@ -134,12 +142,14 @@ const providerConfig = {
     secretEnv: "ANTHROPIC_API_KEY",
     authChoice: "apiKey",
     model: "anthropic/claude-sonnet-4-6",
+    requiredCompanionPackages: [],
   },
   minimax: {
     extensionId: "minimax",
     secretEnv: "MINIMAX_API_KEY",
     authChoice: "minimax-global-api",
     model: "minimax/MiniMax-M2.7",
+    requiredCompanionPackages: [],
   },
 } satisfies Record<ProviderId, ProviderConfig>;
 
@@ -158,7 +168,6 @@ const RELEASE_SMOKE_PLUGIN_ALLOWLIST_BASE = [
   "bonjour",
   "browser",
   "device-pair",
-  "phone-control",
   "talk-voice",
 ];
 
@@ -210,6 +219,11 @@ export const CROSS_OS_GATEWAY_STATUS_COMMAND_TIMEOUT_MS =
   CROSS_OS_GATEWAY_STATUS_RPC_TIMEOUT_MS + 45_000;
 export const CROSS_OS_GATEWAY_READY_TIMEOUT_MS = 3 * 60_000;
 export const CROSS_OS_WINDOWS_GATEWAY_READY_TIMEOUT_MS = 5 * 60_000;
+export function managedGatewayRestartCommandTimeoutMs(platform = process.platform) {
+  // The CLI performs its own restart health loop. Keep the outer release
+  // harness alive long enough to receive that result plus service-manager overhead.
+  return gatewayReadyDeadlineMs(platform) + 60_000;
+}
 export const CROSS_OS_RELEASE_SMOKE_TOOLS_PROFILE = "minimal";
 export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS = 10 * 60;
 export const CROSS_OS_WINDOWS_PACKAGED_UPGRADE_WRAPPER_TIMEOUT_MS =
@@ -301,11 +315,9 @@ function parseBooleanEnv(name: string, fallback: boolean, env = process.env): bo
   if (!raw) {
     return fallback;
   }
-  if (/^(1|true|yes|on)$/iu.test(raw)) {
-    return true;
-  }
-  if (/^(0|false|no|off)$/iu.test(raw)) {
-    return false;
+  const parsed = parsePermissiveBooleanToken(raw);
+  if (parsed !== undefined) {
+    return parsed;
   }
   throw new Error(`${name} must be a boolean. Got: ${JSON.stringify(raw)}`);
 }
@@ -513,22 +525,6 @@ export function shouldUseManagedGatewayService(platform = process.platform) {
   return platform === "win32";
 }
 
-export function shouldUseManagedGatewayForInstallerRuntime(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform) && platform !== "win32";
-}
-
-export function shouldExerciseManagedGatewayLifecycleAfterInstall(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldStopManagedGatewayBeforeManualFallback(platform = process.platform) {
-  return shouldUseManagedGatewayService(platform);
-}
-
-export function shouldRunBundledPluginPostinstall(_options?: { lane?: LaneState }) {
-  return true;
-}
-
 export function looksLikeCommitSha(ref: string) {
   return /^[0-9a-f]{7,40}$/iu.test(ref.trim());
 }
@@ -550,10 +546,6 @@ export function shouldRunMainChannelDevUpdate(ref: string) {
     return false;
   }
   return resolveExpectedDevUpdateRef(ref) === "main";
-}
-
-export function shouldSkipInstallerDaemonHealthCheck(platform = process.platform) {
-  return platform === "win32";
 }
 
 export function buildRealUpdateEnv(env: NodeJS.ProcessEnv) {
@@ -670,7 +662,7 @@ export function updateTimeoutMs() {
     : 20 * 60 * 1000;
 }
 
-export function updateStepTimeoutSeconds() {
+function updateStepTimeoutSeconds() {
   return process.platform === "win32"
     ? CROSS_OS_WINDOWS_PACKAGED_UPGRADE_STEP_TIMEOUT_SECONDS
     : 1200;

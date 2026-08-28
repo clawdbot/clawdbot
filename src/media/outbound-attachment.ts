@@ -1,7 +1,8 @@
 // Outbound attachment helpers prepare media attachments for channel delivery.
+import { rm } from "node:fs/promises";
 import { buildOutboundMediaLoadOptions, type OutboundMediaAccess } from "./load-options.js";
 import { saveMediaBuffer } from "./store.js";
-import { loadWebMedia } from "./web-media.js";
+import { loadWebMedia, markTrustedGeneratedHtmlPath } from "./web-media.js";
 
 /** Loads a remote/local media URL and stages it into the outbound media store. */
 export async function resolveOutboundAttachmentFromUrl(
@@ -30,6 +31,14 @@ export async function resolveOutboundAttachmentFromUrl(
     maxBytes,
     media.fileName,
   );
+  if (media.trustedGeneratedHtmlSource) {
+    try {
+      await markTrustedGeneratedHtmlPath(saved.path, media.buffer);
+    } catch (error) {
+      await rm(saved.path, { force: true }).catch(() => {});
+      throw error;
+    }
+  }
   return { path: saved.path, contentType: saved.contentType };
 }
 

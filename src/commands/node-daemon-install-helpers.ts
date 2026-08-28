@@ -1,12 +1,11 @@
-/** Node-based daemon install plan builder for managed gateway services. */
-import { formatNodeServiceDescription } from "../daemon/constants.js";
+/** Managed node-host install plan builder. */
 import { resolveNodeProgramArguments } from "../daemon/program-args.js";
 import { buildNodeServiceEnvironment } from "../daemon/service-env.js";
 import type { GatewayServiceEnvironmentValueSource } from "../daemon/service-types.js";
 import {
   emitDaemonInstallRuntimeWarning,
   resolveDaemonInstallRuntimeInputs,
-  resolveDaemonNodeBinDir,
+  resolveDaemonRuntimeBinDir,
 } from "./daemon-install-plan.shared.js";
 import type { DaemonInstallWarnFn } from "./daemon-install-runtime-warning.js";
 import type { GatewayDaemonRuntime } from "./daemon-runtime.js";
@@ -26,10 +25,12 @@ function buildNodeInstallEnvironmentValueSources(): Record<
   return {
     OPENCLAW_GATEWAY_TOKEN: "file",
     OPENCLAW_GATEWAY_PASSWORD: "file", // pragma: allowlist secret
+    CF_ACCESS_CLIENT_ID: "file",
+    CF_ACCESS_CLIENT_SECRET: "file", // pragma: allowlist secret
   };
 }
 
-/** Builds launch arguments, environment, and metadata for a Node daemon service install. */
+/** Builds launch arguments, environment, and metadata for a managed node-host service install. */
 export async function buildNodeInstallPlan(params: {
   env: Record<string, string | undefined>;
   host: string;
@@ -39,16 +40,17 @@ export async function buildNodeInstallPlan(params: {
   tlsFingerprint?: string;
   nodeId?: string;
   displayName?: string;
+  installedAppsSharing?: boolean;
   runtime: GatewayDaemonRuntime;
   devMode?: boolean;
-  nodePath?: string;
+  runtimePath?: string;
   warn?: DaemonInstallWarnFn;
 }): Promise<NodeInstallPlan> {
-  const { devMode, nodePath } = await resolveDaemonInstallRuntimeInputs({
+  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
     env: params.env,
     runtime: params.runtime,
     devMode: params.devMode,
-    nodePath: params.nodePath,
+    runtimePath: params.runtimePath,
   });
   const { programArguments, workingDirectory } = await resolveNodeProgramArguments({
     host: params.host,
@@ -58,9 +60,10 @@ export async function buildNodeInstallPlan(params: {
     tlsFingerprint: params.tlsFingerprint,
     nodeId: params.nodeId,
     displayName: params.displayName,
+    installedAppsSharing: params.installedAppsSharing,
     dev: devMode,
     runtime: params.runtime,
-    nodePath,
+    runtimePath,
   });
 
   await emitDaemonInstallRuntimeWarning({
@@ -73,19 +76,15 @@ export async function buildNodeInstallPlan(params: {
 
   const environment = buildNodeServiceEnvironment({
     env: params.env,
-    // Match the gateway install path so supervised node services keep the chosen
-    // node toolchain on PATH for sibling binaries like npm/pnpm when needed.
-    extraPathDirs: resolveDaemonNodeBinDir(nodePath),
+    // Match the Gateway install path so supervised services keep the chosen
+    // runtime toolchain on PATH for sibling binaries when needed.
+    extraPathDirs: resolveDaemonRuntimeBinDir(runtimePath),
   });
-  const description = formatNodeServiceDescription({
-    version: environment.OPENCLAW_SERVICE_VERSION,
-  });
-
   return {
     programArguments,
     workingDirectory,
     environment,
     environmentValueSources: buildNodeInstallEnvironmentValueSources(),
-    description,
+    description: "OpenClaw Node Host",
   };
 }

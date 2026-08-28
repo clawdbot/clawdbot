@@ -2,6 +2,7 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { describe, expect, it } from "vitest";
 import { slackApprovalCapability } from "./approval-native.js";
+import { slackChannelConfigUiHints } from "./config-ui-hints.js";
 import {
   getSlackExecApprovalApprovers,
   isSlackExecApprovalAuthorizedSender,
@@ -60,6 +61,16 @@ describe("slack exec approvals", () => {
     ).toBe(false);
   });
 
+  it.each(["execApprovals", "execApprovals.enabled"] as const)(
+    "describes the explicit enablement and approver requirements in %s UI guidance",
+    (key) => {
+      const { help } = slackChannelConfigUiHints[key];
+      expect(help).toContain('"auto" or true');
+      expect(help).toContain("when approvers can be resolved");
+      expect(help).toContain("unset or false disables");
+    },
+  );
+
   it("prefers explicit approvers when configured", () => {
     const cfg = buildConfig(
       { approvers: ["U456"] },
@@ -91,8 +102,7 @@ describe("slack exec approvals", () => {
     const cfg = buildConfig(
       { enabled: true },
       {
-        allowFrom: ["slack:U123"],
-        dm: { allowFrom: ["<@U456>"] },
+        allowFrom: ["slack:U123", "<@U456>"],
         defaultTo: "user:U789",
       },
     );

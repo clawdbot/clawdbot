@@ -1,20 +1,16 @@
 // Openrouter OAuth tests cover PKCE exchange and auth profile output.
 import type { ProviderAuthContext } from "openclaw/plugin-sdk/plugin-entry";
 import { describe, expect, it, vi } from "vitest";
-import {
-  buildOpenRouterOAuthAuthorizeUrl,
-  buildOpenRouterOAuthRedirectUri,
-  exchangeOpenRouterOAuthCode,
-  loginOpenRouterOAuth,
-  OPENROUTER_OAUTH_CALLBACK_PATH,
-  OPENROUTER_OAUTH_CALLBACK_PORT,
-  OPENROUTER_OAUTH_CHOICE_ID,
-  OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
-  OPENROUTER_OAUTH_REDIRECT_URI,
-  OPENROUTER_OAUTH_TOKEN_URL,
-  parseOpenRouterOAuthCallbackInput,
-  waitForOpenRouterOAuthCallback,
-} from "./oauth.js";
+import { createOpenRouterOAuthAuthMethod } from "./oauth.js";
+
+const OPENROUTER_OAUTH_REDIRECT_URI = "http://localhost:3000/openrouter-oauth/callback";
+type OpenRouterOAuthLoginOptions = NonNullable<
+  Parameters<typeof createOpenRouterOAuthAuthMethod>[0]
+>;
+
+function loginOpenRouterOAuth(ctx: ProviderAuthContext, options: OpenRouterOAuthLoginOptions = {}) {
+  return createOpenRouterOAuthAuthMethod(options).run(ctx);
+}
 
 function jsonResponse(value: unknown, init?: ResponseInit): Response {
   return new Response(JSON.stringify(value), {
@@ -101,11 +97,13 @@ function requestJsonBody(init: RequestInit | undefined): Record<string, unknown>
 
 function createOpenRouterOAuthContext(params: {
   isRemote: boolean;
+  onProgress?: (message: string) => void;
   redirectInput?: string;
   openUrl?: (url: string) => Promise<void>;
+  signal?: AbortSignal;
 }) {
   const progress = {
-    update: vi.fn(),
+    update: vi.fn((message: string) => params.onProgress?.(message)),
     stop: vi.fn(),
   };
   const note = vi.fn<(message: string, title?: string) => Promise<void>>(async () => undefined);
@@ -120,6 +118,7 @@ function createOpenRouterOAuthContext(params: {
     config: {},
     isRemote: params.isRemote,
     openUrl,
+    signal: params.signal,
     prompter: {
       note,
       text,
@@ -138,132 +137,119 @@ function createOpenRouterOAuthContext(params: {
   return { ctx, progress, note, text, log, openUrl };
 }
 
-async function requestLocalOpenRouterOAuthCallback(
-  query: string,
-): Promise<{ callback: Promise<unknown>; response: Response; body: string }> {
-  let markReady = () => {};
-  const ready = new Promise<void>((resolve) => {
-    markReady = resolve;
+function runRemoteOpenRouterOAuthRedirect(redirectInput: string) {
+  const { ctx } = createOpenRouterOAuthContext({ isRemote: true, redirectInput });
+  return loginOpenRouterOAuth(ctx, {
+    createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
+    createState: () => "state-1",
+    fetchImpl: vi.fn(async () => jsonResponse({ key: "sk-or-v1-test" })),
   });
-  const callback = waitForOpenRouterOAuthCallback({
-    expectedState: "state-1",
-    timeoutMs: 1000,
-    onProgress: markReady,
-  });
-  callback.catch(() => undefined);
-  await ready;
-
-  const response = await fetch(`${OPENROUTER_OAUTH_REDIRECT_URI}?${query}`, {
-    headers: { Connection: "close" },
-  });
-  return { callback, response, body: await response.text() };
 }
 
 describe("OpenRouter OAuth", () => {
-  it("builds the documented PKCE authorize URL", () => {
-    const url = new URL(
-      buildOpenRouterOAuthAuthorizeUrl({ codeChallenge: "challenge-1", state: "state-1" }),
-    );
+  it("builds the documented PKCE authorize URL", async () => {
+    const { ctx, openUrl } = createOpenRouterOAuthContext({ isRemote: true });
+    await loginOpenRouterOAuth(ctx, {
+      createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
+      createState: () => "state-1",
+      fetchImpl: vi.fn(async () => jsonResponse({ key: "sk-or-v1-test" })),
+    });
+    const openedUrl = (openUrl as ReturnType<typeof vi.fn>).mock.calls[0]?.[0];
+    if (typeof openedUrl !== "string") {
+      throw new Error("expected OpenRouter OAuth authorize URL");
+    }
+    const url = new URL(openedUrl);
     const callbackUrl = new URL(url.searchParams.get("callback_url") ?? "");
 
     expect(url.origin + url.pathname).toBe("https://openrouter.ai/auth");
     expect(callbackUrl.origin + callbackUrl.pathname).toBe(OPENROUTER_OAUTH_REDIRECT_URI);
     expect(callbackUrl.searchParams.get("state")).toBe("state-1");
     expect(url.searchParams.get("code_challenge")).toBe("challenge-1");
-    expect(url.searchParams.get("code_challenge_method")).toBe(
-      OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
-    );
-    expect(OPENROUTER_OAUTH_REDIRECT_URI).toContain(`:${OPENROUTER_OAUTH_CALLBACK_PORT}/`);
-    expect(OPENROUTER_OAUTH_REDIRECT_URI).toContain(OPENROUTER_OAUTH_CALLBACK_PATH);
+    expect(url.searchParams.get("code_challenge_method")).toBe("S256");
   });
 
-  it("parses state-bound OpenRouter redirect URLs and query strings", () => {
-    expect(
-      parseOpenRouterOAuthCallbackInput(
+  it("parses state-bound OpenRouter redirect URLs and query strings", async () => {
+    await expect(
+      runRemoteOpenRouterOAuthRedirect(
         `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&code=AUTHCODE`,
-        "state-1",
       ),
-    ).toEqual({ code: "AUTHCODE", state: "state-1" });
-    expect(parseOpenRouterOAuthCallbackInput("state=state-1&code=AUTHCODE", "state-1")).toEqual({
-      code: "AUTHCODE",
-      state: "state-1",
-    });
-    expect(() =>
-      parseOpenRouterOAuthCallbackInput(
+    ).resolves.toMatchObject({ defaultModel: "openrouter/auto" });
+    await expect(
+      runRemoteOpenRouterOAuthRedirect("state=state-1&code=AUTHCODE"),
+    ).resolves.toMatchObject({ defaultModel: "openrouter/auto" });
+    await expect(
+      runRemoteOpenRouterOAuthRedirect(
         `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&error=access_denied&error_description=Denied`,
-        "state-1",
       ),
-    ).toThrow("OpenRouter OAuth error: access_denied: Denied");
-    expect(() =>
-      parseOpenRouterOAuthCallbackInput(
+    ).rejects.toThrow("OpenRouter OAuth error: access_denied: Denied");
+    await expect(
+      runRemoteOpenRouterOAuthRedirect(
         "state=state-1&error=access_denied&error_description=Denied",
-        "state-1",
       ),
-    ).toThrow("OpenRouter OAuth error: access_denied: Denied");
-    expect(() =>
-      parseOpenRouterOAuthCallbackInput(
+    ).rejects.toThrow("OpenRouter OAuth error: access_denied: Denied");
+    await expect(
+      runRemoteOpenRouterOAuthRedirect(
         `${OPENROUTER_OAUTH_REDIRECT_URI}?error=access_denied&error_description=Denied`,
-        "state-1",
       ),
-    ).toThrow("Missing OpenRouter OAuth state");
-    expect(() =>
-      parseOpenRouterOAuthCallbackInput(
+    ).rejects.toThrow("Missing OpenRouter OAuth state");
+    await expect(
+      runRemoteOpenRouterOAuthRedirect(
         `${OPENROUTER_OAUTH_REDIRECT_URI}?state=wrong&error=access_denied&error_description=Denied`,
-        "state-1",
       ),
-    ).toThrow("OpenRouter OAuth state mismatch");
-    expect(buildOpenRouterOAuthRedirectUri({ state: "state-1" })).toBe(
-      `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1`,
-    );
-    expect(() =>
-      parseOpenRouterOAuthCallbackInput(
-        `${OPENROUTER_OAUTH_REDIRECT_URI}?code=AUTHCODE`,
-        "state-1",
-      ),
-    ).toThrow("Missing OpenRouter OAuth state");
-    expect(() =>
-      parseOpenRouterOAuthCallbackInput(
+    ).rejects.toThrow("OpenRouter OAuth state mismatch");
+    await expect(
+      runRemoteOpenRouterOAuthRedirect(`${OPENROUTER_OAUTH_REDIRECT_URI}?code=AUTHCODE`),
+    ).rejects.toThrow("Missing OpenRouter OAuth state");
+    await expect(
+      runRemoteOpenRouterOAuthRedirect(
         `${OPENROUTER_OAUTH_REDIRECT_URI}?state=wrong&code=AUTHCODE`,
-        "state-1",
       ),
-    ).toThrow("OpenRouter OAuth state mismatch");
-    expect(() => parseOpenRouterOAuthCallbackInput("AUTHCODE", "state-1")).toThrow(
+    ).rejects.toThrow("OpenRouter OAuth state mismatch");
+    await expect(runRemoteOpenRouterOAuthRedirect("AUTHCODE")).rejects.toThrow(
       "Paste the full OpenRouter redirect URL",
     );
   });
 
   it("exchanges an authorization code for the issued OpenRouter API key", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (url, init) => {
-      expect(requestUrl(url)).toBe(OPENROUTER_OAUTH_TOKEN_URL);
+      expect(requestUrl(url)).toBe("https://openrouter.ai/api/v1/auth/keys");
       expect(init?.method).toBe("POST");
       expect(new Headers(init?.headers).get("content-type")).toBe("application/json");
       expect(requestJsonBody(init)).toEqual({
         code: "AUTHCODE",
         code_verifier: "verifier-1",
-        code_challenge_method: OPENROUTER_OAUTH_CODE_CHALLENGE_METHOD,
+        code_challenge_method: "S256",
       });
       return jsonResponse({ key: "sk-or-v1-test", user_id: "user-1" });
     });
+    const { ctx } = createOpenRouterOAuthContext({ isRemote: true });
 
     await expect(
-      exchangeOpenRouterOAuthCode({
-        code: "AUTHCODE",
-        codeVerifier: "verifier-1",
+      loginOpenRouterOAuth(ctx, {
+        createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
+        createState: () => "state-1",
         fetchImpl,
       }),
-    ).resolves.toEqual({
-      key: "sk-or-v1-test",
-      userId: "user-1",
+    ).resolves.toMatchObject({
+      profiles: [
+        {
+          credential: {
+            key: "sk-or-v1-test",
+            metadata: { userId: "user-1" },
+          },
+        },
+      ],
     });
   });
 
   it("bounds successful OpenRouter OAuth responses", async () => {
     const oversized = oversizedJsonResponse();
+    const { ctx } = createOpenRouterOAuthContext({ isRemote: true });
 
     await expect(
-      exchangeOpenRouterOAuthCode({
-        code: "AUTHCODE",
-        codeVerifier: "verifier-1",
+      loginOpenRouterOAuth(ctx, {
+        createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
+        createState: () => "state-1",
         fetchImpl: vi.fn(async () => oversized.response),
       }),
     ).rejects.toThrow("OpenRouter OAuth key exchange: JSON response exceeds 16777216 bytes");
@@ -279,18 +265,26 @@ describe("OpenRouter OAuth", () => {
       .mockResolvedValueOnce(
         jsonResponse({ error: { message: "Invalid code", code: 400 } }, { status: 400 }),
       );
+    const first = createOpenRouterOAuthContext({
+      isRemote: true,
+      redirectInput: `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&code=bad-code`,
+    });
+    const second = createOpenRouterOAuthContext({
+      isRemote: true,
+      redirectInput: `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&code=bad-code`,
+    });
 
     await expect(
-      exchangeOpenRouterOAuthCode({
-        code: "bad-code",
-        codeVerifier: "bad-verifier",
+      loginOpenRouterOAuth(first.ctx, {
+        createPkce: () => ({ verifier: "bad-verifier", challenge: "challenge-1" }),
+        createState: () => "state-1",
         fetchImpl,
       }),
     ).rejects.toThrow("OpenRouter OAuth key exchange failed (403): Invalid code or code_verifier");
     await expect(
-      exchangeOpenRouterOAuthCode({
-        code: "bad-code",
-        codeVerifier: "bad-verifier",
+      loginOpenRouterOAuth(second.ctx, {
+        createPkce: () => ({ verifier: "bad-verifier", challenge: "challenge-1" }),
+        createState: () => "state-1",
         fetchImpl,
       }),
     ).rejects.toThrow("OpenRouter OAuth key exchange failed (400): Invalid code");
@@ -302,12 +296,16 @@ describe("OpenRouter OAuth", () => {
       502,
     );
     const fetchImpl = vi.fn<typeof fetch>(async () => errorResponse.response);
+    const { ctx } = createOpenRouterOAuthContext({
+      isRemote: true,
+      redirectInput: `${OPENROUTER_OAUTH_REDIRECT_URI}?state=state-1&code=bad-code`,
+    });
 
     let error: unknown;
     try {
-      await exchangeOpenRouterOAuthCode({
-        code: "bad-code",
-        codeVerifier: "bad-verifier",
+      await loginOpenRouterOAuth(ctx, {
+        createPkce: () => ({ verifier: "bad-verifier", challenge: "challenge-1" }),
+        createState: () => "state-1",
         fetchImpl,
       });
     } catch (caught) {
@@ -367,56 +365,99 @@ describe("OpenRouter OAuth", () => {
     expect(progress.stop).toHaveBeenCalledWith("OpenRouter OAuth complete");
   });
 
-  it("uses the local callback path before opening the browser locally", async () => {
+  it("binds the local callback before opening the browser and exchanges its accepted code", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "sk-or-v1-test" }));
-    const waitForCallback = vi.fn<typeof waitForOpenRouterOAuthCallback>(async () => ({
+    const waitForCallback = vi.fn(async () => ({
+      type: "authorization_code" as const,
       code: "AUTHCODE",
       state: "state-1",
     }));
+    const close = vi.fn(async () => undefined);
+    const startCallback = vi.fn(async () => ({ waitForCallback, close }));
     const { ctx, openUrl, text } = createOpenRouterOAuthContext({ isRemote: false });
 
     await loginOpenRouterOAuth(ctx, {
       createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
       createState: () => "state-1",
       fetchImpl,
-      waitForCallback,
+      startCallback,
     });
 
-    expect(waitForCallback).toHaveBeenCalledWith(
-      expect.objectContaining({ expectedState: "state-1" }),
+    expect(startCallback).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectedState: "state-1",
+        redirectUrl: OPENROUTER_OAUTH_REDIRECT_URI,
+      }),
     );
-
-    expect(waitForCallback.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(startCallback.mock.invocationCallOrder[0]).toBeLessThan(
       (openUrl as ReturnType<typeof vi.fn>).mock.invocationCallOrder[0] ?? Number.MAX_SAFE_INTEGER,
     );
+    expect(waitForCallback).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
     expect(openUrl).toHaveBeenCalledWith(expect.stringContaining("https://openrouter.ai/auth?"));
+    expect(text).not.toHaveBeenCalled();
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(requestJsonBody(fetchImpl.mock.calls[0]?.[1])).toEqual({
+      code: "AUTHCODE",
+      code_verifier: "verifier-1",
+      code_challenge_method: "S256",
+    });
+  });
+
+  it("closes a state-bound provider denial without exchanging a code", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "sk-or-v1-test" }));
+    const waitForCallback = vi.fn(async () => ({
+      type: "oauth_error" as const,
+      error: "access_denied",
+      errorDescription: "Denied",
+    }));
+    const close = vi.fn(async () => undefined);
+    const startCallback = vi.fn(async () => ({ waitForCallback, close }));
+    const { ctx, text } = createOpenRouterOAuthContext({ isRemote: false });
+
+    await expect(
+      loginOpenRouterOAuth(ctx, {
+        createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
+        createState: () => "state-1",
+        fetchImpl,
+        startCallback,
+      }),
+    ).rejects.toThrow("OpenRouter OAuth error: access_denied: Denied");
+
+    expect(startCallback).toHaveBeenCalledWith(
+      expect.objectContaining({ expectedState: "state-1" }),
+    );
+    expect(waitForCallback).toHaveBeenCalledTimes(1);
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(fetchImpl).not.toHaveBeenCalled();
     expect(text).not.toHaveBeenCalled();
   });
 
-  it("validates local callback state before surfacing OpenRouter OAuth errors", async () => {
-    const denied = await requestLocalOpenRouterOAuthCallback(
-      "state=state-1&error=access_denied&error_description=Denied",
-    );
-    expect(denied.response.status).toBe(400);
-    expect(denied.body).toBe("OpenRouter authentication failed: access_denied: Denied");
-    await expect(denied.callback).rejects.toThrow("OpenRouter OAuth error: access_denied: Denied");
+  it("falls back to a pasted redirect when the local listener cannot start", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async () => jsonResponse({ key: "sk-or-v1-test" }));
+    const startCallback = vi.fn(async () => {
+      throw new Error("listen EADDRINUSE: address already in use localhost:3000");
+    });
+    const { ctx, openUrl, text } = createOpenRouterOAuthContext({ isRemote: false });
 
-    const missingState = await requestLocalOpenRouterOAuthCallback(
-      "error=access_denied&error_description=Denied",
-    );
-    expect(missingState.response.status).toBe(400);
-    expect(missingState.body).toBe("Invalid OAuth state");
-    await expect(missingState.callback).rejects.toThrow("Missing OpenRouter OAuth state");
+    await expect(
+      loginOpenRouterOAuth(ctx, {
+        createPkce: () => ({ verifier: "verifier-1", challenge: "challenge-1" }),
+        createState: () => "state-1",
+        fetchImpl,
+        startCallback,
+      }),
+    ).resolves.toMatchObject({ defaultModel: "openrouter/auto" });
 
-    const wrongState = await requestLocalOpenRouterOAuthCallback(
-      "state=wrong&error=access_denied&error_description=Denied",
+    expect(startCallback).toHaveBeenCalledTimes(1);
+    expect(openUrl).toHaveBeenCalledTimes(1);
+    expect(text).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "Paste the OpenRouter redirect URL" }),
     );
-    expect(wrongState.response.status).toBe(400);
-    expect(wrongState.body).toBe("Invalid OAuth state");
-    await expect(wrongState.callback).rejects.toThrow("OpenRouter OAuth state mismatch");
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 
   it("exposes stable auth choice metadata", () => {
-    expect(OPENROUTER_OAUTH_CHOICE_ID).toBe("openrouter-oauth");
+    expect(createOpenRouterOAuthAuthMethod().wizard?.choiceId).toBe("openrouter-oauth");
   });
 });

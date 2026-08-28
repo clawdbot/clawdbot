@@ -12,8 +12,18 @@ const AGENT_RUN_ABORTED_STOP_REASON = "aborted" as const;
 /** Error text used for aborted agent runs. */
 export const AGENT_RUN_ABORTED_ERROR = "agent run aborted" as const;
 export const AGENT_RUN_RESTART_ABORT_STOP_REASON = "restart" as const;
+export const AGENT_RUN_SUPERSEDED_STOP_REASON = "superseded" as const;
+/** Error text used for agent runs aborted by a gateway restart. */
+export const AGENT_RUN_RESTART_ABORT_ERROR = "agent run aborted for restart" as const;
+export const AGENT_RUN_SUPERSEDED_ERROR = "agent run superseded by a newer session writer" as const;
 
-const AGENT_RUN_RESTART_ABORT_ERROR_CODE = "OPENCLAW_RESTART_ABORT";
+/**
+ * Transports copy this code onto the persisted assistant message via
+ * `errorCode`, so restart recovery can recognize its own abort without matching
+ * free-form provider error text.
+ */
+export const AGENT_RUN_RESTART_ABORT_ERROR_CODE = "OPENCLAW_RESTART_ABORT";
+const AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE = "AGENT_RUN_SUPERSEDED_ABORT";
 const AGENT_RUN_DIRECT_ABORT_ERROR_CODE = "OPENCLAW_DIRECT_ABORT";
 
 export function createAgentRunDirectAbortError(): Error {
@@ -30,9 +40,16 @@ export function isAgentRunDirectAbortReason(value: unknown): boolean {
 }
 
 export function createAgentRunRestartAbortError(): Error {
-  const error = new Error("agent run aborted for restart") as Error & { code: string };
+  const error = new Error(AGENT_RUN_RESTART_ABORT_ERROR) as Error & { code: string };
   error.name = "AbortError";
   error.code = AGENT_RUN_RESTART_ABORT_ERROR_CODE;
+  return error;
+}
+
+export function createAgentRunSupersededAbortError(): Error {
+  const error = new Error(AGENT_RUN_SUPERSEDED_ERROR) as Error & { code: string };
+  error.name = "AbortError";
+  error.code = AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE;
   return error;
 }
 
@@ -40,6 +57,18 @@ export function isAgentRunRestartAbortReason(value: unknown): boolean {
   try {
     return (
       value instanceof Error && "code" in value && value.code === AGENT_RUN_RESTART_ABORT_ERROR_CODE
+    );
+  } catch {
+    return false;
+  }
+}
+
+export function isAgentRunSupersededAbortReason(value: unknown): boolean {
+  try {
+    return (
+      value instanceof Error &&
+      "code" in value &&
+      value.code === AGENT_RUN_SUPERSEDED_ABORT_ERROR_CODE
     );
   } catch {
     return false;

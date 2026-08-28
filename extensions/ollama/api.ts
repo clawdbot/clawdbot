@@ -24,6 +24,7 @@ export {
   configureOllamaNonInteractive,
   ensureOllamaModelPulled,
   promptAndConfigureOllama,
+  resolveOllamaSetupDefaultBaseUrl,
 } from "./src/setup.js";
 export {
   buildOllamaChatRequest,
@@ -32,4 +33,4 @@ export {
   resolveOllamaCompatNumCtxEnabled,
   shouldInjectOllamaCompatNumCtx,
   wrapOllamaCompatNumCtx,
-} from "./src/stream.js";
+} from "./src/stream-api.js";

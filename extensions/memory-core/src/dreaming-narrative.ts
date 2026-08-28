@@ -1,8 +1,5 @@
 // Memory Core plugin module implements dreaming narrative behavior.
 import { createHash } from "node:crypto";
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
-import path from "node:path";
 import { createAsyncLock } from "openclaw/plugin-sdk/async-lock-runtime";
 import {
   extractErrorCode,
@@ -12,30 +9,38 @@ import {
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { cleanupSessionLifecycleArtifacts } from "openclaw/plugin-sdk/session-store-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import pLimit from "p-limit";
 import { readDreamsFile, resolveDreamsPath, updateDreamsFile } from "./dreaming-dreams-file.js";
+import {
+  DREAMING_SESSION_KEY_PREFIX,
+  scrubDreamingNarrativeArtifacts,
+} from "./dreaming-session-cleanup.js";
+import { extractAssistantText } from "./dreaming-shared.js";
+import { readStore } from "./short-term-promotion-store.js";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
-type SubagentSurface = {
-  run: (params: {
-    idempotencyKey: string;
-    sessionKey: string;
-    message: string;
-    model?: string;
-    extraSystemPrompt?: string;
-    lane?: string;
-    lightContext?: boolean;
-    deliver?: boolean;
-  }) => Promise<{ runId: string }>;
-  waitForRun: (params: {
-    runId: string;
-    timeoutMs?: number;
-  }) => Promise<{ status: string; error?: string }>;
+type SubagentRunParams = Parameters<PluginRuntime["subagent"]["run"]>[0];
+
+export type SubagentSurface = {
+  run: (params: SubagentRunParams) => Promise<{ runId: string }>;
+  waitForRun: (params: { runId: string; timeoutMs?: number }) => Promise<{
+    status: string;
+    error?: string;
+    /**
+     * Authoritative final assistant text captured by the run registry while the
+     * raw text was still available. Preferred over polling the session store,
+     * which lags a completed run (see readSettledNarrativeText) and can stay
+     * empty past the settle budget when a sibling phase's cleanup races it (#123360).
+     */
+    terminalReply?: {
+      disposition: "visible" | "silent" | "empty";
+      text?: string;
+    };
+  }>;
   getSessionMessages: (params: {
     sessionKey: string;
     limit?: number;
@@ -53,6 +58,8 @@ export type NarrativePhaseData = {
   promotions?: string[];
   currentDate?: string;
   recentDiaryEntries?: string[];
+  /** Tracked inputs that must still exist when generated text is published. */
+  sourceEntryKeys?: readonly string[];
 };
 
 type Logger = {
@@ -102,9 +109,7 @@ const NARRATIVE_MESSAGE_FETCH_LIMIT = 5;
 // A completed run can reach the session reader before the final assistant text
 // is visible, so retry briefly before falling back to synthetic diary text.
 const NARRATIVE_MESSAGE_SETTLE_DELAYS_MS = [50, 150, 300, 750] as const;
-const DREAMING_SESSION_KEY_PREFIX = "dreaming-narrative-";
-const DREAMING_TRANSCRIPT_RUN_MARKER = '"runId":"dreaming-narrative-';
-const DREAMING_ORPHAN_MIN_AGE_MS = 300_000;
+const DREAMING_SESSION_OWNER_KEY = "memory-core-v2";
 const DIARY_START_MARKER = "<!-- openclaw:dreaming:diary:start -->";
 const DIARY_END_MARKER = "<!-- openclaw:dreaming:diary:end -->";
 const BACKFILL_ENTRY_MARKER = "openclaw:dreaming:backfill-entry";
@@ -177,8 +182,8 @@ export async function appendFallbackNarrativeEntry(params: {
   }
 }
 
-function buildNarrativeAttemptSessionKey(baseSessionKey: string, attempt: number): string {
-  return attempt === 0 ? baseSessionKey : `${baseSessionKey}-retry-${attempt}`;
+function buildNarrativeAttemptKey(baseKey: string, attempt: number): string {
+  return attempt === 0 ? baseKey : `${baseKey}-retry-${attempt}`;
 }
 
 function isConfiguredModelUnavailableNarrativeError(raw: string): boolean {
@@ -230,6 +235,7 @@ function formatNarrativeTerminalStatus(params: { status: string; error?: string 
 async function startNarrativeRunOrFallback(params: {
   subagent: SubagentSurface;
   sessionKey: string;
+  runKey: string;
   message: string;
   data: NarrativePhaseData;
   workspaceDir: string;
@@ -240,11 +246,15 @@ async function startNarrativeRunOrFallback(params: {
 }): Promise<string | null> {
   try {
     const run = await params.subagent.run({
-      idempotencyKey: `${params.sessionKey}-${params.nowMs}`,
+      // The gateway uses the idempotency key as the runId, and the orphan-transcript
+      // scrub matches runIds by DREAMING_TRANSCRIPT_RUN_MARKER — keep it unscoped.
+      idempotencyKey: `${params.runKey}-${params.nowMs}`,
       sessionKey: params.sessionKey,
       message: params.message,
+      disableTools: true,
       ...(params.model ? { model: params.model } : {}),
       extraSystemPrompt: NARRATIVE_SYSTEM_PROMPT,
+      promptMode: "minimal",
       lane: `dreaming-narrative:${params.sessionKey}`,
       lightContext: true,
       deliver: false,
@@ -255,26 +265,46 @@ async function startNarrativeRunOrFallback(params: {
       throw runErr;
     }
     await appendFallbackNarrativeEntry({
-      workspaceDir: params.workspaceDir,
-      data: params.data,
-      nowMs: params.nowMs,
-      timezone: params.timezone,
-      logger: params.logger,
+      ...params,
       reason: "subagent runtime is request-scoped",
     });
     return null;
   }
 }
 
+function buildNarrativeWorkspaceHash(workspaceDir: string): string {
+  return createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+}
+
 /**
- * Build the deterministic subagent session key used for dream narratives.
+ * Deterministic run identity, which the gateway also uses as the runId.
+ * The agent scope goes after `DREAMING_SESSION_KEY_PREFIX` so the orphan-transcript scrub
+ * keeps matching DREAMING_TRANSCRIPT_RUN_MARKER, while two agents that share one workspace
+ * cannot collide on a run they own through different agent-scoped sessions.
  */
-function buildNarrativeSessionKey(params: {
+function buildNarrativeRunKey(params: {
+  agentId: string;
   workspaceDir: string;
   phase: NarrativePhaseData["phase"];
 }): string {
-  const workspaceHash = createHash("sha1").update(params.workspaceDir).digest("hex").slice(0, 12);
-  return `dreaming-narrative-${params.phase}-${workspaceHash}`;
+  const workspaceHash = buildNarrativeWorkspaceHash(params.workspaceDir);
+  return `${DREAMING_SESSION_KEY_PREFIX}${params.agentId}-${params.phase}-${workspaceHash}`;
+}
+
+/**
+ * Build the deterministic subagent session key used for dream narratives.
+ * Sessions live in per-agent SQLite stores, so the key must name its owning agent;
+ * an unscoped key cannot be resolved to a store and the whole run fails.
+ */
+function buildNarrativeSessionKey(params: {
+  agentId: string;
+  workspaceDir: string;
+  phase: NarrativePhaseData["phase"];
+}): string {
+  const workspaceHash = buildNarrativeWorkspaceHash(params.workspaceDir);
+  // Keep the plugin owner in the stable key so rows created before plugin ownership was
+  // persisted cannot be reused by a memory-core run that is then forbidden to delete them.
+  return `agent:${params.agentId}:${DREAMING_SESSION_KEY_PREFIX}${DREAMING_SESSION_OWNER_KEY}-${params.phase}-${workspaceHash}`;
 }
 
 // ── Prompt building ────────────────────────────────────────────────────
@@ -325,44 +355,6 @@ function buildNarrativePrompt(data: NarrativePhaseData): string {
   return lines.join("\n");
 }
 
-// ── Message extraction ─────────────────────────────────────────────────
-
-function extractNarrativeText(messages: unknown[]): string | null {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (!msg || typeof msg !== "object" || Array.isArray(msg)) {
-      continue;
-    }
-    const record = msg as Record<string, unknown>;
-    if (record.role !== "assistant") {
-      continue;
-    }
-    const content = record.content;
-    if (typeof content === "string" && content.trim().length > 0) {
-      return content.trim();
-    }
-    if (Array.isArray(content)) {
-      const text = content
-        .filter(
-          (part: unknown) =>
-            part &&
-            typeof part === "object" &&
-            !Array.isArray(part) &&
-            ((part as Record<string, unknown>).type === "text" ||
-              (part as Record<string, unknown>).type === "output_text") &&
-            typeof (part as Record<string, unknown>).text === "string",
-        )
-        .map((part) => (part as { text: string }).text)
-        .join("\n")
-        .trim();
-      if (text.length > 0) {
-        return text;
-      }
-    }
-  }
-  return null;
-}
-
 function waitForNarrativeMessagesToSettle(delayMs: number): Promise<void> {
   return new Promise((resolve) => {
     setTimeout(resolve, delayMs);
@@ -377,7 +369,7 @@ async function readNarrativeText(params: {
     sessionKey: params.sessionKey,
     limit: NARRATIVE_MESSAGE_FETCH_LIMIT,
   });
-  return extractNarrativeText(messages);
+  return extractAssistantText(messages);
 }
 
 async function readSettledNarrativeText(params: {
@@ -397,6 +389,31 @@ async function readSettledNarrativeText(params: {
     }
   }
   return null;
+}
+
+/**
+ * Classifies the run result's terminal reply for diary use. The terminal
+ * reply is the authoritative completion-time fact, so an explicit
+ * non-visible disposition (silent/empty) means "this run produced no diary
+ * text" — the transcript must not be read for it, or an older narrative from
+ * a previous run could resurface (#127184 review). Only an absent terminal
+ * reply (legacy runtime) falls back to the transcript.
+ */
+type TerminalReplyNarrative =
+  | { kind: "visible"; text: string }
+  | { kind: "non-visible" }
+  | { kind: "absent" };
+
+function classifyTerminalReplyNarrative(
+  result: Awaited<ReturnType<SubagentSurface["waitForRun"]>>,
+): TerminalReplyNarrative {
+  const reply = result.terminalReply;
+  if (!reply) {
+    return { kind: "absent" };
+  }
+  const text =
+    reply.disposition === "visible" && typeof reply.text === "string" ? reply.text.trim() : "";
+  return text ? { kind: "visible", text } : { kind: "non-visible" };
 }
 
 // ── Date formatting ────────────────────────────────────────────────────
@@ -493,6 +510,18 @@ function isOptionalDiaryContextReadError(err: unknown): boolean {
   return err instanceof Error && err.message === "path must be a regular file";
 }
 
+function getDiaryContextEntries(existing: string): string[] {
+  const startIdx = existing.indexOf(DIARY_START_MARKER);
+  const endIdx = existing.indexOf(DIARY_END_MARKER);
+  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
+    return [];
+  }
+  const inner = existing.slice(startIdx + DIARY_START_MARKER.length, endIdx);
+  return splitDiaryBlocks(inner)
+    .map(normalizeDiaryBlockBody)
+    .filter((entry) => entry.length > 0);
+}
+
 export async function readRecentDreamDiaryEntries(params: {
   workspaceDir: string;
   limit?: number;
@@ -511,17 +540,7 @@ export async function readRecentDreamDiaryEntries(params: {
     }
     throw err;
   }
-  const startIdx = existing.indexOf(DIARY_START_MARKER);
-  const endIdx = existing.indexOf(DIARY_END_MARKER);
-  if (startIdx < 0 || endIdx < 0 || endIdx < startIdx) {
-    return [];
-  }
-  const inner = existing.slice(startIdx + DIARY_START_MARKER.length, endIdx);
-  return splitDiaryBlocks(inner)
-    .map(normalizeDiaryBlockBody)
-    .filter((entry) => entry.length > 0)
-    .slice(-limit)
-    .toReversed();
+  return getDiaryContextEntries(existing).slice(-limit).toReversed();
 }
 
 function normalizeDiaryBlockFingerprint(block: string): string {
@@ -635,12 +654,15 @@ export async function writeBackfillDiaryEntries(params: {
     bodyLines: string[];
     sourcePath?: string;
   }>;
+  preserveExisting?: boolean;
   timezone?: string;
 }): Promise<{ dreamsPath: string; written: number; replaced: number }> {
   return await updateDreamsFile({
     workspaceDir: params.workspaceDir,
     updater: (existing, dreamsPath) => {
-      const stripped = stripBackfillDiaryBlocks(existing);
+      const stripped = params.preserveExisting
+        ? { updated: existing, removed: 0 }
+        : stripBackfillDiaryBlocks(existing);
       const startIdx = stripped.updated.indexOf(DIARY_START_MARKER);
       const endIdx = stripped.updated.indexOf(DIARY_END_MARKER);
       const inner =
@@ -648,22 +670,33 @@ export async function writeBackfillDiaryEntries(params: {
           ? stripped.updated.slice(startIdx + DIARY_START_MARKER.length, endIdx)
           : "";
       const preservedBlocks = splitDiaryBlocks(inner);
-      const nextBlocks = [
-        ...preservedBlocks,
-        ...params.entries.map((entry) =>
-          buildBackfillDiaryEntry({
-            isoDay: entry.isoDay,
-            bodyLines: entry.bodyLines,
-            sourcePath: entry.sourcePath,
-            timezone: params.timezone,
-          }),
-        ),
-      ];
+      const additions = params.entries.map((entry) =>
+        buildBackfillDiaryEntry({
+          isoDay: entry.isoDay,
+          bodyLines: entry.bodyLines,
+          sourcePath: entry.sourcePath,
+          timezone: params.timezone,
+        }),
+      );
+      const existingFingerprints = new Set(
+        preservedBlocks.map((block) => normalizeDiaryBlockFingerprint(block)),
+      );
+      const appended = params.preserveExisting
+        ? additions.filter((block) => {
+            const fingerprint = normalizeDiaryBlockFingerprint(block);
+            if (existingFingerprints.has(fingerprint)) {
+              return false;
+            }
+            existingFingerprints.add(fingerprint);
+            return true;
+          })
+        : additions;
+      const nextBlocks = [...preservedBlocks, ...appended];
       return {
         content: replaceDiaryContent(stripped.updated, joinDiaryBlocks(nextBlocks)),
         result: {
           dreamsPath,
-          written: params.entries.length,
+          written: appended.length,
           replaced: stripped.removed,
         },
       };
@@ -742,12 +775,28 @@ async function appendNarrativeEntry(params: {
   narrative: string;
   nowMs: number;
   timezone?: string;
-}): Promise<string> {
+  sourceEntryKeys?: readonly string[];
+  recentDiaryEntries?: readonly string[];
+}): Promise<string | undefined> {
   const dateStr = formatNarrativeDate(params.nowMs, params.timezone);
   const entry = buildDiaryEntry(params.narrative, dateStr);
-  return await updateDreamsFile({
+  return await updateDreamsFile<string | undefined>({
     workspaceDir: params.workspaceDir,
-    updater: (existing, dreamsPath) => {
+    updater: async (existing, dreamsPath) => {
+      const sourceKeys = params.sourceEntryKeys ?? [];
+      const currentSources =
+        sourceKeys.length > 0
+          ? (await readStore(params.workspaceDir, new Date(params.nowMs).toISOString())).entries
+          : undefined;
+      const currentDiary = new Set(getDiaryContextEntries(existing));
+      // The updater holds the purge lock. Model work ran outside it, so both
+      // staged inputs and prior diary quotes must survive until this commit.
+      if (
+        sourceKeys.some((key) => !currentSources?.[key]) ||
+        params.recentDiaryEntries?.some((block) => !currentDiary.has(clampDiaryContextEntry(block)))
+      ) {
+        return { content: existing, result: undefined, shouldWrite: false };
+      }
       let updated: string;
       if (existing.includes(DIARY_START_MARKER) && existing.includes(DIARY_END_MARKER)) {
         const endIdx = existing.lastIndexOf(DIARY_END_MARKER);
@@ -772,48 +821,9 @@ async function appendNarrativeEntry(params: {
 
 // ── Orchestrator ───────────────────────────────────────────────────────
 
-async function scrubDreamingNarrativeArtifacts(logger: Logger): Promise<void> {
-  const cfg = getRuntimeConfig();
-  const agentsDir = path.join(resolveStateDir(), "agents");
-  let agentEntries: Dirent[];
-  try {
-    agentEntries = await fs.readdir(agentsDir, { withFileTypes: true });
-  } catch {
-    return;
-  }
-
-  let prunedEntries = 0;
-  let archivedOrphans = 0;
-
-  for (const agentEntry of agentEntries) {
-    if (!agentEntry.isDirectory()) {
-      continue;
-    }
-
-    try {
-      const result = await cleanupSessionLifecycleArtifacts({
-        agentId: agentEntry.name,
-        archiveRemovedEntryTranscripts: false,
-        sessionStore: cfg.session?.store,
-        sessionKeySegmentPrefix: DREAMING_SESSION_KEY_PREFIX,
-        transcriptContentMarker: DREAMING_TRANSCRIPT_RUN_MARKER,
-        orphanTranscriptMinAgeMs: DREAMING_ORPHAN_MIN_AGE_MS,
-      });
-      prunedEntries += result.removedEntries;
-      archivedOrphans += result.archivedTranscriptArtifacts;
-    } catch {
-      continue;
-    }
-  }
-
-  if (prunedEntries > 0 || archivedOrphans > 0) {
-    logger.info(
-      `memory-core: dreaming cleanup scrubbed ${prunedEntries} stale session entr${prunedEntries === 1 ? "y" : "ies"} and archived ${archivedOrphans} orphan transcript${archivedOrphans === 1 ? "" : "s"}.`,
-    );
-  }
-}
-
-export async function generateAndAppendDreamNarrative(params: {
+export type DreamNarrativeRequest = {
+  /** Agent that owns this workspace; the narrative session lives in its SQLite store. */
+  agentId: string;
   subagent: SubagentSurface;
   workspaceDir: string;
   data: NarrativePhaseData;
@@ -821,26 +831,41 @@ export async function generateAndAppendDreamNarrative(params: {
   timezone?: string;
   model?: string;
   logger: Logger;
-}): Promise<void> {
-  const nowMs = Number.isFinite(params.nowMs) ? (params.nowMs as number) : Date.now();
+};
 
-  if (params.data.snippets.length === 0 && !params.data.promotions?.length) {
-    return;
-  }
+export type DreamNarrativeOutcome =
+  | { status: "completed" | "pending" | "skipped" }
+  | { status: "degraded"; error: string };
 
+async function generateAndAppendDreamNarrative(
+  params: DreamNarrativeRequest,
+): Promise<DreamNarrativeOutcome> {
+  // `runDreamNarrative` is the only entry point and already dropped empty narrative data.
+  const nowMs =
+    typeof params.nowMs === "number" && Number.isFinite(params.nowMs) ? params.nowMs : Date.now();
+  const runKey = buildNarrativeRunKey({
+    agentId: params.agentId,
+    workspaceDir: params.workspaceDir,
+    phase: params.data.phase,
+  });
   const sessionKey = buildNarrativeSessionKey({
+    agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     phase: params.data.phase,
   });
   const message = buildNarrativePrompt(params.data);
+  let cleanupFailure: string | undefined;
+  let outcome: DreamNarrativeOutcome = { status: "completed" };
   await withNarrativeSessionLock(sessionKey, async () => {
     const attempts: Array<{ sessionKey: string; runId: string | null }> = [];
     let successfulSessionKey: string | null = null;
+    let terminalReply: TerminalReplyNarrative | null = null;
     try {
       const attemptModels = params.model ? [params.model, undefined] : [undefined];
 
       for (const [attemptIndex, attemptModel] of attemptModels.entries()) {
-        const attemptSessionKey = buildNarrativeAttemptSessionKey(sessionKey, attemptIndex);
+        const attemptSessionKey = buildNarrativeAttemptKey(sessionKey, attemptIndex);
+        const attemptRunKey = buildNarrativeAttemptKey(runKey, attemptIndex);
         const attempt = { sessionKey: attemptSessionKey, runId: null as string | null };
         attempts.push(attempt);
 
@@ -850,22 +875,20 @@ export async function generateAndAppendDreamNarrative(params: {
             await params.subagent.deleteSession({ sessionKey: attemptSessionKey });
           } catch (preCleanupErr) {
             if (!isRequestScopedSubagentRuntimeError(preCleanupErr)) {
+              cleanupFailure = formatErrorMessage(preCleanupErr);
               params.logger.warn(
-                `memory-core: narrative pre-cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(preCleanupErr)}`,
+                `memory-core: narrative pre-cleanup failed for ${params.data.phase} phase: ${cleanupFailure}`,
               );
             }
           }
 
           const runId = await startNarrativeRunOrFallback({
-            subagent: params.subagent,
+            ...params,
             sessionKey: attemptSessionKey,
+            runKey: attemptRunKey,
             message,
-            data: params.data,
-            workspaceDir: params.workspaceDir,
             nowMs,
-            timezone: params.timezone,
             model: attemptModel,
-            logger: params.logger,
           });
           if (!runId) {
             return;
@@ -879,6 +902,7 @@ export async function generateAndAppendDreamNarrative(params: {
 
           if (result.status === "ok") {
             successfulSessionKey = attemptSessionKey;
+            terminalReply = classifyTerminalReplyNarrative(result);
             break;
           }
 
@@ -903,11 +927,8 @@ export async function generateAndAppendDreamNarrative(params: {
             })} for ${params.data.phase} phase; writing fallback diary entry.`,
           );
           await appendFallbackNarrativeEntry({
-            workspaceDir: params.workspaceDir,
-            data: params.data,
+            ...params,
             nowMs,
-            timezone: params.timezone,
-            logger: params.logger,
             reason: `the narrative run ended with ${formatNarrativeTerminalStatus({
               status: result.status,
               error: result.error,
@@ -929,40 +950,63 @@ export async function generateAndAppendDreamNarrative(params: {
         return;
       }
 
-      const narrative = await readSettledNarrativeText({
-        subagent: params.subagent,
-        sessionKey: successfulSessionKey,
-      });
+      // Prefer the terminal reply the run registry captured at completion time.
+      // A visible reply is immune to the sibling-cleanup race (#123360); an
+      // explicit non-visible reply is authoritative no-text and must not read
+      // history (an older narrative could resurface); only an absent reply
+      // (legacy runtime) falls back to polling the session store.
+      const narrative =
+        terminalReply?.kind === "visible"
+          ? terminalReply.text
+          : terminalReply?.kind === "absent"
+            ? await readSettledNarrativeText({
+                subagent: params.subagent,
+                sessionKey: successfulSessionKey,
+              })
+            : null;
       if (!narrative) {
         params.logger.warn(
           `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,
         );
         await appendFallbackNarrativeEntry({
-          workspaceDir: params.workspaceDir,
-          data: params.data,
+          ...params,
           nowMs,
-          timezone: params.timezone,
-          logger: params.logger,
           reason: "the narrative run produced no text",
         });
         return;
       }
 
-      await appendNarrativeEntry({
+      const dreamsPath = await appendNarrativeEntry({
         workspaceDir: params.workspaceDir,
         narrative,
         nowMs,
         timezone: params.timezone,
+        sourceEntryKeys: params.data.sourceEntryKeys,
+        recentDiaryEntries: params.data.recentDiaryEntries,
       });
+      if (dreamsPath === undefined) {
+        outcome = { status: "skipped" };
+        params.logger.info(
+          `memory-core: narrative publication skipped for ${params.data.phase} phase because source memory or diary context changed.`,
+        );
+        return;
+      }
 
       params.logger.info(
         `memory-core: dream diary entry written for ${params.data.phase} phase [workspace=${params.workspaceDir}].`,
       );
     } catch (err) {
-      // Narrative generation is best-effort — never fail the parent phase.
+      // Narrative generation is best-effort — never fail the parent phase. Still write the
+      // fallback entry the terminal-status and empty-text branches write, so an unexpected
+      // failure leaves a visible diary trace instead of an untouched DREAMS.md.
       params.logger.warn(
         `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
       );
+      await appendFallbackNarrativeEntry({
+        ...params,
+        nowMs,
+        reason: `the narrative run failed (${formatErrorMessage(err)})`,
+      });
     } finally {
       // Only cleanup after a run was accepted. Request-scoped fallback writes a
       // local diary entry without creating a subagent session.
@@ -975,19 +1019,26 @@ export async function generateAndAppendDreamNarrative(params: {
         try {
           await params.subagent.deleteSession({ sessionKey: attempt.sessionKey });
         } catch (cleanupErr) {
+          cleanupFailure = formatErrorMessage(cleanupErr);
           params.logger.warn(
-            `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${formatErrorMessage(cleanupErr)}`,
+            `memory-core: narrative session cleanup failed for ${params.data.phase} phase: ${cleanupFailure}`,
           );
         }
       }
 
-      await scrubDreamingNarrativeArtifacts(params.logger).catch((scrubErr: unknown) => {
+      await scrubDreamingNarrativeArtifacts({
+        agentId: params.agentId,
+        config: getRuntimeConfig(),
+        logger: params.logger,
+      }).catch((scrubErr: unknown) => {
+        cleanupFailure = formatErrorMessage(scrubErr);
         params.logger.warn(
-          `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${formatErrorMessage(scrubErr)}`,
+          `memory-core: dreaming cleanup scrub failed for ${params.data.phase} phase: ${cleanupFailure}`,
         );
       });
     }
   });
+  return cleanupFailure ? { status: "degraded", error: cleanupFailure } : outcome;
 }
 
 // ── Detached narrative concurrency limit ───────────────────────────────
@@ -998,21 +1049,69 @@ export async function generateAndAppendDreamNarrative(params: {
 // write-lock while it runs and burns a model slot, which caused lock
 // contention (>30 s) and cascading narrative timeouts (#73198).
 //
-// `runDetachedDreamNarrative` caps total in-flight detached narratives across
+// `runDetachedNarrativeJob` caps total in-flight detached narratives across
 // phases/workspaces so cron sweeps cannot exhaust model and session-lock slots.
 const DETACHED_NARRATIVE_CONCURRENCY = 3;
 const detachedNarrativeLimit = pLimit(DETACHED_NARRATIVE_CONCURRENCY);
 
-export function runDetachedDreamNarrative(
-  params: Parameters<typeof generateAndAppendDreamNarrative>[0],
-): void {
+function runDetachedNarrativeJob(params: {
+  job: () => Promise<DreamNarrativeOutcome>;
+  logger: Logger;
+  phase: NarrativePhaseData["phase"];
+  workspaceDir: string;
+}): void {
   queueMicrotask(() => {
-    void detachedNarrativeLimit(() => generateAndAppendDreamNarrative(params)).catch(() => {
-      // Detached narratives intentionally swallow errors — callers (cron
-      // sweeps) cannot recover, and surfacing here would only cause noisy
-      // unhandled rejections. Logging happens inside
-      // generateAndAppendDreamNarrative.
-    });
+    void detachedNarrativeLimit(params.job)
+      .then((outcome) => {
+        if (outcome.status === "degraded") {
+          params.logger.warn(
+            `memory-core: detached dreaming narrative degraded for ${params.phase} phase [workspace=${params.workspaceDir}]: ${outcome.error}`,
+          );
+        }
+      })
+      .catch(() => {
+        // Unexpected failures are logged by the narrative job before reaching this boundary.
+      });
   });
+}
+
+/**
+ * Single entry point for every dreaming phase. Cron sweeps detach so a stalled diary run
+ * cannot hold the sweep open; heartbeat sweeps await so the phase reports the outcome.
+ * A sweep without an owning agent still runs; only the subagent narrative is unavailable.
+ */
+export async function runDreamNarrative(
+  params: Omit<DreamNarrativeRequest, "agentId"> & { agentId?: string; detached?: boolean },
+): Promise<DreamNarrativeOutcome> {
+  const { agentId, detached, ...rest } = params;
+  // Nothing to narrate is a no-op on every path; checking ownership first would let an
+  // ownerless empty sweep append a diary entry for material that never existed.
+  if (rest.data.snippets.length === 0 && !rest.data.promotions?.length) {
+    return { status: "skipped" };
+  }
+  // Narrative sessions are stored per agent, so an ownerless sweep cannot start one.
+  // Write the local diary fallback instead of skipping the entry without a trace, and
+  // keep it on the same dispatch so a detached cron sweep never awaits a diary write.
+  const job = agentId
+    ? () => generateAndAppendDreamNarrative({ ...rest, agentId })
+    : async () => {
+        await appendFallbackNarrativeEntry({
+          ...rest,
+          nowMs:
+            typeof rest.nowMs === "number" && Number.isFinite(rest.nowMs) ? rest.nowMs : Date.now(),
+          reason: "the dreaming sweep has no owning agent id",
+        });
+        return { status: "completed" as const };
+      };
+  if (detached) {
+    runDetachedNarrativeJob({
+      job,
+      logger: rest.logger,
+      phase: rest.data.phase,
+      workspaceDir: rest.workspaceDir,
+    });
+    return { status: "pending" };
+  }
+  return await job();
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

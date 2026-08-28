@@ -1,12 +1,12 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
-import { resolveDefaultAgentId } from "../../agents/agent-scope.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
 import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
+import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { chatAbortMarkerTimestampMs } from "../server-chat-state.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX } from "../server-shared.js";
 import { loadSessionEntry } from "../session-utils.js";
-import { setGatewayDedupeEntry } from "./agent-job.js";
 import {
   buildAbortedChatSendPayload,
   readPreRegisteredRun,
@@ -19,7 +19,10 @@ import {
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
+import { resolveChatSendStopOwnerScope } from "./chat-send-stop-owner-scope.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
+
+export const ACTIVE_LEAF_CHANGED_ERROR_REASON = "active-leaf-changed";
 
 export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerOptions["respond"]) {
   respond(
@@ -27,6 +30,16 @@ export function respondChatSessionRoutingChanged(respond: GatewayRequestHandlerO
     undefined,
     errorShape(ErrorCodes.INVALID_REQUEST, "session routing changed; review and retry", {
       details: { reason: SESSION_ROUTING_CHANGED_ERROR_REASON },
+    }),
+  );
+}
+
+export function respondChatActiveLeafChanged(respond: GatewayRequestHandlerOptions["respond"]) {
+  respond(
+    false,
+    undefined,
+    errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and retry", {
+      details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
     }),
   );
 }
@@ -46,6 +59,7 @@ export async function runChatSendPreAdmission(params: {
     entry,
     sessionKey,
     rawSessionKey,
+    sessionLoadKey,
     selectedAgent,
     clientRunId,
     pendingChatSendKey,
@@ -59,7 +73,7 @@ export async function runChatSendPreAdmission(params: {
     cfg,
     entry,
     sessionKey,
-    channel: entry?.channel,
+    channel: sessionDeliveryChannel(entry),
     chatType: entry?.chatType,
   });
   if (sendPolicy === "deny") {
@@ -76,18 +90,20 @@ export async function runChatSendPreAdmission(params: {
       respondChatSessionRoutingChanged(respond);
       return false;
     }
-    const defaultAgentId = resolveDefaultAgentId(cfg);
-    const stopAgentId =
-      sessionKey === "global" ? (selectedAgent.agentId ?? defaultAgentId) : selectedAgent.agentId;
+    const stopOwnerScope = resolveChatSendStopOwnerScope({
+      cfg,
+      selectedAgentId: selectedAgent.agentId,
+      sessionKey,
+    });
     const res = await abortChatRunsForSessionKeyWithPartials({
       context,
       ops: createChatAbortOps(context),
       sessionKey: rawSessionKey,
       sessionKeyAliases: sessionKey === rawSessionKey ? undefined : [sessionKey],
-      agentId: stopAgentId,
+      agentId: stopOwnerScope.agentId,
       sessionId: entry?.sessionId,
       persistSessionKey: sessionKey,
-      defaultAgentId,
+      defaultAgentId: stopOwnerScope.defaultAgentId,
       abortOrigin: "stop-command",
       stopReason: "stop",
       requester: resolveChatAbortRequester(client),
@@ -106,7 +122,7 @@ export async function runChatSendPreAdmission(params: {
     return false;
   }
 
-  const abortMarker = context.chatAbortedRuns.get(clientRunId);
+  const abortMarker = context.chatRunState.runs.get(clientRunId)?.abortMarker;
   if (abortMarker !== undefined) {
     const abortedAt = chatAbortMarkerTimestampMs(abortMarker);
     const payload = buildAbortedChatSendPayload({ runId: clientRunId, endedAt: abortedAt });
@@ -146,8 +162,9 @@ export async function runChatSendPreAdmission(params: {
     clientRunId,
     entry,
     persistedSessionKey: legacyKey ?? sessionKey,
-    reloadEntry: () => loadSessionEntry(rawSessionKey, sessionLoadOptions).entry,
+    reloadEntry: () => loadSessionEntry(sessionLoadKey, sessionLoadOptions).entry,
     storePath,
+    recoveryRuntime: context.recoveryRuntime,
     warn: (message) =>
       context.logGateway.warn(`failed to retry durable chat recovery ${clientRunId}: ${message}`),
   });
@@ -180,7 +197,9 @@ export async function runChatSendPreAdmission(params: {
     respondChatSessionRoutingChanged(respond);
     return false;
   }
-  const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry);
+  const archivedSessionError = resolveSessionWorkStartError(sessionKey, entry, {
+    allowPendingWorkspace: true,
+  });
   if (archivedSessionError) {
     respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, archivedSessionError));
     return false;

@@ -36,6 +36,12 @@ The wizard also asks for the API domain (Feishu vs Lark) and the group policy. I
   </Step>
 </Steps>
 
+## Inbound durability
+
+OpenClaw durably queues authenticated `im.message.receive_v1` and `drive.notice.comment_add_v1` envelopes before agent dispatch. In webhook mode, the durable `200` carries `x-openclaw-delivery-accepted: durable`; verification challenges, non-durable event types, and error responses omit the marker, so reverse proxies can require it to distinguish durable acceptance from a generic `200`. Pending or retryable events survive a Gateway restart, remain serialized per chat or document, and use Feishu's event ID to suppress duplicate queue entries while the active or retained completion record exists.
+
+If a WebSocket event cannot be persisted after bounded retries, OpenClaw closes that socket and forces a fresh authenticated connection instead of continuing past an uncommitted turn. Other Feishu event types, including reactions and VC meeting invitations, use their normal event paths and do not receive this durable-queue guarantee.
+
 ## Access control
 
 ### Direct messages
@@ -150,6 +156,22 @@ In `allowlist` mode, you can also admit a group by adding an explicit `groups.<c
 
 `channels.feishu.groupSenderAllowFrom` sets the same sender allowlist for all groups; a per-group `allowFrom` takes precedence.
 
+### Bot-authored messages
+
+Feishu ignores messages authored by other bots by default. To allow bot-to-bot group conversations, grant the app the `im:message.group_at_msg.include_bot:readonly` and `im:message:readonly` scopes, then set `allowBots`:
+
+```json5
+{
+  channels: {
+    feishu: {
+      allowBots: true,
+    },
+  },
+}
+```
+
+Feishu only delivers bot-authored group events when another bot mentions this bot. Existing group policy, sender allowlists, and mention requirements still apply. OpenClaw drops self-authored messages, mentions the peer bot on every text or card reply, and applies the shared [`channels.defaults.botLoopProtection`](/channels/bot-loop-protection) guard.
+
 <a id="get-groupuser-ids"></a>
 
 ## Get group/user IDs
@@ -199,10 +221,49 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 
 1. Ensure the bot is published and approved in Feishu Open Platform / Lark Developer
 2. Ensure event subscription includes `im.message.receive_v1`
-3. Ensure **persistent connection** (WebSocket) is selected
-4. Ensure all required permission scopes are granted
-5. Ensure the gateway is running: `openclaw gateway status`
-6. Check logs: `openclaw logs --follow`
+3. For meeting invite auto-join, also subscribe to `vc.bot.meeting_invited_v1`
+4. Ensure **persistent connection** (WebSocket) is selected
+5. Ensure all required permission scopes are granted
+6. Ensure the gateway is running: `openclaw gateway status`
+7. Check logs: `openclaw logs --follow`
+
+Subscribing to `vc.bot.meeting_invited_v1` only delivers the event. Automatic joins are
+default-off. To enable them globally:
+
+```json5
+{
+  channels: {
+    feishu: {
+      vcAutoJoin: true,
+    },
+  },
+}
+```
+
+To enable only one account, omit the top-level switch and set the account override:
+
+```json5
+{
+  channels: {
+    feishu: {
+      accounts: {
+        meetings: { vcAutoJoin: true },
+      },
+    },
+  },
+}
+```
+
+Inviters still pass through the normal Feishu DM policy, allowlist/pairing, session, and reply
+routing before the agent receives a join turn. Joining also requires an available Feishu VC join
+tool configured for app identity with the
+`vc:meeting.bot.join:write` scope. For example, the official
+[`lark-cli` VC agent skill](https://github.com/larksuite/cli/tree/main/skills/lark-vc-agent)
+provides `vc +meeting-join`.
+
+<Warning>
+The official `lark-cli` VC agent skill currently marks meeting-bot actions as a limited beta. If the tool returns `ErrNotInGray` or error code `20017`, the app or tenant has not been enabled for that beta; use the early-access guidance in the linked skill before troubleshooting ordinary scope grants.
+</Warning>
 
 ### QR setup does not react in the Feishu mobile app
 
@@ -250,13 +311,18 @@ Feishu/Lark does not support native slash-command menus, so send these as plain 
 ```
 
 `defaultAccount` controls which account is used when outbound APIs do not specify an `accountId`. Account entries inherit top-level settings; most top-level keys can be overridden per account.
-`accounts.<id>.tts` uses the same shape as `messages.tts` and deep-merges over global TTS config, so multi-bot Feishu setups can keep shared provider credentials globally while overriding only voice, model, persona, or auto mode per account.
+`accounts.<id>.tts` uses the same shape as `tts` and deep-merges over global TTS config, so multi-bot Feishu setups can keep shared provider credentials globally while overriding only voice, model, persona, or auto mode per account.
 
 ### Message limits
 
 - `textChunkLimit` - outbound text chunk size (default: `4000` chars)
 - `streaming.chunkMode` - `"length"` (default) splits at the limit; `"newline"` prefers newline boundaries
 - `mediaMaxMb` - media upload/download limit (default: `30` MB)
+
+Ordinary Markdown cards and rich-text posts are also split to fit Feishu's 30 KB
+serialized message limit. Headers, notes, mentions, JSON escaping, and UTF-8 text
+count toward that limit, so chunks may be shorter than `textChunkLimit`. Long
+media captions are sent as text/card chunks before the attachment.
 
 ### Streaming
 
@@ -275,7 +341,7 @@ Feishu/Lark supports streaming replies via interactive cards (Card Kit streaming
 }
 ```
 
-Set `streaming.mode: "off"` to send the complete reply in one message; `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
+Set `streaming.mode: "off"` to send the completed reply without streaming updates; long replies still split at the message limits above. `renderMode: "raw"` (plain text instead of cards) also disables streaming cards. `streaming.block.enabled` is off by default; enable it only when you want completed assistant blocks flushed before the final reply. Legacy boolean `streaming` and the flat `blockStreaming` / `blockStreamingCoalesce` / `chunkMode` keys migrate to this nested shape via `openclaw doctor --fix`.
 
 ### Quota optimization
 
@@ -324,7 +390,11 @@ The plugin ships agent tools for Feishu documents, chats, knowledge base, cloud 
 | `tools.scopes`  | `feishu_app_scopes` app scope diagnostics     | `true`              |
 | `tools.bitable` | `feishu_bitable_*` Bitable/Base operations    | `true`              |
 
-`tools.base` is an alias for `tools.bitable`; the explicit `bitable` value wins when both are set. Per-account gates live under `accounts.<id>.tools`.
+Per-account gates live under `accounts.<id>.tools`.
+
+`feishu_doc` creates title-only documents. To add Markdown, pass the returned
+`document_id` as `doc_token` in a separate `write` action. A `create` request
+that includes `content` fails without creating an empty document.
 
 Grant `drive:drive.metadata:readonly` for direct `feishu_drive info` lookups outside the root
 directory, unless the app already has the full `drive:drive` scope. Without either scope, `info`
@@ -339,9 +409,9 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    entries: {
+      codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: {
@@ -352,7 +422,7 @@ Feishu/Lark supports ACP for DMs and group thread messages. Feishu/Lark ACP is t
           },
         },
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -395,11 +465,11 @@ Use `bindings` to route Feishu/Lark DMs or groups to different agents.
 ```json5
 {
   agents: {
-    list: [
-      { id: "main" },
-      { id: "agent-a", workspace: "/home/user/agent-a" },
-      { id: "agent-b", workspace: "/home/user/agent-b" },
-    ],
+    entries: {
+      main: { default: true },
+      "agent-a": { workspace: "/home/user/agent-a" },
+      "agent-b": { workspace: "/home/user/agent-b" },
+    },
   },
   bindings: [
     {
@@ -575,25 +645,32 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.defaultAccount`                         | Default account for outbound routing                                                 | `default`                            |
 | `channels.feishu.verificationToken`                      | Required for webhook mode                                                            | -                                    |
 | `channels.feishu.encryptKey`                             | Required for webhook mode                                                            | -                                    |
-| `channels.feishu.webhookPath`                            | Webhook route path                                                                   | `/feishu/events`                     |
+| `channels.feishu.webhookPath`                            | Canonical HTTP request path (must start with `/`)                                    | `/feishu/events`                     |
 | `channels.feishu.webhookHost`                            | Webhook bind host                                                                    | `127.0.0.1`                          |
 | `channels.feishu.webhookPort`                            | Webhook bind port                                                                    | `3000`                               |
 | `channels.feishu.accounts.<id>.appId`                    | App ID                                                                               | -                                    |
 | `channels.feishu.accounts.<id>.appSecret`                | App Secret                                                                           | -                                    |
 | `channels.feishu.accounts.<id>.domain`                   | Per-account domain override                                                          | `feishu`                             |
-| `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `messages.tts`                       |
+| `channels.feishu.accounts.<id>.replyToMode`              | Per-account reply-reference mode                                                     | inherited                            |
+| `channels.feishu.accounts.<id>.tts`                      | Per-account TTS override                                                             | `tts`                                |
+| `channels.feishu.accounts.<id>.actions.sticker`          | Per-account sticker action override                                                  | inherited                            |
 | `channels.feishu.dmPolicy`                               | DM policy (`pairing`, `allowlist`, `open`)                                           | `pairing`                            |
 | `channels.feishu.allowFrom`                              | DM allowlist (open_id list)                                                          | -                                    |
 | `channels.feishu.groupPolicy`                            | Group policy (`open`, `allowlist`, `disabled`)                                       | `allowlist`                          |
 | `channels.feishu.groupAllowFrom`                         | Group allowlist                                                                      | -                                    |
 | `channels.feishu.groupSenderAllowFrom`                   | Sender allowlist applied to all groups                                               | -                                    |
 | `channels.feishu.requireMention`                         | Require @mention in groups                                                           | `true` (`false` when policy `open`)  |
+| `channels.feishu.allowBots`                              | Accept other bots that mention this bot, with bot-loop protection                    | `false`                              |
 | `channels.feishu.groups.<chat_id>.requireMention`        | Per-group @mention override; explicit IDs also admit the group in allowlist mode     | inherited                            |
 | `channels.feishu.groups.<chat_id>.enabled`               | Enable/disable a specific group                                                      | `true`                               |
 | `channels.feishu.groups.<chat_id>.allowFrom`             | Per-group sender allowlist (overrides `groupSenderAllowFrom`)                        | -                                    |
 | `channels.feishu.groupSessionScope`                      | Group session mapping (`group`, `group_sender`, `group_topic`, `group_topic_sender`) | `group`                              |
+| `channels.feishu.replyToMode`                            | Reply-reference mode (`off`, `first`, `all`, `batched`)                              | `all`                                |
 | `channels.feishu.replyInThread`                          | Bot replies create/continue topic threads (`disabled`, `enabled`)                    | `disabled`                           |
 | `channels.feishu.reactionNotifications`                  | Inbound reaction events (`off`, `own`, `all`)                                        | `own`                                |
+| `channels.feishu.actions.sticker`                        | Enable received-sticker sending and configured sticker search                        | `false`                              |
+| `channels.feishu.stickerSets`                            | Searchable received-sticker keys and keywords, grouped by bot app ID                 | none                                 |
+| `channels.feishu.vcAutoJoin`                             | Join invited VC meetings after normal DM authorization                               | `false`                              |
 | `channels.feishu.dynamicAgentCreation.enabled`           | Enable automatic per-user agent creation                                             | `false`                              |
 | `channels.feishu.dynamicAgentCreation.workspaceTemplate` | Path template for dynamic agent workspaces                                           | `~/.openclaw/workspace-{agentId}`    |
 | `channels.feishu.dynamicAgentCreation.agentDirTemplate`  | Agent directory name template                                                        | `~/.openclaw/agents/{agentId}/agent` |
@@ -614,9 +691,15 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 | `channels.feishu.tools.perm`                             | Enable permission management tools                                                   | `false`                              |
 | `channels.feishu.tools.scopes`                           | Enable app scopes diagnostic tool                                                    | `true`                               |
 | `channels.feishu.tools.bitable`                          | Enable Bitable/Base tools                                                            | `true`                               |
-| `channels.feishu.tools.base`                             | Alias for `channels.feishu.tools.bitable`; explicit `bitable` wins when both set     | `true`                               |
 | `channels.feishu.accounts.<id>.tools.bitable`            | Per-account Bitable/Base tool gate                                                   | inherited                            |
-| `channels.feishu.accounts.<id>.tools.base`               | Per-account alias for `tools.bitable`                                                | inherited                            |
+
+In webhook mode, both `channels.feishu.webhookPath` and
+`channels.feishu.accounts.<id>.webhookPath` must be canonical HTTP request paths
+beginning with `/`, such as `/feishu/events`. An optional query string is
+supported and must match exactly. Full URLs, relative paths, URL fragments, dot
+segments, and unencoded spaces or Unicode are rejected. If an existing
+configuration contains a noncanonical path, run `openclaw doctor --fix` to
+repair it before starting the gateway.
 
 ## Supported message types
 
@@ -629,6 +712,10 @@ Full configuration: [Gateway configuration](/gateway/configuration)
 - ✅ Audio
 - ✅ Video/media
 - ✅ Stickers
+
+Received stickers expose their reusable `file_key` to the agent as
+`<sticker key="..."/>`. Feishu/Lark does not support downloading sticker
+resources, so OpenClaw preserves the key without fetching an attachment.
 
 Inbound Feishu/Lark audio messages are normalized as media placeholders instead
 of raw `file_key` JSON. When `tools.media.audio` is configured, OpenClaw
@@ -647,6 +734,7 @@ resource payload.
 - ✅ Audio
 - ✅ Video/media
 - ✅ Interactive cards (including streaming updates)
+- ✅ Stickers previously received by the same bot (requires `actions.sticker`)
 - ⚠️ Rich text (post-style formatting; doesn't support full Feishu/Lark authoring capabilities)
 
 Native Feishu/Lark audio bubbles use the Feishu `audio` message type and require
@@ -656,6 +744,99 @@ transcoded to 48kHz Ogg/Opus with `ffmpeg` only when the reply requests voice
 delivery (`audioAsVoice` / message tool `asVoice`, including TTS voice-note
 replies). Ordinary MP3 attachments stay regular files. If `ffmpeg` is missing or
 conversion fails, OpenClaw falls back to a file attachment and logs the reason.
+
+### Sticker replies
+
+Enable the sticker action to let the agent resend stickers:
+
+```json5
+{
+  channels: {
+    feishu: {
+      actions: { sticker: true },
+    },
+  },
+}
+```
+
+For one account only, set `channels.feishu.accounts.<id>.actions.sticker: true`
+instead. An account-level `actions` object **replaces**, rather than merges
+with, the channel-level object. Repeat any action gates you want to preserve.
+For example, keep reactions disabled while enabling stickers for `work`:
+
+```json5
+{
+  channels: {
+    feishu: {
+      actions: { reactions: false },
+      accounts: {
+        work: {
+          actions: { reactions: false, sticker: true },
+        },
+      },
+    },
+  },
+}
+```
+
+Send a sticker to that bot first, then ask it to resend the sticker.
+The shared `message` tool uses `action: "sticker"` with the received `file_key`
+in `fileId` or the first entry of `stickerId`. In multi-account setups, use the
+same `accountId` that received the sticker.
+
+Only stickers previously received by that bot can be sent. Uploading new
+stickers, downloading sticker resources, and searching the sticker store are
+not supported.
+
+### Sticker keyword search
+
+Add a curated sticker set to let the agent find a received sticker by keyword.
+First send each sticker to the bot and ask it for the received `file_key`.
+Then add keys and your own labels to the existing Feishu configuration:
+
+```json5
+{
+  channels: {
+    feishu: {
+      actions: { sticker: true },
+      stickerSets: {
+        cli_work: {
+          file_received_key: ["thumbs up", "赞", "👍"],
+        },
+      },
+    },
+  },
+}
+```
+
+Replace `cli_work` with the bot's actual app ID and `file_received_key` with
+the key received by that bot. `stickerSets` belongs directly under
+`channels.feishu`, not inside an account. The selected account can search only
+the set matching its app ID; changing an account to a different bot does not
+reuse the previous bot's set. Accounts using the same bot share its set.
+Keep any existing account-level action gates as described above.
+
+Ask the agent to “send a thumbs up sticker.” It can use the shared `message`
+tool with `action: "sticker-search"`, `query: "thumbs up"`, and the intended
+`accountId`, then send a returned `fileId` with `action: "sticker"` on that
+same account. Search is available only when stickers are enabled and the bot
+has a nonempty configured set.
+
+Search matches a case-insensitive substring of an explicit keyword, including
+Chinese labels and emoji, in sticker-key order. It does not infer a sticker's
+meaning, search Feishu's store, or automatically collect received stickers.
+Results include the matching `keyword` and reusable `fileId`. No matches
+produce an empty list; `truncated: true` means matching entries were omitted
+by the result limit or output budget. Narrow the query to find other matches.
+
+Limits: 32 bot sets, 256 stickers per set, and 1–8 keywords per sticker.
+Store keywords without leading or trailing whitespace; each must be nonempty
+and at most 64 Unicode characters. File keys must be canonical received keys,
+at most 512 Unicode characters. Each key appears only once in its bot's map.
+Queries are nonempty and at most 128 Unicode characters. `limit` defaults to 5
+and accepts integers from 1 through 10; search results are also capped at
+3 KiB of JSON output. Removing a set removes it from search; no separate
+sticker database or cache is created.
 
 ### Threads and replies
 

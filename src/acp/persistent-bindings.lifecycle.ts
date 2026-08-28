@@ -13,7 +13,7 @@ import {
 } from "./persistent-bindings.types.js";
 
 // Binding lifecycle keeps configured channel conversations attached to matching ACP sessions.
-function sessionMatchesConfiguredBinding(params: {
+function sessionStructurallyMatchesConfiguredBinding(params: {
   cfg: OpenClawConfig;
   spec: ConfiguredAcpBindingSpec;
   meta: SessionAcpMeta;
@@ -60,6 +60,10 @@ export async function ensureConfiguredAcpBindingSession(params: {
 }): Promise<{ ok: true; sessionKey: string } | { ok: false; sessionKey: string; error: string }> {
   const sessionKey = buildConfiguredAcpSessionKey(params.spec);
   const acpManager = getAcpSessionManager();
+  const runtimeOptions = {
+    ...(params.spec.model ? { model: params.spec.model } : {}),
+    ...(params.spec.thinking ? { thinking: params.spec.thinking } : {}),
+  };
   try {
     const resolution = acpManager.resolveSession({
       cfg: params.cfg,
@@ -67,12 +71,20 @@ export async function ensureConfiguredAcpBindingSession(params: {
     });
     if (
       resolution.kind === "ready" &&
-      sessionMatchesConfiguredBinding({
+      sessionStructurallyMatchesConfiguredBinding({
         cfg: params.cfg,
         spec: params.spec,
         meta: resolution.meta,
       })
     ) {
+      // Apply before persisting: rejected controls must not overwrite accepted options.
+      // Model precedes effort; omission retains the selection because ACP has no unset.
+      for (const key of ["model", "thinking"] as const) {
+        const value = runtimeOptions[key];
+        if (value !== undefined && normalizeText(resolution.meta.runtimeOptions?.[key]) !== value) {
+          await acpManager.setSessionConfigOption({ cfg: params.cfg, sessionKey, key, value });
+        }
+      }
       return {
         ok: true,
         sessionKey,
@@ -95,6 +107,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
       sessionKey,
       agent: params.spec.acpAgentId ?? params.spec.agentId,
       mode: params.spec.mode,
+      runtimeOptions,
       cwd: params.spec.cwd,
       backendId: params.spec.backend,
     });
@@ -117,7 +130,7 @@ export async function ensureConfiguredAcpBindingSession(params: {
 }
 
 /** Resolves a configured binding for a conversation and ensures its ACP session exists. */
-export async function ensureConfiguredAcpBindingReady(params: {
+export async function ensureConfiguredAcpBindingReadyCore(params: {
   cfg: OpenClawConfig;
   configuredBinding: ResolvedConfiguredAcpBinding | null;
 }): Promise<{ ok: true } | { ok: false; error: string }> {

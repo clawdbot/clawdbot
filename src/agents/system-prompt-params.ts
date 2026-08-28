@@ -7,24 +7,24 @@ import fs from "node:fs";
 import path from "node:path";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { ChatType } from "../channels/chat-type.js";
+import { resolveControlUiSessionUrl } from "../config/control-ui-link-base.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   formatActiveNodeContextLabel,
-  getActiveNodeContext,
+  getCurrentActiveNodeContext,
 } from "../infra/active-node-context.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import type { ActiveProcessSessionReference } from "./bash-process-references.js";
-import {
-  formatUserTime,
-  resolveUserTimeFormat,
-  resolveUserTimezone,
-  type ResolvedTimeFormat,
-} from "./date-time.js";
+import { formatDateStamp, resolveUserTimezone } from "./date-time.js";
+
+const MAX_RUNTIME_SESSION_URL_CHARS = 512;
 
 type RuntimeInfoInput = {
   agentId?: string;
   sessionKey?: string;
   sessionId?: string;
+  sessionUrl?: string;
   host: string;
   os: string;
   arch: string;
@@ -45,39 +45,52 @@ type RuntimeInfoInput = {
 type SystemPromptRuntimeParams = {
   runtimeInfo: RuntimeInfoInput;
   userTimezone: string;
-  userTime?: string;
-  userTimeFormat?: ResolvedTimeFormat;
+  userDate: string;
 };
 
 export function buildSystemPromptParams(params: {
   config?: OpenClawConfig;
   agentId?: string;
-  runtime: Omit<RuntimeInfoInput, "agentId">;
+  runtime: Omit<RuntimeInfoInput, "agentId" | "sessionUrl">;
   workspaceDir?: string;
   cwd?: string;
+  preparedRepoRoot?: string | null;
 }): SystemPromptRuntimeParams {
-  const repoRoot = resolveRepoRoot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    cwd: params.cwd,
-  });
+  const repoRoot = Object.hasOwn(params, "preparedRepoRoot")
+    ? (params.preparedRepoRoot ?? undefined)
+    : resolveSystemPromptRepoRoot(params);
   const userTimezone = resolveUserTimezone(params.config?.agents?.defaults?.userTimezone);
-  const userTimeFormat = resolveUserTimeFormat(params.config?.agents?.defaults?.timeFormat);
-  const userTime = formatUserTime(new Date(), userTimezone, userTimeFormat);
+  const userDate = formatDateStamp(Date.now(), userTimezone);
+  const { runId } = parseCronRunScopeSuffix(params.runtime.sessionKey);
+  // Exact isolated-cron URLs expose a volatile run id before prompt rendering can normalize it,
+  // defeating byte-identical prompt-prefix reuse across runs of the same job.
+  const sessionUrl =
+    runId === undefined
+      ? resolveControlUiSessionUrl(params.config, {
+          sessionKey: params.runtime.sessionKey,
+          fallbackAgentId: params.agentId,
+          exactKey: true,
+        })
+      : undefined;
   return {
     runtimeInfo: {
       agentId: params.agentId,
       ...params.runtime,
-      activeNode: formatActiveNodeContextLabel(getActiveNodeContext()) ?? params.runtime.activeNode,
+      // Published links must be externally usable and bounded before entering model context.
+      sessionUrl:
+        sessionUrl?.startsWith("https://") && sessionUrl.length <= MAX_RUNTIME_SESSION_URL_CHARS
+          ? sessionUrl
+          : undefined,
+      activeNode:
+        formatActiveNodeContextLabel(getCurrentActiveNodeContext()) ?? params.runtime.activeNode,
       repoRoot,
     },
     userTimezone,
-    userTime,
-    userTimeFormat,
+    userDate,
   };
 }
 
-function resolveRepoRoot(params: {
+export function resolveSystemPromptRepoRoot(params: {
   config?: OpenClawConfig;
   workspaceDir?: string;
   cwd?: string;

@@ -1,5 +1,5 @@
 // Terminal Core module implements health style behavior.
-import { normalizeLowercaseStringOrEmpty } from "./string.js";
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { theme } from "./theme.js";
 
 // Styles the status word in health output lines.
@@ -24,6 +24,9 @@ export function styleHealthChannelLine(line: string, rich: boolean): string {
 
   if (normalized.startsWith("failed")) {
     return applyPrefix("failed", theme.error);
+  }
+  if (normalized.startsWith("degraded")) {
+    return applyPrefix("degraded", theme.warn);
   }
   if (normalized.startsWith("ok")) {
     return applyPrefix("ok", theme.success);

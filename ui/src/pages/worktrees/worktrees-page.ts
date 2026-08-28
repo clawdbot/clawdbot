@@ -1,12 +1,19 @@
 import { consume } from "@lit/context";
+import { initialState, Task, TaskStatus } from "@lit/task";
 import { html, nothing } from "lit";
 import { state } from "lit/decorators.js";
-import type { WorktreeRecord } from "../../../../packages/gateway-protocol/src/index.js";
+import type {
+  WorktreeRecord,
+  WorktreesRemoveResult,
+} from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
+import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
+import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { renderSessionsHubHeader } from "../../components/sessions-hub-header.ts";
 import {
+  renderLearnMoreLink,
   renderSettingsEmpty,
   renderSettingsPage,
   renderSettingsRow,
@@ -15,65 +22,31 @@ import {
 } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
-import { resolveEditableSnapshotConfig } from "../../lib/config/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
-import { searchForSession } from "../../lib/sessions/index.ts";
+import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
+import { repoName } from "../../lib/session-display.ts";
+import {
+  resolveSessionPreferredFaceForKey,
+  sessionNavigationTarget,
+} from "../../lib/sessions/route-navigation.ts";
+import { createManagedWorktree } from "../../lib/worktrees/create-worktree.ts";
+import { GatewayPageController } from "../../lit/gateway-page-controller.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
-import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
+
+const WORKTREES_DOCS_URL = "https://docs.openclaw.ai/concepts/managed-worktrees";
 
 type WorktreesListResult = { worktrees: WorktreeRecord[] };
-type WorktreesRemoveResult = { removed: boolean; snapshotError?: string };
 type WorktreeBranchesResult = {
   branches: Array<{ name: string }>;
   defaultBranch?: string;
   headBranch?: string;
 };
 
-type WorktreeOperationScope = {
-  gateway: ApplicationContext["gateway"];
-  client: GatewayBrowserClient;
-  epoch: number;
-};
-
-function repoName(repoRoot: string): string {
-  return repoRoot.split(/[\\/]/).findLast(Boolean) ?? repoRoot;
-}
-
-type CleanupLimitKey = "maxCount" | "maxTotalSizeGb";
-
-// Coalesces bursts of stepper clicks into one config.patch and keeps sustained
-// editing far below the control-plane config-write quota (3 writes / 60 s).
-const CLEANUP_COMMIT_DELAY_MS = 2_000;
-
-// The count is an integer, but the size limit accepts fractions (0.5 GB), so
-// only maxCount gets floored; flooring the size would display 0.5 as the
-// documented "disabled" value 0.
-function normalizeCleanupLimit(key: CleanupLimitKey, value: number): number {
-  if (!Number.isFinite(value) || value <= 0) {
-    return 0;
-  }
-  return key === "maxCount" ? Math.floor(value) : value;
-}
-
-function cleanupLimitFromConfig(
-  config: Record<string, unknown> | null,
-  key: CleanupLimitKey,
-): number {
-  const worktrees = config?.worktrees;
-  const cleanup =
-    worktrees && typeof worktrees === "object"
-      ? (worktrees as { cleanup?: unknown }).cleanup
-      : undefined;
-  const value =
-    cleanup && typeof cleanup === "object" ? (cleanup as Record<string, unknown>)[key] : undefined;
-  return typeof value === "number" ? normalizeCleanupLimit(key, value) : 0;
-}
-
 class WorktreesPage extends OpenClawLightDomElement {
   @consume({ context: applicationContext, subscribe: true })
   private context!: ApplicationContext;
 
-  @state() private loading = false;
   @state() private records: WorktreeRecord[] = [];
   @state() private error: string | null = null;
   @state() private busyId: string | null = null;
@@ -83,283 +56,124 @@ class WorktreesPage extends OpenClawLightDomElement {
   @state() private createBaseRef = "";
   @state() private createBranches: string[] = [];
   @state() private creating = false;
-  @state() private cleanupLoaded = false;
-  @state() private cleanupMaxCount = 0;
-  @state() private cleanupMaxSizeGb = 0;
+  @state() private gcLoading = false;
+  private listClient: GatewayBrowserClient | null = null;
+  private readonly gateway = new GatewayPageController(this, {
+    getGateway: () => this.context?.gateway,
+    onIdentityChange: () => {
+      this.records = [];
+      this.error = null;
+    },
+    invalidateRequests: (change) => {
+      if (change.snapshot.phase !== "connected" || !change.snapshot.client) {
+        this.listClient = null;
+        void this.listTask.run([null]);
+      }
+      void this.branchesTask.run([null, ""]);
+      this.invalidateOperations();
+    },
+    ensureInitialData: () => void this.load(),
+    onSnapshot: (change) => {
+      if (!readGatewayOperatorAccess(change.snapshot).canAdmin) {
+        this.createOpen = false;
+      }
+    },
+  });
 
-  // Debounced stepper commits: rapid clicks fold into one rate-limited config.patch.
-  private cleanupCommitTimer: ReturnType<typeof setTimeout> | null = null;
-  private pendingCleanupPatch: Partial<Record<CleanupLimitKey, number>> = {};
-  // Pending edits stay bound to the capability they were made against so a
-  // replaced gateway context never receives another gateway's limits.
-  private pendingCleanupSource: ApplicationContext["runtimeConfig"] | null = null;
-  private cleanupCommitInFlight: Promise<boolean> | null = null;
+  private readonly listTask = new Task(this, {
+    autoRun: false,
+    args: () => [this.gateway.connected ? this.gateway.client : null] as const,
+    task: ([client], { signal }) =>
+      client ? client.request<WorktreesListResult>("worktrees.list", {}, { signal }) : initialState,
+    onComplete: (result) => {
+      this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
+    },
+    onError: (error) => {
+      this.error = formatUiError(error);
+    },
+  });
 
-  private client: GatewayBrowserClient | null = null;
-  private gatewayConnected = false;
-  private gatewaySource?: ApplicationContext["gateway"];
-  private hasBoundGateway = false;
-  private loadGeneration = 0;
-  private branchesGeneration = 0;
-  private operationEpoch = 0;
-  private readonly subscriptions = new SubscriptionsController(this)
-    .effect(
-      () => this.context?.gateway,
-      (gateway) => {
-        const sourceChanged = this.hasBoundGateway && this.gatewaySource !== gateway;
-        this.gatewaySource = gateway;
-        this.hasBoundGateway = true;
-        this.applyGatewaySnapshot(gateway.snapshot, sourceChanged);
-        return gateway.subscribe((snapshot) => {
-          if (this.gatewaySource === gateway && this.context.gateway === gateway) {
-            this.applyGatewaySnapshot(snapshot);
-          }
-        });
-      },
-    )
-    .effect(
-      () => this.context?.runtimeConfig,
-      (runtimeConfig) => {
-        // A replaced capability invalidates drafts made against the old one;
-        // controls stay inert until the new snapshot populates them.
-        this.resetCleanupDraft();
-        void runtimeConfig.ensureLoaded();
-        this.syncCleanupFromConfig();
-        return runtimeConfig.subscribe(() => this.syncCleanupFromConfig());
-      },
-    );
-
-  private resetCleanupDraft() {
-    if (this.cleanupCommitTimer) {
-      clearTimeout(this.cleanupCommitTimer);
-      this.cleanupCommitTimer = null;
-    }
-    this.pendingCleanupPatch = {};
-    this.pendingCleanupSource = null;
-    this.cleanupLoaded = false;
-  }
+  private readonly branchesTask = new Task(this, {
+    autoRun: false,
+    args: () =>
+      [this.gateway.connected ? this.gateway.client : null, this.createRepoRoot.trim()] as const,
+    task: ([client, repoRoot], { signal }) =>
+      client && repoRoot
+        ? client.request<WorktreeBranchesResult>("worktrees.branches", { repoRoot }, { signal })
+        : initialState,
+    onComplete: (result) => {
+      this.createBranches = result.branches.map((branch) => branch.name);
+      if (!this.createBaseRef) {
+        this.createBaseRef = result.defaultBranch ?? result.headBranch ?? "";
+      }
+    },
+    onError: () => {
+      this.createBranches = [];
+    },
+  });
 
   override disconnectedCallback() {
-    this.subscriptions.clear();
-    this.invalidateLoad();
-    this.invalidateOperations();
-    // Flush a pending edit so navigating away does not drop it.
-    void this.flushCleanupEdits();
-    this.gatewaySource = undefined;
-    this.client = null;
-    this.gatewayConnected = false;
+    this.listClient = null;
+    void this.listTask.run([null]);
+    void this.branchesTask.run([null, ""]);
     super.disconnectedCallback();
   }
 
-  private syncCleanupFromConfig() {
-    // A pending local edit owns the draft values until its patch settles.
-    if (this.cleanupCommitTimer || Object.keys(this.pendingCleanupPatch).length > 0) {
-      return;
-    }
-    const runtimeConfig = this.context?.runtimeConfig;
-    if (!runtimeConfig) {
-      return;
-    }
-    const config = resolveEditableSnapshotConfig(runtimeConfig.state.configSnapshot);
-    if (!config) {
-      return;
-    }
-    this.cleanupLoaded = true;
-    this.cleanupMaxCount = cleanupLimitFromConfig(config, "maxCount");
-    this.cleanupMaxSizeGb = cleanupLimitFromConfig(config, "maxTotalSizeGb");
-  }
-
-  private setCleanupLimit(key: CleanupLimitKey, rawValue: number) {
-    const value = normalizeCleanupLimit(key, rawValue);
-    if (key === "maxCount") {
-      this.cleanupMaxCount = value;
-    } else {
-      this.cleanupMaxSizeGb = value;
-    }
-    this.pendingCleanupPatch[key] = value;
-    this.pendingCleanupSource = this.context?.runtimeConfig ?? null;
-    if (this.cleanupCommitTimer) {
-      clearTimeout(this.cleanupCommitTimer);
-    }
-    this.cleanupCommitTimer = setTimeout(() => {
-      this.cleanupCommitTimer = null;
-      void this.commitCleanupLimits();
-    }, CLEANUP_COMMIT_DELAY_MS);
-  }
-
-  /**
-   * Cancels the debounce timer and commits pending cleanup edits now. A failed
-   * in-flight commit re-queues its draft, so the serialized retry below still
-   * reports false and callers refuse to act on limits that never saved.
-   */
-  private async flushCleanupEdits(): Promise<boolean> {
-    if (this.cleanupCommitTimer) {
-      clearTimeout(this.cleanupCommitTimer);
-      this.cleanupCommitTimer = null;
-    }
-    return await this.commitCleanupLimits();
-  }
-
-  private async commitCleanupLimits(): Promise<boolean> {
-    // Serialize config writes: starting while another commit is in flight
-    // would reuse its stale base hash and could land limits out of order.
-    while (this.cleanupCommitInFlight) {
-      await this.cleanupCommitInFlight;
-    }
-    const patch = this.pendingCleanupPatch;
-    if (Object.keys(patch).length === 0) {
-      return true;
-    }
-    const source = this.pendingCleanupSource;
-    this.pendingCleanupPatch = {};
-    this.pendingCleanupSource = null;
-    const runtimeConfig = this.context?.runtimeConfig;
-    if (!runtimeConfig || (source !== null && source !== runtimeConfig)) {
-      // Dropping an edit made against a replaced context beats writing one
-      // gateway's limits into another gateway's config.
-      return false;
-    }
-    // A failed save re-queues the draft (newer edits win per key) so a later
-    // flush retries instead of reporting the unsaved limits as committed.
-    const restoreDraft = () => {
-      if (this.context?.runtimeConfig !== runtimeConfig) {
-        // The capability was replaced while this write was in flight; its
-        // draft must not leak into the replacement gateway's config.
-        return;
-      }
-      this.pendingCleanupPatch = { ...patch, ...this.pendingCleanupPatch };
-      this.pendingCleanupSource = this.pendingCleanupSource ?? source;
-    };
-    const commit = (async () => {
-      try {
-        await runtimeConfig.ensureLoaded();
-        const patched = await runtimeConfig.patch({
-          raw: { worktrees: { cleanup: patch } },
-          note: "worktrees: update cleanup limits",
-        });
-        if (!patched) {
-          this.error = runtimeConfig.state.lastError ?? t("worktrees.cleanupSaveFailed");
-          restoreDraft();
-          return false;
-        }
-        await runtimeConfig.refresh();
-        this.syncCleanupFromConfig();
-        return true;
-      } catch (error) {
-        this.error = String(error);
-        restoreDraft();
-        return false;
-      }
-    })();
-    this.cleanupCommitInFlight = commit;
-    try {
-      return await commit;
-    } finally {
-      if (this.cleanupCommitInFlight === commit) {
-        this.cleanupCommitInFlight = null;
-      }
-    }
-  }
-
-  private applyGatewaySnapshot(
-    snapshot: ApplicationContext["gateway"]["snapshot"],
-    sourceChanged = false,
-  ) {
-    const clientChanged = snapshot.client !== this.client;
-    const connectionChanged = snapshot.connected !== this.gatewayConnected;
-    const identityChanged = sourceChanged || clientChanged;
-    this.client = snapshot.client;
-    this.gatewayConnected = snapshot.connected;
-    if (identityChanged || connectionChanged) {
-      this.invalidateLoad();
-      this.invalidateOperations();
-    }
-    if (identityChanged) {
-      this.records = [];
-      this.error = null;
-    }
-    if (snapshot.connected && snapshot.client) {
-      void this.load();
-    }
-  }
-
-  private invalidateLoad() {
-    this.loadGeneration += 1;
-    this.loading = false;
-  }
-
   private invalidateOperations() {
-    this.operationEpoch += 1;
-    // Stale operation promises skip their finalizers, so reset every epoch-owned flag here.
     this.busyId = null;
     this.creating = false;
+    this.gcLoading = false;
   }
 
-  private captureOperationScope(): WorktreeOperationScope | null {
-    const gateway = this.gatewaySource;
-    const client = this.client;
-    if (
-      !gateway ||
-      !client ||
-      !this.gatewayConnected ||
-      !this.isConnected ||
-      this.context.gateway !== gateway
-    ) {
-      return null;
-    }
-    return { gateway, client, epoch: this.operationEpoch };
-  }
-
-  private isOperationScopeCurrent(scope: WorktreeOperationScope): boolean {
-    return (
-      this.isConnected &&
-      this.gatewayConnected &&
-      this.gatewaySource === scope.gateway &&
-      this.context.gateway === scope.gateway &&
-      this.client === scope.client &&
-      this.operationEpoch === scope.epoch
-    );
-  }
-
-  // Reads and writes share one page-level lane. Otherwise a stale list can
-  // overwrite a completed mutation, while busyId can only represent one row.
   private get operationPending(): boolean {
     return this.loading || this.busyId !== null || this.creating;
   }
 
+  private get loading(): boolean {
+    return this.gcLoading || this.listTask.status === TaskStatus.PENDING;
+  }
+
+  private get canAdmin(): boolean {
+    return readGatewayOperatorAccess(this.context.gateway.snapshot).canAdmin;
+  }
+
+  private get canWrite(): boolean {
+    return readGatewayOperatorAccess(this.context.gateway.snapshot).canWrite;
+  }
+
   private async load(options: { preserveError?: boolean } = {}) {
-    const client = this.client;
-    if (!client || !this.gatewayConnected || this.operationPending) {
+    const client = this.gateway.client;
+    if (
+      !client ||
+      !this.gateway.connected ||
+      this.busyId !== null ||
+      this.creating ||
+      this.gcLoading ||
+      (this.listTask.status === TaskStatus.PENDING && this.listClient === client)
+    ) {
       return;
     }
-    const generation = ++this.loadGeneration;
-    this.loading = true;
+    this.listClient = client;
     if (!options.preserveError) {
       this.error = null;
     }
-    try {
-      const result = await client.request<WorktreesListResult>("worktrees.list", {});
-      if (generation === this.loadGeneration && client === this.client) {
-        // Registry order is insertion order; recently used checkouts matter most.
-        this.records = result.worktrees.toSorted((a, b) => b.lastActiveAt - a.lastActiveAt);
-      }
-    } catch (error) {
-      if (generation === this.loadGeneration && client === this.client) {
-        this.error = String(error);
-      }
-    } finally {
-      if (generation === this.loadGeneration && client === this.client) {
-        this.loading = false;
-      }
-    }
+    await this.listTask.run([client]);
   }
 
   private async removeWorktree(record: WorktreeRecord) {
-    const scope = this.captureOperationScope();
+    const scope = this.gateway.capture();
+    if (!scope || !this.canAdmin || this.operationPending) {
+      return;
+    }
     if (
-      !scope ||
-      this.operationPending ||
-      !window.confirm(t("worktrees.confirmDelete", { name: record.name }))
+      !(await showConfirmDialog({
+        message: t("worktrees.confirmDelete", { name: record.name }),
+        confirmLabel: t("common.delete"),
+        danger: true,
+      })) ||
+      !this.gateway.isCurrent(scope) ||
+      !this.canAdmin ||
+      this.operationPending
     ) {
       return;
     }
@@ -371,32 +185,41 @@ class WorktreesPage extends OpenClawLightDomElement {
       const result = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
         id: record.id,
       });
-      if (!this.isOperationScopeCurrent(scope) || result.removed) {
+      if (!this.gateway.isCurrent(scope) || result.removed) {
         return;
       }
-      // Structured snapshot failure: the caller decides whether to force.
       const reason = result.snapshotError ?? "";
-      const force = window.confirm(t("worktrees.confirmForceDelete", { error: reason }));
+      const force = await showConfirmDialog({
+        message: t("worktrees.confirmForceDelete", { error: reason }),
+        confirmLabel: t("common.delete"),
+        danger: true,
+      });
+      if (!this.gateway.isCurrent(scope) || !this.canAdmin) {
+        return;
+      }
       if (!force) {
         this.error = reason || null;
         return;
       }
-      if (!this.isOperationScopeCurrent(scope)) {
-        return;
-      }
       try {
-        await scope.client.request("worktrees.remove", { id: record.id, force: true });
+        const forced = await scope.client.request<WorktreesRemoveResult>("worktrees.remove", {
+          id: record.id,
+          force: true,
+        });
+        if (this.gateway.isCurrent(scope)) {
+          this.error = forced.snapshotError ?? null;
+        }
       } catch (forceError) {
-        if (this.isOperationScopeCurrent(scope)) {
-          this.error = String(forceError);
+        if (this.gateway.isCurrent(scope)) {
+          this.error = formatUiError(forceError);
         }
       }
     } catch (error) {
-      if (this.isOperationScopeCurrent(scope)) {
-        this.error = String(error);
+      if (this.gateway.isCurrent(scope)) {
+        this.error = formatUiError(error);
       }
     } finally {
-      if (this.isOperationScopeCurrent(scope)) {
+      if (this.gateway.isCurrent(scope)) {
         this.busyId = null;
         await this.load({ preserveError: true });
       }
@@ -404,8 +227,8 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private async restore(record: WorktreeRecord) {
-    const scope = this.captureOperationScope();
-    if (!scope || this.operationPending) {
+    const scope = this.gateway.capture();
+    if (!scope || !this.canAdmin || this.operationPending) {
       return;
     }
     this.busyId = record.id;
@@ -413,11 +236,11 @@ class WorktreesPage extends OpenClawLightDomElement {
     try {
       await scope.client.request("worktrees.restore", { id: record.id });
     } catch (error) {
-      if (this.isOperationScopeCurrent(scope)) {
-        this.error = String(error);
+      if (this.gateway.isCurrent(scope)) {
+        this.error = formatUiError(error);
       }
     } finally {
-      if (this.isOperationScopeCurrent(scope)) {
+      if (this.gateway.isCurrent(scope)) {
         this.busyId = null;
         await this.load({ preserveError: true });
       }
@@ -425,42 +248,28 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private async gc() {
-    const scope = this.captureOperationScope();
-    if (!scope || this.operationPending) {
+    const scope = this.gateway.capture();
+    if (!scope || !this.canAdmin || this.operationPending) {
       return;
     }
-    this.loading = true;
+    this.gcLoading = true;
     this.error = null;
-    // A pending stepper edit must reach the config before gc reads it,
-    // otherwise Clean up now evicts against the previous limits.
-    const flushed = await this.flushCleanupEdits();
-    if (!this.isOperationScopeCurrent(scope)) {
-      return;
-    }
-    if (!flushed) {
-      // The failed commit already surfaced its error; gc must not run
-      // against limits the operator just tried to change.
-      this.loading = false;
-      return;
-    }
     try {
       await scope.client.request("worktrees.gc", {});
     } catch (error) {
-      if (this.isOperationScopeCurrent(scope)) {
-        this.error = String(error);
+      if (this.gateway.isCurrent(scope)) {
+        this.error = formatUiError(error);
       }
     } finally {
-      if (this.isOperationScopeCurrent(scope)) {
-        this.loading = false;
+      if (this.gateway.isCurrent(scope)) {
+        this.gcLoading = false;
         await this.load({ preserveError: true });
       }
     }
   }
 
   private toggleCreate() {
-    // A successful create closes and resets this shared draft, so the submitted
-    // snapshot must stay atomic until its request settles.
-    if (this.creating) {
+    if (!this.canAdmin || this.creating) {
       return;
     }
     this.createOpen = !this.createOpen;
@@ -473,55 +282,40 @@ class WorktreesPage extends OpenClawLightDomElement {
   }
 
   private loadCreateBranches() {
-    const generation = ++this.branchesGeneration;
-    const scope = this.captureOperationScope();
+    const client = this.gateway.connected ? this.gateway.client : null;
     const repoRoot = this.createRepoRoot.trim();
-    if (!scope || !repoRoot) {
+    if (!client || !repoRoot || !this.canWrite) {
       this.createBranches = [];
+      void this.branchesTask.run([null, ""]);
       return;
     }
-    void scope.client
-      .request<WorktreeBranchesResult>("worktrees.branches", { repoRoot })
-      .then((result) => {
-        // Only the latest picker request owns branch state, including after same-path retries.
-        if (generation === this.branchesGeneration && this.isOperationScopeCurrent(scope)) {
-          this.createBranches = result.branches.map((branch) => branch.name);
-          if (!this.createBaseRef) {
-            this.createBaseRef = result.defaultBranch ?? result.headBranch ?? "";
-          }
-        }
-      })
-      .catch(() => {
-        if (generation === this.branchesGeneration && this.isOperationScopeCurrent(scope)) {
-          this.createBranches = [];
-        }
-      });
+    void this.branchesTask.run([client, repoRoot]);
   }
 
   private async createWorktree() {
-    const scope = this.captureOperationScope();
+    const scope = this.gateway.capture();
     const repoRoot = this.createRepoRoot.trim();
-    if (!scope || !repoRoot || this.operationPending) {
+    if (!scope || !this.canAdmin || !repoRoot || this.operationPending) {
       return;
     }
     this.creating = true;
     this.error = null;
     try {
-      await scope.client.request("worktrees.create", {
+      await createManagedWorktree(scope.client, {
         repoRoot,
-        ...(this.createName.trim() ? { name: this.createName.trim() } : {}),
-        ...(this.createBaseRef.trim() ? { baseRef: this.createBaseRef.trim() } : {}),
+        name: this.createName,
+        baseRef: this.createBaseRef,
       });
-      if (this.isOperationScopeCurrent(scope)) {
+      if (this.gateway.isCurrent(scope)) {
         this.createOpen = false;
         this.createName = "";
       }
     } catch (error) {
-      if (this.isOperationScopeCurrent(scope)) {
-        this.error = String(error);
+      if (this.gateway.isCurrent(scope)) {
+        this.error = formatUiError(error);
       }
     } finally {
-      if (this.isOperationScopeCurrent(scope)) {
+      if (this.gateway.isCurrent(scope)) {
         this.creating = false;
         await this.load({ preserveError: true });
       }
@@ -530,8 +324,27 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   private renderOwner(record: WorktreeRecord) {
     if (record.ownerKind === "session" && record.ownerId) {
-      const href = `${pathForRoute("chat", this.context.basePath)}${searchForSession(record.ownerId)}`;
-      return html`<a href=${href} title=${record.ownerId}>${t("worktrees.ownerSession")}</a>`;
+      const face = resolveSessionPreferredFaceForKey(this.context, record.ownerId);
+      const target = sessionNavigationTarget({
+        context: this.context,
+        face,
+        sessionKey: record.ownerId,
+        preferenceDerivedFace: true,
+      });
+      // The clean href stays shareable; the in-app click navigates with the options so an
+      // uncached owner still carries the marker that resolves its stored face.
+      return html`<a
+        href=${target.href}
+        title=${record.ownerId}
+        @click=${(event: MouseEvent) => {
+          if (!shouldHandleNavigationClick(event)) {
+            return;
+          }
+          event.preventDefault();
+          this.context.navigate(face, target.options);
+        }}
+        >${t("worktrees.ownerSession")}</a
+      >`;
     }
     if (record.ownerKind === "workboard") {
       return html`<span title=${record.ownerId ?? ""}>${t("worktrees.ownerWorkboard")}</span>`;
@@ -611,30 +424,6 @@ class WorktreesPage extends OpenClawLightDomElement {
     `;
   }
 
-  private renderCleanupRow(key: CleanupLimitKey, label: string, help: string, value: number) {
-    // Controls stay inert until the config snapshot populates the draft values,
-    // otherwise an early edit would commit 0 over the operator's real limits.
-    const disabled = !this.cleanupLoaded || !this.gatewayConnected;
-    return renderSettingsRow({
-      title: label,
-      description: help,
-      control: html`
-        <input
-          class="settings-input"
-          type="number"
-          min="0"
-          step=${key === "maxCount" ? "1" : "any"}
-          aria-label=${label}
-          .value=${String(value)}
-          ?disabled=${disabled}
-          @change=${(event: Event) => {
-            this.setCleanupLimit(key, Number((event.target as HTMLInputElement).value));
-          }}
-        />
-      `,
-    });
-  }
-
   private renderRecordRow(record: WorktreeRecord) {
     return renderSettingsRow({
       title: record.name,
@@ -648,7 +437,8 @@ class WorktreesPage extends OpenClawLightDomElement {
           : renderSettingsStatus({ kind: "ok", label: t("common.active") })}
         <button
           class=${record.removedAt ? "btn btn--sm" : "btn btn--sm danger"}
-          ?disabled=${this.operationPending}
+          title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
+          ?disabled=${!this.canAdmin || this.operationPending}
           @click=${() =>
             void (record.removedAt ? this.restore(record) : this.removeWorktree(record))}
         >
@@ -660,10 +450,20 @@ class WorktreesPage extends OpenClawLightDomElement {
 
   override render() {
     const actions = html`
-      <button class="btn" ?disabled=${this.creating} @click=${() => this.toggleCreate()}>
+      <button
+        class="btn"
+        title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
+        ?disabled=${!this.canAdmin || this.creating}
+        @click=${() => this.toggleCreate()}
+      >
         ${t("worktrees.newWorktree")}
       </button>
-      <button class="btn" ?disabled=${this.operationPending} @click=${() => void this.gc()}>
+      <button
+        class="btn"
+        title=${this.canAdmin ? "" : t("worktrees.adminRequired")}
+        ?disabled=${!this.canAdmin || this.operationPending}
+        @click=${() => void this.gc()}
+      >
         ${this.loading ? t("common.loading") : t("worktrees.cleanNow")}
       </button>
     `;
@@ -675,40 +475,33 @@ class WorktreesPage extends OpenClawLightDomElement {
     `;
     const body = renderSettingsPage(
       html`
-        ${this.error ? html`<div class="callout danger">${this.error}</div>` : nothing}
+        ${!this.canAdmin
+          ? html`<div class="callout info" role="note">${t("worktrees.adminRequired")}</div>`
+          : nothing}
+        ${this.error ? html`<div class="callout danger" role="alert">${this.error}</div>` : nothing}
         ${renderSettingsSection(
           { title: t("worktrees.title"), description: t("worktrees.subtitle"), actions },
           rows,
-        )}
-        ${renderSettingsSection(
-          { title: t("worktrees.cleanupTitle"), description: t("worktrees.cleanupSubtitle") },
-          html`
-            ${this.renderCleanupRow(
-              "maxCount",
-              t("worktrees.cleanupMaxCount"),
-              t("worktrees.cleanupMaxCountHelp"),
-              this.cleanupMaxCount,
-            )}
-            ${this.renderCleanupRow(
-              "maxTotalSizeGb",
-              t("worktrees.cleanupMaxSize"),
-              t("worktrees.cleanupMaxSizeHelp"),
-              this.cleanupMaxSizeGb,
-            )}
-          `,
         )}
       `,
       { wide: true },
     );
     return html`
-      <section class="content-header">
-        <div>
-          <div class="page-title">${titleForRoute("worktrees")}</div>
-        </div>
-      </section>
-      ${renderSettingsWorkspace(body)}
+      ${renderSessionsHubHeader({
+        active: "worktrees",
+        title: titleForRoute("sessions"),
+        subtitle: html`${subtitleForRoute("worktrees")} ${renderLearnMoreLink(WORKTREES_DOCS_URL)}`,
+        onSelect: (tab) => {
+          if (tab !== "worktrees") {
+            this.context?.navigate(tab);
+          }
+        },
+      })}
+      ${renderSettingsWorkspace(body, { id: "sessions-hub-panel" })}
     `;
   }
 }
 
-customElements.define("openclaw-worktrees-page", WorktreesPage);
+if (!customElements.get("openclaw-worktrees-page")) {
+  customElements.define("openclaw-worktrees-page", WorktreesPage);
+}

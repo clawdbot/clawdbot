@@ -1,22 +1,24 @@
 // Defines core Zod schema fragments for canonical config parsing.
 import path from "node:path";
-import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { z } from "zod";
 import { isSafeExecutableValue } from "../infra/exec-safety.js";
+import { normalizeExactAllowedHost } from "../secrets/exact-hostname.js";
 import {
   formatExecSecretRefIdValidationMessage,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
+  SECRET_PROVIDER_ALIAS_PATTERN,
 } from "../secrets/ref-contract.js";
+import { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
 import type { ModelCompatConfig } from "./types.models.js";
 import { MODEL_APIS, MODEL_THINKING_FORMATS } from "./types.models.js";
-import type { MediaToolsConfig } from "./types.tools.js";
+import { ENV_SECRET_REF_ID_RE } from "./types.secrets.js";
 import { createAllowDenyChannelRulesSchema } from "./zod-schema.allowdeny.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-const ENV_SECRET_REF_ID_PATTERN = /^[A-Z][A-Z0-9_]{0,127}$/;
-const SECRET_PROVIDER_ALIAS_PATTERN = /^[a-z][a-z0-9_-]{0,63}$/;
+export { isBuiltInModelProviderOverlayId } from "./model-provider-config.js";
+
 const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
 const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
@@ -42,7 +44,7 @@ const EnvSecretRefSchema = z
     id: z
       .string()
       .regex(
-        ENV_SECRET_REF_ID_PATTERN,
+        ENV_SECRET_REF_ID_RE,
         'Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
       ),
   })
@@ -79,20 +81,49 @@ const ExecSecretRefSchema = z
   })
   .strict();
 
+const StoreSecretRefSchema = z
+  .object({
+    source: z.literal("store"),
+    provider: z
+      .string()
+      .regex(
+        SECRET_PROVIDER_ALIAS_PATTERN,
+        'Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (example: "default").',
+      ),
+    id: z
+      .string()
+      .regex(
+        ENV_SECRET_REF_ID_RE,
+        'Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (example: "OPENAI_API_KEY").',
+      ),
+  })
+  .strict();
+
 /** Config-level secret reference schema shared by model/provider/plugin credential fields. */
 export const SecretRefSchema = z.discriminatedUnion("source", [
   EnvSecretRefSchema,
   FileSecretRefSchema,
   ExecSecretRefSchema,
+  StoreSecretRefSchema,
 ]);
 
 /** Accepts either legacy inline secret strings or structured secret references. */
 export const SecretInputSchema = z.union([z.string(), SecretRefSchema]);
 
+/** Canonical operator-configurable SSRF policy shared by network-capable surfaces. */
+export const SsrFPolicyConfigSchema = z
+  .object({
+    dangerouslyAllowPrivateNetwork: z.boolean().optional(),
+    allowRfc2544BenchmarkRange: z.boolean().optional(),
+    allowIpv6UniqueLocalRange: z.boolean().optional(),
+    allowedHostnames: z.array(z.string()).optional(),
+  })
+  .strict();
+
 const SecretsEnvProviderSchema = z
   .object({
     source: z.literal("env"),
-    allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_PATTERN)).max(256).optional(),
+    allowlist: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(256).optional(),
   })
   .strict();
 
@@ -108,7 +139,6 @@ const SecretsFileProviderSchema = z
       .positive()
       .max(20 * 1024 * 1024)
       .optional(),
-    allowInsecurePath: z.boolean().optional(),
   })
   .strict();
 
@@ -134,7 +164,7 @@ const SecretsManualExecProviderSchema = z
       .optional(),
     jsonOnly: z.boolean().optional(),
     env: z.record(z.string(), z.string()).optional(),
-    passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_PATTERN)).max(128).optional(),
+    passEnv: z.array(z.string().regex(ENV_SECRET_REF_ID_RE)).max(128).optional(),
     trustedDirs: z
       .array(
         z
@@ -144,8 +174,6 @@ const SecretsManualExecProviderSchema = z
       )
       .max(64)
       .optional(),
-    allowInsecurePath: z.boolean().optional(),
-    allowSymlinkCommand: z.boolean().optional(),
   })
   .strict();
 
@@ -166,16 +194,45 @@ const SecretsExecProviderSchema = z.union([
   SecretsPluginIntegrationExecProviderSchema,
 ]);
 
-/** Schema for one configured env/file/exec secret provider entry. */
+const SecretsStoreProviderSchema = z.object({ source: z.literal("store") }).strict();
+
+// Same exact-host contract as per-secret destination bindings: rejecting schemes,
+// ports, wildcards, and malformed hostnames here keeps invalid entries out of the
+// egress-proxy startup path, which would otherwise throw while starting the Gateway.
+const EgressProxyExactHostSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .superRefine((host, ctx) => {
+    try {
+      normalizeExactAllowedHost(host);
+    } catch (error) {
+      ctx.addIssue({
+        code: "custom",
+        message: error instanceof Error ? error.message : "Invalid allowed host",
+      });
+    }
+  });
+
+/** Schema for one configured env/file/exec/store secret provider entry. */
 export const SecretProviderSchema = z.union([
   SecretsEnvProviderSchema,
   SecretsFileProviderSchema,
   SecretsExecProviderSchema,
+  SecretsStoreProviderSchema,
 ]);
 
 /** Schema for the top-level `secrets` config block. */
 export const SecretsConfigSchema = z
   .object({
+    egressProxy: z
+      .object({
+        enabled: z.boolean().optional(),
+        allowedHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
+        bypassHosts: z.array(EgressProxyExactHostSchema).max(256).optional(),
+      })
+      .strict()
+      .optional(),
     providers: z
       .object({
         // Keep this as a record so users can define multiple named providers per source.
@@ -187,19 +244,7 @@ export const SecretsConfigSchema = z
         env: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         file: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
         exec: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
-      })
-      .strict()
-      .optional(),
-    resolution: z
-      .object({
-        maxProviderConcurrency: z.number().int().positive().max(16).optional(),
-        maxRefsPerProvider: z.number().int().positive().max(4096).optional(),
-        maxBatchBytes: z
-          .number()
-          .int()
-          .positive()
-          .max(5 * 1024 * 1024)
-          .optional(),
+        store: z.string().regex(SECRET_PROVIDER_ALIAS_PATTERN).optional(),
       })
       .strict()
       .optional(),
@@ -225,9 +270,12 @@ const ModelCompatSchema = z
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsTemperature: z.boolean().optional(),
+    supportsInstructions: z.boolean().optional(),
     supportsUsageInStreaming: z.boolean().optional(),
     supportsTools: z.boolean().optional(),
+    codeMode: z.enum(["preferred", "capable"]).optional(),
     supportsStrictMode: z.boolean().optional(),
+    supportsJsonSchemaResponseFormat: z.boolean().optional(),
     requiresStringContent: z.boolean().optional(),
     strictMessageKeys: z.boolean().optional(),
     visibleReasoningDetailTypes: z.array(z.string().min(1)).optional(),
@@ -243,9 +291,7 @@ const ModelCompatSchema = z
     requiresReasoningContentOnAssistantMessages: z.boolean().optional(),
     toolSchemaProfile: z.string().optional(),
     unsupportedToolSchemaKeywords: z.array(z.string().min(1)).optional(),
-    nativeWebSearchTool: z.boolean().optional(),
     toolCallArgumentsEncoding: z.string().optional(),
-    requiresMistralToolIds: z.boolean().optional(),
     requiresOpenAiAnthropicToolPayload: z.boolean().optional(),
   })
   .strict()
@@ -428,105 +474,16 @@ const ModelProviderLocalServiceSchema = z
   .strict()
   .optional();
 
-const BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS = new Set([
-  "amazon-bedrock",
-  "amazon-bedrock-mantle",
-  "anthropic",
-  "anthropic-vertex",
-  "arcee",
-  "azure-openai-responses",
-  "byteplus",
-  "byteplus-plan",
-  "cerebras",
-  "chutes",
-  "claude-cli",
-  "clawrouter",
-  "cloudflare-ai-gateway",
-  "codex",
-  "comfy",
-  "copilot-proxy",
-  "dashscope",
-  "deepinfra",
-  "deepseek",
-  "fal",
-  "fireworks",
-  "github-copilot",
-  "gmi",
-  "gmi-cloud",
-  "gmicloud",
-  "google",
-  "google-antigravity",
-  "google-gemini-cli",
-  "google-vertex",
-  "groq",
-  "huggingface",
-  "kilocode",
-  "kimi",
-  "kimi-coding",
-  "litellm",
-  "lmstudio",
-  "meta",
-  "microsoft-foundry",
-  "minimax",
-  "minimax-portal",
-  "mistral",
-  "modelstudio",
-  "moonshot",
-  "moonshot-ai",
-  "moonshotai",
-  "nvidia",
-  "novita",
-  "novita-ai",
-  "novitaai",
-  "ollama",
-  "ollama-cloud",
-  "openai",
-  "opencode",
-  "opencode-go",
-  "openrouter",
-  "qianfan",
-  "qwen",
-  "qwen-cli",
-  "qwen-oauth",
-  "qwen-portal",
-  "qwen-token-plan",
-  "qwencloud",
-  "sglang",
-  "stepfun",
-  "stepfun-plan",
-  "synthetic",
-  "tencent-tokenhub",
-  "tencent-tokenplan",
-  "together",
-  "venice",
-  "vercel-ai-gateway",
-  "vllm",
-  "volcengine",
-  "volcengine-plan",
-  "vydra",
-  "x-ai",
-  "xai",
-  "xiaomi",
-  "xiaomi-token-plan",
-  "z.ai",
-  "z-ai",
-  "zai",
-]);
-
-export function isBuiltInModelProviderOverlayId(providerId: string): boolean {
-  return BUILT_IN_MODEL_PROVIDER_OVERLAY_IDS.has(normalizeProviderId(providerId));
-}
-
 const ModelProviderSchema = z
   .object({
-    baseUrl: z.string().min(1).optional(),
+    // Bundled provider overlays are materialized with an empty-string sentinel.
+    // ModelProvidersSchema below still rejects empty baseUrl values for custom providers.
+    baseUrl: z.string().optional(),
     apiKey: SecretInputSchema.optional().register(sensitive),
     auth: z
       .union([z.literal("api-key"), z.literal("aws-sdk"), z.literal("oauth"), z.literal("token")])
       .optional(),
     api: ModelApiSchema.optional(),
-    contextWindow: z.number().positive().optional(),
-    contextTokens: z.number().int().positive().optional(),
     maxTokens: z.number().positive().optional(),
     timeoutSeconds: z.number().int().positive().optional(),
     region: z.string().min(1).optional(),
@@ -567,9 +524,29 @@ const ModelProvidersSchema = z
     }
   });
 
-const ModelPricingConfigSchema = z
+const ModelCatalogRefreshConfigSchema = z
   .object({
     enabled: z.boolean().optional(),
+    url: z
+      .string()
+      .refine(
+        (value) => {
+          try {
+            const parsed = new URL(value);
+            return (
+              parsed.protocol === "https:" ||
+              (parsed.protocol === "http:" &&
+                ["localhost", "127.0.0.1", "[::1]"].includes(parsed.hostname))
+            );
+          } catch {
+            return false;
+          }
+        },
+        {
+          message: "models.catalogRefresh.url must use https, or http on localhost",
+        },
+      )
+      .optional(),
   })
   .strict()
   .optional();
@@ -578,7 +555,7 @@ export const ModelsConfigSchema = z
   .object({
     mode: z.union([z.literal("merge"), z.literal("replace")]).optional(),
     providers: ModelProvidersSchema.optional(),
-    pricing: ModelPricingConfigSchema,
+    catalogRefresh: ModelCatalogRefreshConfigSchema,
   })
   .strict()
   .optional();
@@ -611,7 +588,7 @@ export const MentionPatternsPolicySchema = z
 export const GroupChatSchema = z
   .object({
     mentionPatterns: z.array(z.string()).optional(),
-    historyLimit: z.number().int().positive().optional(),
+    historyLimit: z.number().int().min(0).optional(),
     unmentionedInbound: AmbientGroupInboundSchema.optional(),
     visibleReplies: VisibleRepliesSchema.optional(),
   })
@@ -654,10 +631,6 @@ export const TypingModeSchema = z.union([
   z.literal("message"),
 ]);
 
-// GroupPolicySchema: controls how group messages are handled
-// Used with .default("allowlist").optional() pattern:
-//   - .optional() allows field omission in input config
-//   - .default("allowlist") ensures runtime always resolves to "allowlist" if not provided
 export const GroupPolicySchema = z.enum(["open", "disabled", "allowlist"]);
 
 export const DmPolicySchema = z.enum(["pairing", "allowlist", "open", "disabled"]);
@@ -735,17 +708,6 @@ const TtsProviderConfigSchema = z
       z.record(z.string(), z.unknown()),
     ]),
   );
-const TtsPersonaPromptSchema = z
-  .object({
-    profile: z.string().optional(),
-    scene: z.string().optional(),
-    sampleContext: z.string().optional(),
-    style: z.string().optional(),
-    accent: z.string().optional(),
-    pacing: z.string().optional(),
-    constraints: z.array(z.string()).optional(),
-  })
-  .strict();
 const TtsPersonaSchema = z
   .object({
     label: z.string().optional(),
@@ -754,7 +716,6 @@ const TtsPersonaSchema = z
     fallbackPolicy: z
       .union([z.literal("preserve-persona"), z.literal("provider-defaults"), z.literal("fail")])
       .optional(),
-    prompt: TtsPersonaPromptSchema.optional(),
     providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
   })
   .strict();
@@ -781,7 +742,6 @@ export const TtsConfigSchema = z
       .strict()
       .optional(),
     providers: z.record(z.string(), TtsProviderConfigSchema).optional(),
-    prefsPath: z.string().optional(),
     maxTextLength: z.number().int().min(1).optional(),
     timeoutMs: z.number().int().min(1000).max(120000).optional(),
   })
@@ -793,82 +753,6 @@ export const HumanDelaySchema = z
     mode: z.union([z.literal("off"), z.literal("natural"), z.literal("custom")]).optional(),
     minMs: z.number().int().nonnegative().optional(),
     maxMs: z.number().int().nonnegative().optional(),
-  })
-  .strict();
-
-const CliBackendWatchdogModeSchema = z
-  .object({
-    noOutputTimeoutMs: z.number().int().min(1000).optional(),
-    noOutputTimeoutRatio: z.number().min(0.05).max(0.95).optional(),
-    minMs: z.number().int().min(1000).optional(),
-    maxMs: z.number().int().min(1000).optional(),
-  })
-  .strict()
-  .optional();
-
-const CliBackendOutputLimitsSchema = z
-  .object({
-    maxTurnRawChars: z
-      .number()
-      .int()
-      .min(1024)
-      .max(64 * 1024 * 1024)
-      .optional(),
-    maxTurnLines: z.number().int().min(100).max(100_000).optional(),
-  })
-  .strict()
-  .optional();
-
-export const CliBackendSchema = z
-  .object({
-    command: z.string(),
-    args: z.array(z.string()).optional(),
-    output: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    resumeOutput: z.union([z.literal("json"), z.literal("text"), z.literal("jsonl")]).optional(),
-    jsonlDialect: z
-      .union([z.literal("claude-stream-json"), z.literal("gemini-stream-json")])
-      .optional(),
-    liveSession: z.literal("claude-stdio").optional(),
-    input: z.union([z.literal("arg"), z.literal("stdin")]).optional(),
-    maxPromptArgChars: z.number().int().positive().optional(),
-    env: z.record(z.string(), z.string()).optional(),
-    clearEnv: z.array(z.string()).optional(),
-    modelArg: z.string().optional(),
-    modelAliases: z.record(z.string(), z.string()).optional(),
-    sessionArg: z.string().optional(),
-    sessionArgs: z.array(z.string()).optional(),
-    resumeArgs: z.array(z.string()).optional(),
-    forkArg: z.string().optional(),
-    sessionMode: z
-      .union([z.literal("always"), z.literal("existing"), z.literal("none")])
-      .optional(),
-    sessionIdFields: z.array(z.string()).optional(),
-    systemPromptArg: z.string().optional(),
-    systemPromptFileArg: z.string().optional(),
-    systemPromptFileConfigArg: z.string().optional(),
-    systemPromptFileConfigKey: z.string().optional(),
-    systemPromptMode: z.union([z.literal("append"), z.literal("replace")]).optional(),
-    systemPromptWhen: z
-      .union([z.literal("first"), z.literal("always"), z.literal("never")])
-      .optional(),
-    imageArg: z.string().optional(),
-    imageMode: z.union([z.literal("repeat"), z.literal("list")]).optional(),
-    imagePathScope: z.union([z.literal("temp"), z.literal("workspace")]).optional(),
-    serialize: z.boolean().optional(),
-    reseedFromRawTranscriptWhenUncompacted: z.boolean().optional(),
-    reliability: z
-      .object({
-        outputLimits: CliBackendOutputLimitsSchema,
-        watchdog: z
-          .object({
-            fresh: CliBackendWatchdogModeSchema,
-            resume: CliBackendWatchdogModeSchema,
-          })
-          .strict()
-          .optional(),
-      })
-      .strict()
-      .optional(),
   })
   .strict();
 
@@ -947,16 +831,6 @@ export const requireAllowlistAllowFrom = (params: {
 
 export const MSTeamsReplyStyleSchema = z.enum(["thread", "top-level"]);
 
-export const RetryConfigSchema = z
-  .object({
-    attempts: z.number().int().min(1).optional(),
-    minDelayMs: z.number().int().min(0).optional(),
-    maxDelayMs: z.number().int().min(0).optional(),
-    jitter: z.number().min(0).max(1).optional(),
-  })
-  .strict()
-  .optional();
-
 const QueueModeBySurfaceSchema = z
   .object({
     whatsapp: QueueModeSchema.optional(),
@@ -981,7 +855,6 @@ export const QueueSchema = z
   .object({
     mode: QueueModeSchema.optional(),
     byChannel: QueueModeBySurfaceSchema,
-    debounceMs: z.number().int().nonnegative().optional(),
     debounceMsByChannel: DebounceMsBySurfaceSchema,
     cap: z.number().int().positive().optional(),
     drop: QueueDropSchema.optional(),
@@ -997,23 +870,6 @@ export const InboundDebounceSchema = z
   .strict()
   .optional();
 
-export const TranscribeAudioSchema = z
-  .object({
-    command: z.array(z.string()).superRefine((value, ctx) => {
-      const executable = value[0];
-      if (!isSafeExecutableValue(executable)) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          path: [0],
-          message: "expected safe executable name or path",
-        });
-      }
-    }),
-    timeoutSeconds: z.number().int().positive().optional(),
-  })
-  .strict()
-  .optional();
-
 export const HexColorSchema = z.string().regex(/^#?[0-9a-fA-F]{6}$/, "expected hex color (RRGGBB)");
 
 export const ExecutableTokenSchema = z
@@ -1021,10 +877,6 @@ export const ExecutableTokenSchema = z
   .refine(isSafeExecutableValue, "expected safe executable name or path");
 
 const MediaUnderstandingScopeSchema = createAllowDenyChannelRulesSchema();
-
-const MediaUnderstandingCapabilitiesSchema = z
-  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
-  .optional();
 
 const MediaUnderstandingAttachmentsSchema = z
   .object({
@@ -1037,13 +889,8 @@ const MediaUnderstandingAttachmentsSchema = z
   .strict()
   .optional();
 
-const DeepgramAudioSchema = z
-  .object({
-    detectLanguage: z.boolean().optional(),
-    punctuate: z.boolean().optional(),
-    smartFormat: z.boolean().optional(),
-  })
-  .strict()
+const MediaUnderstandingCapabilitiesSchema = z
+  .array(z.union([z.literal("image"), z.literal("audio"), z.literal("video")]))
   .optional();
 
 const ProviderOptionValueSchema = z.union([z.string(), z.number(), z.boolean()]);
@@ -1056,7 +903,6 @@ const MediaUnderstandingRuntimeFields = {
   timeoutSeconds: z.number().int().positive().optional(),
   language: z.string().optional(),
   providerOptions: ProviderOptionsSchema,
-  deepgram: DeepgramAudioSchema,
   baseUrl: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   request: ConfiguredProviderRequestSchema,
@@ -1079,15 +925,28 @@ const MediaUnderstandingModelSchema = z
   .strict()
   .optional();
 
-const ToolsMediaUnderstandingSchema = z
+const ToolsMediaCapabilitySchema = z
   .object({
     enabled: z.boolean().optional(),
+    preferredModel: z.string().trim().min(1).optional(),
     scope: MediaUnderstandingScopeSchema,
     maxBytes: z.number().int().positive().optional(),
     maxChars: z.number().int().positive().optional(),
     ...MediaUnderstandingRuntimeFields,
     attachments: MediaUnderstandingAttachmentsSchema,
-    models: z.array(MediaUnderstandingModelSchema).optional(),
+  })
+  .strict()
+  .optional();
+
+const ToolsMediaAudioSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    preferredModel: z.string().trim().min(1).optional(),
+    scope: MediaUnderstandingScopeSchema,
+    maxBytes: z.number().int().positive().optional(),
+    maxChars: z.number().int().positive().optional(),
+    ...MediaUnderstandingRuntimeFields,
+    attachments: MediaUnderstandingAttachmentsSchema,
     echoTranscript: z.boolean().optional(),
     echoFormat: z.string().optional(),
   })
@@ -1098,30 +957,12 @@ export const ToolsMediaSchema = z
   .object({
     models: z.array(MediaUnderstandingModelSchema).optional(),
     concurrency: z.number().int().positive().optional(),
-    asyncCompletion: z
-      .object({
-        directSend: z.boolean().optional(),
-      })
-      .strict()
-      .optional(),
-    image: ToolsMediaUnderstandingSchema.optional(),
-    audio: ToolsMediaUnderstandingSchema.optional(),
-    video: ToolsMediaUnderstandingSchema.optional(),
+    image: ToolsMediaCapabilitySchema.optional(),
+    audio: ToolsMediaAudioSchema.optional(),
+    video: ToolsMediaCapabilitySchema.optional(),
   })
   .strict()
   .optional();
-type ToolsMediaConfigFromSchema = NonNullable<z.infer<typeof ToolsMediaSchema>>;
-const toolsMediaAsyncCompletionSchemaContract: [
-  AssertAssignable<
-    ToolsMediaConfigFromSchema["asyncCompletion"],
-    MediaToolsConfig["asyncCompletion"]
-  >,
-  AssertAssignable<
-    MediaToolsConfig["asyncCompletion"],
-    ToolsMediaConfigFromSchema["asyncCompletion"]
-  >,
-] = [] as never;
-void toolsMediaAsyncCompletionSchemaContract;
 const LinkModelSchema = z
   .object({
     type: z.literal("cli").optional(),

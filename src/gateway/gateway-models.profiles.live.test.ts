@@ -12,13 +12,14 @@ import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   clampThinkingLevel,
   type Api,
   type Model,
   type ModelThinkingLevel,
 } from "openclaw/plugin-sdk/llm";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { renderCatNoncePngBase64 } from "../../test/helpers/live-image-probe.js";
 import { discoverAuthStorage, discoverModels } from "../agents/agent-model-discovery.js";
 import { resolveAgentWorkspaceDir, resolveDefaultAgentDir } from "../agents/agent-scope.js";
@@ -28,10 +29,28 @@ import {
   saveAuthProfileStore,
 } from "../agents/auth-profiles/store.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
-import { collectAnthropicApiKeys } from "../agents/live-auth-keys.js";
-import { appendPrioritizedDynamicLiveModels } from "../agents/live-model-dynamic-candidates.js";
+import { collectProviderApiKeys } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
+  isLiveProfileKeyModeEnabled,
+  isLiveTestEnabled,
+  readLiveTestConfig,
+  requiresLiveProfileCredential,
+  resolveLiveCredentialPrecedence,
+} from "../agents/live-test-helpers.js";
+import { shouldSkipLiveProviderDrift } from "../agents/live-test-provider-drift.js";
+import {
+  isLiveBillingDrift,
+  isLiveRateLimitDrift,
+} from "../agents/live-test-provider-drift.test-support.js";
+import { getApiKeyForModelCore, type ResolvedProviderAuth } from "../agents/model-auth.js";
+import { normalizeProviderId } from "../agents/model-selection.js";
+import { shouldSuppressBuiltInModelCore } from "../agents/model-suppression.js";
+import { ensureOpenClawModelsJson } from "../agents/models-config.js";
+import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
+import {
+  appendPrioritizedDynamicLiveModels,
+  applyLiveProviderPluginDiscoveryCompat,
   DEFAULT_HIGH_SIGNAL_LIVE_MODEL_LIMIT,
   DEFAULT_SMALL_LIVE_MODEL_LIMIT,
   getHighSignalLiveModelPriorityIndex,
@@ -43,32 +62,32 @@ import {
   selectHighSignalLiveItems,
   selectSmallLiveItems,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
-} from "../agents/live-model-filter.js";
-import { createLiveTargetMatcher } from "../agents/live-target-matcher.js";
-import { isLiveProfileKeyModeEnabled, isLiveTestEnabled } from "../agents/live-test-helpers.js";
+  resolveLiveProviderDiscoveryProviderIds,
+} from "../agents/test-helpers/live-model-dynamic-candidates.js";
+import { createLiveTargetMatcher } from "../agents/test-helpers/live-target-matcher.js";
+import { mergeWorkspaceSetupState } from "../agents/workspace-state-store.js";
+import { ensureAgentWorkspace } from "../agents/workspace.js";
+import { clearRuntimeConfigSnapshot } from "../config/io.js";
 import {
-  isLiveBillingDrift,
-  isLiveRateLimitDrift,
-  shouldSkipLiveProviderDrift,
-} from "../agents/live-test-provider-drift.js";
-import { getApiKeyForModel, resolveEnvApiKey } from "../agents/model-auth.js";
-import { normalizeProviderId } from "../agents/model-selection.js";
-import { shouldSuppressBuiltInModel } from "../agents/model-suppression.js";
-import { ensureOpenClawModelsJson } from "../agents/models-config.js";
-import { STREAM_ERROR_FALLBACK_TEXT } from "../agents/stream-message-shared.js";
-import { clearRuntimeConfigSnapshot, getRuntimeConfig } from "../config/io.js";
+  isSessionTranscriptProjectionUnavailableError,
+  SessionTranscriptProjectionUnavailableError,
+} from "../config/sessions/session-accessor.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
-import { normalizeGoogleModelId } from "../plugin-sdk/google-model-id.js";
-import { resolveProviderThinkingProfile } from "../plugins/provider-runtime.js";
-import { DEFAULT_AGENT_ID } from "../routing/session-key.js";
+import { redactSecrets } from "../logging/redact.js";
+import { normalizeGooglePreviewModelId } from "../plugin-sdk/provider-model-shared.js";
+import { resolveEffectiveThinkingProfile } from "../plugins/provider-thinking.js";
+import { LEGACY_IMPLICIT_AGENT_ID as DEFAULT_AGENT_ID } from "../routing/session-key.js";
 import { stripAssistantInternalScaffolding } from "../shared/text/assistant-visible-text.js";
 import { findFinalTagMatches, stripFinalTags } from "../shared/text/final-tags.js";
 import { deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
 import { getFreePort, isPortFree } from "../test-utils/ports.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
+import { restoreLiveEnv, snapshotLiveEnv } from "./live-env-test-helpers.js";
+import { READ_SCOPE, WRITE_SCOPE } from "./operator-scopes.js";
+import type { GatewayServer } from "./server-public.js";
 
 type ProviderThinkingModelCompat = {
   thinkingFormat?: string;
@@ -81,13 +100,11 @@ import {
   shouldRetryExecReadProbe,
   shouldRetryToolReadProbe,
 } from "./live-tool-probe.test-helpers.js";
-import { startGatewayServer } from "./server.impl.js";
 import { readSessionMessagesAsync } from "./session-transcript-readers.js";
 import { loadSessionEntry } from "./session-utils.js";
 
 const ZAI_FALLBACK = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_ZAI_FALLBACK);
 const REQUIRE_PROFILE_KEYS = isLiveProfileKeyModeEnabled();
-const LIVE_CREDENTIAL_PRECEDENCE = REQUIRE_PROFILE_KEYS ? "profile-first" : "env-first";
 const PROVIDERS = parseFilter(process.env.OPENCLAW_LIVE_GATEWAY_PROVIDERS);
 const GATEWAY_LIVE_SMOKE = isTruthyEnvValue(process.env.OPENCLAW_LIVE_GATEWAY_SMOKE);
 const GATEWAY_LIVE_OPENAI_API_DEFAULT = isTruthyEnvValue(
@@ -138,6 +155,7 @@ const GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS = new Set([
   "openai/gpt-5.4-pro",
 ]);
 const GATEWAY_LIVE_AGENT_ID = "dev";
+const GATEWAY_LIVE_OPERATOR_SCOPES = [READ_SCOPE, WRITE_SCOPE];
 const GATEWAY_LIVE_CONFIG_TEST_WORKSPACE = path.join(os.tmpdir(), "openclaw-live-config-test");
 const GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR = path.join(
   os.tmpdir(),
@@ -147,7 +165,7 @@ const GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
   "fireworks/accounts/fireworks/models/glm-5",
   "fireworks/accounts/fireworks/models/kimi-k2p5",
   "fireworks/accounts/fireworks/models/kimi-k2p6",
-  "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+  "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
   "google/gemini-3.1-flash-lite",
 ]);
 const GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS = new Set([
@@ -176,12 +194,6 @@ function parseFilter(raw?: string): Set<string> | null {
     }
   }
   return ids.length ? new Set(ids) : null;
-}
-
-function providerFilterList(): string[] | undefined {
-  return PROVIDERS
-    ? [...PROVIDERS].toSorted((left, right) => left.localeCompare(right))
-    : undefined;
 }
 
 function listHighSignalLiveModelProviders(): string[] {
@@ -252,12 +264,13 @@ function filterGatewayLiveModelRefsByProvider(
 }
 
 function resolvePrioritizedGatewayLiveModelRefs(params: {
+  explicitRefs: readonly { provider: string; id: string }[];
   providerFilter: ReadonlySet<string> | null;
   useExplicit: boolean;
   useSmall: boolean;
 }): Array<{ provider: string; id: string }> {
   if (params.useExplicit) {
-    return [];
+    return filterGatewayLiveModelRefsByProvider(params.explicitRefs, params.providerFilter);
   }
   // High-signal refs can be plugin-resolved models absent from the static
   // catalog; omitting them leaves provider-scoped live lanes with zero coverage.
@@ -710,7 +723,7 @@ function shouldStripAssistantScaffoldingForLiveModel(modelKey?: string): boolean
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(modelId)}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(modelId)}`;
   return GATEWAY_LIVE_STRIP_SCAFFOLDING_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -739,7 +752,7 @@ function shouldSkipExecReadNonceMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_EXEC_READ_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -880,7 +893,7 @@ describe("shouldSkipExecReadNonceMissForLiveModel", () => {
     ).toBe(true);
     expect(
       shouldSkipExecReadNonceMissForLiveModel(
-        "fireworks/accounts/fireworks/routers/kimi-k2p5-turbo",
+        "fireworks/accounts/fireworks/routers/kimi-k2p6-turbo",
       ),
     ).toBe(true);
   });
@@ -1259,10 +1272,6 @@ function resolveBedrockDiscoveryRegion(cfg: OpenClawConfig | undefined): string 
   return typeof region === "string" ? normalizeOptionalEnvValue(region) : undefined;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function resolveAwsProfileRegion(env: NodeJS.ProcessEnv): string | undefined {
   const profile = normalizeOptionalEnvValue(env.AWS_PROFILE) ?? "default";
   const homeDir = normalizeOptionalEnvValue(env.HOME) ?? os.homedir();
@@ -1381,10 +1390,30 @@ function normalizeOptionalEnvValue(value: string | undefined): string | undefine
 }
 
 function createExplicitLiveFallbackModel(provider: string, id: string): Model {
+  const thinkingProfile = resolveEffectiveThinkingProfile({
+    provider,
+    context: {
+      provider,
+      modelId: id,
+      agentRuntime: "openclaw",
+      reasoning: true,
+    },
+  });
+  const supportsXhigh = thinkingProfile?.levels.some((level) => level.id === "xhigh") ?? false;
+  const supportsMax = thinkingProfile?.levels.some((level) => level.id === "max") ?? false;
   return {
     ...createGatewayLiveTestModel(provider, id),
     contextWindow: EXPLICIT_LIVE_FALLBACK_CONTEXT_WINDOW,
     maxTokens: 4_096,
+    reasoning: thinkingProfile?.levels.some((level) => level.id !== "off") ?? false,
+    ...(supportsXhigh || supportsMax
+      ? {
+          thinkingLevelMap: {
+            ...(supportsXhigh ? { xhigh: "xhigh" } : {}),
+            ...(supportsMax ? { max: "max" } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -1459,7 +1488,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
     expect(candidates).toEqual([model]);
   });
 
-  it("keeps provider-qualified explicit refs usable when the registry is empty", () => {
+  it("fails closed when canonical metadata is unavailable for an explicit ref", () => {
     const matcher = createLiveTargetMatcher({
       providerFilter: new Set(["openai"]),
       modelFilter: new Set(["openai/gpt-5.5"]),
@@ -1481,11 +1510,7 @@ describe("resolveExplicitLiveModelCandidates", () => {
       targetMatcher: matcher,
     });
 
-    if (!candidates) {
-      throw new Error("expected explicit fallback candidates");
-    }
-    expect(candidates).toEqual([createExplicitLiveFallbackModel("openai", "gpt-5.5")]);
-    expect(candidates[0]?.contextWindow).toBeGreaterThanOrEqual(4_000);
+    expect(candidates).toBeNull();
   });
 
   it("uses the Bedrock Converse API for explicit Bedrock fallback candidates", () => {
@@ -1601,6 +1626,7 @@ describe("providerScopedModelRegistryProviders", () => {
   it("loads provider-scoped dynamic refs for default high-signal sweeps", () => {
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
+        explicitRefs: [],
         providerFilter: new Set(["openrouter"]),
         useExplicit: false,
         useSmall: false,
@@ -1612,21 +1638,23 @@ describe("providerScopedModelRegistryProviders", () => {
     ]);
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
+        explicitRefs: [],
         providerFilter: new Set(["fireworks"]),
         useExplicit: false,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/models/glm-5p1" }]);
+    ).toEqual([{ provider: "fireworks", id: "accounts/fireworks/routers/glm-5p2-fast" }]);
   });
 
-  it("leaves explicit gateway model refs to targeted registry lookup", () => {
+  it("loads explicit gateway model refs through dynamic discovery", () => {
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
+        explicitRefs: [{ provider: "openrouter", id: "openai/gpt-5.2-chat" }],
         providerFilter: new Set(["openrouter"]),
         useExplicit: true,
         useSmall: false,
       }),
-    ).toEqual([]);
+    ).toEqual([{ provider: "openrouter", id: "openai/gpt-5.2-chat" }]);
   });
 
   it("does not count small models outside a provider-scoped gateway sweep", () => {
@@ -1702,7 +1730,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (id) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel("openai", id),
             reasoning: true,
@@ -1717,7 +1744,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("preserves exact max for max-capable GPT-5.6 metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: {
           ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
           reasoning: true,
@@ -1731,14 +1757,12 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("fails exact-proof levels instead of silently clamping them", () => {
     expect(() =>
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "max",
       }),
     ).toThrow(/does not advertise max|clamps max/u);
     expect(() =>
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "ultra",
       }),
@@ -1748,7 +1772,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("clamps requested thinking to levels supported by model metadata", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: {
           ...createGatewayLiveTestModel("example", "reasoning-model"),
           reasoning: true,
@@ -1769,11 +1792,26 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
   it("does not let provider profiles override model-level thinking support", () => {
     expect(
       resolveGatewayLiveModelThinkingLevel({
-        cfg: {},
         model: createGatewayLiveTestModel("openai", "gpt-5.5"),
         requestedLevel: "high",
       }),
     ).toBe("off");
+  });
+
+  it.each([
+    ["openai-completions", "off"],
+    ["anthropic-messages", "high"],
+  ] as const)("uses the discovered %s transport for provider thinking policy", (api, expected) => {
+    expect(
+      resolveGatewayLiveModelThinkingLevel({
+        model: {
+          ...createGatewayLiveTestModel("opencode-go", "glm-5.1"),
+          api,
+          reasoning: true,
+        },
+        requestedLevel: "high",
+      }),
+    ).toBe(expected);
   });
 
   it.each(["xai", "x-ai"])(
@@ -1781,7 +1819,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (provider) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel(provider, "grok-4.5"),
             reasoning: true,
@@ -1805,7 +1842,6 @@ describe("resolveGatewayLiveModelThinkingLevel", () => {
     (provider) => {
       expect(
         resolveGatewayLiveModelThinkingLevel({
-          cfg: {},
           model: {
             ...createGatewayLiveTestModel(provider, "grok-build-0.1"),
             reasoning: true,
@@ -1843,7 +1879,7 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          list: [{ id: "ops", default: true }],
+          entries: { ops: {} },
         },
         bindings: [{ agentId: "ops", match: { channel: "telegram" } }],
         broadcast: {
@@ -1856,15 +1892,13 @@ describe("buildLiveGatewayConfig", () => {
       liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
-    expect(cfg.agents?.list).toEqual([
-      {
-        id: GATEWAY_LIVE_AGENT_ID,
-        default: true,
+    expect(cfg.agents?.entries).toEqual({
+      [GATEWAY_LIVE_AGENT_ID]: {
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
       },
-    ]);
+    });
     expect(cfg.bindings).toBeUndefined();
     expect(cfg.broadcast).toBeUndefined();
   });
@@ -1873,14 +1907,12 @@ describe("buildLiveGatewayConfig", () => {
     const cfg = buildLiveGatewayConfig({
       cfg: {
         agents: {
-          list: [
-            {
-              id: "Dev",
-              default: true,
+          entries: {
+            dev: {
               agentDir: "/operator/agent",
               workspace: "/operator/workspace",
             },
-          ],
+          },
         },
       },
       candidates: [createGatewayLiveTestModel("openai", "gpt-5.5")],
@@ -1888,15 +1920,13 @@ describe("buildLiveGatewayConfig", () => {
       liveAgentWorkspaceDir: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
     });
 
-    expect(cfg.agents?.list).toEqual([
-      {
-        id: GATEWAY_LIVE_AGENT_ID,
-        default: true,
+    expect(cfg.agents?.entries).toEqual({
+      [GATEWAY_LIVE_AGENT_ID]: {
         agentDir: GATEWAY_LIVE_CONFIG_TEST_AGENT_DIR,
         workspace: GATEWAY_LIVE_CONFIG_TEST_WORKSPACE,
         sandbox: { mode: "off" },
       },
-    ]);
+    });
   });
 
   it("keeps discovered live model metadata ahead of stale configured model rows", () => {
@@ -2450,7 +2480,7 @@ function shouldSkipToolNonceProbeMissForLiveModel(modelKey?: string): boolean {
   if (provider !== "google" || rest.length === 0) {
     return false;
   }
-  const normalizedKey = `${provider}/${normalizeGoogleModelId(rest.join("/"))}`;
+  const normalizedKey = `${provider}/${normalizeGooglePreviewModelId(rest.join("/"))}`;
   return GATEWAY_LIVE_TOOL_NONCE_MISS_SKIP_MODEL_KEYS.has(normalizedKey);
 }
 
@@ -2538,12 +2568,15 @@ describe("isTransientToolReadProbeErrorForLiveModel", () => {
 
 describe("getHighSignalLiveModelPriorityIndex", () => {
   it("prefers curated Google replacements over big-pickle", () => {
-    expect(
+    const proPriority = expectDefined(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.1-pro-preview" }),
-    ).toBe(4);
-    expect(
+      "curated Gemini Pro live priority",
+    );
+    const flashPriority = expectDefined(
       getHighSignalLiveModelPriorityIndex({ provider: "google", id: "gemini-3.5-flash" }),
-    ).toBe(5);
+      "curated Gemini Flash live priority",
+    );
+    expect(proPriority).toBeLessThan(flashPriority);
     expect(getHighSignalLiveModelPriorityIndex({ provider: "opencode", id: "big-pickle" })).toBe(
       null,
     );
@@ -2643,7 +2676,9 @@ async function runAnthropicRefusalProbe(params: {
     client: params.client,
     sessionKey: params.sessionKey,
     idempotencyKey: `idem-${randomUUID()}-refusal`,
-    message: `Reply with the single word ok. Test token: ${magic}`,
+    // Credential redaction masks values after "token:", including the
+    // nonce needed to correlate this probe with its persisted user turn.
+    message: `Reply with the single word ok. Test trigger: ${magic}`,
     thinkingLevel: params.thinkingLevel,
     context: `${params.label}: refusal-probe`,
     modelKey: params.modelKey,
@@ -2745,57 +2780,238 @@ async function sleep(ms: number): Promise<void> {
   });
 }
 
-function sanitizeAuthProfileStoreForLiveGateway(store: AuthProfileStore): AuthProfileStore {
-  if (REQUIRE_PROFILE_KEYS) {
-    return store;
-  }
+type PreparedGatewayLiveModelCandidate = {
+  model: Model;
+  auth: ResolvedProviderAuth;
+};
 
-  const envBackedProviders = new Set<string>();
-  for (const profile of Object.values(store.profiles)) {
-    if (resolveEnvApiKey(profile.provider)?.apiKey) {
-      envBackedProviders.add(normalizeProviderId(profile.provider));
+function buildLiveGatewayAuthProfileStore(params: {
+  store: AuthProfileStore;
+  candidates: readonly PreparedGatewayLiveModelCandidate[];
+}): AuthProfileStore {
+  const directCredentialProviders = new Set<string>();
+  const selectedProfileIds = new Map<string, string[]>();
+  const materializedProfiles: AuthProfileStore["profiles"] = {};
+
+  for (const { model, auth } of params.candidates) {
+    const provider = normalizeProviderId(model.provider);
+    const modelRef = `${model.provider}/${model.id}`;
+    if (auth.source.startsWith("profile:") && !auth.profileId) {
+      throw new Error(`Prepared live auth for ${modelRef} is missing its selected profile id.`);
     }
-  }
-  if (envBackedProviders.size === 0) {
-    return store;
+
+    let selectedProfileId = auth.profileId;
+    if (selectedProfileId) {
+      const selectedProfile = params.store.profiles[selectedProfileId];
+      if (!selectedProfile) {
+        if (auth.mode === "aws-sdk") {
+          continue;
+        }
+        throw new Error(
+          `Prepared live auth profile "${selectedProfileId}" for ${modelRef} is missing from its source store.`,
+        );
+      }
+      if (normalizeProviderId(selectedProfile.provider) !== provider) {
+        throw new Error(
+          `Prepared live auth profile "${selectedProfileId}" does not belong to ${modelRef}.`,
+        );
+      }
+    } else if (!requiresLiveProfileCredential(provider, REQUIRE_PROFILE_KEYS)) {
+      if (auth.mode !== "aws-sdk") {
+        if (!auth.apiKey) {
+          throw new Error(`Prepared live auth for ${modelRef} is missing its direct credential.`);
+        }
+        if (selectedProfileIds.has(provider)) {
+          throw new Error(
+            `Prepared live auth for ${modelRef} mixes direct and profile credentials.`,
+          );
+        }
+        directCredentialProviders.add(provider);
+      }
+      continue;
+    } else {
+      if (auth.mode !== "api-key" || !auth.apiKey) {
+        throw new Error(
+          `Prepared live auth for ${modelRef} requires an API key or source profile.`,
+        );
+      }
+      selectedProfileId = `${provider}:live`;
+      const existingProfile = materializedProfiles[selectedProfileId];
+      if (
+        existingProfile &&
+        (existingProfile.type !== "api_key" || existingProfile.key !== auth.apiKey)
+      ) {
+        throw new Error(
+          `Prepared live auth for ${modelRef} conflicts with its provider credential.`,
+        );
+      }
+      materializedProfiles[selectedProfileId] = {
+        type: "api_key",
+        provider,
+        key: auth.apiKey,
+      };
+    }
+
+    if (directCredentialProviders.has(provider)) {
+      throw new Error(`Prepared live auth for ${modelRef} mixes direct and profile credentials.`);
+    }
+    const providerProfileIds = selectedProfileIds.get(provider) ?? [];
+    if (!providerProfileIds.includes(selectedProfileId)) {
+      providerProfileIds.push(selectedProfileId);
+    }
+    selectedProfileIds.set(provider, providerProfileIds);
   }
 
-  const profiles = Object.fromEntries(
-    Object.entries(store.profiles).filter(([, profile]) => {
-      return !envBackedProviders.has(normalizeProviderId(profile.provider));
-    }),
-  );
+  const profiles = {
+    ...Object.fromEntries(
+      Object.entries(params.store.profiles).filter(([, profile]) => {
+        return !directCredentialProviders.has(normalizeProviderId(profile.provider));
+      }),
+    ),
+    ...materializedProfiles,
+  };
   const keepProfileIds = new Set(Object.keys(profiles));
 
-  const order = store.order
-    ? Object.fromEntries(
-        Object.entries(store.order)
-          .filter(([provider]) => !envBackedProviders.has(normalizeProviderId(provider)))
-          .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
-          .filter(([, ids]) => expectDefined(ids, "ids test invariant").length > 0),
-      )
-    : undefined;
+  const order: NonNullable<AuthProfileStore["order"]> = Object.fromEntries(
+    Object.entries(params.store.order ?? {})
+      .filter(([provider]) => !directCredentialProviders.has(normalizeProviderId(provider)))
+      .map(([provider, ids]) => [provider, ids.filter((id) => keepProfileIds.has(id))])
+      .filter(([, ids]) => expectDefined(ids, "ids test invariant").length > 0),
+  );
+  for (const [provider, ids] of selectedProfileIds) {
+    order[provider] = [...ids, ...(order[provider] ?? []).filter((id) => !ids.includes(id))];
+  }
 
-  const lastGood = store.lastGood
+  const lastGood = params.store.lastGood
     ? Object.fromEntries(
-        Object.entries(store.lastGood).filter(([provider, id]) => {
-          return !envBackedProviders.has(normalizeProviderId(provider)) && keepProfileIds.has(id);
+        Object.entries(params.store.lastGood).filter(([provider, id]) => {
+          return (
+            !directCredentialProviders.has(normalizeProviderId(provider)) && keepProfileIds.has(id)
+          );
         }),
       )
     : undefined;
 
-  const usageStats = store.usageStats
-    ? Object.fromEntries(Object.entries(store.usageStats).filter(([id]) => keepProfileIds.has(id)))
+  const usageStats = params.store.usageStats
+    ? Object.fromEntries(
+        Object.entries(params.store.usageStats).filter(([id]) => keepProfileIds.has(id)),
+      )
     : undefined;
 
   return {
-    ...store,
+    version: params.store.version,
     profiles,
-    order: order && Object.keys(order).length > 0 ? order : undefined,
+    order: Object.keys(order).length > 0 ? order : undefined,
     lastGood: lastGood && Object.keys(lastGood).length > 0 ? lastGood : undefined,
     usageStats: usageStats && Object.keys(usageStats).length > 0 ? usageStats : undefined,
   };
 }
+
+function materializeGatewayLiveDiscoveryAuth(params: {
+  env: NodeJS.ProcessEnv;
+  providerList: readonly string[] | undefined;
+  store: AuthProfileStore;
+}): AuthProfileStore {
+  const includesOpenAi =
+    !params.providerList ||
+    params.providerList.some((provider) => normalizeProviderId(provider) === "openai");
+  const apiKey = includesOpenAi ? params.env.OPENAI_API_KEY?.trim() : undefined;
+  if (!apiKey) {
+    return params.store;
+  }
+  return buildLiveGatewayAuthProfileStore({
+    store: params.store,
+    candidates: [
+      {
+        model: createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
+        auth: { apiKey, mode: "api-key", source: "env: OPENAI_API_KEY" },
+      },
+    ],
+  });
+}
+
+function resolveGatewayLivePreparedProfileId(
+  store: AuthProfileStore,
+  provider: string,
+): string | undefined {
+  return normalizeProviderId(provider) === "openai" && store.profiles["openai:live"]
+    ? "openai:live"
+    : undefined;
+}
+
+async function enterIsolatedGatewayLiveDiscoveryState(): Promise<() => Promise<void>> {
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-discovery-state-"));
+  setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
+  return async () => {
+    if (previousStateDir === undefined) {
+      delete process.env.OPENCLAW_STATE_DIR;
+    } else {
+      process.env.OPENCLAW_STATE_DIR = previousStateDir;
+    }
+    await fs.rm(tempStateDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+  };
+}
+
+function createGatewayLiveModelSession(params: {
+  agentId: string;
+  credentialAttempt: number;
+  label: string;
+  modelIndex: number;
+  modelKey: string;
+  thinkingLevel?: string;
+}) {
+  const key = `agent:${params.agentId}:${params.label}:model-${params.modelIndex + 1}:attempt-${params.credentialAttempt + 1}`;
+  return {
+    key,
+    // Every attempt owns a fresh key, so create the session and its model/thinking
+    // selection through the single write-scoped lifecycle owner.
+    method: "sessions.create" as const,
+    request: {
+      key,
+      model: params.modelKey,
+      ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
+    },
+  };
+}
+
+describe("gateway live model session policy", () => {
+  const modelSession = (credentialAttempt: number, thinkingLevel?: string) =>
+    createGatewayLiveModelSession({
+      agentId: GATEWAY_LIVE_AGENT_ID,
+      credentialAttempt,
+      label: "all-models",
+      modelIndex: 0,
+      modelKey: "openai/gpt-5.6-luna",
+      thinkingLevel,
+    });
+
+  it("requests only read and write operator scopes", () => {
+    expect(GATEWAY_LIVE_OPERATOR_SCOPES).toEqual([READ_SCOPE, WRITE_SCOPE]);
+  });
+
+  it("isolates every model credential retry in a fresh write-scoped session", () => {
+    const first = modelSession(0);
+    const retry = modelSession(1);
+
+    expect(first.key).not.toBe(retry.key);
+    expect(first.method).toBe("sessions.create");
+    expect(retry.method).toBe("sessions.create");
+    expect(first.request).toMatchObject({ key: first.key, model: "openai/gpt-5.6-luna" });
+    expect(retry.request).toMatchObject({ key: retry.key, model: "openai/gpt-5.6-luna" });
+  });
+
+  it("initializes explicit thinking levels without an admin-scoped session patch", () => {
+    const session = modelSession(0, "ultra");
+
+    expect(session.method).toBe("sessions.create");
+    expect(session.request).toMatchObject({
+      key: session.key,
+      model: "openai/gpt-5.6-luna",
+      thinkingLevel: "ultra",
+    });
+  });
+});
 
 async function connectClient(params: { url: string; token: string; timeoutMs?: number }) {
   const timeoutMs = params.timeoutMs ?? GATEWAY_LIVE_PROBE_TIMEOUT_MS;
@@ -2849,6 +3065,7 @@ async function connectClientOnce(params: { url: string; token: string; timeoutMs
     const client: GatewayClient | undefined = new GatewayClient({
       url: params.url,
       token: params.token,
+      scopes: GATEWAY_LIVE_OPERATOR_SCOPES,
       requestTimeoutMs: Math.max(timeoutMs, GATEWAY_LIVE_MODEL_TIMEOUT_MS),
       connectChallengeTimeoutMs: timeoutMs,
       clientName: GATEWAY_CLIENT_NAMES.TEST,
@@ -2876,52 +3093,210 @@ function isRetryableGatewayConnectError(error: Error): boolean {
   );
 }
 
-describe("sanitizeAuthProfileStoreForLiveGateway", () => {
-  it("drops env-backed provider profiles when live auth should prefer env", () => {
+describe("buildLiveGatewayAuthProfileStore", () => {
+  it("materializes the exact prepared OpenAI API key as the first isolated profile", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+    const auth: ResolvedProviderAuth = {
+      apiKey: "prepared-openai-test-key",
+      mode: "api-key",
+      source: "env: OPENAI_API_KEY",
+    };
+
+    const isolated = buildLiveGatewayAuthProfileStore({
+      store,
+      candidates: [{ model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"), auth }],
+    });
+
+    expect(isolated.profiles["openai:live"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: auth.apiKey,
+    });
+    expect(isolated.order?.openai).toEqual(["openai:live"]);
+    expect(store.profiles).toEqual({});
+  });
+
+  it("materializes the OpenAI live secret before profile-first discovery", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    const prepared = materializeGatewayLiveDiscoveryAuth({
+      env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+      providerList: ["openai"],
+      store,
+    });
+
+    expect(prepared.profiles["openai:live"]).toEqual({
+      type: "api_key",
+      provider: "openai",
+      key: "prepared-openai-test-key",
+    });
+    expect(prepared.order?.openai).toEqual(["openai:live"]);
+    expect(store.profiles).toEqual({});
+  });
+
+  it("does not materialize OpenAI auth for another provider's focused sweep", () => {
+    const store: AuthProfileStore = { version: 1, profiles: {} };
+
+    expect(
+      materializeGatewayLiveDiscoveryAuth({
+        env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+        providerList: ["anthropic"],
+        store,
+      }),
+    ).toBe(store);
+  });
+
+  it("carries the materialized OpenAI profile into profile-first lookup", () => {
+    const store = materializeGatewayLiveDiscoveryAuth({
+      env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+      providerList: ["openai"],
+      store: { version: 1, profiles: {} },
+    });
+
+    expect(resolveGatewayLivePreparedProfileId(store, "openai")).toBe("openai:live");
+    expect(resolveGatewayLivePreparedProfileId(store, "anthropic")).toBeUndefined();
+  });
+
+  it("keeps prepared discovery credentials out of the ambient auth store", async () => {
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    const ambientStateDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "openclaw-live-ambient-state-"),
+    );
+    process.env.OPENCLAW_STATE_DIR = ambientStateDir;
+    const ambientAgentDir = resolveDefaultAgentDir({});
+    const ambientStore: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:ambient": { type: "api_key", provider: "openai", key: "ambient-test-key" },
+      },
+    };
+    saveAuthProfileStore(ambientStore, ambientAgentDir);
+
+    try {
+      const leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
+      try {
+        const discoveryAgentDir = resolveDefaultAgentDir({});
+        expect(discoveryAgentDir).not.toBe(ambientAgentDir);
+        const prepared = materializeGatewayLiveDiscoveryAuth({
+          env: { OPENAI_API_KEY: "prepared-openai-test-key" },
+          providerList: ["openai"],
+          store: ensureAuthProfileStore(discoveryAgentDir, { allowKeychainPrompt: false }),
+        });
+        saveAuthProfileStore(prepared, discoveryAgentDir);
+      } finally {
+        await leaveDiscoveryState();
+      }
+
+      expect(
+        ensureAuthProfileStore(ambientAgentDir, { allowKeychainPrompt: false }).profiles,
+      ).toEqual(ambientStore.profiles);
+    } finally {
+      if (previousStateDir === undefined) {
+        delete process.env.OPENCLAW_STATE_DIR;
+      } else {
+        process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      }
+      await fs.rm(ambientStateDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps an env-first provider on its prepared direct credential", () => {
     const store: AuthProfileStore = {
       version: 1,
       profiles: {
-        openaiProfile: {
+        anthropicProfile: {
           type: "api_key",
-          provider: "openai",
-          key: "sk-openai-test",
-        },
-        codexProfile: {
-          type: "oauth",
-          provider: "openai",
-          access: "access",
-          refresh: "refresh",
-          expires: 1,
+          provider: "anthropic",
+          key: "stored-anthropic-test-key",
         },
       },
       order: {
-        openai: ["codexProfile", "openaiProfile"],
+        anthropic: ["anthropicProfile"],
       },
       lastGood: {
-        openai: "codexProfile",
+        anthropic: "anthropicProfile",
       },
       usageStats: {
-        openaiProfile: { lastUsed: 1 },
-        codexProfile: { lastUsed: 2 },
+        anthropicProfile: { lastUsed: 1 },
       },
     };
 
-    const previousOpenAiKey = process.env.OPENAI_API_KEY;
-    process.env.OPENAI_API_KEY = "sk-live-openai";
-    try {
-      const sanitized = sanitizeAuthProfileStoreForLiveGateway(store);
-      expect(sanitized.profiles.openaiProfile).toBeUndefined();
-      expect(sanitized.profiles.codexProfile).toBeUndefined();
-      expect(sanitized.order).toBeUndefined();
-      expect(sanitized.lastGood).toBeUndefined();
-      expect(sanitized.usageStats).toBeUndefined();
-    } finally {
-      if (previousOpenAiKey === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previousOpenAiKey;
-      }
-    }
+    const isolated = buildLiveGatewayAuthProfileStore({
+      store,
+      candidates: [
+        {
+          model: createGatewayLiveTestModel("anthropic", "claude-sonnet-4-6"),
+          auth: {
+            apiKey: "prepared-anthropic-test-key",
+            mode: "api-key",
+            source: "env: ANTHROPIC_API_KEY",
+          },
+        },
+      ],
+    });
+
+    expect(isolated.profiles.anthropicProfile).toBeUndefined();
+    expect(isolated.order).toBeUndefined();
+    expect(isolated.lastGood).toBeUndefined();
+    expect(isolated.usageStats).toBeUndefined();
+  });
+
+  it("preserves the exact selected source profile and prioritizes it in isolated order", () => {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:other": {
+          type: "api_key",
+          provider: "openai",
+          key: "other-openai-test-key",
+        },
+        "openai:selected": {
+          type: "api_key",
+          provider: "openai",
+          key: "selected-openai-test-key",
+        },
+      },
+      order: { openai: ["openai:other", "openai:selected"] },
+      usageStats: { "openai:selected": { lastUsed: 3 } },
+    };
+
+    const isolated = buildLiveGatewayAuthProfileStore({
+      store,
+      candidates: [
+        {
+          model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"),
+          auth: {
+            apiKey: "selected-openai-test-key",
+            profileId: "openai:selected",
+            mode: "api-key",
+            source: "profile:openai:selected",
+          },
+        },
+      ],
+    });
+
+    expect(isolated.profiles["openai:selected"]).toEqual(store.profiles["openai:selected"]);
+    expect(isolated.order?.openai).toEqual(["openai:selected", "openai:other"]);
+    expect(isolated.usageStats?.["openai:selected"]).toEqual({ lastUsed: 3 });
+  });
+
+  it("rejects selected profiles absent from the authoritative source store", () => {
+    expect(() =>
+      buildLiveGatewayAuthProfileStore({
+        store: { version: 1, profiles: {} },
+        candidates: [
+          {
+            model: createGatewayLiveTestModel("openai", "gpt-5.6-luna"),
+            auth: {
+              apiKey: "missing-openai-test-key",
+              profileId: "openai:missing",
+              mode: "api-key",
+              source: "profile:openai:missing",
+            },
+          },
+        ],
+      }),
+    ).toThrow(/openai:missing.*missing from its source store/);
   });
 });
 function extractTranscriptMessageText(message: unknown): string {
@@ -2959,22 +3334,69 @@ type SessionAssistantEntry = {
   text: string;
 };
 
+async function retryLiveTranscriptProjectionRead<T>(read: () => Promise<T>): Promise<T> {
+  const deadline = Date.now() + GATEWAY_LIVE_PROBE_TIMEOUT_MS;
+  let delayMs = 50;
+  while (true) {
+    try {
+      return await read();
+    } catch (error) {
+      if (!isSessionTranscriptProjectionUnavailableError(error) || Date.now() >= deadline) {
+        throw error;
+      }
+      // SQLite transcript projections rebuild asynchronously; fail only after
+      // the live probe budget, not while a successful model turn is indexing.
+      await new Promise((resolve) => {
+        setTimeout(resolve, Math.min(delayMs, Math.max(0, deadline - Date.now())));
+      });
+      delayMs = Math.min(delayMs * 2, 250);
+    }
+  }
+}
+
+describe("retryLiveTranscriptProjectionRead", () => {
+  it("waits for an in-flight SQLite transcript projection", async () => {
+    let attempts = 0;
+    await expect(
+      retryLiveTranscriptProjectionRead(async () => {
+        attempts += 1;
+        if (attempts === 1) {
+          throw new SessionTranscriptProjectionUnavailableError("live-session");
+        }
+        return ["projected assistant reply"];
+      }),
+    ).resolves.toEqual(["projected assistant reply"]);
+    expect(attempts).toBe(2);
+  });
+
+  it("does not hide unrelated transcript failures", async () => {
+    const failure = new Error("transcript database unavailable");
+    await expect(
+      retryLiveTranscriptProjectionRead(async () => {
+        throw failure;
+      }),
+    ).rejects.toBe(failure);
+  });
+});
+
 async function readSessionMessagesForLiveProbe(sessionKey: string): Promise<unknown[]> {
   const { storePath, entry } = loadSessionEntry(sessionKey);
   if (!entry?.sessionId) {
     return [];
   }
-  return await readSessionMessagesAsync(
-    {
-      sessionEntry: entry,
-      sessionId: entry.sessionId,
-      sessionKey,
-      storePath,
-    },
-    {
-      mode: "full",
-      reason: "live model assistant text verification",
-    },
+  return await retryLiveTranscriptProjectionRead(async () =>
+    readSessionMessagesAsync(
+      {
+        sessionEntry: entry,
+        sessionId: entry.sessionId,
+        sessionKey,
+        storePath,
+      },
+      {
+        mode: "full",
+        reason: "live model assistant text verification",
+      },
+    ),
   );
 }
 
@@ -2984,15 +3406,30 @@ function sessionMessagesAfterNextUserTurn(
   expectedUserText?: string,
 ): unknown[] {
   const nextUserOffset = messages.slice(baselineMessageCount).findIndex((message) => {
+    const actualUserText = extractTranscriptMessageText(message);
     return (
       (message as { role?: unknown } | null | undefined)?.role === "user" &&
-      (expectedUserText === undefined || extractTranscriptMessageText(message) === expectedUserText)
+      (expectedUserText === undefined || matchesLiveProbeUserText(actualUserText, expectedUserText))
     );
   });
   if (nextUserOffset < 0) {
     return [];
   }
   return messages.slice(baselineMessageCount + nextUserOffset + 1);
+}
+
+function matchesLiveProbeUserText(actual: string, expected: string): boolean {
+  if (actual === expected) {
+    return true;
+  }
+  const markerIndex = expected.indexOf(`${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_`);
+  if (markerIndex < 0) {
+    return false;
+  }
+  const nonceSuffix = expected.slice(markerIndex + ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL.length);
+  // The embedded Anthropic runtime scrubs the refusal trigger before persisting it.
+  // Its random suffix survives and still uniquely owns this live probe turn.
+  return /^_[a-f0-9]{32}$/.test(nonceSuffix) && actual.endsWith(nonceSuffix);
 }
 
 function sessionAssistantEntriesForLiveProbe(
@@ -3100,7 +3537,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   thinkingLevel: string;
 }): Promise<void> {
   const { listSubagentRunsForRequester } =
-    await import("../agents/subagent-registry.test-helpers.js");
+    await import("../agents/subagents/registry/subagent-registry.test-helpers.js");
   const existingRunIds = new Set(
     listSubagentRunsForRequester(params.sessionKey).map((entry) => entry.runId),
   );
@@ -3118,6 +3555,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
       model: params.modelKey,
       thinking: params.thinkingLevel,
     }),
+    "Pass only those six arguments. Omit visible, worktree, worktreeName, worktreeBaseRef, cwd, context, taskName, label, streamTo, lightContext, attachments, attachAs, and resumeSessionId.",
     "Wait for the child completion to return before answering.",
     `Then reply exactly ${parentToken} ${childToken} and nothing else.`,
   ].join("\n");
@@ -3137,7 +3575,10 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   let run = listSubagentRunsForRequester(params.sessionKey).find(
     (entry) => !existingRunIds.has(entry.runId) && entry.task.includes(childToken),
   );
-  while ((!run?.endedAt || run.delivery?.status !== "delivered") && Date.now() < deadline) {
+  while (
+    (!run?.execution.endedAt || run.delivery?.status !== "delivered") &&
+    Date.now() < deadline
+  ) {
     await new Promise((resolve) => {
       setTimeout(resolve, 250);
     });
@@ -3154,7 +3595,7 @@ async function verifyGatewayUltraSubagentHandoff(params: {
   ).toHaveLength(1);
   run = matchingRuns[0];
   expect(run, `expected sessions_spawn child for ${params.modelKey}`).toBeDefined();
-  expect(run?.outcome?.status).toBe("ok");
+  expect(run?.execution.outcome?.status).toBe("ok");
   expect(run?.completion?.resultText).toContain(childToken);
   expect(run?.delivery?.status).toBe("delivered");
   expect(run?.childSessionKey).toContain(":subagent:");
@@ -3297,6 +3738,35 @@ describe("latestAssistantTextAfterBaseline", () => {
       ),
     );
     expect(latestTerminalAssistantTextAfterBaseline(secondEntries, 0)).toBe("second-a second-b");
+  });
+
+  it("correlates Anthropic refusal probes after the runtime scrubs their trigger", () => {
+    const nonce = "0123456789abcdef0123456789abcdef";
+    const expected = `Reply with the single word ok. Test trigger: ${ANTHROPIC_MAGIC_STRING_TRIGGER_REFUSAL}_${nonce}`;
+    const scrubbed = `Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_${nonce}`;
+    const redacted = redactSecrets(expected);
+
+    expect(matchesLiveProbeUserText(scrubbed, expected)).toBe(true);
+    expect(redacted).toContain(nonce);
+    expect(matchesLiveProbeUserText(redacted, expected)).toBe(true);
+    expect(
+      sessionMessagesAfterNextUserTurn(
+        [
+          { role: "user", content: "previous turn" },
+          { role: "assistant", content: "previous reply", stopReason: "stop" },
+          { role: "user", content: redacted },
+          { role: "assistant", content: "ok", stopReason: "stop" },
+        ],
+        2,
+        expected,
+      ),
+    ).toEqual([{ role: "assistant", content: "ok", stopReason: "stop" }]);
+    expect(
+      matchesLiveProbeUserText(
+        "Reply with the single word ok. Test trigger: ANTHROPIC MAGIC STRING TRIGGER REFUSAL (redacted)_ffffffffffffffffffffffffffffffff",
+        expected,
+      ),
+    ).toBe(false);
   });
 });
 
@@ -3526,7 +3996,8 @@ async function requestGatewayAgentText(params: {
 type GatewayModelSuiteParams = {
   label: string;
   cfg: OpenClawConfig;
-  candidates: Array<Model>;
+  candidates: PreparedGatewayLiveModelCandidate[];
+  authProfileStore: AuthProfileStore;
   allowNotFoundSkip: boolean;
   extraToolProbes: boolean;
   extraImageProbes: boolean;
@@ -3812,11 +4283,83 @@ describe("OpenAI Ultra wire capture", () => {
       }
     }
   });
+
+  it("preserves model-specific capture endpoints in the provider override", () => {
+    const capture = (baseUrl: string): OpenAIUltraWireCapture => ({
+      baseUrl,
+      close: () => Promise.resolve(),
+      observations: [],
+    });
+    const candidates = [
+      {
+        ...createGatewayLiveTestModel("openai", "gpt-5.6-sol"),
+        baseUrl: "https://sol.test/v1",
+      },
+      {
+        ...createGatewayLiveTestModel("openai", "gpt-5.6-terra"),
+        baseUrl: "https://terra.test/v1",
+      },
+    ];
+    const capturesByModel = new Map<string, OpenAIUltraWireCapture>([
+      ["gpt-5.6-sol", capture("http://127.0.0.1:4101/v1")],
+      ["gpt-5.6-terra", capture("http://127.0.0.1:4102/v1")],
+    ]);
+
+    const override = buildOpenAIUltraWireProviderOverride({
+      candidates,
+      capturesByModel,
+      cfg: {},
+    });
+
+    expect(override.baseUrl).toBe("http://127.0.0.1:4101/v1");
+    expect(
+      Object.fromEntries(override.models?.map((model) => [model.id, model.baseUrl]) ?? []),
+    ).toEqual({
+      "gpt-5.6-sol": "http://127.0.0.1:4101/v1",
+      "gpt-5.6-terra": "http://127.0.0.1:4102/v1",
+    });
+  });
+
+  it("uses the configured or official route for explicit fallback models", () => {
+    const candidate = createExplicitLiveFallbackModel("openai", "gpt-5.6-sol");
+
+    expect(candidate.reasoning).toBe(true);
+    expect(candidate.thinkingLevelMap).toMatchObject({ xhigh: "xhigh", max: "max" });
+    expect(
+      resolveOpenAIUltraUpstreamBaseUrl({
+        candidate,
+        cfg: {
+          models: {
+            providers: { openai: { baseUrl: "https://proxy.test/v1", models: [] } },
+          },
+        },
+      }),
+    ).toBe("https://proxy.test/v1");
+    expect(resolveOpenAIUltraUpstreamBaseUrl({ candidate, cfg: {} })).toBe(
+      "https://api.openai.com/v1",
+    );
+  });
 });
 
+const OPENAI_LIVE_DEFAULT_BASE_URL = "https://api.openai.com/v1";
+
+function resolveOpenAIUltraUpstreamBaseUrl(params: {
+  candidate: Model;
+  cfg: OpenClawConfig;
+}): string {
+  const providerConfig = params.cfg.models?.providers?.openai;
+  const configuredModel = providerConfig?.models?.find((model) => model.id === params.candidate.id);
+  return (
+    params.candidate.baseUrl?.trim() ||
+    configuredModel?.baseUrl?.trim() ||
+    providerConfig?.baseUrl?.trim() ||
+    OPENAI_LIVE_DEFAULT_BASE_URL
+  );
+}
+
 function buildOpenAIUltraWireProviderOverride(params: {
-  baseUrl: string;
   candidates: Array<Model>;
+  capturesByModel: ReadonlyMap<string, OpenAIUltraWireCapture>;
   cfg: OpenClawConfig;
 }): ModelProviderConfig {
   const discovered = buildLiveProviderConfigs({
@@ -3831,10 +4374,14 @@ function buildOpenAIUltraWireProviderOverride(params: {
     base: params.cfg.models?.providers?.openai,
     discovered,
   });
+  const firstCapture = params.capturesByModel.values().next().value;
   return {
     ...merged,
-    baseUrl: params.baseUrl,
-    models: merged.models?.map((model) => Object.assign({}, model, { baseUrl: params.baseUrl })),
+    baseUrl: firstCapture?.baseUrl ?? merged.baseUrl,
+    models: merged.models?.map((model) => {
+      const capture = params.capturesByModel.get(model.id);
+      return capture ? Object.assign({}, model, { baseUrl: capture.baseUrl }) : model;
+    }),
   };
 }
 
@@ -4117,7 +4664,7 @@ function parseExplicitLiveModelRef(
     const rawModelId = trimmed.slice(slash + 1).trim();
     const modelId =
       provider === "google" || provider === "google-gemini-cli" || provider === "google-vertex"
-        ? normalizeGoogleModelId(rawModelId)
+        ? normalizeGooglePreviewModelId(rawModelId)
         : rawModelId;
     return provider && modelId ? { provider, modelId } : null;
   }
@@ -4146,7 +4693,12 @@ function resolveExplicitLiveModelCandidates(params: {
     }
     const model =
       params.modelRegistry.find(ref.provider, ref.modelId) ??
-      createExplicitLiveFallbackModel(ref.provider, ref.modelId);
+      (ref.provider === "amazon-bedrock"
+        ? createExplicitLiveFallbackModel(ref.provider, ref.modelId)
+        : undefined);
+    if (!model) {
+      return null;
+    }
     if (
       !params.targetMatcher.matchesProvider(model.provider) ||
       !params.targetMatcher.matchesModel(model.provider, model.id)
@@ -4163,7 +4715,6 @@ function resolveExplicitLiveModelCandidates(params: {
 }
 
 function resolveGatewayLiveModelThinkingLevel(params: {
-  cfg: OpenClawConfig;
   model: Model;
   requestedLevel: string;
 }): string {
@@ -4172,12 +4723,12 @@ function resolveGatewayLiveModelThinkingLevel(params: {
   if (!isGatewayLiveThinkingLevel(normalized)) {
     return requestedLevel;
   }
-  const profile = resolveProviderThinkingProfile({
+  const profile = resolveEffectiveThinkingProfile({
     provider: model.provider,
-    config: params.cfg,
     context: {
       provider: model.provider,
       modelId: model.id,
+      api: model.api,
       agentRuntime: "openclaw",
       reasoning: model.reasoning,
       compat: getProviderThinkingModelCompat(model),
@@ -4277,7 +4828,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     platform: "linux",
     deps: {
       probeLocalCommand: async (command) => ({ command, found: false }),
-      readClaudeCliCredentials: () => null,
+      detectClaudeLoginState: async () => ({ credentials: false }),
       readCodexCliCredentials: () => null,
       readGeminiCliCredentials: () => null,
     },
@@ -4286,7 +4837,7 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");
   }
-  expect(selected.modelRef).toBe("openai/gpt-5.6");
+  expect(selected.modelRef).toBe("openai/gpt-5.6-sol");
   return selected.modelRef;
 }
 
@@ -4328,15 +4879,13 @@ function buildLiveGatewayConfig(params: {
     ...providerOverrides,
   };
   const providers = Object.keys(nextProviders).length > 0 ? nextProviders : baseProviders;
-  const configuredAgents = [
-    {
-      id: GATEWAY_LIVE_AGENT_ID,
-      default: true,
+  const configuredAgents = {
+    [GATEWAY_LIVE_AGENT_ID]: {
       agentDir: params.liveAgentDir,
       workspace: params.liveAgentWorkspaceDir,
       sandbox: { mode: "off" },
     },
-  ] satisfies NonNullable<OpenClawConfig["agents"]>["list"];
+  } satisfies NonNullable<OpenClawConfig["agents"]>["entries"];
   const baseModels = params.cfg.models;
   return {
     ...params.cfg,
@@ -4344,7 +4893,7 @@ function buildLiveGatewayConfig(params: {
     broadcast: undefined,
     agents: {
       ...params.cfg.agents,
-      list: configuredAgents,
+      entries: configuredAgents,
       defaults: {
         ...params.cfg.agents?.defaults,
         // Live tests should avoid Docker sandboxing so tool probes can
@@ -4368,23 +4917,20 @@ function buildLiveGatewayConfig(params: {
   };
 }
 
-async function sanitizeAuthConfig(params: {
+function sanitizeAuthConfig(params: {
   cfg: OpenClawConfig;
-  agentDir: string;
-}): Promise<OpenClawConfig["auth"] | undefined> {
+  store: AuthProfileStore;
+}): OpenClawConfig["auth"] | undefined {
   const auth = params.cfg.auth;
   if (!auth) {
     return auth;
   }
-  const store = ensureAuthProfileStore(params.agentDir, {
-    allowKeychainPrompt: false,
-  });
 
   let profiles: NonNullable<OpenClawConfig["auth"]>["profiles"] | undefined;
   if (auth.profiles) {
     profiles = {};
     for (const [profileId, profile] of Object.entries(auth.profiles)) {
-      if (!store.profiles[profileId]) {
+      if (!params.store.profiles[profileId]) {
         continue;
       }
       profiles[profileId] = profile;
@@ -4398,7 +4944,7 @@ async function sanitizeAuthConfig(params: {
   if (auth.order) {
     order = {};
     for (const [provider, ids] of Object.entries(auth.order)) {
-      const filtered = ids.filter((id) => Boolean(store.profiles[id]));
+      const filtered = ids.filter((id) => Boolean(params.store.profiles[id]));
       if (filtered.length === 0) {
         continue;
       }
@@ -4409,7 +4955,7 @@ async function sanitizeAuthConfig(params: {
     }
   }
 
-  if (!profiles && !order && !auth.cooldowns) {
+  if (!profiles && !order) {
     return undefined;
   }
   return {
@@ -4435,45 +4981,37 @@ function buildMinimaxProviderOverride(params: {
   };
 }
 
+async function prepareLiveGatewayWorkspace(workspaceDir: string): Promise<void> {
+  // Real workspace setup supplies both the SQLite state and survival evidence;
+  // retired JSON markers or empty initialized workspaces block the first turn.
+  await ensureAgentWorkspace({ dir: workspaceDir, ensureBootstrapFiles: true });
+  await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
+  mergeWorkspaceSetupState(workspaceDir, { setupCompletedAt: new Date().toISOString() });
+}
+
 async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
-  const ultraCandidates = params.candidates.filter((model) =>
-    isOpenAIGpt56UltraTarget(model, params.thinkingLevel),
+  const ultraCandidates = params.candidates.flatMap(({ model }) =>
+    isOpenAIGpt56UltraTarget(model, params.thinkingLevel) ? [model] : [],
   );
   if (ultraCandidates.length > 0 && ultraCandidates.length !== params.candidates.length) {
     throw new Error(
       "OPENCLAW_LIVE_GATEWAY_THINKING=ultra requires an explicit GPT-5.6 OpenAI model list",
     );
   }
-  const ultraUpstreamBaseUrls = new Set(
-    ultraCandidates.map((model) => model.baseUrl?.trim()).filter(Boolean),
-  );
-  if (ultraCandidates.length > 0 && ultraUpstreamBaseUrls.size !== 1) {
-    throw new Error(
-      `Ultra wire capture requires one explicit OpenAI base URL; found ${JSON.stringify([
-        ...ultraUpstreamBaseUrls,
-      ])}`,
-    );
-  }
-  const [ultraUpstreamBaseUrl] = [...ultraUpstreamBaseUrls];
-  const previous = {
-    configPath: process.env.OPENCLAW_CONFIG_PATH,
-    token: process.env.OPENCLAW_GATEWAY_TOKEN,
-    skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-    skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-    skipCron: process.env.OPENCLAW_SKIP_CRON,
-    skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-    disableBonjour: process.env.OPENCLAW_DISABLE_BONJOUR,
-    logLevel: process.env.OPENCLAW_LOG_LEVEL,
-    agentDir: process.env.OPENCLAW_AGENT_DIR,
-    stateDir: process.env.OPENCLAW_STATE_DIR,
-  };
+  const previousEnv = snapshotLiveEnv([
+    "OPENCLAW_DISABLE_BONJOUR",
+    "OPENCLAW_LOG_LEVEL",
+    "OPENCLAW_AGENT_DIR",
+  ]);
+  const { startGatewayServerCore } = await import("./server-start.js");
   let runtimeEnv: ReturnType<typeof enterProductionEnvForLiveRun> | undefined;
   let cleanupTempStateDir: string | undefined;
   let cleanupTempAgentDir: string | undefined;
   let cleanupToolProbePath: string | undefined;
   let cleanupTempDir: string | undefined;
-  let ultraWireCapture: OpenAIUltraWireCapture | undefined;
-  let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+  const ultraWireCapturesByModel = new Map<string, OpenAIUltraWireCapture>();
+  const ultraWireCapturesByUpstream = new Map<string, OpenAIUltraWireCapture>();
+  let server: GatewayServer | undefined;
   let client: GatewayClient | undefined;
 
   try {
@@ -4493,18 +5031,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
     const agentId = GATEWAY_LIVE_AGENT_ID;
 
-    const hostAgentDir = resolveDefaultAgentDir(getRuntimeConfig());
-    const hostStore = ensureAuthProfileStore(hostAgentDir, {
-      allowKeychainPrompt: false,
-    });
-    const sanitizedStore = sanitizeAuthProfileStoreForLiveGateway({
-      version: hostStore.version,
-      profiles: { ...hostStore.profiles },
-      // Keep selection state so the gateway picks the same known-good profiles
-      // as the host (important when some profiles are rate-limited/disabled).
-      order: hostStore.order ? { ...hostStore.order } : undefined,
-      lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
-      usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
+    const isolatedStore = buildLiveGatewayAuthProfileStore({
+      store: params.authProfileStore,
+      candidates: params.candidates,
     });
     const tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-state-"));
     cleanupTempStateDir = tempStateDir;
@@ -4516,28 +5045,15 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
       "agent",
     );
     cleanupTempAgentDir = tempAgentDir;
-    saveAuthProfileStore(sanitizedStore, tempAgentDir);
+    saveAuthProfileStore(isolatedStore, tempAgentDir);
     const tempSessionAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
     if (tempSessionAgentDir !== tempAgentDir) {
-      saveAuthProfileStore(sanitizedStore, tempSessionAgentDir);
+      saveAuthProfileStore(isolatedStore, tempSessionAgentDir);
     }
     setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
     const workspaceDir = path.join(tempStateDir, "workspace-dev");
-    await fs.mkdir(workspaceDir, { recursive: true });
-    await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-    await fs.writeFile(
-      path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-      `${JSON.stringify(
-        {
-          version: 1,
-          setupCompletedAt: new Date().toISOString(),
-        },
-        null,
-        2,
-      )}\n`,
-    );
-    await fs.rm(path.join(workspaceDir, "BOOTSTRAP.md"), { force: true });
+    await prepareLiveGatewayWorkspace(workspaceDir);
     const nonceA = randomUUID();
     const nonceB = randomUUID();
     // Keep probe values out of the path: weak tool callers may echo the filename
@@ -4546,29 +5062,36 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     cleanupToolProbePath = toolProbePath;
     await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-    const agentDir = resolveDefaultAgentDir(params.cfg);
     const sanitizedCfg: OpenClawConfig = {
       ...params.cfg,
-      auth: await sanitizeAuthConfig({ cfg: params.cfg, agentDir }),
+      auth: sanitizeAuthConfig({ cfg: params.cfg, store: isolatedStore }),
     };
     let providerOverrides = params.providerOverrides;
     if (ultraCandidates.length > 0) {
-      if (!ultraUpstreamBaseUrl) {
-        throw new Error("Ultra wire capture requires an explicit OpenAI base URL");
+      for (const candidate of ultraCandidates) {
+        const upstreamBaseUrl = resolveOpenAIUltraUpstreamBaseUrl({
+          candidate,
+          cfg: sanitizedCfg,
+        });
+        let capture = ultraWireCapturesByUpstream.get(upstreamBaseUrl);
+        if (!capture) {
+          capture = await startOpenAIUltraWireCapture(upstreamBaseUrl);
+          ultraWireCapturesByUpstream.set(upstreamBaseUrl, capture);
+        }
+        ultraWireCapturesByModel.set(candidate.id, capture);
       }
-      ultraWireCapture = await startOpenAIUltraWireCapture(ultraUpstreamBaseUrl);
       providerOverrides = {
         ...params.providerOverrides,
         openai: buildOpenAIUltraWireProviderOverride({
-          baseUrl: ultraWireCapture.baseUrl,
           candidates: ultraCandidates,
+          capturesByModel: ultraWireCapturesByModel,
           cfg: sanitizedCfg,
         }),
       };
     }
     const nextCfg = buildLiveGatewayConfig({
       cfg: sanitizedCfg,
-      candidates: params.candidates,
+      candidates: params.candidates.map(({ model }) => model),
       liveAgentDir: tempSessionAgentDir,
       liveAgentWorkspaceDir: workspaceDir,
       providerOverrides,
@@ -4595,7 +5118,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         `${params.label}: gateway-port`,
       );
       server = await withGatewayLiveProbeTimeout(
-        startGatewayServer(port, {
+        startGatewayServerCore(port, {
           bind: "loopback",
           auth: { mode: "token", token },
           controlUiEnabled: false,
@@ -4630,7 +5153,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     logProgress(
       `[${params.label}] heartbeat=${Math.max(1, Math.round(GATEWAY_LIVE_HEARTBEAT_MS / 1_000))}s probe-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_PROBE_TIMEOUT_MS / 1_000))}s agent-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_RUN_TIMEOUT_MS / 1_000))}s agent-wait=${Math.max(1, Math.round(GATEWAY_LIVE_AGENT_WAIT_TIMEOUT_MS / 1_000))}s model-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_MODEL_TIMEOUT_MS / 1_000))}s transcript-timeout=${Math.max(1, Math.round(GATEWAY_LIVE_TRANSCRIPT_TIMEOUT_MS / 1_000))}s`,
     );
-    const anthropicKeys = collectAnthropicApiKeys();
+    const anthropicKeys = process.env.ANTHROPIC_OAUTH_TOKEN?.trim()
+      ? []
+      : collectProviderApiKeys("anthropic");
     if (anthropicKeys.length > 0) {
       process.env.ANTHROPIC_API_KEY = anthropicKeys[0];
       logProgress(`[${params.label}] anthropic keys loaded: ${anthropicKeys.length}`);
@@ -4641,51 +5166,42 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     let timeoutSkippedCount = 0;
     const total = params.candidates.length;
 
-    for (const [index, model] of params.candidates.entries()) {
+    for (const [index, { model }] of params.candidates.entries()) {
       const modelKey = `${model.provider}/${model.id}`;
       const progressLabel = `[${params.label}] ${index + 1}/${total} ${modelKey}`;
       const strictUltraProof = isOpenAIGpt56UltraTarget(model, params.thinkingLevel);
       const skippedBeforeModel = skippedCount;
+      const ultraWireCapture = ultraWireCapturesByModel.get(model.id);
       const wireObservationStart = ultraWireCapture?.observations.length ?? 0;
       const thinkingLevel = resolveGatewayLiveModelThinkingLevel({
-        cfg: params.cfg,
         model,
         requestedLevel: params.thinkingLevel,
       });
       if (thinkingLevel !== params.thinkingLevel) {
         logProgress(`${progressLabel}: thinking ${params.thinkingLevel} -> ${thinkingLevel}`);
       }
-      // Use a separate session per model: live providers can finalize late after
-      // skip/retry paths, and a reset on a reused key does not isolate those
-      // delayed transcript writes from the next model probe.
-      const sessionKey = `agent:${agentId}:${params.label}:model-${index + 1}`;
-
       const attemptMax =
         model.provider === "anthropic" && anthropicKeys.length > 0 ? anthropicKeys.length : 1;
 
       for (let attempt = 0; attempt < attemptMax; attempt += 1) {
+        const session = createGatewayLiveModelSession({
+          agentId,
+          credentialAttempt: attempt,
+          label: params.label,
+          modelIndex: index,
+          modelKey,
+          ...(strictUltraProof ? { thinkingLevel } : {}),
+        });
+        const sessionKey = session.key;
         if (model.provider === "anthropic" && anthropicKeys.length > 0) {
           process.env.ANTHROPIC_API_KEY = anthropicKeys[attempt];
         }
         try {
           const modelResult = await withGatewayLiveModelTimeout<"done" | "skip">(
             (async () => {
-              // Ensure session exists + override model for this run.
-              // Reset between models: avoids cross-provider transcript incompatibilities
-              // (notably OpenAI Responses requiring reasoning replay for function_call items).
               await withGatewayLiveSessionControlTimeout(
-                client.request("sessions.reset", {
-                  key: sessionKey,
-                }),
-                `${progressLabel}: sessions-reset`,
-              );
-              await withGatewayLiveSessionControlTimeout(
-                client.request("sessions.patch", {
-                  key: sessionKey,
-                  model: modelKey,
-                  ...(strictUltraProof ? { thinkingLevel } : {}),
-                }),
-                `${progressLabel}: sessions-patch`,
+                client.request(session.method, session.request),
+                `${progressLabel}: ${session.method}`,
               );
               if (strictUltraProof) {
                 await assertGatewayLiveSessionSelection({
@@ -5340,7 +5856,9 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
           await server.close({ reason: "live test complete" });
         }
       } finally {
-        await ultraWireCapture?.close();
+        await Promise.all(
+          [...ultraWireCapturesByUpstream.values()].map((capture) => capture.close()),
+        );
       }
     } finally {
       try {
@@ -5377,36 +5895,78 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
         if (runtimeEnv) {
           restoreProductionEnvForLiveRun(runtimeEnv);
         }
-        restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-        restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-        restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-        restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-        restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-        restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-        restoreOptionalEnv("OPENCLAW_DISABLE_BONJOUR", previous.disableBonjour);
-        restoreOptionalEnv("OPENCLAW_LOG_LEVEL", previous.logLevel);
-        restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-        restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+        restoreLiveEnv(previousEnv);
       }
     }
   }
 }
 
 describeLive("gateway live (dev agent, profile keys)", () => {
+  let leaveDiscoveryState: (() => Promise<void>) | undefined;
+
+  beforeEach(async () => {
+    leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState();
+  });
+
+  afterEach(async () => {
+    await leaveDiscoveryState?.();
+    leaveDiscoveryState = undefined;
+  });
+
   it(
     "runs meaningful prompts across models with available keys",
     async () =>
       await withSuppressedGatewayLiveWarnings(async () => {
-        const providerList = providerFilterList();
+        const rawModels = await resolveGatewayLiveRequestedModels();
+        const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
+        const useSmall = rawModels === "small";
+        const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
+        const filter = useExplicit ? parseFilter(rawModels) : null;
+        const explicitRefs = useExplicit
+          ? [...(filter ?? [])].flatMap((raw) => {
+              const ref = parseExplicitLiveModelRef(raw, PROVIDERS);
+              return ref ? [{ provider: ref.provider, id: ref.modelId }] : [];
+            })
+          : [];
+        const priorityRefs = filterGatewayLiveModelRefsByProvider(
+          useExplicit
+            ? explicitRefs
+            : useSmall
+              ? listPrioritizedSmallLiveModelRefs()
+              : listPrioritizedHighSignalLiveModelRefs(),
+          PROVIDERS,
+        );
+        const providerList = resolveLiveProviderDiscoveryProviderIds({
+          providerFilter: PROVIDERS,
+          explicitRefs,
+          priorityRefs,
+        });
         const providerLog = providerList?.join(",") ?? "all";
         logProgress(`[all-models] discover candidates providers=${providerLog}`);
         logProgress("[all-models] loading config");
         clearRuntimeConfigSnapshot();
-        const cfg = await withGatewayLiveSetupTimeout(
-          Promise.resolve().then(() => getRuntimeConfig()),
+        const loadedCfg = await withGatewayLiveSetupTimeout(
+          readLiveTestConfig(),
           "[all-models] load config",
         );
+        const cfg = applyLiveProviderPluginDiscoveryCompat({
+          config: loadedCfg,
+          providers: providerList,
+          env: process.env,
+        });
         const workspaceDir = resolveAgentWorkspaceDir(cfg, DEFAULT_AGENT_ID);
+        const discoveryAgentDir = resolveDefaultAgentDir(cfg);
+        const discoveryAuthProfileStore = ensureAuthProfileStore(discoveryAgentDir, {
+          allowKeychainPrompt: false,
+        });
+        const preparedDiscoveryAuthProfileStore = materializeGatewayLiveDiscoveryAuth({
+          env: process.env,
+          providerList,
+          store: discoveryAuthProfileStore,
+        });
+        if (preparedDiscoveryAuthProfileStore !== discoveryAuthProfileStore) {
+          saveAuthProfileStore(preparedDiscoveryAuthProfileStore, discoveryAgentDir);
+        }
         logProgress("[all-models] preparing models.json");
         const modelsJsonResult = await withGatewayLiveSetupTimeout(
           ensureOpenClawModelsJson(cfg, undefined, {
@@ -5416,12 +5976,6 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           "[all-models] prepare models.json",
         );
         const agentDir = modelsJsonResult.agentDir;
-
-        const rawModels = await resolveGatewayLiveRequestedModels();
-        const useModern = !rawModels || rawModels === "modern" || rawModels === "all";
-        const useSmall = rawModels === "small";
-        const useExplicit = Boolean(rawModels) && !useModern && !useSmall;
-        const filter = useExplicit ? parseFilter(rawModels) : null;
         const providerScopedModelProviders = providerScopedModelRegistryProviders({
           providerList,
           useSmall,
@@ -5429,7 +5983,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           modelFilter: filter,
           providerFilter: PROVIDERS,
         });
-        let authProfileStore: AuthProfileStore | undefined;
+        let authProfileStore: AuthProfileStore;
         let modelRegistry: LiveModelRegistry;
         let all: Array<Model>;
         if (providerScopedModelProviders) {
@@ -5440,6 +5994,11 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           );
           if (all.length > 0) {
             modelRegistry = createStaticLiveModelRegistry(all);
+            authProfileStore = ensureAuthProfileStore(agentDir, {
+              allowKeychainPrompt: false,
+              config: cfg,
+              externalCliProviderIds: providerScopedModelProviders,
+            });
           } else {
             logProgress("[all-models] provider-scoped model refs empty; loading auth profiles");
             const authBacked = await loadAuthBackedLiveModelRegistry({
@@ -5453,12 +6012,17 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }
         } else {
           logProgress("[all-models] loading auth profiles");
-          const authBacked = await loadAuthBackedLiveModelRegistry({ agentDir, cfg, providerList });
+          const authBacked = await loadAuthBackedLiveModelRegistry({
+            agentDir,
+            cfg,
+            providerList,
+          });
           authProfileStore = authBacked.authProfileStore;
           modelRegistry = authBacked.modelRegistry;
           all = authBacked.all;
         }
         const prioritizedRefs = resolvePrioritizedGatewayLiveModelRefs({
+          explicitRefs,
           providerFilter: PROVIDERS,
           useExplicit,
           useSmall,
@@ -5527,10 +6091,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           wantedCount: wanted.length,
         });
 
-        const candidates: Array<Model> = [];
+        const candidates: PreparedGatewayLiveModelCandidate[] = [];
         const skipped: Array<{ model: string; error: string }> = [];
         for (const model of wanted) {
-          if (shouldSuppressBuiltInModel({ provider: model.provider, id: model.id })) {
+          if (shouldSuppressBuiltInModelCore({ provider: model.provider, id: model.id })) {
             continue;
           }
           if (!targetMatcher.matchesProvider(model.provider)) {
@@ -5538,26 +6102,30 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           }
           const modelRef = `${model.provider}/${model.id}`;
           try {
-            const apiKeyInfo = await withGatewayLiveSetupTimeout(
-              getApiKeyForModel({
+            const auth = await withGatewayLiveSetupTimeout(
+              getApiKeyForModelCore({
                 model,
                 cfg,
                 store: authProfileStore,
                 agentDir,
                 workspaceDir,
-                credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+                profileId: resolveGatewayLivePreparedProfileId(authProfileStore, model.provider),
+                credentialPrecedence: resolveLiveCredentialPrecedence(
+                  model.provider,
+                  REQUIRE_PROFILE_KEYS,
+                ),
               }),
               `[all-models] auth ${modelRef}`,
               GATEWAY_LIVE_PROBE_TIMEOUT_MS,
             );
-            if (REQUIRE_PROFILE_KEYS && !apiKeyInfo.source.startsWith("profile:")) {
+            if (REQUIRE_PROFILE_KEYS && !auth.source.startsWith("profile:")) {
               skipped.push({
                 model: modelRef,
-                error: `non-profile credential source: ${apiKeyInfo.source}`,
+                error: `non-profile credential source: ${auth.source}`,
               });
               continue;
             }
-            candidates.push(model);
+            candidates.push({ model, auth });
           } catch (error) {
             skipped.push({ model: modelRef, error: String(error) });
           }
@@ -5580,8 +6148,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         const selectedCandidates = selectCandidates(
           candidates,
           maxModels > 0 ? maxModels : candidates.length,
-          (model) => ({ provider: model.provider, id: model.id }),
-          (model) => model.provider,
+          ({ model }) => ({ provider: model.provider, id: model.id }),
+          ({ model }) => model.provider,
         );
         logProgress(
           `[all-models] selection=${useExplicit ? "explicit" : useSmall ? "small" : "high-signal"}`,
@@ -5592,7 +6160,9 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           );
         }
         expect(selectedCandidates.length).toBeGreaterThan(0);
-        const imageCandidates = selectedCandidates.filter((m) => m.input?.includes("image"));
+        const imageCandidates = selectedCandidates.filter(({ model }) =>
+          model.input?.includes("image"),
+        );
         if (imageCandidates.length === 0) {
           logProgress("[all-models] no image-capable models selected; image probe will be skipped");
         }
@@ -5600,15 +6170,16 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           label: "all-models",
           cfg,
           candidates: selectedCandidates,
+          authProfileStore,
           allowNotFoundSkip: useModern || useSmall,
           extraToolProbes: ENABLE_EXTRA_TOOL_PROBES,
           extraImageProbes: ENABLE_EXTRA_IMAGE_PROBES,
           thinkingLevel: THINKING_LEVEL,
         });
 
-        const minimaxCandidates = selectedCandidates.filter(
-          (model) => model.provider === "minimax",
-        );
+        const minimaxCandidates = selectedCandidates.filter(({ model }) => {
+          return model.provider === "minimax";
+        });
         if (minimaxCandidates.length === 0) {
           logProgress("[minimax] no candidates with keys; skipping dual endpoint probes");
           return;
@@ -5624,6 +6195,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
             label: "minimax-anthropic",
             cfg,
             candidates: minimaxCandidates,
+            authProfileStore,
             allowNotFoundSkip: useModern,
             extraToolProbes: ENABLE_EXTRA_TOOL_PROBES,
             extraImageProbes: ENABLE_EXTRA_IMAGE_PROBES,
@@ -5643,16 +6215,8 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     }
     clearRuntimeConfigSnapshot();
     const runtimeEnv = enterProductionEnvForLiveRun();
-    const previous = {
-      configPath: process.env.OPENCLAW_CONFIG_PATH,
-      token: process.env.OPENCLAW_GATEWAY_TOKEN,
-      skipChannels: process.env.OPENCLAW_SKIP_CHANNELS,
-      skipGmail: process.env.OPENCLAW_SKIP_GMAIL_WATCHER,
-      skipCron: process.env.OPENCLAW_SKIP_CRON,
-      skipCanvas: process.env.OPENCLAW_SKIP_CANVAS_HOST,
-      agentDir: process.env.OPENCLAW_AGENT_DIR,
-      stateDir: process.env.OPENCLAW_STATE_DIR,
-    };
+    const previousEnv = snapshotLiveEnv(["OPENCLAW_AGENT_DIR"]);
+    const { startGatewayServerCore } = await import("./server-start.js");
 
     process.env.OPENCLAW_SKIP_CHANNELS = "1";
     process.env.OPENCLAW_SKIP_GMAIL_WATCHER = "1";
@@ -5662,13 +6226,13 @@ describeLive("gateway live (dev agent, profile keys)", () => {
     const token = `test-${randomUUID()}`;
     process.env.OPENCLAW_GATEWAY_TOKEN = token;
 
-    let server: Awaited<ReturnType<typeof startGatewayServer>> | undefined;
+    let server: GatewayServer | undefined;
     let client: GatewayClient | undefined;
     let toolProbePath: string | undefined;
     let tempDir: string | undefined;
     let tempStateDir: string | undefined;
     try {
-      const cfg = getRuntimeConfig();
+      const cfg = await readLiveTestConfig();
       await ensureOpenClawModelsJson(cfg);
 
       const agentDir = resolveDefaultAgentDir(cfg);
@@ -5683,16 +6247,25 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       if (!anthropic || !zai) {
         return;
       }
+      let anthropicAuth: ResolvedProviderAuth;
+      let zaiAuth: ResolvedProviderAuth;
       try {
-        await getApiKeyForModel({
+        anthropicAuth = await getApiKeyForModelCore({
           model: anthropic,
           cfg,
-          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          store: hostStore,
+          agentDir,
+          credentialPrecedence: resolveLiveCredentialPrecedence(
+            anthropic.provider,
+            REQUIRE_PROFILE_KEYS,
+          ),
         });
-        await getApiKeyForModel({
+        zaiAuth = await getApiKeyForModelCore({
           model: zai,
           cfg,
-          credentialPrecedence: LIVE_CREDENTIAL_PRECEDENCE,
+          store: hostStore,
+          agentDir,
+          credentialPrecedence: resolveLiveCredentialPrecedence(zai.provider, REQUIRE_PROFILE_KEYS),
         });
       } catch {
         return;
@@ -5702,39 +6275,27 @@ describeLive("gateway live (dev agent, profile keys)", () => {
       tempStateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-zai-state-"));
       setTestEnvValue("OPENCLAW_STATE_DIR", tempStateDir);
       const workspaceDir = path.join(tempStateDir, "workspace-dev");
-      await fs.mkdir(workspaceDir, { recursive: true });
-      await fs.mkdir(path.join(workspaceDir, ".openclaw"), { recursive: true });
-      await fs.writeFile(
-        path.join(workspaceDir, ".openclaw", "workspace-state.json"),
-        `${JSON.stringify(
-          {
-            version: 1,
-            setupCompletedAt: new Date().toISOString(),
-          },
-          null,
-          2,
-        )}\n`,
-      );
+      await prepareLiveGatewayWorkspace(workspaceDir);
       const nonceA = randomUUID();
       const nonceB = randomUUID();
       // Match the broad probe: the filename must not reveal either expected value.
       toolProbePath = path.join(workspaceDir, ".openclaw-live-zai-fallback.txt");
       await fs.writeFile(toolProbePath, `nonceA=${nonceA}\nnonceB=${nonceB}\n`);
 
-      const sanitizedStore = sanitizeAuthProfileStoreForLiveGateway({
-        version: hostStore.version,
-        profiles: { ...hostStore.profiles },
-        order: hostStore.order ? { ...hostStore.order } : undefined,
-        lastGood: hostStore.lastGood ? { ...hostStore.lastGood } : undefined,
-        usageStats: hostStore.usageStats ? { ...hostStore.usageStats } : undefined,
+      const isolatedStore = buildLiveGatewayAuthProfileStore({
+        store: hostStore,
+        candidates: [
+          { model: anthropic, auth: anthropicAuth },
+          { model: zai, auth: zaiAuth },
+        ],
       });
       const tempAgentDir = path.join(tempStateDir, "agents", agentId, "agent");
-      saveAuthProfileStore(sanitizedStore, tempAgentDir);
+      saveAuthProfileStore(isolatedStore, tempAgentDir);
       setTestEnvValue("OPENCLAW_AGENT_DIR", tempAgentDir);
 
       const sanitizedCfg: OpenClawConfig = {
         ...cfg,
-        auth: await sanitizeAuthConfig({ cfg, agentDir }),
+        auth: sanitizeAuthConfig({ cfg, store: isolatedStore }),
       };
       const nextCfg = buildLiveGatewayConfig({
         cfg: sanitizedCfg,
@@ -5763,7 +6324,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           "zai-fallback: gateway-port",
         );
         server = await withGatewayLiveProbeTimeout(
-          startGatewayServer(port, {
+          startGatewayServerCore(port, {
             bind: "loopback",
             auth: { mode: "token", token },
             controlUiEnabled: false,
@@ -5793,20 +6354,18 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
       }
 
-      const sessionKey = `agent:${agentId}:live-zai-fallback`;
+      const initialSession = createGatewayLiveModelSession({
+        agentId,
+        credentialAttempt: 0,
+        label: "live-zai-fallback",
+        modelIndex: 0,
+        modelKey: "anthropic/claude-opus-4-6",
+      });
+      const sessionKey = initialSession.key;
 
       await withGatewayLiveSessionControlTimeout(
-        client.request("sessions.patch", {
-          key: sessionKey,
-          model: "anthropic/claude-opus-4-6",
-        }),
-        "zai-fallback: sessions-patch-anthropic",
-      );
-      await withGatewayLiveSessionControlTimeout(
-        client.request("sessions.reset", {
-          key: sessionKey,
-        }),
-        "zai-fallback: sessions-reset",
+        client.request(initialSession.method, initialSession.request),
+        "zai-fallback: sessions-create-anthropic",
       );
 
       const toolText = await requestGatewayAgentText({
@@ -5880,14 +6439,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         });
       }
 
-      restoreOptionalEnv("OPENCLAW_CONFIG_PATH", previous.configPath);
-      restoreOptionalEnv("OPENCLAW_GATEWAY_TOKEN", previous.token);
-      restoreOptionalEnv("OPENCLAW_SKIP_CHANNELS", previous.skipChannels);
-      restoreOptionalEnv("OPENCLAW_SKIP_GMAIL_WATCHER", previous.skipGmail);
-      restoreOptionalEnv("OPENCLAW_SKIP_CRON", previous.skipCron);
-      restoreOptionalEnv("OPENCLAW_SKIP_CANVAS_HOST", previous.skipCanvas);
-      restoreOptionalEnv("OPENCLAW_AGENT_DIR", previous.agentDir);
-      restoreOptionalEnv("OPENCLAW_STATE_DIR", previous.stateDir);
+      restoreLiveEnv(previousEnv);
     }
   }, 180_000);
 });

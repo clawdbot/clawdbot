@@ -12,17 +12,12 @@ import {
   formatReactionEmoji,
   normalizeReactionEmoji,
 } from "./send.shared.js";
-import type {
-  DiscordReactionRuntimeContext,
-  DiscordReactionSummary,
-  DiscordReactOpts,
-} from "./send.types.js";
-
-function createDiscordReactionRuntimeClient(opts: DiscordReactionRuntimeContext) {
-  return createDiscordClient(opts);
-}
+import type { DiscordReactionSummary, DiscordReactOpts } from "./send.types.js";
 
 function resolveDiscordReactionClient(opts: DiscordReactOpts) {
+  if (opts.rest && opts.cfg && opts.accountId) {
+    return createDiscordClient(opts);
+  }
   if (!opts.cfg) {
     throw new Error(
       "Discord reactions requires a resolved runtime config. Load and resolve config at the command or gateway boundary, then pass cfg through the runtime path.",
@@ -32,21 +27,13 @@ function resolveDiscordReactionClient(opts: DiscordReactOpts) {
   return createDiscordClient({ ...opts, cfg });
 }
 
-function isDiscordReactionRuntimeContext(
-  opts: DiscordReactOpts,
-): opts is DiscordReactionRuntimeContext {
-  return Boolean(opts.rest && opts.cfg && opts.accountId);
-}
-
 export async function reactMessageDiscord(
   channelId: string,
   messageId: string,
   emoji: string,
   opts: DiscordReactOpts,
 ) {
-  const { rest, request } = isDiscordReactionRuntimeContext(opts)
-    ? createDiscordReactionRuntimeClient(opts)
-    : resolveDiscordReactionClient(opts);
+  const { rest, request } = resolveDiscordReactionClient(opts);
   const encoded = normalizeReactionEmoji(emoji);
   await request(() => createOwnMessageReaction(rest, channelId, messageId, encoded), "react");
   return { ok: true };
@@ -58,11 +45,12 @@ export async function removeReactionDiscord(
   emoji: string,
   opts: DiscordReactOpts,
 ) {
-  const { rest } = isDiscordReactionRuntimeContext(opts)
-    ? createDiscordReactionRuntimeClient(opts)
-    : resolveDiscordReactionClient(opts);
+  const { rest, request } = resolveDiscordReactionClient(opts);
   const encoded = normalizeReactionEmoji(emoji);
-  await deleteOwnMessageReaction(rest, channelId, messageId, encoded);
+  await request(
+    () => deleteOwnMessageReaction(rest, channelId, messageId, encoded),
+    "reaction-remove",
+  );
   return { ok: true };
 }
 
@@ -71,15 +59,14 @@ export async function removeOwnReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts,
 ): Promise<{ ok: true; removed: string[] }> {
-  const { rest } = isDiscordReactionRuntimeContext(opts)
-    ? createDiscordReactionRuntimeClient(opts)
-    : resolveDiscordReactionClient(opts);
-  const message = (await getChannelMessage(rest, channelId, messageId)) as {
-    reactions?: Array<{ emoji: { id?: string | null; name?: string | null } }>;
-  };
+  const { rest, request } = resolveDiscordReactionClient(opts);
+  const message = await request(
+    () => getChannelMessage(rest, channelId, messageId),
+    "reaction-list",
+  );
   const identifiers = new Set<string>();
   for (const reaction of message.reactions ?? []) {
-    const identifier = buildReactionIdentifier(reaction.emoji);
+    const identifier = reaction.me ? buildReactionIdentifier(reaction.emoji) : undefined;
     if (identifier) {
       identifiers.add(identifier);
     }
@@ -92,7 +79,11 @@ export async function removeOwnReactionsDiscord(
   // failure and falsely report every identifier as removed.
   await Promise.all(
     removed.map((identifier) =>
-      deleteOwnMessageReaction(rest, channelId, messageId, normalizeReactionEmoji(identifier)),
+      request(
+        () =>
+          deleteOwnMessageReaction(rest, channelId, messageId, normalizeReactionEmoji(identifier)),
+        "reaction-remove",
+      ),
     ),
   );
   return { ok: true, removed };
@@ -103,15 +94,11 @@ export async function fetchReactionsDiscord(
   messageId: string,
   opts: DiscordReactOpts & { limit?: number },
 ): Promise<DiscordReactionSummary[]> {
-  const { rest } = isDiscordReactionRuntimeContext(opts)
-    ? createDiscordReactionRuntimeClient(opts)
-    : resolveDiscordReactionClient(opts);
-  const message = (await getChannelMessage(rest, channelId, messageId)) as {
-    reactions?: Array<{
-      count: number;
-      emoji: { id?: string | null; name?: string | null };
-    }>;
-  };
+  const { rest, request } = resolveDiscordReactionClient(opts);
+  const message = await request(
+    () => getChannelMessage(rest, channelId, messageId),
+    "reaction-list",
+  );
   const reactions = message.reactions ?? [];
   if (reactions.length === 0) {
     return [];
@@ -128,9 +115,10 @@ export async function fetchReactionsDiscord(
       continue;
     }
     const encoded = encodeURIComponent(identifier);
-    const users = await listMessageReactionUsers(rest, channelId, messageId, encoded, {
-      limit,
-    });
+    const users = await request(
+      () => listMessageReactionUsers(rest, channelId, messageId, encoded, { limit }),
+      "reaction-users",
+    );
     summaries.push({
       emoji: {
         id: reaction.emoji.id ?? null,

@@ -13,7 +13,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 
-ENGINES = ("codex", "claude", "pi")
+ENGINES = ("codex", "claude", "amp", "pi", "kimi")
 DEFAULT_ENGINES = ("codex", "claude")
 
 MALICIOUS_INITIAL = """export function uploadPath(name) {
@@ -176,7 +176,15 @@ def run_reviews(repo: Path, script_dir: Path, fixture: str, engines: list[str]) 
             MALICIOUS_PROMPT if fixture == "malicious" else BENIGN_PROMPT,
         ]
         if fixture == "malicious":
-            command.extend(["--require-finding", "command", "--expect-findings"])
+            command.extend(
+                [
+                    "--max-priority",
+                    "P1",
+                    "--require-finding",
+                    "command",
+                    "--expect-findings",
+                ]
+            )
         run(command, repo)
 
 

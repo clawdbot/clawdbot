@@ -8,8 +8,8 @@ github_output="${3:-}"
 
 package_json="${source_root}/package.json"
 package_lock="${source_root}/package-lock.json"
-expected_lock_sha256="f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816"
-expected_clawhub_integrity="sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA=="
+expected_lock_sha256="9606849698f041afdd2c2600633320f6b7c1e5136d06b98ce16c169c055c0f83"
+expected_clawhub_integrity="sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ=="
 test -f "${package_json}"
 test -f "${package_lock}"
 if [[ -e "${destination}" || -L "${destination}" ]]; then
@@ -38,18 +38,22 @@ clawhub_integrity="$(
   exit 1
 }
 
-npm ci \
-  --prefix "${destination}" \
-  --ignore-scripts \
-  --no-audit \
-  --no-fund \
-  --omit=dev
+# npm 12 misvalidates the lockfile root when this project is selected with --prefix.
+# Running inside the copied project keeps its committed root metadata authoritative.
+(
+  cd "${destination}"
+  npm ci \
+    --ignore-scripts \
+    --no-audit \
+    --no-fund \
+    --omit=dev
+)
 
 clawhub_version="$(
   CLAWHUB_CLI_ROOT="${destination}" \
     node -p "require(require('node:path').join(process.env.CLAWHUB_CLI_ROOT, 'node_modules/clawhub/package.json')).version"
 )"
-[[ "${clawhub_version}" == "0.23.1" ]] || {
+[[ "${clawhub_version}" == "0.23.3" ]] || {
   echo "Pinned ClawHub CLI version mismatch: ${clawhub_version}" >&2
   exit 1
 }

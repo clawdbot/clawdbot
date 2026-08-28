@@ -31,28 +31,29 @@ This is the **deep architecture reference** for the OpenClaw plugin system. For 
 
 ## Public capability model
 
-Capabilities are the public **native plugin** model inside OpenClaw. Every native OpenClaw plugin registers against one or more capability types:
+Capabilities are the public **native plugin** model inside OpenClaw. Native plugins can register one or more capability types:
 
-| Capability             | Registration method                              | Example plugins                |
-| ---------------------- | ------------------------------------------------ | ------------------------------ |
-| Text inference         | `api.registerProvider(...)`                      | `anthropic`, `openai`          |
-| CLI inference backend  | `api.registerCliBackend(...)`                    | `anthropic`, `openai`          |
-| Embeddings             | `api.registerEmbeddingProvider(...)`             | Provider-owned vector plugins  |
-| Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`      |
-| Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                       |
-| Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `google`, `openai`             |
-| Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `google`, `openai`             |
-| Transcripts source     | `api.registerTranscriptSourceProvider(...)`      | `discord`                      |
-| Image generation       | `api.registerImageGenerationProvider(...)`       | `fal`, `google`, `openai`      |
-| Music generation       | `api.registerMusicGenerationProvider(...)`       | `fal`, `google`, `minimax`     |
-| Video generation       | `api.registerVideoGenerationProvider(...)`       | `fal`, `google`, `qwen`        |
-| Web fetch              | `api.registerWebFetchProvider(...)`              | `firecrawl`                    |
-| Web search             | `api.registerWebSearchProvider(...)`             | `brave`, `firecrawl`, `google` |
-| Channel / messaging    | `api.registerChannel(...)`                       | `matrix`, `msteams`            |
-| Gateway discovery      | `api.registerGatewayDiscoveryService(...)`       | `bonjour`                      |
+| Capability             | Registration method                              | Example plugins                                             |
+| ---------------------- | ------------------------------------------------ | ----------------------------------------------------------- |
+| Text inference         | `api.registerProvider(...)`                      | `anthropic`, `openai`                                       |
+| CLI inference backend  | `api.registerCliBackend(...)`                    | `anthropic`, `openai`                                       |
+| Embeddings             | `api.registerEmbeddingProvider(...)`             | Provider-owned vector plugins                               |
+| Speech                 | `api.registerSpeechProvider(...)`                | `elevenlabs`, `microsoft`                                   |
+| Realtime transcription | `api.registerRealtimeTranscriptionProvider(...)` | `openai`                                                    |
+| Realtime voice         | `api.registerRealtimeVoiceProvider(...)`         | `google`, `openai`                                          |
+| Media understanding    | `api.registerMediaUnderstandingProvider(...)`    | `google`, `openai`                                          |
+| Transcripts source     | `api.registerTranscriptSourceProvider(...)`      | `discord`, `google-meet`, `teams-meetings`, `zoom-meetings` |
+| Image generation       | `api.registerImageGenerationProvider(...)`       | `fal`, `google`, `openai`                                   |
+| Music generation       | `api.registerMusicGenerationProvider(...)`       | `fal`, `google`, `minimax`                                  |
+| Video generation       | `api.registerVideoGenerationProvider(...)`       | `fal`, `google`, `qwen`                                     |
+| Web fetch              | `api.registerWebFetchProvider(...)`              | `firecrawl`                                                 |
+| Web search             | `api.registerWebSearchProvider(...)`             | `brave`, `firecrawl`, `google`                              |
+| Channel / messaging    | `api.registerChannel(...)`                       | `matrix`, `msteams`                                         |
+| Gateway discovery      | `api.registerGatewayDiscoveryService(...)`       | `bonjour`                                                   |
+| Migration              | `api.registerMigrationProvider(...)`             | `migrate-claude`, `migrate-hermes`                          |
 
 <Note>
-A plugin that registers zero capabilities but provides hooks, tools, discovery services, or background services is a **legacy hook-only** plugin. That pattern is still fully supported.
+A plugin that registers only hooks is **hook-only**. Plugins with tools, commands, background services, or routes but no capabilities are **non-capability** plugins. Both patterns remain supported; gateway discovery is an explicit capability listed above.
 </Note>
 
 ### External compatibility stance
@@ -88,18 +89,6 @@ OpenClaw classifies every loaded plugin into a shape based on its actual registr
 
 Use `openclaw plugins inspect <id>` to see a plugin's shape and capability breakdown. See [CLI reference](/cli/plugins#inspect) for details.
 
-### Legacy hooks
-
-The `before_agent_start` hook remains supported as a compatibility path for hook-only plugins. Legacy real-world plugins still depend on it.
-
-Direction:
-
-- keep it working
-- document it as legacy
-- prefer `before_model_resolve` for model/provider override work
-- prefer `before_prompt_build` for prompt mutation work
-- remove only after real usage drops and fixture coverage proves migration safety
-
 ### Compatibility signals
 
 `openclaw doctor`, `openclaw plugins inspect <id>`, `openclaw status --all`, and `openclaw plugins doctor` surface these compatibility notices:
@@ -108,7 +97,6 @@ Direction:
 | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
 | **config valid**                           | Config parses fine and plugins resolve                                                                        |
 | **hook-only** (info)                       | Plugin registers only hooks; a supported path, but not migrated to capability registration yet                |
-| **legacy `before_agent_start`** (warn)     | Plugin uses the deprecated `before_agent_start` hook instead of `before_model_resolve`/`before_prompt_build`  |
 | **deprecated memory-embedding API** (warn) | Non-bundled plugin uses the old memory-specific embedding provider API instead of `registerEmbeddingProvider` |
 | **hard error**                             | Config is invalid or plugin failed to load                                                                    |
 
@@ -150,27 +138,27 @@ That split lets OpenClaw validate config, explain missing/disabled plugins, and 
 
 ### Plugin metadata snapshot and lookup table
 
-Gateway startup builds one `PluginMetadataSnapshot` for the current config snapshot. The snapshot is metadata-only: it stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, a plugin id normalizer, and manifest records. It does not hold loaded plugin modules, provider SDKs, package contents, or runtime exports.
+One `PluginCache` starts on the first plugin metadata access, including CLI preflight before Gateway startup, and fills progressively as metadata and artifacts are needed. Gateway startup retains that owner and builds its immutable `PluginMetadataSnapshot`. The snapshot includes plugin metadata from all configured agent workspaces, including disabled plugins, with source precedence and workspace provenance preserved. It stores the installed plugin index, manifest registry, manifest diagnostics, owner maps, and a plugin id normalizer. Package contents and lazily loaded module exports belong to other typed views of the same cache, not the snapshot itself.
 
 Plugin-aware config validation, startup auto-enable, and Gateway plugin bootstrap consume that snapshot instead of rebuilding manifest/index metadata independently. `PluginLookUpTable` is derived from the same snapshot and adds the startup plugin plan for the current runtime config.
 
-After startup, Gateway keeps the current metadata snapshot as a replaceable runtime product. Repeated runtime provider discovery can borrow that snapshot instead of reconstructing the installed index and manifest registry for each provider-catalog pass. The snapshot is cleared or replaced on Gateway shutdown, config/plugin inventory changes, and installed index writes; callers fall back to the cold manifest/index path when no compatible current snapshot exists. Compatibility checks must include plugin discovery roots such as `plugins.load.paths` and the default agent workspace, because workspace plugins are part of the metadata scope.
+After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing config, account state, or an agent's run workspace does not invalidate it. Plugin installs, updates, removals, manifest edits, and discovery-root changes become visible to the runtime after a Gateway restart.
 
 The snapshot and lookup table keep repeated startup decisions on the fast path:
 
 - channel ownership
-- deferred channel startup
+- startup plugin planning
 - startup plugin ids
 - provider and CLI backend ownership
 - setup provider, command alias, model catalog provider, and manifest contract ownership
 - plugin config schema and channel config schema validation
 - startup auto-enable decisions
 
-The safety boundary is snapshot replacement, not mutation. Rebuild the snapshot when config, plugin inventory, install records, or persisted index policy changes. Do not treat it as a broad mutable global registry, and do not keep unbounded historical snapshots. Runtime plugin loading remains separate from metadata snapshots so stale runtime state cannot be hidden behind a metadata cache.
+Activation policy and runtime bindings have a separate lifetime. Hot reload can recompute enablement, replace plugin services, and refresh account state using current config against the fixed startup inventory. Plugin runtime imports remain lazy; retaining metadata does not activate every discovered plugin.
 
-The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): manifest and discovery metadata are fresh unless a caller holds an explicit snapshot, lookup table, or manifest registry for the current flow. Hidden metadata caches and wall-clock TTLs are not part of plugin loading. Only runtime loader, module, and dependency-artifact caches may persist after code or installed artifacts are actually loaded.
+The cache rule is documented in [Plugin architecture internals](/plugins/architecture-internals#plugin-cache-boundary): Gateway retains one cache generation, while explicit management operations use isolated generations of the same cache. There are no wall-clock TTLs for Gateway metadata.
 
-Some cold-path callers still reconstruct manifest registries directly from the persisted installed plugin index instead of receiving a Gateway `PluginLookUpTable`. That path now reconstructs the registry on demand; prefer passing the current lookup table or an explicit manifest registry through runtime flows when a caller already has one.
+Install, update, registry refresh, and doctor flows may read fresh package metadata to validate their changes. Their snapshots and installed-index writes do not replace the running Gateway's inventory. Runtime flows must use the startup snapshot or its lookup table instead of falling back to those cold management paths.
 
 ### Activation planning
 
@@ -200,6 +188,8 @@ The current boundary is:
 
 For channel plugins, the SDK surface is `ChannelMessageActionAdapter.describeMessageTool(...)`. That unified discovery call lets a plugin return its visible actions, capabilities, and schema contributions together so those pieces do not drift apart.
 
+Message action names use a deliberately closed, core-owned vocabulary so every transport can render every action. Plugins add action names through a core PR; runtime registration is intentionally unsupported.
+
 When a channel-specific message-tool param carries a media source such as a local path or remote media URL, the plugin should also return `mediaSourceParams` from `describeMessageTool(...)`. Core uses that explicit list to apply sandbox path normalization and outbound media-access hints without hardcoding plugin-owned param names. Prefer action-scoped maps there, not one channel-wide flat list, so a profile-only media param does not get normalized on unrelated actions like `send`.
 
 Core passes runtime scope into that discovery step. Important fields include:
@@ -217,7 +207,7 @@ That matters for context-sensitive plugins. A channel can hide or expose message
 
 This is why embedded-runner routing changes are still plugin work: the runner is responsible for forwarding the current chat/session identity into the plugin discovery boundary so the shared `message` tool exposes the right channel-owned surface for the current turn.
 
-For channel-owned execution helpers, bundled plugins should keep the execution runtime inside their own plugin modules. Core no longer owns the Discord, Slack, Telegram, or WhatsApp message-action runtimes under `src/agents/tools`. We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and bundled plugins should import their own local runtime code directly from their plugin-owned modules.
+For channel-owned execution helpers, channel plugins should keep the execution runtime inside their own plugin modules. Core no longer owns the Discord, Slack, Telegram, or WhatsApp message-action runtimes under `src/agents/tools`. We do not publish separate `plugin-sdk/*-action-runtime` subpaths, and those plugins should import their own local runtime code directly from their plugin-owned modules.
 
 The same boundary applies to provider-named SDK seams in general: core should not import channel-specific convenience barrels for Discord, Signal, Slack, WhatsApp, or similar plugins. If core needs a behavior, either consume the bundled plugin's own `api.ts` / `runtime-api.ts` barrel or promote the need into a narrow generic capability in the shared SDK.
 
@@ -315,16 +305,13 @@ That same pattern should be preferred for future capabilities.
 A company plugin should feel cohesive from the outside. If OpenClaw has shared contracts for models, speech, realtime transcription, realtime voice, media understanding, image generation, video generation, web fetch, and web search, a vendor can own all of its surfaces in one place:
 
 ```ts
-import type { OpenClawPluginDefinition } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  describeImageWithModel,
-  transcribeOpenAiCompatibleAudio,
-} from "openclaw/plugin-sdk/media-understanding";
-import { createPluginBackedWebSearchProvider } from "openclaw/plugin-sdk/provider-web-search";
+import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
+import { exampleAiMedia } from "./exampleai-media.js";
 
-const plugin: OpenClawPluginDefinition = {
+export default definePluginEntry({
   id: "exampleai",
   name: "ExampleAI",
+  description: "ExampleAI models and media capabilities.",
   register(api) {
     api.registerProvider({
       id: "exampleai",
@@ -339,36 +326,26 @@ const plugin: OpenClawPluginDefinition = {
     api.registerMediaUnderstandingProvider({
       id: "exampleai",
       capabilities: ["image", "audio", "video"],
-      async describeImage(req) {
-        return describeImageWithModel({
-          ...req,
-          provider: "exampleai",
-        });
-      },
-      async transcribeAudio(req) {
-        return transcribeOpenAiCompatibleAudio({
-          ...req,
-          provider: "exampleai",
-        });
-      },
+      describeImage: (req) => exampleAiMedia.describeImage(req),
+      transcribeAudio: (req) => exampleAiMedia.transcribeAudio(req),
+      describeVideo: (req) => exampleAiMedia.describeVideo(req),
     });
 
-    api.registerWebSearchProvider(
-      createPluginBackedWebSearchProvider({
-        id: "exampleai-search",
-        // credential + fetch logic
-      }),
-    );
+    api.registerWebSearchProvider({
+      id: "exampleai-search",
+      createTool() {
+        // Return the vendor-owned web search tool.
+      },
+    });
   },
-};
-
-export default plugin;
+});
 ```
 
 What matters is not the exact helper names. The shape matters:
 
 - one plugin owns the vendor surface
 - core still owns the capability contracts
+- provider request translation and HTTP helpers stay in the vendor plugin
 - channels and feature plugins consume `api.runtime.*` helpers, not vendor code
 - contract tests can assert that the plugin registered the capabilities it claims to own
 
@@ -470,7 +447,7 @@ Keep capability registration public. Trim non-contract helper exports:
 - vendor-specific convenience helpers
 - setup/onboarding helpers that are implementation details
 
-Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package; promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and `plugin-sdk/plugin-config-runtime`.
+Reserved bundled-plugin helper subpaths have been retired from the generated SDK export map. Keep owner-specific helpers inside the owning plugin package; promote only reusable host behavior to generic SDK contracts such as `plugin-sdk/gateway-runtime`, `plugin-sdk/security-runtime`, and injected plugin API capabilities.
 
 ## Internals and reference
 

@@ -54,7 +54,9 @@ describe("describeBrowserScreenshot", () => {
         {
           cfg: {
             tools: {
-              media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } },
+              media: {
+                models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+              },
             },
           },
           filePath,
@@ -77,9 +79,7 @@ describe("describeBrowserScreenshot", () => {
         cfg: {
           tools: {
             media: {
-              image: {
-                models: [{ provider: "openai", model: "gpt-vision" }],
-              },
+              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
             },
           },
         },
@@ -90,6 +90,48 @@ describe("describeBrowserScreenshot", () => {
         scopeContext: { sessionKey: "agent:main:telegram:dm:123", channel: "telegram" },
       });
     });
+  });
+
+  it.each([
+    { name: "session-owned default agent", agentId: undefined, sessionAgentId: "main" },
+    { name: "explicit matching worker agent", agentId: "worker", sessionAgentId: "worker" },
+  ])(
+    "passes the $name identity to image understanding when its directory is absent",
+    async (testCase) => {
+      const describeEntry = vi.fn().mockResolvedValue({ text: "A dashboard." });
+
+      await describeBrowserScreenshot(
+        {
+          cfg: {},
+          filePath: "/tmp/screenshot.png",
+          ...(testCase.agentId ? { agentId: testCase.agentId } : {}),
+          mediaScope: { sessionKey: `agent:${testCase.sessionAgentId}:webchat:direct:123` },
+        },
+        makeDeps(describeEntry),
+      );
+
+      expect(describeEntry).toHaveBeenCalledWith(
+        expect.objectContaining({ agentId: testCase.sessionAgentId, agentDir: undefined }),
+      );
+    },
+  );
+
+  it("rejects an agent identity that conflicts with its session before image understanding", async () => {
+    const describeEntry = vi.fn().mockResolvedValue({ text: "A dashboard." });
+
+    await expect(
+      describeBrowserScreenshot(
+        {
+          cfg: {},
+          filePath: "/tmp/screenshot.png",
+          agentId: "worker",
+          mediaScope: { sessionKey: "agent:main:webchat:direct:123" },
+        },
+        makeDeps(describeEntry),
+      ),
+    ).rejects.toThrow(/belongs to "main", not "worker"/);
+
+    expect(describeEntry).not.toHaveBeenCalled();
   });
 
   it("resizes screenshots before image understanding when image sanitization is configured", async () => {
@@ -141,7 +183,9 @@ describe("describeBrowserScreenshot", () => {
       {
         cfg: {
           tools: {
-            media: { image: { models: [{ provider: "openai", model: "gpt-vision" }] } },
+            media: {
+              models: [{ provider: "openai", model: "gpt-vision", capabilities: ["image"] }],
+            },
           },
         },
         filePath: "/tmp/screenshot.png",

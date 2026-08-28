@@ -16,10 +16,9 @@ function formatPlanHeader(plan: MigrationPlan, heading: string): string[] {
   if (plan.target) {
     lines.push(`Target: ${plan.target}`);
   }
-  const visible = plan.items.filter((item) => !HIDDEN_KINDS.has(item.kind));
   lines.push(
     [
-      formatCount(visible.length, "item"),
+      formatCount(plan.items.length, "item"),
       formatCount(plan.summary.conflicts, "conflict"),
       formatCount(plan.summary.sensitive, "sensitive item"),
     ].join(", "),
@@ -36,13 +35,13 @@ const ITEM_GROUPS: ItemGroup[] = [
   { kind: "auth", heading: "Auth credentials:" },
   { kind: "skill", heading: "Skills:" },
   { kind: "plugin", heading: "Plugins:" },
+  { kind: "config", heading: "Config:" },
   { kind: "memory", heading: "Memory:" },
   { kind: "secret", heading: "Secrets:" },
   { kind: "archive", heading: "Archive:" },
   { kind: "manual", heading: "Manual review:" },
 ];
 
-const HIDDEN_KINDS = new Set(["config"]);
 const KNOWN_KINDS = new Set(ITEM_GROUPS.map((group) => group.kind));
 
 type FormatMode = "preview" | "result";
@@ -52,9 +51,6 @@ function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
   const buckets = new Map<string, MigrationItem[]>();
   const other: MigrationItem[] = [];
   for (const item of plan.items) {
-    if (HIDDEN_KINDS.has(item.kind)) {
-      continue;
-    }
     if (KNOWN_KINDS.has(item.kind)) {
       const list = buckets.get(item.kind) ?? [];
       list.push(item);
@@ -84,12 +80,16 @@ function formatPlanItems(plan: MigrationPlan, mode: FormatMode): string[] {
   return lines;
 }
 
-function formatPlanWarnings(plan: MigrationPlan): string[] {
-  if (!plan.warnings || plan.warnings.length === 0) {
+function formatPlanWarnings(
+  plan: MigrationPlan,
+  visibleElsewhere: readonly string[] = [],
+): string[] {
+  const warnings = plan.warnings?.filter((warning) => !visibleElsewhere.includes(warning));
+  if (!warnings || warnings.length === 0) {
     return [];
   }
   const lines = ["", theme.warn("Warnings:")];
-  for (const warning of plan.warnings) {
+  for (const warning of warnings) {
     lines.push(`⚠️  ${warning}`);
   }
   return lines;
@@ -111,6 +111,7 @@ export function formatMigrationResult(plan: MigrationPlan): string[] {
   const lines = [
     ...formatPlanHeader(safePlan, "Migration plan:"),
     ...formatPlanItems(safePlan, "result"),
+    ...formatPlanWarnings(safePlan, safePlan.nextSteps),
   ];
   if (safePlan.nextSteps && safePlan.nextSteps.length > 0) {
     lines.push("");

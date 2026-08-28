@@ -108,54 +108,21 @@ jobs:
     if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: ubuntu-24.04
     outputs:
-      candidate_revision: ${{ steps.validate.outputs.candidate_revision }}
+      candidate_revision: ${{ steps.validate.outputs.candidate-revision }}
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
 
       - name: Validate ref is trusted
         id: validate
+        uses: ./.github/actions/mantis-validate-trusted-ref
         env:
           GH_TOKEN: ${{ github.token }}
-          CANDIDATE_REF: ${{ inputs.candidate_ref }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          git fetch --no-tags origin +refs/heads/main:refs/remotes/origin/main
-
-          revision="$(git rev-parse "${CANDIDATE_REF}^{commit}")"
-          reason=""
-          if git merge-base --is-ancestor "$revision" refs/remotes/origin/main; then
-            reason="main-ancestor"
-          elif git tag --points-at "$revision" | grep -Eq '^v'; then
-            reason="release-tag"
-          else
-            pr_head_count="$(
-              gh api \
-                -H "Accept: application/vnd.github+json" \
-                "repos/${GITHUB_REPOSITORY}/commits/${revision}/pulls" \
-                --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${revision}"'")] | length'
-            )"
-            if [[ "$pr_head_count" != "0" ]]; then
-              reason="open-pr-head"
-            fi
-          fi
-
-          if [[ -z "$reason" ]]; then
-            echo "Candidate ref '${CANDIDATE_REF}' resolved to ${revision}, which is not trusted for this secret-bearing Mantis run." >&2
-            exit 1
-          fi
-
-          echo "candidate_revision=${revision}" >> "$GITHUB_OUTPUT"
-          {
-            echo "candidate: \`${CANDIDATE_REF}\`"
-            echo "candidate SHA: \`${revision}\`"
-            echo "candidate trust reason: \`${reason}\`"
-          } >> "$GITHUB_STEP_SUMMARY"
+        with:
+          candidate-ref: ${{ inputs.candidate_ref }}
 
   run_slack_desktop:
     name: Run Slack desktop smoke
@@ -165,7 +132,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout harness ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
@@ -173,6 +140,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -180,7 +148,7 @@ jobs:
         run: pnpm build
 
       - name: Cache Mantis candidate pnpm store
-        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.local/share/pnpm/store
@@ -190,7 +158,7 @@ jobs:
             mantis-slack-pnpm-${{ runner.os }}-${{ env.NODE_VERSION }}-
 
       - name: Setup Go for Crabbox CLI
-        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version: "1.26.x"
           cache: false
@@ -203,7 +171,7 @@ jobs:
           mkdir -p "$install_dir" "$HOME/.local/bin"
           git init "$install_dir/src"
           git -C "$install_dir/src" remote add origin https://github.com/openclaw/crabbox.git
-          git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
+          timeout --signal=TERM --kill-after=10s 120s git -C "$install_dir/src" fetch --depth 1 origin "$CRABBOX_REF"
           git -C "$install_dir/src" checkout --detach FETCH_HEAD
           go build -C "$install_dir/src" -o "$HOME/.local/bin/crabbox" ./cmd/crabbox
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
@@ -266,8 +234,29 @@ jobs:
           require_var OPENCLAW_QA_CONVEX_SECRET_CI
           require_var CRABBOX_COORDINATOR_TOKEN
           if [[ -z "${CRABBOX_LEASE_ID:-}" && "$CRABBOX_PROVIDER" == "aws" ]]; then
-            runner_ip="$(curl -fsS https://checkip.amazonaws.com | tr -d '[:space:]')"
-            if [[ -z "$runner_ip" ]]; then
+            runner_ip=""
+            for attempt in 1 2 3; do
+              if runner_ip="$(curl -fsS --connect-timeout 5 --max-time 15 https://checkip.amazonaws.com | tr -d '[:space:]')"; then
+                break
+              fi
+              runner_ip=""
+              if [[ "$attempt" != "3" ]]; then
+                sleep "$attempt"
+              fi
+            done
+            valid_runner_ip=true
+            if [[ ! "$runner_ip" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})$ ]]; then
+              valid_runner_ip=false
+            else
+              IFS=. read -r -a runner_ip_octets <<<"$runner_ip"
+              for octet in "${runner_ip_octets[@]}"; do
+                if ((10#$octet > 255)); then
+                  valid_runner_ip=false
+                  break
+                fi
+              done
+            fi
+            if [[ "$valid_runner_ip" != "true" ]]; then
               echo "Could not resolve GitHub runner public IPv4 for AWS SSH ingress." >&2
               exit 1
             fi
@@ -422,13 +411,14 @@ jobs:
             --argjson screenshot_required "$screenshot_required" \
             --argjson desktop_capture_inline "$desktop_capture_inline" \
             '{
-              schemaVersion: 1,
+              schemaVersion: 2,
               id: "slack-desktop-smoke",
               title: "Mantis Slack Desktop Smoke QA",
               summary: $summary,
               scenario: $scenario,
               comparison: {
-                candidate: { sha: $candidate_sha, expected: $expected, status: $status, fixed: ($status == "pass") },
+                candidate: { sha: $candidate_sha, expected: $expected, expectationMet: ($status == "pass"), status: $status, fixed: ($status == "pass") },
+                outcome: (if $status == "pass" then "pass" else "fail" end),
                 pass: ($status == "pass")
               },
               artifacts: ([

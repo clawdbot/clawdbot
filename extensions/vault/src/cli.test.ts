@@ -32,15 +32,23 @@ function createProgram(config: Record<string, unknown> = {}): Command {
 async function createSetupPlan(args: string[]): Promise<VaultPlan> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-cli-"));
   const planPath = path.join(dir, "plan.json");
+  try {
+    await runSetup(planPath, args);
+    return JSON.parse(await fs.readFile(planPath, "utf8")) as VaultPlan;
+  } finally {
+    await fs.rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function runSetup(planPath: string, args: string[]): Promise<string> {
   const stdout = captureStdout();
   try {
     await createProgram().parseAsync(["vault", "setup", "--plan-out", planPath, ...args], {
       from: "user",
     });
-    return JSON.parse(await fs.readFile(planPath, "utf8")) as VaultPlan;
+    return stdout.output();
   } finally {
     stdout.restore();
-    await fs.rm(dir, { recursive: true, force: true });
   }
 }
 
@@ -64,6 +72,32 @@ afterEach(() => {
 });
 
 describe("vault CLI setup plan", () => {
+  const setupArgs = ["--openai-id", "providers/openai/apiKey"];
+
+  it.skipIf(process.platform === "win32")(
+    "creates plans privately without overwriting files or following symlinks",
+    async () => {
+      const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-plan-security-"));
+      const privatePath = path.join(dir, "private.json");
+      const existingPath = path.join(dir, "existing.json");
+      const targetPath = path.join(dir, "target.json");
+      const symlinkPath = path.join(dir, "symlink.json");
+      try {
+        await runSetup(privatePath, setupArgs);
+        expect((await fs.stat(privatePath)).mode & 0o777).toBe(0o600);
+        await fs.writeFile(existingPath, "keep-me", "utf8");
+        await expect(runSetup(existingPath, setupArgs)).rejects.toThrow("Plan path already exists");
+        await expect(fs.readFile(existingPath, "utf8")).resolves.toBe("keep-me");
+        await fs.writeFile(targetPath, "keep-me", "utf8");
+        await fs.symlink(targetPath, symlinkPath);
+        await expect(runSetup(symlinkPath, setupArgs)).rejects.toThrow("Plan path already exists");
+        await expect(fs.readFile(targetPath, "utf8")).resolves.toBe("keep-me");
+      } finally {
+        await fs.rm(dir, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("generates plugin-managed provider config and model API-key targets", async () => {
     const plan = await createSetupPlan([
       "--openai-id",
@@ -130,6 +164,7 @@ describe("vault CLI setup plan", () => {
   });
 
   it.each([
+    ["empty plans", [], "No SecretRef targets selected"],
     [
       "duplicate providers",
       ["--openai-id", "providers/openai/apiKey", "--provider-key", "OpenAI=providers/openai/other"],
@@ -155,8 +190,28 @@ describe("vault CLI setup plan", () => {
       ],
       "Duplicate secret target path",
     ],
+    [
+      "non-canonical auth-profile agent ids",
+      ["--target", "auth-profiles:../main:profiles.openai.key=providers/openai/apiKey"],
+      "Invalid --target auth-profiles target for Vault",
+    ],
   ])("rejects %s", async (_label, args, message) => {
     await expect(createSetupPlan(args)).rejects.toThrow(message);
+  });
+
+  it("prints shell-safe commands using the canonical plan path", async () => {
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-vault-command-"));
+    const planPath = path.join(dir, "plan with spaces.json");
+    const canonicalPlanPath = path.join(await fs.realpath(dir), "plan with spaces.json");
+    try {
+      const output = await runSetup(planPath, setupArgs);
+      expect(output).toContain(
+        `openclaw secrets apply --from '${canonicalPlanPath}' --dry-run --allow-exec`,
+      );
+      expect(output).toContain(`openclaw secrets apply --from '${canonicalPlanPath}' --allow-exec`);
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 
   it.each([
@@ -176,6 +231,21 @@ describe("vault CLI status", () => {
     const result = await runStatus({
       secrets: {
         providers: {
+          "corp-vault": {
+            source: "exec",
+            pluginIntegration: { pluginId: "vault", integrationId: "vault" },
+          },
+        },
+      },
+    });
+    expect(result.providerAlias).toBe("corp-vault");
+  });
+
+  it("prefers the managed integration when the default alias is unrelated", async () => {
+    const result = await runStatus({
+      secrets: {
+        providers: {
+          vault: { source: "exec", command: "/legacy/resolver" },
           "corp-vault": {
             source: "exec",
             pluginIntegration: { pluginId: "vault", integrationId: "vault" },

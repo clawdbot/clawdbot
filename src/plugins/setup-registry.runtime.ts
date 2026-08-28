@@ -2,10 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
-import {
-  resolvePluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 type SetupCliBackendDescriptorEntry = {
@@ -22,50 +19,19 @@ type SetupCliBackendDescriptorLookupParams = {
   env?: NodeJS.ProcessEnv;
 };
 
-type SetupCliBackendDescriptorCache = {
-  configFingerprint: string;
-  entries: SetupCliBackendDescriptorEntry[];
-};
-
-let cachedSetupCliBackendDescriptors: SetupCliBackendDescriptorCache | undefined;
-function resolveMetadataSnapshotForSetupCliBackends(
-  params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
-): {
-  snapshot: PluginMetadataSnapshot;
-  cacheable: boolean;
-} {
-  const env = params.env ?? process.env;
-  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
-  const snapshot = resolvePluginMetadataSnapshot({
-    config: params.config ?? {},
-    env,
-    ...(workspaceDir !== undefined
-      ? {
-          workspaceDir,
-          allowWorkspaceScopedCurrent: true,
-        }
-      : {}),
-  });
-  return {
-    snapshot,
-    cacheable: true,
-  };
-}
-
 function resolveSetupCliBackendDescriptors(
   params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
 ): SetupCliBackendDescriptorEntry[] {
-  const { snapshot, cacheable } = resolveMetadataSnapshotForSetupCliBackends(params);
-  const configFingerprint = snapshot.configFingerprint;
-  if (
-    cacheable &&
-    configFingerprint &&
-    cachedSetupCliBackendDescriptors?.configFingerprint === configFingerprint
-  ) {
-    return cachedSetupCliBackendDescriptors.entries;
-  }
-  const entries = snapshot.plugins.flatMap((plugin) => {
-    if (!isInstalledPluginEnabled(snapshot.index, plugin.id)) {
+  const env = params.env ?? process.env;
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const snapshot = resolvePluginMetadataSnapshot({
+    ...(params.config ? { config: params.config } : {}),
+    env,
+    ...(workspaceDir ? { workspaceDir } : {}),
+    allowWorkspaceScopedCurrent: true,
+  });
+  return snapshot.plugins.flatMap((plugin) => {
+    if (!isInstalledPluginEnabled(snapshot.index, plugin.id, params.config)) {
       return [];
     }
     return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
@@ -76,10 +42,6 @@ function resolveSetupCliBackendDescriptors(
         }) satisfies SetupCliBackendDescriptorEntry,
     );
   });
-  if (cacheable && configFingerprint) {
-    cachedSetupCliBackendDescriptors = { configFingerprint, entries };
-  }
-  return entries;
 }
 
 export function resolvePluginSetupCliBackendDescriptor(
@@ -89,4 +51,11 @@ export function resolvePluginSetupCliBackendDescriptor(
   return resolveSetupCliBackendDescriptors(params).find(
     (entry) => normalizeProviderId(entry.backend.id) === normalized,
   );
+}
+
+/** Resolve enabled setup CLI backend ids from one metadata snapshot. */
+export function resolvePluginSetupCliBackendIds(
+  params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
+): string[] {
+  return resolveSetupCliBackendDescriptors(params).map((entry) => entry.backend.id);
 }

@@ -1,10 +1,13 @@
 // Proxy capture SQLite store tests cover persisted capture reads and writes.
 import fs from "node:fs";
 import path from "node:path";
+import { constants } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { resolveSqliteDatabaseFilePaths } from "../infra/sqlite-files.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { claimOpenClawStateOwnership } from "../state/openclaw-state-ownership-operations.js";
+import { OpenClawStateOwnershipError } from "../state/openclaw-state-ownership.js";
 import {
   acquireDebugProxyCaptureStore,
   closeDebugProxyCaptureStore,
@@ -76,6 +79,24 @@ describe("DebugProxyCaptureStore", () => {
     expect(() => rebound.endSession("exit-session")).not.toThrow();
   });
 
+  it("fences a shared store that was opened before external ownership was claimed", () => {
+    const env = makeStateEnv("openclaw-proxy-capture-preclaim-");
+    const store = new DebugProxyCaptureStore({ env });
+    env.OPENCLAW_SUPERVISOR_MODE = "external";
+    claimOpenClawStateOwnership("gateway-supervisor", { env });
+    delete env.OPENCLAW_SUPERVISOR_MODE;
+
+    expect(() =>
+      store.upsertSession({
+        id: "preclaim-session",
+        startedAt: 1,
+        mode: "proxy-run",
+        sourceScope: "openclaw",
+        sourceProcess: "cli",
+      }),
+    ).toThrow(OpenClawStateOwnershipError);
+  });
+
   it("tracks and closes cached stores independently across paths", () => {
     const first = acquireDebugProxyCaptureStore({
       env: makeStateEnv("openclaw-proxy-capture-first-"),
@@ -98,6 +119,14 @@ describe("DebugProxyCaptureStore", () => {
     const dbPath = path.join(root, "capture.sqlite");
     const blobDir = path.join(root, "blobs");
     const lease = acquireDebugProxyCaptureStore(dbPath, blobDir);
+    lease.store.db.exec(`
+      CREATE TABLE config_machine_state (
+        state_key TEXT PRIMARY KEY,
+        value_json TEXT NOT NULL,
+        updated_at_ms INTEGER NOT NULL
+      );
+      INSERT INTO config_machine_state VALUES ('gateway.supervision', '{"malformed":true}', 1);
+    `);
 
     expect(getDebugProxyCaptureStore(dbPath, blobDir)).toBe(lease.store);
     lease.store.upsertSession({
@@ -137,6 +166,20 @@ describe("DebugProxyCaptureStore", () => {
         .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'capture_blobs'")
         .get(),
     ).toBeUndefined();
+    lease.store.db.exec("DROP TABLE config_machine_state;");
+    expect(
+      lease.store.db
+        .prepare(
+          `SELECT name, strict FROM pragma_table_list
+           WHERE schema = 'main' AND type = 'table' AND name NOT LIKE 'sqlite_%'
+           ORDER BY name`,
+        )
+        .all(),
+    ).toEqual([
+      { name: "capture_events", strict: 1 },
+      { name: "capture_sessions", strict: 1 },
+    ]);
+    expect(lease.store.db.prepare("PRAGMA user_version").get()).toEqual({ user_version: 1 });
     expect(lease.store.deleteSessions(["legacy-sdk-session"])).toEqual({
       sessions: 1,
       events: 1,
@@ -147,6 +190,66 @@ describe("DebugProxyCaptureStore", () => {
     lease.release();
     expect(lease.store.isClosed).toBe(true);
   });
+
+  it.each(["deleteSessions", "purgeAll"] as const)(
+    "rolls back path-based %s when session deletion fails",
+    (operation) => {
+      const root = makeTempDir(cleanupDirs, "openclaw-proxy-capture-rollback-");
+      const dbPath = path.join(root, "capture.sqlite");
+      const blobDir = path.join(root, "blobs");
+      const lease = acquireDebugProxyCaptureStore(dbPath, blobDir);
+      const sessionId = "path-based-rollback-session";
+
+      try {
+        lease.store.upsertSession({
+          id: sessionId,
+          startedAt: 1,
+          mode: "sdk",
+          sourceScope: "openclaw",
+          sourceProcess: "plugin",
+          dbPath,
+          blobDir,
+        });
+        const blob = lease.store.persistPayload(Buffer.from("rollback payload"), "text/plain");
+        lease.store.recordEvent({
+          sessionId,
+          ts: 2,
+          sourceScope: "openclaw",
+          sourceProcess: "plugin",
+          protocol: "https",
+          direction: "outbound",
+          kind: "request",
+          flowId: "path-based-rollback-flow",
+          dataBlobId: blob.blobId,
+          dataSha256: blob.sha256,
+        });
+
+        const cleanup = () =>
+          operation === "deleteSessions"
+            ? lease.store.deleteSessions([sessionId])
+            : lease.store.purgeAll();
+        lease.store.db.setAuthorizer((action, table) =>
+          action === constants.SQLITE_DELETE && table === "capture_sessions"
+            ? constants.SQLITE_DENY
+            : constants.SQLITE_OK,
+        );
+
+        expect(cleanup).toThrow(/not authorized/u);
+        lease.store.db.setAuthorizer(null);
+        expect(lease.store.listSessions()).toHaveLength(1);
+        expect(lease.store.getSessionEvents(sessionId)).toHaveLength(1);
+        expect(fs.existsSync(blob.path)).toBe(true);
+
+        expect(cleanup()).toEqual({ sessions: 1, events: 1, blobs: 1 });
+        expect(lease.store.listSessions()).toEqual([]);
+        expect(lease.store.getSessionEvents(sessionId)).toEqual([]);
+        expect(fs.existsSync(blob.path)).toBe(false);
+      } finally {
+        lease.store.db.setAuthorizer(null);
+        lease.release();
+      }
+    },
+  );
 
   it("uses rollback journaling for captures on NFS-backed volumes", () => {
     vi.spyOn(fs, "statfsSync").mockReturnValue({

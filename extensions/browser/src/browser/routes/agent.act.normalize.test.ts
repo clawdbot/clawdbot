@@ -1,5 +1,6 @@
 // Browser tests cover agent.act.normalize plugin behavior.
 import { describe, expect, it } from "vitest";
+import { ACT_MAX_BATCH_DEPTH } from "../act-policy.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
 
 const MAX_SAFE_TIMEOUT_DELAY_MS = 2_147_483_647;
@@ -61,6 +62,40 @@ describe("canonicalizeActTargetIds", () => {
         [tab, { targetId: "abcd9999" }],
       ),
     ).toBe("batched action targetId must match request targetId");
+  });
+});
+
+describe("normalizeActRequest keyboard keys", () => {
+  it.each([
+    ["Esc", "Escape"],
+    ["ESC", "Escape"],
+    ["Return", "Enter"],
+    ["Del", "Delete"],
+    ["Ctrl+a", "Control+a"],
+    ["Cmd+A", "Meta+A"],
+    ["Ctrl+Shift+Esc", "Control+Shift+Escape"],
+    ["Ctrl++", "Control++"],
+  ])("normalizes the keyboard alias %s", (key, expected) => {
+    expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
+  });
+
+  it.each(["a", "A", "+", "Control++", "ControlOrMeta+a", "__proto__", "constructor"])(
+    "preserves the existing keyboard contract for %s",
+    (key) => {
+      expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key });
+    },
+  );
+
+  it("normalizes keyboard aliases inside nested batch actions", () => {
+    expect(
+      normalizeActRequest({
+        kind: "batch",
+        actions: [{ kind: "batch", actions: [{ kind: "press", key: "Ctrl+Esc" }] }],
+      }),
+    ).toMatchObject({
+      kind: "batch",
+      actions: [{ kind: "batch", actions: [{ kind: "press", key: "Control+Escape" }] }],
+    });
   });
 });
 
@@ -142,5 +177,30 @@ describe("normalizeActRequest numeric fields", () => {
         height: 600,
       }),
     ).toThrow("resize requires positive width and height");
+  });
+});
+
+describe("normalizeActRequest batch nesting depth", () => {
+  const buildNestedBatch = (depth: number): Record<string, unknown> => {
+    let action: Record<string, unknown> = { kind: "click", ref: "1" };
+    for (let i = 0; i < depth; i += 1) {
+      action = { kind: "batch", actions: [action] };
+    }
+    return action;
+  };
+
+  it("normalizes batches nested up to the executor depth limit", () => {
+    const normalized = normalizeActRequest(buildNestedBatch(ACT_MAX_BATCH_DEPTH + 1));
+    expect(normalized).toMatchObject({ kind: "batch" });
+  });
+
+  it("rejects nesting past the depth limit with a clear error instead of overflowing the stack", () => {
+    // A ~1MB JSON body fits tens of thousands of levels; without a depth bound the
+    // recursive normalization throws RangeError before the action-count check runs.
+    for (const depth of [ACT_MAX_BATCH_DEPTH + 2, 30_000]) {
+      expect(() => normalizeActRequest(buildNestedBatch(depth))).toThrow(
+        `batch nesting exceeds maximum depth of ${ACT_MAX_BATCH_DEPTH}`,
+      );
+    }
   });
 });

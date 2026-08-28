@@ -3,13 +3,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { areBundledPluginsDisabled, resolveBundledPluginsDir } from "../plugins/bundled-dir.js";
-import {
-  getCachedPluginSourceModuleLoader,
-  type PluginModuleLoaderCache,
-} from "../plugins/plugin-module-loader-cache.js";
+import { getPluginCacheRoot, getPluginCacheSource } from "../plugins/plugin-cache.js";
+import { getCachedPluginSourceModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { resolveLoaderPackageRoot } from "../plugins/sdk-alias.js";
 import {
-  loadBundledPluginPublicSurfaceModuleSync as loadBundledPluginPublicSurfaceModuleSyncLight,
+  loadBundledPluginPublicSurfaceModuleSyncCore as loadBundledPluginPublicSurfaceModuleSyncLight,
   loadFacadeModuleAtLocationSync as loadFacadeModuleAtLocationSyncShared,
   resetFacadeLoaderStateForTest,
   type FacadeModuleLocation,
@@ -25,20 +23,6 @@ export {
   listImportedBundledPluginFacadeIds,
 } from "./facade-loader.js";
 
-/** Create a lazy value/function proxy for one property of a facade module. */
-export function createLazyFacadeValue<TFacade extends object, K extends keyof TFacade>(
-  loadFacadeModule: () => TFacade,
-  key: K,
-): TFacade[K] {
-  return ((...args: unknown[]) => {
-    const value = loadFacadeModule()[key];
-    if (typeof value !== "function") {
-      return value;
-    }
-    return (value as (...innerArgs: unknown[]) => unknown)(...args);
-  }) as TFacade[K];
-}
-
 const OPENCLAW_PACKAGE_ROOT =
   resolveLoaderPackageRoot({
     modulePath: fileURLToPath(import.meta.url),
@@ -46,7 +30,6 @@ const OPENCLAW_PACKAGE_ROOT =
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
 const CURRENT_MODULE_PATH = fileURLToPath(import.meta.url);
 const OPENCLAW_SOURCE_EXTENSIONS_ROOT = path.resolve(OPENCLAW_PACKAGE_ROOT, "extensions");
-
 function createFacadeResolutionKey(params: {
   dirName: string;
   artifactBasename: string;
@@ -97,7 +80,20 @@ function resolveFacadeModuleLocation(params: {
   artifactBasename: string;
   env?: NodeJS.ProcessEnv;
 }): { modulePath: string; boundaryRoot: string } | null {
-  return resolveFacadeModuleLocationUncached(params);
+  // Custom environments may select different installed-plugin profiles, so
+  // their facade locations must not enter the process-wide gateway cache.
+  if (params.env !== undefined && params.env !== process.env) {
+    return resolveFacadeModuleLocationUncached(params);
+  }
+  const resolutionKey = `facade-registry:${createFacadeResolutionKey(params)}`;
+  const artifacts = getPluginCacheRoot(OPENCLAW_PACKAGE_ROOT).artifacts;
+  const cached = artifacts.get(resolutionKey);
+  if (cached !== undefined) {
+    return cached;
+  }
+  const location = resolveFacadeModuleLocationUncached(params);
+  artifacts.set(resolutionKey, location);
+  return location;
 }
 
 type BundledPluginPublicSurfaceParams = {
@@ -114,12 +110,21 @@ const FACADE_ACTIVATION_CHECK_RUNTIME_CANDIDATES = [
   "./facade-activation-check.runtime.ts",
 ] as const;
 
-let facadeActivationCheckRuntimeModule: FacadeActivationCheckRuntimeModule | undefined;
-const facadeActivationCheckRuntimeLoaders: PluginModuleLoaderCache = new Map();
+function getFacadeActivationCheckRuntimeModule(): FacadeActivationCheckRuntimeModule | undefined {
+  const cached =
+    getPluginCacheSource(CURRENT_MODULE_PATH).variants.get("activation-runtime")?.exports?.value;
+  // SAFETY: This slot is written only by the typed host activation-runtime setter below.
+  return cached as FacadeActivationCheckRuntimeModule | undefined;
+}
+
+function setFacadeActivationCheckRuntimeModule(module: FacadeActivationCheckRuntimeModule): void {
+  getPluginCacheSource(CURRENT_MODULE_PATH).variants.set("activation-runtime", {
+    exports: { value: module },
+  });
+}
 
 function getFacadeActivationCheckRuntimeSourceLoader(modulePath: string) {
   return getCachedPluginSourceModuleLoader({
-    cache: facadeActivationCheckRuntimeLoaders,
     modulePath,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
@@ -143,6 +148,7 @@ function loadFacadeActivationCheckRuntimeFromCandidates(
 }
 
 function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule {
+  let facadeActivationCheckRuntimeModule = getFacadeActivationCheckRuntimeModule();
   if (facadeActivationCheckRuntimeModule) {
     return facadeActivationCheckRuntimeModule;
   }
@@ -150,12 +156,14 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
     nodeRequire(candidate),
   );
   if (facadeActivationCheckRuntimeModule) {
+    setFacadeActivationCheckRuntimeModule(facadeActivationCheckRuntimeModule);
     return facadeActivationCheckRuntimeModule;
   }
   facadeActivationCheckRuntimeModule = loadFacadeActivationCheckRuntimeFromCandidates((candidate) =>
     getFacadeActivationCheckRuntimeSourceLoader(candidate)(candidate),
   );
   if (facadeActivationCheckRuntimeModule) {
+    setFacadeActivationCheckRuntimeModule(facadeActivationCheckRuntimeModule);
     return facadeActivationCheckRuntimeModule;
   }
   throw new Error("Unable to load facade activation check runtime");
@@ -165,12 +173,15 @@ function loadFacadeActivationCheckRuntime(): FacadeActivationCheckRuntimeModule 
 // import resolves the source graph under vitest where the sync createRequire/jiti
 // candidates cannot, and warms the shared memo so subsequent sync loads reuse it.
 async function loadFacadeActivationCheckRuntimeAsync(): Promise<FacadeActivationCheckRuntimeModule> {
-  facadeActivationCheckRuntimeModule ??= await import("./facade-activation-check.runtime.js");
-  return facadeActivationCheckRuntimeModule;
+  const module =
+    getFacadeActivationCheckRuntimeModule() ??
+    (await import("./facade-activation-check.runtime.js"));
+  setFacadeActivationCheckRuntimeModule(module);
+  return module;
 }
 
 function setFacadeActivationCheckRuntimeForTest(module: FacadeActivationCheckRuntimeModule): void {
-  facadeActivationCheckRuntimeModule = module;
+  setFacadeActivationCheckRuntimeModule(module);
 }
 
 function loadFacadeModuleAtLocationSync<T extends object>(params: {
@@ -282,8 +293,6 @@ export async function tryLoadActivatedBundledPluginPublicSurfaceModule<T extends
 /** Reset facade runtime caches and activation-check test overrides. */
 export function resetFacadeRuntimeStateForTest(): void {
   resetFacadeLoaderStateForTest();
-  facadeActivationCheckRuntimeModule = undefined;
-  facadeActivationCheckRuntimeLoaders.clear();
 }
 
 /** Test-only hooks for facade activation and resolution checks. */

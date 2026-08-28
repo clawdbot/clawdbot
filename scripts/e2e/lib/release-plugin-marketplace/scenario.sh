@@ -25,6 +25,7 @@ dump_debug_logs() {
     /tmp/openclaw-release-plugin-marketplace-install-plugin.log \
     /tmp/openclaw-release-plugin-marketplace-cli-v1.log \
     /tmp/openclaw-release-plugin-marketplace-update-dry-run.log \
+    /tmp/openclaw-release-plugin-marketplace-cli-after-dry-run.log \
     /tmp/openclaw-release-plugin-marketplace-update.log \
     /tmp/openclaw-release-plugin-marketplace-cli-v2.log \
     /tmp/openclaw-release-plugin-marketplace-uninstall.log \
@@ -49,6 +50,8 @@ openclaw onboard \
   --skip-health >/tmp/openclaw-release-plugin-marketplace-onboard.log 2>&1
 
 marketplace_root="$HOME/.claude/plugins/marketplaces/release-fixture-marketplace"
+marketplace_assertions="scripts/e2e/lib/release-plugin-marketplace/lifecycle-assertions.mjs"
+install_path_file="/tmp/openclaw-release-plugin-marketplace-install-path.txt"
 mkdir -p "$HOME/.claude/plugins" "$marketplace_root/.claude-plugin"
 node scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs \
   "$marketplace_root/plugins/release-marketplace-plugin" \
@@ -75,7 +78,14 @@ node scripts/e2e/lib/release-scenarios/write-marketplace.mjs \
 openclaw plugins marketplace list release-fixtures --json >/tmp/openclaw-release-plugin-marketplace-list.json
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-list.json release-marketplace-plugin
 
-openclaw plugins install release-marketplace-plugin@release-fixtures --force >/tmp/openclaw-release-plugin-marketplace-install-plugin.log 2>&1
+openclaw_e2e_fixture_plugin_command openclaw -- plugins install release-marketplace-plugin@release-fixtures --force >/tmp/openclaw-release-plugin-marketplace-install-plugin.log 2>&1
+node "$marketplace_assertions" \
+  assert-marketplace-state \
+  release-marketplace-plugin \
+  0.0.1 \
+  release-fixtures \
+  release-marketplace-plugin \
+  "$install_path_file"
 openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-v1.log 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-cli-v1.log "release-marketplace-plugin:v1"
 
@@ -88,15 +98,57 @@ node scripts/e2e/lib/release-scenarios/write-cli-plugin.mjs \
   release-market \
   "release-marketplace-plugin:v2"
 openclaw plugins update release-marketplace-plugin --dry-run >/tmp/openclaw-release-plugin-marketplace-update-dry-run.log 2>&1
-openclaw plugins update release-marketplace-plugin >/tmp/openclaw-release-plugin-marketplace-update.log 2>&1
+node "$marketplace_assertions" \
+  assert-update-log \
+  /tmp/openclaw-release-plugin-marketplace-update-dry-run.log \
+  "Would update release-marketplace-plugin: 0.0.1 -> 0.0.2."
+node "$marketplace_assertions" \
+  assert-marketplace-state \
+  release-marketplace-plugin \
+  0.0.1 \
+  release-fixtures \
+  release-marketplace-plugin \
+  "$install_path_file"
+openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-after-dry-run.log 2>&1
+node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-cli-after-dry-run.log "release-marketplace-plugin:v1"
+openclaw_e2e_fixture_plugin_command openclaw -- plugins update release-marketplace-plugin >/tmp/openclaw-release-plugin-marketplace-update.log 2>&1
+node "$marketplace_assertions" \
+  assert-update-log \
+  /tmp/openclaw-release-plugin-marketplace-update.log \
+  "Updated release-marketplace-plugin: 0.0.1 -> 0.0.2."
+node "$marketplace_assertions" \
+  assert-marketplace-state \
+  release-marketplace-plugin \
+  0.0.2 \
+  release-fixtures \
+  release-marketplace-plugin \
+  "$install_path_file"
 openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-v2.log 2>&1
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-file-contains /tmp/openclaw-release-plugin-marketplace-cli-v2.log "release-marketplace-plugin:v2"
 
+sentinel_plugin_id="release-marketplace-other"
+sentinel_path="$marketplace_root/plugins/$sentinel_plugin_id"
+node "$marketplace_assertions" \
+  seed-marketplace-uninstall-state \
+  release-marketplace-plugin \
+  "$sentinel_plugin_id" \
+  "$sentinel_path" \
+  "$install_path_file"
 openclaw plugins uninstall release-marketplace-plugin --force >/tmp/openclaw-release-plugin-marketplace-uninstall.log 2>&1
+node "$marketplace_assertions" \
+  assert-update-log \
+  /tmp/openclaw-release-plugin-marketplace-uninstall.log \
+  "Removed: config entry, install record, allowlist entry, denylist entry, load path, directory."
 if openclaw release-market ping >/tmp/openclaw-release-plugin-marketplace-cli-after-uninstall.log 2>&1; then
   echo "release-market CLI should be gone after uninstall" >&2
   exit 1
 fi
+node "$marketplace_assertions" \
+  assert-marketplace-uninstalled \
+  release-marketplace-plugin \
+  "$sentinel_plugin_id" \
+  "$sentinel_path" \
+  "$install_path_file"
 node scripts/e2e/lib/release-scenarios/assertions.mjs assert-plugin-uninstalled release-marketplace-plugin release-market
 
 echo "Release plugin marketplace scenario passed."

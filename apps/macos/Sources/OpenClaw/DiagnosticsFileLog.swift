@@ -16,7 +16,7 @@ actor DiagnosticsFileLog {
     }
 
     nonisolated static func isEnabled() -> Bool {
-        UserDefaults.standard.bool(forKey: debugFileLogEnabledKey)
+        AppDefaults.standard.bool(forKey: debugFileLogEnabledKey)
     }
 
     nonisolated static func logDirectoryURL() -> URL {

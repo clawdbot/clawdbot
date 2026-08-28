@@ -31,13 +31,13 @@ repos:
 
   # GitHub Actions linting
   - repo: https://github.com/rhysd/actionlint
-    rev: v1.7.10
+    rev: v1.7.12
     hooks:
       - id: actionlint
 
   # GitHub Actions security audit
   - repo: https://github.com/zizmorcore/zizmor-pre-commit
-    rev: v1.22.0
+    rev: 451b56af716f9f0d0c2b816503a3fd0cf8b036fa # v1.29.0
     hooks:
       - id: zizmor
         args:
@@ -52,7 +52,7 @@ repos:
 
   # Python checks for skills scripts
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.14.1
+    rev: 65dbdb59d2f2d9c3bdc343c566821ad3319ddaa3 # v0.16.3
     hooks:
       - id: ruff
         files: "^skills/.*\\.py$"
@@ -64,7 +64,7 @@ repos:
         name: skills python tests
         entry: pytest -q -c skills/pyproject.toml skills
         language: python
-        additional_dependencies: ["pytest>=8,<9"]
+        additional_dependencies: ["pytest>=9,<10"]
         pass_filenames: false
         files: "^skills/.*\\.py$"
 

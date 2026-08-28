@@ -2,6 +2,7 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  isCodexAppServerStartupError,
   resolveCodexPostToolRawAssistantCompletionIdleTimeoutMs,
   resolveCodexGatewayTimeoutWithGraceMs,
   resolveCodexStartupTimeoutMs,
@@ -170,12 +171,14 @@ describe("Codex app-server attempt timeouts", () => {
       },
       operation: async () => new Promise<never>(() => {}),
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup timed out");
+    const errorResult = run.catch((error: unknown) => error);
 
     await vi.advanceTimersByTimeAsync(10);
     expect(events).toEqual(["cleanup-start"]);
     await vi.advanceTimersByTimeAsync(5);
-    await rejected;
+    const error = await errorResult;
+    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
+    expect((error as Error).message).toBe("codex app-server startup timed out");
     expect(events).toEqual(["cleanup-start", "cleanup-done"]);
   });
 
@@ -187,10 +190,12 @@ describe("Codex app-server attempt timeouts", () => {
       signal: controller.signal,
       operation: async () => new Promise<never>(() => {}),
     });
-    const rejected = expect(run).rejects.toThrow("codex app-server startup aborted");
+    const errorResult = run.catch((error: unknown) => error);
 
     controller.abort();
 
-    await rejected;
+    const error = await errorResult;
+    expect(isCodexAppServerStartupError(error, "aborted")).toBe(true);
+    expect((error as Error).message).toBe("codex app-server startup aborted");
   });
 });

@@ -1,15 +1,14 @@
-// Qa Lab plugin module implements Crabline local-provider transport behavior.
+// Qa Lab plugin module implements Crabline channel-driver transport behavior against local provider servers.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { setTimeout as sleep } from "node:timers/promises";
 import {
   startOpenClawCrablineAdapter,
   type OpenClawCrablineChannelDriverSelection,
   type OpenClawCrablineInbound,
   type StartedOpenClawCrablineAdapter,
+  type StartedOpenClawCrablineCorrelatedAdapter,
 } from "@openclaw/crabline";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
 import {
   isRecord,
@@ -23,14 +22,14 @@ import {
   resolveCrablineStateConversation,
   resolveTelegramQaSenderId,
 } from "./crabline-provider-targets.js";
-import { QaSuiteInfraError } from "./errors.js";
+import { readQaJsonResponse } from "./ignored-response-body.js";
 import {
   QaStateBackedTransportAdapter,
+  waitForQaTransportAccountReady,
   waitForQaTransportOutboundSequence,
 } from "./qa-transport.js";
 import type {
   QaTransportActionName,
-  QaTransportGatewayClient,
   QaTransportGatewayConfig,
   QaTransportNativeCommandInput,
   QaTransportOutboundEvent,
@@ -45,14 +44,43 @@ import type {
   QaBusOutboundMessageInput,
 } from "./runtime-api.js";
 
-const CRABLINE_TRANSPORT_ID = "crabline";
-
 type QaCrablineTransportState = QaTransportState & {
   cleanup: () => Promise<void>;
   getOutboundEvents: () => Promise<readonly QaTransportOutboundEvent[]>;
   observeEvent: (event: unknown) => void;
   rememberProviderTarget: (providerTargetKey: string, qaTarget: string) => void;
 };
+
+function normalizeCrablineSignalGatewayConfig(config: OpenClawConfig): OpenClawConfig {
+  const signal = config.channels?.signal as unknown;
+  if (!isRecord(signal)) {
+    return config;
+  }
+  const httpUrl = readStringValue(signal.httpUrl);
+  if (!httpUrl) {
+    return config;
+  }
+
+  // Crabline still emits the retired Signal transport fields. Keep that dependency detail at
+  // this adapter boundary so the Gateway receives only the account-owned canonical shape.
+  const canonicalSignal = { ...signal };
+  delete canonicalSignal.apiMode;
+  delete canonicalSignal.autoStart;
+  delete canonicalSignal.httpUrl;
+  return {
+    ...config,
+    channels: {
+      ...config.channels,
+      signal: {
+        ...canonicalSignal,
+        transport: {
+          kind: "external-native",
+          url: httpUrl,
+        },
+      },
+    },
+  } as OpenClawConfig;
+}
 
 function formatLogicalQaTarget({ conversation, threadId }: QaBusInboundMessageInput) {
   const prefix = conversation.kind === "direct" ? "dm" : conversation.kind;
@@ -132,64 +160,6 @@ function readTelegramLifecycleEvent(params: {
   };
 }
 
-async function waitForCrablineReady(params: {
-  accountId: string;
-  channel: string;
-  gateway: QaTransportGatewayClient;
-  timeoutMs?: number;
-  pollIntervalMs?: number;
-}) {
-  const timeoutMs = params.timeoutMs ?? 45_000;
-  const pollIntervalMs = params.pollIntervalMs ?? 500;
-  const startedAt = Date.now();
-  let lastAccountStatus = `no ${params.channel} accounts reported`;
-  let lastProbeError: string | null = null;
-
-  while (Date.now() - startedAt < timeoutMs) {
-    try {
-      const payload = (await params.gateway.call(
-        "channels.status",
-        { probe: false, timeoutMs: 2_000 },
-        { timeoutMs: 5_000 },
-      )) as {
-        channelAccounts?: Record<
-          string,
-          Array<{
-            accountId?: string;
-            running?: boolean;
-            restartPending?: boolean;
-          }>
-        >;
-      };
-      const accounts = payload.channelAccounts?.[params.channel] ?? [];
-      const account = accounts.find((entry) => entry.accountId === params.accountId) ?? accounts[0];
-      lastProbeError = null;
-      lastAccountStatus = account
-        ? JSON.stringify({
-            accountId: account.accountId ?? null,
-            running: account.running ?? null,
-            restartPending: account.restartPending ?? null,
-          })
-        : `no ${params.channel} accounts reported`;
-      if (account?.running && account.restartPending !== true) {
-        return;
-      }
-    } catch (error) {
-      lastProbeError = formatErrorMessage(error);
-    }
-    await sleep(pollIntervalMs);
-  }
-
-  throw new QaSuiteInfraError(
-    "transport_ready_timeout",
-    [
-      `timed out after ${timeoutMs}ms waiting for ${params.channel} ready`,
-      `last status: ${lastAccountStatus}`,
-      ...(lastProbeError ? [`last probe error: ${lastProbeError}`] : []),
-    ].join("; "),
-  );
-}
-
 async function postCrablineInbound(params: {
   adapter: StartedOpenClawCrablineAdapter;
   providerInbound: OpenClawCrablineInbound;
@@ -207,31 +177,23 @@ async function postCrablineInbound(params: {
     policy: { allowPrivateNetwork: true },
     auditContext: `qa-lab-crabline-${params.adapter.channel}-inbound`,
   });
-  try {
-    if (!response.ok) {
-      throw new Error(
-        `Crabline ${params.adapter.channel} inbound injection failed with HTTP ${response.status}.`,
-      );
-    }
-    const result: unknown = await response.json();
-    if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
-      return readStringValue(result.event.event_id);
-    }
-    if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
-      return readStringValue(result.message.ts);
-    }
-    if (
-      params.adapter.channel === "telegram" &&
-      isRecord(result) &&
-      isRecord(result.update) &&
-      isRecord(result.update.message)
-    ) {
-      return normalizeStringifiedOptionalString(result.update.message.message_id);
-    }
-    return undefined;
-  } finally {
-    await release();
+  const label = `Crabline ${params.adapter.channel} inbound injection failed`;
+  const result = await readQaJsonResponse<unknown>(response, release, label);
+  if (params.adapter.channel === "matrix" && isRecord(result) && isRecord(result.event)) {
+    return readStringValue(result.event.event_id);
   }
+  if (params.adapter.channel === "slack" && isRecord(result) && isRecord(result.message)) {
+    return readStringValue(result.message.ts);
+  }
+  if (
+    params.adapter.channel === "telegram" &&
+    isRecord(result) &&
+    isRecord(result.update) &&
+    isRecord(result.update.message)
+  ) {
+    return normalizeStringifiedOptionalString(result.update.message.message_id);
+  }
+  return undefined;
 }
 
 function createCrablineState(params: {
@@ -300,19 +262,18 @@ function createCrablineState(params: {
         adapter: params.adapter,
         providerInbound,
       });
-      const message = baseState.addInboundMessage({
-        ...input,
-        conversation: resolveCrablineStateConversation({
-          adapter: params.adapter,
-          input,
-          providerInbound,
-        }),
-        ...(providerInbound.threadId ? { threadId: providerInbound.threadId } : {}),
-      });
-      if (providerMessageId) {
-        message.id = providerMessageId;
-      }
-      return message;
+      return baseState.addInboundMessage(
+        {
+          ...input,
+          conversation: resolveCrablineStateConversation({
+            adapter: params.adapter,
+            input,
+            providerInbound,
+          }),
+          ...(providerInbound.threadId ? { threadId: providerInbound.threadId } : {}),
+        },
+        providerMessageId,
+      );
     },
     rememberProviderTarget(providerTargetKey, qaTarget) {
       targetByProviderTarget.set(providerTargetKey, qaTarget);
@@ -328,7 +289,7 @@ function createCrablineState(params: {
 }
 
 class QaCrablineTransport extends QaStateBackedTransportAdapter {
-  readonly #adapter: StartedOpenClawCrablineAdapter;
+  readonly #adapter: StartedOpenClawCrablineCorrelatedAdapter;
   readonly #selection: OpenClawCrablineChannelDriverSelection;
   readonly #transportPolicy?: QaTransportPolicy;
   readonly #state: QaCrablineTransportState;
@@ -339,13 +300,13 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   }>;
 
   constructor(params: {
-    adapter: StartedOpenClawCrablineAdapter;
+    adapter: StartedOpenClawCrablineCorrelatedAdapter;
     transportPolicy?: QaTransportPolicy;
     selection: OpenClawCrablineChannelDriverSelection;
     state: QaCrablineTransportState;
   }) {
     super({
-      id: CRABLINE_TRANSPORT_ID,
+      id: "crabline",
       label: `crabline local ${params.selection.channel}`,
       accountId: params.adapter.accountId,
       requiredPluginIds: params.adapter.requiredPluginIds,
@@ -361,11 +322,12 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
         await this.sendInbound({
           ...message,
           text: `/${command}`,
-          nativeCommand: { name: command },
+          nativeCommand: { name: command.split(/\s+/u, 1)[0] ?? command },
         });
       };
       this.waitForOutboundSequence = async (input) =>
         await waitForQaTransportOutboundSequence({
+          accountId: this.accountId,
           input,
           readEvents: () => this.#state.getOutboundEvents(),
         });
@@ -373,7 +335,11 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
   }
 
   createGatewayConfig = (params: { baseUrl: string }): QaTransportGatewayConfig => {
-    const config = this.#adapter.createGatewayConfig(params) as OpenClawConfig;
+    const rawConfig = this.#adapter.createGatewayConfig(params) as OpenClawConfig;
+    const config =
+      this.#selection.channel === "signal"
+        ? normalizeCrablineSignalGatewayConfig(rawConfig)
+        : rawConfig;
     if (this.#selection.channel !== "telegram") {
       return config as QaTransportGatewayConfig;
     }
@@ -406,12 +372,8 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     } as QaTransportGatewayConfig;
   };
 
-  waitReady = (params: {
-    gateway: QaTransportGatewayClient;
-    timeoutMs?: number;
-    pollIntervalMs?: number;
-  }) =>
-    waitForCrablineReady({
+  waitReady = (params: Parameters<QaStateBackedTransportAdapter["waitReady"]>[0]) =>
+    waitForQaTransportAccountReady({
       ...params,
       accountId: this.#adapter.accountId,
       channel: this.#adapter.channel,
@@ -423,7 +385,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     return delivery;
   };
 
-  createRuntimeEnvPatch = () => this.#adapter.createChannelDriverSmokeEnv({});
+  createRuntimeEnvPatch = () => this.#adapter.createProviderReadinessEnv({});
 
   handleAction = async (_params: {
     action: QaTransportActionName;
@@ -431,7 +393,7 @@ class QaCrablineTransport extends QaStateBackedTransportAdapter {
     cfg: OpenClawConfig;
     accountId?: string | null;
   }) => {
-    throw new Error(`Crabline local-provider transport does not support ${_params.action} yet.`);
+    throw new Error(`Crabline channel-driver transport does not support ${_params.action} yet.`);
   };
 
   createReportNotes = (_params: QaTransportReportParams) => [
@@ -462,7 +424,7 @@ export async function createQaCrablineTransportAdapter(params: {
     params.outputDir,
     "artifacts",
     "crabline",
-    `${params.selection.channel}-fake-provider.jsonl`,
+    `${params.selection.channel}-provider-server.jsonl`,
   );
   await fs.mkdir(path.dirname(recorderPath), { recursive: true });
   let observeEvent = (_event: unknown) => {};

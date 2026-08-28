@@ -7,6 +7,33 @@ import {
 } from "./canvas-render.ts";
 
 describe("extractCanvasFromText", () => {
+  it("preserves a valid pinned board widget identity", () => {
+    expect(
+      extractCanvasFromText(
+        JSON.stringify({
+          kind: "canvas",
+          view: {
+            id: "cv_status",
+            url: "/__openclaw__/canvas/documents/cv_status/index.html",
+            boardWidgetName: "release-status",
+          },
+        }),
+      ),
+    ).toMatchObject({ viewId: "cv_status", boardWidgetName: "release-status" });
+  });
+
+  it("preserves node-panel presentation metadata", () => {
+    expect(
+      extractCanvasFromText(
+        JSON.stringify({
+          kind: "canvas",
+          presentation: { target: "node_panel", title: "Status" },
+          view: { id: "cv_status", url: "/__openclaw__/canvas/documents/cv_status/index.html" },
+        }),
+      ),
+    ).toMatchObject({ surface: "node_panel", viewId: "cv_status", title: "Status" });
+  });
+
   it("extracts safe MCP App preview metadata from tool details", () => {
     expect(
       extractCanvasFromDetails({
@@ -20,6 +47,7 @@ describe("extractCanvasFromText", () => {
             toolName: "show",
             uiResourceUri: "ui://demo/app",
             toolCallId: "call-1",
+            originSessionKey: "agent:main:main",
             resultMetaState: "unavailable",
           },
         },
@@ -32,6 +60,7 @@ describe("extractCanvasFromText", () => {
         toolName: "show",
         uiResourceUri: "ui://demo/app",
         toolCallId: "call-1",
+        originSessionKey: "agent:main:main",
         resultMetaState: "unavailable",
       },
     });

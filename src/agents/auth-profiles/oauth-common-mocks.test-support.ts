@@ -9,9 +9,9 @@ import type { OAuthCredential } from "./types.js";
 const oauthProviderRuntimeMocks = vi.hoisted(() => {
   vi.resetModules();
   return {
-    refreshProviderOAuthCredentialWithPluginMock: vi.fn(
-      async (_params?: { context?: unknown }) => undefined,
-    ),
+    refreshProviderOAuthCredentialWithPluginMock: vi.fn<
+      (_params?: { context?: unknown }) => Promise<OAuthCredential | undefined>
+    >(async () => undefined),
     formatProviderAuthProfileApiKeyWithPluginMock: vi.fn(() => undefined),
   };
 });
@@ -22,7 +22,6 @@ export function getOAuthProviderRuntimeMocks() {
 }
 
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
@@ -32,8 +31,14 @@ vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
   formatProviderAuthProfileApiKeyWithPlugin: (params: { context?: { access?: string } }) =>
     oauthProviderRuntimeMocks.formatProviderAuthProfileApiKeyWithPluginMock() ??
     params?.context?.access,
-  refreshProviderOAuthCredentialWithPlugin:
-    oauthProviderRuntimeMocks.refreshProviderOAuthCredentialWithPluginMock,
+  resolveProviderOAuthCredentialWithPlugin: async (params: { credential: OAuthCredential }) => {
+    const credential = await oauthProviderRuntimeMocks.refreshProviderOAuthCredentialWithPluginMock(
+      { context: params.credential },
+    );
+    return credential
+      ? { status: "available", credential, apiKey: credential.access }
+      : { status: "unhandled" };
+  },
 }));
 
 vi.mock("./doctor.js", () => ({
@@ -47,7 +52,6 @@ vi.mock("./external-cli-sync.js", () => ({
     credential.access.trim().length > 0 &&
     Number.isFinite(credential.expires) &&
     credential.expires - now > 5 * 60 * 1000,
-  isSafeToUseExternalCliCredential: () => true,
   readExternalCliBootstrapCredential: () => null,
   resolveExternalCliAuthProfiles: () => [],
   shouldBootstrapFromExternalCliCredential: () => false,

@@ -5,7 +5,7 @@ import { logConfigUpdated } from "../../config/logging.js";
 import { resolveAgentModelFallbackValues, toAgentModelListLike } from "../../config/model-input.js";
 import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
+import { type RuntimeEnv, writeRuntimeJson, writeRuntimeStdout } from "../../runtime.js";
 import { loadModelsConfig } from "./load-config.js";
 import {
   DEFAULT_PROVIDER,
@@ -21,9 +21,7 @@ import {
 type DefaultsFallbackKey = "model" | "imageModel";
 
 function listCommandForFallbackKey(key: DefaultsFallbackKey): string {
-  return key === "imageModel"
-    ? "openclaw models image-fallbacks list"
-    : "openclaw models fallbacks list";
+  return key === "imageModel" ? "models image-fallbacks list" : "models fallbacks list";
 }
 
 function getFallbacks(cfg: OpenClawConfig, key: DefaultsFallbackKey): string[] {
@@ -55,7 +53,10 @@ export async function listFallbacksCommand(
   runtime: RuntimeEnv,
 ) {
   ensureFlagCompatibility(opts);
-  const cfg = await loadModelsConfig({ commandName: `models ${params.key} list`, runtime });
+  const cfg = await loadModelsConfig({
+    commandName: listCommandForFallbackKey(params.key),
+    runtime,
+  });
   const fallbacks = getFallbacks(cfg, params.key);
 
   if (opts.json) {
@@ -64,7 +65,7 @@ export async function listFallbacksCommand(
   }
   if (opts.plain) {
     for (const entry of fallbacks) {
-      runtime.log(entry);
+      writeRuntimeStdout(runtime, entry);
     }
     return;
   }
@@ -84,7 +85,6 @@ export async function addFallbackCommand(
   params: {
     label: string;
     key: DefaultsFallbackKey;
-    logPrefix: string;
   },
   modelRaw: string,
   runtime: RuntimeEnv,
@@ -109,7 +109,7 @@ export async function addFallbackCommand(
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
 /** Removes a fallback model by resolving aliases to the canonical provider/model key. */
@@ -118,7 +118,6 @@ export async function removeFallbackCommand(
     label: string;
     key: DefaultsFallbackKey;
     notFoundLabel: string;
-    logPrefix: string;
   },
   modelRaw: string,
   runtime: RuntimeEnv,
@@ -147,7 +146,7 @@ export async function removeFallbackCommand(
 
     if (filtered.length === existing.length) {
       throw new Error(
-        `${params.notFoundLabel} not found: ${targetKey}. Run ${formatCliCommand(listCommandForFallbackKey(params.key))} to see configured fallbacks.`,
+        `${params.notFoundLabel} not found: ${targetKey}. Run ${formatCliCommand(`openclaw ${listCommandForFallbackKey(params.key)}`)} to see configured fallbacks.`,
       );
     }
 
@@ -155,7 +154,7 @@ export async function removeFallbackCommand(
   });
 
   logConfigUpdated(runtime);
-  runtime.log(`${params.logPrefix}: ${getFallbacks(updated, params.key).join(", ")}`);
+  runtime.log(`${params.label}: ${getFallbacks(updated, params.key).join(", ")}`);
 }
 
 /** Clears all fallback model refs for the selected defaults key. */

@@ -15,7 +15,7 @@ Vendor plugins register capability metadata (which provider supports which media
 
 <Steps>
   <Step title="Collect attachments">
-    Collect inbound attachments (`MediaPaths`, `MediaUrls`, `MediaTypes`).
+    Collect ordered inbound media facts (`path`, `url`, `contentType`, and `kind`).
   </Step>
   <Step title="Select per capability">
     For each enabled capability (image/audio/video), select attachments per the `attachments` policy (default: first attachment only).
@@ -33,21 +33,20 @@ Vendor plugins register capability metadata (which provider supports which media
 
 ## Config
 
-`tools.media` holds a shared model list plus per-capability overrides:
+`tools.media` holds one capability-tagged model list plus small per-capability controls:
 
 ```json5
 {
   tools: {
     media: {
       concurrency: 2, // max concurrent capability runs (default)
-      models: [/* shared list, gate with capabilities */],
-      image: {/* optional overrides */},
-      audio: {
-        /* optional overrides */
-        echoTranscript: true,
-        echoFormat: '📝 "{transcript}"',
-      },
-      video: {/* optional overrides */},
+      models: [
+        { provider: "openai", model: "gpt-4o-mini-transcribe", capabilities: ["audio"] },
+        { provider: "google", model: "gemini-3-flash-preview", capabilities: ["image", "video"] },
+      ],
+      image: { preferredModel: "google/gemini-3-flash-preview" },
+      audio: { enabled: true },
+      video: { enabled: true },
     },
   },
 }
@@ -55,22 +54,21 @@ Vendor plugins register capability metadata (which provider supports which media
 
 Per-capability (`image`/`audio`/`video`) keys:
 
-| Key                                             | Type      | Default                                              | Notes                                                                               |
-| ----------------------------------------------- | --------- | ---------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| `enabled`                                       | `boolean` | auto (`false` disables)                              | Set `false` to turn off auto-detect for this capability                             |
-| `models`                                        | array     | none                                                 | Preferred before the shared `tools.media.models` list                               |
-| `prompt`                                        | `string`  | `"Describe the {media}."` (+ maxChars guidance)      | Image/video only by default                                                         |
-| `maxChars`                                      | `number`  | `500` (image/video), unset (audio)                   | Output is trimmed if the model returns more                                         |
-| `maxBytes`                                      | `number`  | image `10485760`, audio `20971520`, video `52428800` | Oversized media skips to the next model                                             |
-| `timeoutSeconds`                                | `number`  | `60` (image/audio), `120` (video)                    |                                                                                     |
-| `language`                                      | `string`  | unset                                                | Audio transcription hint                                                            |
-| `baseUrl`/`headers`/`providerOptions`/`request` | -         | -                                                    | Provider request overrides; see [Tools and custom providers](/gateway/config-tools) |
-| `attachments`                                   | object    | `{ mode: "first", maxAttachments: 1 }`               | See [Attachment policy](#attachment-policy)                                         |
-| `scope`                                         | object    | unset                                                | Gate by channel/chatType/keyPrefix                                                  |
-| `echoTranscript`                                | `boolean` | `false`                                              | Audio only: echo the transcript back to the chat before agent processing            |
-| `echoFormat`                                    | `string`  | `'📝 "{transcript}"'`                                | Audio only: `{transcript}` placeholder                                              |
+| Key              | Type      | Default                                | Notes                                                                |
+| ---------------- | --------- | -------------------------------------- | -------------------------------------------------------------------- |
+| `enabled`        | `boolean` | auto (`false` disables)                | Set `false` to turn off auto-detect for this capability              |
+| `preferredModel` | `string`  | first compatible entry                 | Prefer `provider/model`, model id, `provider:<id>`, or `cli:command` |
+| `prompt`         | `string`  | capability default                     | Default prompt when an entry does not override it                    |
+| `maxChars`       | `number`  | `500` image/video, unset audio         | Default output limit                                                 |
+| `maxBytes`       | `number`  | 10MB image, 20MB audio, 50MB video     | Default input limit                                                  |
+| `timeoutSeconds` | `number`  | `60` image/audio, `120` video          | Default request timeout                                              |
+| `language`       | `string`  | unset                                  | Audio transcription hint                                             |
+| `scope`          | object    | unset                                  | Gate by channel/chat type/source key                                 |
+| `attachments`    | object    | `{ mode: "first", maxAttachments: 1 }` | Select which matching attachments are processed                      |
+| `echoTranscript` | `boolean` | `false`                                | Audio only: echo the transcript before agent processing              |
+| `echoFormat`     | `string`  | `'📝 "{transcript}"'`                  | Audio only: format for the echoed transcript                         |
 
-Deepgram-specific options go under `providerOptions.deepgram` (the top-level `deepgram: { detectLanguage, punctuate, smartFormat }` field is deprecated but still read).
+Prompts, limits, language hints, request overrides, and provider options can be set as capability defaults or overridden on individual `tools.media.models[]` entries. Capability defaults also cover auto-detected providers when no explicit model is configured.
 
 ### Model entries
 
@@ -87,7 +85,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
       maxChars: 500,
       maxBytes: 10485760,
       timeoutSeconds: 60,
-      capabilities: ["image"], // optional, for multi-modal shared entries
+      capabilities: ["image"],
       profile: "vision-profile",
       preferredProfile: "vision-fallback",
     }
@@ -103,7 +101,7 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
         "gemini-3-flash",
         "--allowed-tools",
         "read_file",
-        "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+        "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
       ],
       maxChars: 500,
       maxBytes: 52428800,
@@ -112,14 +110,14 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
     }
     ```
 
-    CLI templates can also use `{{MediaDir}}` (directory containing the media file), `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension).
+    CLI templates can also use `{{AttachmentUrl}}`, `{{AttachmentContentType}}`, `{{AttachmentDir}}`, `{{AttachmentIndex}}`, `{{OutputDir}}` (scratch dir created for this run), and `{{OutputBase}}` (scratch file base path, no extension). The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}` names remain deprecated compatibility aliases.
 
   </Tab>
 </Tabs>
 
 ### Provider credentials
 
-Provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`. `tools.media.*.models[]` entries do not accept an inline `apiKey` field.
+Provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`. `tools.media.models[]` entries do not accept an inline `apiKey` field.
 
 ```json5
 {
@@ -175,9 +173,6 @@ When `tools.media.<capability>.enabled` is not `false` and no models are configu
     - Image: Anthropic/OpenAI &rarr; Google &rarr; MiniMax &rarr; Deepinfra &rarr; MiniMax Portal &rarr; Z.AI
     - Video: Google &rarr; Qwen &rarr; Moonshot
 
-  </Step>
-  <Step title="Antigravity CLI (image/video only)">
-    First installed `agy` or `antigravity` binary (override with `OPENCLAW_ANTIGRAVITY_CLI`), sandboxed against the media's directory.
   </Step>
 </Steps>
 
@@ -262,10 +257,19 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
 
 ### File-attachment extraction
 
+- Every inbound document attachment ends in a model-visible file block. Attachments routed to image, audio, or video understanding are outside this contract; those stages own their outcomes.
 - Extracted file text is wrapped as untrusted external content before it's appended to the media prompt, using boundary markers like `<<<EXTERNAL_UNTRUSTED_CONTENT id="...">>>` / `<<<END_EXTERNAL_UNTRUSTED_CONTENT id="...">>>` plus a `Source: External` metadata line.
 - This path intentionally omits the long `SECURITY NOTICE:` banner to keep the media prompt short; the boundary markers and metadata still apply.
+- Unsupported files saved on local disk get self-serve guidance only when the reply runtime proves it can read host-local paths (currently non-sandboxed embedded sessions). The path is fenced as untrusted external metadata; the trusted guidance tells the agent to extract the file with its own tools, and modern Office files get an unzip hint. Generic ACP backends, URL-only attachments, and sandboxed sessions keep the plain `[Unsupported document format: <mime>. PDF and plain-text attachments can be read.]` marker.
+- Files rejected by an operator-configured allowlist never include the self-serve path; a policy rejection must not coach the agent around the operator's decision.
+- Files rejected by an operator-configured `allowedMimes` list get `[Attachment type not allowed: <mime>]` instead, so the prompt never claims support the active configuration disables.
+- Read failures get `[Attachment could not be read]`.
+- URL attachments get `[Attachment skipped: URL file sources are disabled]` when URL file sources are disabled.
 - A file with no extractable text gets `[No extractable text]`.
+- At most five skip markers render per message; further skipped attachments collapse into one reason-neutral `[<n> more attachments skipped]` summary so junk attachments cannot grow the prompt without bound. File and image, audio, or video markers share this five-marker budget.
 - If a PDF falls back to rendered page images, OpenClaw forwards those images to vision-capable reply models and keeps the placeholder `[PDF content rendered to images]` in the file block.
+- Image, audio, and video decisions record one closed disposition for every attachment candidate: handled, handed to native vision, not selected after the attachment limit, disabled, missing a model, denied by chat scope, or failed.
+- Unhandled media gets a bounded model-visible marker. Images handed to native vision do not add markers. When a native harness owns the turn and OpenClaw runs only audio preprocessing, failed or skipped audio still gets a marker; image, video, and document inputs remain owned by the harness. Too-small audio keeps its placeholder transcript without a duplicate marker.
 
 ## Config examples
 
@@ -290,7 +294,7 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
                 "gemini-3-flash",
                 "--allowed-tools",
                 "read_file",
-                "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
+                "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
               ],
               capabilities: ["image", "video"],
             },
@@ -311,34 +315,42 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     {
       tools: {
         media: {
+          models: [
+            {
+              provider: "openai",
+              model: "gpt-4o-mini-transcribe",
+              capabilities: ["audio"],
+            },
+            {
+              type: "cli",
+              command: "whisper",
+              args: ["--model", "base", "{{AttachmentPath}}"],
+              capabilities: ["audio"],
+            },
+            {
+              provider: "google",
+              model: "gemini-3-flash-preview",
+              capabilities: ["video"],
+            },
+            {
+              type: "cli",
+              command: "gemini",
+              args: [
+                "-m",
+                "gemini-3-flash",
+                "--allowed-tools",
+                "read_file",
+                "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
+              ],
+              capabilities: ["video"],
+            },
+          ],
           audio: {
             enabled: true,
-            models: [
-              { provider: "openai", model: "gpt-4o-mini-transcribe" },
-              {
-                type: "cli",
-                command: "whisper",
-                args: ["--model", "base", "{{MediaPath}}"],
-              },
-            ],
           },
           video: {
             enabled: true,
             maxChars: 500,
-            models: [
-              { provider: "google", model: "gemini-3-flash-preview" },
-              {
-                type: "cli",
-                command: "gemini",
-                args: [
-                  "-m",
-                  "gemini-3-flash",
-                  "--allowed-tools",
-                  "read_file",
-                  "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
-                ],
-              },
-            ],
           },
         },
       },
@@ -350,25 +362,26 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     {
       tools: {
         media: {
+          models: [
+            { provider: "openai", model: "gpt-5.6-sol", capabilities: ["image"] },
+            { provider: "anthropic", model: "claude-opus-5", capabilities: ["image"] },
+            {
+              type: "cli",
+              command: "gemini",
+              args: [
+                "-m",
+                "gemini-3-flash",
+                "--allowed-tools",
+                "read_file",
+                "Read the media at {{AttachmentPath}} and describe it in <= {{MaxChars}} characters.",
+              ],
+              capabilities: ["image"],
+            },
+          ],
           image: {
             enabled: true,
             maxBytes: 10485760,
             maxChars: 500,
-            models: [
-              { provider: "openai", model: "gpt-5.6-sol" },
-              { provider: "anthropic", model: "claude-opus-4-8" },
-              {
-                type: "cli",
-                command: "gemini",
-                args: [
-                  "-m",
-                  "gemini-3-flash",
-                  "--allowed-tools",
-                  "read_file",
-                  "Read the media at {{MediaPath}} and describe it in <= {{MaxChars}} characters.",
-                ],
-              },
-            ],
           },
         },
       },
@@ -380,33 +393,13 @@ When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
     {
       tools: {
         media: {
-          image: {
-            models: [
-              {
-                provider: "google",
-                model: "gemini-3.1-pro-preview",
-                capabilities: ["image", "video", "audio"],
-              },
-            ],
-          },
-          audio: {
-            models: [
-              {
-                provider: "google",
-                model: "gemini-3.1-pro-preview",
-                capabilities: ["image", "video", "audio"],
-              },
-            ],
-          },
-          video: {
-            models: [
-              {
-                provider: "google",
-                model: "gemini-3.1-pro-preview",
-                capabilities: ["image", "video", "audio"],
-              },
-            ],
-          },
+          models: [
+            {
+              provider: "google",
+              model: "gemini-3.1-pro-preview",
+              capabilities: ["image", "video", "audio"],
+            },
+          ],
         },
       },
     }

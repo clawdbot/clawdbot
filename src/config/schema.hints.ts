@@ -4,110 +4,127 @@ import {
   SENSITIVE_URL_HINT_TAG,
 } from "@openclaw/net-policy/redact-sensitive-url";
 import { z } from "zod";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import type { ConfigUiHints } from "../shared/config-ui-hints-types.js";
+import { isKernelOwnedChannelConfigKey } from "./channel-config-keys.js";
 import { FIELD_HELP } from "./schema.help.js";
 import { FIELD_LABELS } from "./schema.labels.js";
 import { applyDerivedTags } from "./schema.tags.js";
+import { applyConfigTierHints } from "./schema.tiers.js";
 import { isSensitiveConfigPath } from "./sensitive-paths.js";
 import { sensitive } from "./zod-schema.sensitive.js";
 
-let log: ReturnType<typeof createSubsystemLogger> | null = null;
-
-function getLog(): ReturnType<typeof createSubsystemLogger> {
-  if (!log) {
-    log = createSubsystemLogger("config/schema");
-  }
-  return log;
-}
-
 export type { ConfigUiHint, ConfigUiHints } from "../shared/config-ui-hints-types.js";
 
-const GROUP_LABELS: Record<string, string> = {
-  wizard: "Wizard",
-  update: "Update",
-  cli: "CLI",
-  diagnostics: "Diagnostics",
-  logging: "Logging",
-  gateway: "Gateway",
-  nodeHost: "Node Host",
-  cloudWorkers: "Cloud Workers",
-  agents: "Agents",
-  tools: "Tools",
-  bindings: "Bindings",
-  audio: "Audio",
-  models: "Models",
-  messages: "Messages",
-  commands: "Commands",
-  session: "Session",
-  cron: "Cron",
-  worktrees: "Worktrees",
-  hooks: "Hooks",
-  ui: "UI",
-  browser: "Browser",
-  talk: "Talk",
-  channels: "Messaging Channels",
-  skills: "Skills",
-  plugins: "Plugins",
-  discovery: "Discovery",
-  presence: "Presence",
-  voicewake: "Voice Wake",
-};
+const GROUP_HINTS = [
+  ["wizard", "Wizard", 20],
+  ["update", "Update", 25],
+  ["cli", "CLI", 26],
+  ["diagnostics", "Diagnostics", 27],
+  ["telemetry", "Telemetry", 28],
+  ["logging", "Logging", 900],
+  ["gateway", "Gateway", 30],
+  ["nodeHost", "Node Host", 35],
+  ["cloudWorkers", "Cloud Workers", 37],
+  ["desktop", "Desktop", 38],
+  ["agents", "Agents", 40],
+  ["tools", "Tools", 50],
+  ["bindings", "Bindings", 55],
+  ["audio", "Audio", 60],
+  ["models", "Models", 70],
+  ["messages", "Messages", 80],
+  ["commands", "Commands", 85],
+  ["session", "Session", 90],
+  ["cron", "Automations", 100],
+  ["worktrees", "Worktrees", 105],
+  ["hooks", "Hooks", 110],
+  ["ui", "UI", 120],
+  ["browser", "Browser", 130],
+  ["talk", "Talk", 140],
+  ["channels", "Messaging Channels", 150],
+  ["skills", "Skills", 200],
+  ["plugins", "Plugins", 205],
+  ["discovery", "Discovery", 210],
+  ["presence", "Presence", 220],
+  ["voicewake", "Voice Wake", 230],
+] as const;
 
-const GROUP_ORDER: Record<string, number> = {
-  wizard: 20,
-  update: 25,
-  cli: 26,
-  diagnostics: 27,
-  gateway: 30,
-  nodeHost: 35,
-  cloudWorkers: 37,
-  agents: 40,
-  tools: 50,
-  bindings: 55,
-  audio: 60,
-  models: 70,
-  messages: 80,
-  commands: 85,
-  session: 90,
-  cron: 100,
-  worktrees: 105,
-  hooks: 110,
-  ui: 120,
-  browser: 130,
-  talk: 140,
-  channels: 150,
-  skills: 200,
-  plugins: 205,
-  discovery: 210,
-  presence: 220,
-  voicewake: 230,
-  logging: 900,
-};
+// docsUrl targets task-oriented or beginner pages; configuration-reference anchors are banned.
+const SECTION_DOCS_URLS = {
+  accessGroups: "https://docs.openclaw.ai/channels/access-groups",
+  messages: "https://docs.openclaw.ai/concepts/messages",
+  tts: "https://docs.openclaw.ai/tts",
+  commands: "https://docs.openclaw.ai/tools/slash-commands",
+  hooks: "https://docs.openclaw.ai/automation/hooks",
+  cron: "https://docs.openclaw.ai/automation/cron-jobs",
+  bindings: "https://docs.openclaw.ai/concepts/agent-bindings",
+  plugins: "https://docs.openclaw.ai/plugins/manage-plugins",
+  mcp: "https://docs.openclaw.ai/tools/mcp",
+  memory: "https://docs.openclaw.ai/concepts/memory",
+  talk: "https://docs.openclaw.ai/nodes/talk",
+  gateway: "https://docs.openclaw.ai/gateway/configuration",
+  browser: "https://docs.openclaw.ai/tools/browser",
+  nodeHost: "https://docs.openclaw.ai/nodes",
+  discovery: "https://docs.openclaw.ai/gateway/discovery",
+  acp: "https://docs.openclaw.ai/tools/acp-agents",
+  agents: "https://docs.openclaw.ai/concepts/agent",
+  models: "https://docs.openclaw.ai/concepts/models",
+  skills: "https://docs.openclaw.ai/tools/skills",
+  tools: "https://docs.openclaw.ai/tools",
+  session: "https://docs.openclaw.ai/concepts/session",
+  security: "https://docs.openclaw.ai/gateway/security",
+  approvals: "https://docs.openclaw.ai/tools/exec-approvals",
+  env: "https://docs.openclaw.ai/help/environment",
+  auth: "https://docs.openclaw.ai/concepts/oauth",
+  update: "https://docs.openclaw.ai/install/updating",
+  telemetry: "https://docs.openclaw.ai/gateway/telemetry",
+  logging: "https://docs.openclaw.ai/logging",
+  diagnostics: "https://docs.openclaw.ai/gateway/diagnostics",
+  cli: "https://docs.openclaw.ai/cli",
+  secrets: "https://docs.openclaw.ai/gateway/secrets",
+  ui: "https://docs.openclaw.ai/web/control-ui",
+  wizard: "https://docs.openclaw.ai/start/wizard",
+  channels: "https://docs.openclaw.ai/channels",
+  broadcast: "https://docs.openclaw.ai/channels/broadcast-groups",
+  audio: "https://docs.openclaw.ai/nodes/audio",
+  voicewake: "https://docs.openclaw.ai/nodes/voicewake",
+  presence: "https://docs.openclaw.ai/concepts/presence",
+  cloudWorkers: "https://docs.openclaw.ai/gateway/cloud-workers",
+  desktop: "https://docs.openclaw.ai/gateway/configuration",
+  worktrees: "https://docs.openclaw.ai/concepts/managed-worktrees",
+  proxy: "https://docs.openclaw.ai/security/network-proxy",
+  transcripts: "https://docs.openclaw.ai/plugins/meeting-plugins",
+  surfaces: "https://docs.openclaw.ai/concepts/messages",
+} as const satisfies Record<string, string>;
+
+// Root sections without beginner-worthy pages stay explicit. Adding a root config key
+// requires choosing a docsUrl or listing it here.
+const SECTIONS_WITHOUT_DOCS = ["$schema", "meta", "attachments"] as const;
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
+  "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",
   "gateway.remote.tlsFingerprint": "sha256:ab12cd34…",
   "gateway.remote.sshTarget": "user@host",
   "gateway.remote.sshHostKeyPolicy": "strict",
   "gateway.controlUi.basePath": "/openclaw",
+  "gateway.controlUi.environment.label": "edge",
   "gateway.controlUi.root": "dist/control-ui",
   "gateway.controlUi.allowedOrigins": "https://control.example.com",
   "gateway.push.apns.relay.baseUrl": "https://ios-push-relay.openclaw.ai",
   "channels.mattermost.baseUrl": "https://chat.example.com",
-  "agents.list[].identity.avatar": "avatars/openclaw.png",
+  "agents.entries.*.identity.avatar": "avatars/openclaw.png",
 };
 
 const CHANNEL_NAMESPACE_PREFIX = "channels.";
-const CHANNEL_KERNEL_HINT_PREFIXES = ["channels.defaults", "channels.modelByChannel"] as const;
 
 function isKernelOwnedChannelHintPath(path: string): boolean {
   if (path === "channels") {
     return true;
   }
-  return CHANNEL_KERNEL_HINT_PREFIXES.some(
-    (prefix) => path === prefix || path.startsWith(`${prefix}.`),
-  );
+  const channelKey = path.startsWith(CHANNEL_NAMESPACE_PREFIX)
+    ? path.slice(CHANNEL_NAMESPACE_PREFIX.length).split(".", 1)[0]
+    : undefined;
+  return channelKey !== undefined && isKernelOwnedChannelConfigKey(channelKey);
 }
 
 /** Return whether a channel hint path belongs to a plugin-owned channel namespace. */
@@ -121,35 +138,28 @@ function isPluginOwnedChannelHintPath(path: string): boolean {
 /** Build core config UI hints while leaving plugin-owned channel hints to plugin schemas. */
 export function buildBaseHints(): ConfigUiHints {
   const hints: ConfigUiHints = {};
-  for (const [group, label] of Object.entries(GROUP_LABELS)) {
+  for (const [group, label, order] of GROUP_HINTS) {
     hints[group] = {
       label,
       group: label,
-      order: GROUP_ORDER[group],
+      order,
     };
   }
-  for (const [path, label] of Object.entries(FIELD_LABELS)) {
-    if (isPluginOwnedChannelHintPath(path)) {
-      continue;
-    }
-    const current = hints[path];
-    hints[path] = current ? { ...current, label } : { label };
+  for (const [path, docsUrl] of Object.entries(SECTION_DOCS_URLS)) {
+    hints[path] = { ...hints[path], docsUrl };
   }
-  for (const [path, help] of Object.entries(FIELD_HELP)) {
-    if (isPluginOwnedChannelHintPath(path)) {
-      continue;
+  for (const [metadata, field] of [
+    [FIELD_LABELS, "label"],
+    [FIELD_HELP, "help"],
+    [FIELD_PLACEHOLDERS, "placeholder"],
+  ] as const) {
+    for (const [path, value] of Object.entries(metadata)) {
+      if (!isPluginOwnedChannelHintPath(path)) {
+        hints[path] = { ...hints[path], [field]: value };
+      }
     }
-    const current = hints[path];
-    hints[path] = current ? { ...current, help } : { help };
   }
-  for (const [path, placeholder] of Object.entries(FIELD_PLACEHOLDERS)) {
-    if (isPluginOwnedChannelHintPath(path)) {
-      continue;
-    }
-    const current = hints[path];
-    hints[path] = current ? { ...current, placeholder } : { placeholder };
-  }
-  return applyDerivedTags(hints);
+  return applyDerivedTags(applyConfigTierHints(hints));
 }
 
 /** Mark sensitive config paths in a hint map without overwriting explicit sensitivity metadata. */
@@ -210,7 +220,9 @@ export function collectMatchingSchemaPaths(
     paths.add(path);
   }
 
-  if (currentSchema instanceof z.ZodObject) {
+  if (currentSchema instanceof z.ZodPipe) {
+    collectMatchingSchemaPaths(currentSchema.out as unknown as z.ZodType, path, matchesPath, paths);
+  } else if (currentSchema instanceof z.ZodObject) {
     const shape = currentSchema.shape;
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;
@@ -289,11 +301,11 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
 
   if (isSensitive) {
     hints[path] = { ...hints[path], sensitive: true };
-  } else if (isSensitiveConfigPath(path) && !hints[path]?.sensitive) {
-    getLog().debug(`possibly sensitive key found: (${path})`);
   }
 
-  if (currentSchema instanceof z.ZodObject) {
+  if (currentSchema instanceof z.ZodPipe) {
+    mapSensitivePathsMut(currentSchema.out as unknown as z.ZodType, path, hints);
+  } else if (currentSchema instanceof z.ZodObject) {
     const shape = currentSchema.shape;
     for (const key in shape) {
       const nextPath = path ? `${path}.${key}` : key;
@@ -327,4 +339,6 @@ function mapSensitivePathsMut(schema: z.ZodType, path: string, hints: ConfigUiHi
 export const testApi = {
   collectMatchingSchemaPaths,
   mapSensitivePaths,
+  SECTION_DOCS_URLS,
+  SECTIONS_WITHOUT_DOCS,
 };

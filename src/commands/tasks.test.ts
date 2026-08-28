@@ -7,25 +7,30 @@ import type { SessionEntry } from "../config/sessions/types.js";
 import { saveCronStore } from "../cron/store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
-import { resetDetachedTaskLifecycleRuntimeForTests } from "../tasks/detached-task-runtime.js";
-import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  resetTaskFlowRegistryForTests,
-} from "../tasks/task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.js";
+import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   getTaskById,
+  markTaskLostById,
+  markTaskTerminalById,
   reloadTaskRegistryFromStore,
-  resetTaskRegistryDeliveryRuntimeForTests,
-  resetTaskRegistryForTests,
 } from "../tasks/task-registry.js";
 import * as taskRegistryMaintenance from "../tasks/task-registry.maintenance.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryDeliveryRuntimeForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
+import type {
+  TaskSystemAuditCode,
+  TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import type { TaskSystemAuditCode, TaskSystemAuditSeverity } from "./tasks-audit-system.js";
 import {
   tasksAuditCommand,
   tasksCancelCommand,
@@ -79,6 +84,28 @@ function jsonRoundTrip<T>(value: T): T {
   return JSON.parse(serialized) as T;
 }
 
+const UNSAFE_TASK_TERMINAL_TEXT = "\u001b]52;c;Zm9yZ2Vk\u0007\nforged: yes";
+
+function createInspectableTask(params: Partial<Parameters<typeof createTaskRecord>[0]> = {}) {
+  return createTaskRecord({
+    runtime: "cli",
+    ownerKey: "agent:main:main",
+    scopeKind: "session",
+    status: "running",
+    notifyPolicy: "silent",
+    task: "Inspect a background task",
+    ...params,
+  });
+}
+
+function expectSafeTaskOutput(runtime: RuntimeEnv, channel: "log" | "error" = "log") {
+  for (const [line] of vi.mocked(runtime[channel]).mock.calls) {
+    for (const control of ["\u001b", "\u0007", "\n", "\r"]) {
+      expect(String(line)).not.toContain(control);
+    }
+  }
+}
+
 const zeroTaskAuditCounts = {
   delivery_failed: 0,
   inconsistent_timestamps: 0,
@@ -97,31 +124,28 @@ async function writeSessionEntries(
   }
 }
 
+function resetTaskCommandRuntime() {
+  taskRegistryMaintenance.stopTaskRegistryMaintenance();
+  taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
+  resetConfigRuntimeState();
+  resetDetachedTaskLifecycleRuntimeForTests();
+  resetTaskRegistryDeliveryRuntimeForTests();
+  resetTaskRegistryForTests({ persist: false });
+  resetTaskFlowRegistryForTests({ persist: false });
+  closeOpenClawAgentDatabasesForTest();
+}
+
 async function withTaskCommandStateDir(
   run: (state: OpenClawTestState) => Promise<void>,
 ): Promise<void> {
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
-      taskRegistryMaintenance.stopTaskRegistryMaintenance();
-      taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
-      resetConfigRuntimeState();
-      resetDetachedTaskLifecycleRuntimeForTests();
-      resetTaskRegistryDeliveryRuntimeForTests();
-      resetTaskRegistryForTests({ persist: false });
-      resetTaskFlowRegistryForTests({ persist: false });
-      closeOpenClawAgentDatabasesForTest();
+      resetTaskCommandRuntime();
       try {
         await run(state);
       } finally {
-        taskRegistryMaintenance.stopTaskRegistryMaintenance();
-        taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
-        resetConfigRuntimeState();
-        resetDetachedTaskLifecycleRuntimeForTests();
-        resetTaskRegistryDeliveryRuntimeForTests();
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
-        closeOpenClawAgentDatabasesForTest();
+        resetTaskCommandRuntime();
       }
     },
   );
@@ -134,14 +158,7 @@ describe("tasks commands", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    taskRegistryMaintenance.stopTaskRegistryMaintenance();
-    taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
-    resetConfigRuntimeState();
-    resetDetachedTaskLifecycleRuntimeForTests();
-    resetTaskRegistryDeliveryRuntimeForTests();
-    resetTaskRegistryForTests({ persist: false });
-    resetTaskFlowRegistryForTests({ persist: false });
-    closeOpenClawAgentDatabasesForTest();
+    resetTaskCommandRuntime();
     mocks.callGateway.mockReset();
   });
 
@@ -195,7 +212,9 @@ describe("tasks commands", () => {
       });
 
       const limitedRuntime = createRuntime();
+      const auditStartedAt = Date.now();
       await tasksAuditCommand({ json: true, limit: 1 }, limitedRuntime);
+      const auditFinishedAt = Date.now();
 
       const limitedPayload = readFirstJsonLog(limitedRuntime) as { findings: unknown[] };
       const [limitedFinding] = limitedPayload.findings as Array<{ ageMs?: number }>;
@@ -210,8 +229,8 @@ describe("tasks commands", () => {
         token: runningFlow.flowId,
         flow: jsonRoundTrip(runningFlow),
       });
-      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(45 * 60_000);
-      expect(limitedFinding?.ageMs).toBeLessThan(45 * 60_000 + 1_000);
+      expect(limitedFinding?.ageMs).toBeGreaterThanOrEqual(auditStartedAt - runningFlow.updatedAt);
+      expect(limitedFinding?.ageMs).toBeLessThanOrEqual(auditFinishedAt - runningFlow.updatedAt);
     });
   });
 
@@ -308,15 +327,40 @@ describe("tasks commands", () => {
     });
   });
 
-  it("routes cron task cancellation through the live gateway before local fallback", async () => {
+  it.each([
+    {
+      label: "Cron",
+      runtime: "cron",
+      ownerKey: "",
+      scopeKind: "system",
+      childSessionKey: "agent:main:cron:nightly-gmail-sync",
+      runId: "cron:nightly-gmail-sync:123",
+    },
+    {
+      label: "ACP",
+      runtime: "acp",
+      ownerKey: "agent:jarvis:main",
+      scopeKind: "session",
+      childSessionKey: "agent:codex:acp:child",
+      runId: "run-acp-cancel",
+    },
+    {
+      label: "Subagent",
+      runtime: "subagent",
+      ownerKey: "agent:jarvis:main",
+      scopeKind: "session",
+      childSessionKey: "agent:worker:subagent:child",
+      runId: "run-subagent-cancel",
+    },
+  ] as const)("routes $label task cancellation through the live gateway", async (testCase) => {
     await withTaskCommandStateDir(async () => {
       const task = createTaskRecord({
-        runtime: "cron",
-        sourceId: "nightly-gmail-sync",
-        ownerKey: "",
-        scopeKind: "system",
-        runId: "cron:nightly-gmail-sync:123",
-        task: "Nightly Gmail sync",
+        runtime: testCase.runtime,
+        ownerKey: testCase.ownerKey,
+        scopeKind: testCase.scopeKind,
+        childSessionKey: testCase.childSessionKey,
+        runId: testCase.runId,
+        task: `Cancel ${testCase.label} child`,
         status: "running",
         deliveryStatus: "not_applicable",
         notifyPolicy: "silent",
@@ -326,7 +370,7 @@ describe("tasks commands", () => {
         cancelled: true,
         task: {
           taskId: task.taskId,
-          runtime: "cron",
+          runtime: testCase.runtime,
           runId: task.runId,
         },
       });
@@ -342,86 +386,109 @@ describe("tasks commands", () => {
         }),
       );
       expect(runtime.log).toHaveBeenCalledWith(
-        `Cancelled ${task.taskId} (cron) run cron:nightly-gmail-sync:123.`,
+        `Cancelled ${task.taskId} (${testCase.runtime}) run ${testCase.runId}.`,
       );
       expect(runtime.error).not.toHaveBeenCalled();
       expect(runtime.exit).not.toHaveBeenCalled();
     });
   });
 
-  it("routes ACP task cancellation through the live gateway before local fallback", async () => {
-    await withTaskCommandStateDir(async () => {
-      const task = createTaskRecord({
-        runtime: "acp",
-        ownerKey: "agent:jarvis:main",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-acp-cancel",
-        task: "Cancel ACP child",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
+  it.each(["gateway", "local"] as const)(
+    "sanitizes untrusted %s task cancellation output",
+    async (owner) => {
+      await withTaskCommandStateDir(async () => {
+        const unsafe = UNSAFE_TASK_TERMINAL_TEXT;
+        const gatewayOwned = owner === "gateway";
+        const task = createInspectableTask({
+          runtime: gatewayOwned ? "cron" : "cli",
+          ownerKey: gatewayOwned ? "" : "agent:main:main",
+          scopeKind: gatewayOwned ? "system" : "session",
+          runId: `run${unsafe}`,
+        });
+        if (gatewayOwned) {
+          mocks.callGateway.mockResolvedValueOnce({
+            found: true,
+            cancelled: true,
+            task: {
+              taskId: `${task.taskId}${unsafe}`,
+              runtime: `cron${unsafe}`,
+              runId: task.runId,
+            },
+          });
+        }
+        const runtime = createRuntime();
+        await tasksCancelCommand({ lookup: task.taskId }, runtime);
+        expect(runtime.log).toHaveBeenCalledWith(
+          expect.stringContaining(`Cancelled ${task.taskId}`),
+        );
+        expectSafeTaskOutput(runtime);
+        if (!gatewayOwned) {
+          expect(getTaskById(task.taskId)).toMatchObject({
+            status: "cancelled",
+            runId: `run${unsafe}`,
+          });
+          return;
+        }
+        mocks.callGateway.mockResolvedValueOnce({
+          found: true,
+          cancelled: false,
+          reason: `gateway refused${unsafe}`,
+        });
+        const failureRuntime = createRuntime();
+        await tasksCancelCommand({ lookup: task.taskId }, failureRuntime);
+        expectSafeTaskOutput(failureRuntime, "error");
       });
-      mocks.callGateway.mockResolvedValueOnce({
-        found: true,
-        cancelled: true,
-        task: {
-          taskId: task.taskId,
-          runtime: "acp",
-          runId: task.runId,
-        },
+    },
+  );
+
+  it.each([
+    {
+      label: "ACP",
+      runtime: "acp",
+      childSessionKey: "agent:codex:acp:child",
+      runId: "run-acp-cancel-gateway-down",
+    },
+    {
+      label: "Subagent",
+      runtime: "subagent",
+      childSessionKey: "agent:worker:subagent:child",
+      runId: "run-subagent-cancel-gateway-down",
+    },
+  ] as const)(
+    "fails $label task cancellation loudly when the live gateway is unavailable",
+    async (testCase) => {
+      await withTaskCommandStateDir(async () => {
+        const task = createTaskRecord({
+          runtime: testCase.runtime,
+          ownerKey: "agent:jarvis:main",
+          scopeKind: "session",
+          childSessionKey: testCase.childSessionKey,
+          runId: testCase.runId,
+          task: `Cancel ${testCase.label} child`,
+          status: "running",
+          deliveryStatus: "not_applicable",
+          notifyPolicy: "silent",
+        });
+        mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
+        const runtime = createRuntime();
+
+        await tasksCancelCommand({ lookup: task.taskId }, runtime);
+
+        expect(mocks.callGateway).toHaveBeenCalledWith(
+          expect.objectContaining({
+            method: "tasks.cancel",
+            params: { taskId: task.taskId },
+            timeoutMs: 5_000,
+          }),
+        );
+        expect(runtime.error).toHaveBeenCalledWith(
+          `${testCase.runtime.toUpperCase()} task cancellation requires the live Gateway tasks.cancel path: gateway unavailable`,
+        );
+        expect(runtime.exit).toHaveBeenCalledWith(1);
+        expect(runtime.log).not.toHaveBeenCalled();
       });
-      const runtime = createRuntime();
-
-      await tasksCancelCommand({ lookup: task.taskId }, runtime);
-
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "tasks.cancel",
-          params: { taskId: task.taskId },
-          timeoutMs: 5_000,
-        }),
-      );
-      expect(runtime.log).toHaveBeenCalledWith(
-        `Cancelled ${task.taskId} (acp) run run-acp-cancel.`,
-      );
-      expect(runtime.error).not.toHaveBeenCalled();
-      expect(runtime.exit).not.toHaveBeenCalled();
-    });
-  });
-
-  it("fails ACP task cancellation loudly when the live gateway is unavailable", async () => {
-    await withTaskCommandStateDir(async () => {
-      const task = createTaskRecord({
-        runtime: "acp",
-        ownerKey: "agent:jarvis:main",
-        scopeKind: "session",
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-acp-cancel-gateway-down",
-        task: "Cancel ACP child",
-        status: "running",
-        deliveryStatus: "not_applicable",
-        notifyPolicy: "silent",
-      });
-      mocks.callGateway.mockRejectedValueOnce(new Error("gateway unavailable"));
-      const runtime = createRuntime();
-
-      await tasksCancelCommand({ lookup: task.taskId }, runtime);
-
-      expect(mocks.callGateway).toHaveBeenCalledWith(
-        expect.objectContaining({
-          method: "tasks.cancel",
-          params: { taskId: task.taskId },
-          timeoutMs: 5_000,
-        }),
-      );
-      expect(runtime.error).toHaveBeenCalledWith(
-        "ACP task cancellation requires the live Gateway tasks.cancel path: gateway unavailable",
-      );
-      expect(runtime.exit).toHaveBeenCalledWith(1);
-      expect(runtime.log).not.toHaveBeenCalled();
-    });
-  });
+    },
+  );
 
   it("explains stale running tasks retained by backing sessions in maintenance JSON", async () => {
     await withTaskCommandStateDir(async (state) => {
@@ -680,6 +747,105 @@ describe("tasks commands", () => {
     });
   });
 
+  it("sanitizes every persisted task surface while preserving raw task JSON", async () => {
+    await withTaskCommandStateDir(async () => {
+      const unsafe = UNSAFE_TASK_TERMINAL_TEXT;
+      const task = createInspectableTask({
+        sourceId: `source${unsafe}`,
+        childSessionKey: `agent:main:child${unsafe}`,
+        parentTaskId: `parent${unsafe}`,
+        agentId: `worker${unsafe}`,
+        runId: `run${unsafe}`,
+        label: `label${unsafe}`,
+        task: `prompt${unsafe}`,
+        progressSummary: `progress${unsafe}`,
+        terminalSummary: `summary${unsafe}`,
+      });
+      markTaskLostById({ taskId: task.taskId, endedAt: Date.now(), error: `error${unsafe}` });
+      const showRuntime = createRuntime();
+      const listRuntime = createRuntime();
+      const auditRuntime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId }, showRuntime);
+      await tasksListCommand({}, listRuntime);
+      await tasksAuditCommand({}, auditRuntime);
+      for (const runtime of [showRuntime, listRuntime, auditRuntime]) {
+        expectSafeTaskOutput(runtime);
+      }
+      const shown = vi
+        .mocked(showRuntime.log)
+        .mock.calls.map(([line]) => String(line))
+        .join("|");
+      for (const field of [
+        "sourceId",
+        "childSessionKey",
+        "parentTaskId",
+        "agentId",
+        "runId",
+        "label",
+        "task",
+        "error",
+        "progressSummary",
+        "terminalSummary",
+      ]) {
+        expect(shown).toContain(`${field}:`);
+      }
+      expect(vi.mocked(listRuntime.log).mock.calls.flat().join("|")).toContain("error");
+      expect(vi.mocked(auditRuntime.log).mock.calls.flat().join("|")).toContain("error");
+      const jsonRuntime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId, json: true }, jsonRuntime);
+      expect(readFirstJsonLog(jsonRuntime)).toEqual(jsonRoundTrip(getTaskById(task.taskId)));
+      expect(getTaskById(task.taskId)).toMatchObject({
+        runId: `run${unsafe}`,
+        error: `error${unsafe}`,
+      });
+      const lookupRuntime = createRuntime();
+      await tasksShowCommand({ lookup: `missing${unsafe}` }, lookupRuntime);
+      expectSafeTaskOutput(lookupRuntime, "error");
+
+      const jsonLookupRuntime = createRuntime();
+      await tasksShowCommand({ lookup: `missing${unsafe}`, json: true }, jsonLookupRuntime);
+      expect(readFirstJsonLog(jsonLookupRuntime)).toMatchObject({
+        ok: false,
+        error: {
+          type: "cli_error",
+          message: expect.stringContaining("Task not found: missing"),
+        },
+      });
+      expect(jsonLookupRuntime.exit).toHaveBeenCalledWith(1, { resetStream: process.stderr });
+    });
+  });
+
+  it.each(["failed", "timed_out", "lost"] as const)(
+    "shows the persisted failure reason for %s tasks in list summaries",
+    async (status) => {
+      await withTaskCommandStateDir(async () => {
+        const task = createInspectableTask({
+          runId: `task-list-${status}`,
+          label: "Original task title",
+          progressSummary: "Outdated running progress",
+          terminalSummary: "Generic terminal summary",
+        });
+        const error = `${status}: upstream credentials need attention`;
+        const terminal = { taskId: task.taskId, endedAt: Date.now(), error };
+        if (status === "lost") {
+          markTaskLostById(terminal);
+        } else {
+          markTaskTerminalById({
+            ...terminal,
+            status,
+            terminalSummary: "Generic terminal summary",
+          });
+        }
+        const runtime = createRuntime();
+        await tasksListCommand({}, runtime);
+        const output = vi.mocked(runtime.log).mock.calls.flat().join("|");
+        expect(output).toContain(error);
+        expect(output).not.toContain("Outdated running progress");
+        expect(output).not.toContain("Generic terminal summary");
+      });
+    },
+  );
+
   it("keeps task list summaries within their UTF-16 column limit", async () => {
     await withTaskCommandStateDir(async () => {
       createTaskRecord({
@@ -691,6 +857,8 @@ describe("tasks commands", () => {
         task: "Inspect task summary",
         terminalSummary: `${"y".repeat(78)}🚀xx`,
       });
+      createInspectableTask({ progressSummary: "Fetching provider credentials" });
+      createInspectableTask({ status: "succeeded", label: "Human-readable task title" });
       const runtime = createRuntime();
 
       await tasksListCommand({}, runtime);
@@ -701,6 +869,8 @@ describe("tasks commands", () => {
         .join("\n");
       expect(output).toContain(`${"y".repeat(78)}…`);
       expect(output).not.toContain("🚀");
+      expect(output).toContain("Fetching provider credentials");
+      expect(output).toContain("Human-readable task title");
     });
   });
 

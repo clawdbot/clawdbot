@@ -46,6 +46,11 @@ enum MacNodeClaudeSessionCatalog {
         var limit = 20
     }
 
+    private struct TranscriptCursor {
+        var offset: Int
+        var leaseId: String?
+    }
+
     private struct SessionRecord {
         var threadId: String
         var name: String?
@@ -82,6 +87,166 @@ enum MacNodeClaudeSessionCatalog {
         }
     }
 
+    private struct CatalogFileIdentity: Equatable {
+        var modificationDate: Date
+        var size: UInt64
+        var inode: UInt64
+    }
+
+    private struct CatalogDiscoveryCacheEntry {
+        var rootPath: String
+        var identity: CatalogFileIdentity
+        var sessionId: String
+        var scannedBytes: Int
+        var record: SessionRecord?
+        var sidechain: Bool
+        var generation: UInt64 = 0
+    }
+
+    private struct CLIRecordInspection {
+        var aiTitle: String?
+        var record: SessionRecord?
+        var sidechain = false
+        var shouldStop = false
+    }
+
+    private struct CLIRecordDiscoveryContext {
+        var projectsURL: URL
+        var resolvedProjectsURL: URL
+        var rootPath: String
+    }
+
+    private struct CLIRecordFileScan {
+        var fileBytes: Int
+        var record: SessionRecord?
+        var sidechain: Bool
+        var cacheable: Bool
+    }
+
+    private final class CatalogDiscoveryCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: CatalogDiscoveryCacheEntry] = [:]
+        private var generation: UInt64 = 0
+
+        func lookup(
+            path: String,
+            rootPath: String,
+            identity: CatalogFileIdentity,
+            sessionId: String) -> CatalogDiscoveryCacheEntry?
+        {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard var entry = self.entries[path],
+                  entry.rootPath == rootPath,
+                  entry.identity == identity,
+                  entry.sessionId == sessionId
+            else { return nil }
+            self.generation &+= 1
+            entry.generation = self.generation
+            self.entries[path] = entry
+            return entry
+        }
+
+        func store(_ entry: CatalogDiscoveryCacheEntry, path: String) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.generation &+= 1
+            var entry = entry
+            entry.generation = self.generation
+            self.entries[path] = entry
+            if self.entries.count > MacNodeClaudeSessionCatalog.maxCatalogDiscoveryCacheEntries,
+               let oldest = self.entries.min(by: { $0.value.generation < $1.value.generation })
+            {
+                self.entries.removeValue(forKey: oldest.key)
+            }
+        }
+
+        func removeUnseen(rootPath: String, seenPaths: Set<String>) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.entries = self.entries.filter { path, entry in
+                entry.rootPath != rootPath || seenPaths.contains(path)
+            }
+        }
+    }
+
+    private struct TranscriptReadLease {
+        var rootPath: String
+        var threadId: String
+        var fileURL: URL
+        var expiresAt: Date
+        var generation: UInt64
+    }
+
+    private final class TranscriptReadLeaseCache: @unchecked Sendable {
+        private let lock = NSLock()
+        private var entries: [String: TranscriptReadLease] = [:]
+        private var generation: UInt64 = 0
+
+        func lookup(leaseId: String, rootPath: String, threadId: String) -> URL? {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            guard var entry = self.entries[leaseId],
+                  entry.rootPath == rootPath,
+                  entry.threadId == threadId,
+                  entry.expiresAt > Date()
+            else {
+                self.entries.removeValue(forKey: leaseId)
+                return nil
+            }
+            self.generation &+= 1
+            entry.generation = self.generation
+            self.entries[leaseId] = entry
+            return entry.fileURL
+        }
+
+        func store(rootPath: String, threadId: String, fileURL: URL) -> String {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.generation &+= 1
+            let leaseId = UUID().uuidString
+            self.entries[leaseId] = TranscriptReadLease(
+                rootPath: rootPath,
+                threadId: threadId,
+                fileURL: fileURL,
+                expiresAt: Date().addingTimeInterval(
+                    MacNodeClaudeSessionCatalog.transcriptReadLeaseLifetimeSeconds),
+                generation: self.generation)
+            let overflow = self.entries.count - MacNodeClaudeSessionCatalog.maxTranscriptReadLeases
+            guard overflow > 0 else { return leaseId }
+            let oldest = self.entries.sorted { $0.value.generation < $1.value.generation }
+                .prefix(overflow)
+            for entry in oldest {
+                self.entries.removeValue(forKey: entry.key)
+            }
+            return leaseId
+        }
+
+        func remove(leaseId: String) {
+            self.lock.lock()
+            defer { self.lock.unlock() }
+            self.entries.removeValue(forKey: leaseId)
+        }
+    }
+
+    private final class CatalogEnumerationObserver: @unchecked Sendable {
+        private let lock = NSLock()
+        private var observer: (@Sendable (String) -> Void)?
+
+        func set(_ observer: (@Sendable (String) -> Void)?) {
+            self.lock.lock()
+            self.observer = observer
+            self.lock.unlock()
+        }
+
+        func notify(rootPath: String) {
+            self.lock.lock()
+            let observer = self.observer
+            self.lock.unlock()
+            observer?(rootPath)
+        }
+    }
+
     private static let defaultPageLimit = 50
     private static let maxPageLimit = 100
     private static let defaultReadLimit = 20
@@ -90,6 +255,9 @@ enum MacNodeClaudeSessionCatalog {
     private static let maxSessionIdLength = 256
     private static let maxSearchLength = 500
     private static let maxCatalogDiscoveryFiles = 10000
+    fileprivate static let maxCatalogDiscoveryCacheEntries = 20000
+    private static let maxTranscriptReadLeases = 256
+    private static let transcriptReadLeaseLifetimeSeconds: TimeInterval = 120
     private static let metadataPrefixBytes = 1024 * 1024
     private static let metadataReadChunkBytes = 16 * 1024
     private static let maxCatalogMetadataScanBytes = 64 * 1024 * 1024
@@ -98,8 +266,18 @@ enum MacNodeClaudeSessionCatalog {
     private static let maxTranscriptItemBytes = 4 * 1024 * 1024
     private static let maxTranscriptPageBytes = 20 * 1024 * 1024
     private static let maxTruncatedTranscriptTextBytes = 512 * 1024
+    private static let cliEntrypoints: Set<String> = ["cli", "sdk-cli"]
     private static let iso8601FractionalStyle = Date.ISO8601FormatStyle(includingFractionalSeconds: true)
     private static let iso8601Style = Date.ISO8601FormatStyle()
+    private static let catalogDiscoveryCache = CatalogDiscoveryCache()
+    private static let transcriptReadLeases = TranscriptReadLeaseCache()
+    private static let catalogEnumerationObserver = CatalogEnumerationObserver()
+
+    static func setCatalogEnumerationObserverForTesting(
+        _ observer: (@Sendable (String) -> Void)?)
+    {
+        self.catalogEnumerationObserver.set(observer)
+    }
 
     static func shouldAdvertise(
         root: [String: Any]? = nil,
@@ -129,6 +307,7 @@ enum MacNodeClaudeSessionCatalog {
     }
 
     static func list(paramsJSON: String?, homeURL: URL) throws -> String {
+        try Task.checkCancellation()
         let params = try decodeListParams(paramsJSON)
         let offset = try decodeCursor(params.cursor, label: "catalog")
         let search = params.searchTerm?.lowercased()
@@ -151,16 +330,20 @@ enum MacNodeClaudeSessionCatalog {
     }
 
     static func read(paramsJSON: String?, homeURL: URL) throws -> String {
+        try Task.checkCancellation()
         let params = try decodeReadParams(paramsJSON)
-        guard let fileURL = try sessions(homeURL: homeURL)
-            .first(where: { $0.threadId == params.threadId })?.fileURL
+        let cursor = try params.cursor.map(self.decodeTranscriptCursor)
+        guard let target = try sessionFileForRead(
+            homeURL: homeURL,
+            threadId: params.threadId,
+            leaseId: cursor?.leaseId)
         else { throw CatalogError.invalidParams("Claude session is unavailable") }
+        let fileURL = target.fileURL
 
         let handle = try FileHandle(forReadingFrom: fileURL)
         defer { try? handle.close() }
         let fileSize = try handle.seekToEnd()
-        let requestedEnd = try params.cursor.map { try self.decodeCursor($0, label: "transcript") }
-        let end = UInt64(requestedEnd ?? Int(fileSize))
+        let end = UInt64(cursor?.offset ?? Int(fileSize))
         guard end <= fileSize else {
             throw CatalogError.invalidParams("transcript cursor is invalid")
         }
@@ -184,6 +367,7 @@ enum MacNodeClaudeSessionCatalog {
               scanned < self.maxTranscriptScanBytes,
               found.count <= params.limit
         {
+            try Task.checkCancellation()
             let size = min(
                 readChunkBytes,
                 Int(position),
@@ -227,6 +411,7 @@ enum MacNodeClaudeSessionCatalog {
         var selected: [(item: [String: Any], start: UInt64)] = []
         var selectedBytes = 0
         for entry in requested {
+            try Task.checkCancellation()
             guard let data = try? JSONSerialization.data(withJSONObject: entry.item) else { continue }
             if !selected.isEmpty,
                selectedBytes + data.count > self.maxTranscriptPageBytes - 64 * 1024
@@ -243,7 +428,13 @@ enum MacNodeClaudeSessionCatalog {
             "items": selected.map(\.item),
         ]
         if hasEarlierItems, let earliest = selected.last?.start, earliest > 0 {
-            response["nextCursor"] = try encodeCursor(Int(earliest))
+            let leaseId = target.leaseId ?? self.transcriptReadLeases.store(
+                rootPath: self.projectsURL(homeURL: homeURL).standardizedFileURL.path,
+                threadId: params.threadId,
+                fileURL: fileURL)
+            response["nextCursor"] = try encodeTranscriptCursor(
+                offset: Int(earliest),
+                leaseId: leaseId)
         }
         return try encode(response)
     }
@@ -273,6 +464,15 @@ extension MacNodeClaudeSessionCatalog {
     private static func readJSON(_ url: URL) -> Any? {
         guard let data = try? Data(contentsOf: url) else { return nil }
         return try? JSONSerialization.jsonObject(with: data)
+    }
+
+    private static func catalogFileIdentity(_ url: URL) -> CatalogFileIdentity? {
+        guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+              let modificationDate = attributes[.modificationDate] as? Date,
+              let size = (attributes[.size] as? NSNumber)?.uint64Value,
+              let inode = (attributes[.systemFileNumber] as? NSNumber)?.uint64Value
+        else { return nil }
+        return CatalogFileIdentity(modificationDate: modificationDate, size: size, inode: inode)
     }
 
     private static func string(_ value: Any?, maxLength: Int = 4096) -> String? {
@@ -317,14 +517,66 @@ extension MacNodeClaudeSessionCatalog {
         return resolvedCandidate
     }
 
-    private static func desktopMetadata(homeURL: URL) -> (
+    private static func revalidatedSessionFile(
+        homeURL: URL,
+        threadId: String,
+        candidate: URL) -> URL?
+    {
+        let resolvedRoot = self.projectsURL(homeURL: homeURL).resolvingSymlinksInPath()
+        guard let fileURL = self.safeSessionFile(
+            root: resolvedRoot,
+            resolvedRoot: resolvedRoot,
+            candidate: candidate,
+            sessionId: threadId),
+            FileManager.default.isReadableFile(atPath: fileURL.path)
+        else { return nil }
+        return fileURL
+    }
+
+    private static func sessionFileForRead(
+        homeURL: URL,
+        threadId: String,
+        leaseId: String?) throws -> (fileURL: URL, leaseId: String?)?
+    {
+        let rootPath = self.projectsURL(homeURL: homeURL).standardizedFileURL.path
+        if let leaseId {
+            if let candidate = self.transcriptReadLeases.lookup(
+                leaseId: leaseId,
+                rootPath: rootPath,
+                threadId: threadId),
+                let fileURL = self.revalidatedSessionFile(
+                    homeURL: homeURL,
+                    threadId: threadId,
+                    candidate: candidate)
+            {
+                return (fileURL, leaseId)
+            }
+            // A lease is only an optimization. App restart, expiry, eviction, or
+            // a moved file must fall back to current eligibility discovery.
+            self.transcriptReadLeases.remove(leaseId: leaseId)
+        }
+
+        guard let candidate = try self.sessions(homeURL: homeURL)
+            .first(where: { $0.threadId == threadId })?.fileURL
+        else { return nil }
+        guard let fileURL = self.revalidatedSessionFile(
+            homeURL: homeURL,
+            threadId: threadId,
+            candidate: candidate)
+        else { return nil }
+        return (fileURL, nil)
+    }
+
+    private static func desktopMetadata(homeURL: URL) throws -> (
         active: [String: [String: Any]],
         archived: Set<String>)
     {
         var active: [String: [String: Any]] = [:]
         var archived = Set<String>()
         for accountURL in self.childDirectories(self.desktopSessionsURL(homeURL: homeURL)) {
+            try Task.checkCancellation()
             for workspaceURL in self.childDirectories(accountURL) {
+                try Task.checkCancellation()
                 let files = (try? FileManager.default.contentsOfDirectory(
                     at: workspaceURL,
                     includingPropertiesForKeys: nil,
@@ -333,6 +585,7 @@ extension MacNodeClaudeSessionCatalog {
                     where fileURL.lastPathComponent.hasPrefix("local_") &&
                     fileURL.pathExtension == "json"
                 {
+                    try Task.checkCancellation()
                     guard let metadata = self.readJSON(fileURL) as? [String: Any],
                           let sessionId = self.string(metadata["cliSessionId"], maxLength: 256)
                     else { continue }
@@ -351,122 +604,254 @@ extension MacNodeClaudeSessionCatalog {
     private static func discoverCLIRecords(
         projectsURL: URL,
         resolvedProjectsURL: URL,
+        projectFiles: [[URL]],
         records: inout [String: SessionRecord],
-        sidechainIds: inout Set<String>)
+        sidechainIds: inout Set<String>) throws
     {
         var discoveredFiles = 0
         var scannedBytes = 0
-        for projectURL in self.childDirectories(projectsURL) {
-            let files = (try? FileManager.default.contentsOfDirectory(
-                at: projectURL,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles])) ?? []
+        var truncated = false
+        var seenPaths = Set<String>()
+        let context = CLIRecordDiscoveryContext(
+            projectsURL: projectsURL,
+            resolvedProjectsURL: resolvedProjectsURL,
+            rootPath: projectsURL.path)
+        scan: for files in projectFiles {
+            try Task.checkCancellation()
             for candidate in files where candidate.pathExtension == "jsonl" {
-                guard discoveredFiles < self.maxCatalogDiscoveryFiles else { return }
+                try Task.checkCancellation()
+                guard discoveredFiles < self.maxCatalogDiscoveryFiles else {
+                    truncated = true
+                    break scan
+                }
                 discoveredFiles += 1
-                let sessionId = candidate.deletingPathExtension().lastPathComponent
-                guard !sessionId.isEmpty,
-                      records[sessionId] == nil,
-                      !sidechainIds.contains(sessionId),
-                      let fileURL = self.safeSessionFile(
-                          root: projectsURL,
-                          resolvedRoot: resolvedProjectsURL,
-                          candidate: candidate,
-                          sessionId: sessionId),
-                      let handle = try? FileHandle(forReadingFrom: fileURL)
-                else { continue }
-                var aiTitle: String?
-                let updatedAt = (try? fileURL.resourceValues(
-                    forKeys: [.contentModificationDateKey]).contentModificationDate)
-                    .map { Int64($0.timeIntervalSince1970 * 1000) }
-                var stopFile = false
-                func inspectLine(_ line: Data) {
-                    guard let row = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-                          self.string(row["sessionId"], maxLength: self.maxSessionIdLength) == sessionId
-                    else { return }
-                    if row["type"] as? String == "ai-title" {
-                        aiTitle = self.string(row["aiTitle"], maxLength: 500) ?? aiTitle
-                        return
-                    }
-                    if let entrypoint = row["entrypoint"] as? String, entrypoint != "sdk-cli" {
-                        stopFile = true
-                        return
-                    }
-                    if row["entrypoint"] as? String == "sdk-cli",
-                       (row["isSidechain"] as? Bool) == true
-                    {
-                        sidechainIds.insert(sessionId)
-                        stopFile = true
-                        return
-                    }
-                    guard row["entrypoint"] as? String == "sdk-cli",
-                          row["type"] as? String == "user",
-                          let message = row["message"] as? [String: Any],
-                          message["role"] as? String == "user",
-                          let content = message["content"]
-                    else { return }
-                    var fragments: [String] = []
-                    self.collectText(content, into: &fragments)
-                    records[sessionId] = SessionRecord(
-                        threadId: sessionId,
-                        name: aiTitle ?? fragments.first.flatMap { self.string($0, maxLength: 500) },
-                        cwd: self.string(row["cwd"]),
-                        createdAt: self.timestampMs(row["timestamp"]),
-                        updatedAt: updatedAt,
-                        source: "claude-cli",
-                        gitBranch: self.string(row["gitBranch"], maxLength: 500),
-                        fileURL: fileURL)
-                    stopFile = true
-                }
-                var pending = Data()
-                var fileBytes = 0
-                var reachedEnd = false
-                while !stopFile,
-                      fileBytes < self.metadataPrefixBytes,
-                      scannedBytes < self.maxCatalogMetadataScanBytes
+                if try self.discoverCLIRecord(
+                    candidate: candidate,
+                    context: context,
+                    scannedBytes: &scannedBytes,
+                    seenPaths: &seenPaths,
+                    records: &records,
+                    sidechainIds: &sidechainIds)
                 {
-                    let size = min(
-                        self.metadataReadChunkBytes,
-                        self.metadataPrefixBytes - fileBytes,
-                        self.maxCatalogMetadataScanBytes - scannedBytes)
-                    guard size > 0 else { break }
-                    guard let chunk = try? handle.read(upToCount: size) else {
-                        pending.removeAll()
-                        break
-                    }
-                    if chunk.isEmpty {
-                        reachedEnd = true
-                        break
-                    }
-                    fileBytes += chunk.count
-                    scannedBytes += chunk.count
-                    pending.append(chunk)
-                    while !stopFile, let newline = pending.firstIndex(of: 0x0A) {
-                        inspectLine(Data(pending[..<newline]))
-                        pending.removeSubrange(...newline)
-                    }
-                }
-                if !stopFile, reachedEnd, !pending.isEmpty {
-                    inspectLine(pending)
-                }
-                try? handle.close()
-                if scannedBytes >= self.maxCatalogMetadataScanBytes {
-                    return
+                    truncated = true
+                    break scan
                 }
             }
         }
+        if !truncated {
+            self.catalogDiscoveryCache.removeUnseen(rootPath: context.rootPath, seenPaths: seenPaths)
+        }
+    }
+
+    private static func discoverCLIRecord(
+        candidate: URL,
+        context: CLIRecordDiscoveryContext,
+        scannedBytes: inout Int,
+        seenPaths: inout Set<String>,
+        records: inout [String: SessionRecord],
+        sidechainIds: inout Set<String>) throws -> Bool
+    {
+        let sessionId = candidate.deletingPathExtension().lastPathComponent
+        guard !sessionId.isEmpty,
+              records[sessionId] == nil,
+              !sidechainIds.contains(sessionId),
+              let fileURL = self.safeSessionFile(
+                  root: context.projectsURL,
+                  resolvedRoot: context.resolvedProjectsURL,
+                  candidate: candidate,
+                  sessionId: sessionId)
+        else { return false }
+        let identity = self.catalogFileIdentity(fileURL)
+        let cachePath = fileURL.path
+        seenPaths.insert(cachePath)
+        // Cache identity does not encode ACLs. Preserve open-on-every-list authorization.
+        guard FileManager.default.isReadableFile(atPath: cachePath) else { return false }
+        if let identity,
+           let cached = self.catalogDiscoveryCache.lookup(
+               path: cachePath,
+               rootPath: context.rootPath,
+               identity: identity,
+               sessionId: sessionId),
+           scannedBytes + cached.scannedBytes <= self.maxCatalogMetadataScanBytes
+        {
+            if cached.sidechain {
+                sidechainIds.insert(sessionId)
+            }
+            if let record = cached.record {
+                records[sessionId] = record
+            }
+            // Preserve the cold-scan byte frontier so repeated pagination stays stable.
+            scannedBytes += cached.scannedBytes
+            return scannedBytes >= self.maxCatalogMetadataScanBytes
+        }
+        guard let handle = try? FileHandle(forReadingFrom: fileURL) else { return false }
+        defer { try? handle.close() }
+        let updatedAt = identity.map {
+            Int64($0.modificationDate.timeIntervalSince1970 * 1000)
+        } ?? (try? fileURL.resourceValues(
+            forKeys: [.contentModificationDateKey]).contentModificationDate)
+            .map { Int64($0.timeIntervalSince1970 * 1000) }
+        let scan = try self.scanCLIRecordFile(
+            handle: handle,
+            fileURL: fileURL,
+            sessionId: sessionId,
+            updatedAt: updatedAt,
+            byteLimit: self.maxCatalogMetadataScanBytes - scannedBytes)
+        scannedBytes += scan.fileBytes
+        if scan.sidechain {
+            sidechainIds.insert(sessionId)
+        }
+        if let record = scan.record {
+            records[sessionId] = record
+        }
+        let budgetConstrained = scannedBytes >= self.maxCatalogMetadataScanBytes
+        if let identity, !budgetConstrained, scan.cacheable {
+            self.catalogDiscoveryCache.store(
+                CatalogDiscoveryCacheEntry(
+                    rootPath: context.rootPath,
+                    identity: identity,
+                    sessionId: sessionId,
+                    scannedBytes: scan.fileBytes,
+                    record: scan.record,
+                    sidechain: scan.sidechain),
+                path: cachePath)
+        }
+        return budgetConstrained
+    }
+
+    private static func scanCLIRecordFile(
+        handle: FileHandle,
+        fileURL: URL,
+        sessionId: String,
+        updatedAt: Int64?,
+        byteLimit: Int) throws -> CLIRecordFileScan
+    {
+        var inspection = CLIRecordInspection()
+        var pending = Data()
+        var fileBytes = 0
+        var reachedEnd = false
+        var readFailed = false
+        while !inspection.shouldStop,
+              fileBytes < self.metadataPrefixBytes,
+              fileBytes < byteLimit
+        {
+            try Task.checkCancellation()
+            let size = min(
+                self.metadataReadChunkBytes,
+                self.metadataPrefixBytes - fileBytes,
+                byteLimit - fileBytes)
+            guard size > 0 else { break }
+            guard let chunk = try? handle.read(upToCount: size) else {
+                pending.removeAll()
+                readFailed = true
+                break
+            }
+            if chunk.isEmpty {
+                reachedEnd = true
+                break
+            }
+            fileBytes += chunk.count
+            pending.append(chunk)
+            while !inspection.shouldStop, let newline = pending.firstIndex(of: 0x0A) {
+                self.inspectCLIRecordLine(
+                    Data(pending[..<newline]),
+                    sessionId: sessionId,
+                    fileURL: fileURL,
+                    updatedAt: updatedAt,
+                    inspection: &inspection)
+                pending.removeSubrange(...newline)
+            }
+        }
+        if !inspection.shouldStop, reachedEnd, !pending.isEmpty {
+            self.inspectCLIRecordLine(
+                pending,
+                sessionId: sessionId,
+                fileURL: fileURL,
+                updatedAt: updatedAt,
+                inspection: &inspection)
+        }
+        return CLIRecordFileScan(
+            fileBytes: fileBytes,
+            record: inspection.record,
+            sidechain: inspection.sidechain,
+            cacheable: !readFailed &&
+                (inspection.shouldStop || reachedEnd || fileBytes >= self.metadataPrefixBytes))
+    }
+
+    private static func isCLIEntrypoint(_ value: Any?) -> Bool {
+        guard let value = value as? String else { return false }
+        return self.cliEntrypoints.contains(value)
+    }
+
+    private static func inspectCLIRecordLine(
+        _ line: Data,
+        sessionId: String,
+        fileURL: URL,
+        updatedAt: Int64?,
+        inspection: inout CLIRecordInspection)
+    {
+        guard let row = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+              self.string(row["sessionId"], maxLength: self.maxSessionIdLength) == sessionId
+        else { return }
+        if row["type"] as? String == "ai-title" {
+            inspection.aiTitle = self.string(row["aiTitle"], maxLength: 500) ?? inspection.aiTitle
+            return
+        }
+        if let entrypoint = row["entrypoint"] as? String,
+           !self.isCLIEntrypoint(entrypoint)
+        {
+            inspection.shouldStop = true
+            return
+        }
+        if self.isCLIEntrypoint(row["entrypoint"]),
+           (row["isSidechain"] as? Bool) == true
+        {
+            inspection.sidechain = true
+            inspection.shouldStop = true
+            return
+        }
+        guard self.isCLIEntrypoint(row["entrypoint"]),
+              row["type"] as? String == "user",
+              let message = row["message"] as? [String: Any],
+              message["role"] as? String == "user",
+              let content = message["content"]
+        else { return }
+        var fragments: [String] = []
+        self.collectText(content, into: &fragments)
+        inspection.record = SessionRecord(
+            threadId: sessionId,
+            name: inspection.aiTitle ?? fragments.first.flatMap { self.string($0, maxLength: 500) },
+            cwd: self.string(row["cwd"]),
+            createdAt: self.timestampMs(row["timestamp"]),
+            updatedAt: updatedAt,
+            source: "claude-cli",
+            gitBranch: self.string(row["gitBranch"], maxLength: 500),
+            fileURL: fileURL)
+        inspection.shouldStop = true
     }
 
     private static func sessions(homeURL: URL) throws -> [SessionRecord] {
+        try Task.checkCancellation()
         let projectsURL = self.projectsURL(homeURL: homeURL)
+        let rootPath = projectsURL.standardizedFileURL.path
+        self.catalogEnumerationObserver.notify(rootPath: rootPath)
         let resolvedProjectsURL = projectsURL.resolvingSymlinksInPath()
         var records: [String: SessionRecord] = [:]
         var sidechainIds = Set<String>()
+        var projectFiles: [[URL]] = []
         for projectURL in self.childDirectories(projectsURL) {
-            guard let index = readJSON(projectURL.appending(path: "sessions-index.json")) as? [String: Any],
+            try Task.checkCancellation()
+            let files = (try? FileManager.default.contentsOfDirectory(
+                at: projectURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles])) ?? []
+            projectFiles.append(files)
+            guard let indexURL = files.first(where: { $0.lastPathComponent == "sessions-index.json" }),
+                  let index = readJSON(indexURL) as? [String: Any],
                   let entries = index["entries"] as? [[String: Any]]
             else { continue }
             for entry in entries {
+                try Task.checkCancellation()
                 guard let sessionId = string(entry["sessionId"], maxLength: 256) else { continue }
                 if (entry["isSidechain"] as? Bool) == true {
                     sidechainIds.insert(sessionId)
@@ -495,23 +880,37 @@ extension MacNodeClaudeSessionCatalog {
             }
         }
 
-        self.discoverCLIRecords(
+        try self.discoverCLIRecords(
             projectsURL: projectsURL,
             resolvedProjectsURL: resolvedProjectsURL,
+            projectFiles: projectFiles,
             records: &records,
             sidechainIds: &sidechainIds)
 
-        let desktop = self.desktopMetadata(homeURL: homeURL)
+        // Reuse this refresh's inventory: stale Desktop metadata must not trigger
+        // a filesystem walk for every missing transcript. Candidates still pass path validation.
+        let sessionFiles = Dictionary(
+            grouping: projectFiles.joined().filter { $0.pathExtension == "jsonl" },
+            by: \.lastPathComponent)
+        let desktop = try self.desktopMetadata(homeURL: homeURL)
         for sessionId in desktop.archived {
+            try Task.checkCancellation()
             records.removeValue(forKey: sessionId)
         }
         for (sessionId, metadata) in desktop.active {
+            try Task.checkCancellation()
             if sidechainIds.contains(sessionId) {
                 continue
             }
             var record = records[sessionId]
             if record == nil,
-               let fileURL = try locateSessionFile(homeURL: homeURL, sessionId: sessionId)
+               let fileURL = (sessionFiles["\(sessionId).jsonl"] ?? []).lazy.compactMap({ candidate in
+                   self.safeSessionFile(
+                       root: projectsURL,
+                       resolvedRoot: resolvedProjectsURL,
+                       candidate: candidate,
+                       sessionId: sessionId)
+               }).first
             {
                 record = SessionRecord(
                     threadId: sessionId,
@@ -536,23 +935,6 @@ extension MacNodeClaudeSessionCatalog {
             let rightTime = right.updatedAt ?? 0
             return leftTime == rightTime ? left.threadId < right.threadId : leftTime > rightTime
         }
-    }
-
-    private static func locateSessionFile(homeURL: URL, sessionId: String) throws -> URL? {
-        let root = self.projectsURL(homeURL: homeURL)
-        let resolvedRoot = root.resolvingSymlinksInPath()
-        for projectURL in self.childDirectories(root) {
-            let candidate = projectURL.appending(path: "\(sessionId).jsonl")
-            if let fileURL = safeSessionFile(
-                root: root,
-                resolvedRoot: resolvedRoot,
-                candidate: candidate,
-                sessionId: sessionId)
-            {
-                return fileURL
-            }
-        }
-        return nil
     }
 }
 
@@ -607,14 +989,48 @@ extension MacNodeClaudeSessionCatalog {
 
     private static func encodeCursor(_ offset: Int) throws -> String {
         let data = try JSONSerialization.data(withJSONObject: ["offset": offset], options: [.sortedKeys])
-        return data.base64EncodedString()
+        return self.encodeCursorData(data)
+    }
+
+    private static func encodeTranscriptCursor(offset: Int, leaseId: String) throws -> String {
+        let data = try JSONSerialization.data(
+            withJSONObject: [
+                "lease": leaseId,
+                "offset": offset,
+            ],
+            options: [.sortedKeys])
+        return self.encodeCursorData(data)
+    }
+
+    private static func encodeCursorData(_ data: Data) -> String {
+        data.base64EncodedString()
             .replacingOccurrences(of: "+", with: "-")
             .replacingOccurrences(of: "/", with: "_")
             .replacingOccurrences(of: "=", with: "")
     }
 
+    private static func decodeTranscriptCursor(_ cursor: String) throws -> TranscriptCursor {
+        let value = try self.decodeCursorObject(cursor, label: "transcript")
+        guard let offset = value["offset"] as? NSNumber,
+              offset.intValue >= 0
+        else { throw CatalogError.invalidParams("transcript cursor is invalid") }
+        let leaseId = self.string(value["lease"], maxLength: 64)
+        if value["lease"] != nil, leaseId == nil {
+            throw CatalogError.invalidParams("transcript cursor is invalid")
+        }
+        return TranscriptCursor(offset: offset.intValue, leaseId: leaseId)
+    }
+
     private static func decodeCursor(_ cursor: String?, label: String) throws -> Int {
         guard let cursor else { return 0 }
+        let value = try self.decodeCursorObject(cursor, label: label)
+        guard let offset = value["offset"] as? NSNumber,
+              offset.intValue >= 0
+        else { throw CatalogError.invalidParams("\(label) cursor is invalid") }
+        return offset.intValue
+    }
+
+    private static func decodeCursorObject(_ cursor: String, label: String) throws -> [String: Any] {
         guard cursor.count <= self.maxCursorLength else {
             throw CatalogError.invalidParams("\(label) cursor is invalid")
         }
@@ -622,11 +1038,9 @@ extension MacNodeClaudeSessionCatalog {
             .replacingOccurrences(of: "_", with: "/")
         base64 += String(repeating: "=", count: (4 - base64.count % 4) % 4)
         guard let data = Data(base64Encoded: base64),
-              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let offset = value["offset"] as? NSNumber,
-              offset.intValue >= 0
+              let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         else { throw CatalogError.invalidParams("\(label) cursor is invalid") }
-        return offset.intValue
+        return value
     }
 
     private static func encode(_ value: [String: Any], maxBytes: Int? = nil) throws -> String {

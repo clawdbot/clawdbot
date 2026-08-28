@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { parsePositiveInt, readPositiveIntEnv } from "./env-limits.ts";
 import { die, run } from "./host-command.ts";
+import * as frozenProviderAuth from "./provider-auth-prerequisite.mjs";
 import type { Mode, Platform, Provider, ProviderAuth } from "./types.ts";
 
 type ResolveLatestVersionDeps = {
@@ -30,57 +31,17 @@ export function resolveProviderAuth(input: {
   provider: Provider;
   apiKeyEnv?: string;
   modelId?: string;
+  platform?: Platform;
 }): ProviderAuth {
-  const providerDefaults: Record<Provider, Omit<ProviderAuth, "apiKeyValue">> = {
-    anthropic: {
-      apiKeyEnv: input.apiKeyEnv || "ANTHROPIC_API_KEY",
-      authChoice: "apiKey",
-      authKeyFlag: "anthropic-api-key",
-      modelId:
-        input.modelId ||
-        process.env.OPENCLAW_PARALLELS_ANTHROPIC_MODEL ||
-        "anthropic/claude-sonnet-4-6",
-    },
-    minimax: {
-      apiKeyEnv: input.apiKeyEnv || "MINIMAX_API_KEY",
-      authChoice: "minimax-global-api",
-      authKeyFlag: "minimax-api-key",
-      modelId:
-        input.modelId || process.env.OPENCLAW_PARALLELS_MINIMAX_MODEL || "minimax/MiniMax-M2.7",
-    },
-    openai: {
-      apiKeyEnv: input.apiKeyEnv || "OPENAI_API_KEY",
-      authChoice: "openai-api-key",
-      authKeyFlag: "openai-api-key",
-      modelId:
-        input.modelId || process.env.OPENCLAW_PARALLELS_OPENAI_MODEL || "openai/gpt-5.6-luna",
-    },
-  };
-  const resolved = providerDefaults[input.provider];
-  const apiKeyValue = process.env[resolved.apiKeyEnv] ?? "";
-  if (!apiKeyValue) {
-    die(`${resolved.apiKeyEnv} is required`);
+  const result = frozenProviderAuth.resolveParallelsProviderAuth(input, process.env);
+  if (result.status === "blocked") {
+    die(`${result.auth.apiKeyEnv} is required`);
   }
-  return { ...resolved, apiKeyValue };
+  return result.auth;
 }
 
-export function resolveWindowsProviderAuth(input: {
-  provider: Provider;
-  apiKeyEnv?: string;
-  modelId?: string;
-}): ProviderAuth {
-  const auth = resolveProviderAuth(input);
-  if (input.provider !== "openai" || input.modelId) {
-    return auth;
-  }
-  const windowsModel = process.env.OPENCLAW_PARALLELS_WINDOWS_OPENAI_MODEL?.trim();
-  if (windowsModel) {
-    return { ...auth, modelId: windowsModel };
-  }
-  if (process.env.OPENCLAW_PARALLELS_OPENAI_MODEL?.trim()) {
-    return auth;
-  }
-  return { ...auth, modelId: "openai/gpt-5.6-luna" };
+export function resolveWindowsProviderAuth(input: Parameters<typeof resolveProviderAuth>[0]) {
+  return resolveProviderAuth({ ...input, platform: "windows" });
 }
 
 export function providerIdFromModelId(modelId: string): string {
@@ -184,25 +145,11 @@ export function parseMode(value: string): Mode {
 }
 
 export function parsePlatformList(value: string): Set<Platform> {
-  const normalized = value.replaceAll(" ", "");
-  if (normalized === "all") {
-    return new Set(["macos", "windows", "linux"]);
+  try {
+    return frozenProviderAuth.parsePlatformList(value);
+  } catch (error) {
+    return die((error as Error).message);
   }
-  const result = new Set<Platform>();
-  for (const entry of normalized.split(",")) {
-    if (entry === "macos" || entry === "windows" || entry === "linux") {
-      if (result.has(entry)) {
-        die(`duplicate --platform entry: ${entry}`);
-      }
-      result.add(entry);
-    } else {
-      die(`invalid --platform entry: ${entry}`);
-    }
-  }
-  if (result.size === 0) {
-    die("--platform must include at least one platform");
-  }
-  return result;
 }
 
 export function resolveLatestVersion(

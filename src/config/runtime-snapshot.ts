@@ -1,9 +1,11 @@
 // Produces redacted runtime config snapshots for diagnostics and UI surfaces.
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { clearExecutablePathCache } from "../infra/executable-path.js";
 import {
   resetPublishedConfigRuntimeEnv,
   type PreparedConfigRuntimeEnv,
 } from "./config-env-vars.js";
+import { copyConfigResolutionFacts, getConfigResolutionFacts } from "./resolution-facts.js";
 import type { OpenClawConfig } from "./types.js";
 
 export type RuntimeConfigSnapshotRefreshOptions = {
@@ -118,6 +120,7 @@ const managedRuntimeConfigWriteOwners = new Map<
   Set<{ id: symbol; preflight?: ManagedRuntimeConfigWritePreflight }>
 >();
 const runtimeConfigWriteListeners = new Set<(event: RuntimeConfigWriteNotification) => void>();
+const runtimeConfigSnapshotPreparers = new Set<(config: OpenClawConfig) => void>();
 
 function stableConfigStringify(value: unknown): string {
   if (value === null || typeof value !== "object") {
@@ -165,9 +168,25 @@ export function setRuntimeConfigSnapshot(
   config: OpenClawConfig,
   sourceConfig?: OpenClawConfig,
 ): void {
+  const factSource = getConfigResolutionFacts(config) !== null ? config : (sourceConfig ?? config);
+  copyConfigResolutionFacts(factSource, config);
+  for (const prepare of runtimeConfigSnapshotPreparers) {
+    prepare(config);
+  }
+  clearExecutablePathCache();
   runtimeConfigSnapshot = config;
   runtimeConfigSourceSnapshot = sourceConfig ?? null;
   runtimeConfigSnapshotMetadata = createRuntimeConfigSnapshotMetadata(config, sourceConfig);
+}
+
+export function registerRuntimeConfigSnapshotPreparer(
+  prepare: (config: OpenClawConfig) => void,
+): () => void {
+  runtimeConfigSnapshotPreparers.add(prepare);
+  if (runtimeConfigSnapshot) {
+    prepare(runtimeConfigSnapshot);
+  }
+  return () => runtimeConfigSnapshotPreparers.delete(prepare);
 }
 
 export function setAppliedRuntimeConfigSnapshot(
@@ -190,11 +209,13 @@ export function setRuntimeConfigSourceSnapshotIfCurrent(params: {
   ) {
     return false;
   }
+  copyConfigResolutionFacts(params.sourceConfig, runtimeConfigSnapshot);
   setRuntimeConfigSnapshot(runtimeConfigSnapshot, params.sourceConfig);
   return true;
 }
 
 export function resetConfigRuntimeState(): void {
+  clearExecutablePathCache();
   runtimeConfigSnapshot = null;
   runtimeConfigSourceSnapshot = null;
   runtimeConfigSnapshotMetadata = null;

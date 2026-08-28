@@ -1,4 +1,4 @@
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 /** Returns true for terminal statuses that a later visible turn may recover in place. */
 export function isRecoverableTerminalSessionStatus(
@@ -12,10 +12,21 @@ export function recoverTerminalSessionEntryForVisibleTurn(entry: SessionEntry): 
   return {
     ...entry,
     status: undefined,
+    lifecycleRunId: undefined,
+    lastRunId: undefined,
     startedAt: undefined,
     endedAt: undefined,
     runtimeMs: undefined,
+    lastRunError: undefined,
     abortedLastRun: undefined,
     restartRecoveryForceSafeTools: undefined,
+    restartRecoveryDeliveryContext: undefined,
+    restartRecoveryDeliveryMediaUrls: undefined,
+    restartRecoveryDisableMessageTool: undefined,
+    restartRecoverySuppressTextDelivery: undefined,
+    restartRecoveryDeliveryRequestFingerprint: undefined,
+    restartRecoveryDeliveryRunId: undefined,
+    restartRecoveryDeliverySourceRunId: undefined,
+    restartRecoverySourceReplyDeliveryMode: undefined,
   };
 }

@@ -3,17 +3,20 @@ name: OpenClaw Release Telegram QA
 run-name: ${{ github.event_name == 'workflow_dispatch' && format('OpenClaw Release Telegram QA {0}', inputs.dispatch_id) || 'OpenClaw Release Telegram QA' }}
 
 on:
-  # Transitional compatibility for supported release refs whose parent still calls @main.
-  # Current main dispatches this workflow so qa-live-shared secrets stay in this run.
   workflow_call:
     inputs:
       expected_trusted_workflow_sha:
-        description: Resolved main SHA authorized for this trusted workflow
+        description: Exact trusted tooling SHA authorized for this workflow
         required: true
         type: string
       target_ref:
         description: Trusted release ref whose exact candidate SHA should be validated
         required: true
+        type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA candidate
+        required: false
+        default: ""
         type: string
       target_sha:
         description: Exact full candidate commit SHA
@@ -33,12 +36,17 @@ on:
         required: true
         type: string
       expected_trusted_workflow_sha:
-        description: Resolved main SHA authorized for this trusted workflow
+        description: Exact trusted tooling SHA authorized for this workflow
         required: true
         type: string
       target_ref:
         description: Trusted release ref whose exact candidate SHA should be validated
         required: true
+        type: string
+      target_context_ref:
+        description: Optional canonical release branch or tag context for an exact-SHA candidate
+        required: false
+        default: ""
         type: string
       target_sha:
         description: Exact full candidate commit SHA
@@ -47,7 +55,8 @@ on:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  GH_TRANSIENT_SERVER_OR_NETWORK_PATTERN: "HTTP 5[0-9][0-9]|Server Error|invalid character .* looking for beginning of value|error connecting to|context deadline exceeded|connection reset by peer|connection refused|TLS handshake timeout|i/o timeout|network is unreachable|ETIMEDOUT|ECONNRESET|EAI_AGAIN"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_BUILD_PRIVATE_QA: "1"
   OPENCLAW_ENABLE_PRIVATE_QA_CLI: "1"
 
@@ -65,13 +74,14 @@ jobs:
       workflow_repository: ${{ steps.identity.outputs.workflow_repository }}
       workflow_sha: ${{ steps.identity.outputs.workflow_sha }}
     steps:
-      - name: Verify dispatched-main identity
+      - name: Verify dispatched workflow identity
         id: identity
         env:
           CALLER_WORKFLOW_REF: ${{ github.workflow_ref }}
           CALLER_WORKFLOW_SHA: ${{ github.workflow_sha }}
           EXPECTED_TRUSTED_WORKFLOW_SHA: ${{ inputs.expected_trusted_workflow_sha }}
           JOB_CONTEXT: ${{ toJSON(job) }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
           WORKFLOW_REF: ${{ github.workflow_ref }}
@@ -81,7 +91,8 @@ jobs:
           set -euo pipefail
 
           expected_repository="openclaw/openclaw"
-          expected_ref="${expected_repository}/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main"
+          workflow_path=".github/workflows/openclaw-release-telegram-qa.yml"
+          caller_path=".github/workflows/openclaw-release-checks.yml"
           if [[ "$GITHUB_REPOSITORY" != "$expected_repository" ||
                 ! "$EXPECTED_TRUSTED_WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ ||
                 ! "$TARGET_SHA" =~ ^[a-f0-9]{40}$ ||
@@ -89,18 +100,57 @@ jobs:
             echo "Telegram QA identity or target is malformed." >&2
             exit 1
           fi
+          normalized_context_ref="${TARGET_CONTEXT_REF:-}"
+          normalized_context_ref="${normalized_context_ref#refs/heads/}"
+          normalized_context_ref="${normalized_context_ref#refs/tags/}"
+          if [[ -n "$normalized_context_ref" &&
+                ! "$normalized_context_ref" =~ ^(release/[0-9]{4}\.[0-9]+\.[0-9]+|extended-stable/[0-9]{4}\.[0-9]+\.33|v[0-9]{4}\.[0-9]+\.[0-9]+(-(alpha|beta)\.[0-9]+)?)$ ]]; then
+            echo "Telegram QA target context must be a canonical release branch or tag." >&2
+            exit 1
+          fi
+          if [[ -n "$normalized_context_ref" && "$TARGET_REF" != "$TARGET_SHA" ]]; then
+            echo "Telegram QA release context requires an exact-SHA target ref." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_REF" == "refs/heads/main" ]]; then
+            expected_ref="${expected_repository}/${workflow_path}@${GITHUB_REF}"
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/release-ci/([a-f0-9]{12})-([1-9][0-9]*)$ ]]; then
+            release_ci_sha_prefix="${BASH_REMATCH[1]}"
+            if [[ "$release_ci_sha_prefix" != "${EXPECTED_TRUSTED_WORKFLOW_SHA:0:12}" ]]; then
+              echo "Telegram QA release-ci ref does not match the authorized tooling SHA." >&2
+              exit 1
+            fi
+            expected_ref="${expected_repository}/${workflow_path}@${GITHUB_REF}"
+          elif [[ "$GITHUB_REF" =~ ^refs/heads/release/[0-9]{4}\.([1-9]|1[0-2])\.[1-9][0-9]*$ ||
+                  "$GITHUB_REF" =~ ^refs/heads/extended-stable/[0-9]{4}\.([1-9]|1[0-2])\.33$ ]]; then
+            expected_ref="${expected_repository}/${workflow_path}@${GITHUB_REF}"
+          else
+            echo "Telegram QA tooling ref must be exact main, canonical release or extended-stable, or canonical SHA-bound release-ci." >&2
+            exit 1
+          fi
+          if [[ "$GITHUB_SHA" != "$EXPECTED_TRUSTED_WORKFLOW_SHA" ||
+                "$WORKFLOW_SHA" != "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]; then
+            echo "Telegram QA tooling SHA does not match the authorized workflow SHA." >&2
+            exit 1
+          fi
           INVOCATION_MODE=reusable
           if [[ "$WORKFLOW_REF" == "$expected_ref" ]]; then
             INVOCATION_MODE=dispatch
-            [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" &&
-               "$GITHUB_REF" == "refs/heads/main" &&
-               "$GITHUB_SHA" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" &&
-               "$WORKFLOW_SHA" == "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]
+            [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]
+          else
+            expected_caller_ref="${expected_repository}/${caller_path}@${GITHUB_REF}"
+            if [[ "$WORKFLOW_REF" != "$expected_caller_ref" ||
+                  "$CALLER_WORKFLOW_SHA" != "$EXPECTED_TRUSTED_WORKFLOW_SHA" ]]; then
+              echo "Telegram QA reusable caller does not match the authorized tooling tuple." >&2
+              exit 1
+            fi
           fi
           export INVOCATION_MODE
 
           oidc_json="$(
             curl --fail --silent --show-error \
+              --connect-timeout 10 \
+              --max-time 30 \
               -H "Authorization: bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
               "${ACTIONS_ID_TOKEN_REQUEST_URL}&audience=openclaw-release-telegram-qa"
           )"
@@ -215,7 +265,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -233,13 +283,13 @@ jobs:
       - name: Setup candidate build toolchain
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Checkout candidate runtime
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -258,144 +308,20 @@ jobs:
       - name: Validate candidate release provenance
         id: provenance
         env:
+          CANDIDATE_GIT_DIR: .candidate
+          CANDIDATE_ROOT: .candidate
           GH_TOKEN: ${{ github.token }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
         run: |
-          set -euo pipefail
-
-          candidate_sha="$(git -C .candidate rev-parse HEAD)"
-          [[ "$candidate_sha" == "$TARGET_SHA" ]]
-          pr_head_count="$(
-            gh api \
-              -H "Accept: application/vnd.github+json" \
-              "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/pulls" \
-              --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${candidate_sha}"'")] | length'
-          )"
-          if [[ "$pr_head_count" != "0" ]]; then
-            echo "Telegram candidate ${candidate_sha} is an open same-repository PR head." >&2
-            exit 1
-          fi
-
-          compare_status="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
-              --jq '.status'
-          )"
-          trusted_reason=""
-          trusted_release_branch=""
-          if [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
-            trusted_reason="main-ancestor"
-          else
-            normalized_ref="${TARGET_REF#refs/heads/}"
-            if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
-              branch_sha="$(
-                git -C .candidate ls-remote --exit-code --refs origin \
-                  "refs/heads/${normalized_ref}" |
-                  awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
-              )"
-              [[ "$branch_sha" == "$candidate_sha" ]]
-              trusted_reason="release-branch-head"
-              trusted_release_branch="$normalized_ref"
-            elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
-              normalized_tag="${TARGET_REF#refs/tags/}"
-              tag_refs="$(
-                git -C .candidate ls-remote --exit-code origin \
-                  "refs/tags/${normalized_tag}" "refs/tags/${normalized_tag}^{}"
-              )"
-              awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
-                <<<"$tag_refs"
-              trusted_reason="release-tag"
-            elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
-              matching_release_branches="$(
-                gh api --paginate \
-                  "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
-                  --jq '.[].name' |
-                  awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
-                       $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { print }'
-              )"
-              if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" && -n "$matching_release_branches" ]]; then
-                trusted_reason="release-branch-head"
-                trusted_release_branch="$matching_release_branches"
-              else
-                matching_release_tags="$(
-                  git -C .candidate ls-remote origin 'refs/tags/v*' |
-                    awk -v sha="$candidate_sha" '$1 == sha { sub(/\^\{\}$/, "", $2); print $2 }' |
-                    sort -u
-                )"
-                if [[ -n "$matching_release_tags" ]]; then
-                  trusted_reason="release-tag"
-                fi
-              fi
-            fi
-          fi
-          if [[ -z "$trusted_reason" ]]; then
-            echo "Telegram candidate ${candidate_sha} is not trusted release provenance." >&2
-            exit 1
-          fi
-
-          if [[ "$trusted_reason" != "main-ancestor" ]]; then
-            repository_owner="${GITHUB_REPOSITORY%%/*}"
-            repository_name="${GITHUB_REPOSITORY#*/}"
-            signature_json="$(
-              gh api graphql \
-                -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:10){nodes{state baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
-                -f owner="$repository_owner" \
-                -f name="$repository_name" \
-                -f oid="$candidate_sha"
-            )"
-            signature_status="$(
-              jq -er \
-                --arg sha "$candidate_sha" \
-                '.data.repository.object |
-                 select(.oid == $sha) |
-                 if .signature == null then "missing"
-                 elif .signature.isValid == true and .signature.state == "VALID" and
-                   (.signature.signer.login // "") != "" then "valid"
-                 else "invalid"
-                 end' \
-                <<<"$signature_json"
-            )"
-            if [[ "$signature_status" == "invalid" ]]; then
-              echo "Release candidate ${candidate_sha} has an invalid commit signature." >&2
-              exit 1
-            fi
-            signer="$(jq -r '.data.repository.object.signature.signer.login // ""' <<<"$signature_json")"
-            permission_actor="$signer"
-            if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
-              if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-                echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
-                exit 1
-              fi
-              permission_actor="$(
-                jq -er \
-                  --arg base "$trusted_release_branch" \
-                  --arg repo "$GITHUB_REPOSITORY" \
-                  --arg sha "$candidate_sha" \
-                  '[.data.repository.object.associatedPullRequests.nodes[] |
-                    select(.state == "MERGED" and .baseRefName == $base and
-                      .baseRepository.nameWithOwner == $repo and .mergeCommit.oid == $sha) |
-                    .mergedBy.login] | unique | select(length == 1) | .[0]' \
-                  <<<"$signature_json"
-              )"
-            fi
-            permission_json="$(
-              gh api \
-                "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission"
-            )"
-            permission="$(jq -r '.permission // ""' <<<"$permission_json")"
-            role_name="$(jq -r '.role_name // ""' <<<"$permission_json")"
-            if [[ "$permission" != "admin" && "$role_name" != "maintain" ]]; then
-              echo "Release candidate actor ${permission_actor} lacks maintain/admin access." >&2
-              exit 1
-            fi
-          fi
-          echo "Telegram candidate trust reason: ${trusted_reason}"
+          bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"
 
       - name: Install candidate dependencies without runner credentials
         id: install_candidate
         shell: bash
+        working-directory: .candidate
         run: |
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
@@ -408,7 +334,7 @@ jobs:
             NPM_CONFIG_USERCONFIG=/dev/null \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm --dir .candidate install \
+            pnpm install \
               --store-dir "$RUNNER_TEMP/openclaw-telegram-candidate-pnpm-store" \
               --prefer-offline \
               --frozen-lockfile \
@@ -421,6 +347,7 @@ jobs:
       - name: Build candidate runtime without runner credentials
         id: build_candidate
         shell: bash
+        working-directory: .candidate
         run: |
           set -euo pipefail
           candidate_home="${RUNNER_TEMP}/openclaw-telegram-candidate-home"
@@ -431,9 +358,10 @@ jobs:
             LANG=C.UTF-8 \
             NODE_OPTIONS=--max-old-space-size=8192 \
             NPM_CONFIG_USERCONFIG=/dev/null \
+            OPENCLAW_BUILD_PRIVATE_QA=1 \
             PATH="$PATH" \
             RUNNER_TEMP="$RUNNER_TEMP" \
-            pnpm --dir .candidate exec node scripts/build-all.mjs qaRuntime
+            pnpm build qaRuntime
 
       - name: Move built candidate outside trusted workspace
         id: move_candidate
@@ -458,7 +386,7 @@ jobs:
           } >>"$GITHUB_OUTPUT"
 
       - name: Restore trusted Telegram QA bootstrap
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -495,7 +423,7 @@ jobs:
           pnpm_version="$(pnpm --version)"
           jq -n \
             --arg archiveRoot "$archive_root" \
-            --arg buildCommand "node scripts/build-all.mjs qaRuntime" \
+            --arg buildCommand "pnpm build qaRuntime" \
             --arg candidateSha "$TARGET_SHA" \
             --arg candidateTree "$CANDIDATE_TREE" \
             --arg nodeVersion "$node_version" \
@@ -611,7 +539,7 @@ jobs:
           [[ "$IDENTITY_STATUS" == "success" && "$BUILD_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA verifier
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -704,14 +632,14 @@ jobs:
               .candidateSha == $candidateSha and
               .candidateTree == $candidateTree and
               .archiveRoot == "openclaw-telegram-candidate" and
-              .buildCommand == "node scripts/build-all.mjs qaRuntime" and
+              .buildCommand == "pnpm build qaRuntime" and
               .sourceJob == "build_candidate"
             ' "$manifest_path" >/dev/null
           [[ -d "$candidate_root/node_modules" && -f "$candidate_root/dist/index.js" ]]
           echo "archive_path=$archive_path" >>"$GITHUB_OUTPUT"
 
       - name: Checkout independent candidate source
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ inputs.target_sha }}
           fetch-depth: 1
@@ -780,7 +708,7 @@ jobs:
 
       - name: Attest exact candidate archive bytes
         id: attest
-        uses: actions/attest@a1948c3f048ba23858d222213b7c278aabede763 # v4.1.1
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ steps.verify_candidate.outputs.archive_path }}
 
@@ -836,7 +764,7 @@ jobs:
              "$ATTESTATION_STATUS" == "success" ]]
 
       - name: Checkout trusted Telegram QA harness
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
           ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
@@ -846,16 +774,16 @@ jobs:
       - name: Setup trusted harness Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "true"
-          use-actions-cache: "false"
 
       - name: Build trusted QA harness
         id: build_harness
         env:
           NODE_OPTIONS: --max-old-space-size=8192
-        run: node scripts/build-all.mjs qaRuntime
+        run: pnpm build qaRuntime
 
       - name: Validate candidate artifact metadata
         id: metadata
@@ -911,6 +839,7 @@ jobs:
         env:
           ARCHIVE_NAME: ${{ needs.build_candidate.outputs.archive_name }}
           ARCHIVE_SHA256: ${{ needs.build_candidate.outputs.archive_sha256 }}
+          CALLED_WORKFLOW_REF: ${{ needs.trusted_identity.outputs.workflow_ref }}
           CALLED_WORKFLOW_SHA: ${{ needs.trusted_identity.outputs.workflow_sha }}
           CANDIDATE_TREE: ${{ needs.build_candidate.outputs.candidate_tree }}
           GH_TOKEN: ${{ github.token }}
@@ -926,7 +855,7 @@ jobs:
 
           gh attestation verify "$archive_path" \
             --repo "$GITHUB_REPOSITORY" \
-            --cert-identity "https://github.com/openclaw/openclaw/.github/workflows/openclaw-release-telegram-qa.yml@refs/heads/main" \
+            --cert-identity "https://github.com/${CALLED_WORKFLOW_REF}" \
             --signer-digest "$CALLED_WORKFLOW_SHA" \
             --source-ref "$GITHUB_REF" \
             --source-digest "$GITHUB_SHA" \
@@ -960,128 +889,14 @@ jobs:
       - name: Revalidate candidate release provenance
         id: revalidate_provenance
         env:
+          CANDIDATE_ROOT: ${{ steps.extract_candidate.outputs.candidate_root }}
           GH_TOKEN: ${{ github.token }}
+          TARGET_CONTEXT_REF: ${{ inputs.target_context_ref }}
           TARGET_REF: ${{ inputs.target_ref }}
           TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
         run: |
-          set -euo pipefail
-
-          candidate_sha="$TARGET_SHA"
-          pr_head_count="$(
-            gh api \
-              -H "Accept: application/vnd.github+json" \
-              "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/pulls" \
-              --jq '[.[] | select(.state == "open" and .head.repo.full_name == "'"${GITHUB_REPOSITORY}"'" and .head.sha == "'"${candidate_sha}"'")] | length'
-          )"
-          [[ "$pr_head_count" == "0" ]]
-
-          compare_status="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/compare/${candidate_sha}...main" \
-              --jq '.status'
-          )"
-          trusted_reason=""
-          trusted_release_branch=""
-          if [[ "$compare_status" == "ahead" || "$compare_status" == "identical" ]]; then
-            trusted_reason="main-ancestor"
-          else
-            normalized_ref="${TARGET_REF#refs/heads/}"
-            if [[ "$normalized_ref" =~ ^(release/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*|extended-stable/[0-9]{4}\.[1-9][0-9]*\.33)$ ]]; then
-              branch_sha="$(
-                git ls-remote --exit-code --refs origin "refs/heads/${normalized_ref}" |
-                  awk 'NR == 1 { print $1 } END { if (NR != 1) exit 1 }'
-              )"
-              [[ "$branch_sha" == "$candidate_sha" ]]
-              trusted_reason="release-branch-head"
-              trusted_release_branch="$normalized_ref"
-            elif [[ "$TARGET_REF" =~ ^refs/tags/v ]] || [[ "$TARGET_REF" =~ ^v ]]; then
-              normalized_tag="${TARGET_REF#refs/tags/}"
-              tag_refs="$(
-                git ls-remote --exit-code origin \
-                  "refs/tags/${normalized_tag}" "refs/tags/${normalized_tag}^{}"
-              )"
-              awk -v sha="$candidate_sha" '$1 == sha { found = 1 } END { exit(found ? 0 : 1) }' \
-                <<<"$tag_refs"
-              trusted_reason="release-tag"
-            elif [[ "$TARGET_REF" =~ ^[a-f0-9]{40}$ && "$TARGET_REF" == "$candidate_sha" ]]; then
-              matching_release_branches="$(
-                gh api --paginate \
-                  "repos/${GITHUB_REPOSITORY}/commits/${candidate_sha}/branches-where-head" \
-                  --jq '.[].name' |
-                  awk '$0 ~ /^release\/[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*$/ ||
-                       $0 ~ /^extended-stable\/[0-9]{4}\.[1-9][0-9]*\.33$/ { print }'
-              )"
-              if [[ "$(wc -l <<<"$matching_release_branches" | tr -d ' ')" == "1" && -n "$matching_release_branches" ]]; then
-                trusted_reason="release-branch-head"
-                trusted_release_branch="$matching_release_branches"
-              else
-                matching_release_tags="$(
-                  git ls-remote origin 'refs/tags/v*' |
-                    awk -v sha="$candidate_sha" '$1 == sha { sub(/\^\{\}$/, "", $2); print $2 }' |
-                    sort -u
-                )"
-                if [[ -n "$matching_release_tags" ]]; then
-                  trusted_reason="release-tag"
-                fi
-              fi
-            fi
-          fi
-          [[ -n "$trusted_reason" ]]
-
-          if [[ "$trusted_reason" != "main-ancestor" ]]; then
-            repository_owner="${GITHUB_REPOSITORY%%/*}"
-            repository_name="${GITHUB_REPOSITORY#*/}"
-            signature_json="$(
-              gh api graphql \
-                -f query='query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){... on Commit{oid signature{isValid state signer{login}} associatedPullRequests(first:10){nodes{state baseRefName baseRepository{nameWithOwner} mergeCommit{oid} mergedBy{login}}}}}}}' \
-                -f owner="$repository_owner" \
-                -f name="$repository_name" \
-                -f oid="$candidate_sha"
-            )"
-            signature_status="$(
-              jq -er \
-                --arg sha "$candidate_sha" \
-                '.data.repository.object |
-                 select(.oid == $sha) |
-                 if .signature == null then "missing"
-                 elif .signature.isValid == true and .signature.state == "VALID" and
-                   (.signature.signer.login // "") != "" then "valid"
-                 else "invalid"
-                 end' \
-                <<<"$signature_json"
-            )"
-            if [[ "$signature_status" == "invalid" ]]; then
-              echo "Release candidate ${candidate_sha} has an invalid commit signature." >&2
-              exit 1
-            fi
-            signer="$(jq -r '.data.repository.object.signature.signer.login // ""' <<<"$signature_json")"
-            permission_actor="$signer"
-            if [[ "$signature_status" == "missing" || "$signer" == "web-flow" ]]; then
-              if [[ "$trusted_reason" != "release-branch-head" || -z "$trusted_release_branch" ]]; then
-                echo "Unsigned or GitHub web-flow candidates require an exact release branch head." >&2
-                exit 1
-              fi
-              permission_actor="$(
-                jq -er \
-                  --arg base "$trusted_release_branch" \
-                  --arg repo "$GITHUB_REPOSITORY" \
-                  --arg sha "$candidate_sha" \
-                  '[.data.repository.object.associatedPullRequests.nodes[] |
-                    select(.state == "MERGED" and .baseRefName == $base and
-                      .baseRepository.nameWithOwner == $repo and .mergeCommit.oid == $sha) |
-                    .mergedBy.login] | unique | select(length == 1) | .[0]' \
-                  <<<"$signature_json"
-              )"
-            fi
-            permission_json="$(
-              gh api \
-                "repos/${GITHUB_REPOSITORY}/collaborators/${permission_actor}/permission"
-            )"
-            permission="$(jq -r '.permission // ""' <<<"$permission_json")"
-            role_name="$(jq -r '.role_name // ""' <<<"$permission_json")"
-            [[ "$permission" == "admin" || "$role_name" == "maintain" ]]
-          fi
+          bash "${GITHUB_WORKSPACE}/scripts/release-telegram-provenance.sh"
 
       - name: Create isolated Telegram SUT identity and launcher
         id: create_sut
@@ -1148,6 +963,11 @@ jobs:
           sudo chown -R root:root "$CANDIDATE_ROOT"
           sudo chmod -R go-w "$CANDIDATE_ROOT"
           sudo chmod -R a+rX "$CANDIDATE_ROOT"
+          # The trusted runner stages the QA runtime here before the isolated SUT reads it.
+          candidate_artifacts_dir="${CANDIDATE_ROOT}/.artifacts"
+          sudo install -d -o "$runner_uid" -g "$runner_gid" -m 0755 "$candidate_artifacts_dir"
+          [[ "$(stat -c '%F:%a:%u:%g' "$candidate_artifacts_dir")" == "directory:755:${runner_uid}:${runner_gid}" ]]
+          sudo install -d -o "$runner_uid" -g "$runner_gid" -m 0755 "${candidate_artifacts_dir}/qa-runtime"
           evidence_relative=".trusted-qa-evidence/release-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           evidence_root="${CANDIDATE_ROOT}/${evidence_relative}"
           boundary_evidence_dir="${evidence_root}/process-boundary"
@@ -1195,6 +1015,7 @@ jobs:
             printf 'RUNNER_HOME=%q\n' "$runner_home"
             printf 'RUNNER_TEMP_DIR=%q\n' "$runner_temp"
             printf 'CANDIDATE_ROOT=%q\n' "$CANDIDATE_ROOT"
+            printf 'CANDIDATE_ARTIFACTS_DIR=%q\n' "$candidate_artifacts_dir"
             printf 'RUNTIME_ROOT=%q\n' "$runtime_root"
             printf 'NODE_BIN=%q\n' "$node_bin"
             printf 'PRELOAD_PATH=%q\n' "$preload"
@@ -1251,10 +1072,12 @@ jobs:
             OPENAI_API_KEY
             OPENAI_BASE_URL
             OPENCLAW_ALLOW_SLOW_REPLY_TESTS
+            OPENCLAW_BUILD_PRIVATE_QA
             OPENCLAW_BUNDLED_PLUGINS_DIR
             OPENCLAW_COMPATIBILITY_HOST_VERSION
             OPENCLAW_CONFIG_PATH
             OPENCLAW_EMBEDDED_ABORT_SETTLE_TIMEOUT_MS
+            OPENCLAW_ENABLE_PRIVATE_QA_CLI
             OPENCLAW_GATEWAY_TOKEN
             OPENCLAW_HOME
             OPENCLAW_LOG_LEVEL
@@ -1673,7 +1496,7 @@ jobs:
           if [[ "${1:-}" != "--root-run" ]]; then
             present=()
             for key in "${transport_keys[@]}" "${control_keys[@]}"; do
-              if [[ -v "$key" ]]; then
+              if declare -p "$key" >/dev/null 2>&1; then
                 present+=("$key")
               fi
             done
@@ -1694,7 +1517,7 @@ jobs:
             keep_env["$key"]=1
           done
           while IFS= read -r key; do
-            if [[ ! -v "keep_env[$key]" ]]; then
+            if [[ -z "${keep_env[$key]+x}" ]]; then
               unset "$key"
             fi
           done < <(compgen -e)
@@ -1707,9 +1530,19 @@ jobs:
             "$RUNTIME_ROOT"/tmp/openclaw-"$RUNNER_UID"/openclaw-qa-suite-*) ;;
             *) echo "SUT temp root escaped the workflow runtime root." >&2; exit 1 ;;
           esac
+          requested_config_path="${OPENCLAW_CONFIG_PATH:?}"
           config_path="${temp_root}/openclaw.json"
           [[ -f "$config_path" && ! -L "$config_path" ]]
           [[ "$(realpath -e "$config_path")" == "$config_path" ]]
+          case "$requested_config_path" in
+            "$config_path") ;;
+            "${temp_root}/state/qa-auth-bootstrap/openclaw.json")
+              [[ "${1:-}" == "models" && "${2:-}" == "auth" ]]
+              [[ -f "$requested_config_path" && ! -L "$requested_config_path" ]]
+              [[ "$(realpath -e "$requested_config_path")" == "$requested_config_path" ]]
+              ;;
+            *) echo "SUT config path escaped the canonical or auth-bootstrap roots." >&2; exit 1 ;;
+          esac
           capture_live_model_config "$config_path"
 
           export OPENCLAW_QA_TEMP_ROOT="$temp_root"
@@ -1717,20 +1550,31 @@ jobs:
           export OPENCLAW_HOME="$HOME"
           export OPENCLAW_STATE_DIR="${temp_root}/state"
           export OPENCLAW_OAUTH_DIR="${OPENCLAW_STATE_DIR}/credentials"
-          export OPENCLAW_CONFIG_PATH="$config_path"
+          export OPENCLAW_CONFIG_PATH="$requested_config_path"
           export XDG_CACHE_HOME="${temp_root}/xdg-cache"
           export XDG_CONFIG_HOME="${temp_root}/xdg-config"
           export XDG_DATA_HOME="${temp_root}/xdg-data"
 
-          chown "$RUNNER_UID:$RUNNER_GID" "$temp_root"
-          chmod 0711 "$temp_root"
+          # The SUT must create config lock/temp entries beside the runner-owned
+          # config. Sticky group-write prevents it from replacing that config.
+          chown "$RUNNER_UID:$SUT_GID" "$temp_root"
+          chmod 1770 "$temp_root"
           chown "$RUNNER_UID:$SUT_GID" "$config_path"
           chmod 0640 "$config_path"
+          [[ "$(stat -c '%F:%a:%u:%g' "$temp_root")" == "directory:1770:${RUNNER_UID}:${SUT_GID}" ]]
+          [[ "$(stat -c '%F:%a:%u:%g' "$config_path")" == "regular file:640:${RUNNER_UID}:${SUT_GID}" ]]
           sut_tmp="${temp_root}/sut-tmp"
           install -d -o "$SUT_UID" -g "$SUT_GID" -m 0700 "$sut_tmp"
           export TMPDIR="$sut_tmp"
+          workspace="${temp_root}/workspace"
+          [[ -d "$workspace" && ! -L "$workspace" ]]
+          [[ "$(realpath -e "$workspace")" == "$workspace" ]]
+          # The trusted scenario host creates fixtures while the isolated SUT reads
+          # and mutates the workspace. Keep every other runtime directory SUT-private.
+          chown -R "$RUNNER_UID:$SUT_GID" "$workspace"
+          chmod -R u=rwX,g=rwX,o= "$workspace"
+          find "$workspace" -type d -exec chmod g+s {} +
           for path in \
-            "$temp_root/workspace" \
             "${OPENCLAW_HOME:?}" \
             "${OPENCLAW_STATE_DIR:?}" \
             "${XDG_CACHE_HOME:?}" \
@@ -1741,6 +1585,9 @@ jobs:
             chown -R "$SUT_UID:$SUT_GID" "$path"
             chmod -R u=rwX,go= "$path"
           done
+          if [[ "$requested_config_path" != "$config_path" ]]; then
+            [[ "$(stat -c '%F:%a:%u:%g' "$requested_config_path")" == "regular file:600:${SUT_UID}:${SUT_GID}" ]]
+          fi
           if [[ -n "${OPENCLAW_BUNDLED_PLUGINS_DIR:-}" ]]; then
             chown -R root:root "$OPENCLAW_BUNDLED_PLUGINS_DIR"
             chmod -R a+rX,go-w "$OPENCLAW_BUNDLED_PLUGINS_DIR"
@@ -1748,7 +1595,7 @@ jobs:
 
           boundary_mode=false
           for key in "${control_keys[@]}"; do
-            if [[ -v "$key" ]]; then
+            if declare -p "$key" >/dev/null 2>&1; then
               boundary_mode=true
             fi
           done
@@ -1756,7 +1603,7 @@ jobs:
           sandbox_payload_b64=""
           if [[ "$boundary_mode" == "true" ]]; then
             for key in "${control_keys[@]}"; do
-              [[ -v "$key" ]]
+              declare -p "$key" >/dev/null 2>&1
             done
             command_file="$(realpath -e "$OPENCLAW_QA_SUT_BOUNDARY_COMMAND_FILE")"
             identity_file="$(realpath -m "$OPENCLAW_QA_SUT_BOUNDARY_IDENTITY_FILE")"
@@ -1804,8 +1651,9 @@ jobs:
             unset "$key"
           done
           export SUT_UID SUT_GID RUNNER_UID RUNNER_GID RUNNER_HOME RUNNER_TEMP_DIR
-          export CANDIDATE_ROOT RUNTIME_ROOT NODE_BIN
+          export CANDIDATE_ROOT CANDIDATE_ARTIFACTS_DIR RUNTIME_ROOT NODE_BIN
           export PRELOAD_PATH RUNNER_SENTINEL TRUSTED_WORKSPACE EVIDENCE_ROOT
+          export CANONICAL_CONFIG_PATH="$config_path"
           export boundary_mode generation command_file identity_file sandbox_file
           export command_sha256 expected_env_keys_b64 sandbox_payload_b64
 
@@ -1826,7 +1674,7 @@ jobs:
               }
               set_launcher_stage mask-host-paths
               trap "exit_status=\$?; trap - ERR; printf \"Telegram SUT launcher failed: stage=%s line=%s status=%s\\n\" \"\$launcher_stage\" \"\$LINENO\" \"\$exit_status\" >&2; exit \"\$exit_status\"" ERR
-              for masked_path in "$RUNNER_HOME" /tmp /var/tmp /dev/shm; do
+              for masked_path in "$RUNNER_HOME" /var/tmp /dev/shm; do
                 set_launcher_stage "mask-host-path:${masked_path}"
                 [[ -d "$masked_path" ]]
                 mount \
@@ -1835,6 +1683,14 @@ jobs:
                   openclaw-telegram-mask \
                   "$masked_path"
               done
+              # Keep the host temporary tree hidden while providing the stable
+              # POSIX runtime path used by cross-process lifecycle coordinators.
+              set_launcher_stage mount-private-tmp
+              mount \
+                -t tmpfs \
+                -o "mode=0700,uid=${SUT_UID},gid=${SUT_GID},nosuid,nodev,noexec" \
+                openclaw-telegram-sut-tmp \
+                /tmp
               set_launcher_stage mount-proc
               mount -t proc proc /proc -o nosuid,nodev,noexec,hidepid=2
               if [[ "$boundary_mode" == "true" ]]; then
@@ -1959,8 +1815,13 @@ jobs:
                     runtime_stage=verify-runtime-files
                     [[ -r "$CANDIDATE_ROOT/dist/index.js" &&
                           ! -w "$CANDIDATE_ROOT/dist/index.js" &&
-                          -r "${OPENCLAW_CONFIG_PATH:?}" &&
-                          ! -w "$OPENCLAW_CONFIG_PATH" ]]
+                          -r "${CANONICAL_CONFIG_PATH:?}" &&
+                          ! -w "$CANONICAL_CONFIG_PATH" ]]
+                    if [[ "$OPENCLAW_CONFIG_PATH" != "$CANONICAL_CONFIG_PATH" ]]; then
+                      [[ "${1:-}" == "models" && "${2:-}" == "auth" &&
+                            -r "$OPENCLAW_CONFIG_PATH" && -w "$OPENCLAW_CONFIG_PATH" ]]
+                    fi
+                    [[ -d "${CANDIDATE_ARTIFACTS_DIR:?}" && -r "$CANDIDATE_ARTIFACTS_DIR" && -x "$CANDIDATE_ARTIFACTS_DIR" && ! -w "$CANDIDATE_ARTIFACTS_DIR" ]]
                     for writable_path in \
                       "${OPENCLAW_QA_TEMP_ROOT:?}/workspace" \
                       "${OPENCLAW_HOME:?}" \
@@ -1971,6 +1832,9 @@ jobs:
                       "${TMPDIR:?}"; do
                       [[ -d "$writable_path" && -w "$writable_path" ]]
                     done
+                    runtime_stage=verify-private-tmp
+                    [[ "$(stat -c '%F:%a:%u:%g' /tmp)" == "directory:700:${SUT_UID}:${SUT_GID}" &&
+                          -r /tmp && -w /tmp && -x /tmp ]]
                     runtime_stage=verify-host-paths-hidden
                     for protected_path in \
                       "$RUNNER_HOME" \
@@ -1978,7 +1842,6 @@ jobs:
                       "$RUNNER_SENTINEL" \
                       "$TRUSTED_WORKSPACE" \
                       "$EVIDENCE_ROOT" \
-                      /tmp \
                       /var/tmp \
                       /dev/shm; do
                       [[ ! -r "$protected_path" && ! -w "$protected_path" ]]
@@ -1993,6 +1856,8 @@ jobs:
                     runtime_sandbox_payload_b64="$sandbox_payload_b64"
                     unset \
                       CANDIDATE_ROOT \
+                      CANDIDATE_ARTIFACTS_DIR \
+                      CANONICAL_CONFIG_PATH \
                       EVIDENCE_ROOT \
                       NODE_BIN \
                       PRELOAD_PATH \
@@ -2027,14 +1892,15 @@ jobs:
                       runtime_stage=write-sandbox-proof
                       printf "%s" "$runtime_sandbox_payload_b64" | base64 -d >&3
                       exec 3>&-
-                      runtime_stage=exec-runtime
-                      exec "$runtime_node_bin" \
-                        --import "$runtime_preload_path" \
-                        "$runtime_candidate_root/dist/index.js" \
-                        "$@"
+                      runtime_node_args=(
+                        --import "$runtime_preload_path"
+                        "$runtime_candidate_root/dist/index.js" "$@"
+                      )
+                    else
+                      runtime_node_args=("$runtime_candidate_root/dist/index.js" "$@")
                     fi
                     runtime_stage=exec-runtime
-                    exec "$runtime_node_bin" "$runtime_candidate_root/dist/index.js" "$@"
+                    exec "$runtime_node_bin" "${runtime_node_args[@]}"
                   '\'' openclaw-sut "$@"
             ' openclaw-sut "$@"
           LAUNCHER
@@ -2143,6 +2009,13 @@ jobs:
           } >"${output_dir}/source-attestation.txt"
           echo "output_dir=$output_dir" >>"$GITHUB_OUTPUT"
 
+          # The frozen archive is mounted read-only for the isolated SUT. Invoke
+          # its built CLI directly so pnpm cannot attempt an implicit install.
+          run_candidate_telegram_qa() (
+            cd "$CANDIDATE_ROOT"
+            exec node ./dist/index.js qa telegram "$@"
+          )
+
           run_qa_attempt() (
             set -euo pipefail
             exec 2>&1
@@ -2153,7 +2026,7 @@ jobs:
             trap 'printf "::%s::\n" "$workflow_command_token"' EXIT
             set +e
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              pnpm openclaw qa telegram \
+              run_candidate_telegram_qa \
                 --repo-root "$CANDIDATE_ROOT" \
                 --output-dir "${EVIDENCE_RELATIVE}/${output_name}" \
                 --provider-mode mock-openai \
@@ -2168,25 +2041,37 @@ jobs:
             exit "$status"
           )
 
-          if ! run_qa_attempt preflight --scenario channel-canary; then
-            echo "Telegram channel canary failed; skipping the remaining scenarios." >&2
-            exit 1
-          fi
-          terminate_sut_uid
-
           remaining_scenarios=()
+          has_channel_canary=false
           while IFS=$'\t' read -r scenario_id default_label _; do
-            if [[ "$default_label" == "default" && "$scenario_id" != "channel-canary" ]]; then
-              remaining_scenarios+=(--scenario "$scenario_id")
+            if [[ "$default_label" == "default" ]]; then
+              if [[ "$scenario_id" == "channel-canary" ]]; then
+                has_channel_canary=true
+              else
+                remaining_scenarios+=(--scenario "$scenario_id")
+              fi
             fi
           done < <(
             TMPDIR="${SUT_RUNTIME_ROOT}/tmp" \
-              pnpm openclaw qa telegram \
+              run_candidate_telegram_qa \
                 --repo-root "$CANDIDATE_ROOT" \
                 --provider-mode mock-openai \
                 --list-scenarios
           )
-          ((${#remaining_scenarios[@]} > 0))
+          if [[ "$has_channel_canary" == "true" ]]; then
+            if ! run_qa_attempt preflight --scenario channel-canary; then
+              echo "Telegram channel canary failed; skipping the remaining scenarios." >&2
+              exit 1
+            fi
+            terminate_sut_uid
+          fi
+          if ((${#remaining_scenarios[@]} == 0)); then
+            if [[ "$has_channel_canary" == "true" ]]; then
+              exit 0
+            fi
+            echo "Candidate Telegram QA catalog has no default scenarios." >&2
+            exit 1
+          fi
 
           for attempt in 1 2; do
             if run_qa_attempt "attempt-${attempt}" "${remaining_scenarios[@]}"; then
@@ -2440,13 +2325,15 @@ jobs:
             ' "$proof_path" >/dev/null
           done
 
-      - name: Finalize trusted Telegram process-boundary evidence
+      - name: Finalize trusted Telegram execution evidence
         id: finalize_boundary
         if: always() && steps.terminate_sut.outputs.quiescent == 'true' && steps.run_lane.outputs.output_dir != ''
         env:
           BOUNDARY_EVIDENCE_DIR: ${{ steps.create_sut.outputs.boundary_evidence_dir }}
+          CANDIDATE_ROOT: ${{ steps.create_sut.outputs.candidate_root }}
           OUTPUT_DIR: ${{ steps.run_lane.outputs.output_dir }}
           RUN_LANE_OUTCOME: ${{ steps.run_lane.outcome }}
+          TARGET_SHA: ${{ inputs.target_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -2457,6 +2344,49 @@ jobs:
           shopt -s nullglob
           retain_lease_paths=("${BOUNDARY_EVIDENCE_DIR}"/retain-credential-lease-*.json)
           ((${#retain_lease_paths[@]} == 0))
+
+          jq -e \
+            --arg runId "$GITHUB_RUN_ID" \
+            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
+            --arg targetSha "$TARGET_SHA" \
+            '
+              .version == 1 and
+              .kind == "telegram-sut-boundary" and
+              .runId == $runId and
+              .runAttempt == $runAttempt and
+              (.workflowSha | test("^[a-f0-9]{40}$")) and
+              .targetSha == $targetSha and
+              (.candidateArtifact.id | test("^[1-9][0-9]*$")) and
+              (.candidateArtifact.name | length > 0) and
+              (.candidateArtifact.digest | test("^[a-f0-9]{64}$")) and
+              .candidateArtifact.runId == $runId and
+              .candidateArtifact.runAttempt == $runAttempt and
+              (.candidateArtifact.fileName | length > 0) and
+              (.candidateArtifact.sha256 | test("^[a-f0-9]{64}$")) and
+              .candidateArtifact.sourceSha == $targetSha and
+              (.candidateArtifact.version | length > 0)
+            ' "$context_path" >/dev/null
+
+          # The archive and source tree were independently attested before this step.
+          # A tracked contract opts legacy candidates into the pre-boundary evidence shape.
+          legacy_contract_path="${CANDIDATE_ROOT}/qa/contracts/telegram-execution-evidence.json"
+          if [[ -e "$legacy_contract_path" || -L "$legacy_contract_path" ]]; then
+            [[ -f "$legacy_contract_path" && ! -L "$legacy_contract_path" ]]
+            candidate_version="$(jq -er '.candidateArtifact.version' "$context_path")"
+            jq -e --arg candidateVersion "$candidate_version" '
+              (keys | sort) == ["candidateVersion", "kind", "mode", "version"] and
+              .version == 1 and
+              .kind == "openclaw-release-telegram-execution-evidence" and
+              .mode == "legacy-direct-runner-v1" and
+              .candidateVersion == $candidateVersion
+            ' "$legacy_contract_path" >/dev/null
+            jq --arg executionMode "legacy-direct-runner-v1" \
+              '. + {executionMode: $executionMode}' "$context_path" >"$aggregate_path"
+            chmod 0600 "$aggregate_path"
+            echo "aggregate_path=$aggregate_path" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           runtime_parts=("${BOUNDARY_EVIDENCE_DIR}"/runtime-boundary-*.json)
           ((${#runtime_parts[@]} > 0))
           jq -s \
@@ -2469,26 +2399,6 @@ jobs:
           chmod 0600 "${runtime_path}.tmp"
           mv "${runtime_path}.tmp" "$runtime_path"
 
-          jq -e \
-            --arg runId "$GITHUB_RUN_ID" \
-            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-            '
-              .version == 1 and
-              .kind == "telegram-sut-boundary" and
-              .runId == $runId and
-              .runAttempt == $runAttempt and
-              (.workflowSha | test("^[a-f0-9]{40}$")) and
-              (.targetSha | test("^[a-f0-9]{40}$")) and
-              (.candidateArtifact.id | test("^[1-9][0-9]*$")) and
-              (.candidateArtifact.name | length > 0) and
-              (.candidateArtifact.digest | test("^[a-f0-9]{64}$")) and
-              .candidateArtifact.runId == $runId and
-              .candidateArtifact.runAttempt == $runAttempt and
-              (.candidateArtifact.fileName | length > 0) and
-              (.candidateArtifact.sha256 | test("^[a-f0-9]{64}$")) and
-              (.candidateArtifact.sourceSha | test("^[a-f0-9]{40}$")) and
-              (.candidateArtifact.version | length > 0)
-            ' "$context_path" >/dev/null
           jq -e \
             --arg runLaneOutcome "$RUN_LANE_OUTCOME" \
             '
@@ -2521,10 +2431,7 @@ jobs:
                   )
                 )
               ) and
-              (
-                [.launches[] | select(.terminalState == "ready-exited")] | length >=
-                  (if $runLaneOutcome == "success" then 2 else 1 end)
-              )
+              ([.launches[] | select(.terminalState == "ready-exited")] | length >= 1)
             ' "$runtime_path" >/dev/null
 
           while IFS=$'\t' read -r relative_path expected_sha256; do
@@ -2661,6 +2568,16 @@ jobs:
       actions: read
       contents: read
     steps:
+      # Identity binds this checkout to the workflow definition that received
+      # the OIDC token. Do not execute status code from the release candidate.
+      - name: Checkout trusted Telegram status helper
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: ${{ needs.trusted_identity.outputs.workflow_repository }}
+          ref: ${{ needs.trusted_identity.outputs.workflow_sha }}
+          fetch-depth: 1
+          persist-credentials: false
+
       - name: Record advisory status
         id: record_status
         env:
@@ -2685,119 +2602,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          status=failure
-          if [[ "$IDENTITY_RESULT" == "cancelled" ||
-                "$BUILD_RESULT" == "cancelled" ||
-                "$ATTESTATION_RESULT" == "cancelled" ||
-                "$RUN_RESULT" == "cancelled" ]]; then
-            status=cancelled
-          elif [[ "$IDENTITY_STATUS" == "success" &&
-                  "$BUILD_STATUS" == "success" &&
-                  "$ATTESTATION_STATUS" == "success" &&
-                  "$EXECUTION_STATUS" == "success" ]]; then
-            status=success
-          fi
-
-          candidate_artifact=null
-          if [[ "$CANDIDATE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-                "$CANDIDATE_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
-                "$ARCHIVE_NAME" == "release-telegram-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}.tar.zst" &&
-                "$ARCHIVE_SHA256" =~ ^[a-f0-9]{64}$ &&
-                -n "$CANDIDATE_VERSION" ]]; then
-            candidate_artifact="$(
-              jq -cn \
-                --arg id "$CANDIDATE_ARTIFACT_ID" \
-                --arg name "$ARCHIVE_NAME" \
-                --arg digest "$CANDIDATE_ARTIFACT_DIGEST" \
-                --arg runId "$GITHUB_RUN_ID" \
-                --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-                --arg fileName "$ARCHIVE_NAME" \
-                --arg sha256 "$ARCHIVE_SHA256" \
-                --arg sourceSha "$TARGET_SHA" \
-                --arg version "$CANDIDATE_VERSION" \
-                '{
-                  id: $id,
-                  name: $name,
-                  digest: $digest,
-                  runId: $runId,
-                  runAttempt: $runAttempt,
-                  fileName: $fileName,
-                  sha256: $sha256,
-                  sourceSha: $sourceSha,
-                  version: $version
-                }'
-            )"
-          fi
-          if [[ "$status" == "success" ]]; then
-            [[ "$candidate_artifact" != "null" &&
-                  "$WORKFLOW_SHA" =~ ^[a-f0-9]{40}$ &&
-                  "$TARGET_SHA" =~ ^[a-f0-9]{40}$ &&
-                  "$EVIDENCE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-                  "$EVIDENCE_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
-                  "$EVIDENCE_ARTIFACT_NAME" == "release-qa-live-telegram-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}-${TARGET_SHA}" ]]
-          fi
-
-          status_dir=".artifacts/release-check-status"
-          status_file="${status_dir}/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.env"
-          evidence_file="${status_dir}/qa_live_telegram_release_checks-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.json"
-          mkdir -p "$status_dir"
-          step_outcomes="identity:${IDENTITY_STATUS} build:${BUILD_STATUS} attest:${ATTESTATION_STATUS} execute:${EXECUTION_STATUS}"
-          {
-            printf 'run_id=%s\n' "$GITHUB_RUN_ID"
-            printf 'run_attempt=%s\n' "$GITHUB_RUN_ATTEMPT"
-            printf 'target_sha=%s\n' "$TARGET_SHA"
-            printf 'workflow_sha=%s\n' "$WORKFLOW_SHA"
-            printf 'job=%s\n' "qa_live_telegram_release_checks"
-            printf 'variant=\n'
-            printf 'status=%s\n' "$status"
-            printf 'job_status=%s\n' "$RUN_RESULT"
-            printf 'step_outcomes=%s\n' "$step_outcomes"
-          } >"$status_file"
-          jq -n \
-            --arg status "$status" \
-            --arg jobStatus "$RUN_RESULT" \
-            --arg identityOutcome "identity:${IDENTITY_STATUS}" \
-            --arg buildOutcome "build:${BUILD_STATUS}" \
-            --arg attestOutcome "attest:${ATTESTATION_STATUS}" \
-            --arg executeOutcome "execute:${EXECUTION_STATUS}" \
-            --arg runId "$GITHUB_RUN_ID" \
-            --argjson runAttempt "$GITHUB_RUN_ATTEMPT" \
-            --arg workflowSha "$WORKFLOW_SHA" \
-            --arg targetSha "$TARGET_SHA" \
-            --arg evidenceId "$EVIDENCE_ARTIFACT_ID" \
-            --arg evidenceName "$EVIDENCE_ARTIFACT_NAME" \
-            --arg evidenceDigest "$EVIDENCE_ARTIFACT_DIGEST" \
-            --argjson candidateArtifact "$candidate_artifact" \
-            '{
-              version: 1,
-              kind: "release-check-status",
-              job: "qa_live_telegram_release_checks",
-              status: $status,
-              jobStatus: $jobStatus,
-              stepOutcomes: [
-                $identityOutcome,
-                $buildOutcome,
-                $attestOutcome,
-                $executeOutcome
-              ],
-              runId: $runId,
-              runAttempt: $runAttempt,
-              workflowSha: $workflowSha,
-              targetSha: $targetSha,
-              evidenceArtifact: {
-                id: $evidenceId,
-                name: $evidenceName,
-                digest: $evidenceDigest,
-                runId: $runId,
-                runAttempt: $runAttempt
-              },
-              candidateArtifact: $candidateArtifact
-            }' >"$evidence_file"
-          {
-            echo "status=$status"
-            echo "status_file=$status_file"
-            echo "evidence_file=$evidence_file"
-          } >>"$GITHUB_OUTPUT"
+          node scripts/release-telegram-qa.mjs advisory-status
 
       - name: Upload advisory status
         if: always()

@@ -4,13 +4,13 @@
  */
 import type {
   AnyAgentTool,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   type CodexAppServerRuntimeOptions,
   resolveCodexAppServerRuntimeOptions,
+  type CodexPluginConfig,
 } from "./src/app-server/config.js";
-import type { CodexPluginConfig } from "./src/app-server/config.js";
 import { filterCodexDynamicTools } from "./src/app-server/dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge } from "./src/app-server/dynamic-tools.js";
 import type { CodexDynamicToolSpec, JsonObject } from "./src/app-server/protocol.js";
@@ -20,6 +20,8 @@ import {
   buildThreadStartParams,
   buildTurnStartParams,
 } from "./src/app-server/thread-lifecycle.js";
+
+export { CODEX_APP_SERVER_VERSION } from "./src/app-server/version.js";
 
 type CodexHarnessPromptSnapshot = {
   developerInstructions: string;
@@ -50,7 +52,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
   promptText?: string;
   developerInstructionAdditions?: string;
   turnScopedDeveloperInstructions?: string;
-  heartbeatCollaborationInstructions?: string;
 }): CodexHarnessPromptSnapshot {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
@@ -79,7 +80,6 @@ export function buildCodexHarnessPromptSnapshot(params: {
       appServer: params.appServer,
       promptText: params.promptText,
       turnScopedDeveloperInstructions: params.turnScopedDeveloperInstructions,
-      heartbeatCollaborationInstructions: params.heartbeatCollaborationInstructions,
     }),
   };
 }

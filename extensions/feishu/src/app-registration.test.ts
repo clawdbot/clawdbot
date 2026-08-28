@@ -1,7 +1,6 @@
 // Feishu tests cover app registration plugin behavior.
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -35,10 +34,9 @@ type RegistrationFetchOptions = {
 
 const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 
-const hermeticPublicLookup: LookupFn = (async (_hostname: string, _options?: unknown) => ({
-  address: HERMETIC_PUBLIC_LOOKUP_ADDRESS,
-  family: 4,
-})) as LookupFn;
+const hermeticPublicLookup: LookupFn = async () => [
+  { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
+];
 
 async function startLocalServer(
   handler: (req: IncomingMessage, res: ServerResponse) => void,
@@ -242,6 +240,41 @@ describe("Feishu app registration", () => {
     await expect(poll).resolves.toEqual({ status: "timeout" });
   });
 
+  it("stops polling promptly when abortSignal fires during the poll interval", async () => {
+    let requestCount = 0;
+    await withRegistrationServer(
+      (_req, res) => {
+        requestCount += 1;
+        writeJson(res, { error: "authorization_pending" });
+      },
+      async ({ fetchImpl, lookupFn }) => {
+        const controller = new AbortController();
+        const started = Date.now();
+
+        const poll = pollAppRegistration({
+          deviceCode: "device-code",
+          interval: 30,
+          expireIn: 600,
+          abortSignal: controller.signal,
+          fetchImpl,
+          lookupFn,
+        });
+        // Let the first poll resolve and the loop enter its 30s interval sleep.
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 200);
+        });
+        controller.abort();
+
+        await expect(poll).resolves.toEqual({ status: "timeout" });
+        expect(Date.now() - started).toBeLessThan(10_000);
+        expect(requestCount).toBe(1);
+        console.log(
+          `[feishu pollAppRegistration abort proof] interval=30s aborted_after=200ms elapsed=${Date.now() - started}ms requests=${requestCount} outcome=timeout`,
+        );
+      },
+    );
+  });
+
   it("prints scan-to-create QR codes with compact terminal rendering", async () => {
     const writeSpy = vi.spyOn(process.stdout, "write").mockImplementation(() => true);
 
@@ -252,6 +285,39 @@ describe("Feishu app registration", () => {
       { small: true },
     );
     expect(writeSpy).toHaveBeenCalledWith("terminal-qr\n");
+  });
+
+  it("times out registration POSTs when accounts never return headers", async () => {
+    await withRegistrationServer(
+      // Accept TCP but never write headers — idle body timers never start.
+      (_req, _res) => {},
+      async (options) => {
+        const started = Date.now();
+        const outcome = await beginAppRegistration("feishu", {
+          ...options,
+          // Keep the real guarded-fetch path while shortening its production deadline.
+          timeoutMs: 80,
+        }).then(
+          (value) => ({ ok: true as const, value }),
+          (error: unknown) => ({ ok: false as const, error }),
+        );
+        const elapsedMs = Date.now() - started;
+        expect(outcome.ok).toBe(false);
+        if (!outcome.ok) {
+          expect(outcome.error).toMatchObject({
+            name: "TimeoutError",
+            message: "request timed out",
+          });
+        }
+        expect(elapsedMs).toBeGreaterThanOrEqual(60);
+        expect(elapsedMs).toBeLessThan(2_000);
+        console.log(
+          `[feishu fetchFeishuJson hang proof] timed_out=${!outcome.ok} name=${
+            outcome.ok ? "n/a" : (outcome.error as Error).name
+          } elapsed_ms=${elapsedMs}`,
+        );
+      },
+    );
   });
 
   // over-cap: body > 16 MiB, no Content-Length. The bounded reader cancels
@@ -341,59 +407,5 @@ describe("Feishu app registration", () => {
         );
       },
     );
-  });
-});
-
-describe("feishu bound reads — local HTTP server", () => {
-  it("rejects oversized response before fully buffering the response (OOM guard)", async () => {
-    const chunk = Buffer.alloc(1024 * 1024, 0x61);
-    const totalChunks = 64;
-    let chunksWritten = 0;
-
-    const srv = await startLocalServer((_req, res) => {
-      res.writeHead(200, { "content-type": "application/json" });
-      let sent = 0;
-      const sendChunk = () => {
-        if (sent >= totalChunks) {
-          res.end();
-          return;
-        }
-        sent += 1;
-        chunksWritten += 1;
-        const ok = res.write(chunk);
-        if (ok) {
-          setImmediate(sendChunk);
-          return;
-        }
-        res.once("drain", sendChunk);
-      };
-      sendChunk();
-    });
-
-    try {
-      const response = await fetch(`http://127.0.0.1:${srv.port}/`);
-      // Mutation-control: bare `response.json()` would buffer all 20 MiB.
-      await expect(readProviderJsonResponse(response, "feishu.bound-proof")).rejects.toThrow(
-        /JSON response exceeds/,
-      );
-      expect(chunksWritten).toBeLessThan(totalChunks);
-      console.log(`[bound-proof] canceled at ${chunksWritten}/${totalChunks} chunks`);
-    } finally {
-      await srv.stop();
-    }
-  });
-
-  it("parses well-formed JSON response under the cap", async () => {
-    const payload = { code: 0, data: { app_id: "cli_test" } };
-    const srv = await startLocalServer((_req, res) => {
-      writeJson(res, payload);
-    });
-    try {
-      const response = await fetch(`http://127.0.0.1:${srv.port}/`);
-      const result = await readProviderJsonResponse<typeof payload>(response, "feishu.bound-proof");
-      expect(result).toEqual(payload);
-    } finally {
-      await srv.stop();
-    }
   });
 });

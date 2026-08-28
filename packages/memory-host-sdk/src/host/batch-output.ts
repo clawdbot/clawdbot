@@ -21,7 +21,7 @@ export async function readEmbeddingBatchJsonl<T>(
   }
 
   const maxRecordBytes = options.maxRecordBytes ?? DEFAULT_BATCH_OUTPUT_RECORD_MAX_BYTES;
-  const decoder = new TextDecoder();
+  const decoder = new TextDecoder("utf-8", { fatal: true });
   let recordCount = 0;
   let recordBytes = 0;
   let recordBuffer: Uint8Array | undefined;
@@ -61,7 +61,13 @@ export async function readEmbeddingBatchJsonl<T>(
     if (recordCount > options.maxRecords) {
       throw new Error(`${options.label}: JSONL output exceeds ${options.maxRecords} records`);
     }
-    const text = decoder.decode(recordBuffer?.subarray(0, recordBytes)).trim();
+    let text: string;
+    try {
+      text = decoder.decode(recordBuffer?.subarray(0, recordBytes)).trim();
+    } catch {
+      recordBytes = 0;
+      throw new Error(`${options.label}: malformed JSONL record`);
+    }
     recordBytes = 0;
     if (!text) {
       return true;
@@ -78,10 +84,6 @@ export async function readEmbeddingBatchJsonl<T>(
     return options.onRecord(parsed as T);
   };
 
-  const cancel = async () => {
-    await reader.cancel().catch(() => {});
-  };
-
   try {
     while (true) {
       const { done, value } = await reader.read();
@@ -96,7 +98,8 @@ export async function readEmbeddingBatchJsonl<T>(
         }
         appendRecordPart(value.subarray(offset, index));
         if (!emitRecord()) {
-          await cancel();
+          // Release the reader without waiting for a retained capture tee.
+          void reader.cancel().catch(() => {});
           return;
         }
         offset = index + 1;
@@ -107,7 +110,7 @@ export async function readEmbeddingBatchJsonl<T>(
       emitRecord();
     }
   } catch (error) {
-    await cancel();
+    void reader.cancel().catch(() => {});
     throw error;
   } finally {
     reader.releaseLock();
@@ -168,8 +171,8 @@ export function applyEmbeddingBatchOutputLine(params: {
   const data =
     response?.body && typeof response.body === "object" ? (response.body.data ?? []) : [];
   const embedding = data[0]?.embedding ?? [];
-  if (embedding.length === 0) {
-    params.errors.push(`${customId}: empty embedding`);
+  if (!Array.isArray(embedding) || embedding.length === 0 || !embedding.every(Number.isFinite)) {
+    params.errors.push(`${customId}: ${embedding?.length ? "invalid" : "empty"} embedding`);
     return;
   }
   params.byCustomId.set(customId, embedding);

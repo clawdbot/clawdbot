@@ -10,7 +10,6 @@ export type {
   ReplyPayload,
 } from "openclaw/plugin-sdk/core";
 export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
-export { buildAgentMediaPayload } from "openclaw/plugin-sdk/agent-media-payload";
 export { resolveAllowlistMatchSimple } from "openclaw/plugin-sdk/allow-from";
 export { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
@@ -24,7 +23,7 @@ export {
   resolveDefaultGroupPolicy,
   warnMissingProviderGroupPolicyFallbackOnce,
 } from "openclaw/plugin-sdk/runtime-group-policy";
-export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/media-runtime";
+export { resolveChannelMediaMaxBytes } from "openclaw/plugin-sdk/account-helpers";
 export { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 // Legacy map-helper exports stay for older plugin consumers. New message-turn
 // code should use createChannelHistoryWindow.
@@ -38,4 +37,3 @@ export {
   readRequestBodyWithLimit,
 } from "openclaw/plugin-sdk/webhook-ingress";
 export { isTrustedProxyAddress, resolveClientIp } from "openclaw/plugin-sdk/core";
-export { parseTcpPort } from "openclaw/plugin-sdk/number-runtime";

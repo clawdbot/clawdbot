@@ -2,10 +2,11 @@ title: Telegram status command reply
 
 scenario:
   id: telegram-status-command
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [channels.native-commands]
+    primary:
+      - telegram.built-in-commands
   regressionRefs:
     - openclaw/openclaw#74698
   objective: Verify Telegram status returns model, session, and activation details.
@@ -34,8 +35,8 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text:
-              expr: "transport.id === 'telegram' ? '/status@openclaw' : '/status'"
+            text: /status
+            nativeCommand: { name: status }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             sinceIndex: { ref: startIndex }

@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import {
   embeddedAgentLog,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   clearMemoryPluginState,
@@ -12,6 +12,8 @@ import {
 } from "openclaw/plugin-sdk/memory-host-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  buildCodexOpenClawPromptContext,
+  buildCodexWatchedSessionsContext,
   buildCodexWorkspaceBootstrapContext,
   buildCodexSystemPromptReport,
   readContextEngineThreadBootstrapProjection,
@@ -91,9 +93,8 @@ describe("Codex app-server attempt context", () => {
       workspaceBootstrapContext: {
         bootstrapFiles: [],
         contextFiles: [],
+        inheritsAgentWorkspace: false,
         promptContextFiles: [],
-        developerInstructionFiles: [],
-        heartbeatReferenceFiles: [],
       },
       skillsPrompt: "",
       tools,
@@ -140,6 +141,7 @@ describe("Codex app-server attempt context", () => {
       sessionKey: "agent:main:session-1",
       sessionAgentId: "main",
       memoryToolNames: ["memory_search", "memory_get"],
+      ringZeroActive: false,
     });
 
     expect(context.memoryReferenceFiles).toEqual([]);
@@ -180,18 +182,96 @@ describe("Codex app-server attempt context", () => {
         sessionKey: "agent:marketing-agent:session-1",
         sessionAgentId: "marketing-agent",
         memoryToolNames: ["memory_search", "memory_get"],
+        ringZeroActive: false,
+        sandboxed: true,
       });
 
       expect(context.memoryToolRouted).toBe(true);
       expect(observedContext).toMatchObject({
         agentId: "marketing-agent",
         agentSessionKey: "agent:marketing-agent:session-1",
+        sandboxed: true,
       });
       expect(context.memoryCollaborationInstructions).toContain(
         "agent=marketing-agent session=agent:marketing-agent:session-1",
       );
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
+    }
+  });
+
+  it("inherits agent workspace instructions when Codex executes in another folder", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-agent-workspace-"));
+    const executionDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-execution-workspace-"));
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Canonical agent instructions");
+    await fs.writeFile(path.join(workspaceDir, "SOUL.md"), "Canonical agent soul");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Canonical agent memory");
+    await fs.writeFile(path.join(executionDir, "AGENTS.md"), "Execution project instructions");
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:main:session-1",
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: executionDir,
+        sessionKey: "agent:main:session-1",
+        sessionAgentId: "main",
+        memoryToolNames: ["memory_search", "memory_get"],
+        ringZeroActive: false,
+      });
+
+      expect(context.threadDeveloperInstructions).toContain("Canonical agent instructions");
+      expect(context.threadDeveloperInstructions).toContain(
+        "OpenClaw Agent Workspace Instructions",
+      );
+      expect(context.threadDeveloperInstructions).toContain(path.join(workspaceDir, "AGENTS.md"));
+      expect(context.threadDeveloperInstructions).not.toContain("Canonical agent soul");
+      expect(context.threadDeveloperInstructions).not.toContain("Execution project instructions");
+      expect(context.threadDeveloperInstructions).not.toContain(
+        path.join(executionDir, "AGENTS.md"),
+      );
+      expect(context.turnScopedDeveloperInstructions).toContain("Canonical agent soul");
+      expect(context.turnScopedDeveloperInstructions).not.toContain("Canonical agent instructions");
+      expect(context.memoryToolRouted).toBe(true);
+      expect(context.promptContext).toBeUndefined();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(executionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps ambient workspace instructions out of overlapping ring-zero restrictions", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ring-zero-workspace-"));
+    const executionDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ring-zero-execution-"));
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Ambient workspace instructions");
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:openclaw:session-1",
+          toolsAllow: ["openclaw"],
+          pluginHarnessToolPolicyRestricted: true,
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: executionDir,
+        sessionKey: "agent:openclaw:session-1",
+        sessionAgentId: "openclaw",
+        memoryToolNames: [],
+        ringZeroActive: true,
+      });
+
+      expect(context.threadDeveloperInstructions).toBeUndefined();
+      expect(context.threadDeveloperInstructionFiles).toEqual([]);
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(executionDir, { recursive: true, force: true });
     }
   });
 
@@ -248,5 +328,48 @@ describe("Codex app-server attempt context", () => {
       project: true,
       reason: "dynamic-tools-mismatch",
     });
+  });
+
+  it("stitches watched-session context into the per-turn OpenClaw prompt context", () => {
+    const attempt = { config: {} } as EmbeddedRunAttemptParams;
+
+    expect(
+      buildCodexOpenClawPromptContext({
+        params: attempt,
+        watchedSessionsContext: [
+          "## Watched Sessions",
+          "- agent:main:telegram:group:beta — Family group",
+        ].join("\n"),
+      }),
+    ).toContain("## Watched Sessions");
+
+    // No ambient watches (and no state) must render nothing, not an empty section.
+    expect(
+      buildCodexWatchedSessionsContext({
+        attempt,
+        dynamicTools: [
+          {
+            type: "function",
+            name: "sessions_history",
+            description: "history",
+            inputSchema: {},
+          },
+        ],
+        sessionKey: "agent:codex-test:main",
+      }),
+    ).toBe(undefined);
+
+    // Lightweight cron turns keep the runtime context byte-for-byte untouched.
+    expect(
+      buildCodexWatchedSessionsContext({
+        attempt: {
+          config: {},
+          bootstrapContextMode: "lightweight",
+          bootstrapContextRunKind: "cron",
+        } as EmbeddedRunAttemptParams,
+        dynamicTools: [],
+        sessionKey: "agent:codex-test:main",
+      }),
+    ).toBe(undefined);
   });
 });

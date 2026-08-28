@@ -54,25 +54,13 @@ function redactInlineDataUris(value: string): string {
   );
 }
 
-function redactStructuredTextValue(value: string): string {
-  const host = getAiTransportHost();
-  const redacted = host.redactToolPayloadText(value);
-  const trimmed = redacted.trim();
-  if (!trimmed.startsWith("{") && !trimmed.startsWith("[")) {
-    return redacted;
-  }
-  try {
-    const redactedWrapper = host.redactSecrets({ structuredTextValue: JSON.parse(redacted) });
-    return JSON.stringify(redactedWrapper.structuredTextValue);
-  } catch {
-    return redacted;
-  }
-}
-
 function stringifyStructuredBlock(block: Record<string, unknown>): string | undefined {
   const seen = new WeakSet<object>();
   try {
-    const redactedWrapper = getAiTransportHost().redactSecrets({ structuredToolResult: block });
+    const host = getAiTransportHost();
+    const redactedWrapper = host.redactModelVisibleSecrets({
+      structuredToolResult: block,
+    });
     const redactedBlock = redactedWrapper.structuredToolResult;
     const serialized = JSON.stringify(
       redactedBlock,
@@ -90,7 +78,7 @@ function stringifyStructuredBlock(block: Record<string, unknown>): string | unde
           return value.toString();
         }
         if (typeof value === "string") {
-          return redactInlineDataUris(redactStructuredTextValue(value));
+          return redactInlineDataUris(host.redactModelVisibleSecrets(value));
         }
         if (typeof value === "function" || typeof value === "symbol" || value === undefined) {
           return undefined;
@@ -121,42 +109,49 @@ function truncateProviderToolText(text: string): string {
   return `${truncateUtf16Safe(text, PROVIDER_TOOL_RESULT_MAX_CHARS)}\n…(truncated)…`;
 }
 
-export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
+/** Media metadata alone is not an attachment; provider emitters need inline bytes. */
+export function hasMediaPayload(
+  block: unknown,
+): block is Record<string, unknown> & { data: string } {
+  return isRecord(block) && typeof block.data === "string" && block.data.trim().length > 0;
+}
+
+/** Image metadata alone is not an attachment; provider emitters need inline bytes. */
+export function isImageWithMediaPayload<T>(block: T): block is T & { type: "image"; data: string } {
+  return isRecord(block) && block.type === "image" && hasMediaPayload(block);
+}
+
+function classifyToolResultMedia(blocks: readonly unknown[]): {
+  hasImage: boolean;
+  hasAudio: boolean;
+} {
   let hasImage = false;
   let hasAudio = false;
-
   for (const block of blocks) {
-    if (!block || typeof block !== "object") {
+    if (!hasMediaPayload(block) || block.type === "text") {
       continue;
     }
-    const record = block as Record<string, unknown>;
-    const type = typeof record.type === "string" ? record.type : undefined;
-    const mimeType = readMimeType(record);
-
-    if (
-      (type && IMAGE_TOOL_RESULT_TYPES.has(type)) ||
-      mimeType?.toLowerCase().startsWith("image/")
-    ) {
-      hasImage = true;
-    }
-    if (
-      (type && AUDIO_TOOL_RESULT_TYPES.has(type)) ||
-      mimeType?.toLowerCase().startsWith("audio/")
-    ) {
-      hasAudio = true;
-    }
+    const type = typeof block.type === "string" ? block.type : undefined;
+    const mimeType = readMimeType(block)?.toLowerCase();
+    hasImage ||= Boolean(
+      (type && IMAGE_TOOL_RESULT_TYPES.has(type)) || mimeType?.startsWith("image/"),
+    );
+    hasAudio ||= Boolean(
+      (type && AUDIO_TOOL_RESULT_TYPES.has(type)) || mimeType?.startsWith("audio/"),
+    );
   }
+  return { hasImage, hasAudio };
+}
 
+export function describeToolResultMediaPlaceholder(blocks: readonly unknown[]): string | undefined {
+  const { hasImage, hasAudio } = classifyToolResultMedia(blocks);
   if (hasImage && hasAudio) {
     return "(see attached media)";
   }
   if (hasAudio) {
     return "(see attached audio)";
   }
-  if (hasImage) {
-    return "(see attached image)";
-  }
-  return undefined;
+  return hasImage ? "(see attached image)" : undefined;
 }
 
 export function extractToolResultBlockText(block: unknown): string | undefined {
@@ -175,7 +170,10 @@ export function extractToolResultBlockText(block: unknown): string | undefined {
   return structured ? sanitizeSurrogates(truncateProviderToolText(structured)) : undefined;
 }
 
-export function extractToolResultText(blocks: readonly unknown[]): string {
+export function extractToolResultText(
+  blocks: readonly unknown[],
+  options?: { includeStructured?: boolean },
+): string {
   const explicitTexts: string[] = [];
   const structuredTexts: string[] = [];
   for (const block of blocks) {
@@ -191,7 +189,45 @@ export function extractToolResultText(blocks: readonly unknown[]): string {
     }
   }
   if (explicitTexts.length > 0) {
-    return sanitizeSurrogates(explicitTexts.join("\n"));
+    const text = (
+      options?.includeStructured ? [...explicitTexts, ...structuredTexts] : explicitTexts
+    ).join("\n");
+    return sanitizeSurrogates(options?.includeStructured ? truncateProviderToolText(text) : text);
   }
   return sanitizeSurrogates(truncateProviderToolText(structuredTexts.join("\n")));
+}
+
+type ToolResultMediaSupport = { images: boolean; audio: boolean };
+
+/** Describe media that cannot be represented on the target provider wire. */
+export function describeUnsupportedToolResultMedia(
+  blocks: readonly unknown[],
+  support: ToolResultMediaSupport,
+): string | undefined {
+  const { hasImage, hasAudio } = classifyToolResultMedia(blocks);
+  const omittedImage = hasImage && !support.images;
+  const omittedAudio = hasAudio && !support.audio;
+  if (omittedImage && omittedAudio) {
+    return "[unsupported tool-result media omitted]";
+  }
+  if (omittedAudio) {
+    return "[unsupported tool-result audio omitted]";
+  }
+  return omittedImage ? "[unsupported tool-result image omitted]" : undefined;
+}
+
+export function formatToolResultText(params: {
+  text: string;
+  mediaPlaceholder?: string;
+  omittedMediaPlaceholder?: string;
+  isError: boolean;
+}): string {
+  const trimmed = params.text.trim();
+  // trim() is only an emptiness predicate here: tool output boundary
+  // whitespace (indentation, trailing newlines) is significant durable
+  // content, so the nonblank body must emit params.text unmodified.
+  const body = trimmed
+    ? `${params.text}${params.omittedMediaPlaceholder ? `\n${params.omittedMediaPlaceholder}` : ""}`
+    : (params.omittedMediaPlaceholder ?? params.mediaPlaceholder ?? "(no tool output)");
+  return `${params.isError ? "[tool error] " : ""}${body}`;
 }

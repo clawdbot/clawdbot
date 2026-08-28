@@ -1,13 +1,6 @@
 /** Runtime provider selection and tool construction for the `web_fetch` tool. */
 import { createHash } from "node:crypto";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  hasWebProviderEntryCredential,
-  providerRequiresCredential,
-  readWebProviderEnvValue,
-  resolveWebProviderConfig,
-  resolveWebProviderDefinition,
-} from "../../packages/web-content-core/src/provider-runtime-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { logVerbose } from "../globals.js";
 import { getActivePluginRegistryVersion } from "../plugins/runtime.js";
@@ -20,8 +13,15 @@ import {
   resolveRuntimeWebFetchProviders,
 } from "../plugins/web-fetch-providers.runtime.js";
 import { sortWebFetchProvidersForAutoDetect } from "../plugins/web-fetch-providers.shared.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import type { RuntimeWebFetchMetadata } from "../secrets/runtime-web-tools.types.js";
+import {
+  hasWebProviderEntryCredential,
+  providerRequiresCredential,
+  readWebProviderEnvValue,
+  resolveWebProviderConfig,
+  resolveWebProviderDefinition,
+} from "../web/provider-runtime-shared.js";
 
 // Runtime provider selection for the web_fetch tool. It resolves config,
 // credentials, runtime metadata, and sandbox-safe bundled provider scopes.
@@ -68,7 +68,6 @@ function hasEntryCredential(
     | "envVars"
     | "getConfiguredCredentialFallback"
     | "getConfiguredCredentialValue"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
@@ -78,9 +77,8 @@ function hasEntryCredential(
     provider,
     config,
     toolConfig: fetch as Record<string, unknown> | undefined,
-    resolveRawValue: ({ provider: currentProvider, config: currentConfig, toolConfig }) =>
-      currentProvider.getConfiguredCredentialValue?.(currentConfig) ??
-      currentProvider.getCredentialValue(toolConfig),
+    resolveRawValue: ({ provider: currentProvider, config: currentConfig }) =>
+      currentProvider.getConfiguredCredentialValue?.(currentConfig),
     resolveFallbackRawValue: ({ provider: currentProvider, config: currentConfig }) =>
       currentProvider.getConfiguredCredentialFallback?.(currentConfig)?.value,
     resolveEnvValue: ({ provider: currentProvider }) =>
@@ -94,7 +92,6 @@ function hasAutoDetectCredential(
     | "envVars"
     | "getConfiguredCredentialFallback"
     | "getConfiguredCredentialValue"
-    | "getCredentialValue"
     | "requiresCredential"
   >,
   config: OpenClawConfig | undefined,
@@ -281,7 +278,8 @@ function resolveWebFetchDefinitionUncached(
   if (!resolveWebFetchEnabled({ fetch, sandboxed: options?.sandboxed })) {
     return null;
   }
-  const runtimeWebFetch = options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadata()?.fetch;
+  const runtimeWebFetch =
+    options?.runtimeWebFetch ?? getActiveRuntimeWebToolsMetadataFromState()?.fetch;
   const providers = resolveWebFetchProvidersForOptions(options);
   return resolveWebProviderDefinition({
     config: options?.config,

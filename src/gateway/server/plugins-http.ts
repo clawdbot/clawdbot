@@ -9,6 +9,8 @@ import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.j
 import type { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
+import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
+import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
 import {
@@ -32,7 +34,10 @@ export {
   findRegisteredPluginHttpRoute,
   isRegisteredPluginHttpRoutePath,
 } from "./plugins-http/route-match.js";
-export { shouldEnforceGatewayAuthForPluginPath } from "./plugins-http/route-auth.js";
+export {
+  isPluginAuthenticatedRoutePath,
+  shouldEnforceGatewayAuthForPluginPath,
+} from "./plugins-http/route-auth.js";
 
 type SubsystemLogger = ReturnType<typeof createSubsystemLogger>;
 type PluginRouteRuntimeScope = Parameters<typeof withPluginRuntimeGatewayRequestScope>[0];
@@ -51,10 +56,17 @@ function resolvePluginRoutePathContextForRequest(
 function createPluginRouteRuntimeClient(
   scopes: readonly string[],
   clientIp: string | undefined,
+  requestAuth?: AuthorizedGatewayHttpRequest,
 ): GatewayRequestOptions["client"] {
+  const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
+  const sharedSecretOwner =
+    !authenticatedUserProfile &&
+    (requestAuth?.authMethod === "token" || requestAuth?.authMethod === "password");
   return {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
+    ...(sharedSecretOwner ? { internal: { operatorRoleActor: { kind: "system" as const } } } : {}),
     connect: {
       minProtocol: PROTOCOL_VERSION,
       maxProtocol: PROTOCOL_VERSION,
@@ -105,6 +117,7 @@ function canRunPluginHttpRouteWithoutAdmission(route: PluginHttpRouteRegistratio
 }
 
 function createPluginRouteRuntimeScope(params: {
+  registry: PluginRegistry;
   route: PluginHttpRouteRegistration;
   req: IncomingMessage;
   gatewayRequestContext?: GatewayRequestContext;
@@ -115,18 +128,22 @@ function createPluginRouteRuntimeScope(params: {
   const runtimeScopes =
     params.route.auth !== "gateway"
       ? []
-      : params.route.gatewayRuntimeScopeSurface === "trusted-operator"
-        ? resolvePluginRouteRuntimeOperatorScopes(
-            params.req,
-            params.gatewayRequestAuth!,
-            "trusted-operator",
-          )
-        : params.gatewayRequestOperatorScopes!;
+      : params.gatewayRequestAuth?.controlUiPluginGrant
+        ? params.gatewayRequestOperatorScopes!
+        : params.route.gatewayRuntimeScopeSurface === "trusted-operator"
+          ? resolvePluginRouteRuntimeOperatorScopes(
+              params.req,
+              params.gatewayRequestAuth!,
+              "trusted-operator",
+            )
+          : params.gatewayRequestOperatorScopes!;
   const runtimeClient = createPluginRouteRuntimeClient(
     runtimeScopes,
     params.gatewayRequestClientIp,
+    params.route.auth === "gateway" ? params.gatewayRequestAuth : undefined,
   );
   return {
+    pluginRegistry: params.registry,
     ...(params.gatewayRequestContext ? { context: params.gatewayRequestContext } : {}),
     client: runtimeClient,
     isWebchatConnect: () => false,
@@ -185,12 +202,41 @@ export function createGatewayPluginRequestHandler(params: {
       log.warn(`plugin http route blocked without gateway auth (${pathContext.canonicalPath})`);
       return false;
     }
-    const gatewayRequestAuth = dispatchContext?.gatewayRequestAuth;
-    const gatewayRequestOperatorScopes = dispatchContext?.gatewayRequestOperatorScopes;
+    const firstGatewayRoute = matchedRoutes.find((route) => route.auth === "gateway");
+    const presentedGatewayRequestAuth = dispatchContext?.gatewayRequestAuth;
+    const presentedControlUiPluginGrants = presentedGatewayRequestAuth?.controlUiPluginGrants;
+    const controlUiPluginGrant = presentedControlUiPluginGrants?.find(
+      (grant) => grant.pluginId === firstGatewayRoute?.pluginId,
+    );
+    if (presentedControlUiPluginGrants && (!firstGatewayRoute || !controlUiPluginGrant)) {
+      log.warn(
+        `plugin http route blocked for mismatched control ui grant (${pathContext.canonicalPath})`,
+      );
+      res.statusCode = 401;
+      res.setHeader("Content-Type", "text/plain; charset=utf-8");
+      res.end("Unauthorized");
+      return true;
+    }
+    const gatewayRequestAuth = controlUiPluginGrant
+      ? {
+          ...presentedGatewayRequestAuth!,
+          controlUiPluginGrant,
+        }
+      : presentedGatewayRequestAuth;
+    const gatewayRequestOperatorScopes = controlUiPluginGrant
+      ? controlUiPluginGrant.scopes
+      : dispatchContext?.gatewayRequestOperatorScopes;
 
     // Fail closed before invoking any handlers when matched gateway routes are
     // missing the runtime auth/scope context they require.
     for (const route of matchedRoutes) {
+      if (
+        controlUiPluginGrant &&
+        route.auth === "gateway" &&
+        route.pluginId !== controlUiPluginGrant.pluginId
+      ) {
+        continue;
+      }
       const missingRuntimeContext = getMissingPluginRouteRuntimeContext(route, {
         gatewayRequestAuth,
         gatewayRequestOperatorScopes,
@@ -203,11 +249,25 @@ export function createGatewayPluginRequestHandler(params: {
       }
     }
 
+    // The probe is intercepted only after route ownership and cookie auth are
+    // established. Plugin code never sees the reserved capability request.
+    if (controlUiPluginGrant && respondControlUiPluginAuthCookieProbe(req, res)) {
+      return true;
+    }
+
     for (const route of matchedRoutes) {
+      if (
+        controlUiPluginGrant &&
+        route.auth === "gateway" &&
+        route.pluginId !== controlUiPluginGrant.pluginId
+      ) {
+        continue;
+      }
       try {
         const runRoute = async () =>
           (await withPluginRuntimeGatewayRequestScope(
             createPluginRouteRuntimeScope({
+              registry: params.registry,
               route,
               req,
               gatewayRequestContext,
@@ -227,13 +287,7 @@ export function createGatewayPluginRequestHandler(params: {
         }
       } catch (err) {
         log.warn(`plugin http route failed (${route.pluginId ?? "unknown"}): ${String(err)}`);
-        if (!res.headersSent) {
-          res.statusCode = 500;
-          res.setHeader("Content-Type", "text/plain; charset=utf-8");
-          res.end("Internal Server Error");
-        } else if (!res.writableEnded && !res.destroyed) {
-          res.end();
-        }
+        finishFailedGatewayHttpResponse(res);
         return true;
       }
     }
@@ -293,6 +347,7 @@ export function createGatewayPluginUpgradeHandler(params: {
           async () =>
             (await withPluginRuntimeGatewayRequestScope(
               createPluginRouteRuntimeScope({
+                registry: params.registry,
                 route,
                 req,
                 gatewayRequestContext,

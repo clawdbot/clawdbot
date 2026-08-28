@@ -40,9 +40,9 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.19.0"
   CLAWHUB_REGISTRY: "https://clawhub.ai"
-  CLAWHUB_CLI_PACKAGE: "clawhub@0.23.1"
+  CLAWHUB_CLI_PACKAGE: "clawhub@0.23.3"
 
 jobs:
   preview_plugins_clawhub:
@@ -63,11 +63,12 @@ jobs:
       missing_trusted_publisher_matrix: ${{ steps.plan.outputs.missing_trusted_publisher_matrix }}
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.ref }}
           fetch-depth: 0
+          filter: blob:none
 
       - name: Resolve checked-out ref
         id: ref
@@ -75,7 +76,7 @@ jobs:
           TARGET_REF: ${{ github.event_name == 'workflow_dispatch' && inputs.ref || '' }}
         run: |
           set -euo pipefail
-          git fetch --no-tags origin \
+          timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin \
             +refs/heads/main:refs/remotes/origin/main \
             '+refs/heads/release/*:refs/remotes/origin/release/*'
           if [[ -n "${TARGET_REF}" ]]; then
@@ -124,7 +125,7 @@ jobs:
           done < <(git for-each-ref --format='%(refname)' refs/remotes/origin/release)
           if [[ "${TRUSTED_PUBLISH_BRANCH}" =~ ^tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z$ ]]; then
             alpha_branch="${TRUSTED_PUBLISH_BRANCH}"
-            git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
+            timeout --signal=TERM --kill-after=10s 120s git fetch --no-tags origin "+refs/heads/${alpha_branch}:refs/remotes/origin/${alpha_branch}"
             if git merge-base --is-ancestor HEAD "refs/remotes/origin/${alpha_branch}"; then
               exit 0
             fi
@@ -135,6 +136,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
 
@@ -275,12 +277,13 @@ jobs:
       contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       - name: Validate release publish approval run
         env:
+          ALLOW_COMPLETED_SUCCESSFUL_PARENT: "true"
           GH_TOKEN: ${{ github.token }}
           RELEASE_PUBLISH_RUN_ID: ${{ inputs.release_publish_run_id }}
           EXPECTED_WORKFLOW_BRANCH: ${{ inputs.release_publish_branch || github.ref_name }}
@@ -314,32 +317,32 @@ jobs:
       matrix:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
-        with:
-          persist-credentials: false
-          ref: ${{ github.ref }}
-          fetch-depth: 0
-
-      - name: Checkout target revision
+      - name: Validate target revision
         env:
           TARGET_SHA: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
         run: |
-          set -euo pipefail
-          git fetch --no-tags origin \
-            +refs/heads/main:refs/remotes/origin/main \
-            '+refs/heads/release/*:refs/remotes/origin/release/*'
-          git checkout --detach "${TARGET_SHA}"
+          if [[ ! "${TARGET_SHA}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "ClawHub pack target must be a full lowercase commit SHA; got: ${TARGET_SHA}" >&2
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          ref: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
+          fetch-depth: 1
 
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
           install-deps: "true"
 
       - name: Verify package-local runtime build
-        run: node scripts/check-plugin-npm-runtime-builds.mjs --package "${{ matrix.plugin.packageDir }}"
+        run: node --import tsx scripts/check-plugin-npm-runtime-builds.mts --package "${{ matrix.plugin.packageDir }}"
 
       - name: Install pinned ClawHub CLI wrapper
         run: |
@@ -387,7 +390,7 @@ jobs:
     needs:
       [preview_plugins_clawhub, pack_plugins_clawhub_artifacts, approve_plugins_clawhub_release]
     if: always() && github.event_name == 'workflow_dispatch' && needs.preview_plugins_clawhub.outputs.has_candidates == 'true' && needs.pack_plugins_clawhub_artifacts.result == 'success' && (inputs.dry_run == true || needs.approve_plugins_clawhub_release.result == 'success')
-    uses: openclaw/clawhub/.github/workflows/package-publish.yml@d8096dfc039e86ab942ddf9ef117d04849fd84c1
+    uses: openclaw/clawhub/.github/workflows/package-publish.yml@87ca030c30f3cfb78ab15c8e66b5ff1469c8f9c8 # v0.23.3
     permissions:
       actions: read
       contents: read
@@ -402,7 +405,7 @@ jobs:
       dry_run: ${{ inputs.dry_run }}
       registry: https://clawhub.ai
       site: https://clawhub.ai
-      family: ${{ contains(fromJson('["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu","@openclaw/qqbot"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}
+      family: ${{ contains(fromJson('["@openclaw/acpx","@openclaw/diffs","@openclaw/feishu"]'), matrix.plugin.packageName) && 'bundle-plugin' || '' }}
       tags: ${{ matrix.plugin.publishTag }}
       source_repo: ${{ github.repository }}
       source_commit: ${{ needs.preview_plugins_clawhub.outputs.ref_revision }}
@@ -426,7 +429,7 @@ jobs:
         plugin: ${{ fromJson(needs.preview_plugins_clawhub.outputs.matrix) }}
     steps:
       - name: Checkout verification tooling
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.sha }}
@@ -435,10 +438,10 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: off
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "false"
           install-deps: "false"
-          use-actions-cache: "false"
 
       - name: Download published package input
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8

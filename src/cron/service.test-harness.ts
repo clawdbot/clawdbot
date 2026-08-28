@@ -6,8 +6,11 @@ import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
 import type { MockFn } from "../test-utils/vitest-mock-fn.js";
 import type { CronEvent } from "./service.js";
 import { CronService } from "./service.js";
-import { createCronServiceState, type CronServiceState } from "./service/state.js";
-import type { CronServiceDeps } from "./service/state.js";
+import {
+  createCronServiceState,
+  type CronServiceState,
+  type CronServiceDeps,
+} from "./service/state.js";
 import { saveCronStore } from "./store.js";
 import type { CronJob } from "./types.js";
 
@@ -30,12 +33,31 @@ export function createNoopLogger(): NoopLogger {
 export function createCronStoreHarness(options?: { prefix?: string }) {
   let fixtureRoot = "";
   let caseId = 0;
+  const stores = new Map<string, string>();
 
   beforeAll(async () => {
     fixtureRoot = await fs.mkdtemp(path.join(os.tmpdir(), options?.prefix ?? "openclaw-cron-"));
   });
 
+  async function cleanupStore(storePath: string, dir: string) {
+    if (!stores.has(storePath)) {
+      return;
+    }
+    await saveCronStore(storePath, { version: 1, jobs: [] });
+    await fs.rm(dir, { recursive: true, force: true });
+    stores.delete(storePath);
+  }
+
+  afterEach(async () => {
+    for (const [storePath, dir] of stores) {
+      await cleanupStore(storePath, dir);
+    }
+  });
+
   afterAll(async () => {
+    for (const [storePath, dir] of stores) {
+      await cleanupStore(storePath, dir);
+    }
     if (!fixtureRoot) {
       return;
     }
@@ -45,9 +67,11 @@ export function createCronStoreHarness(options?: { prefix?: string }) {
   async function makeStorePath() {
     const dir = path.join(fixtureRoot, `case-${caseId++}`);
     await fs.mkdir(dir, { recursive: true });
+    const storePath = path.join(dir, "cron", "jobs.json");
+    stores.set(storePath, dir);
     return {
-      storePath: path.join(dir, "cron", "jobs.json"),
-      cleanup: async () => {},
+      storePath,
+      cleanup: async () => await cleanupStore(storePath, dir),
     };
   }
 
@@ -118,6 +142,7 @@ export function createFinishedBarrier() {
 export function createStartedCronServiceWithFinishedBarrier(params: {
   storePath: string;
   logger: ReturnType<typeof createNoopLogger>;
+  runSkillCollectionReview?: CronServiceDeps["runSkillCollectionReview"];
 }): {
   cron: CronService;
   enqueueSystemEvent: MockFn;
@@ -134,6 +159,9 @@ export function createStartedCronServiceWithFinishedBarrier(params: {
     enqueueSystemEvent,
     requestHeartbeat,
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    ...(params.runSkillCollectionReview
+      ? { runSkillCollectionReview: params.runSkillCollectionReview }
+      : {}),
     onEvent: finished.onEvent,
   });
   return { cron, enqueueSystemEvent, requestHeartbeat, finished };
@@ -191,6 +219,7 @@ export function createRunningCronServiceState(params: {
     runIsolatedAgentJob: vi.fn().mockResolvedValue({ status: "ok", summary: "ok" }),
   });
   state.running = true;
+  state.activeTimerTicks = 1;
   state.store = {
     version: 1,
     jobs: params.jobs,
@@ -216,16 +245,6 @@ export async function withCronServiceStateForTest<T>(
   }
 }
 
-export function createDeferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason?: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
-
 export function createMockCronStateForJobs(params: {
   jobs: CronJob[];
   nowMs?: number;
@@ -235,23 +254,27 @@ export function createMockCronStateForJobs(params: {
     store: { version: 1, jobs: params.jobs },
     durableNextRunAtMsByJobId: new Map<string, number | undefined>(),
     running: false,
+    activeTimerTicks: 0,
     stopped: false,
+    lifecycleGeneration: 0,
     schedulingPaused: false,
     schedulerStarted: false,
-    restartRecoveryPending: false,
-    pendingCatchupDeferralJobIds: new Set<string>(),
     activeManualRunJobIds: new Set<string>(),
     manualSetupTimeoutNotified: false,
+    runAdmission: { active: 0, waiters: [], capacityListener: null },
+    queuedRunReservationsByJobId: new Map(),
     timer: null,
     storeLoadedAtMs: nowMs,
     op: Promise.resolve(),
     warnedDisabled: false,
     warnedInvalidPersistedJobKeys: new Set<string>(),
+    reportedUnavailableReaperAgentIds: new Set<string>(),
     pendingQuarantineConfigJobs: [],
     lastQuarantineFailureWarnKey: null,
     deps: {
       storePath: "/mock/path",
       cronEnabled: true,
+      defaultAgentId: "main",
       nowMs: () => nowMs,
       enqueueSystemEvent: () => {},
       requestHeartbeat: () => {},

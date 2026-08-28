@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { ModelsConfigSchema } from "../config/zod-schema.core.js";
 import { NON_ENV_SECRETREF_MARKER } from "./model-auth-markers.js";
-import { normalizeProviders } from "./models-config.providers.normalize.js";
+import {
+  normalizeProviderCatalogModelsForConfig,
+  normalizeProviders,
+} from "./models-config.providers.normalize.js";
 import { resolveApiKeyFromProfiles } from "./models-config.providers.secret-helpers.js";
 import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 
@@ -14,18 +18,14 @@ function normalizeLmstudioBaseUrl(baseUrl: string): string {
   return trimmed.replace(/\/api\/v1$/, "").replace(/\/v1$/, "") + "/v1";
 }
 
-vi.mock("./models-config.providers.policy.runtime.js", () => {
+vi.mock("./models-config.providers.policy.js", () => {
   return {
-    applyProviderNativeStreamingUsagePolicy: () => undefined,
-    normalizeProviderConfigPolicy: (
-      providerKey: string,
-      provider: { baseUrl?: unknown } | undefined,
-    ) =>
+    normalizeProviderSpecificConfig: (providerKey: string, provider: { baseUrl?: unknown }) =>
       // Keep the test focused on normalizeProviders while preserving LM Studio policy behavior.
       providerKey === "lmstudio" && typeof provider?.baseUrl === "string"
         ? { ...provider, baseUrl: normalizeLmstudioBaseUrl(provider.baseUrl) }
-        : undefined,
-    resolveProviderConfigApiKeyPolicy: () => undefined,
+        : provider,
+    resolveProviderConfigApiKeyResolver: () => undefined,
   };
 });
 
@@ -167,7 +167,7 @@ describe("normalizeProviders", () => {
     }
   });
 
-  it("deduplicates Google Gemini provider rows after model id normalization", async () => {
+  it("deduplicates model rows and keeps repeated publication stable with secret ownership", async () => {
     const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-agent-"));
     try {
       const providers: NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]> = {
@@ -191,9 +191,10 @@ describe("normalizeProviders", () => {
             }),
           ],
         },
+        custom: { baseUrl: "https://models.example/v1", models: [] },
       };
 
-      const normalized = normalizeProviders({ providers, agentDir });
+      const normalized = normalizeProviders({ providers, agentDir, env: {} });
 
       expect(normalized?.google?.models).toHaveLength(1);
       // The first normalized row wins so explicit config details are not replaced by discovery.
@@ -204,6 +205,20 @@ describe("normalizeProviders", () => {
       expect(model?.maxTokens).toBe(2048);
       expect(model?.reasoning).toBe(false);
       expect(model?.cost).toEqual({ input: 1, output: 2, cacheRead: 3, cacheWrite: 4 });
+
+      const published = normalizeProviderCatalogModelsForConfig(normalized);
+      expect(published).toBe(normalized);
+      const secretRefManagedProviders = new Set<string>();
+      const repeated = normalizeProviders({
+        providers: published,
+        agentDir,
+        env: {},
+        secretRefManagedProviders,
+      });
+      // A no-op object pass must still record marker ownership for secret preservation.
+      expect(repeated).toBe(published);
+      expect(normalizeProviderCatalogModelsForConfig(repeated)).toBe(published);
+      expect(secretRefManagedProviders.has("google")).toBe(true);
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
@@ -381,6 +396,47 @@ describe("normalizeProviders", () => {
     });
     expect((enforced as Record<string, unknown>).openai).toBeNull();
     expect(enforced?.moonshot?.apiKey).toBe("MOONSHOT_API_KEY"); // pragma: allowlist secret
+  });
+
+  it("publishes schema-complete costs after duplicate model rows merge", () => {
+    type ConfigModel = NonNullable<
+      NonNullable<OpenClawConfig["models"]>["providers"]
+    >[string]["models"][number];
+    const modelWithPartialCost = (id: string, cost: Partial<NonNullable<ConfigModel["cost"]>>) =>
+      ({ ...createModel({ id }), cost }) as ConfigModel;
+    const tieredPricing = [
+      {
+        input: 8,
+        output: 40,
+        cacheRead: 0.1,
+        cacheWrite: 1,
+        range: [0, 1_000_000] as [number, number],
+      },
+    ];
+    const providers = {
+      custom: {
+        baseUrl: "https://models.example/v1",
+        models: [
+          modelWithPartialCost("partial", { input: 10, output: 50, tieredPricing }),
+          createModel({ id: "unknown", cost: undefined }),
+          modelWithPartialCost("duplicate", { input: 3, output: 15 }),
+          modelWithPartialCost("duplicate", { cacheRead: 0.3, cacheWrite: 3.75 }),
+        ],
+      },
+    } as unknown as NonNullable<NonNullable<OpenClawConfig["models"]>["providers"]>;
+
+    expect(ModelsConfigSchema.safeParse({ providers }).success).toBe(true);
+    expect(normalizeProviderCatalogModelsForConfig(providers)?.custom?.models).toEqual([
+      createModel({
+        id: "partial",
+        cost: { input: 10, output: 50, cacheRead: 0, cacheWrite: 0, tieredPricing },
+      }),
+      createModel({ id: "unknown", cost: undefined }),
+      createModel({
+        id: "duplicate",
+        cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+      }),
+    ]);
   });
 
   it("canonicalizes LM Studio baseUrl after merge-style explicit overwrite", async () => {

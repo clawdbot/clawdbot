@@ -30,7 +30,7 @@ import { createMSTeamsReplyDispatcher } from "./reply-dispatcher.js";
 import { setMSTeamsRuntime } from "./runtime.js";
 import type { MSTeamsTurnContext } from "./sdk-types.js";
 
-/** Options msteams passes into core createReplyDispatcherWithTyping (capture seam). */
+/** Core-owned dispatcher options returned by the Teams delivery plan. */
 type CapturedDispatcherOptions = {
   onReplyStart?: () => Promise<void> | void;
   deliver: (payload: ReplyPayload, info: { kind: string }) => Promise<void> | void;
@@ -229,12 +229,7 @@ const MSTEAMS_TRACE_CASES: readonly MSTeamsTraceCase[] = [
 ];
 
 function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) {
-  let captured: CapturedDispatcherOptions | undefined;
-  setMSTeamsRuntime(
-    createTraceRuntimeStub(recorder, (options) => {
-      captured = options;
-    }),
-  );
+  setMSTeamsRuntime(createTraceRuntimeStub(recorder, () => undefined));
   const stream = createRecordingStream(recorder, traceCase.streamWriteFault);
   const context = createRecordingTurnContext({
     recorder,
@@ -269,10 +264,10 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
     replyStyle: "thread",
     textLimit: 4000,
   });
-  const options = captured;
-  if (!options) {
-    throw new Error("dispatcher options were not captured");
-  }
+  const options = {
+    ...created.dispatcherOptions,
+    deliver: created.delivery.deliver,
+  } as CapturedDispatcherOptions;
 
   return async (step: DeliveryTraceInStep) => {
     switch (step.kind) {
@@ -307,7 +302,7 @@ function setupMSTeamsTrace(recorder: WireRecorder, traceCase: MSTeamsTraceCase) 
         // armed StreamCancelledError write fault, so this step maps to nothing.
         break;
       case "idle":
-        await created.markDispatchIdle();
+        await created.dispatcherOptions.onSettled?.();
         break;
       case "wire-fault":
         // The shared write-error fault vocabulary covers this shape, but a

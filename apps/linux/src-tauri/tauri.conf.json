@@ -6,11 +6,26 @@
   "build": {
     "frontendDist": "../ui"
   },
+  "plugins": {
+    "deep-link": {
+      "desktop": {
+        "schemes": ["openclaw"]
+      }
+    },
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDRDODJFMzU1QTQ0MUMwNkYKUldSdndFR2tWZU9DVE9RYnlIcHFoNG1xUlQzUlloa0plQmZjY0dPbHpjWlEzWFozdmt0cHBlY2gK",
+      "endpoints": [
+        "https://github.com/openclaw/openclaw/releases/latest/download/latest.json"
+      ]
+    }
+  },
   "app": {
+    "macOSPrivateApi": true,
     "withGlobalTauri": true,
     "windows": [
       {
         "label": "main",
+        "create": false,
         "title": "OpenClaw",
         "url": "index.html",
         "width": 1080,
@@ -22,7 +37,7 @@
       }
     ],
     "security": {
-      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src ipc: http://ipc.localhost",
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data: http: https:; media-src 'self' data: blob: http: https:; connect-src ipc: http://ipc.localhost",
       "capabilities": [
         {
           "identifier": "local-companion",
@@ -31,26 +46,39 @@
           "windows": ["main"],
           "permissions": [
             "allow-bootstrap",
+            "allow-build-info",
+            "allow-check-for-updates",
             "allow-connect-discovered-gateway",
+            "allow-connect-remote-gateway",
             "allow-discover-gateways",
             "allow-gateway-action",
             "allow-install-cli",
+            "allow-open-release-page",
+            "allow-relaunch",
+            "allow-updater-ready",
             "core:event:allow-listen",
-            "core:event:allow-unlisten"
+            "core:event:allow-unlisten",
+            "process:allow-restart",
+            "updater:default"
           ]
         },
         {
-          "identifier": "canvas-renderer",
-          "description": "The bundled Canvas renderer can relay A2UI actions.",
+          "identifier": "quickchat",
+          "description": "Quick Chat can select agents, configure its shortcut, send messages, render hosted widgets, and receive window events.",
           "local": true,
-          "windows": ["canvas"],
-          "permissions": ["allow-canvas-a2ui-action"]
+          "webviews": ["quickchat"],
+          "permissions": [
+            "allow-quickchat",
+            "core:event:allow-listen",
+            "core:event:allow-unlisten"
+          ]
         }
       ]
     }
   },
   "bundle": {
     "active": true,
+    "createUpdaterArtifacts": true,
     "category": "Utility",
     "shortDescription": "OpenClaw Linux companion",
     "longDescription": "Installs OpenClaw, manages the local Gateway service, and hosts the Control UI.",
@@ -62,6 +90,21 @@
     ],
     "resources": {
       "../../../scripts/install-cli.sh": "install-cli.sh"
+    },
+    "linux": {
+      "appimage": {
+        "bundleMediaFramework": true
+      },
+      "deb": {
+        "depends": [
+          "gstreamer1.0-libav",
+          "gstreamer1.0-plugins-good",
+          "gstreamer1.0-plugins-bad"
+        ]
+      }
+    },
+    "macOS": {
+      "minimumSystemVersion": "13.0"
     }
   }
 }

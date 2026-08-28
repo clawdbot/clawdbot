@@ -4,24 +4,33 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { PassThrough } from "node:stream";
+import { PassThrough, Writable } from "node:stream";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import {
   expectRealExitWinsOverSigkillFallback,
   expectWaitStaysPendingUntilSigkillFallback,
+  mockLinuxOomWrapperShell,
 } from "./test-support.js";
 
-const { spawnWithFallbackMock, signalProcessTreeMock, createWindowsOutputDecoderMock } = vi.hoisted(
-  () => ({
-    spawnWithFallbackMock: vi.fn(),
-    signalProcessTreeMock: vi.fn(),
-    createWindowsOutputDecoderMock: vi.fn(() => ({
-      decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
-      flush: () => "",
-    })),
-  }),
-);
+const {
+  spawnWithFallbackMock,
+  signalProcessTreeMock,
+  createWindowsOutputDecoderMock,
+  createServiceChildRelayAdapterMock,
+} = vi.hoisted(() => ({
+  spawnWithFallbackMock: vi.fn(),
+  signalProcessTreeMock: vi.fn(
+    (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+      opts?.onComplete?.();
+    },
+  ),
+  createWindowsOutputDecoderMock: vi.fn(() => ({
+    decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
+    flush: () => "",
+  })),
+  createServiceChildRelayAdapterMock: vi.fn(),
+}));
 
 vi.mock("../../spawn-utils.js", () => ({
   spawnWithFallback: spawnWithFallbackMock,
@@ -35,6 +44,10 @@ vi.mock("../../../infra/windows-encoding.js", () => ({
   createWindowsOutputDecoder: createWindowsOutputDecoderMock,
 }));
 
+vi.mock("../service-child-relay-host.js", () => ({
+  createServiceChildRelayAdapter: createServiceChildRelayAdapterMock,
+}));
+
 let createChildAdapter: typeof import("./child.js").createChildAdapter;
 let getWindowsInstallRoots: typeof import("../../../infra/windows-install-roots.js").getWindowsInstallRoots;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -44,12 +57,31 @@ function createStubChild(pid = 1234) {
   child.stdin = new PassThrough() as ChildProcess["stdin"];
   child.stdout = new PassThrough() as ChildProcess["stdout"];
   child.stderr = new PassThrough() as ChildProcess["stderr"];
+  Object.defineProperty(child, "stdio", {
+    value: [child.stdin, child.stdout, child.stderr],
+    configurable: true,
+  });
   Object.defineProperty(child, "pid", { value: pid, configurable: true });
   Object.defineProperty(child, "killed", { value: false, configurable: true, writable: true });
   Object.defineProperty(child, "exitCode", { value: null, configurable: true, writable: true });
   Object.defineProperty(child, "signalCode", { value: null, configurable: true, writable: true });
+  Object.defineProperty(child, "channel", { value: {}, configurable: true });
+  Object.defineProperty(child, "connected", { value: true, configurable: true, writable: true });
   const killMock = vi.fn(() => true);
+  const sendMock = vi.fn((_message: unknown, ...args: unknown[]) => {
+    const callback = args.findLast((value) => typeof value === "function") as
+      | ((error: Error | null) => void)
+      | undefined;
+    callback?.(null);
+    return true;
+  });
+  const disconnectMock = vi.fn(() => {
+    Object.defineProperty(child, "connected", { value: false, configurable: true, writable: true });
+    child.emit("disconnect");
+  });
   child.kill = killMock as ChildProcess["kill"];
+  child.send = sendMock as ChildProcess["send"];
+  child.disconnect = disconnectMock as ChildProcess["disconnect"];
   const emitClose = (code: number | null, signal: NodeJS.Signals | null = null) => {
     child.emit("close", code, signal);
   };
@@ -62,7 +94,7 @@ function createStubChild(pid = 1234) {
     });
     child.emit("exit", code, signal);
   };
-  return { child, killMock, emitClose, emitExit };
+  return { child, disconnectMock, killMock, sendMock, emitClose, emitExit };
 }
 
 async function createAdapterHarness(params?: {
@@ -143,11 +175,20 @@ describe("createChildAdapter", () => {
     ({ createChildAdapter } = await import("./child.js"));
     spawnWithFallbackMock.mockClear();
     signalProcessTreeMock.mockClear();
+    createServiceChildRelayAdapterMock.mockClear();
     createWindowsOutputDecoderMock.mockClear();
     createWindowsOutputDecoderMock.mockImplementation(() => ({
       decode: (chunk: Buffer | string) => (Buffer.isBuffer(chunk) ? chunk.toString("utf8") : chunk),
       flush: () => "",
     }));
+    createServiceChildRelayAdapterMock.mockResolvedValue({
+      pid: 9999,
+      onStdout: vi.fn(),
+      onStderr: vi.fn(),
+      wait: vi.fn(),
+      kill: vi.fn(),
+      dispose: vi.fn(),
+    });
     delete process.env.OPENCLAW_SERVICE_MARKER;
     vi.useRealTimers();
   });
@@ -202,14 +243,257 @@ describe("createChildAdapter", () => {
     }
 
     adapter.kill();
+    await Promise.resolve();
 
     // Detachment flag is now passed to signalProcessTree so it knows whether
     // it can safely group-kill via -pid. (#71662)
     const expectedDetached = process.platform !== "win32" && !process.env.OPENCLAW_SERVICE_MARKER;
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(4321, "SIGKILL", {
-      detached: expectedDetached,
-    });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(
+      4321,
+      "SIGKILL",
+      expect.objectContaining({ detached: expectedDetached }),
+    );
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
+  });
+
+  it("creates owned worker trees in a dedicated POSIX process group without fallback", async () => {
+    process.env.OPENCLAW_SERVICE_MARKER = "service-managed";
+    const { child, disconnectMock, sendMock } = createStubChild();
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+
+    const adapter = await createChildAdapter({
+      argv: ["node", "worker"],
+      ownedWorker: true,
+      input: "{}",
+    });
+
+    expect(firstSpawnWithFallbackParams().options?.detached).toBe(process.platform !== "win32");
+    expect(firstSpawnWithFallbackParams().fallbacks).toEqual([]);
+    expect(firstSpawnWithFallbackParams().options?.stdio).toEqual(["pipe", "pipe", "pipe", "ipc"]);
+
+    await adapter.openStartGate?.();
+    expect(sendMock).toHaveBeenCalledWith(
+      { type: "openclaw-worker-start-v1" },
+      expect.any(Function),
+    );
+    adapter.closeStartGate?.();
+    expect(disconnectMock).toHaveBeenCalledOnce();
+  });
+
+  it("keeps ordinary children supervised through repeated operational errors", async () => {
+    const { child, emitClose, emitExit } = createStubChild(7865);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-open",
+    });
+    const resolved = vi.fn();
+    const rejected = vi.fn();
+    const wait = adapter.wait();
+    void wait.then(resolved, rejected);
+
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const error = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+        expect(() => child.emit("error", error)).not.toThrow();
+        expect(child.listenerCount("error")).toBe(1);
+        expect(child.listenerCount("exit")).toBe(1);
+        expect(child.listenerCount("close")).toBe(1);
+        await Promise.resolve();
+        expect(resolved).not.toHaveBeenCalled();
+        expect(rejected).not.toHaveBeenCalled();
+      }
+
+      emitExit(0);
+      emitClose(0);
+      await expect(wait).resolves.toEqual({ code: 0, signal: null });
+    } finally {
+      adapter.dispose();
+    }
+
+    expect(child.listenerCount("error")).toBe(0);
+    expect(child.listenerCount("exit")).toBe(0);
+    expect(child.listenerCount("close")).toBe(0);
+  });
+
+  it.each([
+    { first: "error", waitBefore: true },
+    { first: "error", waitBefore: false },
+    { first: "close", waitBefore: true },
+    { first: "close", waitBefore: false },
+  ] as const)(
+    "keeps the first owned worker $first outcome (waitBefore=$waitBefore)",
+    async ({ first, waitBefore }) => {
+      const { child, disconnectMock, emitClose } = createStubChild(7866);
+      spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+      const adapter = await createChildAdapter({
+        argv: ["node", "worker"],
+        ownedWorker: true,
+      });
+      const error = Object.assign(new Error("kill EPERM"), { code: "EPERM" });
+      const pending = Promise.allSettled(waitBefore ? [adapter.wait(), adapter.wait()] : []);
+
+      try {
+        if (first === "error") {
+          child.emit("error", error);
+          emitClose(0);
+        } else {
+          emitClose(0);
+          child.emit("error", error);
+        }
+        // Cross a turn before late waits so an unhandled eager rejection fails the test.
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        const outcomes = [
+          ...(await pending),
+          ...(await Promise.allSettled([adapter.wait(), adapter.wait()])),
+        ];
+        let firstResult: Awaited<ReturnType<typeof adapter.wait>> | undefined;
+        for (const outcome of outcomes) {
+          if (first === "error") {
+            expect(outcome.status).toBe("rejected");
+            if (outcome.status === "rejected") {
+              expect(outcome.reason).toBe(error);
+            }
+          } else {
+            expect(outcome).toStrictEqual({
+              status: "fulfilled",
+              value: { code: 0, signal: null },
+            });
+            if (outcome.status === "fulfilled") {
+              firstResult ??= outcome.value;
+              expect(outcome.value).toBe(firstResult);
+            }
+          }
+        }
+      } finally {
+        adapter.dispose();
+      }
+
+      expect(disconnectMock).toHaveBeenCalledOnce();
+      expect(child.listenerCount("error")).toBe(0);
+    },
+  );
+
+  it("preserves startup failure when a worker error arrives during secret delivery", async () => {
+    const { child, killMock } = createStubChild();
+    const deliveryError = new Error("secret delivery failed");
+    const secretStream = new Writable({
+      write(_chunk, _encoding, callback) {
+        child.emit("error", new Error("worker IPC failed"));
+        setImmediate(() => callback(deliveryError));
+      },
+    });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream, null],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    const transient = Buffer.from("synthetic-secret");
+
+    await expect(
+      createChildAdapter({
+        argv: ["node", "worker"],
+        ownedWorker: true,
+        secretInput: { fd: 3, createData: () => transient },
+      }),
+    ).rejects.toBe(deliveryError);
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+
+    expect(killMock).toHaveBeenCalledWith("SIGKILL");
+    expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
+    child.removeAllListeners();
+  });
+
+  it("writes secret input to an extra descriptor and zeroes the transient buffer", async () => {
+    const { child } = createStubChild();
+    const secretStream = new PassThrough();
+    const chunks: Buffer[] = [];
+    secretStream.on("data", (chunk: Buffer) => {
+      chunks.push(Buffer.from(chunk));
+    });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+    const transient = Buffer.from("selected-secret", "utf8");
+
+    await createChildAdapter({
+      argv: ["claude", "-p"],
+      stdinMode: "pipe-open",
+      secretInput: {
+        fd: 3,
+        createData: () => transient,
+      },
+    });
+
+    expect(firstSpawnWithFallbackParams().options?.stdio).toEqual([
+      "pipe",
+      "pipe",
+      "pipe",
+      process.platform === "win32" ? "overlapped" : "pipe",
+    ]);
+    expect(Buffer.concat(chunks).toString("utf8")).toBe("selected-secret");
+    expect(transient.equals(Buffer.alloc(transient.length))).toBe(true);
+  });
+
+  it("captures child close while secret input delivery is still pending", async () => {
+    const { child, emitClose } = createStubChild();
+    const secretStream = new Writable({
+      write(_chunk, _encoding, callback) {
+        emitClose(0);
+        setImmediate(callback);
+      },
+    });
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, secretStream],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    const adapter = await createChildAdapter({
+      argv: ["claude", "-p"],
+      stdinMode: "pipe-open",
+      secretInput: {
+        fd: 3,
+        createData: () => Buffer.from("selected-secret"),
+      },
+    });
+
+    await expect(adapter.wait()).resolves.toEqual({ code: 0, signal: null });
+  });
+
+  it("uses overlapped I/O for a Windows secret descriptor", async () => {
+    setPlatform("win32");
+    const { child } = createStubChild();
+    Object.defineProperty(child, "stdio", {
+      value: [child.stdin, child.stdout, child.stderr, new PassThrough()],
+      configurable: true,
+    });
+    spawnWithFallbackMock.mockResolvedValue({
+      child,
+      usedFallback: false,
+    });
+
+    await createChildAdapter({
+      argv: ["claude.exe", "-p"],
+      secretInput: {
+        fd: 3,
+        createData: () => Buffer.from("secret"),
+      },
+    });
+
+    expect(firstSpawnWithFallbackParams().options?.stdio?.[3]).toBe("overlapped");
   });
 
   it("passes detached:false to signalProcessTree when spawn fell back to no-detach (#71662 follow-up)", async () => {
@@ -228,18 +512,33 @@ describe("createChildAdapter", () => {
     });
 
     adapter.kill();
+    await Promise.resolve();
 
-    expect(signalProcessTreeMock).toHaveBeenCalledWith(8888, "SIGKILL", { detached: false });
+    expect(signalProcessTreeMock).toHaveBeenCalledWith(
+      8888,
+      "SIGKILL",
+      expect.objectContaining({ detached: false }),
+    );
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("passes detached:false in service-managed mode where useDetached is false from the start (#71662)", async () => {
+  it("selects the exact service relay instead of direct shared-group signaling", async () => {
     process.env.OPENCLAW_SERVICE_MARKER = "1";
     try {
-      const { adapter, killMock } = await createAdapterHarness({ pid: 9999 });
-      adapter.kill();
-      expect(signalProcessTreeMock).toHaveBeenCalledWith(9999, "SIGKILL", { detached: false });
-      expect(killMock).toHaveBeenCalledWith("SIGKILL");
+      await createChildAdapter({
+        argv: ["node", "-e", "setTimeout(() => {}, 1000)"],
+        exactEnv: true,
+        stdinMode: "pipe-open",
+      });
+      expect(createServiceChildRelayAdapterMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          command: "node",
+          args: ["-e", "setTimeout(() => {}, 1000)"],
+          stdinMode: "pipe-open",
+        }),
+      );
+      expect(spawnWithFallbackMock).not.toHaveBeenCalled();
+      expect(signalProcessTreeMock).not.toHaveBeenCalled();
     } finally {
       delete process.env.OPENCLAW_SERVICE_MARKER;
     }
@@ -375,7 +674,106 @@ describe("createChildAdapter", () => {
     expect(killMock).toHaveBeenCalledWith("SIGKILL");
   });
 
-  it("settles wait from exit state on Windows even when close never arrives", async () => {
+  it("waits for Windows tree-kill completion before forced stream settlement", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    let resolveTreeKill: (() => void) | undefined;
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
+    );
+
+    const stub = createStubChild(9753);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(stub.child.stdout?.destroyed).toBe(false);
+    expect(stub.child.stderr?.destroyed).toBe(false);
+
+    resolveTreeKill?.();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(249);
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+    expect(stub.child.stdout?.destroyed).toBe(true);
+    expect(stub.child.stderr?.destroyed).toBe(true);
+  });
+
+  it("blocks Windows child close until tree-kill completion", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    let resolveTreeKill: (() => void) | undefined;
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
+    );
+
+    const stub = createStubChild(9754);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    stub.emitClose(null, "SIGKILL");
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).not.toHaveBeenCalled();
+
+    resolveTreeKill?.();
+    await Promise.resolve();
+    await vi.advanceTimersByTimeAsync(250);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+  });
+
+  it("blocks drained Windows streams until tree-kill completion", async () => {
+    vi.useFakeTimers();
+    setPlatform("win32");
+    let resolveTreeKill: (() => void) | undefined;
+    signalProcessTreeMock.mockImplementationOnce(
+      (_pid: number, _signal: string, opts?: { onComplete?: () => void }) => {
+        resolveTreeKill = opts?.onComplete;
+      },
+    );
+
+    const stub = createStubChild(9755);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "setInterval(() => {}, 1000)"],
+      stdinMode: "pipe-closed",
+    });
+    const settled = vi.fn();
+    void adapter.wait().then(settled);
+
+    adapter.kill("SIGKILL");
+    stub.emitExit(null, "SIGKILL");
+    stub.child.stdout?.emit("end");
+    stub.child.stderr?.emit("end");
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    resolveTreeKill?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(settled).toHaveBeenCalledWith({ code: null, signal: "SIGKILL" });
+  });
+
+  it("preserves descendant output after ordinary Windows child exit", async () => {
     vi.useFakeTimers();
     setPlatform("win32");
 
@@ -391,6 +789,10 @@ describe("createChildAdapter", () => {
       });
       return { ...stub, adapter: adapterLocal };
     })();
+    const stdout = vi.fn();
+    const stderr = vi.fn();
+    adapter.onStdout(stdout);
+    adapter.onStderr(stderr);
 
     const settled = vi.fn();
     void adapter.wait().then((result) => {
@@ -398,14 +800,47 @@ describe("createChildAdapter", () => {
     });
 
     emitExit(0, null);
-    child.stdout?.emit("end");
-    child.stderr?.emit("end");
-    await vi.advanceTimersByTimeAsync(300);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).not.toHaveBeenCalled();
+    expect(child.stdout?.destroyed).toBe(false);
+    expect(child.stderr?.destroyed).toBe(false);
 
+    const stdoutPipe = child.stdout as PassThrough;
+    const stderrPipe = child.stderr as PassThrough;
+    stdoutPipe.write("late stdout");
+    stderrPipe.write("late stderr");
+    stdoutPipe.end();
+    stderrPipe.end();
+    await vi.runAllTimersAsync();
+
+    expect(stdout).toHaveBeenCalledWith("late stdout");
+    expect(stderr).toHaveBeenCalledWith("late stderr");
     expect(settled).toHaveBeenCalledWith({ code: 0, signal: null });
   });
 
-  it("disables detached mode in service-managed runtime", async () => {
+  it("settles ordinary Windows exit when streams drain before exit and close is missing", async () => {
+    setPlatform("win32");
+    const stub = createStubChild(9756);
+    spawnWithFallbackMock.mockResolvedValue({ child: stub.child, usedFallback: false });
+    const adapter = await createChildAdapter({
+      argv: ["node", "-e", "process.exit(0)"],
+      stdinMode: "pipe-closed",
+    });
+    const waitPromise = adapter.wait();
+    const settled = vi.fn();
+    void waitPromise.then(settled);
+
+    stub.child.stdout?.emit("end");
+    stub.child.stderr?.emit("end");
+    await Promise.resolve();
+    expect(settled).not.toHaveBeenCalled();
+
+    stub.emitExit(0, null);
+    await expect(waitPromise).resolves.toEqual({ code: 0, signal: null });
+  });
+
+  it("keeps the service relay out of Windows child mode", async () => {
+    setPlatform("win32");
     process.env.OPENCLAW_SERVICE_MARKER = "openclaw";
 
     await createAdapterHarness({ pid: 7777 });
@@ -413,6 +848,7 @@ describe("createChildAdapter", () => {
     const spawnArgs = firstSpawnWithFallbackParams();
     expect(spawnArgs.options?.detached).toBe(false);
     expect(spawnArgs.fallbacks ?? []).toStrictEqual([]);
+    expect(createServiceChildRelayAdapterMock).not.toHaveBeenCalled();
   });
 
   it("keeps inherited env when no override env is provided on non-Linux", async () => {
@@ -498,15 +934,18 @@ describe("createChildAdapter", () => {
     const originalEnv = process.env.ENV;
     const originalCdpath = process.env.CDPATH;
     setPlatform("linux");
+    const restoreLinuxShell = mockLinuxOomWrapperShell();
     process.env.BASH_ENV = "/tmp/bashenv";
     process.env.ENV = "/tmp/env";
     process.env.CDPATH = "/tmp";
     try {
-      await createAdapterHarness({
+      const { adapter } = await createAdapterHarness({
         pid: 3334,
         argv: ["/usr/bin/node", "-e", "process.exit(0)"],
       });
+      expect(adapter.oomScoreWrapperSelected).toBe(true);
     } finally {
+      restoreLinuxShell();
       if (originalBashEnv === undefined) {
         delete process.env.BASH_ENV;
       } else {
@@ -540,6 +979,28 @@ describe("createChildAdapter", () => {
     expect(spawnArgs.options.env.CDPATH).toBeUndefined();
   });
 
+  it("keeps an exact Linux child environment out of the OOM shell wrapper", async () => {
+    setPlatform("linux");
+    const restoreLinuxShell = mockLinuxOomWrapperShell();
+    const { child } = createStubChild(3335);
+    spawnWithFallbackMock.mockResolvedValue({ child, usedFallback: false });
+    try {
+      const adapter = await createChildAdapter({
+        argv: ["/usr/bin/node", "-e", "process.exit(0)"],
+        env: { HOME: "/worker-home", PATH: "/usr/bin" },
+        exactEnv: true,
+        stdinMode: "pipe-open",
+      });
+      expect(adapter.oomScoreWrapperSelected).toBe(false);
+    } finally {
+      restoreLinuxShell();
+    }
+
+    const spawnArgs = firstSpawnWithFallbackParams();
+    expect(spawnArgs.argv).toEqual(["/usr/bin/node", "-e", "process.exit(0)"]);
+    expect(spawnArgs.options?.env).toEqual({ HOME: "/worker-home", PATH: "/usr/bin" });
+  });
+
   it("passes explicit env overrides as strings", async () => {
     await createAdapterHarness({
       pid: 4444,
@@ -571,14 +1032,16 @@ describe("createChildAdapter", () => {
     });
     const first = vi.fn();
     const second = vi.fn();
+    const raw = vi.fn();
 
-    adapter.onStdout(first);
+    adapter.onStdout(first, raw);
     adapter.onStdout(second);
     child.stdout?.emit("data", Buffer.from([0xb2]));
 
     expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
     expect(first).toHaveBeenCalledWith("first");
     expect(second).toHaveBeenCalledWith("second");
+    expect(raw).toHaveBeenCalledWith(Buffer.from([0xb2]));
   });
 
   it("guards stream errors before output listeners are registered", async () => {

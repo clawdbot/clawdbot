@@ -91,23 +91,21 @@ export type ContentPart = z.infer<typeof ContentPartSchema>;
 const MessageItemRoleSchema = z.enum(["system", "developer", "user", "assistant"]);
 
 const AssistantPhaseSchema = z.enum(["commentary", "final_answer"]);
+const ItemStatusSchema = z.enum(["in_progress", "completed", "incomplete"]);
 
 const MessageItemSchema = z
   .object({
     type: z.literal("message"),
+    id: z.string().optional(),
     role: MessageItemRoleSchema,
     content: z.union([z.string(), z.array(ContentPartSchema)]),
     phase: AssistantPhaseSchema.optional(),
+    status: ItemStatusSchema.optional(),
   })
   .strict()
-  .superRefine((value, ctx) => {
-    if (value.phase !== undefined && value.role !== "assistant") {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        path: ["phase"],
-        message: "`phase` is only valid on assistant messages.",
-      });
-    }
+  .refine((value) => value.phase === undefined || value.role === "assistant", {
+    path: ["phase"],
+    message: "`phase` is only valid on assistant messages.",
   });
 
 const FunctionCallItemSchema = z
@@ -117,6 +115,7 @@ const FunctionCallItemSchema = z
     call_id: z.string().optional(),
     name: z.string(),
     arguments: z.string(),
+    status: ItemStatusSchema.optional(),
   })
   .strict();
 
@@ -201,6 +200,14 @@ export const CreateResponseBodySchema = z
     instructions: z.string().optional(),
     tools: z.array(ToolDefinitionSchema).optional(),
     tool_choice: ToolChoiceSchema.optional(),
+    // The SDK sends its plain-text default explicitly; structured formats must
+    // stay rejected until the runtime actually enforces their contracts.
+    text: z
+      .object({
+        format: z.object({ type: z.literal("text") }).strict(),
+      })
+      .strict()
+      .optional(),
     stream: z.boolean().optional(),
     max_output_tokens: z.number().int().positive().optional(),
     max_tool_calls: z.number().int().positive().optional(),
@@ -237,26 +244,19 @@ const ResponseStatusSchema = z.enum([
 ]);
 
 const OutputItemSchema = z.discriminatedUnion("type", [
-  z
-    .object({
-      type: z.literal("message"),
-      id: z.string(),
-      role: z.literal("assistant"),
-      content: z.array(OutputTextContentPartSchema),
-      phase: AssistantPhaseSchema.optional(),
-      status: z.enum(["in_progress", "completed"]).optional(),
-    })
-    .strict(),
-  z
-    .object({
-      type: z.literal("function_call"),
-      id: z.string(),
-      call_id: z.string(),
-      name: z.string(),
-      arguments: z.string(),
-      status: z.enum(["in_progress", "completed"]).optional(),
-    })
-    .strict(),
+  // Output items are replayable input; narrow required output fields without
+  // duplicating the supported item shape or dropping assistant phase validation.
+  MessageItemSchema.safeExtend({
+    id: z.string(),
+    role: z.literal("assistant"),
+    content: z.array(OutputTextContentPartSchema),
+    status: z.enum(["in_progress", "completed"]).optional(),
+  }),
+  FunctionCallItemSchema.extend({
+    id: z.string(),
+    call_id: z.string(),
+    status: z.enum(["in_progress", "completed"]).optional(),
+  }),
   z
     .object({
       type: z.literal("reasoning"),
@@ -271,7 +271,14 @@ export type OutputItem = z.infer<typeof OutputItemSchema>;
 
 const UsageSchema = z.object({
   input_tokens: z.number().int().nonnegative(),
+  input_tokens_details: z.object({
+    cached_tokens: z.number().int().nonnegative(),
+    cache_write_tokens: z.number().int().nonnegative(),
+  }),
   output_tokens: z.number().int().nonnegative(),
+  output_tokens_details: z.object({
+    reasoning_tokens: z.number().int().nonnegative(),
+  }),
   total_tokens: z.number().int().nonnegative(),
 });
 

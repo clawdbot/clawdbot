@@ -20,6 +20,36 @@ export const CODEX_POST_REASONING_REPLY_IDLE_TIMEOUT_MS = 5 * 60_000;
 /** Long terminal idle watch for app-server turns that never send completion. */
 const CODEX_TURN_TERMINAL_IDLE_TIMEOUT_MS = 30 * 60_000;
 
+type CodexAppServerStartupErrorReason = "aborted" | "timed_out";
+
+export class CodexAppServerStartupError extends Error {
+  readonly code = "CODEX_APP_SERVER_STARTUP_CANCELLED";
+
+  constructor(
+    readonly reason: CodexAppServerStartupErrorReason,
+    message = reason === "timed_out"
+      ? "codex app-server startup timed out"
+      : "codex app-server startup aborted",
+  ) {
+    super(message);
+    this.name = "CodexAppServerStartupError";
+  }
+}
+
+export function isCodexAppServerStartupError(
+  error: unknown,
+  reason?: CodexAppServerStartupErrorReason,
+): error is CodexAppServerStartupError {
+  return (
+    error instanceof Error &&
+    "code" in error &&
+    error.code === "CODEX_APP_SERVER_STARTUP_CANCELLED" &&
+    "reason" in error &&
+    (error.reason === "aborted" || error.reason === "timed_out") &&
+    (reason === undefined || error.reason === reason)
+  );
+}
+
 function resolvePositiveIntegerTimeoutMs(value: number | undefined, fallbackMs: number): number {
   const fallback = resolveTimerTimeoutMs(fallbackMs, 1);
   return resolveTimerTimeoutMs(value, fallback);
@@ -33,7 +63,7 @@ export async function withCodexStartupTimeout<T>(params: {
   operation: () => Promise<T>;
 }): Promise<T> {
   if (params.signal.aborted) {
-    throw new Error("codex app-server startup aborted");
+    throw new CodexAppServerStartupError("aborted");
   }
   let timeout: NodeJS.Timeout | undefined;
   let abortCleanup: (() => void) | undefined;
@@ -51,7 +81,7 @@ export async function withCodexStartupTimeout<T>(params: {
           reject(error);
         };
         timeout = setTimeout(() => {
-          timeoutError = new Error("codex app-server startup timed out");
+          timeoutError = new CodexAppServerStartupError("timed_out");
           timeoutCleanup = Promise.resolve(params.onTimeout?.()).then(
             () => undefined,
             () => undefined,
@@ -60,7 +90,7 @@ export async function withCodexStartupTimeout<T>(params: {
             rejectOnce(timeoutError!);
           });
         }, params.timeoutMs);
-        const abortListener = () => rejectOnce(new Error("codex app-server startup aborted"));
+        const abortListener = () => rejectOnce(new CodexAppServerStartupError("aborted"));
         params.signal.addEventListener("abort", abortListener, { once: true });
         abortCleanup = () => params.signal.removeEventListener("abort", abortListener);
       }),

@@ -43,6 +43,16 @@ type HandshakeConnectAuth = {
   agentRuntimeIdentityToken?: string;
 };
 
+export function isNativeAppUiClient(client: ConnectParams["client"]): boolean {
+  return (
+    client.mode === GATEWAY_CLIENT_MODES.UI &&
+    (client.id === GATEWAY_CLIENT_IDS.MACOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.LINUX_APP ||
+      client.id === GATEWAY_CLIENT_IDS.IOS_APP ||
+      client.id === GATEWAY_CLIENT_IDS.ANDROID_APP)
+  );
+}
+
 function resolveBrowserOriginRateLimitKey(requestOrigin?: string): string {
   const trimmedOrigin = requestOrigin?.trim();
   if (!trimmedOrigin) {
@@ -79,11 +89,13 @@ export function resolveHandshakeBrowserSecurityContext(params: {
 }
 
 export function shouldAllowSilentLocalPairing(params: {
+  autoApproveLocal?: boolean;
   locality: PairingLocalityKind;
   hasBrowserOriginHeader: boolean;
   isControlUi: boolean;
   isWebchat: boolean;
   isNativeAppUi?: boolean;
+  authMethod?: GatewayAuthResult["method"];
   reason: "not-paired" | "role-upgrade" | "scope-upgrade" | "metadata-upgrade";
 }): boolean {
   if (params.locality === "remote") {
@@ -92,54 +104,46 @@ export function shouldAllowSilentLocalPairing(params: {
   if (params.hasBrowserOriginHeader && !params.isControlUi && !params.isWebchat) {
     return false;
   }
-  if (
-    params.reason === "not-paired" ||
-    params.reason === "scope-upgrade" ||
-    params.reason === "role-upgrade"
-  ) {
-    return true;
+  if (params.reason === "metadata-upgrade") {
+    // Metadata-only reconnect refreshes stay automatic even when the operator
+    // disabled autoApproveLocal, to avoid approval churn after benign client or
+    // OS metadata changes. Direct-local refresh is limited to first-party
+    // native app UI clients; node-host, Browser, and Control-UI metadata
+    // pinning stays on the explicit approval path.
+    return (
+      !params.hasBrowserOriginHeader &&
+      !params.isControlUi &&
+      !params.isWebchat &&
+      ((params.locality === "direct_local" && params.isNativeAppUi === true) ||
+        params.locality === "cli_container_local" ||
+        params.locality === "shared_secret_loopback_local")
+    );
   }
-  // metadata-upgrade auto-approves only for non-browser local reconnects that
-  // already proved possession of local/shared credentials. Direct-local
-  // metadata refresh is limited to first-party native app UI clients, covering
-  // same-host app reconnects after OS version metadata changes while keeping
-  // node-host, Browser, and Control-UI metadata pinning on the explicit approval path.
-  if (
-    params.reason === "metadata-upgrade" &&
-    !params.hasBrowserOriginHeader &&
-    !params.isControlUi &&
-    !params.isWebchat &&
-    ((params.locality === "direct_local" && params.isNativeAppUi === true) ||
-      params.locality === "cli_container_local" ||
-      params.locality === "shared_secret_loopback_local")
-  ) {
-    return true;
+  // Operators can require explicit approval for pairing and access upgrades.
+  if (params.autoApproveLocal === false) {
+    return false;
   }
-  return false;
+  if (params.reason === "scope-upgrade") {
+    // Silently widening an existing row grants nothing a fresh local identity
+    // could not get through silent initial pairing — but only when this
+    // connect proved local-grade credentials itself. Identity-proxy methods
+    // (tailscale, trusted-proxy) and bearer device tokens never did, so their
+    // rows remain a durable scope cap.
+    return (
+      params.authMethod === "none" ||
+      params.authMethod === "token" ||
+      params.authMethod === "password"
+    );
+  }
+  return true;
 }
 
-function isCliContainerLocalEquivalent(params: {
-  connectParams: ConnectParams;
-  requestHost?: string;
-  remoteAddress?: string;
-  hasProxyHeaders: boolean;
-  hasBrowserOriginHeader: boolean;
-  sharedAuthOk: boolean;
-  authMethod: GatewayAuthResult["method"];
-}): boolean {
-  const isCliClient =
-    params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
-    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
-  return (
-    isCliClient &&
-    params.sharedAuthOk &&
-    usesSharedSecretAuth &&
-    !params.hasProxyHeaders &&
-    !params.hasBrowserOriginHeader &&
-    isLoopbackAddress(params.remoteAddress) &&
-    isPrivateOrLoopbackHost(resolveHostName(params.requestHost))
-  );
+function isCliCliClient(client: ConnectParams["client"]): boolean {
+  return client.id === GATEWAY_CLIENT_IDS.CLI && client.mode === GATEWAY_CLIENT_MODES.CLI;
+}
+
+function isSharedSecretAuthMethod(method: GatewayAuthResult["method"]): boolean {
+  return method === "token" || method === "password";
 }
 
 function isSharedSecretLoopbackLocalEquivalent(params: {
@@ -150,10 +154,9 @@ function isSharedSecretLoopbackLocalEquivalent(params: {
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
 }): boolean {
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
     params.sharedAuthOk &&
-    usesSharedSecretAuth &&
+    isSharedSecretAuthMethod(params.authMethod) &&
     !params.hasProxyHeaders &&
     !params.hasBrowserOriginHeader &&
     isLoopbackAddress(params.remoteAddress) &&
@@ -186,11 +189,10 @@ function isControlUiBrowserContainerLocalEquivalent(params: {
   const isControlUiBrowser =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI &&
     params.connectParams.client.mode === GATEWAY_CLIENT_MODES.WEBCHAT;
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
   return (
     isControlUiBrowser &&
     params.sharedAuthOk &&
-    usesSharedSecretAuth &&
+    isSharedSecretAuthMethod(params.authMethod) &&
     !params.hasProxyHeaders &&
     params.hasBrowserOriginHeader &&
     isPrivateOrLoopbackAddress(params.remoteAddress) &&
@@ -213,44 +215,15 @@ export function resolvePairingLocality(params: {
   if (params.isLocalClient) {
     return "direct_local";
   }
-  if (
-    isControlUiBrowserContainerLocalEquivalent({
-      connectParams: params.connectParams,
-      requestHost: params.requestHost,
-      requestOrigin: params.requestOrigin,
-      remoteAddress: params.remoteAddress,
-      hasProxyHeaders: params.hasProxyHeaders,
-      hasBrowserOriginHeader: params.hasBrowserOriginHeader,
-      sharedAuthOk: params.sharedAuthOk,
-      authMethod: params.authMethod,
-    })
-  ) {
+  if (isControlUiBrowserContainerLocalEquivalent(params)) {
     return "browser_container_local";
   }
-  if (
-    isCliContainerLocalEquivalent({
-      connectParams: params.connectParams,
-      requestHost: params.requestHost,
-      remoteAddress: params.remoteAddress,
-      hasProxyHeaders: params.hasProxyHeaders,
-      hasBrowserOriginHeader: params.hasBrowserOriginHeader,
-      sharedAuthOk: params.sharedAuthOk,
-      authMethod: params.authMethod,
-    })
-  ) {
-    return "cli_container_local";
-  }
-  if (
-    isSharedSecretLoopbackLocalEquivalent({
-      requestHost: params.requestHost,
-      remoteAddress: params.remoteAddress,
-      hasProxyHeaders: params.hasProxyHeaders,
-      hasBrowserOriginHeader: params.hasBrowserOriginHeader,
-      sharedAuthOk: params.sharedAuthOk,
-      authMethod: params.authMethod,
-    })
-  ) {
-    return "shared_secret_loopback_local";
+  if (isSharedSecretLoopbackLocalEquivalent(params)) {
+    // The CLI container lane shares the shared-secret loopback predicate; only
+    // the client class distinguishes it for scope-preservation policy.
+    return isCliCliClient(params.connectParams.client)
+      ? "cli_container_local"
+      : "shared_secret_loopback_local";
   }
   return "remote";
 }
@@ -265,22 +238,18 @@ export function shouldSkipLocalBackendSelfPairing(params: {
   const isBackendClient =
     params.connectParams.client.id === GATEWAY_CLIENT_IDS.GATEWAY_CLIENT &&
     params.connectParams.client.mode === GATEWAY_CLIENT_MODES.BACKEND;
-  if (!isBackendClient) {
-    return false;
-  }
   const isLocal =
     params.locality === "direct_local" || params.locality === "shared_secret_loopback_local";
-  if (!isLocal || params.hasBrowserOriginHeader) {
+  if (!isBackendClient || !isLocal || params.hasBrowserOriginHeader) {
     return false;
   }
   // No-auth local backend: scoped bypass — not shared secret, but local-only
   // device-less operation is safe when auth.mode is explicitly "none".
-  if (params.authMethod === "none") {
-    return true;
-  }
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
-  const usesDeviceTokenAuth = params.authMethod === "device-token";
-  return (params.sharedAuthOk && usesSharedSecretAuth) || usesDeviceTokenAuth;
+  return (
+    params.authMethod === "none" ||
+    params.authMethod === "device-token" ||
+    (params.sharedAuthOk && isSharedSecretAuthMethod(params.authMethod))
+  );
 }
 
 export function shouldPreserveLocalCliSharedAuthScopes(params: {
@@ -290,15 +259,13 @@ export function shouldPreserveLocalCliSharedAuthScopes(params: {
   sharedAuthOk: boolean;
   authMethod: GatewayAuthResult["method"];
 }): boolean {
-  const isCliClient =
-    params.connectParams.client.id === GATEWAY_CLIENT_IDS.CLI &&
-    params.connectParams.client.mode === GATEWAY_CLIENT_MODES.CLI;
-  if (!isCliClient) {
-    return false;
-  }
-  const isLocal = params.locality === "direct_local" || params.locality === "cli_container_local";
-  const usesSharedSecretAuth = params.authMethod === "token" || params.authMethod === "password";
-  return isLocal && !params.hasBrowserOriginHeader && params.sharedAuthOk && usesSharedSecretAuth;
+  return (
+    isCliCliClient(params.connectParams.client) &&
+    (params.locality === "direct_local" || params.locality === "cli_container_local") &&
+    !params.hasBrowserOriginHeader &&
+    params.sharedAuthOk &&
+    isSharedSecretAuthMethod(params.authMethod)
+  );
 }
 
 function resolveSignatureToken(connectParams: ConnectParams): string | null {

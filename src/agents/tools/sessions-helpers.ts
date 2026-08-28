@@ -1,16 +1,30 @@
+import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
+import type {
+  SessionRow,
+  SessionRunStatus,
+} from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
+import type { FastModeSource } from "../../shared/fast-mode.js";
 /**
  * Shared session-tool data shapes and classification helpers.
  *
  * Keeps list/send/status tools aligned on rows, visibility context, and compact kind/channel labels.
  */
-export {
+import {
   createAgentToAgentPolicy,
-  createSessionVisibilityGuard,
-  createSessionVisibilityRowChecker,
   resolveEffectiveSessionToolsVisibility,
   resolveSandboxedSessionToolContext,
 } from "./sessions-access.js";
-import { resolveSandboxedSessionToolContext } from "./sessions-access.js";
+export {
+  createSessionVisibilityRowChecker,
+  formatSessionToolAccessDenial,
+  recordSessionToolActionFact,
+  resolveEffectiveSessionToolsVisibility,
+  resolveSandboxedSessionToolContext,
+  resolveSessionToolAccess,
+} from "./sessions-access.js";
 export {
   resolveCurrentSessionClientAlias,
   resolveDisplaySessionKey,
@@ -18,16 +32,23 @@ export {
   resolveMainSessionAlias,
   resolveSessionReference,
   resolveVisibleSessionReference,
+  isExpectedSessionLookupMiss,
   shouldResolveSessionIdInput,
 } from "./sessions-resolution.js";
-import { normalizeOptionalString, type FastMode } from "@openclaw/normalization-core/string-coerce";
-import { getRuntimeConfig } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { parseRawSessionConversationRef } from "../../sessions/session-key-utils.js";
-import type { FastModeSource } from "../../shared/fast-mode.js";
 
 /** Coarse session category used by session list/status tools. */
-type SessionKind = "main" | "group" | "cron" | "hook" | "node" | "other";
+export const SESSION_LIST_KINDS = ["main", "group", "cron", "hook", "node", "other"] as const;
+type SessionKind = (typeof SESSION_LIST_KINDS)[number];
+
+const SESSION_KIND_BY_CLASSIFICATION: Readonly<Record<string, SessionKind>> = {
+  main: "main",
+  global: "main",
+  group: "group",
+  channel: "group",
+  cron: "cron",
+  hook: "hook",
+  node: "node",
+};
 
 /** Delivery target metadata attached to session rows. */
 type SessionListDeliveryContext = {
@@ -37,21 +58,21 @@ type SessionListDeliveryContext = {
   threadId?: string | number;
 };
 
-/** Compact run status shown by session tools. */
-export type SessionRunStatus = "running" | "done" | "failed" | "killed" | "timeout";
-
-/** Normalized session row returned by session list-style tools. */
-export type SessionListRow = {
+/** Full Gateway session row consumed by session orchestration internals. */
+export type GatewaySessionListRow = {
   key: string;
   agentId?: string;
-  kind: SessionKind;
-  channel: string;
+  classification: NonNullable<SessionRow["classification"]>;
+  peerKind?: SessionRow["peerKind"];
+  kind: SessionRow["kind"];
+  channel?: string;
   origin?: {
     provider?: string;
     accountId?: string;
   };
   spawnedBy?: string;
   label?: string;
+  category?: string;
   displayName?: string;
   derivedTitle?: string;
   lastMessagePreview?: string;
@@ -93,51 +114,66 @@ export type SessionListRow = {
   messages?: unknown[];
 };
 
+/** Focused model-facing row returned by sessions_list. */
+export type SessionListRow = {
+  key: string;
+  sessionId?: string;
+  agentId: string;
+  kind: SessionKind;
+  channel: string;
+  label?: string;
+  category?: string;
+  displayName?: string;
+  derivedTitle?: string;
+  lastMessagePreview?: string;
+  parentSessionKey?: string;
+  updatedAt?: number;
+  archived: boolean;
+  pinned: boolean;
+  stateVersion?: number;
+  model?: string;
+  contextTokens?: number;
+  totalTokens?: number;
+  status?: SessionRunStatus;
+  abortedLastRun?: boolean;
+  childSessions?: string[];
+  messages?: unknown[];
+};
+
 /** Resolves config plus sandbox visibility context for a session tool call. */
 export function resolveSessionToolContext(opts?: {
+  agentId?: string;
   agentSessionKey?: string;
+  requesterAgentIdOverride?: string;
   sandboxed?: boolean;
   config?: OpenClawConfig;
 }) {
   const cfg = opts?.config ?? getRuntimeConfig();
   return {
     cfg,
+    a2aPolicy: createAgentToAgentPolicy(cfg),
+    sessionVisibility: resolveEffectiveSessionToolsVisibility({
+      cfg,
+      sandboxed: opts?.sandboxed === true,
+    }),
     ...resolveSandboxedSessionToolContext({
       cfg,
       agentSessionKey: opts?.agentSessionKey,
+      requesterAgentId: opts?.requesterAgentIdOverride ?? opts?.agentId,
       sandboxed: opts?.sandboxed,
     }),
   };
 }
 
-/** Classifies a session key/gateway kind into the row category used by tools. */
-export function classifySessionKind(params: {
-  key: string;
-  gatewayKind?: string | null;
-  alias: string;
-  mainKey: string;
+/** Projects the Gateway's authoritative classification into the tool's coarse categories. */
+export function classifySessionListKind(params: {
+  classification: NonNullable<GatewaySessionListRow["classification"]>;
+  peerKind?: GatewaySessionListRow["peerKind"];
 }): SessionKind {
-  const key = params.key;
-  if (key === params.alias || key === params.mainKey) {
-    return "main";
+  if (params.classification === "thread") {
+    return params.peerKind === "group" || params.peerKind === "channel" ? "group" : "other";
   }
-  if (key.startsWith("cron:")) {
-    return "cron";
-  }
-  if (key.startsWith("hook:")) {
-    return "hook";
-  }
-  if (key.startsWith("node-") || key.startsWith("node:")) {
-    return "node";
-  }
-  if (params.gatewayKind === "group") {
-    return "group";
-  }
-  if (key.includes(":group:") || key.includes(":channel:")) {
-    // Gateway-less archived rows still encode group/channel shape in the session key.
-    return "group";
-  }
-  return "other";
+  return SESSION_KIND_BY_CLASSIFICATION[params.classification] ?? "other";
 }
 
 /** Derives the best channel label for a session row. */

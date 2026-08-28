@@ -2,12 +2,13 @@
 
 import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { showToast } from "../lib/toast.ts";
 import {
   getRenderedModalDialog,
   installDialogPolyfill,
   nextFrame,
 } from "../test-helpers/modal-dialog.ts";
-import "./modal-dialog.ts";
+import { OpenClawModalDialog } from "./modal-dialog.ts";
 
 let container: HTMLDivElement;
 let restoreDialogPolyfill: () => void;
@@ -47,13 +48,27 @@ describe("openclaw-modal-dialog", () => {
   });
 
   it("opens a labelled modal dialog with an optional description", async () => {
-    const { webAwesomeDialog, dialog } = await renderModal();
+    const { modal, webAwesomeDialog, dialog } = await renderModal();
 
     expect(dialog.open).toBe(true);
     expect(dialog.localName).toBe("dialog");
+    expect(dialog.getAttribute("role")).toBe("dialog");
+    expect(dialog.getAttribute("aria-modal")).toBe("true");
     expect(dialog.getAttribute("aria-label")).toBe("Confirm action");
     expect(dialog.getAttribute("aria-description")).toBe("Review the operation before continuing.");
     expect(dialog.getRootNode()).toBe(webAwesomeDialog.shadowRoot);
+    expect(document.openClawModalLayers?.has(modal)).toBe(true);
+
+    modal.hide();
+    await modal.updateComplete;
+    expect(document.openClawModalLayers?.has(modal)).toBe(false);
+
+    modal.show();
+    await modal.updateComplete;
+    expect(document.openClawModalLayers?.has(modal)).toBe(true);
+
+    modal.remove();
+    expect(document.openClawModalLayers?.has(modal)).toBe(false);
   });
 
   it("focuses the dialog container first", async () => {
@@ -77,6 +92,23 @@ describe("openclaw-modal-dialog", () => {
     expect(document.activeElement).toBe(container.querySelector("#autofocus-target"));
   });
 
+  it("keeps focus on a field the user selected when the show animation settles", async () => {
+    render(
+      html`<openclaw-modal-dialog label="Edit">
+        <input id="autofocus-target" autofocus />
+        <textarea id="notes-field"></textarea>
+      </openclaw-modal-dialog>`,
+      container,
+    );
+    const { webAwesomeDialog } = await getRenderedModalDialog(container);
+    const notes = container.querySelector<HTMLTextAreaElement>("#notes-field");
+    notes?.focus();
+
+    webAwesomeDialog.dispatchEvent(new Event("wa-after-show"));
+
+    expect(document.activeElement).toBe(notes);
+  });
+
   it("delegates native modality and light dismissal to Web Awesome", async () => {
     const { webAwesomeDialog, dialog } = await renderModal();
 
@@ -86,6 +118,46 @@ describe("openclaw-modal-dialog", () => {
     expect(dialog.open).toBe(true);
   });
 
+  it("hands an active toast back to the app layer when it closes", async () => {
+    const shell = document.createElement("div");
+    shell.className = "shell";
+    const appHost = document.createElement("openclaw-toast-host");
+    shell.append(appHost);
+    document.body.append(shell);
+    try {
+      const { modal } = await renderModal();
+      const moveBefore = vi.spyOn(Element.prototype, "moveBefore");
+
+      showToast({ message: "Saved" });
+      modal.hide();
+      await modal.updateComplete;
+      await appHost.updateComplete;
+
+      expect(moveBefore).toHaveBeenCalledWith(appHost, null);
+      expect(moveBefore.mock.contexts).toContain(modal);
+      expect(appHost.querySelector(".app-toast__message")?.textContent).toBe("Saved");
+      expect(modal.querySelector(".app-toast")).toBeNull();
+    } finally {
+      shell.remove();
+    }
+  });
+
+  it("assigns overlay motion by interaction type", () => {
+    const styles = OpenClawModalDialog.styles.cssText;
+
+    expect(styles).toMatch(
+      /:host\(\.palette\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*0ms;[^}]*--hide-duration:\s*0ms;/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog\s*\{[^}]*--show-duration:\s*200ms;[^}]*--hide-duration:\s*0ms;/u,
+    );
+    expect(styles).toMatch(
+      /:host\(\.drawer\)\s+wa-dialog\[open\]::part\(dialog\)\s*\{[^}]*animation:\s*openclaw-drawer-in 200ms cubic-bezier\(0\.32, 0\.72, 0, 1\);/u,
+    );
+    expect(styles).toMatch(
+      /@keyframes openclaw-drawer-in\s*\{\s*from\s*\{\s*transform:\s*translateX\(100%\);\s*\}\s*to\s*\{\s*transform:\s*translateX\(0\);/u,
+    );
+  });
   it("emits modal-cancel on Escape", async () => {
     const { modal, dialog } = await renderModal();
     const onCancel = vi.fn();
@@ -106,6 +178,21 @@ describe("openclaw-modal-dialog", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
+  it("ignores lifecycle events from tooltips and menus nested in the modal", async () => {
+    const { modal, dialog } = await renderModal();
+    const nestedSurface = container.querySelector("#first-action");
+    const onCancel = vi.fn();
+    modal.addEventListener("modal-cancel", onCancel);
+
+    for (const type of ["wa-hide", "wa-after-hide", "wa-show", "wa-after-show"]) {
+      nestedSurface?.dispatchEvent(new Event(type, { bubbles: true, composed: true }));
+    }
+
+    expect(onCancel).not.toHaveBeenCalled();
+    expect(modal.open).toBe(true);
+    expect(dialog.open).toBe(true);
+  });
+
   it("restores focus when closed and removed", async () => {
     const returnTarget = document.createElement("button");
     returnTarget.textContent = "Return";
@@ -119,6 +206,57 @@ describe("openclaw-modal-dialog", () => {
 
     expect(document.activeElement).toBe(returnTarget);
     returnTarget.remove();
+  });
+
+  it("restores the explicit owner target after Web Awesome restores its original trigger", async () => {
+    const originalTrigger = document.createElement("button");
+    const returnTarget = document.createElement("button");
+    document.body.append(originalTrigger, returnTarget);
+    originalTrigger.focus();
+    const { modal, webAwesomeDialog } = await renderModal();
+
+    modal.setReturnFocusTarget(returnTarget);
+    setTimeout(() => originalTrigger.focus(), 0);
+    webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(document.activeElement).toBe(returnTarget);
+    originalTrigger.remove();
+    returnTarget.remove();
+  });
+
+  it("suppresses Web Awesome's original-trigger restoration when the owner closes without focus", async () => {
+    const originalTrigger = document.createElement("button");
+    document.body.append(originalTrigger);
+    originalTrigger.focus();
+    const { modal, webAwesomeDialog } = await renderModal();
+
+    modal.setReturnFocusTarget(null);
+    setTimeout(() => originalTrigger.focus(), 0);
+    webAwesomeDialog.dispatchEvent(new Event("wa-after-hide"));
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, 0);
+    });
+
+    expect(document.activeElement).not.toBe(originalTrigger);
+    originalTrigger.remove();
+  });
+
+  it("does not restore the original trigger when a suppressed modal is removed", async () => {
+    const originalTrigger = document.createElement("button");
+    document.body.append(originalTrigger);
+    originalTrigger.focus();
+    const { modal } = await renderModal();
+
+    modal.setReturnFocusTarget(null);
+    container.querySelector<HTMLElement>("#first-action")?.focus();
+    render(nothing, container);
+    await nextFrame();
+
+    expect(document.activeElement).not.toBe(originalTrigger);
+    originalTrigger.remove();
   });
 
   it("reopens the same dialog element after reconnect", async () => {

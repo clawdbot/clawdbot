@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import { resolveAgentConfig, resolveAgentDir } from "../../agents/agent-scope.js";
-import { resolveModel } from "../../agents/embedded-agent-runner/model.js";
+import { resolveModelAsync } from "../../agents/embedded-agent-runner/model.js";
 import { isEmbeddedAgentRunActive } from "../../agents/embedded-agent-runner/runs.js";
 import { resolveDefaultModelForAgent } from "../../agents/model-selection-config.js";
-import { resolveHeartbeatPrompt } from "../../auto-reply/heartbeat.js";
-import { resolveStorePath } from "../../config/sessions/paths.js";
+import { resolveHeartbeatPromptCore } from "../../auto-reply/heartbeat.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { toErrorObject } from "../../infra/errors.js";
 import {
   listHistoryScanCandidates,
@@ -15,7 +15,6 @@ import {
   reconcileSkillHistoryScanProgress,
   resolveSkillHistoryScanHasMore,
 } from "./history-scan-progress.js";
-import type { SkillHistoryScanPromptSession } from "./history-scan-prompt.js";
 import { HISTORY_SCAN_MAX_PROPOSAL_MUTATIONS } from "./history-scan-review-outcome.js";
 import { HISTORY_SCAN_SESSION_SEGMENT, runSkillHistoryScanReview } from "./history-scan-review.js";
 import {
@@ -37,8 +36,12 @@ import {
   HISTORY_SCAN_MAX_SESSION_CHARS,
   HISTORY_SCAN_SESSION_OVERHEAD_CHARS,
   readHistoryScanSession,
-  resolveSkillHistoryScanTranscriptBudget,
+  type SkillHistoryScanBatchSession,
 } from "./history-scan-transcript.js";
+import {
+  resolveSkillWorkshopModelContextTokens,
+  resolveSkillWorkshopProjectionBudgets,
+} from "./model-context-budget.js";
 import { getSkillProposalRunProgress } from "./service.js";
 
 type ActiveSkillHistoryScan = {
@@ -65,13 +68,13 @@ function toStoredState(params: {
   previous: StoredSkillHistoryScanState | undefined;
   direction: SkillHistoryScanDirection;
   considered: readonly SkillHistoryScanCandidate[];
-  sessions: readonly SkillHistoryScanPromptSession[];
+  sessions: readonly SkillHistoryScanBatchSession[];
   candidates: readonly SkillHistoryScanCandidate[];
   ideasFound: number;
   now: number;
 }): StoredSkillHistoryScanState {
   const previous = params.previous;
-  const reviewedTimes = params.sessions.map((session) => Date.parse(session.updatedAt));
+  const reviewedTimes = params.sessions.map((session) => session.updatedAtMs);
   const previousOldest = previous?.oldestReviewedAt
     ? Date.parse(previous.oldestReviewedAt)
     : undefined;
@@ -128,7 +131,7 @@ async function runSkillHistoryScanCore(
   params: SkillHistoryScanScope,
 ): Promise<SkillHistoryScanResult> {
   const store = historyScanStore(params.env);
-  const storePath = resolveStorePath(params.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
   });
@@ -212,27 +215,25 @@ async function runSkillHistoryScanCore(
   const modelRef = resolveDefaultModelForAgent({ cfg: params.config, agentId: params.agentId });
   const resolvedModel =
     eligible.length > 0
-      ? resolveModel(
-          modelRef.provider,
-          modelRef.model,
-          resolveAgentDir(params.config, params.agentId, params.env),
-          params.config,
-          { workspaceDir: params.workspaceDir },
+      ? (
+          await resolveModelAsync(
+            modelRef.provider,
+            modelRef.model,
+            resolveAgentDir(params.config, params.agentId, params.env),
+            params.config,
+            { agentId: params.agentId, workspaceDir: params.workspaceDir },
+          )
         ).model
       : undefined;
-  const contextTokens = resolvedModel
-    ? Math.min(
-        resolvedModel.contextTokens ?? resolvedModel.contextWindow,
-        resolvedModel.contextWindow,
-      )
-    : undefined;
-  const maxTranscriptChars = resolveSkillHistoryScanTranscriptBudget(contextTokens);
+  const contextTokens = resolveSkillWorkshopModelContextTokens(resolvedModel);
+  const maxTranscriptChars =
+    resolveSkillWorkshopProjectionBudgets(contextTokens).historyTranscriptChars;
   const maxSessionTranscriptChars = Math.min(
     HISTORY_SCAN_MAX_SESSION_CHARS,
     Math.max(1, maxTranscriptChars - HISTORY_SCAN_SESSION_OVERHEAD_CHARS),
   );
   // The configured prompt is only an extra legacy match; the stable marker is authoritative.
-  const heartbeatPrompt = resolveHeartbeatPrompt(
+  const heartbeatPrompt = resolveHeartbeatPromptCore(
     resolveAgentConfig(params.config, params.agentId)?.heartbeat?.prompt ??
       params.config.agents?.defaults?.heartbeat?.prompt,
   );
@@ -303,7 +304,7 @@ async function runSkillHistoryScanCore(
         resumedPending?.sessionCursors ??
         batch.sessions.map((session) => ({
           instanceId: session.instanceId,
-          updatedAtMs: Date.parse(session.updatedAt),
+          updatedAtMs: session.updatedAtMs,
         })),
     },
   });
@@ -371,7 +372,7 @@ async function runSkillHistoryScanCore(
 export function runSkillHistoryScan(
   params: SkillHistoryScanScope,
 ): Promise<SkillHistoryScanResult> {
-  const storePath = resolveStorePath(params.config.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.config.session?.store, {
     agentId: params.agentId,
     ...(params.env ? { env: params.env } : {}),
   });

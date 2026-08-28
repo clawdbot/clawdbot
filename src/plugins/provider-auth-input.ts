@@ -4,6 +4,8 @@ import {
   normalizeOptionalLowercaseString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import { isMalformedApiKeyInput } from "../agents/auth-profiles/credential-state.js";
 import { resolveEnvApiKey } from "../agents/model-auth-env.js";
 import type { OpenClawConfig } from "../config/types.js";
@@ -77,11 +79,11 @@ export function formatApiKeyPreview(
     const shortHead = Math.min(2, trimmed.length);
     const shortTail = Math.min(2, trimmed.length - shortHead);
     if (shortTail <= 0) {
-      return `${trimmed.slice(0, shortHead)}…`;
+      return `${sliceUtf16Safe(trimmed, 0, shortHead)}…`;
     }
-    return `${trimmed.slice(0, shortHead)}…${trimmed.slice(-shortTail)}`;
+    return `${sliceUtf16Safe(trimmed, 0, shortHead)}…${sliceUtf16Safe(trimmed, -shortTail)}`;
   }
-  return `${trimmed.slice(0, head)}…${trimmed.slice(-tail)}`;
+  return `${sliceUtf16Safe(trimmed, 0, head)}…${sliceUtf16Safe(trimmed, -tail)}`;
 }
 
 /** Normalizes a token-provider selector from CLI/options input. */
@@ -135,6 +137,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   secretInputMode?: SecretInputMode;
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   expectedProviders: string[];
   provider: string;
   envLabel: string;
@@ -166,6 +169,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
   return await ensureApiKeyFromEnvOrPrompt({
     config: params.config,
     env: params.env,
+    workspaceDir: params.workspaceDir,
     provider: params.provider,
     envLabel: params.envLabel,
     promptMessage: params.promptMessage,
@@ -181,6 +185,7 @@ export async function ensureApiKeyFromOptionEnvOrPrompt(params: {
 export async function ensureApiKeyFromEnvOrPrompt(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  workspaceDir?: string;
   provider: string;
   envLabel: string;
   promptMessage: string;
@@ -195,7 +200,14 @@ export async function ensureApiKeyFromEnvOrPrompt(params: {
     explicitMode: params.secretInputMode,
   });
   const env = params.env ?? process.env;
-  const envKey = resolveEnvApiKey(params.provider, env);
+  // Setup must resolve the same trusted workspace/provider descriptors as
+  // runtime; dropping the staged config silently changes credential ownership.
+  const envKey = resolveEnvApiKey(params.provider, env, {
+    config: params.config,
+    workspaceDir:
+      params.workspaceDir ??
+      resolveAgentWorkspaceDir(params.config, resolveDefaultAgentId(params.config), env),
+  });
 
   if (selectedMode === "ref") {
     if (typeof params.prompter.select !== "function") {

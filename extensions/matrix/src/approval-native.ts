@@ -5,7 +5,10 @@ import {
   splitChannelApprovalCapability,
 } from "openclaw/plugin-sdk/approval-delivery-runtime";
 import { createLazyChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-adapter-runtime";
-import type { ChannelApprovalNativeRuntimeAdapter } from "openclaw/plugin-sdk/approval-handler-runtime";
+import type {
+  ChannelApprovalKind,
+  ChannelApprovalNativeRuntimeAdapter,
+} from "openclaw/plugin-sdk/approval-handler-runtime";
 import {
   createChannelNativeOriginTargetResolver,
   resolveApprovalRequestSessionConversation,
@@ -37,7 +40,6 @@ import { resolveMatrixTargetIdentity } from "./matrix/target-ids.js";
 import type { CoreConfig } from "./types.js";
 
 type ApprovalRequest = ExecApprovalRequest | PluginApprovalRequest;
-type ApprovalKind = "exec" | "plugin";
 type MatrixOriginTarget = { to: string; threadId?: string };
 
 function normalizeComparableTarget(value: string): string {
@@ -104,7 +106,7 @@ function availabilityState(enabled: boolean) {
 function hasMatrixApprovalApprovers(params: {
   cfg: CoreConfig;
   accountId?: string | null;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
 }): boolean {
   return (
     getMatrixApprovalApprovers({
@@ -188,7 +190,7 @@ const resolveMatrixOriginTarget = createChannelNativeOriginTargetResolver({
 function resolveMatrixApproverDmTargets(params: {
   cfg: CoreConfig;
   accountId?: string | null;
-  approvalKind: ApprovalKind;
+  approvalKind: ChannelApprovalKind;
   request: ApprovalRequest;
 }): { to: string }[] {
   if (!shouldHandleMatrixApprovalRequest(params)) {

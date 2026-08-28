@@ -3,15 +3,28 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
+import { inheritOptionFromParent } from "../command-options.js";
+import { measureCliCommandStartup } from "../command-startup-timing.js";
 import { formatHelpExamples } from "../help-format.js";
+import { requestExitAfterOneShotOutput } from "../one-shot-exit.js";
 
 type AgentViaGatewayModule = typeof import("../../commands/agent-via-gateway.js");
+type AgentExecModule = typeof import("../../commands/agent-exec.js");
 type CliUtilsModule = typeof import("../cli-utils.js");
 type GlobalStateModule = typeof import("../../global-state.js");
 type RuntimeModule = typeof import("../../runtime.js");
 
 async function loadAgentCliCommand(): Promise<AgentViaGatewayModule["agentCliCommand"]> {
   return (await import("../../commands/agent-via-gateway.js")).agentCliCommand;
+}
+
+async function loadAgentExecCommand(): Promise<AgentExecModule["agentExecCommand"]> {
+  return (await import("../../commands/agent-exec.js")).agentExecCommand;
+}
+
+function collectFallback(value: string, previous: string[]): string[] {
+  return [...previous, value];
 }
 
 async function loadDefaultRuntime(): Promise<RuntimeModule["defaultRuntime"]> {
@@ -31,11 +44,11 @@ export function registerAgentTurnCommand(
   program: Command,
   args: { agentChannelOptions: string },
 ): void {
-  program
+  const agent = program
     .command("agent")
     .description("Run an agent turn via the Gateway (use --local for embedded)")
     .option("-m, --message <text>", "Message body for the agent")
-    .option("--message-file <path>", "Read the agent message body from a UTF-8 file")
+    .option("--message-file <path>", "Read the agent message body from a UTF-8 file (max 4 MiB)")
     .option("-t, --to <number>", "Recipient number in E.164 used to derive the session key")
     .option("--session-key <key>", "Explicit session key (agent:<id>:<key>, or scoped to --agent)")
     .option("--session-id <id>", "Use an explicit session id")
@@ -43,7 +56,7 @@ export function registerAgentTurnCommand(
     .option("--model <id>", "Model override for this run (provider/model or model id)")
     .option(
       "--thinking <level>",
-      "Thinking level: off | minimal | low | medium | high | xhigh | adaptive | max where supported",
+      `Thinking level: ${THINKING_LEVELS_HELP.replaceAll("|", " | ")} where supported`,
     )
     .option("--verbose <on|off>", "Persist agent verbose level for the session")
     .option(
@@ -55,7 +68,7 @@ export function registerAgentTurnCommand(
     .option("--reply-account <id>", "Delivery account id override")
     .option(
       "--local",
-      "Run the embedded agent locally (requires model provider API keys in your shell)",
+      "Run the embedded agent locally using configured provider credentials or local CLI logins",
       false,
     )
     .option("--deliver", "Send the agent's reply back to the selected channel", false)
@@ -98,15 +111,100 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/agent", "docs.openclaw.ai/cli/age
       const verboseLevel =
         typeof opts.verbose === "string" ? normalizeLowercaseStringOrEmpty(opts.verbose) : "";
       const [defaultRuntime, runCommandWithRuntime, setVerbose, agentCliCommand] =
-        await Promise.all([
-          loadDefaultRuntime(),
-          loadRunCommandWithRuntime(),
-          loadSetVerbose(),
-          loadAgentCliCommand(),
-        ]);
+        await measureCliCommandStartup("agent-action-imports", () =>
+          Promise.all([
+            loadDefaultRuntime(),
+            loadRunCommandWithRuntime(),
+            loadSetVerbose(),
+            loadAgentCliCommand(),
+          ]),
+        );
       await runCommandWithRuntime(defaultRuntime, async () => {
         setVerbose(verboseLevel === "on");
         await agentCliCommand(opts, defaultRuntime);
+        requestExitAfterOneShotOutput(defaultRuntime);
+      });
+    });
+
+  agent
+    .command("exec [message]")
+    .description("Run one isolated headless embedded agent turn")
+    .option("--message-file <path>", "Read the UTF-8 prompt from a file; use - for stdin")
+    .option("--cwd <dir>", "Set both the agent workspace and tool working directory")
+    .option("--state-dir <dir>", "Use an existing state directory without deleting it")
+    .option(
+      "--config <path>",
+      "Run against this config file instead of the ambient config (pins a reproducible run)",
+    )
+    .option("--isolated", "Ignore the ambient config and run against exec defaults only", false)
+    .option("--model <provider/model>", "Use an explicit primary model for this run")
+    .option("--code-mode <mode>", "Tool mode: direct | auto | code")
+    .option("--local-model-lean", "Use the reduced local-model tool surface")
+    .option(
+      "--thinking <level>",
+      `Thinking level: ${THINKING_LEVELS_HELP.replaceAll("|", " | ")} where supported`,
+    )
+    .option(
+      "--fallback <provider/model>",
+      "Add an ordered fallback model (repeatable; requires --model)",
+      collectFallback,
+      [],
+    )
+    .option("--auth-env-only", "Use provider credentials from environment variables only", false)
+    .option("--no-auth-env-only", "Allow stored and external CLI credential discovery")
+    .option("--timeout <seconds>", "Agent deadline in seconds", "600")
+    .option("--json", "Emit the stable agent-exec JSON envelope", false)
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.heading("Examples:")}\n${formatHelpExamples([
+          ['openclaw agent exec "Fix the failing test"', "Run in the current directory."],
+          [
+            "openclaw agent exec --message-file task.md --cwd ./repo",
+            "Read a prompt file and set the workspace.",
+          ],
+          [
+            'openclaw agent exec "Summarize this repo" --model openai/gpt-5.6-sol --fallback anthropic/claude-sonnet-4-6 --json',
+            "Use an explicit fallback chain and JSON output.",
+          ],
+          [
+            'openclaw agent exec "Inspect this repo" --model ollama/qwen3.5:9b --code-mode code --local-model-lean --json',
+            "Force Code Mode with the lean local-model tool surface.",
+          ],
+        ])}\n\n${theme.muted("Docs:")} ${formatDocsLink("/cli/agent#agent-exec", "docs.openclaw.ai/cli/agent#agent-exec")}`,
+    )
+    .action(async (message: string | undefined, opts, command): Promise<void> => {
+      const parentOpts = command.parent?.opts() as
+        | {
+            messageFile?: string;
+            model?: string;
+            thinking?: string;
+            timeout?: string;
+            json?: boolean;
+          }
+        | undefined;
+      const execOpts = {
+        ...opts,
+        messageFile: opts.messageFile ?? parentOpts?.messageFile,
+        model: opts.model ?? parentOpts?.model,
+        thinking: opts.thinking ?? parentOpts?.thinking,
+        // Exec --timeout defaults to "600"; inherit a parent flag only when the
+        // leaf source is default. An explicit nested --timeout must win.
+        timeout: inheritOptionFromParent<string>(command, "timeout") ?? opts.timeout,
+        json: opts.json === true || parentOpts?.json === true,
+      };
+      const [defaultRuntime, runCommandWithRuntime, agentExecCommand] = await Promise.all([
+        loadDefaultRuntime(),
+        loadRunCommandWithRuntime(),
+        loadAgentExecCommand(),
+      ]);
+      await runCommandWithRuntime(defaultRuntime, async () => {
+        const result = await agentExecCommand(message, execOpts, defaultRuntime);
+        if (result.exitCode !== 0) {
+          defaultRuntime.exit(result.exitCode, { resetStream: process.stderr });
+          return;
+        }
+        requestExitAfterOneShotOutput(defaultRuntime, result.exitCode);
       });
     });
 }

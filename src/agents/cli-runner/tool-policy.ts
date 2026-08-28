@@ -1,14 +1,24 @@
-import { normalizeToolName } from "../tool-policy.js";
+import { normalizeToolPolicyName } from "../tool-policy.js";
 
-/** CLI backends cannot enforce runtime caps; keep only real restrictions. */
+/** Transport prefix CLI harnesses use for loopback OpenClaw MCP tool names. */
+const OPENCLAW_MCP_TOOL_PREFIX = "mcp__openclaw__";
+
+/** Strips the loopback MCP transport prefix so observers see gateway tool names. */
+export function stripOpenClawMcpToolPrefix(toolName: string): string {
+  return toolName.startsWith(OPENCLAW_MCP_TOOL_PREFIX)
+    ? toolName.slice(OPENCLAW_MCP_TOOL_PREFIX.length)
+    : toolName;
+}
+
+/** Keeps only explicit runtime caps for backend-owned exact translation. */
 export function resolveCliRuntimeToolsAllow(
   toolsAllow?: string[],
-  toolsAllowIsDefault?: boolean,
+  _toolsAllowIsDefault?: boolean,
 ): string[] | undefined {
-  if (toolsAllow === undefined || toolsAllowIsDefault) {
+  if (toolsAllow === undefined) {
     return undefined;
   }
-  return toolsAllow.some((toolName) => normalizeToolName(toolName) === "*")
+  return toolsAllow.some((toolName) => normalizeToolPolicyName(toolName) === "*")
     ? undefined
     : toolsAllow;
 }

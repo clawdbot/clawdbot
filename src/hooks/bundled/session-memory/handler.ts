@@ -8,36 +8,47 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   resolveAgentIdByWorkspacePath,
   resolveAgentWorkspaceDir,
 } from "../../../agents/agent-scope.js";
+import { resolveUserTimezone } from "../../../agents/date-time.js";
+import { createMemoryWriteProvenanceObserver } from "../../../agents/memory-write-provenance.js";
 import { resolveStateDir } from "../../../config/paths.js";
-import { loadTranscriptEvents } from "../../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
 import {
-  parseSqliteSessionFileMarker,
-  type SqliteSessionFileMarker,
-} from "../../../config/sessions/sqlite-marker.js";
+  loadTranscriptEvents,
+  readSessionTranscriptBoundedMessageTailPage,
+  type TranscriptEvent,
+} from "../../../config/sessions/session-accessor.js";
 import { selectVisibleTranscriptEvents } from "../../../config/sessions/transcript-visible-events.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isVitestRuntimeEnv } from "../../../infra/env.js";
 import { root } from "../../../infra/fs-safe.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
-import {
-  parseAgentSessionKey,
-  resolveAgentIdFromSessionKey,
-  toAgentStoreSessionKey,
-} from "../../../routing/session-key.js";
+import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import { parseAgentSessionKey, toAgentStoreSessionKey } from "../../../routing/session-key.js";
 import { shortenHomePath } from "../../../utils.js";
 import { resolveHookConfig } from "../../config.js";
+import { formatHookErrorForLog } from "../../fire-and-forget.js";
 import type { HookHandler } from "../../hooks.js";
 import { generateSlugViaLLM } from "../../llm-slug-generator.js";
+import { isSessionAutoResetReason } from "../../session-auto-reset.js";
 import {
-  findPreviousSessionFile,
-  getRecentSessionContentFromEvents,
-  getRecentSessionContentWithResetFallback,
+  countSessionMemoryMessages,
+  getRecentSessionProjectionFromEvents,
+  type SessionMemoryProjection,
 } from "./transcript.js";
 
 const log = createSubsystemLogger("hooks/session-memory");
+const SESSION_MEMORY_CAPTURE_MAX_BYTES = 8 * 1024 * 1024;
+const SESSION_MEMORY_CAPTURE_PAGE_MESSAGES = 256;
+const SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES = 4_096;
+
+type SessionMemoryTranscript =
+  | ({ status: "available" } & (SessionMemoryProjection | { content: null; originClass: "agent" }))
+  | { status: "unavailable"; reason: string };
 
 function pickDateTimePart(
   parts: Intl.DateTimeFormatPart[],
@@ -46,27 +57,16 @@ function pickDateTimePart(
   return parts.find((part) => part.type === type)?.value;
 }
 
-function resolveLocalTimeZone(): string | undefined {
-  const timeZone = process.env.TZ?.trim();
-  if (!timeZone) {
-    return undefined;
-  }
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone }).format(new Date());
-    return timeZone;
-  } catch {
-    return undefined;
-  }
-}
-
-function formatLocalSessionTimestamp(date: Date): {
+function formatLocalSessionTimestamp(
+  date: Date,
+  timeZone: string,
+): {
   date: string;
   time: string;
   timeSlug: string;
-  timeZoneName?: string;
 } {
   const parts = new Intl.DateTimeFormat("en-US", {
-    timeZone: resolveLocalTimeZone(),
+    timeZone,
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -74,7 +74,6 @@ function formatLocalSessionTimestamp(date: Date): {
     minute: "2-digit",
     second: "2-digit",
     hourCycle: "h23",
-    timeZoneName: "short",
   }).formatToParts(date);
 
   const year = pickDateTimePart(parts, "year") ?? String(date.getFullYear()).padStart(4, "0");
@@ -83,16 +82,10 @@ function formatLocalSessionTimestamp(date: Date): {
   const hour = pickDateTimePart(parts, "hour") ?? String(date.getHours()).padStart(2, "0");
   const minute = pickDateTimePart(parts, "minute") ?? String(date.getMinutes()).padStart(2, "0");
   const second = pickDateTimePart(parts, "second") ?? String(date.getSeconds()).padStart(2, "0");
-  const timeZoneName = [...parts]
-    .toReversed()
-    .find((part) => part.type === "timeZoneName")
-    ?.value?.trim();
-
   return {
     date: `${year}-${month}-${day}`,
     time: `${hour}:${minute}:${second}`,
     timeSlug: `${hour}${minute}`,
-    timeZoneName,
   };
 }
 
@@ -119,23 +112,80 @@ async function resolveAvailableMemoryFilename(params: {
 }
 
 async function getRecentSqliteSessionContent(
-  marker: SqliteSessionFileMarker,
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
   messageCount: number,
-): Promise<string | null> {
-  try {
-    return getRecentSessionContentFromEvents(
-      selectVisibleTranscriptEvents(
-        await loadTranscriptEvents({
-          agentId: marker.agentId,
-          sessionId: marker.sessionId,
-          storePath: marker.storePath,
-        }),
+  capturedEvents?: TranscriptEvent[],
+): Promise<SessionMemoryProjection | null> {
+  const events = capturedEvents ?? (await loadTranscriptEvents({ ...scope }));
+  const latestResetIndex = capturedEvents
+    ? -1
+    : events.findLastIndex(
+        (event) =>
+          Boolean(event) &&
+          typeof event === "object" &&
+          !Array.isArray(event) &&
+          (event as { type?: unknown }).type === "reset",
+      );
+  const retiredEvents = latestResetIndex >= 0 ? events.slice(0, latestResetIndex) : events;
+  return getRecentSessionProjectionFromEvents(
+    selectVisibleTranscriptEvents(retiredEvents),
+    messageCount,
+  );
+}
+
+// The bounded reader already projects the active branch, but message pages
+// omit intervening control ancestors. Relink this snapshot so the shared
+// visibility selector can validate it without dropping active messages.
+function relinkCapturedActiveMessageEvents(events: TranscriptEvent[]): TranscriptEvent[] {
+  let parentId: string | null = null;
+  return events.map((event, index) => {
+    if (!event || typeof event !== "object" || Array.isArray(event)) {
+      return event;
+    }
+    const record = event as Record<string, unknown>;
+    if (record.type !== "message") {
+      return event;
+    }
+    const id = typeof record.id === "string" ? record.id : `session-memory-${index + 1}`;
+    const linked = { ...record, id, parentId } as TranscriptEvent;
+    parentId = id;
+    return linked;
+  });
+}
+
+function captureRecentSessionMemoryEvents(
+  scope: { agentId: string; sessionId: string; sessionKey: string; storePath: string },
+  messageCount: number,
+): TranscriptEvent[] {
+  const captured: TranscriptEvent[] = [];
+  let capturedBytes = 0;
+  let offset = 0;
+  let totalMessages = Number.POSITIVE_INFINITY;
+  while (
+    offset < totalMessages &&
+    offset < SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES &&
+    capturedBytes < SESSION_MEMORY_CAPTURE_MAX_BYTES &&
+    countSessionMemoryMessages(
+      selectVisibleTranscriptEvents(relinkCapturedActiveMessageEvents(captured)),
+    ) < messageCount
+  ) {
+    const page = readSessionTranscriptBoundedMessageTailPage(scope, {
+      maxBytes: SESSION_MEMORY_CAPTURE_MAX_BYTES - capturedBytes,
+      maxMessages: Math.min(
+        SESSION_MEMORY_CAPTURE_PAGE_MESSAGES,
+        SESSION_MEMORY_CAPTURE_MAX_SCANNED_MESSAGES - offset,
       ),
-      messageCount,
-    );
-  } catch {
-    return null;
+      offset,
+    });
+    totalMessages = page.totalMessages;
+    if (page.scannedMessages === 0) {
+      break;
+    }
+    captured.unshift(...page.events.map(({ event }) => event));
+    capturedBytes += page.serializedBytes;
+    offset += page.scannedMessages;
   }
+  return relinkCapturedActiveMessageEvents(captured);
 }
 
 function resolveDisplaySessionKey(params: {
@@ -157,18 +207,27 @@ function resolveDisplaySessionKey(params: {
   });
 }
 
-/**
- * Save session context to memory when /new or /reset command is triggered
- */
 const pendingSessionMemoryWrites = new Set<Promise<void>>();
+
+function requireSessionMemoryAgentId(event: Parameters<HookHandler>[0]): string {
+  const agentId = normalizeOptionalString(event.context?.agentId);
+  if (!agentId) {
+    throw new Error("Session memory hook contract requires context.agentId");
+  }
+  return agentId;
+}
 
 export async function flushSessionMemoryWritesForTest(): Promise<void> {
   await Promise.allSettled(pendingSessionMemoryWrites);
 }
 
-async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<void> {
+async function saveSessionMemoryNow(
+  event: Parameters<HookHandler>[0],
+  agentId: string,
+  capturedEvents?: TranscriptEvent[],
+): Promise<void> {
   try {
-    log.debug("Hook triggered for reset/new command", { action: event.action });
+    log.debug("Session memory hook triggered", { action: event.action, type: event.type });
 
     const context = event.context || {};
     const cfg = context.cfg as OpenClawConfig | undefined;
@@ -176,7 +235,10 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
       typeof context.workspaceDir === "string" && context.workspaceDir.trim().length > 0
         ? context.workspaceDir
         : undefined;
-    const agentId = resolveAgentIdFromSessionKey(event.sessionKey);
+    const contextStorePath =
+      typeof context.storePath === "string" && context.storePath.trim()
+        ? context.storePath.trim()
+        : undefined;
     const workspaceDir =
       contextWorkspaceDir ||
       (cfg
@@ -190,50 +252,28 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     const memoryDir = path.join(workspaceDir, "memory");
     await fs.mkdir(memoryDir, { recursive: true });
 
-    // Use the user's local timezone for memory artifact names and headings.
+    // Session-memory artifacts share the same configured user-day boundary as daily memory files.
     const now = new Date(event.timestamp);
-    const localTimestamp = formatLocalSessionTimestamp(now);
+    const userTimezone = resolveUserTimezone(cfg?.agents?.defaults?.userTimezone ?? process.env.TZ);
+    const localTimestamp = formatLocalSessionTimestamp(now, userTimezone);
     const dateStr = localTimestamp.date;
 
-    // Generate descriptive slug from session when explicitly enabled
-    // Prefer previousSessionEntry (old session before /new) over current (which may be empty)
-    const sessionEntry = (context.previousSessionEntry || context.sessionEntry || {}) as Record<
-      string,
-      unknown
-    >;
-    const currentSessionId = sessionEntry.sessionId as string;
-    let currentSessionFile = (sessionEntry.sessionFile as string) || undefined;
-
-    // If sessionFile is empty or looks like a new/reset file, try to find the previous session file.
-    if (!currentSessionFile || currentSessionFile.includes(".reset.")) {
-      const sessionsDirs = new Set<string>();
-      if (currentSessionFile) {
-        sessionsDirs.add(path.dirname(currentSessionFile));
-      }
-      sessionsDirs.add(path.join(workspaceDir, "sessions"));
-
-      for (const sessionsDir of sessionsDirs) {
-        const recoveredSessionFile = await findPreviousSessionFile({
-          sessionsDir,
-          currentSessionFile,
-          sessionId: currentSessionId,
-        });
-        if (!recoveredSessionFile) {
-          continue;
-        }
-        currentSessionFile = recoveredSessionFile;
-        log.debug("Found previous session file", { file: currentSessionFile });
-        break;
-      }
-    }
+    // Manual commands carry the prior entry separately; automatic rollover
+    // events already identify the ended session as sessionEntry.
+    const sessionEntry = (
+      event.type === "command"
+        ? context.previousSessionEntry || context.sessionEntry || {}
+        : context.sessionEntry || {}
+    ) as Record<string, unknown>;
+    const currentSessionId =
+      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
 
     log.debug("Session context resolved", {
       sessionId: currentSessionId,
-      sessionFile: currentSessionFile,
       hasCfg: Boolean(cfg),
     });
-
-    const sessionFile = currentSessionFile || undefined;
 
     // Read message count from hook config (default: 15)
     const hookConfig = resolveHookConfig(cfg, "session-memory");
@@ -243,33 +283,55 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
         : 15;
 
     let slug: string | null = null;
-    let sessionContent: string | null = null;
+    let transcript: SessionMemoryTranscript = {
+      status: "available",
+      content: null,
+      originClass: "agent",
+    };
 
-    if (sessionFile) {
-      const sqliteMarker = parseSqliteSessionFileMarker(sessionFile);
-      // SQLite-backed runtime sessions carry a marker in the legacy sessionFile
-      // slot; file artifact helpers only run for real transcript paths.
-      sessionContent = sqliteMarker
-        ? await getRecentSqliteSessionContent(sqliteMarker, messageCount)
-        : await getRecentSessionContentWithResetFallback(sessionFile, messageCount);
+    if (currentSessionId) {
+      try {
+        const projection = await getRecentSqliteSessionContent(
+          {
+            agentId,
+            sessionId: currentSessionId,
+            sessionKey: event.sessionKey,
+            storePath:
+              contextStorePath ?? resolveSessionStorePathCore(cfg?.session?.store, { agentId }),
+          },
+          messageCount,
+          capturedEvents,
+        );
+        transcript = projection
+          ? { status: "available", ...projection }
+          : { status: "available", content: null, originClass: "agent" };
+      } catch (error) {
+        const reason = formatHookErrorForLog(error);
+        transcript = { status: "unavailable", reason };
+        log.warn("Session transcript unavailable for memory capture", {
+          sessionKey: event.sessionKey,
+          error: reason,
+        });
+      }
       log.debug("Session content loaded", {
-        length: sessionContent?.length ?? 0,
+        length: transcript.status === "available" ? (transcript.content?.length ?? 0) : 0,
         messageCount,
       });
 
       // Avoid calling the model provider in unit tests; keep hooks fast and deterministic.
-      const isTestEnv =
-        process.env.OPENCLAW_TEST_FAST === "1" ||
-        process.env.VITEST === "true" ||
-        process.env.VITEST === "1" ||
-        process.env.NODE_ENV === "test";
+      const isTestEnv = isVitestRuntimeEnv();
       const allowLlmSlug = !isTestEnv && hookConfig?.llmSlug === true;
 
-      if (sessionContent && cfg && allowLlmSlug) {
+      if (transcript.status === "available" && transcript.content && cfg && allowLlmSlug) {
         log.debug("Calling generateSlugViaLLM...");
         // Use LLM to generate a descriptive slug
         const slugModel = typeof hookConfig?.model === "string" ? hookConfig.model : undefined;
-        slug = await generateSlugViaLLM({ sessionContent, cfg, model: slugModel });
+        slug = await generateSlugViaLLM({
+          sessionContent: transcript.content,
+          cfg,
+          agentId,
+          model: slugModel,
+        });
         log.debug("Generated slug", { slug });
       }
     }
@@ -289,32 +351,57 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
     });
 
     const timeStr = localTimestamp.time;
-    const timeZoneSuffix = localTimestamp.timeZoneName ? ` ${localTimestamp.timeZoneName}` : "";
 
     // Extract context details
     const sessionId = (sessionEntry.sessionId as string) || "unknown";
-    const source = (context.commandSource as string) || "unknown";
+    const boundaryDetail =
+      event.type === "session"
+        ? `- **Reason**: ${(context.reason as string) || "unknown"}`
+        : `- **Source**: ${(context.commandSource as string) || "unknown"}`;
 
     // Build Markdown entry
     const entryParts = [
-      `# Session: ${dateStr} ${timeStr}${timeZoneSuffix}`,
+      `# Session: ${dateStr} ${timeStr} ${userTimezone}`,
       "",
       `- **Session Key**: ${displaySessionKey}`,
       `- **Session ID**: ${sessionId}`,
-      `- **Source**: ${source}`,
+      boundaryDetail,
       "",
     ];
 
     // Include conversation content if available
-    if (sessionContent) {
-      entryParts.push("## Conversation Summary", "", sessionContent, "");
+    if (transcript.status === "available" && transcript.content) {
+      entryParts.push("## Conversation Summary", "", transcript.content, "");
+    } else if (transcript.status === "unavailable") {
+      entryParts.push(
+        "## Conversation Summary",
+        "",
+        `> Transcript content was unavailable: ${JSON.stringify(transcript.reason)}`,
+        "",
+      );
     }
 
     const entry = entryParts.join("\n");
 
-    // Write under memory root with alias-safe file validation.
+    // Reserve provenance before exposing the file. A restricted projection
+    // must never fall back to an untracked artifact that later reads as trusted.
     const memoryRoot = await root(memoryDir);
-    await memoryRoot.write(filename, entry, { encoding: "utf-8" });
+    const provenanceObserver = createMemoryWriteProvenanceObserver({
+      mutationRoot: workspaceDir,
+      workspaceDir,
+      resolveOriginClass: () =>
+        transcript.status === "available" ? transcript.originClass : "agent",
+      sessionId: currentSessionId,
+      sessionKey: event.sessionKey,
+      now: () => now.getTime(),
+    });
+    const commit = () => memoryRoot.write(filename, entry, { encoding: "utf-8" });
+    await provenanceObserver.write({
+      absolutePath: memoryFilePath,
+      contentBefore: "",
+      contentAfter: entry,
+      commit,
+    });
     log.debug("Memory file written successfully");
 
     // Log completion (but don't send user-visible confirmation - it's internal housekeeping)
@@ -334,18 +421,67 @@ async function saveSessionMemoryNow(event: Parameters<HookHandler>[0]): Promise<
 }
 
 const saveSessionToMemory: HookHandler = (event) => {
-  // Only trigger on reset/new commands. This is silent housekeeping, so keep it
-  // off the command reply path.
+  // Manual commands retain their shipped hook contract, including /reset soft.
+  // Automatic rollover uses a distinct lifecycle event so command hooks do not
+  // receive synthetic commands and manual reset cannot double-write memory.
   const isResetCommand = event.action === "new" || event.action === "reset";
-  if (event.type !== "command" || !isResetCommand) {
-    return;
+  const isAutoReset =
+    event.type === "session" &&
+    event.action === "auto-reset" &&
+    isSessionAutoResetReason(event.context.reason);
+  if ((event.type !== "command" || !isResetCommand) && !isAutoReset) {
+    return undefined;
   }
+  const agentId = requireSessionMemoryAgentId(event);
 
-  const writePromise = saveSessionMemoryNow(event);
+  let capturedEvents: TranscriptEvent[] | undefined;
+  try {
+    const context = event.context || {};
+    const sessionEntry = (
+      event.type === "command"
+        ? context.previousSessionEntry || context.sessionEntry || {}
+        : context.sessionEntry || {}
+    ) as Record<string, unknown>;
+    const sessionId =
+      typeof sessionEntry.sessionId === "string" && sessionEntry.sessionId.trim()
+        ? sessionEntry.sessionId.trim()
+        : undefined;
+    if (sessionId) {
+      const cfg = context.cfg as OpenClawConfig | undefined;
+      const storePath =
+        typeof context.storePath === "string" && context.storePath.trim()
+          ? context.storePath.trim()
+          : resolveSessionStorePathCore(cfg?.session?.store, { agentId });
+      const hookConfig = resolveHookConfig(cfg, "session-memory");
+      const messageCount =
+        typeof hookConfig?.messages === "number" && hookConfig.messages > 0
+          ? hookConfig.messages
+          : 15;
+      capturedEvents = captureRecentSessionMemoryEvents(
+        { agentId, sessionId, sessionKey: event.sessionKey, storePath },
+        messageCount,
+      );
+    }
+  } catch {
+    // Projection reads verify indexedSeq against the latest committed seq in
+    // one transaction. An in-flight rebuild throws here and schedules repair,
+    // so the async writer falls back to the authoritative transcript rows.
+  }
+  const writePromise = isAutoReset
+    ? saveSessionMemoryNow(event, agentId, capturedEvents)
+    : runWithGatewayIndependentRootWorkContinuation(() =>
+        saveSessionMemoryNow(event, agentId, capturedEvents),
+      );
   pendingSessionMemoryWrites.add(writePromise);
   void writePromise.finally(() => {
     pendingSessionMemoryWrites.delete(writePromise);
   });
+  // Automatic rollover dispatch is already detached from the successor turn.
+  // Keep its gateway admission alive until nested slug/model work finishes.
+  if (isAutoReset) {
+    return writePromise;
+  }
+  return undefined;
 };
 
 export default saveSessionToMemory;

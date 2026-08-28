@@ -11,6 +11,7 @@ import {
 } from "@openclaw/normalization-core/string-normalization";
 import type { TSchema } from "typebox";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
+import { cleanSchemaForLlamacppGbnf } from "./clean-for-llamacpp-gbnf.js";
 import { stripUnsupportedSchemaKeywords } from "./schema-keyword-strip.js";
 
 /**
@@ -831,12 +832,16 @@ function normalizeToolParameterSchemaUncached(
   const isAnthropicProvider = normalizedProvider.includes("anthropic");
   const unsupportedToolSchemaKeywords = resolveUnsupportedToolSchemaKeywords(options?.modelCompat);
   const omitEmptyArrayItems = shouldOmitEmptyArrayItems(options?.modelCompat);
+  const isLlamacppGbnfProfile = normalizedToolSchemaProfile === "llamacpp";
 
   function applyProviderCleaning(s: unknown): TSchema {
     const normalizedSchema = normalizeArraySchemasMissingItems(s);
-    const arrayItemsCompatibleSchema = omitEmptyArrayItems
+    let arrayItemsCompatibleSchema = omitEmptyArrayItems
       ? stripEmptyArrayItemsFromArraySchemas(normalizedSchema)
       : normalizedSchema;
+    if (isLlamacppGbnfProfile) {
+      arrayItemsCompatibleSchema = cleanSchemaForLlamacppGbnf(arrayItemsCompatibleSchema);
+    }
     if (isGeminiProvider && !isAnthropicProvider) {
       const geminiCompatibleSchema = cleanSchemaForGemini(arrayItemsCompatibleSchema);
       return unsupportedToolSchemaKeywords.size > 0
@@ -887,7 +892,15 @@ function normalizeToolParameterSchemaUncached(
     return applyProviderCleaning(inlinedSchema);
   }
   const variants = schemaRecord[flattenableVariantKey] as unknown[];
-  const mergedProperties: Record<string, unknown> = {};
+  // Seed mergedProperties with the root-declared properties so branch properties
+  // merge *into* them instead of replacing them. Otherwise a root `required`
+  // field that is not re-declared in any branch would be dropped from
+  // `properties` while staying `required`, producing an unsatisfiable schema
+  // when `additionalProperties` is false (#128743).
+  const rootProperties = isSchemaRecord(schemaRecord.properties)
+    ? { ...schemaRecord.properties }
+    : {};
+  const mergedProperties: Record<string, unknown> = rootProperties;
   const requiredCounts = new Map<string, number>();
   let objectVariants = 0;
 

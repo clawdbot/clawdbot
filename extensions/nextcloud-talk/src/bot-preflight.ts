@@ -1,17 +1,17 @@
 // Nextcloud Talk plugin module implements bot preflight behavior.
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictNonNegativeInteger } from "openclaw/plugin-sdk/number-runtime";
-import {
-  readProviderJsonResponse,
-  readResponseTextLimited,
-} from "openclaw/plugin-sdk/provider-http";
+import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
 import { fetchWithSsrFGuard } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
+import {
+  readNextcloudTalkErrorBody,
+  releaseNextcloudTalkGuardedResponse,
+} from "./guarded-response.js";
 import { ssrfPolicyFromPrivateNetworkOptIn } from "./send.runtime.js";
 
 const BOT_FEATURE_RESPONSE = 2;
-const BOT_PREFLIGHT_ERROR_BODY_LIMIT_BYTES = 8 * 1024;
 
 type NextcloudTalkBotAdminEntry = {
   id?: number | string;
@@ -129,10 +129,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
     });
     try {
       if (!response.ok) {
-        const body = await readResponseTextLimited(
-          response,
-          BOT_PREFLIGHT_ERROR_BODY_LIMIT_BYTES,
-        ).catch(() => "");
+        const body = await readNextcloudTalkErrorBody(response, auth, credentials.apiPassword);
         return {
           ok: false,
           code: "api_error",
@@ -175,7 +172,7 @@ export async function probeNextcloudTalkBotResponseFeature(params: {
         message: `Nextcloud Talk bot "${bot.name ?? bot.id ?? "matching bot"}" has the response feature.`,
       };
     } finally {
-      await release();
+      await releaseNextcloudTalkGuardedResponse({ response, release });
     }
   } catch (error) {
     const detail = error instanceof Error ? error.message : formatErrorMessage(error);

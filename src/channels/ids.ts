@@ -15,6 +15,7 @@ export type ChatChannelId = string;
 type BundledChatChannelEntry = {
   id: ChatChannelId;
   aliases: readonly string[];
+  label?: string;
   order: number;
 };
 
@@ -23,6 +24,7 @@ function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
     .map((entry) => ({
       id: normalizeOptionalLowercaseString(entry.channelId) ?? entry.channelId,
       aliases: entry.aliases ?? [],
+      label: entry.label?.trim() || undefined,
       order: entry.order ?? Number.MAX_SAFE_INTEGER,
     }))
     .toSorted(
@@ -33,7 +35,6 @@ function listBundledChatChannelEntries(): BundledChatChannelEntry[] {
 
 const BUNDLED_CHAT_CHANNEL_ENTRIES = Object.freeze(listBundledChatChannelEntries());
 const CHAT_CHANNEL_ID_SET = new Set(BUNDLED_CHAT_CHANNEL_ENTRIES.map((entry) => entry.id));
-let runtimeBundledChatChannelEntries: BundledChatChannelEntry[] | null = null;
 
 /**
  * Stable built-in channel order derived from generated bundled channel metadata.
@@ -58,19 +59,18 @@ const CHAT_CHANNEL_ALIASES: Record<string, ChatChannelId> = Object.freeze(
   ),
 ) as Record<string, ChatChannelId>;
 
-function listRuntimeBundledChatChannelEntries(): BundledChatChannelEntry[] {
-  // Generated metadata is the hot-path source. The runtime catalog fallback covers
-  // dynamically registered bundled metadata without repeated catalog reads.
-  runtimeBundledChatChannelEntries ??= listBundledChannelCatalogEntries().map((entry) => ({
-    id: entry.id,
-    aliases: entry.aliases,
-    order: entry.order,
-  }));
-  return runtimeBundledChatChannelEntries;
+/** Finds the generated operator-facing label for a built-in channel id or alias. */
+export function findChatChannelLabel(raw?: string | null): string | undefined {
+  const normalized = normalizeOptionalLowercaseString(raw);
+  if (!normalized) {
+    return undefined;
+  }
+  const resolved = CHAT_CHANNEL_ALIASES[normalized] ?? normalized;
+  return BUNDLED_CHAT_CHANNEL_ENTRIES.find((entry) => entry.id === resolved)?.label;
 }
 
 function normalizeRuntimeBundledChatChannelId(normalized: string): ChatChannelId | null {
-  for (const entry of listRuntimeBundledChatChannelEntries()) {
+  for (const entry of listBundledChannelCatalogEntries()) {
     if (entry.id === normalized || entry.aliases.includes(normalized)) {
       return entry.id;
     }

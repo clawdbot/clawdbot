@@ -25,7 +25,7 @@ function stubActionTool(name: string, actions: string[]) {
 const coreTools = [
   stubActionTool("canvas", ["create", "read"]),
   stubActionTool("nodes", ["list", "invoke"]),
-  stubActionTool("cron", ["schedule", "cancel"]),
+  stubActionTool("automations", ["schedule", "cancel"]),
   stubActionTool("message", ["send", "reply"]),
   stubTool("heartbeat_respond"),
   stubActionTool("gateway", ["config.get", "config.schema.lookup"]),
@@ -34,6 +34,9 @@ const coreTools = [
   stubActionTool("sessions_list", ["list", "show"]),
   stubActionTool("sessions_history", ["read", "tail"]),
   stubActionTool("sessions_search", ["search", "find"]),
+  stubTool("conversations_list"),
+  stubTool("conversations_send"),
+  stubTool("conversations_turn"),
   stubActionTool("sessions_send", ["send", "reply"]),
   stubActionTool("sessions_spawn", ["spawn", "handoff"]),
   stubActionTool("subagents", ["list", "show"]),
@@ -44,7 +47,7 @@ const coreTools = [
   stubTool("image_generate"),
   stubTool("video_generate"),
   stubTool("web_fetch"),
-  stubTool("image"),
+  stubTool("view_image"),
   stubTool("pdf"),
 ];
 

@@ -78,5 +78,13 @@
   {
     "source": "Webhook",
     "target": "Webhook"
+  },
+  {
+    "source": "Pull request review flow",
+    "target": "पुल रिक्वेस्ट समीक्षा प्रवाह"
+  },
+  {
+    "source": "CI pipeline",
+    "target": "CI पाइपलाइन"
   }
 ]

@@ -1,14 +1,12 @@
+// @vitest-environment node
 // Control UI tests cover custom theme behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { importCustomThemeFromUrl } from "../pages/config/custom-theme-import.ts";
 import {
   createImportedCustomThemeFixture as createImportedTheme,
   createTweakcnThemePayload as createTweakcnPayload,
 } from "../test-helpers/custom-theme.ts";
-import {
-  importCustomThemeFromUrl,
-  parseImportedCustomTheme,
-  syncCustomThemeStyleTag,
-} from "./custom-theme.ts";
+import { parseImportedCustomTheme, syncCustomThemeStyleTag } from "./custom-theme.ts";
 import type { ImportedCustomTheme } from "./custom-theme.ts";
 
 afterEach(() => {
@@ -120,6 +118,27 @@ describe("custom theme import helpers", () => {
     await expect(
       importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z", fetchImpl),
     ).rejects.toThrow("too large");
+  });
+
+  it("rejects unsafe tweakcn content-length values before acquiring the body reader", async () => {
+    const cancel = vi.fn(() => Promise.resolve());
+    const getReader = vi.fn(() => {
+      throw new Error("reader should not be acquired");
+    });
+    const response = {
+      ok: true,
+      status: 200,
+      headers: new Headers({ "content-length": "9007199254740993" }),
+      body: { cancel, getReader },
+      url: "",
+    } as unknown as Response;
+    const fetchImpl = vi.fn(async () => response) as unknown as typeof fetch;
+
+    await expect(
+      importCustomThemeFromUrl("https://tweakcn.com/themes/cmlhfpjhw000004l4f4ax3m7z", fetchImpl),
+    ).rejects.toThrow("too large");
+    expect(getReader).not.toHaveBeenCalled();
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("rejects tweakcn theme responses without a bounded body stream", async () => {

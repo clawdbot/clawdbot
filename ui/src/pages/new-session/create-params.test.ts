@@ -1,5 +1,35 @@
+// @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { buildDraftSessionCreateParams } from "./create-params.ts";
+import { buildDraftSessionCreateParams, canStartSessionAsDraft } from "./create-params.ts";
+
+describe("create-as-draft availability", () => {
+  it("requires both draft policy and multiple creator identities", () => {
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared", "draft"],
+        hasMultipleIdentities: true,
+      }),
+    ).toBe(true);
+    expect(
+      canStartSessionAsDraft({
+        allowedVisibilities: ["shared"],
+        hasMultipleIdentities: true,
+      }),
+    ).toBe(false);
+    expect(canStartSessionAsDraft({ hasMultipleIdentities: true })).toBe(false);
+  });
+
+  it("stays dormant when the gateway has fewer than two identities", () => {
+    for (const hasMultipleIdentities of [undefined, false]) {
+      expect(
+        canStartSessionAsDraft({
+          allowedVisibilities: ["shared", "draft"],
+          hasMultipleIdentities,
+        }),
+      ).toBe(false);
+    }
+  });
+});
 
 describe("buildDraftSessionCreateParams", () => {
   it("keeps plain chats minimal", () => {
@@ -16,6 +46,32 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "hello" });
   });
 
+  it("adds incognito only when that visibility is selected", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private task",
+        visibility: "incognito",
+        worktree: false,
+      }),
+    ).toEqual({ agentId: "main", message: "private task", incognito: true });
+  });
+
+  it("adds draft visibility only when selected", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "private work in progress",
+        worktree: false,
+        visibility: "draft",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "private work in progress",
+      visibility: "draft",
+    });
+  });
+
   it("includes initial-message attachments", () => {
     const attachments = [
       { type: "image", mimeType: "image/png", fileName: "pixel.png", content: "aGVsbG8=" },
@@ -30,18 +86,42 @@ describe("buildDraftSessionCreateParams", () => {
     ).toEqual({ agentId: "main", message: "", attachments });
   });
 
-  it("includes a selected model for a plain session", () => {
+  it("includes selected model, context-window, and thinking overrides for a plain session", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
         message: "use the selected model",
         model: "anthropic/claude-sonnet-4-6",
+        contextWindow: "200k",
+        thinkingLevel: "high",
         worktree: false,
       }),
     ).toEqual({
       agentId: "main",
       message: "use the selected model",
       model: "anthropic/claude-sonnet-4-6",
+      contextWindow: "200k",
+      thinkingLevel: "high",
+    });
+  });
+
+  it("includes selected capability overrides in the atomic create request", () => {
+    const toolOverrides = {
+      mcpServers: { github: false },
+      skills: { release: false },
+      webSearch: false,
+    };
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "use these capabilities",
+        toolOverrides,
+        worktree: false,
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "use these capabilities",
+      toolOverrides,
     });
   });
 
@@ -51,6 +131,8 @@ describe("buildDraftSessionCreateParams", () => {
         agentId: "main",
         message: "start coding",
         model: "openai/gpt-5.5",
+        contextWindow: "200k",
+        thinkingLevel: "medium",
         worktree: false,
         catalogId: "claude",
       }),
@@ -96,39 +178,75 @@ describe("buildDraftSessionCreateParams", () => {
     });
   });
 
-  it("sends cwd only for non-workspace folders and execNode when picked", () => {
+  it("assigns a session created from a custom group", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
-        message: "remote work",
-        worktree: false,
-        cwd: "/other/repo",
+        message: "start grouped work",
+        worktree: true,
+        cwd: "/repos/client",
         workspace: "/workspace",
-        execNode: "macbook",
+        category: " Client work ",
       }),
     ).toEqual({
       agentId: "main",
-      message: "remote work",
-      cwd: "/other/repo",
-      execNode: "macbook",
+      message: "start grouped work",
+      category: "Client work",
+      cwd: "/repos/client",
+      worktree: true,
     });
   });
 
-  it("sends the selected node cwd even when it matches the Gateway workspace path", () => {
+  it("sends a custom Gateway folder without requiring a worktree", () => {
     expect(
       buildDraftSessionCreateParams({
         agentId: "main",
-        message: "remote work",
+        message: "bootstrap here",
         worktree: false,
-        cwd: "/workspace",
+        cwd: "/home",
         workspace: "/workspace",
-        execNode: "macbook",
       }),
     ).toEqual({
       agentId: "main",
-      message: "remote work",
-      cwd: "/workspace",
-      execNode: "macbook",
+      message: "bootstrap here",
+      cwd: "/home",
+    });
+  });
+
+  it("submits a selected project by id without leaking its host path", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "work in the recorded repo",
+        projectId: "openclaw",
+        worktree: true,
+        cwd: "/recorded/openclaw",
+        workspace: "/workspace",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "work in the recorded repo",
+      projectId: "openclaw",
+      worktree: true,
+    });
+  });
+
+  it("sends a custom Gateway checkout with an explicit worktree", () => {
+    expect(
+      buildDraftSessionCreateParams({
+        agentId: "main",
+        message: "isolated work",
+        worktree: true,
+        cwd: "/other/repo",
+        workspace: "/workspace",
+        baseRef: "main",
+      }),
+    ).toEqual({
+      agentId: "main",
+      message: "isolated work",
+      cwd: "/other/repo",
+      worktree: true,
+      worktreeBaseRef: "main",
     });
   });
 });

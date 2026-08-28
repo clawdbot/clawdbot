@@ -15,6 +15,7 @@ import { normalizeAccountId } from "../routing/session-key.js";
 import {
   avoidTrailingHighSurrogateBreak,
   chunkTextByBreakResolver,
+  normalizeChunkLimit,
 } from "../shared/text-chunking.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel-constants.js";
 
@@ -34,12 +35,8 @@ const DEFAULT_CHUNK_MODE: ChunkMode = "length";
 
 type ProviderChunkConfig = {
   textChunkLimit?: number;
-  chunkMode?: ChunkMode;
   streaming?: unknown;
-  accounts?: Record<
-    string,
-    { textChunkLimit?: number; chunkMode?: ChunkMode; streaming?: unknown }
-  >;
+  accounts?: Record<string, { textChunkLimit?: number; streaming?: unknown }>;
 };
 
 function resolveChunkLimitForProvider(
@@ -75,8 +72,7 @@ export function resolveTextChunkLimit(
       return undefined;
     }
     const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
-    const providerConfig = (channelsConfig?.[provider] ??
-      (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
+    const providerConfig = channelsConfig?.[provider] as ProviderChunkConfig | undefined;
     return resolveChunkLimitForProvider(providerConfig, accountId);
   })();
   if (typeof providerOverride === "number" && providerOverride > 0) {
@@ -96,9 +92,6 @@ function resolveChunkModeForProvider(
   const accounts = cfgSection.accounts;
   if (accounts && typeof accounts === "object") {
     const direct = resolveAccountEntry(accounts, normalizedAccountId);
-    // resolveChannelStreamingChunkMode owns nested-first/flat-fallback
-    // precedence (the flat `chunkMode` fallback serves external SDK plugin
-    // configs during the deprecation window). Do not re-read flat keys here.
     const directMode = resolveChannelStreamingChunkMode(direct);
     if (directMode) {
       return directMode;
@@ -116,8 +109,7 @@ export function resolveChunkMode(
     return DEFAULT_CHUNK_MODE;
   }
   const channelsConfig = cfg?.channels as Record<string, unknown> | undefined;
-  const providerConfig = (channelsConfig?.[provider] ??
-    (cfg as Record<string, unknown> | undefined)?.[provider]) as ProviderChunkConfig | undefined;
+  const providerConfig = channelsConfig?.[provider] as ProviderChunkConfig | undefined;
   const mode = resolveChunkModeForProvider(providerConfig, accountId);
   return mode ?? DEFAULT_CHUNK_MODE;
 }
@@ -125,6 +117,7 @@ export function resolveChunkMode(
 /**
  * Split text on newlines, trimming line whitespace.
  * Blank lines are folded into the next non-empty line as leading "\n" prefixes.
+ * Leading and trailing blank lines are capped to the available UTF-16 space.
  * Long lines can be split by length (default) or kept intact via splitLongLines:false.
  */
 export function chunkByNewline(
@@ -139,7 +132,8 @@ export function chunkByNewline(
   if (!text) {
     return [];
   }
-  if (maxLineLength <= 0) {
+  const lineLimit = normalizeChunkLimit(maxLineLength);
+  if (lineLimit <= 0) {
     return text.trim() ? [text] : [];
   }
   const splitLongLines = opts?.splitLongLines !== false;
@@ -155,31 +149,34 @@ export function chunkByNewline(
       continue;
     }
 
-    const maxPrefix = Math.max(0, maxLineLength - 1);
-    const cappedBlankLines = pendingBlankLines > 0 ? Math.min(pendingBlankLines, maxPrefix) : 0;
-    const prefix = cappedBlankLines > 0 ? "\n".repeat(cappedBlankLines) : "";
+    const lineValue = trimLines ? trimmed : line;
+    // Leave room for the first whole code point before folding in blank lines.
+    const firstCodePointLength = avoidTrailingHighSurrogateBreak(lineValue, 0, 1);
+    const maxPrefix = Math.max(0, lineLimit - firstCodePointLength);
+    const prefix = "\n".repeat(Math.min(pendingBlankLines, maxPrefix));
     pendingBlankLines = 0;
 
-    const lineValue = trimLines ? trimmed : line;
-    if (!splitLongLines || lineValue.length + prefix.length <= maxLineLength) {
+    if (!splitLongLines || lineValue.length + prefix.length <= lineLimit) {
       chunks.push(prefix + lineValue);
       continue;
     }
 
     // Back the head cut off to a code-point boundary so an over-long line never splits a surrogate
     // pair; the recursive chunkText below is already surrogate-safe, only this first cut was raw.
-    const rawLimit = Math.max(1, maxLineLength - prefix.length);
+    const rawLimit = Math.max(1, lineLimit - prefix.length);
     const firstLimit = avoidTrailingHighSurrogateBreak(lineValue, 0, rawLimit);
     const first = lineValue.slice(0, firstLimit);
     chunks.push(prefix + first);
     const remaining = lineValue.slice(firstLimit);
     if (remaining) {
-      chunks.push(...chunkText(remaining, maxLineLength));
+      chunks.push(...chunkText(remaining, lineLimit));
     }
   }
 
-  if (pendingBlankLines > 0 && chunks.length > 0) {
-    chunks[chunks.length - 1] += "\n".repeat(pendingBlankLines);
+  const lastChunk = chunks.at(-1);
+  if (pendingBlankLines > 0 && lastChunk !== undefined) {
+    const trailingLines = Math.min(pendingBlankLines, Math.max(0, lineLimit - lastChunk.length));
+    chunks[chunks.length - 1] = lastChunk + "\n".repeat(trailingLines);
   }
 
   return chunks;
@@ -207,8 +204,10 @@ export function chunkByParagraph(
   }
   const splitLongParagraphs = opts?.splitLongParagraphs !== false;
 
-  // Normalize to \n so blank line detection is consistent.
-  const normalized = text.replace(/\r\n?/g, "\n");
+  // U+2029 PARAGRAPH SEPARATOR maps to a blank-line boundary; U+2028 LINE
+  // SEPARATOR and CR/CRLF map to a single newline.
+  // Normalize in two steps so consecutive U+2028\u2029 also produces a blank line.
+  const normalized = text.replace(/\u2029/g, "\n\n").replace(/\r\n?|\u2028/g, "\n");
 
   // Fast-path: if there are no blank-line paragraph separators, do not split.
   // (We *do not* early-return based on `limit` — newline mode is about paragraph
@@ -298,21 +297,24 @@ export function chunkTextWithMode(text: string, limit: number, mode: ChunkMode):
 }
 
 export function chunkMarkdownTextWithMode(text: string, limit: number, mode: ChunkMode): string[] {
+  const normalizedLimit = normalizeChunkLimit(limit);
   if (mode === "newline") {
     // Paragraph chunking is fence-safe because we never split at arbitrary indices.
     // If a paragraph must be split by length, defer to the markdown-aware chunker.
-    const paragraphChunks = chunkByParagraph(text, limit, { splitLongParagraphs: false });
+    const paragraphChunks = chunkByParagraph(text, normalizedLimit, {
+      splitLongParagraphs: false,
+    });
     const out: string[] = [];
     for (const chunk of paragraphChunks.flatMap((paragraphChunk) =>
-      paragraphChunk.length > limit
+      paragraphChunk.length > normalizedLimit
         ? splitPackedFenceParagraphChunk(paragraphChunk)
         : paragraphChunk,
     )) {
-      out.push(...chunkMarkdownText(chunk, limit));
+      out.push(...chunkMarkdownText(chunk, normalizedLimit));
     }
     return out;
   }
-  return chunkMarkdownText(text, limit);
+  return chunkMarkdownText(text, normalizedLimit);
 }
 
 function splitByNewline(
@@ -386,7 +388,8 @@ export function chunkText(text: string, limit: number): string[] {
 }
 
 export function chunkMarkdownText(text: string, limit: number): string[] {
-  const early = resolveChunkEarlyReturn(text, limit);
+  const normalizedLimit = normalizeChunkLimit(limit);
+  const early = resolveChunkEarlyReturn(text, normalizedLimit);
   if (early) {
     return early;
   }
@@ -398,7 +401,7 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
 
   while (start < text.length) {
     const reopenPrefix = reopenFence ? `${reopenFence.openLine}\n` : "";
-    const contentLimit = Math.max(1, limit - reopenPrefix.length);
+    const contentLimit = Math.max(1, normalizedLimit - reopenPrefix.length);
     if (text.length - start <= contentLimit) {
       const finalChunk = `${reopenPrefix}${text.slice(start)}`;
       if (finalChunk.length > 0) {
@@ -475,14 +478,16 @@ export function chunkMarkdownText(text: string, limit: number): string[] {
     }
 
     let rawChunk = `${reopenPrefix}${rawContent}`;
-    const brokeOnSeparator = breakIdx < text.length && /\s/.test(text.charAt(breakIdx));
-    let nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
+    let nextStart = breakIdx;
 
     if (fenceToSplit) {
       const closeLine = `${fenceToSplit.indent}${fenceToSplit.marker}`;
       rawChunk = rawChunk.endsWith("\n") ? `${rawChunk}${closeLine}` : `${rawChunk}\n${closeLine}`;
       reopenFence = fenceToSplit;
     } else {
+      // Only prose separators are disposable; fenced whitespace can be code indentation.
+      const brokeOnSeparator = breakIdx < text.length && /\s/.test(text.charAt(breakIdx));
+      nextStart = Math.min(text.length, breakIdx + (brokeOnSeparator ? 1 : 0));
       nextStart = skipLeadingNewlines(text, nextStart);
       reopenFence = undefined;
     }

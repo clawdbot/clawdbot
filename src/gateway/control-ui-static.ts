@@ -3,6 +3,9 @@ import fs from "node:fs";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { brotliCompress, constants as zlibConstants, gzip } from "node:zlib";
+import { pruneMapToMaxSize } from "../infra/map-size.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { respondPlainText } from "./control-ui-http-utils.js";
 
 const CONTROL_UI_IMMUTABLE_CACHE_CONTROL = "public, max-age=31536000, immutable";
 const CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES = 4;
@@ -37,6 +40,7 @@ const CONTROL_UI_STATIC_ASSET_EXTENSIONS = new Set([
   ".txt",
   ".wasm",
   ".webmanifest",
+  ".woff2",
 ]);
 
 export function isControlUiStaticAssetExtension(extension: string): boolean {
@@ -88,6 +92,8 @@ function contentTypeForExtension(ext: string): string {
       return "application/wasm";
     case ".webmanifest":
       return "application/manifest+json; charset=utf-8";
+    case ".woff2":
+      return "font/woff2";
     default:
       return "application/octet-stream";
   }
@@ -159,16 +165,16 @@ export function resolveControlUiHtmlEncoding(req: IncomingMessage): ControlUiEnc
 }
 
 type OpenedControlUiRepresentation = {
-  bodyFile: { path: string; fd: number };
+  bodyFile: { path: string; fd: number; size: number };
   contentPath: string;
   encoding?: ControlUiContentEncoding;
 };
 
 export function resolveOpenedControlUiRepresentation(params: {
   req: IncomingMessage;
-  sourceFile: { path: string; fd: number };
+  sourceFile: { path: string; fd: number; size: number };
   precompressed: boolean;
-  openPrecompressedFile: (filePath: string) => { path: string; fd: number } | null;
+  openPrecompressedFile: (filePath: string) => { path: string; fd: number; size: number } | null;
 }): OpenedControlUiRepresentation | null {
   const { req, sourceFile, precompressed, openPrecompressedFile } = params;
   const extension = path.extname(sourceFile.path).toLowerCase();
@@ -187,7 +193,7 @@ export function resolveOpenedControlUiRepresentation(params: {
     }
 
     const suffix = selected === "br" ? ".br" : ".gz";
-    let compressedFile: { path: string; fd: number } | null;
+    let compressedFile: { path: string; fd: number; size: number } | null;
     try {
       compressedFile = openPrecompressedFile(`${sourceFile.path}${suffix}`);
     } catch (error) {
@@ -222,7 +228,7 @@ function setControlUiEncodingHeaders(
 function setControlUiFileHeaders(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding },
+  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
 ) {
   const extension = path.extname(filePath).toLowerCase();
   res.setHeader("Content-Type", contentTypeForExtension(extension));
@@ -230,16 +236,57 @@ function setControlUiFileHeaders(
     "Cache-Control",
     options?.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
   );
+  if (options?.lastModifiedMs !== undefined) {
+    res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
+  }
   setControlUiEncodingHeaders(res, extension, options?.encoding ?? "identity");
+}
+
+/**
+ * `no-cache` responses without a validator force a full re-download on every
+ * revisit; fonts and theme CSS are the heavy unhashed assets that hit this.
+ * HTTP-dates carry whole-second precision, so compare on floored seconds.
+ */
+export function isControlUiFileUnmodified(req: IncomingMessage, lastModifiedMs: number): boolean {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    return false;
+  }
+  const header = req.headers?.["if-modified-since"];
+  const since = typeof header === "string" ? Date.parse(header) : Number.NaN;
+  return Number.isFinite(since) && Math.floor(lastModifiedMs / 1000) * 1000 <= since;
+}
+
+export function respondControlUiNotModified(
+  res: ServerResponse,
+  options: { immutable?: boolean; lastModifiedMs: number },
+) {
+  res.statusCode = 304;
+  // A 304 repeats the caching headers of the 200 it stands in for so caches
+  // refresh their freshness metadata alongside the validator.
+  res.setHeader(
+    "Cache-Control",
+    options.immutable ? CONTROL_UI_IMMUTABLE_CACHE_CONTROL : "no-cache",
+  );
+  res.setHeader("Last-Modified", new Date(options.lastModifiedMs).toUTCString());
+  res.setHeader("Vary", "Accept-Encoding");
+  res.end();
 }
 
 export function respondHeadForControlUiFile(
   res: ServerResponse,
   filePath: string,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding },
+  options?: {
+    immutable?: boolean;
+    encoding?: ControlUiContentEncoding;
+    contentLength?: number;
+    lastModifiedMs?: number;
+  },
 ) {
   res.statusCode = 200;
   setControlUiFileHeaders(res, filePath, options);
+  if (options?.contentLength !== undefined) {
+    res.setHeader("Content-Length", String(options.contentLength));
+  }
   res.end();
 }
 
@@ -272,7 +319,7 @@ export async function serveControlUiAsset(
   res: ServerResponse,
   filePath: string,
   body: Buffer,
-  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding },
+  options?: { immutable?: boolean; encoding?: ControlUiContentEncoding; lastModifiedMs?: number },
 ) {
   setControlUiFileHeaders(res, filePath, options);
   res.end(body);
@@ -293,29 +340,20 @@ function cachedCompressedControlUiHtml(
   // Index HTML is process-stable for a configured root. Keep its few rewritten
   // variants single-flight and bounded so unauthenticated requests cannot fan
   // out zlib work; large hashed assets use build-time sidecars instead.
-  const compression = compressControlUiBody(Buffer.from(body), encoding);
-  controlUiHtmlCompressionCache.set(key, compression);
-  void compression.catch(() => {
-    if (controlUiHtmlCompressionCache.get(key) === compression) {
-      controlUiHtmlCompressionCache.delete(key);
-    }
-  });
-  while (controlUiHtmlCompressionCache.size > CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES) {
-    const oldestKey = controlUiHtmlCompressionCache.keys().next().value;
-    if (oldestKey === undefined) {
-      break;
-    }
-    controlUiHtmlCompressionCache.delete(oldestKey);
-  }
+  const compression = getOrCreatePromise(
+    controlUiHtmlCompressionCache,
+    key,
+    () => compressControlUiBody(Buffer.from(body), encoding),
+    { cacheRejections: false },
+  );
+  pruneMapToMaxSize(controlUiHtmlCompressionCache, CONTROL_UI_HTML_COMPRESSION_CACHE_MAX_ENTRIES);
   return compression;
 }
 
 export function respondControlUiNotAcceptable(res: ServerResponse) {
-  res.statusCode = 406;
-  res.setHeader("Content-Type", "text/plain; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Vary", "Accept-Encoding");
-  res.end("Not Acceptable");
+  respondPlainText(res, 406, "Not Acceptable");
 }
 
 export async function sendControlUiHtmlBody(

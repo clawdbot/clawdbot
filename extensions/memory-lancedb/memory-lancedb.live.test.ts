@@ -73,13 +73,20 @@ describeLive("memory plugin live tests", () => {
     expect(registeredServices.length).toBe(1);
 
     // Get tool functions
-    const storeTool = registeredTools.find((t) => t.opts?.name === "memory_store")?.tool;
-    const recallTool = registeredTools.find((t) => t.opts?.name === "memory_recall")?.tool;
-    const forgetTool = registeredTools.find((t) => t.opts?.name === "memory_forget")?.tool;
+    const materialize = (name: string) => {
+      const toolOrFactory = registeredTools.find((entry) => entry.opts?.name === name)?.tool;
+      return typeof toolOrFactory === "function"
+        ? toolOrFactory({ agentId: "main", config: {} })
+        : toolOrFactory;
+    };
+    const storeTool = materialize("memory_store");
+    const recallTool = materialize("memory_recall");
+    const forgetTool = materialize("memory_forget");
+    const storedText = "The user prefers dark mode for all applications";
 
     // Test store
     const storeResult = await storeTool.execute("test-call-1", {
-      text: "The user prefers dark mode for all applications",
+      text: storedText,
       importance: 0.8,
       category: "preference",
     });
@@ -99,10 +106,14 @@ describeLive("memory plugin live tests", () => {
 
     // Test duplicate detection
     const duplicateResult = await storeTool.execute("test-call-3", {
-      text: "The user prefers dark mode for all applications",
+      text: storedText,
     });
 
-    expect(duplicateResult.details?.action).toBe("duplicate");
+    expect(duplicateResult.details).toEqual({
+      action: "already_present",
+      existingId: storedId,
+      existingText: storedText,
+    });
 
     // Test forget
     const forgetResult = await forgetTool.execute("test-call-4", {

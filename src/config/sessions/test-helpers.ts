@@ -3,9 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach } from "vitest";
-import { loadSessionStore } from "./store-load.js";
-import { clearSessionStoreCacheForTest } from "./store-writer-state.js";
-import type { SessionEntry } from "./types.js";
+import { applySessionEntryLifecycleMutation, replaceSessionEntry } from "./session-accessor.js";
+import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 
 /** Creates and cleans a temporary session store fixture around each test. */
 export function useTempSessionsFixture(prefix: string) {
@@ -30,22 +29,27 @@ export function useTempSessionsFixture(prefix: string) {
   };
 }
 
-export function writeSessionStoreForTest(storePath: string, store: Record<string, unknown>): void {
-  fs.mkdirSync(path.dirname(storePath), { recursive: true });
-  clearSessionStoreCacheForTest();
-  fs.writeFileSync(storePath, `${JSON.stringify(store, null, 2)}\n`, "utf8");
-  clearSessionStoreCacheForTest();
-}
-
-export async function writeSessionStoreForTestAsync(
-  storePath: string,
-  store: Record<string, unknown>,
-): Promise<void> {
-  writeSessionStoreForTest(storePath, store);
-}
-
-export function readSessionStoreForTest<T extends object = SessionEntry>(
-  storePath: string,
-): Record<string, T> {
-  return loadSessionStore(storePath, { skipCache: true }) as Record<string, T>;
+export async function runByteLimitedArchiveCleanupFixture(storePath: string): Promise<string[]> {
+  const sessionIds = ["worker-byte-session-0", "worker-byte-session-1"];
+  const largeContent = "x".repeat(33 * 1024 * 1024);
+  for (const [index, sessionId] of sessionIds.entries()) {
+    const sessionKey = `agent:main:worker-byte-${index}`;
+    await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: index });
+    await replaceTranscriptEvents({ sessionId, sessionKey, storePath }, [
+      { content: `${index}:${largeContent}`, id: sessionId, type: "session" },
+    ]);
+  }
+  await replaceSessionEntry(
+    { sessionKey: "agent:main:worker-byte-retained", storePath },
+    { sessionId: "worker-byte-session-retained", updatedAt: sessionIds.length },
+  );
+  await applySessionEntryLifecycleMutation({
+    storePath,
+    maintenanceOverride: {
+      maxEntries: 1,
+      mode: "enforce",
+      pruneAfterMs: Number.MAX_SAFE_INTEGER,
+    },
+  });
+  return sessionIds;
 }

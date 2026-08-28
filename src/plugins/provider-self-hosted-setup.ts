@@ -6,29 +6,25 @@ import {
   normalizeOptionalString,
   normalizeStringifiedOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import type { ApiKeyCredential, AuthProfileCredential } from "../agents/auth-profiles/types.js";
+import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import type { AuthProfileCredential } from "../agents/auth-profiles/types.js";
 import { upsertAuthProfileWithLock } from "../agents/auth-profiles/upsert-with-lock.js";
+import { CUSTOM_LOCAL_AUTH_MARKER, isNonSecretApiKeyMarker } from "../agents/model-auth-markers.js";
 import { parseConfiguredModelVisibilityEntries } from "../agents/model-selection-shared.js";
 import {
   SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-import type { ModelDefinitionConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-// Builds setup metadata for self-hosted provider plugins.
-import { readResponseWithLimit } from "../infra/http-body.js";
-import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
-import type { SsrFPolicy } from "../infra/net/ssrf.js";
-import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
+import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { applyAuthProfileConfig } from "./provider-auth-helpers.js";
 import type {
-  ProviderDiscoveryContext,
-  ProviderAuthResult,
   ProviderAuthMethodNonInteractiveContext,
+  ProviderAuthResult,
+  ProviderCatalogContext,
   ProviderNonInteractiveApiKeyResult,
 } from "./types.js";
 
@@ -37,243 +33,6 @@ export {
   SELF_HOSTED_DEFAULT_COST,
   SELF_HOSTED_DEFAULT_MAX_TOKENS,
 } from "../agents/self-hosted-provider-defaults.js";
-
-const log = createSubsystemLogger("plugins/self-hosted-provider-setup");
-
-// Self-hosted provider base URLs are user-supplied and untrusted (an attacker
-// who can influence the configured endpoint, e.g. via SSRF, could serve an
-// unbounded JSON stream). Cap discovery response bodies before parsing so a
-// hostile or buggy endpoint cannot drive the setup wizard into OOM.
-const SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES = 16 * 1024 * 1024;
-
-type OpenAICompatModelsResponse = {
-  data?: Array<{
-    id?: string;
-    meta?: {
-      n_ctx_train?: unknown;
-    };
-  }>;
-};
-
-type LlamaCppPropsResponse = {
-  default_generation_settings?: {
-    n_ctx?: unknown;
-  };
-  n_ctx?: unknown;
-};
-
-function isReasoningModelHeuristic(modelId: string): boolean {
-  return /r1|reasoning|think|reason/i.test(modelId);
-}
-
-const SELF_HOSTED_ALWAYS_BLOCKED_HOSTNAMES = new Set(["metadata.google.internal"]);
-
-function buildSelfHostedBaseUrlSsrFPolicy(baseUrl: string): SsrFPolicy | undefined {
-  try {
-    const parsed = new URL(baseUrl.trim());
-    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return undefined;
-    }
-    if (SELF_HOSTED_ALWAYS_BLOCKED_HOSTNAMES.has(parsed.hostname.toLowerCase())) {
-      return undefined;
-    }
-    return {
-      hostnameAllowlist: [parsed.hostname],
-      allowPrivateNetwork: true,
-    };
-  } catch {
-    return undefined;
-  }
-}
-
-function readPositiveInteger(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
-    return undefined;
-  }
-  return Math.trunc(value);
-}
-
-/**
- * Reads and parses a self-hosted discovery JSON body under a hard byte cap.
- * Mirrors the byte-bounded reader pattern shared across provider/media reads so
- * an untrusted endpoint cannot stream an unbounded body into memory.
- */
-async function readSelfHostedDiscoveryJson(response: Response, label: string): Promise<unknown> {
-  const bytes = await readResponseWithLimit(response, SELF_HOSTED_DISCOVERY_JSON_MAX_BYTES, {
-    onOverflow: ({ size, maxBytes }) =>
-      new Error(
-        `${label} discovery response body too large: ${size} bytes (limit: ${maxBytes} bytes)`,
-      ),
-  });
-  try {
-    return JSON.parse(new TextDecoder().decode(bytes)) as unknown;
-  } catch (cause) {
-    throw new Error(`${label} discovery response is not valid JSON`, { cause });
-  }
-}
-
-async function cancelUnreadResponseBody(response: Response): Promise<void> {
-  if (!response.bodyUsed) {
-    await response.body?.cancel().catch(() => undefined);
-  }
-}
-
-function resolveLlamaCppPropsUrl(baseUrl: string, modelId?: string): string {
-  const parsed = new URL(baseUrl);
-  const pathname = parsed.pathname.replace(/\/+$/, "");
-  const rootPathname = pathname.endsWith("/v1") ? pathname.slice(0, -3) || "/" : pathname;
-  parsed.pathname = `${rootPathname.replace(/\/+$/, "")}/props`;
-  parsed.search = "";
-  parsed.hash = "";
-  const normalizedModelId = normalizeOptionalString(modelId);
-  if (normalizedModelId) {
-    parsed.searchParams.set("model", normalizedModelId);
-    parsed.searchParams.set("autoload", "false");
-  }
-  return parsed.toString();
-}
-
-async function discoverLlamaCppRuntimeContextTokens(params: {
-  baseUrl: string;
-  apiKey?: string;
-  modelId?: string;
-}): Promise<number | undefined> {
-  let url: string;
-  try {
-    url = resolveLlamaCppPropsUrl(params.baseUrl, params.modelId);
-  } catch {
-    return undefined;
-  }
-  try {
-    const trimmedApiKey = normalizeOptionalString(params.apiKey);
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      },
-      policy: buildSelfHostedBaseUrlSsrFPolicy(params.baseUrl),
-      timeoutMs: 2500,
-    });
-    try {
-      if (!response.ok) {
-        await cancelUnreadResponseBody(response);
-        return undefined;
-      }
-      const data = (await readSelfHostedDiscoveryJson(
-        response,
-        "llama.cpp /props",
-      )) as LlamaCppPropsResponse;
-      return (
-        readPositiveInteger(data.default_generation_settings?.n_ctx) ??
-        readPositiveInteger(data.n_ctx)
-      );
-    } finally {
-      await release();
-    }
-  } catch {
-    return undefined;
-  }
-}
-
-export async function discoverOpenAICompatibleLocalModels(params: {
-  baseUrl: string;
-  apiKey?: string;
-  label: string;
-  contextWindow?: number;
-  maxTokens?: number;
-  env?: NodeJS.ProcessEnv;
-}): Promise<ModelDefinitionConfig[]> {
-  const env = params.env ?? process.env;
-  if (env.VITEST || env.NODE_ENV === "test") {
-    return [];
-  }
-
-  const trimmedBaseUrl = params.baseUrl.trim().replace(/\/+$/, "");
-  const url = `${trimmedBaseUrl}/models`;
-
-  try {
-    const trimmedApiKey = normalizeOptionalString(params.apiKey);
-    const { response, release } = await fetchWithSsrFGuard({
-      url,
-      init: {
-        headers: trimmedApiKey ? { Authorization: `Bearer ${trimmedApiKey}` } : undefined,
-      },
-      policy: buildSelfHostedBaseUrlSsrFPolicy(trimmedBaseUrl),
-      timeoutMs: 5000,
-    });
-    try {
-      if (!response.ok) {
-        await cancelUnreadResponseBody(response);
-        log.warn(`Failed to discover ${params.label} models: ${response.status}`);
-        return [];
-      }
-      const data = (await readSelfHostedDiscoveryJson(
-        response,
-        params.label,
-      )) as OpenAICompatModelsResponse;
-      const models = data.data ?? [];
-      if (models.length === 0) {
-        log.warn(`No ${params.label} models found on local instance`);
-        return [];
-      }
-
-      const discoveredModels = models.flatMap((model) => {
-        const modelId = normalizeOptionalString(model.id);
-        if (!modelId) {
-          return [];
-        }
-        return [{ id: modelId, meta: model.meta }];
-      });
-      const runtimeContextTokensByModelId = new Map<string, number>();
-      if (params.contextWindow === undefined) {
-        const uniqueModelIds = uniqueStrings(discoveredModels.map((model) => model.id));
-        const runtimeContextTokenResults = await Promise.all(
-          uniqueModelIds.map(
-            async (modelId) =>
-              [
-                modelId,
-                await discoverLlamaCppRuntimeContextTokens({
-                  baseUrl: trimmedBaseUrl,
-                  apiKey: params.apiKey,
-                  modelId: uniqueModelIds.length > 1 ? modelId : undefined,
-                }),
-              ] as const,
-          ),
-        );
-        for (const [modelId, runtimeContextTokens] of runtimeContextTokenResults) {
-          if (runtimeContextTokens) {
-            runtimeContextTokensByModelId.set(modelId, runtimeContextTokens);
-          }
-        }
-      }
-
-      return discoveredModels.map((model) => {
-        const modelConfig: ModelDefinitionConfig = {
-          id: model.id,
-          name: model.id,
-          reasoning: isReasoningModelHeuristic(model.id),
-          input: ["text"],
-          cost: SELF_HOSTED_DEFAULT_COST,
-          contextWindow:
-            params.contextWindow ??
-            readPositiveInteger(model.meta?.n_ctx_train) ??
-            SELF_HOSTED_DEFAULT_CONTEXT_WINDOW,
-          maxTokens: params.maxTokens ?? SELF_HOSTED_DEFAULT_MAX_TOKENS,
-        };
-        const runtimeContextTokens = runtimeContextTokensByModelId.get(model.id);
-        if (runtimeContextTokens) {
-          modelConfig.contextTokens = runtimeContextTokens;
-        }
-        return modelConfig;
-      });
-    } finally {
-      await release();
-    }
-  } catch (error) {
-    log.warn(`Failed to discover ${params.label} models: ${String(error)}`);
-    return [];
-  }
-}
 
 export function applyProviderDefaultModel(cfg: OpenClawConfig, modelRef: string): OpenClawConfig {
   const existingModel = cfg.agents?.defaults?.model;
@@ -365,22 +124,7 @@ type OpenAICompatibleSelfHostedProviderPromptResult = {
   profileId: string;
 };
 
-function buildSelfHostedProviderAuthResult(
-  result: OpenAICompatibleSelfHostedProviderPromptResult,
-): ProviderAuthResult {
-  return {
-    profiles: [
-      {
-        profileId: result.profileId,
-        credential: result.credential,
-      },
-    ],
-    configPatch: result.config,
-    defaultModel: result.modelRef,
-  };
-}
-
-export async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
+async function promptAndConfigureOpenAICompatibleSelfHostedProvider(
   params: OpenAICompatibleSelfHostedProviderSetupParams,
 ): Promise<OpenAICompatibleSelfHostedProviderPromptResult> {
   const baseUrlRaw = await params.prompter.text({
@@ -434,13 +178,17 @@ export async function promptAndConfigureOpenAICompatibleSelfHostedProviderAuth(
   params: OpenAICompatibleSelfHostedProviderSetupParams,
 ): Promise<ProviderAuthResult> {
   const result = await promptAndConfigureOpenAICompatibleSelfHostedProvider(params);
-  return buildSelfHostedProviderAuthResult(result);
+  return {
+    profiles: [{ profileId: result.profileId, credential: result.credential }],
+    configPatch: result.config,
+    defaultModel: result.modelRef,
+  };
 }
 
 export async function discoverOpenAICompatibleSelfHostedProvider<
   T extends Record<string, unknown>,
 >(params: {
-  ctx: ProviderDiscoveryContext;
+  ctx: ProviderCatalogContext;
   providerId: string;
   buildProvider: (params: { apiKey?: string; baseUrl?: string }) => Promise<T>;
 }): Promise<{ provider: T & { apiKey: string } } | null> {
@@ -483,15 +231,29 @@ function buildMissingNonInteractiveModelIdMessage(params: {
   ].join("\n");
 }
 
-function buildSelfHostedProviderCredential(params: {
-  ctx: ProviderAuthMethodNonInteractiveContext;
-  providerId: string;
-  resolved: ProviderNonInteractiveApiKeyResult;
-}): ApiKeyCredential | null {
-  return params.ctx.toApiKeyCredential({
-    provider: params.providerId,
-    resolved: params.resolved,
-  });
+function isProviderOwnedSyntheticAuthMarker(
+  providerId: string,
+  resolved: ProviderNonInteractiveApiKeyResult,
+): boolean {
+  if (
+    resolved.source !== "flag" ||
+    !isNonSecretApiKeyMarker(resolved.key, { includeEnvVarName: false })
+  ) {
+    return false;
+  }
+  const normalizedProvider = normalizeProviderId(providerId);
+  const matchesProvider = (provider: string) =>
+    normalizeProviderId(provider) === normalizedProvider;
+  const normalizedValue = resolved.key.trim();
+  // A marker is only a keyless capability when its provider's own plugin declares it.
+  return listOpenClawPluginManifestMetadata().some(
+    ({ origin, manifest }) =>
+      origin === "bundled" &&
+      normalizeTrimmedStringList(manifest.providers).some(matchesProvider) &&
+      normalizeTrimmedStringList(manifest.syntheticAuthRefs).some(matchesProvider) &&
+      (normalizedValue === CUSTOM_LOCAL_AUTH_MARKER ||
+        normalizeTrimmedStringList(manifest.nonSecretAuthMarkers).includes(normalizedValue)),
+  );
 }
 
 export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(params: {
@@ -533,15 +295,8 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     return null;
   }
 
-  const credential = buildSelfHostedProviderCredential({
-    ctx: params.ctx,
-    providerId: params.providerId,
-    resolved,
-  });
-  if (!credential) {
-    return null;
-  }
-
+  const usesSyntheticAuthMarker = isProviderOwnedSyntheticAuthMarker(params.providerId, resolved);
+  const storesCredential = !usesSyntheticAuthMarker && resolved.source !== "profile";
   const configured = buildOpenAICompatibleSelfHostedProviderConfig({
     cfg: params.ctx.config,
     providerId: params.providerId,
@@ -553,17 +308,30 @@ export async function configureOpenAICompatibleSelfHostedProviderNonInteractive(
     contextWindow: params.contextWindow,
     maxTokens: params.maxTokens,
   });
-  await upsertAuthProfileWithLock({
-    profileId: configured.profileId,
-    credential,
-    agentDir: params.ctx.agentDir,
-  });
+  // Existing profiles own their credentials; recognized synthetic markers are
+  // keyless capabilities. Neither should be serialized into a new auth profile.
+  if (storesCredential) {
+    const credential = params.ctx.toApiKeyCredential({
+      provider: params.providerId,
+      resolved,
+    });
+    if (!credential) {
+      return null;
+    }
+    await upsertAuthProfileWithLock({
+      profileId: configured.profileId,
+      credential,
+      agentDir: params.ctx.agentDir,
+    });
+  }
 
-  const withProfile = applyAuthProfileConfig(configured.config, {
-    profileId: configured.profileId,
-    provider: params.providerId,
-    mode: "api_key",
-  });
+  const withProfile = storesCredential
+    ? applyAuthProfileConfig(configured.config, {
+        profileId: configured.profileId,
+        provider: params.providerId,
+        mode: "api_key",
+      })
+    : configured.config;
   params.ctx.runtime.log(`Default ${params.providerLabel} model: ${modelId}`);
   return applyProviderDefaultModel(withProfile, configured.modelRef);
 }

@@ -1,4 +1,9 @@
-import { parseStreamingJson } from "@openclaw/ai/internal/runtime";
+import {
+  createToolArgumentPreviewSchedule,
+  parseStreamingJson,
+  parseTerminalToolCallArguments,
+  type ToolArgumentPreviewSchedule,
+} from "@openclaw/ai/internal/runtime";
 import { WORKER_PROTOCOL_MAX_IDENTIFIER_LENGTH } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import type {
   WorkerInferenceContext,
@@ -18,7 +23,9 @@ import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js"
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import type { WorkerInferenceProxyClient } from "./worker-rpc-clients.js";
 
-type StreamingToolCall = ToolCall & { partialJson?: string };
+type StreamingToolCall = ToolCall & {
+  partialJson: string;
+};
 
 type WorkerInferenceStreamAdapterOptions = {
   client: WorkerInferenceProxyClient;
@@ -59,6 +66,7 @@ function emptyAssistantMessage(modelRef: WorkerInferenceModelRef): AssistantMess
 function processInferenceEvent(
   payload: WorkerInferenceEventParams,
   partial: AssistantMessage,
+  toolArgumentPreviewSchedules: Map<number, ToolArgumentPreviewSchedule>,
   tolerateMissingState: boolean,
 ): AssistantMessageEvent | undefined {
   const event = payload.event;
@@ -146,13 +154,15 @@ function processInferenceEvent(
       };
     }
     case "toolcall_start": {
-      partial.content[event.contentIndex] = {
+      const content = {
         type: "toolCall",
         id: event.id,
         name: event.toolName,
         arguments: {},
         partialJson: "",
-      } satisfies StreamingToolCall as ToolCall;
+      } satisfies StreamingToolCall;
+      partial.content[event.contentIndex] = content;
+      toolArgumentPreviewSchedules.set(event.contentIndex, createToolArgumentPreviewSchedule());
       return { type: "toolcall_start", contentIndex: event.contentIndex, partial };
     }
     case "toolcall_delta": {
@@ -164,8 +174,14 @@ function processInferenceEvent(
         throw new Error("worker inference tool delta has no active tool call");
       }
       const streaming = content as StreamingToolCall;
-      streaming.partialJson = `${streaming.partialJson ?? ""}${event.delta}`;
-      content.arguments = parseStreamingJson(streaming.partialJson);
+      streaming.partialJson += event.delta;
+      const previewSchedule = toolArgumentPreviewSchedules.get(event.contentIndex);
+      if (!previewSchedule) {
+        throw new Error("worker inference tool delta has no preview schedule");
+      }
+      if (previewSchedule(streaming.partialJson.length)) {
+        content.arguments = parseStreamingJson(streaming.partialJson);
+      }
       return {
         type: "toolcall_delta",
         contentIndex: event.contentIndex,
@@ -181,7 +197,10 @@ function processInferenceEvent(
         }
         throw new Error("worker inference tool end has no active tool call");
       }
-      delete (content as StreamingToolCall).partialJson;
+      const streaming = content as StreamingToolCall;
+      content.arguments = parseTerminalToolCallArguments(streaming.partialJson);
+      toolArgumentPreviewSchedules.delete(event.contentIndex);
+      delete (content as Partial<StreamingToolCall>).partialJson;
       return { type: "toolcall_end", contentIndex: event.contentIndex, toolCall: content, partial };
     }
   }
@@ -220,6 +239,7 @@ export function createWorkerInferenceStreamAdapter(
   return (inferenceRequest) => {
     const stream = createAssistantMessageEventStream();
     const partial = emptyAssistantMessage(adapter.modelRef);
+    const toolArgumentPreviewSchedules = new Map<number, ToolArgumentPreviewSchedule>();
     let streamHasGap = false;
     let settled = false;
     modelCallSeq += 1;
@@ -277,7 +297,12 @@ export function createWorkerInferenceStreamAdapter(
           streamHasGap = true;
         },
         onEvent: (event) => {
-          const projected = processInferenceEvent(event, partial, streamHasGap);
+          const projected = processInferenceEvent(
+            event,
+            partial,
+            toolArgumentPreviewSchedules,
+            streamHasGap,
+          );
           if (projected) {
             stream.push(projected);
           }

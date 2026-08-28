@@ -3,17 +3,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
-import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "../agents/command/claude-cli-project-dir.js";
 import { noteClaudeCliHealth } from "./doctor-claude-cli.js";
 
-function createStore(profiles: AuthProfileStore["profiles"] = {}): AuthProfileStore {
-  return {
-    version: 1,
-    profiles,
-  };
-}
+const resolveCliBackendConfigMock = vi.hoisted(() => vi.fn());
+const resolveModelAgentRuntimeMetadataMock = vi.hoisted(() =>
+  vi.fn((_params: { agentId: string }) => ({ id: "openclaw", source: "implicit" })),
+);
+
+vi.mock("../agents/cli-backends.js", () => ({
+  resolveCliBackendConfig: resolveCliBackendConfigMock,
+}));
+
+vi.mock("../agents/agent-runtime-metadata.js", () => ({
+  resolveModelAgentRuntimeMetadata: resolveModelAgentRuntimeMetadataMock,
+}));
 
 async function withTempHome<T>(
   run: (params: { homeDir: string; workspaceDir: string }) => Promise<T> | T,
@@ -54,22 +58,41 @@ function noteTitle(noteFn: ReturnType<typeof vi.fn>): string {
   return value;
 }
 
-describe("resolveClaudeCliProjectDirForWorkspace", () => {
-  it("matches Claude's sanitized workspace project dir shape", () => {
-    expect(
-      resolveClaudeCliProjectDirForWorkspace({
-        workspaceDir: "/Users/vincentkoc/GIT/_Perso/openclaw/.openclaw/workspace",
-        homeDir: "/Users/vincentkoc",
-      }),
-    ).toBe(
-      "/Users/vincentkoc/.claude/projects/-Users-vincentkoc-GIT--Perso-openclaw--openclaw-workspace",
-    );
-  });
-});
-
 describe("noteClaudeCliHealth", () => {
   afterEach(() => {
+    resolveCliBackendConfigMock.mockReset();
+    resolveModelAgentRuntimeMetadataMock
+      .mockReset()
+      .mockReturnValue({ id: "openclaw", source: "implicit" });
     vi.restoreAllMocks();
+  });
+
+  it("probes the executable resolved by the owning backend", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      resolveCliBackendConfigMock.mockReturnValue({
+        id: "claude-cli",
+        pluginId: "custom-anthropic",
+        config: { command: "/opt/custom/bin/claude" },
+      });
+      const resolveCommandPath = vi.fn(() => undefined);
+
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: { model: "claude-cli/claude-sonnet-4-6" },
+            entries: { main: { default: true } },
+          },
+        },
+        {
+          homeDir,
+          workspaceDir,
+          noteFn: vi.fn(),
+          resolveCommandPath,
+        },
+      );
+
+      expect(resolveCommandPath).toHaveBeenCalledWith("/opt/custom/bin/claude", expect.any(Object));
+    });
   });
 
   it("stays quiet when Claude CLI is not configured or detected", () => {
@@ -78,8 +101,6 @@ describe("noteClaudeCliHealth", () => {
       {},
       {
         noteFn,
-        store: createStore(),
-        readClaudeCliCredentials: () => null,
       },
     );
     expect(noteFn).not.toHaveBeenCalled();
@@ -97,25 +118,14 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
           homeDir,
           workspaceDir,
           noteFn,
-          store: createStore({
-            [CLAUDE_CLI_PROFILE_ID]: {
-              type: "oauth",
-              provider: "claude-cli",
-              access: "test-auth-token",
-              refresh: "test-token-placeholder",
-              expires: Date.now() + 60_000,
-            },
-          }),
-          readClaudeCliCredentials: () => ({
-            type: "oauth",
-            expires: Date.now() + 60_000,
-          }),
+          isAuthenticated: () => true,
           resolveCommandPath: () => "/opt/homebrew/bin/claude",
         },
       );
@@ -124,8 +134,53 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
+  it("probes auth with the same cleared environment as Claude execution", async () => {
+    await withTempHome(({ homeDir, workspaceDir }) => {
+      resolveCliBackendConfigMock.mockReturnValue({
+        id: "claude-cli",
+        pluginId: "anthropic",
+        config: {
+          command: "claude",
+          clearEnv: ["ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN"],
+        },
+      });
+      const isAuthenticated = vi.fn(() => true);
+
+      noteClaudeCliHealth(
+        {
+          agents: {
+            defaults: { model: "claude-cli/claude-sonnet-4-6" },
+            entries: { main: { default: true } },
+          },
+        },
+        {
+          env: {
+            ANTHROPIC_API_KEY: "ambient-api-key",
+            CLAUDE_CODE_OAUTH_TOKEN: "ambient-oauth-token",
+            CLAUDE_CONFIG_DIR: "/tmp/claude-config",
+            PATH: "/usr/bin",
+          },
+          homeDir,
+          workspaceDir,
+          isAuthenticated,
+          noteFn: vi.fn(),
+          resolveCommandPath: () => "/usr/bin/claude",
+        },
+      );
+
+      expect(isAuthenticated).toHaveBeenCalledWith("/usr/bin/claude", {
+        CLAUDE_CONFIG_DIR: "/tmp/claude-config",
+        PATH: "/usr/bin",
+      });
+    });
+  });
+
   it("stays quiet for a healthy non-default Claude CLI runtime agent", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
+      resolveModelAgentRuntimeMetadataMock.mockImplementation(({ agentId }) => ({
+        id: agentId === "xiaoao" ? "claude-cli" : "openclaw",
+        source: agentId === "xiaoao" ? "model" : "implicit",
+      }));
       const root = path.dirname(workspaceDir);
       const defaultWorkspace = path.join(root, "workspace-coder");
       const claudeWorkspace = path.join(root, "workspace-xiaoao");
@@ -164,19 +219,7 @@ describe("noteClaudeCliHealth", () => {
         {
           homeDir,
           noteFn,
-          store: createStore({
-            [CLAUDE_CLI_PROFILE_ID]: {
-              type: "oauth",
-              provider: "claude-cli",
-              access: "test-auth-token",
-              refresh: "test-token-placeholder",
-              expires: Date.now() + 60_000,
-            },
-          }),
-          readClaudeCliCredentials: () => ({
-            type: "oauth",
-            expires: Date.now() + 60_000,
-          }),
+          isAuthenticated: () => true,
           resolveCommandPath: () => "/opt/homebrew/bin/claude",
         },
       );
@@ -185,7 +228,7 @@ describe("noteClaudeCliHealth", () => {
     });
   });
 
-  it("explains the exact bad wiring when the claude-cli auth profile is missing", async () => {
+  it("reports when Claude CLI owns no active login", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const noteFn = vi.fn();
       noteClaudeCliHealth(
@@ -194,32 +237,26 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
           homeDir,
           workspaceDir,
           noteFn,
-          store: createStore(),
-          readClaudeCliCredentials: () => ({
-            type: "oauth",
-            expires: Date.now() + 60_000,
-          }),
+          isAuthenticated: () => false,
           resolveCommandPath: () => "/opt/homebrew/bin/claude",
         },
       );
 
       const body = noteBody(noteFn);
-      expect(body).toContain(`OpenClaw auth profile: missing (${CLAUDE_CLI_PROFILE_ID})`);
-      expect(body).toContain(
-        "openclaw models auth login --provider anthropic --method cli --set-default",
-      );
-      expect(body).not.toContain("Headless Claude auth: OK");
-      expect(body).not.toContain("not created yet");
+      expect(body).toContain("Claude auth: not logged in.");
+      expect(body).toContain("claude auth login");
+      expect(body).not.toContain("openclaw models auth login");
     });
   });
 
-  it("warns when Claude auth is not readable headlessly", async () => {
+  it("warns when the Claude binary is missing", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
       const noteFn = vi.fn();
       noteClaudeCliHealth(
@@ -228,27 +265,29 @@ describe("noteClaudeCliHealth", () => {
             defaults: {
               model: { primary: "claude-cli/claude-sonnet-4-6" },
             },
+            entries: { main: { default: true } },
           },
         },
         {
           homeDir,
           workspaceDir,
           noteFn,
-          store: createStore(),
-          readClaudeCliCredentials: () => null,
           resolveCommandPath: () => undefined,
         },
       );
 
       const body = noteBody(noteFn);
       expect(body).toContain('Binary: command "claude" was not found on PATH.');
-      expect(body).toContain("Headless Claude auth: unavailable without interactive prompting.");
-      expect(body).toContain("claude auth login");
+      expect(body).not.toContain("claude auth login");
     });
   });
 
   it("lists Claude CLI agents only when a problem is reported", async () => {
     await withTempHome(({ homeDir, workspaceDir }) => {
+      resolveModelAgentRuntimeMetadataMock.mockReturnValue({
+        id: "claude-cli",
+        source: "model",
+      });
       const root = path.dirname(workspaceDir);
       const alphaWorkspace = path.join(root, "workspace-alpha");
       const zetaWorkspace = path.join(root, "workspace-zeta");
@@ -281,19 +320,7 @@ describe("noteClaudeCliHealth", () => {
         {
           homeDir,
           noteFn,
-          store: createStore({
-            [CLAUDE_CLI_PROFILE_ID]: {
-              type: "oauth",
-              provider: "claude-cli",
-              access: "test-auth-token",
-              refresh: "test-token-placeholder",
-              expires: Date.now() + 60_000,
-            },
-          }),
-          readClaudeCliCredentials: () => ({
-            type: "oauth",
-            expires: Date.now() + 60_000,
-          }),
+          isAuthenticated: () => true,
           resolveCommandPath: () => "/opt/homebrew/bin/claude",
         },
       );

@@ -1,14 +1,26 @@
 // Covers the CI node test shard runner: plan resolution from job env and
 // bounded-concurrency execution with per-child Vitest cache isolation.
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   buildChildEnv,
+  clonePersistentCacheSlots,
+  pruneFsModuleCache,
+  resolveShardChildCommand,
   resolveShardPlans,
+  resolveTestProjectsEntrypoint,
   runShardPlans,
-} from "../../scripts/ci-run-node-test-shard.mjs";
+} from "../../scripts/ci-run-node-test-shard.mts";
 
 const scratchDirs: string[] = [];
 
@@ -24,7 +36,29 @@ afterEach(() => {
   }
 });
 
-describe("scripts/ci-run-node-test-shard.mjs", () => {
+describe("scripts/ci-run-node-test-shard.mts", () => {
+  it("launches the current TypeScript child runner directly with Node", () => {
+    expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node")).toEqual({
+      command: "/runtime/node",
+      args: ["--import", "tsx", "scripts/test-projects.mts", "one.config.ts"],
+    });
+  });
+
+  it("uses the compiled child runner from a frozen candidate", () => {
+    const entrypoint = resolveTestProjectsEntrypoint((candidate) => candidate.endsWith(".mjs"));
+    expect(entrypoint).toBe("scripts/test-projects.mjs");
+    expect(resolveShardChildCommand(["one.config.ts"], "/runtime/node", entrypoint)).toEqual({
+      command: "/runtime/node",
+      args: ["scripts/test-projects.mjs", "one.config.ts"],
+    });
+  });
+
+  it("fails clearly when the candidate has no test-projects entrypoint", () => {
+    expect(() => resolveTestProjectsEntrypoint(() => false)).toThrow(
+      "CI target does not provide scripts/test-projects.mts or .mjs",
+    );
+  });
+
   it("prefers explicit targets and keeps one target per child", () => {
     const plans = resolveShardPlans({
       OPENCLAW_NODE_TEST_TARGETS_JSON: JSON.stringify(["a.test.ts", "b.test.ts"]),
@@ -76,7 +110,6 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(childEnv.IGNORED).toBeUndefined();
     expect(childEnv.OPENCLAW_VITEST_SHARD_NAME).toBe("g");
     expect(childEnv.OPENCLAW_TEST_PROJECTS_PARALLEL).toBe("1");
-    expect(childEnv.OPENCLAW_TEST_HEAVY_CHECK_LOCK_HELD).toBe("1");
     expect(childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH).toBe(
       path.join(scratchDir, "vitest-cache-3"),
     );
@@ -135,6 +168,196 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(new Set(seen.map((run) => run.cache)).size).toBe(3);
   });
 
+  it("runs per-config groups serially through one persistent cache slot", async () => {
+    const scratchDir = makeScratchDir();
+    const persistentRoot = path.join(makeScratchDir(), "persistent");
+    mkdirSync(persistentRoot, { recursive: true });
+    const seen: Array<{ args: string[]; cache: string | undefined; label: string }> = [];
+    let active = 0;
+    let peakActive = 0;
+
+    const exitCode = await runShardPlans(
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+          ["a", "b", "c"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: `cache-warm:${name}`,
+          })),
+        ),
+      }),
+      {
+        concurrency: 1,
+        env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
+        runChild: async (
+          args: string[],
+          childEnv: Record<string, string | undefined>,
+          label: string,
+        ) => {
+          active += 1;
+          peakActive = Math.max(peakActive, active);
+          seen.push({
+            args,
+            cache: childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+            label,
+          });
+          active -= 1;
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(peakActive).toBe(1);
+    expect(seen.map((run) => run.args)).toEqual([
+      ["a.config.ts"],
+      ["b.config.ts"],
+      ["c.config.ts"],
+    ]);
+    expect(seen.map((run) => run.label)).toEqual(["cache-warm:a", "cache-warm:b", "cache-warm:c"]);
+    expect(new Set(seen.map((run) => run.cache))).toEqual(
+      new Set([path.join(persistentRoot, "vitest-cache-0")]),
+    );
+  });
+
+  it("forwards trusted Vitest arguments after the target separator", async () => {
+    const scratchDir = makeScratchDir();
+    const seen: string[][] = [];
+    const exitCode = await runShardPlans(
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(["test/vitest/vitest.unit.config.ts"]),
+      }),
+      {
+        concurrency: 1,
+        env: {
+          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--hookTimeout=300000"]),
+        },
+        runChild: async (args: string[]) => {
+          seen.push(args);
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(seen).toEqual([["test/vitest/vitest.unit.config.ts", "--", "--hookTimeout=300000"]]);
+  });
+
+  it("reuses isolated persistent cache slots across serial work", async () => {
+    const scratchDir = makeScratchDir();
+    const persistentRoot = path.join(makeScratchDir(), "persistent");
+    mkdirSync(persistentRoot, { recursive: true });
+    const seenCaches = new Set<string>();
+    const activeCaches = new Set<string>();
+    let sharedWriter = false;
+    const exitCode = await runShardPlans(
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+          ["a", "b", "c", "d"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: name,
+          })),
+        ),
+      }),
+      {
+        concurrency: 2,
+        env: { OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot },
+        runChild: async (_args: string[], childEnv: Record<string, string | undefined>) => {
+          const cache = childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH ?? "";
+          if (activeCaches.has(cache)) {
+            sharedWriter = true;
+          }
+          activeCaches.add(cache);
+          seenCaches.add(cache);
+          await new Promise((resolve) => {
+            setTimeout(resolve, 10);
+          });
+          activeCaches.delete(cache);
+          return 0;
+        },
+        scratchDir,
+      },
+    );
+
+    expect(exitCode).toBe(0);
+    expect(sharedWriter).toBe(false);
+    expect([...seenCaches].toSorted()).toEqual([
+      path.join(persistentRoot, "vitest-cache-0"),
+      path.join(persistentRoot, "vitest-cache-1"),
+    ]);
+  });
+
+  it("clones a restored persistent seed into every concurrent cache slot", () => {
+    const persistentRoot = makeScratchDir();
+    const seed = path.join(persistentRoot, "vitest-cache-0");
+    mkdirSync(seed, { recursive: true });
+    writeFileSync(path.join(seed, "transform"), "cached", "utf8");
+    const staleSlot = path.join(persistentRoot, "vitest-cache-1");
+    mkdirSync(staleSlot, { recursive: true });
+    writeFileSync(path.join(staleSlot, "stale"), "old", "utf8");
+
+    expect(clonePersistentCacheSlots(persistentRoot, 3)).toBe(2);
+    for (const cacheSlot of [1, 2]) {
+      expect(
+        readFileSync(path.join(persistentRoot, `vitest-cache-${cacheSlot}`, "transform"), "utf8"),
+      ).toBe("cached");
+    }
+    expect(existsSync(path.join(staleSlot, "stale"))).toBe(false);
+  });
+
+  it("prunes oldest transform entries while preserving Vitest metadata", () => {
+    const persistentRoot = makeScratchDir();
+    const slot = path.join(persistentRoot, "vitest-cache-0");
+    mkdirSync(slot, { recursive: true });
+    const metadata = path.join(slot, "_metadata.json");
+    const generation = path.join(persistentRoot, ".openclaw-transform-generation");
+    const oldest = path.join(slot, "oldest");
+    const newest = path.join(slot, "newest");
+    writeFileSync(metadata, "{}", "utf8");
+    writeFileSync(generation, "g", "utf8");
+    writeFileSync(oldest, "aaaaaaaa", "utf8");
+    writeFileSync(newest, "bbbbbbbb", "utf8");
+    utimesSync(oldest, new Date(1_000), new Date(1_000));
+    utimesSync(newest, new Date(2_000), new Date(2_000));
+
+    expect(pruneFsModuleCache(persistentRoot, 16)).toEqual({
+      beforeBytes: 19,
+      afterBytes: 11,
+      removedFiles: 1,
+    });
+    expect(existsSync(metadata)).toBe(true);
+    expect(existsSync(generation)).toBe(true);
+    expect(existsSync(oldest)).toBe(false);
+    expect(existsSync(newest)).toBe(true);
+  });
+
+  it("prunes persistent caches only in the designated writer job", async () => {
+    const persistentRoot = makeScratchDir();
+    const transform = path.join(persistentRoot, "vitest-cache-0", "entry");
+    mkdirSync(path.dirname(transform), { recursive: true });
+    writeFileSync(transform, "cached", "utf8");
+    const plans = resolveShardPlans({
+      OPENCLAW_NODE_TEST_CONFIGS_JSON: JSON.stringify(["test/vitest/vitest.unit.config.ts"]),
+    });
+    const run = (writer: string) =>
+      runShardPlans(plans, {
+        concurrency: 1,
+        env: {
+          OPENCLAW_VITEST_FS_MODULE_CACHE_PATH: persistentRoot,
+          OPENCLAW_VITEST_FS_MODULE_CACHE_WRITER: writer,
+        },
+        fsModuleCacheMaxBytes: 0,
+        runChild: async () => 0,
+        scratchDir: makeScratchDir(),
+      });
+
+    await run("0");
+    expect(existsSync(transform)).toBe(true);
+    await run("1");
+    expect(existsSync(transform)).toBe(false);
+  });
+
   it("stops scheduling new plans after a failure and reports the first failing code", async () => {
     const scratchDir = makeScratchDir();
     const started: string[] = [];
@@ -165,12 +388,59 @@ describe("scripts/ci-run-node-test-shard.mjs", () => {
     expect(started).toEqual(["a", "b"]);
   });
 
-  it("fails plans that carry no configs", async () => {
-    const scratchDir = makeScratchDir();
+  it("continues through failed plans only when explicitly requested", async () => {
+    const started: string[] = [];
     const exitCode = await runShardPlans(
-      [{ kind: "group" as const, name: "broken", plan: { configs: [] } }],
-      { concurrency: 1, env: {}, runChild: async () => 0, scratchDir },
+      resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify(
+          ["a", "b", "c", "d"].map((name) => ({
+            configs: [`${name}.config.ts`],
+            shard_name: name,
+          })),
+        ),
+      }),
+      {
+        concurrency: 1,
+        continueOnFailure: true,
+        env: {},
+        runChild: async (_args, _env, label) => {
+          started.push(label);
+          return label === "b" ? 7 : label === "d" ? 9 : 0;
+        },
+        scratchDir: makeScratchDir(),
+      },
     );
-    expect(exitCode).toBe(1);
+
+    expect(started).toEqual(["a", "b", "c", "d"]);
+    expect(exitCode).toBe(7);
   });
+
+  it.each([
+    { continueOnFailure: false, expectedStarted: [] },
+    { continueOnFailure: true, expectedStarted: ["next"] },
+  ])(
+    "fails a malformed plan with continuation=$continueOnFailure",
+    async ({ continueOnFailure, expectedStarted }) => {
+      const started: string[] = [];
+      const exitCode = await runShardPlans(
+        [
+          { kind: "group" as const, name: "broken", plan: { configs: [] } },
+          { kind: "group" as const, name: "next", plan: { configs: ["next.config.ts"] } },
+        ],
+        {
+          concurrency: 1,
+          continueOnFailure,
+          env: {},
+          runChild: async (_args, _env, label) => {
+            started.push(label);
+            return 0;
+          },
+          scratchDir: makeScratchDir(),
+        },
+      );
+
+      expect(exitCode).toBe(1);
+      expect(started).toEqual(expectedStarted);
+    },
+  );
 });

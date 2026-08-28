@@ -1,17 +1,19 @@
-// Tests steer command persistence and retrieval for session guidance.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+// Tests /steer target capture, prepared-path continuation, and visible fallback.
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import type { ChatType } from "../../channels/chat-type.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { buildCommandTestParams } from "./commands.test-harness.js";
-
-const steerRuntimeMocks = vi.hoisted(() => ({
-  formatEmbeddedAgentQueueFailureSummary: vi.fn(),
-  isEmbeddedAgentRunActive: vi.fn(),
-  queueEmbeddedAgentMessageWithOutcomeAsync: vi.fn(),
-  resolveActiveEmbeddedRunSessionId: vi.fn(),
-  resolveActiveEmbeddedRunSessionIdBySessionFile: vi.fn(),
-}));
-
-vi.mock("./commands-steer.runtime.js", () => steerRuntimeMocks);
+import type { ReplyBackendQueueMessageOptions, ReplyOperation } from "./reply-run-registry.js";
+import { createReplyOperation } from "./reply-run-registry.js";
+import {
+  createFollowupRunToolAuthorityProjector,
+  resolveFollowupRunToolAuthorityFingerprint,
+} from "./reply-tool-authority.js";
+import { createMockFollowupRun } from "./test-helpers.js";
 
 const { handleSteerCommand } = await import("./commands-steer.js");
 
@@ -19,185 +21,194 @@ const baseCfg = {
   commands: { text: true },
   session: { mainKey: "main", scope: "per-sender" },
 } as OpenClawConfig;
+const queueMessage = vi.fn(
+  async (_text: string, _options?: ReplyBackendQueueMessageOptions) => undefined,
+);
+const operations: ReplyOperation[] = [];
 
 function buildParams(commandBody: string) {
   return buildCommandTestParams(commandBody, baseCfg);
 }
 
-describe("handleSteerCommand", () => {
-  beforeEach(() => {
-    steerRuntimeMocks.formatEmbeddedAgentQueueFailureSummary
-      .mockReset()
-      .mockReturnValue(
-        "queue_message_failed reason=not_streaming sessionId=session-active gatewayHealth=live",
-      );
-    steerRuntimeMocks.isEmbeddedAgentRunActive.mockReset().mockReturnValue(false);
-    steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync.mockReset().mockResolvedValue({
-      queued: true,
+function beginActiveOperation(
+  sessionKey: string,
+  sessionId = "session-active",
+  taskSuggestionDeliveryMode?: "gateway",
+  authorityRun = createMockFollowupRun({ run: { sessionId, sessionKey } }),
+) {
+  const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
+  const authorityRoute = {
+    provider: authorityRun.run.provider,
+    model: authorityRun.run.model,
+  };
+  const toolAuthorityFingerprint = resolveFollowupRunToolAuthorityFingerprint(
+    authorityRun,
+    authorityRoute,
+  );
+  operation.bindToolAuthorityProjector(createFollowupRunToolAuthorityProjector(authorityRun));
+  operation.bindToolAuthorityRoute(authorityRoute);
+  operation.bindToolAuthorityFingerprint(toolAuthorityFingerprint);
+  operation.setPhase("running");
+  operation.attachBackend({
+    kind: "embedded",
+    cancel: vi.fn(),
+    taskSuggestionDeliveryMode,
+    messageInjection: { isAvailable: () => true, queueMessage },
+  });
+  operations.push(operation);
+  return { operation, toolAuthorityFingerprint };
+}
+
+function createCommandAuthorityRun(params: ReturnType<typeof buildParams>) {
+  return createMockFollowupRun({
+    originatingChannel: params.ctx.OriginatingChannel,
+    toolsAllow: params.opts?.toolsAllow,
+    disableTools: params.opts?.disableTools,
+    run: {
+      agentId: params.agentId ?? "main",
+      agentDir: params.agentDir ?? "/tmp/agent",
       sessionId: "session-active",
-      target: "embedded_run",
-      gatewayHealth: "live",
-    });
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReset().mockReturnValue(undefined);
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionIdBySessionFile
-      .mockReset()
-      .mockReturnValue(undefined);
+      sessionKey: params.sessionKey,
+      messageProvider: params.ctx.OriginatingChannel ?? params.ctx.Provider ?? params.ctx.Surface,
+      chatType: params.ctx.ChatType as ChatType | undefined,
+      agentAccountId: params.ctx.AccountId,
+      conversationToolPolicy: params.ctx.ConversationToolPolicy,
+      groupId: undefined,
+      groupChannel: undefined,
+      groupSpace: undefined,
+      memberRoleIds: params.ctx.MemberRoleIds,
+      spawnedBy: params.sessionEntry?.spawnedBy,
+      senderId: params.ctx.SenderId,
+      senderName: params.ctx.SenderName,
+      senderUsername: params.ctx.SenderUsername,
+      senderE164: params.ctx.SenderE164,
+      senderIsOwner: params.command.senderIsOwner,
+      traceAuthorized:
+        params.command.senderIsOwner ||
+        (params.ctx.GatewayClientScopes ?? []).includes("operator.admin"),
+      approvalReviewerDeviceId: params.ctx.ApprovalReviewerDeviceId,
+      clientCaps: params.ctx.GatewayClientCaps,
+      toolBindings: params.ctx.GatewayRunToolBindings,
+      inputProvenance: params.ctx.InputProvenance,
+      workspaceDir: params.workspaceDir,
+      config: params.cfg,
+      toolOverrides: params.sessionEntry?.toolOverrides,
+      provider: params.provider,
+      model: params.model,
+    },
+  });
+}
+
+describe("handleSteerCommand", () => {
+  beforeEach(() => queueMessage.mockReset().mockResolvedValue(undefined));
+
+  afterEach(() => {
+    for (const operation of operations.splice(0)) {
+      operation.complete();
+    }
   });
 
-  it("queues steering for the active current text-command session", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
-
-    const result = await handleSteerCommand(buildParams("/steer keep going"), true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: { text: "steered current session." },
-    });
-    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
+  it("routes an active /steer through the prepared reply path without a premature ack", async () => {
+    const params = buildParams("/steer keep going");
+    params.opts = { toolsAllow: ["read"] };
+    const { toolAuthorityFingerprint } = beginActiveOperation(
       "agent:main:main",
-    );
-    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
       "session-active",
-      "keep going",
-      {
-        steeringMode: "all",
-        debounceMs: 0,
-        taskSuggestionDeliveryMode: undefined,
-      },
+      undefined,
+      createCommandAuthorityRun(params),
     );
+
+    const result = await handleSteerCommand(params, true);
+
+    expect(toolAuthorityFingerprint).toEqual(expect.any(String));
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.ctx.BodyForAgent).toBe("keep going");
+    expect(params.command.commandBodyNormalized).toBe("keep going");
+    // Injection now happens only after the normal path has prepared durable
+    // transcript, identity, media, cancellation, and adoption ownership.
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("passes the initiating surface task capability into steering", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
+  it("defers tool-authority admission to the prepared steer path", async () => {
+    const activeParams = buildParams("/steer keep going");
+    activeParams.opts = { toolsAllow: ["exec"] };
+    beginActiveOperation(
+      "agent:main:main",
+      "session-active",
+      undefined,
+      createCommandAuthorityRun(activeParams),
+    );
+    const params = buildParams("/steer keep going");
+    params.opts = { toolsAllow: ["read"] };
+
+    const result = await handleSteerCommand(params, true);
+
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.ctx.BodyForAgent).toBe("keep going");
+    expect(params.command.commandBodyNormalized).toBe("keep going");
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps initiating surface options for prepared steering", async () => {
+    beginActiveOperation("agent:main:main", "session-active", "gateway");
     const params = buildParams("/steer keep going");
     params.opts = { taskSuggestionDeliveryMode: "gateway" };
 
-    await handleSteerCommand(params, true);
+    const result = await handleSteerCommand(params, true);
 
-    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
-      "session-active",
-      "keep going",
-      {
-        steeringMode: "all",
-        debounceMs: 0,
-        taskSuggestionDeliveryMode: "gateway",
-      },
-    );
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.opts.taskSuggestionDeliveryMode).toBe("gateway");
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("prefers the native command target session key over the slash-command session", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-target");
-
+  it("prefers the native command target over the slash-command source", async () => {
+    beginActiveOperation("agent:main:discord:direct:target", "session-target");
     const params = buildParams("/steer check the target");
     params.ctx.CommandSource = "native";
     params.ctx.CommandTargetSessionKey = "agent:main:discord:direct:target";
     params.sessionKey = "agent:main:discord:slash:user";
 
-    await handleSteerCommand(params, true);
+    const result = await handleSteerCommand(params, true);
 
-    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
-      "agent:main:discord:direct:target",
-    );
-    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
-      "session-target",
-      "check the target",
-      {
-        steeringMode: "all",
-        debounceMs: 0,
-        taskSuggestionDeliveryMode: undefined,
-      },
-    );
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.ctx.BodyForAgent).toBe("check the target");
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("falls back to the stored session id when it is still active", async () => {
-    steerRuntimeMocks.isEmbeddedAgentRunActive.mockReturnValue(true);
-
-    const params = buildParams("/tell continue from state");
-    params.sessionEntry = { sessionId: "stored-session-id", updatedAt: Date.now() };
-
-    await handleSteerCommand(params, true);
-
-    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
-      "agent:main:main",
-    );
-    expect(steerRuntimeMocks.isEmbeddedAgentRunActive).toHaveBeenCalledWith("stored-session-id");
-    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
-      "stored-session-id",
-      "continue from state",
-      {
-        steeringMode: "all",
-        debounceMs: 0,
-        taskSuggestionDeliveryMode: undefined,
-      },
-    );
-  });
-
-  it("resolves an active run from the target session file before stored session id fallback", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionIdBySessionFile.mockReturnValue(
-      "session-file-active",
-    );
-
-    const params = buildParams("/steer check the active file");
-    params.ctx.CommandSource = "native";
-    params.ctx.CommandTargetSessionKey = "agent:main:telegram:topic:5907";
-    params.sessionKey = "agent:main:telegram:control";
-    params.sessionStore = {
-      "agent:main:telegram:topic:5907": {
-        sessionId: "stored-session-id",
-        sessionFile: "/tmp/openclaw-topic-5907.jsonl",
-        updatedAt: Date.now(),
-      },
-    };
-
-    await handleSteerCommand(params, true);
-
-    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenCalledWith(
-      "agent:main:telegram:topic:5907",
-    );
-    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionIdBySessionFile).toHaveBeenCalledWith(
-      "/tmp/openclaw-topic-5907.jsonl",
-    );
-    expect(steerRuntimeMocks.isEmbeddedAgentRunActive).not.toHaveBeenCalledWith(
-      "stored-session-id",
-    );
-    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
-      "session-file-active",
-      "check the active file",
-      {
-        steeringMode: "all",
-        debounceMs: 0,
-        taskSuggestionDeliveryMode: undefined,
-      },
-    );
-  });
-
-  it("falls back from a slash-lane command session to an active direct sibling", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockImplementation((key: string) =>
-      key === "agent:main:telegram:direct:123" ? "session-direct-active" : undefined,
-    );
-
+  it("maps a text slash source lane to its active direct conversation", async () => {
+    beginActiveOperation("agent:main:telegram:direct:123", "session-direct-active");
     const params = buildParams("/steer use the active direct lane");
     params.sessionKey = "agent:main:telegram:slash:123";
 
-    await handleSteerCommand(params, true);
+    const result = await handleSteerCommand(params, true);
 
-    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenNthCalledWith(
-      1,
-      "agent:main:telegram:slash:123",
-    );
-    expect(steerRuntimeMocks.resolveActiveEmbeddedRunSessionId).toHaveBeenNthCalledWith(
-      2,
-      "agent:main:telegram:direct:123",
-    );
-    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).toHaveBeenCalledWith(
-      "session-direct-active",
-      "use the active direct lane",
-      {
-        steeringMode: "all",
-        debounceMs: 0,
-        taskSuggestionDeliveryMode: undefined,
-      },
-    );
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+    expect(params.ctx.BodyForAgent).toBe("use the active direct lane");
+    expect(queueMessage).not.toHaveBeenCalled();
+  });
+
+  it("maps a text slash source lane after its active embedded owner's operation clears", async () => {
+    const sessionId = "session-direct-active";
+    const sessionKey = "agent:main:telegram:direct:123";
+    const handle = {
+      kind: "embedded" as const,
+      queueMessage: vi.fn(),
+      isStreaming: () => true,
+      isCompacting: () => false,
+      abort: vi.fn(),
+    };
+    setActiveEmbeddedRun(sessionId, handle, sessionKey);
+    try {
+      const params = buildParams("/steer use the active direct lane");
+      params.sessionKey = "agent:main:telegram:slash:123";
+
+      const result = await handleSteerCommand(params, true);
+
+      expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
+      expect(params.ctx.BodyForAgent).toBe("use the active direct lane");
+    } finally {
+      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
+    }
   });
 
   it("returns usage for an empty steer command", async () => {
@@ -207,79 +218,29 @@ describe("handleSteerCommand", () => {
       shouldContinue: false,
       reply: { text: "Usage: /steer <message>" },
     });
-    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("continues as a normal prompt when no current session run is active", async () => {
+  it("continues visibly as a normal prompt when no direct owner is active", async () => {
     const params = buildParams("/steer keep going");
     const result = await handleSteerCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: true,
-    });
+    expect(result).toEqual({ shouldContinue: true });
     expect(params.ctx.Body).toBe("keep going");
     expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect((params.ctx as Record<string, unknown>).BodyStripped).toBe("keep going");
     expect(params.command.commandBodyNormalized).toBe("keep going");
-    expect(steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync).not.toHaveBeenCalled();
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 
-  it("continues as a normal prompt when the active run rejects steering injection", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
-    steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync.mockResolvedValue({
-      queued: false,
-      sessionId: "session-active",
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    });
-
+  it("does not contact the backend before prepared admission", async () => {
+    beginActiveOperation("agent:main:main");
     const params = buildParams("/steer keep going");
+
     const result = await handleSteerCommand(params, true);
 
-    expect(result).toEqual({
-      shouldContinue: true,
-    });
+    expect(result).toEqual({ shouldContinue: true, queueModeOverride: "steer" });
     expect(params.ctx.BodyForAgent).toBe("keep going");
     expect(params.command.commandBodyNormalized).toBe("keep going");
-    expect(steerRuntimeMocks.formatEmbeddedAgentQueueFailureSummary).toHaveBeenCalledWith({
-      queued: false,
-      sessionId: "session-active",
-      reason: "not_streaming",
-      gatewayHealth: "live",
-    });
-  });
-
-  it("continues as a normal prompt when steering throws", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
-    steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync.mockRejectedValue(
-      new Error("socket closed"),
-    );
-
-    const params = buildParams("/steer keep going");
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({
-      shouldContinue: true,
-    });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
-    expect(params.command.commandBodyNormalized).toBe("keep going");
-  });
-
-  it("continues as a normal prompt when the active run is compacting", async () => {
-    steerRuntimeMocks.resolveActiveEmbeddedRunSessionId.mockReturnValue("session-active");
-    steerRuntimeMocks.queueEmbeddedAgentMessageWithOutcomeAsync.mockResolvedValue({
-      queued: false,
-      sessionId: "session-active",
-      reason: "compacting",
-      gatewayHealth: "live",
-    });
-
-    const params = buildParams("/steer keep going");
-    const result = await handleSteerCommand(params, true);
-
-    expect(result).toEqual({
-      shouldContinue: true,
-    });
-    expect(params.ctx.BodyForAgent).toBe("keep going");
+    expect(queueMessage).not.toHaveBeenCalled();
   });
 });

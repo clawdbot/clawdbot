@@ -4,12 +4,17 @@ import {
   extractHtmlFromAttachment,
   extractInlineImageCandidates,
   IMG_SRC_RE,
-  isDownloadableAttachment,
+  isAdvertisedFileAttachment,
   isLikelyImageAttachment,
   normalizeContentType,
+  resolveMSTeamsMediaKind,
   safeHostForUrl,
 } from "./shared.js";
-import type { MSTeamsAttachmentLike, MSTeamsHtmlAttachmentSummary } from "./types.js";
+import type {
+  MSTeamsAttachmentLike,
+  MSTeamsHtmlAttachmentSummary,
+  MSTeamsInboundMedia,
+} from "./types.js";
 
 /**
  * Extract every `<attachment id="...">` reference from the HTML attachments in
@@ -106,64 +111,7 @@ export function summarizeMSTeamsHtmlAttachments(
   };
 }
 
-function isAdvertisedFileAttachment(attachment: MSTeamsAttachmentLike): boolean {
-  const contentType = normalizeContentType(attachment.contentType) ?? "";
-  if (
-    contentType.startsWith("text/html") ||
-    contentType.startsWith("application/vnd.microsoft.card.") ||
-    contentType.startsWith("application/vnd.microsoft.teams.card.")
-  ) {
-    return false;
-  }
-  return Boolean(
-    isDownloadableAttachment(attachment) ||
-    isLikelyImageAttachment(attachment) ||
-    attachment.name?.trim() ||
-    contentType,
-  );
-}
-
-function countDistinctInlineImages(attachments: MSTeamsAttachmentLike[]): number {
-  const seenReferences = new Set<string>();
-  let count = 0;
-  for (const attachment of attachments) {
-    const html = extractHtmlFromAttachment(attachment);
-    if (!html) {
-      continue;
-    }
-    IMG_SRC_RE.lastIndex = 0;
-    let match: RegExpExecArray | null = IMG_SRC_RE.exec(html);
-    while (match) {
-      const src = match[1]?.trim();
-      if (src?.startsWith("data:")) {
-        count += 1;
-      } else if (src && !seenReferences.has(src)) {
-        seenReferences.add(src);
-        count += 1;
-      }
-      match = IMG_SRC_RE.exec(html);
-    }
-  }
-  return count;
-}
-
-function countDistinctInlineCandidates(
-  attachments: MSTeamsAttachmentLike[],
-  limits?: { maxInlineBytes?: number; maxInlineTotalBytes?: number },
-): number {
-  const seenUrls = new Set<string>();
-  let dataCount = 0;
-  for (const candidate of extractInlineImageCandidates(attachments, limits)) {
-    if (candidate.kind === "data") {
-      dataCount += 1;
-    } else {
-      seenUrls.add(candidate.url);
-    }
-  }
-  return dataCount + seenUrls.size;
-}
-
-function countUnrepresentedHtmlAttachmentIds(attachments: MSTeamsAttachmentLike[]): number {
+function resolveUnrepresentedHtmlAttachmentIds(attachments: MSTeamsAttachmentLike[]): string[] {
   const representedIds = new Set<string>();
   for (const attachment of attachments) {
     const contentType = normalizeContentType(attachment.contentType) ?? "";
@@ -175,39 +123,49 @@ function countUnrepresentedHtmlAttachmentIds(attachments: MSTeamsAttachmentLike[
       representedIds.add(id);
     }
   }
-  return extractMSTeamsHtmlAttachmentIds(attachments).filter((id) => !representedIds.has(id))
-    .length;
+  return extractMSTeamsHtmlAttachmentIds(attachments).filter((id) => !representedIds.has(id));
 }
 
-export function resolveMSTeamsInboundAttachmentPresentation(
+function createAdvertisedMediaFact(
+  kind: MSTeamsInboundMedia["kind"],
+  sourceId?: string,
+): MSTeamsInboundMedia {
+  const media: MSTeamsInboundMedia = { kind };
+  if (sourceId) {
+    media.sourceId = sourceId;
+  }
+  return media;
+}
+
+export function resolveMSTeamsAdvertisedMedia(
   attachments: MSTeamsAttachmentLike[] | undefined,
   limits?: { maxInlineBytes?: number; maxInlineTotalBytes?: number },
-): { placeholder: string; expectedMediaCount: number } {
+): MSTeamsInboundMedia[] {
   const list = Array.isArray(attachments) ? attachments : [];
   if (list.length === 0) {
-    return { placeholder: "", expectedMediaCount: 0 };
+    return [];
   }
   const fileAttachments = list.filter(isAdvertisedFileAttachment);
-  const inlinePlaceholderCount = countDistinctInlineCandidates(list, limits);
-  const inlineExpectedCount = countDistinctInlineImages(list);
+  const inlineMedia = extractInlineImageCandidates(list, limits).map((candidate) =>
+    createAdvertisedMediaFact("image", candidate.sourceId),
+  );
   // Teams HTML uses <attachment> tags as references. A matching attachment
   // entry is the same resource (and may be a card), so count only unmatched
   // IDs that need the Graph/Bot Framework hosted-content fallback.
-  const htmlAttachmentCount = countUnrepresentedHtmlAttachmentIds(list);
-  const expectedMediaCount = fileAttachments.length + inlineExpectedCount + htmlAttachmentCount;
-  if (expectedMediaCount === 0) {
-    return { placeholder: "", expectedMediaCount: 0 };
-  }
-  const totalImages =
-    fileAttachments.filter(isLikelyImageAttachment).length + inlinePlaceholderCount;
-  if (totalImages > 0) {
-    return {
-      placeholder: `<media:image>${totalImages > 1 ? ` (${totalImages} images)` : ""}`,
-      expectedMediaCount,
-    };
-  }
-  return {
-    placeholder: `<media:document>${expectedMediaCount > 1 ? ` (${expectedMediaCount} files)` : ""}`,
-    expectedMediaCount,
-  };
+  const htmlAttachmentIds = resolveUnrepresentedHtmlAttachmentIds(list);
+  return [
+    ...fileAttachments.map((attachment) =>
+      createAdvertisedMediaFact(
+        isLikelyImageAttachment(attachment)
+          ? "image"
+          : resolveMSTeamsMediaKind({
+              contentType: normalizeContentType(attachment.contentType),
+              fileName: attachment.name ?? undefined,
+            }),
+        attachment.id?.trim() || undefined,
+      ),
+    ),
+    ...inlineMedia,
+    ...htmlAttachmentIds.map((sourceId) => createAdvertisedMediaFact("document", sourceId)),
+  ];
 }

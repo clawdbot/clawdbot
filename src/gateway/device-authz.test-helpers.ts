@@ -9,17 +9,14 @@ import {
   publicKeyRawBase64UrlFromPem,
   type DeviceIdentity,
 } from "../infra/device-identity.js";
-import {
-  approveDevicePairing,
-  getPairedDevice,
-  requestDevicePairing,
-  rotateDeviceToken,
-} from "../infra/device-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { rotateDeviceToken } from "../infra/device-pairing-tokens.js";
+import { getPairedDevice, requestDevicePairing } from "../infra/device-pairing.js";
 import { trackConnectChallengeNonce } from "./test-helpers.js";
 
 export function resolveDeviceIdentityPath(name: string): string {
   const root = process.env.OPENCLAW_STATE_DIR ?? process.env.HOME ?? os.tmpdir();
-  return path.join(root, "test-device-identities", `${name}.json`);
+  return path.join(root, "test-device-identities", `${name}.sqlite`);
 }
 
 export function loadDeviceIdentity(name: string): {
@@ -28,7 +25,7 @@ export function loadDeviceIdentity(name: string): {
   publicKey: string;
 } {
   const identityPath = resolveDeviceIdentityPath(name);
-  const identity = loadOrCreateDeviceIdentity(identityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: identityPath });
   return {
     identityPath,
     identity,

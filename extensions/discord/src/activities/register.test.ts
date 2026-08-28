@@ -1,7 +1,9 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
+import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerDiscordActivities } from "./register.js";
 import { getDiscordActivitiesRuntime, setDiscordActivitiesRuntime } from "./runtime.js";
+import { openDiscordActivityStores } from "./store.js";
 import { createMemoryKeyedStore } from "./test-helpers.test-support.js";
 
 afterEach(() => {
@@ -9,78 +11,110 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-function createApi(config: Record<string, unknown>) {
-  const routes: unknown[] = [];
-  const tools: unknown[] = [];
-  const warn = vi.fn();
+function createApi(
+  config: Record<string, unknown>,
+  runtimeConfig: Record<string, unknown> = config,
+) {
+  const routes: Array<Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]> = [];
+  const widgetPresenters: Array<Parameters<OpenClawPluginApi["registerWidgetPresenter"]>[0]> = [];
+  const resolvePath = vi.fn((input: string) => `/plugin-root/${input}`);
   const api = {
     config,
-    logger: { warn },
+    logger: { warn: vi.fn() },
     runtime: {
       state: { openKeyedStore: vi.fn(() => createMemoryKeyedStore()) },
-      config: { current: () => config },
+      config: { current: () => runtimeConfig },
     },
     registerHttpRoute: vi.fn((route) => routes.push(route)),
-    registerTool: vi.fn((tool) => tools.push(tool)),
+    registerWidgetPresenter: vi.fn((presenter) => widgetPresenters.push(presenter)),
+    resolvePath,
   } as unknown as OpenClawPluginApi;
-  return { api, routes, tools, warn };
+  return { api, routes, widgetPresenters, resolvePath };
 }
 
 describe("Discord Activities registration", () => {
-  it("registers no route, tool, or runtime when unconfigured", () => {
-    const test = createApi({ channels: { discord: { token: "test" } } });
-    registerDiscordActivities(test.api);
-    expect(test.routes).toHaveLength(0);
-    expect(test.tools).toHaveLength(0);
-    expect(getDiscordActivitiesRuntime()).toBeUndefined();
+  it("requires atomic plugin state updates", () => {
+    const openKeyedStore = <T>() => {
+      const store: PluginStateKeyedStore<T> = createMemoryKeyedStore<T>();
+      store.update = undefined;
+      return store;
+    };
+
+    expect(() => openDiscordActivityStores(openKeyedStore)).toThrow(
+      "Discord Activities require atomic plugin state updates",
+    );
   });
 
-  it("warns and remains disabled when the secret is missing", () => {
-    vi.stubEnv("DISCORD_CLIENT_SECRET", "");
-    const test = createApi({
-      channels: { discord: { token: "test", activities: { applicationId: "123" } } },
-    });
-    registerDiscordActivities(test.api);
-    expect(test.warn).toHaveBeenCalledWith(expect.stringContaining("no client secret resolved"));
-    expect(test.routes).toHaveLength(0);
-    expect(test.tools).toHaveLength(0);
-  });
-
-  it("registers nothing for an explicitly disabled Discord account", () => {
-    const test = createApi({
-      channels: {
-        discord: {
-          enabled: false,
-          token: "test",
-          activities: { clientSecret: "secret", applicationId: "123" },
-        },
-      },
-    });
-    registerDiscordActivities(test.api);
-    expect(test.routes).toHaveLength(0);
-    expect(test.tools).toHaveLength(0);
-    expect(getDiscordActivitiesRuntime()).toBeUndefined();
-  });
-
-  it("registers the public plugin route and Discord-only tool factory when configured", () => {
-    const test = createApi({
+  it("registers static transport surfaces before runtime config is published", () => {
+    const runtimeConfig = {
       channels: {
         discord: {
           token: "test",
           activities: { clientSecret: "secret", applicationId: "123" },
         },
       },
-    });
+    };
+    const test = createApi({ channels: { discord: { token: "test" } } }, runtimeConfig);
+
     registerDiscordActivities(test.api);
-    expect(test.routes).toHaveLength(1);
-    expect(test.routes[0]).toMatchObject({
-      path: "/discord/activity",
-      auth: "plugin",
-      match: "prefix",
-    });
-    expect(test.tools).toHaveLength(1);
-    const factory = test.tools[0] as (context: { messageChannel?: string }) => unknown;
-    expect(factory({ messageChannel: "slack" })).toBeNull();
-    expect(factory({ messageChannel: "discord" })).not.toBeNull();
+
+    expect(test.routes).toEqual([
+      expect.objectContaining({ path: "/discord/activity", auth: "plugin", match: "prefix" }),
+    ]);
+    expect(test.resolvePath).toHaveBeenCalledWith("assets/embedded-app-sdk.mjs");
+    expect(test.widgetPresenters).toEqual([
+      expect.objectContaining({
+        target: "current_channel",
+        capabilities: { sourceKinds: ["html"], maxSourceBytes: 48 * 1024 },
+      }),
+    ]);
+    const presenter = test.widgetPresenters[0];
+    expect(
+      presenter?.target === "current_channel" &&
+        presenter.match({
+          messageChannel: "discord",
+          accountId: "default",
+          nativeChannelId: "987654321",
+        }),
+    ).toBe(true);
+    expect(getDiscordActivitiesRuntime()).toBeDefined();
+  });
+
+  it.each([
+    {
+      name: "Activities are unconfigured",
+      config: { channels: { discord: { token: "test" } } },
+    },
+    {
+      name: "the client secret is missing",
+      config: {
+        channels: { discord: { token: "test", activities: { applicationId: "123" } } },
+      },
+    },
+    {
+      name: "the Discord account is disabled",
+      config: {
+        channels: {
+          discord: {
+            enabled: false,
+            token: "test",
+            activities: { clientSecret: "secret", applicationId: "123" },
+          },
+        },
+      },
+    },
+  ])("keeps the static presenter unavailable when $name", ({ config }) => {
+    const test = createApi({}, config);
+    registerDiscordActivities(test.api);
+
+    const presenter = test.widgetPresenters[0];
+    expect(
+      presenter?.target === "current_channel" &&
+        presenter.match({
+          messageChannel: "discord",
+          accountId: "default",
+          nativeChannelId: "987654321",
+        }),
+    ).toBe(false);
   });
 });

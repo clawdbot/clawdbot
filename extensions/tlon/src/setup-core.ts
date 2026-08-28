@@ -1,3 +1,4 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 // Tlon plugin module implements setup core behavior.
 import {
   DEFAULT_ACCOUNT_ID,
@@ -112,6 +113,8 @@ export function createTlonSetupWizardBase(params: TlonSetupWizardBaseParams): Ch
         inputKey: "code",
         message: t("wizard.tlon.loginCodePrompt"),
         placeholder: "lidlut-tabwed-pillex-ridrup",
+        sensitive: true,
+        keepPrompt: t("wizard.tlon.loginCodeKeep"),
         currentValue: ({ cfg, accountId }) => resolveTlonAccount(cfg, accountId).code ?? undefined,
         validate: ({ value }) =>
           normalizeStringifiedOptionalString(value) ? undefined : "Required",
@@ -197,7 +200,17 @@ export function applyTlonSetupConfig(params: {
 }
 
 export const tlonSetupAdapter: ChannelSetupAdapter = {
+  singleAccountKeysToMove: ["url", "code"],
   resolveAccountId: ({ accountId }) => normalizeAccountId(accountId),
+  prepareAccountConfigInput: ({ input }) => {
+    const setupInput = input as TlonSetupInput;
+    const url = normalizeOptionalString(setupInput.url);
+    if (!url) {
+      return setupInput;
+    }
+    const validatedUrl = validateUrbitBaseUrl(url);
+    return validatedUrl.ok ? { ...setupInput, url: validatedUrl.baseUrl } : setupInput;
+  },
   applyAccountName: ({ cfg, accountId, name }) =>
     prepareScopedSetupConfig({
       cfg,
@@ -207,15 +220,20 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
     }),
   validateInput: createSetupInputPresenceValidator({
     validate: ({ cfg, accountId, input }) => {
+      const setupInput = input as TlonSetupInput;
       const resolved = resolveTlonAccount(cfg, accountId ?? undefined);
-      const ship = normalizeOptionalString(input.ship) || resolved.ship;
-      const url = normalizeOptionalString(input.url) || resolved.url;
-      const code = normalizeOptionalString(input.code) || resolved.code;
+      const ship = normalizeOptionalString(setupInput.ship ?? resolved.ship);
+      const url = normalizeOptionalString(setupInput.url ?? resolved.url);
+      const code = normalizeOptionalString(setupInput.code ?? resolved.code);
       if (!ship) {
         return "Tlon requires --ship.";
       }
       if (!url) {
         return "Tlon requires --url.";
+      }
+      const validatedUrl = validateUrbitBaseUrl(url);
+      if (!validatedUrl.ok) {
+        return `Invalid URL: ${validatedUrl.error}`;
       }
       if (!code) {
         return "Tlon requires --code.";
@@ -230,3 +248,43 @@ export const tlonSetupAdapter: ChannelSetupAdapter = {
       input: input as TlonSetupInput,
     }),
 };
+
+export const tlonSetupContract = defineChannelSetupContract({
+  fields: {
+    ship: { kind: "string", cli: { flags: "--ship <ship>", description: "Tlon ship" } },
+    url: { kind: "string", cli: { flags: "--url <url>", description: "Tlon URL" } },
+    code: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--code <code>", description: "Tlon login code" },
+    },
+    dangerouslyAllowPrivateNetwork: {
+      kind: "boolean",
+      cli: {
+        flags: "--dangerously-allow-private-network",
+        description: "Allow private-network Tlon URLs",
+      },
+    },
+    groupChannels: {
+      kind: "string-list",
+      cli: { flags: "--group-channels <list>", description: "Tlon group channels" },
+    },
+    dmAllowlist: {
+      kind: "string-list",
+      cli: { flags: "--dm-allowlist <list>", description: "Tlon DM allowlist" },
+    },
+    autoDiscoverChannels: {
+      kind: "boolean",
+      cli: {
+        flags: "--auto-discover-channels",
+        negatedFlags: "--no-auto-discover-channels",
+        description: "Auto-discover Tlon group channels",
+      },
+    },
+    ownerShip: {
+      kind: "string",
+      cli: { flags: "--owner-ship <ship>", description: "Tlon owner ship" },
+    },
+  },
+  legacyAdapter: tlonSetupAdapter,
+});

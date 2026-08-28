@@ -101,6 +101,11 @@ on:
         required: false
         default: ""
         type: string
+      prepublish_plugin_registry_json:
+        description: Optional immutable prerelease plugin registry tuple for manual dispatch
+        required: false
+        default: ""
+        type: string
       openai_model:
         description: OpenAI model for release cross-OS agent-turn smoke
         required: false
@@ -205,6 +210,11 @@ on:
         required: false
         default: ""
         type: string
+      prepublish_plugin_registry_json:
+        description: Optional immutable prerelease plugin registry tuple
+        required: false
+        default: ""
+        type: string
       openai_model:
         description: OpenAI model for release cross-OS agent-turn smoke
         required: false
@@ -232,13 +242,14 @@ concurrency:
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
-  NODE_VERSION: "24.15.0"
+  NODE_VERSION: "24.19.0"
   OPENCLAW_REPOSITORY: openclaw/openclaw
   OPENCLAW_CROSS_OS_OPENAI_MODEL: ${{ inputs.openai_model || vars.OPENCLAW_CROSS_OS_OPENAI_MODEL || 'openai/gpt-5.6-luna' }}
 
 jobs:
   prepare:
     runs-on: ubuntu-24.04
+    timeout-minutes: 90
     continue-on-error: ${{ inputs.advisory }}
     outputs:
       baseline_artifact_digest: ${{ steps.upload_baseline.outputs.artifact-digest }}
@@ -256,6 +267,8 @@ jobs:
       candidate_sha256: ${{ steps.candidate_metadata.outputs.sha256 }}
       candidate_version: ${{ steps.candidate_metadata.outputs.version }}
       matrix: ${{ steps.matrix.outputs.value }}
+      prepublish_plugin_registry_json: ${{ steps.registry_identity.outputs.json }}
+      required_companion_packages_json: ${{ steps.provider_requirements.outputs.json }}
       source_sha: ${{ steps.candidate_metadata.outputs.source_sha }}
       workflow_ref: ${{ steps.workflow_ref.outputs.value }}
     steps:
@@ -381,7 +394,7 @@ jobs:
           esac
 
       - name: Checkout workflow repo
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ steps.workflow_ref.outputs.value }}
@@ -426,50 +439,25 @@ jobs:
             echo "Candidate package source SHA does not match the selected exact ref." >&2
             exit 1
           fi
-
-          artifact_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/artifacts/${ARTIFACT_ID}")"
-          jq -e \
-            --arg digest "sha256:${ARTIFACT_DIGEST}" \
-            --arg id "$ARTIFACT_ID" \
-            --arg name "$ARTIFACT_NAME" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '
-              (.id | tostring) == $id and
-              .name == $name and
-              .expired == false and
-              .digest == $digest and
-              (.workflow_run.id | tostring) == $run_id
-            ' <<< "$artifact_json" >/dev/null || {
-              echo "Candidate artifact identity does not match the requested immutable tuple." >&2
-              exit 1
-            }
-
-          attempt_json="$(
-            gh api \
-              "repos/${GITHUB_REPOSITORY}/actions/runs/${ARTIFACT_RUN_ID}/attempts/${ARTIFACT_RUN_ATTEMPT}"
-          )"
-          jq -e \
-            --arg attempt "$ARTIFACT_RUN_ATTEMPT" \
-            --arg run_id "$ARTIFACT_RUN_ID" \
-            '(.id | tostring) == $run_id and (.run_attempt | tostring) == $attempt' \
-            <<< "$attempt_json" >/dev/null || {
-              echo "Candidate artifact producer run attempt does not match the requested tuple." >&2
-              exit 1
-            }
+          bash workflow/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Candidate" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Checkout public source ref
         if: inputs.candidate_artifact_name == ''
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ inputs.ref }}
           path: source
           fetch-depth: 0
+          filter: blob:none
           persist-credentials: false
           submodules: recursive
 
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: ${{ env.NODE_VERSION }}
 
@@ -479,20 +467,136 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           package-manager-file: ${{ inputs.candidate_artifact_name == '' && 'source/package.json' || 'workflow/package.json' }}
           lockfile-path: ${{ inputs.candidate_artifact_name == '' && 'source/pnpm-lock.yaml' || 'workflow/pnpm-lock.yaml' }}
-          use-actions-cache: ${{ inputs.candidate_artifact_name == '' && 'true' || 'false' }}
+          cache-mode: ${{ inputs.candidate_artifact_name == '' && 'restore' || 'off' }}
+
+      - name: Resolve provider-owned companion requirements
+        id: provider_requirements
+        env:
+          PROVIDER: ${{ inputs.provider }}
+        run: |
+          set -euo pipefail
+          packages_json="$(
+            bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
+              --resolve-provider-required-companion-packages \
+              --provider "$PROVIDER"
+          )"
+          jq -e 'type == "array" and all(.[]; type == "string")' <<< "$packages_json" >/dev/null
+          echo "json=$packages_json" >> "$GITHUB_OUTPUT"
+
+      - name: Normalize companion registry contract
+        id: provided_registry
+        env:
+          CANDIDATE_ARTIFACT_NAME: ${{ inputs.candidate_artifact_name }}
+          PREPUBLISH_PLUGIN_REGISTRY_JSON: ${{ inputs.prepublish_plugin_registry_json }}
+          REQUIRED_COMPANION_PACKAGES_JSON: ${{ steps.provider_requirements.outputs.json }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          required_count="$(jq -er 'length' <<< "$REQUIRED_COMPANION_PACKAGES_JSON")"
+          if [[ -z "${CANDIDATE_ARTIFACT_NAME// }" ]]; then
+            [[ -z "${PREPUBLISH_PLUGIN_REGISTRY_JSON// }" ]] || {
+              echo "Source-built candidates produce their own companion registry and reject a second tuple." >&2
+              exit 1
+            }
+            echo "json=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [[ -z "${PREPUBLISH_PLUGIN_REGISTRY_JSON// }" ]]; then
+            if [[ "$required_count" -gt 0 ]]; then
+              echo "The selected provider requires a complete immutable companion registry tuple." >&2
+              exit 1
+            fi
+            echo "json=" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          normalized="$(
+            jq -ce '
+              def digits: test("^[1-9][0-9]*$");
+              def hex64: test("^[a-f0-9]{64}$");
+              . as $value |
+              (keys | sort) == ([
+                "prepublishPluginRegistryArtifactDigest",
+                "prepublishPluginRegistryArtifactId",
+                "prepublishPluginRegistryArtifactName",
+                "prepublishPluginRegistryArtifactRunAttempt",
+                "prepublishPluginRegistryArtifactRunId",
+                "prepublishPluginRegistryManifestSha256"
+              ] | sort) and
+              all(.[]; type == "string") and
+              (.prepublishPluginRegistryArtifactDigest | hex64) and
+              (.prepublishPluginRegistryArtifactId | digits) and
+              (.prepublishPluginRegistryArtifactRunAttempt | digits) and
+              (.prepublishPluginRegistryArtifactRunId | digits) and
+              (.prepublishPluginRegistryManifestSha256 | hex64) and
+              (.prepublishPluginRegistryArtifactName |
+                endswith("-" + $value.prepublishPluginRegistryArtifactRunId + "-" +
+                  $value.prepublishPluginRegistryArtifactRunAttempt)) |
+              if . then $value else error("invalid prerelease plugin registry tuple") end
+            ' <<< "$PREPUBLISH_PLUGIN_REGISTRY_JSON"
+          )" || {
+            echo "Prerelease companion registry must be one closed immutable JSON tuple." >&2
+            exit 1
+          }
+          if [[ "$required_count" -gt 0 && -z "${normalized// }" ]]; then
+            echo "The selected provider requires a complete immutable companion registry tuple." >&2
+            exit 1
+          fi
+          echo "json=$normalized" >> "$GITHUB_OUTPUT"
+
+      - name: Verify provided prerelease plugin registry upload
+        if: steps.provided_registry.outputs.json != ''
+        env:
+          ARTIFACT_DIGEST: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactDigest || '' }}
+          ARTIFACT_ID: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactId || '' }}
+          ARTIFACT_NAME: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactName || '' }}
+          ARTIFACT_RUN_ATTEMPT: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactRunAttempt || '' }}
+          ARTIFACT_RUN_ID: ${{ fromJSON(steps.provided_registry.outputs.json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          bash workflow/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Prerelease plugin registry" \
+            "$ARTIFACT_ID" "$ARTIFACT_NAME" "$ARTIFACT_DIGEST" \
+            "$ARTIFACT_RUN_ID" "$ARTIFACT_RUN_ATTEMPT"
 
       - name: Ensure pnpm store cache directory exists
         run: mkdir -p "$(pnpm store path --silent)"
+
+      - name: Install workflow validation dependencies
+        if: inputs.candidate_artifact_name != ''
+        working-directory: workflow
+        env:
+          CI: "true"
+        run: pnpm install --frozen-lockfile --prefer-offline --ignore-scripts
 
       - name: Build candidate artifact once
         if: inputs.candidate_artifact_name == ''
         env:
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
+          PROVIDER: ${{ inputs.provider }}
         run: |
           bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
             --prepare-only \
+            --provider "$PROVIDER" \
             --source-dir source \
             --output-dir "${OUTPUT_DIR}"
+
+      - name: Pack source-built prerelease companion registry
+        id: source_prepublish_plugin_registry
+        if: inputs.candidate_artifact_name == '' && steps.provider_requirements.outputs.json != '[]'
+        env:
+          OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare
+          REQUIRED_PACKAGES_JSON: ${{ steps.provider_requirements.outputs.json }}
+        run: |
+          set -euo pipefail
+          result="$(
+            node workflow/scripts/prepublish-plugin-registry-artifact.mjs create \
+              --repo-root source \
+              --artifact-dir "$OUTPUT_DIR/plugins" \
+              --source-sha "$(git -C source rev-parse HEAD)" \
+              --candidate-version "$(node -p "require('./source/package.json').version")" \
+              --required-packages-json "$REQUIRED_PACKAGES_JSON"
+          )"
+          echo "manifest_sha256=$(jq -er '.manifestSha256' <<< "$result")" >> "$GITHUB_OUTPUT"
 
       - name: Download provided candidate artifact
         if: inputs.candidate_artifact_name != ''
@@ -516,7 +620,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          node workflow/scripts/resolve-openclaw-package-candidate.mjs \
+          pnpm --dir workflow exec node --import tsx scripts/resolve-openclaw-package-candidate.mts \
             --source artifact \
             --artifact-dir "$INPUT_DIR" \
             --package-sha256 "$INPUT_CANDIDATE_SHA256" \
@@ -630,13 +734,15 @@ jobs:
       - name: Capture baseline metadata
         if: ${{ inputs.mode != 'fresh' }}
         id: baseline_metadata
+        working-directory: workflow
         env:
           BASELINE_PACK_JSON: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/pack.json
         run: |
-          node <<'NODE' >>"$GITHUB_OUTPUT"
-          const crypto = require("node:crypto");
-          const fs = require("node:fs");
-          const path = require("node:path");
+          node --import tsx --input-type=module <<'NODE' >>"$GITHUB_OUTPUT"
+          import crypto from "node:crypto";
+          import fs from "node:fs";
+          import path from "node:path";
+          import { resolveNpmJsonEntries } from "./scripts/lib/npm-json-output.mts";
           function resolveTarballFileName(value, label) {
             const fileName = typeof value === "string" ? value.trim() : "";
             if (
@@ -650,7 +756,7 @@ jobs:
             return fileName;
           }
           const payload = JSON.parse(fs.readFileSync(process.env.BASELINE_PACK_JSON, "utf8"));
-          const entry = Array.isArray(payload) ? payload.at(-1) : null;
+          const entry = resolveNpmJsonEntries(payload).at(-1);
           const fileName = resolveTarballFileName(entry?.filename, "Baseline npm pack filename");
           const sha256 = crypto
             .createHash("sha256")
@@ -668,6 +774,15 @@ jobs:
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/package/${{ steps.candidate_metadata.outputs.file_name }}
           if-no-files-found: error
 
+      - name: Upload source-built prerelease companion registry
+        id: upload_prepublish_plugin_registry
+        if: inputs.candidate_artifact_name == '' && steps.provider_requirements.outputs.json != '[]'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: openclaw-cross-os-prepublish-plugin-registry-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/plugins/
+          if-no-files-found: error
+
       - name: Upload baseline artifact
         if: ${{ inputs.mode != 'fresh' }}
         id: upload_baseline
@@ -676,6 +791,68 @@ jobs:
           name: openclaw-cross-os-release-checks-baseline-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/prepare/baseline/${{ steps.baseline_metadata.outputs.file_name }}
           if-no-files-found: error
+
+      - name: Prepare prerelease plugin registry identity
+        id: registry_identity
+        env:
+          ARTIFACT_DIGEST: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-digest }}
+          ARTIFACT_ID: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id }}
+          MANIFEST_SHA256: ${{ steps.source_prepublish_plugin_registry.outputs.manifest_sha256 }}
+          PROVIDED_JSON: ${{ steps.provided_registry.outputs.json }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$ARTIFACT_ID" ]]; then
+            echo "json=$PROVIDED_JSON" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          jq -cnr \
+            --arg digest "$ARTIFACT_DIGEST" \
+            --arg id "$ARTIFACT_ID" \
+            --arg manifest "$MANIFEST_SHA256" \
+            --arg name "openclaw-cross-os-prepublish-plugin-registry-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            --arg attempt "$GITHUB_RUN_ATTEMPT" \
+            --arg run "$GITHUB_RUN_ID" \
+            '{
+              prepublishPluginRegistryArtifactName: $name,
+              prepublishPluginRegistryArtifactId: $id,
+              prepublishPluginRegistryArtifactDigest: $digest,
+              prepublishPluginRegistryArtifactRunId: $run,
+              prepublishPluginRegistryArtifactRunAttempt: $attempt,
+              prepublishPluginRegistryManifestSha256: $manifest
+            } | "json=\(.)"' >> "$GITHUB_OUTPUT"
+
+      - name: Verify prepared artifact uploads
+        env:
+          CANDIDATE_DIGEST: ${{ steps.upload_candidate.outputs.artifact-digest }}
+          CANDIDATE_ID: ${{ steps.upload_candidate.outputs.artifact-id }}
+          BASELINE_DIGEST: ${{ steps.upload_baseline.outputs.artifact-digest }}
+          BASELINE_ID: ${{ steps.upload_baseline.outputs.artifact-id }}
+          GENERATED_REGISTRY: ${{ steps.upload_prepublish_plugin_registry.outputs.artifact-id != '' }}
+          GH_TOKEN: ${{ github.token }}
+          REGISTRY_JSON: ${{ steps.registry_identity.outputs.json }}
+        run: |
+          set -euo pipefail
+          bash workflow/scripts/docker/shared-image-artifact.sh \
+            verify-upload "Candidate" \
+            "$CANDIDATE_ID" \
+            "openclaw-cross-os-release-checks-candidate-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            "$CANDIDATE_DIGEST" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          if [[ -n "$BASELINE_ID" ]]; then
+            bash workflow/scripts/docker/shared-image-artifact.sh \
+              verify-upload "Baseline" \
+              "$BASELINE_ID" \
+              "openclaw-cross-os-release-checks-baseline-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+              "$BASELINE_DIGEST" "$GITHUB_RUN_ID" "$GITHUB_RUN_ATTEMPT"
+          fi
+          if [[ "$GENERATED_REGISTRY" == "true" ]]; then
+            bash workflow/scripts/docker/shared-image-artifact.sh \
+              verify-upload "Prerelease plugin registry" \
+              "$(jq -r '.prepublishPluginRegistryArtifactId' <<< "$REGISTRY_JSON")" \
+              "$(jq -r '.prepublishPluginRegistryArtifactName' <<< "$REGISTRY_JSON")" \
+              "$(jq -r '.prepublishPluginRegistryArtifactDigest' <<< "$REGISTRY_JSON")" \
+              "$(jq -r '.prepublishPluginRegistryArtifactRunId' <<< "$REGISTRY_JSON")" \
+              "$(jq -r '.prepublishPluginRegistryArtifactRunAttempt' <<< "$REGISTRY_JSON")"
+          fi
 
       - name: Resolve runner matrix
         id: matrix
@@ -711,7 +888,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - name: Checkout workflow repo
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: ${{ env.OPENCLAW_REPOSITORY }}
           ref: ${{ needs.prepare.outputs.workflow_ref }}
@@ -719,134 +896,20 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      # Windows Server 2025 with Node 24.19 can crash in libuv fs-event on RUNNER~1.
+      # Keep only packaged-fresh on the last validated Node until an upstream fix ships.
       - name: Setup Node.js
-        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}
 
       - name: Setup pnpm
         uses: ./workflow/.github/actions/setup-pnpm-store-cache
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ matrix.os_id == 'windows' && matrix.suite == 'packaged-fresh' && '24.15.0' || env.NODE_VERSION }}
           package-manager-file: workflow/package.json
           lockfile-path: workflow/pnpm-lock.yaml
-          use-actions-cache: "false"
-
-      - name: Validate prepared candidate artifact binding
-        env:
-          ARTIFACT_DIGEST: ${{ needs.prepare.outputs.candidate_artifact_digest }}
-          ARTIFACT_ID: ${{ needs.prepare.outputs.candidate_artifact_id }}
-          ARTIFACT_NAME: ${{ format('openclaw-cross-os-release-checks-candidate-{0}-{1}', needs.prepare.outputs.candidate_artifact_run_id, needs.prepare.outputs.candidate_artifact_run_attempt) }}
-          ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare.outputs.candidate_artifact_run_attempt }}
-          ARTIFACT_RUN_ID: ${{ needs.prepare.outputs.candidate_artifact_run_id }}
-          BASELINE_ARTIFACT_DIGEST: ${{ needs.prepare.outputs.baseline_artifact_digest }}
-          BASELINE_ARTIFACT_ID: ${{ needs.prepare.outputs.baseline_artifact_id }}
-          BASELINE_ARTIFACT_NAME: ${{ format('openclaw-cross-os-release-checks-baseline-{0}-{1}', needs.prepare.outputs.baseline_artifact_run_id, needs.prepare.outputs.baseline_artifact_run_attempt) }}
-          BASELINE_ARTIFACT_RUN_ATTEMPT: ${{ needs.prepare.outputs.baseline_artifact_run_attempt }}
-          BASELINE_ARTIFACT_RUN_ID: ${{ needs.prepare.outputs.baseline_artifact_run_id }}
-          BASELINE_SHA256: ${{ needs.prepare.outputs.baseline_sha256 }}
-          CANDIDATE_SHA256: ${{ needs.prepare.outputs.candidate_sha256 }}
-          CANDIDATE_SOURCE_SHA: ${{ needs.prepare.outputs.source_sha }}
-          CANDIDATE_VERSION: ${{ needs.prepare.outputs.candidate_version }}
-          GH_TOKEN: ${{ github.token }}
-          SUITE: ${{ matrix.suite }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-            "$ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
-            -n "${ARTIFACT_NAME// }" &&
-            "$ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
-            "$ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ ]] || {
-            echo "Prepared candidate artifact binding is incomplete." >&2
-            exit 1
-          }
-          [[ "$CANDIDATE_SHA256" =~ ^[a-f0-9]{64}$ &&
-            "$CANDIDATE_SOURCE_SHA" =~ ^[a-f0-9]{40}$ &&
-            -n "${CANDIDATE_VERSION// }" ]] || {
-            echo "Prepared candidate package identity is incomplete." >&2
-            exit 1
-          }
-          if [[ "$SUITE" == "packaged-upgrade" ]]; then
-            [[ "$BASELINE_ARTIFACT_ID" =~ ^[1-9][0-9]*$ &&
-              "$BASELINE_ARTIFACT_DIGEST" =~ ^[a-f0-9]{64}$ &&
-              -n "${BASELINE_ARTIFACT_NAME// }" &&
-              "$BASELINE_ARTIFACT_RUN_ID" =~ ^[1-9][0-9]*$ &&
-              "$BASELINE_ARTIFACT_RUN_ATTEMPT" =~ ^[1-9][0-9]*$ &&
-              "$BASELINE_SHA256" =~ ^[a-f0-9]{64}$ ]] || {
-              echo "Prepared baseline artifact binding is incomplete." >&2
-              exit 1
-            }
-          fi
-          node <<'NODE'
-          const apiUrl = process.env.GITHUB_API_URL || "https://api.github.com";
-          const repository = process.env.GITHUB_REPOSITORY;
-          const token = process.env.GH_TOKEN;
-          const suite = process.env.SUITE;
-          const tuples = [
-            {
-              digest: process.env.ARTIFACT_DIGEST,
-              id: process.env.ARTIFACT_ID,
-              label: "candidate",
-              name: process.env.ARTIFACT_NAME,
-              runAttempt: process.env.ARTIFACT_RUN_ATTEMPT,
-              runId: process.env.ARTIFACT_RUN_ID,
-            },
-          ];
-          if (suite === "packaged-upgrade") {
-            tuples.push({
-              digest: process.env.BASELINE_ARTIFACT_DIGEST,
-              id: process.env.BASELINE_ARTIFACT_ID,
-              label: "baseline",
-              name: process.env.BASELINE_ARTIFACT_NAME,
-              runAttempt: process.env.BASELINE_ARTIFACT_RUN_ATTEMPT,
-              runId: process.env.BASELINE_ARTIFACT_RUN_ID,
-            });
-          }
-
-          const request = async (path) => {
-            const response = await fetch(`${apiUrl}/repos/${repository}/${path}`, {
-              headers: {
-                Accept: "application/vnd.github+json",
-                Authorization: `Bearer ${token}`,
-                "X-GitHub-Api-Version": "2022-11-28",
-              },
-            });
-            if (!response.ok) {
-              throw new Error(`GitHub artifact API ${path} returned ${response.status}.`);
-            }
-            return response.json();
-          };
-
-          async function main() {
-            for (const tuple of tuples) {
-              const artifact = await request(`actions/artifacts/${tuple.id}`);
-              if (
-                String(artifact.id) !== tuple.id ||
-                artifact.name !== tuple.name ||
-                artifact.expired !== false ||
-                artifact.digest !== `sha256:${tuple.digest}` ||
-                String(artifact.workflow_run?.id) !== tuple.runId
-              ) {
-                throw new Error(`Prepared ${tuple.label} artifact identity does not match.`);
-              }
-              const attempt = await request(
-                `actions/runs/${tuple.runId}/attempts/${tuple.runAttempt}`,
-              );
-              if (
-                String(attempt.id) !== tuple.runId ||
-                String(attempt.run_attempt) !== tuple.runAttempt
-              ) {
-                throw new Error(`Prepared ${tuple.label} artifact run attempt does not match.`);
-              }
-            }
-          }
-
-          main().catch((error) => {
-            console.error(error instanceof Error ? error.message : String(error));
-            process.exitCode = 1;
-          });
-          NODE
+          cache-mode: off
 
       - name: Download candidate artifact
         id: download_candidate
@@ -885,6 +948,26 @@ jobs:
           artifact-ids: ${{ needs.prepare.outputs.baseline_artifact_id }}
           path: ${{ runner.temp }}/openclaw-cross-os-release-checks/baseline
           run-id: ${{ needs.prepare.outputs.baseline_artifact_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download prerelease plugin registry artifact
+        if: needs.prepare.outputs.prepublish_plugin_registry_json != ''
+        id: download_prepublish_plugin_registry
+        continue-on-error: true
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
+          run-id: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
+          github-token: ${{ github.token }}
+
+      - name: Retry prerelease plugin registry artifact download
+        if: needs.prepare.outputs.prepublish_plugin_registry_json != '' && steps.download_prepublish_plugin_registry.outcome == 'failure'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactId || '' }}
+          path: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
+          run-id: ${{ fromJSON(needs.prepare.outputs.prepublish_plugin_registry_json || '{}').prepublishPluginRegistryArtifactRunId || '' }}
           github-token: ${{ github.token }}
 
       - name: Verify release-check inputs
@@ -936,7 +1019,6 @@ jobs:
               exit 1
             fi
           fi
-
       - name: Run cross-OS release checks
         shell: bash
         env:
@@ -959,24 +1041,56 @@ jobs:
           SUITE: ${{ matrix.suite }}
           REF: ${{ inputs.ref }}
           OUTPUT_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/${{ matrix.artifact_name }}-${{ matrix.suite }}
+          PLUGIN_REGISTRY_JSON: ${{ needs.prepare.outputs.prepublish_plugin_registry_json }}
+          PLUGIN_REGISTRY_DIR: ${{ runner.temp }}/openclaw-cross-os-release-checks/plugins
+          REQUIRED_COMPANION_PACKAGES_JSON: ${{ needs.prepare.outputs.required_companion_packages_json }}
         run: |
+          PLUGIN_ARGS=()
+          if [[ -n "$PLUGIN_REGISTRY_JSON" ]]; then
+            PLUGIN_ARGS+=(
+              --plugin-registry-dir "$PLUGIN_REGISTRY_DIR"
+              --plugin-registry-manifest-sha256 \
+                "$(jq -r '.prepublishPluginRegistryManifestSha256' <<< "$PLUGIN_REGISTRY_JSON")"
+            )
+          fi
           DISCORD_ARGS=()
           if [[ -n "${OPENCLAW_DISCORD_SMOKE_BOT_TOKEN}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_GUILD_ID}" ]] && [[ -n "${OPENCLAW_DISCORD_SMOKE_CHANNEL_ID}" ]]; then
             DISCORD_ARGS+=(--run-discord-roundtrip true)
           fi
-          bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
-            --candidate-tgz "${CANDIDATE_TGZ}" \
-            --candidate-version "${CANDIDATE_VERSION}" \
-            --source-sha "${SOURCE_SHA}" \
-            --baseline-spec "${BASELINE_SPEC}" \
-            --previous-version "${PREVIOUS_VERSION}" \
-            --baseline-tgz "${BASELINE_TGZ}" \
-            --provider "${PROVIDER}" \
-            --mode "${MODE}" \
-            --suite "${SUITE}" \
-            --ref "${REF}" \
-            "${DISCORD_ARGS[@]}" \
-            --output-dir "${OUTPUT_DIR}"
+          run_cross_os_release_checks() {
+            bash workflow/scripts/github/run-openclaw-cross-os-release-checks.sh \
+              --candidate-tgz "${CANDIDATE_TGZ}" \
+              --candidate-version "${CANDIDATE_VERSION}" \
+              --source-sha "${SOURCE_SHA}" \
+              --baseline-spec "${BASELINE_SPEC}" \
+              --previous-version "${PREVIOUS_VERSION}" \
+              --baseline-tgz "${BASELINE_TGZ}" \
+              --provider "${PROVIDER}" \
+              --mode "${MODE}" \
+              --suite "${SUITE}" \
+              --ref "${REF}" \
+              "${PLUGIN_ARGS[@]}" \
+              "${DISCORD_ARGS[@]}" \
+              --output-dir "${OUTPUT_DIR}"
+          }
+
+          if run_cross_os_release_checks; then
+            exit 0
+          else
+            status=$?
+          fi
+
+          dashboard_log="${OUTPUT_DIR}/logs/${MODE}-dashboard.log"
+          if [[ "${OPENCLAW_RELEASE_CHECK_OS}" != "windows" ||
+                "$status" -ne 127 ||
+                ! -f "${dashboard_log}" ||
+                -f "${OUTPUT_DIR}/summary.json" ]] ||
+            ! grep -q 'attempt=.*url=http://127.0.0.1:' "${dashboard_log}"; then
+            exit "$status"
+          fi
+
+          echo "::warning::retrying Windows release checks after the outer process exited 127 after the dashboard probe and before summary generation"
+          run_cross_os_release_checks
 
       - name: Summarize release checks
         if: always()

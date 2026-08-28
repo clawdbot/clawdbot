@@ -29,6 +29,191 @@ EOF
   return 1
 }
 
+ensure_full_pr_worktree_checkout() {
+  local sparse_checkout
+  sparse_checkout=$(git config --bool core.sparseCheckout 2>/dev/null || true)
+  if [ "$sparse_checkout" = "true" ]; then
+    # Prepare gates build the whole repository. Inherited sparse settings can
+    # omit tracked transitive inputs and turn healthy PRs into false failures.
+    git sparse-checkout disable
+  fi
+}
+
+refuse_review_transition() {
+  local pr="$1"
+  local reason="$2"
+  echo "Refusing scripts/pr transition for PR #$pr: $reason" >&2
+  git status --short >&2
+  return 1
+}
+
+require_no_foreign_untracked() {
+  local pr="$1"
+  local foreign=()
+  local file
+  while IFS= read -r -d '' file; do
+    case "$file" in
+      .local|.local/*) ;;
+      *) foreign+=("$file") ;;
+    esac
+  done < <(git ls-files --others --exclude-standard -z)
+  [ "${#foreign[@]}" -eq 0 ] || refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
+}
+
+require_no_ignored_transition_paths() {
+  local pr="$1"
+  local source="$2"
+  local target="$3"
+  local file ignored
+  while IFS= read -r -d '' file; do
+    case "$file" in
+      .local|.local/*)
+        refuse_review_transition "$pr" "the journaled transition touches the reserved .local artifact namespace."
+        return 1
+        ;;
+    esac
+  done < <(git diff --name-only --no-renames -z "$source" "$target")
+
+  # Ask Git about every transition path at once. Per-path ignored-file scans
+  # become prohibitively slow when a PR is far behind main.
+  if IFS= read -r -d '' ignored < <(
+    git check-ignore -z --stdin < <(git diff --name-only --no-renames -z "$source" "$target") |
+      while IFS= read -r -d '' candidate; do
+        # check-ignore also reports matching paths that do not exist. Only an
+        # existing ignored entry can be overwritten by the transition.
+        if [ -e "$candidate" ] || [ -L "$candidate" ]; then
+          printf '%s\0' "$candidate"
+        fi
+      done
+  ); then
+    refuse_review_transition "$pr" "ignored file '$ignored' would be overwritten by the journaled transition."
+    return 1
+  fi
+}
+
+validate_review_transition_state() {
+  local pr="$1"
+  local source="$2"
+  local target="$3"
+  local current
+  current=$(git rev-parse HEAD)
+  if { [ "$current" != "$source" ] && [ "$current" != "$target" ]; } ||
+    [ -n "$(git ls-files -u)" ] || ! git diff --quiet ||
+    ! require_no_foreign_untracked "$pr"
+  then
+    refuse_review_transition "$pr" "the journaled transition state is ambiguous."
+    return 1
+  fi
+  require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
+
+  # A path changed from source is owned only when its index mode and blob match target.
+  local file
+  while IFS= read -r -d '' file; do
+    if ! git diff --cached --quiet "$target" -- ":(literal)$file"; then
+      refuse_review_transition "$pr" "'$file' is neither its journaled source nor target entry."
+      return 1
+    fi
+  done < <(git diff --cached --name-only --no-renames -z "$source")
+}
+
+write_review_transition_journal() {
+  local pr="$1"
+  local source="$2"
+  local target="$3"
+  local mode="$4"
+  local branch="$5"
+  mkdir -p .local
+  local journal=.local/review-transition.json
+  local pending
+  pending=$(mktemp "$journal.XXXXXX") || return 1
+  if jq -cn --argjson pr "$pr" --arg source "$source" --arg target "$target" \
+    --arg mode "$mode" --arg branch "$branch" \
+    '{version:1,pr:$pr,source:$source,target:$target,mode:$mode,branch:(if $mode == "branch" then $branch else null end)}' \
+    >"$pending" && mv "$pending" "$journal"
+  then
+    return 0
+  fi
+  rm -f "$pending"
+  return 1
+}
+
+recover_review_transition() {
+  local pr="$1"
+  local journal=.local/review-transition.json
+  [ -e "$journal" ] || return 0
+
+  local fields source target mode branch
+  fields=$(jq -er --argjson pr "$pr" '
+    select(type == "object" and (keys | sort) == ["branch","mode","pr","source","target","version"])
+    | select(.version == 1 and .pr == $pr)
+    | select((.source | type == "string" and test("^[0-9a-f]{40}$")) and (.target | type == "string" and test("^[0-9a-f]{40}$")))
+    | select((.mode == "detached" and .branch == null) or (.mode == "branch" and (.branch | type == "string")))
+    | [.source,.target,.mode,(.branch // "")] | @tsv
+  ' "$journal" 2>/dev/null) || {
+    refuse_review_transition "$pr" "the transition journal is invalid."
+    return 1
+  }
+  IFS=$'\t' read -r source target mode branch <<<"$fields"
+  if ! git cat-file -e "$source^{commit}" 2>/dev/null ||
+    ! git cat-file -e "$target^{commit}" 2>/dev/null ||
+    { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
+  then
+    refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."
+    return 1
+  fi
+
+  validate_review_transition_state "$pr" "$source" "$target" || return 1
+  # Completed deletions are absent from both index and target, so replay only
+  # remaining entries rather than passing already-removed paths to restore.
+  if ! git diff --cached --quiet "$target"; then
+    git diff --cached --name-only --no-renames -z "$target" |
+      git --literal-pathspecs restore --source="$target" --staged --worktree \
+        --pathspec-from-file=- --pathspec-file-nul || return 1
+  fi
+  if [ "$(git write-tree)" != "$(git rev-parse "$target^{tree}")" ] || ! git diff --quiet; then
+    refuse_review_transition "$pr" "the tracked tree did not reach the journaled target."
+    return 1
+  fi
+  if [ "$mode" = "branch" ]; then
+    git checkout -B "$branch" "$target" || return 1
+  else
+    git checkout --detach "$target" || return 1
+  fi
+
+  local actual_branch
+  actual_branch=$(git branch --show-current)
+  if [ "$(git rev-parse HEAD)" != "$target" ] || ! git diff --quiet || ! git diff --cached --quiet ||
+    { [ "$mode" = "branch" ] && [ "$actual_branch" != "$branch" ]; } ||
+    { [ "$mode" = "detached" ] && [ -n "$actual_branch" ]; } ||
+    ! require_no_foreign_untracked "$pr"
+  then
+    refuse_review_transition "$pr" "the journaled transition did not complete cleanly."
+    return 1
+  fi
+  rm -f "$journal"
+}
+
+checkout_pr_worktree_target() {
+  local pr="$1"
+  local target_ref="$2"
+  local branch="${3:-}"
+  recover_review_transition "$pr" || return 1
+  if [ -n "$(git ls-files -u)" ] || ! git diff --quiet || ! git diff --cached --quiet ||
+    ! require_no_foreign_untracked "$pr"
+  then
+    refuse_review_transition "$pr" "foreign state blocks a new transition."
+    return 1
+  fi
+
+  local source target mode=detached
+  source=$(git rev-parse HEAD) || return 1
+  target=$(git rev-parse "$target_ref^{commit}") || return 1
+  require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
+  [ -z "$branch" ] || mode=branch
+  write_review_transition_journal "$pr" "$source" "$target" "$mode" "$branch" || return 1
+  recover_review_transition "$pr"
+}
+
 enter_worktree() {
   local pr="$1"
   local reset_to_main="${2:-false}"
@@ -43,59 +228,124 @@ enter_worktree() {
 
   cd "$root"
   ensure_gh_api_auth
-  git fetch origin main
+  git -C "$root" fetch origin main
 
-  local dir=".worktrees/pr-$pr"
-  if [ -d "$dir" ]; then
-    cd "$dir"
-    git fetch origin main
-    if [ "$reset_to_main" = "true" ]; then
-      git checkout -B "temp/pr-$pr" origin/main
+  # Resolve through the parent, never through the leaf: a missing directory has
+  # no real path of its own, and resolving a leaf symlink would silently adopt
+  # whichever worktree it aliases.
+  local dir="$root/.worktrees/pr-$pr"
+  local resolved_parent resolved_dir=""
+  resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")" 2>/dev/null || true)
+  [ -z "$resolved_parent" ] || resolved_dir="$resolved_parent/pr-$pr"
+
+  if [ ! -d "$dir" ] || [ -z "$resolved_dir" ] || ! worktree_is_registered "$resolved_dir"; then
+    if [ -e "$dir" ] || { [ -n "$resolved_dir" ] && worktree_is_registered "$resolved_dir"; }; then
+      echo "Pruning stale worktree registration for .worktrees/pr-$pr"
+      git -C "$root" worktree prune
+      remove_worktree_if_present "$dir"
+      [ ! -e "$dir" ] || {
+        echo "Refusing scripts/pr operation for PR #$pr: $dir is not a registered worktree and could not be cleared; scripts/pr refuses to mutate the shared canonical checkout." >&2
+        return 1
+      }
     fi
-  else
-    git worktree add "$dir" -b "temp/pr-$pr" origin/main
-    cd "$dir"
+    # Per-PR locking makes resetting this script-owned branch namespace safe.
+    git -C "$root" worktree add "$dir" -B "temp/pr-$pr" origin/main
+    resolved_dir="$(resolve_existing_dir_path "$(dirname "$dir")")/pr-$pr"
   fi
 
+  cd "$resolved_dir"
+
+  # Containment, not repair: every mutation below runs against ambient cwd, so
+  # prove Git resolves it to this worktree before any branch moves. A directory
+  # that is not a worktree lets discovery escape up into the shared canonical
+  # checkout, where a sibling session's branch would be clobbered.
+  local actual_toplevel
+  actual_toplevel=$(resolve_existing_dir_path "$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null)" 2>/dev/null || true)
+  if [ "$actual_toplevel" != "$resolved_dir" ]; then
+    echo "Refusing scripts/pr operation for PR #$pr: expected worktree $resolved_dir, Git resolved ${actual_toplevel:-no repository}; scripts/pr refuses to mutate the shared canonical checkout." >&2
+    return 1
+  fi
+
+  recover_review_transition "$pr" || return 1
+  ensure_full_pr_worktree_checkout
+  git fetch origin main
+  if [ "$reset_to_main" = "true" ]; then
+    checkout_pr_worktree_target "$pr" origin/main "temp/pr-$pr" || return 1
+  fi
   mkdir -p .local
 }
 
 pr_meta_json() {
   local pr="$1"
-  local metadata files expected_file_count actual_file_count head_before head_after
-  metadata=$(gh pr view "$pr" --json number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,reviewRequests,changedFiles,additions,deletions,statusCheckRollup)
-  head_before=$(printf '%s\n' "$metadata" | jq -r .headRefOid)
-
-  # Raw `gh pr view --json files` stops at 100 entries. Paginate REST so
-  # review guards see every path, then fail closed on head or API drift.
-  if ! files=$(
-    set -o pipefail
-    gh api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
-      jq -cs '
-        add
-        | map({
-            path: .filename,
-            additions: .additions,
-            deletions: .deletions,
-            changeType: (
-              if .status == "removed" then "DELETED"
-              else (.status | ascii_upcase)
-              end
-            )
-          })
-      '
-  ); then
-    echo "Failed to collect paginated PR file metadata for #$pr." >&2
+  local metadata files expected_file_count actual_file_count head_before head_after head_after_json
+  metadata=$(read_pr_view_json "$pr" "number,title,state,isDraft,author,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files") || return 1
+  head_before=$(pr_view_string_field "$metadata" "headRefOid" "$pr" "Retry review initialization.") || return 1
+  if ! expected_file_count=$(printf '%s\n' "$metadata" | jq -er '.changedFiles | if type == "number" and . >= 0 and . == floor then . else error("invalid changed file count") end' 2>/dev/null); then
+    echo "Invalid PR metadata for #$pr: changedFiles must be a non-negative integer." >&2
     return 1
   fi
 
-  head_after=$(gh pr view "$pr" --json headRefOid | jq -r .headRefOid)
+  # `gh pr view --json files` is cacheable but stops at 100 entries. Use it
+  # when complete; only large or incomplete responses spend uncached REST quota.
+  files='[]'
+  if [ "$expected_file_count" -le 100 ]; then
+    files=$(printf '%s\n' "$metadata" | jq -c '
+      .files
+      | if type == "array"
+          and all(.[];
+            (.path | type == "string")
+            and (.additions | type == "number")
+            and (.deletions | type == "number")
+            and (.changeType | type == "string" and length > 0)
+          )
+        then map({
+            path: .path,
+            additions: .additions,
+            deletions: .deletions,
+            changeType: (
+              if (.changeType | ascii_downcase) == "removed"
+                or (.changeType | ascii_downcase) == "deleted"
+              then "DELETED"
+              else (.changeType | ascii_upcase)
+              end
+            )
+          })
+        else []
+        end
+    ' 2>/dev/null || printf '[]')
+  fi
+
+  actual_file_count=$(printf '%s\n' "$files" | jq -r 'length')
+  if [ "$actual_file_count" -ne "$expected_file_count" ]; then
+    if ! files=$(
+      set -o pipefail
+      gh_plain api --paginate "repos/{owner}/{repo}/pulls/$pr/files?per_page=100" |
+        jq -cs '
+          add
+          | map({
+              path: .filename,
+              additions: .additions,
+              deletions: .deletions,
+              changeType: (
+                if .status == "removed" then "DELETED"
+                else (.status | ascii_upcase)
+                end
+              )
+            })
+        '
+    ); then
+      echo "Failed to collect paginated PR file metadata for #$pr." >&2
+      return 1
+    fi
+  fi
+
+  head_after_json=$(read_pr_view_json "$pr" "headRefOid") || return 1
+  head_after=$(pr_view_string_field "$head_after_json" "headRefOid" "$pr" "Retry review initialization.") || return 1
   if [ "$head_after" != "$head_before" ]; then
     echo "PR head changed while collecting file metadata for #$pr (started at $head_before, ended at $head_after). Retry review initialization." >&2
     return 1
   fi
 
-  expected_file_count=$(printf '%s\n' "$metadata" | jq -r .changedFiles)
   if ! actual_file_count=$(
     printf '%s\n' "$files" |
       jq -er 'if type == "array" then length else error("expected an array") end'

@@ -3,21 +3,23 @@ import { EventEmitter } from "node:events";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { createChannelIngressQueueForTests } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { coerceErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resetLogger, setLoggerOverride } from "openclaw/plugin-sdk/runtime-env";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import {
   loadConfigMock,
-  readAllowFromStoreMock as pairingReadAllowFromStoreMock,
   resetPairingSecurityMocks,
   upsertPairingRequestMock as pairingUpsertPairingRequestMock,
 } from "./pairing-security.test-harness.js";
+import { setWhatsAppRuntime } from "./runtime.js";
 
 // Avoid exporting vitest mock types (TS2742 under pnpm + d.ts emit).
 type AnyMockFn = any;
 
 export const DEFAULT_ACCOUNT_ID = "default";
 
-export const DEFAULT_WEB_INBOX_CONFIG = {
+const DEFAULT_WEB_INBOX_CONFIG = {
   channels: {
     whatsapp: {
       // Allow all in tests by default.
@@ -30,10 +32,9 @@ export const DEFAULT_WEB_INBOX_CONFIG = {
   },
 } as const;
 export const mockLoadConfig: typeof loadConfigMock = loadConfigMock;
-export const readAllowFromStoreMock = pairingReadAllowFromStoreMock;
 export const upsertPairingRequestMock = pairingUpsertPairingRequestMock;
 
-export type MockSock = {
+type MockSock = {
   ev: EventEmitter;
   end: AnyMockFn;
   ws: { close: AnyMockFn };
@@ -64,7 +65,6 @@ const channelActivityMocks = vi.hoisted(() => ({
 const pluginRuntimeMocks = vi.hoisted(() => {
   type StoreEntry = { key: string; value: unknown; createdAt: number };
   const stores = new Map<string, Map<string, StoreEntry>>();
-  let nextRegisterIfAbsentError: Error | undefined;
   let stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
 
   const openKeyedStore = vi.fn((options: { namespace: string }) => {
@@ -78,11 +78,6 @@ const pluginRuntimeMocks = vi.hoisted(() => {
         store.set(key, { key, value, createdAt: Date.now() });
       },
       registerIfAbsent: async (key: string, value: unknown) => {
-        if (nextRegisterIfAbsentError) {
-          const error = nextRegisterIfAbsentError;
-          nextRegisterIfAbsentError = undefined;
-          throw error;
-        }
         if (store.has(key)) {
           return false;
         }
@@ -106,12 +101,8 @@ const pluginRuntimeMocks = vi.hoisted(() => {
   return {
     openKeyedStore,
     stateDir: () => stateDir,
-    failNextRegisterIfAbsent: (error: Error) => {
-      nextRegisterIfAbsentError = error;
-    },
     reset: () => {
       stores.clear();
-      nextRegisterIfAbsentError = undefined;
       openKeyedStore.mockClear();
       stateDir = `/tmp/openclaw-whatsapp-ingress-${Date.now()}-${Math.random()}`;
     },
@@ -122,10 +113,6 @@ export function getRecordChannelActivityMock(): AnyMockFn {
   return channelActivityMocks.recordChannelActivity;
 }
 
-export function failNextWhatsAppPluginStateRegisterIfAbsent(error: Error) {
-  pluginRuntimeMocks.failNextRegisterIfAbsent(error);
-}
-
 vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
   const actual = await vi.importActual<
     typeof import("openclaw/plugin-sdk/channel-activity-runtime")
@@ -134,26 +121,6 @@ vi.mock("openclaw/plugin-sdk/channel-activity-runtime", async () => {
     ...actual,
     recordChannelActivity: (...args: unknown[]) =>
       channelActivityMocks.recordChannelActivity(...args),
-  };
-});
-
-vi.mock("./runtime.js", async () => {
-  const { createChannelIngressQueueForTests: createChannelIngressQueue } = await Promise.resolve(
-    vi.importActual<typeof import("openclaw/plugin-sdk/plugin-state-test-runtime")>(
-      "openclaw/plugin-sdk/plugin-state-test-runtime",
-    ),
-  );
-  return {
-    getWhatsAppRuntime: () => ({
-      state: {
-        resolveStateDir: pluginRuntimeMocks.stateDir,
-        openKeyedStore: pluginRuntimeMocks.openKeyedStore,
-        openChannelIngressQueue: (
-          options?: Omit<Parameters<typeof createChannelIngressQueue>[0], "channelId">,
-        ) => createChannelIngressQueue({ ...options, channelId: "whatsapp" }),
-      },
-    }),
-    setWhatsAppRuntime: vi.fn(),
   };
 });
 
@@ -210,6 +177,13 @@ function createResolvedMock() {
   return vi.fn().mockResolvedValue(undefined);
 }
 
+function createAcceptedSendMessageMock() {
+  let sequence = 0;
+  return vi.fn().mockImplementation(async () => ({
+    key: { id: `mock-accepted-${++sequence}` },
+  }));
+}
+
 function createMockSock(): MockSock {
   const ev = new EventEmitter();
   return {
@@ -217,7 +191,7 @@ function createMockSock(): MockSock {
     end: vi.fn(),
     ws: { close: vi.fn() },
     sendPresenceUpdate: createResolvedMock(),
-    sendMessage: createResolvedMock(),
+    sendMessage: createAcceptedSendMessageMock(),
     fetchAccountReachoutTimelock: vi.fn().mockResolvedValue({ isActive: false }),
     readMessages: createResolvedMock(),
     groupMetadata: vi.fn().mockImplementation(async (jid: string) => ({
@@ -255,7 +229,7 @@ vi.mock("./session.js", async () => {
     }),
     waitForWaConnection: vi.fn().mockResolvedValue(undefined),
     getStatusCode: vi.fn(() => 500),
-    formatError: (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    formatError: coerceErrorMessage,
   };
 });
 
@@ -273,36 +247,61 @@ export type InboxMonitorOptions = Parameters<MonitorWebInbox>[0];
 let monitorWebInbox: MonitorWebInbox;
 let resetWebInboundDedupe: ResetWebInboundDedupe;
 
-function expectInboxPairingReplyText(
-  text: string,
-  params: {
-    channel: string;
-    idLine: string;
-    code?: string;
-  },
-): string {
-  const code = text.match(/Pairing code:\s*```[\r\n]+([A-Z2-9]{6,})/)?.[1];
-  expect(code).toBeDefined();
-  const resolvedCode = params.code ?? code ?? "";
-  expect(text).toContain("OpenClaw: access not configured.");
-  expect(text).toContain(params.idLine);
-  expect(text).toContain("Pairing code:");
-  expect(text).toContain(`\n\`\`\`\n${resolvedCode}\n\`\`\`\n`);
-  expect(text).toContain(`pairing approve ${params.channel} ${resolvedCode}`);
-  return resolvedCode;
-}
-
-export function getMonitorWebInbox(): MonitorWebInbox {
-  if (!monitorWebInbox) {
-    throw new Error("monitorWebInbox not initialized");
-  }
-  return monitorWebInbox;
-}
-
+// Yields two macrotask ticks so already-scheduled inbound continuations run.
+// This deliberately does NOT wait for pending inbound work to finish — tests
+// observing intermediate states (held handlers, parked debounce batches) rely
+// on that. For final-state assertions use waitForInboundWorkDrained().
 export async function settleInboundWork() {
   await new Promise((resolve) => {
     setImmediate(resolve);
   });
+  await new Promise((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+type InboundWorkTracker = { pending: number };
+const inboundWorkTrackers = new Set<InboundWorkTracker>();
+let inboundIdle: { promise: Promise<void>; release: () => void } | undefined;
+
+function hasPendingInboundWork(): boolean {
+  for (const tracker of inboundWorkTrackers) {
+    if (tracker.pending > 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function publishInboundPendingWork(tracker: InboundWorkTracker, pending: number) {
+  tracker.pending = pending;
+  if (inboundIdle && !hasPendingInboundWork()) {
+    inboundIdle.release();
+    inboundIdle = undefined;
+  }
+}
+
+// Event-driven drain: resolves when every harness-started listener reports zero
+// pending inbound work. Unlike a vi.waitFor deadline, this cannot fail spuriously
+// when a saturated no-isolate worker stalls mid-flow (sync module fetches against
+// the shared transform queue starve waitFor's interval timers). Do not call it
+// while a handler or debounced batch is intentionally held open — it would wait
+// for that work too; use settleInboundWork/waitForMessageCalls there.
+export async function waitForInboundWorkDrained() {
+  if (inboundWorkTrackers.size === 0) {
+    throw new Error("waitForInboundWorkDrained requires a listener started via startInboxMonitor");
+  }
+  if (hasPendingInboundWork()) {
+    if (!inboundIdle) {
+      let release!: () => void;
+      const promise = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      inboundIdle = { promise, release };
+    }
+    await inboundIdle.promise;
+  }
+  // One extra tick lets drained-callback continuations (delivery bookkeeping) run.
   await new Promise((resolve) => {
     setImmediate(resolve);
   });
@@ -332,13 +331,23 @@ export async function startInboxMonitor(
   if (!monitorWebInbox) {
     ({ monitorWebInbox } = await import("./inbound.js"));
   }
-  const listener = await monitorWebInbox({
+  const merged = {
     cfg: mockLoadConfig() as never,
     verbose: false,
     onMessage,
     accountId: DEFAULT_ACCOUNT_ID,
     authDir: getAuthDir(),
     ...extraOptions,
+  };
+  const tracker: InboundWorkTracker = { pending: 0 };
+  inboundWorkTrackers.add(tracker);
+  const callerOnPendingWorkChanged = merged.onPendingWorkChanged;
+  const listener = await monitorWebInbox({
+    ...merged,
+    onPendingWorkChanged: (pendingWorkCount: number, at?: number) => {
+      publishInboundPendingWork(tracker, pendingWorkCount);
+      callerOnPendingWorkChanged?.(pendingWorkCount, at);
+    },
   });
   return { listener, sock: getSock() };
 }
@@ -369,15 +378,21 @@ export function buildNotifyMessageUpsert(params: {
   };
 }
 
-export function expectPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
+// The pairing reply is sent before the inbound handler completes, so a full
+// drain guarantees the prompt is observable — and makes the callers' negative
+// assertions (onMessage/readMessages never called) non-vacuous.
+export async function waitForPairingPromptSent(sock: MockSock, jid: string, senderE164: string) {
+  await waitForInboundWorkDrained();
   expect(sock.sendMessage).toHaveBeenCalledTimes(1);
   const sendCall = sock.sendMessage.mock.calls.at(0);
   expect(sendCall?.[0]).toBe(jid);
-  expectInboxPairingReplyText((sendCall?.[1] as { text?: string } | undefined)?.text ?? "", {
-    channel: "whatsapp",
-    idLine: `Your WhatsApp phone number: ${senderE164}`,
-    code: "PAIRCODE",
-  });
+  // The mocked pairing upsert always issues PAIRCODE.
+  const text = (sendCall?.[1] as { text?: string } | undefined)?.text ?? "";
+  expect(text).toContain("OpenClaw: access not configured.");
+  expect(text).toContain(`Your WhatsApp phone number: ${senderE164}`);
+  expect(text).toContain("Pairing code:");
+  expect(text).toContain("\n```\nPAIRCODE\n```\n");
+  expect(text).toContain("pairing approve whatsapp PAIRCODE");
 }
 
 let authDir: string | undefined;
@@ -389,14 +404,24 @@ export function getAuthDir(): string {
   return authDir;
 }
 
-export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }) {
-  const createAuthDir = opts?.authDir ?? true;
-
+export function installWebMonitorInboxUnitTestHooks() {
   beforeEach(async () => {
     vi.useRealTimers();
     vi.clearAllMocks();
+    inboundWorkTrackers.clear();
+    inboundIdle = undefined;
     channelActivityMocks.recordChannelActivity.mockClear();
     pluginRuntimeMocks.reset();
+    setWhatsAppRuntime({
+      channel: {},
+      state: {
+        resolveStateDir: pluginRuntimeMocks.stateDir,
+        openKeyedStore: pluginRuntimeMocks.openKeyedStore,
+        openChannelIngressQueue: (
+          options?: Omit<Parameters<typeof createChannelIngressQueueForTests>[0], "channelId">,
+        ) => createChannelIngressQueueForTests({ ...options, channelId: "whatsapp" }),
+      },
+    } as never);
     sessionState.sock = createMockSock();
     resetPairingSecurityMocks(DEFAULT_WEB_INBOX_CONFIG);
     if (!monitorWebInbox || !resetWebInboundDedupe) {
@@ -405,11 +430,7 @@ export function installWebMonitorInboxUnitTestHooks(opts?: { authDir?: boolean }
       resetWebInboundDedupe = inboundModule.resetWebInboundDedupe;
     }
     resetWebInboundDedupe();
-    if (createAuthDir) {
-      authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
-    } else {
-      authDir = undefined;
-    }
+    authDir = fsSync.mkdtempSync(path.join(os.tmpdir(), "openclaw-auth-"));
   });
 
   afterEach(() => {

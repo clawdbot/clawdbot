@@ -6,6 +6,7 @@
  */
 import { uniqueValues } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { CDPSession, Page } from "playwright-core";
+import { readCdpMainFrameDocumentIdentity } from "./cdp-page-session.js";
 
 type PageCdpSend = (method: string, params?: Record<string, unknown>) => Promise<unknown>;
 type MarkBackendDomRef = { ref: string; backendDOMNodeId: number };
@@ -44,6 +45,24 @@ export async function withPageScopedCdpClient<T>(opts: {
   });
 }
 
+/** Read the browser-owned loader identity for a Playwright page's main frame. */
+export async function readMainFrameDocumentIdentityForPage(
+  page: Page,
+): Promise<string | undefined> {
+  return await withPlaywrightPageCdpSession(
+    page,
+    async (session) =>
+      await readCdpMainFrameDocumentIdentity((method, params) =>
+        (
+          session.send as unknown as (
+            method: string,
+            params?: Record<string, unknown>,
+          ) => Promise<unknown>
+        )(method, params),
+      ),
+  );
+}
+
 /** Mark backend DOM node ids on the page with browser ref attributes. */
 export async function markBackendDomRefsOnPage(opts: {
   page: Page;
@@ -80,7 +99,9 @@ export async function markBackendDomRefsOnPage(opts: {
         ) => Promise<unknown>
       )(method, params);
 
-    await send("DOM.enable").catch(() => {});
+    // Backend-id pushes require a bound document in this fresh session.
+    // getDocument also enables DOM; depth zero avoids fetching the subtree.
+    await send("DOM.getDocument", { depth: 0 }).catch(() => {});
 
     const backendNodeIds = uniqueValues(refs.map((entry) => Math.floor(entry.backendDOMNodeId)));
     const pushed = (await send("DOM.pushNodesByBackendIdsToFrontend", {

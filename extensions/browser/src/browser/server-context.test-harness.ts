@@ -41,6 +41,8 @@ export function makeBrowserServerState(params?: {
     cdpPortRangeEnd: 18810,
     extensionRelayDefaultPort: 18808,
     extensionRelayPorts: {},
+    extensionRelay: { allowLegacyAuth: true },
+    extensionRelayInternalTokens: {},
     evaluateEnabled: false,
     remoteCdpTimeoutMs: 1500,
     remoteCdpHandshakeTimeoutMs: 3000,

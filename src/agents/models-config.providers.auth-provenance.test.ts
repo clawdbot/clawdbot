@@ -4,8 +4,35 @@ import { captureEnv } from "../test-utils/env.js";
 
 vi.mock("../plugins/provider-runtime.js", () => ({
   normalizeProviderConfigWithPlugin: vi.fn(
-    (params: { context?: { providerConfig?: unknown } }) => params.context?.providerConfig,
+    (params: { provider: string; context?: { providerConfig?: { baseUrl?: string } } }) => {
+      const providerConfig = params.context?.providerConfig;
+      const baseUrl = providerConfig?.baseUrl?.trim();
+      if (params.provider !== "google" || !baseUrl || baseUrl.endsWith("/v1beta")) {
+        return providerConfig;
+      }
+      return {
+        ...providerConfig,
+        baseUrl:
+          baseUrl === "https://generativelanguage.googleapis.com"
+            ? `${baseUrl}/v1beta`
+            : providerConfig?.baseUrl,
+      };
+    },
   ),
+  resolveProviderConfigApiKeyWithPlugin: (params: {
+    provider: string;
+    context: { env: NodeJS.ProcessEnv };
+  }) => {
+    if (params.provider === "amazon-bedrock") {
+      return params.context.env.AWS_PROFILE?.trim() ? "AWS_PROFILE" : undefined;
+    }
+    if (params.provider === "anthropic-vertex") {
+      return params.context.env.ANTHROPIC_VERTEX_USE_GCP_METADATA === "true"
+        ? "gcp-vertex-credentials"
+        : undefined;
+    }
+    return undefined;
+  },
   resolveProviderSyntheticAuthWithPlugin: vi.fn(),
 }));
 
@@ -17,7 +44,6 @@ vi.mock("./provider-auth-aliases.js", () => ({
 type ProviderRuntimeModule = typeof import("../plugins/provider-runtime.js");
 
 let NON_ENV_SECRETREF_MARKER: typeof import("./model-auth-markers.js").NON_ENV_SECRETREF_MARKER;
-let MINIMAX_OAUTH_MARKER: typeof import("./model-auth-markers.js").MINIMAX_OAUTH_MARKER;
 let CUSTOM_LOCAL_AUTH_MARKER: typeof import("./model-auth-markers.js").CUSTOM_LOCAL_AUTH_MARKER;
 let resolveApiKeyFromCredential: typeof import("./models-config.providers.secret-helpers.js").resolveApiKeyFromCredential;
 let createProviderApiKeyResolver: typeof import("./models-config.providers.secrets.js").createProviderApiKeyResolver;
@@ -25,6 +51,11 @@ let createProviderAuthResolver: typeof import("./models-config.providers.secrets
 let mockedResolveProviderSyntheticAuthWithPlugin: ReturnType<
   typeof vi.mocked<ProviderRuntimeModule["resolveProviderSyntheticAuthWithPlugin"]>
 >;
+
+import {
+  normalizeProviderSpecificConfig,
+  resolveProviderConfigApiKeyResolver,
+} from "./models-config.providers.policy.js";
 
 async function loadProviderAuthModules() {
   vi.doUnmock("../plugins/manifest-registry.js");
@@ -40,7 +71,6 @@ async function loadProviderAuthModules() {
   );
   CUSTOM_LOCAL_AUTH_MARKER = markersModule.CUSTOM_LOCAL_AUTH_MARKER;
   NON_ENV_SECRETREF_MARKER = markersModule.NON_ENV_SECRETREF_MARKER;
-  MINIMAX_OAUTH_MARKER = markersModule.MINIMAX_OAUTH_MARKER;
   resolveApiKeyFromCredential = helperModule.resolveApiKeyFromCredential;
   createProviderApiKeyResolver = secretsModule.createProviderApiKeyResolver;
   createProviderAuthResolver = secretsModule.createProviderAuthResolver;
@@ -53,15 +83,6 @@ beforeEach(() => {
 });
 
 beforeAll(loadProviderAuthModules);
-
-function buildPairedApiKeyProviders(apiKey: string) {
-  // Several generated provider pairs should carry the same persisted key
-  // marker; this helper keeps those expectations identical.
-  return {
-    provider: { apiKey },
-    paired: { apiKey },
-  };
-}
 
 describe("models-config provider auth provenance", () => {
   it("persists env keyRef and tokenRef auth profiles as env var markers", () => {
@@ -79,10 +100,7 @@ describe("models-config provider auth provenance", () => {
         provider: "together",
         tokenRef: { source: "env", provider: "default", id: "TOGETHER_API_KEY" },
       })?.apiKey;
-      const volcengineProviders = buildPairedApiKeyProviders(volcengineApiKey ?? "");
-
-      expect(volcengineProviders.provider.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
-      expect(volcengineProviders.paired.apiKey).toBe("VOLCANO_ENGINE_API_KEY");
+      expect(volcengineApiKey).toBe("VOLCANO_ENGINE_API_KEY");
       expect(togetherApiKey).toBe("TOGETHER_API_KEY");
     } finally {
       envSnapshot.restore();
@@ -104,20 +122,8 @@ describe("models-config provider auth provenance", () => {
       token: "tok-runtime-resolved-together",
       tokenRef: { source: "exec", provider: "vault", id: "providers/together/token" },
     })?.apiKey;
-    const byteplusProviders = buildPairedApiKeyProviders(byteplusApiKey ?? "");
-
-    expect(byteplusProviders.provider.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
-    expect(byteplusProviders.paired.apiKey).toBe(NON_ENV_SECRETREF_MARKER);
+    expect(byteplusApiKey).toBe(NON_ENV_SECRETREF_MARKER);
     expect(togetherApiKey).toBe(NON_ENV_SECRETREF_MARKER);
-  });
-
-  it("keeps oauth compatibility markers for minimax-portal", () => {
-    const providers = {
-      "minimax-portal": {
-        apiKey: MINIMAX_OAUTH_MARKER,
-      },
-    };
-    expect(providers["minimax-portal"]?.apiKey).toBe(MINIMAX_OAUTH_MARKER);
   });
 
   it("prefers profile auth over env auth in provider summaries to match runtime resolution", () => {
@@ -351,5 +357,78 @@ describe("models-config provider auth provenance", () => {
       mode: "api_key",
       source: "none",
     });
+  });
+
+  it("keeps non-env SecretRef markers discovery-key-free when unresolved", () => {
+    const auth = createProviderApiKeyResolver(
+      {} as NodeJS.ProcessEnv,
+      {
+        version: 1,
+        profiles: {},
+      },
+      {
+        models: {
+          providers: {
+            vllm: {
+              baseUrl: "http://127.0.0.1:8000/v1",
+              apiKey: { source: "file", provider: "mounted-json", id: "/providers/vllm/apiKey" },
+              api: "openai-completions",
+              models: [],
+            },
+          },
+        },
+      },
+    );
+
+    expect(auth("vllm")).toEqual({
+      apiKey: NON_ENV_SECRETREF_MARKER,
+      discoveryApiKey: undefined,
+    });
+  });
+});
+
+describe("models-config.providers.policy", () => {
+  it("resolves config apiKey markers through provider plugin hooks", () => {
+    const resolver = resolveProviderConfigApiKeyResolver("amazon-bedrock");
+
+    expect(resolver).toBeTypeOf("function");
+    expect(resolver?.({ AWS_PROFILE: "default" } as NodeJS.ProcessEnv)).toBe("AWS_PROFILE");
+  });
+
+  it("resolves anthropic-vertex ADC markers through provider plugin hooks", () => {
+    const resolver = resolveProviderConfigApiKeyResolver("anthropic-vertex");
+
+    expect(resolver).toBeTypeOf("function");
+    expect(resolver?.({ ANTHROPIC_VERTEX_USE_GCP_METADATA: "true" } as NodeJS.ProcessEnv)).toBe(
+      "gcp-vertex-credentials",
+    );
+  });
+
+  it("normalizes Google provider config through provider plugin hooks", () => {
+    expect(
+      normalizeProviderSpecificConfig("google", {
+        api: "google-generative-ai",
+        baseUrl: "https://generativelanguage.googleapis.com",
+        models: [],
+      }),
+    ).toEqual({
+      api: "google-generative-ai",
+      baseUrl: "https://generativelanguage.googleapis.com/v1beta",
+      models: [],
+    });
+  });
+
+  it("does not treat generic transport APIs as provider plugin ids", () => {
+    const provider = {
+      api: "openai-completions" as const,
+      baseUrl: "https://example.invalid/v1",
+      apiKey: "GENERIC_TRANSPORT_MARKER",
+      models: [],
+    };
+
+    const resolver = resolveProviderConfigApiKeyResolver("dashscope-vision", provider);
+    expect(resolver).toBeTypeOf("function");
+    expect(resolver?.({} as NodeJS.ProcessEnv)).toBeUndefined();
+    expect(normalizeProviderSpecificConfig("dashscope-vision", provider)).toBe(provider);
   });
 });

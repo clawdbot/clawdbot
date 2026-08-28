@@ -25,22 +25,17 @@ import {
   buildAgentRunTerminalOutcomeFromWaitResult,
   type AgentRunTerminalOutcome,
 } from "./agent-run-terminal-outcome.js";
+import { normalizeAgentRunTerminalReplySnapshot } from "./agent-run-terminal-reply.js";
 import {
   normalizeAgentRunTimeoutPhase,
   normalizeProviderStarted,
-  type AgentRunTimeoutPhase,
 } from "./run-timeout-attribution.js";
-import { extractAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
+import type { AgentWaitResult } from "./run-wait.types.js";
+import { extractStoredAssistantText, stripToolMessages } from "./tools/chat-history-text.js";
+
+export type { AgentWaitResult };
 
 type GatewayCaller = typeof callGateway;
-
-const defaultRunWaitDeps = {
-  callGateway,
-};
-
-let runWaitDeps: {
-  callGateway: GatewayCaller;
-} = defaultRunWaitDeps;
 
 function resolveRunWaitTimeoutMs(value: number | undefined): number {
   return clampTimerTimeoutMs(parseFiniteNumber(value) ?? 1) ?? 1;
@@ -62,20 +57,6 @@ export type AssistantReplySnapshot = {
   fingerprint?: string;
 };
 
-/** Normalized terminal or pending state returned by `agent.wait`. */
-export type AgentWaitResult = {
-  status: "ok" | "timeout" | "error" | "pending";
-  error?: string;
-  startedAt?: number;
-  endedAt?: number;
-  stopReason?: string;
-  livenessState?: string;
-  yielded?: boolean;
-  pendingError?: boolean;
-  timeoutPhase?: AgentRunTimeoutPhase;
-  providerStarted?: boolean;
-};
-
 /** Summary returned after waiting for a dynamic set of pending runs to drain. */
 type AgentRunsDrainResult = {
   timedOut: boolean;
@@ -94,6 +75,7 @@ type RawAgentWaitResponse = {
   pendingError?: unknown;
   timeoutPhase?: unknown;
   providerStarted?: unknown;
+  terminalReply?: unknown;
 };
 
 function normalizeAgentWaitResult(
@@ -114,6 +96,7 @@ function normalizeAgentWaitResult(
     pendingError: wait?.pendingError === true ? true : undefined,
     timeoutPhase: normalizeAgentRunTimeoutPhase(wait?.timeoutPhase),
     providerStarted: normalizeProviderStarted(wait?.providerStarted),
+    terminalReply: normalizeAgentRunTerminalReplySnapshot(wait?.terminalReply),
   };
 }
 
@@ -148,7 +131,7 @@ export function isRecoverableAgentWaitError(error: string | undefined): boolean 
   if (!message) {
     return false;
   }
-  if (message.includes("gateway timeout")) {
+  if (message.includes("gateway timeout") || message.includes("gateway request timeout")) {
     return false;
   }
   return (
@@ -198,7 +181,7 @@ function isWaitedReplyTurnBoundary(message: unknown): boolean {
 }
 
 function snapshotAssistantReply(message: unknown): AssistantReplySnapshot | undefined {
-  const text = extractAssistantText(message);
+  const text = extractStoredAssistantText(message);
   if (!text?.trim()) {
     return undefined;
   }
@@ -333,17 +316,22 @@ export function hasUpdatedAssistantReplySnapshot(
 /** Read the latest non-tool assistant message for a session. */
 export async function readLatestAssistantReplySnapshot(params: {
   sessionKey: string;
+  agentId?: string;
   limit?: number;
   // Waited reply paths stop at transcript artifacts so they do not resurrect
   // an older assistant message as a fresh post-run reply.
   stopAtTranscriptArtifact?: boolean;
   callGateway?: GatewayCaller;
 }): Promise<AssistantReplySnapshot> {
-  const history = await (params.callGateway ?? runWaitDeps.callGateway)<{
+  const history = await (params.callGateway ?? callGateway)<{
     messages: Array<unknown>;
   }>({
     method: "chat.history",
-    params: { sessionKey: params.sessionKey, limit: params.limit ?? 50 },
+    params: {
+      sessionKey: params.sessionKey,
+      ...(params.agentId ? { agentId: params.agentId } : {}),
+      limit: params.limit ?? 50,
+    },
   });
   return resolveLatestAssistantReplySnapshot(
     stripToolMessages(Array.isArray(history?.messages) ? history.messages : []),
@@ -354,12 +342,14 @@ export async function readLatestAssistantReplySnapshot(params: {
 /** Read only the latest assistant text for call sites that do not need fingerprints. */
 export async function readLatestAssistantReply(params: {
   sessionKey: string;
+  agentId?: string;
   limit?: number;
   callGateway?: GatewayCaller;
 }): Promise<string | undefined> {
   return (
     await readLatestAssistantReplySnapshot({
       sessionKey: params.sessionKey,
+      agentId: params.agentId,
       limit: params.limit,
       callGateway: params.callGateway,
     })
@@ -374,7 +364,7 @@ export async function waitForAgentRun(params: {
 }): Promise<AgentWaitResult> {
   const timeoutMs = resolveRunWaitTimeoutMs(params.timeoutMs);
   try {
-    const wait = await (params.callGateway ?? runWaitDeps.callGateway)({
+    const wait = await (params.callGateway ?? callGateway)({
       method: "agent.wait",
       params: {
         runId: params.runId,
@@ -395,7 +385,10 @@ export async function waitForAgentRun(params: {
   } catch (err) {
     const error = formatErrorMessage(err);
     return {
-      status: error.includes("gateway timeout") ? "timeout" : "error",
+      status:
+        error.includes("gateway timeout") || error.includes("gateway request timeout")
+          ? "timeout"
+          : "error",
       error,
     };
   }
@@ -405,6 +398,7 @@ export async function waitForAgentRun(params: {
 export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   runId: string;
   sessionKey: string;
+  agentId?: string;
   timeoutMs: number;
   limit?: number;
   baseline?: AssistantReplySnapshot;
@@ -418,9 +412,15 @@ export async function waitForAgentRunAndReadUpdatedAssistantReply(params: {
   if (wait.status !== "ok") {
     return wait;
   }
+  if (wait.terminalReply) {
+    return wait.terminalReply.disposition === "visible"
+      ? { ...wait, replyText: wait.terminalReply.text }
+      : wait;
+  }
 
   const latestReply = await readLatestAssistantReplySnapshot({
     sessionKey: params.sessionKey,
+    agentId: params.agentId,
     limit: params.limit,
     stopAtTranscriptArtifact: true,
     callGateway: params.callGateway,
@@ -469,15 +469,3 @@ export async function waitForAgentRunsToDrain(params: {
     deadlineAtMs,
   };
 }
-
-/** Test-only dependency injection for gateway calls. */
-export const testing = {
-  setDepsForTest(overrides?: Partial<{ callGateway: GatewayCaller }>) {
-    runWaitDeps = overrides
-      ? {
-          ...defaultRunWaitDeps,
-          ...overrides,
-        }
-      : defaultRunWaitDeps;
-  },
-};

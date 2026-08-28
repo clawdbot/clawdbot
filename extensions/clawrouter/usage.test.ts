@@ -2,7 +2,7 @@ import { createServer, type Server } from "node:http";
 import { connect, type AddressInfo } from "node:net";
 import type { Duplex } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockedFunction } from "vitest";
-import { fetchClawRouterUsage, type ClawRouterUsageFetchGuard } from "./usage.js";
+import { fetchClawRouterUsage } from "./usage.js";
 
 const runningServers: Server[] = [];
 const runningSockets = new Set<Duplex>();
@@ -107,6 +107,10 @@ afterEach(async () => {
   savedProxyEnv.clear();
 });
 
+type ClawRouterUsageFetchGuard = NonNullable<
+  Parameters<typeof fetchClawRouterUsage>[0]["fetchGuard"]
+>;
+
 function mockFetchGuard(response: Response): MockedFunction<ClawRouterUsageFetchGuard> {
   return vi.fn(async ({ url }) => ({
     response,
@@ -201,14 +205,123 @@ describe("ClawRouter usage", () => {
     expect(snapshot.billing).toEqual([{ type: "spend", amount: 0, unit: "USD" }]);
   });
 
-  it("does not expose an upstream error body", async () => {
+  it("does not coerce numeric strings from the usage boundary", async () => {
+    const snapshot = await fetchClawRouterUsage({
+      token: "proxy-key",
+      timeoutMs: 5000,
+      fetchGuard: mockFetchGuard(
+        Response.json({
+          budget: { configured: true, limitMicros: "1000000", spentMicros: "500000" },
+          usage: { summary: { requestCount: "2", totalTokens: "300", actualCostMicros: "500000" } },
+        }),
+      ),
+    });
+
+    expect(snapshot).toMatchObject({ windows: [], plan: "Managed monthly budget" });
+    expect(snapshot.billing).toBeUndefined();
+    expect(snapshot.summary).toBeUndefined();
+  });
+
+  it.each([
+    ["malformed JSON", new TextEncoder().encode('{"budget":')],
+    ["a non-object JSON root", new TextEncoder().encode("null")],
+  ])("reports %s as a malformed usage response", async (_label, body) => {
+    const snapshot = await fetchClawRouterUsage({
+      token: "test-token",
+      timeoutMs: 5000,
+      fetchGuard: mockFetchGuard(new Response(body)),
+    });
+
+    expect(snapshot).toEqual({
+      provider: "clawrouter",
+      displayName: "ClawRouter",
+      windows: [],
+      error: "Malformed usage response",
+    });
+  });
+
+  it("reports invalid UTF-8 as a malformed usage response", async () => {
+    const prefix = new TextEncoder().encode(
+      '{"budget":{"configured":true,"windowKey":"default/test-policy/2026-',
+    );
+    const suffix = new TextEncoder().encode('","limitMicros":1000000,"spentMicros":500000}}');
+    const body = new Uint8Array([...prefix, 0xff, ...suffix]);
+
+    const snapshot = await fetchClawRouterUsage({
+      token: "test-token",
+      timeoutMs: 5000,
+      fetchGuard: mockFetchGuard(new Response(body)),
+    });
+
+    expect(snapshot).toEqual({
+      provider: "clawrouter",
+      displayName: "ClawRouter",
+      windows: [],
+      error: "Malformed usage response",
+    });
+  });
+
+  it("preserves response stream failures as transport errors", async () => {
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.error(new TypeError("usage stream failed"));
+        },
+      }),
+    );
+
+    await expect(
+      fetchClawRouterUsage({
+        token: "test-token",
+        timeoutMs: 5000,
+        fetchGuard: mockFetchGuard(response),
+      }),
+    ).rejects.toThrow("usage stream failed");
+  });
+
+  it("cancels non-OK usage response body before throwing", async () => {
+    let cancelled = false;
+    const response = new Response(
+      new ReadableStream({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("unauthorized"));
+        },
+        cancel() {
+          cancelled = true;
+        },
+      }),
+      { status: 403 },
+    );
     await expect(
       fetchClawRouterUsage({
         token: "proxy-key",
         timeoutMs: 5000,
-        fetchGuard: mockFetchGuard(new Response("secret details", { status: 403 })),
+        fetchGuard: mockFetchGuard(response),
       }),
     ).rejects.toThrow("ClawRouter usage request failed (HTTP 403)");
+    expect(cancelled).toBe(true);
+  });
+
+  it("observes peer closure when a real loopback server returns non-OK", async () => {
+    let responseClosed = false;
+    const { baseUrl, requests } = await startUsageServer((_req, res) => {
+      res.on("close", () => {
+        responseClosed = true;
+      });
+      res.writeHead(503, { "content-type": "text/plain" });
+      res.write("service unavailable");
+    });
+
+    await expect(
+      fetchClawRouterUsage({
+        token: "test-auth-token",
+        baseUrl,
+        timeoutMs: 5000,
+      }),
+    ).rejects.toThrow("ClawRouter usage request failed (HTTP 503)");
+
+    expect(requests).toEqual(["GET /v1/usage"]);
+    expect(responseClosed).toBe(true);
   });
 
   it("bounds successful usage response bodies", async () => {

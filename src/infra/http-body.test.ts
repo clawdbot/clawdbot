@@ -1,10 +1,11 @@
 // Tests HTTP body reading and size-limit handling.
 import { EventEmitter } from "node:events";
-import type { IncomingMessage } from "node:http";
+import type { IncomingMessage, ServerResponse } from "node:http";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createMockServerResponse } from "../test-utils/mock-http-response.js";
 import {
+  closeRequestAfterResponse,
   installRequestBodyLimitGuard,
   RequestBodyLimitError,
   type RequestBodyLimitErrorCode,
@@ -177,6 +178,11 @@ describe("http body limits", () => {
       headers: { "content-length": "9999" },
       maxBytes: 128,
     },
+    {
+      name: "declared unsafe-integer content-length remains oversized",
+      headers: { "content-length": "999999999999999999999999" },
+      maxBytes: 128,
+    },
   ])("$name", async ({ chunks, headers, maxBytes }) => {
     await expectReadPayloadTooLarge({ chunks, headers, maxBytes });
   });
@@ -289,5 +295,151 @@ describe("http body limits", () => {
       message: "RequestBodyConnectionClosed",
       statusCode: 400,
     });
+    for (const event of ["data", "end", "error", "close"] as const) {
+      expect(req.listenerCount(event), event).toBe(0);
+    }
+  });
+
+  it("immediately classifies a request closed before its body reader starts", async () => {
+    const req = createMockRequest({ emitEnd: false });
+    req.complete = true;
+    Object.defineProperty(req, "readableEnded", { value: false });
+    req.destroy();
+    req.emit("close");
+
+    await expectRequestBodyLimitError(
+      readRequestBodyWithLimit(req, { maxBytes: 128, timeoutMs: 1 }),
+      {
+        code: "CONNECTION_CLOSED",
+        message: "RequestBodyConnectionClosed",
+        statusCode: 400,
+      },
+    );
+    for (const event of ["data", "end", "error", "close"] as const) {
+      expect(req.listenerCount(event), event).toBe(0);
+    }
+  });
+
+  it("disposes a body guard immediately when its request was already closed", () => {
+    const req = createMockRequest({
+      headers: { "content-length": "9999" },
+      emitEnd: false,
+    });
+    req.complete = true;
+    Object.defineProperty(req, "readableEnded", { value: false });
+    req.destroy();
+    req.emit("close");
+    const res = createMockServerResponse();
+
+    const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128, timeoutMs: 1 });
+    try {
+      expect(guard.isTripped()).toBe(false);
+      expect(guard.code()).toBeNull();
+      expect(res.headersSent).toBe(false);
+      expect(res.body).toBeUndefined();
+      for (const event of ["data", "end", "error", "close"] as const) {
+        expect(req.listenerCount(event), event).toBe(0);
+      }
+    } finally {
+      guard.dispose();
+    }
+  });
+
+  it("keeps concurrent body guards, readers, and foreign request listeners independent", async () => {
+    const req = createMockRequest({ chunks: ['{"ok":true}'] });
+    const res = createMockServerResponse();
+    const events = ["data", "end", "error", "close"] as const;
+    const foreignListener = () => {};
+    for (const event of events) {
+      req.on(event, foreignListener);
+    }
+
+    const guard = installRequestBodyLimitGuard(req, res, { maxBytes: 128 });
+    await expect(readRequestBodyWithLimit(req, { maxBytes: 128 })).resolves.toBe('{"ok":true}');
+
+    expect(guard.isTripped()).toBe(false);
+    expect(res.headersSent).toBe(false);
+    for (const event of events) {
+      expect(req.listeners(event)).toEqual([foreignListener]);
+    }
+    guard.dispose();
+  });
+
+  it("classifies request stream errors as a closed connection", async () => {
+    const req = createMockRequest({ emitEnd: false });
+    const promise = readJsonBodyWithLimit(req, { maxBytes: 128 });
+    queueMicrotask(() => req.emit("error", new Error("socket reset")));
+    await expect(promise).resolves.toEqual({
+      ok: false,
+      code: "CONNECTION_CLOSED",
+      error: "Connection closed",
+    });
+  });
+
+  it("can defer destructive limit cleanup until a response flushes", async () => {
+    const req = createMockRequest({
+      headers: { "content-length": "129" },
+      emitEnd: false,
+    });
+    const pause = vi.fn();
+    req.pause = pause;
+
+    await expectRequestBodyLimitError(
+      readRequestBodyWithLimit(req, { maxBytes: 128, destroyOnLimit: false }),
+      {
+        code: "PAYLOAD_TOO_LARGE",
+        message: "PayloadTooLarge",
+        statusCode: 413,
+      },
+    );
+
+    expect(req.destroyed).toBe(false);
+    expect(pause).toHaveBeenCalledOnce();
+  });
+
+  it("closes a limited request only after its response transport closes", () => {
+    const req = createMockRequest({ emitEnd: false });
+    const res = new EventEmitter() as ServerResponse;
+    const setHeader = vi.fn();
+    res.setHeader = setHeader;
+
+    closeRequestAfterResponse(req, res);
+
+    expect(setHeader).toHaveBeenCalledWith("Connection", "close");
+    expect(req.destroyed).toBe(false);
+    res.emit("finish");
+    expect(req.destroyed).toBe(false);
+    res.emit("close");
+    expect(req.destroyed).toBe(true);
+  });
+
+  it("flushes an installed guard response before destroying the request", async () => {
+    const req = createMockRequest({ chunks: ["oversized"], emitEnd: false });
+    const res = new EventEmitter() as ServerResponse;
+    const setHeader = vi.fn();
+    const end = vi.fn();
+    res.setHeader = setHeader;
+    res.end = end;
+
+    installRequestBodyLimitGuard(req, res, { maxBytes: 1 });
+    await waitForMicrotaskTurn();
+
+    expect(res.statusCode).toBe(413);
+    expect(setHeader).toHaveBeenCalledWith("Connection", "close");
+    expect(end).toHaveBeenCalledWith(JSON.stringify({ error: "Payload too large" }));
+    expect(req.destroyed).toBe(false);
+    res.emit("finish");
+    expect(req.destroyed).toBe(false);
+    res.emit("close");
+    expect(req.destroyed).toBe(true);
+  });
+
+  it("allows lightweight responses without finish listeners", () => {
+    const req = createMockRequest({ emitEnd: false });
+    const res = createMockServerResponse();
+
+    expect(() => closeRequestAfterResponse(req, res)).not.toThrow();
+    expect(res.getHeader("connection")).toBe("close");
+    expect(req.destroyed).toBe(false);
   });
 });

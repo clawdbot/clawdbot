@@ -1,7 +1,12 @@
 // Telegram type declarations define plugin contracts.
 import type { Bot } from "grammy";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { Message } from "grammy/types";
 import type {
+  ChannelIngressContextBinding,
+  ResolvedChannelMessageIngress,
+} from "openclaw/plugin-sdk/channel-ingress-runtime";
+import type {
+  OpenClawConfig,
   DmPolicy,
   TelegramDirectConfig,
   TelegramGroupConfig,
@@ -9,18 +14,28 @@ import type {
 } from "openclaw/plugin-sdk/config-contracts";
 import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import type { MsgContext } from "openclaw/plugin-sdk/reply-runtime";
+import type { TelegramMediaKind } from "./bot/body-helpers.js";
+import type { TelegramThreadSpec } from "./bot/helpers.js";
 import type { StickerMetadata, TelegramContext } from "./bot/types.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import type { TelegramSendChatActionHandler } from "./sendchataction-401-backoff.js";
 
 export type TelegramMediaRef = {
-  path: string;
+  kind: TelegramMediaKind;
+  path?: string;
   contentType?: string;
+  fileName?: string;
   stickerMetadata?: StickerMetadata;
   sourceMessageId?: string;
+  unavailable?: { reason: "oversize"; limitMb: number } | { reason: "download-failed" };
 };
 
+export type TelegramChannelIngressResolver = (
+  contextBinding: ChannelIngressContextBinding,
+) => Promise<ResolvedChannelMessageIngress>;
+
 export type TelegramMessageContextOptions = {
+  threadSpec?: TelegramThreadSpec;
   commandSource?: "text" | "native";
   forceWasMentioned?: boolean;
   messageIdOverride?: string;
@@ -29,13 +44,15 @@ export type TelegramMessageContextOptions = {
   promptContextMinTimestampMs?: number;
   promptContextAmbientWatermark?: TelegramAmbientTranscriptWatermark;
   ambientTranscriptBody?: string;
+  bufferedMessages?: readonly Message[];
   spooledReplay?: boolean;
   /** Use an attempt-local participant so an outer retry loop owns final spool settlement. */
   isolateSpooledReplaySettlement?: boolean;
+  channelIngressResolvers?: readonly TelegramChannelIngressResolver[];
 };
 
 export type TelegramPromptContextEntry = NonNullable<
-  MsgContext["UntrustedStructuredContext"]
+  MsgContext["ChannelStructuredContext"]
 >[number];
 
 export type TelegramAmbientTranscriptWatermark = {
@@ -57,10 +74,8 @@ type ResolveTelegramGroupConfig = (
 };
 
 type ResolveGroupActivation = (params: {
-  chatId: string | number;
   agentId?: string;
-  messageThreadId?: number;
-  sessionKey?: string;
+  sessionKey: string;
   cfg: OpenClawConfig;
 }) => boolean | undefined;
 
@@ -98,7 +113,9 @@ export type BuildTelegramMessageContextParams = {
   bot: Bot;
   cfg: OpenClawConfig;
   account: { accountId: string };
+  ownerAgentId?: string;
   historyLimit: number;
+  dmHistoryLimit: number;
   groupHistories: Map<string, HistoryEntry[]>;
   dmPolicy: DmPolicy;
   allowFrom?: Array<string | number>;

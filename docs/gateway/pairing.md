@@ -38,6 +38,28 @@ Pending requests expire automatically **5 minutes after the node's last
 retry** — an actively reconnecting node keeps its one pending request alive
 rather than generating a fresh request (and approval prompt) per attempt.
 
+## One-paste node pairing
+
+In the Control UI Devices page, open the pairing dialog, choose **Node host**,
+and copy the generated command to the device:
+
+```bash
+openclaw node run --pair "oc-pair://<setup-code>"
+```
+
+The setup link carries the Gateway endpoint, a short-lived single-use bootstrap
+token, and a TLS certificate pin when the Gateway directly serves a pinnable
+leaf certificate. The bootstrap token expires after 10 minutes. Explicit
+`--host`, `--port`, `--context-path`, `--tls`/`--no-tls`, and
+`--tls-fingerprint` flags override values from `--pair`.
+
+The bootstrap token and resulting device credential are separate, like a
+short-lived Tailscale auth key and the durable device identity it admits.
+Revoking or expiring the setup link does not revoke the paired device; remove
+the device separately when needed. The link never pre-approves `system.run` or
+folder sync. Those operations still use pending approval or
+[SSH-verified device auto-approval](#ssh-verified-device-auto-approval-default).
+
 ## CLI workflow (headless friendly)
 
 ```bash
@@ -91,15 +113,19 @@ Notes:
   - commandless request: `operator.pairing`
   - ordinary command request: `operator.pairing` + `operator.write`
   - admin-sensitive request containing `system.run`, `system.run.prepare`,
-    `system.which`, `browser.proxy`, `fs.listDir`, or
-    `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
+    `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`,
+    or `system.execApprovals.get/set`: `operator.pairing` + `operator.admin`
+
+Here, `fs.listDir` is the node command relayed through `node.invoke`. The
+top-level Gateway `fs.listDir` RPC needs `operator.write` for
+workspace-contained host browsing and `operator.admin` when `nodeId` is present.
 
 <Warning>
 Node pairing approval records the trusted capability surface. It does **not** pin the live node command surface per node.
 
 - Live node commands come from what the node declares on connect, filtered by
-  the gateway's global node command policy (`gateway.nodes.allowCommands` and
-  `denyCommands`).
+  the gateway's global node command policy (`gateway.nodes.commands.allow` and
+  `gateway.nodes.commands.deny`).
 - Per-node `system.run` allow and ask policy lives on the node in
   `exec.approvals.node.*`, not in the pairing record.
 
@@ -139,6 +165,37 @@ Durable node presence updates follow the same identity boundary: the
 sessions, and updates pairing metadata only when the device/node identity is
 already paired. A self-declared `client.id` value is not enough to write
 last-seen state.
+
+## Silent local pairing
+
+The Gateway treats a loopback source address as local. This includes a client
+reaching a remote loopback-only Gateway through an SSH port forward: the SSH
+server terminates the connection on the Gateway host, so the Gateway sees the
+forwarded connection as loopback. This is intentional because ordinary SSH
+access already implies local trust, including the ability to read the shared
+Gateway token.
+
+By default, trusted local connections silently approve first-time device
+pairing plus role and scope upgrades. This keeps normal same-host and SSH
+tunnel reconnects convenient. Operators using shell-less, port-forward-only
+SSH keys or a multi-user Mac can require explicit approval for every device:
+
+```json5
+{
+  gateway: {
+    nodes: {
+      pairing: {
+        autoApproveLocal: false,
+      },
+    },
+  },
+}
+```
+
+With this setting, new pairing requests, role upgrades, and scope upgrades use
+the normal approval flow even when the connection is local. Metadata-only
+reconnect refreshes remain automatic so routine client or OS metadata changes
+do not create approval churn.
 
 ## SSH-verified device auto-approval (default)
 

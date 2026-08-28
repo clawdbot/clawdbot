@@ -66,7 +66,7 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
 
   </Step>
 
-  <Step title="Install Node.js 24">
+  <Step title="Install Node.js 24 LTS">
     ```bash
     curl -fsSL https://deb.nodesource.com/setup_24.x | sudo -E bash -
     sudo apt install -y nodejs
@@ -91,7 +91,7 @@ Run a persistent, always-on OpenClaw Gateway on a Raspberry Pi. Since the Pi is 
 
   <Step title="Install OpenClaw">
     ```bash
-    curl -fsSL https://openclaw.ai/install.sh | bash
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
     ```
   </Step>
 
@@ -154,7 +154,7 @@ echo 'gpu_mem=16' | sudo tee -a /boot/config.txt
 sudo systemctl disable bluetooth
 ```
 
-**systemd drop-in for stable restarts** -- If this Pi is mostly running OpenClaw, add a service drop-in:
+**systemd drop-in for host-specific startup tuning** -- The managed unit owns the generic restart policy (`Restart=always`, `RestartSec=5`). If this Pi is mostly running OpenClaw, add a service drop-in for host-specific startup settings only:
 
 ```bash
 systemctl --user edit openclaw-gateway.service
@@ -164,8 +164,6 @@ systemctl --user edit openclaw-gateway.service
 [Service]
 Environment=OPENCLAW_NO_RESPAWN=1
 Environment=NODE_COMPILE_CACHE=/var/tmp/openclaw-compile-cache
-Restart=always
-RestartSec=2
 TimeoutStartSec=90
 ```
 
@@ -196,14 +194,19 @@ Most OpenClaw features work on ARM64 without changes (Node.js, Telegram, WhatsAp
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` -- `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, sessions.
+- `~/.openclaw/` -- `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, sessions.
 - `~/.openclaw/workspace/` -- agent workspace (SOUL.md, memory, artifacts).
 
 These survive reboots and benefit from SSD over SD card for both performance and longevity. Take a portable snapshot with:
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
+
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## Troubleshooting
 

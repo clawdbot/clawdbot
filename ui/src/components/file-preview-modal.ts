@@ -1,9 +1,10 @@
 // Control UI component implements the file preview modal element.
-import { css, html, type PropertyValues } from "lit";
+import { css, html, type PropertyValues, type TemplateResult } from "lit";
 import { property, query } from "lit/decorators.js";
 import { t } from "../i18n/index.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { renderCopyButton } from "./copy-button.ts";
+import { type FileKind, fileKindForPath } from "./file-kind.ts";
 import { icons } from "./icons.ts";
 import "./modal-dialog.ts";
 
@@ -70,6 +71,7 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
 
     .search {
       flex: 1;
+      min-width: 0;
       background: transparent;
       border: none;
       outline: none;
@@ -101,12 +103,6 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       border: 1px solid var(--border);
       border-radius: var(--radius-md);
       background: var(--bg-elevated);
-    }
-
-    .kbd {
-      font-family: var(--mono);
-      border: 1px solid var(--border);
-      color: var(--muted);
     }
 
     .body {
@@ -179,7 +175,8 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       opacity: 1;
     }
 
-    .item-icon svg {
+    .item-icon svg,
+    .chat-copy-btn svg {
       width: 16px;
       height: 16px;
       stroke: currentColor;
@@ -287,43 +284,30 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       transition: opacity 150ms ease;
     }
 
-    .chat-copy-btn__icon-check {
+    .chat-copy-btn__icon-check,
+    .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-copy {
       opacity: 0;
     }
 
-    .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-copy {
-      opacity: 0;
-    }
-
-    .chat-copy-btn[data-copied="1"] .chat-copy-btn__icon-check {
+    .chat-copy-btn[data-copy-state="copied"] .chat-copy-btn__icon-check {
       opacity: 1;
     }
 
-    .chat-copy-btn[data-copying="1"] {
+    .chat-copy-btn[data-copy-state="copying"] {
       opacity: 0;
       pointer-events: none;
     }
 
-    .chat-copy-btn[data-error="1"] {
+    .chat-copy-btn[data-copy-state="error"] {
       border-color: var(--danger-subtle);
       background: var(--danger-subtle);
       color: var(--danger);
     }
 
-    .chat-copy-btn[data-copied="1"] {
+    .chat-copy-btn[data-copy-state="copied"] {
       border-color: var(--ok-subtle);
       background: var(--ok-subtle);
       color: var(--ok);
-    }
-
-    .chat-copy-btn svg {
-      width: 16px;
-      height: 16px;
-      stroke: currentColor;
-      fill: none;
-      stroke-width: 1.5px;
-      stroke-linecap: round;
-      stroke-linejoin: round;
     }
 
     .chips {
@@ -397,8 +381,10 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
     }
 
     .kbd {
+      font-family: var(--mono);
       font-size: 10.5px;
       padding: 2px 6px;
+      border: 1px solid var(--border);
       border-radius: 4px;
       background: var(--bg-elevated);
       color: var(--text);
@@ -435,6 +421,33 @@ export class OpenClawFilePreviewModal extends OpenClawLitElement {
       font-size: 13px;
       color: var(--muted);
       max-width: 380px;
+    }
+
+    @media (max-width: 640px) {
+      .head {
+        padding: 12px;
+      }
+
+      .body {
+        grid-template-columns: minmax(0, 1fr);
+        grid-template-rows: minmax(0, min(180px, 30dvh)) minmax(0, 1fr);
+      }
+
+      .list {
+        min-width: 0;
+        border-right: 0;
+        border-bottom: 1px solid var(--border);
+        padding: 10px 8px;
+      }
+
+      .item {
+        min-width: 0;
+      }
+
+      .foot {
+        gap: 8px;
+        padding: 10px 12px;
+      }
     }
   `;
 
@@ -706,54 +719,34 @@ function fileKind(path: string): string {
   const ext = path.split(".").pop()?.toLowerCase() ?? "";
   const map: Record<string, string> = {
     md: "Markdown",
-    txt: "Text",
+    txt: t("filePreview.kind.text"),
     json: "JSON",
     yaml: "YAML",
     yml: "YAML",
     ts: "TypeScript",
     js: "JavaScript",
     py: "Python",
-    sh: "Shell",
+    sh: t("filePreview.kind.shell"),
   };
-  return map[ext] ?? (ext ? ext.toUpperCase() : "File");
+  return map[ext] ?? (ext ? ext.toUpperCase() : t("filePreview.kind.file"));
 }
 
-const CODE_EXTENSIONS = new Set([
-  "ts",
-  "tsx",
-  "js",
-  "jsx",
-  "mjs",
-  "cjs",
-  "py",
-  "sh",
-  "bash",
-  "zsh",
-  "rb",
-  "go",
-  "rs",
-  "java",
-  "kt",
-  "swift",
-  "c",
-  "cc",
-  "cpp",
-  "h",
-  "hpp",
-  "json",
-  "yaml",
-  "yml",
-  "toml",
-  "xml",
-  "html",
-  "css",
-  "scss",
-  "sql",
-]);
+// Same glyph vocabulary chat file links paint through CSS masks
+// (styles/chat/text.css), resolved from the shared kind so a file looks the
+// same wherever the Control UI names it.
+const FILE_KIND_ICONS: Record<FileKind, TemplateResult> = {
+  code: icons.fileCode,
+  component: icons.layoutGrid,
+  data: icons.braces,
+  file: icons.fileText,
+  image: icons.image,
+  markdown: icons.book,
+  package: icons.box,
+  shell: icons.terminal,
+};
 
 function iconForFile(path: string) {
-  const ext = path.split(".").pop()?.toLowerCase() ?? "";
-  return CODE_EXTENSIONS.has(ext) ? icons.fileCode : icons.fileText;
+  return FILE_KIND_ICONS[fileKindForPath(path)];
 }
 
 declare global {

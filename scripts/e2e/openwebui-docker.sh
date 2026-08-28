@@ -7,7 +7,7 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 source "$ROOT_DIR/scripts/lib/docker-e2e-image.sh"
 
 IMAGE_NAME="$(docker_e2e_resolve_image "openclaw-openwebui-e2e" OPENCLAW_OPENWEBUI_E2E_IMAGE)"
-OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.8.10}"
+OPENWEBUI_IMAGE="${OPENWEBUI_IMAGE:-ghcr.io/open-webui/open-webui:v0.11.0@sha256:72c0ba641ba75e7aa52655cb242570906ececd09b1140fb736483038a22b3228}"
 MAX_MEMORY_MIB="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_MEMORY_MIB 8192)"
 MAX_CPU_PERCENT="$(docker_e2e_read_nonnegative_decimal_env OPENCLAW_OPENWEBUI_MAX_CPU_PERCENT 1600)"
 # Keep the default on the preferred GPT-5 OpenAI model for Open WebUI
@@ -159,6 +159,7 @@ docker_e2e_docker_cmd run -d \
     node "$entry" config set --batch-file "$batch_file" >/dev/null
     rm -f "$batch_file"
     node scripts/e2e/lib/fixture.mjs openwebui-workspace
+    node "$entry" doctor --fix --yes --force >/dev/null
 
     openclaw_e2e_exec_gateway "$entry" '"$PORT"' lan /tmp/openwebui-gateway.log
   ' >/dev/null
@@ -197,7 +198,7 @@ docker_e2e_docker_cmd run -d \
   "$OPENWEBUI_IMAGE" >/dev/null
 
 echo "Waiting for Open WebUI..."
-if ! docker_e2e_wait_container_bash_while_running "$OW_NAME" "$GW_NAME" 240 1 "node scripts/e2e/lib/openwebui/http-probe.mjs 'http://$OW_NAME:$WEBUI_PORT/' lt500"; then
+if ! docker_e2e_wait_container_bash_while_running "$OW_NAME" "$GW_NAME" 240 1 "node scripts/e2e/lib/openwebui/http-probe.mjs 'http://$OW_NAME:$WEBUI_PORT/health' 200"; then
   echo "Open WebUI failed to start"
   docker_e2e_docker_cmd logs "$OW_NAME" 2>&1 | tail -n 200 || true
   exit 1

@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import type { ModelAuthStatusResult, ModelCatalogEntry } from "../../api/types.ts";
@@ -18,8 +19,11 @@ function catalogEntry(overrides: Partial<ModelCatalogEntry> & { provider: string
   } satisfies ModelCatalogEntry;
 }
 
-function authStatus(providers: ModelAuthStatusResult["providers"]): ModelAuthStatusResult {
-  return { ts: 1, providers };
+function authStatus(
+  providers: ModelAuthStatusResult["providers"],
+  providerCapabilities?: ModelAuthStatusResult["providerCapabilities"],
+): ModelAuthStatusResult {
+  return { ts: 1, providers, ...(providerCapabilities ? { providerCapabilities } : {}) };
 }
 
 function firstCard(cards: ReturnType<typeof buildModelProviderCards>) {
@@ -55,11 +59,29 @@ describe("buildModelProviderCards", () => {
     expect(cards[1]).toMatchObject({ modelCount: 1, availableModelCount: 0 });
   });
 
+  it("keeps provider-owned catalog failures when no model rows are usable", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      providerOutcomes: [{ provider: "openai", status: "auth-rejected" }],
+    });
+
+    expect(cards).toHaveLength(1);
+    expect(firstCard(cards)).toMatchObject({
+      id: "openai",
+      catalogStatus: "auth-rejected",
+      modelCount: 0,
+      availableModelCount: 0,
+    });
+  });
+
   it("propagates explicit API-key capability onto provider cards", () => {
     const cards = buildModelProviderCards({
       ...EMPTY_INPUT,
       models: [catalogEntry({ provider: "github-copilot", available: true })],
-      catalogModels: [catalogEntry({ provider: "github-copilot", apiKeySupported: false })],
+      authStatus: authStatus(
+        [],
+        [{ provider: "github-copilot", apiKeySupported: false, quickApiKeySetup: false }],
+      ),
     });
     expect(firstCard(cards).apiKeySupported).toBe(false);
   });
@@ -150,6 +172,51 @@ describe("buildModelProviderCards", () => {
       { provider: "anthropic", profileIds: ["p1"] },
       { provider: "claude-cli", profileIds: ["p2"] },
     ]);
+  });
+
+  it("keeps a credential-less missing route visible beside CLI OAuth", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "anthropic",
+          displayName: "Claude",
+          status: "missing",
+          profiles: [],
+        },
+        {
+          provider: "claude-cli",
+          displayName: "Claude",
+          status: "expiring",
+          profiles: [{ profileId: "anthropic:claude-cli", type: "oauth", status: "expiring" }],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 1 });
+  });
+
+  it("preserves missing MiniMax OAuth beside a separate API key", () => {
+    const cards = buildModelProviderCards({
+      ...EMPTY_INPUT,
+      authStatus: authStatus([
+        {
+          provider: "minimax",
+          displayName: "MiniMax",
+          status: "static",
+          profiles: [],
+          apiKey: { source: "env", envVar: "MINIMAX_API_KEY" },
+        },
+        {
+          provider: "minimax-portal",
+          displayName: "MiniMax",
+          status: "missing",
+          profiles: [],
+        },
+      ]),
+    });
+
+    expect(firstCard(cards).auth).toMatchObject({ kind: "missing", profileCount: 0 });
   });
 
   it("prefers usage.status snapshots over the auth-status embed", () => {
@@ -292,6 +359,16 @@ describe("model provider configuration data", () => {
     ]);
   });
 
+  it.each(["openai/gpt-saved", "saved-model"])(
+    "keeps saved %s available when the catalog is unknown, but not when it is empty",
+    (primary) => {
+      const selection = { primary, fallbacks: [], utilityModel: null };
+
+      expect(buildSelectableDefaultModels(null, selection)[0]).not.toHaveProperty("available");
+      expect(buildSelectableDefaultModels([], selection)[0]).toMatchObject({ available: false });
+    },
+  );
+
   it("preserves alias-valued and bare model defaults as picker options", () => {
     const selectable = buildSelectableDefaultModels(
       [catalogEntry({ provider: "anthropic", id: "claude-opus", alias: "Opus", available: true })],
@@ -349,10 +426,9 @@ describe("model provider configuration data", () => {
   it("lists known providers that are not configured", () => {
     const options = buildUnconfiguredProviderOptions(
       [
-        catalogEntry({ provider: "openai", apiKeySupported: true }),
-        catalogEntry({ provider: "anthropic", apiKeySupported: true }),
-        catalogEntry({ provider: "anthropic", id: "anthropic/other", apiKeySupported: true }),
-        catalogEntry({ provider: "github-copilot", apiKeySupported: false }),
+        { provider: "openai", apiKeySupported: true, quickApiKeySetup: true },
+        { provider: "anthropic", apiKeySupported: true, quickApiKeySetup: true },
+        { provider: "github-copilot", apiKeySupported: true, quickApiKeySetup: false },
       ],
       ["openai"],
     );

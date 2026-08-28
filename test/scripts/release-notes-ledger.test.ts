@@ -6,8 +6,54 @@ import {
   renderContributionRecordEntry,
 } from "../../.agents/skills/openclaw-changelog-update/scripts/verify-release-notes.mjs";
 
+const targetSha = "a".repeat(40);
+
+function contributionLedger({
+  nodes,
+  seededPullRequests = [],
+  sourcePullRequests = [],
+  sourceReferences = [],
+}: {
+  nodes: Map<number, Record<string, unknown>>;
+  seededPullRequests?: number[];
+  sourcePullRequests?: number[];
+  sourceReferences?: number[];
+}) {
+  return ledgerFor(
+    "v2026.7.2-beta.7",
+    targetSha,
+    [...nodes.keys()],
+    nodes,
+    new Map(),
+    new Map(),
+    { issuesByPullRequest: new Map() },
+    {
+      legacyIssues: new Map(),
+      pullRequests: new Map(
+        seededPullRequests.map((number) => [
+          number,
+          { externalReferences: [], references: [], thanks: [] },
+        ]),
+      ),
+    },
+    new Set(sourcePullRequests),
+    sourceReferences,
+    [],
+    [],
+    new Set(),
+    [],
+    Date.parse("2026-08-05T00:00:00Z"),
+  ) as ReturnType<typeof ledgerFor> & {
+    provenance: {
+      inRangePullRequests: number;
+      retainedSeedOnlyPullRequests: number;
+      uniquePullRequests: number;
+    };
+  };
+}
+
 describe("renderContributionRecordEntry", () => {
-  it("keeps source and linked issue references without repeating PR titles", () => {
+  it("keeps external and linked issue references without repeating PR title references", () => {
     expect(
       renderContributionRecordEntry({
         number: 123,
@@ -18,14 +64,14 @@ describe("renderContributionRecordEntry", () => {
     ).toBe("- **PR #123** Related #45, openclaw/imsg#141, #67. Thanks @alice and @bob.");
   });
 
-  it("deduplicates title references and retains seeded cross-repository references", () => {
+  it("deduplicates resolved issues and retains seeded cross-repository references", () => {
     expect(
       renderContributionRecordEntry({
         number: 124,
         title: "Fix #45, #45, and OpenClaw/imsg#141",
         externalReferences: ["openclaw/imsg#141"],
         priorReferences: [67],
-        linkedIssues: [{ number: 45 }],
+        linkedIssues: [{ number: 45 }, { number: 67 }],
         thanks: [],
       }),
     ).toBe("- **PR #124** Related #45, OpenClaw/imsg#141, #67.");
@@ -68,7 +114,7 @@ describe("renderContributionRecordEntry", () => {
         title: "Title changed after release",
         priorReferences: seeded?.references,
         externalReferences: seeded?.externalReferences,
-        linkedIssues: [],
+        linkedIssues: [{ number: 45 }],
         thanks: seeded?.thanks ?? [],
       }),
     ).toBe(line);
@@ -101,7 +147,7 @@ describe("renderContributionRecordEntry", () => {
 
     const result = ledgerFor(
       "v2026.6.11",
-      "HEAD",
+      targetSha,
       [125],
       nodes,
       new Map(),
@@ -118,6 +164,126 @@ describe("renderContributionRecordEntry", () => {
     );
 
     expect(result.ledger).toContain("- **PR #125** Thanks @carol and @alice and @bob.");
+  });
+
+  it("counts associated and PR-typed source refs before retained seed-only rows", () => {
+    const nodes = new Map(
+      [1, 2, 3].map((number) => [
+        number,
+        {
+          __typename: "PullRequest",
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title: `fix: contribution ${number}`,
+        },
+      ]),
+    );
+    const result = contributionLedger({
+      nodes,
+      seededPullRequests: [1, 3],
+      sourcePullRequests: [1],
+      sourceReferences: [2],
+    });
+
+    expect(result.provenance).toEqual({
+      inRangePullRequests: 2,
+      retainedSeedOnlyPullRequests: 1,
+      uniquePullRequests: 3,
+    });
+    expect(result.ledger).toContain("2 in-range PRs + 1 retained seed-only PR = 3 unique PRs.");
+  });
+
+  it("reports zero retained seed-only PRs when every row is in range", () => {
+    const nodes = new Map([
+      [
+        1,
+        {
+          __typename: "PullRequest",
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title: "fix: in-range contribution",
+        },
+      ],
+    ]);
+    const result = contributionLedger({ nodes, sourcePullRequests: [1] });
+
+    expect(result.provenance).toMatchObject({
+      inRangePullRequests: 1,
+      retainedSeedOnlyPullRequests: 0,
+      uniquePullRequests: 1,
+    });
+  });
+
+  it("reports all rows as retained seed-only when the release range has no PRs", () => {
+    const nodes = new Map(
+      [1, 2].map((number) => [
+        number,
+        {
+          __typename: "PullRequest",
+          closingIssuesReferences: { nodes: [] },
+          mergedAt: "2026-08-04T00:00:00Z",
+          title: `fix: seeded contribution ${number}`,
+        },
+      ]),
+    );
+    const result = contributionLedger({ nodes, seededPullRequests: [1, 2] });
+
+    expect(result.provenance).toMatchObject({
+      inRangePullRequests: 0,
+      retainedSeedOnlyPullRequests: 2,
+      uniquePullRequests: 2,
+    });
+  });
+
+  it("rejects a forged canonical range and seed partition", () => {
+    const source = [
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- Highlight one.",
+      "- Highlight two.",
+      "- Highlight three.",
+      "- Highlight four.",
+      "- Highlight five.",
+      "",
+      "### Changes",
+      "",
+      "### Fixes",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 0 in-range PRs + 1 retained seed-only PR = 1 unique PR.`,
+      "",
+      "#### Pull requests",
+      "",
+      "- **PR #456**",
+    ].join("\n");
+    const entry = {
+      number: 456,
+      title: "fix: example",
+      editorialEligible: true,
+      priorReferences: [],
+      externalReferences: [],
+      linkedIssues: [],
+      thanks: [],
+    };
+
+    expect(
+      ledgerChecks(
+        {
+          source,
+          expectedProvenance: {
+            inRangePullRequests: 1,
+            retainedSeedOnlyPullRequests: 0,
+            uniquePullRequests: 1,
+          },
+        },
+        [entry],
+        new Map([[456, { __typename: "PullRequest" }]]),
+        [],
+      ),
+    ).toContain("contribution record provenance partition does not match generated inventory");
   });
 
   it("retains references from a verbose record when the source title changes", () => {
@@ -141,7 +307,7 @@ describe("renderContributionRecordEntry", () => {
     });
   });
 
-  it("requires complete reference tokens rather than matching substrings", () => {
+  it("requires complete resolved issue tokens rather than matching substrings", () => {
     const source = [
       "## 2026.7.1",
       "",
@@ -159,6 +325,8 @@ describe("renderContributionRecordEntry", () => {
       "",
       "### Complete contribution record",
       "",
+      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
+      "",
       "#### Pull requests",
       "",
       "- **PR #456** Related openclaw/imsg#141.",
@@ -167,9 +335,9 @@ describe("renderContributionRecordEntry", () => {
       number: 456,
       title: "Internal cleanup",
       editorialEligible: false,
-      priorReferences: [45, 141],
+      priorReferences: [],
       externalReferences: [],
-      linkedIssues: [],
+      linkedIssues: [{ number: 45 }, { number: 141 }],
       thanks: [],
     };
 
@@ -179,6 +347,47 @@ describe("renderContributionRecordEntry", () => {
       "missing #45 on contribution record for PR #456",
       "missing #141 on contribution record for PR #456",
     ]);
+  });
+
+  it("does not require an out-of-range PR referenced by a PR title", () => {
+    const line = "- **PR #456**";
+    const source = [
+      "## 2026.7.1",
+      "",
+      "### Highlights",
+      "",
+      "- Highlight one.",
+      "- Highlight two.",
+      "- Highlight three.",
+      "- Highlight four.",
+      "- Highlight five.",
+      "",
+      "### Changes",
+      "",
+      "### Fixes",
+      "",
+      "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
+      "",
+      "#### Pull requests",
+      "",
+      line,
+    ].join("\n");
+    const entry = {
+      number: 456,
+      title: "docs: align backup rules (#123)",
+      editorialEligible: false,
+      priorReferences: [123],
+      externalReferences: [],
+      linkedIssues: [],
+      thanks: [],
+    };
+
+    expect(renderContributionRecordEntry(entry)).toBe(line);
+    expect(
+      ledgerChecks({ source }, [entry], new Map([[456, { __typename: "PullRequest" }]]), []),
+    ).toEqual([]);
   });
 
   it("accepts case-only differences in cross-repository references", () => {
@@ -199,6 +408,8 @@ describe("renderContributionRecordEntry", () => {
       "### Fixes",
       "",
       "### Complete contribution record",
+      "",
+      `This audited record covers the complete base..${targetSha} history: 1 merged PR.`,
       "",
       "#### Pull requests",
       "",

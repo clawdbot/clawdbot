@@ -17,12 +17,10 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../plugins/config-state.js";
-import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
-import {
-  loadPluginManifestRegistry,
-  type PluginManifestRecord,
-} from "../plugins/manifest-registry.js";
+import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { parsePluginCacheJson, readPluginCacheFile } from "../plugins/plugin-cache-files.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { parseJsonWithJson5Fallback } from "../utils/parse-json-compat.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "./facade-activation-contract.js";
 import { resolveRegistryPluginModuleLocationFromRecords } from "./facade-resolution-shared.js";
@@ -96,18 +94,11 @@ function getFacadeManifestRegistry(params: {
 }): readonly PluginManifestRecord[] {
   const envOption = params.env ? { env: params.env } : {};
   const resolved = getFacadeBoundaryResolvedConfig();
-  const current = getCurrentPluginMetadataSnapshot({
+  return resolvePluginMetadataSnapshot({
     config: resolved.config,
     ...envOption,
-    allowWorkspaceScopedSnapshot: true,
-  });
-  if (current?.manifestRegistry) {
-    return current.manifestRegistry.plugins;
-  }
-  return loadPluginManifestRegistry({
-    config: resolved.config,
-    ...envOption,
-  }).plugins;
+    allowWorkspaceScopedCurrent: true,
+  }).manifestRegistry.plugins;
 }
 
 /** Resolves the concrete plugin module location recorded in the manifest registry. */
@@ -129,16 +120,20 @@ function readBundledPluginManifestRecordFromDir(params: {
   pluginsRoot: string;
   resolvedDirName: string;
 }): FacadePluginManifestLike | null {
-  const manifestPath = path.join(
-    params.pluginsRoot,
-    params.resolvedDirName,
-    "openclaw.plugin.json",
-  );
-  if (!fs.existsSync(manifestPath)) {
+  const file = readPluginCacheFile({
+    rootDir: path.join(params.pluginsRoot, params.resolvedDirName),
+    relativePath: "openclaw.plugin.json",
+    rejectHardlinks: false,
+  });
+  if (!file.ok) {
     return null;
   }
   try {
-    const raw = parseJsonWithJson5Fallback(fs.readFileSync(manifestPath, "utf8")) as {
+    const parsed = parsePluginCacheJson(file, { json5: true });
+    if (!parsed.ok) {
+      return null;
+    }
+    const raw = parsed.value as {
       id?: unknown;
       enabledByDefault?: unknown;
       channels?: unknown;

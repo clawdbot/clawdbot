@@ -1,0 +1,35 @@
+title: Gateway SSH tunnel fallback
+
+scenario:
+  id: gateway-ssh-tunnels
+  surface: runtime
+  coverage:
+    primary:
+      - gateway.ssh-tunnels
+  objective: Prove the Gateway status SSH fallback through a real isolated OpenSSH daemon and loopback Gateway.
+  successCriteria:
+    - An isolated OpenSSH daemon accepts an ephemeral key through strict host-key verification.
+    - OpenSSH reads scenario-owned host trust without modifying the Testbox account known_hosts file, including overlapping and killed producers.
+    - Gateway status starts a real local forward and reaches the authenticated loopback Gateway through it.
+    - Gateway status closes the local forward after probing.
+    - A changed host key produces an explicit SSH tunnel warning without hiding the directly reachable Gateway.
+    - A stopped SSH daemon produces an explicit unreachable-tunnel warning without hiding the directly reachable Gateway.
+  docsRefs:
+    - docs/gateway/remote.md
+    - docs/cli/gateway.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - src/infra/ssh-tunnel.ts
+    - src/commands/gateway-status.ts
+    - src/commands/gateway-status/probe-run.ts
+    - test/e2e/qa-lab/runtime/gateway-ssh-tunnels.ts
+  execution:
+    allowBlockedEvidence: true
+    kind: script
+    parallelSafe: true
+    path: test/e2e/qa-lab/runtime/gateway-ssh-tunnels.ts
+    summary: Starts an isolated real sshd and loopback Gateway with scenario-owned host trust, then exercises success, cleanup, host-key rejection, unreachable-daemon diagnostics, overlap, and forced termination.
+    timeoutMs: 120000
+    args:
+      - --artifact-base
+      - ${outputDir}

@@ -4,6 +4,7 @@
  * Loads paired nodes from Gateway and resolves requested/default nodes with legacy pair-list fallback.
  */
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import { parseNodeList, parsePairingList } from "../../shared/node-list-parse.js";
 import type { NodeListNode } from "../../shared/node-list-types.js";
 import { resolveNodeFromNodeList, resolveNodeIdFromNodeList } from "../../shared/node-resolve.js";
@@ -19,50 +20,19 @@ type DefaultNodeSelectionOptions = {
   preferLocalMac?: boolean;
 };
 
-function messageFromError(error: unknown): string {
-  if (error instanceof Error) {
-    return error.message;
-  }
-  if (typeof error === "string") {
-    return error;
-  }
-  if (
-    typeof error === "object" &&
-    error !== null &&
-    "message" in error &&
-    typeof (error as { message?: unknown }).message === "string"
-  ) {
-    return (error as { message: string }).message;
-  }
-  if (typeof error === "object" && error !== null) {
-    try {
-      return JSON.stringify(error);
-    } catch {
-      return "";
-    }
-  }
-  return "";
-}
-
-function shouldFallbackToPairList(error: unknown): boolean {
-  const message = normalizeOptionalLowercaseString(messageFromError(error)) ?? "";
-  if (!message.includes("node.list")) {
-    return false;
-  }
-  return (
-    message.includes("unknown method") ||
-    message.includes("method not found") ||
-    message.includes("not implemented") ||
-    message.includes("unsupported")
-  );
-}
-
 async function loadNodes(opts: GatewayCallOptions, signal?: AbortSignal): Promise<NodeListNode[]> {
   try {
     const res = await callGatewayTool("node.list", opts, {}, { signal });
     return parseNodeList(res);
   } catch (error) {
-    if (!shouldFallbackToPairList(error)) {
+    if (
+      !(error instanceof GatewayClientRequestError) ||
+      error.gatewayCode !== "INVALID_REQUEST" ||
+      error.retryable ||
+      error.message !== "unknown method: node.list" ||
+      (error.retryAfterMs !== undefined &&
+        (!Number.isInteger(error.retryAfterMs) || error.retryAfterMs < 0))
+    ) {
       throw error;
     }
     // Older gateways only expose paired-node state; preserve node tools until node.list exists.
@@ -85,11 +55,20 @@ function isLocalMacNode(node: NodeListNode): boolean {
   );
 }
 
-function compareDefaultNodeOrder(a: NodeListNode, b: NodeListNode): number {
-  const aConnectedAt = Number.isFinite(a.connectedAtMs) ? (a.connectedAtMs ?? 0) : -1;
-  const bConnectedAt = Number.isFinite(b.connectedAtMs) ? (b.connectedAtMs ?? 0) : -1;
-  if (aConnectedAt !== bConnectedAt) {
-    return bConnectedAt - aConnectedAt;
+function compareNewestTimestamp(a?: number, b?: number): number {
+  const aValue = Number.isFinite(a) ? (a ?? 0) : -1;
+  const bValue = Number.isFinite(b) ? (b ?? 0) : -1;
+  return bValue - aValue;
+}
+
+function compareDefaultNodeOrder(
+  a: NodeListNode,
+  b: NodeListNode,
+  recencyField: "connectedAtMs" | "lastSeenAtMs",
+): number {
+  const recencyOrder = compareNewestTimestamp(a[recencyField], b[recencyField]);
+  if (recencyOrder !== 0) {
+    return recencyOrder;
   }
   return a.nodeId.localeCompare(b.nodeId);
 }
@@ -126,10 +105,10 @@ export function selectDefaultNodeFromList(
     return null;
   }
 
-  const ordered = [...candidates].toSorted(compareDefaultNodeOrder);
-  // Multiple candidates — pick the first connected canvas-capable node.
-  // For A2UI and other canvas operations, any node works since multi-node
-  // setups broadcast surfaces across devices.
+  // Once the pool is known to be offline, stale connection timestamps must not
+  // outrank the durable last-seen signal used to choose the wake target.
+  const recencyField = connected.length > 0 ? "connectedAtMs" : "lastSeenAtMs";
+  const ordered = [...candidates].toSorted((a, b) => compareDefaultNodeOrder(a, b, recencyField));
   return ordered[0] ?? null;
 }
 
@@ -164,16 +143,16 @@ export function resolveNodeIdFromList(
 }
 
 /** Loads nodes from the Gateway and resolves the requested or default node id. */
-export async function resolveNodeId(
+export async function resolveAgentNodeId(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,
 ) {
-  return (await resolveNode(opts, query, allowDefault)).nodeId;
+  return (await resolveAgentNode(opts, query, allowDefault)).nodeId;
 }
 
 /** Loads nodes from the Gateway and returns the requested or default node record. */
-export async function resolveNode(
+export async function resolveAgentNode(
   opts: GatewayCallOptions,
   query?: string,
   allowDefault = false,

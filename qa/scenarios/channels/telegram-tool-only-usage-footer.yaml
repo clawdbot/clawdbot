@@ -2,11 +2,13 @@ title: Telegram tool-only usage footer
 
 scenario:
   id: telegram-tool-only-usage-footer
-  surface: channel-framework
-  category: channel-framework.channel-actions-commands-and-approvals
+  surface: channels
+  category: channels.channel-actions-commands-and-approvals
   coverage:
-    primary: [telemetry.model-usage]
-    secondary: [channels.native-commands]
+    primary:
+      - observability.model-usage
+    secondary:
+      - telegram.built-in-commands
   regressionRefs:
     - openclaw/openclaw#87392
   objective: Verify Telegram usage mode decorates a message-tool-only visible reply.
@@ -21,7 +23,6 @@ scenario:
     channel: telegram
     summary: Enable token usage mode, then verify the next Telegram reply footer.
     config:
-      requiredChannelDriver: live
       marker: QA-TELEGRAM-USAGE-FOOTER-OK
 
 flow:
@@ -33,8 +34,8 @@ flow:
             conversation: { id: telegram-command-room, kind: channel }
             senderId: qa-command-operator
             senderName: QA Command Operator
-            text:
-              expr: "transport.id === 'telegram' ? '/usage@openclaw tokens' : '/usage tokens'"
+            text: /usage tokens
+            nativeCommand: { name: usage }
         - waitForOutbound:
             conversation: { id: telegram-command-room, kind: channel }
             textIncludes: tokens
@@ -69,8 +70,8 @@ flow:
                   conversation: { id: telegram-command-room, kind: channel }
                   senderId: qa-command-operator
                   senderName: QA Command Operator
-                  text:
-                    expr: "transport.id === 'telegram' ? '/usage@openclaw off' : '/usage off'"
+                  text: /usage off
+                  nativeCommand: { name: usage }
               - waitForOutbound:
                   conversation: { id: telegram-command-room, kind: channel }
                   textIncludes: "Usage footer: off"

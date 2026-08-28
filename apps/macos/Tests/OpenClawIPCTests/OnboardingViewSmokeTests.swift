@@ -3,7 +3,6 @@ import Foundation
 import OpenClawDiscovery
 import OpenClawIPC
 import OpenClawKit
-import SwiftUI
 import Testing
 @testable import OpenClaw
 
@@ -32,13 +31,40 @@ private func makeOnboardingResumeDefaults() throws -> (UserDefaults, String) {
 @Suite(.serialized)
 @MainActor
 struct OnboardingViewSmokeTests {
-    @Test func `onboarding view builds body`() {
-        let state = AppState(preview: true)
-        let view = OnboardingView(
-            state: state,
-            permissionMonitor: PermissionMonitor.shared,
-            discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
-        _ = view.body
+    @Test func `discovered gateway summary uses localized runtime strings`() {
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 1) ==
+                "1 gateway found on your network — click to choose it.")
+        #expect(
+            OnboardingView.remoteChoiceSubtitle(discoveredGatewayCount: 2) ==
+                "2 gateways found on your network — click to choose one.")
+    }
+
+    @Test func `foreign local listener is not advertised as attachable`() {
+        let profile = AppProfile(environment: ["OPENCLAW_PROFILE": "p2380"])
+        let foreign = OnboardingView.LocalGatewayProbe(
+            port: profile.defaultGatewayPort,
+            pid: 1402,
+            command: "node",
+            profile: profile,
+            managedServicePID: 2380)
+        let managed = OnboardingView.LocalGatewayProbe(
+            port: profile.defaultGatewayPort,
+            pid: 2380,
+            command: "node",
+            profile: profile,
+            managedServicePID: 2380)
+        let inactiveUnexpected = OnboardingView.LocalGatewayProbe(
+            port: 18789,
+            pid: 3301,
+            command: "python",
+            profile: AppProfile(environment: [:]),
+            managedServicePID: nil)
+
+        #expect(foreign.subtitle ==
+            "Port 55636 already in use (node pid 1402). Choose a different Gateway port for profile p2380.")
+        #expect(managed.subtitle == "Existing gateway detected (node pid 2380). Will attach.")
+        #expect(inactiveUnexpected.subtitle == "Port 18789 already in use (python pid 3301). Will attach.")
     }
 
     @Test func `onboarding window resizes vertically and gives the page the extra height`() {
@@ -73,14 +99,27 @@ struct OnboardingViewSmokeTests {
         #expect(short < preferred)
     }
 
-    @Test func `page order delegates setup after inference to OpenClaw`() {
-        let order = OnboardingView.pageOrder(
+    @Test func `configured flows end at AI setup and hand off to the dashboard`() {
+        // Everything after working inference (memory import, permissions,
+        // channels, hatch) belongs to the dashboard custodian onboarding.
+        #expect(OnboardingView.pageOrder(
             for: .local,
-            requiresCLIInstall: false)
-        #expect(!order.contains(4))
-        #expect(!order.contains(7))
-        #expect(!order.contains(8))
-        #expect(order.contains(3))
+            requiresCLIInstall: true) == [0, 1, 2, 3])
+        #expect(OnboardingView.pageOrder(
+            for: .local,
+            requiresCLIInstall: false) == [0, 1, 3])
+        #expect(OnboardingView.pageOrder(
+            for: .remote,
+            requiresCLIInstall: true) == [0, 1, 2, 3])
+        #expect(OnboardingView.pageOrder(
+            for: .remote,
+            requiresCLIInstall: false) == [0, 1, 3])
+    }
+
+    @Test func `set up later keeps the native ready page`() {
+        #expect(OnboardingView.pageOrder(
+            for: .unconfigured,
+            requiresCLIInstall: false) == [0, 1, 9])
     }
 
     @Test func `fresh local setup installs CLI before inference setup`() {
@@ -100,12 +139,7 @@ struct OnboardingViewSmokeTests {
         #expect(!order.contains(2))
     }
 
-    @Test func `fresh remote setup installs CLI for the Mac node worker`() {
-        let order = OnboardingView.pageOrder(
-            for: .remote,
-            requiresCLIInstall: true)
-
-        #expect(order.contains(2))
+    @Test func `CLI install activates only a local gateway`() {
         #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
         #expect(OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .local))
     }
@@ -118,6 +152,7 @@ struct OnboardingViewSmokeTests {
 
         #expect(view.selectedConnectionMode == .local)
         #expect(view.isConnectionSelectionBlocking)
+        #expect(view.pageOrder == [0, 1, 2, 3])
         #expect(state.connectionMode == .unconfigured)
     }
 
@@ -129,6 +164,7 @@ struct OnboardingViewSmokeTests {
 
         #expect(view.selectedConnectionMode == .unconfigured)
         #expect(!view.isConnectionSelectionBlocking)
+        #expect(view.pageOrder == [0, 1, 9])
         #expect(state.connectionMode == .unconfigured)
     }
 
@@ -143,10 +179,25 @@ struct OnboardingViewSmokeTests {
         #expect(state.connectionMode == .local)
     }
 
+    @Test func `choosing another computer never commits the recommended local gateway`() {
+        let state = AppState(preview: true)
+        state.onboardingSeen = false
+        state.connectionMode = .unconfigured
+        let view = OnboardingView(state: state)
+
+        view.handleRemoteSelection()
+
+        #expect(view.selectedConnectionMode == .remote)
+        #expect(state.connectionMode == .remote)
+
+        view.commitRecommendedConnectionIfNeeded(for: view.connectionPageIndex)
+
+        #expect(state.connectionMode == .remote)
+    }
+
     @Test func `automatic CLI setup waits for the initial status probe`() {
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: false,
             executableReady: false,
@@ -154,7 +205,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: true,
             executableReady: false,
@@ -162,7 +212,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: false,
             statusKnown: true,
             executableReady: false,
@@ -170,7 +219,6 @@ struct OnboardingViewSmokeTests {
             installing: false))
         #expect(!OnboardingView.shouldAutoInstallCLI(
             onCLIPage: true,
-            isLocal: true,
             visible: true,
             statusKnown: true,
             executableReady: true,
@@ -178,47 +226,149 @@ struct OnboardingViewSmokeTests {
             installing: false))
     }
 
-    @Test func `detected CLI starts its gateway after this Mac is selected`() {
-        #expect(!OnboardingView.shouldStartExistingCLIActivation(
+    @Test func `detected CLI follows the selected onboarding connection mode`() {
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .remote,
+            executableReady: true,
+            installing: false) == .remote)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .local,
+            executableReady: true,
+            installing: false) == .local)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .unconfigured,
+            executableReady: true,
+            installing: false) == nil)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .local,
+            executableReady: true,
+            installing: true) == nil)
+        #expect(OnboardingView.existingCLISetupMode(
+            connectionMode: .remote,
+            executableReady: false,
+            installing: false) == nil)
+        #expect(!OnboardingView.shouldActivateLocalGateway(afterCLIInstallFor: .remote))
+    }
+
+    @Test func `paused gateway keeps CLI setup and recovery visible after every install path`() {
+        for afterFreshInstall in [false, true] {
+            let outcome = OnboardingView.localGatewayActivationOutcome(
+                .deferred,
+                afterFreshInstall: afterFreshInstall)
+
+            #expect(!outcome.ready)
+            #expect(OnboardingView.pageOrder(for: .local, requiresCLIInstall: !outcome.ready) == [0, 1, 2, 3])
+            #expect(outcome.status == "OpenClaw is paused. Resume it, then retry setup to start the Gateway.")
+        }
+    }
+
+    @Test func `local gateway activation preserves readiness and concrete failure reasons`() {
+        for afterFreshInstall in [false, true] {
+            let ready = OnboardingView.localGatewayActivationOutcome(
+                .ready,
+                afterFreshInstall: afterFreshInstall)
+            #expect(ready.ready)
+            #expect(ready.status == "OpenClaw Gateway is ready.")
+
+            let failure = OnboardingView.localGatewayActivationOutcome(
+                .failed(reason: "launchd disabled"),
+                afterFreshInstall: afterFreshInstall)
+            #expect(!failure.ready)
+            #expect(failure.status == (afterFreshInstall
+                    ? "OpenClaw was installed, but the Gateway did not start. Retry setup. (launchd disabled)"
+                    : "OpenClaw is installed, but the Gateway did not start. Retry setup. (launchd disabled)"))
+        }
+    }
+
+    @Test func `later gateway readiness revises a pinned CLI activation failure`() {
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .attachedExisting(details: "pid 4242"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .failed("still unavailable"),
+            isLocal: true,
+            executableReady: true,
+            installed: false))
+        #expect(!OnboardingView.shouldReviseCLIActivationFailure(
+            gatewayStatus: .running(details: nil),
             isLocal: false,
             executableReady: true,
-            installing: false))
-        #expect(OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: true,
-            executableReady: true,
-            installing: false))
-        #expect(!OnboardingView.shouldStartExistingCLIActivation(
-            isLocal: true,
-            executableReady: true,
-            installing: true))
+            installed: false))
+    }
+
+    @Test func `running local gateway resolves only its pending CLI install prompt`() {
+        for status in [GatewayProcessManager.Status.running(details: nil), .attachedExisting(details: "pid 4242")] {
+            #expect(OnboardingView.shouldResolveInstallPromptForRunningGateway(
+                gatewayStatus: status,
+                isLocal: true,
+                phase: .choosingTarget))
+        }
+        for status in [GatewayProcessManager.Status.starting, .stopped, .failed("unavailable")] {
+            #expect(!OnboardingView.shouldResolveInstallPromptForRunningGateway(
+                gatewayStatus: status,
+                isLocal: true,
+                phase: .choosingTarget))
+        }
+        for mode in [AppState.ConnectionMode.remote, .unconfigured] {
+            #expect(!OnboardingView.shouldResolveInstallPromptForRunningGateway(
+                gatewayStatus: .running(details: nil),
+                isLocal: mode == .local,
+                phase: .choosingTarget))
+        }
+        for phase in [OnboardingView.CLIInstallPhase.idle, .installing, .startingService] {
+            #expect(!OnboardingView.shouldResolveInstallPromptForRunningGateway(
+                gatewayStatus: .running(details: nil),
+                isLocal: true,
+                phase: phase))
+        }
+    }
+
+    @Test func `gateway start failure message retains the concrete reason`() {
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: "launchd disabled") ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup. (launchd disabled)")
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: nil) ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup.")
+        #expect(
+            OnboardingView.gatewayStartFailureMessage(
+                prefix: "OpenClaw was installed, but the Gateway did not start. Retry setup.",
+                reason: "") ==
+                "OpenClaw was installed, but the Gateway did not start. Retry setup.")
     }
 
     @Test func `connection mode change restarts full page monitoring`() {
         let state = AppState(preview: true)
         let view = OnboardingView(state: state)
         var monitoredPage: Int?
-        let previousSystemAgentChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "route-bound"
-        view.systemAgentState.isPresented = true
 
         view.handleConnectionModeChange { pageIndex in
             monitoredPage = pageIndex
         }
 
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat !== previousSystemAgentChat)
         #expect(monitoredPage == view.activePageIndex)
     }
 
-    @Test func `gateway route reset returns later pages to inference setup`() throws {
+    @Test func `gateway route reset keeps the AI page blocking until inference verifies`() throws {
         let order = OnboardingView.pageOrder(
             for: .remote,
             requiresCLIInstall: false)
-        let permissionsCursor = try #require(order.firstIndex(of: 5))
         let aiCursor = try #require(order.firstIndex(of: 3))
         let resetCursor = OnboardingView.pageCursorAfterGatewayReset(
-            currentPage: permissionsCursor,
+            currentPage: order.count - 1,
             pageOrder: order,
             aiPageIndex: 3)
 
@@ -243,7 +393,6 @@ struct OnboardingViewSmokeTests {
             state.remoteTarget = "user@old-host:2222"
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName))
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Unresolved",
@@ -284,12 +433,9 @@ struct OnboardingViewSmokeTests {
             state.connectionMode = .remote
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
-            let priorChat = view.systemAgentState.chat
             view.aiSetup.manualKey = "route-a-secret"
-            view.systemAgentState.isPresented = true
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Gateway B",
                 serviceHost: nil,
@@ -307,8 +453,6 @@ struct OnboardingViewSmokeTests {
 
             #expect(state.connectionMode == .remote)
             #expect(view.aiSetup.manualKey.isEmpty)
-            #expect(!view.systemAgentState.isPresented)
-            #expect(view.systemAgentState.chat !== priorChat)
             #expect(!OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-b",
                 defaults: defaults))
@@ -346,9 +490,9 @@ struct OnboardingViewSmokeTests {
         view.aiSetup.manualKey = "route-a-secret"
         view.aiSetup.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
         view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
-        let priorChat = view.systemAgentState.chat
-        view.systemAgentState.isPresented = true
-        view.remoteProbeState = .ok(RemoteGatewayProbeSuccess(authSource: .sharedToken))
+        view.remoteProbeState = .ok(
+            view.remoteGatewayProbeInput,
+            RemoteGatewayProbeSuccess(authSource: .sharedToken))
         view.remoteAuthIssue = .tokenMismatch
 
         view.updateManualRemoteURL("wss://gateway-b.example.test")
@@ -369,8 +513,6 @@ struct OnboardingViewSmokeTests {
         #expect(view.aiSetup.phase == .idle)
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat !== priorChat)
         #expect(view.remoteProbeState == .idle)
         #expect(view.remoteAuthIssue == nil)
         #expect(gatewaySession.snapshotMakeCount() == 0)
@@ -397,12 +539,9 @@ struct OnboardingViewSmokeTests {
             state.connectionMode = .remote
             let view = OnboardingView(
                 state: state,
-                permissionMonitor: PermissionMonitor.shared,
                 discoveryModel: GatewayDiscoveryModel(localDisplayName: InstanceIdentity.displayName),
                 systemAgentDefaults: defaults)
-            let priorChat = view.systemAgentState.chat
             view.aiSetup.manualKey = "pending-secret"
-            view.systemAgentState.isPresented = true
             let gateway = GatewayDiscoveryModel.DiscoveredGateway(
                 displayName: "Gateway A",
                 serviceHost: nil,
@@ -419,8 +558,6 @@ struct OnboardingViewSmokeTests {
             view.selectRemoteGateway(gateway)
 
             #expect(view.aiSetup.manualKey == "pending-secret")
-            #expect(view.systemAgentState.isPresented)
-            #expect(view.systemAgentState.chat === priorChat)
             #expect(OnboardingSystemAgentResumeStore.isPending(
                 for: "remote:id:gateway-a",
                 defaults: defaults))
@@ -441,16 +578,12 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         state.connectionMode = .remote
         let view = OnboardingView(state: state, systemAgentDefaults: defaults)
-        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "route-a-secret"
-        view.systemAgentState.isPresented = true
 
         view.selectLocalGateway()
 
         #expect(state.connectionMode == .local)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat !== priorChat)
         #expect(!OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
         #expect(OnboardingSystemAgentResumeStore.isPending(
             for: "remote:id:gateway-a",
@@ -464,15 +597,11 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         state.connectionMode = .local
         let view = OnboardingView(state: state, systemAgentDefaults: defaults)
-        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "pending-secret"
-        view.systemAgentState.isPresented = true
 
         view.selectLocalGateway()
 
         #expect(view.aiSetup.manualKey == "pending-secret")
-        #expect(view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat === priorChat)
         #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 
@@ -483,16 +612,12 @@ struct OnboardingViewSmokeTests {
         let state = AppState(preview: true)
         state.connectionMode = .local
         let view = OnboardingView(state: state, systemAgentDefaults: defaults)
-        let priorChat = view.systemAgentState.chat
         view.aiSetup.manualKey = "local-secret"
-        view.systemAgentState.isPresented = true
 
         view.selectUnconfiguredGateway()
 
         #expect(state.connectionMode == .unconfigured)
         #expect(view.aiSetup.manualKey.isEmpty)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat !== priorChat)
         #expect(OnboardingSystemAgentResumeStore.isPending(for: "local", defaults: defaults))
     }
 

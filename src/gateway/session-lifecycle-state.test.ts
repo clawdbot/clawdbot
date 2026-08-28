@@ -2,11 +2,18 @@
  * Session lifecycle state derivation tests.
  */
 import { describe, expect, it, vi } from "vitest";
-import type { SessionEntry } from "../config/sessions.js";
+import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
+import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 
 const persistenceMocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   updateSessionEntry: vi.fn(),
+}));
+const loggerMocks = vi.hoisted(() => ({
+  debug: vi.fn(),
+  error: vi.fn(),
+  info: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
@@ -15,6 +22,10 @@ vi.mock("../config/sessions/session-accessor.js", () => ({
 
 vi.mock("./session-utils.js", () => ({
   loadSessionEntry: persistenceMocks.loadSessionEntry,
+}));
+
+vi.mock("../logging/subsystem.js", () => ({
+  createSubsystemLogger: () => loggerMocks,
 }));
 
 import {
@@ -104,7 +115,12 @@ async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Pro
 describe("session lifecycle state", () => {
   it("treats a pre-reset run's lifecycle event as stale once the row's sessionId rotated (#88538)", () => {
     expect(
-      isStaleLifecycleEventForSession({ owningSessionId: "old-id", currentSessionId: "new-id" }),
+      isStaleLifecycleEventForSession({
+        owningSessionId: "old-id",
+        currentSessionId: "new-id",
+        eventRunId: "same-run",
+        currentRunId: "same-run",
+      }),
     ).toBe(true);
   });
 
@@ -121,6 +137,157 @@ describe("session lifecycle state", () => {
   });
 
   it.each([
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 100, stale: true },
+    { eventRunId: "run-a", currentRunId: "run-a", eventStartedAt: 100, stale: false },
+    { eventRunId: "run-a", currentRunId: "run-b", eventStartedAt: 100, stale: true },
+    { eventRunId: "run-a", currentRunId: undefined, eventStartedAt: 100, stale: true },
+    { eventRunId: undefined, currentRunId: "run-a", eventStartedAt: 100, stale: true },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 200, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: 300, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: undefined, stale: false },
+    { eventRunId: undefined, currentRunId: undefined, eventStartedAt: Number.NaN, stale: false },
+  ])(
+    "correlates explicit same-session run start times",
+    ({ eventRunId, currentRunId, eventStartedAt, stale }) => {
+      expect(
+        isStaleLifecycleEventForSession({
+          owningSessionId: "session-id",
+          currentSessionId: "session-id",
+          eventRunId,
+          currentRunId,
+          eventStartedAt,
+          currentStartedAt: 200,
+        }),
+      ).toBe(stale);
+    },
+  );
+
+  it.each(["end", "error"] as const)(
+    "ignores an older overlapping run's late %s while preserving the newer owner",
+    async (phase) => {
+      const first = await persistLifecycle(
+        { sessionId: "session-id", updatedAt: 900 },
+        {
+          ts: 1_000,
+          sessionId: "session-id",
+          runId: "run-a",
+          data: { phase: "start", startedAt: 1_000 },
+        },
+      );
+      const second = await persistLifecycle(first, {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "run-b",
+        data: { phase: "start", startedAt: 2_000 },
+      });
+      expect(second.lifecycleRunId).toBe("run-b");
+      const afterOlderTerminal = await persistLifecycle(second, {
+        ts: 3_000,
+        sessionId: "session-id",
+        runId: "run-a",
+        data: {
+          phase,
+          startedAt: 1_000,
+          endedAt: 3_000,
+          ...(phase === "error" ? { error: "older run failed" } : {}),
+        },
+      });
+
+      expect(afterOlderTerminal).toMatchObject({ status: "running", startedAt: 2_000 });
+      expect(afterOlderTerminal.lifecycleRunId).toBe("run-b");
+      expect(afterOlderTerminal.endedAt).toBeUndefined();
+      expect(afterOlderTerminal.lastRunError).toBeUndefined();
+
+      const completed = await persistLifecycle(afterOlderTerminal, {
+        ts: 4_000,
+        sessionId: "session-id",
+        runId: "run-b",
+        data: { phase: "end", startedAt: 2_000, endedAt: 4_000 },
+      });
+      expect(completed).toMatchObject({
+        status: "done",
+        startedAt: 2_000,
+        endedAt: 4_000,
+        runtimeMs: 2_000,
+      });
+      expect(completed.lifecycleRunId).toBeUndefined();
+      expect(completed.lastRunId).toBe("run-b");
+    },
+  );
+
+  it("settles a same-run terminal event whose outer start time predates its embedded start", async () => {
+    const started = await persistLifecycle(
+      { sessionId: "session-id", updatedAt: 900 },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "run-a",
+        data: { phase: "start", startedAt: 2_000 },
+      },
+    );
+    const completed = await persistLifecycle(started, {
+      ts: 3_000,
+      sessionId: "session-id",
+      runId: "run-a",
+      data: { phase: "end", startedAt: 1_900, endedAt: 3_000 },
+    });
+
+    expect(completed).toMatchObject({
+      status: "done",
+      startedAt: 1_900,
+      endedAt: 3_000,
+      runtimeMs: 1_100,
+    });
+    expect(completed.lifecycleRunId).toBeUndefined();
+  });
+
+  it("keeps provider lifecycle ownership while recording the client terminal run", async () => {
+    const started = await persistLifecycle(
+      { sessionId: "session-id", updatedAt: 900 },
+      {
+        ts: 1_000,
+        sessionId: "session-id",
+        runId: "provider-run",
+        clientRunId: "client-run",
+        data: { phase: "start", startedAt: 1_000 },
+      },
+    );
+    expect(started.lifecycleRunId).toBe("provider-run");
+
+    const completed = await persistLifecycle(started, {
+      ts: 2_000,
+      sessionId: "session-id",
+      runId: "provider-run",
+      clientRunId: "client-run",
+      data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+    });
+
+    expect(completed.lifecycleRunId).toBeUndefined();
+    expect(completed.lastRunId).toBe("client-run");
+  });
+
+  it("clears inherited run ownership when a start event has no run id", async () => {
+    const started = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 900,
+        status: "running",
+        startedAt: 900,
+        lifecycleRunId: "old-run",
+        lastRunId: "old-run",
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: { phase: "start", startedAt: 2_000 },
+      },
+    );
+
+    expect(started.lifecycleRunId).toBeUndefined();
+    expect(started.lastRunId).toBeUndefined();
+  });
+
+  it.each([
     {
       name: "aborted",
       data: { phase: "end", endedAt: 1_800, stopReason: "aborted" },
@@ -128,10 +295,10 @@ describe("session lifecycle state", () => {
       abortedLastRun: true,
     },
     {
-      name: "timeout",
+      name: "signal-only cancellation",
       data: { phase: "end", endedAt: 1_800, aborted: true },
-      status: "timeout",
-      abortedLastRun: false,
+      status: "killed",
+      abortedLastRun: true,
     },
     {
       name: "provider timeout",
@@ -174,7 +341,7 @@ describe("session lifecycle state", () => {
         livenessState: "paused",
         stopReason: "end_turn",
       },
-      status: "timeout",
+      status: "failed",
       abortedLastRun: false,
     },
   ] as const)("persists $name terminal state", async ({ data, status, abortedLastRun }) => {
@@ -197,7 +364,43 @@ describe("session lifecycle state", () => {
     });
   });
 
+  it("persists a compact failure reason and clears it when a new run starts", async () => {
+    const failed = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: {
+          phase: "error",
+          endedAt: 1_800,
+          error: `Provider credits exhausted\n${"details ".repeat(40)}`,
+        },
+      },
+    );
+
+    expect(failed.status).toBe("failed");
+    expect(failed.lastRunError).toMatch(/^Provider credits exhausted details/);
+    expect(failed.lastRunError?.length).toBeLessThanOrEqual(160);
+    expect(failed.lastRunError).not.toContain("\n");
+
+    const restarted = await persistLifecycle(failed, {
+      ts: 2_100,
+      sessionId: "session-id",
+      data: { phase: "start", startedAt: 2_100 },
+    });
+    expect(restarted.status).toBe("running");
+    expect(restarted.lastRunError).toBeUndefined();
+  });
+
   it("keeps an explicitly yielded parent pending until continuation starts", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    loggerMocks.info.mockClear();
+    loggerMocks.warn.mockClear();
     const yielded = await persistLifecycle(
       {
         sessionId: "session-id",
@@ -208,6 +411,9 @@ describe("session lifecycle state", () => {
       {
         ts: 2_000,
         sessionId: "session-id",
+        runId: "yielded-recovery-run",
+        lifecycleGeneration,
+        mainSessionRestartRecovery: true,
         data: {
           phase: "end",
           endedAt: 1_800,
@@ -224,6 +430,8 @@ describe("session lifecycle state", () => {
       runtimeMs: 750,
       abortedLastRun: false,
     });
+    expect(loggerMocks.info).not.toHaveBeenCalled();
+    expect(loggerMocks.warn).not.toHaveBeenCalled();
 
     const resumed = await persistLifecycle(yielded, {
       ts: 2_100,
@@ -258,6 +466,11 @@ describe("session lifecycle state", () => {
   });
 
   it("preserves recovery state for a late interrupted-run event", async () => {
+    const mainRestartRecovery = {
+      cycleId: "cycle-1",
+      revision: 2,
+      chargedAttempts: 2,
+    };
     const persisted = await persistLifecycle(
       {
         sessionId: "session-id",
@@ -265,6 +478,7 @@ describe("session lifecycle state", () => {
         status: "running",
         abortedLastRun: true,
         restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+        mainRestartRecovery,
       },
       {
         ts: 2_000,
@@ -279,7 +493,248 @@ describe("session lifecycle state", () => {
       status: "running",
       abortedLastRun: true,
       restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+      mainRestartRecovery,
     });
+  });
+
+  it("ignores an unidentified completion while recovery remains pending", async () => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        lifecycleRunId: "foreground-run",
+        abortedLastRun: true,
+        restartRecoveryRuns: [{ runId: "restart-run", lifecycleGeneration: "pre-restart" }],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+    });
+    expect(persisted.restartRecoveryRuns).toEqual([
+      { runId: "restart-run", lifecycleGeneration: "pre-restart" },
+    ]);
+    expect(persisted.mainRestartRecovery).toMatchObject({ cycleId: "cycle-1" });
+  });
+
+  it("applies the terminal snapshot for the foreground owner run", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
+          { runId: "foreground-run", lifecycleGeneration },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+          foregroundClaims: {
+            lifecycleGeneration,
+            tokens: ["owner-claim"],
+            runIdsByClaimId: { "owner-claim": "foreground-run" },
+          },
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "foreground-run",
+        lifecycleGeneration,
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "done",
+      endedAt: 1_800,
+      abortedLastRun: false,
+    });
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+    expect(persisted.lifecycleRunId).toBeUndefined();
+  });
+
+  it("clears every generation of a resumed run when its current owner completes", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        lifecycleRunId: "recovery-run",
+        abortedLastRun: false,
+        restartRecoveryRuns: [
+          { runId: "recovery-run", lifecycleGeneration: "pre-restart" },
+          { runId: "recovery-run", lifecycleGeneration },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 5,
+          chargedAttempts: 2,
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "recovery-run",
+        lifecycleGeneration,
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "done",
+      endedAt: 1_800,
+      abortedLastRun: false,
+    });
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+    expect(persisted.lifecycleRunId).toBeUndefined();
+  });
+
+  it("reports an exact recovery run's terminal outcome after persistence", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    loggerMocks.warn.mockClear();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        lifecycleRunId: "recovery-run",
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryRuns: [
+          { runId: "recovery-run", lifecycleGeneration: "pre-restart" },
+          { runId: "recovery-run", lifecycleGeneration },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 5,
+          chargedAttempts: 2,
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "recovery-run",
+        lifecycleGeneration,
+        mainSessionRestartRecovery: true,
+        data: { phase: "error", endedAt: 1_800, error: "provider failed" },
+      },
+    );
+
+    expect(persisted.status).toBe("failed");
+    expect(persisted.mainRestartRecovery).toBeUndefined();
+    expect(persisted.restartRecoveryRuns).toBeUndefined();
+    expect(loggerMocks.warn).toHaveBeenCalledWith(
+      "main-session restart recovery terminal: session=agent:main:main run=recovery-run status=error reason=failed",
+    );
+  });
+
+  it("keeps an active recovery when an older same-run terminal arrives", async () => {
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        lifecycleRunId: "recovery-run",
+        abortedLastRun: false,
+        restartRecoveryDeliveryRunId: "recovery-run",
+        restartRecoveryRuns: [
+          { runId: "recovery-run", lifecycleGeneration: "pre-restart" },
+          { runId: "recovery-run", lifecycleGeneration },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 5,
+          chargedAttempts: 2,
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "recovery-run",
+        lifecycleGeneration: "pre-restart",
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "running",
+      abortedLastRun: false,
+      restartRecoveryDeliveryRunId: "recovery-run",
+      restartRecoveryRuns: [{ runId: "recovery-run", lifecycleGeneration }],
+      mainRestartRecovery: { cycleId: "cycle-1" },
+    });
+    expect(persisted.restartRecoveryTerminalRunIds).toBeUndefined();
+    expect(persisted.lifecycleRunId).toBe("recovery-run");
+  });
+
+  it("does not settle a foreground owner from a stale lifecycle generation", async () => {
+    const persisted = await persistLifecycle(
+      {
+        sessionId: "session-id",
+        updatedAt: 1_000,
+        startedAt: 1_050,
+        status: "running",
+        lifecycleRunId: "foreground-run",
+        abortedLastRun: true,
+        restartRecoveryRuns: [
+          { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
+          { runId: "foreground-run", lifecycleGeneration: "pre-restart" },
+        ],
+        mainRestartRecovery: {
+          cycleId: "cycle-1",
+          revision: 2,
+          chargedAttempts: 2,
+          foregroundClaims: {
+            lifecycleGeneration: "pre-restart",
+            tokens: ["owner-claim"],
+            runIdsByClaimId: { "owner-claim": "foreground-run" },
+          },
+        },
+      },
+      {
+        ts: 2_000,
+        sessionId: "session-id",
+        runId: "foreground-run",
+        lifecycleGeneration: "pre-restart",
+        data: { phase: "end", endedAt: 1_800 },
+      },
+    );
+
+    expect(persisted).toMatchObject({
+      status: "running",
+      abortedLastRun: true,
+      restartRecoveryRuns: [{ runId: "interrupted-run", lifecycleGeneration: "pre-restart" }],
+      mainRestartRecovery: {
+        foregroundClaims: { tokens: ["owner-claim"] },
+      },
+    });
+    expect(persisted.lifecycleRunId).toBe("foreground-run");
   });
 
   it("clears only the completed recovery marker", async () => {
@@ -289,6 +744,7 @@ describe("session lifecycle state", () => {
         updatedAt: 1_000,
         startedAt: 1_050,
         status: "running",
+        lifecycleRunId: "interrupted-run",
         abortedLastRun: true,
         restartRecoveryRuns: [
           { runId: "completed-run", lifecycleGeneration: "pre-restart" },
@@ -308,6 +764,7 @@ describe("session lifecycle state", () => {
       { runId: "interrupted-run", lifecycleGeneration: "pre-restart" },
     ]);
     expect(persisted.status).toBe("running");
+    expect(persisted.lifecycleRunId).toBe("interrupted-run");
   });
 
   it.each([

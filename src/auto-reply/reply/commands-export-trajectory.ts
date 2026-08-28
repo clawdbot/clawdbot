@@ -144,6 +144,7 @@ function buildTrajectoryExportApprovalRequest(
       config: params.cfg,
     });
   return {
+    approvalKind: "exec",
     id: "trajectory-export-private-route",
     request: {
       command: request.command,
@@ -166,7 +167,7 @@ async function requestTrajectoryExportApproval(
   request: TrajectoryExportExecRequest,
   options: { privateApprovalTarget?: PrivateCommandRouteTarget } = {},
 ): Promise<string> {
-  const timeoutSec = params.cfg.tools?.exec?.timeoutSec;
+  const timeoutSec = params.cfg.tools?.exec?.timeoutSeconds;
   const agentId =
     params.agentId ??
     resolveSessionAgentId({
@@ -203,7 +204,7 @@ async function requestTrajectoryExportApproval(
       security: "allowlist",
       ask: "always",
       background: true,
-      timeout: timeoutSec,
+      timeoutSeconds: timeoutSec,
     });
     return [
       `Trajectory bundle: requested \`${request.displayCommand}\` through exec approval. Approve once to create the bundle; do not use allow-all for trajectory exports.`,

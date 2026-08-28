@@ -1,7 +1,7 @@
 /** Discovers plugin-declared environment variable names for channel credential setup. */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { appendUniqueEnvVarCandidates } from "../shared/env-var-candidates.js";
 
 type ChannelEnvVarLookupParams = {
@@ -20,22 +20,22 @@ type ChannelEnvVarLookupParams = {
 function resolveChannelEnvVars(
   params?: ChannelEnvVarLookupParams,
 ): Record<string, readonly string[]> {
-  const snapshot = loadPluginMetadataSnapshot({
-    config: params?.config ?? {},
+  const snapshot = resolvePluginMetadataSnapshot({
+    config: params?.config,
     workspaceDir: params?.workspaceDir,
     env: params?.env ?? process.env,
   });
   const candidates: Record<string, string[]> = {};
   for (const plugin of snapshot.plugins) {
-    if (!plugin.channelEnvVars) {
+    const channelId = plugin.packageChannel?.id?.trim();
+    const channelEnv = plugin.packageChannel?.configuredState?.env;
+    if (!channelId || !channelEnv) {
       continue;
     }
-    // Sort channel ids before merging so prompt/test snapshots do not depend on manifest order.
-    for (const [channelId, keys] of Object.entries(plugin.channelEnvVars).toSorted(
-      ([left], [right]) => left.localeCompare(right),
-    )) {
-      appendUniqueEnvVarCandidates(candidates, channelId, keys);
-    }
+    appendUniqueEnvVarCandidates(candidates, channelId, [
+      ...(channelEnv.allOf ?? []),
+      ...(channelEnv.anyOf ?? []),
+    ]);
   }
   return candidates;
 }

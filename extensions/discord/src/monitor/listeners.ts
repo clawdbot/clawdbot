@@ -4,20 +4,22 @@ import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
 import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
+  type DiscordMessageDispatchData,
   GuildCreateListener,
   GuildDeleteListener,
   InteractionCreateListener,
   MessageCreateListener,
   PresenceUpdateListener,
   ReadyListener,
+  ThreadDeleteListener,
   ThreadUpdateListener,
 } from "../internal/discord.js";
-import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
-export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
+import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
+import { discordEventQueueLog, runDiscordListenerWithSlowLog } from "./listeners.queue.js";
 import { clearPresences, setPresence } from "./presence-cache.js";
 import { openDiscordPresenceCooldownStore } from "./presence-cooldown-store.js";
 import {
@@ -32,15 +34,18 @@ import {
 } from "./presence-events.js";
 import { DiscordPresenceBaselineCache } from "./presence-transition-cache.js";
 import { isThreadArchived } from "./thread-bindings.discord-api.js";
+import { getThreadBindingManager } from "./thread-bindings.manager.js";
 import { closeDiscordThreadSessions } from "./thread-session-close.js";
+export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listeners.reactions.js";
 
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
-export type DiscordMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+type DiscordRawMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+export type DiscordMessageEvent = DiscordMessageDispatchData;
 type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
 
 export type DiscordMessageHandler = (
-  data: DiscordMessageEvent,
+  data: DiscordRawMessageEvent,
   client: Client,
   options?: { abortSignal?: AbortSignal },
 ) => Promise<void>;
@@ -62,16 +67,16 @@ export class DiscordMessageListener extends MessageCreateListener {
     super();
   }
 
-  async handle(data: DiscordMessageEvent, client: Client) {
+  async handle(data: DiscordRawMessageEvent, client: Client) {
     this.onEvent?.();
-    // Fire-and-forget: hand off to the handler without blocking gateway dispatch.
-    // Per-session ordering is owned by the message run queue.
-    void Promise.resolve()
-      .then(() => this.handler(data, client))
-      .catch((err: unknown) => {
-        const logger = this.logger ?? discordEventQueueLog;
-        logger.error(danger(`discord handler failed: ${String(err)}`));
-      });
+    // This awaits only the durable append. Agent dispatch remains detached behind
+    // the ingress drain, so later gateway events never wait for a model turn.
+    try {
+      await this.handler(data, client);
+    } catch (err) {
+      const logger = this.logger ?? discordEventQueueLog;
+      logger.error(danger(`discord handler failed: ${String(err)}`));
+    }
   }
 }
 
@@ -291,24 +296,8 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       return;
     }
 
-    const fetchedUserIsBot =
-      data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
-    if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
-      return;
-    }
-    if (fetchedUserIsBot) {
-      this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
-      return;
-    }
-    const route = resolveAgentRoute({
-      cfg: this.params.cfg,
-      channel: "discord",
-      accountId: this.params.accountId,
-      guildId: data.guild_id,
-      peer: { kind: "channel", id: presenceEvent.channelId },
-    });
-    // Reserve only after fallible user lookup and routing. Release the slot unless an event is
-    // actually queued; rejected attempts must remain retryable and must not crowd out humans.
+    // Reserve before Discord REST lookups so a presence storm cannot bypass the burst cap by
+    // filling the permission queue. Release every unqueued attempt; commit only after enqueue.
     const burstNowMs = this.params.nowMs?.() ?? Date.now();
     const burstGate = this.emissionGate.reserveBurst(data.guild_id, burstNowMs, gateOptions);
     if (!burstGate.allowed) {
@@ -320,33 +309,71 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
           guildId: data.guild_id,
         });
       }
+      if (burstGate.reason === "burst-pending") {
+        // Pending permission checks cap REST concurrency, but they are not emitted greetings.
+        // Keep this member retryable after a lookup settles instead of advancing its baseline.
+        return;
+      }
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
       return;
     }
     const burstReservation = burstGate.reservation;
+    let burstCommitted = false;
+    let cooldownReserved = false;
     try {
-      // Reserve only after fallible Discord lookups. Rejecting at capacity preserves every live
-      // cooldown; skipping this wake is safer than allowing a duplicate greeting.
-      const reserved = this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
-        ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
-      });
-      if (!reserved) {
-        this.emissionGate.releaseBurst(data.guild_id, burstReservation);
-        // Another live listener won the durable claim while this one awaited Discord. Treat the
-        // member as online locally so overlapping provider generations cannot retry the greeting.
+      const fetchedUserIsBot =
+        data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
+      if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
+        return;
+      }
+      if (fetchedUserIsBot) {
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
       }
-    } catch (err) {
-      this.emissionGate.releaseBurst(data.guild_id, burstReservation);
-      const logger = this.params.logger ?? discordEventQueueLog;
-      logger.warn(danger(`discord presence cooldown persistence failed: ${String(err)}`));
-      return;
-    }
-    let queued: boolean;
-    try {
-      queued = enqueueSystemEvent(presenceEvent.text, {
-        sessionKey: route.sessionKey,
+      const canViewTargetChannel = await canViewDiscordGuildChannel(
+        data.guild_id,
+        presenceEvent.channelId,
+        userId,
+        {
+          cfg: this.params.cfg,
+          accountId: this.params.accountId,
+          rest: client.rest,
+        },
+      );
+      if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
+        return;
+      }
+      if (!canViewTargetChannel) {
+        // Presence is guild-wide. Require target-channel visibility so private channel greetings
+        // cannot be triggered by unrelated guild members.
+        this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+        return;
+      }
+      const route = resolveAgentRoute({
+        cfg: this.params.cfg,
+        channel: "discord",
+        accountId: this.params.accountId,
+        guildId: data.guild_id,
+        peer: { kind: "channel", id: presenceEvent.channelId },
+      });
+
+      try {
+        cooldownReserved = this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
+          ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
+        });
+        if (!cooldownReserved) {
+          // Another live listener won the durable claim while this one awaited Discord. Treat the
+          // member as online locally so overlapping provider generations cannot retry the greeting.
+          this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+          return;
+        }
+      } catch (err) {
+        const logger = this.params.logger ?? discordEventQueueLog;
+        logger.warn(danger(`discord presence cooldown persistence failed: ${String(err)}`));
+        return;
+      }
+
+      const queued = enqueueRoutedSystemEvent(presenceEvent.text, route, {
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
         deliveryContext: {
           channel: "discord",
@@ -354,33 +381,36 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
           accountId: this.params.accountId,
         },
       });
-    } catch (err) {
-      this.emissionGate.releaseBurst(data.guild_id, burstReservation);
-      if (this.cooldownStore.lookup(presenceKey) === nowMs) {
+      if (!queued) {
+        return;
+      }
+      this.emissionGate.commitBurst(
+        data.guild_id,
+        burstReservation,
+        this.params.nowMs?.() ?? Date.now(),
+      );
+      burstCommitted = true;
+      this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+      requestHeartbeat({
+        source: "notifications-event",
+        intent: "immediate",
+        reason: "wake",
+        agentId: route.agentId,
+        sessionKey: route.sessionKey,
+        heartbeat: {
+          target: "discord",
+          to: `channel:${presenceEvent.channelId}`,
+          accountId: this.params.accountId,
+        },
+      });
+    } finally {
+      if (!burstCommitted) {
+        this.emissionGate.releaseBurst(data.guild_id, burstReservation);
+      }
+      if (cooldownReserved && !burstCommitted && this.cooldownStore.lookup(presenceKey) === nowMs) {
         this.cooldownStore.delete(presenceKey);
       }
-      throw err;
     }
-    if (!queued) {
-      this.emissionGate.releaseBurst(data.guild_id, burstReservation);
-      if (this.cooldownStore.lookup(presenceKey) === nowMs) {
-        this.cooldownStore.delete(presenceKey);
-      }
-      return;
-    }
-    this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
-    requestHeartbeat({
-      source: "notifications-event",
-      intent: "immediate",
-      reason: "wake",
-      agentId: route.agentId,
-      sessionKey: route.sessionKey,
-      heartbeat: {
-        target: "discord",
-        to: `channel:${presenceEvent.channelId}`,
-        accountId: this.params.accountId,
-      },
-    });
   }
 
   private isCurrentGeneration(
@@ -445,7 +475,6 @@ type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
 export class DiscordThreadUpdateListener extends ThreadUpdateListener {
   constructor(
     private cfg: OpenClawConfig,
-    private accountId: string,
     private logger?: Logger,
   ) {
     super();
@@ -470,7 +499,6 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
         const logger = this.logger ?? discordEventQueueLog;
         const count = await closeDiscordThreadSessions({
           cfg: this.cfg,
-          accountId: this.accountId,
           threadId,
         });
         if (count > 0) {
@@ -480,6 +508,46 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
       onError: (err) => {
         const logger = this.logger ?? discordEventQueueLog;
         logger.error(danger(`discord thread-update handler failed: ${String(err)}`));
+      },
+    });
+  }
+}
+
+type ThreadDeleteEvent = Parameters<ThreadDeleteListener["handle"]>[0];
+
+export class DiscordThreadDeleteListener extends ThreadDeleteListener {
+  constructor(
+    private cfg: OpenClawConfig,
+    private accountId: string,
+    private logger?: Logger,
+  ) {
+    super();
+  }
+
+  async handle(data: ThreadDeleteEvent) {
+    await runDiscordListenerWithSlowLog({
+      logger: this.logger,
+      listener: this.constructor.name,
+      event: this.type,
+      run: async () => {
+        const threadId = data.id;
+        getThreadBindingManager(this.accountId)?.unbindThread({
+          threadId,
+          reason: "thread-delete",
+          sendFarewell: false,
+        });
+        const count = await closeDiscordThreadSessions({
+          cfg: this.cfg,
+          threadId,
+        });
+        if (count > 0) {
+          const logger = this.logger ?? discordEventQueueLog;
+          logger.info("Discord thread deleted — reset sessions", { threadId, count });
+        }
+      },
+      onError: (err) => {
+        const logger = this.logger ?? discordEventQueueLog;
+        logger.error(danger(`discord thread-delete handler failed: ${String(err)}`));
       },
     });
   }

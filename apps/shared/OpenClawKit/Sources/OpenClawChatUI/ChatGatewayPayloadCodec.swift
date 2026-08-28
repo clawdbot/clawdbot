@@ -110,6 +110,13 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawChatSessionsChangedEvent.self)
             else { return nil }
             return .sessionsChanged(change)
+        case "session.observer":
+            guard let payload = frame.payload,
+                  let digest = try? GatewayPayloadDecoding.decode(
+                      payload,
+                      as: SessionObserverDigest.self)
+            else { return nil }
+            return .sessionObserver(digest)
         case "seqGap":
             return .seqGap
         case "health":
@@ -131,6 +138,25 @@ public enum OpenClawChatGatewayPayloadCodec {
                       payload,
                       as: OpenClawSessionMessageEventPayload.self)
             else { return nil }
+            if var canonicalMessage = message.message,
+               canonicalMessage.transcriptMessageID?
+                   .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
+                   let messageID = message.messageId?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !messageID.isEmpty
+            {
+                // Live events carry durable transcript identity on their envelope.
+                // Preserve it on the row so history cannot replay the same message.
+                canonicalMessage.transcriptMessageID = messageID
+                return .sessionMessage(OpenClawSessionMessageEventPayload(
+                    sessionKey: message.sessionKey,
+                    agentId: message.agentId,
+                    message: canonicalMessage,
+                    messageId: message.messageId,
+                    messageSeq: message.messageSeq,
+                    hasActiveRun: message.hasActiveRun,
+                    activeRunIds: message.activeRunIds,
+                    activeRunIdsPresent: message.activeRunIdsPresent))
+            }
             return .sessionMessage(message)
         case "agent":
             guard let payload = frame.payload,
@@ -139,6 +165,30 @@ public enum OpenClawChatGatewayPayloadCodec {
                       as: OpenClawAgentEventPayload.self)
             else { return nil }
             return .agent(agent)
+        case "progressCard.changed":
+            guard let payload = frame.payload,
+                  let event = try? GatewayPayloadDecoding.decode(
+                      payload,
+                      as: ProgressCardChangedEvent.self)
+            else { return nil }
+            return .progressCardChanged(event)
+        default:
+            return self.secondaryEvent(from: frame)
+        }
+    }
+
+    private static func secondaryEvent(from frame: EventFrame) -> OpenClawChatTransportEvent? {
+        guard let payload = frame.payload else { return nil }
+        switch frame.event {
+        case "task":
+            return (try? GatewayPayloadDecoding.decode(payload, as: OpenClawChatTaskEvent.self))
+                .map(OpenClawChatTransportEvent.task)
+        case "question.requested":
+            return (try? GatewayPayloadDecoding.decode(payload, as: QuestionRecord.self))
+                .map(OpenClawChatTransportEvent.questionRequested)
+        case "question.resolved":
+            return (try? GatewayPayloadDecoding.decode(payload, as: OpenClawQuestionResolvedEvent.self))
+                .map(OpenClawChatTransportEvent.questionResolved)
         default:
             return nil
         }

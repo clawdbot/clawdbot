@@ -1,9 +1,21 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import {
+  resetPluginBlobStoreForTests,
+  resetPluginStateStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 // Matrix tests cover send plugin behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../../runtime-api.js";
 import { setMatrixRuntime } from "../runtime.js";
+import { installMatrixTestRuntime } from "../test-runtime.js";
 import { voteMatrixPoll } from "./actions/polls.js";
+import { loadMatrixDeliveryPlan, resolveMatrixDurableDeliveryIdentity } from "./delivery-plan.js";
+import { markdownToMatrixBody, markdownToMatrixHtml } from "./format.js";
 import {
+  chunkMatrixText,
   editMessageMatrix,
   sendMessageMatrix,
   sendPollMatrix,
@@ -30,9 +42,10 @@ const isVoiceCompatibleAudioMock = vi.fn(
 const resolveTextChunkLimitMock = vi.fn<
   (cfg: unknown, channel: unknown, accountId?: unknown) => number
 >(() => 4000);
-const resolveMarkdownTableModeMock = vi.fn(() => "code");
-const convertMarkdownTablesMock = vi.fn((text: string) => text);
-const chunkMarkdownTextWithModeMock = vi.fn((text: string) => (text ? [text] : []));
+const resolveMarkdownTableModeMock = vi.fn((_params?: unknown) => "code");
+const chunkMarkdownTextWithModeMock = vi.fn<
+  (text: string, limit?: number, mode?: unknown) => string[]
+>((text) => (text ? [text] : []));
 
 vi.mock("openclaw/plugin-sdk/plugin-config-runtime", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/plugin-config-runtime")>(
@@ -70,9 +83,10 @@ const runtimeStub = {
         resolveTextChunkLimitMock(cfg, channel, accountId),
       resolveChunkMode: () => "length",
       chunkMarkdownText: (text: string) => (text ? [text] : []),
-      chunkMarkdownTextWithMode: (text: string) => chunkMarkdownTextWithModeMock(text),
-      resolveMarkdownTableMode: () => resolveMarkdownTableModeMock(),
-      convertMarkdownTables: (text: string) => convertMarkdownTablesMock(text),
+      chunkMarkdownTextWithMode: (text: string, limit: number, mode: unknown) =>
+        chunkMarkdownTextWithModeMock(text, limit, mode),
+      resolveMarkdownTableMode: (params: unknown) => resolveMarkdownTableModeMock(params),
+      convertMarkdownTables: (text: string) => text,
     },
   },
 } as unknown as PluginRuntime;
@@ -105,18 +119,40 @@ const makeClient = () => {
   const getEvent = vi.fn();
   const getJoinedRoomMembers = vi.fn().mockResolvedValue([]);
   const uploadContent = vi.fn().mockResolvedValue("mxc://example/file");
+  const prepareRoomForMessageSend = vi.fn();
   const client = {
     sendMessage,
     sendEvent,
     getEvent,
     getJoinedRoomMembers,
     uploadContent,
+    prepareRoomForMessageSend,
+    getTransactionScopeId: vi.fn().mockResolvedValue("scope-1"),
+    getMessageWireEventType: vi.fn().mockResolvedValue("m.room.message"),
     getUserId: vi.fn().mockResolvedValue("@bot:example.org"),
     prepareForOneOff: vi.fn(async () => undefined),
     start: vi.fn(async () => undefined),
     stop: vi.fn(() => undefined),
     stopAndPersist: vi.fn(async () => undefined),
   } as unknown as import("./sdk.js").MatrixClient;
+  prepareRoomForMessageSend.mockImplementation(
+    async (roomId: string, content?: import("./sdk.js").MessageEventContent) => {
+      const eventType = await client.getMessageWireEventType(roomId);
+      if (eventType === "m.room.encrypted" && !client.crypto) {
+        throw new Error("Encrypted Matrix room: enable encryption before sending messages");
+      }
+      if (
+        eventType === "m.room.encrypted" &&
+        (typeof content?.url === "string" ||
+          (content?.info &&
+            "thumbnail_url" in content.info &&
+            typeof content.info.thumbnail_url === "string"))
+      ) {
+        throw new Error("Encrypted Matrix room contains unencrypted media; retry the send");
+      }
+      return eventType;
+    },
+  );
   return { client, sendMessage, sendEvent, getEvent, getJoinedRoomMembers, uploadContent };
 };
 
@@ -126,15 +162,11 @@ function makeEncryptedMediaClient() {
     isRoomEncrypted: vi.fn().mockResolvedValue(true),
     encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
   };
+  vi.spyOn(result.client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
   return result;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object") {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("object", "expected-label");
 
 function requireArray(value: unknown, label: string): Array<unknown> {
   expect(Array.isArray(value), label).toBe(true);
@@ -165,6 +197,12 @@ function expectTextReceiptPart(value: unknown, platformMessageId: string) {
   const part = requireRecord(value, "receipt part");
   expect(part.platformMessageId).toBe(platformMessageId);
   expect(part.kind).toBe("text");
+}
+
+function splitTextAtLimit(text: string, limit = text.length): string[] {
+  return Array.from({ length: Math.ceil(text.length / limit) }, (_, index) =>
+    text.slice(index * limit, (index + 1) * limit),
+  );
 }
 
 function resetMatrixSendRuntimeMocks() {
@@ -211,12 +249,322 @@ function resetMatrixSendRuntimeMocks() {
   isVoiceCompatibleAudioMock.mockReset().mockReturnValue(false);
   resolveTextChunkLimitMock.mockReset().mockReturnValue(4000);
   resolveMarkdownTableModeMock.mockReset().mockReturnValue("code");
-  convertMarkdownTablesMock.mockReset().mockImplementation((text: string) => text);
   chunkMarkdownTextWithModeMock
     .mockReset()
     .mockImplementation((text: string) => (text ? [text] : []));
   applyMatrixSendRuntimeStub();
 }
+
+describe("Matrix formatted chunk boundaries", () => {
+  beforeEach(() => {
+    resetMatrixSendRuntimeMocks();
+  });
+
+  it("closes and reopens spoilers without exposing chunked secret text", () => {
+    const secret = "secret ".repeat(8).trim();
+    resolveTextChunkLimitMock.mockReturnValue(20);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(`before ||${secret}|| after`, {
+      cfg: {} as never,
+      tableMode: "block",
+    });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    for (const chunk of chunks) {
+      expect(markdownToMatrixBody(chunk)).not.toContain("secret");
+      expect(markdownToMatrixHtml(chunk)).not.toContain("||");
+    }
+  });
+
+  it("does not pair an unmatched paragraph delimiter with a later spoiler", () => {
+    const secret = "secret ".repeat(8).trim();
+    resolveTextChunkLimitMock.mockReturnValue(20);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(`first ||\n\nsecond ||${secret}||`, {
+      cfg: {} as never,
+      tableMode: "block",
+    });
+
+    expect(chunks.join("")).toContain("[Spoiler]");
+    expect(chunks.every((chunk) => !markdownToMatrixBody(chunk).includes("secret"))).toBe(true);
+  });
+
+  it("keeps a spoiler-bearing message whole when it already fits", () => {
+    const markdown = `||${"x".repeat(14)}||`;
+    resolveTextChunkLimitMock.mockReturnValue(20);
+
+    expect(chunkMatrixText(markdown, { cfg: {} as never, tableMode: "block" }).chunks).toEqual([
+      markdown,
+    ]);
+    expect(chunkMarkdownTextWithModeMock).not.toHaveBeenCalled();
+  });
+
+  it("closes and reopens authored underline across chunk boundaries", () => {
+    const markdown = `<u>${"underlined ".repeat(6).trim()}</u>`;
+    resolveTextChunkLimitMock.mockReturnValue(20);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(markdown, { cfg: {} as never, tableMode: "block" });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 20)).toBe(true);
+    expect(chunks.every((chunk) => markdownToMatrixHtml(chunk).includes("<u>"))).toBe(true);
+  });
+
+  it("keeps underline-looking tags inside code literal", () => {
+    const markdown = `\`<ins>\` \\<u> ${"plain ".repeat(8)}`;
+    resolveTextChunkLimitMock.mockReturnValue(20);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(markdown, { cfg: {} as never, tableMode: "block" });
+
+    expect(chunks.join("")).toBe(markdown.trim());
+    expect(chunks.join("")).not.toContain("</u>");
+  });
+
+  it("keeps underline-looking tags inside link metadata literal", () => {
+    const markdown = `[x](https://example.test "literal <u>") ${"plain ".repeat(8)}`;
+    resolveTextChunkLimitMock.mockReturnValue(28);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(markdown, { cfg: {} as never, tableMode: "block" });
+
+    expect(chunks.join("")).toBe(markdown.trim());
+    expect(chunks.join("")).not.toContain("</u>");
+  });
+
+  it("keeps nested underline depth across chunk boundaries", () => {
+    const markdown = `<u>outer <ins>inner</ins> ${"tail ".repeat(8)}</u>`;
+    resolveTextChunkLimitMock.mockReturnValue(24);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(markdown, { cfg: {} as never, tableMode: "block" });
+
+    expect(chunks.length).toBeGreaterThan(1);
+    expect(chunks.every((chunk) => chunk.length <= 24)).toBe(true);
+    expect(chunks.every((chunk) => markdownToMatrixHtml(chunk).includes("<u>"))).toBe(true);
+  });
+
+  it("drops padding-only chunks from long authored underline tags", () => {
+    const markdown = `<u title="${"x".repeat(60)}">content</u>`;
+    resolveTextChunkLimitMock.mockReturnValue(20);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(markdown, { cfg: {} as never, tableMode: "block" });
+
+    expect(
+      chunks.every((chunk) => chunk.replaceAll("<u>", "").replaceAll("</u>", "").trim().length > 0),
+    ).toBe(true);
+  });
+
+  it("keeps spoiler and underline nesting valid across chunks", () => {
+    const markdown = `||<u>${"nested ".repeat(8).trim()}</u>||`;
+    resolveTextChunkLimitMock.mockReturnValue(24);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(markdown, { cfg: {} as never, tableMode: "block" });
+
+    expect(chunks.every((chunk) => chunk.length <= 24)).toBe(true);
+    expect(
+      chunks.every((chunk) => {
+        const html = markdownToMatrixHtml(chunk);
+        return html.includes("<span data-mx-spoiler>") && html.includes("<u>");
+      }),
+    ).toBe(true);
+  });
+
+  it("falls back to table bullets when a native table cannot fit one event", () => {
+    resolveTextChunkLimitMock.mockReturnValue(30);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+    const prepared = chunkMatrixText(
+      "| Name | Description |\n|---|---|\n| Alice | a long description that crosses the limit |",
+      { cfg: {} as never, tableMode: "block" },
+    );
+
+    const rendered = prepared.chunks.join("\n");
+    expect(rendered).toContain("**Alice**");
+    expect(rendered).toContain("• Description:");
+    expect(rendered).toContain("description that crosses the");
+    expect(rendered).not.toContain("|---|---|");
+  });
+
+  it("keeps a small native table in a long message", () => {
+    const table = "| A | B |\n|---|---|\n| 1 | 2 |";
+    resolveTextChunkLimitMock.mockReturnValue(40);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(`${"prose ".repeat(10)}\n\n${table}`, {
+      cfg: {} as never,
+      tableMode: "block",
+    });
+
+    expect(chunks).toContain(table);
+  });
+
+  it("preserves indentation after a native table segment", () => {
+    const table = "| A | B |\n|---|---|\n| 1 | 2 |";
+    const code = "    indented code";
+    resolveTextChunkLimitMock.mockReturnValue(40);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+
+    const { chunks } = chunkMatrixText(`${"prose ".repeat(10)}\n\n${table}\n\n${code}`, {
+      cfg: {} as never,
+      tableMode: "block",
+    });
+
+    expect(chunks).toContain(code);
+  });
+
+  it("recognizes aligned tables and ignores table examples inside fences", () => {
+    const aligned = "| A | B |\n| ---: | :---: |\n| 1 | 2 |\n| 3 | 4 |";
+    resolveTextChunkLimitMock.mockReturnValue(35);
+    chunkMarkdownTextWithModeMock.mockImplementation(splitTextAtLimit);
+    expect(
+      chunkMatrixText(aligned, { cfg: {} as never, tableMode: "block" }).chunks.join("\n"),
+    ).toContain("• B:");
+
+    const fenced = `\`\`\`\n${aligned}\n\`\`\``;
+    expect(chunkMatrixText(fenced, { cfg: {} as never, tableMode: "block" }).chunks.join("")).toBe(
+      fenced,
+    );
+
+    const shortDivider = "A|B\n-| -\nbar";
+    resolveTextChunkLimitMock.mockReturnValue(8);
+    expect(
+      chunkMatrixText(shortDivider, { cfg: {} as never, tableMode: "block" }).chunks.join("\n"),
+    ).toContain("**bar**");
+  });
+});
+
+describe("sendMessageMatrix durable delivery", () => {
+  let stateDir = "";
+
+  beforeEach(() => {
+    resetMatrixSendRuntimeMocks();
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-send-plan-"));
+    installMatrixTestRuntime({
+      stateDir,
+      cfg: {},
+      channel: runtimeStub.channel,
+    });
+  });
+
+  afterEach(() => {
+    resetPluginBlobStoreForTests({ closeDatabase: false });
+    resetPluginStateStoreForTests();
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
+
+  it("dispatches fractional BMP and astral limits through the real send path", async () => {
+    chunkMarkdownTextWithModeMock.mockImplementation((text) => Array.from(text));
+
+    resolveTextChunkLimitMock.mockReturnValue(0.5);
+    const bmp = makeClient();
+    await sendMessageMatrix("room:!room:example", "ABCD", {
+      client: bmp.client,
+      cfg: {} as never,
+    });
+    expect(bmp.sendMessage).toHaveBeenCalledTimes(4);
+    expect(
+      bmp.sendMessage.mock.calls.map((call) => requireRecord(call[1], "BMP content").body),
+    ).toEqual(["A", "B", "C", "D"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1.5);
+    const astral = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀😀", {
+      client: astral.client,
+      cfg: {} as never,
+    });
+    expect(astral.sendMessage).toHaveBeenCalledTimes(2);
+    expect(
+      astral.sendMessage.mock.calls.map((call) => requireRecord(call[1], "astral content").body),
+    ).toEqual(["😀", "😀"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1.5);
+    const mixed = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀AB", {
+      client: mixed.client,
+      cfg: {} as never,
+    });
+    expect(
+      mixed.sendMessage.mock.calls.map((call) => requireRecord(call[1], "mixed content").body),
+    ).toEqual(["😀", "A", "B"]);
+
+    resolveTextChunkLimitMock.mockReturnValue(1);
+    const integer = makeClient();
+    await sendMessageMatrix("room:!room:example", "😀AB", {
+      client: integer.client,
+      cfg: {} as never,
+    });
+    expect(
+      integer.sendMessage.mock.calls.map((call) => requireRecord(call[1], "integer content").body),
+    ).toEqual(["😀", "A", "B"]);
+  });
+
+  it("persists the complete event plan before the first provider dispatch", async () => {
+    const { client, sendMessage } = makeClient();
+    const deliveryIdentity = resolveMatrixDurableDeliveryIdentity({
+      queueId: "queue-1",
+      partIndex: 0,
+      partCount: 1,
+    });
+    if (!deliveryIdentity) {
+      throw new Error("expected durable Matrix identity");
+    }
+    const dispatch = vi.fn(async () => {
+      await expect(
+        loadMatrixDeliveryPlan({
+          identity: deliveryIdentity,
+          accountId: "default",
+          roomId: "!room:example",
+          transactionScopeId: "scope-1",
+          wireEventType: "m.room.message",
+        }),
+      ).resolves.not.toBeNull();
+    });
+    sendMessage.mockImplementation(
+      async (
+        roomId: string,
+        _content: unknown,
+        transactionId?: string,
+        beforeWireDispatch?: (dispatch: {
+          roomId: string;
+          eventType: "m.room.message";
+          transactionId: string;
+          requestPath: string;
+        }) => Promise<void>,
+      ) => {
+        if (!transactionId || !beforeWireDispatch) {
+          throw new Error("expected durable Matrix dispatch context");
+        }
+        await beforeWireDispatch({
+          roomId,
+          eventType: "m.room.message",
+          transactionId,
+          requestPath: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/send/m.room.message/${transactionId}`,
+        });
+        return "$event-1";
+      },
+    );
+
+    const result = await sendMessageMatrix("room:!room:example", "durable", {
+      client,
+      cfg: {} as never,
+      accountId: "default",
+      deliveryQueueId: "queue-1",
+      deliveryPartIndex: 0,
+      deliveryPartCount: 1,
+      onPlatformSendDispatch: dispatch,
+    });
+
+    expect(result.messageId).toBe("$event-1");
+    expect(dispatch).toHaveBeenCalledOnce();
+    expect(sendMessage.mock.calls[0]?.[2]).toMatch(/^oc_/);
+  });
+});
 
 describe("sendMessageMatrix media", () => {
   beforeEach(() => {
@@ -225,15 +573,33 @@ describe("sendMessageMatrix media", () => {
 
   it("uploads media with url payloads", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
+    const mediaAccess = {
+      localRoots: ["/tmp/openclaw"],
+      workspaceDir: "/tmp/openclaw",
+    };
 
     await sendMessageMatrix("room:!room:example", "caption", {
       client,
       cfg: {} as never,
-      mediaUrl: "file:///tmp/photo.png",
+      mediaUrl: "chart.png",
+      mediaAccess,
+      mediaLocalRoots: mediaAccess.localRoots,
     });
+
+    expect(mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 0)).toBe(
+      "chart.png",
+    );
+    const mediaOptions = requireRecord(
+      mockCallArg(loadOutboundMediaFromUrlMock, "loadOutboundMediaFromUrl", 1),
+      "outbound media options",
+    );
+    expect(mediaOptions.mediaAccess).toBe(mediaAccess);
+    expect(mediaOptions.mediaLocalRoots).toBe(mediaAccess.localRoots);
 
     const uploadArg = mockCallArg(uploadContent, "uploadContent", 0);
     expect(Buffer.isBuffer(uploadArg)).toBe(true);
+    expect(uploadArg).toEqual(Buffer.from("media"));
+    expect(uploadContent).toHaveBeenCalledWith(Buffer.from("media"), "image/png", "photo.png");
 
     const content = sentContent(sendMessage) as {
       url?: string;
@@ -245,6 +611,142 @@ describe("sendMessageMatrix media", () => {
     expect(content.format).toBe("org.matrix.custom.html");
     expect(content.formatted_body).toContain("caption");
     expect(content.url).toBe("mxc://example/file");
+  });
+
+  it("rejects encrypted-room media before upload when encryption is unavailable", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
+
+    await expect(
+      sendMessageMatrix("room:!room:example", "caption", {
+        client,
+        cfg: {} as never,
+        mediaUrl: "file:///tmp/photo.png",
+      }),
+    ).rejects.toThrow(/enable encryption/i);
+
+    expect(uploadContent).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(["text", "media"])(
+    "rejects encrypted-room %s before reporting a platform dispatch when encryption is disabled",
+    async (kind) => {
+      const { client, sendMessage, uploadContent } = makeClient();
+      vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
+      const onPlatformSendDispatch = vi.fn();
+
+      await expect(
+        sendMessageMatrix("room:!room:example", "secret", {
+          client,
+          cfg: {} as never,
+          ...(kind === "media" ? { mediaUrl: "file:///tmp/photo.png" } : {}),
+          onPlatformSendDispatch,
+        }),
+      ).rejects.toThrow(/enable encryption/i);
+
+      expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+      expect(uploadContent).not.toHaveBeenCalled();
+      expect(sendMessage).not.toHaveBeenCalled();
+      if (kind === "media") {
+        expect(loadOutboundMediaFromUrlMock).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("rejects uploads when a room becomes encrypted while media is loading", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    const onPlatformSendDispatch = vi.fn();
+    loadOutboundMediaFromUrlMock.mockImplementationOnce(async () => {
+      vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
+      return {
+        buffer: Buffer.from("secret media"),
+        fileName: "secret.png",
+        contentType: "image/png",
+        kind: "image",
+      };
+    });
+
+    await expect(
+      sendMessageMatrix("room:!room:example", "secret", {
+        client,
+        cfg: {} as never,
+        mediaUrl: "file:///tmp/secret.png",
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toThrow(/enable encryption/i);
+
+    expect(uploadContent).not.toHaveBeenCalled();
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
+  });
+
+  it("encrypts uploads when a room becomes encrypted while media is loading", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    (client as { crypto?: object }).crypto = {
+      encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
+    };
+    loadOutboundMediaFromUrlMock.mockImplementationOnce(async () => {
+      vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
+      return {
+        buffer: Buffer.from("secret media"),
+        fileName: "secret.png",
+        contentType: "image/png",
+        kind: "image",
+      };
+    });
+
+    await sendMessageMatrix("room:!room:example", "secret", {
+      client,
+      cfg: {} as never,
+      mediaUrl: "file:///tmp/secret.png",
+    });
+
+    expect(uploadContent).toHaveBeenCalledWith(
+      Buffer.from("encrypted"),
+      "application/octet-stream",
+    );
+    const content = sentContent(sendMessage);
+    expect(content.file).toBeDefined();
+    expect(content.url).toBeUndefined();
+  });
+
+  it("records each media and overflow event with its actual kind and reply relation", async () => {
+    const { client, sendMessage } = makeClient();
+    resolveTextChunkLimitMock.mockReturnValue(6);
+    chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
+    sendMessage.mockReset().mockResolvedValueOnce("$image").mockResolvedValueOnce("$overflow");
+    const onDeliveryResult = vi.fn();
+
+    const result = await sendMessageMatrix("room:!room:example", "first|second", {
+      client,
+      cfg: {} as never,
+      mediaUrl: "file:///tmp/photo.png",
+      replyToId: "$reply",
+      onDeliveryResult,
+    });
+
+    expect(sentContent(sendMessage, 0)).toMatchObject({
+      msgtype: "m.image",
+      "m.relates_to": { "m.in_reply_to": { event_id: "$reply" } },
+    });
+    expect(sentContent(sendMessage, 1)).toMatchObject({ msgtype: "m.text" });
+    expect(sentContent(sendMessage, 1)).not.toHaveProperty("m.relates_to");
+    expect(result.messageId).toBe("$overflow");
+    expect(result.primaryMessageId).toBe("$image");
+    expect(result.receipt.platformMessageIds).toEqual(["$image", "$overflow"]);
+    expect(result.receipt.parts).toMatchObject([
+      { platformMessageId: "$image", kind: "media", index: 0, replyToId: "$reply" },
+      { platformMessageId: "$overflow", kind: "text", index: 1 },
+    ]);
+    expect(result.receipt.parts[1]).not.toHaveProperty("replyToId");
+    expect(
+      onDeliveryResult.mock.calls.map(([progress]) => progress.receipt.parts[0]),
+    ).toMatchObject([
+      { platformMessageId: "$image", kind: "media", replyToId: "$reply" },
+      { platformMessageId: "$overflow", kind: "text" },
+    ]);
+    expect(onDeliveryResult.mock.calls[1]?.[0]?.receipt.parts[0]).not.toHaveProperty("replyToId");
   });
 
   it("uploads encrypted media with file payloads", async () => {
@@ -260,18 +762,26 @@ describe("sendMessageMatrix media", () => {
     expect(uploadArg instanceof Uint8Array ? Buffer.from(uploadArg).toString() : undefined).toBe(
       "encrypted",
     );
+    expect(uploadContent).toHaveBeenCalledWith(
+      Buffer.from("encrypted"),
+      "application/octet-stream",
+    );
 
     const content = sentContent(sendMessage) as {
       url?: string;
       file?: { url?: string };
+      filename?: string;
+      info?: { mimetype?: string };
     };
     expect(content.url).toBeUndefined();
     expect(content.file?.url).toBe("mxc://example/file");
+    expect(content.filename).toBe("photo.png");
+    expect(content.info?.mimetype).toBe("image/png");
   });
 
   it("encrypts thumbnail via thumbnail_file when room is encrypted", async () => {
     const { client, sendMessage, uploadContent } = makeClient();
-    const isRoomEncrypted = vi.fn().mockResolvedValue(true);
+    vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
     const encryptMedia = vi.fn().mockResolvedValue({
       buffer: Buffer.from("encrypted-thumb"),
       file: {
@@ -282,7 +792,6 @@ describe("sendMessageMatrix media", () => {
       },
     });
     (client as { crypto?: object }).crypto = {
-      isRoomEncrypted,
       encryptMedia,
     };
     // Return image metadata so thumbnail generation is triggered (image > 800px)
@@ -302,8 +811,11 @@ describe("sendMessageMatrix media", () => {
     });
 
     // encryptMedia called twice: once for main media, once for thumbnail
-    expect(isRoomEncrypted).toHaveBeenCalledTimes(1);
     expect(encryptMedia).toHaveBeenCalledTimes(2);
+    expect(uploadContent.mock.calls).toEqual([
+      [Buffer.from("encrypted-thumb"), "application/octet-stream"],
+      [Buffer.from("encrypted-thumb"), "application/octet-stream"],
+    ]);
 
     const content = sentContent(sendMessage) as {
       url?: string;
@@ -320,6 +832,7 @@ describe("sendMessageMatrix media", () => {
 
   it("keeps reply context on voice transcript follow-ups outside threads", async () => {
     const { client, sendMessage } = makeClient();
+    sendMessage.mockReset().mockResolvedValueOnce("$voice").mockResolvedValueOnce("$transcript");
     mediaKindFromMimeMock.mockReturnValue("audio");
     isVoiceCompatibleAudioMock.mockReturnValue(true);
     loadWebMediaMock.mockResolvedValueOnce({
@@ -329,7 +842,7 @@ describe("sendMessageMatrix media", () => {
       kind: "audio",
     });
 
-    await sendMessageMatrix("room:!room:example", "voice caption", {
+    const result = await sendMessageMatrix("room:!room:example", "voice caption", {
       client,
       cfg: {} as never,
       mediaUrl: "file:///tmp/clip.mp3",
@@ -343,6 +856,10 @@ describe("sendMessageMatrix media", () => {
     expect(requireRecord(transcriptContent["m.relates_to"], "relation")["m.in_reply_to"]).toEqual({
       event_id: "$reply",
     });
+    expect(result.receipt.parts).toMatchObject([
+      { platformMessageId: "$voice", kind: "voice", index: 0, replyToId: "$reply" },
+      { platformMessageId: "$transcript", kind: "text", index: 1, replyToId: "$reply" },
+    ]);
   });
 
   it("keeps regular audio payload when audioAsVoice media is incompatible", async () => {
@@ -387,7 +904,10 @@ describe("sendMessageMatrix media", () => {
       mediaUrl: "file:///tmp/photo.png",
     });
 
-    expect(uploadContent).toHaveBeenCalledTimes(2);
+    expect(uploadContent.mock.calls).toEqual([
+      [Buffer.from("media"), "image/png", "photo.png"],
+      [Buffer.from("thumb"), "image/jpeg", "thumbnail.jpg"],
+    ]);
     const content = sentContent(sendMessage) as {
       info?: {
         thumbnail_url?: string;
@@ -408,6 +928,37 @@ describe("sendMessageMatrix media", () => {
       mimetype: "image/jpeg",
       size: Buffer.from("thumb").byteLength,
     });
+  });
+
+  it("rejects mixed attachments when a room becomes encrypted while an image is resized", async () => {
+    const { client, sendMessage, uploadContent } = makeClient();
+    const onPlatformSendDispatch = vi.fn();
+    (client as { crypto?: object }).crypto = {
+      encryptMedia: vi.fn().mockResolvedValue(createEncryptedMediaPayload()),
+    };
+    getImageMetadataMock
+      .mockResolvedValueOnce({ width: 1600, height: 1200 })
+      .mockResolvedValueOnce({ width: 800, height: 600 });
+    resizeToJpegMock.mockImplementationOnce(async () => {
+      vi.spyOn(client, "getMessageWireEventType").mockResolvedValue("m.room.encrypted");
+      return Buffer.from("secret thumbnail");
+    });
+
+    await expect(
+      sendMessageMatrix("room:!room:example", "caption", {
+        client,
+        cfg: {} as never,
+        mediaUrl: "file:///tmp/photo.png",
+        onPlatformSendDispatch,
+      }),
+    ).rejects.toThrow(/unencrypted media.*retry/i);
+
+    expect(uploadContent.mock.calls).toEqual([
+      [Buffer.from("media"), "image/png", "photo.png"],
+      [Buffer.from("encrypted"), "application/octet-stream"],
+    ]);
+    expect(sendMessage).not.toHaveBeenCalled();
+    expect(onPlatformSendDispatch).not.toHaveBeenCalled();
   });
 
   it("uses explicit cfg for media sends instead of runtime loadConfig fallbacks", async () => {
@@ -446,6 +997,25 @@ describe("sendMessageMatrix media", () => {
     expect(resolveTextChunkLimitMock).toHaveBeenCalledWith(explicitCfg, "matrix", "ops");
   });
 
+  it.each([{ mediaMaxMb: 0 }, { mediaMaxMb: -5 }])(
+    "leaves outbound media uncapped when mediaMaxMb is $mediaMaxMb",
+    async ({ mediaMaxMb }) => {
+      const { client } = makeClient();
+
+      await sendMessageMatrix("room:!room:example", "caption", {
+        client,
+        cfg: { channels: { matrix: { mediaMaxMb } } },
+        mediaUrl: "file:///tmp/photo.png",
+      });
+
+      const mediaOptions = requireRecord(
+        mockCallArg(loadWebMediaMock, "loadWebMedia", 1),
+        "media options",
+      );
+      expect(mediaOptions.maxBytes).toBeUndefined();
+    },
+  );
+
   it("passes caller mediaLocalRoots to media loading", async () => {
     const { client } = makeClient();
 
@@ -483,6 +1053,29 @@ describe("sendMessageMatrix mentions", () => {
     expect(sentContent(sendMessage).body).toBe("hello");
     expect(sentContent(sendMessage)["m.mentions"]).toEqual({});
   });
+
+  it.each([
+    { mention: "@room", mediaUrl: undefined },
+    { mention: "@alice:example.org", mediaUrl: undefined },
+    { mention: "@room", mediaUrl: "file:///tmp/photo.png" },
+  ])(
+    "keeps indented $mention inert in messages and media captions",
+    async ({ mention, mediaUrl }) => {
+      const { client, sendMessage } = makeClient();
+      const markdown = `    ${mention}`;
+
+      await sendMessageMatrix("room:!room:example", markdown, {
+        client,
+        cfg: {} as never,
+        ...(mediaUrl ? { mediaUrl } : {}),
+      });
+
+      const content = sentContent(sendMessage);
+      expect(content.body).toBe(markdown);
+      expect(content.formatted_body).toBe(`<pre><code>${mention}\n</code></pre>`);
+      expect(content["m.mentions"]).toEqual({});
+    },
+  );
 
   it("emits m.mentions and matrix.to anchors for qualified user mentions", async () => {
     const { client, sendMessage } = makeClient();
@@ -661,15 +1254,15 @@ describe("sendMessageMatrix threads", () => {
 
   it("returns ordered event ids for chunked text sends", async () => {
     const { client, sendMessage } = makeClient();
+    resolveTextChunkLimitMock.mockReturnValue(6);
     sendMessage
       .mockReset()
       .mockResolvedValueOnce("$m1")
       .mockResolvedValueOnce("$m2")
       .mockResolvedValueOnce("$m3");
-    convertMarkdownTablesMock.mockImplementation(() => "part1|part2|part3");
     chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
 
-    const result = await sendMessageMatrix("room:!room:example", "ignored", {
+    const result = await sendMessageMatrix("room:!room:example", "part1|part2|part3", {
       client,
       cfg: {} as never,
     });
@@ -677,6 +1270,7 @@ describe("sendMessageMatrix threads", () => {
     expect(result.roomId).toBe("!room:example");
     expect(result.primaryMessageId).toBe("$m1");
     expect(result.messageId).toBe("$m3");
+    expect(result.content).toBe("part1\npart2\npart3");
     expect(result.receipt.primaryPlatformMessageId).toBe("$m1");
     expect(result.receipt.platformMessageIds).toEqual(["$m1", "$m2", "$m3"]);
     const parts = requireArray(result.receipt.parts, "receipt parts");
@@ -687,16 +1281,16 @@ describe("sendMessageMatrix threads", () => {
 
   it("reports the first Matrix event before a later event fails", async () => {
     const { client, sendMessage } = makeClient();
+    resolveTextChunkLimitMock.mockReturnValue(5);
     sendMessage
       .mockReset()
       .mockResolvedValueOnce("$m1")
       .mockRejectedValueOnce(new Error("second event failed"));
-    convertMarkdownTablesMock.mockImplementation(() => "part1|part2");
     chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
     const onDeliveryResult = vi.fn();
 
     await expect(
-      sendMessageMatrix("room:!room:example", "ignored", {
+      sendMessageMatrix("room:!room:example", "part1|part2", {
         client,
         cfg: {} as never,
         onDeliveryResult,
@@ -704,14 +1298,15 @@ describe("sendMessageMatrix threads", () => {
     ).rejects.toThrow("second event failed");
 
     expect(onDeliveryResult.mock.calls.map((call) => call[0]?.messageId)).toEqual(["$m1"]);
+    expect(onDeliveryResult.mock.calls.map((call) => call[0]?.content)).toEqual(["part1"]);
   });
 
   it("merges extra content into only the first chunked text event", async () => {
     const { client, sendMessage } = makeClient();
-    convertMarkdownTablesMock.mockImplementation(() => "first|second|third");
+    resolveTextChunkLimitMock.mockReturnValue(6);
     chunkMarkdownTextWithModeMock.mockImplementation((text: string) => text.split("|"));
 
-    await sendMessageMatrix("room:!room:example", "ignored", {
+    await sendMessageMatrix("room:!room:example", "first|second|third", {
       client,
       cfg: {} as never,
       extraContent: { "com.openclaw.approval": { id: "req-1" } },
@@ -733,19 +1328,81 @@ describe("sendSingleTextMessageMatrix", () => {
     resetMatrixSendRuntimeMocks();
   });
 
-  it("rejects single-event sends when converted text exceeds the Matrix limit", async () => {
+  it("rejects single-event sends when rendered text exceeds the Matrix limit", async () => {
     const { client, sendMessage } = makeClient();
     resolveTextChunkLimitMock.mockReturnValue(5);
-    convertMarkdownTablesMock.mockImplementation(() => "123456");
 
     await expect(
-      sendSingleTextMessageMatrix("room:!room:example", "1234", {
+      sendSingleTextMessageMatrix("room:!room:example", "123456", {
         client,
         cfg: {} as never,
       }),
     ).rejects.toThrow("Matrix single-message text exceeds limit");
 
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it.each(["@room", "@alice:example.org"])(
+    "keeps indented %s inert in single-event messages",
+    async (mention) => {
+      const { client, sendMessage } = makeClient();
+      const markdown = `    ${mention}`;
+
+      await sendSingleTextMessageMatrix("room:!room:example", markdown, {
+        client,
+        cfg: {} as never,
+      });
+
+      const content = sentContent(sendMessage);
+      expect(content.body).toBe(markdown);
+      expect(content.formatted_body).toBe(`<pre><code>${mention}\n</code></pre>`);
+      expect(content["m.mentions"]).toEqual({});
+    },
+  );
+
+  it("rejects whitespace-only single-event messages", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await expect(
+      sendSingleTextMessageMatrix("room:!room:example", "   \n  ", {
+        client,
+        cfg: {} as never,
+      }),
+    ).rejects.toThrow("Matrix single-message send requires text");
+
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it("keeps native tables in the body and formatted body when the profile selects blocks", async () => {
+    const { client, sendMessage } = makeClient();
+    const markdown = "| Name | Age |\n|---|---|\n| Alice | 30 |";
+    resolveMarkdownTableModeMock.mockReturnValue("block");
+
+    await sendSingleTextMessageMatrix("room:!room:example", markdown, {
+      client,
+      cfg: {} as never,
+    });
+
+    const content = sentContent(sendMessage);
+    expect(content.body).toBe(markdown);
+    expect(content.formatted_body).toContain("<table>");
+    expect(content.formatted_body).toContain("<td>Alice</td>");
+    expect(resolveMarkdownTableModeMock).toHaveBeenCalledWith(
+      expect.objectContaining({ channel: "matrix", supportsBlockTables: true }),
+    );
+  });
+
+  it("keeps spoiler text out of the Matrix plain fallback", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await sendSingleTextMessageMatrix("room:!room:example", "before ||secret|| after", {
+      client,
+      cfg: {} as never,
+    });
+
+    const content = sentContent(sendMessage);
+    expect(content.body).toBe("before [Spoiler] after");
+    expect(content.formatted_body).toBe("<p>before <span data-mx-spoiler>secret</span> after</p>");
   });
 
   it("supports quiet draft preview sends without mention metadata", async () => {
@@ -842,6 +1499,7 @@ describe("sendSingleTextMessageMatrix", () => {
     expect(result.receipt.primaryPlatformMessageId).toBe("evt1");
     expect(result.receipt.platformMessageIds).toEqual(["evt1"]);
     expectTextReceiptPart(result.receipt.parts[0], "evt1");
+    expect(result.content).toBe("done");
   });
 });
 
@@ -961,6 +1619,17 @@ describe("editMessageMatrix mentions", () => {
     const content = sentContent(sendMessage);
     expect(content[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
     expect(newContent(content)[MATRIX_OPENCLAW_FINALIZED_PREVIEW_KEY]).toBe(true);
+  });
+
+  it("preserves Markdown-significant indentation in edits", async () => {
+    const { client, sendMessage } = makeClient();
+
+    await editMessageMatrix("room:!room:example", "$original", "    code", {
+      client,
+      cfg: {} as never,
+    });
+
+    expect(newContent(sentContent(sendMessage)).body).toBe("    code");
   });
 
   it("edits threaded originals with a pure replace relation", async () => {

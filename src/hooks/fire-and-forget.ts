@@ -1,9 +1,9 @@
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 // Fire-and-forget hook helpers schedule hook work without blocking hot paths.
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { logVerbose } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 
 const DEFAULT_MAX_CONCURRENT_FIRE_AND_FORGET_HOOKS = 16;
 const DEFAULT_MAX_QUEUED_FIRE_AND_FORGET_HOOKS = 256;
@@ -23,7 +23,7 @@ type FireAndForgetHookState = {
 };
 
 /** Queue limits for bounded fire-and-forget hook execution. */
-export type FireAndForgetBoundedHookOptions = {
+type FireAndForgetBoundedHookOptions = {
   maxConcurrency?: number;
   maxQueue?: number;
   timeoutMs?: number;

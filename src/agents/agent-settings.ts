@@ -3,12 +3,13 @@ import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { AgentCompactionMode } from "../config/types.agent-defaults.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { ContextEngineInfo } from "../context-engine/types.js";
-import { MIN_PROMPT_BUDGET_RATIO, MIN_PROMPT_BUDGET_TOKENS } from "./agent-compaction-constants.js";
+import { resolveEffectiveCompactionReserveTokens } from "./agent-compaction-constants.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 
 export const DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR = 20_000;
 
 type AgentSettingsManagerLike = {
+  getCompactionEnabled?: () => boolean;
   getCompactionReserveTokens: () => number;
   getCompactionKeepRecentTokens: () => number;
   applyOverrides: (overrides: {
@@ -19,22 +20,6 @@ type AgentSettingsManagerLike = {
   }) => void;
   setCompactionEnabled?: (enabled: boolean) => void;
 };
-
-/** Resolves the configured reserve-token floor for agent compaction. */
-function resolveCompactionReserveTokensFloor(cfg?: OpenClawConfig): number {
-  const raw = cfg?.agents?.defaults?.compaction?.reserveTokensFloor;
-  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) {
-    return Math.floor(raw);
-  }
-  return DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR;
-}
-
-function toNonNegativeInt(value: unknown): number | undefined {
-  if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
-    return undefined;
-  }
-  return Math.floor(value);
-}
 
 function toPositiveInt(value: unknown): number | undefined {
   if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
@@ -56,36 +41,24 @@ export function applyAgentCompactionSettingsFromConfig(params: {
   const currentReserveTokens = params.settingsManager.getCompactionReserveTokens();
   const currentKeepRecentTokens = params.settingsManager.getCompactionKeepRecentTokens();
   const compactionCfg = params.cfg?.agents?.defaults?.compaction;
+  // Omission preserves embedded/project settings. OpenClaw config reloads create a new
+  // prepared manager; same-manager resource reloads reuse cfg and reapply explicit values.
+  const configuredEnabled = compactionCfg?.enabled;
 
-  const configuredReserveTokens = toNonNegativeInt(compactionCfg?.reserveTokens);
   const configuredKeepRecentTokens = toPositiveInt(compactionCfg?.keepRecentTokens);
-  let reserveTokensFloor = resolveCompactionReserveTokensFloor(params.cfg);
-  let maxReserveTokens: number | undefined;
-
-  // Cap the floor to a safe fraction of the context window so that
-  // small-context models (e.g. Ollama with 16 K tokens) are not starved of
-  // prompt budget.  Without this cap the default floor of 20 000 can exceed
-  // the entire context window, causing every prompt to be classified as an
-  // overflow and triggering an infinite compaction loop.
   const contextTokenBudget = toPositiveInt(params.contextTokenBudget);
-  if (contextTokenBudget !== undefined) {
-    const minPromptBudget = Math.min(
-      MIN_PROMPT_BUDGET_TOKENS,
-      Math.max(1, Math.floor(contextTokenBudget * MIN_PROMPT_BUDGET_RATIO)),
-    );
-    maxReserveTokens = Math.max(0, contextTokenBudget - minPromptBudget);
-    reserveTokensFloor = Math.min(reserveTokensFloor, maxReserveTokens);
-  }
-
-  let targetReserveTokens = Math.max(
-    configuredReserveTokens ?? currentReserveTokens,
-    reserveTokensFloor,
+  const requestedReserveTokens = Math.max(
+    currentReserveTokens,
+    DEFAULT_AGENT_COMPACTION_RESERVE_TOKENS_FLOOR,
   );
-  if (maxReserveTokens !== undefined) {
-    // Cap the effective value too: the harness default or explicit config can otherwise
-    // undo the floor cap and make shouldCompact() true from the first token.
-    targetReserveTokens = Math.min(targetReserveTokens, maxReserveTokens);
-  }
+  // Cap the final effective reserve, not only its floor; otherwise small models compact at token one.
+  const targetReserveTokens =
+    contextTokenBudget === undefined
+      ? requestedReserveTokens
+      : resolveEffectiveCompactionReserveTokens({
+          contextTokenBudget,
+          reserveTokens: requestedReserveTokens,
+        });
   const targetKeepRecentTokens = configuredKeepRecentTokens ?? currentKeepRecentTokens;
 
   const overrides: { reserveTokens?: number; keepRecentTokens?: number } = {};
@@ -96,10 +69,18 @@ export function applyAgentCompactionSettingsFromConfig(params: {
     overrides.keepRecentTokens = targetKeepRecentTokens;
   }
 
-  const didOverride = Object.keys(overrides).length > 0;
-  if (didOverride) {
+  const shouldApplyEnabled =
+    configuredEnabled !== undefined &&
+    typeof params.settingsManager.setCompactionEnabled === "function" &&
+    (typeof params.settingsManager.getCompactionEnabled !== "function" ||
+      params.settingsManager.getCompactionEnabled() !== configuredEnabled);
+  if (shouldApplyEnabled) {
+    params.settingsManager.setCompactionEnabled!(configuredEnabled);
+  }
+  if (Object.keys(overrides).length > 0) {
     params.settingsManager.applyOverrides({ compaction: overrides });
   }
+  const didOverride = shouldApplyEnabled || Object.keys(overrides).length > 0;
 
   return {
     didOverride,

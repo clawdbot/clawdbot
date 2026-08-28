@@ -1,6 +1,7 @@
 // Release Beta Verifier tests cover release beta verifier script behavior.
 /* oxlint-disable typescript/no-base-to-string -- fetch mock normalizes standard RequestInfo inputs for URL assertions. */
 import { createHash } from "node:crypto";
+import { resolve } from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -10,9 +11,27 @@ import {
   parseNpmViewFields,
   parseReleaseVerifyBetaArgs,
   readBoundedJsonResponse,
+  resolveOpenClawNpmPostpublishVerifier,
   runNpmViewWithRetry,
+  runReleaseVerifierCommand,
   validateClawHubBootstrapEvidence,
 } from "../../scripts/lib/release-beta-verifier.ts";
+type CommandError = Error & {
+  code?: string;
+  signal?: NodeJS.Signals;
+  status?: number;
+  stderr?: string;
+  stdout?: string;
+};
+
+function captureCommandError(run: () => unknown): CommandError {
+  try {
+    run();
+  } catch (error) {
+    return error as CommandError;
+  }
+  throw new Error("expected command to fail");
+}
 
 function sha256(bytes: Uint8Array): string {
   return createHash("sha256").update(bytes).digest("hex");
@@ -91,6 +110,7 @@ describe("parseReleaseVerifyBetaArgs", () => {
       pluginSelection: [],
       clawHubBootstrapPlugins: [],
       evidenceOut: undefined,
+      postpublishVerifier: undefined,
       skipPostpublish: false,
       skipGitHubRelease: false,
       skipClawHub: false,
@@ -128,7 +148,8 @@ describe("parseReleaseVerifyBetaArgs", () => {
         "44",
         "--evidence-out",
         ".artifacts/release-evidence.json",
-        "--skip-postpublish",
+        "--postpublish-verifier",
+        "/tmp/trusted-postpublish.ts",
         "--skip-github-release",
         "--skip-clawhub",
         "--rerun-failed-clawhub",
@@ -145,7 +166,8 @@ describe("parseReleaseVerifyBetaArgs", () => {
       pluginSelection: ["@openclaw/plugin-a", "@openclaw/plugin-b"],
       clawHubBootstrapPlugins: ["@openclaw/plugin-b"],
       evidenceOut: ".artifacts/release-evidence.json",
-      skipPostpublish: true,
+      postpublishVerifier: "/tmp/trusted-postpublish.ts",
+      skipPostpublish: false,
       skipGitHubRelease: true,
       skipClawHub: true,
       rerunFailedClawHub: true,
@@ -158,6 +180,27 @@ describe("parseReleaseVerifyBetaArgs", () => {
         npmTelegram: "44",
       },
     });
+  });
+
+  it("only accepts the trusted tooling postpublish verifier override", () => {
+    expect(resolveOpenClawNpmPostpublishVerifier("/tmp/release")).toBe(
+      "/tmp/release/scripts/openclaw-npm-postpublish-verify.ts",
+    );
+    const trustedVerifier = resolve("scripts/openclaw-npm-postpublish-verify.ts");
+    expect(resolveOpenClawNpmPostpublishVerifier("/tmp/release", trustedVerifier)).toBe(
+      trustedVerifier,
+    );
+    expect(() =>
+      resolveOpenClawNpmPostpublishVerifier("/tmp/release", "/tmp/untrusted-verifier.ts"),
+    ).toThrow("must select the trusted tooling verifier");
+    expect(() =>
+      parseReleaseVerifyBetaArgs([
+        "2026.5.10-beta.3",
+        "--postpublish-verifier",
+        trustedVerifier,
+        "--skip-postpublish",
+      ]),
+    ).toThrow("cannot be combined");
   });
 
   it("requires exact target and package inputs for bootstrap run verification", () => {
@@ -185,9 +228,9 @@ describe("parseReleaseVerifyBetaArgs", () => {
 
 describe("validateClawHubBootstrapEvidence", () => {
   const clawhubToolchainIntegrity =
-    "sha512-YvUImhsVaM90BUAv3uP7lfABziwR5XL3ch2Owa+GvNxwQ2xzZFmZC0yVjAtQbvep+dDDS16nUGRwKx7jqnTOEA==";
-  const clawhubToolchainSha256 = "f44f670d70f13a8cde566a174cae5be682ad98456ec7a85aafd497f7d8c71816";
-  const clawhubToolchainVersion = "0.23.1";
+    "sha512-VwM6FQrZVarFRDiEqG42npUeyCu/iLhPnpO+b7kKIGRXv+TA6Lb8pboHnIgT6cmjFEnW3j/pTbshWeDQMQ7QWQ==";
+  const clawhubToolchainSha256 = "9606849698f041afdd2c2600633320f6b7c1e5136d06b98ce16c169c055c0f83";
+  const clawhubToolchainVersion = "0.23.3";
   const releaseSha = "a".repeat(40);
   const workflowSha = "b".repeat(40);
   const packageSha = "c".repeat(64);
@@ -597,7 +640,9 @@ describe("runNpmViewWithRetry", () => {
         run: (args) => {
           calls.push(args);
           if (calls.length < 3) {
-            throw new Error("npm registry has not propagated the release yet");
+            throw Object.assign(new Error("npm registry has not propagated the release yet"), {
+              code: "E404",
+            });
           }
           return '"2026.5.10-beta.3"';
         },
@@ -607,6 +652,71 @@ describe("runNpmViewWithRetry", () => {
     expect(calls).toHaveLength(3);
     expect(calls.every((args) => args.at(-1) === "--prefer-online")).toBe(true);
     expect(delays).toEqual([1000, 2000]);
+  });
+
+  it("fails a timed-out npm read after one attempt and reaps the child", async () => {
+    const delay = vi.fn(async () => {});
+    let calls = 0;
+    let timeoutError: CommandError | undefined;
+    const result = runNpmViewWithRetry(["view", "openclaw", "version"], {
+      attempts: 3,
+      delay,
+      run: () => {
+        calls += 1;
+        try {
+          return runReleaseVerifierCommand(
+            process.execPath,
+            ["-e", "process.stdout.write(String(process.pid)); setInterval(() => {}, 1000)"],
+            { timeoutMs: 5_000 },
+          );
+        } catch (error) {
+          timeoutError = error as CommandError;
+          throw error;
+        }
+      },
+    });
+    await expect(result).rejects.toMatchObject({ code: "ETIMEDOUT", signal: "SIGKILL" });
+    expect(calls).toBe(1);
+    expect(delay).not.toHaveBeenCalled();
+    const observedTimeoutError = expectDefined(timeoutError, "timeout command error");
+    const childPid = Number(observedTimeoutError.stdout?.trim());
+    expect(Number.isInteger(childPid) && childPid > 0).toBe(true);
+    expect(() => process.kill(childPid, 0)).toThrow();
+  });
+});
+
+describe("runReleaseVerifierCommand", () => {
+  it("trims successful captured output", () => {
+    expect(
+      runReleaseVerifierCommand(process.execPath, [
+        "-e",
+        'process.stdout.write("  release ready  \\n")',
+      ]),
+    ).toBe("release ready");
+  });
+
+  it("preserves stdout and stderr when a command exits nonzero", () => {
+    const error = captureCommandError(() =>
+      runReleaseVerifierCommand(process.execPath, [
+        "-e",
+        'process.stdout.write("partial output"); process.stderr.write("failure detail"); process.exit(7)',
+      ]),
+    );
+    expect(error).toMatchObject({ status: 7 });
+    expect(error.stdout).toContain("partial output");
+    expect(error.stderr).toContain("failure detail");
+  });
+
+  it("fails when captured output exceeds the command buffer", () => {
+    const error = captureCommandError(() =>
+      runReleaseVerifierCommand(
+        process.execPath,
+        ["-e", 'process.stdout.write("x".repeat(4096))'],
+        { maxBufferBytes: 64 },
+      ),
+    );
+    expect(error.code).toBe("ENOBUFS");
+    expect(error.stdout).toContain("x");
   });
 });
 
@@ -709,13 +819,13 @@ describe("readBoundedJsonResponse", () => {
         "ClawHub package",
         64,
       ),
-    ).rejects.toThrow("ClawHub package response body exceeded 64 bytes.");
+    ).rejects.toThrow("ClawHub package response body exceeded 64 bytes");
   });
 
   it("rejects oversized streamed JSON bodies", async () => {
     await expect(
       readBoundedJsonResponse(new Response('{"padding":"too-large"}'), "ClawHub package", 8),
-    ).rejects.toThrow("ClawHub package response body exceeded 8 bytes.");
+    ).rejects.toThrow("ClawHub package response body exceeded 8 bytes");
   });
 
   it("keeps ClawHub request timeouts active while reading JSON bodies", async () => {

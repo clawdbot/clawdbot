@@ -19,10 +19,6 @@ PROFILE_FILE="$(openclaw_live_default_profile_file)"
 ACP_AGENT_LIST_RAW="${OPENCLAW_LIVE_ACP_BIND_AGENTS:-${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude,codex,gemini}}"
 ACP_CLAUDE_AUTH_MODE="${OPENCLAW_LIVE_ACP_BIND_CLAUDE_AUTH:-auto}"
 ACP_SETUP_TIMEOUT_SECONDS="$(openclaw_live_read_positive_int_env OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS 180)"
-TEMP_DIRS=()
-DOCKER_USER="${OPENCLAW_DOCKER_USER:-node}"
-DOCKER_HOME_MOUNT=()
-DOCKER_AUTH_PRESTAGED=0
 DOCKER_TRUSTED_HARNESS_CONTAINER_DIR="/trusted-harness"
 DOCKER_TRUSTED_HARNESS_MOUNT=(-v "$TRUSTED_HARNESS_DIR":"$DOCKER_TRUSTED_HARNESS_CONTAINER_DIR":ro)
 
@@ -72,42 +68,9 @@ case "$ACP_CLAUDE_AUTH_MODE" in
     ;;
 esac
 
-cleanup_temp_dirs() {
-  if ((${#TEMP_DIRS[@]} > 0)); then
-    rm -rf "${TEMP_DIRS[@]}"
-  fi
-}
-trap cleanup_temp_dirs EXIT
-
-if [[ -n "${OPENCLAW_DOCKER_CLI_TOOLS_DIR:-}" ]]; then
-  CLI_TOOLS_DIR="${OPENCLAW_DOCKER_CLI_TOOLS_DIR}"
-elif openclaw_live_is_ci; then
-  CLI_TOOLS_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cli-tools.XXXXXX")"
-  TEMP_DIRS+=("$CLI_TOOLS_DIR")
-else
-  CLI_TOOLS_DIR="$HOME/.cache/openclaw/docker-cli-tools"
-fi
-if [[ -n "${OPENCLAW_DOCKER_CACHE_HOME_DIR:-}" ]]; then
-  CACHE_HOME_DIR="${OPENCLAW_DOCKER_CACHE_HOME_DIR}"
-elif openclaw_live_is_ci; then
-  CACHE_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-cache.XXXXXX")"
-  TEMP_DIRS+=("$CACHE_HOME_DIR")
-else
-  CACHE_HOME_DIR="$HOME/.cache/openclaw/docker-cache"
-fi
-
-openclaw_live_prepare_bind_dir_for_container_user "$CLI_TOOLS_DIR"
-openclaw_live_prepare_bind_dir_for_container_user "$CACHE_HOME_DIR"
-if openclaw_live_uses_managed_bind_dirs; then
-  DOCKER_USER="$(id -u):$(id -g)"
-fi
-
-PROFILE_MOUNT=()
-PROFILE_STATUS="none"
-if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-  PROFILE_STATUS="$PROFILE_FILE"
-fi
-
+openclaw_live_init_temp_dirs
+openclaw_live_init_cli_tools_dir
+openclaw_live_init_cache_home_dir
 openclaw_live_acp_bind_load_factory_api_key_from_profile() {
   [[ -z "${FACTORY_API_KEY:-}" ]] || return 0
   [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]] || return 0
@@ -140,47 +103,15 @@ export npm_config_cache="$NPM_CONFIG_CACHE"
 mkdir -p "$NPM_CONFIG_PREFIX" "$HOME/.local/bin" "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE"
 chmod 700 "$XDG_CACHE_HOME" "$COREPACK_HOME" "$NPM_CONFIG_CACHE" || true
 export PATH="$HOME/.local/bin:$NPM_CONFIG_PREFIX/bin:$PATH"
+trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
+source "$trusted_scripts_dir/lib/live-docker-stage.sh"
+openclaw_live_stage_mounted_auth
 run_setup_command() {
-  local timeout_value="${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:?missing live ACP bind setup timeout seconds}s"
-  local timeout_bin=""
-  if command -v timeout >/dev/null 2>&1; then
-    timeout_bin="timeout"
-  elif command -v gtimeout >/dev/null 2>&1; then
-    timeout_bin="gtimeout"
-  else
-    echo "timeout command not found; cannot bound live ACP bind setup after ${timeout_value}" >&2
-    return 127
-  fi
-  if "$timeout_bin" --kill-after=1s 1s true >/dev/null 2>&1; then
-    "$timeout_bin" --kill-after=30s "$timeout_value" "$@"
-  else
-    "$timeout_bin" "$timeout_value" "$@"
-  fi
+  openclaw_live_run_setup_command \
+    "${OPENCLAW_LIVE_ACP_BIND_SETUP_TIMEOUT_SECONDS:?missing live ACP bind setup timeout seconds}" \
+    "live ACP bind setup" \
+    "$@"
 }
-if [ "${OPENCLAW_DOCKER_AUTH_PRESTAGED:-0}" != "1" ]; then
-  IFS=',' read -r -a auth_dirs <<<"${OPENCLAW_DOCKER_AUTH_DIRS_RESOLVED:-}"
-  IFS=',' read -r -a auth_files <<<"${OPENCLAW_DOCKER_AUTH_FILES_RESOLVED:-}"
-  if ((${#auth_dirs[@]} > 0)); then
-    for auth_dir in "${auth_dirs[@]}"; do
-      [ -n "$auth_dir" ] || continue
-      if [ -d "/host-auth/$auth_dir" ]; then
-        mkdir -p "$HOME/$auth_dir"
-        cp -R "/host-auth/$auth_dir/." "$HOME/$auth_dir"
-        chmod -R u+rwX "$HOME/$auth_dir" || true
-      fi
-    done
-  fi
-  if ((${#auth_files[@]} > 0)); then
-    for auth_file in "${auth_files[@]}"; do
-      [ -n "$auth_file" ] || continue
-      if [ -f "/host-auth-files/$auth_file" ]; then
-        mkdir -p "$(dirname "$HOME/$auth_file")"
-        cp "/host-auth-files/$auth_file" "$HOME/$auth_file"
-        chmod u+rw "$HOME/$auth_file" || true
-      fi
-    done
-  fi
-fi
 agent="${OPENCLAW_LIVE_ACP_BIND_AGENT:-claude}"
 case "$agent" in
   claude)
@@ -297,8 +228,6 @@ NODE
     ;;
 esac
 tmp_dir="$(mktemp -d)"
-trusted_scripts_dir="${OPENCLAW_LIVE_DOCKER_SCRIPTS_DIR:-/src/scripts}"
-source "$trusted_scripts_dir/lib/live-docker-stage.sh"
 openclaw_live_stage_source_tree "$tmp_dir"
 openclaw_live_stage_node_modules "$tmp_dir"
 openclaw_live_link_runtime_tree "$tmp_dir"
@@ -306,7 +235,7 @@ openclaw_live_stage_state_dir "$tmp_dir/.openclaw-state"
 openclaw_live_prepare_staged_config
 cd "$tmp_dir"
 export OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND="${OPENCLAW_LIVE_ACP_BIND_AGENT_COMMAND:-}"
-node scripts/test-live.mjs -- ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}
+node --import tsx scripts/test-live.mts -- ${OPENCLAW_LIVE_ACP_BIND_TEST_FILES:-src/gateway/gateway-acp-bind.live.test.ts}
 EOF
 
 openclaw_live_acp_bind_append_build_extension acpx
@@ -330,55 +259,11 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
   AUTH_PROVIDER="$(openclaw_live_acp_bind_resolve_auth_provider "$ACP_AGENT")"
   AGENT_COMMAND="$(openclaw_live_acp_bind_resolve_agent_command "$ACP_AGENT")"
 
-  AUTH_DIRS=()
-  AUTH_FILES=()
-  if [[ -n "${OPENCLAW_DOCKER_AUTH_DIRS:-}" ]]; then
-    while IFS= read -r auth_dir; do
-      [[ -n "$auth_dir" ]] || continue
-      AUTH_DIRS+=("$auth_dir")
-    done < <(openclaw_live_collect_auth_dirs)
-    while IFS= read -r auth_file; do
-      [[ -n "$auth_file" ]] || continue
-      AUTH_FILES+=("$auth_file")
-    done < <(openclaw_live_collect_auth_files)
-  else
-    while IFS= read -r auth_dir; do
-      [[ -n "$auth_dir" ]] || continue
-      AUTH_DIRS+=("$auth_dir")
-    done < <(openclaw_live_collect_auth_dirs_from_csv "$AUTH_PROVIDER")
-    while IFS= read -r auth_file; do
-      [[ -n "$auth_file" ]] || continue
-      AUTH_FILES+=("$auth_file")
-    done < <(openclaw_live_collect_auth_files_from_csv "$AUTH_PROVIDER")
-  fi
-
-  AUTH_DIRS_CSV=""
-  if ((${#AUTH_DIRS[@]} > 0)); then
-    AUTH_DIRS_CSV="$(openclaw_live_join_csv "${AUTH_DIRS[@]}")"
-  fi
-  AUTH_FILES_CSV=""
-  if ((${#AUTH_FILES[@]} > 0)); then
-    AUTH_FILES_CSV="$(openclaw_live_join_csv "${AUTH_FILES[@]}")"
-  fi
-
-  DOCKER_HOME_MOUNT=()
+  openclaw_live_collect_auth_for_providers "$AUTH_PROVIDER"
   DOCKER_AUTH_PRESTAGED=0
-  if openclaw_live_uses_managed_bind_dirs; then
-    DOCKER_HOME_DIR="$(mktemp -d "${RUNNER_TEMP:-/tmp}/openclaw-docker-home.XXXXXX")"
-    TEMP_DIRS+=("$DOCKER_HOME_DIR")
-    openclaw_live_prepare_bind_dir_for_container_user "$DOCKER_HOME_DIR"
-    DOCKER_HOME_MOUNT=(-v "$DOCKER_HOME_DIR":/home/node)
-    if [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-      openclaw_live_stage_profile_into_home "$DOCKER_HOME_DIR" "$PROFILE_FILE"
-    fi
-  elif [[ -f "$PROFILE_FILE" && -r "$PROFILE_FILE" ]]; then
-    PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
-  fi
-
-  if [[ -n "${DOCKER_HOME_DIR:-}" ]]; then
-    openclaw_live_stage_auth_into_home "$DOCKER_HOME_DIR" "${AUTH_DIRS[@]}" --files "${AUTH_FILES[@]}"
-    DOCKER_AUTH_PRESTAGED=1
-  fi
+  openclaw_live_init_managed_home
+  openclaw_live_init_profile_mount
+  openclaw_live_finalize_auth_mounts
 
   if [[ "$ACP_AGENT" == "droid" ]]; then
     openclaw_live_acp_bind_load_factory_api_key_from_profile
@@ -399,26 +284,6 @@ for ACP_AGENT in "${ACP_AGENTS[@]}"; do
     else
       CLAUDE_AUTH_MODE="api-key"
     fi
-  fi
-
-  EXTERNAL_AUTH_MOUNTS=()
-  if ((${#AUTH_DIRS[@]} > 0)); then
-    for auth_dir in "${AUTH_DIRS[@]}"; do
-      auth_dir="$(openclaw_live_validate_relative_home_path "$auth_dir")"
-      host_path="$HOME/$auth_dir"
-      if [[ -d "$host_path" ]]; then
-        EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
-      fi
-    done
-  fi
-  if ((${#AUTH_FILES[@]} > 0)); then
-    for auth_file in "${AUTH_FILES[@]}"; do
-      auth_file="$(openclaw_live_validate_relative_home_path "$auth_file")"
-      host_path="$HOME/$auth_file"
-      if [[ -f "$host_path" ]]; then
-        EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth-files/"$auth_file":ro)
-      fi
-    done
   fi
 
   echo "==> Run ACP bind live test in Docker"

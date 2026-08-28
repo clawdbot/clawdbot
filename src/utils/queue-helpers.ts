@@ -6,21 +6,22 @@ import { expectDefined } from "@openclaw/normalization-core";
  * debounce drains, and force individual collection when cross-channel ordering matters.
  */
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import { isFastTestRuntimeEnv } from "../infra/env.js";
 
-/** Mutable summary state for a capped queue. */
+/** Pending overflow summary state produced by the summarize drop policy. */
 type QueueSummaryState = {
-  dropPolicy: "summarize" | "old" | "new";
   droppedCount: number;
   summaryLines: string[];
 };
 
-/** Queue overflow strategy. */
-type QueueDropPolicy = QueueSummaryState["dropPolicy"];
+/** Queue overflow strategy for future admissions. */
+type QueueDropPolicy = "summarize" | "old" | "new";
 
 /** Generic capped queue state with shared overflow summary fields. */
 type QueueState<T> = QueueSummaryState & {
   items: T[];
   cap: number;
+  dropPolicy: QueueDropPolicy;
 };
 
 /** Build a summary prompt preview without mutating the source queue state. */
@@ -29,11 +30,20 @@ export function previewQueueSummaryPrompt(params: {
   noun: string;
   title?: string;
 }): string | undefined {
-  return buildQueueSummaryPrompt({
-    state: params.state,
-    noun: params.noun,
-    title: params.title,
-  });
+  if (params.state.droppedCount <= 0) {
+    return undefined;
+  }
+  const title =
+    params.title ??
+    `[Queue overflow] Dropped ${params.state.droppedCount} ${params.noun}${params.state.droppedCount === 1 ? "" : "s"} due to cap.`;
+  const lines = [title];
+  if (params.state.summaryLines.length > 0) {
+    lines.push("Summary:");
+    for (const line of params.state.summaryLines) {
+      lines.push(`- ${line}`);
+    }
+  }
+  return lines.join("\n");
 }
 
 /** Apply runtime queue settings while preserving previous values for omitted fields. */
@@ -63,18 +73,12 @@ export function applyQueueRuntimeSettings<TMode extends string>(params: {
   params.target.dropPolicy = params.settings.dropPolicy ?? params.target.dropPolicy;
 }
 
-/** Trim queue summary text to a bounded single-line preview. */
-function elideQueueText(text: string, limit = 140): string {
-  if (text.length <= limit) {
-    return text;
-  }
-  return `${truncateUtf16Safe(text, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-
 /** Normalize whitespace and elide one dropped item for queue summaries. */
 function buildQueueSummaryLine(text: string, limit = 160): string {
   const cleaned = text.replace(/\s+/g, " ").trim();
-  return elideQueueText(cleaned, limit);
+  return cleaned.length <= limit
+    ? cleaned
+    : `${truncateUtf16Safe(cleaned, Math.max(0, limit - 1)).trimEnd()}…`;
 }
 
 /** Run optional duplicate detection before an item enters a queue. */
@@ -109,6 +113,7 @@ export function applyQueueDropPolicy<T>(params: {
   summarize: (item: T) => string;
   summaryLimit?: number;
   onDrop?: (items: T[]) => void;
+  onSummaryElide?: (lines: string[]) => void;
   inFlight?: ReadonlySet<T>;
   isProtected?: (item: T) => boolean;
 }): boolean {
@@ -152,8 +157,15 @@ export function applyQueueDropPolicy<T>(params: {
     }
     // Summary memory is bounded independently from the item cap to avoid prompt blowups.
     const limit = Math.max(0, params.summaryLimit ?? cap);
+    const elidedLines: string[] = [];
     while (params.queue.summaryLines.length > limit) {
-      params.queue.summaryLines.shift();
+      const line = params.queue.summaryLines.shift();
+      if (line !== undefined) {
+        elidedLines.push(line);
+      }
+    }
+    if (elidedLines.length > 0) {
+      params.onSummaryElide?.(elidedLines);
     }
   }
   return true;
@@ -167,7 +179,7 @@ export function waitForQueueDebounce(
   },
   abortSignal?: AbortSignal,
 ): Promise<void> {
-  if (process.env.OPENCLAW_TEST_FAST === "1") {
+  if (isFastTestRuntimeEnv()) {
     // Tests use this escape hatch so debounce logic does not slow deterministic queue specs.
     return Promise.resolve();
   }
@@ -260,26 +272,6 @@ export async function drainNextQueueItem<T>(
   return true;
 }
 
-/** Drain one item when collect mode requires individual processing. */
-async function drainCollectItemIfNeeded<T>(params: {
-  forceIndividualCollect: boolean;
-  isCrossChannel: boolean;
-  setForceIndividualCollect?: (next: boolean) => void;
-  items: T[];
-  run: (item: T) => Promise<void>;
-  reserveOptions?: DrainQueueItemOptions<T>;
-}): Promise<"skipped" | "drained" | "empty"> {
-  if (!params.forceIndividualCollect && !params.isCrossChannel) {
-    return "skipped";
-  }
-  if (params.isCrossChannel) {
-    // Once cross-channel items appear, future collection stays individual to preserve ordering.
-    params.setForceIndividualCollect?.(true);
-  }
-  const drained = await drainNextQueueItem(params.items, params.run, params.reserveOptions);
-  return drained ? "drained" : "empty";
-}
-
 /** Drain one collect step using mutable queue collection state. */
 export async function drainCollectQueueStep<T>(params: {
   collectState: { forceIndividualCollect: boolean };
@@ -288,39 +280,15 @@ export async function drainCollectQueueStep<T>(params: {
   run: (item: T) => Promise<void>;
   reserveOptions?: DrainQueueItemOptions<T>;
 }): Promise<"skipped" | "drained" | "empty"> {
-  return await drainCollectItemIfNeeded({
-    forceIndividualCollect: params.collectState.forceIndividualCollect,
-    isCrossChannel: params.isCrossChannel,
-    setForceIndividualCollect: (next) => {
-      params.collectState.forceIndividualCollect = next;
-    },
-    items: params.items,
-    run: params.run,
-    reserveOptions: params.reserveOptions,
-  });
-}
-
-/** Build the queue overflow summary prompt. */
-function buildQueueSummaryPrompt(params: {
-  state: QueueSummaryState;
-  noun: string;
-  title?: string;
-}): string | undefined {
-  if (params.state.dropPolicy !== "summarize" || params.state.droppedCount <= 0) {
-    return undefined;
+  if (!params.collectState.forceIndividualCollect && !params.isCrossChannel) {
+    return "skipped";
   }
-  const noun = params.noun;
-  const title =
-    params.title ??
-    `[Queue overflow] Dropped ${params.state.droppedCount} ${noun}${params.state.droppedCount === 1 ? "" : "s"} due to cap.`;
-  const lines = [title];
-  if (params.state.summaryLines.length > 0) {
-    lines.push("Summary:");
-    for (const line of params.state.summaryLines) {
-      lines.push(`- ${line}`);
-    }
+  if (params.isCrossChannel) {
+    // Once cross-channel items appear, future collection stays individual to preserve ordering.
+    params.collectState.forceIndividualCollect = true;
   }
-  return lines.join("\n");
+  const drained = await drainNextQueueItem(params.items, params.run, params.reserveOptions);
+  return drained ? "drained" : "empty";
 }
 
 /** Render a collect prompt from queued items and optional overflow summary. */

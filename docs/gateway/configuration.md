@@ -19,6 +19,8 @@ Common reasons to add a config:
 
 See the [full reference](/gateway/configuration-reference) for every available field.
 
+Configuration follows a two-bucket rule: root siblings hold infrastructure and cross-agent defaults, while `agents.defaults` holds agent-loop behavior. Entries under `agents.entries` may override either bucket where the schema supports a per-agent override.
+
 Agents and automation should use `config.schema.lookup` for exact field-level
 docs before editing config. Use this page for task-oriented guidance and
 [Configuration reference](/gateway/configuration-reference) for the broader
@@ -61,6 +63,12 @@ field map and defaults.
     available, with a **Raw JSON** editor as an escape hatch. For drill-down
     UIs and other tooling, the gateway also exposes `config.schema.lookup` to
     fetch one path-scoped schema node plus immediate child summaries.
+    Settings show common fields first. Each section keeps its advanced fields
+    in a collapsed **Advanced (N)** group; use **Show advanced** to expand all
+    groups. Settings search always includes both tiers and opens the matching
+    advanced group when needed. Per-channel settings under **Settings ->
+    Channels** use the same split and share the **Show advanced** preference,
+    with **Hide advanced** on the divider to collapse them again.
   </Tab>
   <Tab title="Direct edit">
     Edit `~/.openclaw/openclaw.json` directly. The Gateway watches the file and applies changes automatically (see [hot reload](#config-hot-reload)).
@@ -79,6 +87,12 @@ child summaries for drill-down tooling. Field `title`/`description` docs metadat
 carries through nested objects, wildcard (`*`), array-item (`[]`), and `anyOf`/
 `oneOf`/`allOf` branches. Runtime plugin and channel schemas merge in when the
 manifest registry is loaded.
+
+Every config leaf has a common or advanced presentation tier in `uiHints`.
+`advanced: false` marks common settings and `advanced: true` marks advanced
+settings. A leaf inherits the nearest ancestor tier when it has no direct hint;
+paths with no declared ancestor default to advanced. This affects presentation
+only, not validation, defaults, reload behavior, or whether the key can be set.
 
 When validation fails:
 
@@ -151,8 +165,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - `agents.defaults.models` defines the model catalog and acts as the allowlist for `/model`; `provider/*` entries filter `/model`, `/models`, and model pickers to selected providers while still using dynamic model discovery.
-    - Use `openclaw config set agents.defaults.models '<json>' --strict-json --merge` to add allowlist entries without removing existing models. Plain replacements that would remove entries are rejected unless you pass `--replace`.
+    - `agents.defaults.models` stores aliases and per-model settings; adding an entry never restricts `/model` or `--model` overrides.
+    - `agents.defaults.modelPolicy.allow` is the explicit allowlist for overrides and model pickers. It accepts exact refs and `provider/*` wildcards; omit it or use `[]` to allow any model.
     - Model refs use `provider/model` format (e.g. `anthropic/claude-opus-4-6`).
     - `agents.defaults.imageMaxDimensionPx` controls transcript/tool image downscaling (default `1200`); lower values usually reduce vision-token usage on screenshot-heavy runs.
     - See [Models CLI](/concepts/models) for switching models in chat and [Model Failover](/concepts/model-failover) for auth rotation and fallback behavior.
@@ -187,14 +201,14 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         },
       },
       agents: {
-        list: [
-          {
-            id: "main",
+        entries: {
+          main: {
+            default: true,
             groupChat: {
               mentionPatterns: ["@openclaw", "openclaw"],
             },
           },
-        ],
+        },
       },
       channels: {
         whatsapp: {
@@ -213,7 +227,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
 
   <Accordion title="Restrict skills per agent">
     Use `agents.defaults.skills` for a shared baseline, then override specific
-    agents with `agents.list[].skills`:
+    agents with `agents.entries.*.skills`:
 
     ```json5
     {
@@ -221,33 +235,28 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         defaults: {
           skills: ["github", "weather"],
         },
-        list: [
-          { id: "writer" }, // inherits github, weather
-          { id: "docs", skills: ["docs-search"] }, // replaces defaults
-          { id: "locked-down", skills: [] }, // no skills
-        ],
+        entries: {
+          writer: { default: true }, // inherits github, weather
+          docs: { skills: ["docs-search"] }, // replaces defaults
+          "locked-down": { skills: [] }, // no skills
+        },
       },
     }
     ```
 
     - Omit `agents.defaults.skills` for unrestricted skills by default.
-    - Omit `agents.list[].skills` to inherit the defaults.
-    - Set `agents.list[].skills: []` for no skills.
+    - Omit `agents.entries.*.skills` to inherit the defaults.
+    - Set `agents.entries.*.skills: []` for no skills.
     - See [Skills](/tools/skills), [Skills config](/tools/skills-config), and
       the [Configuration Reference](/gateway/config-agents#agents-defaults-skills).
 
   </Accordion>
 
-  <Accordion title="Tune gateway channel health monitoring">
-    Control how aggressively the gateway restarts channels that look stale:
+  <Accordion title="Configure per-channel health monitoring">
+    Disable or enable automatic health restarts for a channel or account:
 
     ```json5
     {
-      gateway: {
-        channelHealthCheckMinutes: 5,
-        channelStaleEventThresholdMinutes: 30,
-        channelMaxRestartsPerHour: 10,
-      },
       channels: {
         telegram: {
           healthMonitor: { enabled: false },
@@ -261,28 +270,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - Values shown are the defaults. Set `gateway.channelHealthCheckMinutes: 0` to disable health-monitor restarts globally.
-    - `channelStaleEventThresholdMinutes` should be greater than or equal to the check interval.
-    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to disable auto-restarts for one channel or account without disabling the global monitor.
+    - Use `channels.<provider>.healthMonitor.enabled` or `channels.<provider>.accounts.<id>.healthMonitor.enabled` to control auto-restarts for one channel or account.
     - See [Health Checks](/gateway/health) for operational debugging and the [full reference](/gateway/configuration-reference#gateway) for all fields.
-
-  </Accordion>
-
-  <Accordion title="Tune gateway WebSocket handshake timeout">
-    Give local clients more time to complete the pre-auth WebSocket handshake on
-    loaded or low-powered hosts:
-
-    ```json5
-    {
-      gateway: {
-        handshakeTimeoutMs: 30000,
-      },
-    }
-    ```
-
-    - Default is `15000` milliseconds.
-    - `OPENCLAW_HANDSHAKE_TIMEOUT_MS` still takes precedence for one-off service or shell overrides.
-    - Prefer fixing startup/event-loop stalls first; this knob is for hosts that are healthy but slow during warmup.
 
   </Accordion>
 
@@ -401,15 +390,15 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
         defaults: {
           heartbeat: {
             every: "30m",
-            target: "last",
+            target: "owner",
           },
         },
       },
     }
     ```
 
-    - `every`: duration string (`30m`, `2h`). Set `0m` to disable. Default: `30m`.
-    - `target`: `last` | `none` | `<channel-id>` (for example `discord`, `matrix`, `telegram`, or `whatsapp`)
+    - `every`: duration string (`30m`, `2h`). Set `0m` to disable recurring cadence; targeted event-driven wakes can still run one agent turn. Default: `30m`.
+    - `target`: `owner` (default operator DM) | `last` (latest conversation, including groups) | `none` (internal only) | `<channel-id>`
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.
 
@@ -420,14 +409,13 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     {
       cron: {
         enabled: true,
-        maxConcurrentRuns: 8, // default; cron dispatch + isolated cron agent-turn execution
         sessionRetention: "24h",
       },
     }
     ```
 
-    - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` to disable).
-    - Run history automatically keeps the newest 2000 terminal rows per job; lost rows retain their 24-hour cleanup window.
+    - `sessionRetention`: prune completed isolated run sessions from SQLite session rows (default `24h`; set `false` or a zero duration such as `"0h"` to disable).
+    - Terminal run history is retained for 7 days (`lost` rows for 24 hours), with the newest 2000 rows per job and history class enforced as an additional ceiling.
     - See [Cron jobs](/automation/cron-jobs) for feature overview and CLI examples.
 
   </Accordion>
@@ -449,6 +437,8 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
             match: { path: "gmail" },
             action: "agent",
             agentId: "main",
+            sessionKey: "hook:gmail",
+            sessionMode: "persistent",
             deliver: true,
           },
         ],
@@ -463,6 +453,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     - `hooks.path` cannot be `/`; keep webhook ingress on a dedicated subpath such as `/hooks`.
     - Keep unsafe-content bypass flags disabled (`hooks.gmail.allowUnsafeExternalContent`, `hooks.mappings[].allowUnsafeExternalContent`) unless doing tightly scoped debugging.
     - If you enable `hooks.allowRequestSessionKey`, also set `hooks.allowedSessionKeyPrefixes` to bound caller-selected session keys.
+    - Keep hook sessions isolated unless durable context is intentional. Direct persistent hooks require an explicit, prefix-bounded request `sessionKey`; mapped persistent hooks require a stable mapping key or `hooks.defaultSessionKey`.
     - For hook-driven agents, prefer strong modern model tiers and strict tool policy (for example messaging-only plus sandboxing where possible).
 
     See [full reference](/gateway/configuration-reference#hooks) for all mapping options and Gmail integration.
@@ -475,10 +466,10 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     ```json5
     {
       agents: {
-        list: [
-          { id: "home", default: true, workspace: "~/.openclaw/workspace-home" },
-          { id: "work", workspace: "~/.openclaw/workspace-work" },
-        ],
+        entries: {
+          home: { default: true, workspace: "~/.openclaw/workspace-home" },
+          work: { workspace: "~/.openclaw/workspace-work" },
+        },
       },
       bindings: [
         { agentId: "home", match: { channel: "whatsapp", accountId: "personal" } },
@@ -544,26 +535,30 @@ for the checklist.
 
 ### Reload modes
 
-| Mode                   | Behavior                                                                                |
-| ---------------------- | --------------------------------------------------------------------------------------- |
-| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones.           |
-| **`hot`**              | Hot-applies safe changes only. Logs a warning when a restart is needed - you handle it. |
-| **`restart`**          | Restarts the Gateway on any config change, safe or not.                                 |
-| **`off`**              | Disables file watching. Changes take effect on the next manual restart.                 |
+| Mode                   | Behavior                                                                      |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| **`hybrid`** (default) | Hot-applies safe changes instantly. Automatically restarts for critical ones. |
+| **`off`**              | Disables file watching. Changes take effect on the next manual restart.       |
 
 ```json5
 {
   gateway: {
-    reload: { mode: "hybrid", debounceMs: 300 },
+    reload: { mode: "hybrid" },
   },
 }
 ```
+
+The earlier `hot` and `restart` modes are retired; [`openclaw doctor --fix`](/cli/doctor) maps both to `hybrid`. Reload debounce is no longer configurable and runs behind a built-in default.
 
 ### What hot-applies vs what needs a restart
 
 Most fields hot-apply without downtime; some hot-applied sections restart just that
 subsystem (channel, cron, heartbeat, health monitor) rather than the whole Gateway. In
 `hybrid` mode, Gateway-restart-required changes are handled automatically.
+
+By default, changing `agents.defaults.mediaMaxMb` restarts channel runtimes so their inherited
+attachment limits take effect together. Automatic reloads preserve manually
+stopped accounts; use an explicit channel start to resume those accounts.
 
 | Category            | Fields                                                                  | Gateway restart needed?      |
 | ------------------- | ----------------------------------------------------------------------- | ---------------------------- |
@@ -580,6 +575,13 @@ subsystem (channel, cron, heartbeat, health monitor) rather than the whole Gatew
 <Note>
 `gateway.reload` and `gateway.remote` are exceptions under `gateway.*` - changing them does **not** trigger a restart. Individual plugins can also override this table: a loaded plugin may declare its own restart-triggering config prefixes (for example the bundled Canvas plugin restarts the Gateway for `plugins.enabled`, `plugins.allow`, and `plugins.deny`, not just its own `plugins.entries.canvas`), so the actual behavior depends on which plugins are active.
 </Note>
+
+Plugin hot reload uses the package metadata discovered at Gateway startup.
+Enablement, plugin config, and account changes do not rescan plugin files.
+Install, update, uninstall, and explicit plugin metadata refresh require a
+Gateway restart; `hybrid` schedules that restart, while `off` leaves it to you.
+Changing an agent's workspace also does not discover plugins in the new
+directory until restart. See [Plugin metadata snapshots](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table).
 
 ### Reload planning
 
@@ -611,7 +613,8 @@ subsystem references.
 
 <Note>
 Control-plane writes (`config.apply`, `config.patch`, `update.run`) are
-rate-limited to 3 requests per 60 seconds per `deviceId+clientIp`. Restart
+rate-limited to 30 requests per 60 seconds, per method, per
+`deviceId+clientIp`; see [Rate limiting](/gateway/security/rate-limiting). Restart
 requests coalesce and then enforce a 30-second cooldown between restart cycles.
 `update.status` is read-only but admin-scoped because the restart sentinel can
 include update step summaries and command output tails.
@@ -631,11 +634,23 @@ Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a
 config file already exists (a first write with no existing config skips the check).
 
+For hot-applied changes, these RPCs wait until the active Gateway applies the
+exact write. Channel or plugin reloads may defer for unrelated active work. If
+the file watcher takes over the same unapplied write during that wait, the RPC stays pending
+through replay; persistence alone is not an application acknowledgment. Shutdown,
+supersession by different content, or failed application returns `UNAVAILABLE`
+with recovery guidance. `config.set` acknowledges persistence only.
+
+Once a reload has committed, it finishes its model and channel work before a
+newer config is applied. If that work needs restart recovery, the RPC returns
+`UNAVAILABLE`; wait for the Gateway to restart, then use `config.get` to verify
+the active revision.
+
 `config.patch` also accepts `replacePaths`, an array of config paths whose array
 replacement is intentional. If a patch would replace or delete an existing array
 with fewer entries, the Gateway rejects the write unless that exact path appears
 in `replacePaths`; nested arrays under array entries use `[]`, such as
-`agents.list[].skills`. This prevents truncated `config.get` snapshots from
+`agents.entries.*.skills`. This prevents truncated `config.get` snapshots from
 silently clobbering routing or allowlist arrays. Use `config.apply` when you
 intend to replace the full config.
 
@@ -651,8 +666,10 @@ Neither file overrides existing env vars. You can also set inline env vars in co
 ```json5
 {
   env: {
-    OPENROUTER_API_KEY: "sk-or-...",
-    vars: { GROQ_API_KEY: "gsk-..." },
+    vars: {
+      OPENROUTER_API_KEY: "sk-or-...",
+      GROQ_API_KEY: "gsk-...",
+    },
   },
 }
 ```
@@ -684,14 +701,14 @@ Env var equivalent: `OPENCLAW_LOAD_SHELL_ENV=1`. Default `timeoutMs`: `15000`.
 Rules:
 
 - Only uppercase names matched: `[A-Z_][A-Z0-9_]*`
-- Missing/empty vars throw an error at load time
-- Escape with `$${VAR}` for literal output
+- Missing/empty vars stay visibly unresolved, emit a warning, and are unavailable to consumers that require the value
+- Escape with `$${VAR}` to produce a literal `${VAR}` value
 - Works inside `$include` files
 - Inline substitution: `"${BASE}/v1"` → `"https://api.example.com/v1"`
 
 </Accordion>
 
-<Accordion title="Secret refs (env, file, exec)">
+<Accordion title="Secret refs (env, file, exec, store)">
   For fields that support SecretRef objects, you can use:
 
 ```json5
@@ -714,7 +731,7 @@ Rules:
   },
   channels: {
     googlechat: {
-      serviceAccountRef: {
+      serviceAccount: {
         source: "exec",
         provider: "vault",
         id: "channels/googlechat/serviceAccount",
@@ -724,7 +741,7 @@ Rules:
 }
 ```
 
-SecretRef details (including `secrets.providers` for `env`/`file`/`exec`) are in [Secrets Management](/gateway/secrets).
+SecretRef details (including `secrets.providers` for `env`/`file`/`exec`/`store`) are in [Secrets Management](/gateway/secrets).
 Supported credential paths are listed in [SecretRef Credential Surface](/reference/secretref-credential-surface).
 </Accordion>
 

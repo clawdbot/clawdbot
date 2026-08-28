@@ -1,22 +1,18 @@
 // Formats detailed subagent run information for the info action.
 import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coercion";
-import { subagentRuns } from "../../../agents/subagent-registry-memory.js";
-import { countPendingDescendantRunsFromRuns } from "../../../agents/subagent-registry-queries.js";
-import { getSubagentRunsSnapshotForRead } from "../../../agents/subagent-registry-state.js";
-import { resolveStorePath } from "../../../config/sessions/paths.js";
-import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
+import { countPendingDescendantRuns } from "../../../agents/subagents/registry/subagent-registry-read.js";
+import { resolveSubagentDisplayStatus } from "../../../agents/subagents/registry/subagent-session-metrics.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { loadSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
+import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
 import { formatTimeAgo } from "../../../infra/format-time/format-relative.ts";
 import { parseAgentSessionKey } from "../../../routing/session-key.js";
-import { formatDurationCompact } from "../../../shared/subagents-format.js";
 import { findTaskByRunIdForOwner } from "../../../tasks/task-owner-access.js";
 import { sanitizeTaskStatusText } from "../../../tasks/task-status.js";
+import { commandReply } from "../command-gates.js";
 import type { CommandHandlerResult } from "../commands-types.js";
-import { formatRunLabel, formatRunStatus } from "../subagents-utils.js";
-import {
-  resolveSubagentEntryForToken,
-  stopWithText,
-  type SubagentsCommandContext,
-} from "./shared.js";
+import { formatRunLabel } from "../subagents-utils.js";
+import { resolveSubagentEntryForToken, type SubagentsCommandContext } from "./shared.js";
 
 function formatTimestampWithAge(valueMs?: number) {
   if (!valueMs || !Number.isFinite(valueMs) || valueMs <= 0) {
@@ -29,26 +25,13 @@ function formatTimestampWithAge(valueMs?: number) {
   return `${timestamp} (${formatTimeAgo(Date.now() - valueMs, { fallback: "n/a" })})`;
 }
 
-function resolveDisplayStatus(
-  entry: SubagentsCommandContext["runs"][number],
-  options?: { pendingDescendants?: number },
-) {
-  const pendingDescendants = Math.max(0, options?.pendingDescendants ?? 0);
-  if (pendingDescendants > 0) {
-    const childLabel = pendingDescendants === 1 ? "child" : "children";
-    return `active (waiting on ${pendingDescendants} ${childLabel})`;
-  }
-  const status = formatRunStatus(entry);
-  return status === "error" ? "failed" : status;
-}
-
 function loadSubagentSessionEntry(params: SubagentsCommandContext["params"], childKey: string) {
   const parsed = parseAgentSessionKey(childKey);
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: parsed?.agentId,
   });
   return {
-    entry: loadSessionEntry({
+    entry: loadSessionEntryReadOnly({
       storePath,
       sessionKey: childKey,
       clone: false,
@@ -60,7 +43,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const { params, requesterKey, runs, restTokens } = ctx;
   const target = restTokens[0];
   if (!target) {
-    return stopWithText("ℹ️ Usage: /subagents info <id|#>");
+    return commandReply("ℹ️ Usage: /subagents info <id|#>");
   }
 
   const targetResolution = resolveSubagentEntryForToken(runs, target);
@@ -71,16 +54,19 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
   const run = targetResolution.entry;
   const { entry: sessionEntry } = loadSubagentSessionEntry(params, run.childSessionKey);
   const runtime =
-    run.startedAt && Number.isFinite(run.startedAt)
-      ? (formatDurationCompact((run.endedAt ?? Date.now()) - run.startedAt) ?? "n/a")
+    run.execution.startedAt && Number.isFinite(run.execution.startedAt)
+      ? (formatDurationCompact((run.execution.endedAt ?? Date.now()) - run.execution.startedAt) ??
+        "n/a")
       : "n/a";
-  const outcomeError = sanitizeTaskStatusText(run.outcome?.error, { errorContext: true });
-  const outcome = run.outcome
-    ? `${run.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
+  const outcomeError = sanitizeTaskStatusText(run.execution.outcome?.error, { errorContext: true });
+  const outcome = run.execution.outcome
+    ? `${run.execution.outcome.status}${outcomeError ? ` (${outcomeError})` : ""}`
     : "n/a";
   const linkedTask = findTaskByRunIdForOwner({
     runId: run.runId,
     callerOwnerKey: requesterKey,
+    callerAgentId: params.agentId,
+    config: params.cfg,
   });
   const taskText = sanitizeTaskStatusText(run.task) || "n/a";
   const progressText = sanitizeTaskStatusText(linkedTask?.progressSummary);
@@ -91,12 +77,7 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
 
   const lines = [
     "ℹ️ Subagent info",
-    `Status: ${resolveDisplayStatus(run, {
-      pendingDescendants: countPendingDescendantRunsFromRuns(
-        getSubagentRunsSnapshotForRead(subagentRuns),
-        run.childSessionKey,
-      ),
-    })}`,
+    `Status: ${resolveSubagentDisplayStatus(run, countPendingDescendantRuns(run.childSessionKey))}`,
     `Label: ${formatRunLabel(run)}`,
     `Task: ${taskText}`,
     `Run: ${run.runId}`,
@@ -104,11 +85,10 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `TaskStatus: ${linkedTask.status}` : undefined,
     `Session: ${run.childSessionKey}`,
     `SessionId: ${sessionEntry?.sessionId ?? "n/a"}`,
-    `Transcript: ${sessionEntry?.sessionFile ?? "n/a"}`,
     `Runtime: ${runtime}`,
     `Created: ${formatTimestampWithAge(run.createdAt)}`,
-    `Started: ${formatTimestampWithAge(run.startedAt)}`,
-    `Ended: ${formatTimestampWithAge(run.endedAt)}`,
+    `Started: ${formatTimestampWithAge(run.execution.startedAt)}`,
+    `Ended: ${formatTimestampWithAge(run.execution.endedAt)}`,
     `Cleanup: ${run.cleanup}`,
     run.archiveAtMs ? `Archive: ${formatTimestampWithAge(run.archiveAtMs)}` : undefined,
     run.cleanupHandled ? "Cleanup handled: yes" : undefined,
@@ -119,5 +99,5 @@ export function handleSubagentsInfoAction(ctx: SubagentsCommandContext): Command
     linkedTask ? `Delivery: ${linkedTask.deliveryStatus}` : undefined,
   ].filter(Boolean);
 
-  return stopWithText(lines.join("\n"));
+  return commandReply(lines.join("\n"));
 }

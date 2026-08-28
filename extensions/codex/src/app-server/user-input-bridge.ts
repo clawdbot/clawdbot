@@ -1,17 +1,16 @@
-/**
- * Bridges Codex item/tool user-input requests to OpenClaw messaging prompts and
- * turns replies into app-server answer payloads.
- */
+/** Owns per-turn Codex request_user_input and ordinary MCP elicitation lifecycles. */
 import {
-  buildAgentHarnessUserInputAnswers,
-  deliverAgentHarnessUserInputPrompt,
+  callGatewayTool,
+  agentHarnessStructuredInput as structuredInput,
   embeddedAgentLog,
   emptyAgentHarnessUserInputAnswers,
+  type AgentHarnessQuestionGatewayCall,
   type AgentHarnessUserInputOption,
   type AgentHarnessUserInputQuestion,
-  type EmbeddedRunAttemptParams,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { formatCodexDisplayText } from "../command-formatters.js";
+import { createCodexElicitationResponse } from "./elicitation-response.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -19,207 +18,381 @@ import {
   type JsonValue,
 } from "./protocol.js";
 
-type PendingUserInput = {
+const DEFAULT_USER_INPUT_TIMEOUT_MS = 15 * 60_000;
+// Codex omits a deadline for nonblocking requests, so bound gateway and secret paths alike.
+const NONBLOCKING_USER_INPUT_TIMEOUT_MS = 120_000;
+const MAX_USER_INPUT_QUESTIONS = 3;
+const MAX_USER_INPUT_OPTIONS = 4;
+const MAX_USER_INPUT_ID = 256;
+const MAX_USER_INPUT_HEADER = 64;
+const MAX_USER_INPUT_TEXT = 4_096;
+type StructuredInputCompileResult = ReturnType<typeof structuredInput.compileForm>;
+
+type InteractiveJob = {
   requestId: number | string;
-  threadId: string;
-  turnId: string;
-  itemId: string;
-  questions: AgentHarnessUserInputQuestion[];
+  abort: AbortController;
+  cancelValue: JsonValue;
+  failureValue: JsonValue;
+  run: (signal: AbortSignal) => Promise<JsonValue | undefined>;
   resolve: (value: JsonValue) => void;
-  cleanup: () => void;
 };
 
-type CodexUserInputBridge = {
-  handleRequest: (request: {
-    id: number | string;
-    params?: JsonValue;
-  }) => Promise<JsonValue | undefined>;
-  handleQueuedMessage: (text: string) => boolean;
-  handleNotification: (notification: CodexServerNotification) => void;
-  cancelPending: () => void;
-};
+type CodexInputRequest = { id: number | string; params?: JsonValue };
 
-/** Creates a per-turn bridge for pending Codex user-input requests. */
+/** Creates the single per-turn owner for Codex operator input. */
 export function createCodexUserInputBridge(params: {
   paramsForRun: EmbeddedRunAttemptParams;
   threadId: string;
   turnId: string;
   signal?: AbortSignal;
-}): CodexUserInputBridge {
-  let pending: PendingUserInput | undefined;
+  gatewayCall?: AgentHarnessQuestionGatewayCall;
+}) {
+  const gatewayCall = params.gatewayCall ?? callGatewayTool;
+  const jobs: InteractiveJob[] = [];
+  let activeCompletion: Promise<void> | undefined;
+  const inputSessionKey = params.paramsForRun.sessionKey ?? params.paramsForRun.sessionId;
 
-  const resolvePending = (value: JsonValue) => {
-    const current = pending;
-    if (!current) {
+  const pump = () => {
+    const job = jobs[0];
+    if (activeCompletion || !job) {
       return;
     }
-    pending = undefined;
-    current.cleanup();
-    current.resolve(value);
+    activeCompletion = job
+      .run(job.abort.signal)
+      .catch((error: unknown) => {
+        embeddedAgentLog.warn("failed to bridge codex operator input", { error });
+        return job.abort.signal.aborted ? job.cancelValue : job.failureValue;
+      })
+      .then((value) => {
+        // Lifecycle cancellation owns the request once observed, so a late
+        // answer cannot cross into the queued replacement.
+        job.resolve(job.abort.signal.aborted ? job.cancelValue : (value ?? job.failureValue));
+      })
+      .finally(() => {
+        if (jobs[0] === job) {
+          jobs.shift();
+        }
+        activeCompletion = undefined;
+        pump();
+      });
   };
 
+  const enqueue = (definition: Omit<InteractiveJob, "resolve">) => {
+    if (params.signal?.aborted) {
+      return Promise.resolve(definition.cancelValue);
+    }
+    return new Promise<JsonValue>((resolve) => {
+      jobs.push({ ...definition, resolve });
+      pump();
+    });
+  };
+
+  const cancelJob = (job: InteractiveJob) => {
+    const index = jobs.indexOf(job);
+    if (index < 0) {
+      return;
+    }
+    if (index === 0) {
+      job.abort.abort(new Error("Codex operator input request cancelled"));
+      return;
+    }
+    jobs.splice(index, 1);
+    job.resolve(job.cancelValue);
+  };
+
+  const cancelPending = async () => {
+    const pendingCompletion = activeCompletion;
+    const queuedJobs = jobs.splice(1);
+    for (const job of queuedJobs) {
+      job.resolve(job.cancelValue);
+    }
+    jobs[0]?.abort.abort(new Error("Codex operator input request cancelled"));
+    await pendingCompletion;
+  };
+
+  const execute = (input: StructuredInputCompileResult, timeoutMs: number, signal: AbortSignal) =>
+    structuredInput.run({
+      input,
+      sessionKey: inputSessionKey,
+      agentId: params.paramsForRun.agentId,
+      runId: params.paramsForRun.runId,
+      timeoutMs,
+      gatewayCall,
+      delivery: params.paramsForRun,
+      signal,
+      promptOptions: {
+        formatText: formatCodexDisplayText,
+        unsupportedIntro: "Codex input request could not be shown:",
+        urlIntro: "Codex needs confirmation:",
+      },
+    });
+
+  params.signal?.addEventListener("abort", () => void cancelPending(), { once: true });
+
   return {
-    async handleRequest(request) {
+    async handleRequest(request: CodexInputRequest) {
       const requestParams = readUserInputParams(request.params);
-      if (!requestParams) {
-        return undefined;
-      }
-      if (requestParams.threadId !== params.threadId || requestParams.turnId !== params.turnId) {
+      if (
+        !requestParams ||
+        requestParams.threadId !== params.threadId ||
+        requestParams.turnId !== params.turnId
+      ) {
         return undefined;
       }
       if (requestParams.questions.length === 0) {
         return emptyUserInputResponse();
       }
-
-      resolvePending(emptyUserInputResponse());
-
-      return new Promise<JsonValue>((resolve) => {
-        const abortListener = () => resolvePending(emptyUserInputResponse());
-        const cleanup = () => params.signal?.removeEventListener("abort", abortListener);
-        pending = {
-          requestId: request.id,
-          threadId: requestParams.threadId,
-          turnId: requestParams.turnId,
-          itemId: requestParams.itemId,
-          questions: requestParams.questions,
-          resolve,
-          cleanup,
-        };
-        params.signal?.addEventListener("abort", abortListener, { once: true });
-        if (params.signal?.aborted) {
-          resolvePending(emptyUserInputResponse());
-          return;
-        }
-        void deliverUserInputPrompt(params.paramsForRun, requestParams.questions).catch(
-          (error: unknown) => {
-            embeddedAgentLog.warn("failed to deliver codex user input prompt", { error });
-          },
-        );
+      const timeoutMs = requestParams.isBlocking
+        ? (params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS)
+        : NONBLOCKING_USER_INPUT_TIMEOUT_MS;
+      const input = compileUserInputQuestions(requestParams.questions);
+      const cancelValue = emptyUserInputResponse();
+      return await enqueue({
+        requestId: request.id,
+        abort: new AbortController(),
+        cancelValue,
+        failureValue: cancelValue,
+        run: async (signal) => {
+          const result = await execute(input, timeoutMs, signal);
+          return result.status === "answered"
+            ? gatewayAnswersToCodexResponse(result.answers)
+            : cancelValue;
+        },
       });
     },
-    handleQueuedMessage(text) {
-      const current = pending;
-      if (!current) {
-        return false;
+    async handleElicitationRequest(request: CodexInputRequest) {
+      if (readRawOwnString(request.params, "threadId") !== params.threadId) {
+        return undefined;
       }
-      resolvePending(buildUserInputResponse(current.questions, text));
-      return true;
+      const requestSnapshot = structuredInput.snapshot(request.params);
+      if (requestSnapshot === undefined) {
+        const cancelValue = createCodexElicitationResponse("cancel");
+        return await enqueue({
+          requestId: request.id,
+          abort: new AbortController(),
+          cancelValue,
+          failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
+          run: async (signal) => {
+            const result = await execute(
+              {
+                kind: "unsupported",
+                message: "OpenClaw declined a malformed or over-limit MCP elicitation request.",
+              },
+              params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS,
+              signal,
+            );
+            return result.status === "unsupported"
+              ? declineElicitation(result.message)
+              : cancelValue;
+          },
+        });
+      }
+      const { compileCodexOrdinaryElicitation } = await import("./elicitation-input.js");
+      const compiled = compileCodexOrdinaryElicitation({
+        value: requestSnapshot,
+        threadId: params.threadId,
+        turnId: params.turnId,
+      });
+      if (compiled.kind === "ignored") {
+        return undefined;
+      }
+      const cancelValue = createCodexElicitationResponse("cancel");
+      const timeoutMs = params.paramsForRun.timeoutMs ?? DEFAULT_USER_INPUT_TIMEOUT_MS;
+      return await enqueue({
+        requestId: request.id,
+        abort: new AbortController(),
+        cancelValue,
+        failureValue: declineElicitation("OpenClaw could not handle this elicitation."),
+        run: async (signal) => {
+          const result = await execute(compiled.input, timeoutMs, signal);
+          if (result.status === "answered") {
+            const content =
+              compiled.input.kind === "ready" && compiled.input.plan.kind === "url"
+                ? null
+                : result.content;
+            return createCodexElicitationResponse("accept", content);
+          }
+          if (result.status === "declined") {
+            return declineElicitation(result.message);
+          }
+          if (result.status === "unsupported") {
+            return declineElicitation(result.message);
+          }
+          return cancelValue;
+        },
+      });
     },
-    handleNotification(notification) {
-      if (notification.method !== "serverRequest/resolved" || !pending) {
+    handleNotification(notification: CodexServerNotification) {
+      if (notification.method !== "serverRequest/resolved" || !isJsonObject(notification.params)) {
         return;
       }
-      const notificationParams = isJsonObject(notification.params)
-        ? notification.params
-        : undefined;
-      const requestId = notificationParams ? readRequestId(notificationParams) : undefined;
+      const requestId = readRequestId(notification.params);
       if (
-        notificationParams &&
-        readString(notificationParams, "threadId") === pending.threadId &&
-        requestId !== undefined &&
-        String(requestId) === String(pending.requestId)
+        requestId === undefined ||
+        readOwnString(notification.params, "threadId") !== params.threadId
       ) {
-        resolvePending(emptyUserInputResponse());
+        return;
+      }
+      const job = jobs.find(
+        (candidate) =>
+          typeof candidate.requestId === typeof requestId && candidate.requestId === requestId,
+      );
+      if (job) {
+        cancelJob(job);
       }
     },
-    cancelPending() {
-      resolvePending(emptyUserInputResponse());
-    },
+    cancelPending,
   };
+}
+
+function compileUserInputQuestions(
+  questions: readonly AgentHarnessUserInputQuestion[],
+): StructuredInputCompileResult {
+  return structuredInput.compileQuestions({ questions, intro: "Codex needs input:" });
 }
 
 function readUserInputParams(value: JsonValue | undefined):
   | {
       threadId: string;
       turnId: string;
-      itemId: string;
       questions: AgentHarnessUserInputQuestion[];
+      isBlocking: boolean;
     }
   | undefined {
-  if (!isJsonObject(value)) {
+  const snapshot = structuredInput.snapshot(value);
+  if (!structuredInput.isRecord(snapshot)) {
     return undefined;
   }
-  const threadId = readString(value, "threadId");
-  const turnId = readString(value, "turnId");
-  const itemId = readString(value, "itemId");
-  const questionsRaw = value.questions;
-  if (!threadId || !turnId || !itemId || !Array.isArray(questionsRaw)) {
+  const threadId = readBoundedUserInputText(snapshot, "threadId", MAX_USER_INPUT_ID);
+  const turnId = readBoundedUserInputText(snapshot, "turnId", MAX_USER_INPUT_ID);
+  const itemId = readBoundedUserInputText(snapshot, "itemId", MAX_USER_INPUT_ID);
+  const questions = readArray(snapshot, "questions", MAX_USER_INPUT_QUESTIONS);
+  if (!threadId || !turnId || !itemId || !questions) {
     return undefined;
   }
-  const questions = questionsRaw
-    .map(readQuestion)
-    .filter((question): question is AgentHarnessUserInputQuestion => Boolean(question));
-  return { threadId, turnId, itemId, questions };
+  const parsed: AgentHarnessUserInputQuestion[] = [];
+  for (const questionValue of questions) {
+    const question = readQuestion(questionValue);
+    if (!question) {
+      return undefined;
+    }
+    parsed.push(question);
+  }
+  return {
+    threadId,
+    turnId,
+    questions: parsed,
+    isBlocking: readValue(snapshot, "isBlocking") !== false,
+  };
 }
 
-function readQuestion(value: JsonValue): AgentHarnessUserInputQuestion | undefined {
-  if (!isJsonObject(value)) {
+function readQuestion(value: unknown): AgentHarnessUserInputQuestion | undefined {
+  if (!structuredInput.isRecord(value)) {
     return undefined;
   }
-  const id = readString(value, "id");
-  const header = readString(value, "header");
-  const question = readString(value, "question");
+  const id = readBoundedUserInputText(value, "id", MAX_USER_INPUT_ID);
+  const header = readBoundedUserInputText(value, "header", MAX_USER_INPUT_HEADER);
+  const question = readBoundedUserInputText(value, "question", MAX_USER_INPUT_TEXT);
   if (!id || !header || !question) {
+    return undefined;
+  }
+  const options = readOptions(readValue(value, "options"));
+  if (options === undefined) {
     return undefined;
   }
   return {
     id,
     header,
     question,
-    isOther: value.isOther === true,
-    isSecret: value.isSecret === true,
-    options: readOptions(value.options),
+    isOther: readValue(value, "isOther") === true,
+    isSecret: readValue(value, "isSecret") === true,
+    ...(readValue(value, "multiSelect") === true ? { multiSelect: true } : {}),
+    options,
   };
 }
 
-function readOptions(value: JsonValue | undefined): AgentHarnessUserInputOption[] | null {
-  if (!Array.isArray(value)) {
+function readOptions(value: unknown): AgentHarnessUserInputOption[] | null | undefined {
+  if (value === undefined || value === null) {
     return null;
   }
-  const options = value
-    .map(readOption)
-    .filter((option): option is AgentHarnessUserInputOption => Boolean(option));
-  return options.length > 0 ? options : null;
-}
-
-function readOption(value: JsonValue): AgentHarnessUserInputOption | undefined {
-  if (!isJsonObject(value)) {
+  if (!Array.isArray(value) || value.length > MAX_USER_INPUT_OPTIONS) {
     return undefined;
   }
-  const label = readString(value, "label");
-  const description = readString(value, "description") ?? "";
-  return label ? { label, description } : undefined;
+  const options: AgentHarnessUserInputOption[] = [];
+  for (const entry of value) {
+    if (!structuredInput.isRecord(entry)) {
+      return undefined;
+    }
+    const label = readBoundedUserInputText(entry, "label", MAX_USER_INPUT_ID);
+    const description = readBoundedUserInputText(entry, "description", MAX_USER_INPUT_TEXT, true);
+    if (!label) {
+      return undefined;
+    }
+    options.push({ label, ...(description ? { description } : {}) });
+  }
+  return options;
 }
 
-async function deliverUserInputPrompt(
-  params: EmbeddedRunAttemptParams,
-  questions: AgentHarnessUserInputQuestion[],
-): Promise<void> {
-  await deliverAgentHarnessUserInputPrompt(params, questions, {
-    formatText: formatCodexDisplayText,
-    intro: "Codex needs input:",
-  });
+function readValue(record: Record<string, unknown>, key: string): unknown {
+  return Object.hasOwn(record, key) ? record[key] : undefined;
 }
 
-function buildUserInputResponse(
-  questions: AgentHarnessUserInputQuestion[],
-  inputText: string,
-): JsonObject {
-  // Multi-question replies may use "header: answer" or numbered lines. Keep the
-  // parser permissive so chat-channel replies remain ergonomic.
-  return buildAgentHarnessUserInputAnswers(questions, inputText) as unknown as JsonObject;
+function readBoundedUserInputText(
+  record: Record<string, unknown>,
+  key: string,
+  maximum: number,
+  allowEmpty = false,
+): string | undefined {
+  const value = readValue(record, key);
+  return typeof value === "string" && value.length <= maximum && (allowEmpty || value.length > 0)
+    ? value
+    : undefined;
 }
 
-function emptyUserInputResponse(): JsonObject {
-  return emptyAgentHarnessUserInputAnswers() as unknown as JsonObject;
+function readArray(
+  record: Record<string, unknown>,
+  key: string,
+  maximum: number,
+): unknown[] | undefined {
+  const value = readValue(record, key);
+  return Array.isArray(value) && value.length <= maximum ? value : undefined;
 }
 
-function readString(record: JsonObject, key: string): string | undefined {
-  const value = record[key];
-  return typeof value === "string" ? value : undefined;
+function readOwnString(record: JsonObject, key: string): string | undefined {
+  const descriptor = Object.getOwnPropertyDescriptor(record, key);
+  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
+}
+
+function readRawOwnString(value: unknown, key: string): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const descriptor = Object.getOwnPropertyDescriptor(value, key);
+  return descriptor && "value" in descriptor && typeof descriptor.value === "string"
+    ? descriptor.value
+    : undefined;
 }
 
 function readRequestId(record: JsonObject): string | number | undefined {
-  const value = record.requestId;
+  const descriptor = Object.getOwnPropertyDescriptor(record, "requestId");
+  const value = descriptor && "value" in descriptor ? descriptor.value : undefined;
   return typeof value === "string" || typeof value === "number" ? value : undefined;
+}
+
+function gatewayAnswersToCodexResponse(answers: Record<string, string[]>): JsonObject {
+  return {
+    answers: Object.fromEntries(
+      Object.entries(answers).map(([questionId, values]) => [questionId, { answers: values }]),
+    ),
+  };
+}
+
+function emptyUserInputResponse(): JsonObject {
+  return { ...emptyAgentHarnessUserInputAnswers() };
+}
+
+function declineElicitation(message?: string) {
+  return createCodexElicitationResponse("decline", null, message ? { message } : null);
 }

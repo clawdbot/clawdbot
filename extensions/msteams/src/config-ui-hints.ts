@@ -1,4 +1,4 @@
-// Msteams helper module supports config ui hints behavior.
+import { createChannelConfigUiHints } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelConfigUiHint } from "openclaw/plugin-sdk/channel-core";
 
 export const msTeamsChannelConfigUiHints = {
@@ -22,32 +22,17 @@ export const msTeamsChannelConfigUiHints = {
     label: "MS Teams Graph Media Fallback",
     help: "Query Microsoft Graph for unresolved channel or group-chat HTML media. Adds one lookup per matching message when enabled (default: false).",
   },
-  streaming: {
-    label: "MS Teams Streaming",
-    help: 'Microsoft Teams preview/progress streaming mode: "off" | "partial" | "block" | "progress". Personal chats use Teams native streaminfo progress when available.',
-  },
-  "streaming.progress.label": {
-    label: "MS Teams Progress Label",
-    help: 'Initial progress title. Use "auto" for built-in single-word labels, a custom string, or false to hide the title.',
-  },
-  "streaming.progress.labels": {
-    label: "MS Teams Progress Label Pool",
-    help: 'Candidate labels for streaming.progress.label="auto". Leave unset to use OpenClaw built-in progress labels.',
-  },
-  "streaming.progress.maxLines": {
-    label: "MS Teams Progress Max Lines",
-    help: "Maximum number of compact progress lines to keep below the progress title (default: 8).",
-  },
-  "streaming.progress.maxLineChars": {
-    label: "MS Teams Progress Max Line Chars",
-    help: "Maximum characters per compact progress line before truncation (default: 120). Prose cuts at word boundaries; commands and paths keep useful suffixes.",
-  },
-  "streaming.progress.toolProgress": {
-    label: "MS Teams Progress Tool Lines",
-    help: "Show compact tool/progress lines in progress mode (default: true). Set false to keep only the title until final delivery.",
-  },
-  "streaming.progress.commandText": {
-    label: "MS Teams Progress Command Text",
-    help: 'Command/exec detail in progress lines: "raw" preserves released behavior; "status" shows only the tool label.',
-  },
+  ...createChannelConfigUiHints({
+    channelLabel: "MS Teams",
+    streaming: {
+      "": {
+        label: "MS Teams Streaming",
+        help: 'Microsoft Teams preview/progress streaming mode: "off" | "partial" | "block" | "progress". Personal chats use Teams native streaminfo progress when available.',
+      },
+    },
+    progress: {
+      labels: "openclaw",
+      titleWording: true,
+    },
+  }),
 } satisfies Record<string, ChannelConfigUiHint>;

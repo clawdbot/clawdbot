@@ -12,8 +12,10 @@ import { resolveGithubCopilotDomain } from "./domain.js";
 import {
   PROVIDER_ID,
   fetchCopilotModelCatalog,
+  isCopilotCatalogModelVisible,
   resolveCopilotForwardCompatModel,
 } from "./models.js";
+import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
 
 type GithubCopilotCatalogContext = {
   agentDir?: string;
@@ -51,9 +53,9 @@ export function createGithubCopilotDynamicModelHooks(params: {
     if (!params.discoveryEnabled(ctx.config)) {
       return null;
     }
-    const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotApiToken } =
+    const { DEFAULT_COPILOT_API_BASE_URL, resolveCopilotRuntimeAuth } =
       await loadGithubCopilotRuntime();
-    const { githubToken, hasProfile } = await resolveFirstGithubToken({
+    const { githubToken, githubDomain, hasProfile } = await resolveFirstGithubToken({
       agentDir: ctx.agentDir,
       env: ctx.env,
       ...(ctx.config ? { config: ctx.config } : {}),
@@ -67,13 +69,17 @@ export function createGithubCopilotDynamicModelHooks(params: {
     let copilotApiToken: string | undefined;
     if (githubToken) {
       try {
-        const token = await resolveCopilotApiToken({
+        const auth = await resolveCopilotRuntimeAuth({
           githubToken,
           env: ctx.env,
-          githubDomain: resolveGithubCopilotDomain({ env: ctx.env, config: ctx.config }),
+          githubDomain: resolveGithubCopilotDomain({
+            env: ctx.env,
+            explicit: githubDomain,
+            config: ctx.config,
+          }),
         });
-        baseUrl = token.baseUrl;
-        copilotApiToken = token.token;
+        baseUrl = auth.baseUrl;
+        copilotApiToken = auth.apiKey;
       } catch {
         baseUrl = DEFAULT_COPILOT_API_BASE_URL;
       }
@@ -82,10 +88,17 @@ export function createGithubCopilotDynamicModelHooks(params: {
     // manifest models remain the visible fallback when exchange or discovery fails.
     let discoveredModels: Awaited<ReturnType<typeof fetchCopilotModelCatalog>> = [];
     if (copilotApiToken) {
+      const headers = buildCopilotRuntimeHeaders({ config: ctx.config });
       try {
         discoveredModels = await getCachedLiveCatalogValue({
-          keyParts: [PROVIDER_ID, "models", baseUrl, copilotApiToken],
-          load: async () => await fetchCopilotModelCatalog({ copilotApiToken, baseUrl }),
+          keyParts: [
+            PROVIDER_ID,
+            "models",
+            baseUrl,
+            copilotApiToken,
+            headers["Copilot-Integration-Id"],
+          ],
+          load: async () => await fetchCopilotModelCatalog({ copilotApiToken, baseUrl, headers }),
         });
       } catch {
         discoveredModels = [];
@@ -96,7 +109,14 @@ export function createGithubCopilotDynamicModelHooks(params: {
 
   async function runCatalog(ctx: ProviderCatalogContext): Promise<ProviderCatalogResult> {
     const catalog = await resolveCatalog(ctx);
-    return catalog ? { provider: catalog } : null;
+    return catalog
+      ? {
+          provider: {
+            ...catalog,
+            models: catalog.models.filter(isCopilotCatalogModelVisible),
+          },
+        }
+      : null;
   }
 
   async function prepareDynamicModel(ctx: ProviderPrepareDynamicModelContext): Promise<void> {

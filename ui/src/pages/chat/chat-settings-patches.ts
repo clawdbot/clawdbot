@@ -1,3 +1,4 @@
+import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionsPatchResult } from "../../api/types.ts";
 import {
   resolveSessionKey,
@@ -16,7 +17,6 @@ import {
   resolveUiDefaultAgentId,
   resolveUiSelectedGlobalAgentId,
 } from "../../lib/sessions/session-key.ts";
-import { normalizeOptionalLowercaseString } from "../../lib/string-coerce.ts";
 
 type ChatPickerPatchHost = SessionScopeHost & { sessions: SessionCapability };
 type ChatCommandSettingsContext = {
@@ -112,19 +112,21 @@ function trackPendingChatSettingsPatch(
 export function patchChatSessionSettings(
   host: ChatPickerPatchHost,
   sessionKey: string,
-  patch: Pick<SessionPatch, "model" | "thinkingLevel" | "fastMode">,
+  patch: SessionPatch,
   options: {
     agentId?: string;
+    ownsModelOverride?: () => boolean;
     reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
   } = {},
 ): Promise<SessionsPatchResult | null> {
   const previous = getPendingChatPickerPatch(host, sessionKey, options.agentId);
   const operation = (async () => {
-    // Model-dependent settings and sends share this canonical per-session tail.
+    // Run-affecting settings and sends share this canonical per-session tail.
     // The capability captures this route before waiting, so a reconnect cannot
     // redirect queued intent to a replacement Gateway.
     const result = await host.sessions.patch(sessionKey, patch, {
       agentId: options.agentId,
+      ownsModelOverride: options.ownsModelOverride,
       waitFor: previous,
     });
     if (result) {
@@ -164,6 +166,10 @@ export async function patchChatCommandSessionSettings(
   context: ChatCommandSettingsContext,
   sessionKey: string,
   patch: SessionPatch,
+  options: {
+    ownsModelOverride?: () => boolean;
+    reconcile?: (result: SessionsPatchResult) => Promise<void> | void;
+  } = {},
 ): Promise<NonNullable<Awaited<ReturnType<SessionCapability["patch"]>>>> {
   const result = await patchChatSessionSettings(
     {
@@ -174,7 +180,7 @@ export async function patchChatCommandSessionSettings(
     },
     sessionKey,
     patch,
-    selectedGlobalScope(sessionKey, context),
+    { ...selectedGlobalScope(sessionKey, context), ...options },
   );
   if (!result) {
     throw new Error("Session capability is unavailable");

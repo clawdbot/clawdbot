@@ -5,8 +5,8 @@
  */
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
-import type { ExecApprovalDecision } from "../infra/exec-approvals.js";
 import type {
+  ExecApprovalDecision,
   ExecAsk,
   ExecHost,
   ExecMode,
@@ -17,15 +17,18 @@ import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import type { SafeBinProfileFixture } from "../infra/exec-safe-bin-policy.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import type { TerminationReason } from "../process/supervisor/types.js";
+import type { OperationalRunInstanceRef } from "./admitted-run-context.js";
 import type { BashSandboxConfig } from "./bash-tools.shared.js";
 import type { EmbeddedFullAccessBlockedReason } from "./embedded-agent-runner/types.js";
 import type { ExecReviewerConfig } from "./exec-auto-reviewer.js";
+import type { PreparedGitHubToolEnvironment } from "./github-tool-identity.js";
 
 /** Runtime defaults passed into exec/process tool factories. */
 export type ExecToolDefaults = {
   hasCronTool?: boolean;
   host?: ExecTarget;
   mode?: ExecMode;
+  bypassHostApprovalFloors?: boolean;
   security?: ExecSecurity;
   ask?: ExecAsk;
   trigger?: string;
@@ -40,6 +43,8 @@ export type ExecToolDefaults = {
   safeBinProfiles?: Record<string, SafeBinProfileFixture>;
   reviewer?: ExecReviewerConfig;
   config?: OpenClawConfig;
+  /** Host-prepared non-secret environment and store projection exclusions. */
+  preparedRunEnvironment?: PreparedGitHubToolEnvironment;
   autoReviewer?: ExecAutoReviewer;
   agentId?: string;
   backgroundMs?: number;
@@ -50,10 +55,20 @@ export type ExecToolDefaults = {
   approvalFollowupMode?: "agent" | "direct";
   approvalRunningNoticeMs?: number;
   sandbox?: BashSandboxConfig;
+  /** Immutable session policy that forbids execution outside its provisioned sandbox. */
+  sandboxRequired?: boolean;
   elevated?: ExecElevatedDefaults;
   allowBackground?: boolean;
+  /** Final run-local availability of the process continuation tool. */
+  processToolAvailabilityRef?: { value?: boolean };
   scopeKey?: string;
   sessionKey?: string;
+  /** Stable agent run that owns any approval created by this tool. */
+  runId?: string;
+  /** Exact admitted execution instance that owns secret-egress proxy access. */
+  operationalRunInstance?: OperationalRunInstanceRef;
+  /** Durable session that receives detached exec completion events and approval followups. */
+  notifySessionKey?: string;
   /** Ephemeral session UUID active when this exec tool was built. Regenerated
    *  on `/new` and `/reset`, so it pins exec-approval followups to the original
    *  session instance and lets stale followups drop after a session rebind. */
@@ -79,6 +94,8 @@ export type ExecToolDefaults = {
   channelContext?: PluginHookChannelContext;
   accountId?: string;
   approvalReviewerDeviceId?: string;
+  /** Deny approval-requiring commands without creating operator approval events. */
+  nonInteractiveApproval?: boolean;
   notifyOnExit?: boolean;
   notifyOnExitEmptySuccess?: boolean;
   cwd?: string;
@@ -88,6 +105,7 @@ export type ExecToolDefaults = {
 export type ExecApprovalFollowupOutcome = {
   status: "completed" | "failed";
   exitCode: number | null;
+  exitReason?: TerminationReason;
   timedOut: boolean;
   aggregated: string;
   reason?: string;
@@ -114,8 +132,20 @@ export type ExecElevatedDefaults = {
   fullAccessBlockedReason?: EmbeddedFullAccessBlockedReason;
 };
 
+/** One model-backed approval review recorded on an exec tool call. */
+export type ExecToolApprovalReview = {
+  id: string;
+  label: string;
+  status: "in_progress" | "approved" | "denied" | "timed_out" | "aborted";
+  riskLevel?: string;
+  rationale?: string;
+};
+
 /** Structured details returned by exec tool calls. */
-export type ExecToolDetails =
+export type ExecToolDetails = {
+  approvalReviews?: readonly ExecToolApprovalReview[];
+  approvalReviewOutcome?: "approved" | "denied" | "reviewing";
+} & (
   | {
       status: "running";
       sessionId: string;
@@ -129,6 +159,13 @@ export type ExecToolDetails =
       exitCode: number | null;
       exitSignal?: NodeJS.Signals | number | null;
       failureKind?: string;
+      reason?: "not-dispatched" | "outcome-unknown";
+      nodeInvokeFailure?: {
+        failureCode?: string;
+        message: string;
+        nodeCommandDispatched?: boolean;
+        requestSent?: boolean;
+      };
       exitReason?: TerminationReason;
       durationMs: number;
       aggregated: string;
@@ -163,4 +200,5 @@ export type ExecToolDetails =
       cwd?: string;
       nodeId?: string;
       warningText?: string;
-    };
+    }
+);

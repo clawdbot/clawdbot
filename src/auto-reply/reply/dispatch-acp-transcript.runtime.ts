@@ -2,8 +2,8 @@
 import { resolveAcpSessionCwd } from "@openclaw/acp-core/runtime/session-identifiers";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { persistAcpTurnTranscript } from "../../agents/command/attempt-execution.js";
-import { resolveStorePath } from "../../config/sessions.js";
-import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
+import { loadSessionEntryReadOnly } from "../../config/sessions/session-accessor.js";
 import type { SessionAcpMeta } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 
@@ -25,10 +25,10 @@ export async function persistAcpDispatchTranscript(params: {
     sessionKey: params.sessionKey,
     config: params.cfg,
   });
-  const storePath = resolveStorePath(params.cfg.session?.store, {
+  const storePath = resolveSessionStorePathCore(params.cfg.session?.store, {
     agentId: sessionAgentId,
   });
-  const sessionEntry = loadSessionEntry({
+  const sessionEntry = loadSessionEntryReadOnly({
     agentId: sessionAgentId,
     sessionKey: params.sessionKey,
     storePath,

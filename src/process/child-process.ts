@@ -12,22 +12,14 @@ const EXIT_STDIO_MAX_DRAIN_MS = 1_000;
  * short output tails. The returned cleanup must run after awaiting the child.
  */
 export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => void {
-  let exited = false;
   let idleTimer: NodeJS.Timeout | undefined;
+  let releaseImmediate: NodeJS.Immediate | undefined;
   let deadlineTimer: NodeJS.Timeout | undefined;
 
-  const clearTimers = () => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-      idleTimer = undefined;
-    }
-    if (deadlineTimer) {
-      clearTimeout(deadlineTimer);
-      deadlineTimer = undefined;
-    }
-  };
   const cleanup = () => {
-    clearTimers();
+    clearTimeout(idleTimer);
+    clearImmediate(releaseImmediate);
+    clearTimeout(deadlineTimer);
     child.removeListener("exit", onExit);
     child.stdout?.removeListener("data", onData);
     child.stderr?.removeListener("data", onData);
@@ -37,23 +29,32 @@ export function releaseChildProcessOutputAfterExit(child: ChildProcess): () => v
     child.stdout?.destroy();
     child.stderr?.destroy();
   };
+  const scheduleRelease = () => {
+    // Either timer may run before already-buffered pipe data on a loaded loop.
+    // Share one cancellable release after poll has had a turn to drain it.
+    releaseImmediate ??= setImmediate(release);
+    releaseImmediate.unref();
+  };
   const armIdleTimer = () => {
-    if (idleTimer) {
-      clearTimeout(idleTimer);
-    }
-    idleTimer = setTimeout(release, EXIT_STDIO_GRACE_MS);
+    clearTimeout(idleTimer);
+    clearImmediate(releaseImmediate);
+    releaseImmediate = undefined;
+    idleTimer = setTimeout(scheduleRelease, EXIT_STDIO_GRACE_MS);
     idleTimer.unref();
   };
   const onData = () => {
-    if (exited) {
+    if (deadlineTimer) {
       armIdleTimer();
     }
   };
   const onExit = () => {
-    exited = true;
-    armIdleTimer();
-    deadlineTimer = setTimeout(release, EXIT_STDIO_MAX_DRAIN_MS);
+    deadlineTimer = setTimeout(() => {
+      // Post-deadline data must not cancel release and extend the hard bound.
+      deadlineTimer = undefined;
+      scheduleRelease();
+    }, EXIT_STDIO_MAX_DRAIN_MS);
     deadlineTimer.unref();
+    armIdleTimer();
   };
 
   child.stdout?.on("data", onData);

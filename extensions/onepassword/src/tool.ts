@@ -1,4 +1,6 @@
+import { isRecord } from "openclaw/plugin-sdk/channel-secret-basic-runtime";
 import type { AnyAgentTool, OpenClawPluginToolContext } from "openclaw/plugin-sdk/plugin-entry";
+import { asNonArrayRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { jsonResult } from "openclaw/plugin-sdk/tool-results";
 import type {
   PluginHookToolResultPersistEvent,
@@ -34,7 +36,7 @@ const OnePasswordToolSchema = {
       description: "Internal. Injected by the gateway policy layer; never set this manually.",
     },
   },
-} as unknown as AnyAgentTool["parameters"];
+} satisfies AnyAgentTool["parameters"];
 
 function errorResult(error: unknown) {
   const code =
@@ -45,10 +47,6 @@ function errorResult(error: unknown) {
         : "OP_ERROR";
   const message = error instanceof Error ? error.message : "1Password request failed";
   return jsonResult({ ok: false, error: { code, message } });
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
 export function redactPersistedOnePasswordResult(
@@ -73,7 +71,7 @@ export function redactPersistedOnePasswordResult(
   if (!hasSecretValue) {
     return undefined;
   }
-  const safeDetails = isRecord(details) ? details : {};
+  const safeDetails = asNonArrayRecord(details);
   const persisted = {
     ok: true,
     redacted: true,

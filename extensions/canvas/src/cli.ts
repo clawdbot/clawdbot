@@ -2,16 +2,18 @@
  * Canvas node CLI command registration and runtime dependency wiring.
  */
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import type { Command } from "commander";
 import { runCommandWithRuntime, theme } from "openclaw/plugin-sdk/cli-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import {
   callGatewayFromCli,
+  isGatewayClientRequestError,
   resolveNodeFromNodeList,
   type NodeMatchCandidate,
 } from "openclaw/plugin-sdk/gateway-runtime";
 import {
+  addTimerTimeoutGraceMs,
+  clampPositiveTimerTimeoutMs,
   parseStrictFiniteNumber,
   parseStrictPositiveInteger,
 } from "openclaw/plugin-sdk/number-runtime";
@@ -20,9 +22,6 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { shortenHomePath } from "openclaw/plugin-sdk/text-utility-runtime";
-import { buildA2UITextJsonl, validateSupportedA2UIJsonl } from "./a2ui-jsonl.js";
-import { canvasSnapshotTempPath, parseCanvasSnapshotPayload } from "./cli-helpers.js";
 
 /** Runtime output surface used by Canvas CLI commands. */
 type CanvasCliRuntime = {
@@ -45,12 +44,6 @@ export type CanvasNodesRpcOpts = {
   y?: string;
   width?: string;
   height?: string;
-  js?: string;
-  jsonl?: string;
-  text?: string;
-  format?: string;
-  maxWidth?: string;
-  quality?: string;
 };
 
 /** Dependency bundle used to keep Canvas CLI commands testable. */
@@ -73,25 +66,12 @@ export type CanvasCliDependencies = {
     params?: unknown,
     callOpts?: { transportTimeoutMs?: number },
   ) => Promise<unknown>;
-  writeBase64ToFile: (filePath: string, base64: string) => Promise<unknown>;
-  shortenHomePath: (filePath: string) => string;
 };
 
 type CanvasNodeCandidate = NodeMatchCandidate;
-type CanvasSnapshotRequestFormat = "png" | "jpeg";
 
-function parseCanvasSnapshotRequestFormat(raw: unknown): CanvasSnapshotRequestFormat {
-  const format = normalizeLowercaseStringOrEmpty(normalizeOptionalString(raw) ?? "jpg");
-  switch (format) {
-    case "png":
-      return "png";
-    case "jpg":
-    case "jpeg":
-      return "jpeg";
-    default:
-      throw new Error(`invalid format: ${String(raw)} (expected png|jpg|jpeg)`);
-  }
-}
+const DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS = 30_000;
+const CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS = 10_000;
 
 function parseTimeoutMs(raw: unknown): number | undefined {
   if (raw === undefined || raw === null) {
@@ -104,17 +84,6 @@ function parseTimeoutMs(raw: unknown): number | undefined {
   return parsed;
 }
 
-function parseCanvasPositiveIntOption(raw: string | undefined, flag: string): number | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const parsed = parseStrictPositiveInteger(raw);
-  if (parsed === undefined) {
-    throw new Error(`${flag} must be a positive integer.`);
-  }
-  return parsed;
-}
-
 function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): number | undefined {
   if (!raw) {
     return undefined;
@@ -122,14 +91,6 @@ function parseCanvasFiniteNumberOption(raw: string | undefined, flag: string): n
   const parsed = parseStrictFiniteNumber(raw);
   if (parsed === undefined) {
     throw new Error(`${flag} must be a number.`);
-  }
-  return parsed;
-}
-
-function parseCanvasSnapshotQualityOption(raw: string | undefined): number | undefined {
-  const parsed = parseCanvasFiniteNumberOption(raw, "--quality");
-  if (parsed !== undefined && (parsed < 0 || parsed > 1)) {
-    throw new Error("--quality must be between 0 and 1.");
   }
   return parsed;
 }
@@ -232,7 +193,15 @@ export function createDefaultCanvasCliDependencies(): CanvasCliDependencies {
       let raw: unknown;
       try {
         raw = await callGatewayCli("node.list", opts, {});
-      } catch {
+      } catch (error) {
+        if (
+          !isGatewayClientRequestError(error) ||
+          error.gatewayCode !== "INVALID_REQUEST" ||
+          error.retryable ||
+          error.message !== "unknown method: node.list"
+        ) {
+          throw error;
+        }
         raw = await callGatewayCli("node.pair.list", opts, {});
       }
       return resolveNodeFromNodeList(parseNodeCandidates(raw), query).nodeId;
@@ -245,9 +214,6 @@ export function createDefaultCanvasCliDependencies(): CanvasCliDependencies {
       ...(typeof timeoutMs === "number" && Number.isFinite(timeoutMs) ? { timeoutMs } : {}),
     }),
     callGatewayCli,
-    writeBase64ToFile: async (filePath, base64) =>
-      await fs.writeFile(filePath, Buffer.from(base64, "base64")),
-    shortenHomePath,
   };
 }
 
@@ -257,61 +223,46 @@ async function invokeCanvas(
   command: string,
   params?: Record<string, unknown>,
 ) {
-  const timeoutMs = deps.parseTimeoutMs(opts.invokeTimeout);
+  const timeoutMs =
+    clampPositiveTimerTimeoutMs(
+      deps.parseTimeoutMs(opts.invokeTimeout) ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+    ) ?? DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS;
   const nodeId = await deps.resolveNodeId(opts, normalizeOptionalString(opts.node) ?? "");
-  return await deps.callGatewayCli(
-    "node.invoke",
-    opts,
-    deps.buildNodeInvokeParams({
-      nodeId,
-      command,
-      params,
-      timeoutMs: typeof timeoutMs === "number" ? timeoutMs : undefined,
-    }),
+  const invokeParams = deps.buildNodeInvokeParams({ nodeId, command, params, timeoutMs });
+  const configuredGatewayTimeoutMs = parseStrictPositiveInteger(opts.timeout ?? 10_000);
+  if (configuredGatewayTimeoutMs === undefined) {
+    // Preserve the existing Gateway parser's actionable invalid --timeout error.
+    return await deps.callGatewayCli("node.invoke", opts, invokeParams);
+  }
+  // Node work owns its deadline; Gateway transport needs extra time to deliver that result.
+  const transportTimeoutMs = Math.max(
+    clampPositiveTimerTimeoutMs(configuredGatewayTimeoutMs) ??
+      DEFAULT_CANVAS_NODE_INVOKE_TIMEOUT_MS,
+    addTimerTimeoutGraceMs(timeoutMs, CANVAS_NODE_INVOKE_TRANSPORT_GRACE_MS) ?? timeoutMs,
   );
+  return await deps.callGatewayCli("node.invoke", opts, invokeParams, { transportTimeoutMs });
+}
+
+/** Prints the complete invocation response for machines or the existing human acknowledgement. */
+function writeCanvasInvokeResult(
+  deps: CanvasCliDependencies,
+  opts: CanvasNodesRpcOpts,
+  result: unknown,
+  message: string,
+): void {
+  if (opts.json) {
+    deps.defaultRuntime.writeJson(result);
+    return;
+  }
+  const { ok } = deps.getNodesTheme();
+  deps.defaultRuntime.log(ok(message));
 }
 
 /** Registers Canvas subcommands under the nodes CLI command group. */
 export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDependencies) {
   const canvas = nodes
     .command("canvas")
-    .description("Capture or render canvas content from a paired node");
-
-  deps.nodesCallOpts(
-    canvas
-      .command("snapshot")
-      .description("Capture a canvas snapshot (prints the saved path)")
-      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .option("--format <png|jpg|jpeg>", "Image format", "jpg")
-      .option("--max-width <px>", "Max width in px (optional)")
-      .option("--quality <0-1>", "JPEG quality (optional)")
-      .option("--invoke-timeout <ms>", "Node invoke timeout in ms (default 20000)", "20000")
-      .action(async (opts: CanvasNodesRpcOpts) => {
-        await deps.runNodesCommand("canvas snapshot", async () => {
-          const format = parseCanvasSnapshotRequestFormat(opts.format);
-          const maxWidth = parseCanvasPositiveIntOption(opts.maxWidth, "--max-width");
-          const quality = parseCanvasSnapshotQualityOption(opts.quality);
-          const raw = await invokeCanvas(deps, opts, "canvas.snapshot", {
-            format,
-            maxWidth: Number.isFinite(maxWidth) ? maxWidth : undefined,
-            quality: Number.isFinite(quality) ? quality : undefined,
-          });
-          const res = typeof raw === "object" && raw !== null ? (raw as { payload?: unknown }) : {};
-          const payload = parseCanvasSnapshotPayload(res.payload);
-          const filePath = canvasSnapshotTempPath({
-            ext: payload.format === "jpeg" ? "jpg" : payload.format,
-          });
-          await deps.writeBase64ToFile(filePath, payload.base64);
-
-          if (opts.json) {
-            deps.defaultRuntime.writeJson({ file: { path: filePath, format: payload.format } });
-            return;
-          }
-          deps.defaultRuntime.log(deps.shortenHomePath(filePath));
-        });
-      }),
-    { timeoutMs: 60_000 },
-  );
+    .description("Present widget documents on a paired macOS panel");
 
   deps.nodesCallOpts(
     canvas
@@ -344,11 +295,8 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
           ) {
             params.placement = placement;
           }
-          await invokeCanvas(deps, opts, "canvas.present", params);
-          if (!opts.json) {
-            const { ok } = deps.getNodesTheme();
-            deps.defaultRuntime.log(ok("canvas present ok"));
-          }
+          const result = await invokeCanvas(deps, opts, "canvas.present", params);
+          writeCanvasInvokeResult(deps, opts, result, "canvas present ok");
         });
       }),
   );
@@ -361,11 +309,8 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
       .action(async (opts: CanvasNodesRpcOpts) => {
         await deps.runNodesCommand("canvas hide", async () => {
-          await invokeCanvas(deps, opts, "canvas.hide", undefined);
-          if (!opts.json) {
-            const { ok } = deps.getNodesTheme();
-            deps.defaultRuntime.log(ok("canvas hide ok"));
-          }
+          const result = await invokeCanvas(deps, opts, "canvas.hide", undefined);
+          writeCanvasInvokeResult(deps, opts, result, "canvas hide ok");
         });
       }),
   );
@@ -379,98 +324,8 @@ export function registerNodesCanvasCommands(nodes: Command, deps: CanvasCliDepen
       .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
       .action(async (url: string, opts: CanvasNodesRpcOpts) => {
         await deps.runNodesCommand("canvas navigate", async () => {
-          await invokeCanvas(deps, opts, "canvas.navigate", { url });
-          if (!opts.json) {
-            const { ok } = deps.getNodesTheme();
-            deps.defaultRuntime.log(ok("canvas navigate ok"));
-          }
-        });
-      }),
-  );
-
-  deps.nodesCallOpts(
-    canvas
-      .command("eval")
-      .description("Evaluate JavaScript in the canvas")
-      .argument("[js]", "JavaScript to evaluate")
-      .option("--js <code>", "JavaScript to evaluate")
-      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
-      .action(async (jsArg: string | undefined, opts: CanvasNodesRpcOpts) => {
-        await deps.runNodesCommand("canvas eval", async () => {
-          const js = opts.js ?? jsArg;
-          if (!js) {
-            throw new Error("missing --js or <js>");
-          }
-          const raw = await invokeCanvas(deps, opts, "canvas.eval", {
-            javaScript: js,
-          });
-          if (opts.json) {
-            deps.defaultRuntime.writeJson(raw);
-            return;
-          }
-          const payload =
-            typeof raw === "object" && raw !== null
-              ? (raw as { payload?: { result?: string } }).payload
-              : undefined;
-          if (typeof payload?.result === "string") {
-            deps.defaultRuntime.log(payload.result);
-          } else {
-            const { ok } = deps.getNodesTheme();
-            deps.defaultRuntime.log(ok("canvas eval ok"));
-          }
-        });
-      }),
-  );
-
-  const a2ui = canvas.command("a2ui").description("Render A2UI content on the canvas");
-
-  deps.nodesCallOpts(
-    a2ui
-      .command("push")
-      .description("Push A2UI JSONL to the canvas")
-      .option("--jsonl <path>", "Path to JSONL payload")
-      .option("--text <text>", "Render a quick A2UI text payload")
-      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
-      .action(async (opts: CanvasNodesRpcOpts) => {
-        await deps.runNodesCommand("canvas a2ui push", async () => {
-          const hasJsonl = Boolean(opts.jsonl);
-          const hasText = typeof opts.text === "string";
-          if (hasJsonl === hasText) {
-            throw new Error("provide exactly one of --jsonl or --text");
-          }
-
-          const jsonl = hasText
-            ? buildA2UITextJsonl(opts.text ?? "")
-            : await fs.readFile(String(opts.jsonl), "utf8");
-          const { messageCount } = validateSupportedA2UIJsonl(jsonl);
-          await invokeCanvas(deps, opts, "canvas.a2ui.pushJSONL", { jsonl });
-          if (!opts.json) {
-            const { ok } = deps.getNodesTheme();
-            deps.defaultRuntime.log(
-              ok(
-                `canvas a2ui push ok (v0.8, ${messageCount} message${messageCount === 1 ? "" : "s"})`,
-              ),
-            );
-          }
-        });
-      }),
-  );
-
-  deps.nodesCallOpts(
-    a2ui
-      .command("reset")
-      .description("Reset A2UI renderer state")
-      .requiredOption("--node <idOrNameOrIp>", "Node id, name, or IP")
-      .option("--invoke-timeout <ms>", "Node invoke timeout in ms")
-      .action(async (opts: CanvasNodesRpcOpts) => {
-        await deps.runNodesCommand("canvas a2ui reset", async () => {
-          await invokeCanvas(deps, opts, "canvas.a2ui.reset", undefined);
-          if (!opts.json) {
-            const { ok } = deps.getNodesTheme();
-            deps.defaultRuntime.log(ok("canvas a2ui reset ok"));
-          }
+          const result = await invokeCanvas(deps, opts, "canvas.navigate", { url });
+          writeCanvasInvokeResult(deps, opts, result, "canvas navigate ok");
         });
       }),
   );

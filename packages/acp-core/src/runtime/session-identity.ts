@@ -1,5 +1,5 @@
 // ACP Core module implements session identity behavior.
-import { normalizeText } from "../normalize-text.js";
+import { normalizeOptionalString as normalizeText } from "@openclaw/normalization-core/string-coerce";
 import type { SessionAcpIdentity, SessionAcpIdentitySource, SessionAcpMeta } from "../types.js";
 import type { AcpRuntimeHandle, AcpRuntimeStatus } from "./types.js";
 

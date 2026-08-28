@@ -4,8 +4,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 ANDROID_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 
-PACKAGE="ai.openclaw.app"
-ACTIVITY=".MainActivity"
+PACKAGE="ai.openclaw.app.debug"
+ACTIVITY="ai.openclaw.app.MainActivity"
 DURATION_SECONDS="10"
 OUTPUT_PERF_DATA=""
 
@@ -99,7 +99,7 @@ symbols_csv="$tmp_dir/symbols.csv"
 children_txt="$tmp_dir/children.txt"
 
 cd "$ANDROID_DIR"
-./gradlew :app:installDebug --console=plain >"$tmp_dir/install.log" 2>&1
+./gradlew :app:installPlayDebug --console=plain >"$tmp_dir/install.log" 2>&1
 
 if ! uv run --no-project python3 "$app_profiler" \
   -p "$PACKAGE" \

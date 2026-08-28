@@ -64,6 +64,21 @@ describe("searxng client", () => {
     );
   });
 
+  it("does not duplicate a configured search endpoint", () => {
+    expect(
+      testing.buildSearxngSearchUrl({
+        baseUrl: "https://search.example.com/search",
+        query: "openclaw",
+      }),
+    ).toBe("https://search.example.com/search?q=openclaw&format=json");
+    expect(
+      testing.buildSearxngSearchUrl({
+        baseUrl: "https://search.example.com/search/",
+        query: "openclaw",
+      }),
+    ).toBe("https://search.example.com/search?q=openclaw&format=json");
+  });
+
   it("parses SearXNG JSON results and applies the requested count cap", () => {
     expect(
       testing.parseSearxngResponseText(

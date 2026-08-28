@@ -6,10 +6,22 @@ import type {
   MigrationsMemoryPlanResult,
 } from "../../../../packages/gateway-protocol/src/schema/migrations.js";
 import type { GatewayAgentRow } from "../../../../src/shared/session-types.js";
+import "../../components/agent-select-registration.ts";
 import "../../components/modal-dialog.ts";
 import { icons } from "../../components/icons.ts";
 import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
+import {
+  renderSettingsEmpty,
+  renderSettingsPage,
+  renderSettingsRow,
+  renderSettingsSection,
+  renderSettingsStatus,
+  renderSettingsToggleRow,
+  renderSettingsValue,
+} from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { normalizeAgentLabel } from "../../lib/agents/display.ts";
+import { formatUiExternalText } from "../../lib/format-error.ts";
 import "../../styles/memory-import.css";
 
 type MemoryCollection = {
@@ -18,8 +30,30 @@ type MemoryCollection = {
   items: MemoryMigrationItem[];
 };
 
+export type SessionBackfillGatewayResult = {
+  days: number;
+  candidates: number;
+  perDay: Array<{ day: string; candidateCount: number; sample: string[] }>;
+  staged: number;
+  truncated?: boolean;
+  cursor?: { advanced: boolean; exhausted: boolean; hasMore: boolean };
+};
+
+export type SessionBackfillProgress = {
+  days: number;
+  candidates: number;
+  staged: number;
+  complete: boolean;
+};
+
+export type SessionBackfillRollbackResult = {
+  removedDiaryEntries: number;
+  removedStagedEntries: number;
+};
+
 type MemoryImportViewProps = {
   connected: boolean;
+  canAdmin: boolean;
   agents: GatewayAgentRow[];
   selectedAgentId: string | null;
   plan: MigrationsMemoryPlanResult | null;
@@ -31,6 +65,15 @@ type MemoryImportViewProps = {
   applyingProviderId: string | null;
   pendingProviderId: string | null;
   lastResults: Record<string, MigrationsMemoryApplyResult>;
+  backfillAvailable: boolean;
+  backfillFrom: string;
+  backfillTo: string;
+  backfillBusy: "preview" | "apply" | "rollback" | null;
+  backfillError: string | null;
+  backfillPreview: SessionBackfillGatewayResult | null;
+  backfillProgress: SessionBackfillProgress | null;
+  backfillRollbackResult: SessionBackfillRollbackResult | null;
+  backfillRollbackPending: boolean;
   onSelectAgent: (agentId: string) => void;
   onReplaceExisting: (enabled: boolean) => void;
   onRefresh: () => void;
@@ -38,6 +81,13 @@ type MemoryImportViewProps = {
   onRequestImport: (providerId: string) => void;
   onConfirmImport: () => void;
   onCancelImport: () => void;
+  onBackfillFromChange: (value: string) => void;
+  onBackfillToChange: (value: string) => void;
+  onBackfillPreview: () => void;
+  onBackfillApply: () => void;
+  onBackfillRollbackRequest: () => void;
+  onBackfillRollbackConfirm: () => void;
+  onBackfillRollbackCancel: () => void;
 };
 
 function detailString(item: MemoryMigrationItem, key: string): string | undefined {
@@ -80,6 +130,15 @@ function fileCount(count: number): string {
   });
 }
 
+function processedDayCount(count: number): string {
+  return t(
+    count === 1
+      ? "memoryImport.backfill.processedDayCountOne"
+      : "memoryImport.backfill.processedDayCount",
+    { count: String(count) },
+  );
+}
+
 function artifactLabel(item: MemoryMigrationItem): string {
   const relativePath = detailString(item, "relativePath");
   if (relativePath) {
@@ -89,6 +148,8 @@ function artifactLabel(item: MemoryMigrationItem): string {
   return pathValue.split(/[\\/]/u).at(-1) ?? pathValue;
 }
 
+// Collection review keeps custom markup: a select-all checkbox plus a
+// collapsible per-file status list has no settings-ui primitive.
 function renderCollection(
   provider: MemoryMigrationProviderPlan,
   collection: MemoryCollection,
@@ -101,7 +162,7 @@ function renderCollection(
   const checked = selectableIds.length > 0 && selectableIds.every((id) => selectedIds.has(id));
   const conflicts = collection.items.filter((item) => item.status === "conflict").length;
   return html`
-    <div class="memory-import__collection">
+    <div class="settings-row settings-row--stacked memory-import__collection">
       <div class="memory-import__collection-header">
         <label class="memory-import__collection-choice">
           <input
@@ -121,9 +182,10 @@ function renderCollection(
           </span>
         </label>
         ${conflicts > 0
-          ? html`<span class="memory-import__badge memory-import__badge--conflict">
-              ${t("memoryImport.alreadyImported", { count: String(conflicts) })}
-            </span>`
+          ? renderSettingsStatus({
+              kind: "warn",
+              label: t("memoryImport.alreadyImported", { count: String(conflicts) }),
+            })
           : nothing}
       </div>
       <details ?open=${collection.items.length <= 4}>
@@ -150,6 +212,8 @@ function renderCollection(
   `;
 }
 
+// Apply results keep custom markup: nested issue and recovery-artifact lists
+// are a report, not a settings row.
 function renderResult(result: MigrationsMemoryApplyResult | undefined) {
   if (!result) {
     return nothing;
@@ -163,7 +227,9 @@ function renderResult(result: MigrationsMemoryApplyResult | undefined) {
   );
   return html`
     <div
-      class="memory-import__result ${incomplete ? "memory-import__result--incomplete" : ""}"
+      class="settings-row settings-row--stacked memory-import__result ${incomplete
+        ? "memory-import__result--incomplete"
+        : ""}"
       role=${incomplete ? "alert" : "status"}
     >
       <span aria-hidden="true">${incomplete ? icons.alertTriangle : icons.check}</span>
@@ -207,7 +273,7 @@ function renderResult(result: MigrationsMemoryApplyResult | undefined) {
                 );
                 return html`<li>
                   <strong>${artifactLabel(item)}</strong>
-                  <span>${item.reason ?? item.message ?? item.status}</span>
+                  <span>${formatUiExternalText(item.reason ?? item.message, item.status)}</span>
                   ${recoveryArtifacts.map(
                     (artifact) => html`<span class="memory-import__result-artifact">
                       <span>${artifact.label}</span>
@@ -227,85 +293,84 @@ function renderProvider(props: MemoryImportViewProps, provider: MemoryMigrationP
   const selectedIds = new Set(props.selectedByProvider[provider.providerId] ?? []);
   const groups = groupMemoryItems(provider.items);
   const applying = props.applyingProviderId === provider.providerId;
-  return html`
-    <article class="card memory-import__provider" data-provider-id=${provider.providerId}>
-      <div class="memory-import__provider-header">
-        <div class="memory-import__provider-identity">
-          ${renderProviderBrandIcon(provider.providerId, {
-            className: "memory-import__provider-icon",
+  const backfillMutating =
+    props.backfillBusy === "apply" ||
+    props.backfillBusy === "rollback" ||
+    props.backfillRollbackPending;
+  const rows = provider.error
+    ? html`<div class="callout danger" role="alert">${formatUiExternalText(provider.error)}</div>`
+    : !provider.found
+      ? renderSettingsEmpty(provider.message ?? t("memoryImport.noMemoryFound"))
+      : html`
+          ${provider.source
+            ? renderSettingsRow({
+                title: t("memoryImport.source"),
+                control: renderSettingsValue(provider.source, { mono: true }),
+              })
+            : nothing}
+          ${provider.target
+            ? renderSettingsRow({
+                title: t("memoryImport.destination"),
+                control: renderSettingsValue(`${provider.target}/memory/imports/`, { mono: true }),
+              })
+            : nothing}
+          ${groups.map((group) =>
+            renderCollection(
+              provider,
+              group,
+              selectedIds,
+              props.onToggleCollection,
+              props.loading ||
+                props.applyingProviderId !== null ||
+                props.error !== null ||
+                backfillMutating,
+            ),
+          )}
+          ${renderSettingsRow({
+            title:
+              selectedIds.size > 0
+                ? t("memoryImport.selectedCount", { count: String(selectedIds.size) })
+                : t("memoryImport.selectAtLeastOne"),
+            control: html`
+              <button
+                class="btn primary"
+                data-test-id="memory-import-provider-button"
+                ?disabled=${selectedIds.size === 0 ||
+                props.applyingProviderId !== null ||
+                backfillMutating ||
+                props.loading ||
+                props.error !== null}
+                @click=${() => props.onRequestImport(provider.providerId)}
+              >
+                ${applying ? t("common.importing") : t("memoryImport.importSelected")}
+              </button>
+            `,
           })}
-          <div>
-            <h3>${providerLabel(provider)}</h3>
-            <p>${providerDescription(provider)}</p>
-          </div>
-        </div>
-        <span
-          class="memory-import__badge ${provider.found
-            ? "memory-import__badge--ready"
-            : "memory-import__badge--muted"}"
-        >
-          ${provider.found ? fileCount(provider.items.length) : t("memoryImport.notFound")}
-        </span>
-      </div>
-
-      ${provider.error
-        ? html`<div class="callout danger" role="alert">${provider.error}</div>`
-        : !provider.found
-          ? html`<div class="memory-import__empty">
-              ${provider.message ?? t("memoryImport.noMemoryFound")}
-            </div>`
-          : html`
-              <dl class="memory-import__paths">
-                ${provider.source
-                  ? html`<div>
-                      <dt>${t("memoryImport.source")}</dt>
-                      <dd><code title=${provider.source}>${provider.source}</code></dd>
-                    </div>`
-                  : nothing}
-                ${provider.target
-                  ? html`<div>
-                      <dt>${t("memoryImport.destination")}</dt>
-                      <dd>
-                        <code title=${provider.target}>${provider.target}/memory/imports/</code>
-                      </dd>
-                    </div>`
-                  : nothing}
-              </dl>
-              <div class="memory-import__collections">
-                ${groups.map((group) =>
-                  renderCollection(
-                    provider,
-                    group,
-                    selectedIds,
-                    props.onToggleCollection,
-                    props.loading || props.applyingProviderId !== null || props.error !== null,
-                  ),
-                )}
-              </div>
-              <div class="memory-import__provider-actions">
-                <span>
-                  ${selectedIds.size > 0
-                    ? t("memoryImport.selectedCount", { count: String(selectedIds.size) })
-                    : t("memoryImport.selectAtLeastOne")}
-                </span>
-                <button
-                  class="btn primary"
-                  data-test-id="memory-import-provider-button"
-                  ?disabled=${selectedIds.size === 0 ||
-                  props.applyingProviderId !== null ||
-                  props.loading ||
-                  props.error !== null}
-                  @click=${() => props.onRequestImport(provider.providerId)}
-                >
-                  ${applying ? t("common.importing") : t("memoryImport.importSelected")}
-                </button>
-              </div>
-            `}
-      ${renderResult(props.lastResults[provider.providerId])}
-    </article>
+        `;
+  return html`
+    <div data-provider-id=${provider.providerId}>
+      ${renderSettingsSection(
+        {
+          title: html`<span class="memory-import__provider-title">
+            ${renderProviderBrandIcon(provider.providerId, {
+              className: "memory-import__provider-icon",
+            })}
+            ${providerLabel(provider)}
+          </span>`,
+          description: providerDescription(provider),
+          actions: renderSettingsStatus({
+            kind: provider.found ? "ok" : "muted",
+            label: provider.found ? fileCount(provider.items.length) : t("memoryImport.notFound"),
+          }),
+        },
+        html`${rows}${renderResult(props.lastResults[provider.providerId])}`,
+      )}
+    </div>
   `;
 }
 
+// The confirmation modal reuses the shared exec-approval dialog anatomy, not
+// the settings design language.
 function renderConfirmation(props: MemoryImportViewProps) {
   const provider = props.plan?.providers.find(
     (candidate) => candidate.providerId === props.pendingProviderId,
@@ -360,75 +425,279 @@ function renderConfirmation(props: MemoryImportViewProps) {
   `;
 }
 
+function renderIntroSection(props: MemoryImportViewProps) {
+  const busy = props.loading || props.applyingProviderId !== null || props.backfillBusy !== null;
+  return renderSettingsSection(
+    {
+      title: t("memoryImport.title"),
+      description: t("memoryImport.subtitle"),
+      actions: html`
+        <button class="btn btn--sm" ?disabled=${busy} @click=${props.onRefresh}>
+          ${props.loading ? t("common.refreshing") : t("common.refresh")}
+        </button>
+      `,
+    },
+    html`
+      ${props.agents.length > 1
+        ? renderSettingsRow({
+            title: t("memoryImport.agent"),
+            control: html`
+              <openclaw-agent-select
+                class="agent-select--settings"
+                name="memory-import-agent"
+                .options=${props.agents.map((agent) => ({
+                  value: agent.id,
+                  label: normalizeAgentLabel(agent),
+                  agent,
+                }))}
+                .value=${props.selectedAgentId ?? ""}
+                .accessibleLabel=${t("memoryImport.agent")}
+                .disabled=${busy}
+                .onSelect=${props.onSelectAgent}
+              ></openclaw-agent-select>
+            `,
+          })
+        : nothing}
+      ${renderSettingsToggleRow({
+        title: t("memoryImport.replaceExisting"),
+        description: t("memoryImport.replaceHint"),
+        checked: props.replaceExisting,
+        disabled: busy,
+        onChange: (enabled) => props.onReplaceExisting(enabled),
+      })}
+    `,
+  );
+}
+
+function renderBackfillConfirmation(props: MemoryImportViewProps) {
+  if (!props.backfillRollbackPending) {
+    return nothing;
+  }
+  return html`
+    <openclaw-modal-dialog
+      label=${t("memoryImport.backfill.rollbackConfirmTitle")}
+      description=${t("memoryImport.backfill.rollbackConfirmDescription")}
+      @modal-cancel=${props.onBackfillRollbackCancel}
+    >
+      <div class="exec-approval-card memory-import__confirm">
+        <div class="exec-approval-header">
+          <div>
+            <div class="exec-approval-title">
+              ${t("memoryImport.backfill.rollbackConfirmTitle")}
+            </div>
+            <div class="exec-approval-sub">
+              ${t("memoryImport.backfill.rollbackConfirmDescription")}
+            </div>
+          </div>
+        </div>
+        <div class="callout warn">${t("memoryImport.backfill.rollbackWarning")}</div>
+        <div class="exec-approval-actions">
+          <button
+            class="btn danger"
+            data-test-id="memory-backfill-rollback-confirm"
+            ?disabled=${props.backfillBusy !== null || props.applyingProviderId !== null}
+            @click=${props.onBackfillRollbackConfirm}
+          >
+            ${t("memoryImport.backfill.rollback")}
+          </button>
+          <button
+            class="btn"
+            ?disabled=${props.backfillBusy !== null || props.applyingProviderId !== null}
+            @click=${props.onBackfillRollbackCancel}
+          >
+            ${t("common.cancel")}
+          </button>
+        </div>
+      </div>
+    </openclaw-modal-dialog>
+  `;
+}
+
+function renderBackfillSection(props: MemoryImportViewProps) {
+  const busy = props.backfillBusy !== null || props.applyingProviderId !== null;
+  const result = props.backfillPreview;
+  return html`
+    <div data-test-id="memory-session-backfill">
+      ${renderSettingsSection(
+        {
+          title: t("memoryImport.backfill.title"),
+          description: t("memoryImport.backfill.subtitle"),
+        },
+        html`
+          ${props.backfillAvailable
+            ? html`
+                ${renderSettingsRow({
+                  title: t("memoryImport.backfill.dateRange"),
+                  description: t("memoryImport.backfill.dateRangeHint"),
+                  control: html`<div class="memory-import__backfill-dates">
+                    <label>
+                      <span>${t("memoryImport.backfill.from")}</span>
+                      <input
+                        class="input"
+                        type="date"
+                        .value=${props.backfillFrom}
+                        ?disabled=${busy}
+                        @input=${(event: Event) =>
+                          props.onBackfillFromChange(
+                            (event.currentTarget as HTMLInputElement).value,
+                          )}
+                      />
+                    </label>
+                    <label>
+                      <span>${t("memoryImport.backfill.to")}</span>
+                      <input
+                        class="input"
+                        type="date"
+                        .value=${props.backfillTo}
+                        ?disabled=${busy}
+                        @input=${(event: Event) =>
+                          props.onBackfillToChange((event.currentTarget as HTMLInputElement).value)}
+                      />
+                    </label>
+                  </div>`,
+                })}
+                ${renderSettingsRow({
+                  title: t("memoryImport.backfill.actions"),
+                  control: html`<div class="memory-import__backfill-actions">
+                    <button
+                      class="btn"
+                      data-test-id="memory-backfill-preview"
+                      ?disabled=${busy}
+                      @click=${props.onBackfillPreview}
+                    >
+                      ${props.backfillBusy === "preview"
+                        ? t("memoryImport.backfill.previewing")
+                        : t("memoryImport.backfill.preview")}
+                    </button>
+                    <button
+                      class="btn primary"
+                      data-test-id="memory-backfill-apply"
+                      ?disabled=${busy}
+                      @click=${props.onBackfillApply}
+                    >
+                      ${props.backfillBusy === "apply"
+                        ? t("memoryImport.backfill.applying")
+                        : t("memoryImport.backfill.apply")}
+                    </button>
+                    <button
+                      class="btn danger"
+                      data-test-id="memory-backfill-rollback"
+                      ?disabled=${busy}
+                      @click=${props.onBackfillRollbackRequest}
+                    >
+                      ${t("memoryImport.backfill.rollback")}
+                    </button>
+                  </div>`,
+                })}
+                ${props.backfillError
+                  ? html`<div class="callout danger" role="alert">${props.backfillError}</div>`
+                  : nothing}
+                ${result
+                  ? html`<div
+                      class="settings-row settings-row--stacked memory-import__backfill-preview"
+                    >
+                      <strong>
+                        ${t("memoryImport.backfill.previewSummary", {
+                          candidates: String(result.candidates),
+                          days: String(result.days),
+                        })}
+                      </strong>
+                      ${result.perDay.length > 0
+                        ? html`<ul>
+                            ${result.perDay.map(
+                              (day) => html`<li>
+                                <div>
+                                  <strong>${day.day}</strong>
+                                  <span>
+                                    ${t("memoryImport.backfill.candidateCount", {
+                                      count: String(day.candidateCount),
+                                    })}
+                                  </span>
+                                </div>
+                                ${day.sample.length > 0
+                                  ? html`<ul>
+                                      ${day.sample.map((sample) => html`<li>${sample}</li>`)}
+                                    </ul>`
+                                  : nothing}
+                              </li>`,
+                            )}
+                          </ul>`
+                        : html`<span>${t("memoryImport.backfill.noCandidates")}</span>`}
+                      ${result.truncated
+                        ? html`<div class="callout warn">
+                            ${t("memoryImport.backfill.previewTruncated")}
+                          </div>`
+                        : nothing}
+                    </div>`
+                  : nothing}
+                ${props.backfillProgress
+                  ? html`<div
+                      class="settings-row settings-row--stacked memory-import__backfill-progress"
+                      role="status"
+                    >
+                      <strong>
+                        ${props.backfillProgress.complete
+                          ? t("memoryImport.backfill.complete", {
+                              count: String(props.backfillProgress.staged),
+                            })
+                          : t("memoryImport.backfill.progress", {
+                              days: String(props.backfillProgress.days),
+                              staged: String(props.backfillProgress.staged),
+                            })}
+                      </strong>
+                      <span>
+                        ${t("memoryImport.backfill.processedCandidates", {
+                          count: String(props.backfillProgress.candidates),
+                        })}
+                        · ${processedDayCount(props.backfillProgress.days)}
+                      </span>
+                    </div>`
+                  : nothing}
+                ${props.backfillRollbackResult
+                  ? html`<div class="settings-row settings-row--stacked" role="status">
+                      <strong>${t("memoryImport.backfill.rollbackComplete")}</strong>
+                      <span>
+                        ${t("memoryImport.backfill.rollbackCounts", {
+                          diary: String(props.backfillRollbackResult.removedDiaryEntries),
+                          staged: String(props.backfillRollbackResult.removedStagedEntries),
+                        })}
+                      </span>
+                    </div>`
+                  : nothing}
+              `
+            : renderSettingsEmpty(t("memoryImport.backfill.unavailable"))}
+        `,
+      )}
+      ${renderBackfillConfirmation(props)}
+    </div>
+  `;
+}
+
 export function renderMemoryImport(props: MemoryImportViewProps) {
   if (!props.connected) {
-    return html`<section class="card">
-      <div class="card-sub">${t("memoryImport.disconnected")}</div>
-    </section>`;
+    return renderSettingsPage(renderSettingsEmpty(t("memoryImport.disconnected")));
+  }
+  if (!props.canAdmin) {
+    return renderSettingsPage(renderSettingsEmpty(t("memoryImport.adminRequired")));
   }
   return html`
     <div class="memory-import" data-test-id="memory-import-page">
-      <section class="card memory-import__intro">
-        <div>
-          <div class="card-title">${t("memoryImport.title")}</div>
-          <div class="card-sub">${t("memoryImport.subtitle")}</div>
-        </div>
-        <div class="memory-import__controls">
-          <label>
-            <span>${t("memoryImport.agent")}</span>
-            <select
-              name="memory-import-agent"
-              .value=${props.selectedAgentId ?? ""}
-              ?disabled=${props.loading || props.applyingProviderId !== null}
-              @change=${(event: Event) =>
-                props.onSelectAgent((event.currentTarget as HTMLSelectElement).value)}
-            >
-              ${props.agents.map(
-                (agent) => html`
-                  <option value=${agent.id} ?selected=${agent.id === props.selectedAgentId}>
-                    ${agent.identity?.name ?? agent.name ?? agent.id}
-                  </option>
-                `,
-              )}
-            </select>
-          </label>
-          <label class="memory-import__replace">
-            <input
-              type="checkbox"
-              name="memory-import-replace"
-              .checked=${props.replaceExisting}
-              ?disabled=${props.loading || props.applyingProviderId !== null}
-              @change=${(event: Event) =>
-                props.onReplaceExisting((event.currentTarget as HTMLInputElement).checked)}
-            />
-            <span>
-              <strong>${t("memoryImport.replaceExisting")}</strong>
-              <small>${t("memoryImport.replaceHint")}</small>
-            </span>
-          </label>
-          <button
-            class="btn btn--sm"
-            ?disabled=${props.loading || props.applyingProviderId !== null}
-            @click=${props.onRefresh}
-          >
-            ${props.loading ? t("common.refreshing") : t("common.refresh")}
-          </button>
-        </div>
-      </section>
-
-      ${props.error ? html`<div class="callout danger" role="alert">${props.error}</div>` : nothing}
-      ${props.applyError
-        ? html`<div class="callout danger" role="alert">${props.applyError}</div>`
-        : nothing}
-      ${props.loading && !props.plan
-        ? html`<section class="card memory-import__loading" aria-busy="true">
-            <div class="memory-import__skeleton"></div>
-            <div class="memory-import__skeleton"></div>
-          </section>`
-        : html`<div class="memory-import__grid">
-            ${(props.plan?.providers ?? []).map((provider) => renderProvider(props, provider))}
-          </div>`}
-      ${renderConfirmation(props)}
+      ${renderSettingsPage(html`
+        ${renderIntroSection(props)} ${renderBackfillSection(props)}
+        ${props.error
+          ? html`<div class="callout danger" role="alert">${props.error}</div>`
+          : nothing}
+        ${props.applyError
+          ? html`<div class="callout danger" role="alert">${props.applyError}</div>`
+          : nothing}
+        ${props.loading && !props.plan
+          ? html`<div class="settings-group memory-import__loading" aria-busy="true">
+              <div class="skeleton memory-import__skeleton"></div>
+              <div class="skeleton memory-import__skeleton"></div>
+            </div>`
+          : (props.plan?.providers ?? []).map((provider) => renderProvider(props, provider))}
+        ${renderConfirmation(props)}
+      `)}
     </div>
   `;
 }

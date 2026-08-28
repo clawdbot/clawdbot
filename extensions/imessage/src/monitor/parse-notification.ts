@@ -7,12 +7,6 @@ function isOptionalString(value: unknown): value is string | null | undefined {
   return value === undefined || value === null || typeof value === "string";
 }
 
-function isOptionalStringOrNumber(value: unknown): value is string | number | null | undefined {
-  return (
-    value === undefined || value === null || typeof value === "string" || typeof value === "number"
-  );
-}
-
 function isOptionalNumber(value: unknown): value is number | null | undefined {
   return value === undefined || value === null || typeof value === "number";
 }
@@ -66,10 +60,9 @@ export function parseIMessageNotification(raw: unknown): IMessagePayload | null 
     !isOptionalNumber(message.chat_id) ||
     !isOptionalString(message.sender) ||
     !isOptionalString(message.destination_caller_id) ||
-    !isOptionalString(message.balloon_bundle_id) ||
     !isOptionalBoolean(message.is_from_me) ||
     !isOptionalString(message.text) ||
-    !isOptionalStringOrNumber(message.reply_to_id) ||
+    !isOptionalString(message.thread_originator_guid) ||
     !isOptionalString(message.reply_to_guid) ||
     !isOptionalString(message.reply_to_text) ||
     !isOptionalString(message.reply_to_sender) ||

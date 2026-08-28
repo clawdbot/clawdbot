@@ -4,9 +4,11 @@ import { normalizeChatType } from "../../channels/chat-type.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import type { ChannelThreadingAdapter } from "../../channels/plugins/types.core.js";
 import { normalizeAnyChannelId } from "../../channels/registry.js";
+import { getLoadedChannelThreadingAdapter } from "../../channels/thread-addressing.js";
 import type { ReplyToMode } from "../../config/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_ACCOUNT_ID } from "../../routing/account-id.js";
+import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../../routing/account-id.js";
+import { resolveNormalizedAccountEntry } from "../../routing/account-lookup.js";
 import {
   copyReplyPayloadMetadata,
   isReplyPayloadStatusNotice,
@@ -19,9 +21,7 @@ import { isSingleUseReplyToMode } from "./reply-reference.js";
 type ReplyToModeChannelConfig = {
   replyToMode?: ReplyToMode;
   replyToModeByChatType?: Partial<Record<"direct" | "group" | "channel", ReplyToMode>>;
-  dm?: {
-    replyToMode?: ReplyToMode;
-  };
+  accounts?: Record<string, ReplyToModeChannelConfig | undefined>;
 };
 
 function normalizeReplyToModeChatType(
@@ -37,6 +37,7 @@ function resolveConfiguredReplyToMode(
   cfg: OpenClawConfig,
   channel?: OriginatingChannelType,
   chatType?: string | null,
+  accountId?: string | null,
 ): ReplyToMode {
   const provider = normalizeAnyChannelId(channel) ?? normalizeOptionalLowercaseString(channel);
   if (!provider) {
@@ -45,20 +46,28 @@ function resolveConfiguredReplyToMode(
   const channelConfig = (cfg.channels as Record<string, ReplyToModeChannelConfig> | undefined)?.[
     provider
   ];
+  const normalizedAccountId = accountId?.trim();
+  const accountConfig = normalizedAccountId
+    ? resolveNormalizedAccountEntry(
+        channelConfig?.accounts,
+        normalizeAccountId(normalizedAccountId),
+        normalizeAccountId,
+      )
+    : undefined;
   const normalizedChatType = normalizeReplyToModeChatType(chatType);
   if (normalizedChatType) {
+    // Exhaust account policy before channel defaults so a routed account cannot silently inherit.
+    const accountMode =
+      accountConfig?.replyToModeByChatType?.[normalizedChatType] ?? accountConfig?.replyToMode;
+    if (accountMode !== undefined) {
+      return accountMode;
+    }
     const scopedMode = channelConfig?.replyToModeByChatType?.[normalizedChatType];
     if (scopedMode !== undefined) {
       return scopedMode;
     }
   }
-  if (normalizedChatType === "direct") {
-    const legacyDirectMode = channelConfig?.dm?.replyToMode;
-    if (legacyDirectMode !== undefined) {
-      return legacyDirectMode;
-    }
-  }
-  return channelConfig?.replyToMode ?? "all";
+  return accountConfig?.replyToMode ?? channelConfig?.replyToMode ?? "all";
 }
 
 /** Resolve reply-to mode using channel threading adapter override when present. */
@@ -76,7 +85,9 @@ function resolveReplyToModeWithThreading(
     accountId: params.accountId,
     chatType: params.chatType,
   });
-  return resolved ?? resolveConfiguredReplyToMode(cfg, params.channel, params.chatType);
+  return (
+    resolved ?? resolveConfiguredReplyToMode(cfg, params.channel, params.chatType, params.accountId)
+  );
 }
 
 /** Resolve effective reply-to mode for a channel/account/chat tuple. */
@@ -154,7 +165,7 @@ function createReplyToModeFilter(
   opts: { allowExplicitReplyTagsWhenOff?: boolean } = {},
 ) {
   let hasThreaded = false;
-  return (payload: ReplyPayload): ReplyPayload => {
+  const apply = (payload: ReplyPayload, preview = false): ReplyPayload => {
     const isStatusNotice = isReplyPayloadStatusNotice(payload);
     if (!payload.replyToId) {
       return payload;
@@ -187,11 +198,15 @@ function createReplyToModeFilter(
     // threaded (so they appear in-context), but they must not consume the
     // "first" slot of the replyToMode=first|batched filter.  Skip advancing
     // hasThreaded so the real assistant reply still gets replyToId.
-    if (isSingleUseReplyToMode(mode) && !isStatusNotice) {
+    if (isSingleUseReplyToMode(mode) && !isStatusNotice && !preview) {
       hasThreaded = true;
     }
     return payload;
   };
+  // Dedupe must inspect the actual transport route without spending a first-reply slot.
+  return Object.assign((payload: ReplyPayload) => apply(payload), {
+    preview: (payload: ReplyPayload) => apply(payload, true),
+  });
 }
 
 /** Resolve whether implicit current-message replies are allowed under threading policy. */
@@ -228,10 +243,13 @@ export function createReplyToModeFilterForChannel(
   channel?: OriginatingChannelType,
 ) {
   const normalized = normalizeOptionalLowercaseString(channel);
-  const isWebchat = normalized === "webchat";
-  // Default: allow explicit reply tags/directives even when replyToMode is "off".
-  // Unknown channels fail closed; internal webchat stays allowed.
-  const allowExplicitReplyTagsWhenOff = normalized ? true : isWebchat;
+  const adapter = getLoadedChannelThreadingAdapter(normalized);
+  // Channels may opt out via their threading adapter. Any named channel defaults to
+  // allowing explicit tags — including ids with no loaded plugin, because this filter
+  // also runs where plugins are not loaded and stripping there would break real
+  // channels. Only an absent channel fails closed. Accepted tradeoff, not an oversight.
+  const allowExplicitReplyTagsWhenOff =
+    adapter?.allowExplicitReplyTagsWhenOff ?? adapter?.allowTagsWhenOff ?? Boolean(normalized);
   return createReplyToModeFilter(mode, {
     allowExplicitReplyTagsWhenOff,
   });

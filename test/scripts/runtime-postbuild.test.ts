@@ -1,25 +1,26 @@
 // Runtime Postbuild tests cover runtime postbuild script behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import {
   copyStaticExtensionAssets,
+  copyStaticExtensionAssetsForPackage,
   copyStaticExtensionAssetsToRuntimeOverlay,
   discoverStaticExtensionAssets,
-} from "../../scripts/lib/static-extension-assets.mjs";
+} from "../../scripts/lib/static-extension-assets.mts";
 import {
-  listStaticExtensionAssetOutputs,
   rewriteRootRuntimeImportsToStableAliases,
   runRuntimePostBuild,
   writeLegacyCliExitCompatChunks,
   writeLegacyRootRuntimeCompatAliases,
   writeStableRootRuntimeAliases,
-} from "../../scripts/runtime-postbuild.mjs";
+} from "../../scripts/runtime-postbuild.mts";
 import { expectNoNodeFsScans } from "../../src/test-utils/fs-scan-assertions.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+const MODULE_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 
 async function expectPathMissing(targetPath: string): Promise<void> {
   let statError: unknown;
@@ -35,17 +36,60 @@ async function expectPathMissing(targetPath: string): Promise<void> {
   expect(Reflect.get(statError, "code")).toBe("ENOENT");
 }
 
+async function writeExportHtmlBuildFixture(rootDir: string): Promise<void> {
+  const sourceDir = path.join(rootDir, "src", "auto-reply", "reply", "export-html");
+  await fs.mkdir(sourceDir, { recursive: true });
+  await fs.writeFile(path.join(sourceDir, "template.html"), "<html></html>\n", "utf8");
+  await fs.writeFile(path.join(rootDir, "package.json"), "{}\n", "utf8");
+  for (const fixture of [
+    {
+      name: "marked",
+      exports: { ".": "./index.js", "./package.json": "./package.json" },
+      source: 'export const parse = () => "alternate-root-marked"; export const use = () => {};\n',
+      license: "ALTERNATE ROOT MARKED LICENSE\n",
+    },
+    {
+      name: "highlight.js",
+      exports: { "./lib/common": "./common.js", "./package.json": "./package.json" },
+      source: 'export default { marker: "alternate-root-highlight" };\n',
+      license: "ALTERNATE ROOT HIGHLIGHT LICENSE\n",
+    },
+  ]) {
+    const packageDir = path.join(rootDir, "node_modules", fixture.name);
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(
+      path.join(packageDir, "package.json"),
+      `${JSON.stringify({ name: fixture.name, type: "module", exports: fixture.exports })}\n`,
+      "utf8",
+    );
+    const entryName = fixture.name === "marked" ? "index.js" : "common.js";
+    await fs.writeFile(path.join(packageDir, entryName), fixture.source, "utf8");
+    await fs.writeFile(path.join(packageDir, "LICENSE"), fixture.license, "utf8");
+  }
+}
+
 describe("runtime postbuild static assets", () => {
-  it("tracks plugin-owned static assets that release packaging must ship", () => {
-    expect(listStaticExtensionAssetOutputs()).toEqual([
-      "dist/extensions/acpx/mcp-command-line.mjs",
-      "dist/extensions/acpx/mcp-proxy.mjs",
-      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
-      "dist/extensions/diffs/assets/viewer-runtime.js",
-      "dist/extensions/discord/assets/embedded-app-sdk.mjs",
-      "dist/extensions/vault/vault-secret-id.js",
-      "dist/extensions/vault/vault-secret-ref-resolver.js",
-    ]);
+  it("copies bundled hook metadata without replacing compiled handlers", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-hooks-");
+    const sourceHookDir = path.join(rootDir, "src", "hooks", "bundled", "session-memory");
+    const distHookDir = path.join(rootDir, "dist", "bundled", "session-memory");
+    await fs.mkdir(sourceHookDir, { recursive: true });
+    await fs.mkdir(distHookDir, { recursive: true });
+    await fs.writeFile(path.join(sourceHookDir, "HOOK.md"), "---\nname: session-memory\n---\n");
+    await fs.writeFile(path.join(distHookDir, "handler.js"), "export default () => {};\n");
+
+    runRuntimePostBuild({
+      rootDir,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      timings: false,
+    });
+
+    await expect(fs.readFile(path.join(distHookDir, "HOOK.md"), "utf8")).resolves.toContain(
+      "name: session-memory",
+    );
+    await expect(fs.readFile(path.join(distHookDir, "handler.js"), "utf8")).resolves.toBe(
+      "export default () => {};\n",
+    );
   });
 
   it("discovers repo static asset metadata without scanning extension directories", () => {
@@ -53,7 +97,7 @@ describe("runtime postbuild static assets", () => {
       outputs: string[];
       sources: string[];
     }>(`
-      const assets = await import("./scripts/lib/static-extension-assets.mjs");
+      const assets = await import("./scripts/lib/static-extension-assets.mts");
       return {
         outputs: assets.listStaticExtensionAssetOutputs(),
         sources: assets.listStaticExtensionAssetSources(),
@@ -63,15 +107,20 @@ describe("runtime postbuild static assets", () => {
     expect(payload.outputs).toEqual([
       "dist/extensions/acpx/mcp-command-line.mjs",
       "dist/extensions/acpx/mcp-proxy.mjs",
-      "dist/extensions/diffs-language-pack/assets/viewer-runtime.js",
-      "dist/extensions/diffs/assets/viewer-runtime.js",
+      "dist/extensions/crabbox/assets/openclaw-worker-wallpaper.png",
       "dist/extensions/discord/assets/embedded-app-sdk.mjs",
+      "dist/extensions/onepassword/onepassword-op-path.js",
+      "dist/extensions/onepassword/onepassword-secret-id.js",
+      "dist/extensions/onepassword/onepassword-secret-ref-resolver.js",
       "dist/extensions/vault/vault-secret-id.js",
       "dist/extensions/vault/vault-secret-ref-resolver.js",
     ]);
-    expect(payload.sources).toContain("extensions/diffs-language-pack/assets/viewer-runtime.js");
-    expect(payload.sources).toContain("extensions/diffs/assets/viewer-runtime.js");
+    expect(payload.sources).not.toContain(
+      "extensions/diffs-language-pack/assets/viewer-runtime.js",
+    );
+    expect(payload.sources).not.toContain("extensions/diffs/assets/viewer-runtime.js");
     expect(payload.sources).toContain("extensions/discord/assets/embedded-app-sdk.mjs");
+    expect(payload.sources).toContain("extensions/crabbox/assets/openclaw-worker-wallpaper.png");
   });
 
   it("discovers static assets from plugin package metadata", async () => {
@@ -105,33 +154,38 @@ describe("runtime postbuild static assets", () => {
     ]);
   });
 
-  it("excludes external plugin (bundledDist: false) static assets by default", async () => {
-    const rootDir = createTempDir("openclaw-runtime-postbuild-");
-    const packageDir = path.join(rootDir, "extensions", "external-demo");
-    await fs.mkdir(packageDir, { recursive: true });
-    await fs.writeFile(
-      path.join(packageDir, "package.json"),
-      JSON.stringify({
-        name: "@openclaw/external-demo",
+  it.each([
+    { name: "top-level array", packageJson: [] },
+    { name: "array openclaw section", packageJson: { openclaw: [] } },
+    { name: "array build section", packageJson: { openclaw: { build: [] } } },
+    {
+      name: "non-record asset entries",
+      packageJson: {
         openclaw: {
           build: {
-            bundledDist: false,
-            staticAssets: [
-              {
-                source: "./assets/runtime.js",
-                output: "assets/runtime.js",
-              },
-            ],
+            staticAssets: [[], "asset", null, { source: 42, output: [] }],
           },
         },
-      }),
-      "utf8",
-    );
+      },
+    },
+  ])("ignores malformed $name metadata", async ({ packageJson }) => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-malformed-");
+    const packageDir = path.join(rootDir, "extensions", "demo");
+    await fs.mkdir(packageDir, { recursive: true });
+    await fs.writeFile(path.join(packageDir, "package.json"), JSON.stringify(packageJson), "utf8");
 
     expect(discoverStaticExtensionAssets({ rootDir })).toEqual([]);
   });
 
-  it("includes external plugin (bundledDist: false) static assets when includeExternalPlugins is true", async () => {
+  it.each([
+    { name: "normal root build", params: {}, included: false },
+    { name: "isolated external build", params: { includeExternalPlugins: true }, included: true },
+    {
+      name: "Docker-selected build",
+      params: { env: { OPENCLAW_INTERNAL_DOCKER_BUILD_PLUGIN_IDS: "external-demo" } },
+      included: true,
+    },
+  ])("$name handles external plugin assets", async ({ params, included }) => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const packageDir = path.join(rootDir, "extensions", "external-demo");
     await fs.mkdir(packageDir, { recursive: true });
@@ -154,21 +208,26 @@ describe("runtime postbuild static assets", () => {
       "utf8",
     );
 
-    expect(discoverStaticExtensionAssets({ rootDir, includeExternalPlugins: true })).toEqual([
-      {
-        pluginDir: "external-demo",
-        src: "extensions/external-demo/assets/runtime.js",
-        dest: "dist/extensions/external-demo/assets/runtime.js",
-      },
-    ]);
+    expect(discoverStaticExtensionAssets({ rootDir, ...params })).toEqual(
+      included
+        ? [
+            {
+              pluginDir: "external-demo",
+              src: "extensions/external-demo/assets/runtime.js",
+              dest: "dist/extensions/external-demo/assets/runtime.js",
+            },
+          ]
+        : [],
+    );
   });
 
-  it("copies declared static assets into dist", async () => {
+  it("copies declared static assets into root and package dist", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const src = "extensions/acpx/src/runtime-internals/mcp-proxy.mjs";
     const dest = "dist/extensions/acpx/mcp-proxy.mjs";
     const sourcePath = path.join(rootDir, src);
     const destPath = path.join(rootDir, dest);
+    const packageDestPath = path.join(rootDir, "extensions", "acpx", "dist", "mcp-proxy.mjs");
     await fs.mkdir(path.dirname(sourcePath), { recursive: true });
     await fs.writeFile(sourcePath, "proxy-data\n", "utf8");
 
@@ -176,8 +235,16 @@ describe("runtime postbuild static assets", () => {
       rootDir,
       assets: [{ src, dest }],
     });
+    expect(
+      copyStaticExtensionAssetsForPackage({
+        rootDir,
+        pluginDir: "acpx",
+        assets: [{ src, dest }],
+      }),
+    ).toEqual(["dist/mcp-proxy.mjs"]);
 
     expect(await fs.readFile(destPath, "utf8")).toBe("proxy-data\n");
+    expect(await fs.readFile(packageDestPath, "utf8")).toBe("proxy-data\n");
   });
 
   it("stages copied static assets byte-for-byte during the same postbuild run", async () => {
@@ -187,12 +254,6 @@ describe("runtime postbuild static assets", () => {
     const distAsset = "dist/extensions/diffs/assets/viewer-runtime.js";
     const runtimeAsset = "dist-runtime/extensions/diffs/assets/viewer-runtime.js";
 
-    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
-      "module.exports = {};\n",
-      "utf8",
-    );
     await fs.mkdir(path.join(rootDir, "extensions", "diffs", "assets"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "extensions", "diffs", "package.json"),
@@ -229,18 +290,102 @@ describe("runtime postbuild static assets", () => {
     );
   });
 
+  it("writes every phase beneath the cwd-only caller root", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-cwd-");
+    const sentinelDest = path.join(
+      "dist",
+      `runtime-postbuild-cwd-only-${path.basename(rootDir)}.js`,
+    );
+    const moduleSentinelPath = path.join(MODULE_ROOT, sentinelDest);
+    await writeExportHtmlBuildFixture(rootDir);
+    await expectPathMissing(moduleSentinelPath);
+
+    try {
+      const params = {
+        chunks: [{ dest: sentinelDest, contents: "selected root only\n" }],
+        cwd: rootDir,
+        env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+        timings: false,
+      };
+      runRuntimePostBuild(params);
+
+      await expect(
+        fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
+      ).resolves.toBe("<html></html>\n");
+      const vendorDir = path.join(rootDir, "dist", "export-html", "vendor");
+      const markedAsset = await fs.readFile(path.join(vendorDir, "marked.min.js"), "utf8");
+      const highlightAsset = await fs.readFile(path.join(vendorDir, "highlight.min.js"), "utf8");
+      expect(markedAsset).toContain("ALTERNATE ROOT MARKED LICENSE");
+      expect(markedAsset).toContain("alternate-root-marked");
+      expect(highlightAsset).toContain("ALTERNATE ROOT HIGHLIGHT LICENSE");
+      expect(highlightAsset).toContain("alternate-root-highlight");
+      await expect(
+        fs.readFile(path.join(rootDir, "dist", "channel-catalog.json"), "utf8"),
+      ).resolves.toContain('"entries"');
+      await expect(fs.readFile(path.join(rootDir, sentinelDest), "utf8")).resolves.toBe(
+        "selected root only\n",
+      );
+      await expectPathMissing(moduleSentinelPath);
+    } finally {
+      await fs.rm(moduleSentinelPath, { force: true });
+    }
+  });
+
+  it("uses rootDir ahead of conflicting cwd and repoRoot for every phase", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-root-");
+    const cwd = createTempDir("openclaw-runtime-postbuild-rejected-cwd-");
+    const repoRoot = createTempDir("openclaw-runtime-postbuild-rejected-repo-");
+    await writeExportHtmlBuildFixture(rootDir);
+
+    runRuntimePostBuild({
+      cwd,
+      env: { OPENCLAW_RUNTIME_POSTBUILD_STATIC_ASSETS: "0" },
+      repoRoot,
+      rootDir,
+      timings: false,
+    });
+
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "export-html", "template.html"), "utf8"),
+    ).resolves.toBe("<html></html>\n");
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "channel-catalog.json"), "utf8"),
+    ).resolves.toContain('"entries"');
+    await expect(
+      fs.readFile(path.join(rootDir, "dist", "memory-state-CcqRgDZU.js"), "utf8"),
+    ).resolves.toContain("hasMemoryRuntime");
+    await expectPathMissing(path.join(cwd, "dist"));
+    await expectPathMissing(path.join(repoRoot, "dist"));
+  });
+
+  it("validates every postbuild root before running any phase", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-roots-");
+    const distFile = path.join(rootDir, "dist", "keep.js");
+    const targetDir = path.join(rootDir, "gateway-runtime");
+    await fs.mkdir(path.dirname(distFile), { recursive: true });
+    await fs.mkdir(targetDir);
+    await fs.writeFile(distFile, "keep\n");
+    await fs.symlink(targetDir, path.join(rootDir, "dist-runtime"), "dir");
+
+    expect(() =>
+      runRuntimePostBuild({
+        cwd: rootDir,
+        repoRoot: rootDir,
+        rootDir,
+        timings: false,
+      }),
+    ).toThrow(/symbolic link/u);
+
+    await expect(fs.readdir(path.join(rootDir, "dist"))).resolves.toEqual(["keep.js"]);
+    await expect(fs.readFile(distFile, "utf8")).resolves.toBe("keep\n");
+  });
+
   it("preserves restored dist static assets when plugin sources are absent", async () => {
     const rootDir = createTempDir("openclaw-runtime-postbuild-");
     const output = "assets/viewer-runtime.js";
     const distPluginDir = path.join(rootDir, "dist", "extensions", "diffs");
     const runtimeAsset = path.join(rootDir, "dist-runtime", "extensions", "diffs", output);
 
-    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
-      "module.exports = {};\n",
-      "utf8",
-    );
     await fs.mkdir(path.join(distPluginDir, "assets"), { recursive: true });
     await fs.writeFile(path.join(distPluginDir, "index.js"), "export default {};\n", "utf8");
     await fs.writeFile(
@@ -278,12 +423,6 @@ describe("runtime postbuild static assets", () => {
     const warn = vi.fn();
     const output = "assets/viewer-runtime.js";
 
-    await fs.mkdir(path.join(rootDir, "src", "plugin-sdk"), { recursive: true });
-    await fs.writeFile(
-      path.join(rootDir, "src", "plugin-sdk", "root-alias.cjs"),
-      "module.exports = {};\n",
-      "utf8",
-    );
     await fs.mkdir(path.join(rootDir, "extensions", "diffs"), { recursive: true });
     await fs.writeFile(
       path.join(rootDir, "extensions", "diffs", "package.json"),
@@ -425,6 +564,22 @@ describe("runtime postbuild static assets", () => {
       'export * from "./runtime-tts.runtime-AbCd1234.js";\n',
     );
     await expectPathMissing(path.join(distDir, "library.js"));
+  });
+
+  it("refuses to rewrite stable aliases through a symlinked dist root", async () => {
+    const rootDir = createTempDir("openclaw-runtime-postbuild-symlink-");
+    const targetDir = path.join(rootDir, "gateway-dist");
+    await fs.mkdir(targetDir, { recursive: true });
+    const hashedFile = path.join(targetDir, "runtime-model-auth.runtime-XyZ987.js");
+    await fs.writeFile(hashedFile, "export const auth = true;\n", "utf8");
+    const distLink = path.join(rootDir, "dist");
+    await fs.symlink(targetDir, distLink, "dir");
+
+    expect(() => writeStableRootRuntimeAliases({ rootDir })).toThrow(/symbolic link/u);
+
+    expect(await fs.readlink(distLink)).toBe(targetDir);
+    expect(await fs.readFile(hashedFile, "utf8")).toBe("export const auth = true;\n");
+    await expectPathMissing(path.join(targetDir, "runtime-model-auth.runtime.js"));
   });
 
   it("forwards default exports through stable and legacy aliases", async () => {

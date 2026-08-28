@@ -22,6 +22,7 @@ import {
   type Tool as BedrockTool,
   type ToolChoice,
   type ToolConfiguration,
+  type ToolResultContentBlock,
   ToolResultStatus,
 } from "@aws-sdk/client-bedrock-runtime";
 import { NodeHttpHandler } from "@smithy/node-http-handler";
@@ -51,11 +52,14 @@ import {
   type ThinkingLevel,
   type Tool,
   type ToolCall,
+  type ToolResultMessage,
 } from "openclaw/plugin-sdk/llm";
+import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import {
   resolveClaudeFable5ModelIdentity,
   resolveClaudeModelIdentity,
   resolveClaudeMythos5ModelIdentity,
+  resolveClaudeOpus5ModelIdentity,
   resolveClaudeSonnet5ModelIdentity,
   requiresClaudeMandatoryAdaptiveThinking,
   supportsClaudeAdaptiveThinking,
@@ -66,14 +70,31 @@ import {
   createDeferredEventBuffer,
   notifyLlmRequestActivity,
 } from "openclaw/plugin-sdk/provider-stream-shared";
+import {
+  describeToolResultMediaPlaceholder,
+  finalizeTerminalToolCallArguments,
+  notifyProviderHttpMetadata,
+} from "openclaw/plugin-sdk/provider-transport-runtime";
+import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { supportsBedrockPromptCaching, type BedrockOptions } from "./bedrock-options.js";
 import { supportsBedrockNativeMaxEffort } from "./thinking-policy.js";
 
-type Block = (TextContent | ThinkingContent | ToolCall) & { index?: number; partialJson?: string };
+type Block = (TextContent | ThinkingContent | ToolCall) & {
+  index?: number;
+  partialJson?: string;
+};
 type BedrockEventSink = { push(event: AssistantMessageEvent): void };
+type PendingBedrockToolCall = {
+  block: ToolCall & Pick<Block, "partialJson">;
+  contentIndex: number;
+};
 
 function usesClaudeFable5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
   return resolveClaudeFable5ModelIdentity(model) !== undefined;
+}
+
+function usesClaudeOpus5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
+  return resolveClaudeOpus5ModelIdentity(model) !== undefined;
 }
 
 function usesClaudeSonnet5BedrockContract(model: Model<"bedrock-converse-stream">): boolean {
@@ -86,6 +107,7 @@ function usesClaudeStreamingRefusalBedrockContract(
   return (
     usesClaudeFable5BedrockContract(model) ||
     resolveClaudeMythos5ModelIdentity(model) !== undefined ||
+    usesClaudeOpus5BedrockContract(model) ||
     usesClaudeSonnet5BedrockContract(model)
   );
 }
@@ -122,7 +144,7 @@ function resolveAdaptiveBedrockMaxTokens(
 }
 
 /** Stream a Bedrock Converse request using Bedrock-specific options. */
-export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
+const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOptions> = (
   model: Model<"bedrock-converse-stream">,
   context: Context,
   options: BedrockOptions = {},
@@ -149,6 +171,8 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
     };
 
     const blocks = output.content as Block[];
+    const pendingToolCallEnds: PendingBedrockToolCall[] = [];
+    const redactedReasoningChunks = new Map<number, Uint8Array[]>();
     const fable5 = usesClaudeFable5BedrockContract(model);
     // Claude classifiers may refuse after partial output. Hold every event until
     // messageStop proves the response is safe to expose.
@@ -163,11 +187,12 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       profile: options.profile,
     };
     const configuredRegion = getConfiguredBedrockRegion(options);
+    const requestRegion = options.region || getBedrockModelArnRegion(model.id) || configuredRegion;
     const hasConfiguredProfile = hasConfiguredBedrockProfile(options);
     const endpointRegion = getStandardBedrockEndpointRegion(model.baseUrl);
     const useExplicitEndpoint = shouldUseExplicitBedrockEndpoint(
       model.baseUrl,
-      configuredRegion,
+      requestRegion,
       hasConfiguredProfile,
     );
 
@@ -184,11 +209,10 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
 
     // in Node.js/Bun environment only
     if (typeof process !== "undefined" && (process.versions?.node || process.versions?.bun)) {
-      // Region resolution: explicit option > env vars > SDK default chain.
-      // When AWS_PROFILE is set, we leave region undefined so the SDK can
-      // resovle it from aws profile configs. Otherwise fall back to us-east-1.
-      if (configuredRegion) {
-        config.region = configuredRegion;
+      // Region resolution: explicit option > model ARN > env vars > SDK default chain.
+      // When AWS_PROFILE is set, leave region undefined so the SDK can resolve it.
+      if (requestRegion) {
+        config.region = requestRegion;
       } else if (endpointRegion && useExplicitEndpoint) {
         config.region = endpointRegion;
       } else if (!hasConfiguredProfile) {
@@ -217,7 +241,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       // Non-Node environment (browser): fall back to us-east-1 since
       // there's no config file resolution available.
       config.region =
-        configuredRegion ||
+        requestRegion ||
         (endpointRegion && useExplicitEndpoint ? endpointRegion : undefined) ||
         "us-east-1";
     }
@@ -227,8 +251,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       config.authSchemePreference = ["httpBearerAuth"];
     }
 
+    let client: BedrockRuntimeClient | undefined;
     try {
-      const client = new BedrockRuntimeClient(config);
+      client = new BedrockRuntimeClient(config);
       const cacheRetention = resolveCacheRetention(options.cacheRetention);
       const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
       const thinking = (additionalModelRequestFields as Record<string, unknown> | undefined)
@@ -265,19 +290,24 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       const command = new ConverseStreamCommand(commandInput);
 
       const response = await client.send(command, { abortSignal: options.signal });
+      const responseIterator = response.stream![Symbol.asyncIterator]();
       if (response.$metadata.httpStatusCode !== undefined) {
         const responseHeaders: Record<string, string> = {};
         if (response.$metadata.requestId) {
           responseHeaders["x-amzn-requestid"] = response.$metadata.requestId;
         }
-        await options?.onResponse?.(
-          { status: response.$metadata.httpStatusCode, headers: responseHeaders },
+        await notifyProviderHttpMetadata({
+          options,
+          response: { status: response.$metadata.httpStatusCode, headers: responseHeaders },
           model,
-        );
+          cancelStream: async () => {
+            await responseIterator.return?.();
+          },
+        });
       }
 
       let sawMessageStop = false;
-      for await (const item of response.stream!) {
+      for await (const item of { [Symbol.asyncIterator]: () => responseIterator }) {
         if (item.messageStart) {
           if (item.messageStart.role !== ConversationRole.ASSISTANT) {
             throw new Error(
@@ -288,9 +318,22 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         } else if (item.contentBlockStart) {
           handleContentBlockStart(item.contentBlockStart, blocks, output, eventSink);
         } else if (item.contentBlockDelta) {
-          handleContentBlockDelta(item.contentBlockDelta, blocks, output, eventSink);
+          handleContentBlockDelta(
+            item.contentBlockDelta,
+            blocks,
+            output,
+            eventSink,
+            redactedReasoningChunks,
+          );
         } else if (item.contentBlockStop) {
-          handleContentBlockStop(item.contentBlockStop, blocks, output, eventSink);
+          handleContentBlockStop(
+            item.contentBlockStop,
+            blocks,
+            output,
+            eventSink,
+            redactedReasoningChunks,
+            pendingToolCallEnds,
+          );
         } else if (item.messageStop) {
           sawMessageStop = true;
           if ((item.messageStop.stopReason as string | undefined) === "refusal") {
@@ -300,7 +343,11 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
               model.provider,
             );
           } else {
-            output.stopReason = mapStopReason(item.messageStop.stopReason);
+            const mappedStop = mapStopReason(item.messageStop.stopReason);
+            output.stopReason = mappedStop.stopReason;
+            if (mappedStop.errorMessage) {
+              output.errorMessage = mappedStop.errorMessage;
+            }
           }
         } else if (item.metadata) {
           handleMetadata(item.metadata, model, output);
@@ -317,7 +364,7 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         }
       }
 
-      if (refusalBuffer && !sawMessageStop) {
+      if (!sawMessageStop) {
         throw new Error("Bedrock stream ended before messageStop");
       }
       if (options.signal?.aborted) {
@@ -328,10 +375,25 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
         throw new Error(output.errorMessage ?? "An unknown error occurred");
       }
 
+      // Some valid provider streams omit contentBlockStop; never persist their scratch state.
+      for (const block of blocks) {
+        if (block.index !== undefined && block.type !== "toolCall") {
+          handleContentBlockStop(
+            { contentBlockIndex: block.index },
+            blocks,
+            output,
+            eventSink,
+            redactedReasoningChunks,
+            pendingToolCallEnds,
+          );
+        }
+      }
+      flushPendingBedrockToolCalls(pendingToolCallEnds, blocks, output, eventSink);
       refusalBuffer?.flush();
       stream.push({ type: "done", reason: output.stopReason, message: output });
       stream.end();
     } catch (error) {
+      output.content = output.content.filter((block) => block.type !== "toolCall");
       for (const block of output.content) {
         delete (block as Block).index;
         // partialJson is only a streaming scratch buffer; never persist it.
@@ -345,6 +407,9 @@ export const streamBedrock: StreamFunction<"bedrock-converse-stream", BedrockOpt
       output.errorMessage = formatBedrockError(error);
       stream.push({ type: "error", reason: output.stopReason, error: output });
       stream.end();
+    } finally {
+      // The SDK client owns pooled HTTP resources; release them only after its async stream settles.
+      client?.destroy();
     }
   })();
 
@@ -392,7 +457,11 @@ function resolveSimpleBedrockOptions(
   model: Model<"bedrock-converse-stream">,
   options?: SimpleStreamOptions,
 ): BedrockOptions {
-  const base = buildBaseOptions(model, options, undefined);
+  const bedrockOptions = options as BedrockOptions | undefined;
+  const base = {
+    ...bedrockOptions,
+    ...buildBaseOptions(model, options, undefined),
+  };
   if (requiresMandatoryAdaptiveThinking(model)) {
     return {
       ...base,
@@ -403,12 +472,13 @@ function resolveSimpleBedrockOptions(
   }
   if (!options?.reasoning) {
     const reasoning =
-      isAnthropicClaudeModel(model) && requiresMandatoryAdaptiveThinking(model)
+      usesClaudeOpus5BedrockContract(model) ||
+      (isAnthropicClaudeModel(model) && requiresMandatoryAdaptiveThinking(model))
         ? "high"
         : undefined;
     return {
       ...base,
-      ...(reasoning !== undefined
+      ...(reasoning !== undefined || supportsAdaptiveThinking(model)
         ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
         : {}),
       reasoning,
@@ -416,7 +486,13 @@ function resolveSimpleBedrockOptions(
   }
 
   if (options.reasoning === "off") {
-    return { ...base, reasoning: "off" } satisfies BedrockOptions;
+    return {
+      ...base,
+      ...(supportsAdaptiveThinking(model)
+        ? { maxTokens: resolveAdaptiveBedrockMaxTokens(model, base.maxTokens) }
+        : {}),
+      reasoning: "off",
+    } satisfies BedrockOptions;
   }
 
   if (isAnthropicClaudeModel(model)) {
@@ -474,11 +550,12 @@ function handleContentBlockStart(
   const start = event.start;
 
   if (start?.toolUse) {
+    const startArguments = isRecord(start.toolUse) ? start.toolUse.input : undefined;
     const block: Block = {
       type: "toolCall",
       id: start.toolUse.toolUseId || "",
       name: start.toolUse.name || "",
-      arguments: {},
+      arguments: isRecord(startArguments) ? startArguments : {},
       partialJson: "",
       index,
     };
@@ -492,6 +569,7 @@ function handleContentBlockDelta(
   blocks: Block[],
   output: AssistantMessage,
   stream: BedrockEventSink,
+  redactedReasoningChunks: Map<number, Uint8Array[]>,
 ): void {
   const contentBlockIndex = event.contentBlockIndex!;
   const delta = event.delta;
@@ -551,6 +629,16 @@ function handleContentBlockDelta(
         thinkingBlock.thinkingSignature =
           (thinkingBlock.thinkingSignature || "") + delta.reasoningContent.signature;
       }
+      if (delta.reasoningContent.redactedContent) {
+        const chunks = redactedReasoningChunks.get(contentBlockIndex);
+        if (chunks) {
+          chunks.push(delta.reasoningContent.redactedContent);
+        } else {
+          redactedReasoningChunks.set(contentBlockIndex, [delta.reasoningContent.redactedContent]);
+        }
+        thinkingBlock.thinking = "[Reasoning redacted]";
+        thinkingBlock.redacted = true;
+      }
     }
   }
 }
@@ -565,7 +653,24 @@ function handleMetadata(
     output.usage.output = event.usage.outputTokens || 0;
     output.usage.cacheRead = event.usage.cacheReadInputTokens || 0;
     output.usage.cacheWrite = event.usage.cacheWriteInputTokens || 0;
-    output.usage.totalTokens = event.usage.totalTokens || output.usage.input + output.usage.output;
+    const promptTokens = output.usage.input + output.usage.cacheRead + output.usage.cacheWrite;
+    output.usage.totalTokens = Math.max(
+      event.usage.totalTokens || 0,
+      promptTokens + output.usage.output,
+    );
+    output.usage.contextUsage = {
+      state: "available",
+      promptTokens,
+      totalTokens: promptTokens + output.usage.output,
+    };
+    const cacheWrite1h = event.usage.cacheDetails?.reduce(
+      (total, detail) =>
+        detail.ttl === CacheTTL.ONE_HOUR ? total + (detail.inputTokens ?? 0) : total,
+      0,
+    );
+    if (cacheWrite1h) {
+      output.usage.cacheWrite1h = cacheWrite1h;
+    }
     calculateCost(model, output.usage);
   }
 }
@@ -575,19 +680,35 @@ function handleContentBlockStop(
   blocks: Block[],
   output: AssistantMessage,
   stream: BedrockEventSink,
+  redactedReasoningChunks: Map<number, Uint8Array[]>,
+  pendingToolCallEnds: PendingBedrockToolCall[],
 ): void {
   const index = blocks.findIndex((b) => b.index === event.contentBlockIndex);
   const block = blocks[index];
   if (!block) {
     return;
   }
-  delete block.index;
-
   switch (block.type) {
     case "text":
+      delete block.index;
       stream.push({ type: "text_end", contentIndex: index, content: block.text, partial: output });
       break;
     case "thinking":
+      delete block.index;
+      if (block.redacted) {
+        const chunks = redactedReasoningChunks.get(event.contentBlockIndex!);
+        if (chunks) {
+          // Encode once at the block boundary; encoding every streamed prefix is quadratic.
+          let opaqueReasoning = "";
+          for (const chunk of chunks) {
+            for (const byte of chunk) {
+              opaqueReasoning += String.fromCharCode(byte);
+            }
+          }
+          block.thinkingSignature = btoa(opaqueReasoning);
+          redactedReasoningChunks.delete(event.contentBlockIndex!);
+        }
+      }
       stream.push({
         type: "thinking_end",
         contentIndex: index,
@@ -596,11 +717,34 @@ function handleContentBlockStop(
       });
       break;
     case "toolCall":
-      // Finalize in-place and strip the scratch buffer so replay only
-      // carries parsed arguments.
-      delete (block as Block).partialJson;
-      stream.push({ type: "toolcall_end", contentIndex: index, toolCall: block, partial: output });
+      delete block.index;
+      pendingToolCallEnds.push({ block, contentIndex: index });
       break;
+  }
+}
+
+function flushPendingBedrockToolCalls(
+  pending: PendingBedrockToolCall[],
+  blocks: Block[],
+  output: AssistantMessage,
+  stream: BedrockEventSink,
+): void {
+  if (blocks.some((block) => block.type === "toolCall" && block.index !== undefined)) {
+    throw new Error("Provider completed stream with an incomplete tool call");
+  }
+  finalizeTerminalToolCallArguments(
+    pending.map(({ block }) => block),
+    (block) =>
+      block.partialJson && block.partialJson.length > 0 ? block.partialJson : block.arguments,
+  );
+  for (const toolCall of pending) {
+    delete toolCall.block.partialJson;
+    stream.push({
+      type: "toolcall_end",
+      contentIndex: toolCall.contentIndex,
+      toolCall: toolCall.block,
+      partial: output,
+    });
   }
 }
 
@@ -613,9 +757,10 @@ function resolveClaudeProfileNameModelId(modelName?: string): string | undefined
   if (!normalized.includes("claude")) {
     return undefined;
   }
-  const family = /(?:fable-5|mythos-(?:5|preview)|opus-4-(?:6|7|8)|sonnet-(?:5|4-6))(?:$|-)/.exec(
-    normalized,
-  )?.[0];
+  const family =
+    /(?:fable-5|mythos-(?:5|preview)|opus-(?:5|4-(?:6|7|8))|sonnet-(?:5|4-6))(?:$|-)/.exec(
+      normalized,
+    )?.[0];
   return family ? `claude-${family.replace(/-$/, "")}` : undefined;
 }
 
@@ -784,12 +929,37 @@ function normalizeToolCallId(id: string): string {
   return sanitized.length > 64 ? sanitized.slice(0, 64) : sanitized;
 }
 
+function createBedrockToolResult(message: ToolResultMessage): ContentBlock.ToolResultMember {
+  const content: ToolResultContentBlock[] = [];
+  for (const block of message.content) {
+    if (block.type === "text") {
+      content.push({ text: sanitizeSurrogates(block.text) });
+      continue;
+    }
+    if (block.type === "image" && describeToolResultMediaPlaceholder([block])) {
+      content.push({ image: createImageBlock(block.mimeType, block.data) });
+    }
+  }
+
+  return {
+    toolResult: {
+      toolUseId: message.toolCallId,
+      content:
+        content.length > 0
+          ? content
+          : [{ text: describeToolResultMediaPlaceholder(message.content) ?? "(no output)" }],
+      status: message.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
+    },
+  };
+}
+
 function convertMessages(
   context: Context,
   model: Model<"bedrock-converse-stream">,
   cacheRetention: CacheRetention,
 ): Message[] {
   const result: Message[] = [];
+  let firstVolatileMessageIndex: number | undefined;
   const transformedMessages = transformMessages(context.messages, model, normalizeToolCallId);
 
   for (let i = 0; i < transformedMessages.length; i++) {
@@ -816,6 +986,9 @@ function convertMessages(
         }
         if (content.length === 0) {
           continue;
+        }
+        if (m.runtimeContextCarrier === true && firstVolatileMessageIndex === undefined) {
+          firstVolatileMessageIndex = result.length;
         }
         result.push({
           role: ConversationRole.USER,
@@ -845,6 +1018,27 @@ function convertMessages(
               });
               break;
             case "thinking": {
+              if (c.redacted) {
+                // transformMessages already strips opaque reasoning after a model
+                // switch; this also rejects routes that cannot consume the format.
+                if (!supportsThinkingSignature(model)) {
+                  continue;
+                }
+                if (!c.thinkingSignature) {
+                  throw new Error(
+                    "Bedrock redacted reasoning block is missing its opaque signature",
+                  );
+                }
+                contentBlocks.push({
+                  reasoningContent: {
+                    redactedContent: decodeBedrockBase64(
+                      c.thinkingSignature,
+                      "Bedrock redacted reasoning block has a malformed opaque signature",
+                    ),
+                  },
+                });
+                break;
+              }
               const thinkingSignature = c.thinkingSignature;
               const normalizedThinkingSignature = thinkingSignature?.trim();
               const supportsSignature = supportsThinkingSignature(model);
@@ -902,17 +1096,7 @@ function convertMessages(
         const toolResults: ContentBlock.ToolResultMember[] = [];
 
         // Add current tool result with all content blocks combined
-        toolResults.push({
-          toolResult: {
-            toolUseId: m.toolCallId,
-            content: m.content.map((c) =>
-              c.type === "image"
-                ? { image: createImageBlock(c.mimeType, c.data) }
-                : { text: sanitizeSurrogates(c.text) },
-            ),
-            status: m.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
-          },
-        });
+        toolResults.push(createBedrockToolResult(m));
 
         // Look ahead for consecutive toolResult messages
         let j = i + 1;
@@ -921,17 +1105,7 @@ function convertMessages(
           if (nextMsg?.role !== "toolResult") {
             break;
           }
-          toolResults.push({
-            toolResult: {
-              toolUseId: nextMsg.toolCallId,
-              content: nextMsg.content.map((c) =>
-                c.type === "image"
-                  ? { image: createImageBlock(c.mimeType, c.data) }
-                  : { text: sanitizeSurrogates(c.text) },
-              ),
-              status: nextMsg.isError ? ToolResultStatus.ERROR : ToolResultStatus.SUCCESS,
-            },
-          });
+          toolResults.push(createBedrockToolResult(nextMsg));
           j++;
         }
 
@@ -949,11 +1123,20 @@ function convertMessages(
     }
   }
 
-  // Add cache point to the last user message for supported Claude models when caching is enabled
-  if (cacheRetention !== "none" && supportsPromptCaching(model) && result.length > 0) {
-    const lastMessage = expectDefined(result.at(-1), "non-empty converted message list");
-    if (lastMessage.role === ConversationRole.USER && lastMessage.content) {
-      lastMessage.content.push({
+  // Cache points include their entire prefix, so anchors after transient runtime
+  // context would still cache volatile bytes even when those anchors are stable.
+  if (
+    cacheRetention !== "none" &&
+    supportsPromptCaching(model) &&
+    result.at(-1)?.role === ConversationRole.USER
+  ) {
+    const cacheAnchor = result.findLast(
+      (message, index) =>
+        message.role === ConversationRole.USER &&
+        (firstVolatileMessageIndex === undefined || index < firstVolatileMessageIndex),
+    );
+    if (cacheAnchor?.content) {
+      cacheAnchor.content.push({
         cachePoint: {
           type: CachePointType.DEFAULT,
           ...(cacheRetention === "long" ? { ttl: CacheTTL.ONE_HOUR } : {}),
@@ -977,7 +1160,7 @@ function convertToolConfig(
     toolSpec: {
       name: tool.name,
       description: tool.description,
-      inputSchema: { json: tool.parameters as unknown as DocumentType },
+      inputSchema: { json: { ...tool.parameters } },
     },
   }));
 
@@ -998,19 +1181,31 @@ function convertToolConfig(
   return { tools: bedrockTools, toolChoice: bedrockToolChoice };
 }
 
-function mapStopReason(reason: string | undefined): StopReason {
+function mapStopReason(reason: string | undefined): {
+  stopReason: StopReason;
+  errorMessage?: string;
+} {
   switch (reason) {
     case BedrockStopReason.END_TURN:
     case BedrockStopReason.STOP_SEQUENCE:
-      return "stop";
+      return { stopReason: "stop" };
     case BedrockStopReason.MAX_TOKENS:
     case BedrockStopReason.MODEL_CONTEXT_WINDOW_EXCEEDED:
-      return "length";
+      return { stopReason: "length" };
     case BedrockStopReason.TOOL_USE:
-      return "toolUse";
+      return { stopReason: "toolUse" };
+    case BedrockStopReason.CONTENT_FILTERED:
+    case BedrockStopReason.GUARDRAIL_INTERVENED:
+    case BedrockStopReason.MALFORMED_MODEL_OUTPUT:
+    case BedrockStopReason.MALFORMED_TOOL_USE:
+      return { stopReason: "error", errorMessage: reason };
     default:
-      return "error";
+      return reason ? { stopReason: "error", errorMessage: reason } : { stopReason: "error" };
   }
+}
+
+function getBedrockModelArnRegion(modelId: string): string | undefined {
+  return /^arn:aws(?:-[a-z0-9-]+)?:bedrock:([a-z0-9-]+):/.exec(modelId)?.[1];
 }
 
 function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined {
@@ -1018,7 +1213,11 @@ function getConfiguredBedrockRegion(options: BedrockOptions): string | undefined
     return options.region;
   }
 
-  return options.region || process.env.AWS_REGION || process.env.AWS_DEFAULT_REGION || undefined;
+  return (
+    options.region ||
+    normalizeOptionalString(process.env.AWS_REGION) ||
+    normalizeOptionalString(process.env.AWS_DEFAULT_REGION)
+  );
 }
 
 function hasConfiguredBedrockProfile(options: BedrockOptions): boolean {
@@ -1163,23 +1362,26 @@ function createImageBlock(mimeType: string, data: string) {
       throw new Error(`Unknown image type: ${mimeType}`);
   }
 
-  const binaryString = atob(data);
+  return {
+    source: {
+      bytes: decodeBedrockBase64(data, "Amazon Bedrock image content has malformed base64"),
+    },
+    format,
+  };
+}
+
+function decodeBedrockBase64(data: string, errorMessage: string): Uint8Array {
+  // Validate before portable decoding so browser runtimes keep working without leaking atob errors.
+  const canonicalBase64 = canonicalizeBase64(data);
+  if (!canonicalBase64) {
+    throw new Error(errorMessage);
+  }
+  const binaryString = atob(canonicalBase64);
   const bytes = new Uint8Array(binaryString.length);
   for (let i = 0; i < binaryString.length; i++) {
     bytes[i] = binaryString.charCodeAt(i);
   }
-
-  return { source: { bytes }, format };
+  return bytes;
 }
 
-/** Test-only hooks for Bedrock runtime conversion and endpoint policy. */
-export const testing = {
-  buildAdditionalModelRequestFields,
-  convertMessages,
-  getConfiguredBedrockRegion,
-  hasConfiguredBedrockProfile,
-  mapThinkingLevelToEffort,
-  resolveSimpleBedrockOptions,
-  shouldUseExplicitBedrockEndpoint,
-};
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

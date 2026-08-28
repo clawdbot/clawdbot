@@ -80,7 +80,7 @@ describe("hosted media provider live QA producer", () => {
     expect(classifyHostedMediaFailureStatus("provider response was malformed")).toBe("fail");
   });
 
-  it("maps video provider live coverage roles without making tool invocation primary", () => {
+  it("binds video provider coverage from the scenario catalog", () => {
     const artifactBase = path.join(os.tmpdir(), "openclaw-hosted-media-live-test");
     const options = parseHostedMediaOptions(["--suite", "video", "--artifact-base", artifactBase]);
     const evidence = buildHostedMediaEvidence({

@@ -4,6 +4,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import type { AgentConfig } from "../config/types.agents.js";
 
 const {
+  loadFullModelCatalogMock,
   loadModelCatalogMock,
   getModelRefStatusMock,
   normalizeModelSelectionMock,
@@ -11,6 +12,7 @@ const {
   resolveConfiguredModelRefMock,
   resolveHooksGmailModelMock,
 } = vi.hoisted(() => ({
+  loadFullModelCatalogMock: vi.fn(),
   loadModelCatalogMock: vi.fn(),
   getModelRefStatusMock: vi.fn(),
   normalizeModelSelectionMock: vi.fn((value: unknown) => {
@@ -36,9 +38,17 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   DEFAULT_MODEL: "claude-opus-4-6",
   DEFAULT_PROVIDER: "anthropic",
   getModelRefStatus: getModelRefStatusMock,
-  loadModelCatalog: loadModelCatalogMock,
+  loadResolvedPublishedModelCatalogOwner: loadModelCatalogMock,
   normalizeModelSelection: normalizeModelSelectionMock,
-  resolveAllowedModelRef: resolveAllowedModelRefMock,
+  publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
+    owner.agentId === agentId.trim().toLowerCase(),
+  resolveAgentConfig: (cfg: { agents?: { list?: AgentConfig[] } }, agentId: string) =>
+    cfg.agents?.list?.find((agent) => agent.id === agentId),
+  resolveAgentWorkspaceDir: (
+    cfg: { agents?: { list?: Array<AgentConfig & { workspace?: string }> } },
+    agentId: string,
+  ) => cfg.agents?.list?.find((agent) => agent.id === agentId)?.workspace ?? "/tmp/workspace",
+  resolveAllowedModelRefCore: resolveAllowedModelRefMock,
   resolveConfiguredModelRef: resolveConfiguredModelRefMock,
   resolveHooksGmailModel: resolveHooksGmailModelMock,
   resolveSubagentModelConfigSelectionResult: ({
@@ -50,8 +60,8 @@ vi.mock("./isolated-agent/run-model-selection.runtime.js", () => ({
   }) => {
     for (const candidate of [
       { raw: agentConfigOverride?.subagents?.model, source: "subagent" as const },
-      { raw: agentConfigOverride?.model, source: "agent" as const },
       { raw: cfg?.agents?.defaults?.subagents?.model, source: "default-subagent" as const },
+      { raw: agentConfigOverride?.model, source: "agent" as const },
     ]) {
       if (normalizeModelSelectionMock(candidate.raw)) {
         return candidate;
@@ -137,12 +147,13 @@ async function selectModel(options: SelectModelOptions = {}) {
   const cfg = options.cfg ?? {};
   return resolveCronModelSelection({
     cfg: cfg as never,
-    cfgWithAgentDefaults: cfg as never,
     agentConfigOverride: options.agentConfigOverride,
     sessionEntry: options.sessionEntry ?? {},
     payload: options.payload ?? defaultPayload(),
     isGmailHook: options.isGmailHook ?? false,
     agentId: options.agentId,
+    agentDir: "/tmp/agent",
+    workspaceDir: "/tmp/workspace",
   });
 }
 
@@ -161,7 +172,29 @@ async function expectDefaultSelectedModel(options: SelectModelOptions = {}) {
 describe("cron model formatting and precedence edge cases", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    loadModelCatalogMock.mockResolvedValue([]);
+    loadModelCatalogMock.mockImplementation(
+      async (params: {
+        config: Record<string, unknown>;
+        agentId?: string;
+        agentDir: string;
+        readOnly?: boolean;
+        workspaceDir: string;
+      }) => {
+        if (params.readOnly !== true) {
+          await loadFullModelCatalogMock();
+        }
+        return {
+          agentId: params.agentId ?? "main",
+          agentDir: params.agentDir,
+          workspaceDir: params.workspaceDir,
+          config: params.config,
+          modelCatalog: { entries: [], routeVariants: [] },
+        };
+      },
+    );
+    loadFullModelCatalogMock.mockRejectedValue(
+      new Error("cron model selection must not materialize the full model catalog"),
+    );
     getModelRefStatusMock.mockReturnValue({ allowed: false });
     resolveHooksGmailModelMock.mockReturnValue(null);
     resolveConfiguredModelRefMock.mockImplementation(({ cfg }: { cfg?: Record<string, unknown> }) =>
@@ -174,6 +207,17 @@ describe("cron model formatting and precedence edge cases", () => {
   });
 
   describe("parseModelRef formatting", () => {
+    it("keeps cron owner selection on the published read-only catalog", async () => {
+      await expectDefaultSelectedModel();
+
+      expect(loadModelCatalogMock).toHaveBeenCalledWith({
+        config: {},
+        readOnly: true,
+        allowGatewaySubagentBinding: true,
+      });
+      expect(loadFullModelCatalogMock).not.toHaveBeenCalled();
+    });
+
     it("splits standard provider/model", async () => {
       await expectSelectedModel(
         {
@@ -183,29 +227,53 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("handles leading/trailing whitespace in model string", async () => {
+    it.each([
+      {
+        title: "handles leading/trailing whitespace in model string",
+        model: "  openai/gpt-4.1-mini  ",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+      {
+        title: "handles openrouter nested provider paths",
+        model: "openrouter/meta-llama/llama-3.3-70b:free",
+        expectedProvider: "openrouter",
+        expectedModel: "meta-llama/llama-3.3-70b:free",
+      },
+      {
+        title: "normalizes provider casing",
+        model: "OpenAI/gpt-4.1-mini",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+      {
+        title: "normalizes anthropic model aliases",
+        model: "anthropic/opus-4.5",
+        expectedProvider: "anthropic",
+        expectedModel: "claude-opus-4-5",
+      },
+      {
+        title: "normalizes bedrock provider alias",
+        model: "bedrock/claude-sonnet-4-6",
+        expectedProvider: "amazon-bedrock",
+        expectedModel: "claude-sonnet-4-6",
+      },
+      {
+        title: "job payload model overrides default (anthropic -> openai)",
+        model: "openai/gpt-4.1-mini",
+        expectedProvider: "openai",
+        expectedModel: "gpt-4.1-mini",
+      },
+    ])("$title", async ({ model, expectedProvider, expectedModel }) => {
       await expectSelectedModel(
         {
           payload: {
             kind: "agentTurn",
             message: DEFAULT_MESSAGE,
-            model: "  openai/gpt-4.1-mini  ",
+            model,
           },
         },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
-    it("handles openrouter nested provider paths", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "openrouter/meta-llama/llama-3.3-70b:free",
-          },
-        },
-        { provider: "openrouter", model: "meta-llama/llama-3.3-70b:free" },
+        { provider: expectedProvider, model: expectedModel },
       );
     });
 
@@ -216,7 +284,7 @@ describe("cron model formatting and precedence edge cases", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "cron payload.model 'openai/' rejected: invalid model",
+        error: "automation model override 'openai/' rejected: invalid model",
       });
     });
 
@@ -227,7 +295,7 @@ describe("cron model formatting and precedence edge cases", () => {
         }),
       ).resolves.toEqual({
         ok: false,
-        error: "cron payload.model '/gpt-4.1-mini' rejected: invalid model",
+        error: "automation model override '/gpt-4.1-mini' rejected: invalid model",
       });
     });
 
@@ -247,64 +315,125 @@ describe("cron model formatting and precedence edge cases", () => {
       ).resolves.toEqual({
         ok: false,
         error:
-          "cron payload.model 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.models allowlist: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
+          "automation model override 'anthropic/claude-sonnet-4-6' rejected by agents.defaults.modelPolicy.allow: anthropic/claude-sonnet-4-6 is not in [(none configured)]",
       });
     });
 
-    it("normalizes provider casing", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "OpenAI/gpt-4.1-mini",
+    it("reports the active per-agent allowlist path and refs", async () => {
+      resolveAllowedModelRefMock.mockReturnValueOnce({
+        error: "model not allowed: openai/gpt-5.5",
+      });
+
+      await expect(
+        selectModel({
+          agentId: "ops",
+          cfg: {
+            agents: {
+              list: [{ id: "ops", modelPolicy: { allow: ["anthropic/*"] } }],
+            },
           },
+          payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "openai/gpt-5.5" },
+        }),
+      ).resolves.toEqual({
+        ok: false,
+        error:
+          "automation model override 'openai/gpt-5.5' rejected by agents.entries.*.modelPolicy.allow: openai/gpt-5.5 is not in [anthropic/*]",
+      });
+    });
+
+    it("authorizes cron payload aliases against the original agent policy scope", async () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.5": { alias: "approved" } },
+            modelPolicy: { allow: ["approved"] },
+          },
+          list: [
+            {
+              id: "worker",
+              models: { "anthropic/claude-sonnet-4-6": { alias: "approved" } },
+            },
+          ],
         },
-        { provider: "openai", model: "gpt-4.1-mini" },
+      };
+      await selectModel({
+        cfg,
+        agentId: "worker",
+        payload: { kind: "agentTurn", message: DEFAULT_MESSAGE, model: "approved" },
+      });
+
+      expect(resolveAllowedModelRefMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cfg, agentId: "worker", raw: "approved" }),
       );
     });
 
-    it("normalizes anthropic model aliases", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "anthropic/opus-4.5",
-          },
+    it("uses one published replacement owner for cron model selection", async () => {
+      const callerConfig = {
+        agents: {
+          defaults: { model: "anthropic/caller-model" },
+          list: [{ id: "worker", default: true }],
         },
-        { provider: "anthropic", model: "claude-opus-4-5" },
-      );
-    });
+      };
+      const ownerConfig = {
+        agents: {
+          defaults: {
+            model: "openai/owner-default",
+            modelPolicy: { allow: ["openai/*"] },
+          },
+          list: [{ id: "main", default: true }],
+        },
+      };
+      const ownerCatalog = [{ id: "owner-model", name: "Owner Model", provider: "openai" }];
+      loadModelCatalogMock.mockResolvedValueOnce({
+        agentId: "main",
+        agentDir: "/tmp/owner-agent",
+        workspaceDir: "/tmp/owner-workspace",
+        config: ownerConfig,
+        modelCatalog: { entries: ownerCatalog, routeVariants: [] },
+      });
 
-    it("normalizes bedrock provider alias", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "bedrock/claude-sonnet-4-6",
-          },
+      const result = await selectModel({
+        cfg: callerConfig,
+        payload: {
+          kind: "agentTurn",
+          message: DEFAULT_MESSAGE,
+          model: "openai/owner-model",
         },
-        { provider: "amazon-bedrock", model: "claude-sonnet-4-6" },
+      });
+
+      expect(loadModelCatalogMock).toHaveBeenCalledOnce();
+      expect(loadModelCatalogMock).toHaveBeenCalledWith({
+        config: callerConfig,
+        readOnly: true,
+        allowGatewaySubagentBinding: true,
+      });
+      expect(resolveConfiguredModelRefMock).toHaveBeenCalledWith(
+        expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),
       );
+      expect(resolveAllowedModelRefMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          cfg: ownerConfig,
+          agentId: "main",
+          catalog: ownerCatalog,
+          raw: "openai/owner-model",
+        }),
+      );
+      expect(result).toMatchObject({
+        ok: true,
+        provider: "openai",
+        model: "owner-model",
+        owner: {
+          config: ownerConfig,
+          agentId: "main",
+          agentDir: "/tmp/owner-agent",
+          workspaceDir: "/tmp/owner-workspace",
+          modelCatalog: { entries: ownerCatalog, routeVariants: [] },
+        },
+      });
     });
   });
 
   describe("model precedence isolation", () => {
-    it("job payload model overrides default (anthropic -> openai)", async () => {
-      await expectSelectedModel(
-        {
-          payload: {
-            kind: "agentTurn",
-            message: DEFAULT_MESSAGE,
-            model: "openai/gpt-4.1-mini",
-          },
-        },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
     it("session override applies when no job payload model is present", async () => {
       await expectSelectedModel(
         {
@@ -506,24 +635,6 @@ describe("cron model formatting and precedence edge cases", () => {
     });
   });
 
-  describe("stored session overrides", () => {
-    it("stored modelOverride/providerOverride are applied", async () => {
-      await expectSelectedModel(
-        {
-          sessionEntry: {
-            providerOverride: "openai",
-            modelOverride: "gpt-4.1-mini",
-          },
-        },
-        { provider: "openai", model: "gpt-4.1-mini" },
-      );
-    });
-
-    it("default remains when store has no override", async () => {
-      await expectDefaultSelectedModel({ sessionEntry: {} });
-    });
-  });
-
   describe("Gmail hook model precedence", () => {
     const gmailModel = {
       provider: "openrouter",
@@ -668,7 +779,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("falls through fallback-only subagents.model to the agent model", async () => {
+    it("falls through fallback-only subagents.model to the global subagent default", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -684,7 +795,7 @@ describe("cron model formatting and precedence edge cases", () => {
             subagents: { model: { fallbacks: [] } },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
 
@@ -709,7 +820,7 @@ describe("cron model formatting and precedence edge cases", () => {
       );
     });
 
-    it("prefers the agent model over agents.defaults.subagents.model", async () => {
+    it("prefers agents.defaults.subagents.model over the agent model", async () => {
       await expectSelectedModel(
         {
           cfg: {
@@ -724,7 +835,7 @@ describe("cron model formatting and precedence edge cases", () => {
             model: { primary: "anthropic/claude-opus-4-6" },
           },
         },
-        { provider: "anthropic", model: "claude-opus-4-6" },
+        { provider: "ollama", model: "llama3.2:3b" },
       );
     });
   });

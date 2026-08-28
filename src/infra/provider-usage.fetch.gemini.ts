@@ -1,12 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 // Fetches Gemini provider usage windows.
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import {
-  buildUsageHttpErrorSnapshot,
-  discardUsageResponseBody,
-  fetchJson,
-  readUsageJson,
-} from "./provider-usage.fetch.shared.js";
+import { fetchUsageJson } from "./provider-usage.fetch.shared.js";
 import { clampPercent, providerUsageLabel } from "./provider-usage.shared.js";
 import type {
   ProviderUsageSnapshot,
@@ -14,19 +10,16 @@ import type {
   UsageWindow,
 } from "./provider-usage.types.js";
 
-type GeminiUsageResponse = {
-  buckets?: Array<{ modelId?: string; remainingFraction?: number }>;
-};
-
 export async function fetchGeminiUsage(
   token: string,
   timeoutMs: number,
   fetchFn: typeof fetch,
   provider: UsageProviderId,
 ): Promise<ProviderUsageSnapshot> {
-  const res = await fetchJson(
-    "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
-    {
+  const parsed = await fetchUsageJson({
+    provider,
+    url: "https://cloudcode-pa.googleapis.com/v1internal:retrieveUserQuota",
+    init: {
       method: "POST",
       headers: {
         Authorization: `Bearer ${token}`,
@@ -36,28 +29,22 @@ export async function fetchGeminiUsage(
     },
     timeoutMs,
     fetchFn,
-  );
-
-  if (!res.ok) {
-    await discardUsageResponseBody(res);
-    return buildUsageHttpErrorSnapshot({
-      provider,
-      status: res.status,
-    });
-  }
-
-  const parsed = await readUsageJson(provider, res);
+  });
   if (!parsed.ok) {
     return parsed.snapshot;
   }
-  const data = parsed.data as GeminiUsageResponse;
-  const quotas: Record<string, number> = {};
-
-  for (const bucket of data.buckets || []) {
-    const model = bucket.modelId || "unknown";
-    const frac = bucket.remainingFraction ?? 1;
-    if (!quotas[model] || frac < quotas[model]) {
-      quotas[model] = frac;
+  const buckets =
+    isRecord(parsed.data) && Array.isArray(parsed.data.buckets) ? parsed.data.buckets : [];
+  const quotas = new Map<string, number>();
+  for (const bucket of buckets) {
+    if (!isRecord(bucket)) {
+      continue;
+    }
+    const model = typeof bucket.modelId === "string" ? bucket.modelId : "unknown";
+    const frac = typeof bucket.remainingFraction === "number" ? bucket.remainingFraction : 1;
+    const current = quotas.get(model);
+    if (current === undefined || frac < current) {
+      quotas.set(model, frac);
     }
   }
 
@@ -67,7 +54,7 @@ export async function fetchGeminiUsage(
   let hasPro = false;
   let hasFlash = false;
 
-  for (const [model, frac] of Object.entries(quotas)) {
+  for (const [model, frac] of quotas) {
     const lower = normalizeLowercaseStringOrEmpty(model);
     if (lower.includes("pro")) {
       hasPro = true;

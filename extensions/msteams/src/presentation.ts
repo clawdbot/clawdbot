@@ -69,10 +69,14 @@ export function buildMSTeamsPresentationCard(params: {
       for (const button of block.buttons) {
         const action = resolveMessagePresentationButtonAction(button);
         if (action?.type === "url" || action?.type === "web-app") {
+          const url = normalizeOptionalString(action.url);
+          if (!url) {
+            continue;
+          }
           actions.push({
             type: "Action.OpenUrl",
             title: button.label,
-            url: action.url,
+            url,
           });
           continue;
         }

@@ -1,11 +1,11 @@
 // Tool media extraction tests cover structured media payloads, image fallbacks,
 // trust decisions, and filtering of local/remote media URLs.
 import { describe, expect, it } from "vitest";
+import { isToolResultMediaTrusted } from "./embedded-agent-subscribe.tools.test-support.js";
 import {
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
-  isToolResultMediaTrusted,
-} from "./embedded-agent-subscribe.tools.js";
+} from "./embedded-agent-tool-media.js";
 
 describe("extractToolResultMediaArtifact", () => {
   it("returns undefined for null/undefined", () => {
@@ -88,6 +88,100 @@ describe("extractToolResultMediaArtifact", () => {
         "https://example.test/cover.png",
         "/tmp/stems.zip",
         "https://example.test/stems.zip",
+      ],
+      attachments: [
+        { type: "audio", path: "/tmp/song.mp3", mimeType: "audio/mpeg" },
+        { type: "image", url: "https://example.test/cover.png" },
+        { type: "file" },
+        { type: "file" },
+      ],
+    });
+  });
+
+  it("aligns generated attachment metadata with deduplicated media references", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            mediaUrls: [" /tmp/song.mp3 ", "/tmp/cover.png", "/tmp/song.mp3"],
+            attachments: [
+              {
+                type: "image",
+                path: "/tmp/cover.png",
+                name: "cover.png",
+                width: 640,
+                height: 480,
+              },
+              {
+                type: "audio",
+                path: "/tmp/song.mp3",
+                name: "friendly-song.mp3",
+                mimeType: "audio/mpeg",
+                durationMs: 2_000,
+                trustedLocalMedia: true,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/song.mp3", "/tmp/cover.png"],
+      attachments: [
+        {
+          type: "audio",
+          path: "/tmp/song.mp3",
+          name: "friendly-song.mp3",
+          mimeType: "audio/mpeg",
+          durationMs: 2_000,
+        },
+        {
+          type: "image",
+          path: "/tmp/cover.png",
+          name: "cover.png",
+          width: 640,
+          height: 480,
+        },
+      ],
+    });
+  });
+
+  it("drops malformed provider attachment metadata while preserving valid media references", () => {
+    expect(
+      extractToolResultMediaArtifact({
+        details: {
+          media: {
+            attachments: [
+              {
+                type: "document",
+                path: "/tmp/generated.mp3",
+                url: false,
+                mediaUrl: {},
+                filePath: 12,
+                mimeType: 7,
+                name: 1,
+                sizeBytes: Infinity,
+                durationMs: -1,
+                width: "1920",
+                height: Number.NaN,
+                trustedLocalMedia: true,
+              },
+              {
+                type: "audio",
+                path: "/tmp/empty.mp3",
+                sizeBytes: 0,
+                durationMs: 0,
+                width: 0,
+                height: 0,
+              },
+            ],
+          },
+        },
+      }),
+    ).toEqual({
+      mediaUrls: ["/tmp/generated.mp3", "/tmp/empty.mp3"],
+      attachments: [
+        { path: "/tmp/generated.mp3" },
+        { type: "audio", path: "/tmp/empty.mp3", sizeBytes: 0, durationMs: 0 },
       ],
     });
   });

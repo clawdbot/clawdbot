@@ -23,11 +23,11 @@ If the node and gateway are on different networks, multicast mDNS can't cross th
 ```json5
 {
   gateway: { bind: "tailnet" }, // tailnet-only (recommended)
-  discovery: { wideArea: { enabled: true, domain: "openclaw.internal" } },
+  discovery: { wideArea: { domain: "openclaw.internal" } },
 }
 ```
 
-`discovery.wideArea.domain` also accepts the `OPENCLAW_WIDE_AREA_DOMAIN` env var as a fallback when unset.
+Setting `discovery.wideArea.domain` enables wide-area discovery. OpenClaw also accepts the `OPENCLAW_WIDE_AREA_DOMAIN` env var as a fallback when the config key is unset.
 
 ### One-time DNS server setup (gateway host, macOS only)
 
@@ -82,7 +82,6 @@ Only the gateway advertises `_openclaw-gw._tcp`. LAN multicast advertising comes
 | `gatewayTls=1`                | Only when TLS is enabled.                                                      |
 | `gatewayTlsSha256=<sha256>`   | Only when TLS is enabled and a fingerprint is available.                       |
 | `gatewayDirectReachable=1`    | Only when the gateway is directly reachable (not only via a relay/proxy path). |
-| `canvasPort=<port>`           | Only when the canvas host is enabled; currently the same as `gatewayPort`.     |
 | `tailnetDns=<magicdns>`       | mDNS full mode only; optional hint when Tailnet is available.                  |
 | `sshPort=<port>`              | Full mode only; omitted in minimal and off modes.                              |
 | `cliPath=<path>`              | Full mode only; omitted in minimal and off modes.                              |
@@ -141,11 +140,11 @@ openclaw plugins enable bonjour
 
 When enabled, Bonjour uses `discovery.mdns.mode` to decide how much TXT metadata to publish; the same mode controls optional TXT hints in wide-area DNS-SD records. Modes:
 
-| Mode                | Behavior                                                                                                                                                      |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `minimal` (default) | Core TXT keys only; omits `sshPort`, `cliPath`, `tailnetDns`.                                                                                                 |
-| `full`              | Adds `sshPort`, `cliPath`, `tailnetDns` — use when clients need those hints.                                                                                  |
-| `off`               | Suppresses LAN multicast without changing plugin enablement; wide-area DNS-SD can still publish the minimal beacon when `discovery.wideArea.enabled` is true. |
+| Mode                | Behavior                                                                                                                                 |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `minimal` (default) | Core TXT keys only; omits `sshPort`, `cliPath`, `tailnetDns`.                                                                            |
+| `full`              | Adds `sshPort`, `cliPath`, `tailnetDns` — use when clients need those hints.                                                             |
+| `off`               | Suppresses LAN multicast without changing plugin enablement; wide-area DNS-SD can still publish when `discovery.wideArea.domain` is set. |
 
 ## When to disable Bonjour
 

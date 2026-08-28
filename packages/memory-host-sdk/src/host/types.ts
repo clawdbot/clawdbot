@@ -1,6 +1,19 @@
-// Public memory host contracts shared by runtime, QMD, builtin search, and
-// package consumers.
+// Public memory host contracts shared by runtime, builtin search, and package consumers.
 export type MemorySource = "memory" | "sessions";
+
+export type MemoryOriginClass = "owner" | "agent" | "untrusted" | "system";
+
+export type MemorySessionKind = "interactive" | "cron" | "heartbeat" | "subagent" | "unknown";
+
+/** Additional memory root, optionally narrowed by a root-relative glob. */
+export type MemoryExtraPath = string | { path: string; pattern?: string };
+
+export type MemoryEntryProvenance = {
+  originClass: MemoryOriginClass;
+  sessionKind: MemorySessionKind;
+  observedAt: number;
+  supersedesKey?: string;
+};
 
 /** One ranked memory search hit with optional vector/text scoring details. */
 export type MemorySearchResult = {
@@ -12,8 +25,28 @@ export type MemorySearchResult = {
   textScore?: number;
   snippet: string;
   source: MemorySource;
+  importance?: number;
+  triggers?: string;
+  /** Semicolon-separated stable repository identities lifted from inline annotations. */
+  projectKey?: string;
+  /** @deprecated Use provenance.originClass. This field is not authoritative for automatic injection. */
+  originClass?: string;
   citation?: string;
+  provenance?: MemoryEntryProvenance;
 };
+
+/** Automatic prompt injection is reserved for content with authoritative trusted provenance. */
+export function isMemoryOriginEligibleForAutomaticInjection(
+  originClass: unknown,
+): originClass is "owner" | "agent" {
+  return originClass === "owner" || originClass === "agent";
+}
+
+export function isAutomaticMemoryEntryEligible(
+  entry: Pick<MemorySearchResult, "provenance">,
+): boolean {
+  return isMemoryOriginEligibleForAutomaticInjection(entry.provenance?.originClass);
+}
 
 /** Cached/probed embedding availability status. */
 export type MemoryEmbeddingProbeResult = {
@@ -51,44 +84,46 @@ export type MemorySyncParams = {
   progress?: (update: MemorySyncProgressUpdate) => void;
 };
 
-/** @public Runtime backend/mode diagnostics for memory search. */
-export type MemorySearchRuntimeQmdCollectionValidationDebug = {
-  cacheState?: "hit" | "miss" | "write" | "bypass-force" | "error";
-  elapsedMs: number;
-  collectionCount: number;
-  listCalls?: number;
-  showCalls?: number;
-};
-
-/** @public */ export type MemorySearchRuntimeQmdMultiCollectionProbeDebug = {
-  cacheState?: "hit" | "miss" | "write" | "error";
-  elapsedMs: number;
-  supported: boolean;
-};
-
-/** @public */ export type MemorySearchRuntimeQmdSearchPlanDebug = {
-  command?: "query" | "search" | "vsearch";
-  collectionCount?: number;
-  groupCount?: number;
-  sources?: MemorySource[];
-};
-
-/** @public */ export type MemorySearchRuntimeQmdDebug = {
-  collectionValidation?: MemorySearchRuntimeQmdCollectionValidationDebug;
-  multiCollectionProbe?: MemorySearchRuntimeQmdMultiCollectionProbeDebug;
-  searchPlan?: MemorySearchRuntimeQmdSearchPlanDebug;
-};
-
 export type MemorySearchRuntimeDebug = {
-  backend: "builtin" | "qmd";
+  backend: "builtin";
   configuredMode?: string;
   effectiveMode?: string;
   fallback?: string;
-  qmd?: MemorySearchRuntimeQmdDebug;
+  embeddingBootstrap?: {
+    ok: false;
+    provider: string;
+    reason: string;
+    degradedTo: "keyword-only";
+  };
 };
 
-/** Result of reading a memory file, optionally paginated/truncated. */
-export type MemoryReadResult = {
+/** Successful memory-file excerpt, optionally paginated/truncated. */
+type MemoryReadSuccessResult = {
+  status: "ok";
+  text: string;
+  path: string;
+  truncated?: boolean;
+  from?: number;
+  lines?: number;
+  nextFrom?: number;
+};
+
+/** An allowed memory path that does not exist. */
+type MemoryReadNotFoundResult = {
+  status: "not_found";
+  text: "";
+  path: string;
+  truncated?: never;
+  from?: never;
+  lines?: never;
+  nextFrom?: never;
+};
+
+export type MemoryReadResult = MemoryReadSuccessResult | MemoryReadNotFoundResult;
+
+/** Pre-status result accepted only from registered memory managers during migration. */
+export type LegacyMemoryReadResult = {
+  status?: never;
   text: string;
   path: string;
   truncated?: boolean;
@@ -98,24 +133,39 @@ export type MemoryReadResult = {
 };
 
 /** Aggregated memory backend status for CLI/UI diagnostics. */
+export type MemoryVectorIndexState =
+  | { state: "empty" }
+  | { state: "complete" }
+  | { state: "incomplete" }
+  | { state: "unverified" };
+
 export type MemoryProviderStatus = {
-  backend: "builtin" | "qmd";
+  backend: "builtin";
   provider: string;
   model?: string;
   requestedProvider?: string;
   files?: number;
   chunks?: number;
   dirty?: boolean;
+  /** Sources currently being refreshed by an admitted sync. */
+  pendingSyncSources?: MemorySource[];
   workspaceDir?: string;
   dbPath?: string;
-  extraPaths?: string[];
+  extraPaths?: MemoryExtraPath[];
   sources?: MemorySource[];
-  sourceCounts?: Array<{ source: MemorySource; files: number; chunks: number }>;
+  sourceCounts?: Array<{
+    source: MemorySource;
+    files: number;
+    chunks: number;
+    eligible?: number | null;
+    issues?: string[];
+  }>;
   cache?: { enabled: boolean; entries?: number; maxEntries?: number };
   fts?: { enabled: boolean; available: boolean; error?: string };
   fallback?: { from: string; reason?: string };
   vector?: {
     enabled: boolean;
+    index?: MemoryVectorIndexState;
     storeAvailable?: boolean;
     semanticAvailable?: boolean;
     available?: boolean;
@@ -137,6 +187,32 @@ export type MemoryProviderStatus = {
   custom?: Record<string, unknown>;
 };
 
+export function resolveMemorySearchStaleness(
+  status: Pick<MemoryProviderStatus, "dirty" | "pendingSyncSources" | "custom">,
+  agentId?: string,
+): { stale: true; warning: string; action: string } | null {
+  const identity = status.custom?.indexIdentity as Record<string, unknown> | undefined;
+  const identityReason =
+    (identity?.status === "mismatched" || identity?.status === "missing") &&
+    typeof identity.reason === "string"
+      ? identity.reason.trim()
+      : undefined;
+  const refreshingSessionsOnly =
+    status.dirty === true &&
+    status.pendingSyncSources?.length === 1 &&
+    status.pendingSyncSources[0] === "sessions";
+  if ((!status.dirty || refreshingSessionsOnly) && !identityReason) {
+    return null;
+  }
+  return {
+    stale: true,
+    warning: identityReason
+      ? `Memory index is stale: ${identityReason}. Search results may be incomplete.`
+      : "Memory index is dirty. Search results may be incomplete.",
+    action: `Run: openclaw memory status --index${agentId?.trim() ? ` --agent ${agentId.trim()}` : ""}`,
+  };
+}
+
 /** Search/read/sync/status contract implemented by memory managers. */
 export interface MemorySearchManager {
   search(
@@ -145,13 +221,28 @@ export interface MemorySearchManager {
       maxResults?: number;
       minScore?: number;
       sessionKey?: string;
-      qmdSearchModeOverride?: "query" | "search" | "vsearch";
+      /**
+       * Keyword/FTS scoring only: skip query embedding and vector search.
+       * For reply-path recall (trigger injection) that must not add a
+       * network round-trip per inbound message.
+       */
+      lexicalOnly?: boolean;
+      /** Active repository identities used only for project-aware ranking. */
+      activeProjectKeys?: string[];
       onDebug?: (debug: MemorySearchRuntimeDebug) => void;
       sources?: MemorySource[];
       /** Optional caller cancellation; managers consume it where their runtime supports cancellation. */
       signal?: AbortSignal;
     },
   ): Promise<MemorySearchResult[]>;
+  listTriggerCandidates?(opts?: {
+    limit?: number;
+    activeProjectKeys?: string[];
+  }): Promise<MemorySearchResult[]>;
+  listCuratedProjectCandidates?(opts: {
+    activeProjectKeys: string[];
+    limit?: number;
+  }): Promise<MemorySearchResult[]>;
   readFile(params: { relPath: string; from?: number; lines?: number }): Promise<MemoryReadResult>;
   status(): MemoryProviderStatus;
   sync?(params?: MemorySyncParams): Promise<void>;

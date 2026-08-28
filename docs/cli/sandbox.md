@@ -5,13 +5,19 @@ read_when: "You are managing sandbox runtimes or debugging sandbox/tool-policy b
 status: active
 ---
 
-Manage sandbox runtimes for isolated agent execution: Docker containers, SSH targets, or OpenShell backends.
+Manage sandbox runtimes for isolated agent execution: Docker/Podman containers, SSH targets, or OpenShell backends.
+
+[`openclaw agent exec`](/cli/agent#agent-exec) does not use these configured runtimes. Its isolated implicit policy config turns the agent sandbox off, allows full Gateway-host execution, and restricts filesystem tools to `--cwd`.
 
 ## Commands
 
 ### `openclaw sandbox list`
 
 List sandbox runtimes with status, backend, config match, age, idle time, and associated session/agent.
+
+For configured plugin-provided backends such as OpenShell, the CLI loads the
+owning backend plugin before checking live runtime status. Browser-only
+operations do not require backend plugin activation.
 
 ```bash
 openclaw sandbox list
@@ -57,6 +63,7 @@ openclaw sandbox explain --json
 ```
 
 Unlike `recreate --session`, this accepts short session names (for example `main`) and expands them against the resolved agent.
+An explicit `--agent` is sufficient for multi-agent fleets with no implicit owner; sandbox explanation does not require or guess a default first.
 
 ## Why recreate is needed
 
@@ -70,7 +77,7 @@ Prefer `openclaw sandbox recreate` over manual backend-specific cleanup. It uses
 
 | Change                                                                                                                                                         | Command                                                             |
 | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| Docker image update (`agents.defaults.sandbox.docker.image`)                                                                                                   | `openclaw sandbox recreate --all`                                   |
+| Container sandbox image update (`agents.defaults.sandbox.docker.image`)                                                                                        | `openclaw sandbox recreate --all`                                   |
 | Sandbox config (`agents.defaults.sandbox.*`)                                                                                                                   | `openclaw sandbox recreate --all`                                   |
 | SSH target/auth (`agents.defaults.sandbox.ssh.{target,workspaceRoot,identityFile,certificateFile,knownHostsFile,identityData,certificateData,knownHostsData}`) | `openclaw sandbox recreate --all`                                   |
 | OpenShell source/policy/mode (`plugins.entries.openshell.config.{from,mode,policy}`)                                                                           | `openclaw sandbox recreate --all`                                   |
@@ -92,7 +99,7 @@ Run `openclaw doctor --fix` to migrate valid legacy entries into SQLite. Invalid
 
 ## Configuration
 
-Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.list[].sandbox`):
+Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sandbox` (per-agent overrides go in `agents.entries.*.sandbox`):
 
 ```jsonc
 {
@@ -100,7 +107,7 @@ Sandbox settings live in `~/.openclaw/openclaw.json` under `agents.defaults.sand
     "defaults": {
       "sandbox": {
         "mode": "all", // off, non-main, all
-        "backend": "docker", // docker, ssh, openshell (plugin-provided)
+        "backend": "docker", // docker, podman, ssh; openshell is plugin-provided
         "scope": "agent", // session, agent, shared
         "docker": {
           "image": "openclaw-sandbox:bookworm-slim",

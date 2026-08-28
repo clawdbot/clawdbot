@@ -11,6 +11,7 @@ android {
   defaultConfig {
     minSdk = 31
     targetSdk = 36
+    missingDimensionStrategy("store", "play")
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     testInstrumentationRunnerArguments["androidx.benchmark.suppressErrors"] = "DEBUGGABLE,EMULATOR"
   }

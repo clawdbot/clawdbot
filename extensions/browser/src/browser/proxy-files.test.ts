@@ -4,12 +4,12 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempHomeEnv, type TempHomeEnv } from "../../test-support.js";
 import { BROWSER_PROXY_MAX_FILE_BYTES } from "../browser-proxy-envelope.js";
-import { applyBrowserProxyPaths, persistBrowserProxyFiles } from "./proxy-files.js";
+import { persistBrowserProxyResultFiles } from "./proxy-files.js";
 
 const BROWSER_PROXY_MAX_FILES = 256;
 const BROWSER_PROXY_MAX_TOTAL_FILE_BYTES = 16 * 1024 * 1024;
 
-describe("persistBrowserProxyFiles", () => {
+describe("persistBrowserProxyResultFiles", () => {
   let tempHome: TempHomeEnv;
 
   beforeEach(async () => {
@@ -22,7 +22,8 @@ describe("persistBrowserProxyFiles", () => {
 
   it("persists browser proxy files under the shared media store", async () => {
     const sourcePath = "/tmp/proxy-file.txt";
-    const mapping = await persistBrowserProxyFiles([
+    const result = { path: sourcePath };
+    await persistBrowserProxyResultFiles(result, [
       {
         path: sourcePath,
         base64: Buffer.from("hello from browser proxy").toString("base64"),
@@ -30,7 +31,7 @@ describe("persistBrowserProxyFiles", () => {
       },
     ]);
 
-    const savedPath = mapping.get(sourcePath);
+    const savedPath = result.path;
     expect(typeof savedPath).toBe("string");
     expect(path.normalize(savedPath ?? "")).toContain(
       `${path.sep}.openclaw${path.sep}media${path.sep}browser${path.sep}`,
@@ -38,10 +39,37 @@ describe("persistBrowserProxyFiles", () => {
     await expect(fs.readFile(savedPath ?? "", "utf8")).resolves.toBe("hello from browser proxy");
   });
 
+  it("persists legitimate empty browser proxy downloads", async () => {
+    const sourcePath = "/tmp/empty-browser-download.bin";
+    const result = { path: sourcePath };
+    await persistBrowserProxyResultFiles(result, [
+      { path: sourcePath, base64: "", mimeType: "application/octet-stream" },
+    ]);
+
+    const savedPath = result.path;
+    expect(typeof savedPath).toBe("string");
+    await expect(fs.stat(savedPath ?? "")).resolves.toMatchObject({ size: 0 });
+    await expect(fs.readFile(savedPath ?? "")).resolves.toHaveLength(0);
+  });
+
+  it.each([
+    { name: "valid unpadded base64", base64: "aGVsbG8" },
+    { name: "valid whitespace-separated base64", base64: " aG Vs bG8= \n" },
+  ])("persists $name without corrupting the download", async ({ base64 }) => {
+    const sourcePath = "/tmp/normalized-browser-download.txt";
+    const result = { path: sourcePath };
+    await persistBrowserProxyResultFiles(result, [
+      { path: sourcePath, base64, mimeType: "text/plain" },
+    ]);
+
+    await expect(fs.readFile(result.path, "utf8")).resolves.toBe("hello");
+  });
+
   it("persists a file at the proxy limit above the shared media default", async () => {
     const sourcePath = "/tmp/above-default.bin";
     const buffer = Buffer.alloc(BROWSER_PROXY_MAX_FILE_BYTES, 0x41);
-    const mapping = await persistBrowserProxyFiles([
+    const result = { path: sourcePath };
+    await persistBrowserProxyResultFiles(result, [
       {
         path: sourcePath,
         base64: buffer.toString("base64"),
@@ -49,7 +77,7 @@ describe("persistBrowserProxyFiles", () => {
       },
     ]);
 
-    await expect(fs.stat(mapping.get(sourcePath) ?? "")).resolves.toMatchObject({
+    await expect(fs.stat(result.path)).resolves.toMatchObject({
       size: buffer.byteLength,
     });
   });
@@ -61,18 +89,21 @@ describe("persistBrowserProxyFiles", () => {
       0x42,
     );
 
-    const error = await persistBrowserProxyFiles([
-      {
-        path: "/tmp/first.bin",
-        base64: first.toString("base64"),
-        mimeType: "application/octet-stream",
-      },
-      {
-        path: "/tmp/second.bin",
-        base64: second.toString("base64"),
-        mimeType: "application/octet-stream",
-      },
-    ]).then(
+    const error = await persistBrowserProxyResultFiles(
+      { downloads: [{ path: "/tmp/first.bin" }, { path: "/tmp/second.bin" }] },
+      [
+        {
+          path: "/tmp/first.bin",
+          base64: first.toString("base64"),
+          mimeType: "application/octet-stream",
+        },
+        {
+          path: "/tmp/second.bin",
+          base64: second.toString("base64"),
+          mimeType: "application/octet-stream",
+        },
+      ],
+    ).then(
       () => null,
       (err: unknown) => err,
     );
@@ -86,7 +117,7 @@ describe("persistBrowserProxyFiles", () => {
 
   it("rejects a file above the proxy per-file limit", async () => {
     const oversized = Buffer.alloc(BROWSER_PROXY_MAX_FILE_BYTES + 1, 0x41);
-    const error = await persistBrowserProxyFiles([
+    const error = await persistBrowserProxyResultFiles({ path: "/tmp/oversized.bin" }, [
       {
         path: "/tmp/oversized.bin",
         base64: oversized.toString("base64"),
@@ -104,6 +135,72 @@ describe("persistBrowserProxyFiles", () => {
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
+  it("rejects malformed base64 before persisting files", async () => {
+    const error = await persistBrowserProxyResultFiles({ path: "/tmp/malformed.bin" }, [
+      {
+        path: "/tmp/malformed.bin",
+        base64: "aGVsbG8$",
+        mimeType: "application/octet-stream",
+      },
+    ]).then(
+      () => null,
+      (err: unknown) => err,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect((error as Error).message).toBe("browser proxy file contains malformed base64 data");
+
+    await expect(
+      fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it.each([
+    { name: "invalid alphabet", base64: "aGVsbG8$" },
+    { name: "invalid padding", base64: "aGVsbG8===" },
+    { name: "nonzero padding bits", base64: "ZE==" },
+    { name: "impossible unpadded length", base64: "S" },
+    { name: "whitespace without encoded data", base64: " \n\t" },
+  ])("rejects $name before creating the media directory", async ({ base64 }) => {
+    await expect(
+      persistBrowserProxyResultFiles({ path: "/tmp/malformed-browser-download.bin" }, [
+        {
+          path: "/tmp/malformed-browser-download.bin",
+          base64,
+          mimeType: "application/octet-stream",
+        },
+      ]),
+    ).rejects.toThrow("browser proxy file contains malformed base64 data");
+
+    await expect(
+      fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it("rejects a later malformed file without persisting an earlier valid file", async () => {
+    await expect(
+      persistBrowserProxyResultFiles(
+        {
+          downloads: [
+            { path: "/tmp/valid-browser-download.txt" },
+            { path: "/tmp/malformed-browser-download.bin" },
+          ],
+        },
+        [
+          {
+            path: "/tmp/valid-browser-download.txt",
+            base64: Buffer.from("valid browser download").toString("base64"),
+            mimeType: "text/plain",
+          },
+          { path: "/tmp/malformed-browser-download.bin", base64: "ZE==" },
+        ],
+      ),
+    ).rejects.toThrow("browser proxy file contains malformed base64 data");
+
+    await expect(
+      fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
   it("rejects too many files before persisting any", async () => {
     const files = Array.from({ length: BROWSER_PROXY_MAX_FILES + 1 }, (_, index) => ({
       path: `/tmp/file-${index}.bin`,
@@ -111,15 +208,49 @@ describe("persistBrowserProxyFiles", () => {
       mimeType: "application/octet-stream",
     }));
 
-    await expect(persistBrowserProxyFiles(files)).rejects.toThrow(
-      "browser proxy response exceeds 256 file limit",
+    await expect(
+      persistBrowserProxyResultFiles(
+        { downloads: files.map((file) => ({ path: file.path })) },
+        files,
+      ),
+    ).rejects.toThrow("browser proxy response exceeds 256 file limit");
+    await expect(
+      fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
+    ).rejects.toHaveProperty("code", "ENOENT");
+  });
+
+  it.each([
+    {
+      name: "missing payload",
+      result: { path: "/node/missing.png" },
+      files: undefined,
+    },
+    {
+      name: "duplicate payload path",
+      result: { path: "/node/duplicate.png" },
+      files: [
+        { path: "/node/duplicate.png", base64: "" },
+        { path: "/node/duplicate.png", base64: "" },
+      ],
+    },
+    {
+      name: "unreferenced extra payload",
+      result: { path: "/node/owned.png" },
+      files: [
+        { path: "/node/owned.png", base64: "" },
+        { path: "/node/unowned.png", base64: "" },
+      ],
+    },
+  ])("rejects $name before persisting any files", async ({ result, files }) => {
+    await expect(persistBrowserProxyResultFiles(result, files)).rejects.toThrow(
+      "browser proxy returned an invalid file envelope",
     );
     await expect(
       fs.stat(path.join(tempHome.home, ".openclaw", "media", "browser")),
     ).rejects.toHaveProperty("code", "ENOENT");
   });
 
-  it("rewrites explicit proxy file paths without traversing nested page data", () => {
+  it("rewrites a complete file mapping without traversing nested page data", async () => {
     const result = {
       ok: true,
       path: "/node/screenshot.png",
@@ -138,35 +269,30 @@ describe("persistBrowserProxyFiles", () => {
       },
     };
 
-    applyBrowserProxyPaths(
+    const routePaths = [
+      "/node/screenshot.png",
+      "/node/snapshot.png",
+      "/node/download.csv",
+      "/node/first.pdf",
+      "/node/second.pdf",
+    ];
+    await persistBrowserProxyResultFiles(
       result,
-      new Map([
-        ["/node/screenshot.png", "/gateway/screenshot.png"],
-        ["/node/snapshot.png", "/gateway/snapshot.png"],
-        ["/node/download.csv", "/gateway/download.csv"],
-        ["/node/first.pdf", "/gateway/first.pdf"],
-        ["/node/second.pdf", "/gateway/second.pdf"],
-        ["/node/page-controlled.txt", "/gateway/should-not-rewrite.txt"],
-        ["/node/page-controlled-download.txt", "/gateway/should-not-rewrite-download.txt"],
-      ]),
+      routePaths.map((filePath) => ({
+        path: filePath,
+        base64: Buffer.from(filePath).toString("base64"),
+      })),
     );
 
-    expect(result).toEqual({
-      ok: true,
-      path: "/gateway/screenshot.png",
-      imagePath: "/gateway/snapshot.png",
-      download: { path: "/gateway/download.csv", suggestedFilename: "download.csv" },
-      downloads: [
-        { path: "/gateway/first.pdf", suggestedFilename: "first.pdf" },
-        null,
-        { path: 42 },
-        { path: "/gateway/second.pdf", suggestedFilename: "second.pdf" },
-        { path: "/gateway/first.pdf", suggestedFilename: "first-copy.pdf" },
-      ],
-      result: {
-        path: "/node/page-controlled.txt",
-        downloads: [{ path: "/node/page-controlled-download.txt" }],
-      },
+    expect(result.path).not.toBe(routePaths[0]);
+    expect(result.imagePath).not.toBe(routePaths[1]);
+    expect(result.download.path).not.toBe(routePaths[2]);
+    expect(result.downloads[0]?.path).not.toBe(routePaths[3]);
+    expect(result.downloads[3]?.path).not.toBe(routePaths[4]);
+    expect(result.downloads[4]?.path).toBe(result.downloads[0]?.path);
+    expect(result.result).toEqual({
+      path: "/node/page-controlled.txt",
+      downloads: [{ path: "/node/page-controlled-download.txt" }],
     });
   });
 });

@@ -1,6 +1,310 @@
 // Slack helper module supports config schema behavior.
-import { buildChannelConfigSchema, SlackConfigSchema } from "../config-api.js";
+import {
+  buildChannelAllowBotsSchema,
+  buildChannelConfigSchema,
+  buildChannelExecApprovalsSchema,
+  buildChannelReactionShape,
+  buildChannelAccountSchemaParts,
+  buildGroupEntrySchema,
+  ChannelBotLoopProtectionSchema,
+  ChannelDangerouslyAllowNameMatchingSchema,
+  ChannelImplicitMentionsSchema,
+  ChannelPreviewStreamingConfigSchema,
+  ChannelStreamingProgressSchema,
+  ProviderCommandsSchema,
+  ReplyToModeSchema,
+  requireAllowlistAllowFrom,
+  requireOpenAllowFrom,
+} from "openclaw/plugin-sdk/channel-config-schema";
+import { buildSecretInputSchema, hasConfiguredSecretInput } from "openclaw/plugin-sdk/secret-input";
+import { z } from "zod";
 import { slackChannelConfigUiHints } from "./config-ui-hints.js";
+
+const SecretInputSchema = buildSecretInputSchema();
+// Match the default per-file AGENTS.md bootstrap budget so one presence wake
+// cannot inject more operator guidance than a normal workspace instruction file.
+const SLACK_PRESENCE_EVENT_PROMPT_MAX_CHARS = 20_000;
+
+const SlackStreamingProgressSchema = ChannelStreamingProgressSchema.extend({
+  style: z.enum(["card", "compact"]).optional(),
+  nativeTaskCards: z.boolean().optional(),
+}).strict();
+const SlackStreamingConfigSchema = ChannelPreviewStreamingConfigSchema.extend({
+  nativeTransport: z.boolean().optional(),
+  progress: SlackStreamingProgressSchema.optional(),
+}).strict();
+const SlackDmSchema = z
+  .object({
+    enabled: z.boolean().optional(),
+    groupEnabled: z.boolean().optional(),
+    groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
+  })
+  .strict();
+
+const SlackPresenceEventsSchema = z
+  .object({
+    mode: z.enum(["off", "auto", "on"]).optional(),
+    prompt: z.string().max(SLACK_PRESENCE_EVENT_PROMPT_MAX_CHARS).optional(),
+  })
+  .strict();
+
+const SlackChannelSchema = buildGroupEntrySchema(
+  {
+    ignoreOtherMentions: z.boolean().optional(),
+    replyToMode: ReplyToModeSchema.optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+    users: z.array(z.union([z.string(), z.number()])).optional(),
+    presenceEvents: SlackPresenceEventsSchema.optional(),
+  },
+  { omit: ["allowFrom"] },
+);
+
+const SlackThreadSchema = z
+  .object({
+    historyScope: z.enum(["thread", "channel"]).optional(),
+    inheritParent: z.boolean().optional(),
+    initialHistoryLimit: z.number().int().min(0).optional(),
+  })
+  .strict();
+
+const ReplyToModeByChatTypeSchema = z
+  .object({
+    direct: ReplyToModeSchema.optional(),
+    group: ReplyToModeSchema.optional(),
+    channel: ReplyToModeSchema.optional(),
+  })
+  .strict();
+
+const SlackRelaySchema = z
+  .object({
+    url: z.string().optional(),
+    authToken: SecretInputSchema.optional(),
+    gatewayId: z.string().optional(),
+  })
+  .strict();
+
+const SlackIdentitySchema = z.enum(["bot", "user"]);
+
+const { accountShape, rootPolicyShape } = buildChannelAccountSchemaParts({
+  omit: ["groupAllowFrom"],
+  streaming: SlackStreamingConfigSchema.optional(),
+});
+
+const SlackAccountSchema = z
+  .object({
+    ...accountShape,
+    joinIntro: z.boolean().optional(),
+    postAs: SlackIdentitySchema.optional(),
+    mode: z.enum(["socket", "http", "relay"]).optional(),
+    relay: SlackRelaySchema.optional(),
+    signingSecret: SecretInputSchema.optional(),
+    webhookPath: z.string().optional(),
+    execApprovals: buildChannelExecApprovalsSchema(z.union([z.string(), z.number()])),
+    commands: ProviderCommandsSchema,
+    botToken: SecretInputSchema.optional(),
+    appToken: SecretInputSchema.optional(),
+    userToken: SecretInputSchema.optional(),
+    userTokenReadOnly: z.boolean().optional(),
+    allowBots: buildChannelAllowBotsSchema({ allowMentions: true }),
+    botLoopProtection: ChannelBotLoopProtectionSchema.optional(),
+    dangerouslyAllowNameMatching: ChannelDangerouslyAllowNameMatchingSchema,
+    requireMention: z.boolean().optional(),
+    implicitMentions: ChannelImplicitMentionsSchema.optional(),
+    unfurlLinks: z.boolean().optional(),
+    unfurlMedia: z.boolean().optional(),
+    ...buildChannelReactionShape({
+      notificationModes: ["off", "own", "all", "allowlist"],
+      reactionAllowlist: true,
+      ackReaction: z.string().optional(),
+    }),
+    replyToModeByChatType: ReplyToModeByChatTypeSchema.optional(),
+    thread: SlackThreadSchema.optional(),
+    presenceEvents: SlackPresenceEventsSchema.optional(),
+    actions: z
+      .object({
+        reactions: z.boolean().optional(),
+        messages: z.boolean().optional(),
+        pins: z.boolean().optional(),
+        search: z.boolean().optional(),
+        permissions: z.boolean().optional(),
+        memberInfo: z.boolean().optional(),
+        channelInfo: z.boolean().optional(),
+        emojiList: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    slashCommand: z
+      .object({
+        enabled: z.boolean().optional(),
+        name: z.string().optional(),
+        sessionPrefix: z.string().optional(),
+        ephemeral: z.boolean().optional(),
+      })
+      .strict()
+      .optional(),
+    dm: SlackDmSchema.optional(),
+    channels: z.record(z.string(), SlackChannelSchema.optional()).optional(),
+    typingReaction: z.string().optional(),
+  })
+  .strict();
+
+type SlackAccountLike = {
+  enabled?: unknown;
+  mode?: unknown;
+  signingSecret?: unknown;
+};
+
+function validateSlackSigningSecretRequirements(
+  value: {
+    mode?: unknown;
+    signingSecret?: unknown;
+    accounts?: Record<string, SlackAccountLike | undefined>;
+  },
+  ctx: z.RefinementCtx,
+): void {
+  const resolveMode = (mode: unknown) =>
+    mode === "http" || mode === "socket" || mode === "relay" ? mode : undefined;
+  const baseMode = resolveMode(value.mode) ?? "socket";
+  // Named accounts own their inherited HTTP credentials; only an implicit
+  // default account needs a separate root signing secret.
+  const hasImplicitRootAccount = Object.keys(value.accounts ?? {}).length === 0;
+  if (
+    baseMode === "http" &&
+    hasImplicitRootAccount &&
+    !hasConfiguredSecretInput(value.signingSecret)
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: 'channels.slack.mode="http" requires channels.slack.signingSecret',
+      path: ["signingSecret"],
+    });
+  }
+  for (const [accountId, account] of Object.entries(value.accounts ?? {})) {
+    if (!account || account.enabled === false) {
+      continue;
+    }
+    const accountMode = resolveMode(account.mode) ?? baseMode;
+    if (accountMode !== "http") {
+      continue;
+    }
+    const accountSecret = account.signingSecret ?? value.signingSecret;
+    if (!hasConfiguredSecretInput(accountSecret)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'channels.slack.accounts.*.mode="http" requires channels.slack.signingSecret or channels.slack.accounts.*.signingSecret',
+        path: ["accounts", accountId, "signingSecret"],
+      });
+    }
+  }
+}
+
+export const SlackConfigSchema = SlackAccountSchema.safeExtend({
+  ...rootPolicyShape,
+  postAs: SlackIdentitySchema.default("bot"),
+  userTokenReadOnly: z.boolean().optional().default(true),
+  mode: z.enum(["socket", "http", "relay"]).optional().default("socket"),
+  signingSecret: SecretInputSchema.optional(),
+  webhookPath: z.string().optional().default("/slack/events"),
+  accounts: z.record(z.string(), SlackAccountSchema.optional()).optional(),
+  defaultAccount: z.string().optional(),
+}).superRefine((value, ctx) => {
+  if (value.enabled === false) {
+    return;
+  }
+
+  const dmPolicy = value.dmPolicy ?? "pairing";
+  const allowFrom = value.allowFrom;
+  requireOpenAllowFrom({
+    policy: dmPolicy,
+    allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message: 'channels.slack.dmPolicy="open" requires channels.slack.allowFrom to include "*"',
+  });
+  requireAllowlistAllowFrom({
+    policy: dmPolicy,
+    allowFrom,
+    ctx,
+    path: ["allowFrom"],
+    message:
+      'channels.slack.dmPolicy="allowlist" requires channels.slack.allowFrom to contain at least one sender ID',
+  });
+
+  const requireRelayConfig = (
+    relay: { url?: unknown; authToken?: unknown; gatewayId?: unknown } | undefined,
+    path: (string | number)[],
+  ) => {
+    if (typeof relay?.url !== "string" || !relay.url.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.mode="relay" requires relay.url',
+        path: [...path, "url"],
+      });
+    }
+    if (!hasConfiguredSecretInput(relay?.authToken)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.mode="relay" requires relay.authToken',
+        path: [...path, "authToken"],
+      });
+    }
+    if (typeof relay?.gatewayId !== "string" || !relay.gatewayId.trim()) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'channels.slack.mode="relay" requires relay.gatewayId',
+        path: [...path, "gatewayId"],
+      });
+    }
+  };
+
+  const baseMode = value.mode ?? "socket";
+  const accountIds = value.accounts ? Object.keys(value.accounts) : [];
+  if (!value.accounts) {
+    if (baseMode === "relay") {
+      requireRelayConfig(value.relay, ["relay"]);
+    }
+    validateSlackSigningSecretRequirements(value, ctx);
+    return;
+  }
+  for (const accountId of accountIds) {
+    const account = value.accounts[accountId];
+    if (!account || account.enabled === false) {
+      continue;
+    }
+    const accountMode = account.mode ?? baseMode;
+    const effectiveRelay = {
+      ...value.relay,
+      ...account.relay,
+    };
+    const effectivePolicy = account.dmPolicy ?? value.dmPolicy ?? "pairing";
+    const effectiveAllowFrom = account.allowFrom ?? value.allowFrom;
+    requireOpenAllowFrom({
+      policy: effectivePolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.slack.accounts.*.dmPolicy="open" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to include "*"',
+    });
+    requireAllowlistAllowFrom({
+      policy: effectivePolicy,
+      allowFrom: effectiveAllowFrom,
+      ctx,
+      path: ["accounts", accountId, "allowFrom"],
+      message:
+        'channels.slack.accounts.*.dmPolicy="allowlist" requires channels.slack.accounts.*.allowFrom (or channels.slack.allowFrom) to contain at least one sender ID',
+    });
+    if (accountMode !== "http") {
+      if (accountMode === "relay") {
+        requireRelayConfig(effectiveRelay, ["accounts", accountId, "relay"]);
+      }
+      continue;
+    }
+  }
+  validateSlackSigningSecretRequirements(value, ctx);
+});
 
 export const SlackChannelConfigSchema = buildChannelConfigSchema(SlackConfigSchema, {
   uiHints: slackChannelConfigUiHints,

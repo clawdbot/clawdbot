@@ -1,18 +1,12 @@
 // Verifies provider runtime uses current plugin metadata snapshots.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  clearCurrentPluginMetadataSnapshot,
-  setCurrentPluginMetadataSnapshot,
-} from "./current-plugin-metadata-snapshot.js";
+import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index.js";
 import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import {
-  clearLoadPluginMetadataSnapshotMemo,
-  loadPluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.js";
+import { loadPluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "./runtime.js";
 
 // Mock the persisted-registry loaders so direct metadata loads are observable.
@@ -21,8 +15,8 @@ import { resetPluginRuntimeStateForTest } from "./runtime.js";
 const loadPluginRegistrySnapshotWithMetadata = vi.hoisted(() => vi.fn());
 const loadPluginManifestRegistryForInstalledIndex = vi.hoisted(() => vi.fn());
 
-vi.mock("./plugin-registry.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./plugin-registry.js")>();
+vi.mock("./plugin-registry-snapshot.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./plugin-registry-snapshot.js")>();
   return {
     ...actual,
     loadPluginRegistrySnapshotWithMetadata: (params: unknown) =>
@@ -40,7 +34,7 @@ vi.mock("./manifest-registry-installed.js", async (importOriginal) => {
 });
 
 import { resolveExternalAuthProfilesWithPlugins } from "./provider-runtime.js";
-import { isPluginProvidersLoadInFlight, resolvePluginProviders } from "./providers.runtime.js";
+import { isPluginProvidersLoadInFlight, resolvePluginProvidersCore } from "./providers.runtime.js";
 
 const WORKSPACE = "/workspace/a";
 
@@ -66,7 +60,6 @@ function makeIndex(pluginId = "demo"): InstalledPluginIndex {
         startup: {
           sidecar: false,
           memory: false,
-          deferConfiguredChannelFullLoadUntilAfterListen: false,
           agentHarnesses: [],
         },
         compat: [],
@@ -124,17 +117,13 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
   beforeEach(() => {
     resetPluginRuntimeStateForTest();
     clearPluginMetadataLifecycleCaches();
-    clearLoadPluginMetadataSnapshotMemo();
-    clearCurrentPluginMetadataSnapshot();
     loadPluginRegistrySnapshotWithMetadata.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReset();
     loadPluginManifestRegistryForInstalledIndex.mockReturnValue(makeManifestRegistry());
   });
 
   afterEach(() => {
-    clearCurrentPluginMetadataSnapshot();
     clearPluginMetadataLifecycleCaches();
-    clearLoadPluginMetadataSnapshotMemo();
     resetPluginRuntimeStateForTest();
   });
 
@@ -184,14 +173,14 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     });
   });
 
-  describe("resolvePluginProviders", () => {
+  describe("resolvePluginProvidersCore", () => {
     it("reuses a compatible current snapshot without a direct disk load", () => {
       const config: OpenClawConfig = {};
       registerCurrentSnapshot(config);
 
       // onlyPluginIds:[] short-circuits provider materialization after the
       // snapshot is resolved, isolating the consult-first routing.
-      const providers = resolvePluginProviders({
+      const providers = resolvePluginProvidersCore({
         config,
         env: {},
         workspaceDir: WORKSPACE,
@@ -207,7 +196,7 @@ describe("provider runtime consults the current plugin metadata snapshot", () =>
     it("falls back to a direct disk load when no current snapshot is registered", () => {
       armFallbackLoad();
 
-      resolvePluginProviders({
+      resolvePluginProvidersCore({
         config: {},
         env: {},
         workspaceDir: WORKSPACE,

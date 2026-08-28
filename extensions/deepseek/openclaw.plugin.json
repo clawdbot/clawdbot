@@ -28,6 +28,7 @@
       "deepseek": {
         "baseUrl": "https://api.deepseek.com",
         "api": "openai-completions",
+        "defaultModel": "deepseek-v4-pro",
         "models": [
           {
             "id": "deepseek-v4-flash",
@@ -45,7 +46,8 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "maxTokensField": "max_tokens"
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
             }
           },
           {
@@ -64,50 +66,35 @@
             "compat": {
               "supportsUsageInStreaming": true,
               "supportsReasoningEffort": true,
-              "maxTokensField": "max_tokens"
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
             }
           },
           {
-            "id": "deepseek-chat",
-            "name": "DeepSeek Chat",
-            "input": ["text"],
-            "contextWindow": 1000000,
-            "maxTokens": 384000,
-            "cost": {
-              "input": 0.14,
-              "output": 0.28,
-              "cacheRead": 0.0028,
-              "cacheWrite": 0
-            },
-            "compat": {
-              "supportsUsageInStreaming": true,
-              "maxTokensField": "max_tokens"
-            }
-          },
-          {
-            "id": "deepseek-reasoner",
-            "name": "DeepSeek Reasoner",
+            "id": "deepseek-v4-flash-vision-exp",
+            "name": "DeepSeek V4 Flash Vision (Experimental)",
             "reasoning": true,
-            "input": ["text"],
+            "input": ["text", "image"],
             "contextWindow": 1000000,
             "maxTokens": 384000,
             "cost": {
-              "input": 0.14,
-              "output": 0.28,
-              "cacheRead": 0.0028,
+              "input": 0.44,
+              "output": 1.32,
+              "cacheRead": 0.014,
               "cacheWrite": 0
             },
             "compat": {
               "supportsUsageInStreaming": true,
-              "supportsReasoningEffort": false,
-              "maxTokensField": "max_tokens"
+              "supportsReasoningEffort": true,
+              "maxTokensField": "max_tokens",
+              "codeMode": "preferred"
             }
           }
         ]
       }
     },
     "discovery": {
-      "deepseek": "static"
+      "deepseek": "refreshable"
     }
   },
   "setup": {

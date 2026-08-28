@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../../agents/session-runtime-compat.js";
 import type { SessionEntry } from "../../config/sessions.js";
 
@@ -63,8 +63,8 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
   it("keeps CLI runtime pins only when the runtime serves the selected provider", () => {
     cliBackendsTesting.setDepsForTest({
       resolveRuntimeCliBackends: () => [],
-      resolvePluginSetupCliBackend: ({ backend, config }) =>
-        backend === "claude-cli" && config
+      resolvePluginSetupCliBackend: ({ backend }) =>
+        backend === "claude-cli"
           ? {
               pluginId: "anthropic",
               backend: {
@@ -76,15 +76,7 @@ describe("resolveSessionRuntimeOverrideForProvider", () => {
             }
           : undefined,
     });
-    const cfg = {
-      agents: {
-        defaults: {
-          cliBackends: {
-            "claude-cli": { command: "claude" },
-          },
-        },
-      },
-    };
+    const cfg = {};
 
     expect(
       resolveSessionRuntimeOverrideForProvider({

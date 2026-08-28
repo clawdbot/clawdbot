@@ -5,12 +5,12 @@ import type { ChannelId } from "../../channels/plugins/channel-id.types.js";
 
 /** Successful channel send result normalized for core delivery accounting. */
 export type OutboundDeliveryResult = {
-  channel: Exclude<ChannelId, "none">;
+  channel: ChannelId;
   messageId: string;
-  chatId?: string;
-  channelId?: string;
-  roomId?: string;
-  conversationId?: string;
+  target?: {
+    kind: "chat" | "channel" | "room" | "conversation";
+    id: string;
+  };
   timestamp?: number;
   toJid?: string;
   pollId?: string;
@@ -50,15 +50,20 @@ export type OutboundPayloadDeliveryKind = "text" | "media" | "other";
 const PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE = "OPENCLAW_PLATFORM_MESSAGE_NOT_DISPATCHED";
 
 /**
- * Provider assertion that retrying cannot duplicate a recipient-visible send.
- * Never use this after a finalization/send call returned an ambiguous result.
+ * Provider assertion that no recipient-visible send began. Set retryable=false
+ * for permanent payload/policy rejection; never use after an ambiguous send.
  */
 export class PlatformMessageNotDispatchedError extends Error {
   readonly code = PLATFORM_MESSAGE_NOT_DISPATCHED_ERROR_CODE;
+  readonly retryable: boolean;
 
-  constructor(message: string, options: { cause: unknown }) {
-    super(message, { cause: options.cause });
+  constructor(message: string, options: { cause: unknown; retryable?: boolean }) {
+    const retryable = options.retryable !== false;
+    super(retryable ? message : message.trim() || "Platform rejected the message before dispatch", {
+      cause: options.cause,
+    });
     this.name = "PlatformMessageNotDispatchedError";
+    this.retryable = retryable;
   }
 }
 
@@ -66,6 +71,12 @@ export function isPlatformMessageNotDispatchedError(
   error: unknown,
 ): error is PlatformMessageNotDispatchedError {
   return error instanceof PlatformMessageNotDispatchedError;
+}
+
+export function isPlatformMessageRejectedError(
+  error: unknown,
+): error is PlatformMessageNotDispatchedError & { readonly retryable: false } {
+  return error instanceof PlatformMessageNotDispatchedError && !error.retryable;
 }
 
 /** Per-payload delivery status emitted to callers and channel send summaries. */
@@ -104,6 +115,7 @@ export class OutboundDeliveryError extends Error {
   readonly payloadOutcomes: OutboundPayloadDeliveryOutcome[];
   readonly sentBeforeError: boolean;
   readonly stage: OutboundDeliveryFailureStage;
+  recoveryOwnedRetry?: true;
 
   constructor(
     message: string,
@@ -118,7 +130,11 @@ export class OutboundDeliveryError extends Error {
     this.name = "OutboundDeliveryError";
     this.results = [...(options.results ?? [])];
     this.payloadOutcomes = [...(options.payloadOutcomes ?? [])];
-    this.sentBeforeError = this.results.length > 0;
+    this.sentBeforeError =
+      this.results.length > 0 ||
+      this.payloadOutcomes.some(
+        (outcome) => outcome.status === "failed" && outcome.sentBeforeError,
+      );
     this.stage = options.stage ?? "unknown";
   }
 }

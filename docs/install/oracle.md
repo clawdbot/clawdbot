@@ -91,6 +91,7 @@ Run a persistent OpenClaw Gateway on Oracle Cloud's **Always Free** ARM tier (up
     openclaw config set gateway.tailscale.mode serve
     openclaw config set gateway.trustedProxies '["127.0.0.1"]'
 
+    openclaw gateway install
     systemctl --user restart openclaw-gateway.service
     ```
 
@@ -176,14 +177,19 @@ Verify the architecture with `uname -m` (should print `aarch64`). For binaries w
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` -- `openclaw.json`, per-agent `auth-profiles.json`, channel/provider state, and session data.
+- `~/.openclaw/` -- `openclaw.json`, shared and per-agent SQLite auth stores, channel/provider state, and session data.
 - `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
 
 These survive reboots. To take a portable snapshot:
 
 ```bash
 openclaw backup create
+openclaw backup restore <archive.tar.gz> --target <fresh-directory>
 ```
+
+Restore verifies and extracts into a fresh staging directory; activation is a
+separate offline step. See [Restore a full archive](/install/backups#restore-a-full-archive)
+for the rollback warnings and activation sequence.
 
 ## Fallback: SSH tunnel
 

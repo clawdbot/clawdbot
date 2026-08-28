@@ -7,25 +7,25 @@ import type {
 import {
   generatedImageAssetFromBase64,
   generatedImageAssetFromDataUrl,
+  parseOpenAiCompatibleImageResponse,
   resolveInlineImageJsonResponseMaxBytes,
   toImageDataUrl,
 } from "openclaw/plugin-sdk/image-generation";
-import { MAX_IMAGE_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 import { isProviderApiKeyConfigured } from "openclaw/plugin-sdk/provider-auth";
-import { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
 import {
   assertOkOrThrowHttpError,
   postJsonRequest,
   readProviderJsonResponse,
-  resolveProviderHttpRequestConfig,
 } from "openclaw/plugin-sdk/provider-http";
 import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { OPENROUTER_BASE_URL } from "./provider-catalog.js";
+import { resolveOpenRouterGenerationRequestContext } from "./generation-request-context.js";
+import { normalizeOpenRouterBaseUrl } from "./provider-catalog.js";
 
 const DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview";
 const DEFAULT_TIMEOUT_MS = 180_000;
 const MAX_IMAGE_RESULTS = 4;
-const MB = 1024 * 1024;
 const SUPPORTED_MODELS = [
   DEFAULT_MODEL,
   "google/gemini-3-pro-image-preview",
@@ -45,50 +45,43 @@ const SUPPORTED_ASPECT_RATIOS = [
 ] as const;
 const OPENROUTER_IMAGE_MALFORMED_RESPONSE = "OpenRouter image generation response malformed";
 
-function throwMalformedOpenRouterImageResponse(message: string | undefined): never | undefined {
-  if (message) {
-    throw new Error(message);
-  }
-  return undefined;
+function throwMalformedOpenRouterImageResponse(): never {
+  throw new Error(OPENROUTER_IMAGE_MALFORMED_RESPONSE);
 }
 
-function pushDataUrlImage(
-  images: GeneratedImageAsset[],
-  dataUrl: string,
-  malformedResponseError?: string,
-): void {
+function requireOpenRouterImageRecord(value: unknown): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throwMalformedOpenRouterImageResponse();
+  }
+  return value;
+}
+
+function requireOpenRouterImageUrl(value: unknown): string {
+  const url = normalizeOptionalString(requireOpenRouterImageRecord(value).url);
+  if (!url) {
+    throwMalformedOpenRouterImageResponse();
+  }
+  return url;
+}
+
+function pushDataUrlImage(images: GeneratedImageAsset[], dataUrl: string, strict = true): void {
   const image = generatedImageAssetFromDataUrl({ dataUrl, index: images.length });
   if (!image) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
+    if (strict) {
+      throwMalformedOpenRouterImageResponse();
+    }
     return;
   }
   images.push(image);
 }
 
-function extractImagesFromPart(
-  images: GeneratedImageAsset[],
-  part: unknown,
-  malformedResponseError?: string,
-): void {
-  if (!isRecord(part)) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
-  }
+function extractImagesFromPart(images: GeneratedImageAsset[], value: unknown): void {
+  const part = requireOpenRouterImageRecord(value);
   if (part.type === "text") {
     return;
   }
   if (part.type === "image_url") {
-    const imageUrl = part.image_url ?? part.imageUrl;
-    if (!isRecord(imageUrl)) {
-      throwMalformedOpenRouterImageResponse(malformedResponseError);
-      return;
-    }
-    const url = normalizeOptionalString(imageUrl.url);
-    if (url) {
-      pushDataUrlImage(images, url, malformedResponseError);
-      return;
-    }
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
+    pushDataUrlImage(images, requireOpenRouterImageUrl(part.image_url ?? part.imageUrl));
     return;
   }
 
@@ -99,30 +92,24 @@ function extractImagesFromPart(
       images.push(image);
       return;
     }
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
+    throwMalformedOpenRouterImageResponse();
   }
   if ("b64_json" in part) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
+    throwMalformedOpenRouterImageResponse();
   }
 
   const inlineData = part.inlineData ?? part.inline_data;
   if (inlineData === undefined || inlineData === null) {
     return;
   }
-  if (!isRecord(inlineData)) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
-  }
-  const data = normalizeOptionalString(inlineData.data);
+  const inline = requireOpenRouterImageRecord(inlineData);
+  const data = normalizeOptionalString(inline.data);
   if (!data) {
-    throwMalformedOpenRouterImageResponse(malformedResponseError);
-    return;
+    throwMalformedOpenRouterImageResponse();
   }
   const mimeType =
-    normalizeOptionalString(inlineData.mimeType) ??
-    normalizeOptionalString(inlineData.mime_type) ??
+    normalizeOptionalString(inline.mimeType) ??
+    normalizeOptionalString(inline.mime_type) ??
     "image/png";
   const image = generatedImageAssetFromBase64({
     base64: data,
@@ -133,63 +120,36 @@ function extractImagesFromPart(
     images.push(image);
     return;
   }
-  throwMalformedOpenRouterImageResponse(malformedResponseError);
+  throwMalformedOpenRouterImageResponse();
 }
 
-export function extractOpenRouterImagesFromResponse(
-  body: unknown,
-  options: { malformedResponseError?: string } = {},
-): GeneratedImageAsset[] {
-  if (!isRecord(body)) {
-    throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-    return [];
-  }
-  const choices = body.choices;
+function extractOpenRouterImagesFromResponse(body: unknown): GeneratedImageAsset[] {
+  const payload = requireOpenRouterImageRecord(body);
+  const choices = payload.choices;
   if (choices === undefined || choices === null) {
     return [];
   }
   if (!Array.isArray(choices)) {
-    throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-    return [];
+    throwMalformedOpenRouterImageResponse();
   }
 
   const images: GeneratedImageAsset[] = [];
-  for (const choice of choices) {
-    if (!isRecord(choice)) {
-      throwMalformedOpenRouterImageResponse(options.malformedResponseError);
+  for (const choiceValue of choices) {
+    const choice = requireOpenRouterImageRecord(choiceValue);
+    const messageValue = choice.message;
+    if (messageValue === undefined || messageValue === null) {
       continue;
     }
-    const message = choice.message;
-    if (message === undefined || message === null) {
-      continue;
-    }
-    if (!isRecord(message)) {
-      throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-      continue;
-    }
+    const message = requireOpenRouterImageRecord(messageValue);
 
     const messageImages = message.images;
     if (messageImages !== undefined && messageImages !== null) {
       if (!Array.isArray(messageImages)) {
-        throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-        continue;
+        throwMalformedOpenRouterImageResponse();
       }
-      for (const entry of messageImages) {
-        if (!isRecord(entry)) {
-          throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-          continue;
-        }
-        const imageUrl = entry.image_url ?? entry.imageUrl;
-        if (!isRecord(imageUrl)) {
-          throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-          continue;
-        }
-        const url = normalizeOptionalString(imageUrl.url);
-        if (!url) {
-          throwMalformedOpenRouterImageResponse(options.malformedResponseError);
-          continue;
-        }
-        pushDataUrlImage(images, url, options.malformedResponseError);
+      for (const entryValue of messageImages) {
+        const entry = requireOpenRouterImageRecord(entryValue);
+        pushDataUrlImage(images, requireOpenRouterImageUrl(entry.image_url ?? entry.imageUrl));
       }
     }
 
@@ -197,38 +157,74 @@ export function extractOpenRouterImagesFromResponse(
     if (typeof content === "string" && content.length > 0) {
       const dataUrlPattern = /data:image\/[^;]+;base64,[A-Za-z0-9+/=]+/g;
       for (const match of content.matchAll(dataUrlPattern)) {
-        pushDataUrlImage(images, match[0]);
+        pushDataUrlImage(images, match[0], false);
       }
     } else if (Array.isArray(content)) {
       for (const part of content) {
-        extractImagesFromPart(images, part, options.malformedResponseError);
+        extractImagesFromPart(images, part);
       }
     } else if (content !== undefined && content !== null) {
-      throwMalformedOpenRouterImageResponse(options.malformedResponseError);
+      throwMalformedOpenRouterImageResponse();
     }
   }
   return images;
 }
 
 function resolveImageCount(count: number | undefined): number {
-  if (typeof count !== "number" || !Number.isFinite(count)) {
-    return 1;
-  }
-  return Math.max(1, Math.min(MAX_IMAGE_RESULTS, Math.trunc(count)));
-}
-
-function resolveGeneratedImageMaxBytes(req: {
-  cfg: { agents?: { defaults?: { mediaMaxMb?: number } } };
-}): number {
-  const configured = req.cfg.agents?.defaults?.mediaMaxMb;
-  if (typeof configured === "number" && Number.isFinite(configured) && configured > 0) {
-    return Math.floor(configured * MB);
-  }
-  return MAX_IMAGE_BYTES;
+  return resolveIntegerOption(count, 1, { min: 1, max: MAX_IMAGE_RESULTS });
 }
 
 function isGeminiImageModel(model: string): boolean {
   return model.startsWith("google/gemini-");
+}
+
+function buildInputReferences(req: ImageGenerationRequest) {
+  return (req.inputImages ?? []).map((image) => ({
+    type: "image_url" as const,
+    image_url: { url: toImageDataUrl(image) },
+  }));
+}
+
+function buildDedicatedImageBody(
+  req: ImageGenerationRequest,
+  model: string,
+  count: number,
+): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model,
+    prompt: req.prompt,
+    n: count,
+  };
+  if (isGeminiImageModel(model)) {
+    const aspectRatio = normalizeOptionalString(req.aspectRatio);
+    if (aspectRatio) {
+      body.aspect_ratio = aspectRatio;
+    }
+    const resolution = normalizeOptionalString(req.resolution);
+    if (resolution) {
+      body.resolution = resolution;
+    }
+  }
+  const inputReferences = buildInputReferences(req);
+  if (inputReferences.length > 0) {
+    body.input_references = inputReferences;
+  }
+  return body;
+}
+
+function normalizeDedicatedImageResponse(payload: unknown): unknown {
+  if (!isRecord(payload) || !Array.isArray(payload.data)) {
+    return payload;
+  }
+  return {
+    ...payload,
+    data: payload.data.map((entry) => {
+      if (!isRecord(entry) || entry.mime_type !== undefined || entry.media_type === undefined) {
+        return entry;
+      }
+      return { ...entry, mime_type: entry.media_type };
+    }),
+  };
 }
 
 function buildMessageContent(
@@ -271,8 +267,7 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
     label: "OpenRouter",
     defaultModel: DEFAULT_MODEL,
     models: [...SUPPORTED_MODELS],
-    isConfigured: ({ agentDir }) =>
-      isProviderApiKeyConfigured({ provider: "openrouter", agentDir }),
+    isConfigured: (ctx) => isProviderApiKeyConfigured({ provider: "openrouter", ...ctx }),
     capabilities: {
       generate: {
         maxCount: MAX_IMAGE_RESULTS,
@@ -294,34 +289,68 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
       },
     },
     async generateImage(req) {
-      const auth = await resolveApiKeyForProvider({
-        provider: "openrouter",
-        cfg: req.cfg,
-        agentDir: req.agentDir,
-        store: req.authStore,
-      });
-      if (!auth.apiKey) {
-        throw new Error("OpenRouter API key missing");
-      }
+      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
+        await resolveOpenRouterGenerationRequestContext({
+          cfg: req.cfg,
+          agentDir: req.agentDir,
+          authStore: req.authStore,
+          capability: "image",
+          // Preserve the existing resolved header contract; postJsonRequest supplies
+          // the JSON content type for both chat-completion and dedicated image requests.
+          jsonContentType: false,
+        });
 
       const model = normalizeOptionalString(req.model) ?? DEFAULT_MODEL;
       const imageConfig = buildImageConfig(req, model);
-      const { baseUrl, allowPrivateNetwork, headers, dispatcherPolicy } =
-        resolveProviderHttpRequestConfig({
-          baseUrl: req.cfg?.models?.providers?.openrouter?.baseUrl,
-          defaultBaseUrl: OPENROUTER_BASE_URL,
-          allowPrivateNetwork: false,
-          defaultHeaders: {
-            Authorization: `Bearer ${auth.apiKey}`,
-            "HTTP-Referer": "https://openclaw.ai",
-            "X-OpenRouter-Title": "OpenClaw",
-          },
-          provider: "openrouter",
-          capability: "image",
-          transport: "http",
-        });
-
       const count = resolveImageCount(req.count);
+      const canonicalBaseUrl = normalizeOpenRouterBaseUrl(baseUrl);
+      if (canonicalBaseUrl) {
+        // Preserve the existing all-or-nothing batch contract so any failed
+        // image request reaches the runtime's configured provider fallback.
+        const generated = await Promise.all(
+          Array.from({ length: count }, async () => {
+            const requestCount = 1;
+            const { response, release } = await postJsonRequest({
+              url: `${canonicalBaseUrl}/images`,
+              headers,
+              body: buildDedicatedImageBody(req, model, requestCount),
+              timeoutMs: req.timeoutMs ?? DEFAULT_TIMEOUT_MS,
+              fetchFn: fetch,
+              allowPrivateNetwork,
+              ssrfPolicy: req.ssrfPolicy,
+              dispatcherPolicy,
+            });
+            try {
+              await assertOkOrThrowHttpError(response, "OpenRouter image generation failed");
+              const payload = await readProviderJsonResponse(
+                response,
+                "openrouter.image-generation",
+                {
+                  maxBytes: resolveInlineImageJsonResponseMaxBytes(
+                    requestCount,
+                    resolveGeneratedMediaMaxBytes(req.cfg, "image"),
+                  ),
+                },
+              );
+              const images = parseOpenAiCompatibleImageResponse(
+                normalizeDedicatedImageResponse(payload),
+                {
+                  malformedResponseError: OPENROUTER_IMAGE_MALFORMED_RESPONSE,
+                  sniffMimeType: true,
+                },
+              );
+              if (images.length === 0) {
+                throw new Error("OpenRouter image generation response missing image data");
+              }
+              return images;
+            } finally {
+              await release();
+            }
+          }),
+        );
+        return { images: generated.flat(), model };
+      }
+
       const { response, release } = await postJsonRequest({
         url: `${baseUrl}/chat/completions`,
         headers,
@@ -344,12 +373,10 @@ export function buildOpenRouterImageGenerationProvider(): ImageGenerationProvide
         const payload = await readProviderJsonResponse(response, "openrouter.image-generation", {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(
             count,
-            resolveGeneratedImageMaxBytes(req),
+            resolveGeneratedMediaMaxBytes(req.cfg, "image"),
           ),
         });
-        const images = extractOpenRouterImagesFromResponse(payload, {
-          malformedResponseError: OPENROUTER_IMAGE_MALFORMED_RESPONSE,
-        });
+        const images = extractOpenRouterImagesFromResponse(payload);
         if (images.length === 0) {
           throw new Error("OpenRouter image generation response missing image data");
         }

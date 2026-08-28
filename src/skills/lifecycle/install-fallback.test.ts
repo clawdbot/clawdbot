@@ -8,7 +8,7 @@ import { hasBinaryMock, runCommandWithTimeoutMock } from "../test-support/instal
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 
 const skillsMocks = vi.hoisted(() => ({
-  loadWorkspaceSkillEntries: vi.fn(),
+  loadWorkspaceSkills: vi.fn(),
 }));
 
 vi.mock("../../process/exec.js", () => ({
@@ -19,20 +19,24 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
   evaluateSkillInstallPolicy: vi.fn(async () => undefined),
 }));
 
-vi.mock("../loading/workspace.js", () => ({
-  loadWorkspaceSkillEntries: skillsMocks.loadWorkspaceSkillEntries,
-}));
+vi.mock("../loading/workspace-skill-loader.js", async () => {
+  const actual = await vi.importActual<typeof import("../loading/workspace-skill-loader.js")>(
+    "../loading/workspace-skill-loader.js",
+  );
+  return {
+    loadMergedWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
+    loadWorkspaceSkills: skillsMocks.loadWorkspaceSkills,
+    normalizeWorkspaceSkillRoots: actual.normalizeWorkspaceSkillRoots,
+  };
+});
 
 let installSkill: typeof import("./install.js").installSkill;
 let resolveInstallerKindReadiness: typeof import("./install.js").resolveInstallerKindReadiness;
-let skillsInstallTesting: typeof import("./install.js").testing;
+let skillsInstallTesting: typeof import("./install.test-support.js").skillsInstallTesting;
 
 async function loadSkillsInstallModulesForTest() {
-  ({
-    installSkill,
-    resolveInstallerKindReadiness,
-    testing: skillsInstallTesting,
-  } = await import("./install.js"));
+  ({ installSkill, resolveInstallerKindReadiness } = await import("./install.js"));
+  ({ skillsInstallTesting } = await import("./install.test-support.js"));
 }
 
 function makeSkillEntry(
@@ -135,7 +139,7 @@ describe("skills-install fallback edge cases", () => {
 
   beforeAll(async () => {
     workspaceDir = await suiteTempDirs.setup();
-    skillsMocks.loadWorkspaceSkillEntries.mockReturnValue([
+    skillsMocks.loadWorkspaceSkills.mockReturnValue([
       makeSkillEntry(workspaceDir, "go-tool-single", {
         kind: "go",
         module: "example.com/tool@latest",
@@ -285,7 +289,7 @@ describe("skills-install fallback edge cases", () => {
     });
     mockAvailableBinaries([]);
     try {
-      skillsMocks.loadWorkspaceSkillEntries.mockReturnValueOnce([
+      skillsMocks.loadWorkspaceSkills.mockReturnValueOnce([
         makeSkillEntry(workspaceDir, "brew-tool-container", {
           kind: "brew",
           formula: "openai-whisper",

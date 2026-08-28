@@ -1,19 +1,135 @@
 // Coverage for building compaction runtime context from active runner state.
+import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { addSession, resetProcessRegistryForTests } from "../bash-process-registry.js";
+import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
+import * as manifestModelIdNormalization from "../../plugins/manifest-model-id-normalization.js";
+import { addSession, deleteSession } from "../bash-process-registry.js";
 import { createProcessSessionFixture } from "../bash-process-registry.test-helpers.js";
+import * as providerModelNormalizationRuntime from "../provider-model-normalization.runtime.js";
 import {
   buildEmbeddedCompactionRuntimeContext,
+  resolveCompactionContextTokenBudget,
   resolveCompactionHarnessRuntime,
+  resolveEmbeddedCompactionThinkingLevel,
   resolveEmbeddedCompactionTarget,
 } from "./compaction-runtime-context.js";
+import { buildContextEngineCompactionSessionTarget } from "./run/session-bootstrap.js";
 
-describe("buildEmbeddedCompactionRuntimeContext", () => {
-  afterEach(() => {
-    resetProcessRegistryForTests();
+const compactionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+describe("resolveCompactionContextTokenBudget", () => {
+  const cfg = {} as OpenClawConfig;
+  const modelWithWindow = (contextWindow: number) =>
+    ({ contextWindow }) as Parameters<typeof resolveCompactionContextTokenBudget>[0]["model"];
+  it.each([
+    { requested: 500_000, modelWindow: 500_000, expected: 500_000 },
+    { requested: 100_000, modelWindow: 500_000, expected: 100_000 },
+    { requested: 500_000, modelWindow: 64_000, expected: 64_000 },
+  ])(
+    "caps requested=$requested by the model ceiling to $expected",
+    ({ requested, modelWindow, expected }) => {
+      const budget = resolveCompactionContextTokenBudget({
+        config: cfg,
+        provider: "openai",
+        modelId: "mock-model",
+        model: modelWithWindow(modelWindow),
+        requestedTokenBudget: requested,
+      });
+      expect(budget).toBe(expected);
+    },
+  );
+});
+
+describe("resolveEmbeddedCompactionThinkingLevel", () => {
+  it("lets the compaction override replace the inherited session level", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "low" } } },
+        },
+        provider: "demo",
+        modelId: "demo-model",
+        inheritedLevel: "high",
+      }),
+    ).toBe("low");
   });
 
+  it("revalidates an unsupported configured level for the actual candidate", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "ultra" } } },
+        },
+        provider: "demo",
+        modelId: "demo-model",
+      }),
+    ).toBe("high");
+  });
+
+  it("revalidates the compaction default against provider-denied thinking levels", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        provider: "custom",
+        modelId: "reasoning-model",
+        catalog: [
+          {
+            provider: "custom",
+            id: "reasoning-model",
+            reasoning: true,
+            thinkingLevelMap: { minimal: null, low: null, medium: null },
+          },
+        ],
+      }),
+    ).toBe("high");
+  });
+
+  it("defaults compaction to low without inheriting the session level", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        provider: "demo",
+        modelId: "demo-model",
+        inheritedLevel: "medium",
+      }),
+    ).toBe("low");
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        provider: "demo",
+        modelId: "demo-model",
+      }),
+    ).toBe("low");
+  });
+
+  it("inherits the session level only when explicitly configured", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "inherit" } } },
+        } as unknown as OpenClawConfig,
+        provider: "demo",
+        modelId: "demo-model",
+        inheritedLevel: "medium",
+      }),
+    ).toBe("medium");
+  });
+
+  it("preserves thinking when the resolved Ollama model reports reasoning support", () => {
+    expect(
+      resolveEmbeddedCompactionThinkingLevel({
+        config: {
+          agents: { defaults: { compaction: { thinkingLevel: "inherit" } } },
+        },
+        provider: "ollama",
+        modelId: "qwen3.5:4b",
+        inheritedLevel: "high",
+        catalog: [{ provider: "ollama", id: "qwen3.5:4b", reasoning: true }],
+      }),
+    ).toBe("high");
+  });
+});
+
+describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves sender and current message routing for compaction", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       sessionKey: "agent:main:thread:1",
@@ -54,6 +170,18 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.senderId).toBe("user-123");
     expect(result.provider).toBe("openai");
     expect(result.model).toBe("gpt-5.4");
+  });
+
+  it("preserves the finite tool allowlist for delegated compaction", () => {
+    const result = buildEmbeddedCompactionRuntimeContext({
+      workspaceDir: "/tmp/workspace",
+      agentDir: "/tmp/agent",
+      provider: "openai",
+      modelId: "gpt-5.4",
+      toolsAllow: ["read"],
+    });
+
+    expect(result.toolsAllow).toEqual(["read"]);
   });
 
   it("normalizes nullable compaction routing fields to undefined", () => {
@@ -122,6 +250,55 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:p1");
   });
 
+  it.each([
+    { name: "without configured aliases", models: undefined },
+    {
+      name: "with an unrelated configured alias",
+      models: { "openai/gpt-5.4-mini": { alias: "fast" } },
+    },
+  ])(
+    "resolves literal compaction overrides without discovering provider plugins $name",
+    ({ models }) => {
+      const manifestNormalization = vi
+        .spyOn(manifestModelIdNormalization, "normalizeProviderModelIdWithManifest")
+        .mockImplementation(() => {
+          throw new Error("literal compaction overrides must not discover plugin manifests");
+        });
+      const runtimeNormalization = vi
+        .spyOn(providerModelNormalizationRuntime, "normalizeProviderModelIdWithRuntime")
+        .mockImplementation(() => {
+          throw new Error("literal compaction overrides must not activate provider plugins");
+        });
+
+      try {
+        const result = buildEmbeddedCompactionRuntimeContext({
+          workspaceDir: "/tmp/workspace",
+          agentDir: "/tmp/agent",
+          config: {
+            agents: {
+              defaults: {
+                ...(models ? { models } : {}),
+                compaction: { model: "gpt-4o" },
+              },
+            },
+          } as OpenClawConfig,
+          provider: "openai",
+          modelId: "gpt-3.5-turbo",
+          authProfileId: "openai:p1",
+        });
+
+        expect(result.provider).toBe("openai");
+        expect(result.model).toBe("gpt-4o");
+        expect(result.authProfileId).toBe("openai:p1");
+        expect(manifestNormalization).not.toHaveBeenCalled();
+        expect(runtimeNormalization).not.toHaveBeenCalled();
+      } finally {
+        runtimeNormalization.mockRestore();
+        manifestNormalization.mockRestore();
+      }
+    },
+  );
+
   it("uses session model when no compaction.model override configured", () => {
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
@@ -139,18 +316,18 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
   it("preserves scoped active process session references for compaction", () => {
     // Only sessions tied to the same scope are summarized; cross-session process
     // state would leak unrelated task context into the compaction prompt.
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-01-02T03:04:05.000Z"));
+    const scopeKey = "agent:main:compaction-runtime-context";
+    const startedAt = Date.now() - 1_000;
     const active = createProcessSessionFixture({
-      id: "sess-active",
+      id: "compaction-runtime-active",
       command: "sleep 600",
       backgrounded: true,
       pid: 1234,
-      startedAt: 1_000,
+      startedAt,
     });
-    active.scopeKey = "agent:main:thread:1";
+    active.scopeKey = scopeKey;
     const other = createProcessSessionFixture({
-      id: "sess-other",
+      id: "compaction-runtime-other",
       command: "sleep 600",
       backgrounded: true,
     });
@@ -158,42 +335,35 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     addSession(active);
     addSession(other);
 
-    const result = buildEmbeddedCompactionRuntimeContext({
-      sessionKey: "agent:main:thread:1",
-      workspaceDir: "/tmp/workspace",
-      agentDir: "/tmp/agent",
-      config: {} as unknown as OpenClawConfig,
-    });
-
     try {
+      const result = buildEmbeddedCompactionRuntimeContext({
+        sessionKey: scopeKey,
+        workspaceDir: "/tmp/workspace",
+        agentDir: "/tmp/agent",
+        config: {} as unknown as OpenClawConfig,
+      });
+
       expect(result.activeProcessSessions).toEqual([
         {
           command: "sleep 600",
           cwd: "/tmp",
           name: "sleep 600",
           pid: 1234,
-          runtimeMs: 1_767_323_044_000,
-          sessionId: "sess-active",
-          startedAt: 1_000,
+          runtimeMs: expect.any(Number),
+          sessionId: "compaction-runtime-active",
+          startedAt,
           status: "running",
           tail: "",
           truncated: false,
         },
       ]);
     } finally {
-      vi.useRealTimers();
+      deleteSession(active.id);
+      deleteSession(other.id);
     }
   });
 
   it("omits active process session references when no safe scope is available", () => {
-    const active = createProcessSessionFixture({
-      id: "sess-active",
-      command: "sleep 600",
-      backgrounded: true,
-    });
-    active.scopeKey = "agent:main:thread:1";
-    addSession(active);
-
     const result = buildEmbeddedCompactionRuntimeContext({
       workspaceDir: "/tmp/workspace",
       agentDir: "/tmp/agent",
@@ -533,7 +703,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("resolves compaction.model alias to canonical model ref on same provider (#90340)", () => {
+  it("resolves a mixed-case compaction model alias with a trailing profile on its provider", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         agents: {
@@ -544,7 +714,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
                 params: { thinking: "high" },
               },
             },
-            compaction: { model: "gpt54mini" },
+            compaction: { model: "GPT54MINI@work" },
           },
         },
       } as unknown as OpenClawConfig,
@@ -585,7 +755,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBeUndefined();
   });
 
-  it("falls back to literal model when alias does not match", () => {
+  it("preserves the full literal model and profile when no configured alias matches", () => {
     const result = resolveEmbeddedCompactionTarget({
       config: {
         agents: {
@@ -595,7 +765,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
                 alias: "gpt54mini",
               },
             },
-            compaction: { model: "nonexistent-alias" },
+            compaction: { model: "nonexistent-alias@work" },
           },
         },
       } as unknown as OpenClawConfig,
@@ -606,7 +776,7 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "gpt-5.5",
     });
     expect(result.provider).toBe("openai");
-    expect(result.model).toBe("nonexistent-alias");
+    expect(result.model).toBe("nonexistent-alias@work");
     expect(result.authProfileId).toBe("openai:default");
   });
 
@@ -689,6 +859,70 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
     expect(result.authProfileId).toBe("openai:default");
   });
 
+  it.each([
+    {
+      name: "infers a different provider for a uniquely configured bare literal",
+      config: {
+        models: {
+          providers: {
+            anthropic: { models: [{ id: "compact-model" }] },
+          },
+        },
+        agents: { defaults: { compaction: { model: "compact-model" } } },
+      },
+      provider: "openai",
+      authProfileId: "openai:default",
+      expectedProvider: "anthropic",
+      expectedModel: "compact-model",
+      expectedAuthProfileId: undefined,
+    },
+    {
+      name: "keeps an ambiguous configured bare literal on the current provider",
+      config: {
+        models: {
+          providers: {
+            openai: { models: [{ id: "shared-model" }] },
+            anthropic: { models: [{ id: "shared-model" }] },
+          },
+        },
+        agents: { defaults: { compaction: { model: "shared-model" } } },
+      },
+      provider: "google",
+      authProfileId: "google:default",
+      expectedProvider: "google",
+      expectedModel: "shared-model",
+      expectedAuthProfileId: "google:default",
+    },
+    {
+      name: "preserves a multi-segment model id and trailing profile suffix",
+      config: {
+        agents: {
+          defaults: {
+            compaction: { model: "openrouter/meta-llama/llama-3.3-70b:free@work" },
+          },
+        },
+      },
+      provider: "openrouter",
+      authProfileId: "openrouter:default",
+      expectedProvider: "openrouter",
+      expectedModel: "meta-llama/llama-3.3-70b:free@work",
+      expectedAuthProfileId: "openrouter:default",
+    },
+  ])("$name", (fixture) => {
+    const result = resolveEmbeddedCompactionTarget({
+      config: fixture.config as unknown as OpenClawConfig,
+      provider: fixture.provider,
+      modelId: "current-model",
+      authProfileId: fixture.authProfileId,
+      defaultProvider: fixture.provider,
+      defaultModel: "current-model",
+    });
+
+    expect(result.provider).toBe(fixture.expectedProvider);
+    expect(result.model).toBe(fixture.expectedModel);
+    expect(result.authProfileId).toBe(fixture.expectedAuthProfileId);
+  });
+
   it("leaves non-openai providers unchanged", () => {
     const result = resolveEmbeddedCompactionTarget({
       provider: "anthropic",
@@ -698,5 +932,34 @@ describe("buildEmbeddedCompactionRuntimeContext", () => {
       defaultModel: "claude-opus-4-5",
     });
     expect(result.provider).toBe("anthropic");
+  });
+});
+
+describe("buildContextEngineCompactionSessionTarget", () => {
+  it("derives the agent from a scoped session key", () => {
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        config: { session: { store: "/tmp/agents/{agentId}/sessions.json" } },
+        sessionFile: "agent:helper:main",
+        sessionId: "helper-session",
+        sessionKey: "agent:helper:main",
+      }),
+    ).toMatchObject({
+      agentId: "helper",
+      sessionKey: "agent:helper:main",
+      storePath: "/tmp/agents/helper/sessions.json",
+    });
+  });
+
+  it("leaves the key absent when a marker store has no mapped row", () => {
+    const storePath = path.join(compactionTempDirs.make("compaction-marker-"), "sessions.json");
+    const sessionId = "legacy-unmapped-session";
+
+    expect(
+      buildContextEngineCompactionSessionTarget({
+        sessionFile: formatSqliteSessionFileMarker({ agentId: "main", sessionId, storePath }),
+        sessionId,
+      }),
+    ).toEqual({ agentId: "main", sessionId, storePath });
   });
 });

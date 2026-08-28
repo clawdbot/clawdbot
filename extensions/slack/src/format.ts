@@ -1,12 +1,15 @@
 // Slack helper module supports format behavior.
+import { eastAsianWidthType } from "get-east-asian-width";
 import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
 import {
   chunkTextForOutbound,
+  FormatCapabilityProfile,
   markdownToIR,
+  type MarkdownIR,
   type MarkdownLinkSpan,
   renderMarkdownIRChunksWithinLimit,
+  renderMarkdownWithMarkers,
 } from "openclaw/plugin-sdk/text-chunking";
-import { renderMarkdownWithMarkers } from "openclaw/plugin-sdk/text-chunking";
 
 // Escape special characters for Slack mrkdwn format.
 // Preserve Slack's angle-bracket tokens so mentions and links stay intact.
@@ -105,6 +108,93 @@ function buildSlackLink(link: MarkdownLinkSpan, text: string) {
 type SlackMarkdownOptions = {
   tableMode?: MarkdownTableMode;
 };
+
+const SLACK_MRKDWN_WORD_CHARACTER_RE = /[\p{L}\p{M}\p{N}_]/u;
+const SLACK_MRKDWN_PUNCTUATION_RE = /\p{P}/u;
+const SLACK_MRKDWN_SYMBOL_RE = /\p{S}/u;
+const SLACK_MRKDWN_CJK_SCRIPT_RE =
+  /[\p{Script_Extensions=Han}\p{Script_Extensions=Hiragana}\p{Script_Extensions=Katakana}\p{Script_Extensions=Hangul}]/u;
+const SLACK_MRKDWN_EMOJI_PRESENTATION_RE = /\p{Emoji_Presentation}/u;
+
+function getCodePointBefore(text: string, index: number): string {
+  if (index <= 0) {
+    return "";
+  }
+  const lastCodeUnit = text.charCodeAt(index - 1);
+  if (lastCodeUnit >= 0xdc00 && lastCodeUnit <= 0xdfff && index > 1) {
+    const previousCodeUnit = text.charCodeAt(index - 2);
+    if (previousCodeUnit >= 0xd800 && previousCodeUnit <= 0xdbff) {
+      return text.slice(index - 2, index);
+    }
+  }
+  return text[index - 1] ?? "";
+}
+
+function getCodePointAt(text: string, index: number): string {
+  const codePoint = text.codePointAt(index);
+  return codePoint === undefined ? "" : String.fromCodePoint(codePoint);
+}
+
+function isSlackCjkPunctuation(character: string): boolean {
+  if (!SLACK_MRKDWN_PUNCTUATION_RE.test(character)) {
+    return false;
+  }
+  if (SLACK_MRKDWN_CJK_SCRIPT_RE.test(character)) {
+    return true;
+  }
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined) {
+    return false;
+  }
+  const width = eastAsianWidthType(codePoint);
+  return (
+    width === "fullwidth" ||
+    width === "halfwidth" ||
+    (width === "wide" && !SLACK_MRKDWN_EMOJI_PRESENTATION_RE.test(character))
+  );
+}
+
+function isUnsafeSlackEmphasisBoundary(character: string): boolean {
+  if (SLACK_MRKDWN_WORD_CHARACTER_RE.test(character)) {
+    return true;
+  }
+  const codePoint = character.codePointAt(0);
+  if (codePoint === undefined || codePoint <= 0x7f) {
+    return false;
+  }
+  return SLACK_MRKDWN_SYMBOL_RE.test(character) || isSlackCjkPunctuation(character);
+}
+
+function makeSlackEmphasisStylesSafe(ir: MarkdownIR): MarkdownIR {
+  const styles = ir.styles.filter((span) => {
+    if (span.style !== "italic" && span.style !== "bold") {
+      return true;
+    }
+    // Slack's parser can expose markers accepted by the CJK-friendly Markdown parser.
+    // Drop only the affected style so transport syntax never leaks into visible text.
+    return (
+      !isUnsafeSlackEmphasisBoundary(getCodePointBefore(ir.text, span.start)) &&
+      !isUnsafeSlackEmphasisBoundary(getCodePointAt(ir.text, span.end))
+    );
+  });
+  return styles.length === ir.styles.length ? ir : { ...ir, styles };
+}
+
+const SLACK_FORMAT_PROFILE = FormatCapabilityProfile.define({
+  mechanism: "markdown",
+  constructs: {
+    underline: "strip",
+    spoiler: "fallback",
+    codeLanguage: "fallback",
+    heading: "fallback",
+    bulletList: "fallback",
+    orderedList: "fallback",
+    taskList: "fallback",
+    table: "fallback",
+    image: "fallback",
+  },
+  chunk: { limit: 4000, unit: "chars", hardCap: 40_000 },
+});
 
 type SlackCodeMarker = "`" | "```";
 const SLACK_ASSISTANT_TRANSCRIPT_PREFIX = "`Assistant:` ";
@@ -314,22 +404,6 @@ function protectSlackAssistantTranscriptRoleHeaders(text: string): string {
   return `${SLACK_ASSISTANT_TRANSCRIPT_PREFIX}${text}`;
 }
 
-function hardSliceSlackToken(token: string, limit: number): string[] {
-  const chunks: string[] = [];
-  let chunk = "";
-  for (const character of token) {
-    if (chunk && chunk.length + character.length > limit) {
-      chunks.push(chunk);
-      chunk = "";
-    }
-    chunk += character;
-  }
-  if (chunk) {
-    chunks.push(chunk);
-  }
-  return chunks;
-}
-
 function buildSlackRenderOptions() {
   return {
     annotationMarkers: {
@@ -351,20 +425,23 @@ function buildSlackRenderOptions() {
   };
 }
 
-function markdownToSlackMrkdwn(markdown: string, options: SlackMarkdownOptions = {}): string {
-  const ir = markdownToIR(markdown ?? "", {
-    assistantTranscriptRoleHeaders: true,
-    linkify: false,
-    autolink: false,
-    headingStyle: "bold",
-    blockquotePrefix: "> ",
-    tableMode: options.tableMode,
-  });
-  return renderMarkdownWithMarkers(ir, buildSlackRenderOptions());
-}
-
-export function normalizeSlackOutboundText(markdown: string): string {
-  return protectSlackAssistantTranscriptRoleHeaders(markdownToSlackMrkdwn(markdown ?? ""));
+export function normalizeSlackOutboundText(
+  markdown: string,
+  options: SlackMarkdownOptions = {},
+): string {
+  const ir = makeSlackEmphasisStylesSafe(
+    markdownToIR(markdown ?? "", {
+      assistantTranscriptRoleHeaders: true,
+      linkify: false,
+      autolink: false,
+      headingStyle: "rich",
+      blockquotePrefix: "> ",
+      tableMode: options.tableMode,
+    }),
+  );
+  return protectSlackAssistantTranscriptRoleHeaders(
+    renderMarkdownWithMarkers(ir, buildSlackRenderOptions(), SLACK_FORMAT_PROFILE),
+  );
 }
 
 /** Chunk already-rendered Slack mrkdwn without splitting entities or code markers. */
@@ -380,53 +457,66 @@ export function chunkSlackMrkdwnText(text: string, limit: number): string[] {
     (text.match(/<[^>\n]+>/gu)?.some(isAllowedSlackAngleToken) ?? false) ||
     /\\[\s\S]/u.test(text);
   if (!hasProtectedToken) {
-    return chunkTextForOutbound(text, limit);
+    return chunkTextForOutbound(text, limit, { preserveWhitespace: true });
   }
 
   const chunks: string[] = [];
   let activeMarker: SlackCodeMarker | undefined;
   let content = "";
-  const wrapper = () =>
-    activeMarker && limit > activeMarker.length * 2 ? activeMarker : undefined;
-  const capacity = () => limit - (wrapper()?.length ?? 0) * 2;
+  const wrapper = (marker: SlackCodeMarker | undefined) =>
+    marker && limit > marker.length * 2 ? marker : undefined;
+  const capacity = (marker: SlackCodeMarker | undefined) => limit - (wrapper(marker)?.length ?? 0);
   const flush = () => {
-    if (!content) {
-      return;
+    const marker = wrapper(activeMarker);
+    if (content && content !== marker) {
+      chunks.push(marker ? `${content}${marker}` : content);
     }
-    const marker = wrapper();
-    chunks.push(marker ? `${marker}${content}${marker}` : content);
     content = "";
   };
 
   for (const token of tokenizeSlackMrkdwn(text)) {
     const transition = resolveSlackCodeMarkerTransition(activeMarker, token);
-    if (transition !== null) {
-      flush();
-      activeMarker = transition;
+    const nextMarker = transition === null ? activeMarker : transition;
+    const sourceMarker = token === "`" || token === "```" ? token : undefined;
+    if (transition !== null && sourceMarker && !wrapper(sourceMarker)) {
+      activeMarker = nextMarker;
       continue;
     }
+    if (content && content.length + token.length > capacity(nextMarker)) {
+      flush();
+    }
+    activeMarker = nextMarker;
+    if (!content && transition === undefined) {
+      continue;
+    }
+    content ||= transition === null ? (wrapper(activeMarker) ?? "") : "";
 
-    const contentLimit = capacity();
+    const contentLimit = capacity(activeMarker) - (wrapper(activeMarker)?.length ?? 0);
     if (token.length > contentLimit) {
       flush();
-      const marker = wrapper();
+      const marker = wrapper(activeMarker);
       if (activeMarker && isAllowedSlackAngleToken(token)) {
         if (marker) {
           chunks.push(
-            ...hardSliceSlackToken(token, contentLimit).map(
-              (fragment) => `${marker}${fragment}${marker}`,
-            ),
+            ...chunkTextForOutbound(token, Math.max(1, Math.floor(contentLimit)), {
+              preserveWhitespace: true,
+            }).map((fragment) => `${marker}${fragment}${marker}`),
           );
         } else {
-          chunks.push(...hardSliceSlackToken(escapeSlackMrkdwnSegment(token), limit));
+          chunks.push(
+            ...chunkTextForOutbound(
+              escapeSlackMrkdwnSegment(token),
+              Math.max(1, Math.floor(limit)),
+              {
+                preserveWhitespace: true,
+              },
+            ),
+          );
         }
         continue;
       }
       chunks.push(...(token.length <= limit ? [token] : chunkTextForOutbound(token, limit)));
       continue;
-    }
-    if (content && content.length + token.length > contentLimit) {
-      flush();
     }
     content += token;
   }
@@ -439,20 +529,24 @@ export function markdownToSlackMrkdwnChunks(
   limit: number,
   options: SlackMarkdownOptions = {},
 ): string[] {
-  const ir = markdownToIR(markdown ?? "", {
-    assistantTranscriptRoleHeaders: true,
-    linkify: false,
-    autolink: false,
-    headingStyle: "bold",
-    blockquotePrefix: "> ",
-    tableMode: options.tableMode,
-  });
+  const ir = makeSlackEmphasisStylesSafe(
+    markdownToIR(markdown ?? "", {
+      assistantTranscriptRoleHeaders: true,
+      linkify: false,
+      autolink: false,
+      headingStyle: "rich",
+      blockquotePrefix: "> ",
+      tableMode: options.tableMode,
+    }),
+  );
   const renderOptions = buildSlackRenderOptions();
   return renderMarkdownIRChunksWithinLimit({
     ir,
     limit,
     renderChunk: (chunk) =>
-      protectSlackAssistantTranscriptRoleHeaders(renderMarkdownWithMarkers(chunk, renderOptions)),
+      protectSlackAssistantTranscriptRoleHeaders(
+        renderMarkdownWithMarkers(chunk, renderOptions, SLACK_FORMAT_PROFILE),
+      ),
     measureRendered: (rendered) => rendered.length,
   }).map(({ rendered }) => rendered);
 }

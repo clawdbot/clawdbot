@@ -31,6 +31,15 @@ Companion plugins such as `memory-wiki` can run alongside `memory-lancedb`,
 but only one plugin owns the active memory slot at a time.
 </Note>
 
+<Note>
+LanceDB's `memory_recall` does not receive the protected private transcript
+authorization used by `memory.search.rememberAcrossConversations`. Use LanceDB's
+`autoRecall` or its `memory_recall` tool through
+[advanced Active Memory](/concepts/active-memory#lancedb-memory).
+`openclaw doctor` reports when Remember across conversations is unavailable
+with the current memory provider.
+</Note>
+
 ## Quick start
 
 ```json5
@@ -56,7 +65,7 @@ but only one plugin owns the active memory slot at a time.
 }
 ```
 
-Restart the Gateway after changing plugin config, then verify it loaded:
+Restart the Gateway after installation, then verify it loaded:
 
 ```bash
 openclaw gateway restart
@@ -72,8 +81,8 @@ defaults to `openai`; `model` defaults to `text-embedding-3-small`.
 | ---------------------- | ------------- | ------------------------------------------------------------------------ |
 | `embedding.provider`   | string        | Adapter id, e.g. `openai`, `github-copilot`, `ollama`. Default `openai`. |
 | `embedding.model`      | string        | Default `text-embedding-3-small`.                                        |
-| `embedding.apiKey`     | string        | Optional; supports `${ENV_VAR}` expansion.                               |
-| `embedding.baseUrl`    | string        | Optional; supports `${ENV_VAR}` expansion.                               |
+| `embedding.apiKey`     | string        | Optional; supports `${ENV_VAR}` expansion and live credential rotation.  |
+| `embedding.baseUrl`    | string        | Optional; supports `${ENV_VAR}` expansion and live endpoint rotation.    |
 | `embedding.dimensions` | integer (>=1) | Required for models not in the built-in table (see below).               |
 
 Two request paths exist:
@@ -88,6 +97,18 @@ Two request paths exist:
   (or `"openai"`) and set `embedding.apiKey` plus `embedding.baseUrl`. Use this
   for a raw OpenAI-compatible embeddings endpoint that has no bundled provider
   adapter.
+
+`embedding.apiKey` and `embedding.baseUrl` are re-read from live plugin config
+for the next memory operation, as long as `provider`, `model`, and `dimensions`
+remain unchanged.
+
+<Warning>
+`embedding.provider`, `embedding.model`, and `embedding.dimensions` define the
+persisted LanceDB index identity and do not change live. Before restarting with
+a new identity, plan a LanceDB re-embedding or rebuild so every stored row uses
+the new vector space and dimensions. The plugin does not re-embed existing rows
+automatically.
+</Warning>
 
 OpenAI Codex / ChatGPT OAuth is not an OpenAI Platform embeddings credential.
 For OpenAI embeddings use an OpenAI API key auth profile, `OPENAI_API_KEY`, or
@@ -182,21 +203,23 @@ local server returns context-length errors.
 
 ## Recall and capture limits
 
-| Setting           | Default | Range                        | Applies to                                                 |
-| ----------------- | ------- | ---------------------------- | ---------------------------------------------------------- |
-| `recallMaxChars`  | `1000`  | 100-10000                    | Text sent to the embedding API for recall.                 |
-| `captureMaxChars` | `500`   | 100-10000                    | Message length eligible for auto-capture.                  |
-| `customTriggers`  | `[]`    | 0-50 items, each <=100 chars | Literal phrases that make auto-capture consider a message. |
+| Setting           | Default | Range                       | Applies to                                                        |
+| ----------------- | ------- | --------------------------- | ----------------------------------------------------------------- |
+| `recallMaxChars`  | `1000`  | 100-10000                   | Recall query length and each escaped model-visible recalled item. |
+| `captureMaxChars` | `500`   | 100-10000                   | `memory_store` input limit and auto-capture eligibility.          |
+| `customTriggers`  | `[]`    | 0-50 items, each ≤100 chars | Literal phrases that make auto-capture consider a message.        |
 
 `recallMaxChars` bounds the `before_prompt_build` auto-recall query, the
-`memory_recall` tool, the `memory_forget` query path, and `openclaw ltm
-search`. Auto-recall embeds the latest user message from the turn and falls
-back to the full prompt only when no user message is present, keeping channel
-metadata and large prompt blocks out of the embedding request.
+`memory_recall` tool, the `memory_forget` query path, and `openclaw ltm search`.
+Auto-recall embeds the latest user message from the turn and falls back to the
+full prompt only when no user message is present, keeping channel metadata and
+large prompt blocks out of the embedding request. It also bounds each recalled
+item after prompt escaping before that text reaches the model.
 
 `captureMaxChars` gates whether a user message from the turn's `agent_end`
-event is short enough to be considered for auto-capture; it does not affect
-recall queries.
+event is short enough to be considered for auto-capture. `memory_store` rejects
+longer text before embedding or storage; the setting does not affect recall
+queries.
 
 `customTriggers` adds literal auto-capture phrases without regex. Built-in
 triggers cover common English, Czech, Chinese, Japanese, and Korean memory
@@ -206,28 +229,36 @@ Auto-capture also rejects text that looks like envelope/transport metadata,
 prompt-injection payloads, or already-injected `<relevant-memories>` context,
 and caps at 3 captured memories per agent turn.
 
+Every memory is owned by one agent. Recall, duplicate detection, capture,
+listing, raw queries, and deletion all enforce that owner before returning or
+mutating rows. An agent with `memory.search.enabled: false` in its `agents.entries.*`
+entry, or one inheriting a disabled top-level search, also gets none of the `memory_recall`, `memory_store`,
+or `memory_forget` tools and does not participate in automatic recall or
+capture, even when the plugin-level `autoRecall`/`autoCapture` flags are on.
+
 ## Commands
 
 `memory-lancedb` registers the `ltm` CLI namespace whenever it is installed
 (not only when it owns the active memory slot):
 
 ```bash
-openclaw ltm list [--limit <n>] [--order-by-created-at]
-openclaw ltm search <query> [--limit <n>]
-openclaw ltm stats
+openclaw ltm list [--agent <id>] [--limit <n>] [--order-by-created-at]
+openclaw ltm search <query> [--agent <id>] [--limit <n>]
+openclaw ltm stats [--agent <id>]
 ```
 
 `ltm query` runs a non-vector query directly against the LanceDB table:
 
 ```bash
-openclaw ltm query --cols id,text,createdAt --limit 20
+openclaw ltm query --agent research --cols id,text,createdAt --limit 20
 openclaw ltm query --filter "category = 'preference'" --order-by createdAt:desc
 ```
 
 | Flag                              | Default                                 | Notes                                                                                                                                     |
 | --------------------------------- | --------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `--agent <id>`                    | configured default agent                | Selects the private agent namespace. Available on `list`, `search`, `query`, and `stats`.                                                 |
 | `--cols <columns>`                | `id,text,importance,category,createdAt` | Comma-separated column allowlist.                                                                                                         |
-| `--filter <condition>`            | none                                    | SQL-style WHERE clause. Max 200 chars; only alphanumerics, `_-`, whitespace, and `='"<>!.,()%*` are allowed.                              |
+| `--filter <condition>`            | none                                    | One comparison over an output column, such as `category = 'preference'` or `importance >= 0.8`. String values must be quoted.             |
 | `--limit <n>`                     | `10`                                    | Positive integer.                                                                                                                         |
 | `--order-by <column>:<asc\|desc>` | none                                    | Sorted in memory after the filter runs; the sort column is auto-added to the projection and stripped from output if it was not requested. |
 
@@ -235,7 +266,9 @@ Agents get three tools from the active memory plugin:
 
 - `memory_recall`: vector search over stored memories.
 - `memory_store`: save a fact, preference, decision, or entity (rejects text
-  that looks like a prompt-injection payload; skips near-duplicate stores).
+  that looks like a prompt-injection payload; skips exact duplicates after
+  normalizing line endings, Unicode NFC, and surrounding whitespace, but stores
+  semantically similar memories with different text).
 - `memory_forget`: delete by `memoryId`, or by `query` (auto-deletes a single
   match above 90% score, otherwise lists candidate IDs to disambiguate).
 
@@ -261,6 +294,19 @@ LanceDB data defaults to `~/.openclaw/memory/lancedb`. Override with `dbPath`:
   },
 }
 ```
+
+The plugin keeps one LanceDB table and stores a normalized agent owner on each
+row. This is a storage boundary, not a post-search filter: agent ownership is
+applied before vector ranking and is included in list, query, count, and delete
+predicates. `ltm query --filter` accepts one validated comparison over the
+public output columns. The store builds that comparison separately from the
+mandatory owner predicate, so a filter cannot widen the query to another
+agent.
+
+Databases created before per-agent ownership have no reliable row provenance.
+On upgrade, `openclaw doctor --fix` assigns those legacy rows once to the
+configured default agent. Runtime access fails closed until that migration has
+completed; other agents never inherit the old shared rows.
 
 `storageOptions` accepts string key/value pairs for LanceDB storage backends
 (e.g. S3-compatible object storage) and supports `${ENV_VAR}` expansion:
@@ -311,7 +357,7 @@ The embedding model rejected the recall query:
 memory-lancedb: recall failed: Error: 400 the input length exceeds the context length
 ```
 
-Lower `recallMaxChars`, then restart the Gateway:
+Lower `recallMaxChars`; the new limit applies to the next memory operation:
 
 ```json5
 {

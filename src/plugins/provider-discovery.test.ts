@@ -1,6 +1,4 @@
 /** Tests provider discovery normalization, grouping, and manifest contribution handling. */
-import fs from "node:fs";
-import path from "node:path";
 import { describe, expect, it } from "vitest";
 import type { ModelDefinitionConfig, ModelProviderConfig } from "../config/types.js";
 import {
@@ -9,14 +7,12 @@ import {
   runProviderCatalog,
   runProviderStaticCatalog,
 } from "./provider-discovery.js";
-import * as providerDiscoveryModule from "./provider-discovery.js";
-import type { ProviderCatalogResult, ProviderDiscoveryOrder, ProviderPlugin } from "./types.js";
+import type { ProviderCatalogOrder, ProviderPlugin } from "./types.js";
 
 function makeProvider(params: {
   id: string;
   label?: string;
-  order?: ProviderDiscoveryOrder;
-  mode?: "catalog" | "discovery";
+  order?: ProviderCatalogOrder;
   aliases?: string[];
   hookAliases?: string[];
 }): ProviderPlugin {
@@ -30,7 +26,7 @@ function makeProvider(params: {
     auth: [],
     ...(params.aliases ? { aliases: params.aliases } : {}),
     ...(params.hookAliases ? { hookAliases: params.hookAliases } : {}),
-    ...(params.mode === "discovery" ? { discovery: hook } : { catalog: hook }),
+    catalog: hook,
   };
 }
 
@@ -61,7 +57,7 @@ function makeModel(id: string): ModelDefinitionConfig {
 
 function expectGroupedProviderIds(
   providers: readonly ProviderPlugin[],
-  expected: Record<ProviderDiscoveryOrder | "late", readonly string[]>,
+  expected: Record<ProviderCatalogOrder | "late", readonly string[]>,
 ) {
   const grouped = groupPluginDiscoveryProvidersByOrder([...providers]);
   const actual = {
@@ -71,34 +67,6 @@ function expectGroupedProviderIds(
     late: grouped.late.map((provider) => provider.id),
   };
   expect(actual).toEqual(expected);
-}
-
-function createCatalogRuntimeContext() {
-  return {
-    config: {},
-    env: {},
-    resolveProviderApiKey: () => ({ apiKey: undefined }),
-    resolveProviderAuth: () => ({
-      apiKey: undefined,
-      discoveryApiKey: undefined,
-      mode: "none" as const,
-      source: "none" as const,
-    }),
-  };
-}
-
-function createCatalogProvider(params: {
-  id?: string;
-  catalogRun?: () => Promise<ProviderCatalogResult>;
-  discoveryRun?: () => Promise<ProviderCatalogResult>;
-}) {
-  return {
-    id: params.id ?? "demo",
-    label: "Demo",
-    auth: [],
-    ...(params.catalogRun ? { catalog: { run: params.catalogRun } } : {}),
-    ...(params.discoveryRun ? { discovery: { run: params.discoveryRun } } : {}),
-  };
 }
 
 function expectNormalizedDiscoveryResult(params: {
@@ -121,37 +89,6 @@ type NormalizePluginDiscoveryResultCase = {
   expected: Record<string, unknown>;
 };
 
-async function expectProviderCatalogResult(params: {
-  provider: ProviderPlugin;
-  expected: Record<string, unknown>;
-}) {
-  await expect(
-    runProviderCatalog({
-      provider: params.provider,
-      ...createCatalogRuntimeContext(),
-    }),
-  ).resolves.toEqual(params.expected);
-}
-
-describe("resolveInstalledPluginProviderContributionIds", () => {
-  it("keeps current production callers off the ambiguous runtime-discovery alias", () => {
-    const callerPaths = [
-      "src/agents/models-config.providers.implicit.ts",
-      "src/commands/models/list.provider-catalog.ts",
-    ];
-
-    for (const callerPath of callerPaths) {
-      expect(fs.readFileSync(path.join(process.cwd(), callerPath), "utf-8")).not.toContain(
-        "resolvePluginDiscoveryProviders",
-      );
-    }
-  });
-
-  it("does not keep exporting the ambiguous runtime-discovery alias", () => {
-    expect(Object.keys(providerDiscoveryModule)).not.toContain("resolvePluginDiscoveryProviders");
-  });
-});
-
 describe("groupPluginDiscoveryProvidersByOrder", () => {
   it.each([
     {
@@ -170,21 +107,118 @@ describe("groupPluginDiscoveryProvidersByOrder", () => {
         late: ["late-a", "late-b"],
       },
     },
-    {
-      name: "uses the legacy discovery hook when catalog is absent",
-      providers: [
-        makeProvider({ id: "legacy", label: "Legacy", order: "profile", mode: "discovery" }),
-      ],
-      expected: {
-        simple: [],
-        profile: ["legacy"],
-        paired: [],
-        late: [],
-      },
-    },
   ] as const)("$name", ({ providers, expected }) => {
     expectGroupedProviderIds(providers, expected);
   });
+});
+
+describe("runProviderCatalog", () => {
+  it("passes the selected provider identities into the catalog hook", async () => {
+    let providerIds: readonly string[] | undefined;
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async (ctx) => {
+          providerIds = ctx.providerIds;
+          return null;
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      providerIds: ["azure-openai"],
+      config: {},
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+    });
+
+    expect(providerIds).toEqual(["azure-openai"]);
+  });
+
+  it("carries explicit provider-owned catalog outcomes across an async hook", async () => {
+    const outcomes: Array<{
+      provider: string;
+      profileId?: string;
+      status: "ready" | "auth-rejected" | "unavailable";
+    }> = [];
+    const provider: ProviderPlugin = {
+      id: "openai",
+      label: "OpenAI",
+      auth: [],
+      catalog: {
+        run: async () => {
+          await Promise.resolve();
+          return {
+            providers: {},
+            outcomes: [
+              {
+                provider: "openai",
+                profileId: "openai:chatgpt",
+                status: "auth-rejected",
+              },
+            ],
+          };
+        },
+      },
+    };
+
+    await runProviderCatalog({
+      provider,
+      config: {},
+      agentDir: "/tmp/openclaw-agent",
+      workspaceDir: "/tmp/openclaw-workspace",
+      env: {},
+      resolveProviderApiKey: () => ({ apiKey: undefined }),
+      resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+      reportCatalogOutcome: (outcome) => outcomes.push(outcome),
+    });
+
+    expect(outcomes).toEqual([
+      { provider: "openai", profileId: "openai:chatgpt", status: "auth-rejected" },
+    ]);
+  });
+
+  it.each([
+    { providerIds: ["OPENAI"], expected: ["openai"] },
+    { providerIds: ["azure-openai"], expected: ["azure-openai"] },
+    { providerIds: [], expected: [] },
+  ])(
+    "emits outcomes only for selected provider identities: $providerIds",
+    async ({ providerIds, expected }) => {
+      const outcomes: string[] = [];
+      const provider: ProviderPlugin = {
+        id: "openai",
+        label: "OpenAI",
+        auth: [],
+        catalog: {
+          run: async () => ({
+            providers: {},
+            outcomes: [
+              { provider: "openai", profileId: "openai:private", status: "auth-rejected" },
+              { provider: "azure-openai", profileId: "azure-openai:selected", status: "ready" },
+              { provider: "unrelated", status: "unavailable" },
+            ],
+          }),
+        },
+      };
+
+      await runProviderCatalog({
+        provider,
+        providerIds,
+        config: {},
+        env: {},
+        resolveProviderApiKey: () => ({ apiKey: undefined }),
+        resolveProviderAuth: () => ({ apiKey: undefined, mode: "none", source: "none" }),
+        reportCatalogOutcome: (outcome) => outcomes.push(outcome.provider),
+      });
+
+      expect(outcomes).toEqual(expected);
+    },
+  );
 });
 
 describe("normalizePluginDiscoveryResult", () => {
@@ -434,27 +468,7 @@ describe("runProviderStaticCatalog", () => {
       },
     };
 
-    await expect(
-      runProviderStaticCatalog({
-        provider,
-        config: {
-          models: {
-            providers: {
-              demo: {
-                baseUrl: "https://configured.example/v1",
-                models: [],
-                apiKey: "secret-value",
-              },
-            },
-          },
-        },
-        agentDir: "/tmp/agent",
-        workspaceDir: "/tmp/workspace",
-        env: {
-          SECRET_TOKEN: "secret-value",
-        },
-      }),
-    ).resolves.toEqual({
+    await expect(runProviderStaticCatalog({ provider })).resolves.toEqual({
       provider: {
         baseUrl: "https://static.example/v1",
         models: [],
@@ -486,29 +500,5 @@ describe("runProviderStaticCatalog", () => {
     });
     expect(seenContexts[0]).not.toHaveProperty("agentDir");
     expect(seenContexts[0]).not.toHaveProperty("workspaceDir");
-  });
-});
-
-describe("runProviderCatalog", () => {
-  it("prefers catalog over discovery when both exist", async () => {
-    const catalogRun = async () => ({
-      provider: makeModelProviderConfig({ baseUrl: "http://catalog.example/v1" }),
-    });
-    const discoveryRun = async () => ({
-      provider: makeModelProviderConfig({ baseUrl: "http://discovery.example/v1" }),
-    });
-
-    await expectProviderCatalogResult({
-      provider: createCatalogProvider({
-        catalogRun,
-        discoveryRun,
-      }),
-      expected: {
-        provider: {
-          baseUrl: "http://catalog.example/v1",
-          models: [],
-        },
-      },
-    });
   });
 });

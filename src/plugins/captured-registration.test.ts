@@ -1,9 +1,52 @@
 // Covers captured plugin registration behavior in test registries.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { capturePluginRegistration } from "./captured-registration.js";
 import type { AnyAgentTool, OpenClawPluginApi } from "./types.js";
 
 describe("captured plugin registration", () => {
+  it("rejects runtime access while capturing CLI metadata without activating the real runtime", () => {
+    expect(() =>
+      capturePluginRegistration({
+        id: "captured-cli-plugin",
+        registrationMode: "cli-metadata",
+        register(api) {
+          api.runtime.state.openSyncKeyedStore({ namespace: "example", maxEntries: 1 });
+        },
+      }),
+    ).toThrow(
+      'Plugin "captured-cli-plugin" runtime is intentionally unavailable during "cli-metadata" registration.',
+    );
+  });
+
+  it("preserves root machine-output metadata", () => {
+    const machineOutput = ({ stdoutIsTTY }: { stdoutIsTTY: boolean }) => !stdoutIsTTY;
+    const captured = capturePluginRegistration({
+      register(api) {
+        api.registerCli(() => {}, {
+          commands: [" captured-machine ", "captured-machine", "captured-extra"],
+          descriptors: [
+            {
+              name: "captured-machine",
+              description: "Captured machine output",
+              hasSubcommands: true,
+              machineOutput,
+            },
+          ],
+        });
+      },
+    });
+
+    expect(captured.cliRegistrars[0]?.commands).toEqual(["captured-machine", "captured-extra"]);
+    const descriptor = captured.cliRegistrars[0]?.descriptors[0];
+    expect(descriptor?.machineOutput).toBe(machineOutput);
+    expect(
+      descriptor?.machineOutput?.({
+        argv: ["node", "openclaw", "captured-machine"],
+        stdoutIsTTY: false,
+      }),
+    ).toBe(true);
+  });
+
   it("keeps a complete plugin API surface available while capturing supported capabilities", () => {
     const capturedTool = {
       name: "captured-tool",
@@ -127,7 +170,35 @@ describe("captured plugin registration", () => {
     expect(captured.textTransforms[0]?.input).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares).toHaveLength(1);
     expect(captured.agentToolResultMiddlewares[0]?.runtimes).toEqual(["codex"]);
-    expect(captured.api.registerMemoryEmbeddingProvider).toBeTypeOf("function");
+    expect(captured.api.runtime.version).toEqual(expect.any(String));
+  });
+
+  it("enforces captured middleware runtime and tool scopes", async () => {
+    const handler = vi.fn(() => undefined);
+    const captured = capturePluginRegistration({
+      register(api) {
+        api.registerAgentToolResultMiddleware(handler, {
+          runtimes: ["codex"],
+          matcher: ["exec"],
+        });
+      },
+    });
+    const registration = captured.agentToolResultMiddlewares[0];
+    expect(registration).toBeDefined();
+    if (!registration) {
+      return;
+    }
+    const event = {
+      toolCallId: "call-1",
+      args: {},
+      result: { content: [{ type: "text" as const, text: "ok" }], details: {} },
+    };
+
+    await registration.handler({ ...event, toolName: "web_search" }, { runtime: "codex" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "openclaw" });
+    await registration.handler({ ...event, toolName: "exec" }, { runtime: "codex" });
+
+    expect(handler).toHaveBeenCalledOnce();
   });
 
   it("returns synthetic scheduled-turn ids independent of human-readable names", async () => {

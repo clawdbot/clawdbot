@@ -1,20 +1,28 @@
 // Tasks JSON tests cover structured task command output and managed task flow state.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { runCommandWithRuntime } from "../cli/cli-utils.js";
 import type { RuntimeEnv } from "../runtime.js";
-import {
-  createManagedTaskFlow as createManagedTaskFlowOrNull,
-  resetTaskFlowRegistryForTests,
-} from "../tasks/task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "../tasks/task-flow-registry.store.js";
+import * as taskRuntime from "../tasks/runtime-internal.js";
+import { createManagedTaskFlow as createManagedTaskFlowOrNull } from "../tasks/task-flow-registry.js";
 import type { TaskFlowRecord } from "../tasks/task-flow-registry.types.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
-  resetTaskRegistryDeliveryRuntimeForTests,
-  resetTaskRegistryForTests,
+  markTaskTerminalById,
 } from "../tasks/task-registry.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryDeliveryRuntimeForTests,
+  resetTaskRegistryForTests,
+} from "../tasks/task-runtime.test-helpers.js";
+import type {
+  TaskSystemAuditCode,
+  TaskSystemAuditSeverity,
+} from "../tasks/task-system-audit.types.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { tasksAuditJsonCommand, tasksListJsonCommand } from "./tasks-json.js";
+import { tasksListCommand, tasksShowCommand } from "./tasks.js";
 
 function createRuntime(): RuntimeEnv {
   return {
@@ -112,6 +120,92 @@ describe("tasks JSON commands", () => {
         runtime: "cli",
         status: "running",
         tasks: [jsonRoundTrip(cliTask)],
+      });
+
+      const emptyRuntime = createRuntime();
+      await tasksListJsonCommand({ json: true, runtime: "subagent" }, emptyRuntime);
+      expect(readJsonLog(emptyRuntime)).toStrictEqual({
+        count: 0,
+        runtime: "subagent",
+        status: null,
+        tasks: [],
+      });
+    });
+  });
+
+  it("filters blocked completion outcomes without changing stored statuses or JSON", async () => {
+    await withTaskJsonStateDir(async () => {
+      const task = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        status: "running",
+        runId: "task-list-blocked",
+        task: "Inspect an incomplete background task",
+      });
+      markTaskTerminalById({
+        taskId: task.taskId,
+        status: "succeeded",
+        terminalOutcome: "blocked",
+        terminalSummary: "Required completion did not produce a final deliverable.",
+        endedAt: Date.now(),
+      });
+      const completed = createTaskRecord({
+        runtime: "cli",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        status: "running",
+        runId: "task-list-completed",
+        task: "Inspect a completed background task",
+      });
+      markTaskTerminalById({
+        taskId: completed.taskId,
+        status: "succeeded",
+        terminalOutcome: "succeeded",
+        endedAt: Date.now(),
+      });
+
+      const listRuntime = createRuntime();
+      await tasksListCommand({ status: "succeeded" }, listRuntime);
+      const listOutput = vi.mocked(listRuntime.log).mock.calls.flat().join("\n");
+      expect(listOutput).toContain("Task pressure: 0 queued · 0 running · 1 issues");
+      expect(listOutput).toMatch(/\bblocked\s+pending\b/);
+
+      const blockedRuntime = createRuntime();
+      await tasksListCommand({ status: "blocked" }, blockedRuntime);
+      const blockedOutput = vi.mocked(blockedRuntime.log).mock.calls.flat().join("\n");
+      expect(blockedOutput).toContain(task.taskId.slice(0, 9));
+      expect(blockedOutput).not.toContain(completed.taskId.slice(0, 9));
+
+      const blockedJsonRuntime = createRuntime();
+      await tasksListJsonCommand({ json: true, status: "blocked" }, blockedJsonRuntime);
+      expect(readJsonLog(blockedJsonRuntime)).toMatchObject({
+        count: 1,
+        runtime: null,
+        status: "blocked",
+        tasks: [{ taskId: task.taskId, status: "succeeded", terminalOutcome: "blocked" }],
+      });
+
+      const succeededJsonRuntime = createRuntime();
+      await tasksListJsonCommand({ json: true, status: "succeeded" }, succeededJsonRuntime);
+      expect(readJsonLog(succeededJsonRuntime)).toMatchObject({
+        count: 2,
+        status: "succeeded",
+        tasks: expect.arrayContaining([
+          expect.objectContaining({ taskId: task.taskId, terminalOutcome: "blocked" }),
+          expect.objectContaining({ taskId: completed.taskId, terminalOutcome: "succeeded" }),
+        ]),
+      });
+
+      const showRuntime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId }, showRuntime);
+      expect(vi.mocked(showRuntime.log).mock.calls.flat().join("\n")).toContain("status: blocked");
+
+      const jsonRuntime = createRuntime();
+      await tasksShowCommand({ lookup: task.taskId, json: true }, jsonRuntime);
+      expect(readJsonLog(jsonRuntime)).toMatchObject({
+        status: "succeeded",
+        terminalOutcome: "blocked",
       });
     });
   });
@@ -239,6 +333,49 @@ describe("tasks JSON commands", () => {
         },
       });
     });
+  });
+
+  it.each([
+    {
+      run: (runtime: RuntimeEnv) => tasksListJsonCommand({ json: true, runtime: "bogus" }, runtime),
+      message: "--runtime must be subagent, acp, cron, or cli.",
+    },
+    {
+      run: (runtime: RuntimeEnv) =>
+        tasksListJsonCommand({ json: true, status: "RUNNING" }, runtime),
+      message:
+        "--status must be queued, running, succeeded, failed, timed_out, cancelled, lost, or blocked.",
+    },
+    {
+      run: (runtime: RuntimeEnv) =>
+        tasksAuditJsonCommand(
+          { json: true, severity: "bogus" as TaskSystemAuditSeverity },
+          runtime,
+        ),
+      message: "--severity must be warn or error.",
+    },
+    {
+      run: (runtime: RuntimeEnv) =>
+        tasksAuditJsonCommand({ json: true, code: "bogus-code" as TaskSystemAuditCode }, runtime),
+      message:
+        "--code must be stale_queued, stale_running, lost, delivery_failed, missing_cleanup, inconsistent_timestamps, restore_failed, stale_waiting, stale_blocked, cancel_stuck, missing_linked_tasks, or blocked_task_missing.",
+    },
+  ])("rejects invalid routed filters before reading task state", async ({ run, message }) => {
+    const query = vi.spyOn(taskRuntime, "listTaskRecords").mockImplementation(() => {
+      throw new Error("task JSON query performed");
+    });
+    const runtime = createRuntime();
+
+    try {
+      await runCommandWithRuntime(runtime, () => run(runtime));
+
+      expect(runtime.error).toHaveBeenCalledWith(message);
+      expect(runtime.exit).toHaveBeenCalledWith(1);
+      expect(query).not.toHaveBeenCalled();
+      expect(runtime.log).not.toHaveBeenCalled();
+    } finally {
+      query.mockRestore();
+    }
   });
 
   it("keeps task-flow restore failures inspectable in audit JSON", async () => {

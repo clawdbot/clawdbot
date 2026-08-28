@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
+import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "../../agents/failover/user-copy.js";
 import { LiveSessionModelSwitchError } from "../../agents/live-model-switch-error.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveFallbackCandidateRun } from "./agent-runner-auth-profile.js";
@@ -7,8 +8,10 @@ import { resolveRunAfterAutoFallbackPrimaryProbeRecheck } from "./agent-runner-a
 import {
   setupAgentRunnerExecutionTestState,
   GENERIC_RUN_FAILURE_TEXT,
-  getRunAgentTurnWithFallback,
+  getExecuteAgentTurnForTest,
   createFollowupRun,
+  fallbackAttemptOptions,
+  initialFallbackAttemptOptions,
   createMockReplyOperation,
   expectRecordFields,
   expectMockCallArgFields,
@@ -18,11 +21,10 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
-import { HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT } from "./agent-runner-failure-copy.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: primary probe routing", () => {
+describe("executeAgentTurn: primary probe routing", () => {
   it("rechecks queued auto fallback primary probes before running", async () => {
     const { markAutoFallbackPrimaryProbe } = await import("../../agents/agent-scope.js");
     const probe = {
@@ -65,6 +67,7 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     ).toMatchObject({
       provider: "google",
       model: "gemini-3.1-pro-preview",
+      requestedRouteResolution: "resolved",
       authProfileId: "google:fallback",
       authProfileIdSource: "auto",
       autoFallbackPrimaryProbe: undefined,
@@ -100,12 +103,55 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     ).toMatchObject({
       provider: "openai",
       model: "gpt-5.4",
+      requestedRouteResolution: "raw",
       authProfileId: "openai:work",
       authProfileIdSource: "user",
       modelOverrideSource: "user",
       autoFallbackPrimaryProbe: undefined,
     });
   });
+
+  it.each([
+    { name: "legacy user", marker: undefined, expectedSource: "user" as const },
+    { name: "marker-backed auto", marker: 0, expectedSource: "auto" as const },
+  ])(
+    "canonicalizes a source-less $name auth profile during queued probe recheck",
+    ({ marker, expectedSource }) => {
+      const probe = {
+        provider: "anthropic",
+        model: "claude-sonnet-4-6",
+        fallbackProvider: "google",
+        fallbackModel: "gemini-3-pro",
+      };
+      const sessionEntry: SessionEntry = {
+        sessionId: "session",
+        updatedAt: 1,
+        providerOverride: "openai",
+        modelOverride: "gpt-5.4",
+        modelOverrideSource: "user",
+        authProfileOverride: "openai:work",
+        ...(marker === undefined ? {} : { authProfileOverrideCompactionCount: marker }),
+      };
+      const run = createFollowupRun().run;
+      run.provider = probe.provider;
+      run.model = probe.model;
+      run.autoFallbackPrimaryProbe = probe;
+
+      expect(
+        resolveRunAfterAutoFallbackPrimaryProbeRecheck({
+          run,
+          entry: sessionEntry,
+          sessionKey: "main",
+        }),
+      ).toMatchObject({
+        provider: "openai",
+        model: "gpt-5.4",
+        authProfileId: "openai:work",
+        authProfileIdSource: expectedSource,
+        autoFallbackPrimaryProbe: undefined,
+      });
+    },
+  );
 
   it("propagates rechecked user selections to post-run state", async () => {
     const sessionKey = "rechecked-user-selection";
@@ -138,7 +184,11 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
       fallbackModel: "gemini-3-pro",
     };
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-      result: await params.run(params.provider, params.model),
+      result: await params.run(
+        params.provider,
+        params.model,
+        initialFallbackAttemptOptions(params),
+      ),
       provider: params.provider,
       model: params.model,
       attempts: [],
@@ -153,8 +203,8 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       sessionKey,
       activeSessionStore,
@@ -296,7 +346,7 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "exhausted",
-      result: await params.run(probe.provider, probe.model),
+      result: await params.run(probe.provider, probe.model, initialFallbackAttemptOptions(params)),
       provider: probe.provider,
       model: probe.model,
       attempts: [
@@ -311,8 +361,8 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
     const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun, replyOperation }),
       sessionKey,
       activeSessionStore,
@@ -376,7 +426,7 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "completed",
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: [],
@@ -384,8 +434,8 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
     const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         replyOperation,
         opts: { runId: "run-non-fallbackable-error" },
@@ -453,15 +503,15 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     });
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: testCase.outcome,
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", initialFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: testCase.attempts,
     }));
     const { replyOperation, failMock } = createMockReplyOperation();
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ replyOperation }),
       isHeartbeat: testCase.isHeartbeat,
     });
@@ -483,7 +533,7 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
       outcome: "exhausted",
-      result: await params.run("codex-cli", "gpt-5.4"),
+      result: await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params)),
       provider: "codex-cli",
       model: "gpt-5.4",
       attempts: [{ provider: "codex-cli", model: "gpt-5.4", error: "incomplete" }],
@@ -503,8 +553,8 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     const { replyOperation, failMock, retainFailureUntilCompleteMock } = createMockReplyOperation();
     const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         followupRun,
         replyOperation,
@@ -540,7 +590,7 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     state.isCliProviderMock.mockReturnValue(true);
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
       try {
-        return await params.run("codex-cli", "gpt-5.4");
+        return await params.run("codex-cli", "gpt-5.4", initialFallbackAttemptOptions(params));
       } catch (cause) {
         throw new Error("All model fallback candidates failed", { cause });
       }
@@ -553,8 +603,8 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     followupRun.run.model = "gpt-5.4";
     const emitAgentEvent = vi.mocked((await import("../../infra/agent-events.js")).emitAgentEvent);
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(
       createMinimalRunAgentTurnParams({
         followupRun,
         opts: { runId: "run-cli-timeout" },
@@ -593,9 +643,9 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     followupRun.run.authProfileIdSource = "auto";
     followupRun.run.autoFallbackPrimaryProbe = probe;
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      await params.run("openai", "gpt-5.5");
+      await params.run("openai", "gpt-5.5", initialFallbackAttemptOptions(params));
       return {
-        result: await params.run("openai", "gpt-5.4"),
+        result: await params.run("openai", "gpt-5.4", fallbackAttemptOptions(params, "unknown")),
         provider: "openai",
         model: "gpt-5.4",
         attempts: [{ provider: "openai", model: "gpt-5.5", error: "rate limit" }],
@@ -605,8 +655,8 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
       .mockResolvedValueOnce({ payloads: [], meta: {} })
       .mockResolvedValueOnce({ payloads: [{ text: "fallback" }], meta: {} });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback(createMinimalRunAgentTurnParams({ followupRun }));
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn(createMinimalRunAgentTurnParams({ followupRun }));
 
     expectMockCallArgFields(state.runEmbeddedAgentMock, 0, "primary run", {
       provider: "openai",
@@ -646,7 +696,11 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
     followupRun.run.model = "claude-sonnet-4-6";
     followupRun.run.autoFallbackPrimaryProbe = probe;
     state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => {
-      const result = await params.run(params.provider, params.model);
+      const result = await params.run(
+        params.provider,
+        params.model,
+        initialFallbackAttemptOptions(params),
+      );
       activeSessionStore[sessionKey] = {
         sessionId: "session",
         updatedAt: 2,
@@ -671,8 +725,8 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
       },
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       sessionKey,
       activeSessionStore,
@@ -717,7 +771,7 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
       const provider = params.provider ?? "anthropic";
       const model = params.model ?? "claude-sonnet-4-6";
       return {
-        result: await params.run(provider, model),
+        result: await params.run(provider, model, initialFallbackAttemptOptions(params)),
         provider,
         model,
         attempts: [],
@@ -742,8 +796,8 @@ describe("runAgentTurnWithFallback: primary probe routing", () => {
         },
       });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
+    const executeAgentTurn = await getExecuteAgentTurnForTest();
+    const result = await executeAgentTurn({
       ...createMinimalRunAgentTurnParams({ followupRun }),
       sessionKey,
       activeSessionStore,

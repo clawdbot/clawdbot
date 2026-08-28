@@ -92,6 +92,12 @@ Minimal config:
 - `username` is the bot's account (who authenticates), `channel` is which chat room to join. One account entry joins exactly one channel.
 - Tokens work with or without the `oauth:` prefix; OpenClaw normalizes both ways (the setup wizard expects the `oauth:` form).
 
+## Inbound durability
+
+OpenClaw durably queues each accepted Twitch chat message before normal dispatch. Pending or retryable messages survive a Gateway restart, stay serialized for the configured channel, and use Twitch's message ID to suppress duplicate queue entries while the active or retained completion record exists.
+
+Twitch chat does not replay a `PRIVMSG` after the client has accepted it. This protects the local accept-to-dispatch crash window, but it cannot recover messages missed before durable admission. If the queue append itself fails, OpenClaw logs the failure; reconnecting does not ask Twitch to resend that message.
+
 ## Token refresh (optional)
 
 Tokens from [Twitch Token Generator](https://twitchtokengenerator.com/) cannot be refreshed by OpenClaw - regenerate when expired (they last a few hours; no app registration needed).
@@ -102,6 +108,10 @@ For automatic refresh, create your own app at the [Twitch Developer Console](htt
 {
   channels: {
     twitch: {
+      username: "openclaw",
+      accessToken: "oauth:abc123...",
+      clientId: "xyz789...",
+      channel: "yourchannel",
       clientSecret: "your_client_secret",
       refreshToken: "your_refresh_token",
     },
@@ -158,6 +168,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               allowFrom: ["123456789", "987654321"],
             },
           },
@@ -173,6 +186,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               allowedRoles: ["moderator", "vip"],
             },
           },
@@ -190,6 +206,9 @@ Every account entry needs its own `accessToken` (the env var covers only the def
         twitch: {
           accounts: {
             default: {
+              username: "openclaw",
+              accessToken: "oauth:abc123...",
+              channel: "yourchannel",
               requireMention: false,
             },
           },
@@ -208,6 +227,19 @@ Find yours with the [username to ID converter](https://www.streamweasels.com/too
 </Note>
 
 ## Troubleshooting
+
+### Execution identity audit
+
+With [execution identity collection](/gateway/audit#run-identity-inspection) enabled,
+a trusted native Twitch plugin attributes the run to the native Twitch sender,
+scoped to the configured account. The audit stores an opaque identity, not the raw
+Twitch user ID. Roles such as moderator authorize access; they do not replace
+the sender's identity. Missing native user IDs remain unknown even when a role or
+open policy allows a reply. External plugin installations do not gain trusted
+participant evidence through this path. Audit collection never changes these
+access decisions.
+
+### Connection and replies
 
 First, run diagnostic commands:
 
@@ -294,8 +326,8 @@ openclaw channels status --probe
 ### Provider options
 
 - `channels.twitch.enabled` - Enable/disable channel startup
-- `channels.twitch.username` / `accessToken` / `clientId` / `channel` - Simplified single-account config (implicit `default` account; takes precedence over `accounts.default`)
-- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above)
+- `channels.twitch.username` / `accessToken` / `clientId` / `channel` - Simplified single-account config with an implicit `default` account
+- `channels.twitch.accounts.<accountName>` - Multi-account config (all account fields above); do not combine it with top-level account credentials
 - `channels.twitch.defaultAccount` - Which account name is the default
 - `channels.twitch.markdown.tables` - Markdown table rendering mode (`off` | `bullets` | `code` | `block`)
 
@@ -306,14 +338,17 @@ Full example:
   channels: {
     twitch: {
       enabled: true,
-      username: "openclaw",
-      accessToken: "oauth:abc123...",
-      clientId: "xyz789...",
-      channel: "yourchannel",
-      clientSecret: "secret123...",
-      refreshToken: "refresh456...",
-      allowFrom: ["123456789"],
+      defaultAccount: "default",
       accounts: {
+        default: {
+          username: "openclaw",
+          accessToken: "oauth:abc123...",
+          clientId: "xyz789...",
+          channel: "yourchannel",
+          clientSecret: "secret123...",
+          refreshToken: "refresh456...",
+          allowFrom: ["123456789"],
+        },
         second: {
           username: "mybot",
           accessToken: "oauth:def456...",

@@ -40,20 +40,22 @@ vi.mock("node:child_process", async () => {
 const spawnMock = vi.mocked(spawn);
 
 let toolSearch: typeof import("./tool-search.js");
+let testing: (typeof import("./tool-search.test-support.js"))["testing"];
 
 describe("tool-search code-mode stream errors", () => {
   beforeAll(async () => {
     toolSearch = await import("./tool-search.js");
+    testing = (await import("./tool-search.test-support.js")).testing;
   });
 
   afterEach(() => {
-    toolSearch.testing.setToolSearchCodeModeSupportedForTest(undefined);
-    toolSearch.testing.setToolSearchMinCodeTimeoutMsForTest(undefined);
+    testing.setToolSearchCodeModeSupportedForTest(undefined);
+    testing.setToolSearchMinCodeTimeoutMsForTest(undefined);
   });
 
   it("rejects stderr errors and leaves the unused stdout unpiped", async () => {
-    toolSearch.testing.setToolSearchCodeModeSupportedForTest(true);
-    toolSearch.testing.setToolSearchMinCodeTimeoutMsForTest(1000);
+    testing.setToolSearchCodeModeSupportedForTest(true);
+    testing.setToolSearchMinCodeTimeoutMsForTest(1000);
 
     let spawnedChild: MockSpawnChild | undefined;
     spawnMock.mockImplementationOnce(
@@ -67,15 +69,12 @@ describe("tool-search code-mode stream errors", () => {
       },
     );
 
-    const runtime = new toolSearch.ToolSearchRuntime(
-      {},
-      toolSearch.testing.resolveToolSearchConfig({}),
-    );
+    const runtime = new toolSearch.ToolSearchRuntime({}, toolSearch.resolveToolSearchConfig({}));
 
     await expect(
-      toolSearch.testing.runCodeModeChild({
+      testing.runCodeModeChild({
         code: "return 1;",
-        config: toolSearch.testing.resolveToolSearchConfig({}),
+        config: toolSearch.resolveToolSearchConfig({}),
         logs: [],
         parentToolCallId: "call-stderr-error",
         runtime,
@@ -89,8 +88,8 @@ describe("tool-search code-mode stream errors", () => {
   });
 
   it("keeps stderr tail in exit error messages valid at UTF-16 boundaries", async () => {
-    toolSearch.testing.setToolSearchCodeModeSupportedForTest(true);
-    toolSearch.testing.setToolSearchMinCodeTimeoutMsForTest(1000);
+    testing.setToolSearchCodeModeSupportedForTest(true);
+    testing.setToolSearchMinCodeTimeoutMsForTest(1000);
 
     spawnMock.mockImplementationOnce(
       (_command: string, _args: readonly string[], _options: SpawnOptions): ChildProcess => {
@@ -105,16 +104,13 @@ describe("tool-search code-mode stream errors", () => {
       },
     );
 
-    const runtime = new toolSearch.ToolSearchRuntime(
-      {},
-      toolSearch.testing.resolveToolSearchConfig({}),
-    );
+    const runtime = new toolSearch.ToolSearchRuntime({}, toolSearch.resolveToolSearchConfig({}));
 
     let caught: Error | undefined;
     try {
-      await toolSearch.testing.runCodeModeChild({
+      await testing.runCodeModeChild({
         code: "return 1;",
-        config: toolSearch.testing.resolveToolSearchConfig({}),
+        config: toolSearch.resolveToolSearchConfig({}),
         logs: [],
         parentToolCallId: "call-stderr-utf16",
         runtime,

@@ -11,15 +11,15 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayload } from "./device-auth.js";
+import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
 import {
-  createGatewaySuiteHarness,
   connectReq,
   getTrackedConnectChallengeNonce,
-  getFreePort,
+  getGatewayTestPort,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
-  startGatewayServer,
+  startTestGatewayServer,
   startServer,
   startServerWithClient,
   trackConnectChallengeNonce,
@@ -40,7 +40,7 @@ function nextAuthIdentityPath(prefix: string): string {
     poolId +
     "-" +
     String(authIdentityPathSeq++) +
-    ".json";
+    ".sqlite";
   return path.join(os.tmpdir(), fileName);
 }
 
@@ -81,8 +81,11 @@ const readConnectChallengeNonce = async (ws: WebSocket) => {
   return String(nonce);
 };
 
-const openTailscaleWs = async (port: number, headers?: Record<string, string>) => {
-  const ws = new WebSocket(`ws://127.0.0.1:${port}`, {
+const openTailscaleWs = async (
+  endpoint: GatewayTailscaleIngressEndpoint,
+  headers?: Record<string, string>,
+) => {
+  const ws = new WebSocket(`ws://${endpoint.host}:${endpoint.port}`, {
     headers: {
       "x-forwarded-for": "100.64.0.1",
       "x-forwarded-proto": "https",
@@ -182,7 +185,7 @@ async function createSignedDevice(params: {
   const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem, signDevicePayload } =
     await import("../infra/device-identity.js");
   const identity = params.identityPath
-    ? loadOrCreateDeviceIdentity(params.identityPath)
+    ? loadOrCreateDeviceIdentity({ path: params.identityPath })
     : loadOrCreateDeviceIdentity();
   const signedAtMs = params.signedAtMs ?? Date.now();
   const payload = buildDeviceAuthPayload({
@@ -220,7 +223,8 @@ function resolveGatewayTokenOrEnv(): string {
 }
 
 async function approvePendingPairingIfNeeded() {
-  const { approveDevicePairing, listDevicePairing } = await import("../infra/device-pairing.js");
+  const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+  const { listDevicePairing } = await import("../infra/device-pairing.js");
   const list = await listDevicePairing();
   const pending = list.pending.at(0);
   if (!pending?.requestId) {
@@ -254,23 +258,6 @@ async function configureTrustedProxyControlUiAuth() {
         },
       },
     },
-    afterWrite: { mode: "auto" },
-  });
-}
-
-async function writeTrustedProxyControlUiConfig(params?: { allowInsecureAuth?: boolean }) {
-  const { replaceConfigFile } = await import("../config/config.js");
-  const nextConfig = {
-    gateway: {
-      trustedProxies: ["127.0.0.1"],
-      controlUi: {
-        allowedOrigins: ["https://localhost"],
-        ...(params?.allowInsecureAuth ? { allowInsecureAuth: true } : {}),
-      },
-    },
-  };
-  await replaceConfigFile({
-    nextConfig,
     afterWrite: { mode: "auto" },
   });
 }
@@ -332,7 +319,7 @@ async function resolvePairedTokenForDeviceIdentityPath(deviceIdentityPath: strin
   const { loadOrCreateDeviceIdentity } = await import("../infra/device-identity.js");
   const { getPairedDevice } = await import("../infra/device-pairing.js");
 
-  const identity = loadOrCreateDeviceIdentity(deviceIdentityPath);
+  const identity = loadOrCreateDeviceIdentity({ path: deviceIdentityPath });
   const paired = await getPairedDevice(identity.deviceId);
   const deviceToken = paired?.tokens?.operator?.token;
   expect(paired?.deviceId).toBe(identity.deviceId);
@@ -391,18 +378,14 @@ async function ensurePairedDeviceTokenForCurrentIdentity(ws: WebSocket): Promise
 }
 
 export {
-  approvePendingPairingIfNeeded,
   BACKEND_GATEWAY_CLIENT,
-  buildDeviceAuthPayload,
   configureTrustedProxyControlUiAuth,
   connectReq,
   CONTROL_UI_CLIENT,
   createSignedDevice,
-  createGatewaySuiteHarness,
   ensurePairedDeviceTokenForCurrentIdentity,
   expectHelloOkServerVersion,
-  getFreePort,
-  getTrackedConnectChallengeNonce,
+  getGatewayTestPort,
   installGatewayTestHooks,
   MIN_PROBE_PROTOCOL_VERSION,
   NODE_CLIENT,
@@ -415,19 +398,17 @@ export {
   restoreGatewayToken,
   rpcReq,
   sendRawConnectReq,
-  startGatewayServer,
+  startTestGatewayServer,
   startRateLimitedTokenServerWithPairedDeviceToken,
   startServer,
   startServerWithClient,
   TEST_OPERATOR_CLIENT,
-  trackConnectChallengeNonce,
   TRUSTED_PROXY_CONTROL_UI_HEADERS,
   testState,
   testTailscaleWhois,
   waitForWsClose,
   withGatewayServer,
   withRuntimeVersionEnv,
-  writeTrustedProxyControlUiConfig,
 };
 export { ConnectErrorDetailCodes } from "../../packages/gateway-protocol/src/connect-error-details.js";
 export { resolvePreauthHandshakeTimeoutMs } from "./handshake-timeouts.js";

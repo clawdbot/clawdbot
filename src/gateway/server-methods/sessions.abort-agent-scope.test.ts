@@ -3,17 +3,28 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { EmbeddedAgentQueueHandle } from "../../agents/embedded-agent-runner/run-state.js";
+import {
+  addSubagentRunForTests,
+  getSubagentRunByChildSessionKey,
+  resetSubagentRegistryForTests,
+  testing as subagentRegistryTesting,
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 const chatAbortMock = vi.fn();
 const resolveSessionKeyForRunMock = vi.fn();
 const listSessionsFromStoreAsyncMock = vi.fn();
 const loadCombinedSessionStoreForGatewayMock = vi.fn();
-const isEmbeddedAgentRunActiveMock = vi.fn();
+const isEmbeddedAgentRunInProgressMock = vi.fn();
+const abortEmbeddedAgentRunMock = vi.fn();
+const clearSessionQueuesMock = vi.fn();
 const loadSessionEntryMock = vi.fn((sessionKey: string, _opts?: { agentId?: string }) => ({
   canonicalKey: sessionKey,
 }));
+const loadGatewaySessionRowMock = vi.fn();
 
 vi.mock("../server-session-key.js", () => ({
   resolveSessionKeyForRun: (...args: unknown[]) => resolveSessionKeyForRunMock(...args),
@@ -23,6 +34,10 @@ vi.mock("./chat.js", () => ({
   chatHandlers: {
     "chat.abort": (...args: unknown[]) => chatAbortMock(...args),
   },
+}));
+
+vi.mock("./chat-abort-handler.js", () => ({
+  handleChatAbortRequestWithLifecycle: (...args: unknown[]) => chatAbortMock(...args),
 }));
 
 vi.mock("../worker-environments/session-target.js", () => ({
@@ -37,10 +52,13 @@ vi.mock("../session-utils.js", async () => {
   return {
     ...actual,
     listSessionsFromStoreAsync: (...args: unknown[]) => listSessionsFromStoreAsyncMock(...args),
-    loadCombinedSessionStoreForGateway: (...args: unknown[]) =>
+    loadCombinedSessionStoreForGatewayCore: (...args: unknown[]) =>
       loadCombinedSessionStoreForGatewayMock(...args),
     loadSessionEntry: (...args: unknown[]) =>
       loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadGatewaySessionEntryReadOnly: (...args: unknown[]) =>
+      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadGatewaySessionRow: (...args: unknown[]) => loadGatewaySessionRowMock(...args),
   };
 });
 
@@ -50,11 +68,30 @@ vi.mock("../../agents/embedded-agent-runner/runs.js", async () => {
   );
   return {
     ...actual,
-    isEmbeddedAgentRunActive: (...args: unknown[]) => isEmbeddedAgentRunActiveMock(...args),
+    abortEmbeddedAgentRun: (sessionId: string) => {
+      abortEmbeddedAgentRunMock(sessionId);
+      return actual.abortEmbeddedAgentRun(sessionId);
+    },
+    isEmbeddedAgentRunInProgress: (...args: unknown[]) => isEmbeddedAgentRunInProgressMock(...args),
+    resolveEmbeddedAgentRunProgressState: (...args: unknown[]) =>
+      isEmbeddedAgentRunInProgressMock(...args) ? "running" : undefined,
   };
 });
 
-import { sessionsHandlers } from "./sessions.js";
+vi.mock("../../auto-reply/reply/queue/cleanup.js", () => ({
+  clearSessionQueues: (...args: unknown[]) => clearSessionQueuesMock(...args),
+}));
+
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { sessionAbortHandlers } from "./sessions-abort.js";
+import { sessionCompactHandlers } from "./sessions-compact.js";
+import { sessionDeleteHandlers } from "./sessions-delete.js";
+import { sessionMutationHandlers } from "./sessions-mutations.js";
+import { sessionReadHandlers } from "./sessions-read.js";
+import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 
 function createActiveRun(sessionKey: string, params: { agentId?: string } = {}) {
   const now = Date.now();
@@ -113,8 +150,17 @@ function createGlobalWorkRunContext(activeRun: ActiveRun): GatewayRequestContext
   });
 }
 
+const sessionHandlers = {
+  ...sessionAbortHandlers,
+  ...sessionCompactHandlers,
+  ...sessionDeleteHandlers,
+  ...sessionMutationHandlers,
+  ...sessionReadHandlers,
+  ...sessionSubscriptionHandlers,
+};
+
 async function callSessions(
-  method: keyof typeof sessionsHandlers,
+  method: keyof typeof sessionHandlers,
   params: Record<string, unknown>,
   options: {
     context: GatewayRequestContext;
@@ -125,8 +171,8 @@ async function callSessions(
 ): Promise<RespondFn> {
   const respond = options.respond ?? createRespond();
   await expectDefined(
-    sessionsHandlers[method],
-    "sessionsHandlers[method] test invariant",
+    sessionHandlers[method],
+    "sessionHandlers[method] test invariant",
   )({
     req: { id: options.reqId ?? `req-${method}` } as never,
     params,
@@ -148,7 +194,15 @@ function expectRespondErrorMessage(respond: RespondFn, message: string): void {
 }
 
 function mockChatSuccess(mock: typeof chatAbortMock, payload: Record<string, unknown>): void {
-  mock.mockImplementationOnce(({ respond }: { respond: RespondFn }) => respond(true, payload));
+  mock.mockImplementationOnce(
+    (
+      { respond }: { respond: RespondFn },
+      lifecycle?: { onAuthorizedAfterQueuedAbort?: () => boolean },
+    ) => {
+      const additionalAborted = lifecycle?.onAuthorizedAfterQueuedAbort?.() ?? false;
+      respond(true, additionalAborted ? { ...payload, aborted: true } : payload);
+    },
+  );
 }
 
 function expectSessionsListActiveRun(respond: RespondFn, hasActiveRun: boolean): void {
@@ -174,7 +228,7 @@ async function expectListedGlobalSessionActiveRun(params: {
     extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
   });
   listSessionsFromStoreAsyncMock.mockResolvedValue({
-    sessions: [{ key: "global", hasActiveRun: false }],
+    sessions: [{ key: "global", agentId: params.agentId, hasActiveRun: false }],
   });
   const respond = await callSessions(
     "sessions.list",
@@ -186,6 +240,11 @@ async function expectListedGlobalSessionActiveRun(params: {
 }
 
 describe("sessions.abort agent scope", () => {
+  afterEach(() => {
+    resetSubagentRegistryForTests({ persist: false });
+    subagentRegistryTesting.setDepsForTest();
+  });
+
   beforeEach(() => {
     chatAbortMock.mockReset();
     resolveSessionKeyForRunMock.mockReset();
@@ -193,12 +252,23 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({ sessions: [] });
     loadCombinedSessionStoreForGatewayMock.mockReset();
     loadCombinedSessionStoreForGatewayMock.mockReturnValue({
+      agentIdBySessionKey: new Map(),
+      durableTargets: [],
       storePath: "/tmp/openclaw-sessions.json",
       store: {},
     });
     loadSessionEntryMock.mockClear();
-    isEmbeddedAgentRunActiveMock.mockReset();
-    isEmbeddedAgentRunActiveMock.mockReturnValue(false);
+    loadGatewaySessionRowMock.mockReset();
+    loadGatewaySessionRowMock.mockReturnValue(null);
+    isEmbeddedAgentRunInProgressMock.mockReset();
+    isEmbeddedAgentRunInProgressMock.mockReturnValue(false);
+    abortEmbeddedAgentRunMock.mockReset();
+    clearSessionQueuesMock.mockReset();
+    clearSessionQueuesMock.mockReturnValue({ followupCleared: 0, laneCleared: 0, keys: [] });
+    subagentRegistryTesting.setDepsForTest({
+      persistSubagentRunsToDisk: () => {},
+      persistSubagentRunsToDiskOrThrow: () => {},
+    });
   });
 
   it("does not abort an active run whose session key belongs to another requested agent", async () => {
@@ -221,6 +291,76 @@ describe("sessions.abort agent scope", () => {
     });
   });
 
+  it("aborts the exact embedded owner without entering chat.abort", async () => {
+    const sessionKey = "agent:main:telegram:direct:user";
+    const abort = vi.fn();
+    const handle: EmbeddedAgentQueueHandle = {
+      runId: "run-embedded",
+      abort,
+      isAborted: () => false,
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => undefined,
+    };
+    setActiveEmbeddedRun("session-embedded", handle, sessionKey);
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "session-embedded" },
+    }));
+    try {
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: sessionKey, runId: "run-embedded" },
+        {
+          context: createContext({
+            extra: { getSessionEventSubscriberConnIds: () => new Set() },
+          }),
+        },
+      );
+
+      expect(chatAbortMock).not.toHaveBeenCalled();
+      expect(abort).toHaveBeenCalledOnce();
+      expect(respond).toHaveBeenCalledWith(true, {
+        ok: true,
+        abortedRunId: "run-embedded",
+        status: "aborted",
+      });
+    } finally {
+      clearActiveEmbeddedRun("session-embedded", handle, sessionKey);
+    }
+  });
+
+  it("rejects an embedded run ID owned by another session", async () => {
+    const ownerKey = "agent:main:telegram:direct:owner";
+    const requestedKey = "agent:main:telegram:direct:other";
+    const abort = vi.fn();
+    const handle: EmbeddedAgentQueueHandle = {
+      runId: "run-embedded",
+      abort,
+      isAborted: () => false,
+      isCompacting: () => false,
+      isStreaming: () => true,
+      queueMessage: async () => undefined,
+    };
+    setActiveEmbeddedRun("session-owner", handle, ownerKey);
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: requestedKey,
+      entry: { sessionId: "session-other" },
+    }));
+    try {
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: requestedKey, runId: "run-embedded" },
+        { context: createContext() },
+      );
+
+      expect(abort).not.toHaveBeenCalled();
+      expectRespondErrorMessage(respond, "runId does not match session");
+    } finally {
+      clearActiveEmbeddedRun("session-owner", handle, ownerKey);
+    }
+  });
+
   it("marks listed sessions active when the embedded or channel reply run registry owns the session id", async () => {
     const context = createContext({
       extra: { loadGatewayModelCatalog: vi.fn().mockResolvedValue([]) },
@@ -228,7 +368,7 @@ describe("sessions.abort agent scope", () => {
     listSessionsFromStoreAsyncMock.mockResolvedValue({
       sessions: [{ key: "agent:main:openclaw-weixin:direct:user", sessionId: "sess-weixin" }],
     });
-    isEmbeddedAgentRunActiveMock.mockImplementation(
+    isEmbeddedAgentRunInProgressMock.mockImplementation(
       (sessionId: string) => sessionId === "sess-weixin",
     );
 
@@ -238,7 +378,7 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-channel-active" },
     );
 
-    expect(isEmbeddedAgentRunActiveMock).toHaveBeenCalledWith("sess-weixin");
+    expect(isEmbeddedAgentRunInProgressMock).toHaveBeenCalledWith("sess-weixin");
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({
@@ -262,7 +402,61 @@ describe("sessions.abort agent scope", () => {
     await callSessions("sessions.abort", { runId: "run-beta" }, { context, reqId: "req-2" });
 
     expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
-    expectChatAbortParams({ sessionKey: "agent:beta:dashboard:target", runId: "run-beta" });
+    expectChatAbortParams({
+      sessionKey: "agent:beta:dashboard:target",
+      runId: "run-beta",
+      agentId: "beta",
+    });
+  });
+
+  it("kills controlled subagents after the parent run has already ended", async () => {
+    const actualChatAbort =
+      await vi.importActual<typeof import("./chat-abort-handler.js")>("./chat-abort-handler.js");
+    chatAbortMock.mockImplementationOnce(actualChatAbort.handleChatAbortRequestWithLifecycle);
+    const childSessionKey = "agent:main:subagent:orphaned-after-parent-stop";
+    addSubagentRunForTests({
+      runId: "run-orphaned-child",
+      childSessionKey,
+      controllerSessionKey: "agent:main:main",
+      requesterSessionKey: "agent:main:main",
+      requesterDisplayKey: "main",
+      requesterAgentId: "main",
+      requesterTurnRunId: "ended-parent-run",
+      task: "orphaned child",
+      cleanup: "keep",
+      createdAt: Date.now() - 2_000,
+      startedAt: Date.now() - 1_000,
+    });
+    const context = createContext({
+      extra: {
+        agentRunSeq: new Map(),
+        broadcast: vi.fn(),
+        cancelRunBoundApprovals: vi.fn(),
+        chatQueuedTurns: new Map(),
+        chatRunState: { resolveBuffer: () => ({ text: "" }) } as never,
+        dedupe: new Map(),
+        getSessionEventSubscriberConnIds: () => new Set(),
+        nodeSendToSession: vi.fn(),
+        removeChatRun: vi.fn(),
+      },
+    });
+
+    const respond = await callSessions(
+      "sessions.abort",
+      { key: "agent:main:main" },
+      { context, reqId: "req-orphaned-child" },
+    );
+
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, abortedRunId: null, status: "aborted" },
+      undefined,
+      undefined,
+    );
+    expect(getSubagentRunByChildSessionKey(childSessionKey)).toMatchObject({
+      endedReason: "subagent-killed",
+      killReconciliation: { suppressTaskDelivery: true },
+    });
   });
 
   it("resolves runId-only worker aborts to the owning session", async () => {
@@ -281,6 +475,7 @@ describe("sessions.abort agent scope", () => {
     expectChatAbortParams({
       sessionKey: "agent:work:dashboard:worker",
       runId: "run-worker",
+      agentId: "work",
     });
     expect(context.dedupe?.size).toBe(0);
   });
@@ -288,7 +483,7 @@ describe("sessions.abort agent scope", () => {
   it("aborts global-scope active runs for non-default agents", async () => {
     const activeRun = createActiveRun("global", { agentId: "work" });
     const context = createGlobalWorkRunContext(activeRun);
-    resolveSessionKeyForRunMock.mockReturnValue(undefined);
+    resolveSessionKeyForRunMock.mockReturnValue("global");
 
     await callSessions(
       "sessions.abort",
@@ -296,7 +491,7 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-global" },
     );
 
-    expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
+    expect(resolveSessionKeyForRunMock).toHaveBeenCalledWith("run-global", { agentId: "work" });
     expectChatAbortParams({ sessionKey: "global", runId: "run-global", agentId: "work" });
   });
 
@@ -348,7 +543,289 @@ describe("sessions.abort agent scope", () => {
         reason: "abort",
       }),
       new Set(["conn-1"]),
-      { dropIfSlow: true },
+      { agentId: "work", dropIfSlow: true },
+    );
+  });
+
+  it("reports reply-only aborts as aborted without a fabricated run id", async () => {
+    const broadcastToConnIds = vi.fn();
+    const weixinOperation = createReplyOperation({
+      sessionKey: "agent:main:openclaw-weixin:direct:wechat-user",
+      sessionId: "weixin-session",
+      resetTriggered: false,
+    });
+    const telegramOperation = createReplyOperation({
+      sessionKey: "agent:main:telegram:direct:telegram-user",
+      sessionId: "telegram-session",
+      resetTriggered: false,
+    });
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
+    loadSessionEntryMock.mockImplementationOnce((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "weixin-session" },
+    }));
+    loadGatewaySessionRowMock.mockReturnValue({
+      key: "agent:main:openclaw-weixin:direct:wechat-user",
+      kind: "direct",
+      sessionId: "weixin-session",
+      updatedAt: null,
+    });
+    const context = createContext({
+      extra: {
+        getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
+        broadcastToConnIds,
+        dedupe: new Map(),
+      },
+    });
+
+    try {
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: "agent:main:openclaw-weixin:direct:wechat-user" },
+        { context, reqId: "req-reply-only-abort" },
+      );
+
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { ok: true, abortedRunId: null, status: "aborted" },
+        undefined,
+        undefined,
+      );
+      expect(clearSessionQueuesMock).not.toHaveBeenCalled();
+      expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("weixin-session");
+      expect(weixinOperation.abortSignal.aborted).toBe(true);
+      expect(telegramOperation.abortSignal.aborted).toBe(false);
+      expect(broadcastToConnIds).toHaveBeenCalledWith(
+        "sessions.changed",
+        expect.objectContaining({
+          hasActiveRun: false,
+          sessionKey: "agent:main:openclaw-weixin:direct:wechat-user",
+          reason: "abort",
+        }),
+        new Set(["conn-1"]),
+        {
+          agentId: "main",
+          dropIfSlow: true,
+          sessionKeys: ["agent:main:openclaw-weixin:direct:wechat-user"],
+        },
+      );
+    } finally {
+      weixinOperation.complete();
+      telegramOperation.complete();
+    }
+  });
+
+  it("preserves queued work while also aborting the exact active reply run", async () => {
+    const weixinOperation = createReplyOperation({
+      sessionKey: "agent:main:openclaw-weixin:direct:wechat-user",
+      sessionId: "weixin-session",
+      resetTriggered: false,
+    });
+    const telegramOperation = createReplyOperation({
+      sessionKey: "agent:main:telegram:direct:telegram-user",
+      sessionId: "telegram-session",
+      resetTriggered: false,
+    });
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: true, runIds: ["visible-run"] });
+    loadSessionEntryMock.mockImplementationOnce((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "weixin-session" },
+    }));
+    const context = createContext({
+      extra: {
+        dedupe: new Map(),
+        getSessionEventSubscriberConnIds: () => new Set(),
+      },
+    });
+
+    try {
+      const respond = await callSessions(
+        "sessions.abort",
+        { key: "agent:main:openclaw-weixin:direct:wechat-user" },
+        { context, reqId: "req-visible-and-reply-abort" },
+      );
+
+      expect(clearSessionQueuesMock).not.toHaveBeenCalled();
+      expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("weixin-session");
+      expect(weixinOperation.abortSignal.aborted).toBe(true);
+      expect(telegramOperation.abortSignal.aborted).toBe(false);
+      expect(respond).toHaveBeenCalledWith(
+        true,
+        { ok: true, abortedRunId: "visible-run", status: "aborted" },
+        undefined,
+        undefined,
+      );
+    } finally {
+      weixinOperation.complete();
+      telegramOperation.complete();
+    }
+  });
+
+  it("clears queued session work even when no embedded run remains active", async () => {
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
+    loadSessionEntryMock.mockImplementationOnce((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "queued-session" },
+    }));
+    clearSessionQueuesMock.mockReturnValueOnce({
+      followupCleared: 1,
+      laneCleared: 0,
+      keys: ["queued-session"],
+    });
+    const context = createContext({
+      extra: {
+        getSessionEventSubscriberConnIds: () => new Set(),
+      },
+    });
+
+    const respond = await callSessions(
+      "sessions.abort",
+      {
+        key: "agent:main:openclaw-weixin:direct:queued-user",
+        clearQueued: true,
+      },
+      { context, reqId: "req-queued-only-abort" },
+    );
+
+    expect(clearSessionQueuesMock).toHaveBeenCalledWith([
+      "agent:main:openclaw-weixin:direct:queued-user",
+      "agent:main:openclaw-weixin:direct:queued-user",
+      "queued-session",
+    ]);
+    expect(abortEmbeddedAgentRunMock).toHaveBeenCalledWith("queued-session");
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, abortedRunId: null, status: "aborted" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("clears key-addressed queues without requiring a persisted session id", async () => {
+    const sessionKey = "agent:main:openclaw-weixin:direct:queued-without-entry";
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
+    loadSessionEntryMock.mockImplementationOnce(() => ({ canonicalKey: sessionKey }));
+    clearSessionQueuesMock.mockReturnValueOnce({
+      followupCleared: 1,
+      laneCleared: 0,
+      keys: [sessionKey],
+    });
+    const context = createContext({
+      extra: {
+        getSessionEventSubscriberConnIds: () => new Set(),
+      },
+    });
+
+    const respond = await callSessions(
+      "sessions.abort",
+      { key: sessionKey, clearQueued: true },
+      { context, reqId: "req-key-only-queue-abort" },
+    );
+
+    expect(clearSessionQueuesMock).toHaveBeenCalledWith([sessionKey, sessionKey]);
+    expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, abortedRunId: null, status: "aborted" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("keeps explicit runId aborts targeted instead of clearing the whole session", async () => {
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
+    loadSessionEntryMock.mockImplementationOnce((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "persisted-session" },
+    }));
+    const context = createContext();
+
+    const respond = await callSessions(
+      "sessions.abort",
+      {
+        key: "agent:main:openclaw-weixin:direct:wechat-user",
+        runId: "missing-run",
+      },
+      { context, reqId: "req-targeted-run-abort" },
+    );
+
+    expect(clearSessionQueuesMock).not.toHaveBeenCalled();
+    expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, abortedRunId: null, status: "no-active-run" },
+      undefined,
+      undefined,
+    );
+  });
+
+  it("clears legacy aliases only when they belong to the selected agent", async () => {
+    loadSessionEntryMock.mockImplementationOnce((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "work-session" },
+    }));
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
+
+    await callSessions(
+      "sessions.abort",
+      { key: "main", agentId: "work", clearQueued: true },
+      {
+        context: createContext({
+          agents: [{ id: "work", default: true }, { id: "main" }],
+        }),
+        reqId: "req-owned-legacy-alias-abort",
+      },
+    );
+
+    expect(clearSessionQueuesMock).toHaveBeenLastCalledWith([
+      "agent:work:main",
+      "main",
+      "agent:work:main",
+      "work-session",
+    ]);
+
+    clearSessionQueuesMock.mockClear();
+    loadSessionEntryMock.mockImplementationOnce((sessionKey: string) => ({
+      canonicalKey: sessionKey,
+      entry: { sessionId: "work-session" },
+    }));
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
+
+    await callSessions(
+      "sessions.abort",
+      { key: "main", agentId: "work", clearQueued: true },
+      { context: createContext(), reqId: "req-foreign-legacy-alias-abort" },
+    );
+
+    expect(clearSessionQueuesMock).toHaveBeenLastCalledWith([
+      "agent:work:main",
+      "agent:work:main",
+      "work-session",
+    ]);
+  });
+
+  it("leaves global-scope cleanup on chat.abort without an agent-qualified queue key", async () => {
+    mockChatSuccess(chatAbortMock, { ok: true, aborted: false, runIds: [] });
+    loadSessionEntryMock.mockImplementationOnce(() => ({
+      canonicalKey: "global",
+      entry: { sessionId: "work-global-session" },
+    }));
+    const context = createContext({ globalScope: true });
+
+    const respond = await callSessions(
+      "sessions.abort",
+      { key: "global", agentId: "work", clearQueued: true },
+      { context, reqId: "req-scoped-global-queue-abort" },
+    );
+
+    expectChatAbortParams({ sessionKey: "global", runId: undefined, agentId: "work" });
+    expect(clearSessionQueuesMock).not.toHaveBeenCalled();
+    expect(abortEmbeddedAgentRunMock).not.toHaveBeenCalled();
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      { ok: true, abortedRunId: null, status: "no-active-run" },
+      undefined,
+      undefined,
     );
   });
 
@@ -440,7 +917,6 @@ describe("sessions.abort agent scope", () => {
   });
 
   it("infers selected-agent global subscriptions from agent-prefixed aliases", async () => {
-    loadSessionEntryMock.mockImplementationOnce(() => ({ canonicalKey: "global" }));
     const subscribeSessionMessageEvents = vi.fn();
     const context = createContext({
       globalScope: true,
@@ -456,7 +932,7 @@ describe("sessions.abort agent scope", () => {
       },
     );
 
-    expect(loadSessionEntryMock).toHaveBeenCalledWith("agent:work:main", { agentId: "work" });
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
     expect(subscribeSessionMessageEvents).toHaveBeenCalledWith(
       "conn-work-alias",
       "agent:work:global",
@@ -475,7 +951,7 @@ describe("sessions.abort agent scope", () => {
     await callSessions("sessions.abort", { runId: "run-work" }, { context, reqId: "req-3" });
 
     expect(resolveSessionKeyForRunMock).not.toHaveBeenCalled();
-    expectChatAbortParams({ sessionKey: "main", runId: "run-work" });
+    expectChatAbortParams({ sessionKey: "main", runId: "run-work", agentId: "work" });
   });
 
   it("rejects key-based aborts when key agent does not match agentId", async () => {
@@ -502,8 +978,32 @@ describe("sessions.abort agent scope", () => {
     ] as const) {
       const respond = await callSessions(method, params, { context, reqId: `req-${method}` });
 
-      expectRespondErrorMessage(respond, "session key agent does not match agentId");
+      expectRespondErrorMessage(respond, 'agent "work" does not match session key agent "main"');
     }
+  });
+
+  it("protects bare global when its fixed-store owner is inferred", async () => {
+    const context = createContext({
+      extra: {
+        getRuntimeConfig: () => ({
+          session: { scope: "global", store: "/stores/shared.sqlite" },
+          agents: {
+            ownership: "explicit",
+            defaults: { sessionStore: { agentId: "ops" } },
+            entries: { ops: {}, research: {} },
+          },
+        }),
+      },
+    });
+
+    const respond = await callSessions(
+      "sessions.delete",
+      { key: "global" },
+      { context, reqId: "req-persisted-global-delete" },
+    );
+
+    expectRespondErrorMessage(respond, "Cannot delete the main session (global).");
+    expect(loadSessionEntryMock).not.toHaveBeenCalled();
   });
 
   it("rejects unknown explicit agentId before session mutations", async () => {
@@ -543,7 +1043,11 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-5" },
     );
 
-    expectChatAbortParams({ sessionKey: "agent:work:main", runId: undefined });
+    expectChatAbortParams({
+      sessionKey: "agent:work:main",
+      runId: undefined,
+      agentId: "work",
+    });
   });
 
   it("does not use a raw legacy key alias that belongs to another agent", async () => {
@@ -556,7 +1060,11 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-6" },
     );
 
-    expectChatAbortParams({ sessionKey: "agent:work:main", runId: undefined });
+    expectChatAbortParams({
+      sessionKey: "agent:work:main",
+      runId: undefined,
+      agentId: "work",
+    });
   });
 
   it("keeps the raw legacy key alias when it belongs to the requested agent", async () => {
@@ -572,6 +1080,6 @@ describe("sessions.abort agent scope", () => {
       { context, reqId: "req-7" },
     );
 
-    expectChatAbortParams({ sessionKey: "main", runId: undefined });
+    expectChatAbortParams({ sessionKey: "main", runId: undefined, agentId: "work" });
   });
 });

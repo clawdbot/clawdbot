@@ -1,6 +1,5 @@
-// Installed plugin health snapshot tests cover should-run drift wiring: the eager
-// startup plan is read, deferred channel plugins are excluded, and the not-loaded
-// remainder surfaces as drift in detailed status.
+// Installed plugin health snapshot tests cover should-run drift wiring: the startup
+// plan is read and its not-loaded remainder surfaces as drift in detailed status.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveReadOnlyChannelPluginsForConfig } from "../channels/plugins/read-only.js";
 import {
@@ -89,7 +88,7 @@ afterEach(() => {
 });
 
 describe("installed plugin health should-run drift", () => {
-  it("excludes deferred channel plugins and flags the not-loaded remainder as drift", async () => {
+  it("flags startup plugins that are not loaded as drift", async () => {
     await withStateDirEnv("openclaw-status-should-run-drift-", async () => {
       resolveReadOnlyChannelPluginsForConfigMock.mockReturnValue({
         loadFailures: [],
@@ -97,9 +96,7 @@ describe("installed plugin health should-run drift", () => {
       } as never);
       loadGatewayStartupPluginPlanMock.mockReturnValue({
         channelPluginIds: [],
-        // deferred-chan finishes loading only after listen, so it must not count as drift.
-        configuredDeferredChannelPluginIds: ["deferred-chan"],
-        pluginIds: ["deferred-chan", "planned-missing", "runtime-ok"],
+        pluginIds: ["planned-missing", "runtime-ok"],
       });
 
       const registry = createEmptyPluginRegistry();
@@ -117,13 +114,11 @@ describe("installed plugin health should-run drift", () => {
       expect(loadGatewayStartupPluginPlanMock).toHaveBeenCalledWith(
         expect.objectContaining({ config: rawConfig, activationSourceConfig: rawConfig }),
       );
-      // Deferred channel plugin dropped from the eager should-run set.
       expect(snapshot.shouldRunPluginIds).toEqual(["planned-missing", "runtime-ok"]);
 
       const text = formatDetailedPluginHealth(snapshot);
       expect(text).toContain("Loaded: 1 (runtime-ok)");
       expect(text).toContain("Configured to run but not loaded: 1 (planned-missing)");
-      expect(text).not.toContain("deferred-chan");
     });
   });
 
@@ -135,7 +130,6 @@ describe("installed plugin health should-run drift", () => {
       } as never);
       loadGatewayStartupPluginPlanMock.mockReturnValue({
         channelPluginIds: [],
-        configuredDeferredChannelPluginIds: [],
         pluginIds: [],
       });
       // /status passes the live runtime config; the activation source must be the original
@@ -192,7 +186,6 @@ describe("installed plugin health unregistered memory embedding providers", () =
       } as never);
       loadGatewayStartupPluginPlanMock.mockReturnValue({
         channelPluginIds: [],
-        configuredDeferredChannelPluginIds: [],
         pluginIds: [],
       });
       collectUnregisteredConfiguredMemoryEmbeddingProvidersMock.mockReturnValue([
@@ -229,7 +222,6 @@ describe("installed plugin health unregistered memory embedding providers", () =
       } as never);
       loadGatewayStartupPluginPlanMock.mockReturnValue({
         channelPluginIds: [],
-        configuredDeferredChannelPluginIds: [],
         pluginIds: [],
       });
       // Even if the resolver would report something, the null-registry guard must skip it

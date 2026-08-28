@@ -1,26 +1,32 @@
-// Tests status command rendering for sessions, agents, and diagnostics.
+// Tests status command rendering for sessions, agents, diagnostics, and model defaults.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { withTempHome } from "openclaw/plugin-sdk/test-env";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { normalizeTestText } from "../../../test/helpers/normalize-text.js";
 import { saveAuthProfileStore } from "../../agents/auth-profiles/store.js";
-import { testing as cliBackendsTesting } from "../../agents/cli-backends.js";
+import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import { clearAgentHarnesses, registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import {
   addSubagentRunForTests,
   resetSubagentRegistryForTests,
-} from "../../agents/subagent-registry.test-helpers.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
+} from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import {
-  completeTaskRunByRunId,
-  createQueuedTaskRun,
-  createRunningTaskRun,
-  failTaskRunByRunId,
+  persistSessionTranscriptTurn,
+  replaceSessionEntry,
+} from "../../config/sessions/session-accessor.js";
+import type { ModelDefinitionConfig } from "../../config/types.models.js";
+import type { ProviderThinkingProfile } from "../../plugins/provider-thinking.types.js";
+import {
+  completeTaskRunByRunIdCore,
+  createQueuedTaskRunCore,
+  createRunningTaskRunCore,
+  failTaskRunByRunIdCore,
 } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-registry.js";
+import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
 import {
@@ -28,6 +34,8 @@ import {
   buildCommandTestParams,
   configureInMemoryTaskRegistryStoreForTests,
 } from "./commands.test-harness.js";
+
+// Tests status command rendering for sessions, agents, and diagnostics.
 
 type LoadProviderUsageSummary =
   typeof import("../../infra/provider-usage.js").loadProviderUsageSummary;
@@ -37,6 +45,14 @@ const providerUsageMock = vi.hoisted(() => ({
     updatedAt: Date.now(),
     providers: [],
   })),
+}));
+const activeProviderThinkingMock = vi.hoisted(() => ({
+  resolveThinkingProfile: vi.fn<
+    (params: {
+      provider: string;
+      context: { modelId: string };
+    }) => ProviderThinkingProfile | null | undefined
+  >(() => undefined),
 }));
 type StatusPluginHealthSnapshot =
   import("../../status/status-plugin-health.js").StatusPluginHealthSnapshot;
@@ -69,6 +85,11 @@ vi.mock("../../infra/provider-usage.js", async (importOriginal) => {
     loadProviderUsageSummary: providerUsageMock.loadProviderUsageSummary,
   };
 });
+
+vi.mock("../../plugins/provider-thinking-active.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../plugins/provider-thinking-active.js")>()),
+  resolveActiveProviderThinkingProfile: activeProviderThinkingMock.resolveThinkingProfile,
+}));
 
 vi.mock("../../status/status-plugin-health.runtime.js", () => pluginHealthRuntimeMock);
 
@@ -134,6 +155,7 @@ function registerStatusCodexHarness(): void {
   const harness: AgentHarness = {
     id: "codex",
     label: "Codex",
+    autoSelection: { providerIds: [...codexProviders] },
     supports: (ctx) =>
       codexProviders.has(ctx.provider.trim().toLowerCase())
         ? { supported: true, priority: 100 }
@@ -148,7 +170,7 @@ function registerStatusCodexHarness(): void {
 function saveStatusTestAuthProfile(params: {
   dir: string;
   profileId: string;
-  provider: "openai" | "openai-codex" | "anthropic";
+  provider: "openai" | "anthropic";
 }): void {
   saveStatusTestAuthProfiles({
     dir: params.dir,
@@ -158,7 +180,7 @@ function saveStatusTestAuthProfile(params: {
 
 function saveStatusTestAuthProfiles(params: {
   dir: string;
-  profiles: Array<{ profileId: string; provider: "openai" | "openai-codex" | "anthropic" }>;
+  profiles: Array<{ profileId: string; provider: "openai" | "anthropic" }>;
 }): void {
   const agentDir = path.join(params.dir, ".openclaw", "agents", "main", "agent");
   fs.mkdirSync(agentDir, { recursive: true });
@@ -168,7 +190,7 @@ function saveStatusTestAuthProfiles(params: {
       profiles: Object.fromEntries(
         params.profiles.map((profile) => [
           profile.profileId,
-          profile.provider === "openai" || profile.provider === "openai-codex"
+          profile.provider === "openai"
             ? {
                 type: "oauth",
                 provider: profile.provider,
@@ -197,6 +219,8 @@ afterEach(() => {
     updatedAt: Date.now(),
     providers: [],
   });
+  activeProviderThinkingMock.resolveThinkingProfile.mockReset();
+  activeProviderThinkingMock.resolveThinkingProfile.mockReturnValue(undefined);
   pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockReset();
   pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockResolvedValue({
     plugins: [],
@@ -215,7 +239,7 @@ afterEach(() => {
   });
 });
 
-function writeTranscriptUsageLog(params: {
+async function writeTranscriptUsageLog(params: {
   dir: string;
   agentId: string;
   sessionId: string;
@@ -227,26 +251,33 @@ function writeTranscriptUsageLog(params: {
     totalTokens: number;
   };
 }) {
-  const logPath = path.join(
+  const storePath = path.join(
     params.dir,
     ".openclaw",
     "agents",
     params.agentId,
     "sessions",
-    `${params.sessionId}.jsonl`,
+    "sessions.json",
   );
-  fs.mkdirSync(path.dirname(logPath), { recursive: true });
-  fs.writeFileSync(
-    logPath,
-    JSON.stringify({
-      type: "message",
-      message: {
-        role: "assistant",
-        model: "claude-opus-4-5",
-        usage: params.usage,
-      },
-    }),
-    "utf-8",
+  const sessionKey = `agent:${params.agentId}:main`;
+  await replaceSessionEntry(
+    { agentId: params.agentId, sessionKey, storePath },
+    { sessionId: params.sessionId, updatedAt: Date.now() },
+  );
+  await persistSessionTranscriptTurn(
+    { agentId: params.agentId, sessionId: params.sessionId, sessionKey, storePath },
+    {
+      messages: [
+        {
+          message: {
+            role: "assistant",
+            model: "claude-opus-4-5",
+            usage: params.usage,
+          },
+        },
+      ],
+      touchSessionEntry: false,
+    },
   );
 }
 
@@ -413,7 +444,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("includes active and total task counts for the current session", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-running",
@@ -421,7 +452,7 @@ describe("buildStatusReply subagent summary", () => {
       task: "active background task",
       progressSummary: "still working",
     });
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-queued",
@@ -436,7 +467,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("hides stale completed task rows from the session task line", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-live",
@@ -444,14 +475,14 @@ describe("buildStatusReply subagent summary", () => {
       task: "live background task",
       progressSummary: "still working",
     });
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-stale-done",
       runId: "run-status-task-stale-done",
       task: "stale completed task",
     });
-    completeTaskRunByRunId({
+    completeTaskRunByRunIdCore({
       runId: "run-status-task-stale-done",
       endedAt: Date.now() - 10 * 60_000,
       terminalSummary: "done a while ago",
@@ -465,36 +496,36 @@ describe("buildStatusReply subagent summary", () => {
     expect(reply?.text).not.toContain("done a while ago");
   });
 
-  it("shows a recent failure when no active tasks remain", async () => {
-    createRunningTaskRun({
+  it("shows blocked completion outcomes when no active tasks remain", async () => {
+    createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
-      childSessionKey: "agent:main:acp:status-task-failed",
-      runId: "run-status-task-failed",
-      task: "failed background task",
+      runId: "run-status-task-blocked",
+      task: "blocked background task",
     });
-    failTaskRunByRunId({
-      runId: "run-status-task-failed",
+    completeTaskRunByRunIdCore({
+      runId: "run-status-task-blocked",
       endedAt: Date.now(),
-      error: "approval denied",
+      terminalOutcome: "blocked",
+      terminalSummary: "Additional input required.",
     });
 
     const reply = await buildStatusReplyForTest({});
 
-    expect(reply?.text).toContain("📌 Tasks: 1 recent failure");
-    expect(reply?.text).toContain("failed background task");
-    expect(reply?.text).toContain("approval denied");
+    expect(reply?.text).toContain("📌 Tasks: 1 recent failure · blocked");
+    expect(reply?.text).toContain("blocked background task");
+    expect(reply?.text).toContain("Additional input required.");
   });
 
   it("does not leak internal runtime context through the task status line", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-leak",
       runId: "run-status-task-leak",
       task: "leaked context task",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-status-task-leak",
       endedAt: Date.now(),
       error: [
@@ -515,7 +546,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("truncates long task titles and details in the session task line", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-truncated",
@@ -538,26 +569,26 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("prefers failure context over newer success context when showing recent failures", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "acp",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:acp:status-task-failed-priority",
       runId: "run-status-task-failed-priority",
       task: "failed background task",
     });
-    failTaskRunByRunId({
+    failTaskRunByRunIdCore({
       runId: "run-status-task-failed-priority",
       endedAt: Date.now() - 30_000,
       error: "approval denied",
     });
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:main",
       childSessionKey: "agent:main:subagent:status-task-succeeded-later",
       runId: "run-status-task-succeeded-later",
       task: "later successful task",
     });
-    completeTaskRunByRunId({
+    completeTaskRunByRunIdCore({
       runId: "run-status-task-succeeded-later",
       endedAt: Date.now(),
       terminalSummary: "all done",
@@ -573,7 +604,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("falls back to same-agent task counts without details when the current session has none", async () => {
-    createRunningTaskRun({
+    createRunningTaskRunCore({
       runtime: "subagent",
       requesterSessionKey: "agent:main:other",
       childSessionKey: "agent:main:subagent:status-agent-fallback-running",
@@ -582,7 +613,7 @@ describe("buildStatusReply subagent summary", () => {
       task: "hidden task title",
       progressSummary: "hidden progress detail",
     });
-    createQueuedTaskRun({
+    createQueuedTaskRunCore({
       runtime: "cron",
       requesterSessionKey: "agent:main:another",
       childSessionKey: "agent:main:subagent:status-agent-fallback-queued",
@@ -603,7 +634,7 @@ describe("buildStatusReply subagent summary", () => {
   it("uses transcript usage fallback in /status output", async () => {
     await withTempHome(async (dir) => {
       const sessionId = "sess-status-transcript";
-      writeTranscriptUsageLog({
+      await writeTranscriptUsageLog({
         dir,
         agentId: "main",
         sessionId,
@@ -641,7 +672,7 @@ describe("buildStatusReply subagent summary", () => {
         activeModelAuthOverride: "api-key",
       });
 
-      expect(normalizeTestText(text)).toContain("Context: 1.0k/32k");
+      expect(normalizeTestText(text)).toContain("Context: 1.0k/200k");
     });
   });
 
@@ -684,6 +715,7 @@ describe("buildStatusReply subagent summary", () => {
         model: "kimi-k2.7-code",
         totalTokens: 0,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -841,7 +873,7 @@ describe("buildStatusReply subagent summary", () => {
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Runtime: OpenAI Codex");
-    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("fast");
     expect(normalized).not.toContain("Fast · codex");
     expect(
       providerUsageMock.loadProviderUsageSummary.mock.calls.some(([params]) =>
@@ -1198,72 +1230,6 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("forwards legacy Codex profile providers to Codex synthetic usage", async () => {
-    registerStatusCodexHarness();
-    providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
-      updatedAt: Date.now(),
-      providers: [
-        {
-          provider: "openai",
-          displayName: "OpenAI",
-          windows: [{ label: "5h", usedPercent: 9 }],
-        },
-      ],
-    });
-
-    await withTempHome(
-      async (dir) => {
-        saveStatusTestAuthProfile({
-          dir,
-          profileId: "openai-codex:legacy",
-          provider: "openai-codex",
-        });
-
-        await buildStatusText({
-          cfg: {
-            ...baseCfg,
-            agents: {
-              defaults: {
-                agentRuntime: { id: "codex" },
-              },
-            },
-          },
-          sessionEntry: {
-            sessionId: "sess-status-codex-legacy-profile",
-            updatedAt: 0,
-            authProfileOverride: "openai-codex:legacy",
-          },
-          sessionKey: "agent:main:main",
-          parentSessionKey: "agent:main:main",
-          sessionScope: "per-sender",
-          statusChannel: "mobilechat",
-          provider: "openai",
-          model: "gpt-5.5",
-          contextTokens: 32_000,
-          resolvedFastMode: false,
-          resolvedVerboseLevel: "off",
-          resolvedReasoningLevel: "off",
-          resolveDefaultThinkingLevel: async () => undefined,
-          isGroup: false,
-          defaultGroupActivation: () => "mention",
-          modelAuthOverride: "oauth",
-          activeModelAuthOverride: "oauth",
-        });
-
-        const providerUsageCall = providerUsageMock.loadProviderUsageSummary.mock.calls.find(
-          ([params]) => params?.providers?.includes("openai"),
-        );
-        expect(providerUsageCall?.[0]?.auth).toEqual([
-          {
-            ...expectedCodexRuntimeUsageAuth[0],
-            authProfileId: "openai-codex:legacy",
-          },
-        ]);
-      },
-      { skipSessionCleanup: true, skipHomeCleanup: true },
-    );
-  });
-
   it("loads Codex synthetic usage when no local OpenAI profile label exists", async () => {
     registerStatusCodexHarness();
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
@@ -1431,11 +1397,15 @@ describe("buildStatusReply subagent summary", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "minimax-portal",
         model: "MiniMax-M2.7",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "minimax-portal/MiniMax-M2.7",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "minimax-portal/MiniMax-M2.7",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1 as const,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -1494,11 +1464,15 @@ describe("buildStatusReply subagent summary", () => {
         modelOverride: "mimo-v2-flash",
         modelProvider: "custom-runtime",
         model: "unknown-fallback-model",
-        fallbackNoticeSelectedModel: "xiaomi/mimo-v2-flash",
-        fallbackNoticeActiveModel: "custom-runtime/unknown-fallback-model",
-        fallbackNoticeReason: "model not allowed",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "xiaomi/mimo-v2-flash",
+          activeModel: "custom-runtime/unknown-fallback-model",
+          reason: "model not allowed",
+        },
         totalTokens: 49_000,
         totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 1_048_576,
       },
       sessionKey: "agent:main:main",
@@ -1525,6 +1499,7 @@ describe("buildStatusReply subagent summary", () => {
   });
 
   it("shows DeepSeek balance summaries in /status output", async () => {
+    registerStatusCodexHarness();
     providerUsageMock.loadProviderUsageSummary.mockResolvedValue({
       updatedAt: Date.now(),
       providers: [
@@ -1920,23 +1895,9 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("uses Claude CLI OAuth auth labels for anthropic models running on the Claude CLI runtime", async () => {
+  it("uses native Claude CLI auth labels for anthropic models running on the Claude CLI runtime", async () => {
     await withTempHome(
-      async (dir) => {
-        const authPath = path.join(dir, ".claude", ".credentials.json");
-        fs.mkdirSync(path.dirname(authPath), { recursive: true });
-        fs.writeFileSync(
-          authPath,
-          JSON.stringify({
-            claudeAiOauth: {
-              accessToken: "access-token",
-              refreshToken: "refresh-token",
-              expiresAt: Date.now() + 60_000,
-            },
-          }),
-          "utf8",
-        );
-
+      async () => {
         const text = await buildStatusText({
           cfg: {
             ...baseCfg,
@@ -1968,7 +1929,7 @@ describe("buildStatusReply subagent summary", () => {
 
         const normalized = normalizeTestText(text);
         expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
-        expect(normalized).toContain("oauth (claude-cli)");
+        expect(normalized).toContain("native (claude-cli)");
       },
       {
         env: {
@@ -1979,7 +1940,7 @@ describe("buildStatusReply subagent summary", () => {
     );
   });
 
-  it("prefers active Claude CLI OAuth over selected env API-key labels for runtime aliases", async () => {
+  it("prefers active native Claude CLI auth over selected env API-key labels for runtime aliases", async () => {
     const text = await buildStatusText({
       cfg: {
         ...baseCfg,
@@ -1996,9 +1957,12 @@ describe("buildStatusReply subagent summary", () => {
         modelOverride: "claude-opus-4-7",
         modelProvider: "claude-cli",
         model: "claude-opus-4-7",
-        fallbackNoticeSelectedModel: "anthropic/claude-opus-4-7",
-        fallbackNoticeActiveModel: "claude-cli/claude-opus-4-7",
-        fallbackNoticeReason: "selected model unavailable",
+        fallbackNotice: {
+          kind: "active",
+          selectedModel: "anthropic/claude-opus-4-7",
+          activeModel: "claude-cli/claude-opus-4-7",
+          reason: "selected model unavailable",
+        },
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -2015,12 +1979,12 @@ describe("buildStatusReply subagent summary", () => {
       isGroup: false,
       defaultGroupActivation: () => "mention",
       modelAuthOverride: "api-key (env: ANTHROPIC_API_KEY)",
-      activeModelAuthOverride: "oauth (claude-cli)",
+      activeModelAuthOverride: "native (claude-cli)",
     });
 
     const normalized = normalizeTestText(text);
     expect(normalized).toContain("Model: anthropic/claude-opus-4-7");
-    expect(normalized).toContain("oauth (claude-cli)");
+    expect(normalized).toContain("native (claude-cli)");
     expect(normalized).not.toContain("api-key (env: ANTHROPIC_API_KEY)");
     expect(normalized).not.toContain("Usage:");
   });
@@ -2049,6 +2013,8 @@ describe("buildStatusReply subagent summary", () => {
         sessionId: "sess-status-codex-context",
         updatedAt: 0,
         totalTokens: 25_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
       },
       sessionKey: "agent:main:main",
       parentSessionKey: "agent:main:main",
@@ -2095,6 +2061,8 @@ describe("buildStatusReply subagent summary", () => {
         sessionId: "sess-status-codex-stale-context",
         updatedAt: 0,
         totalTokens: 181_000,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
         contextTokens: 400_000,
       },
       sessionKey: "agent:main:main",
@@ -2232,7 +2200,7 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Fast");
+    expect(normalized).toContain("fast");
     expect(normalized).not.toContain("codex");
   });
 
@@ -2266,8 +2234,48 @@ describe("buildStatusReply subagent summary", () => {
     });
 
     const normalized = normalizeTestText(text);
-    expect(normalized).toContain("Think: max");
-    expect(normalized).not.toContain("Think: ultra");
+    expect(normalized).toContain("think max");
+    expect(normalized).not.toContain("think ultra");
+  });
+
+  it("clamps off to the active provider's always-thinking level", async () => {
+    activeProviderThinkingMock.resolveThinkingProfile.mockReturnValue({
+      levels: [{ id: "max", label: "max" }],
+      defaultLevel: "max",
+    });
+
+    const text = await buildStatusText({
+      cfg: baseCfg,
+      sessionEntry: {
+        sessionId: "sess-status-kimi-k3",
+        updatedAt: 0,
+        thinkingLevel: "off",
+      },
+      sessionKey: "agent:main:main",
+      parentSessionKey: "agent:main:main",
+      sessionScope: "per-sender",
+      statusChannel: "mobilechat",
+      provider: "moonshot",
+      model: "kimi-k3",
+      contextTokens: 262_144,
+      resolvedThinkLevel: "off",
+      resolvedFastMode: false,
+      resolvedVerboseLevel: "off",
+      resolvedReasoningLevel: "off",
+      resolveDefaultThinkingLevel: async () => undefined,
+      isGroup: false,
+      defaultGroupActivation: () => "mention",
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+
+    expect(normalizeTestText(text)).toContain("think max");
+    expect(activeProviderThinkingMock.resolveThinkingProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        provider: "moonshot",
+        context: expect.objectContaining({ modelId: "kimi-k3" }),
+      }),
+    );
   });
 
   it("treats the persisted harness id as observational in /status", async () => {
@@ -2307,4 +2315,291 @@ describe("buildStatusReply subagent summary", () => {
     expect(normalizeTestText(text)).toContain("Runtime: OpenAI Codex");
   });
 });
+
+describe("buildStatusReply error handling", () => {
+  afterEach(() => {
+    vi.doUnmock("../../logger.js");
+    vi.doUnmock("../../status/status-text.js");
+    vi.resetModules();
+    vi.restoreAllMocks();
+  });
+
+  async function runStatusReply(fn: typeof buildStatusReply) {
+    const commandParams = buildCommandTestParams("/status", baseCfg);
+    return await fn({
+      cfg: baseCfg,
+      command: commandParams.command,
+      sessionEntry: commandParams.sessionEntry,
+      sessionKey: commandParams.sessionKey,
+      parentSessionKey: commandParams.sessionKey,
+      sessionScope: commandParams.sessionScope,
+      storePath: commandParams.storePath,
+      provider: "anthropic",
+      model: "claude-opus-4-6",
+      contextTokens: 0,
+      resolvedThinkLevel: commandParams.resolvedThinkLevel,
+      resolvedFastMode: false,
+      resolvedVerboseLevel: commandParams.resolvedVerboseLevel,
+      resolvedReasoningLevel: commandParams.resolvedReasoningLevel,
+      resolvedElevatedLevel: commandParams.resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: commandParams.resolveDefaultThinkingLevel,
+      isGroup: commandParams.isGroup,
+      defaultGroupActivation: commandParams.defaultGroupActivation,
+      modelAuthOverride: "api-key",
+      activeModelAuthOverride: "api-key",
+    });
+  }
+
+  it("delivers a fixed generic reply and logs details when status rendering throws", async () => {
+    // commands-status re-exports buildStatusText, so the mock must keep that
+    // binding while prod calls buildStatusReplyParts. logError stays mocked so
+    // containment diagnostics never leak into test stderr.
+    vi.doMock("../../logger.js", async (importOriginal) => ({
+      ...(await importOriginal<object>()),
+      logError: vi.fn(),
+    }));
+    vi.doMock("../../status/status-text.js", () => ({
+      buildStatusReplyParts: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
+      buildStatusText: vi.fn(() => Promise.reject(new Error("Unexpected rendering error"))),
+    }));
+
+    vi.resetModules();
+    const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
+    const { logError } = await import("../../logger.js");
+    const reply = await runStatusReply(freshBuildStatusReply);
+
+    // Exact object equality also pins that no stale presentation or internal
+    // error text reaches the channel; diagnostics belong to the log sink only.
+    expect(reply).toEqual({ text: "⚠️ Status: error rendering response" });
+    expect(logError).toHaveBeenCalledWith(expect.stringContaining("Unexpected rendering error"));
+  });
+
+  it("keeps the structured rich payload on the success path", async () => {
+    const presentation = {
+      title: "Status",
+      tone: "info" as const,
+      blocks: [{ type: "text" as const, text: "plain status" }, { type: "divider" as const }],
+    };
+    vi.doMock("../../status/status-text.js", () => ({
+      buildStatusReplyParts: vi.fn(() => Promise.resolve({ text: "plain status", presentation })),
+      buildStatusText: vi.fn(() => Promise.resolve("plain status")),
+    }));
+
+    vi.resetModules();
+    const { buildStatusReply: freshBuildStatusReply } = await import("./commands-status.js");
+    const reply = await runStatusReply(freshBuildStatusReply);
+
+    expect(reply).toMatchObject({
+      text: "plain status",
+      presentation,
+      presentationTextMode: "fallback",
+    });
+  });
+
+  it("returns a generic reply and logs details when plugin health collection fails", async () => {
+    vi.doMock("../../logger.js", async (importOriginal) => ({
+      ...(await importOriginal<object>()),
+      logError: vi.fn(),
+    }));
+
+    vi.resetModules();
+    const { buildStatusPluginsReply: freshBuildStatusPluginsReply } =
+      await import("./commands-status.js");
+    const { logError } = await import("../../logger.js");
+    pluginHealthRuntimeMock.collectInstalledPluginHealthSnapshot.mockRejectedValueOnce(
+      new Error("Cannot find module 'internal/path'"),
+    );
+
+    const commandParams = buildCommandTestParams("/status plugins", {
+      ...baseCfg,
+      commands: { text: true, plugins: true },
+    });
+    const reply = await freshBuildStatusPluginsReply({
+      cfg: commandParams.cfg,
+      command: commandParams.command,
+      workspaceDir: commandParams.workspaceDir,
+    });
+
+    expect(reply?.text).toBe("⚠️ Plugins: health unavailable");
+    expect(logError).toHaveBeenCalledWith(
+      expect.stringContaining("Cannot find module 'internal/path'"),
+    );
+  });
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+async function buildKiraStatusReply(cfg: OpenClawConfig) {
+  return await buildStatusReply({
+    cfg,
+    command: {
+      isAuthorizedSender: true,
+      channel: "whatsapp",
+    } as never,
+    sessionKey: "agent:kira:main",
+    provider: "openai",
+    model: "gpt-5.4",
+    contextTokens: 0,
+    resolvedVerboseLevel: "off",
+    resolvedReasoningLevel: "off",
+    resolveDefaultThinkingLevel: async () => undefined,
+    isGroup: false,
+    defaultGroupActivation: () => "mention",
+  });
+}
+
+describe("buildStatusReply", () => {
+  beforeAll(async () => {
+    await buildKiraStatusReply({
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig);
+  });
+
+  it("shows per-agent thinkingDefault in the status card", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.4",
+        },
+        list: [
+          {
+            id: "kira",
+            model: "openai/gpt-5.4",
+            thinkingDefault: "xhigh",
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("think xhigh");
+  });
+
+  it("shows per-agent fallback overrides in the status card", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: ["google/gemini-2.5-flash"],
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Fallbacks: google/gemini-2.5-flash");
+    expect(reply?.text).not.toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps default fallback config when the agent has no explicit model", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).toContain("Fallbacks: anthropic/claude-sonnet-4-6");
+  });
+
+  it("keeps agent primary strict when the agent has no explicit fallback override", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).not.toContain("Fallbacks:");
+  });
+
+  it("treats an explicit empty per-agent fallback override as disabling inherited fallbacks", async () => {
+    const cfg = {
+      session: { mainKey: "main", scope: "per-sender" },
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.4",
+            fallbacks: ["anthropic/claude-sonnet-4-6"],
+          },
+        },
+        list: [
+          {
+            id: "kira",
+            model: {
+              primary: "openai/gpt-5.4",
+              fallbacks: [],
+            },
+          },
+        ],
+      },
+      channels: {
+        whatsapp: { allowFrom: ["*"] },
+      },
+    } as OpenClawConfig;
+
+    const reply = await buildKiraStatusReply(cfg);
+
+    expect(reply?.text).not.toContain("Fallbacks:");
+  });
+});

@@ -1,13 +1,26 @@
+import { resolveIntegerOption } from "openclaw/plugin-sdk/number-runtime";
 // Transport-agnostic Parallel search normalization shared by the paid REST
 // provider (`parallel`) and the free Search MCP provider (`parallel-free`).
 // Both transports return the same v1 result shape, so query/result handling
 // lives here instead of being copied into each runtime.
 import {
   buildSearchCacheKey,
+  DEFAULT_SEARCH_COUNT,
+  readCachedSearchPayload,
+  readPositiveIntegerParam,
+  readStringArrayParam,
+  readStringParam,
+  resolveSearchCacheTtlMs,
+  resolveSearchTimeoutSeconds,
   resolveSiteName,
+  type SearchConfigRecord,
   wrapWebContent,
+  writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeBoundedOptionalString,
+  normalizeOptionalString,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 // Internal-only bounds (the model-facing tool schema declares its own copies).
@@ -21,9 +34,14 @@ const PARALLEL_MAX_SEARCH_QUERIES = 5;
 // Paid v1 REST accepts session ids up to 1000 chars, but the free Search MCP
 // `tools/list` schema caps session_id at 100. Each runtime passes its own limit
 // (and advertises it in the tool schema) so callers never send an out-of-contract id.
-export const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
+const PARALLEL_SESSION_ID_MAX_LENGTH = 1000;
 export const PARALLEL_FREE_SESSION_ID_MAX_LENGTH = 100;
 const PARALLEL_CLIENT_MODEL_MAX_LENGTH = 100;
+
+export const normalizeParallelSessionId: (
+  value: string | undefined,
+  maxLength: number,
+) => string | undefined = normalizeBoundedOptionalString;
 
 type ParallelSearchResult = {
   title?: unknown;
@@ -40,16 +58,95 @@ export type ParallelSearchResponse = {
   usage?: unknown;
 };
 
-export function resolveParallelSearchCount(value: number): number {
-  return Math.max(1, Math.min(PARALLEL_MAX_SEARCH_COUNT, Math.floor(value)));
+type NormalizedParallelSearchRequest = {
+  objective?: string;
+  searchQueries: string[];
+  count: number;
+  sessionId?: string;
+  clientModel?: string;
+};
+
+function normalizeParallelSearchRequest(
+  args: Record<string, unknown>,
+  configuredCount: unknown,
+  sessionIdMaxLength: number,
+): { error: ReturnType<typeof invalidSearchQueriesPayload> } | NormalizedParallelSearchRequest {
+  const objective = normalizeParallelObjective(readStringParam(args, "objective"));
+  const cliQuery = normalizeParallelObjective(readStringParam(args, "query"));
+  let searchQueries = normalizeParallelSearchQueries(readStringArrayParam(args, "search_queries"));
+  if (searchQueries.length === 0 && cliQuery) {
+    searchQueries = normalizeParallelSearchQueries([cliQuery]);
+  }
+  if (searchQueries.length === 0) {
+    return { error: invalidSearchQueriesPayload() };
+  }
+  return {
+    objective,
+    searchQueries,
+    count: resolveParallelSearchCount(args, configuredCount),
+    sessionId: normalizeParallelSessionId(readStringParam(args, "session_id"), sessionIdMaxLength),
+    clientModel: normalizeParallelClientModel(readStringParam(args, "client_model")),
+  };
 }
 
-export function normalizeParallelSessionId(
-  value: string | undefined,
-  maxLength: number,
-): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  return trimmed && trimmed.length <= maxLength ? trimmed : undefined;
+export async function executeParallelSearchRequest(params: {
+  provider: "parallel" | "parallel-free";
+  endpoint: string;
+  args: Record<string, unknown>;
+  searchConfig: SearchConfigRecord | undefined;
+  signal?: AbortSignal;
+  search: (
+    request: NormalizedParallelSearchRequest,
+    timeoutSeconds: number,
+  ) => Promise<ParallelSearchResponse>;
+}): Promise<Record<string, unknown>> {
+  const request = normalizeParallelSearchRequest(
+    params.args,
+    params.searchConfig?.maxResults,
+    params.provider === "parallel"
+      ? PARALLEL_SESSION_ID_MAX_LENGTH
+      : PARALLEL_FREE_SESSION_ID_MAX_LENGTH,
+  );
+  if ("error" in request) {
+    return request.error;
+  }
+  const cacheKey = buildParallelCacheKey({ endpoint: params.endpoint, ...request });
+  const cached = readCachedSearchPayload(cacheKey);
+  if (cached) {
+    return cached;
+  }
+
+  const start = Date.now();
+  const response = await params.search(request, resolveSearchTimeoutSeconds(params.searchConfig));
+  // A provider can finish after its caller aborts; never cache that stale result.
+  params.signal?.throwIfAborted();
+  const payload = buildParallelSearchPayload({
+    provider: params.provider,
+    objective: request.objective,
+    searchQueries: request.searchQueries,
+    response,
+    start,
+  });
+  const cachePayload = request.sessionId ? payload : stripParallelGeneratedSessionId(payload);
+  writeCachedSearchPayload(cacheKey, cachePayload, resolveSearchCacheTtlMs(params.searchConfig));
+  return payload;
+}
+
+export function resolveParallelSearchCount(
+  args: Record<string, unknown>,
+  configuredCount: unknown,
+): number {
+  const requestedCount = readPositiveIntegerParam(args, "count", {
+    max: PARALLEL_MAX_SEARCH_COUNT,
+    message: `count must be an integer from 1 to ${PARALLEL_MAX_SEARCH_COUNT}.`,
+  });
+  const value =
+    requestedCount ??
+    (typeof configuredCount === "number" ? configuredCount : DEFAULT_SEARCH_COUNT);
+  return resolveIntegerOption(value, DEFAULT_SEARCH_COUNT, {
+    min: 1,
+    max: PARALLEL_MAX_SEARCH_COUNT,
+  });
 }
 
 export function normalizeParallelObjective(value: string | undefined): string | undefined {
@@ -104,7 +201,7 @@ export function normalizeParallelSearchQueries(value: unknown): string[] {
   return out;
 }
 
-export function invalidSearchQueriesPayload() {
+function invalidSearchQueriesPayload() {
   return {
     error: "invalid_search_queries",
     message:
@@ -127,7 +224,7 @@ export function normalizeParallelResults(payload: unknown): ParallelSearchResult
 }
 
 /** Maps a Parallel v1 response into wrapped `web_search` result entries. */
-export function mapParallelResults(response: ParallelSearchResponse): Record<string, unknown>[] {
+function mapParallelResults(response: ParallelSearchResponse): Record<string, unknown>[] {
   return normalizeParallelResults(response).map((entry) => {
     const title = typeof entry.title === "string" ? entry.title : "";
     const url = typeof entry.url === "string" ? entry.url : "";
@@ -152,12 +249,49 @@ export function mapParallelResults(response: ParallelSearchResponse): Record<str
   });
 }
 
+function buildParallelSearchPayload(params: {
+  provider: "parallel" | "parallel-free";
+  objective?: string;
+  searchQueries: readonly string[];
+  response: ParallelSearchResponse;
+  start: number;
+}): Record<string, unknown> {
+  const results = mapParallelResults(params.response);
+  const payload: Record<string, unknown> = {
+    ...(params.objective ? { objective: params.objective } : {}),
+    searchQueries: params.searchQueries,
+    provider: params.provider,
+    count: results.length,
+    tookMs: Date.now() - params.start,
+    externalContent: {
+      untrusted: true,
+      source: "web_search",
+      provider: params.provider,
+      wrapped: true,
+    },
+    results,
+  };
+  if (typeof params.response.search_id === "string") {
+    payload.searchId = params.response.search_id;
+  }
+  if (typeof params.response.session_id === "string") {
+    payload.sessionId = params.response.session_id;
+  }
+  if (Array.isArray(params.response.warnings) && params.response.warnings.length > 0) {
+    payload.warnings = params.response.warnings;
+  }
+  if (Array.isArray(params.response.usage) && params.response.usage.length > 0) {
+    payload.usage = params.response.usage;
+  }
+  return payload;
+}
+
 /**
  * Drops a Parallel-generated `sessionId` before caching. Identical queries from
  * unrelated tasks would otherwise share that id; caller-supplied session ids are
  * part of the cache key, so a cache hit only ever returns the matching id.
  */
-export function stripParallelGeneratedSessionId(
+function stripParallelGeneratedSessionId(
   payload: Record<string, unknown>,
 ): Record<string, unknown> {
   if (!("sessionId" in payload)) {

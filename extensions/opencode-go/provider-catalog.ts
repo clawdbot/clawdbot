@@ -1,15 +1,20 @@
-// Opencode Go provider module implements model/runtime integration.
 import type { ModelCatalogEntry } from "openclaw/plugin-sdk/agent-runtime";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import {
   buildLiveModelProviderConfig,
+  fetchLiveProviderModelIds,
+  getCachedUpstreamProviderCatalog,
+  listProviderCatalogSnapshotEntries,
+  projectProviderCatalogSnapshotRows,
+  projectUpstreamProviderCatalogSnapshot,
   type LiveModelCatalogFetchGuard,
+  type ProviderCatalogSnapshot,
+  type ProjectedUpstreamProviderCatalogModel as OpencodeGoModelDefinition,
+  type UpstreamProviderCatalog,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { normalizeModelCompat } from "openclaw/plugin-sdk/provider-model-shared";
-import type {
-  ModelDefinitionConfig,
-  ModelProviderConfig,
-} from "openclaw/plugin-sdk/provider-model-shared";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 
 const PROVIDER_ID = "opencode-go";
 
@@ -21,340 +26,54 @@ const OPENCODE_GO_KIMI_NO_REASONING_MODEL_IDS = new Set([
   "kimi-k2.7-code",
 ]);
 const OPENCODE_GO_MODELS_ENDPOINT = "https://opencode.ai/zen/go/v1/models";
+const OPENCODE_UPSTREAM_CATALOG_ENDPOINT = "https://models.opencode.ai/api.json";
 const OPENCODE_GO_MODELS_TIMEOUT_MS = 5_000;
 const OPENCODE_GO_MODELS_CACHE_TTL_MS = 60_000;
+const OPENCODE_GO_MANIFEST_PROVIDER = manifest.modelCatalog.providers[PROVIDER_ID];
+const OPENCODE_GO_SEED_CATALOG: ProviderCatalogSnapshot = new Map(
+  OPENCODE_GO_MANIFEST_PROVIDER.models.map((row) => {
+    const inheritedTransport = {
+      ...row,
+      provider: PROVIDER_ID,
+      api: "api" in row ? row.api : OPENCODE_GO_MANIFEST_PROVIDER.api,
+      baseUrl: "baseUrl" in row ? row.baseUrl : OPENCODE_GO_MANIFEST_PROVIDER.baseUrl,
+    };
+    // SAFETY: Bundled rows and inherited transport supply the complete runtime model shape.
+    const hydrated = inheritedTransport as OpencodeGoModelDefinition;
+    // SAFETY: Normalization preserves the hydrated model's transport and input shape.
+    const model = normalizeModelCompat(hydrated) as OpencodeGoModelDefinition;
+    return [
+      model.id.toLowerCase(),
+      {
+        model,
+        ...("status" in row && (row.status === "deprecated" || row.status === "preview")
+          ? { status: row.status }
+          : {}),
+      },
+    ];
+  }),
+);
+let opencodeGoCatalog = OPENCODE_GO_SEED_CATALOG;
 
-type OpencodeGoModelDefinition = ModelDefinitionConfig & {
-  provider: typeof PROVIDER_ID;
-  api: NonNullable<ModelDefinitionConfig["api"]>;
-  baseUrl: string;
-  input: Array<"text" | "image">;
-};
+function listStaticOpencodeGoModels(): OpencodeGoModelDefinition[] {
+  return [...OPENCODE_GO_SEED_CATALOG.values()]
+    .filter(({ model }) => !opencodeGoCatalog.get(model.id)?.status)
+    .map(({ model }) => model);
+}
 
-const OPENCODE_GO_MODELS = (
-  [
-    {
-      id: "deepseek-v4-pro",
-      name: "DeepSeek V4 Pro",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1.74,
-        output: 3.48,
-        cacheRead: 0.145,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "deepseek-v4-flash",
-      name: "DeepSeek V4 Flash",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.14,
-        output: 0.28,
-        cacheRead: 0.028,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 384_000,
-      compat: {
-        supportsUsageInStreaming: true,
-        supportsReasoningEffort: true,
-        maxTokensField: "max_tokens",
-      },
-    },
-    {
-      id: "glm-5",
-      name: "GLM-5",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1,
-        output: 3.2,
-        cacheRead: 0.2,
-        cacheWrite: 0,
-      },
-      contextWindow: 202_752,
-      maxTokens: 32_768,
-    },
-    {
-      id: "glm-5.1",
-      name: "GLM-5.1",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1.4,
-        output: 4.4,
-        cacheRead: 0.26,
-        cacheWrite: 0,
-      },
-      contextWindow: 202_752,
-      maxTokens: 32_768,
-    },
-    {
-      id: "glm-5.2",
-      name: "GLM-5.2",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1.4,
-        output: 4.4,
-        cacheRead: 0.26,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 131_072,
-    },
-    {
-      id: "hy3-preview",
-      name: "HY3 Preview",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 32_768,
-    },
-    {
-      id: "kimi-k2.5",
-      name: "Kimi K2.5",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.6,
-        output: 3,
-        cacheRead: 0.1,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
-    {
-      id: "kimi-k2.6",
-      name: "Kimi K2.6",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.95,
-        output: 4,
-        cacheRead: 0.16,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
-    {
-      id: "kimi-k2.7-code",
-      name: "Kimi K2.7 Code",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.95,
-        output: 4,
-        cacheRead: 0.19,
-        cacheWrite: 0,
-      },
-      contextWindow: 262_144,
-      maxTokens: 262_144,
-    },
-    {
-      id: "mimo-v2.5",
-      name: "MiMo V2.5",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.4,
-        output: 2,
-        cacheRead: 0.08,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 128_000,
-    },
-    {
-      id: "mimo-v2.5-pro",
-      name: "MiMo V2.5 Pro",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 1,
-        output: 3,
-        cacheRead: 0.2,
-        cacheWrite: 0,
-      },
-      contextWindow: 1_048_576,
-      maxTokens: 128_000,
-    },
-    {
-      id: "minimax-m2.5",
-      name: "MiniMax M2.5",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.3,
-        output: 1.2,
-        cacheRead: 0.03,
-        cacheWrite: 0.375,
-      },
-      contextWindow: 204_800,
-      maxTokens: 65_536,
-    },
-    {
-      id: "minimax-m2.7",
-      name: "MiniMax M2.7",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.3,
-        output: 1.2,
-        cacheRead: 0.06,
-        cacheWrite: 0.375,
-      },
-      contextWindow: 204_800,
-      maxTokens: 131_072,
-    },
-    {
-      id: "minimax-m3",
-      name: "MiniMax M3",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 0.6,
-        output: 2.4,
-        cacheRead: 0.12,
-        cacheWrite: 0.75,
-      },
-      contextWindow: 204_800,
-      maxTokens: 131_072,
-    },
-    {
-      id: "qwen3.5-plus",
-      name: "Qwen3.5 Plus",
-      api: "openai-completions",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.2,
-        output: 1.2,
-        cacheRead: 0.02,
-        cacheWrite: 0.25,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
-    {
-      id: "qwen3.7-max",
-      name: "Qwen3.7 Max",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text"],
-      cost: {
-        input: 2.5,
-        output: 7.5,
-        cacheRead: 0.5,
-        cacheWrite: 3.125,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 65_536,
-    },
-    {
-      id: "qwen3.7-plus",
-      name: "Qwen3.7 Plus",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.4,
-        output: 1.6,
-        cacheRead: 0.04,
-        cacheWrite: 0.5,
-      },
-      contextWindow: 1_000_000,
-      maxTokens: 65_536,
-    },
-    {
-      id: "qwen3.6-plus",
-      name: "Qwen3.6 Plus",
-      api: "anthropic-messages",
-      provider: PROVIDER_ID,
-      baseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
-      compat: { thinkingFormat: "qwen" },
-      reasoning: true,
-      input: ["text", "image"],
-      cost: {
-        input: 0.5,
-        output: 3,
-        cacheRead: 0.05,
-        cacheWrite: 0.625,
-      },
-      contextWindow: 262_144,
-      maxTokens: 65_536,
-    },
-  ] satisfies OpencodeGoModelDefinition[]
-).map((model) => normalizeModelCompat(model) as OpencodeGoModelDefinition);
+function cacheUpstreamOpencodeGoModels(catalog: UpstreamProviderCatalog): void {
+  opencodeGoCatalog = projectUpstreamProviderCatalogSnapshot({
+    providerId: PROVIDER_ID,
+    provider: catalog,
+    seed: OPENCODE_GO_SEED_CATALOG,
+    anthropicBaseUrl: OPENCODE_GO_ANTHROPIC_BASE_URL,
+    defaultBaseUrl: OPENCODE_GO_OPENAI_BASE_URL,
+    decorateModel: (model) =>
+      model.api === "anthropic-messages" && model.id.startsWith("qwen")
+        ? { ...model, compat: { ...model.compat, thinkingFormat: "qwen" } }
+        : model,
+  });
+}
 
 type FetchOpencodeGoLiveModelIdsParams = {
   apiKey?: string;
@@ -363,25 +82,53 @@ type FetchOpencodeGoLiveModelIdsParams = {
   signal?: AbortSignal;
 };
 
-function buildOpencodeGoProviderConfig(
-  models: OpencodeGoModelDefinition[],
-  apiKey?: string,
-): ModelProviderConfig {
+export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
   return {
     api: "openai-completions",
     baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
     ...(apiKey ? { apiKey } : {}),
-    models,
+    models: listStaticOpencodeGoModels(),
   };
 }
 
-export function buildStaticOpencodeGoProviderConfig(apiKey?: string): ModelProviderConfig {
-  return buildOpencodeGoProviderConfig(OPENCODE_GO_MODELS, apiKey);
+export async function resolveOpencodeGoStarterModel(params: {
+  apiKey: string;
+  preferredModelRef: string;
+  fetchGuard?: LiveModelCatalogFetchGuard;
+  signal?: AbortSignal;
+}): Promise<string | undefined> {
+  const liveModelIds = await fetchLiveProviderModelIds({
+    providerId: PROVIDER_ID,
+    endpoint: OPENCODE_GO_MODELS_ENDPOINT,
+    discoveryApiKey: params.apiKey,
+    fetchGuard: params.fetchGuard,
+    signal: params.signal,
+    timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
+    auditContext: "opencode-go-onboarding-model-discovery",
+  });
+  const preferredModelId = params.preferredModelRef.replace(`${PROVIDER_ID}/`, "");
+  return liveModelIds.includes(preferredModelId) ? params.preferredModelRef : undefined;
 }
 
 export async function buildOpencodeGoLiveProviderConfig(
   params: FetchOpencodeGoLiveModelIdsParams = {},
 ): Promise<ModelProviderConfig> {
+  if (!params.apiKey && !params.discoveryApiKey) {
+    return buildStaticOpencodeGoProviderConfig();
+  }
+  try {
+    const upstream = await getCachedUpstreamProviderCatalog({
+      endpoint: OPENCODE_UPSTREAM_CATALOG_ENDPOINT,
+      providerId: PROVIDER_ID,
+      fetchGuard: params.fetchGuard,
+      signal: params.signal,
+    });
+    if (upstream) {
+      cacheUpstreamOpencodeGoModels(upstream);
+    }
+  } catch {
+    // Keep the trusted offline seed usable when upstream metadata is unavailable.
+  }
   return await buildLiveModelProviderConfig({
     providerId: PROVIDER_ID,
     endpoint: OPENCODE_GO_MODELS_ENDPOINT,
@@ -389,7 +136,7 @@ export async function buildOpencodeGoLiveProviderConfig(
       api: "openai-completions",
       baseUrl: OPENCODE_GO_OPENAI_BASE_URL,
     },
-    models: OPENCODE_GO_MODELS,
+    models: listStaticOpencodeGoModels(),
     apiKey: params.apiKey,
     discoveryApiKey: params.discoveryApiKey,
     fetchGuard: params.fetchGuard,
@@ -397,23 +144,17 @@ export async function buildOpencodeGoLiveProviderConfig(
     timeoutMs: OPENCODE_GO_MODELS_TIMEOUT_MS,
     ttlMs: OPENCODE_GO_MODELS_CACHE_TTL_MS,
     auditContext: "opencode-go-model-discovery",
+    projectRows: (rows) => projectProviderCatalogSnapshotRows(rows, opencodeGoCatalog),
   });
 }
 
 export function listOpencodeGoModelCatalogEntries(): ModelCatalogEntry[] {
-  return OPENCODE_GO_MODELS.map((model) => ({
-    provider: model.provider,
-    id: model.id,
-    name: model.name,
-    reasoning: model.reasoning,
-    input: model.input,
-    contextWindow: model.contextWindow,
-  }));
+  return listProviderCatalogSnapshotEntries(opencodeGoCatalog);
 }
 
 export function resolveOpencodeGoModel(modelId: string): ProviderRuntimeModel | undefined {
-  const normalizedModelId = modelId.trim().toLowerCase();
-  return OPENCODE_GO_MODELS.find((model) => model.id === normalizedModelId);
+  // Public upstream metadata does not establish another account's Go entitlement.
+  return OPENCODE_GO_SEED_CATALOG.get(modelId.trim().toLowerCase())?.model;
 }
 
 export function isOpencodeGoKimiNoReasoningModelId(modelId: unknown): boolean {

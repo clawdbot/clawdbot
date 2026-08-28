@@ -25,9 +25,13 @@ vi.mock("../config/io.js", () => ({
   getRuntimeConfig: () => cfg,
 }));
 
-vi.mock("../config/sessions.js", () => ({
-  resolveMainSessionKey: () => "agent:main:main",
-}));
+vi.mock("../config/sessions.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../config/sessions.js")>();
+  return {
+    ...actual,
+    resolveMainSessionKey: () => "agent:main:main",
+  };
+});
 
 vi.mock("./auth.js", () => ({
   authorizeHttpGatewayConnect: alwaysAuthorized,
@@ -60,9 +64,9 @@ vi.mock("../plugins/tools.js", () => ({
 vi.mock("../agents/openclaw-tools.js", () => {
   const tools = [
     {
-      name: "cron",
+      name: "automations",
       parameters: { type: "object", properties: { action: { type: "string" } } },
-      execute: async () => ({ ok: true, via: "cron" }),
+      execute: async () => ({ ok: true, via: "automations" }),
     },
     {
       name: "gateway",
@@ -154,6 +158,24 @@ describe("tools invoke HTTP denylist", () => {
 
     expect(cronRes.status).toBe(200);
   });
+
+  it.each(["cron", " CRON ", "CrOn"])(
+    "keeps deny spelling %j authoritative over a canonical allow",
+    async (deniedTool) => {
+      cfg = {
+        gateway: {
+          tools: {
+            allow: ["automations"],
+            deny: [deniedTool],
+          },
+        },
+      };
+
+      const cronRes = await invoke("cron", "operator.admin");
+
+      expect(cronRes.status).toBe(404);
+    },
+  );
 
   it("keeps gateway denied under the coding profile while honoring explicit cron allow", async () => {
     cfg = {

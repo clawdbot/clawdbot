@@ -1,9 +1,63 @@
 // Model list probe tests cover runtime probing while listing configured models.
+import fsSync from "node:fs";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import type { AgentRunResultView } from "../../agents/agent-run-result.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { acquireGatewayLock, type GatewayLockOptions } from "../../infra/gateway-lock.js";
 
 let probeModule: typeof import("./list.probe.js");
+
+function createGatewayLockOptions(stateDir: string): GatewayLockOptions {
+  return {
+    allowInTests: true,
+    env: {
+      ...process.env,
+      OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      OPENCLAW_STATE_DIR: stateDir,
+    },
+    lockDir: path.join(stateDir, "gateway-locks"),
+    readProcessStartTime: () => 123_456,
+    timeoutMs: 100,
+  };
+}
+
+function createSignalProcess() {
+  type SignalName = "SIGINT" | "SIGTERM";
+  const listeners = new Map<SignalName, Set<() => void>>();
+  const processLike = {
+    on(signal: SignalName, handler: () => void) {
+      const current = listeners.get(signal) ?? new Set<() => void>();
+      current.add(handler);
+      listeners.set(signal, current);
+      return processLike;
+    },
+    off(signal: SignalName, handler: () => void) {
+      listeners.get(signal)?.delete(handler);
+      return processLike;
+    },
+  };
+  return {
+    processLike,
+    emit(signal: SignalName) {
+      for (const handler of listeners.get(signal) ?? []) {
+        handler();
+      }
+    },
+  };
+}
+
+async function withTempState<T>(run: (stateDir: string) => Promise<T>): Promise<T> {
+  const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-model-probe-lock-"));
+  try {
+    return await run(stateDir);
+  } finally {
+    await fs.rm(stateDir, { recursive: true, force: true });
+  }
+}
 
 describe("mapFailoverReasonToProbeStatus", () => {
   beforeAll(async () => {
@@ -42,14 +96,98 @@ describe("mapFailoverReasonToProbeStatus", () => {
 });
 
 describe("runAuthProbes", () => {
-  it("runs Codex auth probes through raw OpenClaw model-run mode", async () => {
+  beforeAll(async () => {
+    probeModule ??= await import("./list.probe.js");
+  });
+
+  it("refuses direct CLI probes while a live Gateway owns canonical state", async () => {
+    await withTempState(async (stateDir) => {
+      const lockOptions = createGatewayLockOptions(stateDir);
+      const gatewayLock = await acquireGatewayLock({ ...lockOptions, port: 28789 });
+      expect(gatewayLock).not.toBeNull();
+      if (!gatewayLock) {
+        throw new Error("Expected live Gateway fixture lock");
+      }
+      try {
+        await expect(
+          probeModule.withAuthProbeStateOwnership(
+            { mode: "exclusive", gatewayLockOptions: lockOptions },
+            async () => undefined,
+          ),
+        ).rejects.toThrow(
+          `A Gateway is running for this state directory (pid ${process.pid}, port 28789). Stop the Gateway first (openclaw gateway stop), then rerun models status --probe.`,
+        );
+      } finally {
+        await gatewayLock.release();
+      }
+    });
+  });
+
+  it("holds and releases canonical state ownership around direct CLI probes", async () => {
+    await withTempState(async (stateDir) => {
+      const lockOptions = createGatewayLockOptions(stateDir);
+      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
+      let observedPayload: { pid?: number; role?: string } | undefined;
+
+      await probeModule.withAuthProbeStateOwnership(
+        { mode: "exclusive", gatewayLockOptions: lockOptions },
+        async () => {
+          observedPayload = JSON.parse(fsSync.readFileSync(stateLockPath, "utf8")) as {
+            pid?: number;
+            role?: string;
+          };
+        },
+      );
+
+      expect(observedPayload).toMatchObject({ pid: process.pid, role: "agent-embedded" });
+      await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("releases canonical state ownership when a direct CLI probe receives SIGTERM", async () => {
+    await withTempState(async (stateDir) => {
+      const lockOptions = createGatewayLockOptions(stateDir);
+      const stateLockPath = path.join(lockOptions.lockDir!, "gateway.state.lock");
+      const signals = createSignalProcess();
+
+      await probeModule.withAuthProbeStateOwnership(
+        {
+          mode: "exclusive",
+          gatewayLockOptions: lockOptions,
+          process: signals.processLike,
+        },
+        async (signal) => {
+          let markInterrupted!: () => void;
+          const interrupted = new Promise<void>((resolve) => {
+            markInterrupted = resolve;
+          });
+          signal?.addEventListener("abort", markInterrupted, { once: true });
+          signals.emit("SIGTERM");
+          await interrupted;
+        },
+      );
+
+      await expect(fs.stat(stateLockPath)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  });
+
+  it("runs Codex-pinned auth probes through raw OpenClaw model-run mode", async () => {
     const runEmbeddedAgent = vi.fn(
-      async (_params: {
+      async (params: {
         agentDir?: string;
+        agentHarnessRuntimeOverride?: string;
         authProfileId?: string;
         authProfileIdSource?: string;
         config?: OpenClawConfig;
-      }) => ({ text: "OK" }),
+        preparedModelRuntimeMode?: string;
+      }): Promise<AgentRunResultView> => {
+        if (params.agentHarnessRuntimeOverride !== "openclaw") {
+          throw new Error(
+            'Requested agent harness "codex" does not support openai/gpt-5.5 (Codex cannot reproduce authored request transport overrides).',
+          );
+        }
+        return { payloads: [{ text: "OK" }] };
+      },
     );
     vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
     vi.doMock("../../agents/auth-profiles.js", () => ({
@@ -80,8 +218,8 @@ describe("runAuthProbes", () => {
       resolveProviderEntryApiKeyBinding: vi.fn(),
       resolveProviderEntryApiKeyProfileReference: () => ({ kind: "none" }),
     }));
-    vi.doMock("../../agents/model-catalog.js", () => ({
-      loadModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
+      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     try {
       const module = await importFreshModule<typeof import("./list.probe.js")>(
@@ -89,7 +227,17 @@ describe("runAuthProbes", () => {
         `./list.probe.js?scope=${Math.random().toString(36).slice(2)}`,
       );
       const result = await module.runAuthProbes({
-        cfg: {} as never,
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                agentRuntime: { id: "codex" },
+                models: [],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
         agentId: "probe-agent",
         agentDir: "/tmp/openclaw-probe-agent",
         workspaceDir: "/tmp/openclaw-probe-workspace",
@@ -107,17 +255,53 @@ describe("runAuthProbes", () => {
       expect(result.results[0]?.status).toBe("ok");
       expect(runEmbeddedAgent).toHaveBeenCalledWith(
         expect.objectContaining({
+          agentHarnessRuntimeOverride: "openclaw",
           modelRun: true,
           disableTools: true,
+          modelFallbacksOverride: [],
           authProfileId: "openai:profile",
           authProfileIdSource: "user",
         }),
       );
+      // Profile targets reuse the committed configured generation: no isolated
+      // runtime mode is requested.
+      expect(runEmbeddedAgent.mock.calls[0]?.[0].preparedModelRuntimeMode).toBeUndefined();
+
+      runEmbeddedAgent.mockResolvedValueOnce({
+        payloads: [{ text: "LLM request timed out.", isError: true }],
+        meta: { livenessState: "abandoned" },
+      });
+      const failed = await module.runAuthProbes({
+        cfg: {
+          models: {
+            providers: {
+              openai: {
+                baseUrl: "https://api.openai.com/v1",
+                agentRuntime: { id: "codex" },
+                models: [],
+              },
+            },
+          },
+        } satisfies OpenClawConfig,
+        agentId: "probe-agent",
+        agentDir: "/tmp/openclaw-probe-agent",
+        workspaceDir: "/tmp/openclaw-probe-workspace",
+        providers: ["openai"],
+        modelCandidates: ["openai/gpt-5.5"],
+        options: {
+          provider: "openai",
+          profileIds: ["openai:profile"],
+          timeoutMs: 5_000,
+          concurrency: 1,
+          maxTokens: 8,
+        },
+      });
+      expect(failed.results[0]).toMatchObject({ status: "timeout" });
     } finally {
       vi.doUnmock("../../agents/embedded-agent.js");
       vi.doUnmock("../../agents/auth-profiles.js");
       vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/model-catalog.js");
+      vi.doUnmock("../../agents/prepared-model-catalog.js");
     }
   });
 
@@ -128,7 +312,8 @@ describe("runAuthProbes", () => {
         authProfileId?: string;
         authProfileIdSource?: string;
         config?: OpenClawConfig;
-      }) => ({ text: "OK" }),
+        preparedModelRuntimeMode?: string;
+      }) => ({ payloads: [{ text: "OK" }] }),
     );
     vi.doMock("../../agents/embedded-agent.js", () => ({ runEmbeddedAgent }));
     const upsertAuthProfileWithLock = vi.fn(
@@ -170,8 +355,8 @@ describe("runAuthProbes", () => {
         source: "models.json",
       }),
     }));
-    vi.doMock("../../agents/model-catalog.js", () => ({
-      loadModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
+      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     const providerConfig = {
       baseUrl: "https://api.openai.com/v1",
@@ -206,6 +391,7 @@ describe("runAuthProbes", () => {
       );
       expect(configKeyCall?.[0].agentDir).not.toBe("/tmp/openclaw-probe-agent");
       expect(configKeyCall?.[0].authProfileIdSource).toBe("user");
+      expect(configKeyCall?.[0].preparedModelRuntimeMode).toBe("isolated-read-only");
       expect(configKeyCall?.[0].config).toMatchObject({
         models: {
           providers: {
@@ -235,14 +421,19 @@ describe("runAuthProbes", () => {
       vi.doUnmock("../../agents/embedded-agent.js");
       vi.doUnmock("../../agents/auth-profiles.js");
       vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/model-catalog.js");
+      vi.doUnmock("../../agents/prepared-model-catalog.js");
     }
   });
 
   it("isolates marker credentials from stored profiles without pinning a synthetic one", async () => {
     const runEmbeddedAgent = vi.fn(
-      async (_params: { agentDir?: string; authProfileId?: string; config?: OpenClawConfig }) => ({
-        text: "OK",
+      async (_params: {
+        agentDir?: string;
+        authProfileId?: string;
+        config?: OpenClawConfig;
+        preparedModelRuntimeMode?: string;
+      }) => ({
+        payloads: [{ text: "OK" }],
       }),
     );
     const upsertAuthProfileWithLock = vi.fn();
@@ -267,8 +458,8 @@ describe("runAuthProbes", () => {
         source: "OPENAI_API_KEY",
       }),
     }));
-    vi.doMock("../../agents/model-catalog.js", () => ({
-      loadModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
+    vi.doMock("../../agents/prepared-model-catalog.js", () => ({
+      loadPreparedModelCatalog: async () => [{ provider: "openai", id: "gpt-5.5" }],
     }));
     const cfg = {
       models: {
@@ -310,6 +501,7 @@ describe("runAuthProbes", () => {
       const call = runEmbeddedAgent.mock.calls[0]?.[0];
       expect(call?.agentDir).not.toBe("/tmp/openclaw-probe-agent");
       expect(call?.agentDir).toContain("openclaw-auth-probe-");
+      expect(call?.preparedModelRuntimeMode).toBe("isolated-read-only");
       expect(call?.config?.auth?.order?.openai).toEqual([]);
       expect(call?.config?.models?.providers?.openai?.apiKey).toBe(
         cfg.models.providers.openai.apiKey,
@@ -320,7 +512,7 @@ describe("runAuthProbes", () => {
       vi.doUnmock("../../agents/embedded-agent.js");
       vi.doUnmock("../../agents/auth-profiles.js");
       vi.doUnmock("../../agents/model-auth.js");
-      vi.doUnmock("../../agents/model-catalog.js");
+      vi.doUnmock("../../agents/prepared-model-catalog.js");
     }
   });
 });

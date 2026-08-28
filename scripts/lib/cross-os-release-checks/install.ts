@@ -12,7 +12,8 @@ import {
 } from "node:fs";
 import { dirname, join, relative, resolve, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
-import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mjs";
+import { validatePackageSourceDir } from "../../package-source-preflight.mjs";
+import { isLocalBuildMetadataDistPath } from "../local-build-metadata-paths.mts";
 import type { CandidateBuild, LaneCommandParams, LaneState, PackageJson } from "./config.ts";
 import {
   CROSS_OS_NPM_DEBUG_LOG_TAIL_BYTES,
@@ -22,7 +23,6 @@ import {
   PUBLISHED_INSTALLER_BASE_URL,
   installTimeoutMs,
   resolvePackDestinationTarball,
-  shouldRunBundledPluginPostinstall,
 } from "./config.ts";
 import { readLogTextWindow } from "./logs.ts";
 import { runCommand } from "./process.ts";
@@ -35,6 +35,7 @@ export async function prepareCandidate(params: {
   logsDir: string;
 }): Promise<CandidateBuild> {
   logPhase("prepare", "resolve-source-sha");
+  validatePackageSourceDir(params.sourceDir, { allowUnreleasedChangelog: true });
   const packageJson = readPackageJson(params.sourceDir);
   const hasUiBuildScript = packageJsonHasScript(packageJson, "ui:build");
   const sourceSha = (
@@ -342,11 +343,11 @@ export function readProvidedCandidate(params: {
   };
 }
 
-export function readPackageJson(packageRoot: string): PackageJson {
+function readPackageJson(packageRoot: string): PackageJson {
   return JSON.parse(readFileSync(join(packageRoot, "package.json"), "utf8")) as PackageJson;
 }
 
-export function packageJsonHasScript(packageJson: PackageJson, scriptName: string) {
+function packageJsonHasScript(packageJson: PackageJson, scriptName: string) {
   return typeof packageJson?.scripts?.[scriptName] === "string";
 }
 
@@ -398,10 +399,7 @@ export async function installTarballPackage(params: {
     timeoutMs: params.timeoutMs,
     ignoreScripts: params.ignoreScripts,
   });
-  if (
-    params.restoreBundledPluginPostinstall !== false &&
-    shouldRunBundledPluginPostinstall({ lane: params.lane })
-  ) {
+  if (params.restoreBundledPluginPostinstall !== false) {
     await runBundledPluginPostinstall({
       lane: params.lane,
       env: params.env,
@@ -740,7 +738,7 @@ export function readInstalledMetadata(prefixDir: string) {
   return readInstalledMetadataFromManifest(packageJson, packageRoot);
 }
 
-export function readInstalledMetadataFromPackageRoot(packageRoot: string) {
+function readInstalledMetadataFromPackageRoot(packageRoot: string) {
   const { packageJson } = readInstalledPackageManifestFromPackageRoot(packageRoot);
   return readInstalledMetadataFromManifest(packageJson, packageRoot);
 }
@@ -822,7 +820,7 @@ export function resolveInstalledPackageRootFromCliPath(
   throw new Error(`Installed package manifest missing. Checked: ${checked.join(", ")}`);
 }
 
-export function installedPackageRoot(prefixDir: string, platform = process.platform) {
+function installedPackageRoot(prefixDir: string, platform = process.platform) {
   return platform === "win32"
     ? join(prefixDir, "node_modules", "openclaw")
     : join(prefixDir, "lib", "node_modules", "openclaw");
@@ -832,7 +830,7 @@ export function installedEntryPath(prefixDir: string) {
   return join(installedPackageRoot(prefixDir), "openclaw.mjs");
 }
 
-export function npmShimPath(prefixDir: string) {
+function npmShimPath(prefixDir: string) {
   return process.platform === "win32" ? join(prefixDir, "npm.cmd") : join(prefixDir, "bin", "npm");
 }
 
@@ -840,7 +838,7 @@ export function binDirForPrefix(prefixDir: string) {
   return process.platform === "win32" ? prefixDir : join(prefixDir, "bin");
 }
 
-export function pnpmCommand() {
+function pnpmCommand() {
   return process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 }
 
@@ -848,7 +846,7 @@ export function npmCommand() {
   return process.platform === "win32" ? "npm.cmd" : "npm";
 }
 
-export function gitCommand() {
+function gitCommand() {
   return process.platform === "win32" ? "git.exe" : "git";
 }
 

@@ -72,7 +72,7 @@ describe("security audit sandbox docker config", () => {
                   docker: { image: "ghcr.io/example/sandbox:latest" },
                 },
               },
-              list: [{ id: "ops", sandbox: { mode: "all" } }],
+              entries: { ops: { sandbox: { mode: "all" } } },
             },
           } as OpenClawConfig,
           expectedFindings: [],
@@ -189,5 +189,33 @@ describe("security audit sandbox docker config", () => {
         }),
       );
     });
+  });
+
+  it("reports canonical agent paths for docker sandbox findings", () => {
+    const config = {
+      agents: {
+        entries: {
+          ops: {
+            sandbox: {
+              mode: "off",
+              docker: {
+                image: "ghcr.io/example/sandbox:latest",
+                binds: ["/etc/passwd:/mnt/passwd:ro"],
+              },
+            },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+
+    const noOpFinding = collectSandboxDockerNoopFindings(config).find(
+      (entry) => entry.checkId === "sandbox.docker_config_mode_off",
+    );
+    expect(noOpFinding?.detail).toContain("agents.entries.ops.sandbox.docker");
+
+    const dangerousFinding = collectSandboxDangerousConfigFindings(config).find(
+      (entry) => entry.checkId === "sandbox.dangerous_bind_mount",
+    );
+    expect(dangerousFinding?.detail).toContain("agents.entries.ops.sandbox.docker.binds");
   });
 });

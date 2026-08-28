@@ -3,7 +3,7 @@ import SwiftUI
 import UIKit
 
 struct AgentProNodesDestination: View {
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let overview: AgentOverviewSnapshot?
     let gatewayConnected: Bool
     let agentCount: Int
@@ -36,14 +36,14 @@ struct AgentProNodesDestination: View {
 
     @ViewBuilder
     private var header: some View {
-        if let headerLeadingAction {
+        if let headerSidebarAction {
             OpenClawAdaptiveHeaderRow(
                 title: "Instances",
                 subtitle: .verbatim(self.instancesDetail),
                 titleFont: OpenClawType.title3SemiBold,
                 subtitleFont: OpenClawType.subheadMedium)
             {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
             } accessory: {
                 EmptyView()
             }
@@ -79,11 +79,11 @@ struct AgentProNodesDestination: View {
                     ProValuePill(value: self.instancesValue, color: self.instancesColor)
                 }
                 HStack(spacing: 10) {
-                    self.detailMetric(
+                    agentProDetailMetric(
                         label: "Connected",
                         value: (self.overview?.presence.count ?? 0).formatted())
-                    self.detailMetric(label: "Agents", value: self.agentCount.formatted())
-                    self.detailMetric(
+                    agentProDetailMetric(label: "Agents", value: self.agentCount.formatted())
+                    agentProDetailMetric(
                         label: "Gateway",
                         value: self.gatewayConnected
                             ? String(localized: "online")
@@ -100,7 +100,7 @@ struct AgentProNodesDestination: View {
             ProCard(padding: 0) {
                 let nodes = self.sortedPresenceEntries
                 if nodes.isEmpty {
-                    self.emptyRow(
+                    agentProEmptyDetailRow(
                         icon: "display",
                         title: self.gatewayConnected ? "No instances connected" : "Instances unavailable",
                         detail: self.gatewayConnected
@@ -272,42 +272,6 @@ struct AgentProNodesDestination: View {
                 }
             }
             .padding(.horizontal, OpenClawProMetric.pagePadding)
-        }
-    }
-
-    private func detailMetric(label: OpenClawTextValue, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            label.text
-                .font(OpenClawType.caption2Medium)
-                .foregroundStyle(.secondary)
-            Text(verbatim: value)
-                .font(OpenClawType.subheadSemiBold)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(
-            Color.primary.opacity(0.055),
-            in: RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous))
-    }
-
-    private func emptyRow(
-        icon: String,
-        title: OpenClawTextValue,
-        detail: OpenClawTextValue) -> some View
-    {
-        HStack(spacing: 12) {
-            ProIconBadge(systemName: icon, color: .secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                title.text
-                    .font(OpenClawType.subheadSemiBold)
-                detail.text
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
         }
     }
 

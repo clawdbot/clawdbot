@@ -7,6 +7,7 @@ export { analyzeArgvCommand } from "./exec-argv-analysis.js";
 export {
   matchAllowlist,
   parseExecArgvToken,
+  buildCwdBoundHashedArgPattern,
   resolveAllowlistCandidatePath,
   resolveApprovalAuditCandidatePath,
   resolveApprovalAuditTrustPath,

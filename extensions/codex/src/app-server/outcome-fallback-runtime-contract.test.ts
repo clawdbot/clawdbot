@@ -3,14 +3,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
-import type { EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
+import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness";
 import { classifyEmbeddedAgentRunResultForModelFallback } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createContractRunResult,
+  openFileBackedSessionManagerForTest,
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
-import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
 import { createCodexDynamicToolBridge } from "./dynamic-tools.js";
 import { CodexAppServerEventProjector } from "./event-projector.js";
 import { createCodexTestModel } from "./test-support.js";
@@ -28,7 +29,7 @@ async function createParams(): Promise<EmbeddedRunAttemptParams> {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-outcome-contract-"));
   tempDirs.add(tempDir);
   const sessionFile = path.join(tempDir, "session.jsonl");
-  SessionManager.open(sessionFile);
+  openFileBackedSessionManagerForTest(sessionFile);
   return {
     prompt: OUTCOME_FALLBACK_RUNTIME_CONTRACT.prompt,
     sessionId: OUTCOME_FALLBACK_RUNTIME_CONTRACT.sessionId,
@@ -80,7 +81,7 @@ function classifyProjectedAttemptResult(result: ProjectedAttemptResult) {
       ...result,
       meta: {
         durationMs: 1,
-        aborted: result.aborted,
+        aborted: readAttemptTerminal(result).aborted,
         agentHarnessResultClassification: result.agentHarnessResultClassification,
         finalAssistantRawText: finalAssistantText || undefined,
         finalAssistantVisibleText: finalAssistantText || undefined,
@@ -115,7 +116,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("preserves exact NO_REPLY as assistant text instead of classifying in the adapter", async () => {
@@ -140,7 +141,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     expect(result.assistantTexts).toEqual(["NO_REPLY"]);
     expect(result.lastAssistant?.content).toEqual([{ type: "text", text: "NO_REPLY" }]);
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
   });
 
   it("preserves reasoning-only terminal turns for OpenClaw-owned fallback classification", async () => {
@@ -165,7 +166,7 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
-    expect(result.promptError).toBeNull();
+    expect(readAttemptTerminal(result).promptError).toBeNull();
     expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual([
       "user",
       "assistant",
@@ -231,42 +232,9 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
 
     expect(result.assistantTexts).toStrictEqual([]);
     expect(result.lastAssistant).toBeUndefined();
-    expect(result.promptError).toBeNull();
-    expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual([
-      "user",
-      "assistant",
-    ]);
-    const planMessage = result.messagesSnapshot[1];
-    if (planMessage?.role !== "assistant") {
-      throw new Error("expected Codex plan mirror assistant message");
-    }
-    expect(readMirrorIdentity(planMessage)).toBe(`${TURN_ID}:plan`);
-    expect(planMessage.content).toStrictEqual([
-      {
-        type: "text",
-        text: `Codex plan:\n${OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText}`,
-      },
-    ]);
-    expect(planMessage.api).toBe("openai-chatgpt-responses");
-    expect(planMessage.provider).toBe("codex");
-    expect(planMessage.model).toBe(OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel);
-    expect(planMessage.usage).toStrictEqual({
-      input: 0,
-      output: 0,
-      cacheRead: 0,
-      cacheWrite: 0,
-      totalTokens: 0,
-      cost: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        total: 0,
-      },
-    });
-    expect(planMessage.stopReason).toBe("stop");
-    expect(typeof planMessage.timestamp).toBe("number");
-    expect(planMessage.timestamp).toBeGreaterThan(0);
+    expect(readAttemptTerminal(result).promptError).toBeNull();
+    expect(result.messagesSnapshot.map((message) => message.role)).toStrictEqual(["user"]);
+    expect(result.agentHarnessResultClassification).toBe("planning-only");
   });
 
   it("preserves tool side-effect telemetry so fallback can stay disabled", async () => {
@@ -353,6 +321,25 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
         return projector.buildResult(buildToolTelemetry());
       },
     },
+    {
+      name: "structured planning-only",
+      classification: "planning-only",
+      expectedCode: "planning_only_result",
+      build: async () => {
+        const projector = await createProjector();
+        await projector.handleNotification(
+          forCurrentTurn("turn/plan/updated", {
+            plan: [{ step: OUTCOME_FALLBACK_RUNTIME_CONTRACT.planningOnlyText, status: "pending" }],
+          }),
+        );
+        await projector.handleNotification(
+          forCurrentTurn("turn/completed", {
+            turn: { id: TURN_ID, status: "completed", items: [] },
+          }),
+        );
+        return projector.buildResult(buildToolTelemetry());
+      },
+    },
   ] as const)(
     "keeps $name terminal turns fallback-ready with adapter-produced classification",
     async ({ build, classification, expectedCode }) => {
@@ -419,7 +406,12 @@ describe("Outcome/fallback runtime contract - Codex app-server adapter", () => {
           {
             name: "cron",
             description: "Cron",
-            parameters: { type: "object", properties: {} },
+            parameters: {
+              type: "object",
+              properties: { action: { type: "string" } },
+              required: ["action"],
+              additionalProperties: false,
+            },
             execute: vi.fn(async () => toolResult),
           } as never,
         ],

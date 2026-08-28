@@ -20,7 +20,6 @@ import {
   type AcpRuntimeHandle,
   type AcpRuntimeOptions,
   type AcpRuntimeStatus,
-  type AcpRuntimeTurn,
   type AcpRuntimeTurnResult,
   type SessionAgentOptions,
 } from "acpx/runtime";
@@ -29,19 +28,25 @@ import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { AcpRuntimeError, type AcpRuntime, type AcpRuntimeErrorCode } from "../runtime-api.js";
+import { CODEX_ACP_PACKAGE, OPENCLAW_CODEX_CONFIG_ARG } from "./codex-adapter.js";
 import { splitCommandParts } from "./command-line.js";
 import {
+  ACPX_PROBE_LEASE_SESSION_KEY,
   createAcpxProcessLeaseId,
   hashAcpxProcessCommand,
+  readAcpxProcessLeaseIdentity,
   withAcpxLeaseEnvironment,
   type AcpxProcessLease,
+  type AcpxProcessLeaseIdentity,
   type AcpxProcessLeaseStore,
 } from "./process-lease.js";
 import {
+  cleanupOpenClawOwnedAcpxPendingLease,
   cleanupOpenClawOwnedAcpxProcessTree,
   isOpenClawLeaseAwareAcpxProcessCommand,
   type AcpxProcessCleanupDeps,
 } from "./process-reaper.js";
+import type { CompleteAcpRuntime, CompleteAcpRuntimeTurn } from "./runtime-proxy.js";
 
 type AcpSessionStore = AcpRuntimeOptions["sessionStore"];
 type AcpSessionRecord = Parameters<AcpSessionStore["save"]>[0];
@@ -51,6 +56,7 @@ type OpenClawAcpxRuntimeOptions = AcpRuntimeOptions & {
   openclawWrapperRoot?: string;
   openclawGatewayInstanceId?: string;
   openclawProcessLeaseStore?: AcpxProcessLeaseStore;
+  pluginToolsMcpBridgeEnabled?: boolean;
   openclawToolsMcpBridgeEnabled?: boolean;
 };
 type AcpxRuntimeTestOptions = Record<string, unknown> & {
@@ -58,12 +64,13 @@ type AcpxRuntimeTestOptions = Record<string, unknown> & {
 };
 type OpenClawRuntimeTurnInput = Parameters<NonNullable<AcpRuntime["startTurn"]>>[0];
 type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0];
+type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>>;
 type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type AcpxMcpServer = NonNullable<AcpRuntimeOptions["mcpServers"]>[number];
 
+const ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME = "openclaw-plugin-tools";
 const ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME = "openclaw-tools";
 const OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY_ENV = "OPENCLAW_TOOLS_MCP_AGENT_SESSION_KEY";
-
 type ResetAwareSessionStore = AcpSessionStore & {
   markFresh: (sessionKey: string) => void;
 };
@@ -98,8 +105,15 @@ type AcpxLaunchLeaseContext = {
   gatewayInstanceId: string;
   sessionKey: string;
   wrapperRoot: string;
-  stableCommand?: string;
+  stableCommand: string;
+  resolvedCommand: string;
+  leasedCommand: string;
 };
+
+type AcpxHandleOperationSnapshot = Readonly<{
+  record: AcpLoadedSessionRecord;
+  command: string | undefined;
+}>;
 
 const CODEX_WRAPPER_STDERR_LOG_PREFIX = "codex-acp-wrapper.stderr";
 const CODEX_WRAPPER_ERROR_TAIL_MAX_CHARS = 6_000;
@@ -251,6 +265,7 @@ function createResetAwareSessionStore(
     gatewayInstanceId?: string;
     leaseStore?: AcpxProcessLeaseStore;
     launchScope?: AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>;
+    wrapperRoot?: string;
   },
 ): ResetAwareSessionStore {
   const freshSessionKeys = new Set<string>();
@@ -283,40 +298,69 @@ function createResetAwareSessionStore(
       let recordToSave = record;
       const launch = params?.launchScope?.getStore();
       const sessionName = readSessionRecordName(record);
-      const rootPid = readRecordAgentPid(record);
       const agentCommand = readRecordAgentCommand(record);
-      const stableAgentCommand = launch?.stableCommand ?? agentCommand;
+      const leasedCommand = launch?.leasedCommand ?? agentCommand;
+      const leaseIdentity = launch ?? readAcpxProcessLeaseIdentity(leasedCommand);
       if (
-        launch &&
         params?.leaseStore &&
-        sessionName === launch.sessionKey &&
-        rootPid &&
-        stableAgentCommand
+        params.gatewayInstanceId &&
+        params.wrapperRoot &&
+        (!launch || sessionName === launch.sessionKey) &&
+        leasedCommand &&
+        leaseIdentity?.gatewayInstanceId === params.gatewayInstanceId &&
+        isOpenClawLeaseAwareAcpxProcessCommand({
+          command: leasedCommand,
+          wrapperRoot: params.wrapperRoot,
+        })
       ) {
-        const lease: AcpxProcessLease = {
-          leaseId: launch.leaseId,
-          gatewayInstanceId: launch.gatewayInstanceId,
-          sessionKey: launch.sessionKey,
-          wrapperRoot: launch.wrapperRoot,
-          wrapperPath: extractGeneratedWrapperPath(stableAgentCommand),
-          rootPid,
-          commandHash: hashAcpxProcessCommand(stableAgentCommand),
-          startedAt: Date.now(),
-          state: "open",
-        };
-        await params.leaseStore.save(lease);
-        recordToSave = withOpenClawLeaseSessionMetadata(
-          {
-            ...record,
-            // ACPX uses agentCommand as reuse identity. Lease metadata belongs to
-            // our sidecar record, so keep the persisted command stable.
-            agentCommand: stableAgentCommand,
-          },
-          {
-            openclawLeaseId: launch.leaseId,
-            openclawGatewayInstanceId: launch.gatewayInstanceId,
-          },
-        );
+        const existing = await params.leaseStore.load(leaseIdentity.leaseId);
+        const ownsExisting =
+          !existing ||
+          (existing.gatewayInstanceId === leaseIdentity.gatewayInstanceId &&
+            existing.sessionKey === sessionName &&
+            existing.wrapperRoot === params.wrapperRoot);
+        if (ownsExisting) {
+          const adoptingLease = Boolean(launch && launch.resolvedCommand !== launch.leasedCommand);
+          const lifecycleRecord = adoptingLease
+            ? {
+                ...record,
+                // A reused legacy record can carry the previous wrapper PID. Clear
+                // it before persisting the new lease so reconnect cannot claim it.
+                pid: undefined,
+                processId: undefined,
+                agentStartedAt: undefined,
+              }
+            : record;
+          const rootPid = readRecordAgentPid(lifecycleRecord);
+          if (rootPid) {
+            await params.leaseStore.save({
+              leaseId: leaseIdentity.leaseId,
+              gatewayInstanceId: leaseIdentity.gatewayInstanceId,
+              sessionKey: sessionName,
+              wrapperRoot: params.wrapperRoot,
+              wrapperPath: extractGeneratedWrapperPath(leasedCommand),
+              rootPid,
+              ...(existing?.rootPid === rootPid && existing.processGroupId
+                ? { processGroupId: existing.processGroupId }
+                : {}),
+              commandHash: hashAcpxProcessCommand(leasedCommand),
+              startedAt: existing?.rootPid === rootPid ? existing.startedAt : Date.now(),
+              state: "open",
+            });
+          }
+          recordToSave = withOpenClawLeaseSessionMetadata(
+            {
+              ...lifecycleRecord,
+              // ACPX reconnects from the persisted command, so lease identity must
+              // remain in that reuse key until the session lifecycle is terminal.
+              agentCommand: leasedCommand,
+            },
+            {
+              openclawLeaseId: leaseIdentity.leaseId,
+              openclawGatewayInstanceId: leaseIdentity.gatewayInstanceId,
+            },
+          );
+        }
       }
       await baseStore.save(recordToSave);
       if (sessionName) {
@@ -337,7 +381,6 @@ const OPENCLAW_BRIDGE_SUBCOMMAND = "acp";
 const CODEX_ACP_AGENT_ID = "codex";
 const CODEX_ACP_OPENCLAW_PREFIX = "openai/";
 const CLAUDE_ACP_OPENCLAW_PREFIX = "anthropic/";
-const CODEX_ACP_REASONING_EFFORTS = new Set(["low", "medium", "high", "xhigh"]);
 const CODEX_ACP_THINKING_ALIASES = new Map<string, string | undefined>([
   ["off", undefined],
   ["minimal", "low"],
@@ -356,6 +399,10 @@ type CodexAcpModelOverride = {
   model?: string;
   reasoningEffort?: string;
 };
+
+type CodexAcpModelClassification =
+  | { kind: "override"; override: CodexAcpModelOverride }
+  | { kind: "unsupported"; thinkingOverride?: CodexAcpModelOverride };
 
 function normalizeAgentName(value: string | undefined): string | undefined {
   const normalized = value?.trim().toLowerCase();
@@ -470,7 +517,7 @@ function isOpenClawBridgeCommand(command: string | undefined): boolean {
 
 function isCodexAcpCommand(command: string | undefined): boolean {
   return isAcpCommand(command, {
-    packageName: "@zed-industries/codex-acp",
+    packageName: CODEX_ACP_PACKAGE,
     executableName: "codex-acp",
   });
 }
@@ -528,53 +575,72 @@ function normalizeCodexAcpReasoningEffort(rawThinking: string | undefined): stri
   return CODEX_ACP_THINKING_ALIASES.get(normalized);
 }
 
-function normalizeCodexAcpModelOverride(
+function isCodexAcpReasoningEffortAlias(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return Boolean(normalized && CODEX_ACP_THINKING_ALIASES.has(normalized));
+}
+
+function classifyCodexAcpModelRequest(
   rawModel: string | undefined,
   rawThinking?: string,
-): CodexAcpModelOverride | undefined {
+): CodexAcpModelClassification {
   const raw = rawModel?.trim();
   const thinkingReasoningEffort = normalizeCodexAcpReasoningEffort(rawThinking);
-
+  const thinkingOnlyOverride = thinkingReasoningEffort
+    ? { reasoningEffort: thinkingReasoningEffort }
+    : undefined;
   if (!raw) {
-    return thinkingReasoningEffort ? { reasoningEffort: thinkingReasoningEffort } : undefined;
+    return { kind: "override", override: thinkingOnlyOverride ?? {} };
   }
 
   let value = raw;
+  let hadOpenAiQualifier = false;
   if (value.toLowerCase().startsWith(CODEX_ACP_OPENCLAW_PREFIX)) {
     value = value.slice(CODEX_ACP_OPENCLAW_PREFIX.length);
+    hadOpenAiQualifier = true;
   }
-  const parts = value.split("/");
-  if (parts.length > 2) {
+
+  let model = value.trim();
+  let modelReasoningEffort: string | undefined;
+  const slashIndex = value.lastIndexOf("/");
+  if (slashIndex >= 0 && isCodexAcpReasoningEffortAlias(value.slice(slashIndex + 1))) {
+    modelReasoningEffort = normalizeCodexAcpReasoningEffort(value.slice(slashIndex + 1));
+    model = value.slice(0, slashIndex).trim();
+  }
+
+  if (hadOpenAiQualifier && (!model || model.includes("/"))) {
     failUnsupportedCodexAcpModel(
       raw,
       `Codex ACP model "${raw}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
     );
   }
-  const model = (parts[0] ?? "").trim();
-  const modelReasoningEffort = normalizeCodexAcpReasoningEffort(parts[1]);
-  if (!model) {
-    failUnsupportedCodexAcpModel(
-      raw,
-      `Codex ACP model "${raw}" is not supported. Use openai/<model> or <model>/<reasoning-effort>.`,
-    );
+  if (!model || model.includes("/")) {
+    return thinkingOnlyOverride
+      ? { kind: "unsupported", thinkingOverride: thinkingOnlyOverride }
+      : { kind: "unsupported" };
   }
+
   const reasoningEffort = thinkingReasoningEffort ?? modelReasoningEffort;
-  if (reasoningEffort && !CODEX_ACP_REASONING_EFFORTS.has(reasoningEffort)) {
-    failUnsupportedCodexAcpThinking(reasoningEffort);
-  }
   return {
-    model,
-    ...(reasoningEffort ? { reasoningEffort } : {}),
+    kind: "override",
+    override: {
+      model,
+      ...(reasoningEffort ? { reasoningEffort } : {}),
+    },
   };
 }
 
-function codexAcpSessionModelId(override: CodexAcpModelOverride): string {
-  if (!override.model) {
-    return "";
+function withCodexSessionModel<T extends { model?: string }>(
+  input: T,
+  override: CodexAcpModelOverride | undefined,
+): T {
+  const next = { ...input };
+  if (override?.model) {
+    next.model = override.model;
+  } else {
+    delete next.model;
   }
-  return override.reasoningEffort
-    ? `${override.model}/${override.reasoningEffort}`
-    : override.model;
+  return next;
 }
 
 function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string | undefined {
@@ -592,8 +658,9 @@ function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegate
   const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
   const model = input.model?.trim() || existingOptions?.model;
   const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
+  const { modelExplicit: _modelExplicit, ...rest } = input;
   return {
-    ...input,
+    ...rest,
     ...(sessionOptions ? { sessionOptions } : {}),
   } as AcpxDelegateEnsureInput;
 }
@@ -625,15 +692,22 @@ function quoteShellArg(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+function normalizeAgentCommand(command: string | string[]): string | undefined {
+  const normalized = Array.isArray(command)
+    ? command.map((part) => quoteShellArg(part)).join(" ")
+    : command;
+  return normalized.trim() || undefined;
+}
+
 function appendCodexAcpConfigOverrides(command: string, override: CodexAcpModelOverride): string {
-  const configArgs = override.model ? [`model=${override.model}`] : [];
-  if (override.reasoningEffort) {
-    configArgs.push(`model_reasoning_effort=${override.reasoningEffort}`);
-  }
-  if (configArgs.length === 0) {
+  const config = {
+    ...(override.model ? { model: override.model } : {}),
+    ...(override.reasoningEffort ? { model_reasoning_effort: override.reasoningEffort } : {}),
+  };
+  if (Object.keys(config).length === 0) {
     return command;
   }
-  return `${command} ${configArgs.map((arg) => `-c ${quoteShellArg(arg)}`).join(" ")}`;
+  return `${command} ${OPENCLAW_CODEX_CONFIG_ARG} ${quoteShellArg(JSON.stringify(config))}`;
 }
 
 function createModelScopedAgentRegistry(params: {
@@ -643,7 +717,7 @@ function createModelScopedAgentRegistry(params: {
 }): AcpAgentRegistry {
   return {
     resolve(agentName: string): string {
-      const command = params.agentRegistry.resolve(agentName);
+      const command = normalizeAgentCommand(params.agentRegistry.resolve(agentName)) ?? "";
       const override = params.scope.getStore();
       if (
         !override ||
@@ -668,8 +742,7 @@ function resolveAgentCommand(params: {
   if (!normalizedAgentName) {
     return undefined;
   }
-  const resolvedCommand = params.agentRegistry.resolve(normalizedAgentName);
-  return typeof resolvedCommand === "string" ? resolvedCommand.trim() || undefined : undefined;
+  return normalizeAgentCommand(params.agentRegistry.resolve(normalizedAgentName));
 }
 
 function shouldUseBridgeSafeDelegateForCommand(command: string | undefined): boolean {
@@ -681,18 +754,27 @@ function shouldUseDistinctBridgeDelegate(options: AcpRuntimeOptions): boolean {
   return Array.isArray(mcpServers) && mcpServers.length > 0;
 }
 
-function withOpenClawToolsMcpSessionEnv(params: {
-  enabled: boolean | undefined;
+function withManagedToolsMcpSessionEnv(params: {
+  pluginToolsEnabled: boolean;
+  openclawToolsEnabled: boolean;
   mcpServers: AcpRuntimeOptions["mcpServers"];
   sessionKey: string;
 }): AcpRuntimeOptions["mcpServers"] {
   const sessionKey = params.sessionKey.trim();
-  if (!params.enabled || !sessionKey || !params.mcpServers?.length) {
+  if (
+    (!params.pluginToolsEnabled && !params.openclawToolsEnabled) ||
+    !sessionKey ||
+    !params.mcpServers?.length
+  ) {
     return params.mcpServers;
   }
   let changed = false;
   const nextServers = params.mcpServers.map((server): AcpxMcpServer => {
-    if (server.name !== ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME || !("command" in server)) {
+    const isManagedPluginTools =
+      params.pluginToolsEnabled && server.name === ACPX_PLUGIN_TOOLS_MCP_SERVER_NAME;
+    const isManagedOpenClawTools =
+      params.openclawToolsEnabled && server.name === ACPX_OPENCLAW_TOOLS_MCP_SERVER_NAME;
+    if ((!isManagedPluginTools && !isManagedOpenClawTools) || !("command" in server)) {
       return server;
     }
     changed = true;
@@ -709,7 +791,7 @@ function withOpenClawToolsMcpSessionEnv(params: {
 }
 
 /** OpenClaw-managed ACP runtime implementation backed by the upstream acpx runtime. */
-export class AcpxRuntime implements AcpRuntime {
+export class AcpxRuntime implements CompleteAcpRuntime {
   private readonly sessionStore: ResetAwareSessionStore;
   private readonly agentRegistry: AcpAgentRegistry;
   private readonly scopedAgentRegistry: AcpAgentRegistry;
@@ -719,15 +801,22 @@ export class AcpxRuntime implements AcpRuntime {
   private readonly delegate: BaseAcpxRuntime;
   private readonly bridgeSafeDelegate: BaseAcpxRuntime;
   private readonly probeDelegate: BaseAcpxRuntime;
+  private readonly probeCommand: string | undefined;
   private readonly delegateOptions: AcpRuntimeOptions;
   private readonly delegateTestOptions: BaseAcpxRuntimeTestOptions;
+  private readonly pluginToolsMcpBridgeEnabled: boolean;
   private readonly openclawToolsMcpBridgeEnabled: boolean;
-  private readonly openclawToolsSessionDelegates = new Map<string, BaseAcpxRuntime>();
+  private readonly managedToolsMcpBridgeEnabled: boolean;
+  private readonly managedToolsSessionDelegates = new Map<string, BaseAcpxRuntime>();
   private readonly processCleanupDeps: AcpxProcessCleanupDeps | undefined;
   private readonly wrapperRoot: string | undefined;
   private readonly gatewayInstanceId: string | undefined;
   private readonly processLeaseStore: AcpxProcessLeaseStore | undefined;
   private readonly launchLeaseScope = new AsyncLocalStorage<AcpxLaunchLeaseContext | undefined>();
+  private readonly ensureSessionTails = new Map<string, Promise<void>>();
+  private readonly processLeaseTransitionTails = new Map<string, Promise<void>>();
+  private readonly processLeaseOperationCounts = new Map<string, number>();
+  private readonly uncertainProcessLeaseIds = new Set<string>();
   private readonly cwd: string;
 
   constructor(options: OpenClawAcpxRuntimeOptions, testOptions?: AcpxRuntimeTestOptions) {
@@ -736,12 +825,16 @@ export class AcpxRuntime implements AcpRuntime {
     this.wrapperRoot = options.openclawWrapperRoot;
     this.gatewayInstanceId = options.openclawGatewayInstanceId;
     this.processLeaseStore = options.openclawProcessLeaseStore;
+    this.pluginToolsMcpBridgeEnabled = options.pluginToolsMcpBridgeEnabled === true;
     this.openclawToolsMcpBridgeEnabled = options.openclawToolsMcpBridgeEnabled === true;
+    this.managedToolsMcpBridgeEnabled =
+      this.pluginToolsMcpBridgeEnabled || this.openclawToolsMcpBridgeEnabled;
     this.cwd = options.cwd;
     this.sessionStore = createResetAwareSessionStore(options.sessionStore, {
       gatewayInstanceId: this.gatewayInstanceId,
       leaseStore: this.processLeaseStore,
       launchScope: this.launchLeaseScope,
+      wrapperRoot: this.wrapperRoot,
     });
     this.agentRegistry = options.agentRegistry;
     this.scopedAgentRegistry = createModelScopedAgentRegistry({
@@ -770,8 +863,9 @@ export class AcpxRuntime implements AcpRuntime {
       agentName: normalizeAgentName(options.probeAgent) ?? "codex",
       agentRegistry: this.agentRegistry,
     });
+    this.probeCommand = probeCommand;
     const useBridgeSafeProbe =
-      this.openclawToolsMcpBridgeEnabled || shouldUseBridgeSafeDelegateForCommand(probeCommand);
+      this.managedToolsMcpBridgeEnabled || shouldUseBridgeSafeDelegateForCommand(probeCommand);
     this.probeDelegate = useBridgeSafeProbe ? this.bridgeSafeDelegate : this.delegate;
   }
 
@@ -782,83 +876,76 @@ export class AcpxRuntime implements AcpRuntime {
     if (shouldUseBridgeSafeDelegateForCommand(params.command)) {
       return this.bridgeSafeDelegate;
     }
-    return this.resolveOpenClawToolsDelegateForSession(params.sessionKey);
+    return this.resolveManagedToolsDelegateForSession(params.sessionKey);
   }
 
-  private resolveOpenClawToolsDelegateForSession(sessionKey: string): BaseAcpxRuntime {
-    if (!this.openclawToolsMcpBridgeEnabled) {
+  private resolveManagedToolsDelegateForSession(sessionKey: string): BaseAcpxRuntime {
+    if (!this.managedToolsMcpBridgeEnabled) {
       return this.delegate;
     }
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) {
       return this.delegate;
     }
-    const cached = this.openclawToolsSessionDelegates.get(normalizedSessionKey);
+    const cached = this.managedToolsSessionDelegates.get(normalizedSessionKey);
     if (cached) {
       return cached;
     }
-    // Upstream acpx captures mcpServers at runtime construction. The managed
-    // OpenClaw tools bridge needs per-session identity, so cache one delegate
+    // Upstream acpx captures mcpServers at runtime construction. Managed tool
+    // bridges need per-session identity, so cache one delegate
     // per session with the scoped MCP env already embedded.
     const delegate = new BaseAcpxRuntime(
       {
         ...this.delegateOptions,
-        mcpServers: withOpenClawToolsMcpSessionEnv({
-          enabled: this.openclawToolsMcpBridgeEnabled,
+        mcpServers: withManagedToolsMcpSessionEnv({
+          pluginToolsEnabled: this.pluginToolsMcpBridgeEnabled,
+          openclawToolsEnabled: this.openclawToolsMcpBridgeEnabled,
           mcpServers: this.delegateOptions.mcpServers,
           sessionKey: normalizedSessionKey,
         }),
       },
       this.delegateTestOptions,
     );
-    this.openclawToolsSessionDelegates.set(normalizedSessionKey, delegate);
+    this.managedToolsSessionDelegates.set(normalizedSessionKey, delegate);
     return delegate;
   }
 
-  private releaseOpenClawToolsDelegateForSession(sessionKey: string): void {
-    if (!this.openclawToolsMcpBridgeEnabled) {
+  private releaseManagedToolsDelegateForSession(sessionKey: string): void {
+    if (!this.managedToolsMcpBridgeEnabled) {
       return;
     }
     const normalizedSessionKey = sessionKey.trim();
     if (!normalizedSessionKey) {
       return;
     }
-    this.openclawToolsSessionDelegates.delete(normalizedSessionKey);
+    this.managedToolsSessionDelegates.delete(normalizedSessionKey);
   }
 
-  private async resolveDelegateForHandle(handle: AcpRuntimeHandle): Promise<BaseAcpxRuntime> {
-    const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
-    return this.resolveDelegateForLoadedRecord(handle, record);
-  }
-
-  private resolveDelegateForLoadedRecord(
+  private async loadOperationSnapshotForHandle(
     handle: AcpRuntimeHandle,
-    record: AcpLoadedSessionRecord,
-  ): BaseAcpxRuntime {
-    const recordCommand = readAgentCommandFromRecord(record);
-    if (recordCommand) {
-      return this.resolveDelegateForSession({
-        command: recordCommand,
-        sessionKey: handle.sessionKey,
+  ): Promise<AcpxHandleOperationSnapshot> {
+    const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
+    const command =
+      readAgentCommandFromRecord(record) ??
+      resolveAgentCommand({
+        agentName: readAgentFromHandle(handle),
+        agentRegistry: this.agentRegistry,
       });
-    }
-    const agentName = readAgentFromHandle(handle);
-    const command = resolveAgentCommand({
-      agentName,
-      agentRegistry: this.agentRegistry,
-    });
-    return this.resolveDelegateForSession({ command, sessionKey: handle.sessionKey });
+    return {
+      record,
+      command,
+    };
   }
 
-  private async resolveCommandForHandle(handle: AcpRuntimeHandle): Promise<string | undefined> {
-    const record = await this.sessionStore.load(handle.acpxRecordId ?? handle.sessionKey);
-    const recordCommand = readAgentCommandFromRecord(record);
-    if (recordCommand) {
-      return recordCommand;
-    }
-    return resolveAgentCommand({
-      agentName: readAgentFromHandle(handle),
-      agentRegistry: this.agentRegistry,
+  private resolveDelegateForOperationSnapshot(
+    handle: AcpRuntimeHandle,
+    snapshot: AcpxHandleOperationSnapshot,
+  ): BaseAcpxRuntime {
+    // Lease-owning callers project only after validation so a rejected record
+    // cannot populate the managed-tools delegate cache.
+    return this.resolveDelegateForSession({
+      command: snapshot.command,
+      sessionKey: handle.sessionKey,
     });
   }
 
@@ -867,7 +954,9 @@ export class AcpxRuntime implements AcpRuntime {
     if (!launch) {
       return command;
     }
-    launch.stableCommand = command;
+    if (command === launch.stableCommand) {
+      return launch.resolvedCommand;
+    }
     return withAcpxLeaseEnvironment({
       command,
       leaseId: launch.leaseId,
@@ -875,42 +964,59 @@ export class AcpxRuntime implements AcpRuntime {
     });
   }
 
-  private async canReuseStablePersistentSession(params: {
+  private async readReusablePersistentSessionCommand(params: {
     sessionKey: string;
     mode: Parameters<AcpRuntime["ensureSession"]>[0]["mode"];
     cwd: string | undefined;
     command: string | undefined;
     resumeSessionId: string | undefined;
-  }): Promise<boolean> {
+  }): Promise<string | undefined> {
     if (params.mode !== "persistent" || !params.command) {
-      return false;
+      return undefined;
     }
     const existing = await this.sessionStore.load(params.sessionKey);
     if (!existing || readRecordResetOnNextEnsure(existing)) {
-      return false;
+      return undefined;
     }
     const recordCwd = readRecordCwd(existing);
     if (!recordCwd || resolvePath(recordCwd) !== resolvePath(params.cwd?.trim() || this.cwd)) {
-      return false;
+      return undefined;
     }
-    if (readRecordAgentCommand(existing) !== params.command) {
-      return false;
+    const recordCommand = readRecordAgentCommand(existing);
+    if (!recordCommand) {
+      return undefined;
+    }
+    const leaseIdentity = readAcpxProcessLeaseIdentity(recordCommand);
+    if (leaseIdentity && leaseIdentity.gatewayInstanceId !== this.gatewayInstanceId) {
+      return undefined;
+    }
+    const stableRecordCommand = leaseIdentity
+      ? withAcpxLeaseEnvironment({
+          command: params.command,
+          leaseId: leaseIdentity.leaseId,
+          gatewayInstanceId: leaseIdentity.gatewayInstanceId,
+        })
+      : params.command;
+    if (recordCommand !== stableRecordCommand) {
+      return undefined;
     }
     const existingSessionId =
       typeof existing === "object" && existing !== null
         ? (existing as { acpSessionId?: unknown }).acpSessionId
         : undefined;
-    return !params.resumeSessionId || existingSessionId === params.resumeSessionId;
+    return !params.resumeSessionId || existingSessionId === params.resumeSessionId
+      ? recordCommand
+      : undefined;
   }
 
   private async runWithLaunchLease<T>(params: {
     sessionKey: string;
     command: string | undefined;
-    enabled?: boolean;
+    reusableCommand?: string;
+    finalizeCompletedProbe?: boolean;
     run: () => Promise<T>;
   }): Promise<T> {
     if (
-      params.enabled === false ||
       !params.command ||
       !this.wrapperRoot ||
       !this.gatewayInstanceId ||
@@ -922,27 +1028,336 @@ export class AcpxRuntime implements AcpRuntime {
     ) {
       return await params.run();
     }
+    const processLeaseStore = this.processLeaseStore;
+    const reusableIdentity = readAcpxProcessLeaseIdentity(params.reusableCommand);
+    const canReuseLeaseIdentity = reusableIdentity?.gatewayInstanceId === this.gatewayInstanceId;
+    // Repeated probes share one uncertainty row per Gateway and wrapper. Unique probe rows could
+    // otherwise evict live session ownership from the bounded lease namespace.
+    const leaseId = canReuseLeaseIdentity
+      ? reusableIdentity.leaseId
+      : params.finalizeCompletedProbe
+        ? `probe-${hashAcpxProcessCommand(
+            `${this.gatewayInstanceId}\0${extractGeneratedWrapperPath(params.command)}`,
+          )}`
+        : createAcpxProcessLeaseId();
+    const leasedCommand = withAcpxLeaseEnvironment({
+      command: params.command,
+      leaseId,
+      gatewayInstanceId: this.gatewayInstanceId,
+    });
     const launch: AcpxLaunchLeaseContext = {
-      leaseId: createAcpxProcessLeaseId(),
+      leaseId,
       gatewayInstanceId: this.gatewayInstanceId,
       sessionKey: params.sessionKey,
       wrapperRoot: this.wrapperRoot,
       stableCommand: params.command,
+      resolvedCommand: params.reusableCommand ?? leasedCommand,
+      leasedCommand,
     };
-    // The pending lease is written before acpx spawns. The session-store save
-    // path fills in the live PID after acpx connects and exposes the process.
-    await this.processLeaseStore.save({
-      leaseId: launch.leaseId,
-      gatewayInstanceId: launch.gatewayInstanceId,
-      sessionKey: launch.sessionKey,
-      wrapperRoot: launch.wrapperRoot,
-      wrapperPath: extractGeneratedWrapperPath(params.command),
-      rootPid: 0,
-      commandHash: hashAcpxProcessCommand(params.command),
-      startedAt: Date.now(),
-      state: "open",
+    // Reuse-only adoption cannot spawn: readReusablePersistentSessionCommand
+    // mirrors upstream's exact reuse policy. Persist the new command first and
+    // let the next reconnect create its matching pending lease.
+    await this.retainProcessLeaseOperation(launch, async () => {
+      const reusableLease = canReuseLeaseIdentity
+        ? await processLeaseStore.load(launch.leaseId)
+        : undefined;
+      if (
+        reusableLease &&
+        (reusableLease.gatewayInstanceId !== launch.gatewayInstanceId ||
+          reusableLease.sessionKey !== launch.sessionKey ||
+          reusableLease.wrapperRoot !== launch.wrapperRoot)
+      ) {
+        throw new AcpRuntimeError(
+          "ACP_SESSION_INIT_FAILED",
+          `ACPX process lease ${launch.leaseId} belongs to another session`,
+        );
+      }
+      const ownsPendingLease =
+        !reusableLease && (!params.reusableCommand || params.reusableCommand === leasedCommand);
+      if (!ownsPendingLease) {
+        return;
+      }
+      // The pending lease is written before acpx can spawn. The session-store
+      // save fills in the PID; uncertain launch failures leave it for recovery.
+      await processLeaseStore.save({
+        leaseId: launch.leaseId,
+        gatewayInstanceId: launch.gatewayInstanceId,
+        sessionKey: launch.sessionKey,
+        wrapperRoot: launch.wrapperRoot,
+        wrapperPath: extractGeneratedWrapperPath(leasedCommand),
+        rootPid: 0,
+        commandHash: hashAcpxProcessCommand(leasedCommand),
+        startedAt: Date.now(),
+        state: "open",
+      });
     });
-    return await this.launchLeaseScope.run(launch, params.run);
+    try {
+      const result = await this.launchLeaseScope.run(launch, params.run);
+      if (params.finalizeCompletedProbe) {
+        await this.finalizeCompletedProbeLease(launch);
+      } else {
+        await this.finalizeProcessLeaseForSession(params.sessionKey, launch);
+      }
+      return result;
+    } catch (error) {
+      await this.releaseProcessLeaseAfterUncertainFailure(launch);
+      throw error;
+    }
+  }
+
+  private async prepareProcessLeaseForOperation(
+    handle: AcpRuntimeHandle,
+    record: AcpLoadedSessionRecord,
+  ): Promise<AcpxProcessLeaseIdentity | undefined> {
+    if (!this.processLeaseStore || !this.gatewayInstanceId || !this.wrapperRoot) {
+      return undefined;
+    }
+    const processLeaseStore = this.processLeaseStore;
+    const wrapperRoot = this.wrapperRoot;
+    const recordPid = readRecordAgentPid(record);
+    const command = readAgentCommandFromRecord(record);
+    const identity = readAcpxProcessLeaseIdentity(command);
+    if (
+      !command ||
+      !isOpenClawLeaseAwareAcpxProcessCommand({
+        command,
+        wrapperRoot,
+      })
+    ) {
+      return undefined;
+    }
+    if (!identity) {
+      return undefined;
+    }
+    if (identity.gatewayInstanceId !== this.gatewayInstanceId) {
+      throw new AcpRuntimeError(
+        "ACP_TURN_FAILED",
+        `ACPX process lease ${identity.leaseId} belongs to another gateway`,
+      );
+    }
+    await this.retainProcessLeaseOperation(identity, async () => {
+      const existing = await processLeaseStore.load(identity.leaseId);
+      if (!existing) {
+        // Preserve a PID already persisted with this lease identity. Otherwise
+        // reconnect starts from a pending row until upstream saves its new PID.
+        await processLeaseStore.save({
+          leaseId: identity.leaseId,
+          gatewayInstanceId: identity.gatewayInstanceId,
+          sessionKey: handle.sessionKey,
+          wrapperRoot,
+          wrapperPath: extractGeneratedWrapperPath(command),
+          rootPid: recordPid ?? 0,
+          commandHash: hashAcpxProcessCommand(command),
+          startedAt: Date.now(),
+          state: "open",
+        });
+        return;
+      }
+      if (
+        existing.gatewayInstanceId !== identity.gatewayInstanceId ||
+        existing.sessionKey !== handle.sessionKey ||
+        existing.wrapperRoot !== wrapperRoot
+      ) {
+        throw new AcpRuntimeError(
+          "ACP_TURN_FAILED",
+          `ACPX process lease ${identity.leaseId} belongs to another session`,
+        );
+      }
+    });
+    return identity;
+  }
+
+  private async runSerializedProcessLeaseTransition<T>(
+    leaseId: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const previous = this.processLeaseTransitionTails.get(leaseId) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => current);
+    this.processLeaseTransitionTails.set(leaseId, tail);
+    await previous;
+    try {
+      return await run();
+    } finally {
+      release();
+      if (this.processLeaseTransitionTails.get(leaseId) === tail) {
+        this.processLeaseTransitionTails.delete(leaseId);
+      }
+    }
+  }
+
+  private async retainProcessLeaseOperation(
+    identity: AcpxProcessLeaseIdentity,
+    prepare: () => Promise<void>,
+  ): Promise<void> {
+    await this.runSerializedProcessLeaseTransition(identity.leaseId, async () => {
+      await prepare();
+      this.processLeaseOperationCounts.set(
+        identity.leaseId,
+        (this.processLeaseOperationCounts.get(identity.leaseId) ?? 0) + 1,
+      );
+    });
+  }
+
+  private async releaseProcessLeaseOperation(
+    identity: AcpxProcessLeaseIdentity | undefined,
+    finalize: () => Promise<void>,
+  ): Promise<void> {
+    if (!identity) {
+      return;
+    }
+    await this.runSerializedProcessLeaseTransition(identity.leaseId, async () => {
+      const count = this.processLeaseOperationCounts.get(identity.leaseId) ?? 0;
+      if (count > 1) {
+        this.processLeaseOperationCounts.set(identity.leaseId, count - 1);
+        return;
+      }
+      if (count === 0) {
+        return;
+      }
+      // Keep the zero-owner check and retirement in one lease-local transition.
+      // Otherwise a reconnect can retain a row while an older owner deletes it.
+      this.processLeaseOperationCounts.delete(identity.leaseId);
+      await finalize();
+    });
+  }
+
+  private async finalizeProcessLeaseForOperation(
+    handle: AcpRuntimeHandle,
+    identity: AcpxProcessLeaseIdentity | undefined,
+  ): Promise<void> {
+    await this.finalizeProcessLeaseForSession(handle.acpxRecordId ?? handle.sessionKey, identity);
+  }
+
+  private async finalizeProcessLeaseForSession(
+    sessionId: string,
+    identity: AcpxProcessLeaseIdentity | undefined,
+  ): Promise<void> {
+    if (!identity || !this.processLeaseStore) {
+      return;
+    }
+    const processLeaseStore = this.processLeaseStore;
+    await this.releaseProcessLeaseOperation(identity, async () => {
+      const lease = await processLeaseStore.load(identity.leaseId);
+      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId) {
+        return;
+      }
+      if (lease.rootPid <= 0) {
+        if (this.uncertainProcessLeaseIds.has(identity.leaseId)) {
+          return;
+        }
+        await processLeaseStore.markState(identity.leaseId, "lost");
+        return;
+      }
+      this.uncertainProcessLeaseIds.delete(identity.leaseId);
+      try {
+        const record = await this.sessionStore.load(sessionId);
+        const recordIdentity = readAcpxProcessLeaseIdentity(readAgentCommandFromRecord(record));
+        if (
+          recordIdentity?.leaseId !== identity.leaseId ||
+          recordIdentity.gatewayInstanceId !== identity.gatewayInstanceId
+        ) {
+          await processLeaseStore.markState(identity.leaseId, "lost");
+        }
+      } catch {
+        // Preserve a PID-bearing lease for startup verification when record reload
+        // fails; deleting it here could lose the only cleanup identity.
+      }
+    });
+  }
+
+  private async finalizeCompletedProbeLease(identity: AcpxLaunchLeaseContext): Promise<void> {
+    if (!this.processLeaseStore) {
+      return;
+    }
+    const processLeaseStore = this.processLeaseStore;
+    await this.releaseProcessLeaseOperation(identity, async () => {
+      const lease = await processLeaseStore.load(identity.leaseId);
+      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId) {
+        return;
+      }
+      // Upstream probe close is bounded and best-effort. Delegate fulfillment
+      // does not prove the wrapper exited, so verify the exact pending identity.
+      // Keep the lease even when the wrapper is absent: its detached adapter
+      // descendants do not carry lease args and may already be reparented.
+      if (lease.rootPid > 0) {
+        return;
+      }
+      await cleanupOpenClawOwnedAcpxPendingLease({
+        leaseId: lease.leaseId,
+        gatewayInstanceId: lease.gatewayInstanceId,
+        wrapperRoot: lease.wrapperRoot,
+        wrapperPath: lease.wrapperPath,
+        deps: this.processCleanupDeps,
+      });
+    });
+  }
+
+  private async releaseProcessLeaseAfterUncertainFailure(
+    identity: AcpxProcessLeaseIdentity | undefined,
+  ): Promise<void> {
+    if (!identity || !this.processLeaseStore) {
+      return;
+    }
+    this.uncertainProcessLeaseIds.add(identity.leaseId);
+    const processLeaseStore = this.processLeaseStore;
+    await this.releaseProcessLeaseOperation(identity, async () => {
+      const lease = await processLeaseStore.load(identity.leaseId);
+      if (!lease || lease.gatewayInstanceId !== identity.gatewayInstanceId || lease.rootPid > 0) {
+        this.uncertainProcessLeaseIds.delete(identity.leaseId);
+      }
+    });
+  }
+
+  private async runWithProcessLeaseForHandle<T>(
+    handle: AcpRuntimeHandle,
+    record: AcpLoadedSessionRecord,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const identity = await this.prepareProcessLeaseForOperation(handle, record);
+    try {
+      return await run();
+    } finally {
+      await this.finalizeProcessLeaseForOperation(handle, identity);
+    }
+  }
+
+  private async finalizeProcessLeaseAfter<T>(
+    handle: AcpRuntimeHandle,
+    identityPromise: Promise<AcpxProcessLeaseIdentity | undefined>,
+    resultPromise: Promise<T>,
+  ): Promise<T> {
+    try {
+      return await resultPromise;
+    } finally {
+      await this.finalizeProcessLeaseForOperation(handle, await identityPromise);
+    }
+  }
+
+  private async runSerializedSessionEnsure<T>(
+    sessionKey: string,
+    run: () => Promise<T>,
+  ): Promise<T> {
+    const key = sessionKey.trim() || sessionKey;
+    const previous = this.ensureSessionTails.get(key) ?? Promise.resolve();
+    let release!: () => void;
+    const current = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = previous.then(() => current);
+    this.ensureSessionTails.set(key, tail);
+    await previous;
+    try {
+      return await run();
+    } finally {
+      release();
+      if (this.ensureSessionTails.get(key) === tail) {
+        this.ensureSessionTails.delete(key);
+      }
+    }
   }
 
   private async withCodexWrapperDiagnostics<T>(params: {
@@ -1016,9 +1431,12 @@ export class AcpxRuntime implements AcpRuntime {
       });
       await this.processLeaseStore?.markState(
         lease.leaseId,
-        result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
-          ? "closed"
-          : "lost",
+        result.skippedReason === "process-list-unavailable" ||
+          result.skippedReason === "unsupported-platform"
+          ? "open"
+          : result.terminatedPids.length > 0 || result.skippedReason === "missing-root"
+            ? "closed"
+            : "lost",
       );
       return;
     }
@@ -1047,82 +1465,126 @@ export class AcpxRuntime implements AcpRuntime {
     return this.probeDelegate.isHealthy();
   }
 
-  probeAvailability(): Promise<void> {
-    return this.probeDelegate.probeAvailability();
+  async probeAvailability(): Promise<void> {
+    await this.runWithLaunchLease({
+      sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+      command: this.probeCommand,
+      finalizeCompletedProbe: true,
+      run: () => this.probeDelegate.probeAvailability(),
+    });
   }
 
-  doctor(): Promise<AcpRuntimeDoctorReport> {
-    return this.probeDelegate.doctor();
+  async doctor(): Promise<AcpRuntimeDoctorReport> {
+    return await this.runWithLaunchLease({
+      sessionKey: ACPX_PROBE_LEASE_SESSION_KEY,
+      command: this.probeCommand,
+      finalizeCompletedProbe: true,
+      run: () => this.probeDelegate.doctor(),
+    });
   }
 
   async ensureSession(
     input: Parameters<AcpRuntime["ensureSession"]>[0],
-  ): Promise<AcpRuntimeHandle> {
+  ): Promise<OpenClawRuntimeHandle> {
+    return await this.runSerializedSessionEnsure(input.sessionKey, () =>
+      this.ensureSessionUnlocked(input),
+    );
+  }
+
+  private async ensureSessionUnlocked(
+    input: Parameters<AcpRuntime["ensureSession"]>[0],
+  ): Promise<OpenClawRuntimeHandle> {
     assertSupportedRuntimeSessionMode(input.mode);
     const command = resolveAgentCommand({
       agentName: input.agent,
       agentRegistry: this.agentRegistry,
     });
     const delegate = this.resolveDelegateForSession({ command, sessionKey: input.sessionKey });
+    const isCodexAcp =
+      normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command);
     const claudeModelOverride = isClaudeAcpCommand(command)
       ? normalizeClaudeAcpModelOverride(input.model)
       : undefined;
+    const codexClassification = isCodexAcp
+      ? classifyCodexAcpModelRequest(input.model, input.thinking)
+      : undefined;
+    if (codexClassification?.kind === "unsupported" && input.modelExplicit) {
+      failUnsupportedCodexAcpModel(input.model ?? "");
+    }
+    const classifiedCodexOverride =
+      codexClassification?.kind === "override"
+        ? codexClassification.override
+        : codexClassification?.thinkingOverride;
     const codexModelOverride =
-      normalizeAgentName(input.agent) === CODEX_ACP_AGENT_ID && isCodexAcpCommand(command)
-        ? normalizeCodexAcpModelOverride(input.model, input.thinking)
+      classifiedCodexOverride && Object.keys(classifiedCodexOverride).length > 0
+        ? classifiedCodexOverride
         : undefined;
-    const ensureInput = claudeModelOverride ? { ...input, model: claudeModelOverride } : input;
+    const requestedModel = input.model?.trim();
+    const appliedModel: OpenClawRuntimeHandle["appliedModel"] =
+      isCodexAcp && requestedModel
+        ? codexModelOverride?.model
+          ? { kind: "applied", model: requestedModel }
+          : { kind: "dropped" }
+        : undefined;
+    const ensureInput = isCodexAcp
+      ? withCodexSessionModel(input, codexModelOverride)
+      : claudeModelOverride
+        ? { ...input, model: claudeModelOverride }
+        : input;
     const stableLaunchCommand =
       codexModelOverride && command
         ? appendCodexAcpConfigOverrides(command, codexModelOverride)
         : command;
-    const shouldStartWithLease = !(await this.canReuseStablePersistentSession({
+    const reusableCommand = await this.readReusablePersistentSessionCommand({
       sessionKey: input.sessionKey,
       mode: input.mode,
       cwd: input.cwd,
       command: stableLaunchCommand,
       resumeSessionId: input.resumeSessionId,
-    }));
-
-    if (!codexModelOverride) {
-      return await this.runWithLaunchLease({
-        sessionKey: ensureInput.sessionKey,
-        command: stableLaunchCommand,
-        enabled: shouldStartWithLease,
-        run: () =>
-          this.withCodexWrapperDiagnostics({
-            command: stableLaunchCommand,
-            fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
-          }),
-      });
-    }
-
-    const normalizedInput = {
-      ...ensureInput,
-      ...(codexAcpSessionModelId(codexModelOverride)
-        ? { model: codexAcpSessionModelId(codexModelOverride) }
-        : {}),
-    };
-    return await this.runWithLaunchLease({
-      sessionKey: input.sessionKey,
-      command: stableLaunchCommand,
-      enabled: shouldStartWithLease,
-      run: () =>
-        this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
-          this.withCodexWrapperDiagnostics({
-            command: stableLaunchCommand,
-            fallbackCode: "ACP_SESSION_INIT_FAILED",
-            run: () => delegate.ensureSession(withAcpxSessionOptions(normalizedInput)),
-          }),
-        ),
     });
+
+    const handle = !codexModelOverride
+      ? await this.runWithLaunchLease({
+          sessionKey: ensureInput.sessionKey,
+          command: stableLaunchCommand,
+          reusableCommand,
+          run: () =>
+            this.withCodexWrapperDiagnostics({
+              command: stableLaunchCommand,
+              fallbackCode: "ACP_SESSION_INIT_FAILED",
+              run: () => ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+            }),
+        })
+      : await this.runWithLaunchLease({
+          sessionKey: input.sessionKey,
+          command: stableLaunchCommand,
+          reusableCommand,
+          run: () =>
+            this.codexAcpModelOverrideScope.run(codexModelOverride, () =>
+              this.withCodexWrapperDiagnostics({
+                command: stableLaunchCommand,
+                fallbackCode: "ACP_SESSION_INIT_FAILED",
+                run: () => delegate.ensureSession(withAcpxSessionOptions(ensureInput)),
+              }),
+            ),
+        });
+    return appliedModel ? { ...handle, appliedModel } : handle;
   }
 
   async *runTurn(input: Parameters<AcpRuntime["runTurn"]>[0]): AsyncIterable<AcpRuntimeEvent> {
-    const command = await this.resolveCommandForHandle(input.handle);
-    const delegate = await this.resolveDelegateForHandle(input.handle);
+    const record = await this.sessionStore.load(
+      input.handle.acpxRecordId ?? input.handle.sessionKey,
+    );
+    const turnLease = await this.prepareProcessLeaseForOperation(input.handle, record);
+    let command: string | undefined;
     try {
+      // Legacy runTurn keeps separate command/delegate loads; startTurn owns the
+      // one-snapshot contract until task #15 removes this compatibility path.
+      command = (await this.loadOperationSnapshotForHandle(input.handle)).command;
+      const delegate = this.resolveDelegateForOperationSnapshot(
+        input.handle,
+        await this.loadOperationSnapshotForHandle(input.handle),
+      );
       for await (const event of delegate.runTurn(withOpenClawManagedTurnTimeout(input))) {
         if (
           event.type !== "error" ||
@@ -1154,39 +1616,49 @@ export class AcpxRuntime implements AcpRuntime {
       throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
         cause: error,
       });
+    } finally {
+      await this.finalizeProcessLeaseForOperation(input.handle, turnLease);
     }
   }
 
-  startTurn(input: OpenClawRuntimeTurnInput): AcpRuntimeTurn {
+  startTurn(input: OpenClawRuntimeTurnInput): CompleteAcpRuntimeTurn {
     const readCodexTurnFailureStderr = () =>
       this.readCodexTurnFailureStderr({
         handle: input.handle,
       });
-    const turnPromise = Promise.all([
-      this.resolveCommandForHandle(input.handle),
-      this.resolveDelegateForHandle(input.handle),
-    ]).then(async ([command, delegate]) => {
-      try {
-        return {
-          command,
-          turn: delegate.startTurn(withOpenClawManagedTurnTimeout(input)),
-        };
-      } catch (error) {
-        if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
-          throw error;
+    const snapshotPromise = this.loadOperationSnapshotForHandle(input.handle);
+    const turnLeasePromise = snapshotPromise.then(({ record }) =>
+      this.prepareProcessLeaseForOperation(input.handle, record),
+    );
+    const turnPromise = Promise.all([snapshotPromise, turnLeasePromise]).then(
+      async ([snapshot]) => {
+        const { command } = snapshot;
+        const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
+        try {
+          return {
+            command,
+            turn: delegate.startTurn(withOpenClawManagedTurnTimeout(input)),
+          };
+        } catch (error) {
+          if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
+            throw error;
+          }
+          const stderrTail = await readCodexTurnFailureStderr();
+          if (!stderrTail) {
+            throw error;
+          }
+          throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
+            cause: error,
+          });
         }
-        const stderrTail = await readCodexTurnFailureStderr();
-        if (!stderrTail) {
-          throw error;
-        }
-        throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
-          cause: error,
-        });
-      }
-    });
+      },
+    );
 
     return {
       requestId: input.requestId,
+      get promptStarted() {
+        return turnPromise.then(({ turn }) => turn.promptStarted);
+      },
       events: {
         async *[Symbol.asyncIterator](): AsyncIterator<AcpRuntimeEvent> {
           const { command, turn } = await turnPromise;
@@ -1225,41 +1697,45 @@ export class AcpxRuntime implements AcpRuntime {
           }
         },
       },
-      result: turnPromise.then(async ({ command, turn }): Promise<AcpRuntimeTurnResult> => {
-        try {
-          const result = await turn.result;
-          if (
-            result.status !== "failed" ||
-            !isCodexAcpCommand(command) ||
-            !isGenericInternalAcpErrorMessage(result.error.message)
-          ) {
-            return result;
+      result: this.finalizeProcessLeaseAfter(
+        input.handle,
+        turnLeasePromise,
+        turnPromise.then(async ({ command, turn }): Promise<AcpRuntimeTurnResult> => {
+          try {
+            const result = await turn.result;
+            if (
+              result.status !== "failed" ||
+              !isCodexAcpCommand(command) ||
+              !isGenericInternalAcpErrorMessage(result.error.message)
+            ) {
+              return result;
+            }
+            const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+            if (!stderrTail) {
+              return result;
+            }
+            return {
+              status: "failed",
+              error: {
+                ...result.error,
+                code: "ACP_TURN_FAILED",
+                message: `Internal error: ${stderrTail}`,
+              },
+            };
+          } catch (error) {
+            if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
+              throw error;
+            }
+            const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
+            if (!stderrTail) {
+              throw error;
+            }
+            throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
+              cause: error,
+            });
           }
-          const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
-          if (!stderrTail) {
-            return result;
-          }
-          return {
-            status: "failed",
-            error: {
-              ...result.error,
-              code: "ACP_TURN_FAILED",
-              message: `Internal error: ${stderrTail}`,
-            },
-          };
-        } catch (error) {
-          if (!isCodexAcpCommand(command) || !isGenericInternalAcpError(error)) {
-            throw error;
-          }
-          const stderrTail = await this.readCodexTurnFailureStderr({ handle: input.handle });
-          if (!stderrTail) {
-            throw error;
-          }
-          throw new AcpRuntimeError("ACP_TURN_FAILED", `Internal error: ${stderrTail}`, {
-            cause: error,
-          });
-        }
-      }),
+        }),
+      ),
       cancel(inputArgs?: { reason?: string }) {
         return turnPromise.then(({ turn }) => turn.cancel(inputArgs));
       },
@@ -1269,63 +1745,82 @@ export class AcpxRuntime implements AcpRuntime {
     };
   }
 
-  getCapabilities(): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
-    return this.delegate.getCapabilities();
+  getCapabilities(
+    input?: Parameters<NonNullable<AcpRuntime["getCapabilities"]>>[0],
+  ): ReturnType<BaseAcpxRuntime["getCapabilities"]> {
+    return this.delegate.getCapabilities(input);
   }
 
   async getStatus(
     input: Parameters<NonNullable<AcpRuntime["getStatus"]>>[0],
   ): Promise<AcpRuntimeStatus> {
-    const delegate = await this.resolveDelegateForHandle(input.handle);
-    return delegate.getStatus(input);
+    const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
+    return this.resolveDelegateForOperationSnapshot(input.handle, snapshot).getStatus(input);
   }
 
   async setMode(input: Parameters<NonNullable<AcpRuntime["setMode"]>>[0]): Promise<void> {
-    const delegate = await this.resolveDelegateForHandle(input.handle);
-    await delegate.setMode(input);
+    const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
+    await this.runWithProcessLeaseForHandle(input.handle, snapshot.record, () =>
+      this.resolveDelegateForOperationSnapshot(input.handle, snapshot).setMode(input),
+    );
   }
 
   async setConfigOption(
     input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0],
   ): Promise<void> {
-    const delegate = await this.resolveDelegateForHandle(input.handle);
-    const command = await this.resolveCommandForHandle(input.handle);
+    const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
+    await this.runWithProcessLeaseForHandle(input.handle, snapshot.record, () =>
+      this.setConfigOptionUnlocked(input, snapshot),
+    );
+  }
+
+  private async setConfigOptionUnlocked(
+    input: Parameters<NonNullable<AcpRuntime["setConfigOption"]>>[0],
+    snapshot: AcpxHandleOperationSnapshot,
+  ): Promise<void> {
+    const { command } = snapshot;
+    const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
     const key = input.key.trim().toLowerCase();
     const isCodexAcp = isCodexAcpCommand(command);
     if (WIRE_TIMEOUT_CONFIG_KEYS.has(key) && (isCodexAcp || isClaudeAcpCommand(command))) {
       return;
     }
     if (isCodexAcp) {
-      if (
-        key === "model" ||
-        key === "thinking" ||
-        key === "thought_level" ||
-        key === "reasoning_effort"
-      ) {
-        const override =
-          key === "model"
-            ? normalizeCodexAcpModelOverride(input.value)
-            : normalizeCodexAcpModelOverride(undefined, input.value);
-        if (!override && key !== "model") {
-          return;
+      if (key === "model") {
+        const classification = classifyCodexAcpModelRequest(input.value);
+        if (classification.kind === "unsupported") {
+          failUnsupportedCodexAcpModel(input.value);
         }
-        if (override) {
-          if (override.model) {
-            await delegate.setConfigOption({
-              ...input,
-              key: "model",
-              value: override.model,
-            });
-          }
-          if (override.reasoningEffort) {
-            await delegate.setConfigOption({
-              ...input,
-              key: "reasoning_effort",
-              value: override.reasoningEffort,
-            });
-          }
-          return;
+        const { override } = classification;
+        if (override.model) {
+          await delegate.setConfigOption({ ...input, key: "model", value: override.model });
         }
+        if (override.reasoningEffort) {
+          await delegate.setConfigOption({
+            ...input,
+            key: "reasoning_effort",
+            value: override.reasoningEffort,
+          });
+        }
+        return;
+      }
+      if (key === "thinking" || key === "thought_level" || key === "reasoning_effort") {
+        const classification = classifyCodexAcpModelRequest(undefined, input.value);
+        const reasoningEffort =
+          classification.kind === "override" ? classification.override.reasoningEffort : undefined;
+        if (!reasoningEffort) {
+          // `off` omits the startup override; Codex has no live control to unset effort.
+          throw new AcpRuntimeError(
+            "ACP_BACKEND_UNSUPPORTED_CONTROL",
+            "Clearing Codex reasoning effort on an existing session is unsupported. Choose a supported explicit effort; the current effort is unchanged.",
+          );
+        }
+        await delegate.setConfigOption({
+          ...input,
+          key: "reasoning_effort",
+          value: reasoningEffort,
+        });
+        return;
       }
     }
     if (isClaudeAcpCommand(command) && key === "model") {
@@ -1339,11 +1834,8 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async cancel(input: Parameters<AcpRuntime["cancel"]>[0]): Promise<void> {
-    const record = await this.sessionStore.load(
-      input.handle.acpxRecordId ?? input.handle.sessionKey,
-    );
-    const delegate = this.resolveDelegateForLoadedRecord(input.handle, record);
-    await delegate.cancel(input);
+    const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
+    await this.resolveDelegateForOperationSnapshot(input.handle, snapshot).cancel(input);
   }
 
   async prepareFreshSession(input: { sessionKey: string }): Promise<void> {
@@ -1354,26 +1846,35 @@ export class AcpxRuntime implements AcpRuntime {
   }
 
   async close(input: Parameters<AcpRuntime["close"]>[0]): Promise<void> {
-    const record = await this.sessionStore.load(
-      input.handle.acpxRecordId ?? input.handle.sessionKey,
-    );
-    let closeSucceeded;
-    const delegate = this.resolveDelegateForLoadedRecord(input.handle, record);
+    const snapshot = await this.loadOperationSnapshotForHandle(input.handle);
+    const closeLease = await this.prepareProcessLeaseForOperation(input.handle, snapshot.record);
+    let cleanupSucceeded = false;
     try {
-      await delegate.close({
-        handle: input.handle,
-        reason: input.reason,
-        discardPersistentState: input.discardPersistentState,
-      });
-      closeSucceeded = true;
+      const delegate = this.resolveDelegateForOperationSnapshot(input.handle, snapshot);
+      let closeSucceeded;
+      try {
+        await delegate.close({
+          handle: input.handle,
+          reason: input.reason,
+          discardPersistentState: input.discardPersistentState,
+        });
+        closeSucceeded = true;
+      } finally {
+        await this.cleanupProcessTreeForRecord(input.handle, snapshot.record);
+        cleanupSucceeded = true;
+      }
+      if (closeSucceeded) {
+        this.releaseManagedToolsDelegateForSession(input.handle.sessionKey);
+      }
+      if (closeSucceeded && input.discardPersistentState) {
+        this.sessionStore.markFresh(input.handle.sessionKey);
+      }
     } finally {
-      await this.cleanupProcessTreeForRecord(input.handle, record);
-    }
-    if (closeSucceeded) {
-      this.releaseOpenClawToolsDelegateForSession(input.handle.sessionKey);
-    }
-    if (closeSucceeded && input.discardPersistentState) {
-      this.sessionStore.markFresh(input.handle.sessionKey);
+      if (cleanupSucceeded) {
+        await this.finalizeProcessLeaseForOperation(input.handle, closeLease);
+      } else {
+        await this.releaseProcessLeaseAfterUncertainFailure(closeLease);
+      }
     }
   }
 }
@@ -1390,14 +1891,10 @@ export {
 /** Test-only hooks for ACPX runtime behavior that is otherwise private. */
 export const testing = {
   appendCodexAcpConfigOverrides,
-  assertSupportedRuntimeSessionMode,
-  codexAcpSessionModelId,
   isClaudeAcpCommand,
   isCodexAcpCommand,
-  normalizeClaudeAcpModelOverride,
-  normalizeCodexAcpModelOverride,
+  normalizeAgentCommand,
 };
 
 export type { AcpAgentRegistry, AcpRuntimeOptions, AcpSessionRecord, AcpSessionStore };
-export { testing as __testing };
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

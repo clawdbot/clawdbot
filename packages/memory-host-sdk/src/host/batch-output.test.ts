@@ -1,5 +1,5 @@
 // Memory Host SDK tests cover batch output behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { applyEmbeddingBatchOutputLine, readEmbeddingBatchJsonl } from "./batch-output.js";
 
 function streamingResponse(chunks: Uint8Array[]): {
@@ -30,6 +30,55 @@ function streamingResponse(chunks: Uint8Array[]): {
 }
 
 describe("readEmbeddingBatchJsonl", () => {
+  it.each(["enough records", "invalid record"])(
+    "settles %s before a response clone is released",
+    async (kind) => {
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(
+              new TextEncoder().encode(kind === "enough records" ? '{"value":1}\n' : "invalid\n"),
+            );
+          },
+          cancel,
+        }),
+      );
+      const capture = response.clone();
+      const records: unknown[] = [];
+      const operation = readEmbeddingBatchJsonl(response, {
+        label: "fixture",
+        maxRecords: 1,
+        onRecord(record) {
+          records.push(record);
+          return false;
+        },
+      }).then(
+        () => ({ records }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        const result = await Promise.race([
+          operation,
+          new Promise<undefined>((resolve) => {
+            setImmediate(() => resolve(undefined));
+          }),
+        ]);
+        expect(result).toEqual(
+          kind === "enough records"
+            ? { records: [{ value: 1 }] }
+            : { error: new Error("fixture: malformed JSONL record") },
+        );
+        expect(response.body?.locked).toBe(false);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        await capture.body?.cancel();
+        await operation;
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
   it("frames split UTF-8, CRLF, and an unterminated final record", async () => {
     const bytes = new TextEncoder().encode('{"value":"😀"}\r\n{"value":2}');
     const streamed = streamingResponse(Array.from(bytes, (byte) => Uint8Array.of(byte)));
@@ -114,6 +163,30 @@ describe("readEmbeddingBatchJsonl", () => {
     },
   );
 
+  it.each([
+    { name: "newline-terminated record", suffix: "\n", canceled: true },
+    { name: "unterminated final record", suffix: "", canceled: false },
+  ])("rejects malformed UTF-8 in a $name", async ({ canceled, suffix }) => {
+    const encoder = new TextEncoder();
+    const malformed = streamingResponse([
+      new Uint8Array([
+        ...encoder.encode('{"value":"'),
+        0xc3,
+        0x28,
+        ...encoder.encode(`"}${suffix}`),
+      ]),
+    ]);
+
+    await expect(
+      readEmbeddingBatchJsonl(malformed.response, {
+        label: "test.batch-output",
+        maxRecords: 1,
+        onRecord: () => true,
+      }),
+    ).rejects.toThrow("test.batch-output: malformed JSONL record");
+    expect(malformed.wasCanceled()).toBe(canceled);
+  });
+
   it("accepts a null response body", async () => {
     await expect(
       readEmbeddingBatchJsonl(new Response(null), {
@@ -147,6 +220,39 @@ describe("applyEmbeddingBatchOutputLine", () => {
     expect(remaining.has("req-1")).toBe(false);
     expect(errors).toStrictEqual([]);
     expect(byCustomId.get("req-1")).toEqual([0.1, 0.2]);
+  });
+
+  it.each([
+    { name: "non-array", embedding: "poison" },
+    { name: "array-like object", embedding: { length: 1 } },
+    { name: "boolean", embedding: false },
+    { name: "string coordinate", embedding: ["poison"] },
+    { name: "null coordinate", embedding: [null] },
+    { name: "NaN coordinate", embedding: [Number.NaN] },
+    { name: "positive infinity coordinate", embedding: [Number.POSITIVE_INFINITY] },
+    { name: "negative infinity coordinate", embedding: [Number.NEGATIVE_INFINITY] },
+  ])("rejects a $name instead of storing it as a valid vector", ({ embedding }) => {
+    const remaining = new Set(["req-invalid"]);
+    const errors: string[] = [];
+    const byCustomId = new Map<string, number[]>();
+
+    applyEmbeddingBatchOutputLine({
+      line: {
+        custom_id: "req-invalid",
+        response: {
+          status_code: 200,
+          body: { data: [{ embedding: embedding as unknown as number[] }] },
+        },
+      },
+      remaining,
+      errors,
+      byCustomId,
+    });
+
+    expect(remaining.has("req-invalid")).toBe(false);
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatch(/^req-invalid: (?:empty|invalid) embedding$/);
+    expect(byCustomId.size).toBe(0);
   });
 
   it("records provider error from line.error", () => {

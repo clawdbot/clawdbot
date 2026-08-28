@@ -6,8 +6,9 @@ import {
   RequestScopedSubagentRuntimeError,
   SUBAGENT_RUNTIME_REQUEST_SCOPE_ERROR_CODE,
 } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resolveGlobalMap } from "openclaw/plugin-sdk/global-singleton";
-import * as memoryCoreHostRuntimeCoreModule from "openclaw/plugin-sdk/memory-core-host-runtime-core";
+import { resolveStateDir } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import * as runtimeConfigSnapshotModule from "openclaw/plugin-sdk/runtime-config-snapshot";
 import {
   listSessionEntries,
@@ -17,18 +18,28 @@ import {
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSqliteSessionTranscriptEventForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { updateDreamsFile } from "./dreaming-dreams-file.js";
 import {
   dedupeDreamDiaryEntries,
-  generateAndAppendDreamNarrative,
   readRecentDreamDiaryEntries,
   removeBackfillDiaryEntries,
-  runDetachedDreamNarrative,
+  runDreamNarrative,
   writeBackfillDiaryEntries,
 } from "./dreaming-narrative.js";
+import {
+  SHORT_TERM_LOCK_MAX_ENTRIES,
+  SHORT_TERM_LOCK_NAMESPACE,
+  memoryCoreWorkspaceStateKey,
+  openMemoryCoreStateStore,
+} from "./dreaming-state.js";
+import { forgetMemoryEntries } from "./memory-forget.js";
+import { SESSION_CORPUS_RELATIVE_DIR } from "./session-ingestion.js";
+import { readShortTermRecallEntries, recordShortTermRecalls } from "./short-term-promotion.js";
 import { createMemoryCoreTestHarness } from "./test-helpers.js";
 
+vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
+
 const { createTempWorkspace } = createMemoryCoreTestHarness();
-const DREAMS_FILE_LOCKS_KEY = Symbol.for("openclaw.memoryCore.dreamingNarrative.fileLocks");
 const NARRATIVE_SESSION_LOCKS_KEY = Symbol.for(
   "openclaw.memoryCore.dreamingNarrative.sessionLocks",
 );
@@ -102,6 +113,7 @@ function readSessionStoreEntries(storePath: string): Record<string, SessionEntry
 
 async function seedDreamingTranscriptEvent(params: {
   sessionId: string;
+  sessionKey: string;
   storePath: string;
   timestampMs: number;
   runId?: string;
@@ -109,7 +121,7 @@ async function seedDreamingTranscriptEvent(params: {
   await appendSqliteSessionTranscriptEventForTest({
     agentId: "main",
     sessionId: params.sessionId,
-    sessionKey: `agent:main:dreaming-narrative-fixture:${params.sessionId}`,
+    sessionKey: params.sessionKey,
     storePath: params.storePath,
     event: {
       type: "metadata",
@@ -135,11 +147,53 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 afterEach(() => {
   vi.restoreAllMocks();
   restoreNarrativeTestEnv();
-  resolveGlobalMap<string, unknown>(DREAMS_FILE_LOCKS_KEY).clear();
   resolveGlobalMap<string, unknown>(NARRATIVE_SESSION_LOCKS_KEY).clear();
 });
 
 describe("dream diary file behavior", () => {
+  it("does not restore deleted diary content from an update already in progress", async () => {
+    const workspaceDir = await createTempWorkspace("dreaming-forget-update-");
+    setNarrativeTestEnv(path.join(workspaceDir, ".state"));
+    const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+    const claim = "A private cobalt archive phrase.";
+    await fs.writeFile(dreamsPath, `# Diary\n\n## Session ID: forgotten\n${claim}\n`);
+    const prepared = createDeferred<void>();
+    const publish = createDeferred<void>();
+    const update = updateDreamsFile({
+      workspaceDir,
+      updater: async (existing) => {
+        expect(existing).toContain(claim);
+        prepared.resolve();
+        await publish.promise;
+        return { content: `${existing}\n## Other\nA new unrelated entry.\n`, result: undefined };
+      },
+    });
+    let forgotten: ReturnType<typeof forgetMemoryEntries> | undefined;
+    try {
+      await prepared.promise;
+      const writerOwnsLock = await openMemoryCoreStateStore({
+        namespace: SHORT_TERM_LOCK_NAMESPACE,
+        maxEntries: SHORT_TERM_LOCK_MAX_ENTRIES,
+      }).lookup(memoryCoreWorkspaceStateKey(workspaceDir));
+      forgotten = forgetMemoryEntries({
+        cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
+        agentId: "main",
+        sessionIds: ["forgotten"],
+      });
+      if (!writerOwnsLock) {
+        await forgotten;
+      }
+      publish.resolve();
+      await Promise.all([update, forgotten]);
+      const content = await fs.readFile(dreamsPath, "utf8");
+      expect(content).not.toContain(claim);
+      expect(content).toContain("A new unrelated entry.");
+    } finally {
+      publish.resolve();
+      await Promise.allSettled([update, ...(forgotten ? [forgotten] : [])]);
+    }
+  });
+
   it("writes, reads, deduplicates, and removes backfill entries", async () => {
     const workspaceDir = await createTempWorkspace("dreaming-narrative-backfill-");
     const written = await writeBackfillDiaryEntries({
@@ -381,7 +435,7 @@ describe("dream diary file behavior", () => {
   });
 });
 
-describe("generateAndAppendDreamNarrative", () => {
+describe("runDreamNarrative", () => {
   function createMockSubagent(responseText: string) {
     return {
       run: vi.fn().mockResolvedValue({ runId: "run-123" }),
@@ -410,9 +464,11 @@ describe("generateAndAppendDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
+    const expectedRunKey = `dreaming-narrative-main-light-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-memory-core-v2-light-${workspaceHash}`;
 
-    await generateAndAppendDreamNarrative({
+    const outcome = await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: {
@@ -427,18 +483,89 @@ describe("generateAndAppendDreamNarrative", () => {
 
     expect(subagent.run).toHaveBeenCalledOnce();
     const runOptions = mockObjectArg(subagent.run, "subagent run");
-    expect(runOptions.idempotencyKey).toBe(`${expectedSessionKey}-${nowMs}`);
+    // The runId keeps the scrub marker's `dreaming-narrative-` prefix ahead of the agent scope.
+    expect(runOptions.idempotencyKey).toBe(`${expectedRunKey}-${nowMs}`);
+    expect(runOptions.idempotencyKey).toMatch(/^dreaming-narrative-/);
     expect(runOptions.sessionKey).toBe(expectedSessionKey);
     expect(runOptions.lane).toBe(`dreaming-narrative:${expectedSessionKey}`);
     expect(runOptions.lightContext).toBe(true);
     expect(runOptions.deliver).toBe(false);
+    expect(runOptions.disableTools).toBe(true);
+    expect(runOptions.promptMode).toBe("minimal");
     expect(runOptions.model).toBe("anthropic/claude-sonnet-4-6");
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(subagent.deleteSession).toHaveBeenCalledTimes(2);
+    expect(outcome).toEqual({ status: "completed" });
 
     const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
     expect(content).toContain("The repository whispered of forgotten endpoints.");
     expect(logger.info).toHaveBeenCalled();
+  });
+
+  it("keeps creation and cleanup on the memory-core-owned session identity", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-owner-");
+    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+    const legacyUnownedKey = `agent:blockdigest:dreaming-narrative-rem-${workspaceHash}`;
+    const ownedKey = `agent:blockdigest:dreaming-narrative-memory-core-v2-rem-${workspaceHash}`;
+    const subagent = createMockSubagent("The digest folded itself into a paper moon.");
+    subagent.deleteSession.mockImplementation(async ({ sessionKey }: { sessionKey: string }) => {
+      if (sessionKey === legacyUnownedKey) {
+        throw new Error('Plugin "memory-core" cannot delete session because it did not create it');
+      }
+    });
+    const logger = createMockLogger();
+
+    const outcome = await runDreamNarrative({
+      agentId: "blockdigest",
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["A digest session needs one lifecycle owner."] },
+      logger,
+    });
+
+    expect(mockObjectArg(subagent.run, "subagent run").sessionKey).toBe(ownedKey);
+    expect(
+      subagent.deleteSession.mock.calls.map(
+        (call: unknown[]) => (call[0] as { sessionKey: string }).sessionKey,
+      ),
+    ).toEqual([ownedKey, ownedKey]);
+    expect(outcome).toEqual({ status: "completed" });
+    expectLogExcludes(logger.warn, "did not create it");
+  });
+
+  // Regression: unscoped narrative session keys cannot be resolved to a per-agent SQLite
+  // store, so every subagent call failed with "Cannot resolve SQLite session scope without
+  // an agent id" and the whole dreaming pipeline produced nothing.
+  it("scopes narrative sessions to the workspace's owning agent", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("The night shift agent kept its own notebook.");
+    const logger = createMockLogger();
+    const nowMs = Date.parse("2026-04-05T03:00:00Z");
+    const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
+    const sessionSuffix = `dreaming-narrative-memory-core-v2-rem-${workspaceHash}`;
+
+    await runDreamNarrative({
+      agentId: "researcher",
+      subagent,
+      workspaceDir,
+      data: { phase: "rem", snippets: ["The index remembered a second agent."] },
+      nowMs,
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(mockObjectArg(subagent.run, "subagent run").sessionKey).toBe(
+      `agent:researcher:${sessionSuffix}`,
+    );
+    expect(mockObjectArg(subagent.deleteSession, "delete session")).toEqual({
+      sessionKey: `agent:researcher:${sessionSuffix}`,
+    });
+    // The runId names its owning agent too, so two agents sharing a workspace cannot collide
+    // on one run; the scrub marker still matches because the agent scope follows the prefix.
+    expect(mockObjectArg(subagent.run, "subagent run").idempotencyKey).toBe(
+      `dreaming-narrative-researcher-rem-${workspaceHash}-${nowMs}`,
+    );
+    expectLogExcludes(logger.warn, "narrative generation failed");
   });
 
   it("waits for persisted assistant text before falling back", async () => {
@@ -461,7 +588,8 @@ describe("generateAndAppendDreamNarrative", () => {
         });
       const logger = createMockLogger();
 
-      const operation = generateAndAppendDreamNarrative({
+      const operation = runDreamNarrative({
+        agentId: "main",
         subagent,
         workspaceDir,
         data: {
@@ -476,11 +604,11 @@ describe("generateAndAppendDreamNarrative", () => {
 
       expect(subagent.getSessionMessages).toHaveBeenCalledTimes(2);
       expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(1, {
-        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+        sessionKey: expect.stringContaining("dreaming-narrative-memory-core-v2-light-"),
         limit: expect.any(Number),
       });
       expect(subagent.getSessionMessages).toHaveBeenNthCalledWith(2, {
-        sessionKey: expect.stringContaining("dreaming-narrative-light-"),
+        sessionKey: expect.stringContaining("dreaming-narrative-memory-core-v2-light-"),
         limit: expect.any(Number),
       });
       const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
@@ -492,6 +620,139 @@ describe("generateAndAppendDreamNarrative", () => {
     }
   });
 
+  it("writes the terminal reply text without polling the session store", async () => {
+    vi.useFakeTimers();
+    try {
+      const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+      const subagent = createMockSubagent("");
+      subagent.waitForRun.mockResolvedValue({
+        status: "ok",
+        terminalReply: {
+          disposition: "visible",
+          text: "The terminal reply carried the diary safely.",
+        },
+      });
+      // Simulate the sibling-cleanup race from #123360: the store never shows the
+      // completed run's text within the settle window.
+      subagent.getSessionMessages.mockResolvedValue({ messages: [] });
+      const logger = createMockLogger();
+
+      const operation = runDreamNarrative({
+        agentId: "main",
+        subagent,
+        workspaceDir,
+        data: {
+          phase: "light",
+          snippets: ["The narrative raced a sibling phase's cleanup."],
+        },
+        nowMs: Date.parse("2026-04-05T03:00:00Z"),
+        timezone: "UTC",
+        logger,
+      });
+      await flushNarrativeSettleTimers(operation);
+
+      expect(subagent.getSessionMessages).not.toHaveBeenCalled();
+      const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+      expect(content).toContain("The terminal reply carried the diary safely.");
+      expect(content).not.toContain("A memory trace surfaced");
+      expectLogExcludes(logger.warn, "produced no text");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    { label: "empty", reply: { disposition: "empty" } },
+    { label: "silent", reply: { disposition: "silent" } },
+    // `message-tool-not-called` is an explicit no-text fact too; history must
+    // not resurface a transcript for it.
+    {
+      label: "empty (message-tool-not-called)",
+      reply: { disposition: "empty", code: "message-tool-not-called" },
+    },
+  ] as const)(
+    "treats an explicit $label terminal reply as authoritative no-text and never reads history",
+    async ({ reply }) => {
+      vi.useFakeTimers();
+      try {
+        const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+        const subagent = createMockSubagent("");
+        subagent.waitForRun.mockResolvedValue({
+          status: "ok",
+          // Any `text` beside a non-visible disposition must be ignored.
+          terminalReply: { ...reply, text: "text that must be ignored" },
+        });
+        // The store holds an OLD narrative from a previous run; reading it would
+        // resurface stale text over the authoritative no-text result.
+        subagent.getSessionMessages.mockResolvedValue({
+          messages: [
+            { role: "user", content: "prompt" },
+            { role: "assistant", content: "A stale narrative from a previous run." },
+          ],
+        });
+        const logger = createMockLogger();
+
+        const operation = runDreamNarrative({
+          agentId: "main",
+          subagent,
+          workspaceDir,
+          data: {
+            phase: "rem",
+            snippets: ["The run was silent, so history must not speak for it."],
+          },
+          nowMs: Date.parse("2026-04-05T03:00:00Z"),
+          timezone: "UTC",
+          logger,
+        });
+        await flushNarrativeSettleTimers(operation);
+
+        expect(subagent.getSessionMessages).not.toHaveBeenCalled();
+        const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+        expect(content).toContain("A memory trace surfaced");
+        expect(content).not.toContain("A stale narrative from a previous run.");
+        expect(content).not.toContain("text that must be ignored");
+        expectLogIncludes(logger.warn, "produced no text");
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("treats a visible terminal reply with only whitespace as no-text", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = createMockSubagent("");
+    subagent.waitForRun.mockResolvedValue({
+      status: "ok",
+      terminalReply: { disposition: "visible", text: "   \n  " },
+    });
+    subagent.getSessionMessages.mockResolvedValue({
+      messages: [
+        { role: "user", content: "prompt" },
+        { role: "assistant", content: "A stale narrative from a previous run." },
+      ],
+    });
+    const logger = createMockLogger();
+
+    await runDreamNarrative({
+      agentId: "main",
+      subagent,
+      workspaceDir,
+      data: {
+        phase: "light",
+        snippets: ["A blank diary page must not borrow yesterday's words."],
+      },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    expect(subagent.getSessionMessages).not.toHaveBeenCalled();
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).toContain("A memory trace surfaced");
+    expect(content).not.toContain("A stale narrative from a previous run.");
+    expectLogIncludes(logger.warn, "produced no text");
+  });
+
   it("falls back after settled assistant text never appears", async () => {
     vi.useFakeTimers();
     try {
@@ -499,7 +760,8 @@ describe("generateAndAppendDreamNarrative", () => {
       const subagent = createMockSubagent("");
       const logger = createMockLogger();
 
-      const operation = generateAndAppendDreamNarrative({
+      const operation = runDreamNarrative({
+        agentId: "main",
         subagent,
         workspaceDir,
         data: {
@@ -530,10 +792,11 @@ describe("generateAndAppendDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-light-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-memory-core-v2-light-${workspaceHash}`;
     const retrySessionKey = `${expectedSessionKey}-retry-1`;
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: {
@@ -582,10 +845,11 @@ describe("generateAndAppendDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
     const workspaceHash = createHash("sha1").update(workspaceDir).digest("hex").slice(0, 12);
-    const expectedSessionKey = `dreaming-narrative-rem-${workspaceHash}`;
+    const expectedSessionKey = `agent:main:dreaming-narrative-memory-core-v2-rem-${workspaceHash}`;
     const retrySessionKey = `${expectedSessionKey}-retry-1`;
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: {
@@ -627,7 +891,8 @@ describe("generateAndAppendDreamNarrative", () => {
     );
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: {
@@ -649,7 +914,8 @@ describe("generateAndAppendDreamNarrative", () => {
     const subagent = createMockSubagent("Should not appear.");
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "light", snippets: [] },
@@ -670,7 +936,8 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.waitForRun.mockResolvedValue({ status: "timeout" });
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "deep", snippets: ["some memory"] },
@@ -701,7 +968,8 @@ describe("generateAndAppendDreamNarrative", () => {
       "Session: 2026-05-22 00:02:16 GMT+1: Session Key: agent:main:dashboard:secret",
     ];
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "deep", snippets: sensitiveSnippets },
@@ -724,7 +992,8 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.deleteSession.mockRejectedValue(new Error("still active"));
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    const outcome = await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "rem", snippets: ["some memory"] },
@@ -734,6 +1003,7 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(subagent.waitForRun).toHaveBeenCalledOnce();
     expect(mockObjectArg(subagent.waitForRun, "wait for run").timeoutMs).toBe(60_000);
     expectLogIncludes(logger.warn, "narrative session cleanup failed for rem phase");
+    expect(outcome).toEqual({ status: "degraded", error: "still active" });
   });
 
   it("handles subagent error gracefully", async () => {
@@ -746,16 +1016,20 @@ describe("generateAndAppendDreamNarrative", () => {
     );
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "rem", snippets: ["pattern surfaced"] },
       logger,
     });
 
-    // Should not throw.
-    expect(logger.warn).toHaveBeenCalled();
-    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
+    // Should not throw, and an unexpected failure still leaves a dated diary trace
+    // instead of silently skipping the entry.
+    expectLogIncludes(logger.warn, "narrative generation failed");
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).not.toContain("pattern surfaced");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
   });
 
   it("falls back to a local narrative when subagent runtime is request-scoped", async () => {
@@ -765,7 +1039,8 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.run.mockRejectedValue(new RequestScopedSubagentRuntimeError());
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "light", snippets: ["API endpoints need authentication"] },
@@ -797,7 +1072,8 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.run.mockRejectedValue(crossBoundaryError);
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "deep", snippets: [], promotions: ["A durable candidate surfaced."] },
@@ -825,15 +1101,21 @@ describe("generateAndAppendDreamNarrative", () => {
     });
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "deep", snippets: ["should not persist"] },
       logger,
     });
 
-    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
+    // A spoofed code must not be treated as the request-scoped runtime, so this stays on the
+    // unexpected-failure path: warn plus a generic fallback entry, never the request-scoped info.
     expectLogIncludes(logger.warn, "narrative generation failed");
+    expectLogExcludes(logger.info, "request-scoped");
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).not.toContain("should not persist");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
   });
 
   it("cleans up session even on failure", async () => {
@@ -842,7 +1124,8 @@ describe("generateAndAppendDreamNarrative", () => {
     subagent.getSessionMessages.mockRejectedValue(new Error("fetch failed"));
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "light", snippets: ["memory fragment"] },
@@ -864,8 +1147,9 @@ describe("generateAndAppendDreamNarrative", () => {
     const updatedAt = Date.now();
     await seedSessionStore(storePath, {
       "agent:main:dreaming-narrative-light-1": {
-        sessionId: "missing",
-        updatedAt,
+        sessionId: "orphan",
+        sessionFile: orphanPath,
+        updatedAt: updatedAt - 600_000,
       },
       "agent:main:kept-session": {
         sessionId: "still-live",
@@ -884,12 +1168,14 @@ describe("generateAndAppendDreamNarrative", () => {
     });
     await seedDreamingTranscriptEvent({
       sessionId: "orphan",
+      sessionKey: "agent:main:dreaming-narrative-light-1",
       storePath,
       timestampMs: Date.now() - 600_000,
       runId: "dreaming-narrative-light-123",
     });
     await seedDreamingTranscriptEvent({
       sessionId: "still-live",
+      sessionKey: "agent:main:kept-session",
       storePath,
       timestampMs: Date.now(),
       runId: "dreaming-narrative-light-keep",
@@ -906,12 +1192,13 @@ describe("generateAndAppendDreamNarrative", () => {
       session: {},
     } as never);
     setNarrativeTestEnv(stateDir);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+    vi.mocked(resolveStateDir).mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("The repository whispered of forgotten endpoints.");
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "light", snippets: ["memory fragment"] },
@@ -920,7 +1207,7 @@ describe("generateAndAppendDreamNarrative", () => {
 
     const updatedStore = readSessionStoreEntries(storePath) as Record<string, unknown>;
     expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-light-1");
-    expect(updatedStore).not.toHaveProperty("agent:main:dreaming-narrative-corrupt-normal");
+    expect(updatedStore).toHaveProperty("agent:main:dreaming-narrative-corrupt-normal");
     expect(updatedStore).toHaveProperty("agent:main:kept-session");
     expect(updatedStore).toHaveProperty("agent:main:telegram:group:dreaming-narrative-room");
     expect(loadTranscriptEventsSync({ agentId: "main", sessionId: "orphan", storePath })).toEqual(
@@ -952,7 +1239,7 @@ describe("generateAndAppendDreamNarrative", () => {
       "agent:main:dreaming-narrative-deep-orphan": {
         sessionId: "orphan-dreaming",
         sessionFile: orphanTranscript,
-        updatedAt,
+        updatedAt: updatedAt - 600_000,
       },
       "agent:main:dreaming-narrative-deep-live": {
         sessionId: "live-dreaming",
@@ -967,12 +1254,14 @@ describe("generateAndAppendDreamNarrative", () => {
     });
     await seedDreamingTranscriptEvent({
       sessionId: "orphan-dreaming",
+      sessionKey: "agent:main:dreaming-narrative-deep-orphan",
       storePath,
       timestampMs: Date.now() - 600_000,
       runId: "dreaming-narrative-deep-orphan",
     });
     await seedDreamingTranscriptEvent({
       sessionId: "live-dreaming",
+      sessionKey: "agent:main:dreaming-narrative-deep-live",
       storePath,
       timestampMs: Date.now(),
       runId: "dreaming-narrative-deep-live",
@@ -989,12 +1278,13 @@ describe("generateAndAppendDreamNarrative", () => {
       session: {},
     } as never);
     setNarrativeTestEnv(stateDir);
-    vi.spyOn(memoryCoreHostRuntimeCoreModule, "resolveStateDir").mockReturnValue(stateDir);
+    vi.mocked(resolveStateDir).mockReturnValue(stateDir);
 
     const subagent = createMockSubagent("A forgotten endpoint hummed in the dark.");
     const logger = createMockLogger();
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir,
       data: { phase: "light", snippets: ["memory fragment"] },
@@ -1028,14 +1318,16 @@ describe("generateAndAppendDreamNarrative", () => {
     const logger = createMockLogger();
     const nowMs = Date.parse("2026-04-05T03:00:00Z");
 
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir: firstWorkspaceDir,
       data: { phase: "light", snippets: ["first workspace fragment"] },
       nowMs,
       logger,
     });
-    await generateAndAppendDreamNarrative({
+    await runDreamNarrative({
+      agentId: "main",
       subagent,
       workspaceDir: secondWorkspaceDir,
       data: { phase: "light", snippets: ["second workspace fragment"] },
@@ -1048,8 +1340,8 @@ describe("generateAndAppendDreamNarrative", () => {
     expect(firstSessionKey).toBeTypeOf("string");
     expect(secondSessionKey).toBeTypeOf("string");
     expect(firstSessionKey).not.toBe(secondSessionKey);
-    expect(firstSessionKey).toContain("dreaming-narrative-light-");
-    expect(secondSessionKey).toContain("dreaming-narrative-light-");
+    expect(firstSessionKey).toContain("dreaming-narrative-memory-core-v2-light-");
+    expect(secondSessionKey).toContain("dreaming-narrative-memory-core-v2-light-");
     const deleteKeys = subagent.deleteSession.mock.calls.map(
       (call: unknown[]) => (call[0] as { sessionKey: string })?.sessionKey,
     );
@@ -1058,7 +1350,228 @@ describe("generateAndAppendDreamNarrative", () => {
   });
 });
 
-describe("runDetachedDreamNarrative", () => {
+describe("runDreamNarrative deletion boundary", () => {
+  it.each([
+    { source: "tracked source", mutation: "forget" },
+    { source: "prior diary", mutation: "forget" },
+    { source: "prior diary", mutation: "unrelated append" },
+  ] as const)(
+    "validates $source before publishing generated quotes after $mutation",
+    async ({ source, mutation }) => {
+      const workspaceDir = await createTempWorkspace("dreaming-forget-generated-");
+      setNarrativeTestEnv(path.join(workspaceDir, ".state"));
+      const nowMs = Date.now();
+      const claim = "The private cobalt archive opens every midnight.";
+      const retainedClaim = "A public archive is open throughout the afternoon.";
+      const sourcePath = "memory/2026-08-26.md";
+      const dreamsPath = path.join(workspaceDir, "DREAMS.md");
+      await fs.mkdir(path.join(workspaceDir, "memory"), { recursive: true });
+      await fs.writeFile(path.join(workspaceDir, sourcePath), `${claim}\n${retainedClaim}\n`);
+      await fs.mkdir(path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR), { recursive: true });
+      await fs.writeFile(
+        path.join(workspaceDir, SESSION_CORPUS_RELATIVE_DIR, "2026-08-26.txt"),
+        `[main:forgotten-narrative-source#L1] ${claim}\n`,
+      );
+      await fs.writeFile(dreamsPath, "# Dream Diary\n\nA retained public diary entry.\n");
+      await recordShortTermRecalls({
+        workspaceDir,
+        query: "archive opening time",
+        signalType: "daily",
+        nowMs,
+        results: [
+          {
+            path: sourcePath,
+            startLine: 1,
+            endLine: 1,
+            score: 0.9,
+            snippet: claim,
+            source: "memory",
+            sessionOrigin: { agentId: "main", sessionId: "forgotten-narrative-source" },
+          },
+          {
+            path: sourcePath,
+            startLine: 2,
+            endLine: 2,
+            score: 0.9,
+            snippet: retainedClaim,
+            source: "memory",
+          },
+        ],
+      });
+      const entries = (await readShortTermRecallEntries({ workspaceDir, nowMs })).filter(
+        (entry) => entry.snippet === (source === "prior diary" ? retainedClaim : claim),
+      );
+      if (source === "prior diary") {
+        await writeBackfillDiaryEntries({
+          workspaceDir,
+          preserveExisting: true,
+          entries: [{ isoDay: "2026-08-26", bodyLines: [claim] }],
+        });
+      }
+      const waiting = createDeferred<void>();
+      const terminal = createDeferred<{
+        status: string;
+        terminalReply: { disposition: "visible"; text: string };
+      }>();
+      const reply = {
+        status: "ok",
+        terminalReply: { disposition: "visible" as const, text: `I remembered: ${claim}` },
+      };
+      const subagent = {
+        run: vi.fn().mockResolvedValue({ runId: "generated-after-forget" }),
+        waitForRun: vi.fn(async () => {
+          waiting.resolve();
+          return await terminal.promise;
+        }),
+        getSessionMessages: vi.fn().mockResolvedValue({ messages: [] }),
+        deleteSession: vi.fn().mockResolvedValue(undefined),
+      };
+      const data = {
+        phase: "light" as const,
+        snippets: entries.map((entry) => entry.snippet),
+        sourceEntryKeys: entries.map((entry) => entry.key),
+        ...(source === "prior diary"
+          ? { recentDiaryEntries: await readRecentDreamDiaryEntries({ workspaceDir }) }
+          : {}),
+      };
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const operation = runDreamNarrative({
+        agentId: "main",
+        subagent,
+        workspaceDir,
+        data,
+        nowMs,
+        logger,
+      });
+      try {
+        await waiting.promise;
+        expect(mockObjectArg(subagent.run, "subagent run").message).toContain(claim);
+        if (mutation === "forget") {
+          const forgotten = await forgetMemoryEntries({
+            cfg: { agents: { entries: { main: { workspace: workspaceDir } } } },
+            agentId: "main",
+            sessionIds: ["forgotten-narrative-source"],
+          });
+          expect(forgotten.artifacts.shortTermEntries).toBe(1);
+          expect(await fs.readFile(dreamsPath, "utf8")).not.toContain(claim);
+        } else {
+          // The original context remains valid even after it falls outside
+          // the recent-entry window used to prepare the next narrative.
+          await writeBackfillDiaryEntries({
+            workspaceDir,
+            preserveExisting: true,
+            entries: Array.from({ length: 4 }, (_, index) => ({
+              isoDay: "2026-08-26",
+              bodyLines: [`Another retained diary entry ${index}.`],
+            })),
+          });
+        }
+        terminal.resolve(reply);
+        const outcome = await operation;
+        const content = await fs.readFile(dreamsPath, "utf8");
+        expect(content).toContain("A retained public diary entry.");
+        if (mutation === "forget") {
+          expect(content).not.toContain(claim);
+          expect(outcome).toEqual({ status: "skipped" });
+          expectLogIncludes(logger.info, "narrative publication skipped");
+        } else {
+          expect(content).toContain(reply.terminalReply.text);
+          expect(outcome).toEqual({ status: "completed" });
+        }
+      } finally {
+        terminal.resolve(reply);
+        await operation;
+      }
+    },
+  );
+});
+
+describe("runDreamNarrative ownership gate", () => {
+  it("keeps the sweep alive with a local fallback when no owning agent is known", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = {
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      deleteSession: vi.fn(),
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await runDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["An ownerless sweep still leaves a trace."] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    // No agent means no resolvable session store, so the subagent is never called.
+    expect(subagent.run).not.toHaveBeenCalled();
+    expect(subagent.deleteSession).not.toHaveBeenCalled();
+    const content = await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8");
+    expect(content).not.toContain("An ownerless sweep still leaves a trace.");
+    expect(content).toContain("A memory trace surfaced, but details were unavailable in this run.");
+    expectLogIncludes(logger.info, "no owning agent id");
+  });
+
+  it("queues the ownerless fallback through detached dispatch", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = {
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      deleteSession: vi.fn(),
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    // A detached cron sweep must not await the diary write, so the ownerless fallback rides
+    // the same limiter as the subagent path instead of blocking inline.
+    await runDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: ["A detached ownerless sweep still leaves a trace."] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+      detached: true,
+    });
+
+    expect(subagent.run).not.toHaveBeenCalled();
+    await vi.waitFor(async () => {
+      expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).toContain(
+        "A memory trace surfaced, but details were unavailable in this run.",
+      );
+    });
+  });
+
+  it("stays a no-op for an ownerless sweep with nothing to narrate", async () => {
+    const workspaceDir = await createTempWorkspace("openclaw-dreaming-narrative-");
+    const subagent = {
+      run: vi.fn(),
+      waitForRun: vi.fn(),
+      getSessionMessages: vi.fn(),
+      deleteSession: vi.fn(),
+    };
+    const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+    await runDreamNarrative({
+      subagent,
+      workspaceDir,
+      data: { phase: "light", snippets: [] },
+      nowMs: Date.parse("2026-04-05T03:00:00Z"),
+      timezone: "UTC",
+      logger,
+    });
+
+    // Empty narrative data is a no-op with or without an owner; the ownership fallback must
+    // not invent a diary entry for material that never existed.
+    expect(subagent.run).not.toHaveBeenCalled();
+    await expectPathMissing(path.join(workspaceDir, "DREAMS.md"));
+  });
+});
+
+describe("runDreamNarrative detached dispatch", () => {
   type Deferred<T> = { promise: Promise<T>; resolve: (v: T) => void };
   function deferred<T>(): Deferred<T> {
     let resolve: ((v: T) => void) | undefined;
@@ -1106,12 +1619,14 @@ describe("runDetachedDreamNarrative", () => {
     const logger = createMockLogger();
 
     for (const [i, workspaceDir] of workspaceDirs.entries()) {
-      runDetachedDreamNarrative({
+      void runDreamNarrative({
+        agentId: "main",
         subagent,
         workspaceDir,
         data: { phase: "light", snippets: [`fragment-${i}`] },
         nowMs: Date.parse("2026-04-28T03:00:00Z"),
         logger,
+        detached: true,
       });
     }
 
@@ -1165,12 +1680,14 @@ describe("runDetachedDreamNarrative", () => {
     const logger = createMockLogger();
 
     for (let i = 0; i < 5; i += 1) {
-      runDetachedDreamNarrative({
+      void runDreamNarrative({
+        agentId: "main",
         subagent,
         workspaceDir,
         data: { phase: "light", snippets: [`fragment-${i}`] },
         nowMs: Date.parse("2026-04-28T03:00:00Z"),
         logger,
+        detached: true,
       });
     }
 
@@ -1217,18 +1734,26 @@ describe("runDetachedDreamNarrative", () => {
     process.on("unhandledRejection", unhandled);
 
     try {
-      runDetachedDreamNarrative({
+      void runDreamNarrative({
+        agentId: "main",
         subagent,
         workspaceDir,
         data: { phase: "light", snippets: ["fragment"] },
         nowMs: Date.parse("2026-04-28T03:00:00Z"),
         logger,
+        detached: true,
       });
 
       await drainMicrotasks();
 
       expect(subagent.run).toHaveBeenCalledOnce();
       expect(unhandled).not.toHaveBeenCalled();
+      // Settle the detached fallback write before the fixture workspace is torn down.
+      await vi.waitFor(async () => {
+        expect(await fs.readFile(path.join(workspaceDir, "DREAMS.md"), "utf-8")).toContain(
+          "A memory trace surfaced, but details were unavailable in this run.",
+        );
+      });
     } finally {
       process.off("unhandledRejection", unhandled);
     }

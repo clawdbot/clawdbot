@@ -1,2 +1,22 @@
 // Qa Lab plugin module implements protocol behavior.
-export type * from "openclaw/plugin-sdk/qa-channel-protocol";
+export type {
+  QaBusAttachment,
+  QaBusConversation,
+  QaBusCreateThreadInput,
+  QaBusDeleteMessageInput,
+  QaBusEditMessageInput,
+  QaBusEvent,
+  QaBusInboundMessageInput,
+  QaBusMessage,
+  QaBusOutboundMessageInput,
+  QaBusPollInput,
+  QaBusPollResult,
+  QaBusReactToMessageInput,
+  QaBusReadMessageInput,
+  QaBusSearchMessagesInput,
+  QaBusSnapshotConversation,
+  QaBusStateSnapshot,
+  QaBusThread,
+  QaBusToolCall,
+  QaBusWaitForInput,
+} from "openclaw/plugin-sdk/qa-channel-protocol";

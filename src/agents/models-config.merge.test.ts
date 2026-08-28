@@ -104,45 +104,79 @@ describe("models-config merge helpers", () => {
     ]);
   });
 
-  it("preserves explicit input modality overrides when implicit metadata has the same model id", () => {
-    const merged = mergeProviderModels(
-      {
-        api: "ollama",
-        models: [
-          {
-            id: "qwen3-vl:latest",
-            name: "Qwen3 VL",
-            input: ["text"],
-            reasoning: true,
-            contextWindow: 128_000,
-            maxTokens: 8192,
-          },
-        ],
-      } as ProviderConfig,
-      {
-        api: "ollama",
-        models: [
-          {
-            id: "qwen3-vl:latest",
-            name: "Qwen3 VL",
-            input: ["text", "image"],
-            contextWindow: 128_000,
-            maxTokens: 8192,
-          },
-        ],
-      } as ProviderConfig,
-    );
+  it("uses source input presence when merging matching model metadata", () => {
+    const implicit = {
+      api: "ollama",
+      models: [
+        {
+          id: "qwen3-vl:latest",
+          name: "Qwen3 VL",
+          input: ["text", "image"],
+          reasoning: true,
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        },
+      ],
+    } as ProviderConfig;
+    const explicit = {
+      api: "ollama",
+      models: [
+        {
+          id: "qwen3-vl:latest",
+          name: "Qwen3 VL",
+          input: ["text"],
+          contextWindow: 128_000,
+          maxTokens: 8192,
+        },
+      ],
+    } as ProviderConfig;
 
-    expect(merged.models).toEqual([
-      {
-        id: "qwen3-vl:latest",
-        name: "Qwen3 VL",
-        input: ["text", "image"],
-        reasoning: true,
-        contextWindow: 128_000,
-        maxTokens: 8192,
-      },
-    ]);
+    expect(mergeProviderModels(implicit, explicit).models?.[0]?.input).toEqual(["text"]);
+    expect(
+      mergeProviderModels(implicit, explicit, {
+        providerId: "ollama",
+        sourceModelInputOmissions: new Set(["ollama/qwen3-vl:latest"]),
+      }).models?.[0]?.input,
+    ).toEqual(["text", "image"]);
+  });
+
+  it("keeps compat catalog-owned for a configured model on the catalog route", () => {
+    const implicit = createConfigProvider({
+      baseUrl: "https://catalog.example/v1/",
+      models: [
+        createModel({
+          compat: { supportsTools: true, supportsTemperature: false },
+        }),
+      ],
+    });
+    const explicit = createConfigProvider({
+      baseUrl: "https://catalog.example/v1",
+      models: [
+        createModel({
+          compat: { supportsTools: false, supportsTemperature: true },
+        }),
+      ],
+    });
+
+    expect(mergeProviderModels(implicit, explicit).models?.[0]?.compat).toEqual({
+      supportsTools: true,
+      supportsTemperature: false,
+    });
+  });
+
+  it("preserves custom compat when config changes the catalog route", () => {
+    const implicit = createConfigProvider({
+      baseUrl: "https://catalog.example/v1",
+      models: [createModel({ compat: { supportsTools: true } })],
+    });
+    const explicit = createConfigProvider({
+      baseUrl: "http://127.0.0.1:9000/v1",
+      models: [createModel({ compat: { supportsTools: false } })],
+    });
+
+    expect(mergeProviderModels(implicit, explicit).models?.[0]?.compat).toEqual({
+      supportsTools: false,
+    });
   });
 
   it("merges explicit providers onto trimmed keys", () => {
@@ -157,6 +191,114 @@ describe("models-config merge helpers", () => {
 
     expect(Object.keys(merged)).toEqual(["custom"]);
     expect(merged.custom?.api).toBe("openai-responses");
+  });
+
+  it("merges explicit providers onto case-normalized implicit provider ids", () => {
+    const merged = mergeProviders({
+      implicit: {
+        openai: {
+          api: "openai-responses",
+          models: [
+            createModel({
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoning: true,
+            }),
+          ],
+        } as ProviderConfig,
+      },
+      explicit: {
+        " OpenAI ": {
+          apiKey: configApiKey,
+          models: [
+            createModel({
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoning: false,
+            }),
+          ],
+        } as ProviderConfig,
+      },
+    });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.apiKey).toBe(configApiKey);
+    expect(merged.openai?.api).toBe("openai-responses");
+    expect(merged.OpenAI).toBeUndefined();
+  });
+
+  it("normalizes implicit provider ids before merging explicit providers", () => {
+    const merged = mergeProviders({
+      implicit: {
+        " OpenAI ": {
+          api: "openai-responses",
+          models: [
+            createModel({
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoning: true,
+            }),
+          ],
+        } as ProviderConfig,
+      },
+      explicit: {
+        openai: {
+          apiKey: configApiKey,
+          models: [
+            createModel({
+              id: "gpt-5.4",
+              name: "GPT-5.4",
+              reasoning: false,
+            }),
+          ],
+        } as ProviderConfig,
+      },
+    });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.apiKey).toBe(configApiKey);
+    expect(merged.OpenAI).toBeUndefined();
+  });
+
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])("prefers canonical provider keys when they appear %s case variants", (_position, first) => {
+    const canonical = createConfigProvider({ baseUrl: "https://canonical.example/v1" });
+    const caseVariant = createConfigProvider({ baseUrl: "https://variant.example/v1" });
+    const explicit: Record<string, ProviderConfig> = first
+      ? { openai: canonical, OpenAI: caseVariant }
+      : { OpenAI: caseVariant, openai: canonical };
+
+    const merged = mergeProviders({ explicit });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.baseUrl).toBe("https://canonical.example/v1");
+  });
+
+  it("keeps canonical providers at the canonical key's position", () => {
+    const merged = mergeProviders({
+      explicit: {
+        OpenAI: createConfigProvider({ baseUrl: "https://variant.example/v1" }),
+        anthropic: createConfigProvider({ baseUrl: "https://anthropic.example/v1" }),
+        openai: createConfigProvider({ baseUrl: "https://canonical.example/v1" }),
+      },
+    });
+
+    expect(Object.keys(merged)).toEqual(["anthropic", "openai"]);
+    expect(merged.openai?.baseUrl).toBe("https://canonical.example/v1");
+  });
+
+  it("keeps the later provider when no collision key uses canonical spelling", () => {
+    const merged = mergeProviders({
+      explicit: {
+        OpenAI: createConfigProvider({ baseUrl: "https://first.example/v1" }),
+        " OPENAI ": createConfigProvider({ baseUrl: "https://second.example/v1" }),
+      },
+    });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.baseUrl).toBe("https://second.example/v1");
   });
 
   it("keeps existing providers alongside newly configured providers in merge mode", () => {
@@ -248,6 +390,48 @@ describe("models-config merge helpers", () => {
     expect(merged.custom?.apiKey).toBe(preservedApiKey);
     expect(merged.custom?.baseUrl).toBe("https://agent.example/v1");
   });
+
+  it("preserves existing secrets after provider key normalization", () => {
+    const normalized = mergeProviders({
+      explicit: {
+        openai: createConfigProvider(),
+      },
+    });
+    const merged = mergeWithExistingProviderSecrets({
+      nextProviders: normalized,
+      existingProviders: {
+        " OpenAI ": createExistingProvider(),
+      },
+      secretRefManagedProviders: new Set<string>(),
+    });
+
+    expect(Object.keys(merged)).toEqual(["openai"]);
+    expect(merged.openai?.apiKey).toBe(preservedApiKey);
+    expect(merged.openai?.baseUrl).toBe("https://agent.example/v1");
+    expect(merged.OpenAI).toBeUndefined();
+  });
+
+  it.each([
+    ["before", true],
+    ["after", false],
+  ])(
+    "prefers canonical existing providers when they appear %s case variants",
+    (_position, first) => {
+      const canonical = createExistingProvider({ baseUrl: "https://canonical.example/v1" });
+      const caseVariant = createExistingProvider({ baseUrl: "https://variant.example/v1" });
+      const existingProviders: Record<string, ExistingProviderConfig> = first
+        ? { openai: canonical, OpenAI: caseVariant }
+        : { OpenAI: caseVariant, openai: canonical };
+      const merged = mergeWithExistingProviderSecrets({
+        nextProviders: { openai: createConfigProvider() },
+        existingProviders,
+        secretRefManagedProviders: new Set<string>(),
+      });
+
+      expect(Object.keys(merged)).toEqual(["openai"]);
+      expect(merged.openai?.baseUrl).toBe("https://canonical.example/v1");
+    },
+  );
 
   it("preserves implicit provider headers when explicit config adds extra headers", () => {
     const merged = mergeProviderModels(

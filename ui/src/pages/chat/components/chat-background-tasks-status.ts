@@ -1,9 +1,7 @@
-// Registers <wa-tooltip>: the status row's hover preview uses it directly
-// because openclaw-tooltip only carries plain-text content.
-import "@awesome.me/webawesome/dist/components/tooltip/tooltip.js";
 import { html, nothing, type TemplateResult } from "lit";
 import "../../../components/elapsed-time.ts";
 import { icons } from "../../../components/icons.ts";
+import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
 import {
@@ -12,19 +10,19 @@ import {
   taskStatusLabel,
   taskTimestampMs,
   taskTitle,
-  type TaskSummary,
 } from "../../../lib/tasks/data.ts";
-import { STATUS_TONES, type BackgroundTasksProps } from "./chat-background-tasks.ts";
+import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { STATUS_TONES } from "./chat-background-tasks-shared.ts";
+import type { BackgroundTasksProps } from "./chat-background-tasks.types.ts";
+import { renderSubagentActivity } from "./chat-subagent-activity.ts";
 
 type BackgroundTasksStatus = { count: number; startedMs: number | null };
 
 /** Summary for the bottom-of-thread status row: active-task count plus the
  * oldest active start time so the row ticks one elapsed label, not one per
  * task. `startedMs` is null when no active task has a usable timestamp. */
-function activeBackgroundTasksStatus(
-  props: BackgroundTasksProps | undefined,
-): BackgroundTasksStatus | null {
-  const active = props?.tasks?.filter(isActiveTask) ?? [];
+function activeBackgroundTasksStatus(tasks: readonly TaskSummary[]): BackgroundTasksStatus | null {
+  const active = tasks.filter(isActiveTask);
   if (active.length === 0) {
     return null;
   }
@@ -73,27 +71,24 @@ function renderStatusPreviewRow(task: TaskSummary): TemplateResult {
 /** Hover/focus preview on the status row: the latest tasks at a glance
  * without opening the rail. Content is read-only — a tooltip is a transient
  * surface, so actions stay in the rail the click opens. */
-function renderStatusPreview(props: BackgroundTasksProps): TemplateResult {
-  const { active, recent } = partitionTasks(props.tasks ?? []);
+function renderStatusPreview(remainingTasks: readonly TaskSummary[]): TemplateResult {
+  const { active, recent } = partitionTasks(remainingTasks);
   const tasks = [...active, ...recent];
   const preview = tasks.slice(0, STATUS_PREVIEW_LIMIT);
   const overflow = tasks.length - preview.length;
   return html`
-    <wa-tooltip
-      class="chat-tasks-status__preview"
-      for=${props.statusRowId}
-      placement="top-start"
-      without-arrow
-    >
-      <div class="chat-tasks-preview">
-        ${preview.map((task) => renderStatusPreviewRow(task))}
-        ${overflow > 0
-          ? html`<div class="chat-tasks-preview__more">
-              ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
-            </div>`
-          : nothing}
+    <div slot="content" class="chat-tasks-preview">
+      <div class="chat-tasks-preview__heading">
+        <span>${t("chat.backgroundTasks.title")}</span>
+        <span>${t("chat.backgroundTasks.running", { count: String(active.length) })}</span>
       </div>
-    </wa-tooltip>
+      ${preview.map((task) => renderStatusPreviewRow(task))}
+      ${overflow > 0
+        ? html`<div class="chat-tasks-preview__more">
+            ${t("chat.backgroundTasks.statusPreviewMore", { count: String(overflow) })}
+          </div>`
+        : nothing}
+    </div>
   `;
 }
 
@@ -104,11 +99,24 @@ function renderStatusPreview(props: BackgroundTasksProps): TemplateResult {
 export function renderBackgroundTasksStatusRow(
   backgroundTasks: BackgroundTasksProps | undefined,
 ): TemplateResult | typeof nothing {
-  const status = activeBackgroundTasksStatus(backgroundTasks);
   // Disconnected snapshots are stale: task events cannot arrive, so a ticking
   // "running" claim would be a lie. The rail owns the disconnected state.
-  if (!backgroundTasks?.connected || !status) {
+  if (!backgroundTasks?.connected) {
     return nothing;
+  }
+  const subagentActivity = renderSubagentActivity(
+    backgroundTasks.subagentActivity,
+    backgroundTasks.onOpenTaskDetail,
+  );
+  const remainingTasks = (backgroundTasks.tasks ?? []).filter(
+    (task) => !backgroundTasks.subagentActivity.taskIds.has(task.id),
+  );
+  const status = activeBackgroundTasksStatus(remainingTasks);
+  if (subagentActivity === nothing && !status) {
+    return nothing;
+  }
+  if (!status) {
+    return subagentActivity;
   }
   const label =
     status.count === 1
@@ -119,25 +127,26 @@ export function renderBackgroundTasksStatusRow(
       backgroundTasks.onToggleCollapsed();
     }
   };
-  // The preview tooltip anchors the whole row (not the link button): wa-tooltip
-  // joins the anchor's aria-labelledby, which would replace the button's
-  // accessible name. It also stays a sibling so the ticking preview content
-  // never lives inside the polite live region.
-  return html`
-    <div class="chat-tasks-status" id=${backgroundTasks.statusRowId} role="status">
+  // Keep the live announcement separate from the tooltip: rich preview
+  // content must not enter the polite region, while the popup must anchor to
+  // the link itself or its center drifts with the claw and elapsed time.
+  const aggregate = html`
+    <div class="chat-tasks-status" id=${backgroundTasks.statusRowId}>
       <span class="chat-tasks-status__claw" aria-hidden="true">${icons.claw}</span>
       ${status.startedMs !== null
         ? html`
-            <!-- Ticking time stays out of the polite live region: without
-                 aria-hidden, screen readers would re-announce every second. -->
             <span class="chat-tasks-status__time" aria-hidden="true">
               <openclaw-elapsed-time .startMs=${status.startedMs}></openclaw-elapsed-time>
             </span>
             <span class="chat-tasks-status__sep" aria-hidden="true">·</span>
           `
         : nothing}
-      <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
+      <span class="sr-only" role="status">${label}</span>
+      <openclaw-tooltip class="chat-tasks-status__preview">
+        <button class="chat-tasks-status__link" type="button" @click=${openRail}>${label}</button>
+        ${renderStatusPreview(remainingTasks)}
+      </openclaw-tooltip>
     </div>
-    ${renderStatusPreview(backgroundTasks)}
   `;
+  return subagentActivity === nothing ? aggregate : html`${subagentActivity}${aggregate}`;
 }

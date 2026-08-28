@@ -1,7 +1,12 @@
 // Covers in-memory system presence merging and expiry behavior.
 import { randomUUID } from "node:crypto";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { listSystemPresence, updateSystemPresence, upsertPresence } from "./system-presence.js";
+import {
+  listSystemPresence,
+  touchPresence,
+  updateSystemPresence,
+  upsertPresence,
+} from "./system-presence.js";
 
 describe("system-presence", () => {
   afterEach(() => {
@@ -62,6 +67,29 @@ describe("system-presence", () => {
     expect(entry?.scopes).toEqual(["operator.admin", "system.run"]);
   });
 
+  it("clears retained input activity on explicit null", () => {
+    const instanceId = `presence-clear-${randomUUID()}`;
+    updateSystemPresence({
+      text: "Node: desk · mode ui",
+      instanceId,
+      host: "desk",
+      mode: "ui",
+      lastInputSeconds: 4,
+    });
+
+    updateSystemPresence({
+      text: "Node: desk · mode ui",
+      instanceId,
+      host: "desk",
+      mode: "ui",
+      lastInputSeconds: null,
+    });
+
+    const entry = listSystemPresence().find((candidate) => candidate.instanceId === instanceId);
+    expect(entry?.host).toBe("desk");
+    expect(entry?.lastInputSeconds).toBeUndefined();
+  });
+
   it("parses node presence text and normalizes the update key", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-05-11T04:00:00.000Z"));
@@ -119,6 +147,25 @@ describe("system-presence", () => {
     const update = updateSystemPresence({ text: `${keyPrefix}🚀tail` });
 
     expect(update.key).toBe(keyPrefix);
+  });
+
+  it("keeps connection-owned presence alive when its heartbeat is acknowledged", () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(Date.now());
+
+    const connectionId = randomUUID();
+    upsertPresence(connectionId, {
+      host: "control-ui",
+      instanceId: connectionId,
+      mode: "webchat",
+      reason: "connect",
+    });
+
+    vi.advanceTimersByTime(4 * 60 * 1000);
+    expect(touchPresence(connectionId)).toBe(true);
+    vi.advanceTimersByTime(4 * 60 * 1000);
+
+    expect(listSystemPresence().map((entry) => entry.instanceId)).toContain(connectionId);
   });
 
   it("prunes stale non-self entries after TTL", () => {

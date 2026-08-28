@@ -1,8 +1,8 @@
 // Builds minimal message contexts for reply unit tests.
-import type { FinalizedMsgContext, MsgContext } from "../templating.js";
+import type { FinalizedRuntimeMsgContext, MsgContext } from "../templating.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 
-export function buildTestCtx(overrides: Partial<MsgContext> = {}): FinalizedMsgContext {
+export function buildTestCtx(overrides: Partial<MsgContext> = {}): FinalizedRuntimeMsgContext {
   return finalizeInboundContext({
     Body: "",
     CommandBody: "",

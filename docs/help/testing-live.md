@@ -12,6 +12,22 @@ For quick start, QA runners, unit/integration suites, and Docker flows, see
 [Testing](/help/testing). This page covers **live** (network-touching) tests:
 model matrix, CLI backends, ACP, media providers, and credential handling.
 
+## Live tests vs your real gateway
+
+Live suites and ad hoc smokes must never disturb a gateway that is already
+serving real traffic (yours or another operator's):
+
+- Bring your own gateway: use the in-process gateway (Layer 2 below) or start a
+  dev instance with an isolated state dir (`OPENCLAW_STATE_DIR=<scratch>`) and a
+  free port. Do not bind the default gateway port (18789) while a real gateway
+  is running on it.
+- Do not `openclaw gateway stop`/`restart` (or `launchctl`/`systemctl`/tmux
+  equivalents) a service you did not start in this session — that is the
+  operator's live instance. Get explicit approval first.
+- Need realistic data? Copy the live state/DB into your dev state dir and test
+  against the copy. In-place migrations of a live gateway's state also require
+  explicit approval.
+
 ## Live: local smoke commands
 
 Export the needed provider key in the process environment before ad hoc live
@@ -61,7 +77,7 @@ Live model tests are split into two layers so failures are isolated:
 - "Direct model" tells you whether the provider/model can answer at all with the given key.
 - "Gateway smoke" tells you whether the full gateway+agent pipeline works for that model (sessions, history, tools, sandbox policy, etc.).
 
-The curated model lists below live in `src/agents/live-model-filter.ts` and
+The curated model lists below live in `src/agents/test-helpers/live-model-dynamic-candidates.ts` and
 change over time; treat the arrays there as the source of truth, not this
 page.
 
@@ -87,7 +103,7 @@ MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
   - Exhaustive sweeps use `OPENCLAW_LIVE_TEST_TIMEOUT_MS` for the whole direct-model test timeout. Default: 60 minutes.
   - Direct-model probes run with 20-way parallelism by default; set `OPENCLAW_LIVE_MODEL_CONCURRENCY` to override.
 - How to select providers:
-  - `OPENCLAW_LIVE_PROVIDERS="google,google-antigravity,google-gemini-cli"` (comma allowlist)
+  - `OPENCLAW_LIVE_PROVIDERS="google,google-gemini-cli"` (comma allowlist)
 - Where keys come from:
   - By default: profile store and env fallbacks
   - Set `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to enforce **profile store** only
@@ -120,7 +136,7 @@ MiniMax M3 uses `minimax/MiniMax-M3` as its default provider/model reference.
   - Or set `OPENCLAW_LIVE_GATEWAY_MODELS="provider/model"` (or comma list) to narrow
   - Modern/all and small gateway sweeps default to their curated-list length as a cap; set `OPENCLAW_LIVE_GATEWAY_MAX_MODELS=0` for an exhaustive selected sweep or a positive number for a smaller cap.
 - How to select providers (avoid "OpenRouter everything"):
-  - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-antigravity,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
+  - `OPENCLAW_LIVE_GATEWAY_PROVIDERS="google,google-gemini-cli,openai,anthropic,zai,minimax"` (comma allowlist)
 - Tool + image probes are always on in this live test:
   - `read` probe + `exec+read` probe (tool stress)
   - image probe runs when the model advertises image input support
@@ -160,6 +176,7 @@ openclaw models list --json
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_ARG="--image"` to pass image file paths as CLI args instead of prompt injection.
   - `OPENCLAW_LIVE_CLI_BACKEND_IMAGE_MODE="repeat"` (or `"list"`) to control how image args are passed when `IMAGE_ARG` is set.
   - `OPENCLAW_LIVE_CLI_BACKEND_RESUME_PROBE=1` to send a second turn and validate resume flow.
+  - `OPENCLAW_LIVE_CLI_BACKEND_CACHE_PROBE=1` to run a fresh Claude CLI turn, a tool-bearing warmup resume, and a no-tool settlement resume before requiring at least 90% prompt-cache reuse on the following dirty-workspace resume. It also verifies that a thinking-level change rotates the live-session generation and that the next steady resume restores at least 90% reuse. This probe disables the image, MCP, and model-switch probes.
   - `OPENCLAW_LIVE_CLI_BACKEND_MODEL_SWITCH_PROBE=1` to opt into the Claude Sonnet -> Opus same-session continuity probe when the selected model supports a switch target. Off by default, including in Docker recipes.
   - `OPENCLAW_LIVE_CLI_BACKEND_MCP_PROBE=1` to opt into the MCP/tool loopback probe. Off by default in Docker recipes.
 
@@ -193,6 +210,7 @@ Single-provider Docker recipes:
 
 ```bash
 pnpm test:docker:live-cli-backend:claude
+pnpm test:docker:live-cli-backend:claude:cache
 pnpm test:docker:live-cli-backend:claude-subscription
 pnpm test:docker:live-cli-backend:gemini
 ```
@@ -200,11 +218,12 @@ pnpm test:docker:live-cli-backend:gemini
 Notes:
 
 - The Docker runner lives at `scripts/test-live-cli-backend-docker.sh`.
+- `pnpm test:docker:live-cli-backend:claude:cache` requires Anthropic API-key auth. It logs normalized cache usage for every cache-probe resume and requires at least 90% reuse on both the post-settlement dirty-workspace resume and the steady resume after a thinking-level change.
 - It runs the live CLI-backend smoke inside the repo Docker image as the non-root `node` user.
 - It resolves CLI smoke metadata from the owning plugin, then installs the matching Linux CLI package (`@anthropic-ai/claude-code` or `@google/gemini-cli`) into a cached writable prefix at `OPENCLAW_DOCKER_CLI_TOOLS_DIR` (default: `~/.cache/openclaw/docker-cli-tools`).
 - `codex-cli` is no longer a bundled CLI backend; use `openai/*` with the Codex app-server runtime instead (see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke)).
 - `pnpm test:docker:live-cli-backend:claude-subscription` requires portable Claude Code subscription OAuth through either `~/.claude/.credentials.json` with `claudeAiOauth.subscriptionType` or `CLAUDE_CODE_OAUTH_TOKEN` from `claude setup-token`. It first proves direct `claude -p` in Docker, then runs two Gateway CLI-backend turns without preserving Anthropic API-key env vars. This subscription lane disables the Claude MCP/tool and image probes by default because it consumes the signed-in subscription's usage limits and Anthropic can change Claude Agent SDK / `claude -p` billing and rate-limit behavior without an OpenClaw release.
-- Claude and Gemini support the same probe set (text turn, image classification, MCP `cron` tool call, model-switch continuity) through the flags above, but none of those probes run by default - opt in per flag as needed.
+- Claude and Gemini support the same probe set (text turn, image classification, MCP `automations` tool call, model-switch continuity) through the flags above, but none of those probes run by default - opt in per flag as needed.
 
 ## Live: APNs HTTP/2 proxy reachability
 
@@ -300,16 +319,53 @@ Docker notes:
 - Test: `src/gateway/gateway-codex-harness.live.test.ts`
 - Enable: `OPENCLAW_LIVE_CODEX_HARNESS=1`
 - Harness baseline model: `openai/gpt-5.6-luna`
-- Fresh OpenAI API-key selection default: `openai/gpt-5.6`
+- Fresh OpenAI API-key selection default: `openai/gpt-5.6-sol`
 - Default thinking: `low`
 - Model override: `OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/<model>`
 - Thinking override: `OPENCLAW_LIVE_CODEX_HARNESS_THINKING=<level>`
+- Non-default model effort assertion:
+  `OPENCLAW_LIVE_CODEX_HARNESS_EXPECTED_EFFORT=<level>`
 - Matrix override: `OPENCLAW_LIVE_CODEX_HARNESS_TARGETS=<model>=<thinking>,...`
 - Auth mode: `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=codex-auth` (default) uses the
   copied Codex login; `api-key` uses `OPENAI_API_KEY` through Codex app-server.
 - Optional image probe: `OPENCLAW_LIVE_CODEX_HARNESS_IMAGE_PROBE=1`
 - Optional MCP/tool probe: `OPENCLAW_LIVE_CODEX_HARNESS_MCP_PROBE=1`
 - Optional Guardian probe: `OPENCLAW_LIVE_CODEX_HARNESS_GUARDIAN_PROBE=1`
+- Optional resume stress: `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1` adds
+  four history turns, then closes and restarts the Gateway and Codex app-server
+  three times while requiring the same native thread id and conversation
+  history. Override the bounded counts with
+  `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_HISTORY_TURNS` (1-20) and
+  `OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS_RESTARTS` (1-10).
+- Optional fan-out stress: set `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1`
+  and `OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_COUNT` (1-12). The harness starts
+  every child concurrently, waits for every terminal run, and verifies each
+  unique child reply and native thread identity.
+- Optional compaction stress: `OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS=1`
+  generates bounded native tool output, requires automatic compaction events,
+  verifies the persisted compaction count and hidden-marker recall, restarts
+  the Gateway and physical Codex app-server, then repeats the output and
+  compaction wave. Tune the bounded work with
+  `OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS` (1-8) and
+  `OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES` (100000-800000).
+- Full direct-API context: `OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT=1` applies
+  the `922000` context and `700000` total automatic-compaction limits, sends
+  dense bounded user turns without `/compact` or another manual checkpoint,
+  and requires a later small turn to trigger native automatic compaction. It
+  requires
+  `OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key` plus an absolute
+  `OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG` path. The catalog must expose the
+  exact selected model with `context_window: 922000`,
+  `max_context_window: 922000`, and `auto_compact_token_limit: 700000` so Codex
+  does not clamp the override back to its normal catalog window. The ordinary
+  reduced-threshold stress above keeps the stricter automatic-compaction and
+  hidden-marker retention assertions.
+- Optional loop-relay opt-out probe:
+  `OPENCLAW_LIVE_CODEX_HARNESS_DISABLE_LOOP_RELAY=1`
+- The requested thinking preference may map to the nearest effort advertised
+  by Codex for that model. For example, Luna maps `minimal` to `low`.
+- Known Codex catalog models derive that exact native effort automatically.
+  Unknown model overrides must state the expected mapped effort.
 - The smoke forces provider/model `agentRuntime.id: "codex"` so a broken Codex
   harness cannot pass by silently falling back to OpenClaw.
 - Auth: Codex app-server auth from the local Codex subscription login, or
@@ -333,6 +389,39 @@ Docker recipe:
 pnpm test:docker:live-codex-harness
 ```
 
+Restart and history stress:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1 \
+pnpm test:docker:live-codex-harness
+```
+
+Fan-out, large-output, compaction, and restart stress:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
+  OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_PROBE=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_SUBAGENT_COUNT=8 \
+  OPENCLAW_LIVE_CODEX_HARNESS_RESUME_STRESS=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS=1 \
+  pnpm test:docker:live-codex-harness
+```
+
+Full native Codex `922000` input-budget compaction stress:
+
+```bash
+OPENCLAW_LIVE_CODEX_HARNESS=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
+  OPENCLAW_LIVE_CODEX_HARNESS_FULL_CONTEXT=1 \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL_CATALOG=/absolute/path/to/models-api-1m.json \
+  OPENCLAW_LIVE_CODEX_HARNESS_MODEL=openai/gpt-5.6-sol \
+  OPENCLAW_LIVE_CODEX_HARNESS_THINKING=low \
+  OPENCLAW_LIVE_CODEX_HARNESS_COMPACTION_STRESS_TURNS=8 \
+  OPENCLAW_LIVE_CODEX_HARNESS_LARGE_OUTPUT_BYTES=800000 \
+  OPENCLAW_LIVE_CODEX_HARNESS_DEBUG=1 \
+  node --import tsx scripts/test-live.mts --quiet src/gateway/gateway-codex-harness.live.test.ts
+```
+
 GPT-5.6 native Codex matrix:
 
 ```bash
@@ -340,6 +429,78 @@ OPENCLAW_LIVE_CODEX_HARNESS_AUTH=api-key \
   OPENCLAW_LIVE_CODEX_HARNESS_TARGETS='openai/gpt-5.6-sol=ultra,openai/gpt-5.6-terra=ultra,openai/gpt-5.6-luna=max' \
   pnpm test:docker:live-codex-harness
 ```
+
+## Live: OpenAI long context
+
+- Goal: validate exact-model embedded OpenClaw execution through a
+  process-owned isolated Gateway, cross the long-context pricing boundary,
+  observe a first-class OpenAI Responses compaction item, and prove opaque
+  replay plus prefix pruning on the next request.
+- Test: `src/gateway/gateway-openai-long-context.live.test.ts`
+- Enable: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1`
+- Profiles: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=full` selects exact
+  `openai/gpt-5.6-sol` with a `1050000` total window, `922000` safe active
+  input, `128000` maximum output, and `700000` compaction threshold. `reduced`
+  reaches the same transport and persistence path with a smaller budget.
+- Metrics: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1` emits phase timing and
+  token observations. These measurements are informational, not pass/fail
+  latency targets.
+- Long output: `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1` requires a
+  deterministic response between 4000 and 8000 output tokens.
+- Optional raw read-tool stress:
+  `OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_TOOL_OUTPUT=1`. It is not part of the
+  default recipe because the effective tool surface may use Code Mode instead
+  of exposing the raw read tool.
+
+Full `922000` input-budget recipe:
+
+```bash
+OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1 \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=full \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1 \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1 \
+  node --import tsx scripts/test-live.mts --quiet src/gateway/gateway-openai-long-context.live.test.ts
+```
+
+Reduced-budget recipe:
+
+```bash
+OPENCLAW_LIVE_OPENAI_LONG_CONTEXT=1 \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_PROFILE=reduced \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_METRICS=1 \
+  OPENCLAW_LIVE_OPENAI_LONG_CONTEXT_OUTPUT=1 \
+  node --import tsx scripts/test-live.mts --quiet src/gateway/gateway-openai-long-context.live.test.ts
+```
+
+### Long-context hard oracles
+
+The full embedded and native recipes are proof runs, not throughput
+benchmarks. They fail unless the following runtime contracts hold:
+
+- Runtime and model identity are exact: embedded OpenClaw or native Codex as
+  requested, both on `openai/gpt-5.6-sol`.
+- At least one provider request crosses `272000` input tokens and every call
+  reports priority service.
+- Embedded OpenClaw receives and persists a first-class encrypted Responses
+  `compaction` item, replays the exact opaque item on the next request, and
+  prunes the earlier input prefix. The encrypted content must never appear in
+  display or diagnostics.
+- Native Codex reports an effective window of `875900`, grows beyond the
+  `700000` total-scope threshold without a manual compact, and automatically
+  compacts on the next turn.
+- Each runtime produces a deterministic long response between 4000 and 8000
+  output tokens and preserves a durable marker through compaction and a
+  Gateway restart.
+
+Compaction duration, restart latency, turn latency, and total suite duration
+are emitted as informational metrics only.
+
+<Warning>
+The full modes deliberately cross OpenAI's long-context pricing boundary and
+make several large API calls. Above `272000` input tokens, the whole request is
+2× input/cache and 1.5× output; Fast/Priority doubles that tier again. Use full
+mode only with explicit spend approval.
+</Warning>
 
 Fresh OpenAI API-key default:
 
@@ -351,7 +512,7 @@ OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT=1 \
 ```
 
 This proof leaves `OPENCLAW_LIVE_GATEWAY_MODELS` unset, resolves the model through
-the fresh onboarding inference-selection seam, asserts `openai/gpt-5.6`, and then
+the fresh onboarding inference-selection seam, asserts `openai/gpt-5.6-sol`, and then
 runs a real gateway turn with that resolved model.
 
 GPT-5.6 embedded OpenClaw matrix:
@@ -402,12 +563,11 @@ Narrow, explicit allowlists are fastest and least flaky:
 - Tool calling across several providers:
   - `OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna,anthropic/claude-opus-4-6,google/gemini-3.5-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
-- Z.AI Coding Plan GLM-5.2 direct smoke:
+- Z.AI Coding Plan GLM-5.3 direct smoke:
   - `ZAI_CODING_LIVE_TEST=1 pnpm test:live src/agents/zai.live.test.ts`
 
-- Google focus (Gemini API key + Antigravity):
+- Google focus:
   - Gemini (API key): `OPENCLAW_LIVE_GATEWAY_MODELS="google/gemini-3.5-flash" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
-  - Antigravity (OAuth): `OPENCLAW_LIVE_GATEWAY_MODELS="google-antigravity/claude-opus-4-6-thinking,google-antigravity/gemini-3-pro-high" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts`
 
 - Google adaptive thinking smoke (`qa manual` from the private QA CLI - requires `OPENCLAW_ENABLE_PRIVATE_QA_CLI=1` and a source checkout; see [QA overview](/concepts/qa-e2e-automation)):
   - Gemini 3 dynamic default: `OPENCLAW_ENABLE_PRIVATE_QA_CLI=1 pnpm openclaw qa manual --provider-mode live-frontier --model google/gemini-3.1-pro-preview --alt-model google/gemini-3.1-pro-preview --message '/think adaptive Reply exactly: GEMINI_ADAPTIVE_OK' --timeout-ms 180000`
@@ -416,40 +576,42 @@ Narrow, explicit allowlists are fastest and least flaky:
 Notes:
 
 - `google/...` uses the Gemini API (API key).
-- `google-antigravity/...` uses the Antigravity OAuth bridge (Cloud Code Assist-style agent endpoint).
 - `google-gemini-cli/...` uses the local Gemini CLI on your machine (separate auth + tooling quirks).
+- `google-antigravity/...` is not a registered provider or supported setup path. Do not add it to live-test allowlists.
 - Gemini API vs Gemini CLI:
   - API: OpenClaw calls Google's hosted Gemini API over HTTP (API key / profile auth); this is what most users mean by "Gemini".
   - CLI: OpenClaw shells out to a local `gemini` binary; it has its own auth and can behave differently (streaming/tool support/version skew).
 
 ## Live: model matrix (what we cover)
 
-Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/live-model-filter.ts`, in this priority order:
+Live is opt-in, so there is no fixed "CI model list." `OPENCLAW_LIVE_MODELS=modern` / `OPENCLAW_LIVE_GATEWAY_MODELS=modern` (and their `all` alias) run the curated priority list from `HIGH_SIGNAL_LIVE_MODEL_PRIORITY` in `src/agents/test-helpers/live-model-dynamic-candidates.ts`, in this priority order:
 
-| Provider/model                                | Notes      |
-| --------------------------------------------- | ---------- |
-| `anthropic/claude-opus-4-8`                   |            |
-| `anthropic/claude-sonnet-5`                   |            |
-| `anthropic/claude-sonnet-4-6`                 |            |
-| `anthropic/claude-opus-4-7`                   |            |
-| `google/gemini-3.1-pro-preview`               | Gemini API |
-| `google/gemini-3.5-flash`                     | Gemini API |
-| `cohere/command-a-plus-05-2026`               |            |
-| `moonshot/kimi-k2.7-code`                     |            |
-| `anthropic/claude-opus-4-6`                   |            |
-| `deepseek/deepseek-v4-flash`                  |            |
-| `deepseek/deepseek-v4-pro`                    |            |
-| `minimax/MiniMax-M3`                          |            |
-| `openai/gpt-5.5`                              |            |
-| `openrouter/openai/gpt-5.2-chat`              |            |
-| `openrouter/minimax/minimax-m2.7`             |            |
-| `opencode-go/glm-5`                           |            |
-| `openrouter/ai21/jamba-large-1.7`             |            |
-| `xai/grok-4.5`                                |            |
-| `xai/grok-4.20-0309-reasoning`                |            |
-| `zai/glm-5.1`                                 |            |
-| `fireworks/accounts/fireworks/models/glm-5p1` |            |
-| `minimax-portal/minimax-m3`                   |            |
+| Provider/model                                      | Notes      |
+| --------------------------------------------------- | ---------- |
+| `anthropic/claude-opus-5`                           |            |
+| `anthropic/claude-opus-4-8`                         |            |
+| `anthropic/claude-sonnet-5`                         |            |
+| `anthropic/claude-sonnet-4-6`                       |            |
+| `anthropic/claude-opus-4-7`                         |            |
+| `google/gemini-3.1-pro-preview`                     | Gemini API |
+| `google/gemini-3.5-flash`                           | Gemini API |
+| `cohere/command-a-plus-05-2026`                     |            |
+| `moonshot/kimi-k3`                                  |            |
+| `anthropic/claude-opus-4-6`                         |            |
+| `deepseek/deepseek-v4-flash`                        |            |
+| `deepseek/deepseek-v4-pro`                          |            |
+| `minimax/MiniMax-M3`                                |            |
+| `openai/gpt-5.6`                                    |            |
+| `openrouter/openai/gpt-5.2-chat`                    |            |
+| `openrouter/minimax/minimax-m2.7`                   |            |
+| `opencode-go/glm-5`                                 |            |
+| `openrouter/ai21/jamba-large-1.7`                   |            |
+| `xai/grok-4.6`                                      |            |
+| `xai/grok-4.5`                                      |            |
+| `xai/grok-4.20-0309-reasoning`                      |            |
+| `zai/glm-5.1`                                       |            |
+| `fireworks/accounts/fireworks/routers/glm-5p2-fast` |            |
+| `minimax-portal/minimax-m3`                         |            |
 
 The curated **small-model** list (`OPENCLAW_LIVE_MODELS=small` / `OPENCLAW_LIVE_GATEWAY_MODELS=small`), from `SMALL_LIVE_MODEL_PRIORITY`:
 
@@ -466,14 +628,14 @@ The curated **small-model** list (`OPENCLAW_LIVE_MODELS=small` / `OPENCLAW_LIVE_
 
 Notes on the modern list:
 
-- `codex` and `codex-cli` providers are excluded from the default modern sweep (they cover CLI-backend/ACP behavior, tested separately above). `openai/gpt-5.5` itself routes through the Codex app-server harness by default; see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke).
+- `codex` and `codex-cli` providers are excluded from the default modern sweep (they cover CLI-backend/ACP behavior, tested separately above). `openai/gpt-5.6` itself routes through the Codex app-server harness by default; see [Live: Codex app-server harness smoke](#live-codex-app-server-harness-smoke).
 - `fireworks`, `google`, `openrouter`, and `xai` only run their explicitly curated model ids in the modern sweep (no automatic "every model from this provider" expansion).
 - Include at least one image-capable model (Claude/Gemini/OpenAI-family vision variants, etc.) in `OPENCLAW_LIVE_GATEWAY_MODELS` to exercise the image probe.
 
 Run gateway smoke with tools + image across a hand-picked cross-provider set:
 
 ```bash
-OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3.5-flash,google-antigravity/claude-opus-4-6-thinking,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts
+OPENCLAW_LIVE_GATEWAY_MODELS="openai/gpt-5.6-luna,anthropic/claude-opus-4-6,google/gemini-3.1-pro-preview,google/gemini-3.5-flash,deepseek/deepseek-v4-flash,zai/glm-5.1,minimax/MiniMax-M3" pnpm test:live src/gateway/gateway-models.profiles.live.test.ts
 ```
 
 Optional additional coverage outside the curated lists (nice to have, pick a "tools"-capable model you have enabled):
@@ -491,7 +653,7 @@ If you have keys enabled, you can also test via:
 
 More providers you can include in the live matrix (if you have creds/config):
 
-- Built-in: `anthropic`, `cerebras`, `github-copilot`, `google`, `google-antigravity`, `google-gemini-cli`, `google-vertex`, `groq`, `mistral`, `openai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `zai`
+- First-party provider plugins: `anthropic`, `cerebras`, `github-copilot`, `google`, `google-gemini-cli`, `google-vertex`, `groq`, `mistral`, `openai`, `openrouter`, `opencode`, `opencode-go`, `xai`, `zai`
 - Via `models.providers` (custom endpoints): `minimax` (cloud/API), plus any OpenAI/Anthropic-compatible proxy (LM Studio, vLLM, LiteLLM, etc.)
 
 <Tip>
@@ -505,10 +667,10 @@ Live tests discover credentials the same way the CLI does. Practical implication
 - If the CLI works, live tests should find the same keys.
 - If a live test says "no creds", debug the same way you'd debug `openclaw models list` / model selection.
 
-- Per-agent auth profiles: `~/.openclaw/agents/<agentId>/agent/auth-profiles.json` (this is what "profile keys" means in the live tests)
+- Per-agent auth profiles: SQLite credential rows in `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (this is what "profile keys" means in the live tests)
 - Config: `~/.openclaw/openclaw.json` (or `OPENCLAW_CONFIG_PATH`)
 - Legacy OAuth dir: `~/.openclaw/credentials/` (copied into the staged live home when present, but not the main profile-key store)
-- Local live runs copy the active config (with `agents.*.workspace` / `agentDir` overrides stripped) and each agent's `auth-profiles.json` - not the rest of that agent's directory, so `workspace/` and `sandboxes/` data never reaches the staged home - plus the legacy `credentials/` dir and supported external CLI auth files/dirs (`.claude.json`, `.claude/.credentials.json`, `.claude/settings*.json`, `.claude/backups`, `.codex/auth.json`, `.codex/config.toml`, `.gemini`, `.minimax`) into a temp test home.
+- Local live runs copy the active config (with `agents.*.workspace` / `agentDir` overrides stripped) and stage each agent's canonical SQLite auth credential/state rows through the auth-store reader/writer APIs, not by copying its database or the rest of its directory. Agent sessions, `workspace/`, and `sandboxes/` data are not staged. The runner also copies the legacy `credentials/` dir and supported external CLI auth files/dirs (`.claude.json`, `.claude/.credentials.json`, `.claude/settings*.json`, `.claude/backups`, `.codex/auth.json`, `.codex/config.toml`, `.gemini`, `.minimax`) into a temp test home.
 
 If you want to rely on env keys, export them before local tests or use the
 Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
@@ -529,7 +691,7 @@ Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
 - Test: `extensions/comfy/comfy.live.test.ts`
 - Enable: `OPENCLAW_LIVE_TEST=1 COMFY_LIVE_TEST=1 pnpm test:live -- extensions/comfy/comfy.live.test.ts`
 - Scope:
-  - Exercises the bundled comfy image, video, and `music_generate` paths
+  - Exercises the comfy image, video, and `music_generate` paths
   - Skips each capability unless `plugins.entries.comfy.config.<capability>` is configured
   - Useful after changing comfy workflow submission, polling, downloads, or plugin registration
 
@@ -541,7 +703,7 @@ Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
 - Scope:
   - Enumerates every registered image-generation provider plugin
   - Uses already-exported provider env vars before probing
-  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs each configured provider through the shared image-generation runtime:
     - `<provider>:generate`
@@ -558,7 +720,7 @@ Docker runners below with an explicit `OPENCLAW_PROFILE_FILE`.
 - Optional narrowing:
   - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="openai,google,openrouter,xai"`
   - `OPENCLAW_LIVE_IMAGE_GENERATION_PROVIDERS="deepinfra"`
-  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image-preview,openrouter/google/gemini-3.1-flash-image-preview,xai/grok-imagine-image"`
+  - `OPENCLAW_LIVE_IMAGE_GENERATION_MODELS="openai/gpt-image-2,google/gemini-3.1-flash-image,openrouter/google/gemini-3.1-flash-image-preview,xai/grok-imagine-image"`
   - `OPENCLAW_LIVE_IMAGE_GENERATION_CASES="google:flash-generate,google:pro-edit,openrouter:generate,xai:default-generate,xai:default-edit"`
 - Optional auth behavior:
   - `OPENCLAW_LIVE_REQUIRE_PROFILE_KEYS=1` to force profile-store auth and ignore env-only overrides
@@ -570,7 +732,7 @@ test passes:
 OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_INFER_CLI_TEST=1 pnpm test:live -- test/image-generation.infer-cli.live.test.ts
 openclaw infer image providers --json
 openclaw infer image generate \
-  --model google/gemini-3.1-flash-image-preview \
+  --model google/gemini-3.1-flash-image \
   --prompt "Minimal flat test image: one blue square on a white background, no text." \
   --output ./openclaw-infer-image-smoke.png \
   --json
@@ -589,7 +751,7 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Exercises the shared bundled music-generation provider path
   - Currently covers `fal`, `google`, `minimax`, and `openrouter`
   - Uses already-exported provider env vars before probing
-  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs both declared runtime modes when available:
     - `generate` with prompt-only input
@@ -611,7 +773,7 @@ request. Plugin dependencies are expected to be present before runtime load.
   - Defaults to the release-safe smoke path: one text-to-video request per provider, one-second lobster prompt, and a per-provider operation cap from `OPENCLAW_LIVE_VIDEO_GENERATION_TIMEOUT_MS` (`180000` by default)
   - Skips FAL by default because provider-side queue latency can dominate release time; pass `OPENCLAW_LIVE_VIDEO_GENERATION_PROVIDERS="fal"` (or clear the skip list) to run it explicitly
   - Uses already-exported provider env vars before probing
-  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in `auth-profiles.json` do not mask real shell credentials
+  - Uses live/env API keys ahead of stored auth profiles by default, so stale test keys in SQLite auth stores do not mask real shell credentials
   - Skips providers with no usable auth/profile/model
   - Runs only `generate` by default
   - Set `OPENCLAW_LIVE_VIDEO_GENERATION_FULL_MODES=1` to also run declared transform modes when available:

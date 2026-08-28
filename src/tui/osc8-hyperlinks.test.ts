@@ -8,6 +8,21 @@ describe("extractUrls", () => {
     expect(urls).toEqual(["https://example.com"]);
   });
 
+  it.each([".", ",", ";", "!", "?", ":", "*", "_", "~", ".?!"])(
+    "excludes trailing GFM punctuation %s from bare URLs",
+    (punctuation) => {
+      expect(extractUrls(`Visit https://example.com/path${punctuation}`)).toEqual([
+        "https://example.com/path",
+      ]);
+    },
+  );
+
+  it("stops bare URLs before bidi formatting controls", () => {
+    const url = "https://example.com/path";
+    expect(extractUrls(`مرحبا ${url}\u2069`)).toEqual([url]);
+    expect(extractUrls(`مرحبا ${url}\u200f`)).toEqual([url]);
+  });
+
   it("extracts multiple bare URLs", () => {
     const urls = extractUrls("Visit https://foo.com and http://bar.com");
     expect(urls).toContain("https://foo.com");
@@ -15,9 +30,9 @@ describe("extractUrls", () => {
     expect(urls).toHaveLength(2);
   });
 
-  it("extracts markdown link hrefs", () => {
-    const urls = extractUrls("[Click here](https://example.com/path)");
-    expect(urls).toEqual(["https://example.com/path"]);
+  it.each(["", ".", "?", ";"])("preserves authored markdown href suffix %s", (suffix) => {
+    const url = `https://example.com/path${suffix}`;
+    expect(extractUrls(`[Click here](${url})`)).toEqual([url]);
   });
 
   it("extracts markdown links with angle brackets and title text", () => {
@@ -56,6 +71,11 @@ describe("extractUrls", () => {
   it("extracts markdown link hrefs with parentheses in the URL", () => {
     const url = "https://en.wikipedia.org/wiki/URL_(disambiguation)";
     expect(extractUrls(`[Wikipedia](${url})`)).toEqual([url]);
+  });
+
+  it("keeps balanced URL parentheses and internal query punctuation", () => {
+    const url = "https://example.com/v1.0/URL_(disambiguation)?a=1&b=2#section";
+    expect(extractUrls(`Visit ${url}.`)).toEqual([url]);
   });
 
   it("does not extract an incomplete markdown link destination", () => {
@@ -100,6 +120,48 @@ describe("addOsc8Hyperlinks", () => {
     expect(result[0]).toContain(`\x1b]8;;\x07`);
     // The URL text should be between open and close
     expect(result[0]).toBe(`Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07 for info`);
+  });
+
+  it.each([".", ",", ";", "!", "?", ":", "*", "_", "~", ".?!"])(
+    "keeps trailing GFM punctuation %s outside terminal hyperlink targets",
+    (punctuation) => {
+      const url = "https://example.com/path";
+      const line = `Visit ${url}${punctuation}`;
+
+      expect(addOsc8Hyperlinks([line], extractUrls(line))).toEqual([
+        `Visit \x1b]8;;${url}\x07${url}\x1b]8;;\x07${punctuation}`,
+      ]);
+    },
+  );
+
+  it("preserves punctuation explicitly authored in markdown hyperlink targets", () => {
+    const url = "https://example.com/path.";
+    const line = `Docs (${url})`;
+
+    expect(addOsc8Hyperlinks([line], extractUrls(`[Docs](${url})`))).toEqual([
+      `Docs (\x1b]8;;${url}\x07${url}\x1b]8;;\x07)`,
+    ]);
+  });
+
+  it.each([".", ","])(
+    "keeps authored and bare hyperlink occurrences distinct before %s",
+    (punctuation) => {
+      const bareUrl = "https://example.com/path";
+      const authoredUrl = `${bareUrl}${punctuation}`;
+      const markdown = `[Docs](${authoredUrl}) and ${bareUrl}${punctuation}`;
+      const rendered = `Docs (${authoredUrl}) and ${bareUrl}${punctuation}`;
+
+      expect(addOsc8Hyperlinks([rendered], extractUrls(markdown))).toEqual([
+        `Docs (\x1b]8;;${authoredUrl}\x07${authoredUrl}\x1b]8;;\x07) and \x1b]8;;${bareUrl}\x07${bareUrl}\x1b]8;;\x07${punctuation}`,
+      ]);
+    },
+  );
+
+  it("keeps bidi isolation outside the exact OSC 8 target", () => {
+    const url = "https://example.com/path";
+    expect(addOsc8Hyperlinks([`\u2067مرحبا ${url}\u2069`], [url])).toEqual([
+      `\u2067مرحبا \x1b]8;;${url}\x07${url}\x1b]8;;\x07\u2069`,
+    ]);
   });
 
   it("wraps a URL broken across two lines", () => {

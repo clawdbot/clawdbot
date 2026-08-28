@@ -12,13 +12,18 @@ import {
   ensureCliExecutionBootstrap,
   resolveCliExecutionStartupContext,
 } from "../command-execution-startup.js";
-import { shouldBypassConfigGuardForCommandPath } from "../command-startup-policy.js";
+import { inheritOptionFromParent } from "../command-options.js";
+import { applyResolvedCommandOutputMode } from "../json-output-mode.js";
+import { isModelsPlainMachineOutput } from "../models-output-mode.js";
 import {
   resolvePluginInstallInvalidConfigPolicy,
   resolvePluginInstallPreactionRequest,
 } from "../plugin-install-config-policy.js";
+import { getCommanderCommandPath, hasCommanderOptionToken } from "./commander-parse-facts.js";
 import { isCommandJsonOutputMode } from "./json-mode.js";
 import { isParentDefaultHelpAction } from "./parent-default-help.js";
+
+const HELP_OR_VERSION_FLAGS = new Set(["-h", "--help", "-V", "--version"]);
 
 function setProcessTitleForCommand(actionCommand: Command) {
   let current: Command = actionCommand;
@@ -35,6 +40,7 @@ function setProcessTitleForCommand(actionCommand: Command) {
 
 function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: string[]): boolean {
   return (
+    commandPath[0] === "update" ||
     resolvePluginInstallInvalidConfigPolicy(
       resolvePluginInstallPreactionRequest({
         actionCommand,
@@ -45,22 +51,23 @@ function shouldAllowInvalidConfigForAction(actionCommand: Command, commandPath: 
   );
 }
 
-function getActionCommandPath(actionCommand: Command): string[] {
-  const commandPath: string[] = [];
-  let current: Command | null = actionCommand;
-  while (current.parent) {
-    commandPath.unshift(current.name());
-    current = current.parent;
-  }
-  return commandPath;
-}
-
 function getCliLogLevel(actionCommand: Command): LogLevel | undefined {
   if (actionCommand.getOptionValueSourceWithGlobals("logLevel") !== "cli") {
     return undefined;
   }
   const logLevel = actionCommand.optsWithGlobals<{ logLevel?: unknown }>().logLevel;
   return typeof logLevel === "string" ? (logLevel as LogLevel) : undefined;
+}
+
+function getStateMigrationAgentId(actionCommand: Command): string | undefined {
+  if (!actionCommand.options.some((option) => option.attributeName() === "agent")) {
+    return undefined;
+  }
+  const value =
+    actionCommand.getOptionValueSource("agent") === "cli"
+      ? actionCommand.getOptionValue("agent")
+      : inheritOptionFromParent(actionCommand, "agent", "cli");
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
 }
 
 function isBareParentDefaultHelpInvocation(actionCommand: Command, argv: string[]): boolean {
@@ -111,14 +118,26 @@ export function registerPreActionHooks(program: Command, programVersion: string)
   program.hook("preAction", async (_thisCommand, actionCommand) => {
     setProcessTitleForCommand(actionCommand);
     const argv = process.argv;
-    if (isHelpOrVersionInvocation(argv) || isBareParentDefaultHelpInvocation(actionCommand, argv)) {
+    const helpOrVersionWasOptionValue = hasCommanderOptionToken(
+      actionCommand,
+      argv,
+      HELP_OR_VERSION_FLAGS,
+      "value",
+    );
+    if (
+      (isHelpOrVersionInvocation(argv) && !helpOrVersionWasOptionValue) ||
+      isBareParentDefaultHelpInvocation(actionCommand, argv)
+    ) {
       return;
     }
     const jsonOutputMode = isCommandJsonOutputMode(actionCommand, argv);
+    const machineOutputMode = jsonOutputMode || isModelsPlainMachineOutput(argv, actionCommand);
+    applyResolvedCommandOutputMode(jsonOutputMode, machineOutputMode);
     const { commandPath, startupPolicy } = resolveCliExecutionStartupContext({
       argv,
-      protocolCommandPath: getActionCommandPath(actionCommand),
+      commandPath: getCommanderCommandPath(actionCommand),
       jsonOutputMode,
+      machineOutputMode,
       env: process.env,
     });
     await applyCliExecutionStartupPresentation({
@@ -134,16 +153,24 @@ export function registerPreActionHooks(program: Command, programVersion: string)
     if (!verbose) {
       process.env.NODE_NO_WARNINGS ??= "1";
     }
-    if (
-      shouldBypassConfigGuardForCommandPath(commandPath) ||
-      isGuidedConfigAction(actionCommand) ||
-      isGuidedConfigCommandPath(commandPath)
-    ) {
+    if (isGuidedConfigAction(actionCommand) || isGuidedConfigCommandPath(commandPath)) {
+      return;
+    }
+    if (startupPolicy.skipConfigGuard) {
+      // Config validation and plugin activation are independent startup policies.
+      // A cold config read must not suppress a plugin runtime explicitly required by the command.
+      await ensureCliExecutionBootstrap({
+        runtime: defaultRuntime,
+        commandPath,
+        startupPolicy,
+        skipConfigGuard: true,
+      });
       return;
     }
     let beforeStateMigrations: ((snapshot?: ConfigFileSnapshot) => Promise<boolean>) | undefined;
     let skipPristineStartupStateMigrations = false;
     let skipPristineCoreStateMigrations = false;
+    let allowInvalid = shouldAllowInvalidConfigForAction(actionCommand, commandPath);
     if (isGatewayRunAction(actionCommand)) {
       const {
         prepareGatewayRunBootstrap,
@@ -153,6 +180,7 @@ export function registerPreActionHooks(program: Command, programVersion: string)
       } = await import("../gateway-cli/pre-bootstrap.js");
       const { resolveGatewayRunOptions } = await import("../gateway-cli/run-options.js");
       const resolvedOptions = resolveGatewayRunOptions(actionCommand.opts(), actionCommand);
+      allowInvalid ||= resolvedOptions.allowUnconfigured === true;
       const opts = {
         force: resolvedOptions.force === true,
         reset: resolvedOptions.reset === true,
@@ -170,17 +198,37 @@ export function registerPreActionHooks(program: Command, programVersion: string)
           ...(snapshot ? { snapshot } : {}),
         });
     }
+    const stateMigrationAgentId = getStateMigrationAgentId(actionCommand);
+    if (stateMigrationAgentId) {
+      const existingGuard = beforeStateMigrations;
+      beforeStateMigrations = async (snapshot) => {
+        if (snapshot) {
+          const { isValidAgentId, normalizeAgentId } =
+            await import("@openclaw/normalization-core/agent-id");
+          if (isValidAgentId(stateMigrationAgentId)) {
+            const [{ listAgentIds }, { retainLegacyDefaultAgentId }] = await Promise.all([
+              import("../../agents/agent-scope-config.js"),
+              import("../../config/legacy.default-agent-owner.js"),
+            ]);
+            const agentId = normalizeAgentId(stateMigrationAgentId);
+            if (listAgentIds(snapshot.sourceConfig).includes(agentId)) {
+              retainLegacyDefaultAgentId(snapshot.sourceConfig, agentId);
+            }
+          }
+        }
+        return (await existingGuard?.(snapshot)) ?? true;
+      };
+    }
     await ensureCliExecutionBootstrap({
       runtime: defaultRuntime,
       commandPath,
       startupPolicy,
-      allowInvalid: shouldAllowInvalidConfigForAction(actionCommand, commandPath),
+      allowInvalid,
       ...(beforeStateMigrations ? { beforeStateMigrations } : {}),
       ...(skipPristineStartupStateMigrations ? { skipPristineStartupStateMigrations: true } : {}),
       ...(skipPristineCoreStateMigrations ? { skipPristineCoreStateMigrations: true } : {}),
-      skipConfigGuard: shouldBypassConfigGuardForCommandPath(commandPath),
     });
-    if (beforeStateMigrations) {
+    if (beforeStateMigrations && isGatewayRunAction(actionCommand)) {
       const { reloadTrustedGatewayRunEnvironment } =
         await import("../gateway-cli/pre-bootstrap.js");
       await reloadTrustedGatewayRunEnvironment({ runtime: defaultRuntime });

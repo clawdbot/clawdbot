@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   collectLintDisableDirectives,
   isMaxLinesRule,
-} from "../../scripts/check-max-lines-ratchet.mjs";
+} from "../../scripts/check-max-lines-ratchet.mts";
 import { expectNoReaddirSyncDuring } from "../../src/test-utils/fs-scan-assertions.js";
 import { listGitTrackedFiles, toRepoRelativePath } from "../../src/test-utils/repo-files.js";
 
@@ -187,7 +187,8 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
       filterExpectedSuppressionsForPresentFiles([
-        "extensions/browser/src/browser/pw-tools-core.interactions.ts|@typescript-eslint/no-implied-eval|3",
+        "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
+        "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
         "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/browser/src/node-host/invoke-browser.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/diffs/src/viewer-client.ts|eslint/no-underscore-dangle|1",
@@ -195,19 +196,24 @@ describe("production lint suppressions", () => {
         "extensions/discord/src/test-support/provider.test-support.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/feishu/src/bitable.ts|typescript/no-unnecessary-type-parameters|1",
         "extensions/matrix/src/onboarding.test-harness.ts|typescript/no-unnecessary-type-parameters|1",
-        "extensions/reef/src/transport.ts|no-useless-assignment|1",
+        "extensions/qa-lab/src/gateway-child.ts|preserve-caught-error|1",
         "extensions/slack/src/monitor/provider-support.ts|typescript/no-unnecessary-type-parameters|1",
-        "scripts/changed-lanes.mjs|typescript/no-base-to-string|2",
-        "scripts/changed-lanes.mjs|typescript/restrict-template-expressions|2",
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
-        "src/audit/audit-event-writer.ts|unicorn/require-post-message-target-origin|2",
+        "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
+        "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
+        // JSON parser causes can quote reflected credentials from authenticated provider responses.
+        "src/agents/provider-http-errors.ts|preserve-caught-error|1",
+        "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/types.plugin.ts|typescript/no-explicit-any|1",
         "src/cli/cli-utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/command-options.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/cli/program/openclaw-command.ts|eslint/no-underscore-dangle|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
+        // Cleanup is retained in AggregateError.errors; extraction remains the primary cause.
+        "src/commands/backup-restore.ts|preserve-caught-error|1",
         "src/gateway/test-helpers.server.ts|typescript/no-unnecessary-type-parameters|1",
         "src/hooks/module-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/device-pairing-store.ts|typescript/no-unnecessary-type-parameters|1",
@@ -222,23 +228,26 @@ describe("production lint suppressions", () => {
         "src/plugin-sdk/facade-runtime.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugin-sdk/json-store.ts|typescript-eslint/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/qa-runner-runtime.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/plugin-sdk/test-helpers/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugin-sdk/test-helpers/subagent-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/host-hooks.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/lazy-service-module.ts|typescript/no-unnecessary-type-parameters|1",
+        "src/plugins/management-service.ts|preserve-caught-error|1",
         "src/plugins/public-surface-loader.ts|typescript/no-unnecessary-type-parameters|3",
         "src/plugins/runtime/runtime-plugin-boundary.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/runtime/types-channel.ts|typescript/no-unnecessary-type-parameters|1",
         "src/plugins/trusted-tool-policy.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/system-agent/setup-inference.ts|no-unsafe-finally|1",
-        "src/system-agent/setup-inference.ts|preserve-caught-error|1",
+        // Raw PowerShell errors carry the -EncodedCommand argv; only the sanitized cause may escape.
+        "src/secrets/private-plan-file.ts|preserve-caught-error|1",
+        "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|2",
+        "src/system-agent/setup-inference-activate.ts|no-unsafe-finally|1",
+        "src/system-agent/setup-inference-activate.ts|preserve-caught-error|1",
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/test-utils/bundled-plugin-public-surface.ts|typescript/no-unnecessary-type-parameters|2",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/version.ts|eslint/no-underscore-dangle|1",
         "ui/public/sw.js|unicorn/require-post-message-target-origin|1",
+        // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
+        "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
       ]),
     );
   });

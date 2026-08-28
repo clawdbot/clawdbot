@@ -10,14 +10,23 @@ function normalizeInternalRunId(runId: string): string {
 }
 
 /** Resolves the hidden SQLite session identity owned by one internal-effects run. */
-export function resolveInternalSessionEffectsIdentity(params: { agentId: string; runId: string }): {
+export function resolveInternalSessionEffectsIdentity(params: {
+  agentId: string;
+  incognito?: boolean;
+  runId: string;
+}): {
   sessionId: string;
   sessionKey: string;
 } {
   const suffix = normalizeInternalRunId(params.runId);
+  const keySuffix = params.incognito
+    ? `incognito-${suffix}`
+    : suffix.startsWith("incognito-")
+      ? `legacy-${suffix}`
+      : suffix;
   return {
     sessionId: `${INTERNAL_SESSION_EFFECTS_SEGMENT}-${suffix}`,
-    sessionKey: `agent:${normalizeAgentId(params.agentId)}:${INTERNAL_SESSION_EFFECTS_SEGMENT}:${suffix}`,
+    sessionKey: `agent:${normalizeAgentId(params.agentId)}:${INTERNAL_SESSION_EFFECTS_SEGMENT}:${keySuffix}`,
   };
 }
 

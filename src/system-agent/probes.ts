@@ -14,6 +14,7 @@ export type LocalCommandProbe = {
   found: boolean;
   version?: string;
   error?: string;
+  timedOut?: boolean;
 };
 
 const LOCAL_COMMAND_PROBE_OUTPUT_MAX_CHARS = 16 * 1024;
@@ -36,6 +37,7 @@ export async function probeLocalCommand(
         command,
         found: true,
         error: `timed out after ${timeoutMs}ms`,
+        timedOut: true,
       };
     }
     // Version output can arrive on stdout or stderr depending on the CLI.

@@ -1,8 +1,5 @@
 // Media-understanding runner resolves providers/models, local roots, auth, and
 // per-capability execution decisions for message attachments.
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { mergeInboundPathRoots } from "@openclaw/media-core/inbound-path-policy";
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
@@ -11,12 +8,13 @@ import {
   normalizeNullableString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import {
-  normalizeStringEntries,
-  uniqueStrings,
-} from "@openclaw/normalization-core/string-normalization";
+import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 import { isMediaUnderstandingSkipError } from "../../packages/media-understanding-common/src/errors.js";
+import {
+  normalizeMediaExecutionProviderId,
+  normalizeMediaProviderId,
+} from "../../packages/media-understanding-common/src/provider-id.js";
 import { providerSupportsCapability } from "../../packages/media-understanding-common/src/provider-supports.js";
 import { isMinimaxVlmModel, isMinimaxVlmProvider } from "../agents/minimax-vlm.js";
 import {
@@ -36,25 +34,30 @@ import type {
   MediaUnderstandingModelConfig,
 } from "../config/types.tools.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
-import { resolvePreferredOpenClawTmpDir } from "../infra/tmp-openclaw-dir.js";
 import { logWarn } from "../logger.js";
 import { resolveChannelInboundAttachmentRoots } from "../media/channel-inbound-roots.js";
 import { getDefaultMediaLocalRoots } from "../media/local-roots.js";
-import { runExec } from "../process/exec.js";
-import { getOrCreatePromise } from "../shared/lazy-promise.js";
+import { normalizeMediaFacts } from "../media/media-facts.js";
+import { classifyMediaReferenceSource } from "../media/media-reference.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { MediaAttachmentCache, selectAttachments } from "./attachments.js";
+import { matchesMediaEntryCapability } from "./entry-capabilities.js";
 import {
   clearLocalAudioInspectionCacheForTests,
   inspectLocalAudioSelection,
 } from "./local-audio.js";
 import { resolveOpenAiAudioAuthModelApi } from "./openai-audio-api.js";
-import { normalizeMediaExecutionProviderId, normalizeMediaProviderId } from "./provider-id.js";
 import {
   buildMediaUnderstandingRegistry,
   getMediaUnderstandingProvider,
+  resolveAutoMediaKeyProvidersFromRegistry,
+  resolveDefaultMediaModelFromRegistry,
 } from "./provider-registry.js";
-import { resolveModelEntries, resolveScopeDecision } from "./resolve.js";
+import {
+  resolveModelEntries,
+  resolveScopeDecision,
+  type ResolvedMediaModelEntry,
+} from "./resolve.js";
 import {
   buildModelDecision,
   formatDecisionSummary,
@@ -63,6 +66,7 @@ import {
 } from "./runner.entries.js";
 import type {
   MediaAttachment,
+  MediaAttachmentDisposition,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
   MediaUnderstandingModelDecision,
@@ -71,13 +75,13 @@ import type {
 } from "./types.js";
 
 export { createMediaAttachmentCache, normalizeMediaAttachments } from "./runner.attachments.js";
-export type { ActiveMediaModel } from "../../packages/media-understanding-common/src/active-model.js";
 
 type ProviderRegistry = Map<string, MediaUnderstandingProvider>;
-type ModelCatalogApi = typeof import("../agents/model-catalog.js");
-type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadModelCatalog"]>>;
+type ModelCatalogApi = typeof import("../agents/model-catalog.js") &
+  typeof import("../agents/prepared-model-catalog.js");
+type ModelCatalog = Awaited<ReturnType<ModelCatalogApi["loadPreparedModelCatalog"]>>;
 
-export type RunCapabilityResult = {
+type RunCapabilityResult = {
   outputs: MediaUnderstandingOutput[];
   decision: MediaUnderstandingDecision;
 };
@@ -87,9 +91,10 @@ const loadHasAvailableAuthForProvider = createLazyRuntimeNamedExport(
   "hasAvailableAuthForProvider",
 );
 
-const loadModelCatalogApi = createLazyRuntimeModule(
-  async () => await import("../agents/model-catalog.js"),
-);
+const loadPreparedModelCatalogApi = createLazyRuntimeModule(async () => ({
+  ...(await import("../agents/model-catalog.js")),
+  ...(await import("../agents/prepared-model-catalog.js")),
+}));
 
 function resolveLiteralProviderApiKey(
   cfg: OpenClawConfig | undefined,
@@ -190,50 +195,13 @@ function resolveCatalogImageModelId(params: {
   return normalizeOptionalString((autoEntry ?? matches[0])?.id);
 }
 
-function resolveDefaultMediaModelFromRegistry(params: {
-  providerId: string;
-  capability: MediaUnderstandingCapability;
-  providerRegistry: ProviderRegistry;
-}): string | undefined {
-  const provider = params.providerRegistry.get(normalizeMediaProviderId(params.providerId));
-  return normalizeOptionalString(provider?.defaultModels?.[params.capability]);
-}
-
-function resolveAutoMediaKeyProvidersFromRegistry(params: {
-  capability: MediaUnderstandingCapability;
-  providerRegistry: ProviderRegistry;
-}): string[] {
-  type AutoProviderEntry = {
-    provider: MediaUnderstandingProvider;
-    priority: number;
-  };
-  return [...params.providerRegistry.values()]
-    .filter(
-      (provider) =>
-        provider.capabilities?.includes(params.capability) ??
-        providerSupportsCapability(provider, params.capability),
-    )
-    .map((provider): AutoProviderEntry | null => {
-      const priority = provider.autoPriority?.[params.capability];
-      return typeof priority === "number" && Number.isFinite(priority)
-        ? { provider, priority }
-        : null;
-    })
-    .filter((entry): entry is AutoProviderEntry => entry !== null)
-    .toSorted((left, right) => {
-      if (left.priority !== right.priority) {
-        return left.priority - right.priority;
-      }
-      return left.provider.id.localeCompare(right.provider.id);
-    })
-    .map((entry) => normalizeMediaProviderId(entry.provider.id))
-    .filter(Boolean);
-}
-
 async function explicitImageModelVisionStatus(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   providerId: string;
   model: string;
+  agentDir?: string;
+  workspaceDir?: string;
 }): Promise<"supported" | "unsupported" | "unknown"> {
   // Explicit model overrides should survive unknown catalog state, but known
   // text-only models must not be routed into image understanding.
@@ -247,8 +215,14 @@ async function explicitImageModelVisionStatus(params: {
   if (configured?.id?.trim() === params.model && configured.input?.includes("image")) {
     return "supported";
   }
-  const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+    await loadPreparedModelCatalogApi();
+  const catalog = await loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   const entry = findModelInCatalog(catalog, params.providerId, params.model);
   if (!entry) {
     return "unknown";
@@ -258,17 +232,22 @@ async function explicitImageModelVisionStatus(params: {
 
 async function resolveAutoImageModelId(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   providerId: string;
   providerRegistry: ProviderRegistry;
   explicitModel?: string;
+  agentDir?: string;
   workspaceDir?: string;
 }): Promise<string | undefined> {
   const explicit = normalizeOptionalString(params.explicitModel);
   if (explicit) {
     const explicitStatus = await explicitImageModelVisionStatus({
       cfg: params.cfg,
+      agentId: params.agentId,
       providerId: params.providerId,
       model: explicit,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
     });
     if (explicitStatus !== "unsupported") {
       return explicit;
@@ -299,8 +278,13 @@ async function resolveAutoImageModelId(params: {
   if (bundledDefaultModel) {
     return bundledDefaultModel;
   }
-  const { loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const { loadPreparedModelCatalog, modelSupportsVision } = await loadPreparedModelCatalogApi();
+  const catalog = await loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   return resolveCatalogImageModelId({
     providerId: params.providerId,
     catalog,
@@ -320,239 +304,42 @@ export function resolveMediaAttachmentLocalRoots(params: {
   ctx: MsgContext;
   workspaceDir?: string;
 }): readonly string[] {
-  // ctx.MediaWorkspaceDir is set by chat.send's prestageNonImageOffloads when
-  // inbound attachments were staged into a sandbox workspace. The paths in
-  // ctx.MediaPaths are kept sandbox-relative (so the agent inside the
-  // container can read them), and the workspace dir is carried separately so
-  // host-side media-understanding can still resolve them via this root list.
-  const workspaceDir = params.ctx.MediaWorkspaceDir ?? params.workspaceDir;
+  const workspaceDirs = normalizeMediaFacts(params.ctx.media).flatMap((fact) =>
+    fact.workspaceDir ? [path.resolve(fact.workspaceDir)] : [],
+  );
   return mergeInboundPathRoots(
     getDefaultMediaLocalRoots(),
-    workspaceDir ? [path.resolve(workspaceDir)] : undefined,
+    workspaceDirs,
+    params.workspaceDir ? [path.resolve(params.workspaceDir)] : undefined,
     resolveChannelInboundAttachmentRoots(params),
   );
 }
 
-const binaryCache = new Map<string, Promise<string | null>>();
-const antigravityCliCache = new Map<string, Promise<string | null>>();
-
-export function clearMediaUnderstandingBinaryCacheForTests(): void {
-  binaryCache.clear();
-  antigravityCliCache.clear();
+function clearMediaUnderstandingBinaryCacheForTests(): void {
   clearLocalAudioInspectionCacheForTests();
 }
 
-function expandHomeDir(value: string): string {
-  if (!value.startsWith("~")) {
-    return value;
-  }
-  const home = os.homedir();
-  if (value === "~") {
-    return home;
-  }
-  if (value.startsWith("~/")) {
-    return path.join(home, value.slice(2));
-  }
-  return value;
-}
-
-function hasPathSeparator(value: string): boolean {
-  return value.includes("/") || value.includes("\\");
-}
-
-function candidateBinaryNames(name: string): string[] {
-  if (process.platform !== "win32") {
-    return [name];
-  }
-  const ext = path.extname(name);
-  if (ext) {
-    return [name];
-  }
-  const pathext = normalizeStringEntries(
-    (process.env.PATHEXT ?? ".EXE;.CMD;.BAT;.COM").split(";"),
-  ).map((item) => (item.startsWith(".") ? item : `.${item}`));
-  return [name, ...uniqueStrings(pathext).map((item) => `${name}${item}`)];
-}
-
-async function isExecutable(filePath: string): Promise<boolean> {
-  try {
-    const stat = await fs.stat(filePath);
-    if (!stat.isFile()) {
-      return false;
-    }
-    if (process.platform === "win32") {
-      return true;
-    }
-    await fs.access(filePath, fsConstants.X_OK);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function findBinary(name: string): Promise<string | null> {
-  return await getOrCreatePromise(binaryCache, name, async () => {
-    const direct = expandHomeDir(name.trim());
-    if (direct && hasPathSeparator(direct)) {
-      for (const candidate of candidateBinaryNames(direct)) {
-        if (await isExecutable(candidate)) {
-          return candidate;
-        }
-      }
-    }
-
-    const searchName = name.trim();
-    if (!searchName) {
-      return null;
-    }
-    const pathEntries = (process.env.PATH ?? "").split(path.delimiter);
-    const candidates = candidateBinaryNames(searchName);
-    for (const entryRaw of pathEntries) {
-      const entry = expandHomeDir(entryRaw.trim().replace(/^"(.*)"$/, "$1"));
-      if (!entry) {
-        continue;
-      }
-      for (const candidate of candidates) {
-        const fullPath = path.join(entry, candidate);
-        if (await isExecutable(fullPath)) {
-          return fullPath;
-        }
-      }
-    }
-
-    return null;
-  });
-}
-
-async function probeAntigravityCliCandidate(command: string): Promise<string | null> {
-  const resolved = await findBinary(command);
-  if (!resolved) {
-    return null;
-  }
-  const probeDir = await fs.mkdtemp(
-    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-antigravity-probe-"),
-  );
-  try {
-    const { stdout } = await runExec(resolved, ["--help"], {
-      timeoutMs: 3000,
-      cwd: probeDir,
-    });
-    return stdout.includes("--print") &&
-      stdout.includes("--add-dir") &&
-      stdout.includes("--sandbox")
-      ? resolved
-      : null;
-  } catch {
-    return null;
-  } finally {
-    await fs.rm(probeDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-async function resolveAntigravityCliBinary(): Promise<string | null> {
-  return await getOrCreatePromise(antigravityCliCache, "agy", async () => {
-    const configured = process.env.OPENCLAW_ANTIGRAVITY_CLI?.trim();
-    const candidates = [configured, "agy", "antigravity"].filter((value): value is string =>
-      Boolean(value),
-    );
-    for (const candidate of candidates) {
-      const command = await probeAntigravityCliCandidate(candidate);
-      if (command) {
-        return command;
-      }
-    }
-    return null;
-  });
-}
-
-async function resolveAntigravityCliEntry(
-  capability: MediaUnderstandingCapability,
-): Promise<MediaUnderstandingModelConfig | null> {
-  if (capability === "audio") {
-    return null;
-  }
-  const command = await resolveAntigravityCliBinary();
-  if (!command) {
-    return null;
-  }
-  return {
-    type: "cli",
-    command,
-    args: [
-      "--sandbox",
-      "--add-dir",
-      "{{MediaDir}}",
-      "--print",
-      "{{Prompt}} Inspect {{MediaPath}} and reply with only the requested media description.",
-    ],
-  };
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[
+    Symbol.for("openclaw.mediaUnderstandingRunnerTestApi")
+  ] = { clearMediaUnderstandingBinaryCacheForTests };
 }
 
 async function resolveKeyEntry(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
 }): Promise<MediaUnderstandingModelConfig | null> {
-  const { cfg, agentDir, workspaceDir, providerRegistry, capability } = params;
-  const checkProvider = async (
+  const { cfg, providerRegistry, capability } = params;
+  const checkProvider = (
     providerId: string,
     model?: string,
-  ): Promise<MediaUnderstandingModelConfig | null> => {
-    const provider = getMediaUnderstandingProvider(providerId, providerRegistry);
-    if (!provider) {
-      return null;
-    }
-    if (capability === "audio" && !provider.transcribeAudio) {
-      return null;
-    }
-    if (capability === "image" && !provider.describeImage) {
-      return null;
-    }
-    if (capability === "video" && !provider.describeVideo) {
-      return null;
-    }
-    if (
-      !(await hasProviderAuthAvailable({
-        capability,
-        provider: providerId,
-        cfg,
-        agentDir,
-        workspaceDir,
-      }))
-    ) {
-      return null;
-    }
-    // The supplied model can belong to the active chat route. Audio providers
-    // use their own default or stay model-less; explicit media entries bypass this auto path.
-    const resolvedModel =
-      capability === "image"
-        ? await resolveAutoImageModelId({
-            cfg,
-            providerId,
-            providerRegistry,
-            explicitModel: model,
-            workspaceDir,
-          })
-        : capability === "audio"
-          ? resolveDefaultMediaModelFromRegistry({
-              providerId,
-              capability: "audio",
-              providerRegistry,
-            })
-          : (model ??
-            resolveDefaultMediaModelFromRegistry({
-              providerId,
-              capability: "video",
-              providerRegistry,
-            }));
-    if (capability === "image" && !resolvedModel) {
-      return null;
-    }
-    return { type: "provider" as const, provider: providerId, model: resolvedModel };
-  };
+  ): Promise<MediaUnderstandingModelConfig | null> =>
+    resolveAutoProviderModelEntry(params, providerId, () => model);
 
   const activeProvider = params.activeModel?.provider?.trim();
   if (activeProvider) {
@@ -606,13 +393,16 @@ function resolveImageModelFromAgentDefaults(params: {
       : (inferUniqueProviderFromConfiguredModels({
           cfg: params.cfg,
           model: ref,
+          agentId: params.agentId,
         }) ?? defaultProvider);
     const aliasIndex = buildModelAliasIndex({
       cfg: params.cfg,
       defaultProvider: effectiveDefaultProvider,
+      agentId: params.agentId,
     });
     const resolved = resolveModelRefFromString({
       cfg: params.cfg,
+      agentId: params.agentId,
       raw: ref,
       defaultProvider: effectiveDefaultProvider,
       aliasIndex,
@@ -630,9 +420,17 @@ function resolveImageModelFromAgentDefaults(params: {
 }
 
 function hasExplicitImageUnderstandingConfig(params: {
-  config?: MediaUnderstandingConfig;
+  cfg: OpenClawConfig;
+  providerRegistry: ProviderRegistry;
 }): boolean {
-  return (params.config?.models?.length ?? 0) > 0;
+  return (params.cfg.tools?.media?.models ?? []).some((entry) =>
+    matchesMediaEntryCapability({
+      entry,
+      source: "shared",
+      capability: "image",
+      providerRegistry: params.providerRegistry,
+    }),
+  );
 }
 
 function isMinimaxNativeVisionModel(params: { provider: string; model?: string }): boolean {
@@ -646,7 +444,10 @@ function isMinimaxNativeVisionModel(params: { provider: string; model?: string }
 
 async function activeModelSupportsNativeVision(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   activeModel?: ActiveMediaModel;
+  agentDir?: string;
+  workspaceDir?: string;
 }): Promise<boolean> {
   const activeProvider = params.activeModel?.provider?.trim();
   if (!activeProvider) {
@@ -661,8 +462,14 @@ async function activeModelSupportsNativeVision(params: {
   ) {
     return false;
   }
-  const { findModelInCatalog, loadModelCatalog, modelSupportsVision } = await loadModelCatalogApi();
-  const catalog = await loadModelCatalog({ config: params.cfg });
+  const { findModelInCatalog, loadPreparedModelCatalog, modelSupportsVision } =
+    await loadPreparedModelCatalogApi();
+  const catalog = await loadPreparedModelCatalog({
+    config: params.cfg,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
+    ...(params.agentDir ? { agentDir: params.agentDir } : {}),
+    ...(params.workspaceDir ? { workspaceDir: params.workspaceDir } : {}),
+  });
   const entry = findModelInCatalog(catalog, activeProvider, params.activeModel?.model ?? "");
   return modelSupportsVision(entry);
 }
@@ -675,20 +482,15 @@ async function resolveAutoEntries(params: {
   providerRegistry: ProviderRegistry;
   capability: MediaUnderstandingCapability;
   activeModel?: ActiveMediaModel;
+  nativeVisionActive: boolean;
 }): Promise<MediaUnderstandingModelConfig[]> {
-  if (params.capability === "image") {
-    const activeSupportsVision = await activeModelSupportsNativeVision({
+  if (params.capability === "image" && !params.nativeVisionActive) {
+    const imageModelEntries = resolveImageModelFromAgentDefaults({
       cfg: params.cfg,
-      activeModel: params.activeModel,
+      agentId: params.agentId,
     });
-    if (!activeSupportsVision) {
-      const imageModelEntries = resolveImageModelFromAgentDefaults({
-        cfg: params.cfg,
-        agentId: params.agentId,
-      });
-      if (imageModelEntries.length > 0) {
-        return imageModelEntries;
-      }
+    if (imageModelEntries.length > 0) {
+      return imageModelEntries;
     }
   }
   const activeEntry = await resolveActiveModelEntry(params);
@@ -709,10 +511,6 @@ async function resolveAutoEntries(params: {
   if (keys) {
     return [keys];
   }
-  const antigravity = await resolveAntigravityCliEntry(params.capability);
-  if (antigravity) {
-    return [antigravity];
-  }
   return [];
 }
 
@@ -724,51 +522,28 @@ export async function resolveAutoImageModel(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<ActiveMediaModel | null> {
   const providerRegistry = buildProviderRegistry(undefined, params.cfg);
-  const toActive = (entry: MediaUnderstandingModelConfig | null): ActiveMediaModel | null => {
-    if (!entry || entry.type === "cli") {
-      return null;
+  const entries = await resolveAutoEntries({
+    ...params,
+    providerRegistry,
+    capability: "image",
+    nativeVisionActive: false,
+  });
+  for (const entry of entries) {
+    if (entry.type === "cli") {
+      continue;
     }
     const provider = entry.provider;
     const model = entry.model?.trim();
-    if (!provider || !model) {
-      return null;
+    if (provider && model) {
+      return { provider, model };
     }
-    return { provider, model };
-  };
-  const configuredImageModel = resolveImageModelFromAgentDefaults({
-    cfg: params.cfg,
-    agentId: params.agentId,
-  })
-    .map((entry) => toActive(entry))
-    .find((entry): entry is ActiveMediaModel => entry !== null);
-  if (configuredImageModel) {
-    return configuredImageModel;
   }
-  const activeEntry = await resolveActiveModelEntry({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    providerRegistry,
-    capability: "image",
-    activeModel: params.activeModel,
-  });
-  const resolvedActive = toActive(activeEntry);
-  if (resolvedActive) {
-    return resolvedActive;
-  }
-  const keyEntry = await resolveKeyEntry({
-    cfg: params.cfg,
-    agentDir: params.agentDir,
-    workspaceDir: params.workspaceDir,
-    providerRegistry,
-    capability: "image",
-    activeModel: params.activeModel,
-  });
-  return toActive(keyEntry);
+  return null;
 }
 
 async function resolveActiveModelEntry(params: {
   cfg: OpenClawConfig;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
@@ -783,17 +558,23 @@ async function resolveActiveModelEntry(params: {
   if (!providerId) {
     return null;
   }
+  return await resolveAutoProviderModelEntry(params, providerId, () => params.activeModel?.model);
+}
+
+async function resolveAutoProviderModelEntry(
+  params: {
+    cfg: OpenClawConfig;
+    agentId?: string;
+    agentDir?: string;
+    workspaceDir?: string;
+    providerRegistry: ProviderRegistry;
+    capability: MediaUnderstandingCapability;
+  },
+  providerId: string,
+  readModel: () => string | undefined,
+): Promise<MediaUnderstandingModelConfig | null> {
   const provider = getMediaUnderstandingProvider(providerId, params.providerRegistry);
-  if (!provider) {
-    return null;
-  }
-  if (params.capability === "audio" && !provider.transcribeAudio) {
-    return null;
-  }
-  if (params.capability === "image" && !provider.describeImage) {
-    return null;
-  }
-  if (params.capability === "video" && !provider.describeVideo) {
+  if (!providerSupportsCapability(provider, params.capability)) {
     return null;
   }
   const hasAuth = await hasProviderAuthAvailable({
@@ -806,13 +587,17 @@ async function resolveActiveModelEntry(params: {
   if (!hasAuth) {
     return null;
   }
+  // Active selection reads its model after auth; key selection captures it before auth.
+  // Audio uses its provider default instead of the active chat model in either path.
   let model: string | undefined;
   if (params.capability === "image") {
     model = await resolveAutoImageModelId({
       cfg: params.cfg,
+      agentId: params.agentId,
       providerId,
       providerRegistry: params.providerRegistry,
-      explicitModel: params.activeModel?.model,
+      explicitModel: readModel(),
+      agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
     });
   } else if (params.capability === "audio") {
@@ -823,7 +608,7 @@ async function resolveActiveModelEntry(params: {
     });
   } else {
     model =
-      params.activeModel?.model ??
+      readModel() ??
       resolveDefaultMediaModelFromRegistry({
         providerId,
         capability: "video",
@@ -844,20 +629,23 @@ async function runAttachmentEntries(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
   ctx: MsgContext;
-  attachmentIndex: number;
+  attachment: MediaAttachment;
+  agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
   providerRegistry: ProviderRegistry;
   cache: MediaAttachmentCache;
-  entries: MediaUnderstandingModelConfig[];
+  entries: ResolvedMediaModelEntry[];
   config?: MediaUnderstandingConfig;
 }): Promise<{
   output: MediaUnderstandingOutput | null;
   attempts: MediaUnderstandingModelDecision[];
 }> {
   const { entries, capability } = params;
+  const attachmentIndex = params.attachment.index;
   const attempts: MediaUnderstandingModelDecision[] = [];
-  for (const entry of entries) {
+  for (const candidate of entries) {
+    const { entry } = candidate;
     const entryType = entry.type ?? (entry.command ? "cli" : "provider");
     try {
       const result =
@@ -867,7 +655,7 @@ async function runAttachmentEntries(params: {
               entry,
               cfg: params.cfg,
               ctx: params.ctx,
-              attachmentIndex: params.attachmentIndex,
+              attachment: params.attachment,
               cache: params.cache,
               config: params.config,
             })
@@ -876,14 +664,16 @@ async function runAttachmentEntries(params: {
               entry,
               cfg: params.cfg,
               ctx: params.ctx,
-              attachmentIndex: params.attachmentIndex,
+              attachmentIndex,
               cache: params.cache,
+              agentId: params.agentId,
               agentDir: params.agentDir,
               workspaceDir: params.workspaceDir,
               providerRegistry: params.providerRegistry,
               config: params.config,
+              secretOwnerId: candidate.secretOwnerId,
             });
-      if (result) {
+      if (result?.text) {
         const decision = buildModelDecision({ entry, entryType, outcome: "success" });
         if (result.provider) {
           decision.provider = result.provider;
@@ -941,6 +731,13 @@ function hasFailedMediaAttempt(attachments: MediaUnderstandingDecision["attachme
   );
 }
 
+function createAttachmentDispositions(
+  indexes: readonly number[],
+  disposition: MediaAttachmentDisposition,
+): Record<number, MediaAttachmentDisposition> {
+  return Object.fromEntries(indexes.map((index) => [index, disposition]));
+}
+
 export async function runCapability(params: {
   capability: MediaUnderstandingCapability;
   cfg: OpenClawConfig;
@@ -955,24 +752,82 @@ export async function runCapability(params: {
   activeModel?: ActiveMediaModel;
 }): Promise<RunCapabilityResult> {
   const { capability, cfg, ctx } = params;
-  const config = params.config ?? cfg.tools?.media?.[capability];
+  const config: MediaUnderstandingConfig = params.config ?? cfg.tools?.media?.[capability] ?? {};
+  const selection = selectAttachments({
+    capability,
+    attachments: params.media,
+    policy: config.attachments,
+  });
+  const selectedAttachmentIndexes = selection.selected.map((attachment) => attachment.index);
+  const activeProvider = params.activeModel?.provider?.trim();
+  // One memoized owner for the native-vision fact. Probed lazily — only when
+  // the skip branch must decide, or an image decision carries a renderable
+  // disposition — so explicit image models never pay a catalog lookup. A probe
+  // failure yields "unknown" and never alters a decision outcome; unknown
+  // suppresses image markers because a false skip claim beside a natively
+  // delivered image is worse than silence (#122101).
+  let nativeVisionProbe: Promise<boolean | undefined> | undefined;
+  const resolveNativeVisionFlag = (): Promise<boolean | undefined> => {
+    nativeVisionProbe ??= activeModelSupportsNativeVision({
+      cfg,
+      agentId: params.agentId,
+      activeModel: params.activeModel,
+      agentDir: params.agentDir,
+      workspaceDir: params.workspaceDir,
+    }).catch((err: unknown) => {
+      if (shouldLogVerbose()) {
+        logVerbose(`native vision support probe failed: ${String(err)}`);
+      }
+      return undefined;
+    });
+    return nativeVisionProbe;
+  };
+  const buildDispositions = (
+    selectedDisposition: MediaAttachmentDisposition,
+    droppedDisposition = selectedDisposition,
+  ) => ({
+    ...createAttachmentDispositions(selectedAttachmentIndexes, selectedDisposition),
+    ...createAttachmentDispositions(selection.droppedAttachmentIndexes, droppedDisposition),
+  });
+  const rendersMarker = (dispositions: Record<number, MediaAttachmentDisposition>) =>
+    Object.values(dispositions).some(
+      (d) => d.kind !== "handled" && d.kind !== "handed-to-native-vision",
+    );
+  const buildDecision = async (
+    outcome: MediaUnderstandingDecision["outcome"],
+    attachments: MediaUnderstandingDecision["attachments"],
+    attachmentDispositions: Record<number, MediaAttachmentDisposition>,
+  ): Promise<MediaUnderstandingDecision> => {
+    // Record the fact whenever it is known (probe already ran) or needed
+    // (a marker could render); never fire the probe for marker-free decisions.
+    const nativeVisionActive =
+      capability === "image" &&
+      (nativeVisionProbe !== undefined || rendersMarker(attachmentDispositions))
+        ? await resolveNativeVisionFlag()
+        : undefined;
+    return {
+      capability,
+      outcome,
+      attachments,
+      attachmentDispositions,
+      ...(nativeVisionActive !== undefined ? { nativeVisionActive } : {}),
+    };
+  };
   if (config?.enabled === false) {
     return {
       outputs: [],
-      decision: { capability, outcome: "disabled", attachments: [] },
+      decision: await buildDecision(
+        "disabled",
+        [],
+        buildDispositions({ kind: "capability-disabled" }),
+      ),
     };
   }
 
-  const attachmentPolicy = config?.attachments;
-  const selected = selectAttachments({
-    capability,
-    attachments: params.media,
-    policy: attachmentPolicy,
-  });
-  if (selected.length === 0) {
+  if (selection.selected.length === 0) {
     return {
       outputs: [],
-      decision: { capability, outcome: "no-attachment", attachments: [] },
+      decision: await buildDecision("no-attachment", [], {}),
     };
   }
 
@@ -983,52 +838,65 @@ export async function runCapability(params: {
     }
     return {
       outputs: [],
-      decision: {
-        capability,
-        outcome: "scope-deny",
-        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
-      },
+      decision: await buildDecision(
+        "scope-deny",
+        selection.selected.map((item) => ({
+          attachmentIndex: item.index,
+          attempts: [],
+        })),
+        buildDispositions({ kind: "scope-denied" }),
+      ),
     };
   }
 
   // Skip image understanding when the primary model supports vision natively.
   // The image will be injected directly into the model context instead.
-  const activeProvider = params.activeModel?.provider?.trim();
   if (
     capability === "image" &&
     activeProvider &&
-    !hasExplicitImageUnderstandingConfig({
-      config,
-    })
+    !hasExplicitImageUnderstandingConfig({ cfg, providerRegistry: params.providerRegistry }) &&
+    (await resolveNativeVisionFlag()) === true
   ) {
-    if (await activeModelSupportsNativeVision({ cfg, activeModel: params.activeModel })) {
-      if (shouldLogVerbose()) {
-        logVerbose("Skipping image understanding: primary model supports vision natively");
-      }
-      const model = params.activeModel?.model?.trim();
-      const reason = "primary model supports vision natively";
-      return {
-        outputs: [],
-        decision: {
-          capability,
-          outcome: "skipped",
-          attachments: selected.map((item) => {
-            const attempt = {
-              type: "provider" as const,
-              provider: activeProvider,
-              model: model || undefined,
-              outcome: "skipped" as const,
-              reason,
-            };
-            return {
-              attachmentIndex: item.index,
-              attempts: [attempt],
-              chosen: attempt,
-            };
-          }),
-        },
-      };
+    if (shouldLogVerbose()) {
+      logVerbose("Skipping image understanding: primary model supports vision natively");
     }
+    const attempt = {
+      type: "provider" as const,
+      provider: activeProvider,
+      model: params.activeModel?.model?.trim() || undefined,
+      outcome: "skipped" as const,
+      reason: "primary model supports vision natively",
+    };
+    // Native hydration ignores understanding limits but only resolves local paths
+    // and media-store refs. Selected and dropped remote URLs both need failure
+    // markers; claiming a handoff would silently hide them.
+    const nativeDeliverable = (item: MediaAttachment) =>
+      Boolean(item.path) ||
+      (Boolean(item.url) && classifyMediaReferenceSource(item.url ?? "").isMediaStoreUrl);
+    const attachmentDispositions = buildDispositions(
+      { kind: "handed-to-native-vision" },
+      { kind: "not-selected" },
+    );
+    for (const item of params.media) {
+      if (attachmentDispositions[item.index] && !nativeDeliverable(item)) {
+        attachmentDispositions[item.index] = {
+          kind: "failed",
+          reason: "remote-url image is not natively deliverable",
+        };
+      }
+    }
+    return {
+      outputs: [],
+      decision: await buildDecision(
+        "skipped",
+        selection.selected.map((item) =>
+          nativeDeliverable(item)
+            ? { attachmentIndex: item.index, attempts: [attempt], chosen: attempt }
+            : { attachmentIndex: item.index, attempts: [] },
+        ),
+        attachmentDispositions,
+      ),
+    };
   }
 
   const entries = resolveModelEntries({
@@ -1037,37 +905,45 @@ export async function runCapability(params: {
     config,
     providerRegistry: params.providerRegistry,
   });
-  let resolvedEntries = entries;
+  let resolvedEntries: ResolvedMediaModelEntry[] = entries;
   if (resolvedEntries.length === 0) {
-    resolvedEntries = await resolveAutoEntries({
-      cfg,
-      agentId: params.agentId,
-      agentDir: params.agentDir,
-      workspaceDir: params.workspaceDir,
-      providerRegistry: params.providerRegistry,
-      capability,
-      activeModel: params.activeModel,
-    });
+    resolvedEntries = (
+      await resolveAutoEntries({
+        cfg,
+        agentId: params.agentId,
+        agentDir: params.agentDir,
+        workspaceDir: params.workspaceDir,
+        providerRegistry: params.providerRegistry,
+        capability,
+        activeModel: params.activeModel,
+        nativeVisionActive: capability === "image" && (await resolveNativeVisionFlag()) === true,
+      })
+    ).map((entry) => ({ entry }));
   }
   if (resolvedEntries.length === 0) {
     return {
       outputs: [],
-      decision: {
-        capability,
-        outcome: "skipped",
-        attachments: selected.map((item) => ({ attachmentIndex: item.index, attempts: [] })),
-      },
+      decision: await buildDecision(
+        "skipped",
+        selection.selected.map((item) => ({
+          attachmentIndex: item.index,
+          attempts: [],
+        })),
+        buildDispositions({ kind: "no-model" }, { kind: "not-selected" }),
+      ),
     };
   }
 
   const outputs: MediaUnderstandingOutput[] = [];
   const attachmentDecisions: MediaUnderstandingDecision["attachments"] = [];
-  for (const attachment of selected) {
+  const attachmentDispositions = buildDispositions({ kind: "failed" }, { kind: "not-selected" });
+  for (const attachment of selection.selected) {
     const { output, attempts } = await runAttachmentEntries({
       capability,
       cfg,
       ctx,
-      attachmentIndex: attachment.index,
+      attachment,
+      agentId: params.agentId,
       agentDir: params.agentDir,
       workspaceDir: params.workspaceDir,
       providerRegistry: params.providerRegistry,
@@ -1078,22 +954,22 @@ export async function runCapability(params: {
     if (output) {
       outputs.push(output);
     }
+    attachmentDispositions[attachment.index] = output ? { kind: "handled" } : { kind: "failed" };
     attachmentDecisions.push({
       attachmentIndex: attachment.index,
       attempts,
       chosen: attempts.find((attempt) => attempt.outcome === "success"),
     });
   }
-  const decision: MediaUnderstandingDecision = {
-    capability,
-    outcome:
-      outputs.length > 0
-        ? "success"
-        : hasFailedMediaAttempt(attachmentDecisions)
-          ? "failed"
-          : "skipped",
-    attachments: attachmentDecisions,
-  };
+  const decision = await buildDecision(
+    outputs.length > 0
+      ? "success"
+      : hasFailedMediaAttempt(attachmentDecisions)
+        ? "failed"
+        : "skipped",
+    attachmentDecisions,
+    attachmentDispositions,
+  );
   if (decision.outcome === "failed") {
     logWarn(`media-understanding: ${formatDecisionSummary(decision)}`);
   } else if (shouldLogVerbose()) {

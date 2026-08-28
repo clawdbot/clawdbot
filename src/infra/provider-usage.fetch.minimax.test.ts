@@ -18,6 +18,7 @@ async function expectMinimaxUsageResult(params: {
   });
 
   const result = await fetchMinimaxUsage("key", 5000, mockFetch);
+  expect(result.error).toBeUndefined();
   expect(result.plan).toBe(params.expected.plan);
   expect(result.windows).toEqual(params.expected.windows);
 }
@@ -280,6 +281,152 @@ describe("fetchMinimaxUsage", () => {
       expected: {
         plan: "Coding Plan · MiniMax-M*",
         windows: [{ label: "4h", usedPercent: 0.8333333333333334, resetAt: 1_774_195_200_000 }],
+      },
+    },
+    {
+      name: "normalizes current MiniMax percentage-only general and weekly windows",
+      payload: {
+        model_remains: [
+          {
+            model_name: "general",
+            start_time: "1784386800000",
+            end_time: "1784404800000",
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 97,
+            current_interval_status: 1,
+            weekly_start_time: "1783900800000",
+            weekly_end_time: "1784505600000",
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 77,
+            current_weekly_status: 1,
+          },
+          {
+            model_name: "video",
+            start_time: 1_784_332_800_000,
+            end_time: 1_784_419_200_000,
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+            weekly_start_time: 1_783_900_800_000,
+            weekly_end_time: 1_784_505_600_000,
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 100,
+            current_weekly_status: 3,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [
+          { label: "5h", usedPercent: 3, resetAt: 1_784_404_800_000 },
+          { label: "Week", usedPercent: 23, resetAt: 1_784_505_600_000 },
+        ],
+      },
+    },
+    {
+      name: "prefers current MiniMax remaining percentages over legacy count math",
+      payload: {
+        model_remains: [
+          {
+            model_name: "general",
+            startTime: 1_784_386_800_000,
+            endTime: 1_784_404_800_000,
+            currentIntervalTotalCount: 100,
+            currentIntervalUsageCount: 90,
+            currentIntervalRemainingPercent: 1,
+            currentIntervalStatus: 1,
+            weeklyStartTime: 1_783_900_800_000,
+            weeklyEndTime: 1_784_505_600_000,
+            currentWeeklyTotalCount: 0,
+            currentWeeklyUsageCount: 0,
+            currentWeeklyRemainingPercent: 100,
+            currentWeeklyStatus: 3,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [{ label: "5h", usedPercent: 99, resetAt: 1_784_404_800_000 }],
+      },
+    },
+    {
+      name: "omits an unlimited current window while preserving a bounded weekly window",
+      payload: {
+        model_remains: [
+          {
+            model_name: "general",
+            start_time: 1_784_386_800_000,
+            end_time: 1_784_404_800_000,
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+            weekly_start_time: 1_783_900_800_000,
+            weekly_end_time: 1_784_505_600_000,
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 50,
+            current_weekly_status: 1,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [{ label: "Week", usedPercent: 50, resetAt: 1_784_505_600_000 }],
+      },
+    },
+    {
+      name: "returns a valid empty snapshot when all MiniMax windows are unlimited",
+      payload: {
+        model_remains: [
+          {
+            model_name: "general",
+            current_interval_total_count: 0,
+            current_interval_usage_count: 0,
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+            current_weekly_total_count: 0,
+            current_weekly_usage_count: 0,
+            current_weekly_remaining_percent: 100,
+            current_weekly_status: 3,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · general",
+        windows: [],
+      },
+    },
+    {
+      name: "prefers an exhausted bounded row over an earlier unlimited fallback row",
+      payload: {
+        model_remains: [
+          {
+            model_name: "video",
+            current_interval_remaining_percent: 100,
+            current_interval_status: 3,
+          },
+          {
+            model_name: "other-bounded-model",
+            start_time: 1_784_386_800_000,
+            end_time: 1_784_404_800_000,
+            current_interval_remaining_percent: 0,
+            current_interval_status: 2,
+          },
+        ],
+        base_resp: { status_code: 0, status_msg: "success" },
+      },
+      expected: {
+        plan: "Coding Plan · other-bounded-model",
+        windows: [{ label: "5h", usedPercent: 100, resetAt: 1_784_404_800_000 }],
       },
     },
     {

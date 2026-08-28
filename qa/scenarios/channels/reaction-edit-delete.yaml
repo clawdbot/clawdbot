@@ -7,7 +7,7 @@ scenario:
     primary:
       - channels.message-actions
     secondary:
-      - channels.qa-channel
+      - channels.qa-channel-reply-transform
   objective: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
   successCriteria:
     - Agent adds at least one reaction.
@@ -21,8 +21,8 @@ scenario:
   execution:
     kind: flow
     summary: Verify the agent can use channel-owned message actions and that the QA transcript reflects them.
+    channel: qa-channel
     config:
-      requiredChannelDriver: qa-channel
       target: "channel:qa-room"
       seedText: "seed message"
       editedText: "seed message (edited)"
@@ -46,6 +46,8 @@ flow:
                 ref: env
               action: react
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
                 emoji:
@@ -56,6 +58,8 @@ flow:
                 ref: env
               action: edit
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
                 text:
@@ -66,6 +70,8 @@ flow:
                 ref: env
               action: delete
               args:
+                to:
+                  expr: config.target
                 messageId:
                   expr: seed.id
         - call: state.readMessage

@@ -39,9 +39,10 @@ export function createXaiWebSearchProvider(): WebSearchProviderPlugin {
       description:
         "Search the web using xAI Grok. Returns AI-synthesized answers with citations from real-time web search.",
       parameters: GenericXaiSearchSchema,
-      execute: async (args) => {
+      execute: async (args, executionContext) => {
+        executionContext?.signal?.throwIfAborted();
         const { executeXaiWebSearchProviderTool } = await loadXaiWebSearchProviderRuntime();
-        return await executeXaiWebSearchProviderTool(ctx, args);
+        return await executeXaiWebSearchProviderTool(ctx, args, executionContext);
       },
     }),
   };

@@ -11,7 +11,7 @@ Build and run the OpenClaw macOS application from source.
 
 ## Prerequisites
 
-- **Xcode 26.2+** (Swift 6.2 toolchain), on the latest macOS available in
+- **Xcode 26.4+** (Swift 6.3 toolchain), on the latest macOS available in
   Software Update.
 - **Node.js 24.15+ & pnpm** for the gateway, CLI, and packaging scripts. Node
   22.22.3+ also works.
@@ -28,8 +28,15 @@ pnpm install
 ./scripts/package-mac-app.sh
 ```
 
-Outputs `dist/OpenClaw.app`. Without an Apple Developer ID certificate, the
-script falls back to ad-hoc signing.
+Outputs `dist/OpenClaw.app`. Packaging requires a real signing identity by
+default; ad-hoc signing is an explicit opt-in and does not preserve TCC grants.
+See [macOS signing](/platforms/mac/signing).
+
+Set `OPENCLAW_SKIP_MLX_TTS=1` to package a dev/proof build without the local
+MLX voice helper. This skips the `openclaw-mlx-tts` binary and its large
+mlx-swift Metal shader stack, which some beta Xcode toolchains cannot compile.
+The resulting app has no on-device MLX voice; it is rejected for `release`
+builds, which must ship the helper.
 
 For dev run modes, signing flags, and Team ID troubleshooting, see
 [apps/macos/README.md](https://github.com/openclaw/openclaw/blob/main/apps/macos/README.md).
@@ -49,19 +56,24 @@ matching user-space CLI and runtime before starting the Gateway wizard.
 
 For manual development recovery, install the matching CLI yourself:
 
+The npm command below is for npm 12 or npm 11.16+. On npm 11.15 and earlier,
+omit `--allow-scripts=openclaw`.
+
 ```bash
-npm install -g openclaw@<version>
+npm install -g openclaw@<version> --allow-scripts=openclaw
 ```
 
-`pnpm add -g openclaw@<version>` and `bun add -g openclaw@<version>` also
-work. Node remains the recommended runtime for the Gateway itself.
+`pnpm add -g --allow-build=openclaw openclaw@<version>` and
+`bun add -g --trust openclaw@<version>` also work. Bun's `--trust` allows the
+OpenClaw lifecycle scripts for that install. Node remains the recommended
+runtime for the Gateway itself.
 
 ## Troubleshooting
 
 ### Build fails: toolchain or SDK mismatch
 
-The macOS app build expects the latest macOS SDK and the Swift 6.2 toolchain
-(Xcode 26.2+).
+The macOS app build expects the latest macOS SDK and the Swift 6.3 toolchain
+(Xcode 26.4+).
 
 ```bash
 xcodebuild -version
@@ -69,6 +81,26 @@ xcrun swift --version
 ```
 
 If versions don't match, update macOS/Xcode and re-run the build.
+
+### Build fails: MLX voice helper Metal shaders
+
+On a beta-only Xcode toolchain (for example Xcode 27 with the macOS 27 SDK),
+only the `openclaw-mlx-tts` helper may fail while the main app builds fine. The
+mlx-swift Metal compilation errors non-deterministically (a different `.metal`
+file each run, `Could not read serialized diagnostics file` then a nonzero
+`metal` exit), because the beta `metal` compiler and its separately downloaded
+Metal Toolchain are still unstable. This is an upstream toolchain issue, not an
+OpenClaw one.
+
+If you do not need on-device MLX voice, skip the helper:
+
+```bash
+OPENCLAW_SKIP_MLX_TTS=1 ./scripts/package-mac-app.sh
+```
+
+Otherwise, install the Metal Toolchain
+(`xcodebuild -downloadComponent MetalToolchain`) and build from a stable Xcode
+release.
 
 ### App crashes on permission grant
 

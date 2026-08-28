@@ -1,8 +1,10 @@
-import type { Router } from "@openclaw/uirouter";
-import { html, nothing } from "lit";
+import type { RouteMatch, Router } from "@openclaw/uirouter";
+import { nothing } from "lit";
 import type { ReactiveController, ReactiveControllerHost } from "lit";
 import { property } from "lit/decorators.js";
-import { icon } from "../components/icons.ts";
+import { renderLazyViewError } from "../components/lazy-view-error.ts";
+import { renderLoadingState } from "../components/loading-state.ts";
+import { McpAppUnmountGate } from "../components/mcp-app-unmount.ts";
 import { t } from "../i18n/index.ts";
 import { OpenClawLightDomElement } from "../lit/openclaw-element.ts";
 import {
@@ -12,7 +14,7 @@ import {
 } from "./router-outlet-controller.ts";
 import {
   isStaleChunkImportError,
-  retryStaleChunkReload,
+  retryStaleChunkReloadWhenReachable,
   scheduleStaleChunkReload,
 } from "./stale-chunk-reload.ts";
 
@@ -20,6 +22,10 @@ export { selectRenderedRouteMatch } from "./router-outlet-controller.ts";
 
 type RenderableModule<TData> = {
   render: (data: TData | undefined) => unknown;
+  renderOwnerKey?: (
+    match: Pick<RouteMatch<string, unknown, TData>, "data" | "location">,
+    settled: Pick<RouteMatch<string, unknown, TData>, "data" | "location"> | undefined,
+  ) => string | undefined;
 };
 
 type RouterOutletOptions<TLoadContext = unknown> = {
@@ -45,13 +51,23 @@ function measureRoutedRender<T>(routeId: string, render: () => T): T {
   return result;
 }
 
-function renderPending() {
-  return html`
-    <section class="card lazy-view-state lazy-view-state--loading" role="status">
-      <div class="card-title">${t("lazyView.loadingTitle")}</div>
-      <div class="card-sub">${t("common.loading")}</div>
-    </section>
-  `;
+/**
+ * Shows progress while waiting for the restarting gateway. The state lives on
+ * the element rather than in render state because the reload replaces the
+ * document; a re-render that resets the label is harmless, since the pending
+ * wait still reloads on its own once the gateway answers.
+ */
+function markButtonReloading(button: HTMLButtonElement | null): () => void {
+  if (!button) {
+    return () => {};
+  }
+  const label = button.textContent;
+  button.disabled = true;
+  button.textContent = t("lazyView.reloading");
+  return () => {
+    button.disabled = false;
+    button.textContent = label;
+  };
 }
 
 function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
@@ -61,7 +77,6 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
   routeId: TRouteId,
   render?: () => unknown,
 ) {
-  const routeError = error instanceof Error ? error.message : String(error);
   const staleChunk = isStaleChunkImportError(error);
   if (staleChunk) {
     // The chunk this document references was replaced by a newer build;
@@ -74,55 +89,38 @@ function renderError<TRouteId extends string, TLoadContext, TModule, TData>(
     }
     void router.revalidate(retryContext, routeId).catch(() => undefined);
   };
-  const handleRetry = () => {
+  const handleRetry = (event: Event) => {
     if (!staleChunk) {
       revalidate();
       return;
     }
-    // Reload only when the gateway is reachable; during a restart fall back to
-    // revalidation so the panel error stays recoverable inside app webviews.
-    void retryStaleChunkReload().then((reloading) => {
-      if (!reloading) {
-        revalidate();
+    // The gateway is usually still restarting when this is clicked (that update
+    // is what stranded the chunk), so wait for it to answer and then reload
+    // instead of declining on the first failed probe — a silent no-op here is
+    // what drives people to a manual hard reload. Reloading against an
+    // unreachable gateway would replace the recoverable panel error with a
+    // fatal navigation error in app webviews, so the wait is still bounded.
+    const button = event.currentTarget instanceof HTMLButtonElement ? event.currentTarget : null;
+    const restoreButton = markButtonReloading(button);
+    void retryStaleChunkReloadWhenReachable().then((reloading) => {
+      if (reloading) {
+        return;
       }
+      restoreButton();
+      revalidate();
     });
   };
   // Stale-chunk failures are routine after a gateway update, so present them
   // as an update prompt instead of a generic failure.
-  const errorClasses = [
-    "lazy-view-error",
-    render ? "lazy-view-error--inline" : "",
-    staleChunk ? "lazy-view-error--stale" : "",
-  ]
-    .filter(Boolean)
-    .join(" ");
-  return html`
-    ${render?.() ?? nothing}
-    <div class=${errorClasses} role="alert">
-      <div class="lazy-view-error__icon" aria-hidden="true">
-        ${icon(staleChunk ? "refresh" : "alertTriangle")}
-      </div>
-      <div class="lazy-view-error__title">
-        ${staleChunk ? t("lazyView.staleTitle") : t("lazyView.errorTitle")}
-      </div>
-      <div class="lazy-view-error__subtitle">
-        ${staleChunk ? t("lazyView.staleSubtitle") : t("lazyView.genericSubtitle")}
-      </div>
-      <button class="btn lazy-view-error__action" @click=${handleRetry}>
-        ${staleChunk ? t("common.reload") : t("lazyView.retry")}
-      </button>
-      <code class="lazy-view-error__detail">${routeError}</code>
-    </div>
-  `;
+  return renderLazyViewError({ error, onRetry: handleRetry, render, stale: staleChunk });
 }
 
 function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TData = unknown>(
   router: Router<TRouteId, TLoadContext, TModule, TData>,
   selection: RouterOutletSnapshot<TRouteId, TModule, TData>,
+  renderedMatch: RouteMatch<TRouteId, TModule, TData> | undefined,
   options: RouterOutletOptions<TLoadContext> = {},
 ): unknown {
-  const pending = selection.pending;
-  const renderedMatch = selectRenderedRouteMatch(selection.active, pending);
   if (renderedMatch?.status === "notFound") {
     return nothing;
   }
@@ -143,7 +141,7 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
           routeId,
         )
       : selection.showPending
-        ? renderPending()
+        ? renderLoadingState()
         : nothing;
   }
   const routeModule = renderedMatch.module;
@@ -172,7 +170,8 @@ function renderRouterOutlet<TRouteId extends string, TLoadContext, TModule, TDat
 
 type RouterOutletInputs<TRouteId extends string, TLoadContext, TModule, TData> = {
   router?: Router<TRouteId, TLoadContext, TModule, TData>;
-  onNotFound?: () => void;
+  onNotFound?: () => boolean | void;
+  notFoundRecoveryReady?: boolean;
 };
 
 class LitRouterOutletController<
@@ -217,19 +216,42 @@ class OpenClawRouterOutlet<
 > extends OpenClawLightDomElement {
   @property({ attribute: false }) router?: Router<TRouteId, TLoadContext, TModule, TData>;
   @property({ attribute: false }) retryContext?: TLoadContext;
-  @property({ attribute: false }) onNotFound?: () => void;
+  @property({ attribute: false }) onNotFound?: () => boolean | void;
+  @property({ attribute: false }) notFoundRecoveryReady?: boolean;
   private readonly outlet = new LitRouterOutletController(this, () => ({
     router: this.router,
     onNotFound: this.onNotFound,
+    notFoundRecoveryReady: this.notFoundRecoveryReady,
   }));
+  private readonly mcpAppUnmountGate = new McpAppUnmountGate(this);
 
   override render() {
-    if (!this.router) {
+    const router = this.router;
+    if (!router) {
       return nothing;
     }
-    return renderRouterOutlet(this.router, this.outlet.snapshot, {
-      retryContext: this.retryContext,
-    });
+    const snapshot = this.outlet.snapshot;
+    const renderedMatch = selectRenderedRouteMatch(snapshot.active, snapshot.pending);
+    const routeKey = renderedMatch ? `${renderedMatch.routeId}:${renderedMatch.status}` : "empty";
+    const routeModule = renderedMatch?.module;
+    const declaredOwnerKey =
+      renderedMatch && isRenderableModule<TData>(routeModule)
+        ? routeModule.renderOwnerKey?.(renderedMatch, snapshot.settled)
+        : undefined;
+    const explicitOwnerKey = renderedMatch?.error === undefined ? declaredOwnerKey : undefined;
+    const retainCurrent =
+      explicitOwnerKey !== undefined &&
+      renderedMatch?.status === "pending" &&
+      renderedMatch.data === undefined;
+    return this.mcpAppUnmountGate.render(
+      explicitOwnerKey ?? routeKey,
+      () =>
+        renderRouterOutlet(router, snapshot, renderedMatch, {
+          retryContext: this.retryContext,
+        }),
+      () => [this],
+      { retainRenderedValue: retainCurrent },
+    );
   }
 }
 

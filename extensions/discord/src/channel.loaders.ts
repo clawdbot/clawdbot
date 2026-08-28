@@ -1,5 +1,6 @@
 // Discord plugin module implements channel.loaders behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import type { DiscordProbe } from "./probe.js";
 
 export const loadDiscordDirectoryConfigModule = createLazyRuntimeModule(
   () => import("./directory-config.js"),
@@ -22,6 +23,18 @@ export const loadDiscordProviderRuntime = createLazyRuntimeModule(
 );
 
 export const loadDiscordProbeRuntime = createLazyRuntimeModule(() => import("./probe.runtime.js"));
+
+export async function probeDiscordStatusAccount(params: {
+  token: string;
+  timeoutMs: number;
+}): Promise<DiscordProbe> {
+  const startedAtMs = Date.now();
+  const runtime = await loadDiscordProbeRuntime();
+  // The gateway starts its hook deadline before lazy plugin loading. Carry only the remaining
+  // budget into the probe or a cold import can let optional metadata outrun the caller.
+  const remainingMs = Math.max(1, params.timeoutMs - Math.max(0, Date.now() - startedAtMs));
+  return await runtime.probeDiscord(params.token, remainingMs, { includeApplication: true });
+}
 
 export const loadDiscordAuditModule = createLazyRuntimeModule(() => import("./audit.js"));
 

@@ -4,14 +4,12 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.access-policy
+      - matrix.mention-gates
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 8000
     retryCount: 0
-    config:
-      requiredChannelDriver: live
 
 flow:
   module: ./live-transports/matrix/scenarios/scenario-runtime-policy.js

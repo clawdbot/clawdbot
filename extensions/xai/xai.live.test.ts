@@ -20,8 +20,7 @@ import {
   type RealtimeVoiceBridge,
   type RealtimeVoiceBridgeEvent,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-env";
+import { isBillingErrorMessage } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { createCodeExecutionTool } from "./code-execution.js";
 import plugin from "./index.js";
@@ -34,21 +33,17 @@ const describeLive = liveEnabled ? describe : describe.skip;
 const EMPTY_AUTH_STORE = { version: 1, profiles: {} } as const;
 
 function createLiveConfig(): OpenClawConfig {
-  const cfg = getRuntimeConfig();
   return {
-    ...cfg,
     models: {
-      ...cfg.models,
       providers: {
-        ...cfg.models?.providers,
         xai: {
-          ...cfg.models?.providers?.xai,
           apiKey: XAI_API_KEY,
           baseUrl: "https://api.x.ai/v1",
+          models: [],
         },
       },
     },
-  } as OpenClawConfig;
+  };
 }
 
 function createReferencePng(): Buffer {
@@ -718,6 +713,68 @@ describeLive("xai plugin live", () => {
       bridge.close();
     }
   }, 240_000);
+
+  it("runs realtime voice tool calls with valid object arguments and continuation", async () => {
+    const realtimeProvider = registerXaiRealtimeVoiceProvider();
+    const marker = "OPENCLAW_XAI_TOOL_ARGS_OK";
+    const finalAssistantTranscripts: string[] = [];
+    const toolCalls: Array<{ callId: string; name: string; args: unknown }> = [];
+    const errors: Error[] = [];
+    const bridge: RealtimeVoiceBridge = realtimeProvider.createBridge({
+      cfg: createLiveConfig(),
+      providerConfig: {
+        apiKey: XAI_API_KEY,
+        baseUrl: "https://api.x.ai/v1",
+        model: "grok-voice-latest",
+        voice: "eve",
+      },
+      audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+      instructions:
+        "When asked, call openclaw_live_probe with the exact token. After the tool result, say its marker exactly.",
+      tools: [
+        {
+          type: "function",
+          name: "openclaw_live_probe",
+          description: "Return the live validation marker.",
+          parameters: {
+            type: "object",
+            properties: { token: { type: "string" } },
+            required: ["token"],
+          },
+        },
+      ],
+      onAudio: () => {},
+      onClearAudio: () => {},
+      onMark: (markName) => bridge.acknowledgeMark(markName),
+      onTranscript: (role, text, isFinal) => {
+        if (role === "assistant" && isFinal) {
+          finalAssistantTranscripts.push(text);
+        }
+      },
+      onToolCall: (event) => toolCalls.push(event),
+      onError: (error) => errors.push(error),
+    });
+
+    try {
+      await bridge.connect();
+      bridge.sendUserMessage?.("Call openclaw_live_probe now with token bluebird.");
+      await waitForXaiLive("valid object tool arguments", () => toolCalls.length > 0);
+      expect(toolCalls[0]).toEqual({
+        callId: expect.any(String),
+        itemId: expect.any(String),
+        name: "openclaw_live_probe",
+        args: { token: "bluebird" },
+      });
+
+      await bridge.submitToolResult(toolCalls[0]?.callId ?? "", { marker });
+      await waitForXaiLive("tool result continuation", () =>
+        finalAssistantTranscripts.some((text) => text.includes(marker)),
+      );
+      expect(errors).toStrictEqual([]);
+    } finally {
+      bridge.close();
+    }
+  }, 120_000);
 
   it("generates and edits images through the registered image provider", async () => {
     await runXaiLiveCase("image", async () => {

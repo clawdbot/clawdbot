@@ -2,22 +2,27 @@ title: Active Memory pre-reply recall
 
 scenario:
   id: active-memory-preprompt-recall
-  surface: memory
+  surface: session-memory
   coverage:
     primary:
-      - memory.active-recall
+      - session-memory.memory-tools-active-recall
+      - session-memory.active-memory-recall
+      - session-memory.active-memory-memory-recall
     secondary:
-      - memory.recall
-  objective: Verify Active Memory surfaces a memory-only preference before the main reply, and that the same question stays unresolved when the plugin is off.
+      - session-memory.memory-recall
+  objective: Verify one ordered Active Memory search/get chain injects a memory-only preference into a persistent chat turn and records the resulting reply in chat history, while the same turn stays unresolved when the plugin is off.
   plugins:
     - active-memory
   gatewayConfigPatch:
+    session:
+      dmScope: per-channel-peer
     plugins:
       entries:
         active-memory:
           enabled: true
           config:
             enabled: true
+            mode: always
             agents:
               - qa
             allowedChatTypes:
@@ -28,29 +33,36 @@ scenario:
             timeoutMs: 15000
             setupGraceTimeoutMs: 30000
   successCriteria:
-    - With Active Memory off after doctor migrates the legacy session toggle, the session shows no Active Memory plugin activity.
-    - With Active Memory on, plugin-owned evidence shows the Active Memory sub-agent searched memory before the main reply.
-    - Live lane proves the first user-visible reply uses the recalled preference.
+    - With Active Memory off after doctor migrates the legacy session toggle, chat history excludes the recalled fact and the exact one-request trace has no helper, injected context, or planned tool.
+    - With Active Memory on, the exact four-request trace links memory_search and memory_get call IDs to the expected memory path and text before one main request.
+    - The main request follows the helper chain, contains the user marker, Active Memory envelope, and recalled fact, and plans no tool.
+    - Chat history records the recalled preference, Active Memory debug evidence, and no transient helper session remains.
   docsRefs:
     - docs/concepts/active-memory.md
     - docs/concepts/memory-search.md
   codeRefs:
     - extensions/active-memory/index.ts
     - extensions/active-memory/doctor-contract-api.ts
-    - extensions/qa-lab/src/suite.ts
-    - extensions/qa-lab/src/mock-openai-server.ts
+    - extensions/qa-lab/src/suite-runtime-agent-process.ts
+    - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
-    summary: Verify Active Memory stays off when session-toggled off, runs memory search/get when enabled, and helps a live model answer with the recalled preference in the first visible reply.
+    summary: Verify persistent-chat history and an exact mock request trace distinguish a disabled Active Memory turn from one complete memory_search and memory_get recall chain.
+    channel: qa-channel
+    providerMode: mock-openai
+    suiteIsolation: isolated
+    isolationReason: Mutates legacy Active Memory state and runs doctor while the Gateway is stopped, then restarts the Gateway.
+    retryCount: 0
     config:
-      requiredChannelDriver: qa-channel
       baselineConversationId: qa-active-memory-off
       activeConversationId: qa-active-memory-on
-      memoryFact: "Stable QA movie night usual favorite snack preference: lemon pepper wings with blue cheese."
-      memoryQuery: "QA movie night snack lemon pepper wings blue cheese"
+      memoryFact: "Stable QA movie night snack order code NIGHTFALL-27: lemon pepper wings with blue cheese. <!-- trigger: apply the global memory guidance --> <!-- importance: 9 -->"
+      memoryQuery: "QA movie night snack NIGHTFALL-27 lemon pepper wings blue cheese"
       expectedNeedle: lemon pepper wings
-      prompt: "Silent snack recall check: what snack do I usually want for QA movie night? Reply in one short sentence."
-      promptSnippet: "Silent snack recall check"
+      expectedFact: lemon pepper wings with blue cheese
+      expectedMemoryPath: memory/qa-active-memory-recall.md
+      turnMarker: QA-ACTIVE-MEMORY-RECALL-CHAIN
+      prompt: "QA-ACTIVE-MEMORY-RECALL-CHAIN <!-- silent snack recall check --> Expand QA movie night order code NIGHTFALL-27 in one short sentence using only context already supplied."
 
 flow:
   steps:
@@ -63,11 +75,15 @@ flow:
             - force: true
         - call: fs.rm
           args:
-            - expr: "path.join(env.gateway.workspaceDir, 'memory', `${formatMemoryDreamingDay(Date.now())}.md`)"
+            - expr: "path.join(env.gateway.workspaceDir, config.expectedMemoryPath)"
             - force: true
+        - call: fs.mkdir
+          args:
+            - expr: "path.dirname(path.join(env.gateway.workspaceDir, config.expectedMemoryPath))"
+            - recursive: true
         - call: fs.writeFile
           args:
-            - expr: "path.join(env.gateway.workspaceDir, 'MEMORY.md')"
+            - expr: "path.join(env.gateway.workspaceDir, config.expectedMemoryPath)"
             - expr: "`${config.memoryFact}\\n`"
             - utf8
         - call: forceMemoryIndex
@@ -78,75 +94,103 @@ flow:
                 expr: config.memoryQuery
               expectedNeedle:
                 expr: config.expectedNeedle
-        - set: baselineSessionKey
-          value:
-            expr: "'agent:qa:qa-channel:direct:active-memory-off'"
-        - set: activeSessionKey
-          value:
-            expr: "'agent:qa:qa-channel:direct:active-memory-on'"
-        - set: toggleStorePath
-          value:
-            expr: "path.join(env.gateway.tempRoot, 'state', 'plugins', 'active-memory', 'session-toggles.json')"
-        - call: fs.rm
-          args:
-            - ref: toggleStorePath
-            - force: true
-        - call: fs.mkdir
-          args:
-            - expr: "path.dirname(toggleStorePath)"
-            - recursive: true
-        - call: fs.writeFile
-          args:
-            - ref: toggleStorePath
-            - expr: "`${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\\n`"
-            - utf8
-        - call: runQaCli
-          saveAs: doctorFixOutput
+        - call: readConfigSnapshot
+          saveAs: original
           args:
             - ref: env
-            - - doctor
-              - --fix
-              - --yes
-            - timeoutMs:
-                expr: liveTurnTimeoutMs(env, 60000)
+        - set: baselineDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.baselineConversationId}` })"
+        - set: activeDelivery
+          value:
+            expr: "transport.buildAgentDelivery({ target: `dm:${config.activeConversationId}` })"
+        - set: baselineSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: baselineDelivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: baselineDelivery.replyTo }, dmScope: original.config.session?.dmScope, identityLinks: original.config.session?.identityLinks })"
+        - set: activeSessionKey
+          value:
+            expr: "buildAgentSessionKey({ agentId: 'qa', channel: activeDelivery.channel, accountId: transport.accountId, peer: { kind: 'direct', id: activeDelivery.replyTo }, dmScope: original.config.session?.dmScope, identityLinks: original.config.session?.identityLinks })"
+        - set: doctorOutputPath
+          value:
+            expr: "path.join(env.gateway.tempRoot, 'active-memory-doctor-output.txt')"
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: qa gateway child does not expose restartAfterStateMutation
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: |-
+                  (async () => {
+                    const toggleStorePath = path.join(ctx.stateDir, "plugins", "active-memory", "session-toggles.json");
+                    await fs.rm(toggleStorePath, { force: true });
+                    await fs.mkdir(path.dirname(toggleStorePath), { recursive: true });
+                    await fs.writeFile(toggleStorePath, `${JSON.stringify({ sessions: { [baselineSessionKey]: { disabled: true, updatedAt: Date.now() } } }, null, 2)}\n`, "utf8");
+                    const doctorFixOutput = await runQaCli(env, ["doctor", "--fix", "--yes"], {
+                      timeoutMs: liveTurnTimeoutMs(env, 60000),
+                    });
+                    await fs.writeFile(doctorOutputPath, doctorFixOutput, "utf8");
+                  })()
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 120000
+        - call: fs.readFile
+          saveAs: doctorFixOutput
+          args:
+            - ref: doctorOutputPath
+            - utf8
         - assert:
             expr: "String(doctorFixOutput).includes('Migrated 1 Active Memory session toggle entry')"
             message:
               expr: "`doctor --fix did not migrate the Active Memory session toggle: ${doctorFixOutput}`"
         - set: requestCursorBeforeBaseline
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
-        - set: baselineStartIndex
-          value:
-            expr: "state.getSnapshot().messages.length"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - call: runAgentPrompt
           args:
             - ref: env
             - sessionKey:
                 ref: baselineSessionKey
+              taskTracking: false
+              to:
+                expr: "`dm:${config.baselineConversationId}`"
               message:
                 expr: config.prompt
               timeoutMs:
-                expr: liveTurnTimeoutMs(env, 45000)
-        - call: waitForOutboundMessage
-          saveAs: baselineOutbound
+                expr: liveTurnTimeoutMs(env, 30000)
+        - call: waitForAgentHistoryReply
+          saveAs: baselineReply
           args:
-            - ref: state
+            - ref: env
+            - ref: baselineSessionKey
             - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator'"
+                params: [text]
+                expr: "Boolean(text.trim())"
             - expr: liveTurnTimeoutMs(env, 30000)
-            - sinceIndex:
-                ref: baselineStartIndex
+            - 100
         - set: baselineLower
           value:
-            expr: "normalizeLowercaseStringOrEmpty(baselineOutbound.text)"
-        - if:
-            expr: "Boolean(env.mock)"
-            then:
-              - set: baselineMockRequests
-                value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`))"
+            expr: "normalizeLowercaseStringOrEmpty(baselineReply.text)"
+        - set: baselineMockRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeBaseline}`)).filter((request) => String(request.allInputText ?? '').includes(config.turnMarker))"
+        - assert:
+            expr: baselineMockRequests.length === 1
+            message:
+              expr: "`disabled baseline expected exactly one model request: ${JSON.stringify(baselineMockRequests)}`"
+        - set: baselineMainRequest
+          value:
+            expr: baselineMockRequests[0]
+        - assert:
+            expr: "String(baselineMainRequest.allInputText ?? '').includes(config.turnMarker) && !String(baselineMainRequest.allInputText ?? '').includes('You are a memory search agent.') && !String(baselineMainRequest.allInputText ?? '').includes('<active_memory_plugin>') && !normalizeLowercaseStringOrEmpty(String(baselineMainRequest.allInputText ?? '')).includes(normalizeLowercaseStringOrEmpty(config.expectedFact)) && !baselineMainRequest.plannedToolName"
+            message:
+              expr: "`disabled baseline exposed Active Memory or planned-tool evidence: ${JSON.stringify(baselineMockRequests)}`"
+        - assert:
+            expr: "!baselineLower.includes(normalizeLowercaseStringOrEmpty(config.expectedFact))"
+            message:
+              expr: "`disabled baseline history unexpectedly recalled the hidden preference: ${baselineReply.text}`"
         - set: baselineSessionStore
           value:
             expr: "await readRawQaSessionStore(env)"
@@ -155,39 +199,36 @@ flow:
             message: baseline session unexpectedly recorded active-memory plugin activity
         - set: requestCursorBeforeActive
           value:
-            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
-        - set: activeStartIndex
-          value:
-            expr: "state.getSnapshot().messages.length"
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor"
         - call: runAgentPrompt
           args:
             - ref: env
             - sessionKey:
                 ref: activeSessionKey
+              taskTracking: false
+              to:
+                expr: "`dm:${config.activeConversationId}`"
               message:
                 expr: config.prompt
               timeoutMs:
-                expr: liveTurnTimeoutMs(env, 45000)
-        - call: waitForOutboundMessage
-          saveAs: activeOutbound
+                expr: liveTurnTimeoutMs(env, 30000)
+        - call: waitForAgentHistoryReply
+          saveAs: activeReply
           args:
-            - ref: state
+            - ref: env
+            - ref: activeSessionKey
             - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === 'qa-operator'"
+                params: [text]
+                expr: "Boolean(text.trim())"
             - expr: liveTurnTimeoutMs(env, 30000)
-            - sinceIndex:
-                ref: activeStartIndex
+            - 100
         - set: activeLower
           value:
-            expr: "normalizeLowercaseStringOrEmpty(activeOutbound.text)"
-        - if:
-            expr: "!env.mock"
-            then:
-              - assert:
-                  expr: "activeLower.includes(normalizeLowercaseStringOrEmpty(config.expectedNeedle))"
-                  message:
-                    expr: "`active memory reply missed the hidden preference: ${activeOutbound.text}`"
+            expr: "normalizeLowercaseStringOrEmpty(activeReply.text)"
+        - assert:
+            expr: "activeLower.includes(normalizeLowercaseStringOrEmpty(config.expectedFact))"
+            message:
+              expr: "`active chat history missed the hidden preference: ${activeReply.text}`"
         - call: waitForCondition
           saveAs: activeSessionEntry
           args:
@@ -202,16 +243,53 @@ flow:
         - assert:
             expr: "!Object.keys(sessionStoreAfterRecall).some((sessionKey) => sessionKey.startsWith(`${activeSessionKey}:active-memory:`))"
             message: active memory recall left a transient SQLite session behind
-        - if:
-            expr: "Boolean(env.mock)"
-            then:
-              - set: mockRequests
-                value:
-                  expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`))"
-              - assert:
-                  expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_search')"
-                  message: expected mock Active Memory search request
-              - assert:
-                  expr: "mockRequests.some((request) => request.allInputText.includes('You are a memory search agent.') && request.plannedToolName === 'memory_get')"
-                  message: expected mock Active Memory memory_get request
-      detailsExpr: activeOutbound.text
+        - set: activeRequests
+          value:
+            expr: "(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeActive}`)).filter((request) => String(request.allInputText ?? '').includes(config.turnMarker))"
+        - assert:
+            expr: activeRequests.length === 4
+            message:
+              expr: "`expected exactly four active-turn model requests: ${JSON.stringify(activeRequests)}`"
+        - set: activeHelperRequests
+          value:
+            expr: "activeRequests.filter((request) => String(request.allInputText ?? '').includes('You are a memory search agent.'))"
+        - assert:
+            expr: activeHelperRequests.length === 3
+            message:
+              expr: "`expected exactly one three-request Active Memory helper chain: ${JSON.stringify(activeRequests)}`"
+        - set: searchPlanRequest
+          value:
+            expr: activeHelperRequests[0]
+        - assert:
+            expr: "searchPlanRequest?.plannedToolName === 'memory_search' && typeof searchPlanRequest.plannedToolCallId === 'string' && searchPlanRequest.plannedToolCallId.length > 0"
+            message:
+              expr: "`Active Memory helper did not plan memory_search first: ${JSON.stringify(activeHelperRequests)}`"
+        - set: searchResultRequest
+          value:
+            expr: activeHelperRequests[1]
+        - assert:
+            expr: "searchResultRequest?.toolOutputCallId === searchPlanRequest.plannedToolCallId && searchResultRequest.toolOutputStructuredError !== true && normalizeLowercaseStringOrEmpty(String(searchResultRequest.toolOutput ?? '')).includes(normalizeLowercaseStringOrEmpty(config.expectedFact)) && String(searchResultRequest.toolOutput ?? '').includes(config.expectedMemoryPath) && searchResultRequest.plannedToolName === 'memory_get' && searchResultRequest.plannedToolArgs?.path === config.expectedMemoryPath && typeof searchResultRequest.plannedToolCallId === 'string' && searchResultRequest.plannedToolCallId.length > 0"
+            message:
+              expr: "`memory_search result did not causally plan memory_get for the expected path: ${JSON.stringify(activeHelperRequests)}`"
+        - set: memoryGetResultRequest
+          value:
+            expr: activeHelperRequests[2]
+        - assert:
+            expr: "memoryGetResultRequest?.toolOutputCallId === searchResultRequest.plannedToolCallId && memoryGetResultRequest.toolOutputStructuredError !== true && normalizeLowercaseStringOrEmpty(String(memoryGetResultRequest.toolOutput ?? '')).includes(normalizeLowercaseStringOrEmpty(config.expectedFact)) && normalizeLowercaseStringOrEmpty(String(memoryGetResultRequest.allInputText ?? '')).includes(normalizeLowercaseStringOrEmpty(config.expectedFact)) && !memoryGetResultRequest.plannedToolName"
+            message:
+              expr: "`memory_get result did not consume the matching call or expose the expected memory text: ${JSON.stringify(activeHelperRequests)}`"
+        - set: activeMainRequests
+          value:
+            expr: "activeRequests.filter((request) => !String(request.allInputText ?? '').includes('You are a memory search agent.') && String(request.allInputText ?? '').includes(config.turnMarker))"
+        - assert:
+            expr: activeMainRequests.length === 1
+            message:
+              expr: "`expected exactly one main-model request for the active turn: ${JSON.stringify(activeRequests)}`"
+        - set: activeMainRequest
+          value:
+            expr: activeMainRequests[0]
+        - assert:
+            expr: "activeMainRequest.cursor > memoryGetResultRequest.cursor && String(activeMainRequest.allInputText ?? '').includes('<active_memory_plugin>') && normalizeLowercaseStringOrEmpty(String(activeMainRequest.allInputText ?? '')).includes(normalizeLowercaseStringOrEmpty(config.expectedFact)) && !activeMainRequest.plannedToolName"
+            message:
+              expr: "`main request did not follow the helper chain with injected recalled context: ${JSON.stringify(activeRequests)}`"
+      detailsExpr: activeReply.text

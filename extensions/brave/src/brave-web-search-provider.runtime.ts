@@ -67,6 +67,24 @@ type BraveHttpDiagnostics = {
   enabled?: boolean;
 };
 
+type BraveRequestParams = {
+  baseUrl: string;
+  endpointMode: BraveEndpointMode;
+  apiKey: string;
+  timeoutSeconds: number;
+  diagnostics?: BraveHttpDiagnostics;
+  signal?: AbortSignal;
+};
+
+type BraveSearchRequestParams = BraveRequestParams & {
+  query: string;
+  country?: string;
+  search_lang?: string;
+  freshness?: string;
+  dateAfter?: string;
+  dateBefore?: string;
+};
+
 function logBraveHttp(
   diagnostics: BraveHttpDiagnostics | undefined,
   event: string,
@@ -78,22 +96,12 @@ function logBraveHttp(
   braveHttpLogger.info(`brave http ${event}`, meta);
 }
 
-function describeBraveRequestUrl(url: URL): {
-  url: string;
-  query: string;
-  params: Record<string, string>;
-} {
-  return {
-    url: url.toString(),
-    query: url.searchParams.get("q") ?? "",
-    params: Object.fromEntries(url.searchParams.entries()),
-  };
-}
-
 function resolveBraveApiKey(searchConfig?: SearchConfigRecord): string | undefined {
   return (
-    readConfiguredSecretString(searchConfig?.apiKey, "tools.web.search.apiKey") ??
-    readProviderEnvValue(["BRAVE_API_KEY"])
+    readConfiguredSecretString(
+      searchConfig?.apiKey,
+      "plugins.entries.brave.config.webSearch.apiKey",
+    ) ?? readProviderEnvValue(["BRAVE_API_KEY"])
   );
 }
 
@@ -196,14 +204,9 @@ function setBraveSearchUrlParams(
 }
 
 async function runBraveJsonRequest<T>(
-  params: {
-    baseUrl: string;
+  params: BraveRequestParams & {
     endpointPath: string;
-    endpointMode: BraveEndpointMode;
     mode: BraveSearchMode;
-    apiKey: string;
-    timeoutSeconds: number;
-    diagnostics?: BraveHttpDiagnostics;
     configureUrl: (url: URL) => void;
   },
   errorLabel: string,
@@ -215,7 +218,9 @@ async function runBraveJsonRequest<T>(
   params.configureUrl(url);
   logBraveHttp(params.diagnostics, "request", {
     mode: params.mode,
-    ...describeBraveRequestUrl(url),
+    url: url.toString(),
+    query: url.searchParams.get("q") ?? "",
+    params: Object.fromEntries(url.searchParams.entries()),
   });
   const startedAt = Date.now();
   const withEndpoint =
@@ -226,6 +231,7 @@ async function runBraveJsonRequest<T>(
     {
       url: url.toString(),
       timeoutSeconds: params.timeoutSeconds,
+      signal: params.signal,
       init: {
         method: "GET",
         headers: {
@@ -247,19 +253,7 @@ async function runBraveJsonRequest<T>(
   );
 }
 
-async function runBraveLlmContextSearch(params: {
-  baseUrl: string;
-  endpointMode: BraveEndpointMode;
-  query: string;
-  apiKey: string;
-  timeoutSeconds: number;
-  diagnostics?: BraveHttpDiagnostics;
-  country?: string;
-  search_lang?: string;
-  freshness?: string;
-  dateAfter?: string;
-  dateBefore?: string;
-}): Promise<{
+async function runBraveLlmContextSearch(params: BraveSearchRequestParams): Promise<{
   results: Array<{
     url: string;
     title: string;
@@ -270,13 +264,9 @@ async function runBraveLlmContextSearch(params: {
 }> {
   const data = await runBraveJsonRequest<BraveLlmContextResponse>(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       endpointPath: BRAVE_LLM_CONTEXT_ENDPOINT_PATH,
       mode: "llm-context",
-      endpointMode: params.endpointMode,
-      apiKey: params.apiKey,
-      timeoutSeconds: params.timeoutSeconds,
-      diagnostics: params.diagnostics,
       configureUrl: (url) => {
         setBraveSearchUrlParams(url, params);
       },
@@ -286,30 +276,17 @@ async function runBraveLlmContextSearch(params: {
   return { results: mapBraveLlmContextResults(data), sources: data.sources };
 }
 
-async function runBraveWebSearch(params: {
-  baseUrl: string;
-  endpointMode: BraveEndpointMode;
-  query: string;
-  count: number;
-  apiKey: string;
-  timeoutSeconds: number;
-  diagnostics?: BraveHttpDiagnostics;
-  country?: string;
-  search_lang?: string;
-  ui_lang?: string;
-  freshness?: string;
-  dateAfter?: string;
-  dateBefore?: string;
-}): Promise<Array<Record<string, unknown>>> {
+async function runBraveWebSearch(
+  params: BraveSearchRequestParams & {
+    count: number;
+    ui_lang?: string;
+  },
+): Promise<Array<Record<string, unknown>>> {
   const data = await runBraveJsonRequest<BraveSearchResponse>(
     {
-      baseUrl: params.baseUrl,
+      ...params,
       endpointPath: BRAVE_SEARCH_ENDPOINT_PATH,
       mode: "web",
-      endpointMode: params.endpointMode,
-      apiKey: params.apiKey,
-      timeoutSeconds: params.timeoutSeconds,
-      diagnostics: params.diagnostics,
       configureUrl: (url) => {
         setBraveSearchUrlParams(url, {
           ...params,
@@ -344,6 +321,7 @@ export async function executeBraveSearch(
   searchConfig?: SearchConfigRecord,
   options?: {
     diagnosticsEnabled?: boolean;
+    signal?: AbortSignal;
   },
 ): Promise<Record<string, unknown>> {
   const apiKey = resolveBraveApiKey(searchConfig);
@@ -474,70 +452,46 @@ export async function executeBraveSearch(
   const start = Date.now();
   const timeoutSeconds = resolveSearchTimeoutSeconds(searchConfig);
   const cacheTtlMs = resolveSearchCacheTtlMs(searchConfig);
-
-  if (braveMode === "llm-context") {
-    const { results, sources } = await runBraveLlmContextSearch({
-      baseUrl: braveBaseUrl,
-      endpointMode: braveEndpointMode,
-      query,
-      apiKey,
-      timeoutSeconds,
-      diagnostics,
-      country: country ?? undefined,
-      search_lang: normalizedLanguage.search_lang,
-      freshness,
-      dateAfter,
-      dateBefore,
-    });
-    const payload = {
-      query,
-      provider: "brave",
-      mode: "llm-context" as const,
-      count: results.length,
-      tookMs: Date.now() - start,
-      externalContent: {
-        untrusted: true,
-        source: "web_search",
-        provider: "brave",
-        wrapped: true,
-      },
-      results: results.map((entry) => ({
-        title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
-        url: entry.url,
-        snippets: entry.snippets.map((snippet) => wrapWebContent(snippet, "web_search")),
-        siteName: entry.siteName,
-      })),
-      sources,
-    };
-    writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
-    logBraveHttp(diagnostics, "cache write", {
-      mode: "llm-context",
-      query,
-      cacheKey,
-      ttlMs: cacheTtlMs,
-      count: results.length,
-    });
-    return payload;
-  }
-
-  const results = await runBraveWebSearch({
+  const request = {
     baseUrl: braveBaseUrl,
     endpointMode: braveEndpointMode,
     query,
-    count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
     apiKey,
     timeoutSeconds,
     diagnostics,
+    signal: options?.signal,
     country: country ?? undefined,
     search_lang: normalizedLanguage.search_lang,
-    ui_lang: normalizedLanguage.ui_lang,
     freshness,
     dateAfter,
     dateBefore,
-  });
+  };
+  const response =
+    braveMode === "llm-context"
+      ? { ...(await runBraveLlmContextSearch(request)), mode: "llm-context" as const }
+      : {
+          results: await runBraveWebSearch({
+            ...request,
+            count: resolveSearchCount(count, DEFAULT_SEARCH_COUNT),
+            ui_lang: normalizedLanguage.ui_lang,
+          }),
+          mode: "web" as const,
+        };
+  // A completed upstream response must not write cache state after its caller aborts.
+  options?.signal?.throwIfAborted();
+  const results =
+    response.mode === "llm-context"
+      ? response.results.map((entry) => ({
+          title: entry.title ? wrapWebContent(entry.title, "web_search") : "",
+          url: entry.url,
+          snippets: entry.snippets.map((snippet) => wrapWebContent(snippet, "web_search")),
+          siteName: entry.siteName,
+        }))
+      : response.results;
   const payload = {
     query,
     provider: "brave",
+    ...(response.mode === "llm-context" ? { mode: response.mode } : {}),
     count: results.length,
     tookMs: Date.now() - start,
     externalContent: {
@@ -547,10 +501,11 @@ export async function executeBraveSearch(
       wrapped: true,
     },
     results,
+    ...(response.mode === "llm-context" ? { sources: response.sources } : {}),
   };
   writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   logBraveHttp(diagnostics, "cache write", {
-    mode: "web",
+    mode: response.mode,
     query,
     cacheKey,
     ttlMs: cacheTtlMs,

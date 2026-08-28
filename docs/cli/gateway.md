@@ -4,6 +4,7 @@ read_when:
   - Running the Gateway from the CLI (dev or servers)
   - Debugging Gateway auth, bind modes, and connectivity
   - Discovering gateways via Bonjour (local + wide-area DNS-SD)
+  - Integrating an external Gateway process supervisor
 title: "Gateway"
 sidebarTitle: "Gateway"
 ---
@@ -32,6 +33,7 @@ openclaw gateway run   # equivalent, explicit form
 <AccordionGroup>
   <Accordion title="Startup behavior">
     - Refuses to start unless `gateway.mode=local` is set in `~/.openclaw/openclaw.json`. Use `--allow-unconfigured` for ad-hoc/dev runs; it bypasses the guard without writing or repairing config.
+    - When startup finds a repairable invalid config, an interactive terminal offers to run `openclaw doctor --fix` and retries startup once after consent. Non-interactive runs never repair automatically; they print the command instead. If the repaired config is still invalid, startup remains stopped.
     - `openclaw onboard --mode local` and `openclaw setup` write `gateway.mode=local`. If the config file exists but `gateway.mode` is missing, that is treated as damaged/clobbered config and the Gateway refuses to guess `local` for you — re-run onboarding, set the key manually, or pass `--allow-unconfigured`.
     - Binding beyond loopback without auth is blocked.
     - `--bind` values `lan`, `tailnet`, and `custom` resolve over IPv4-only paths today; IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
@@ -64,20 +66,23 @@ openclaw gateway run   # equivalent, explicit form
 <ParamField path="--tailscale <mode>" type="string">
   Tailscale exposure: `off`, `serve`, `funnel`.
 </ParamField>
-<ParamField path="--tailscale-reset-on-exit" type="boolean">
-  Reset Tailscale serve/funnel config on shutdown.
-</ParamField>
 <ParamField path="--allow-unconfigured" type="boolean">
   Start without enforcing `gateway.mode=local`. Ad-hoc/dev bootstrap only; does not persist or repair config.
 </ParamField>
 <ParamField path="--dev" type="boolean">
   Create a dev config + workspace if missing (skips `BOOTSTRAP.md`).
 </ParamField>
+<ParamField path="--ambient-channels" type="boolean">
+  Allow the Gateway to auto-configure channels from ambient environment variables. By default, channels require an explicit `channels.<id>` config block.
+</ParamField>
+<ParamField path="--dev-ambient-channels" type="boolean">
+  Deprecated alias for `--ambient-channels`.
+</ParamField>
 <ParamField path="--reset" type="boolean">
   Reset dev config, credentials, sessions, and workspace. Requires `--dev`.
 </ParamField>
 <ParamField path="--force" type="boolean">
-  Kill any existing listener on the target port before starting.
+  Kill any existing listener on the target port before starting. In a non-interactive shell, this refuses to kill a verified Gateway listener; use `--dev` or an isolated `--profile` with a free port instead.
 </ParamField>
 <ParamField path="--verbose" type="boolean">
   Verbose logging to stdout/stderr.
@@ -102,6 +107,18 @@ openclaw gateway run   # equivalent, explicit form
 
 For `--bind custom`, set `gateway.customBindHost` to an IPv4 address. Any address other than `127.0.0.1` or `0.0.0.0` also requires `127.0.0.1` on the same port for same-host clients; startup fails if either listener cannot bind. Wildcard `0.0.0.0` does not add a separate required alias. IPv6-only bring-your-own-host setups need an IPv4 sidecar or proxy in front of the Gateway.
 
+## Reveal the configured token
+
+Run this on the Gateway host when a client needs the configured shared token:
+
+```bash
+openclaw gateway auth-token --show
+```
+
+The command resolves `gateway.auth.token`, `OPENCLAW_GATEWAY_TOKEN`, and configured SecretRefs, then prints only the token. It requires an interactive terminal and refuses redirected or piped output so the credential does not silently enter command logs. Treat the terminal output as a secret.
+
+If no persistent token is configured, run `openclaw doctor --generate-gateway-token`, restart the Gateway, and then rerun the command. Generic `openclaw config get` output remains redacted, including `--json`.
+
 ## Restart the Gateway
 
 ```bash
@@ -112,9 +129,9 @@ openclaw gateway restart --force
 openclaw gateway restart --wait 30s
 ```
 
-`--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded by `gateway.reload.deferralTimeoutMs` (default: 5 minutes / `300000`); when the budget expires the restart is forced. Set `deferralTimeoutMs: 0` to wait indefinitely (with periodic still-pending warnings) instead of forcing. `--safe` cannot combine with `--force` or `--wait`.
+`--safe` asks the running Gateway to preflight active work and schedule one coalesced restart after that work drains. The wait is bounded to 5 minutes; when the budget expires the restart is forced. `--safe` cannot combine with `--force` or `--wait`.
 
-`--skip-deferral` bypasses the active-work deferral gate on a safe restart, so the Gateway restarts immediately even with reported blockers. It requires `--safe` — use it when a deferral is stuck on a runaway task.
+`--skip-deferral` bypasses only the safe-restart active-work deferral gate. It can move the Gateway into shutdown even while active-work blockers are reported, but the close-stage pending-reply drain still applies before the process exits. It requires `--safe` — use it when a deferral is stuck on a runaway task and reply delivery can still be allowed to settle.
 
 `--wait <duration>` overrides the drain budget for a plain (non-safe) restart. Accepts bare milliseconds or unit suffixes `ms`, `s`, `m`, `h`, `d` (e.g. `30s`, `5m`, `1h30m`); `--wait 0` waits indefinitely. Not compatible with `--force` or `--safe`.
 
@@ -123,6 +140,51 @@ openclaw gateway restart --wait 30s
 <Warning>
 Inline `--password` can be exposed in local process listings. Prefer `--password-file`, env, or a SecretRef-backed `gateway.auth.password`.
 </Warning>
+
+### Install identity
+
+Service management (`install`, `start`, `stop`, `restart`, `uninstall`, Doctor service repair, and self-update service handling) belongs to the install that owns the host service. That is the canonical `.openclaw` directory under the OS account home, or the `.openclaw-<profile>` directory a named profile projects there. Named profiles use distinct native service identities.
+
+`OPENCLAW_HOME`, or an `OPENCLAW_STATE_DIR` or `OPENCLAW_CONFIG_PATH` that points elsewhere, is treated as isolated state and skipped. A relocated or copied state tree cannot adopt and rewrite the account's host service.
+
+On macOS and Windows, native service-managed profile names must be lowercase. Runtime-only profiles may still use uppercase, but case-distinct names such as `Main` and `main` share paths on normal case-insensitive filesystems and cannot safely own separate native services. On macOS, the lowercase names `gateway` and `node` are also unavailable for native service management because their historical LaunchAgent labels collide with the default Gateway and node-host services.
+
+Named profiles must also use the native service identity derived from `OPENCLAW_PROFILE`. Unset `OPENCLAW_LAUNCHD_LABEL`, `OPENCLAW_SYSTEMD_UNIT`, or `OPENCLAW_WINDOWS_TASK_NAME` before service management; custom identities remain available for the default profile or runtime-only/external-supervisor setups.
+
+### External supervisors
+
+Set `OPENCLAW_SUPERVISOR_MODE=external` only when another process manager owns the Gateway lifecycle. In this mode:
+
+- `openclaw gateway restart` preserves the existing safe, forced, and bounded-wait behavior while targeting the verified running Gateway instead of launchd, systemd, or Task Scheduler. Exact-lock restart delivery runs inside that Gateway, so a replacement CLI does not migrate shared state before the old process hands off.
+- Native service install, start, stop, and uninstall operations are refused with guidance to use the external supervisor.
+- OpenClaw self-update is refused so the supervisor can stop the Gateway, replace and finalize the runtime, and restart it safely.
+- A fresh-process restart writes a bounded SQLite handoff before clean exit. If persistence fails, the Gateway falls back to an in-process restart instead of exiting without a consumable handoff.
+
+An external supervisor can also claim durable ownership of shared-state writes:
+
+```bash
+OPENCLAW_SUPERVISOR_MODE=external \
+  openclaw database ownership claim --manager gateway-supervisor --json
+```
+
+Before claiming, stop and verify every older Gateway, CLI, Doctor, updater, and native app process that can write the shared state database. Pre-contract processes do not understand the ownership row and cannot be retroactively fenced. Claim only after every remaining writer uses ownership-aware code and carries `OPENCLAW_SUPERVISOR_MODE=external`.
+
+The claim is idempotent for the same stable manager identifier and refuses a different manager. There is no automatic claim or unclaim path. Once claimed, unmarked writable shared-state opens fail before permissions, schema migration, additive repair, compaction, or other mutation. Read-only access remains available. This is protection against accidental unmarked same-user writers, not an authentication or lease protocol.
+
+For upgrades and rollbacks, have the supervisor create a consolidated WAL-consistent copied snapshot with no SQLite sidecars, then run the target release's own `openclaw database preflight <copied-state.sqlite> --json` before activation. Numeric schema versions alone do not prove that a same-version additive shape is compatible. See [Database schemas](/reference/database-schemas).
+
+`OPENCLAW_SERVICE_REPAIR_POLICY=external` remains a separate Doctor repair policy. It does not declare runtime ownership; supervisors that need both behaviors should set both variables.
+
+External supervisors can negotiate and consume restart handoffs through the hidden machine contract:
+
+```bash
+openclaw gateway restart-handoff capabilities --json
+openclaw gateway restart-handoff consume --expected-pid <pid> --json
+```
+
+Protocol version `1` supports the `consume` operation. Consumption validates the expected PID and bounded handoff fields inside one immediate SQLite transaction. An accepted handoff is deleted before success is returned, so concurrent or replayed consumers cannot both accept it. A PID mismatch is retained for the matching owner; missing, expired, and invalid rows do not authorize a restart.
+
+Valid machine requests return JSON with exit code `0`, including non-restart results. Invalid arguments return `reason: "invalid-expected-pid"` with exit code `2`; state-store failures return `reason: "store-unavailable"` with exit code `1`. Supervisors should probe `capabilities` on the exact runtime or launcher they will use rather than infer support from an OpenClaw version string or read the private SQLite schema directly.
 
 ### Gateway profiling
 
@@ -282,10 +344,14 @@ Shows the Gateway service (launchd/systemd/schtasks) plus an optional connectivi
 openclaw gateway status
 openclaw gateway status --json
 openclaw gateway status --require-rpc
+openclaw gateway status --port 19001
 ```
 
 <ParamField path="--url <url>" type="string">
-  Add an explicit probe target. Configured remote + localhost are still probed.
+  Probe this explicit WebSocket URL instead of the service-derived target. Cannot combine with `--port`.
+</ParamField>
+<ParamField path="--port <port>" type="number">
+  Select a local Gateway port using the invoking CLI config for auth and TLS. Accepts `gateway --port 19001 status` and `gateway status --port 19001`; an explicit status port wins. Native service details remain visible as diagnostics but do not select the probe target.
 </ParamField>
 <ParamField path="--token <token>" type="string">
   Token auth for the probe.
@@ -316,7 +382,9 @@ openclaw gateway status --require-rpc
     - Use `--require-rpc` in scripts/automation when a listening service is not enough and you need read-scope RPC to be healthy too.
     - `--deep` scans for extra launchd/systemd/schtasks installs; when multiple gateway-like services are found, human output prints cleanup hints (usually run one gateway per machine) and reports a recent supervisor restart handoff when relevant.
     - `--deep` also runs config validation in plugin-aware mode (`pluginValidation: "full"`) and surfaces plugin manifest warnings (e.g. missing channel config metadata). Default `gateway status` keeps the fast read-only path that skips plugin validation.
+    - On Linux, status reports the effective service currently loaded by systemd, including loaded drop-ins. If the unit or a drop-in changed on disk, `Systemd reload: pending` means you must run `systemctl --user daemon-reload` (or `sudo systemctl daemon-reload` for a system service) before those changes take effect.
     - Human output includes the resolved file log path plus CLI-vs-service config paths/validity to help diagnose profile or state-dir drift.
+    - Human output includes `Gateway heap:` with configured service heap controls and a separate install-time recommendation based on memory visible to the CLI. JSON output exposes the same report as `service.gatewayHeap`. Neither is a measurement of the running Gateway's V8 heap ceiling; use runtime memory diagnostics for that.
 
   </Accordion>
   <Accordion title="Linux systemd auth-drift checks">
@@ -400,6 +468,11 @@ openclaw gateway probe --ssh user@gateway-host
 <ParamField path="--ssh <target>" type="string">
   `user@host` or `user@host:port` (port defaults to `22`).
 </ParamField>
+
+OpenClaw launches only an SSH client found in OS-managed system directories. On native Windows,
+install the **OpenSSH Client** optional feature; Windows places it under
+`%SystemRoot%\System32\OpenSSH`.
+
 <ParamField path="--ssh-identity <path>" type="string">
   Identity file.
 </ParamField>
@@ -415,6 +488,7 @@ Low-level RPC helper.
 
 ```bash
 openclaw gateway call status
+openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
@@ -423,6 +497,9 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
 </ParamField>
 <ParamField path="--url <url>" type="string">
   Gateway WebSocket URL.
+</ParamField>
+<ParamField path="--port <port>" type="number">
+  Target a local loopback Gateway on this port. Overrides `OPENCLAW_GATEWAY_URL` and `OPENCLAW_GATEWAY_PORT` for this call. Cannot combine with `--url`.
 </ParamField>
 <ParamField path="--token <token>" type="string">
   Gateway token.
@@ -440,9 +517,42 @@ openclaw gateway call logs.tail --params '{"limit": 200}'
   Machine-readable JSON output.
 </ParamField>
 
+`openclaw.setup.detect` uses a 40-second default so the Gateway can finish its
+bounded AI-access scan. An explicit `--timeout` still takes precedence.
+
 <Note>
-`--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected).
+`--params` must be valid JSON, and each method validates its own param shape (extra/misnamed fields are rejected). Use `--port` for a custom-port local Gateway; explicit `--url` targets still require explicit credentials.
 </Note>
+
+### `gateway suspend`
+
+Prepare an idle Gateway for a cooperative host freeze or snapshot. Without
+`--wait`, active work returns a nonzero exit with blocker details. With
+`--wait`, the CLI retries until the bounded deadline using one stable request
+ID.
+
+```bash
+openclaw gateway suspend
+openclaw gateway suspend --request-id snapshot-2026-08-11 --wait 30
+openclaw gateway suspend --port 18999 --json
+```
+
+The ready output includes the suspension ID, lease expiry, and the matching
+resume command. Common RPC options such as `--url`, `--token`, `--password`,
+`--timeout`, `--json`, and `--port` are supported.
+
+### `gateway resume <suspensionId>`
+
+Release a prepared suspension after thaw or when the host operation is
+abandoned.
+
+```bash
+openclaw gateway resume <suspensionId>
+openclaw gateway resume <suspensionId> --port 18999 --json
+```
+
+An already expired or resumed lease is a successful no-op. A different active
+suspension ID is rejected.
 
 ## Manage the Gateway service
 
@@ -486,17 +596,39 @@ openclaw gateway restart
 
 <AccordionGroup>
   <Accordion title="Command options">
-    - `gateway status`: `--url`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
-    - `gateway install`: `--port`, `--runtime <node>` (default: `node`), `--token`, `--wrapper <path>`, `--force`, `--json`
+    - `gateway status`: `--url`, `--port`, `--token`, `--password`, `--timeout`, `--no-probe`, `--require-rpc`, `--deep`, `--json`
+    - `gateway install`: `--port`, `--runtime <node|bun>` (default: `node`), `--token`, `--wrapper <path>`, `--force`, `--json`
     - `gateway restart`: `--safe`, `--skip-deferral`, `--force`, `--wait <duration>`, `--json`
     - `gateway uninstall|start`: `--json`
-    - `gateway stop`: `--disable`, `--json`
+    - `gateway stop`: `--disable`, `--force`, `--json`
+
+  </Accordion>
+  <Accordion title="Service runtime">
+    - Node is the primary, default, and recommended managed Gateway runtime.
+    - Bun 1.4+ with WAL-reset-safe `node:sqlite` is available as an explicit opt-in with `gateway install --runtime bun`.
 
   </Accordion>
   <Accordion title="Lifecycle behavior">
+    - `gateway start` is idempotent: when the managed service is already running, it reports the running process and leaves it untouched. A loaded but stopped service is started as before.
+    - If no managed service is installed, `gateway start` prints install hints and exits nonzero. `gateway restart` can first recover an installed-but-unloaded LaunchAgent or a verified unmanaged Gateway; if neither a managed service nor recovery handles the action, it prints the same hints and exits nonzero. Stopping an absent service remains a successful no-op.
+    - If `gateway start` or `gateway restart` needs to repair a stale service definition, the command refuses when the invoking shell resolves a different state directory, config path, or port than the installed service. Match or unset the conflicting environment overrides, or use `openclaw gateway install --force` to retarget the service intentionally.
+    - On Linux, `gateway start` and `gateway restart` also refuse ineffective repairs when an operator-owned systemd drop-in overrides the command or working directory. Inspect the effective unit with `systemctl --user cat <unit>.service`, then update or remove that drop-in. `gateway install --force` rewrites only the managed base unit and warns if the override remains; `Environment=` drop-ins remain supported.
     - Use `gateway restart` to restart a managed service. Do not chain `gateway stop` and `gateway start` as a restart substitute.
+    - In a non-interactive shell, `gateway stop` requires `--force`. Interactive terminals keep the existing prompt-free behavior. For automation and tests, prefer `gateway run --dev` or an isolated `--profile` with a free port.
     - On macOS, `gateway stop` uses `launchctl bootout` by default, which removes the LaunchAgent from the current boot session without persisting a disable — KeepAlive auto-recovery stays active for future crashes and `gateway start` re-enables cleanly without a manual `launchctl enable`. Pass `--disable` to persistently suppress KeepAlive and RunAtLoad so the gateway does not respawn until the next explicit `gateway start`; use this when a manual stop should survive reboots.
+    - Gateway lifecycle mutations append best-effort key-value audit records to `<state-dir>/logs/gateway-restart.log`, including CLI start, stop, and restart operations, safe restart requests, supervisor restarts, and detached handoffs.
     - Lifecycle commands accept `--json` for scripting.
+
+  </Accordion>
+  <Accordion title="Managed Gateway heap sizing">
+    - For a managed Node Gateway without an existing heap setting, `gateway install` places `--max-old-space-size` in Node's launch arguments, before the entry script. It explicitly clears `NODE_OPTIONS` in the service environment so ambient service-manager preload/debug flags cannot leak into the Gateway. Plain spawned Node processes do not inherit the new automatic budget through `NODE_OPTIONS`; Node's fork and Worker inheritance rules are unchanged.
+    - Capacity is the smaller of valid physical RAM and a valid constraint reported by Node, never fluctuating free RAM. With no usable capacity reading, Node keeps its native default. The installer targets 50% of capacity, with a nominal 2048 MiB floor and a cap of the greater of 8192 MiB or 25% of capacity. A final 75% capacity cap reserves native-memory headroom and can put small-host budgets below the nominal floor.
+    - Examples: 32 GiB capacity selects 8 GiB old space; 64 GiB selects 16 GiB; 128 GiB selects 32 GiB. Old space is only part of V8's total heap, and neither is a limit on total process memory (RSS). Raising the ceiling does not preallocate that memory.
+    - Existing managed service heap controls are preserved across forced reinstalls and doctor repairs, including absolute old-space, percentage old-space, and total-heap flags. Only heap flags survive managed `NODE_OPTIONS` sanitization; arbitrary preload/debug flags do not. Put intentional preload/debug settings in an operator-owned systemd `Environment=` drop-in, or set them inside an [installed wrapper](#install-with-a-wrapper) before it launches Node. Do not edit the generated service environment for those settings. Existing stored numbers are preserved even when they resemble an older automatic default or exceed the new recommendation.
+    - When an operator-owned service override controls `NODE_OPTIONS` (including an empty value or reset), regeneration does not add a new automatic heap argument. Operator values and drop-in files stay separate from the managed base. Existing managed argv controls remain: Node's argv wins over `NODE_OPTIONS` for the same option, and percentage old-space sizing takes precedence over absolute old-space sizing. Inspect both surfaces before changing a cap.
+    - Ambient installer `NODE_OPTIONS` and the installer's own Node arguments are not saved as Gateway heap settings. The budget is chosen at installation and takes effect when the service process starts; it is not recalculated while the Gateway runs. Upgrading OpenClaw alone does not resize a running Gateway, and foreground launches do not replace themselves to apply this policy.
+    - The installer's memory constraints can differ from the future service's constraints. Node/libuv reporting is platform-dependent and does not guarantee detection of every ancestor cgroup limit; inspect the actual service or container limits before increasing a budget.
+    - This policy applies to managed Node Gateway launches, not foreground `gateway run`, custom supervisors, Docker runtime commands, Bun, or node-host services. Those retain their own runtime configuration. See [memory troubleshooting](/gateway/troubleshooting#gateway-exits-during-high-memory-use) for explicit native Node settings.
 
   </Accordion>
   <Accordion title="Auth and SecretRefs at install time">

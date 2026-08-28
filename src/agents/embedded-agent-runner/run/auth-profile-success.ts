@@ -1,9 +1,14 @@
 import { sanitizeForLog } from "../../../../packages/terminal-core/src/ansi.js";
+import { MODEL_APIS, type ModelApi } from "../../../config/types.models.js";
+import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { redactIdentifier } from "../../../logging/redact-identifier.js";
+import type { ProviderRouteOverridePresence } from "../../../plugin-sdk/provider-model-types.js";
+import { resolveProviderModelRoutes } from "../../../plugins/provider-model-routes.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../../../secrets/sentinel.js";
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import { markAuthProfileSuccess } from "../../auth-profiles.js";
+import { recordRuntimeAuthMaterialization } from "../../auth-profiles/runtime-materializations.js";
 import {
   fingerprintAuthProfileOwnerShape,
   fingerprintAwsSdkRuntimeOwner,
@@ -13,6 +18,7 @@ import {
   type AgentExecutionAuthBinding,
 } from "../../execution-auth-binding.js";
 import type { ResolvedProviderAuth } from "../../model-auth.js";
+import { modelMatchesProviderModelRoute } from "../../provider-model-route.js";
 import { log } from "../logger.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
@@ -75,6 +81,12 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
   apiKeyInfo: ResolvedProviderAuth | null;
   attempt: EmbeddedRunAttemptResult;
   provider: string;
+  agentDir?: string;
+  modelId: string;
+  modelApi: string;
+  modelBaseUrl?: string;
+  requestTransportOverrides?: ProviderRouteOverridePresence;
+  config?: OpenClawConfig;
   agentHarnessId: string;
   pluginHarnessOwnsTransport: boolean;
   pluginHarnessOwnsAuthBootstrap: boolean;
@@ -138,9 +150,25 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
     : input.pluginHarnessOwnsTransport
       ? ("plugin-harness" as const)
       : undefined;
+  const materializedRoute = resolveHarnessAuthMaterialization(input, credential);
+  if (materializedRoute) {
+    recordRuntimeAuthMaterialization({
+      agentDir: input.agentDir,
+      provider: input.provider,
+      modelId: input.modelId,
+      modelApi: materializedRoute.api,
+      modelBaseUrl: materializedRoute.baseUrl,
+      requestTransportOverrides: materializedRoute.requestTransportOverrides,
+      authMode: materializedRoute.authRequirement === "subscription" ? "oauth" : "api-key",
+      runtimeOwnerId: input.agentHarnessId,
+      ...(input.profileId ? { authProfileId: input.profileId } : {}),
+    });
+  }
   input.onSuccessfulAuthBinding?.({
     ...(input.profileId ? { authProfileId: input.profileId } : {}),
     agentHarnessId: input.agentHarnessId,
+    modelId: input.modelId,
+    modelApi: input.modelApi,
     ...(authFingerprint ? { authFingerprint } : {}),
     ...(runtimeOwnerFingerprint ? { runtimeOwnerFingerprint } : {}),
     ...(runtimeOwnerKind ? { runtimeOwnerKind } : {}),
@@ -152,6 +180,73 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
         }
       : {}),
   });
+}
+
+function resolveHarnessAuthMaterialization(
+  input: Parameters<typeof reportEmbeddedRunSuccessfulAuthBinding>[0],
+  credential: AuthProfileStore["profiles"][string] | undefined,
+) {
+  const preparedApiKeyProfileId = input.apiKeyInfo?.profileId;
+  // Prepared API-key routes are host-resolved before a harness turn. Only the
+  // exact SecretRef profile may turn that completed request into a catalog fact.
+  const resolvedReferencedApiKey =
+    credential?.type === "api_key" &&
+    credential.keyRef !== undefined &&
+    input.apiKeyInfo?.mode === "api-key" &&
+    preparedApiKeyProfileId !== undefined &&
+    preparedApiKeyProfileId === input.profileId &&
+    input.apiKeyInfo.source === `profile:${preparedApiKeyProfileId}`;
+  if (
+    !input.pluginHarnessOwnsAuthBootstrap ||
+    (input.apiKeyInfo && !resolvedReferencedApiKey) ||
+    hasInlineCredentialMaterial(credential) ||
+    !isModelApi(input.modelApi)
+  ) {
+    return undefined;
+  }
+  const resolution = resolveProviderModelRoutes({
+    provider: input.provider,
+    modelId: input.modelId,
+    api: input.modelApi,
+    baseUrl: input.modelBaseUrl,
+    config: input.config,
+    requestTransportOverrides: input.requestTransportOverrides ?? "none",
+  });
+  if (resolution?.kind !== "routes") {
+    return undefined;
+  }
+  const routes = resolution.routes.filter(
+    (route) =>
+      route.api === input.modelApi &&
+      route.requestTransportOverrides === (input.requestTransportOverrides ?? "none") &&
+      (!input.modelBaseUrl ||
+        modelMatchesProviderModelRoute({
+          provider: input.provider,
+          api: input.modelApi,
+          baseUrl: input.modelBaseUrl,
+          route,
+        })),
+  );
+  return routes.length === 1 ? routes[0] : undefined;
+}
+
+function isModelApi(value: string): value is ModelApi {
+  return (MODEL_APIS as readonly string[]).includes(value);
+}
+
+function hasInlineCredentialMaterial(
+  credential: AuthProfileStore["profiles"][string] | undefined,
+): boolean {
+  if (!credential) {
+    return false;
+  }
+  if (credential.type === "api_key") {
+    return Boolean(credential.key?.trim());
+  }
+  if (credential.type === "token") {
+    return Boolean(credential.token?.trim());
+  }
+  return Boolean(credential.access?.trim() && credential.refresh?.trim());
 }
 
 function resolvePluginHarnessApiKeyInfo(input: {

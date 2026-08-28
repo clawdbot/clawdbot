@@ -6,10 +6,10 @@ scenario:
   category: diagnostics
   coverage:
     primary:
-      - personal.diagnostics
+      - observability.support-zip-diagnostics
     secondary:
-      - personal.redaction
-      - qa.artifact-safety
+      - observability.support-zip-redaction
+      - observability.support-zip-artifact-safety
   risk: high
   capabilities:
     - tools.read

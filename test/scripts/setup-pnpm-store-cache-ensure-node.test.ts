@@ -1,6 +1,14 @@
 // Setup Pnpm Store Cache Ensure Node tests cover setup pnpm store cache ensure node script behavior.
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
@@ -30,6 +38,49 @@ exit 0
   );
   chmodSync(nodePath, 0o755);
   return nodePath;
+}
+
+function writeFakeCurl(binDir: string) {
+  mkdirSync(binDir, { recursive: true });
+  const curlPath = join(binDir, "curl");
+  writeFileSync(
+    curlPath,
+    `#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\\n' "$*" >> "$OPENCLAW_FAKE_CURL_LOG"
+output=""
+url=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    -o)
+      output="$2"
+      shift 2
+      ;;
+    http://* | https://*)
+      url="$1"
+      shift
+      ;;
+    *)
+      shift
+      ;;
+  esac
+done
+if [[ -n "\${OPENCLAW_FAKE_CURL_FAIL_SUFFIX:-}" && "$url" == *"\${OPENCLAW_FAKE_CURL_FAIL_SUFFIX:-}" ]]; then
+  if [[ -n "$output" ]]; then
+    printf '%s' 'partial archive' > "$output"
+  fi
+  exit 28
+fi
+if [[ "$url" == */index.json ]]; then
+  printf '%s\\n' '[{"version":"v24.15.0"}]'
+elif [[ -n "$output" ]]; then
+  : > "$output"
+else
+  printf '%s' 'archive'
+fi
+`,
+  );
+  chmodSync(curlPath, 0o755);
 }
 
 function runEnsureNode(root: string, requested: string, extraEnv: NodeJS.ProcessEnv = {}) {
@@ -238,6 +289,31 @@ exit 1
     }
   });
 
+  it("prefers the repo-owned cached toolchain over an image toolcache below the floor", () => {
+    // Blacksmith's image ships Node 24.13.0/22.22.0, just under this repo's
+    // engines floor, so without a cached toolchain every job re-downloads.
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const activeBin = join(root, "active", "bin");
+      writeFakeNode(activeBin, "20.20.0");
+      writeFakeNode(join(root, "toolcache", "node", "24.13.0", "x64", "bin"), "24.13.0");
+      const cachedBin = join(root, "cached", "node", "v24.19.0-linux-x64", "bin");
+      const cachedNode = writeFakeNode(cachedBin, "24.19.0");
+      const result = runEnsureNode(root, "24.x", {
+        PATH: `${activeBin}:${process.env.PATH ?? ""}`,
+        RUNNER_TOOL_CACHE: join(root, "toolcache"),
+        OPENCLAW_NODE_TOOLCHAIN_ROOT: join(root, "cached", "node"),
+      });
+
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain(`Using Node 24.19.0 from ${cachedNode}`);
+      expect(result.stdout).not.toContain("Downloading Node");
+      expect(result.stdout.trim().endsWith("24.19.0")).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("keeps the Node 22 wildcard at the supported minimum", () => {
     const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
     try {
@@ -269,6 +345,119 @@ exit 1
     expect(runVersionMatch("24.15.0", "24.x").status).toBe(0);
     expect(runVersionMatch("25.8.1", "25.x").status).toBe(1);
     expect(runVersionMatch("25.9.0", "25.x").status).toBe(0);
+  });
+
+  it("replaces a rejected payload in the cached toolchain root instead of accreting", () => {
+    // The cache entry is saved wholesale, so a rejected install left beside the
+    // replacement would ride along in every future save and grow without bound.
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const helperBin = join(root, "bin");
+      const toolchainRoot = join(root, "toolchain", "node");
+      writeFakeNode(join(toolchainRoot, "v24.13.0-linux-x64", "bin"), "24.13.0");
+      writeFakeCurl(helperBin);
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `export PATH=${JSON.stringify(`${helperBin}:${process.env.PATH ?? ""}`)}`,
+            `export OPENCLAW_FAKE_CURL_LOG=${JSON.stringify(join(root, "curl.log"))}`,
+            `export OPENCLAW_NODE_TOOLCHAIN_ROOT=${JSON.stringify(toolchainRoot)}`,
+            `source "${ensureNodeScript}"`,
+            "openclaw_prepend_node_bin() { :; }",
+            'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
+            "tar() { :; }",
+            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.15.0"`,
+          ].join("\n"),
+        ],
+        { encoding: "utf8", env: process.env },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(existsSync(join(toolchainRoot, "v24.13.0-linux-x64"))).toBe(false);
+      expect(existsSync(join(toolchainRoot, "v24.15.0-linux-x64"))).toBe(true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("bounds every Node distribution request", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const helperBin = join(root, "bin");
+      const curlLog = join(root, "curl.log");
+      writeFakeCurl(helperBin);
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -euo pipefail",
+            `export PATH=${JSON.stringify(`${helperBin}:${process.env.PATH ?? ""}`)}`,
+            `export OPENCLAW_FAKE_CURL_LOG=${JSON.stringify(curlLog)}`,
+            `source "${ensureNodeScript}"`,
+            'openclaw_resolve_node_download_version "24.x"',
+            "openclaw_prepend_node_bin() { :; }",
+            'openclaw_node_download_platform() { printf "win-x64\\n"; }',
+            "pwsh() { :; }",
+            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.15.0"`,
+            'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
+            "tar() { :; }",
+            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.15.0"`,
+          ].join("\n"),
+        ],
+        { encoding: "utf8", env: process.env },
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      const curlCalls = readFileSync(curlLog, "utf8").trim().split("\n");
+      expect(curlCalls).toHaveLength(3);
+      for (const call of curlCalls) {
+        expect(call).toContain(
+          "-fsSL --connect-timeout 10 --max-time 120 --retry 2 --retry-delay 2",
+        );
+      }
+      expect(curlCalls[0]).toContain("https://nodejs.org/dist/index.json");
+      expect(curlCalls[1]).toContain("https://nodejs.org/dist/v24.15.0/node-v24.15.0-win-x64.zip");
+      expect(curlCalls[2]).toContain(
+        "https://nodejs.org/dist/v24.15.0/node-v24.15.0-linux-x64.tar.xz",
+      );
+      expect(existsSync(join(root, "node-v24.15.0-linux-x64.tar.xz"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("removes a partial POSIX archive after a timed-out download", () => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-ensure-node-"));
+    try {
+      const helperBin = join(root, "bin");
+      writeFakeCurl(helperBin);
+      const result = spawnSync(
+        "bash",
+        [
+          "-c",
+          [
+            "set -uo pipefail",
+            `export PATH=${JSON.stringify(`${helperBin}:${process.env.PATH ?? ""}`)}`,
+            `export OPENCLAW_FAKE_CURL_LOG=${JSON.stringify(join(root, "curl.log"))}`,
+            `export OPENCLAW_FAKE_CURL_FAIL_SUFFIX=${JSON.stringify(".tar.xz")}`,
+            `source "${ensureNodeScript}"`,
+            "openclaw_prepend_node_bin() { :; }",
+            'openclaw_node_download_platform() { printf "linux-x64\\n"; }',
+            `RUNNER_TEMP=${JSON.stringify(root)} openclaw_download_node "24.15.0"`,
+          ].join("\n"),
+        ],
+        { encoding: "utf8", env: process.env },
+      );
+
+      expect(result.status).toBe(1);
+      expect(existsSync(join(root, "node-v24.15.0-linux-x64.tar.xz"))).toBe(false);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 
   it("fails clearly when no matching node is available", () => {

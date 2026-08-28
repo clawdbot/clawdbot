@@ -7,7 +7,7 @@ import {
   listPrioritizedHighSignalLiveModelRefs,
   resolveHighSignalLiveModelLimit,
   shouldExcludeProviderFromDefaultHighSignalLiveSweep,
-} from "./live-model-filter.js";
+} from "./test-helpers/live-model-dynamic-candidates.js";
 
 function resolveProviderOwners(provider: string): readonly string[] | undefined {
   if (provider === "openai") {
@@ -113,10 +113,10 @@ describe("resolveHighSignalLiveModelLimit", () => {
 });
 
 describe("live model priorities", () => {
-  it("includes the always-thinking Moonshot K2.7 Code route", () => {
+  it("includes the always-thinking Moonshot K3 route", () => {
     expect(listPrioritizedHighSignalLiveModelRefs()).toContainEqual({
       provider: "moonshot",
-      id: "kimi-k2.7-code",
+      id: "kimi-k3",
     });
   });
 });

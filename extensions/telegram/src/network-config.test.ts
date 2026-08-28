@@ -2,9 +2,8 @@
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("openclaw/plugin-sdk/runtime-env", () => ({
-  isTruthyEnvValue: (value: string | undefined) =>
-    typeof value === "string" && /^(1|true|yes|on)$/i.test(value.trim()),
+vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/runtime-env")>()),
   isWSL2Sync: vi.fn(() => false),
 }));
 
@@ -13,7 +12,8 @@ let resolveTelegramAutoSelectFamilyDecision: typeof import("./network-config.js"
 let resolveTelegramDnsResultOrderDecision: typeof import("./network-config.js").resolveTelegramDnsResultOrderDecision;
 
 async function loadModule() {
-  ({ isWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env"));
+  const { isWSL2Sync: loadedIsWSL2Sync } = await import("openclaw/plugin-sdk/runtime-env");
+  isWSL2Sync = loadedIsWSL2Sync;
   ({ resolveTelegramAutoSelectFamilyDecision, resolveTelegramDnsResultOrderDecision } =
     await import("./network-config.js"));
 }

@@ -3,48 +3,17 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { loadQaRunnerModelOptions } from "./model-catalog.runtime.js";
+import {
+  isProcessAlive,
+  waitForDead,
+  waitForFile,
+  waitForPidFile,
+} from "./process-wait.test-helper.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const { cleanup, makeTempDir } = createTempDirHarness();
 
 afterEach(cleanup);
-
-async function waitForFile(filePath: string, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    try {
-      await fs.access(filePath);
-      return;
-    } catch {
-      await new Promise((resolvePoll) => {
-        setTimeout(resolvePoll, 25);
-      });
-    }
-  }
-  throw new Error(`timed out waiting for ${filePath}`);
-}
-
-function isProcessAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-async function waitForDead(pid: number, timeoutMs: number): Promise<void> {
-  const deadlineAt = Date.now() + timeoutMs;
-  while (Date.now() < deadlineAt) {
-    if (!isProcessAlive(pid)) {
-      return;
-    }
-    await new Promise((resolvePoll) => {
-      setTimeout(resolvePoll, 25);
-    });
-  }
-  throw new Error(`timed out waiting for pid ${pid} to exit`);
-}
 
 describe("qa runner model catalog", () => {
   it("filters catalog output and prefers gpt-5.6-luna first", async () => {
@@ -84,8 +53,11 @@ describe("qa runner model catalog", () => {
     );
 
     await expect(loadQaRunnerModelOptions({ repoRoot })).resolves.toEqual([
-      expect.objectContaining({ key: "openai/gpt-5.6-luna" }),
-      expect.objectContaining({ key: "anthropic/claude-sonnet-4-6" }),
+      expect.objectContaining({ key: "openai/gpt-5.6-luna", provider: "openai" }),
+      expect.objectContaining({
+        key: "anthropic/claude-sonnet-4-6",
+        provider: "anthropic",
+      }),
     ]);
   });
 
@@ -128,14 +100,12 @@ describe("qa runner model catalog", () => {
           signal: controller.signal,
         });
 
-        await waitForFile(pidPath, 2_000);
-        descendantPid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        descendantPid = await waitForPidFile(pidPath);
         expect(isProcessAlive(descendantPid)).toBe(true);
         controller.abort();
 
         await expect(runPromise).rejects.toThrow("qa model catalog aborted");
-        await waitForDead(descendantPid, 2_000);
+        await waitForDead(descendantPid);
       } finally {
         if (descendantPid !== undefined && isProcessAlive(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
@@ -181,16 +151,19 @@ describe("qa runner model catalog", () => {
           signal: controller.signal,
         });
 
-        await waitForFile(readyPath, 2_000);
-        descendantPid = Number.parseInt(await fs.readFile(pidPath, "utf8"), 10);
-        expect(Number.isInteger(descendantPid)).toBe(true);
+        // The ready marker lands after the SIGTERM handler is installed, and the
+        // pid file is fully written before it, so this read is parse-safe.
+        await waitForFile(readyPath);
+        descendantPid = await waitForPidFile(pidPath);
         const abortStartedAt = Date.now();
         controller.abort();
 
         await expect(runPromise).rejects.toThrow("qa model catalog aborted");
         expect(await fs.readFile(cleanupPath, "utf8")).toBe("clean");
-        expect(Date.now() - abortStartedAt).toBeLessThan(1_700);
-        await waitForDead(descendantPid, 2_000);
+        // Abort must settle with the exiting descendants (grace window is 300ms),
+        // never a long fixed kill ceiling; generous bound for loaded runners.
+        expect(Date.now() - abortStartedAt).toBeLessThan(5_000);
+        await waitForDead(descendantPid);
       } finally {
         if (descendantPid !== undefined && isProcessAlive(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");

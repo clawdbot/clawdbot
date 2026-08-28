@@ -24,6 +24,7 @@ describe("gmi provider plugin", () => {
     expect(provider.aliases).toEqual(["gmi-cloud", "gmicloud"]);
     expect(provider.envVars).toEqual(["GMI_API_KEY"]);
     expect(provider.auth?.map((method) => method.id)).toEqual(["api-key"]);
+    expect(provider.auth?.[0]?.starterModel).toBe("gmi/openai/gpt-5.6-sol");
 
     const result = await provider.staticCatalog?.run({
       config: {},
@@ -32,8 +33,6 @@ describe("gmi provider plugin", () => {
     } as never);
     const catalogProvider = requireCatalogProvider(result);
     expect(catalogProvider.baseUrl).toBe("https://api.gmi-serving.com/v1");
-    expect(catalogProvider.models?.map((model) => model.id)).toContain(
-      "google/gemini-3.1-flash-lite",
-    );
+    expect(catalogProvider.models?.map((model) => model.id)).toContain("openai/gpt-5.6-sol");
   });
 });

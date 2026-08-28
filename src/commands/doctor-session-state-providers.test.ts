@@ -1,11 +1,21 @@
 // Doctor session state provider tests cover route-state repair through the public doctor path.
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../config/sessions.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
+import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { runPluginSessionStateDoctorRepairs } from "./doctor-session-state-providers.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import {
+  createPluginSessionStateDoctorScanner,
+  runPluginSessionStateDoctorRepairs,
+} from "./doctor-session-state-providers.js";
 
 const codexOwner = {
   id: "codex",
@@ -36,6 +46,7 @@ vi.mock("../plugins/doctor-contract-registry.js", async () => {
 });
 
 async function runDoctor(params: {
+  agentId?: string;
   cfg: OpenClawConfig;
   store: Record<string, SessionEntry>;
   confirm?: boolean;
@@ -48,12 +59,18 @@ async function runDoctor(params: {
   const changes: string[] = [];
   const confirmRuntimeRepair = vi.fn(async () => params.confirm ?? true);
   try {
-    await runPluginSessionStateDoctorRepairs({
+    const scanner = createPluginSessionStateDoctorScanner({
+      agentId: params.agentId,
       cfg: params.cfg,
-      store: structuredClone(params.store),
-      absoluteStorePath: storePath,
-      prompter: { confirmRuntimeRepair, note: vi.fn() },
       env: params.env ?? {},
+    });
+    for (const [sessionKey, sessionEntry] of Object.entries(params.store)) {
+      scanner.scanEntry(sessionKey, sessionEntry);
+    }
+    await runPluginSessionStateDoctorRepairs({
+      scan: scanner.result(),
+      store: { kind: "legacy", path: storePath },
+      prompter: { confirmRuntimeRepair, note: vi.fn() },
       warnings,
       changes,
     });
@@ -139,6 +156,39 @@ describe("doctor session state provider routes", () => {
     expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
   });
 
+  it("uses the inspected agent route for a store-local global session", async () => {
+    const store = {
+      global: entry({
+        model: "gpt-5.4",
+        modelProvider: "openai-codex",
+        providerOverride: "openai-codex",
+      }),
+    };
+    const cfg = {
+      agents: {
+        entries: {
+          main: { model: "github-copilot/gpt-5.4-mini" },
+          ops: { model: "openai/gpt-5.4" },
+        },
+      },
+      models: {
+        providers: {
+          openai: {
+            agentRuntime: { id: "codex-cli" },
+            baseUrl: "https://api.openai.com/v1",
+            models: [],
+          },
+        },
+      },
+      session: { scope: "global" },
+    } satisfies OpenClawConfig;
+
+    const result = await runDoctor({ agentId: "ops", cfg, store });
+
+    expect(result.store).toEqual(store);
+    expect(result.confirmRuntimeRepair).not.toHaveBeenCalled();
+  });
+
   it("clears stale automatic owner state through the doctor repair boundary", async () => {
     const sessionKey = "agent:main:telegram:direct:2";
     const store = {
@@ -146,6 +196,7 @@ describe("doctor session state provider routes", () => {
         providerOverride: "openai-codex",
         modelOverride: "gpt-5.4",
         modelOverrideSource: "auto",
+        modelOverrideRouteResolution: "resolved",
         modelProvider: "openai-codex",
         model: "gpt-5.4",
         contextTokens: 1_050_000,
@@ -171,12 +222,70 @@ describe("doctor session state provider routes", () => {
     expect(result.changes.join("\n")).toContain("Cleared stale Codex session routing state");
     expect(repaired.providerOverride).toBeUndefined();
     expect(repaired.modelOverride).toBeUndefined();
+    expect(repaired.modelOverrideRouteResolution).toBeUndefined();
     expect(repaired.modelProvider).toBeUndefined();
     expect(repaired.agentHarnessId).toBeUndefined();
     expect(repaired.authProfileOverride).toBeUndefined();
     expect(repaired.cliSessionBindings).toEqual({
       "claude-cli": { sessionId: "claude-session" },
     });
+  });
+
+  it("repairs a non-default SQLite row without creating a legacy store", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-session-route-sqlite-"));
+    const legacyStorePath = path.join(root, "sessions.json");
+    const sqliteStorePath = resolveSqliteTargetFromSessionStorePath(legacyStorePath, {
+      agentId: "ops",
+      defaultAgentId: "ops",
+    }).path;
+    const sessionKey = "agent:ops:telegram:direct:2";
+    const staleEntry = entry({
+      model: "gpt-5.4",
+      modelOverride: "gpt-5.4",
+      modelOverrideSource: "auto",
+      modelProvider: "openai-codex",
+      providerOverride: "openai-codex",
+    });
+    const cfg = {
+      agents: {
+        defaults: { model: { primary: "github-copilot/gpt-5-mini" } },
+        entries: { main: {}, ops: {} },
+      },
+    } satisfies OpenClawConfig;
+    try {
+      await upsertSessionEntryCore(
+        {
+          agentId: "ops",
+          defaultAgentId: "ops",
+          sessionKey,
+          storePath: legacyStorePath,
+        },
+        staleEntry,
+      );
+      const scanner = createPluginSessionStateDoctorScanner({ cfg, env: {} });
+      scanner.scanEntry(sessionKey, staleEntry);
+
+      await runPluginSessionStateDoctorRepairs({
+        scan: scanner.result(),
+        store: { kind: "sqlite", agentId: "ops", path: sqliteStorePath },
+        prompter: { confirmRuntimeRepair: vi.fn(async () => true), note: vi.fn() },
+        warnings: [],
+        changes: [],
+      });
+
+      const repaired = loadSessionEntryReadOnly({
+        agentId: "ops",
+        sessionKey,
+        storePath: sqliteStorePath,
+      });
+      expect(repaired?.providerOverride).toBeUndefined();
+      expect(repaired?.modelOverride).toBeUndefined();
+      expect(repaired?.modelProvider).toBeUndefined();
+      expect(fsSync.existsSync(legacyStorePath)).toBe(false);
+    } finally {
+      closeOpenClawAgentDatabasesForTest();
+      await fs.rm(root, { recursive: true, force: true });
+    }
   });
 
   it("leaves explicit user owner choices for manual review", async () => {

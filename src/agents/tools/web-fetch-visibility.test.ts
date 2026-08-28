@@ -1,9 +1,38 @@
 // web_fetch visibility tests cover hidden HTML and invisible Unicode stripping
 // before extracted content reaches the model.
-import { describe, expect, it } from "vitest";
-import { sanitizeHtml, stripInvisibleUnicode } from "./web-fetch-visibility.js";
+import { describe, expect, it, vi } from "vitest";
+import { stripInvisibleUnicode } from "../../infra/unicode-visibility.js";
+import { sanitizeHtml } from "./web-fetch-visibility.js";
 
 describe("sanitizeHtml", () => {
+  it("reuses compiled CSS property matchers across styled elements", async () => {
+    const styledElements = 256;
+    const html = Array.from(
+      { length: styledElements },
+      (_, index) => `<p style="color:rgb(12,34,56)">Visible ${index}</p>`,
+    ).join("");
+    const NativeRegExp = globalThis.RegExp;
+    const regexpConstructor = vi.spyOn(globalThis, "RegExp").mockImplementation(function (
+      pattern?: string | RegExp,
+      flags?: string,
+    ) {
+      return Reflect.construct(NativeRegExp, [pattern, flags]);
+    });
+
+    try {
+      const result = await sanitizeHtml(html);
+      const perElementStyleMatchers = regexpConstructor.mock.calls.filter(
+        ([pattern]) => typeof pattern === "string" && pattern.startsWith("(?:^|;)\\s*"),
+      );
+
+      expect(result).toContain("Visible 0");
+      expect(result).toContain(`Visible ${styledElements - 1}`);
+      expect(perElementStyleMatchers).toHaveLength(0);
+    } finally {
+      regexpConstructor.mockRestore();
+    }
+  });
+
   it("strips display:none elements", async () => {
     const html = '<p>Visible</p><p style="display:none">Hidden</p>';
     const result = await sanitizeHtml(html);

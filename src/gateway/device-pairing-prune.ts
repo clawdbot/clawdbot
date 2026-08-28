@@ -3,6 +3,8 @@ import {
   pruneSupersededSilentPairedDevices,
   type PrunedSupersededPairedDevice,
 } from "../infra/device-pairing.js";
+import { reconcileRevokedDeviceWorker } from "./device-worker-revocation.js";
+import { clearRemovedNodeRuntimeState } from "./node-runtime-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 
 type PruneContext = Pick<
@@ -11,8 +13,11 @@ type PruneContext = Pick<
   | "hasConnectedClientsForDevice"
   | "invalidateClientsForDevice"
   | "disconnectClientsForDevice"
+  | "workerEnvironmentService"
+  | "workerPlacementDispatchService"
 > & {
-  logGateway: Pick<GatewayRequestContext["logGateway"], "info">;
+  logGateway: Pick<GatewayRequestContext["logGateway"], "info" | "warn">;
+  nodeRegistry: Pick<GatewayRequestContext["nodeRegistry"], "updateSurface">;
 };
 
 /**
@@ -38,13 +43,15 @@ export async function pruneSupersededSilentPairingsAfterApproval(params: {
     context.logGateway.info(
       `device pairing pruned superseded silent pairing device=${entry.deviceId} roles=${entry.roles.join(",") || "none"}`,
     );
-    // Invalidate before disconnect so buffered frames from a racing reconnect
-    // fail authorization, mirroring device.pair.remove ordering.
+    if (entry.roles.includes("node")) {
+      // Persistent pruning is a node removal owner too. Clear disconnected
+      // queues, wake lifecycles, and runtime metadata before session teardown.
+      clearRemovedNodeRuntimeState({ nodeId: entry.deviceId, context });
+    }
+    // Invalidate before credential and placement teardown so racing reconnects
+    // fail authorization through the same owner used by explicit removal.
     context.invalidateClientsForDevice?.(entry.deviceId, { reason: "device-pair-removed" });
-    // The node surface lives on the pruned device record, so dropping the
-    // record retired it too; tell node list consumers. Pruned devices are
-    // offline (connected ones are skipped), so there is no live node session
-    // or queued action state to clear.
+    await reconcileRevokedDeviceWorker(context, entry.deviceId);
     if (entry.roles.includes("node")) {
       context.broadcast(
         "node.pair.resolved",

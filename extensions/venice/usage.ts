@@ -1,6 +1,9 @@
-import type { ProviderUsageSnapshot } from "openclaw/plugin-sdk/provider-usage";
-import { buildUsageHttpErrorSnapshot } from "openclaw/plugin-sdk/provider-usage";
-import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
+import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  buildUsageHttpErrorSnapshot,
+  parseProviderUsageNonNegativeNumber,
+  type ProviderUsageSnapshot,
+} from "openclaw/plugin-sdk/provider-usage";
 
 const VENICE_BALANCE_URL = "https://api.venice.ai/api/v1/billing/balance";
 const VENICE_USAGE_RESPONSE_MAX_BYTES = 1024 * 1024;
@@ -15,33 +18,13 @@ type VeniceBalanceResponse = {
   diemEpochAllocation?: unknown;
 };
 
-function nonNegativeNumber(value: unknown): number | undefined {
-  const parsed =
-    typeof value === "number"
-      ? value
-      : typeof value === "string" && value.trim()
-        ? Number(value)
-        : Number.NaN;
-  return Number.isFinite(parsed) && parsed >= 0 ? parsed : undefined;
-}
-
-function objectRecord(value: unknown): Record<string, unknown> | undefined {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : undefined;
-}
-
 async function readPayload(response: Response, timeoutMs: number): Promise<VeniceBalanceResponse> {
-  const buffer = await readResponseWithLimit(response, VENICE_USAGE_RESPONSE_MAX_BYTES, {
+  const data = await readProviderJsonObjectResponse(response, "Venice usage", {
+    maxBytes: VENICE_USAGE_RESPONSE_MAX_BYTES,
     chunkTimeoutMs: timeoutMs,
-    onOverflow: ({ maxBytes }) => new Error(`Venice usage response exceeds ${maxBytes} bytes`),
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`Venice usage response stalled for ${chunkTimeoutMs}ms`),
   });
-  const data = objectRecord(JSON.parse(new TextDecoder().decode(buffer)));
-  if (!data) {
-    throw new Error("Venice usage response is not an object");
-  }
   return data as VeniceBalanceResponse;
 }
 
@@ -84,9 +67,9 @@ export async function fetchVeniceUsage(params: {
     };
   }
 
-  const diem = nonNegativeNumber(data.balances?.diem);
-  const usd = nonNegativeNumber(data.balances?.usd);
-  const allocation = nonNegativeNumber(data.diemEpochAllocation);
+  const diem = parseProviderUsageNonNegativeNumber(data.balances?.diem);
+  const usd = parseProviderUsageNonNegativeNumber(data.balances?.usd);
+  const allocation = parseProviderUsageNonNegativeNumber(data.diemEpochAllocation);
   const windows = [];
   if (diem !== undefined && allocation !== undefined && allocation > 0) {
     windows.push({

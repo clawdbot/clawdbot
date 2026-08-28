@@ -5,7 +5,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vites
 import { runCommandWithTimeout } from "../process/exec.js";
 import { installPluginFromPath, PLUGIN_INSTALL_ERROR_CODE } from "./install.js";
 import { packToArchive } from "./test-helpers/archive-fixtures.js";
-import { createSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
+import { createSyncSuiteTempRootTracker } from "./test-helpers/fs-fixtures.js";
 import {
   createBundleInstallFixtureFactory,
   createDualFormatInstallFixtureFactory,
@@ -15,7 +15,7 @@ vi.mock("../process/exec.js", () => ({
   runCommandWithTimeout: vi.fn(),
 }));
 
-const suiteTempRootTracker = createSuiteTempRootTracker("openclaw-plugin-install-path");
+const suiteTempRootTracker = createSyncSuiteTempRootTracker("openclaw-plugin-install-path");
 const setupBundleInstallFixture = createBundleInstallFixtureFactory(
   suiteTempRootTracker.makeTempDir,
 );
@@ -146,30 +146,48 @@ describe("installPluginFromPath", () => {
     },
   );
 
-  it("installs Claude bundles from an archive path", async () => {
-    const { pluginDir, extensionsDir } = setupBundleInstallFixture({
-      bundleFormat: "claude",
+  it.each([
+    {
+      format: "agent" as const,
+      name: "Portable Sample",
+      pluginId: "portable-sample",
+      archiveName: "agent-bundle.tgz",
+      manifestPath: "plugin.json",
+    },
+    {
+      format: "claude" as const,
       name: "Claude Sample",
-    });
-    const archivePath = path.join(suiteTempRootTracker.makeTempDir(), "claude-bundle.tgz");
+      pluginId: "claude-sample",
+      archiveName: "claude-bundle.tgz",
+      manifestPath: path.join(".claude-plugin", "plugin.json"),
+    },
+  ])(
+    "installs $format bundles from an archive path",
+    async ({ format, name, pluginId, archiveName, manifestPath }) => {
+      const { pluginDir, extensionsDir } = setupBundleInstallFixture({
+        bundleFormat: format,
+        name,
+      });
+      const archivePath = path.join(suiteTempRootTracker.makeTempDir(), archiveName);
 
-    await packToArchive({
-      pkgDir: pluginDir,
-      outDir: path.dirname(archivePath),
-      outName: path.basename(archivePath),
-    });
+      await packToArchive({
+        pkgDir: pluginDir,
+        outDir: path.dirname(archivePath),
+        outName: path.basename(archivePath),
+      });
 
-    const result = await installPluginFromPath({
-      path: archivePath,
-      extensionsDir,
-    });
-    expect(result.ok).toBe(true);
-    if (!result.ok) {
-      return;
-    }
-    expect(result.pluginId).toBe("claude-sample");
-    expect(fs.existsSync(path.join(result.targetDir, ".claude-plugin", "plugin.json"))).toBe(true);
-  });
+      const result = await installPluginFromPath({
+        path: archivePath,
+        extensionsDir,
+      });
+      expect(result.ok).toBe(true);
+      if (!result.ok) {
+        return;
+      }
+      expect(result.pluginId).toBe(pluginId);
+      expect(fs.existsSync(path.join(result.targetDir, manifestPath))).toBe(true);
+    },
+  );
 
   it("prefers native package metadata without installing dependencies for dual-format archives", async () => {
     const { nodeModulesExists, result, runCalls } = dualFormatArchiveCase;

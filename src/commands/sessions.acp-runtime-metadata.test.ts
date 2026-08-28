@@ -1,92 +1,35 @@
-// Sessions ACP runtime metadata tests cover agent runtime metadata derived from model and session keys.
-import { describe, expect, it } from "vitest";
-import { resolveModelAgentRuntimeMetadata } from "../agents/agent-runtime-metadata.js";
+// Sessions ACP runtime metadata tests cover session-owned runtime overlays.
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  resolveCurrentSessionAgentRuntimeMetadata,
+  resolveModelAgentRuntimeMetadata,
+} from "../agents/agent-runtime-metadata.js";
+import {
+  clearAgentHarnesses,
+  listRegisteredAgentHarnesses,
+  registerAgentHarness,
+} from "../agents/harness/registry.js";
+import { restoreRegisteredAgentHarnesses } from "../agents/harness/registry.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
-
-/**
- * Catalog #18 — `openclaw sessions --json` reports `agentRuntime.id: "openclaw"` for
- * ACP sessions because the old metadata resolver only consulted agent-config
- * policies (env / agent / defaults / implicit fallback to "openclaw"). The session
- * key clearly carries the ACP runtime indicator (the `:acp:` segment), but
- * `sessions.ts:294` used to ignore it.
- *
- * Empirical observation from a deployed openclaw container against a copilot
- * agent that has no explicit `agentRuntime.id` policy:
- *
- *   {
- *     "key": "agent:copilot:acp:86b7b5af-3773-4a56-b244-069d6c5d3db9",
- *     "agentId": "copilot",
- *     "agentRuntime": { "id": "openclaw", "source": "implicit" },
- *     "kind": "direct"
- *   }
- *
- * That is wrong: this session is plainly ACP, not the native runtime. The runtime field is
- * supposed to be a faithful classifier of how this session is actually being
- * run; instead, every ACP session in the JSON output is mislabelled as the native runtime.
- *
- * This test mirrors the exact computation `sessionsCommand` performs at
- * `src/commands/sessions.ts:294` and proves the bug in two parts:
- *
- *   - RED: ACP-keyed session resolves to `id: "openclaw"`, `source: "implicit"`.
- *   - GREEN control: a non-ACP `agent:main:main` session resolves to the
- *     same implicit-native metadata, which IS correct in that case. The control
- *     proves the assertion infrastructure is not masking the RED case.
- *
- * Fix shape (see the third test): when the session key is ACP-style,
- * agentRuntime.id should report `acpx` (or whatever runtime id is actually
- * driving the session) so that the JSON faithfully classifies the session.
- * The fix likely belongs at the caller (sessions.ts:294 and the other
- * call sites in `src/gateway/server-methods/sessions.ts`,
- * `src/gateway/session-utils.ts`) so it can pass session-key context to
- * `resolveModelAgentRuntimeMetadata`.
- */
 
 const ACP_SESSION_KEY = "agent:copilot:acp:86b7b5af-3773-4a56-b244-069d6c5d3db9";
 const NON_ACP_SESSION_KEY = "agent:main:main";
 
-/**
- * Build a minimal `OpenClawConfig` that mirrors the deployed scenario:
- * - a copilot agent exists in the agents.list
- * - it has NO explicit `agentRuntime.id` policy
- * - no top-level `agents.defaults.agentRuntime` either
- *
- * Result: the old metadata resolver fell through to the implicit "openclaw"
- * branch — which is the bug under test.
- */
 function buildConfigWithoutAgentRuntimePolicy(): OpenClawConfig {
   return {
     agents: {
-      list: [
-        {
-          id: "copilot",
-          // Intentionally no `agentRuntime` field, no `runtime` descriptor.
-        },
-        {
-          id: "main",
-        },
-      ],
-      // No `defaults.agentRuntime` either.
+      list: [{ id: "copilot" }, { id: "main", default: true }],
       defaults: {},
     },
   } as OpenClawConfig;
 }
 
-/**
- * Mirror the per-row computation from `src/commands/sessions.ts:290-298`:
- *   const agentId = parseAgentSessionKey(row.key)?.agentId ?? target.agentId;
- *   const agentRuntime = resolveModelAgentRuntimeMetadata({ cfg, agentId, sessionKey: row.key });
- *
- * Returns the same shape that ends up serialized to `--json` output.
- * After commit 02fe0d8978, the production path goes through resolveModelAgentRuntimeMetadata.
- */
 function computeSessionAgentRuntime(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   fallbackAgentId: string;
-  /** Mirrors `entry?.acp != null` passed from loaded session rows. */
   acpRuntime?: boolean;
-  /** Mirrors `entry?.acp?.backend` passed from the session store entry. */
   acpBackend?: string;
 }): ReturnType<typeof resolveModelAgentRuntimeMetadata> {
   const agentId = parseAgentSessionKey(params.sessionKey)?.agentId ?? params.fallbackAgentId;
@@ -99,116 +42,113 @@ function computeSessionAgentRuntime(params: {
   });
 }
 
-describe("sessions --json agentRuntime classifier (catalog #18)", () => {
-  it("RED→GREEN: ACP session key is no longer misclassified (overlay applies)", () => {
-    const cfg = buildConfigWithoutAgentRuntimePolicy();
+const registeredHarnesses = listRegisteredAgentHarnesses();
+beforeEach(() => clearAgentHarnesses());
+afterAll(() => restoreRegisteredAgentHarnesses(registeredHarnesses));
+
+describe("session ACP runtime metadata", () => {
+  it.each(["model", "provider", "session-key", "implicit"] as const)(
+    "projects a declared fallback for the next turn while retaining %s attribution",
+    (source) => {
+      const supports = vi.fn((_context: unknown) => ({
+        supported: false as const,
+        fallbackRuntime: "openclaw" as const,
+      }));
+      registerAgentHarness({
+        id: "codex",
+        label: "Codex",
+        supports,
+        runAttempt: async () => {
+          throw new Error("projection must not execute");
+        },
+      });
+      const cfg: OpenClawConfig = {
+        models: {
+          providers: {
+            openai: {
+              api: "openai-responses",
+              baseUrl: "https://api.openai.com/v1",
+              ...(source === "provider" ? { agentRuntime: { id: "codex" } } : {}),
+              models: [
+                {
+                  id: "gpt-5.6-sol",
+                  name: "Sol",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  contextWindow: 200_000,
+                  maxTokens: 8192,
+                  compat: { supportsStore: false },
+                },
+              ],
+            },
+          },
+        },
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.6-sol": source === "model" ? { agentRuntime: { id: "codex" } } : {},
+            },
+          },
+        },
+      };
+      const params = {
+        cfg,
+        agentId: "main",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        sessionKey: NON_ACP_SESSION_KEY,
+        sessionEntry: {
+          agentHarnessId: "codex",
+          ...(source === "session-key" ? { agentRuntimeOverride: "codex" } : {}),
+        },
+      };
+      expect(resolveCurrentSessionAgentRuntimeMetadata(params)).toEqual({ id: "openclaw", source });
+      expect(
+        resolveCurrentSessionAgentRuntimeMetadata({
+          ...params,
+          sessionEntry: { ...params.sessionEntry, modelSelectionLocked: true },
+        }),
+      ).toEqual({ id: "codex", source: "session" });
+      expect(
+        resolveCurrentSessionAgentRuntimeMetadata({
+          ...params,
+          sessionKey: "agent:main:acp:runtime-test",
+          acpRuntime: true,
+        }),
+      ).toEqual({ id: "acpx", source: "session-key" });
+      // Projection consumes registered support only; it never discovers provider ownership.
+      for (const [context] of supports.mock.calls) {
+        expect(context).not.toHaveProperty("providerOwnerStatus");
+      }
+    },
+  );
+  it("prefers an explicit ACP backend", () => {
     const agentRuntime = computeSessionAgentRuntime({
-      cfg,
-      sessionKey: ACP_SESSION_KEY,
-      fallbackAgentId: "copilot",
-      acpRuntime: true,
-    });
-
-    // The bug was: the session key plainly contains `:acp:` and yet the
-    // resolved metadata said id="openclaw", source="implicit".
-    // After the fix (applyAcpRuntimeOverlay in resolveModelAgentRuntimeMetadata),
-    // the ACP session key overrides the runtime to id="acpx", source="session-key".
-    expect(
-      agentRuntime.id,
-      `ACP session ${ACP_SESSION_KEY} should no longer be misclassified as "auto" or "openclaw". ` +
-        `Got "${agentRuntime.id}". resolveModelAgentRuntimeMetadata must pass sessionKey to ` +
-        `applyAcpRuntimeOverlay so ACP sessions are classified as "acpx".`,
-    ).not.toBe("auto");
-    expect(
-      agentRuntime.source,
-      `ACP session ${ACP_SESSION_KEY} resolved with source="${agentRuntime.source}". ` +
-        `For an ACP-keyed session, the source should not be "implicit" — ` +
-        `the session key itself is an explicit signal that the runtime is ACP.`,
-    ).not.toBe("implicit");
-  });
-
-  it("GREEN control: non-ACP session is NOT overridden by ACP overlay", () => {
-    const cfg = buildConfigWithoutAgentRuntimePolicy();
-    const agentRuntime = computeSessionAgentRuntime({
-      cfg,
-      sessionKey: NON_ACP_SESSION_KEY,
-      fallbackAgentId: "main",
-    });
-
-    // For a non-ACP session, the overlay must NOT fire — the result must
-    // not be "acpx" and source must not be "session-key".  The control
-    // proves the overlay is gated on the `:acp:` segment in the session key.
-    // (The concrete id — "codex" for the default openai/gpt-5.5 provider —
-    // is determined by resolveAgentHarnessPolicy's Codex-routing rule;
-    // what matters here is the absence of the ACP override.)
-    expect(agentRuntime.id).not.toBe("acpx");
-    expect(agentRuntime.source).not.toBe("session-key");
-  });
-
-  it("FIX-SHAPE expectation: ACP session should resolve to 'acpx'", () => {
-    // What "fixed" should look like once the bug is addressed.
-    // RED today; GREEN once the fix lands.
-    //
-    // Note: the exact id ("acpx" vs another label) is a design choice for
-    // the fix author. What matters is that it is meaningfully different
-    // from "openclaw" and reflects the actual runtime driving the session.
-    // If the fix picks a different label, update this assertion to match —
-    // the structural point (session-key-aware classification) is the
-    // load-bearing part.
-    const cfg = buildConfigWithoutAgentRuntimePolicy();
-    const agentRuntime = computeSessionAgentRuntime({
-      cfg,
-      sessionKey: ACP_SESSION_KEY,
-      fallbackAgentId: "copilot",
-      acpRuntime: true,
-    });
-
-    expect(
-      agentRuntime.id,
-      `ACP session ${ACP_SESSION_KEY} should resolve to runtime id "acpx" (or the canonical ACP runtime label). ` +
-        `Got "${agentRuntime.id}". Fix candidates: ` +
-        `(a) override at the call site in src/commands/sessions.ts:294 once isAcpSessionKey(row.key) is true, or ` +
-        `make resolveModelAgentRuntimeMetadata apply the session-key-aware override centrally.`,
-    ).toBe("acpx");
-  });
-
-  it("backend override: ACP session with entry.acp.backend set reports that backend id, NOT 'acpx'", () => {
-    // When the session entry carries an explicit acp.backend (e.g. a registered
-    // non-default backend), the overlay must reflect the actual backend instead
-    // of the generic "acpx" fallback.
-    const cfg = buildConfigWithoutAgentRuntimePolicy();
-    const agentRuntime = computeSessionAgentRuntime({
-      cfg,
+      cfg: buildConfigWithoutAgentRuntimePolicy(),
       sessionKey: ACP_SESSION_KEY,
       fallbackAgentId: "copilot",
       acpRuntime: true,
       acpBackend: "custom-backend",
     });
 
-    expect(agentRuntime.id).toBe("custom-backend");
-    expect(agentRuntime.source).toBe("session-key");
+    expect(agentRuntime).toEqual({ id: "custom-backend", source: "session-key" });
   });
 
-  it("backend fallback: ACP session with entry.acp but no backend falls back to 'acpx'", () => {
-    // When the session entry has ACP metadata but no acp.backend, the overlay
-    // must fall back to the canonical "acpx" id.
-    const cfg = buildConfigWithoutAgentRuntimePolicy();
+  it("falls back to acpx when ACP metadata has no backend", () => {
     const agentRuntime = computeSessionAgentRuntime({
-      cfg,
+      cfg: buildConfigWithoutAgentRuntimePolicy(),
       sessionKey: ACP_SESSION_KEY,
       fallbackAgentId: "copilot",
       acpRuntime: true,
-      // acpBackend intentionally omitted — mirrors entry with no acp.backend
     });
 
-    expect(agentRuntime.id).toBe("acpx");
-    expect(agentRuntime.source).toBe("session-key");
+    expect(agentRuntime).toEqual({ id: "acpx", source: "session-key" });
   });
 
-  it("GREEN control: ACP-shaped bridge session without entry.acp is NOT overridden", () => {
-    const cfg = buildConfigWithoutAgentRuntimePolicy();
+  it("does not overlay ACP-shaped bridge sessions without ACP metadata", () => {
     const agentRuntime = computeSessionAgentRuntime({
-      cfg,
+      cfg: buildConfigWithoutAgentRuntimePolicy(),
       sessionKey: ACP_SESSION_KEY,
       fallbackAgentId: "copilot",
       acpRuntime: false,
@@ -241,5 +181,47 @@ describe("sessions --json agentRuntime classifier (catalog #18)", () => {
     });
 
     expect(agentRuntime).toEqual({ id: "codex", source: "session" });
+  });
+
+  it.each([undefined, "codex"])(
+    "reports current %s policy instead of an unlocked historical producer",
+    (runtime) => {
+      const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
+        cfg: {
+          agents: {
+            defaults: {
+              models: {
+                "openai/gpt-5.6-sol": runtime ? { agentRuntime: { id: runtime } } : {},
+              },
+            },
+          },
+        } as OpenClawConfig,
+        agentId: "main",
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        sessionKey: NON_ACP_SESSION_KEY,
+        sessionEntry: {
+          agentHarnessId: "openclaw",
+        },
+      });
+
+      expect(agentRuntime).toEqual({ id: "codex", source: runtime ? "model" : "implicit" });
+    },
+  );
+
+  it("keeps an explicit compatible runtime override", () => {
+    const agentRuntime = resolveCurrentSessionAgentRuntimeMetadata({
+      cfg: buildConfigWithoutAgentRuntimePolicy(),
+      agentId: "main",
+      provider: "openai",
+      model: "gpt-5.6-sol",
+      sessionKey: NON_ACP_SESSION_KEY,
+      sessionEntry: {
+        agentHarnessId: "openclaw",
+        agentRuntimeOverride: "codex",
+      },
+    });
+
+    expect(agentRuntime).toEqual({ id: "codex", source: "session-key" });
   });
 });

@@ -1,7 +1,6 @@
 /**
  * Cohere model catalog helpers derived from the plugin manifest.
  */
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import type { ModelDefinitionConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import manifest from "./openclaw.plugin.json" with { type: "json" };
@@ -9,11 +8,9 @@ import manifest from "./openclaw.plugin.json" with { type: "json" };
 const COHERE_MANIFEST_CATALOG = manifest.modelCatalog.providers.cohere;
 
 export const COHERE_BASE_URL = COHERE_MANIFEST_CATALOG.baseUrl;
-export const COHERE_MODEL_CATALOG = COHERE_MANIFEST_CATALOG.models;
-export const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
-export const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
-export const COHERE_COMMAND_A_VISION_MODEL_ID = "command-a-vision-07-2025";
-export const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
+const COHERE_COMMAND_A_PLUS_MODEL_ID = "command-a-plus-05-2026";
+const COHERE_COMMAND_A_REASONING_MODEL_ID = "command-a-reasoning-08-2025";
+const COHERE_NORTH_MINI_CODE_MODEL_ID = "north-mini-code-1-0";
 
 const COHERE_MODERN_MODEL_IDS = new Set([
   COHERE_COMMAND_A_PLUS_MODEL_ID,
@@ -31,14 +28,4 @@ export function buildCohereCatalogModels(): ModelDefinitionConfig[] {
     providerId: "cohere",
     catalog: COHERE_MANIFEST_CATALOG,
   }).models;
-}
-
-export function buildCohereModelDefinition(
-  model: (typeof COHERE_MODEL_CATALOG)[number],
-): ModelDefinitionConfig {
-  const providerConfig = buildManifestModelProviderConfig({
-    providerId: "cohere",
-    catalog: { ...COHERE_MANIFEST_CATALOG, models: [model] },
-  });
-  return expectDefined(providerConfig.models.at(0), "normalized Cohere manifest model");
 }

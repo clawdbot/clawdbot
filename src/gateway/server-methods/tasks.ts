@@ -4,19 +4,25 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import {
   ErrorCodes,
   errorShape,
-  formatValidationErrors,
   type TaskSummary,
   type TasksListParams,
   validateTasksCancelParams,
   validateTasksGetParams,
   validateTasksListParams,
+  validateTasksRecoveryParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { getTaskById, listTaskRecordsUnsorted } from "../../tasks/runtime-internal.js";
-import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
-import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
-import { mapTaskSummary, taskUpdatedAt } from "./task-summary.js";
+import {
+  dismissSubagentCompletionDelivery,
+  retrySubagentCompletionDelivery,
+} from "../../agents/subagents/completion/subagent-completion-delivery.js";
+import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
+import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
+import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { canAccessTaskRequesterSession } from "../task-session-access.js";
+import { mapTaskSummary } from "./task-summary.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 const DEFAULT_TASKS_LIST_LIMIT = 100;
 const MAX_TASKS_LIST_LIMIT = 500;
@@ -40,36 +46,6 @@ function normalizeTaskStatusFilter(status: TasksListParams["status"]): Set<TaskS
   return new Set(statuses.flatMap((value) => LEDGER_STATUS_TO_TASK_STATUSES[value] ?? []));
 }
 
-// Session filtering needs all ownership keys because detached child runs may be
-// queried from the requester, child session, or owner/control-plane view.
-function taskMatchesSession(task: TaskRecord, sessionKey: string | undefined): boolean {
-  const normalized = normalizeOptionalString(sessionKey);
-  if (!normalized) {
-    return true;
-  }
-  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
-    (candidate) => normalizeOptionalString(candidate) === normalized,
-  );
-}
-
-// Explicit `task.agentId` is authoritative: a task that records its own agent
-// must not also match other agents through the session-key fallback. Only
-// records that predate a direct `agentId` recover the owning agent from
-// session-style keys instead of being hidden.
-function taskMatchesAgent(task: TaskRecord, agentId: string | undefined): boolean {
-  const normalized = normalizeOptionalString(agentId);
-  if (!normalized) {
-    return true;
-  }
-  const explicitAgentId = normalizeOptionalString(task.agentId);
-  if (explicitAgentId) {
-    return explicitAgentId === normalized;
-  }
-  return [task.requesterSessionKey, task.childSessionKey, task.ownerKey].some(
-    (candidate) => parseAgentSessionKey(candidate)?.agentId === normalized,
-  );
-}
-
 // Cursor strings are offsets, not opaque tokens; reject malformed values so a
 // client cannot silently restart pagination at the first page.
 function parseCursor(cursor: string | undefined): number | null {
@@ -86,16 +62,8 @@ function parseCursor(cursor: string | undefined): number | null {
 // Control UI task methods expose the stable gateway protocol shape; helpers
 // above keep runtime registry details out of the wire result.
 export const tasksHandlers: GatewayRequestHandlers = {
-  "tasks.list": ({ params, respond }) => {
-    if (!validateTasksListParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.list params: ${formatValidationErrors(validateTasksListParams.errors)}`,
-        ),
-      );
+  "tasks.list": ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksListParams, "tasks.list", respond)) {
       return;
     }
     const cursor = parseCursor(params.cursor);
@@ -109,48 +77,56 @@ export const tasksHandlers: GatewayRequestHandlers = {
     }
     const statusFilter = normalizeTaskStatusFilter(params.status);
     const limit = Math.min(params.limit ?? DEFAULT_TASKS_LIST_LIMIT, MAX_TASKS_LIST_LIMIT);
-    // The ledger view pages by last activity so an old long-running task that
-    // just finished still surfaces on the first page instead of hiding behind
-    // newer-created records. Start from a cloned insertion-order snapshot so
-    // this sort does not first pay for the registry's discarded createdAt sort.
-    const filtered = listTaskRecordsUnsorted()
-      .filter((task) => {
-        if (statusFilter && !statusFilter.has(task.status)) {
-          return false;
-        }
-        return (
-          taskMatchesAgent(task, params.agentId) && taskMatchesSession(task, params.sessionKey)
-        );
-      })
-      .toSorted((left, right) => {
-        const updatedDiff = taskUpdatedAt(right) - taskUpdatedAt(left);
-        if (updatedDiff !== 0) {
-          return updatedDiff;
-        }
-        return left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0;
+    const requestedSessionKey = normalizeOptionalString(params.sessionKey);
+    const cfg = context.getRuntimeConfig();
+    let sessionKey: string | undefined;
+    let sessionAgentId: string | undefined;
+    if (requestedSessionKey) {
+      const sessionOwner = resolveRequestedSessionAgentId(
+        cfg,
+        requestedSessionKey,
+        normalizeOptionalString(params.agentId),
+      );
+      if (!sessionOwner.ok) {
+        respond(false, undefined, sessionOwner.error);
+        return;
+      }
+      sessionAgentId = sessionOwner.agentId;
+      sessionKey = canonicalizeMainSessionAlias({
+        cfg,
+        agentId: sessionOwner.agentId,
+        sessionKey: requestedSessionKey,
       });
-    const page = filtered.slice(cursor, cursor + limit);
-    const nextOffset = cursor + page.length;
+    }
+    // The ledger pages by last activity so an old long-running task that just
+    // finished still surfaces first. Selection stays inside the registry so
+    // only the bounded wire page pays for defensive record cloning.
+    const page = listTaskRecordPage({
+      offset: cursor,
+      limit,
+      statuses: statusFilter ? [...statusFilter] : undefined,
+      agentId: sessionKey ? undefined : params.agentId,
+      sessionKey,
+      sessionAgentId,
+      cfg,
+      filter: (task) => canAccessTaskRequesterSession({ cfg, client, task }),
+    });
+    const nextOffset = cursor + page.tasks.length;
     respond(true, {
-      tasks: page.map((task) => mapTaskSummary(task)),
-      ...(nextOffset < filtered.length ? { nextCursor: String(nextOffset) } : {}),
+      tasks: page.tasks.map((task) => mapTaskSummary(task)),
+      ...(page.hasMore ? { nextCursor: String(nextOffset) } : {}),
     });
   },
-  "tasks.get": ({ params, respond }) => {
-    if (!validateTasksGetParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.get params: ${formatValidationErrors(validateTasksGetParams.errors)}`,
-        ),
-      );
+  "tasks.get": ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksGetParams, "tasks.get", respond)) {
       return;
     }
     const taskId = params.taskId;
     const task = getTaskById(taskId);
-    if (!task) {
+    if (
+      !task ||
+      !canAccessTaskRequesterSession({ cfg: context.getRuntimeConfig(), client, task })
+    ) {
       respond(
         false,
         undefined,
@@ -158,24 +134,26 @@ export const tasksHandlers: GatewayRequestHandlers = {
       );
       return;
     }
-    respond(true, { task: mapTaskSummary(task) });
+    // The potentially longer task input is lookup-only. List and event payloads
+    // stay compact while detail views can show the operator what was requested.
+    respond(true, { task: mapTaskSummary(task, { includePrompt: true }) });
   },
-  "tasks.cancel": async ({ params, respond, context }) => {
-    if (!validateTasksCancelParams(params)) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          `invalid tasks.cancel params: ${formatValidationErrors(validateTasksCancelParams.errors)}`,
-        ),
-      );
+  "tasks.cancel": async ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksCancelParams, "tasks.cancel", respond)) {
       return;
     }
     const taskId = params.taskId;
     const reason = normalizeOptionalString(params.reason);
-    const result = await cancelDetachedTaskRunById({
-      cfg: context.getRuntimeConfig(),
+    const { cancelDetachedTaskRunByIdCore } =
+      await import("../../tasks/task-executor-cancel.runtime.js");
+    const cfg = context.getRuntimeConfig();
+    const task = getTaskById(taskId);
+    if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+      respond(true, { found: false, cancelled: false });
+      return;
+    }
+    const result = await cancelDetachedTaskRunByIdCore({
+      cfg,
       taskId,
       ...(reason ? { reason } : {}),
     });
@@ -186,9 +164,53 @@ export const tasksHandlers: GatewayRequestHandlers = {
       ...(result.task ? { task: mapTaskSummary(result.task) } : {}),
     });
   },
+  "tasks.retry": async ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.retry", respond)) {
+      return;
+    }
+    const results = [];
+    const cfg = context.getRuntimeConfig();
+    for (const taskId of params.taskIds) {
+      const task = getTaskById(taskId);
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+        results.push({ taskId, ok: false, reason: "task not found" });
+        continue;
+      }
+      const result = await retrySubagentCompletionDelivery(taskId);
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.duplicateRisk ? { duplicateRisk: true } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  },
+  "tasks.dismiss": async ({ params, respond, context, client }) => {
+    if (!assertValidParams(params, validateTasksRecoveryParams, "tasks.dismiss", respond)) {
+      return;
+    }
+    const { discardSubagentTerminalDelivery } =
+      await import("../../agents/subagents/registry/subagent-registry.js");
+    const results = [];
+    const cfg = context.getRuntimeConfig();
+    for (const taskId of params.taskIds) {
+      const task = getTaskById(taskId);
+      if (task && !canAccessTaskRequesterSession({ access: "write", cfg, client, task })) {
+        results.push({ taskId, ok: false, reason: "task not found" });
+        continue;
+      }
+      const result = await dismissSubagentCompletionDelivery(taskId, {
+        discardTerminalDelivery: discardSubagentTerminalDelivery,
+      });
+      results.push({
+        taskId,
+        ok: result.ok,
+        ...(result.reason ? { reason: result.reason } : {}),
+        ...(result.task ? { task: mapTaskSummary(result.task, { includePrompt: true }) } : {}),
+      });
+    }
+    respond(true, { results });
+  },
 };
-
-export const testApi = {
-  mapTaskSummary,
-};
-export { testApi as __test };

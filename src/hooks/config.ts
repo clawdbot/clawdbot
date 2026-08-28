@@ -26,6 +26,10 @@ export function isHookConfigPathTruthy(
 
 export { resolveHookConfig };
 
+export function isHookEnvSatisfied(envName: string, hookConfig?: HookConfig): boolean {
+  return Boolean(process.env[envName]?.trim() || hookConfig?.env?.[envName]?.trim());
+}
+
 function evaluateHookRuntimeEligibility(params: {
   entry: HookEntry;
   config?: OpenClawConfig;
@@ -47,7 +51,7 @@ function evaluateHookRuntimeEligibility(params: {
   return evaluateRuntimeEligibility({
     ...base,
     hasBin: hasBinary,
-    hasEnv: (envName) => Boolean(process.env[envName] || hookConfig?.env?.[envName]),
+    hasEnv: (envName) => isHookEnvSatisfied(envName, hookConfig),
     isConfigPathTruthy: (configPath) => isHookConfigPathTruthy(config, configPath),
   });
 }

@@ -3,11 +3,12 @@ title: "Config restart capability flip"
 scenario:
   id: config-restart-capability-flip
   surface: config
+  runtimePairLane: core
   coverage:
     primary:
-      - config.restart-apply
+      - gateway.restart-and-stop-restart-apply
     secondary:
-      - plugins.capabilities
+      - plugins.mixed-plugin-capabilities
   objective: Verify a restart-triggering config change flips capability inventory and the same session successfully uses the newly restored tool after wake-up.
   successCriteria:
     - Capability is absent before the restart-triggering patch.
@@ -51,7 +52,17 @@ flow:
             expr: "originalTools ? (Object.prototype.hasOwnProperty.call(originalTools, 'deny') ? structuredClone(originalTools.deny) : undefined) : undefined"
         - set: originalImageGenerationModelPrimary
           value:
-            expr: "original.config.agents?.defaults?.imageGenerationModel?.primary ?? null"
+            expr: "original.config.agents?.defaults?.mediaModels?.image?.primary ?? null"
+        - set: originalTerminal
+          value:
+            expr: "original.config.gateway && Object.prototype.hasOwnProperty.call(original.config.gateway, 'terminal') ? structuredClone(original.config.gateway.terminal) : undefined"
+        - set: restartTerminalEnabled
+          value:
+            # Terminal is enabled unless explicitly false. This expression flips both effective states.
+            expr: "originalTerminal?.enabled === false ? true : false"
+        - set: originalTerminalEnabledPresent
+          value:
+            expr: "originalTerminal !== undefined && Object.prototype.hasOwnProperty.call(originalTerminal, 'enabled')"
         - set: denied
           value:
             expr: "Array.isArray(originalToolsDeny) ? originalToolsDeny.map((entry) => String(entry)) : []"
@@ -94,6 +105,9 @@ flow:
               - set: wakeMarker
                 value:
                   expr: "`QA-CAPABILITY-${randomUUID().slice(0, 8)}`"
+              - set: requestCursorBeforeRestart
+                value:
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
               - call: patchConfig
                 args:
                   - env:
@@ -104,15 +118,24 @@ flow:
                           expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
                       agents:
                         defaults:
-                          imageGenerationModel:
-                            primary:
-                              ref: originalImageGenerationModelPrimary
+                          mediaModels:
+                            image:
+                              primary:
+                                ref: originalImageGenerationModelPrimary
+                      gateway:
+                        terminal:
+                          enabled:
+                            ref: restartTerminalEnabled
                     sessionKey:
                       ref: sessionKey
+                    deliveryContext:
+                      channel: qa-channel
+                      to: dm:qa-operator
                     note:
                       ref: wakeMarker
                     replacePaths:
                       - tools.deny
+                      - gateway.terminal.enabled
               - call: waitForGatewayHealthy
                 args:
                   - ref: env
@@ -121,6 +144,13 @@ flow:
                 args:
                   - ref: env
                   - 60000
+              - call: waitForOutboundMessage
+                args:
+                  - ref: state
+                  - lambda:
+                      params: [candidate]
+                      expr: "candidate.conversation.id === 'qa-operator' && candidate.text.includes(wakeMarker)"
+                  - expr: liveTurnTimeoutMs(env, config.imageTurnTimeoutMs)
               - call: waitForCondition
                 saveAs: afterTools
                 args:
@@ -211,10 +241,13 @@ flow:
               # guard means this check only runs in mock mode (where
               # `/debug/requests` is available); live-frontier runs skip
               # it and still pass the rest of the scenario.
+              - set: postRestartRequests
+                value:
+                  expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBeforeRestart}`))] : []"
               - assert:
-                  expr: "!env.mock || [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].some((request) => String(request.allInputText ?? '').toLowerCase().includes('capability flip image check') && request.plannedToolName === 'image_generate')"
+                  expr: "!env.mock || postRestartRequests.some((request) => String(request.allInputText ?? '').toLowerCase().includes('capability flip image check') && request.plannedToolName === 'image_generate')"
                   message:
-                    expr: "`expected image_generate tool call during capability flip scenario, saw plannedToolNames=${JSON.stringify([...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].filter((request) => String(request.allInputText ?? '').toLowerCase().includes('capability flip image check')).map((request) => request.plannedToolName ?? null))}`"
+                    expr: "`expected post-restart mock prompt/tool evidence, saw requests=${JSON.stringify(postRestartRequests.map((request) => ({ prompt: String(request.allInputText ?? '').slice(-160), plannedToolName: request.plannedToolName ?? null })))}`"
             finally:
               - call: patchConfig
                 args:
@@ -224,6 +257,9 @@ flow:
                       tools:
                         deny:
                           expr: "originalToolsDeny === undefined ? null : originalToolsDeny"
+                      gateway:
+                        terminal:
+                          expr: "originalTerminal === undefined ? null : (originalTerminalEnabledPresent ? originalTerminal : { ...originalTerminal, enabled: null })"
                     replacePaths:
                       - tools.deny
               - call: waitForGatewayHealthy

@@ -5,7 +5,7 @@ import {
   listAgentIds,
   resolveAgentDir,
   resolveDefaultAgentDir,
-  resolveDefaultAgentId,
+  tryResolveDefaultAgentId,
 } from "../agents/agent-scope.js";
 import {
   buildAuthHealthSummary,
@@ -21,15 +21,17 @@ import {
   resolveApiKeyForProfile,
   resolveProfileUnusableUntilForDisplay,
 } from "../agents/auth-profiles.js";
-import { CLAUDE_CLI_PROFILE_ID } from "../agents/auth-profiles/constants.js";
 import { formatAuthDoctorHint } from "../agents/auth-profiles/doctor.js";
 import {
+  buildAuthProfileUnusableHint,
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   formatOAuthRefreshFailureLoginCommandMarkdown,
   type OAuthRefreshFailureReason,
 } from "../agents/auth-profiles/oauth-refresh-failure.js";
-import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/path-resolve.js";
+import { resolveSharedAuthStoreOwnership } from "../agents/auth-profiles/path-resolve.js";
+import { resolveAuthStorePathForDisplay } from "../agents/auth-profiles/paths.js";
+import { inspectPersistedSharedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
 import { buildProviderAuthRecoveryHint } from "../agents/provider-auth-recovery-hint.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { HealthFinding } from "../flows/health-checks.js";
@@ -39,7 +41,6 @@ import type { DoctorPrompter } from "./doctor-prompter.js";
 
 const OPENAI_PROVIDER_ID = "openai";
 const LEGACY_CODEX_PROVIDER_ID = "openai-codex";
-const CLAUDE_CLI_PROVIDER_ID = "claude-cli";
 const CODEX_OAUTH_WARNING_TITLE = "Codex OAuth";
 const OPENAI_BASE_URL = "https://api.openai.com/v1";
 const LEGACY_CODEX_APIS = new Set(["openai-responses", "openai-completions"]);
@@ -47,6 +48,20 @@ const AUTH_PROFILES_CHECK_ID = "core/doctor/auth-profiles";
 const DOCTOR_REAUTH_PROVIDER_ALIASES: Readonly<Record<string, string>> = {
   [LEGACY_CODEX_PROVIDER_ID]: OPENAI_PROVIDER_ID,
 };
+
+/** Surface the one-time relocation while the legacy shared owner is still active. */
+export function noteSharedAuthStoreStatus(env: NodeJS.ProcessEnv = process.env): void {
+  if (
+    resolveSharedAuthStoreOwnership(env).location !== "legacy-main" ||
+    inspectPersistedSharedAuthProfileStoreRaw(env).status !== "readable"
+  ) {
+    return;
+  }
+  note(
+    "Shared auth profiles still live in the main agent database. Run `openclaw doctor --fix` to move them into shared SQLite state and make the main agent deletable.",
+    "Shared auth store",
+  );
+}
 
 function hasConfiguredCodexOAuthProfile(cfg: OpenClawConfig): boolean {
   return Object.values(cfg.auth?.profiles ?? {}).some(
@@ -121,9 +136,7 @@ function buildCodexProviderOverrideWarning(providerOverride: unknown): string {
   return lines.join("\n");
 }
 
-export function legacyCodexProviderOverrideToHealthFinding(
-  providerOverride: unknown,
-): HealthFinding {
+function legacyCodexProviderOverrideToHealthFinding(providerOverride: unknown): HealthFinding {
   const message =
     "Legacy openai-codex transport override can shadow configured Codex OAuth credentials.";
   const details = buildCodexProviderOverrideWarning(providerOverride);
@@ -171,7 +184,7 @@ function formatAgentNoteTitle(title: string, agentId: string, labelAgents: boole
 }
 
 function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTarget[] {
-  const defaultAgentId = resolveDefaultAgentId(cfg);
+  const defaultAgentId = tryResolveDefaultAgentId(cfg);
   const targets = new Map<string, AuthProfileHealthTarget>();
   const addTarget = (agentId: string, agentDir: string, isDefault: boolean) => {
     const key = path.resolve(agentDir);
@@ -181,7 +194,9 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
     }
   };
 
-  addTarget(defaultAgentId, resolveDefaultAgentDir(cfg), true);
+  if (defaultAgentId) {
+    addTarget(defaultAgentId, resolveDefaultAgentDir(cfg), true);
+  }
   for (const agentId of listAgentIds(cfg)) {
     if (agentId === defaultAgentId) {
       continue;
@@ -193,22 +208,6 @@ function listAuthProfileHealthTargets(cfg: OpenClawConfig): AuthProfileHealthTar
   }
 
   return [...targets.values()];
-}
-
-/** Returns the short doctor hint for disabled or cooldown auth profiles. */
-function resolveUnusableProfileHint(params: {
-  kind: "cooldown" | "disabled";
-  reason?: string;
-}): string {
-  if (params.kind === "disabled") {
-    if (params.reason === "billing") {
-      return "Top up credits (provider billing) or switch provider.";
-    }
-    if (params.reason === "auth_permanent" || params.reason === "auth") {
-      return "Refresh or replace credentials, then retry.";
-    }
-  }
-  return "Wait for cooldown or switch provider.";
 }
 
 function formatOAuthRefreshFailureReason(reason: OAuthRefreshFailureReason | null): string {
@@ -344,16 +343,6 @@ function isAuthProfileHealthIssue(profile: AuthHealthSummary["profiles"][number]
   if (profile.type === "api_key") {
     return profile.status === "missing";
   }
-  // Claude CLI refreshes its short-lived access token when the process runs.
-  // Warn once that external credential is unusable, not throughout its normal lifetime.
-  if (
-    profile.profileId === CLAUDE_CLI_PROFILE_ID &&
-    profile.provider === CLAUDE_CLI_PROVIDER_ID &&
-    profile.type === "oauth" &&
-    profile.status === "expiring"
-  ) {
-    return false;
-  }
   return (
     (profile.type === "oauth" || profile.type === "token") &&
     (profile.status === "expired" || profile.status === "expiring" || profile.status === "missing")
@@ -380,12 +369,14 @@ async function collectAuthProfileHealthFindingsForTarget(params: {
     const stats = store.usageStats?.[profileId];
     const remaining = formatRemainingShort(until - now);
     const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
-    const kind = disabledActive
-      ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-      : "cooldown";
-    const hint = resolveUnusableProfileHint({
+    const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
+    const displayReason = disabledActive ? reason : (stats?.cooldownClassification ?? reason);
+    const kind = `${disabledActive ? "disabled" : "cooldown"}${displayReason ? `:${displayReason}` : ""}`;
+    const hint = buildAuthProfileUnusableHint({
       kind: disabledActive ? "disabled" : "cooldown",
-      reason: stats?.disabledReason,
+      reason,
+      provider: store.profiles[profileId]?.provider ?? profileId,
+      profileId,
     });
     findings.push(
       authProfileCooldownToHealthFinding({
@@ -485,12 +476,14 @@ async function noteAuthProfileHealthForTarget(params: {
       const stats = store.usageStats?.[profileId];
       const remaining = formatRemainingShort(until - now);
       const disabledActive = typeof stats?.disabledUntil === "number" && now < stats.disabledUntil;
-      const kind = disabledActive
-        ? `disabled${stats.disabledReason ? `:${stats.disabledReason}` : ""}`
-        : "cooldown";
-      const hint = resolveUnusableProfileHint({
+      const reason = disabledActive ? stats?.disabledReason : stats?.cooldownReason;
+      const displayReason = disabledActive ? reason : (stats?.cooldownClassification ?? reason);
+      const kind = `${disabledActive ? "disabled" : "cooldown"}${displayReason ? `:${displayReason}` : ""}`;
+      const hint = buildAuthProfileUnusableHint({
         kind: disabledActive ? "disabled" : "cooldown",
-        reason: stats?.disabledReason,
+        reason,
+        provider: store.profiles[profileId]?.provider ?? profileId,
+        profileId,
       });
       out.push(`- ${profileId}: ${kind} (${remaining})${hint ? ` — ${hint}` : ""}`);
     }

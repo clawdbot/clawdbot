@@ -1,7 +1,6 @@
 // Gateway WebSocket connect finalization attaches node/session state and sends hello-ok.
-import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { WebSocket } from "ws";
 import {
   GATEWAY_CLIENT_IDS,
@@ -10,17 +9,40 @@ import {
 import { ConnectErrorDetailCodes } from "../../../../packages/gateway-protocol/src/connect-error-details.js";
 import { ErrorCodes, PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/index.js";
 import { getRuntimeConfig } from "../../../config/io.js";
-import { resolveStateDir } from "../../../config/paths.js";
-import { updatePairedNodeMetadata } from "../../../infra/node-pairing.js";
+import {
+  captureAuthenticatedNodePairingState,
+  type NodePairingGeneration,
+  type NodePairingIdentity,
+} from "../../../infra/device-pairing-node-state.js";
 import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
+import { resolveLocalNodeId } from "../../../node-host/local-id.js";
+import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
-import { isEphemeralGatewayClient } from "../../../utils/message-channel.js";
-import { resolveRuntimeServiceVersion } from "../../../version.js";
+import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
+import {
+  adoptTailscaleProfileAvatar,
+  ensureProfileForEmail,
+  ensureProfileForTailscaleIdentity,
+  getUserProfileDisplay,
+} from "../../../state/user-profiles.js";
+import {
+  isBrowserCopilotClient,
+  isEphemeralGatewayClient,
+} from "../../../utils/message-channel.js";
+import { resolveRuntimeServiceBuildId, resolveRuntimeServiceVersion } from "../../../version.js";
 import { verifyAgentRuntimeIdentityToken } from "../../agent-runtime-identity-token.js";
+import { buildAuthenticatedPresenceUser } from "../../authenticated-presence-user.js";
+import { createAuthenticatedGitHubIdentitySync } from "../../github-user-identity.js";
+import {
+  attachGatewayLocalUserIngress,
+  prepareGatewayLocalUserIngress,
+} from "../../local-user-ingress.js";
 import { APPROVALS_SCOPE } from "../../method-scopes.js";
+import { serializeEventPayload } from "../../node-registry.js";
 import { isOperatorApprovalRuntimeToken } from "../../operator-approval-runtime-token.js";
+import { resolveOperatorRolePolicyForProfile } from "../../operator-role-policy.js";
 import {
   buildPluginNodeCapabilityScopedHostUrl,
   indexPluginNodeCapabilitySurfaces,
@@ -29,13 +51,15 @@ import {
   setClientPluginNodeCapability,
   type PluginNodeCapabilitySurface,
 } from "../../plugin-node-capability.js";
-import { MAX_PAYLOAD_BYTES } from "../../server-constants.js";
+import { MAX_PAYLOAD_BYTES, WEBSOCKET_OPEN_READY_STATE } from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
-import { incrementPresenceVersion } from "../health-state.js";
+import { broadcastPresenceSnapshot } from "../presence-events.js";
 import type { GatewayWsClient } from "../ws-types.js";
+import { resolveEffectiveConnectionScopes } from "./connect-admission.js";
 import { sendGatewayHello } from "./connect-hello.js";
 import { prepareGatewayNodeConnect } from "./connect-node-session.js";
+import { resolveControlUiBuildMismatch } from "./control-ui-build-admission.js";
 import type {
   DeviceAuthorizedGatewayConnect,
   GatewayConnectPhaseContext,
@@ -44,27 +68,14 @@ import type {
 /** Match production release versions (YYYY.M.PATCH or YYYY.M.PATCH-beta.N). */
 const RELEASED_VERSION_RE = /^\d{4}\.\d+\.\d+/;
 
+type AuthenticatedNodePairingAdmission = {
+  authenticated: { nodeId: string; publicKey: string; token: string };
+  identity: NodePairingIdentity;
+  generation?: NodePairingGeneration;
+};
+
 function isReleasedVersion(version: string): boolean {
   return RELEASED_VERSION_RE.test(version);
-}
-
-/**
- * Lazily resolve the local node host's nodeId from ~/.openclaw/node.json.
- * Process-stable: only changes on `openclaw node install`, which requires restart.
- */
-let cachedLocalNodeId: string | null | undefined;
-function resolveLocalNodeId(): string | null {
-  if (cachedLocalNodeId !== undefined) {
-    return cachedLocalNodeId;
-  }
-  try {
-    const raw = fs.readFileSync(path.join(resolveStateDir(), "node.json"), "utf8");
-    const parsed = JSON.parse(raw) as { nodeId?: string };
-    cachedLocalNodeId = typeof parsed.nodeId === "string" ? parsed.nodeId.trim() || null : null;
-  } catch {
-    cachedLocalNodeId = null;
-  }
-  return cachedLocalNodeId;
 }
 
 function setSocketMaxPayload(socket: WebSocket, maxPayload: number): void {
@@ -85,6 +96,7 @@ export async function attachAuthenticatedGatewayConnect(
     pluginSurfaceBaseUrl,
     pluginNodeCapabilities = [],
     buildRequestContext,
+    getRequiredSharedGatewaySessionGeneration,
     close,
     isClosed,
     clearHandshakeTimer,
@@ -94,6 +106,8 @@ export async function attachAuthenticatedGatewayConnect(
     setCloseCause,
     logGateway,
     logWsControl,
+    requestHost,
+    requestOrigin,
   } = context.handler;
   const {
     connectParams,
@@ -112,8 +126,11 @@ export async function attachAuthenticatedGatewayConnect(
     maxProtocol,
     usesLegacyNodeProtocol,
     role,
-    scopes,
+    scopes: deviceScopes,
     device,
+    devicePublicKey,
+    deviceToken,
+    authResult,
     authMethod,
     pairingLocality,
     sessionUsesSharedGatewayAuth,
@@ -123,12 +140,134 @@ export async function attachAuthenticatedGatewayConnect(
     return;
   }
 
+  let nodePairingAdmission: AuthenticatedNodePairingAdmission | undefined;
+  if (role === "node") {
+    const nodeId = device?.id ?? connectParams.client.id;
+    const authenticatedNodeToken =
+      authMethod === "device-token"
+        ? normalizeOptionalString(connectParams.auth?.deviceToken ?? connectParams.auth?.token)
+        : deviceToken?.token;
+    if (!device || !devicePublicKey || !authenticatedNodeToken) {
+      const message = "authenticated node pairing identity unavailable";
+      markHandshakeFailure("node-pairing-generation-changed", {});
+      sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
+      await releasePendingNodePairingCleanup();
+      close(1008, truncateCloseReason(message));
+      return;
+    }
+    const authenticatedNodePairing = {
+      nodeId,
+      publicKey: devicePublicKey,
+      token: authenticatedNodeToken,
+    };
+    const admittedPairingState =
+      await captureAuthenticatedNodePairingState(authenticatedNodePairing);
+    if (!admittedPairingState) {
+      const message = "node pairing changed during connect";
+      markHandshakeFailure(
+        "node-pairing-generation-changed",
+        device?.id ? { deviceId: device.id } : {},
+      );
+      sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
+      await releasePendingNodePairingCleanup();
+      close(1008, truncateCloseReason(message));
+      return;
+    }
+    nodePairingAdmission = {
+      authenticated: authenticatedNodePairing,
+      identity: admittedPairingState.identity,
+      ...(admittedPairingState.generation ? { generation: admittedPairingState.generation } : {}),
+    };
+  }
+
   // Presence lists user-visible clients/nodes. Ephemeral control-plane connections
   // (CLI, backend RPC probes, tests) churn for the full TTL and stay excluded.
   const shouldTrackPresence = !isEphemeralGatewayClient(connectParams.client);
   const clientId = connectParams.client.id;
   const instanceId = connectParams.client.instanceId;
-  const presenceKey = shouldTrackPresence ? (device?.id ?? instanceId ?? connId) : undefined;
+  // Nodes retain device-owned presence. User clients need one row per connection
+  // so two tabs watching different sessions cannot overwrite each other.
+  const presenceKey = shouldTrackPresence
+    ? role === "node"
+      ? (device?.id ?? instanceId ?? connId)
+      : connId
+    : undefined;
+  const authenticatedUserId = normalizeOptionalString(authResult.user);
+  const tailscaleLogin = authResult.tailscaleIdentity
+    ? classifyTailscaleLogin(authResult.tailscaleIdentity.login)
+    : undefined;
+  const authenticatedUserIsTailscaleProvider = tailscaleLogin?.kind === "provider";
+  const resolveAuthenticatedGitHubIdentity = createAuthenticatedGitHubIdentitySync({
+    authResult,
+    authConfig: context.configSnapshot.gateway?.auth,
+    requestHeaders: context.handler.upgradeReq.headers,
+  });
+  const rolesConfigured = Boolean(context.configSnapshot.gateway?.roles);
+  const sharedSecretOperatorOwner =
+    role === "operator" && (authMethod === "token" || authMethod === "password");
+  let authenticatedUserProfile: GatewayWsClient["authenticatedUserProfile"];
+  if (authenticatedUserId && (!resolveAuthenticatedGitHubIdentity || rolesConfigured)) {
+    try {
+      const profile = resolveAuthenticatedGitHubIdentity
+        ? await resolveAuthenticatedGitHubIdentity()
+        : authResult.tailscaleIdentity
+          ? ensureProfileForTailscaleIdentity(authResult.tailscaleIdentity)
+          : ensureProfileForEmail(authenticatedUserId);
+      const profileId = "profileId" in profile ? profile.profileId : profile.id;
+      const display = getUserProfileDisplay(profileId);
+      // The live profile callback refreshes edits and detached provider-avatar adoption.
+      authenticatedUserProfile = {
+        profileId: display.id,
+        displayName: display.displayName,
+        avatarRevision: display.avatarRevision,
+        hasAvatar: display.hasAvatar,
+        updatedAt: profile.updatedAt,
+      };
+    } catch (error) {
+      // Profile storage and best-effort provider metadata must never block login.
+      logWsControl.warn(
+        `user profile resolution failed conn=${connId} user=${formatForLog(authenticatedUserId)}: ${formatForLog(error)}`,
+      );
+    }
+  }
+  // Identity-derived scopes must be capped only after their durable profile is known.
+  // Configured roles fail closed if profile storage or provider verification is unavailable.
+  const effectiveScopes = resolveEffectiveConnectionScopes({
+    role,
+    deviceScopes,
+    verifiedIdentity: authenticatedUserId,
+    identityScopes: context.configSnapshot.gateway?.auth?.identityScopes,
+    upgradeReq: context.handler.upgradeReq,
+  });
+  const rolePolicy =
+    role === "operator" && !sharedSecretOperatorOwner
+      ? resolveOperatorRolePolicyForProfile(
+          authenticatedUserProfile?.profileId,
+          context.configSnapshot,
+        )
+      : undefined;
+  const scopes =
+    role === "operator" && authenticatedUserId && rolesConfigured && !authenticatedUserProfile
+      ? []
+      : rolePolicy
+        ? effectiveScopes.scopes.filter((scope) =>
+            roleScopesAllow({
+              role: "operator",
+              requestedScopes: [scope],
+              allowedScopes: rolePolicy.scopes,
+            }),
+          )
+        : effectiveScopes.scopes;
+  state.scopes = scopes;
+  connectParams.scopes = scopes;
+  const addedIdentityScopes = effectiveScopes.addedIdentityScopes.filter((scope) =>
+    scopes.includes(scope),
+  );
+  if (authenticatedUserId && addedIdentityScopes.length > 0) {
+    logGateway.warn(
+      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} conn=${connId}`,
+    );
+  }
 
   if (isClosed()) {
     await releasePendingNodePairingCleanup();
@@ -138,7 +277,6 @@ export async function attachAuthenticatedGatewayConnect(
     });
     return;
   }
-
   const pluginSurfaceUrls: Record<string, string> = {};
   const pluginNodeCapabilitySurfaces = indexPluginNodeCapabilitySurfaces(pluginNodeCapabilities);
   const pendingPluginNodeCapabilities: Array<{
@@ -146,8 +284,14 @@ export async function attachAuthenticatedGatewayConnect(
     capability: string;
     expiresAtMs: number;
   }> = [];
+  const effectiveNodeCaps = role === "node" ? new Set(connectParams.caps ?? []) : undefined;
   if (pluginSurfaceBaseUrl && !usesLegacyNodeProtocol) {
     for (const pluginCapabilitySurface of Object.values(pluginNodeCapabilitySurfaces)) {
+      // Node reconciliation replaces declared caps with the approved surface.
+      // Issuing a route capability for a withheld cap would bypass node.pair.approve.
+      if (effectiveNodeCaps && !effectiveNodeCaps.has(pluginCapabilitySurface.surface)) {
+        continue;
+      }
       const capability = mintPluginNodeCapabilityToken();
       const expiresAtMs = resolvePluginNodeCapabilityExpiresAtMs(pluginCapabilitySurface);
       if (expiresAtMs === undefined) {
@@ -204,15 +348,67 @@ export async function attachAuthenticatedGatewayConnect(
       return;
     }
   }
+  const controlUiBuildMismatch = resolveControlUiBuildMismatch({
+    clientId: connectParams.client.id,
+    clientBuildId: connectParams.client.buildId,
+    gatewayBuildId: resolveRuntimeServiceBuildId(),
+    configuredControlUiRoot: context.configSnapshot.gateway?.controlUi?.root,
+    requestHost,
+    requestOrigin,
+  });
+  if (controlUiBuildMismatch) {
+    // Build identity predates this rejection. Frozen clients recognize the shipped
+    // protocol-mismatch signal and surface its literal reload guidance.
+    const message = "protocol mismatch: Control UI updated; reload this page to continue";
+    markHandshakeFailure("control-ui-build-mismatch", {
+      clientBuildId: controlUiBuildMismatch.clientBuildId ?? "legacy",
+      gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
+    });
+    sendHandshakeErrorResponse(ErrorCodes.UNAVAILABLE, message, {
+      retryable: false,
+      details: {
+        code: ConnectErrorDetailCodes.PROTOCOL_MISMATCH,
+        gatewayBuildId: controlUiBuildMismatch.gatewayBuildId,
+        reloadRequired: true,
+      },
+    });
+    logWsControl.warn(
+      `control ui build rejected conn=${connId} clientBuild=${formatForLog(controlUiBuildMismatch.clientBuildId ?? "legacy")} gatewayBuild=${formatForLog(controlUiBuildMismatch.gatewayBuildId)}; reload required`,
+    );
+    await releasePendingNodePairingCleanup();
+    close(1008, truncateCloseReason(message));
+    return;
+  }
   const internal =
-    isTrustedApprovalRuntime || trustedAgentRuntimeIdentity
+    isLocalClient ||
+    isTrustedApprovalRuntime ||
+    trustedAgentRuntimeIdentity ||
+    sharedSecretOperatorOwner
       ? {
+          ...(isLocalClient ? { isLocalClient: true as const } : {}),
           ...(isTrustedApprovalRuntime ? { approvalRuntime: true } : {}),
           ...(trustedAgentRuntimeIdentity
             ? { agentRuntimeIdentity: trustedAgentRuntimeIdentity }
             : {}),
+          ...(sharedSecretOperatorOwner ? { operatorRoleActor: { kind: "system" as const } } : {}),
         }
       : undefined;
+  const prepareLocalUserIngress = (profile = authenticatedUserProfile) =>
+    prepareGatewayLocalUserIngress({
+      authMethod,
+      authenticatedUserExpected: Boolean(authenticatedUserId),
+      ...(profile
+        ? {
+            profile: {
+              profileId: profile.profileId,
+              displayName: profile.displayName,
+            },
+          }
+        : {}),
+      ...(device?.id ? { pairedDeviceId: device.id } : {}),
+      isLocalClient,
+    });
+  const localUserIngress = prepareLocalUserIngress();
   if (usesLegacyNodeProtocol) {
     logWsControl.warn(
       `legacy node protocol accepted conn=${connId} client=${formatForLog(clientLabel)} v${formatForLog(connectParams.client.version)} min=${minProtocol} max=${maxProtocol} current=${PROTOCOL_VERSION}; upgrade recommended`,
@@ -225,9 +421,15 @@ export async function attachAuthenticatedGatewayConnect(
     connId,
     connectionKind: "gateway",
     isDeviceTokenAuth: authMethod === "device-token",
+    pairedClientId: isBrowserCopilotClient(connectParams.client)
+      ? connectParams.client.id
+      : undefined,
     usesSharedGatewayAuth: sessionUsesSharedGatewayAuth,
     sharedGatewaySessionGeneration: sessionSharedGatewaySessionGeneration,
     presenceKey,
+    ...(authenticatedUserId ? { authenticatedUserId } : {}),
+    ...(authenticatedUserIsTailscaleProvider ? { authenticatedUserIsTailscaleProvider: true } : {}),
+    ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
     clientIp: reportedClientIp,
     ...(internal ? { internal } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
@@ -235,6 +437,42 @@ export async function attachAuthenticatedGatewayConnect(
       ? { pluginNodeCapabilitySurfaces }
       : {}),
   };
+  attachGatewayLocalUserIngress(nextClient, localUserIngress);
+  const attachAuthenticatedProfile = (profileId: string, updatedAt: number) => {
+    if (
+      isClosed() ||
+      context.handler.getClient() !== nextClient ||
+      nextClient.invalidated ||
+      socket.readyState !== WEBSOCKET_OPEN_READY_STATE
+    ) {
+      return;
+    }
+    const display = getUserProfileDisplay(profileId);
+    const profile = {
+      profileId: display.id,
+      displayName: display.displayName,
+      avatarRevision: display.avatarRevision,
+      hasAvatar: display.hasAvatar,
+      updatedAt,
+    };
+    if (nextClient.authenticatedUserProfile) {
+      Object.assign(nextClient.authenticatedUserProfile, profile);
+    } else {
+      nextClient.authenticatedUserProfile = profile;
+    }
+    attachGatewayLocalUserIngress(
+      nextClient,
+      prepareLocalUserIngress(nextClient.authenticatedUserProfile),
+    );
+    buildRequestContext().refreshConnectedUserProfile?.({ ...display, updatedAt });
+  };
+  if (resolveAuthenticatedGitHubIdentity) {
+    nextClient.authenticatedGitHubIdentitySync = async () => {
+      const result = await resolveAuthenticatedGitHubIdentity();
+      attachAuthenticatedProfile(result.profileId, result.updatedAt);
+      return result;
+    };
+  }
   for (const entry of pendingPluginNodeCapabilities) {
     setClientPluginNodeCapability({
       client: nextClient,
@@ -247,11 +485,11 @@ export async function attachAuthenticatedGatewayConnect(
 
   // Version mismatch: kick the local node host so the OS supervisor restarts it.
   // Only applies when the connecting node is the same-install local node (verified by
-  // matching instanceId against ~/.openclaw/node.json nodeId). SSH-tunneled remote
+  // matching instanceId against the local node-host config row). SSH-tunneled remote
   // nodes also appear as loopback but have different instanceIds, so they are exempt.
   // Placed before setClient/presence to avoid phantom online state on rejection.
   if (role === "node" && isLocalClient) {
-    const localNodeId = resolveLocalNodeId();
+    const localNodeId = await resolveLocalNodeId();
     const clientInstanceId = connectParams.client.instanceId?.trim();
     if (localNodeId && clientInstanceId && clientInstanceId === localNodeId) {
       const gatewayVersion = resolveRuntimeServiceVersion(process.env);
@@ -280,6 +518,39 @@ export async function attachAuthenticatedGatewayConnect(
     }
   }
 
+  const admittedNodePairing = role === "node" ? nodePairingAdmission : undefined;
+  if (admittedNodePairing) {
+    const currentPairingState = await captureAuthenticatedNodePairingState(
+      admittedNodePairing.authenticated,
+    );
+    if (
+      !currentPairingState ||
+      currentPairingState.identity.key !== admittedNodePairing.identity.key ||
+      currentPairingState.generation?.key !== admittedNodePairing.generation?.key
+    ) {
+      const message = "node pairing changed during connect";
+      markHandshakeFailure("node-pairing-generation-changed", {
+        deviceId: admittedNodePairing.identity.nodeId,
+      });
+      sendHandshakeErrorResponse(ErrorCodes.NOT_PAIRED, message);
+      await releasePendingNodePairingCleanup();
+      close(1008, truncateCloseReason(message));
+      return;
+    }
+  }
+
+  // Authentication may finish before pairing/profile work does. Revalidate at
+  // the registration boundary so a credential rotation cannot miss this client.
+  if (
+    sessionUsesSharedGatewayAuth &&
+    getRequiredSharedGatewaySessionGeneration &&
+    sessionSharedGatewaySessionGeneration !== getRequiredSharedGatewaySessionGeneration()
+  ) {
+    setCloseCause("gateway-auth-rotated", { authGenerationStale: true });
+    await releasePendingNodePairingCleanup();
+    close(4001, "gateway auth changed");
+    return;
+  }
   if (!setClient(nextClient)) {
     await releasePendingNodePairingCleanup();
     setCloseCause("connect-aborted-before-register", {
@@ -301,13 +572,30 @@ export async function attachAuthenticatedGatewayConnect(
     auth: authMethod,
   });
 
-  if (isWebchatConnect(connectParams)) {
+  if (authenticatedUserId) {
     logWsControl.info(
-      `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version}`,
+      `authenticated user connected conn=${connId} user=${formatForLog(authenticatedUserId)}`,
     );
   }
 
+  if (isWebchatConnect(connectParams)) {
+    const clientBuildId = connectParams.client.buildId?.trim();
+    logWsControl.info(
+      `webchat connected conn=${connId} remote=${remoteAddr ?? "?"} client=${clientLabel} ${connectParams.client.mode} v${connectParams.client.version} build=${formatForLog(clientBuildId ?? "legacy")}`,
+    );
+  }
+
+  const currentAuthenticatedPresenceUser = () =>
+    nextClient.authenticatedGitHubIdentitySync && !nextClient.authenticatedUserProfile
+      ? undefined
+      : buildAuthenticatedPresenceUser({
+          authenticatedUserId,
+          authenticatedUserIsTailscaleProvider,
+          authenticatedUserProfile: nextClient.authenticatedUserProfile,
+        });
+
   if (presenceKey) {
+    const authenticatedPresenceUser = currentAuthenticatedPresenceUser();
     upsertPresence(presenceKey, {
       host: connectParams.client.displayName ?? connectParams.client.id ?? os.hostname(),
       ip: isLocalClient ? undefined : reportedClientIp,
@@ -315,37 +603,27 @@ export async function attachAuthenticatedGatewayConnect(
       platform: connectParams.client.platform,
       deviceFamily: connectParams.client.deviceFamily,
       modelIdentifier: connectParams.client.modelIdentifier,
+      timeZone: connectParams.client.timeZone,
       mode: connectParams.client.mode,
       deviceId: device?.id,
       roles: [role],
       scopes,
-      instanceId: device?.id ?? instanceId,
+      instanceId: role === "node" ? (device?.id ?? instanceId) : instanceId,
+      ...(authenticatedPresenceUser ? { user: authenticatedPresenceUser } : {}),
       reason: "connect",
     });
-    incrementPresenceVersion();
+    // Publish the completed row before hello snapshots it; existing readers do
+    // not receive this connection's hello and must not wait for later activity.
+    broadcastPresenceSnapshot(buildRequestContext());
   }
-  if (role === "node") {
+  if (admittedNodePairing) {
+    const pairingGeneration = admittedNodePairing.generation?.key;
     const requestContext = buildRequestContext();
     const nodeSession = requestContext.nodeRegistry.register(nextClient, {
       remoteIp: reportedClientIp,
+      pairingIdentity: admittedNodePairing.identity.key,
+      ...(pairingGeneration ? { pairingGeneration } : {}),
     });
-    const instanceIdRaw = connectParams.client.instanceId;
-    const instanceIdLocal = typeof instanceIdRaw === "string" ? instanceIdRaw.trim() : "";
-    const nodeIdsForPairing = new Set<string>([nodeSession.nodeId]);
-    if (instanceIdLocal) {
-      nodeIdsForPairing.add(instanceIdLocal);
-    }
-    for (const nodeId of nodeIdsForPairing) {
-      runDetachedConnectWork(
-        async () => {
-          await updatePairedNodeMetadata(nodeId, {
-            lastConnectedAtMs: nodeSession.connectedAtMs,
-          });
-        },
-        (err) =>
-          logGateway.warn(`failed to record last connect for ${nodeId}: ${formatForLog(err)}`),
-      );
-    }
     recordRemoteNodeInfo({
       nodeId: nodeSession.nodeId,
       connId: nodeSession.connId,
@@ -354,6 +632,7 @@ export async function attachAuthenticatedGatewayConnect(
       deviceFamily: nodeSession.deviceFamily,
       commands: nodeSession.commands,
       remoteIp: nodeSession.remoteIp,
+      pairingGeneration: nodeSession.pairingGeneration,
     });
     runDetachedConnectWork(
       async () => {
@@ -371,12 +650,28 @@ export async function attachAuthenticatedGatewayConnect(
       (err) =>
         logGateway.warn(`remote bin probe failed for ${nodeSession.nodeId}: ${formatForLog(err)}`),
     );
+    const sendConnectSnapshot = async (event: string, payload: unknown) => {
+      if (pairingGeneration) {
+        await requestContext.nodeRegistry.sendEventRawForPairingGeneration(
+          nodeSession.nodeId,
+          pairingGeneration,
+          event,
+          serializeEventPayload(payload),
+        );
+        return;
+      }
+      await requestContext.nodeRegistry.sendEventForPairingIdentity({
+        nodeId: nodeSession.nodeId,
+        connId: nodeSession.connId,
+        pairingIdentity: admittedNodePairing.identity.key,
+        event,
+        payload,
+      });
+    };
     runDetachedConnectWork(
       async () => {
         const cfg = await loadVoiceWakeConfig();
-        requestContext.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.changed", {
-          triggers: cfg.triggers,
-        });
+        await sendConnectSnapshot("voicewake.changed", { triggers: cfg.triggers });
       },
       (err) =>
         logGateway.warn(
@@ -386,9 +681,7 @@ export async function attachAuthenticatedGatewayConnect(
     runDetachedConnectWork(
       async () => {
         const routing = await loadVoiceWakeRoutingConfig();
-        requestContext.nodeRegistry.sendEvent(nodeSession.nodeId, "voicewake.routing.changed", {
-          config: routing,
-        });
+        await sendConnectSnapshot("voicewake.routing.changed", { config: routing });
       },
       (err) =>
         logGateway.warn(
@@ -397,5 +690,51 @@ export async function attachAuthenticatedGatewayConnect(
     );
   }
 
-  await sendGatewayHello(context, state, pluginSurfaceUrls);
+  await sendGatewayHello(context, state, pluginSurfaceUrls, authenticatedUserProfile?.profileId);
+
+  if (nextClient.authenticatedGitHubIdentitySync) {
+    runDetachedConnectWork(
+      async () => {
+        const result = await nextClient.authenticatedGitHubIdentitySync!();
+        const profile = nextClient.authenticatedUserProfile;
+        const profilePic = authResult.tailscaleIdentity?.profilePic;
+        if (!profile?.hasAvatar && profilePic) {
+          try {
+            const updated = await adoptTailscaleProfileAvatar(result.profileId, profilePic);
+            if (updated.avatarMime) {
+              attachAuthenticatedProfile(updated.id, updated.updatedAt);
+            }
+          } catch (error) {
+            logGateway.warn(
+              `Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`,
+            );
+          }
+        }
+      },
+      (error) => {
+        logGateway.warn(`GitHub identity sync failed conn=${connId}: ${formatForLog(error)}`);
+      },
+    );
+  }
+
+  const tailscaleProfilePic = authResult.tailscaleIdentity?.profilePic;
+  const tailscaleProfileId = nextClient.authenticatedUserProfile?.profileId;
+  if (
+    !nextClient.authenticatedGitHubIdentitySync &&
+    tailscaleProfileId &&
+    !nextClient.authenticatedUserProfile?.hasAvatar &&
+    tailscaleProfilePic
+  ) {
+    runDetachedConnectWork(
+      async () => {
+        const updated = await adoptTailscaleProfileAvatar(tailscaleProfileId, tailscaleProfilePic);
+        if (!updated.avatarMime) {
+          return;
+        }
+        attachAuthenticatedProfile(updated.id, updated.updatedAt);
+      },
+      (error) =>
+        logGateway.warn(`Tailscale avatar adoption failed conn=${connId}: ${formatForLog(error)}`),
+    );
+  }
 }

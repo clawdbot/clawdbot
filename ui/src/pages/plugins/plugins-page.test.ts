@@ -2,206 +2,38 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { GatewayRequestError } from "../../api/gateway.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { i18n } from "../../i18n/index.ts";
-import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import { createRuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
+import type {
+  PluginInstallRequest,
+  PluginListResult,
+  PluginMutationResult,
+  PluginSearchResult,
+} from "../../lib/plugins/index.ts";
+import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
-  createApplicationContextProvider,
-  type ApplicationContextProvider,
-} from "../../test-helpers/application-context.ts";
+  clickRowAction,
+  createClient,
+  createContext,
+  createGateway,
+  createPlugin,
+  createPluginsRouteData,
+  createPluginsRouteLocation,
+  createResult,
+  createRuntimeConfigHarness,
+  deferred,
+  mountPage,
+  resetPluginsPageTestState,
+  type RuntimeConfigTestState,
+} from "./plugins-page.test-support.ts";
 import type { PluginsRouteData } from "./plugins-page.ts";
-import "./plugins-page.ts";
 
-type RequestHandler = (method: string, params: unknown) => Promise<unknown>;
-
-type GatewayHarness = {
-  gateway: ApplicationGateway;
-  emit: (client: GatewayBrowserClient | null, connected: boolean) => ApplicationGatewaySnapshot;
-};
-
-type TestPluginsPage = HTMLElement & {
-  routeData?: PluginsRouteData;
-  updateComplete: Promise<boolean>;
-  result: PluginListResult | null;
-  loading: boolean;
-  busy: Record<string, boolean>;
-  activeTab: "installed" | "discover";
-};
-
-type RuntimeConfigTestState = {
-  configFormDirty: boolean;
-  lastError: string | null;
-  configSnapshot?: { sourceConfig: Record<string, unknown>; hash: string } | null;
-};
-
-function createPlugin(overrides: Partial<PluginCatalogItem> = {}): PluginCatalogItem {
-  return {
-    id: "workboard",
-    name: "Workboard",
-    description: "Agent work queue and session handoff.",
-    origin: "bundled",
-    installed: true,
-    enabled: false,
-    state: "disabled",
-    featured: true,
-    order: 10,
-    ...overrides,
-  };
-}
-
-function createResult(plugin = createPlugin()): PluginListResult {
-  return { plugins: [plugin], diagnostics: [], mutationAllowed: true };
-}
-
-function createClient(handler: RequestHandler) {
-  const request = vi.fn(handler);
-  return {
-    client: { request } as unknown as GatewayBrowserClient,
-    request,
-  };
-}
-
-function createSnapshot(
-  client: GatewayBrowserClient | null,
-  connected: boolean,
-): ApplicationGatewaySnapshot {
-  return {
-    client,
-    connected,
-    reconnecting: !connected,
-    hello: {
-      type: "hello-ok",
-      protocol: 1,
-      auth: { role: "operator", scopes: ["operator.read", "operator.admin"] },
-    },
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-}
-
-function createGateway(client: GatewayBrowserClient, connected = true): GatewayHarness {
-  let snapshot = createSnapshot(client, connected);
-  const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
-  const gateway = {
-    get snapshot() {
-      return snapshot;
-    },
-    connection: { gatewayUrl: "ws://localhost", token: "", password: "", bootstrapToken: "" },
-    eventLog: [],
-    connect: () => undefined,
-    setSessionKey: () => undefined,
-    start: () => undefined,
-    stop: () => undefined,
-    subscribe(listener) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-    subscribeEventLog: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  } satisfies ApplicationGateway;
-  return {
-    gateway,
-    emit(nextClient, nextConnected) {
-      snapshot = createSnapshot(nextClient, nextConnected);
-      for (const listener of listeners) {
-        listener(snapshot);
-      }
-      return snapshot;
-    },
-  };
-}
-
-type RuntimeConfigTestHarness = {
-  runtimeConfig: {
-    state: RuntimeConfigTestState;
-    refresh: ApplicationContext["runtimeConfig"]["refresh"];
-    ensureLoaded: ReturnType<typeof vi.fn<() => Promise<undefined>>>;
-    patch: ReturnType<
-      typeof vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>
-    >;
-    subscribe: (listener: (state: RuntimeConfigTestState) => void) => () => void;
-  };
-  notify: () => void;
-};
-
-function createRuntimeConfigHarness(
-  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
-  runtimeConfigState: RuntimeConfigTestState,
-): RuntimeConfigTestHarness {
-  const listeners = new Set<(state: RuntimeConfigTestState) => void>();
-  const runtimeConfig = {
-    state: runtimeConfigState,
-    refresh: refreshConfig,
-    ensureLoaded: vi.fn(async () => undefined),
-    patch: vi.fn<(options: { raw: Record<string, unknown>; note: string }) => Promise<boolean>>(
-      async () => true,
-    ),
-    subscribe(listener: (state: RuntimeConfigTestState) => void) {
-      listeners.add(listener);
-      return () => listeners.delete(listener);
-    },
-  };
-  return {
-    runtimeConfig,
-    notify: () => {
-      for (const listener of listeners) {
-        listener(runtimeConfigState);
-      }
-    },
-  };
-}
-
-function createContext(
-  gateway: ApplicationGateway,
-  refreshConfig: ApplicationContext["runtimeConfig"]["refresh"],
-  runtimeConfigState: RuntimeConfigTestState = {
-    configFormDirty: false,
-    lastError: null,
-  },
-  harness = createRuntimeConfigHarness(refreshConfig, runtimeConfigState),
-): ApplicationContext {
-  return {
-    gateway,
-    basePath: "",
-    runtimeConfig: harness.runtimeConfig,
-    navigate: vi.fn(),
-  } as unknown as ApplicationContext;
-}
-
-async function mountPage(
-  context: ApplicationContext,
-  routeData?: PluginsRouteData,
-): Promise<{ page: TestPluginsPage; provider: ApplicationContextProvider }> {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement("openclaw-plugins-page") as unknown as TestPluginsPage;
-  page.routeData = routeData;
-  provider.append(page);
-  document.body.append(provider);
-  await page.updateComplete;
-  return { page, provider };
-}
-
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((nextResolve) => {
-    resolve = nextResolve;
-  });
-  return { promise, resolve };
-}
-
-async function clickRowAction(page: TestPluginsPage, pluginSelector: string, label: string) {
-  const button = [...page.querySelectorAll<HTMLButtonElement>(`${pluginSelector} button`)].find(
-    (element) => (element.getAttribute("aria-label") ?? element.textContent ?? "").includes(label),
-  );
-  button?.click();
-  await page.updateComplete;
+function clickHubTab(page: HTMLElement, tab: "installed" | "discover" | "skills" | "workshop") {
+  page
+    .querySelector(`#plugins-tab-${tab}`)
+    ?.dispatchEvent(new MouseEvent("click", { detail: 1, bubbles: true }));
 }
 
 describe("PluginsPage", () => {
@@ -209,31 +41,15 @@ describe("PluginsPage", () => {
     await i18n.setLocale("en");
   });
 
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-  });
+  afterEach(resetPluginsPageTestState);
 
   it("accepts matching route data without issuing a duplicate list request", async () => {
     const { client, request } = createClient(async () => createResult());
     const harness = createGateway(client);
     const result = createResult();
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result,
-      error: null,
-    };
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
 
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     expect(page.result).toBe(result);
     expect(request).not.toHaveBeenCalled();
@@ -241,65 +57,125 @@ describe("PluginsPage", () => {
     expect(page.querySelector("h1")?.textContent).toBe("Plugins");
   });
 
-  it("applies a ?tab=discover deep link from route data", async () => {
-    const { client } = createClient(async () => createResult());
+  it("surfaces an initial catalog load failure", async () => {
+    const { client } = createClient(async () => {
+      throw new Error("catalog unavailable");
+    });
     const harness = createGateway(client);
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      result: createResult(),
-      error: null,
-      initialTab: "discover",
-    };
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const { page } = await mountPage(createContext(harness.gateway));
 
-    expect(page.activeTab).toBe("discover");
-    const tabGroup = page.querySelector<HTMLElement & { updateComplete: Promise<boolean> }>(
-      "wa-tab-group",
+    await waitForFast(() =>
+      expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
+        "catalog unavailable",
+      ),
     );
-    await tabGroup?.updateComplete;
     expect(
-      page.querySelector<HTMLElement & { active: boolean }>("#plugins-tab-discover")?.active,
-    ).toBe(true);
+      page.querySelector(".plugins-page-error")?.textContent?.match(/catalog unavailable/gu),
+    ).toHaveLength(1);
   });
 
-  it("routes the skills and workshop hub tabs through navigation", async () => {
+  it("fetches proxied icons with auth fallback and revokes their blob URLs", async () => {
+    const createObjectURL = vi.fn(() => "blob:firecrawl-icon");
+    const revokeObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = revokeObjectURL;
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(new Response(null, { status: 401 }))
+      .mockResolvedValueOnce(
+        new Response(
+          new Blob(
+            [
+              new Uint8Array([
+                0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0, 0x49, 0x48, 0x44, 0x52,
+                0, 0, 0, 2, 0, 0, 0, 1,
+              ]),
+            ],
+            { type: "image/png" },
+          ),
+          {
+            status: 200,
+            headers: { "content-type": "image/png" },
+          },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
     const { client } = createClient(async () => createResult());
     const harness = createGateway(client);
-    const context = createContext(
-      harness.gateway,
-      vi.fn(async () => undefined),
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    harness.gateway.connection.token = "first";
+    harness.gateway.connection.password = "second";
+    const result = createResult(
+      createPlugin({ id: "remote-icon", name: "FireCrawl", hasIcon: true }),
     );
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result: createResult(),
-      error: null,
-    };
-    const { page } = await mountPage(context, routeData);
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway, result);
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-skills")?.click();
-    expect(context.navigate).toHaveBeenCalledWith("skills");
-    page.querySelector<HTMLButtonElement>("#plugins-tab-workshop")?.click();
-    expect(context.navigate).toHaveBeenCalledWith("skill-workshop");
-    expect(page.activeTab).toBe("installed");
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
-    // Catalog tabs switch locally for instant feedback and keep the URL in
-    // sync with the ?tab=discover deep link.
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
-    expect(page.activeTab).toBe("discover");
-    expect(context.navigate).toHaveBeenCalledWith("plugins", { search: "?tab=discover" });
-    await page.updateComplete;
-    page.querySelector<HTMLButtonElement>("#plugins-tab-installed")?.click();
-    expect(page.activeTab).toBe("installed");
-    expect(context.navigate).toHaveBeenCalledWith("plugins", undefined);
+    await waitForFast(() => {
+      expect(
+        page.querySelector('[data-plugin-id="remote-icon"] img.plugins-icon')?.getAttribute("src"),
+      ).toBe("blob:firecrawl-icon");
+    });
+    expect(
+      fetchMock.mock.calls.map(([, init]) => new Headers(init?.headers).get("Authorization")),
+    ).toEqual(["Bearer first", "Bearer second"]);
+    page.applyMutationResult({
+      ok: true,
+      plugin: createPlugin({ id: "other-plugin", name: "Other Plugin" }),
+      restartRequired: false,
+    });
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+
+    page.remove();
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:firecrawl-icon");
+  });
+
+  it("keeps the monogram fallback when a proxied SVG exceeds the safe icon subset", async () => {
+    const createObjectURL = vi.fn();
+    vi.stubGlobal(
+      "URL",
+      class extends URL {
+        static override createObjectURL = createObjectURL;
+        static override revokeObjectURL = vi.fn();
+      },
+    );
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(
+        new Response(
+          new Blob(
+            [
+              `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><filter id="work"><feTurbulence /></filter><path filter="url(#work)" d="M0 0h24v24H0z"/></svg>`,
+            ],
+            { type: "image/svg+xml" },
+          ),
+          { status: 200, headers: { "content-type": "image/svg+xml" } },
+        ),
+      );
+    vi.stubGlobal("fetch", fetchMock as unknown as typeof fetch);
+    const { client } = createClient(async () => createResult());
+    const harness = createGateway(client);
+    harness.gateway.connection.gatewayUrl = window.location.origin.replace(/^http/u, "ws");
+    const result = createResult(
+      createPlugin({ id: "unsafe-icon", name: "Unsafe Icon", hasIcon: true }),
+    );
+
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, result),
+    );
+
+    await waitForFast(() => expect(fetchMock).toHaveBeenCalledOnce());
+    expect(createObjectURL).not.toHaveBeenCalled();
+    expect(
+      page.querySelector('[data-plugin-id="unsafe-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("UI");
   });
 
   it("refreshes the authoritative catalog after a same-client reconnect", async () => {
@@ -311,26 +187,99 @@ describe("PluginsPage", () => {
       throw new Error(`Unexpected method ${method}`);
     });
     const harness = createGateway(client);
-    const routeData: PluginsRouteData = {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result: createResult(),
-      error: null,
-    };
-    const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      routeData,
-    );
+    const routeData: PluginsRouteData = createPluginsRouteData(harness.gateway);
+    const { page } = await mountPage(createContext(harness.gateway), routeData);
 
     harness.emit(client, false);
     harness.emit(client, true);
 
-    await vi.waitFor(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
-    expect(request).toHaveBeenCalledWith("plugins.list", {});
+    await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
+    expect(request).toHaveBeenCalledWith(
+      "plugins.list",
+      {},
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("owns install-policy reviews by install identity across row aliases", async () => {
+    let installCalls = 0;
+    const { client } = createClient(async (method) => {
+      if (method === "plugins.list") {
+        return createResult(
+          createPlugin({ id: "bluebubbles", name: "BlueBubbles", installed: true }),
+        );
+      }
+      if (method !== "plugins.install") {
+        throw new Error(`Unexpected method ${method}`);
+      }
+      installCalls += 1;
+      if (installCalls <= 2) {
+        throw new GatewayRequestError({
+          code: "INVALID_REQUEST",
+          message: "install requires review",
+          details: {
+            installPolicyCode: "install_policy_warning_acknowledgement_required",
+            targetName: "@openclaw/bluebubbles",
+            targetType: "plugin",
+            requestMode: "install",
+            reason: `Review this plugin (${installCalls}).`,
+          },
+        });
+      }
+      return {
+        ok: true,
+        plugin: createPlugin({ id: "bluebubbles", name: "BlueBubbles", installed: true }),
+        restartRequired: false,
+      } satisfies PluginMutationResult;
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(
+          createPlugin({
+            id: "@openclaw/bluebubbles",
+            name: "BlueBubbles",
+            packageName: "@openclaw/bluebubbles",
+            installed: false,
+            enabled: false,
+            state: "not-installed",
+            install: { source: "official", pluginId: "@openclaw/bluebubbles" },
+          }),
+        ),
+      ),
+    );
+    const installIdentity = "plugin:@openclaw/bluebubbles";
+    const catalogRequest = {
+      source: "official",
+      pluginId: "@openclaw/bluebubbles",
+    } satisfies PluginInstallRequest;
+    const searchRequest = {
+      source: "clawhub",
+      packageName: "@openclaw/bluebubbles",
+    } satisfies PluginInstallRequest;
+    page.messages["plugin:workboard"] = { kind: "success", text: "Unrelated message." };
+
+    await page.consentController.install(catalogRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
+      "Review this plugin (1).",
+    );
+
+    await page.consentController.install(searchRequest, installIdentity);
+    expect(page.messages[installIdentity]?.installPolicyWarning?.details.reason).toBe(
+      "Review this plugin (2).",
+    );
+
+    await page.consentController.install(
+      { ...searchRequest, acknowledgeInstallPolicyWarning: true },
+      installIdentity,
+    );
+
+    expect(page.messages[installIdentity]).toBeUndefined();
+    expect(page.messages["plugin:bluebubbles"]?.kind).toBe("success");
+    expect(page.result?.plugins.map((plugin) => plugin.id)).toEqual(["bluebubbles"]);
+    expect(page.messages["plugin:workboard"]?.text).toBe("Unrelated message.");
   });
 
   it("debounces two-character ClawHub searches and cancels stale input", async () => {
@@ -343,20 +292,11 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "w";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -367,10 +307,60 @@ describe("PluginsPage", () => {
     await vi.advanceTimersByTimeAsync(300);
 
     expect(request).toHaveBeenCalledTimes(1);
-    expect(request).toHaveBeenCalledWith("plugins.search", {
-      query: "workboard",
-      limit: 20,
+    expect(request).toHaveBeenCalledWith(
+      "plugins.search",
+      {
+        query: "workboard",
+        limit: 20,
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
+  });
+
+  it("commits only the latest ClawHub search result", async () => {
+    vi.useFakeTimers();
+    const first = deferred<{ results: PluginSearchResult[] }>();
+    const second = deferred<{ results: PluginSearchResult[] }>();
+    const { client, request } = createClient(async (method, params) => {
+      if (method !== "plugins.search") {
+        throw new Error(`Unexpected method ${method}`);
+      }
+      return (params as { query: string }).query === "first" ? first.promise : second.promise;
     });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(
+        harness.gateway,
+        createResult(),
+        createPluginsRouteLocation("/settings/plugins/discover"),
+      ),
+    );
+    const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
+    search.value = "first";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    search.value = "second";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    await vi.advanceTimersByTimeAsync(300);
+    expect(request).toHaveBeenCalledTimes(2);
+
+    const latest: PluginSearchResult = {
+      score: 1,
+      package: {
+        name: "latest-plugin",
+        displayName: "Latest Plugin",
+        family: "code-plugin",
+        channel: "community",
+        isOfficial: false,
+      },
+    };
+    second.resolve({ results: [latest] });
+    await vi.waitFor(() => expect(page.searchResults).toEqual([latest]));
+    first.resolve({ results: [] });
+    await Promise.resolve();
+
+    expect(page.searchResults).toEqual([latest]);
   });
 
   it("refreshes plugins and runtime config without discarding a pending config draft", async () => {
@@ -400,25 +390,135 @@ describe("PluginsPage", () => {
     });
     const { page } = await mountPage(
       createContext(harness.gateway, refreshConfig, runtimeConfigState),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
-    await vi.waitFor(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
-    await vi.waitFor(() => expect(refreshConfig).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(page.result?.plugins[0]?.enabled).toBe(true));
+    await waitForFast(() => expect(refreshConfig).toHaveBeenCalledOnce());
     expect(refreshConfig).toHaveBeenCalledWith();
     expect(runtimeConfigState.configFormDirty).toBe(true);
     expect(calls).toContainEqual(["plugins.setEnabled", { pluginId: "workboard", enabled: true }]);
     expect(calls).toContainEqual(["plugins.list", {}]);
     expect(calls).toContainEqual(["config.get", {}]);
   });
+
+  it.each(["install", "enable", "uninstall"] as const)(
+    "flushes a pending config draft before plugin %s and refreshes afterward",
+    async (action) => {
+      vi.useFakeTimers();
+      const method =
+        action === "install"
+          ? "plugins.install"
+          : action === "enable"
+            ? "plugins.setEnabled"
+            : "plugins.uninstall";
+      const order: string[] = [];
+      let config: Record<string, unknown> = { pending: false };
+      let hash = "hash-1";
+      const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
+      const installedPlugin = createPlugin({
+        id: "example-plugin",
+        name: "Example Plugin",
+        origin: "global",
+        installed: true,
+        enabled: true,
+        state: "enabled",
+      });
+      const removablePlugin = createPlugin({
+        id: "community-thing",
+        name: "Community Thing",
+        origin: "global",
+        removable: true,
+        featured: false,
+      });
+      const { client } = createClient(async (requestMethod, params) => {
+        if (requestMethod === "config.get") {
+          order.push(requestMethod);
+          return {
+            config,
+            sourceConfig: config,
+            raw: JSON.stringify(config),
+            hash,
+            valid: true,
+            issues: [],
+          };
+        }
+        if (requestMethod === "config.set") {
+          order.push(requestMethod);
+          config = JSON.parse((params as { raw: string }).raw) as Record<string, unknown>;
+          hash = "hash-2";
+          return { hash };
+        }
+        if (requestMethod === method) {
+          order.push(requestMethod);
+          config = { ...config, pluginMutation: action };
+          hash = "hash-3";
+          if (action === "uninstall") {
+            return {
+              ok: true,
+              pluginId: "community-thing",
+              restartRequired: true,
+              removed: ["config entry"],
+            };
+          }
+          return {
+            ok: true,
+            plugin: action === "install" ? installedPlugin : enabledPlugin,
+            restartRequired: true,
+          };
+        }
+        if (requestMethod === "plugins.list") {
+          order.push(requestMethod);
+          return createResult(action === "install" ? installedPlugin : enabledPlugin);
+        }
+        throw new Error(`Unexpected method ${requestMethod}`);
+      });
+      const gatewayHarness = createGateway(client);
+      const runtimeConfig = createRuntimeConfigCapability(gatewayHarness.gateway);
+      await runtimeConfig.ensureLoaded();
+      const context = {
+        ...createContext(gatewayHarness.gateway, runtimeConfig.refresh),
+        runtimeConfig,
+      } as ApplicationContext;
+      const { page } = await mountPage(context, {
+        gateway: gatewayHarness.gateway,
+        gatewaySnapshot: gatewayHarness.gateway.snapshot,
+        location: createPluginsRouteLocation(),
+        result: {
+          plugins: [createPlugin(), removablePlugin],
+          diagnostics: [],
+          mutationAllowed: true,
+        },
+        error: null,
+      });
+      order.length = 0;
+      runtimeConfig.patchForm(["pending"], true);
+
+      if (action === "install") {
+        await page.consentController.install(
+          {
+            source: "clawhub",
+            packageName: "example-plugin",
+          } as PluginInstallRequest,
+          "clawhub:example-plugin",
+        );
+      } else if (action === "enable") {
+        await page.updateEnabled("workboard", true);
+      } else {
+        await page.uninstall("community-thing", "plugin:community-thing");
+      }
+
+      expect(order).toEqual(["config.set", method, "config.get", "plugins.list"]);
+      expect(runtimeConfig.state.configSnapshot?.hash).toBe("hash-3");
+      expect(runtimeConfig.state.configForm).toMatchObject({
+        pending: true,
+        pluginMutation: action,
+      });
+      runtimeConfig.dispose();
+    },
+  );
 
   it("keeps the enable action retryable after a failed enable", async () => {
     const { client, request } = createClient(async (method) => {
@@ -429,26 +529,17 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="alert"]')?.textContent).toContain("Enable failed"),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() => {
+    await waitForFast(() => {
       const calls = request.mock.calls.filter(([method]) => method === "plugins.setEnabled");
       expect(calls).toHaveLength(2);
       expect(calls.map(([, params]) => params)).toEqual([
@@ -471,20 +562,11 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     const search = page.querySelector<HTMLInputElement>("#plugins-global-search")!;
     search.value = "calendar";
     search.dispatchEvent(new Event("input", { bubbles: true }));
@@ -494,10 +576,14 @@ describe("PluginsPage", () => {
 
     harness.emit(client, true);
     await vi.advanceTimersByTimeAsync(300);
-    expect(request).toHaveBeenCalledWith("plugins.search", {
-      query: "calendar",
-      limit: 20,
-    });
+    expect(request).toHaveBeenCalledWith(
+      "plugins.search",
+      {
+        query: "calendar",
+        limit: 20,
+      },
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
   });
 
   it("clears visible catalog loading when a mutation supersedes a manual refresh", async () => {
@@ -517,17 +603,8 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway),
     );
 
     page.querySelector<HTMLButtonElement>(".plugins-refresh")?.click();
@@ -535,7 +612,7 @@ describe("PluginsPage", () => {
     expect(page.loading).toBe(true);
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
 
-    await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
+    await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
     expect(page.loading).toBe(false);
     expect(page.querySelector<HTMLButtonElement>(".plugins-refresh")?.disabled).toBe(false);
     manualRefresh.resolve(createResult());
@@ -543,9 +620,9 @@ describe("PluginsPage", () => {
     expect(page.loading).toBe(false);
   });
 
-  it("surfaces and retries a runtime config refresh failure", async () => {
+  it("keeps a committed enable successful when its config refresh fails", async () => {
     const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
-    const { client } = createClient(async (method) => {
+    const { client, request } = createClient(async (method) => {
       if (method === "plugins.setEnabled") {
         return { ok: true, plugin: enabledPlugin, restartRequired: false };
       }
@@ -559,32 +636,25 @@ describe("PluginsPage", () => {
       configFormDirty: false,
       lastError: null,
     };
-    let refreshCalls = 0;
     const refreshConfig = vi.fn(async () => {
-      refreshCalls += 1;
-      runtimeConfigState.lastError = refreshCalls === 1 ? "config.get failed" : null;
+      throw new Error("config.get failed after plugin commit");
     });
     const { page } = await mountPage(
       createContext(harness.gateway, refreshConfig, runtimeConfigState),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: createResult(),
-        error: null,
-      },
+      createPluginsRouteData(harness.gateway),
     );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
-    await vi.waitFor(() =>
-      expect(page.querySelector(".plugins-page-error")?.textContent).toContain(
-        "Could not refresh Control UI configuration: config.get failed",
+    await waitForFast(() =>
+      expect(page.querySelector('[role="status"]')?.textContent).toContain(
+        "config.get failed after plugin commit",
       ),
     );
-
-    page.querySelector<HTMLButtonElement>(".plugins-page-error button")?.click();
-    await vi.waitFor(() => expect(page.querySelector(".plugins-page-error")).toBeNull());
-    expect(refreshConfig).toHaveBeenCalledTimes(2);
+    expect(page.result?.plugins[0]?.enabled).toBe(true);
+    expect(request.mock.calls.filter(([method]) => method === "plugins.setEnabled")).toHaveLength(
+      1,
+    );
+    expect(refreshConfig).toHaveBeenCalledOnce();
   });
 
   it("does not let an old mutation clear replacement-source busy state", async () => {
@@ -616,19 +686,16 @@ describe("PluginsPage", () => {
     const refreshConfig = vi.fn(async () => {
       await replacementClient.request("config.get", {});
     });
-    const { page } = await mountPage(createContext(harness.gateway, refreshConfig), {
-      gateway: harness.gateway,
-      gatewaySnapshot: harness.gateway.snapshot,
-      initialTab: null,
-      result: disabledResult,
-      error: null,
-    });
+    const { page } = await mountPage(
+      createContext(harness.gateway, refreshConfig),
+      createPluginsRouteData(harness.gateway, disabledResult),
+    );
 
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     harness.emit(replacementClient, true);
-    await vi.waitFor(() => expect(replacementListCount).toBe(1));
+    await waitForFast(() => expect(replacementListCount).toBe(1));
     await page.updateComplete;
     await clickRowAction(page, '[data-plugin-id="workboard"]', "Enable");
     expect(page.busy["plugin:workboard"]).toBe(true);
@@ -638,7 +705,7 @@ describe("PluginsPage", () => {
     expect(page.busy["plugin:workboard"]).toBe(true);
 
     freshMutation.resolve({ ok: true, plugin: enabledPlugin, restartRequired: false });
-    await vi.waitFor(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
+    await waitForFast(() => expect(page.busy["plugin:workboard"]).toBeUndefined());
   });
 
   it("uninstalls a removable plugin after inline confirmation", async () => {
@@ -667,17 +734,12 @@ describe("PluginsPage", () => {
     });
     const harness = createGateway(client);
     const { page } = await mountPage(
-      createContext(
-        harness.gateway,
-        vi.fn(async () => undefined),
-      ),
-      {
-        gateway: harness.gateway,
-        gatewaySnapshot: harness.gateway.snapshot,
-        initialTab: null,
-        result: { plugins: [createPlugin(), removable], diagnostics: [], mutationAllowed: true },
-        error: null,
-      },
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, {
+        plugins: [createPlugin(), removable],
+        diagnostics: [],
+        mutationAllowed: true,
+      }),
     );
 
     await clickRowAction(page, '[data-plugin-id="community-thing"]', "Remove");
@@ -687,15 +749,66 @@ describe("PluginsPage", () => {
       )
       ?.click();
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(calls).toContainEqual(["plugins.uninstall", { pluginId: "community-thing" }]),
     );
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector(".plugins-page-notice")?.textContent).toContain(
         "Removed community-thing",
       ),
     );
     expect(calls).toContainEqual(["plugins.list", {}]);
+  });
+
+  it("does not let an older uninstall republish its page notice after a newer row action", async () => {
+    const uninstallResult = deferred<unknown>();
+    const enabledPlugin = createPlugin({ enabled: true, state: "enabled" });
+    const removable = createPlugin({
+      id: "community-thing",
+      name: "Community Thing",
+      origin: "global",
+      removable: true,
+      featured: false,
+    });
+    const { client, request } = createClient(async (method) => {
+      if (method === "plugins.uninstall") {
+        return uninstallResult.promise;
+      }
+      if (method === "plugins.setEnabled") {
+        return { ok: true, plugin: enabledPlugin, restartRequired: false };
+      }
+      if (method === "plugins.list") {
+        return createResult(enabledPlugin);
+      }
+      throw new Error(`Unexpected method ${method}`);
+    });
+    const harness = createGateway(client);
+    const { page } = await mountPage(
+      createContext(harness.gateway),
+      createPluginsRouteData(harness.gateway, {
+        plugins: [createPlugin(), removable],
+        diagnostics: [],
+        mutationAllowed: true,
+      }),
+    );
+
+    const uninstall = page.uninstall("community-thing", "plugin:community-thing");
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("plugins.uninstall", { pluginId: "community-thing" }),
+    );
+    await page.updateEnabled("workboard", true);
+
+    uninstallResult.resolve({
+      ok: true,
+      pluginId: "community-thing",
+      restartRequired: true,
+      removed: ["config entry", "install record", "directory"],
+    });
+    await uninstall;
+    await page.updateComplete;
+
+    expect(page.querySelector(".plugins-page-notice")).toBeNull();
+    expect(page.messages["plugin:workboard"]?.text).toContain("Enabled Workboard");
   });
 
   it("adds an MCP server through the shared config seam", async () => {
@@ -725,7 +838,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -737,13 +850,13 @@ describe("PluginsPage", () => {
     addButton?.click();
     await page.updateComplete;
 
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
-    await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
     const patchArgs = expectDefined(
       expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP add patch call")[0],
       "MCP add patch payload",
@@ -759,7 +872,7 @@ describe("PluginsPage", () => {
         },
       },
     });
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="status"].plugins-row-message')?.textContent).toContain(
         "Added MCP server context7",
       ),
@@ -797,7 +910,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -806,7 +919,7 @@ describe("PluginsPage", () => {
     expect(page.querySelector('[data-mcp-name="github"]')).not.toBeNull();
     await clickRowAction(page, '[data-mcp-name="github"]', "Remove");
 
-    await vi.waitFor(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(configHarness.runtimeConfig.patch).toHaveBeenCalledOnce());
     const patchArgs = expectDefined(
       expectDefined(configHarness.runtimeConfig.patch.mock.calls[0], "MCP remove patch call")[0],
       "MCP remove patch payload",
@@ -838,13 +951,13 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
     );
 
-    page.querySelector<HTMLButtonElement>("#plugins-tab-discover")?.click();
+    clickHubTab(page, "discover");
     await page.updateComplete;
     page
       .querySelector<HTMLButtonElement>(
@@ -852,7 +965,7 @@ describe("PluginsPage", () => {
       )
       ?.click();
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(
         page.querySelector('[data-connector-id="context7"] [role="alert"]')?.textContent,
       ).toContain("rate limit exceeded"),
@@ -878,7 +991,7 @@ describe("PluginsPage", () => {
       {
         gateway: gatewayHarness.gateway,
         gatewaySnapshot: gatewayHarness.gateway.snapshot,
-        initialTab: null,
+        location: createPluginsRouteLocation(),
         result: createResult(),
         error: null,
       },
@@ -889,12 +1002,12 @@ describe("PluginsPage", () => {
     ].find((button) => button.textContent?.includes("Add server"));
     addButton?.click();
     await page.updateComplete;
-    const form = page.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = page.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "bad name!";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value = "https://x.example/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
 
-    await vi.waitFor(() =>
+    await waitForFast(() =>
       expect(page.querySelector('[role="alert"].plugins-row-message')?.textContent).toContain(
         "Server names use",
       ),

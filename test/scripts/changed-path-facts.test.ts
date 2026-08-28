@@ -17,6 +17,9 @@ describe("changed path facts", () => {
       ["test/scripts/changed-lanes.test.ts", "rootTest"],
       ["test-fixtures/sample.ts", "testFixture"],
       ["scripts/check-changed.mjs", "rootTooling"],
+      [".agents/skills/openclaw-pr-maintainer/scripts/github-activity.sh", "rootTooling"],
+      [".agents/skills/openclaw-pr-maintainer/SKILL.md", "docs"],
+      ["test/scripts/github-activity-helper.test.ts", "rootTest"],
       [".github/workflows/ci.yml", "rootTooling"],
       ["package.json", "rootGlobal"],
       ["assets/legacy.png", "legacyRootAsset"],
@@ -29,7 +32,7 @@ describe("changed path facts", () => {
   });
 
   it("preserves test and native-only predicates independently from surfaces", () => {
-    expect(getChangedPathFacts("extensions/slack/src/index.test.ts")).toMatchObject({
+    expect(getChangedPathFacts("extensions/slack/src/index.test-support.ts")).toMatchObject({
       surface: "extension",
       isChangedLaneTest: true,
       isTestOnly: true,
@@ -37,6 +40,14 @@ describe("changed path facts", () => {
     });
     expect(getChangedPathFacts("test/helpers/fixture.ts")).toMatchObject({
       surface: "rootTest",
+      isChangedLaneTest: true,
+      isTestOnly: true,
+      isNativeOnly: false,
+    });
+    expect(
+      getChangedPathFacts("src/gateway/server.auth.control-ui.trusted-proxy.suite.ts"),
+    ).toMatchObject({
+      surface: "source",
       isChangedLaneTest: true,
       isTestOnly: true,
       isNativeOnly: false,

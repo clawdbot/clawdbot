@@ -4,22 +4,22 @@ import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { ensureRepoBoundDirectory, resolveRepoRelativeOutputDir } from "../cli-paths.js";
+import { toQaError } from "../errors.js";
 import {
   acquireQaCredentialLease,
   startQaCredentialLeaseHeartbeat,
 } from "../live-transports/shared/credential-lease.runtime.js";
-import { listSlackQaScenarioCatalog } from "../live-transports/slack/slack-live.runtime.js";
+import { resolveSlackQaScenarioIds } from "../live-transports/slack/scenario-selection.js";
 import { isTruthyOptIn, trimToValue } from "../mantis-options.runtime.js";
 import { createPhaseTimer, type MantisPhaseTimings } from "../mantis-phase-timer.runtime.js";
 import {
+  copyCrabboxArtifacts,
   type CommandRunner,
-  type CrabboxInspect,
   defaultCommandRunner,
   inspectCrabbox,
   resolveCrabboxBin,
   runCommand,
   shellQuote,
-  sshCommand,
   stopCrabbox,
   warmupCrabbox,
 } from "./crabbox-runtime.js";
@@ -214,12 +214,9 @@ function resolveScenarioIds(params: {
         ].join(", ")}. Unsupported: ${unsupported.join(", ")}.`,
       );
     }
-    const requested = new Set(scenarioIds);
-    // Slack selects scenarios from catalog order, not CLI order. The watcher
-    // must mirror that order or both sides can block on different checkpoints.
-    return listSlackQaScenarioCatalog()
-      .map((scenario) => scenario.id)
-      .filter((scenarioId) => requested.has(scenarioId));
+    // Mirror the YAML catalog order used by the Slack runner so the watcher
+    // and runner cannot block on different approval checkpoints.
+    return resolveSlackQaScenarioIds({ scenarioIds });
   }
   return scenarioIds;
 }
@@ -596,7 +593,7 @@ if [ -n "\${OPENCLAW_LIVE_OPENAI_KEY:-}" ] && [ -z "\${OPENAI_API_KEY:-}" ]; the
 fi
 if ! command -v node >/dev/null 2>&1; then
   sudo apt-get update -y >"$out/node-apt.log" 2>&1
-  curl -fsSL https://deb.nodesource.com/setup_22.x | sudo -E bash - >>"$out/node-apt.log" 2>&1
+  curl -fsSL --connect-timeout 10 --max-time 120 https://deb.nodesource.com/setup_22.x | sudo -E bash - >>"$out/node-apt.log" 2>&1
   sudo DEBIAN_FRONTEND=noninteractive apt-get install -y nodejs >>"$out/node-apt.log" 2>&1
 fi
 if ! command -v scrot >/dev/null 2>&1; then
@@ -726,9 +723,11 @@ run_mantis_remote_body() {
       node_tmp="$(mktemp -d)"
       node_archive="node-v$node_version-linux-$node_arch.tar.xz"
       node_base_url="https://nodejs.org/dist/v$node_version"
-      curl -fsSL --retry 3 --retry-all-errors "$node_base_url/SHASUMS256.txt" \
+      # Retry quick transient failures within 120 seconds, but do not start
+      # another long transfer after an attempt consumes that full deadline.
+      curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/SHASUMS256.txt" \
         -o "$node_tmp/SHASUMS256.txt"
-      curl -fsSL --retry 3 --retry-all-errors "$node_base_url/$node_archive" \
+      curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors "$node_base_url/$node_archive" \
         -o "$node_tmp/$node_archive"
       (cd "$node_tmp" && grep "  $node_archive$" SHASUMS256.txt | sha256sum -c -)
       rm -rf "$node_root"
@@ -757,7 +756,9 @@ console.log(match[1] + " " + match[2]);
     pnpm_root="$out/pnpm-$pnpm_version"
     pnpm_archive="$pnpm_root/pnpm.tgz"
     mkdir -p "$pnpm_root"
-    curl -fsSL --retry 3 --retry-all-errors \
+    # Retry quick transient failures within 120 seconds, but do not start
+    # another long transfer after an attempt consumes that full deadline.
+    curl -fsSL --connect-timeout 10 --max-time 120 --retry 3 --retry-max-time 120 --retry-all-errors \
       "https://registry.npmjs.org/pnpm/-/pnpm-$pnpm_version.tgz" \
       -o "$pnpm_archive"
     downloaded_pnpm_sha512="$(sha512sum "$pnpm_archive" | awk '{print $1}')"
@@ -1159,9 +1160,9 @@ if [ "$qa_status" -ne 0 ]; then
   find "$out" -maxdepth 3 -type f -printf "%p %s bytes\\n" | sort || true
   for diagnostic_file in \
     "$out/slack-desktop-command.log" \
-    "$out/slack-qa/slack-qa-report.md" \
-    "$out/slack-qa/slack-qa-summary.json" \
-    "$out/slack-qa/slack-qa-observed-messages.json" \
+    "$out/slack-qa/qa-suite-report.md" \
+    "$out/slack-qa/qa-suite-summary.json" \
+    "$out/slack-qa/qa-evidence.json" \
     "$out/remote-command-timeout.txt" \
     "$out/approval-checkpoint-watcher.log" \
     "$out/chrome.log" \
@@ -1233,44 +1234,6 @@ function renderReport(summary: MantisSlackDesktopSmokeSummary) {
     "",
   ].filter((line) => line !== undefined);
   return `${lines.join("\n")}\n`;
-}
-
-async function copyRemoteArtifacts(params: {
-  cwd: string;
-  env: NodeJS.ProcessEnv;
-  inspect: CrabboxInspect;
-  outputDir: string;
-  remoteOutputDir: string;
-  runner: CommandRunner;
-}) {
-  const { host, sshArgs, sshUser } = sshCommand({ inspect: params.inspect });
-  await fs.mkdir(path.join(params.outputDir, "slack-qa"), { recursive: true });
-  await runCommand({
-    command: "rsync",
-    args: [
-      "-az",
-      "-e",
-      sshArgs,
-      `${sshUser}@${host}:${params.remoteOutputDir}/`,
-      `${params.outputDir}/`,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  });
-  await runCommand({
-    command: "rsync",
-    args: [
-      "-az",
-      "-e",
-      sshArgs,
-      `${sshUser}@${host}:${params.remoteOutputDir}/slack-qa/`,
-      `${path.join(params.outputDir, "slack-qa")}/`,
-    ],
-    cwd: params.cwd,
-    env: params.env,
-    runner: params.runner,
-  }).catch(() => ({ stdout: "", stderr: "" }));
 }
 
 export async function runMantisSlackDesktopSmoke(
@@ -1436,7 +1399,7 @@ export async function runMantisSlackDesktopSmoke(
     );
     leaseHeartbeat?.throwIfFailed();
     await timer.timePhase("artifacts.copy", () =>
-      copyRemoteArtifacts({
+      copyCrabboxArtifacts({
         cwd: repoRoot,
         env,
         inspect: inspected,
@@ -1463,7 +1426,7 @@ export async function runMantisSlackDesktopSmoke(
       timer.updatePhaseStatus("crabbox.remote_run", "accepted");
     }
     if (remoteRunError && !gatewaySetupCompleted && !slackQaCompleted) {
-      throw toErrorObject(remoteRunError);
+      throw toQaError(remoteRunError);
     }
     if (gatewaySetup && !gatewaySetupCompleted) {
       throw new Error("Slack desktop gateway setup did not report a live OpenClaw gateway.");
@@ -1557,29 +1520,37 @@ export async function runMantisSlackDesktopSmoke(
       videoPath,
     };
   } finally {
-    if (summary) {
-      summary.finishedAt = new Date().toISOString();
-      summary.timings = timer.snapshot();
-      await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
-      await fs.writeFile(reportPath, renderReport(summary), "utf8");
-    }
-    if (createdLease && leaseId && !keepLease) {
-      await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
-    }
-    if (leaseHeartbeat) {
-      await leaseHeartbeat.stop().catch((error: unknown) => {
-        console.warn(`Slack credential heartbeat cleanup failed: ${formatErrorMessage(error)}`);
-      });
-    }
-    if (credentialLease) {
-      await credentialLease.release().catch((error: unknown) => {
-        console.warn(`Slack credential release failed: ${formatErrorMessage(error)}`);
-      });
+    try {
+      if (summary) {
+        summary.finishedAt = new Date().toISOString();
+        summary.timings = timer.snapshot();
+        await fs.writeFile(summaryPath, `${JSON.stringify(summary, null, 2)}\n`, "utf8");
+        await fs.writeFile(reportPath, renderReport(summary), "utf8");
+      }
+    } finally {
+      try {
+        if (createdLease && leaseId && !keepLease) {
+          await stopCrabbox({ crabboxBin, cwd: repoRoot, env, leaseId, provider, runner });
+        }
+      } finally {
+        try {
+          if (leaseHeartbeat) {
+            await leaseHeartbeat.stop().catch((error: unknown) => {
+              console.warn(
+                `Slack credential heartbeat cleanup failed: ${formatErrorMessage(error)}`,
+              );
+            });
+          }
+        } finally {
+          if (credentialLease) {
+            await credentialLease.release().catch((error: unknown) => {
+              console.warn(`Slack credential release failed: ${formatErrorMessage(error)}`);
+            });
+          }
+        }
+      }
     }
   }
 }
 
-function toErrorObject(error: unknown): Error {
-  return error instanceof Error ? error : new Error(formatErrorMessage(error));
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -11,30 +11,34 @@ import {
 } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import type { TelegramBotDeps } from "./bot-deps.js";
+import type { TelegramMessageProcessorTurnContext } from "./bot-handlers.types.js";
 import {
   buildTelegramMessageContext,
   type BuildTelegramMessageContextParams,
   type TelegramMediaRef,
 } from "./bot-message-context.js";
-import type { TelegramMessageContextOptions } from "./bot-message-context.types.js";
-import type { TelegramPromptContextEntry } from "./bot-message-context.types.js";
+import type {
+  TelegramMessageContextOptions,
+  TelegramPromptContextEntry,
+} from "./bot-message-context.types.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import {
   createTelegramSpooledReplayParticipant,
   createTelegramSpooledReplayDeferredParticipant,
   getTelegramSpooledReplayDeferredParticipant,
+  getTelegramSpooledReplayLifecycle,
   isTelegramSpooledReplayUpdate,
   recordTelegramMessageProcessingResult,
   type TelegramMessageProcessingResult,
-  type TelegramSpooledReplayDeferredParticipant,
 } from "./bot-processing-outcome.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import { buildTelegramThreadParams, resolveTelegramStreamMode } from "./bot/helpers.js";
 import type { TelegramContext } from "./bot/types.js";
+import { resolveTelegramDmHistoryLimit } from "./dm-history.js";
 import type { TelegramReplyChainEntry } from "./message-cache.js";
 import { TELEGRAM_TEXT_CHUNK_LIMIT } from "./outbound-adapter.js";
 import { TELEGRAM_RICH_TEXT_LIMIT } from "./rich-message.js";
-import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./spooled-update-retry-policy.js";
+import { resolveSpooledUpdatePersistenceRetryDelayMs } from "./telegram-ingress-spool.js";
 
 const telegramInboundLog = createSubsystemLogger("gateway/channels/telegram").child("inbound");
 
@@ -57,6 +61,7 @@ type TelegramMessageProcessorDeps = Omit<
   | "options"
   | "cfg"
   | "historyLimit"
+  | "dmHistoryLimit"
   | "dmPolicy"
   | "allowFrom"
   | "groupAllowFrom"
@@ -64,27 +69,21 @@ type TelegramMessageProcessorDeps = Omit<
 > & {
   runtime: RuntimeEnv;
   telegramDeps: TelegramBotDeps;
-  opts: Pick<TelegramBotOptions, "token" | "allowFrom" | "groupAllowFrom" | "replyToMode">;
-};
-
-export type TelegramMessageProcessorTurnContext = {
-  cfg: OpenClawConfig;
-  telegramCfg: TelegramAccountConfig;
-  onDispatchStart?: () => Promise<void> | void;
-  /** One-way cancellation from an outer spool owner into an isolated retry attempt. */
-  spooledReplayAbortSignal?: AbortSignal;
-  spooledReplayParticipant?: TelegramSpooledReplayDeferredParticipant;
-  finalizeSpooledReplayResult?: (
-    result: TelegramMessageProcessingResult,
-    phase: "adopted" | "terminal",
-  ) => Promise<TelegramMessageProcessingResult>;
-  completeSpooledReplayAfterIrrevocableAdoption?: (
-    error: unknown,
-  ) => Promise<TelegramMessageProcessingResult> | TelegramMessageProcessingResult;
+  buildContext?: typeof import("openclaw/plugin-sdk/channel-inbound").buildChannelInboundEventContext;
+  opts: Pick<
+    TelegramBotOptions,
+    | "token"
+    | "ownerAgentId"
+    | "allowFrom"
+    | "groupAllowFrom"
+    | "replyToMode"
+    | "dispatchReplyFromConfig"
+  >;
 };
 
 export function resolveTelegramMessageTurnSettings(params: {
   accountId: string;
+  senderId?: string | number;
   cfg: OpenClawConfig;
   telegramCfg: TelegramAccountConfig;
   opts: Pick<TelegramBotOptions, "allowFrom" | "groupAllowFrom" | "replyToMode">;
@@ -96,6 +95,10 @@ export function resolveTelegramMessageTurnSettings(params: {
     ackReactionScope: params.cfg.messages?.ackReactionScope ?? "group-mentions",
     allowFrom,
     dmPolicy: params.telegramCfg.dmPolicy ?? "pairing",
+    dmHistoryLimit: resolveTelegramDmHistoryLimit({
+      config: params.telegramCfg,
+      senderId: params.senderId,
+    }),
     groupAllowFrom:
       params.opts.groupAllowFrom ??
       params.telegramCfg.groupAllowFrom ??
@@ -130,11 +133,15 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     sendChatActionHandler,
     runtime,
     telegramDeps,
+    buildContext,
     opts,
   } = deps;
   const sessionRuntime = {
-    ...(telegramDeps.buildChannelInboundEventContext
-      ? { buildChannelInboundEventContext: telegramDeps.buildChannelInboundEventContext }
+    ...((buildContext ?? telegramDeps.buildChannelInboundEventContext)
+      ? {
+          buildChannelInboundEventContext:
+            buildContext ?? telegramDeps.buildChannelInboundEventContext,
+        }
       : {}),
     ...(telegramDeps.readSessionUpdatedAt
       ? { readSessionUpdatedAt: telegramDeps.readSessionUpdatedAt }
@@ -176,6 +183,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     const turnTelegramCfg = turnContext.telegramCfg;
     const turnSettings = resolveTelegramMessageTurnSettings({
       accountId: account.accountId,
+      senderId: primaryCtx.message.from?.id,
       cfg: turnCfg,
       telegramCfg: turnTelegramCfg,
       opts,
@@ -204,7 +212,9 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       bot,
       cfg: turnCfg,
       account,
+      ownerAgentId: opts.ownerAgentId,
       historyLimit: turnSettings.historyLimit,
+      dmHistoryLimit: turnSettings.dmHistoryLimit,
       groupHistories,
       dmPolicy: turnSettings.dmPolicy,
       allowFrom: turnSettings.allowFrom,
@@ -253,7 +263,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           : context.ctxPayload.To,
         chatType: context.ctxPayload.ChatType,
         body: context.ctxPayload.RawBody,
-        mediaType: allMedia[0]?.contentType,
+        mediaType: allMedia[0]?.contentType ?? allMedia[0]?.kind,
       }),
     );
     const spooledReplay =
@@ -261,11 +271,14 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
     if (!spooledReplay) {
       await turnContext.onDispatchStart?.();
     }
-    const runDispatch = async (params: {
-      onTurnAdopted?: () => void | Promise<void>;
-      onTurnDeferred?: () => void;
-      onTurnAbandoned?: () => void;
-      turnAbortSignal?: AbortSignal;
+    const runTelegramDispatch = async (params: {
+      turnAdoptionLifecycle?: {
+        admission?: "exclusive" | "cancel-only";
+        onAdopted: () => void | Promise<void>;
+        onDeferred?: () => void;
+        onAbandoned?: () => void;
+        abortSignal?: AbortSignal;
+      };
     }): Promise<TelegramMessageProcessingResult> => {
       try {
         const dispatchResult = await dispatchTelegramMessage({
@@ -281,10 +294,7 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
           opts,
           retryDispatchErrors: spooledReplay,
           suppressFailureFallback: spooledReplay,
-          onTurnAdopted: params.onTurnAdopted,
-          onTurnDeferred: params.onTurnDeferred,
-          onTurnAbandoned: params.onTurnAbandoned,
-          turnAbortSignal: params.turnAbortSignal,
+          turnAdoptionLifecycle: params.turnAdoptionLifecycle,
         });
         if (dispatchResult?.kind === "failed-retryable") {
           const result: TelegramMessageProcessingResult = {
@@ -389,34 +399,51 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         }
       };
       const run = async () => {
-        const turnAbortSignal = turnContext.spooledReplayAbortSignal
-          ? AbortSignal.any([participant.abortSignal, turnContext.spooledReplayAbortSignal])
-          : participant.abortSignal;
-        const result = await runDispatch({
-          turnAbortSignal,
-          onTurnAdopted: async () => {
-            if (adopted) {
-              return;
-            }
-            adoptionAttempted = true;
-            const adoptedResult = await settle({ kind: "completed" }, "adopted");
-            if (adoptedResult.kind !== "completed") {
-              adoptionFinalizationError =
-                adoptedResult.kind === "failed-retryable"
+        const drainLifecycle = getTelegramSpooledReplayLifecycle();
+        // Participant always owns an AbortSignal on the spooled-replay path;
+        // merge optional drain/context signals without widening to undefined.
+        const turnAbortSignal: AbortSignal = (() => {
+          const extras = [turnContext.spooledReplayAbortSignal, drainLifecycle?.abortSignal].filter(
+            (signal): signal is AbortSignal => signal !== undefined,
+          );
+          if (extras.length === 0) {
+            return participant.abortSignal;
+          }
+          return AbortSignal.any([participant.abortSignal, ...extras]);
+        })();
+        const result = await runTelegramDispatch({
+          turnAdoptionLifecycle: {
+            admission: "exclusive",
+            abortSignal: turnAbortSignal,
+            onAdopted: async () => {
+              if (adopted) {
+                return;
+              }
+              adoptionAttempted = true;
+              const adoptedResult = await settle({ kind: "completed" }, "adopted");
+              if (adoptedResult.kind !== "completed") {
+                adoptionFinalizationError =
+                  adoptedResult.kind === "failed-retryable"
+                    ? adoptedResult.error
+                    : new Error("telegram spooled turn adoption was not completed");
+                throw adoptedResult.kind === "failed-retryable"
                   ? adoptedResult.error
                   : new Error("telegram spooled turn adoption was not completed");
-              throw adoptedResult.kind === "failed-retryable"
-                ? adoptedResult.error
-                : new Error("telegram spooled turn adoption was not completed");
-            }
-          },
-          onTurnDeferred: () => {
-            deferred = true;
-          },
-          onTurnAbandoned: () => {
-            if (!adopted) {
-              void settle({ kind: "skipped" }, "terminal");
-            }
+              }
+              await drainLifecycle?.onAdopted();
+            },
+            onDeferred: () => {
+              deferred = true;
+              drainLifecycle?.onDeferred();
+            },
+            onAbandoned: () => {
+              if (!adopted) {
+                void settle({ kind: "failed-retryable", error: "turn-abandoned" }, "terminal");
+              }
+              // Generic reply abandonment is synchronous; Telegram has no
+              // owner-local resource teardown gated on core claim release.
+              void drainLifecycle?.onAbandoned();
+            },
           },
         });
         if (adopted) {
@@ -424,6 +451,18 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
         }
         if (settledResult) {
           return settledResult;
+        }
+        if (turnAbortSignal.aborted) {
+          const abortResult: TelegramMessageProcessingResult =
+            turnAbortSignal.reason === "skipped"
+              ? { kind: "skipped" }
+              : {
+                  kind: "failed-retryable",
+                  error:
+                    turnAbortSignal.reason ??
+                    new Error("telegram spooled replay owner cancelled before adoption"),
+                };
+          return await settle(abortResult, "terminal");
         }
         if (adoptionAttempted && !deferred && result.kind === "completed") {
           runtime.error?.(
@@ -491,6 +530,6 @@ export const createTelegramMessageProcessor = (deps: TelegramMessageProcessorDep
       return await participant.task;
     }
 
-    return await runDispatch({});
+    return await runTelegramDispatch({});
   };
 };

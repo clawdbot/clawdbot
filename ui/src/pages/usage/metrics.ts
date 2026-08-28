@@ -1,14 +1,14 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 // Control UI view renders usage metrics screen content.
 import { html } from "lit";
 import {
-  buildUsageAggregateTail,
-  mergeUsageDailyLatency,
-  mergeUsageLatency,
-} from "../../../../src/shared/usage-aggregates.js";
+  addCostUsageTotals,
+  createEmptyCostUsageTotals,
+} from "../../../../src/infra/session-cost-usage-totals.js";
+import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty } from "../../lib/string-coerce.ts";
 import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
 
 const CHARS_PER_TOKEN = 4;
@@ -25,8 +25,14 @@ function charsToTokens(chars: number): number {
   return Math.round(chars / CHARS_PER_TOKEN);
 }
 
-function formatTokens(n: number): string {
+function formatUsageTokens(n: number): string {
   return formatCompactTokenCount(n, { thousandsSuffix: "K", trimTrailingZero: false });
+}
+
+// Usage charts choose fixed precision from the surrounding scale; the shared
+// adaptive cost formatter would change labels as values cross its thresholds.
+function formatUsageCost(n: number, decimals = 2): string {
+  return `$${n.toFixed(decimals)}`;
 }
 
 function formatHourLabel(hour: number): string {
@@ -58,9 +64,19 @@ function forEachSessionHourSlice(
 
   const startMs = Math.min(start, end);
   const endMs = Math.max(start, end);
-  const durationMs = Math.max(endMs - startMs, 1);
-  const totalMinutes = durationMs / 60000;
 
+  if (startMs === endMs) {
+    const date = new Date(startMs);
+    visitor({
+      usage,
+      hour: getZonedHour(date, timeZone),
+      weekday: getZonedWeekday(date, timeZone),
+      share: 1,
+    });
+    return true;
+  }
+
+  const totalMinutes = (endMs - startMs) / 60000;
   let cursor = startMs;
   while (cursor < endMs) {
     const date = new Date(cursor);
@@ -342,7 +358,7 @@ function renderUsageMosaic(
         description: t("usage.mosaic.subtitleEmpty"),
         actions: html`
           <div class="usage-mosaic-total">
-            ${formatTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
+            ${formatUsageTokens(0)} ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
           </div>
         `,
       },
@@ -368,7 +384,7 @@ function renderUsageMosaic(
       }),
       actions: html`
         <div class="usage-mosaic-total">
-          ${formatTokens(stats.totalTokens)}
+          ${formatUsageTokens(stats.totalTokens)}
           ${normalizeLowercaseStringOrEmpty(t("usage.metrics.tokens"))}
         </div>
       `,
@@ -388,7 +404,7 @@ function renderUsageMosaic(
                 return html`
                   <div class="usage-daypart-cell" style="background: ${bg};">
                     <div class="usage-daypart-label">${part.label}</div>
-                    <div class="usage-daypart-value">${formatTokens(part.tokens)}</div>
+                    <div class="usage-daypart-value">${formatUsageTokens(part.tokens)}</div>
                   </div>
                 `;
               })}
@@ -406,7 +422,7 @@ function renderUsageMosaic(
                   value > 0
                     ? `color-mix(in srgb, var(--accent) ${(8 + intensity * 70).toFixed(1)}%, transparent)`
                     : "transparent";
-                const title = `${hour}:00 · ${formatTokens(value)} ${normalizeLowercaseStringOrEmpty(
+                const title = `${hour}:00 · ${formatUsageTokens(value)} ${normalizeLowercaseStringOrEmpty(
                   t("usage.metrics.tokens"),
                 )}`;
                 const border =
@@ -415,12 +431,15 @@ function renderUsageMosaic(
                     : "color-mix(in srgb, var(--accent) 24%, transparent)";
                 const selected = selectedHours.includes(hour);
                 return html`
-                  <div
+                  <button
+                    type="button"
                     class="usage-hour-cell ${selected ? "selected" : ""}"
                     style="background: ${bg}; border-color: ${border};"
                     title="${title}"
+                    aria-label=${title}
+                    aria-pressed=${selected ? "true" : "false"}
                     @click=${(e: MouseEvent) => onSelectHour(hour, e.shiftKey)}
-                  ></div>
+                  ></button>
                 `;
               })}
             </div>
@@ -441,10 +460,6 @@ function renderUsageMosaic(
       </div>
     `,
   );
-}
-
-function formatCost(n: number, decimals = 2): string {
-  return `$${n.toFixed(decimals)}`;
 }
 
 function formatIsoDate(date: Date): string {
@@ -512,34 +527,6 @@ function formatFullDate(dateStr: string): string {
   return date.toLocaleDateString(undefined, { month: "long", day: "numeric", year: "numeric" });
 }
 
-const emptyUsageTotals = (): UsageTotals => ({
-  input: 0,
-  output: 0,
-  cacheRead: 0,
-  cacheWrite: 0,
-  totalTokens: 0,
-  totalCost: 0,
-  inputCost: 0,
-  outputCost: 0,
-  cacheReadCost: 0,
-  cacheWriteCost: 0,
-  missingCostEntries: 0,
-});
-
-const mergeUsageTotals = (target: UsageTotals, source: Partial<UsageTotals>) => {
-  target.input += source.input ?? 0;
-  target.output += source.output ?? 0;
-  target.cacheRead += source.cacheRead ?? 0;
-  target.cacheWrite += source.cacheWrite ?? 0;
-  target.totalTokens += source.totalTokens ?? 0;
-  target.totalCost += source.totalCost ?? 0;
-  target.inputCost += source.inputCost ?? 0;
-  target.outputCost += source.outputCost ?? 0;
-  target.cacheReadCost += source.cacheReadCost ?? 0;
-  target.cacheWriteCost += source.cacheWriteCost ?? 0;
-  target.missingCostEntries += source.missingCostEntries ?? 0;
-};
-
 function buildUsageCostWindowSummary(
   daily: Array<UsageTotals & { date: string }>,
   startDate: string,
@@ -551,11 +538,11 @@ function buildUsageCostWindowSummary(
     return null;
   }
 
-  const totals = emptyUsageTotals();
+  const totals = createEmptyCostUsageTotals();
   for (const entry of daily) {
     const day = parseIsoDayIndex(entry.date);
     if (day !== null && day >= startDay && day <= endDay) {
-      mergeUsageTotals(totals, entry);
+      addCostUsageTotals(totals, entry);
     }
   }
 
@@ -608,171 +595,11 @@ const buildAggregatesFromSessions = (
     );
   }
 
-  const messages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
-  const toolMap = new Map<string, number>();
-  const modelMap = new Map<
-    string,
-    { provider?: string; model?: string; count: number; totals: UsageTotals }
-  >();
-  const providerMap = new Map<
-    string,
-    { provider?: string; model?: string; count: number; totals: UsageTotals }
-  >();
-  const agentMap = new Map<string, UsageTotals>();
-  const channelMap = new Map<string, UsageTotals>();
-  const dailyMap = new Map<
-    string,
-    {
-      date: string;
-      tokens: number;
-      cost: number;
-      messages: number;
-      toolCalls: number;
-      errors: number;
-    }
-  >();
-  const dailyLatencyMap = new Map<
-    string,
-    { date: string; count: number; sum: number; min: number; max: number; p95Max: number }
-  >();
-  const modelDailyMap = new Map<
-    string,
-    { date: string; provider?: string; model?: string; tokens: number; cost: number; count: number }
-  >();
-  const latencyTotals = { count: 0, sum: 0, min: Number.POSITIVE_INFINITY, max: 0, p95Max: 0 };
-
+  const accumulator = createUsageAggregateAccumulator();
   for (const session of sessions) {
-    const usage = session.usage;
-    if (!usage) {
-      continue;
-    }
-    if (usage.messageCounts) {
-      messages.total += usage.messageCounts.total;
-      messages.user += usage.messageCounts.user;
-      messages.assistant += usage.messageCounts.assistant;
-      messages.toolCalls += usage.messageCounts.toolCalls;
-      messages.toolResults += usage.messageCounts.toolResults;
-      messages.errors += usage.messageCounts.errors;
-    }
-
-    if (usage.toolUsage) {
-      for (const tool of usage.toolUsage.tools) {
-        toolMap.set(tool.name, (toolMap.get(tool.name) ?? 0) + tool.count);
-      }
-    }
-
-    if (usage.modelUsage) {
-      for (const entry of usage.modelUsage) {
-        const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
-        const modelExisting = modelMap.get(modelKey) ?? {
-          provider: entry.provider,
-          model: entry.model,
-          count: 0,
-          totals: emptyUsageTotals(),
-        };
-        modelExisting.count += entry.count;
-        mergeUsageTotals(modelExisting.totals, entry.totals);
-        modelMap.set(modelKey, modelExisting);
-
-        const providerKey = entry.provider ?? "unknown";
-        const providerExisting = providerMap.get(providerKey) ?? {
-          provider: entry.provider,
-          model: undefined,
-          count: 0,
-          totals: emptyUsageTotals(),
-        };
-        providerExisting.count += entry.count;
-        mergeUsageTotals(providerExisting.totals, entry.totals);
-        providerMap.set(providerKey, providerExisting);
-      }
-    }
-
-    mergeUsageLatency(latencyTotals, usage.latency);
-
-    if (session.agentId) {
-      const totals = agentMap.get(session.agentId) ?? emptyUsageTotals();
-      mergeUsageTotals(totals, usage);
-      agentMap.set(session.agentId, totals);
-    }
-    if (session.channel) {
-      const totals = channelMap.get(session.channel) ?? emptyUsageTotals();
-      mergeUsageTotals(totals, usage);
-      channelMap.set(session.channel, totals);
-    }
-
-    for (const day of usage.dailyBreakdown ?? []) {
-      const daily = dailyMap.get(day.date) ?? {
-        date: day.date,
-        tokens: 0,
-        cost: 0,
-        messages: 0,
-        toolCalls: 0,
-        errors: 0,
-      };
-      daily.tokens += day.tokens;
-      daily.cost += day.cost;
-      dailyMap.set(day.date, daily);
-    }
-    for (const day of usage.dailyMessageCounts ?? []) {
-      const daily = dailyMap.get(day.date) ?? {
-        date: day.date,
-        tokens: 0,
-        cost: 0,
-        messages: 0,
-        toolCalls: 0,
-        errors: 0,
-      };
-      daily.messages += day.total;
-      daily.toolCalls += day.toolCalls;
-      daily.errors += day.errors;
-      dailyMap.set(day.date, daily);
-    }
-    mergeUsageDailyLatency(dailyLatencyMap, usage.dailyLatency);
-    for (const day of usage.dailyModelUsage ?? []) {
-      const key = `${day.date}::${day.provider ?? "unknown"}::${day.model ?? "unknown"}`;
-      const existing = modelDailyMap.get(key) ?? {
-        date: day.date,
-        provider: day.provider,
-        model: day.model,
-        tokens: 0,
-        cost: 0,
-        count: 0,
-      };
-      existing.tokens += day.tokens;
-      existing.cost += day.cost;
-      existing.count += day.count;
-      modelDailyMap.set(key, existing);
-    }
+    accumulator.add(session);
   }
-
-  const tail = buildUsageAggregateTail({
-    byChannelMap: channelMap,
-    latencyTotals,
-    dailyLatencyMap,
-    modelDailyMap,
-    dailyMap,
-  });
-
-  return {
-    messages,
-    tools: {
-      totalCalls: Array.from(toolMap.values()).reduce((sum, count) => sum + count, 0),
-      uniqueTools: toolMap.size,
-      tools: Array.from(toolMap.entries())
-        .map(([name, count]) => ({ name, count }))
-        .toSorted((a, b) => b.count - a.count),
-    },
-    byModel: Array.from(modelMap.values()).toSorted(
-      (a, b) => b.totals.totalCost - a.totals.totalCost,
-    ),
-    byProvider: Array.from(providerMap.values()).toSorted(
-      (a, b) => b.totals.totalCost - a.totals.totalCost,
-    ),
-    byAgent: Array.from(agentMap.entries())
-      .map(([agentId, totals]) => ({ agentId, totals }))
-      .toSorted((a, b) => b.totals.totalCost - a.totals.totalCost),
-    ...tail,
-  };
+  return accumulator.finish();
 };
 
 type UsageInsightStats = {
@@ -848,12 +675,11 @@ export {
   buildPeakErrorHours,
   buildUsageInsightStats,
   charsToTokens,
-  formatCost,
+  formatUsageCost,
   formatDayLabel,
   formatFullDate,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 };
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

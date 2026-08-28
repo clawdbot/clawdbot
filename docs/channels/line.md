@@ -42,9 +42,17 @@ openclaw plugins install ./path/to/local/line-plugin
 https://gateway-host/line/webhook
 ```
 
-The Gateway answers LINE's webhook verification (GET) and acknowledges signed
-inbound events (POST) immediately after signature and payload validation; agent
-processing continues asynchronously.
+The Gateway answers LINE's webhook verification (GET). For signed inbound events
+(POST), it writes each event to the durable ingress queue before returning `200`;
+agent processing continues asynchronously. Failed delivery is retried from the
+queue, including after a Gateway restart, and poison events become failed queue
+records after bounded retries. If durable persistence fails, the request returns
+`500` instead of acknowledging an event that could be lost.
+Delivery is at least once across the queue-to-agent boundary: a Gateway shutdown or
+crash during an active delivery can replay the turn. Message events deduplicate by
+LINE message ID; other event types use `webhookEventId`. Retained completion records
+suppress ordinary duplicate webhooks, but handlers that perform external side effects
+should still be idempotent.
 If you need a custom path, set `channels.line.webhookPath` or
 `channels.line.accounts.<id>.webhookPath` and update the URL accordingly.
 
@@ -152,6 +160,21 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Group: `C` + 32 hex chars
 - Room: `R` + 32 hex chars
 
+## Group join introductions
+
+When the bot joins an allowed group or multi-person room, it posts one
+introduction there. LINE exposes a group name through its group summary API, but
+no room name or topic for multi-person rooms. The Messaging API cannot read prior
+messages, so introductions use only available metadata and ask what the room
+wants the bot to take on rather than inventing activity.
+
+Introductions are enabled by default. Set `channels.line.joinIntro: false` to
+disable them, or use `channels.line.accounts.<accountId>.joinIntro` to override
+one account. They never run in one-to-one user chats or when another member joins.
+See [group join introductions](/channels#group-join-introductions) for room
+admission, once-per-room behavior, and the no-tools turn that treats room content
+as untrusted.
+
 ## Message behavior
 
 - Text is chunked at 5000 characters.
@@ -163,39 +186,79 @@ LINE IDs are case-sensitive. Valid IDs look like:
 - Inbound media is saved under `~/.openclaw/media/inbound/` before it is passed
   to the agent, matching the shared media store used by other channel plugins.
 
-## Channel data (rich messages)
+## Structured rich messages
 
-Use `channelData.line` to send quick replies, locations, Flex cards, or template
-messages.
+Use the shared message presentation fields for portable choices. LINE renders
+`buttons` blocks as Flex controls and `select` blocks as quick replies. A two-button
+block is the portable confirm-style form.
 
 ```json5
 {
-  text: "Here you go",
+  action: "send",
+  message: "Choose an action",
+  presentation: {
+    title: "Menu",
+    blocks: [
+      {
+        type: "buttons",
+        buttons: [
+          { label: "Status", action: { type: "command", command: "/status" } },
+          { label: "Website", action: { type: "url", url: "https://example.com" } },
+        ],
+      },
+      {
+        type: "select",
+        placeholder: "Pick one",
+        options: [
+          { label: "Alpha", action: { type: "callback", value: "alpha" } },
+          { label: "Help", action: { type: "command", command: "/help" } },
+        ],
+      },
+    ],
+  },
+}
+```
+
+LINE-only output uses the schema-validated `channelData.line` fields on
+`message(action="send")`. Send one location and/or one `card`. The supported card
+types are `media_player`, `event`, `agenda`, `device`, and `appletv_remote`.
+
+```json5
+{
+  action: "send",
+  message: "Here you go",
   channelData: {
     line: {
-      quickReplies: ["Status", "Help"],
       location: {
         title: "Office",
         address: "123 Main St",
         latitude: 35.681236,
         longitude: 139.767125,
       },
-      flexMessage: {
-        altText: "Status card",
-        contents: {/* Flex payload */},
-      },
-      templateMessage: {
-        type: "confirm",
-        text: "Proceed?",
-        confirmLabel: "Yes",
-        confirmData: "yes",
-        cancelLabel: "No",
-        cancelData: "no",
+      card: {
+        type: "event",
+        title: "Team meeting",
+        date: "2026-08-18",
+        time: "10:00",
+        location: "Conference room",
+        description: "Weekly planning",
       },
     },
   },
 }
 ```
+
+Other card shapes:
+
+```json5 validate=false
+{ type: "media_player", title: "Song", artist: "Artist", source: "Living Room", status: "playing", imageUrl: "https://example.com/cover.jpg" }
+{ type: "agenda", title: "Today", events: [{ title: "Standup", time: "09:00", location: "Online" }] }
+{ type: "device", name: "TV", deviceType: "Streaming box", status: "Playing", controls: [{ label: "Pause", action: "pause" }] }
+{ type: "appletv_remote", name: "Living Room", status: "Playing" }
+```
+
+Double-bracket strings such as `[[buttons: ...]]` are plain text and are not
+interpreted as rich-message instructions.
 
 The LINE plugin also ships a `/card` command for Flex message presets:
 

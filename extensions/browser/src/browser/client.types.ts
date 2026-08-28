@@ -3,6 +3,10 @@
  *
  * Shared by the browser control client, CLI, and Browser agent tool.
  */
+import type { lookup as dnsLookupCb } from "node:dns";
+
+type BrowserCdpLookup = typeof dnsLookupCb;
+
 /** Browser transport backing the selected profile. */
 export type BrowserTransport = "cdp" | "chrome-mcp" | "extension";
 type BrowserHeadlessSource =
@@ -59,6 +63,24 @@ export type BrowserGraphicsDiagnostics =
       reason: string;
     };
 
+export type BrowserTabOwnership =
+  | {
+      status: "durable";
+      nativeTargetId: string;
+      profileFingerprint: string;
+      browserInstanceFingerprint: string;
+    }
+  | {
+      status: "non-durable";
+      reason:
+        | "explicit-cdp-url-required"
+        | "target-marker-not-unique"
+        | "target-marker-lookup-failed"
+        | "target-lookup-failed"
+        | "browser-identity-unavailable"
+        | "browser-identity-lookup-failed";
+    };
+
 /** Browser status response returned by the control server. */
 export type BrowserStatus = {
   enabled: boolean;
@@ -108,7 +130,20 @@ export type BrowserTab = {
   title: string;
   url: string;
   wsUrl?: string;
+  /** Internal CDP lookup pin paired with wsUrl; omitted from model-facing summaries. */
+  wsLookup?: BrowserCdpLookup;
   type?: string;
+};
+
+/** Availability and page enumeration returned by the tab-list boundary. */
+export type BrowserTabsResult =
+  | { running: true; tabs: BrowserTab[] }
+  | { running: false; tabs: [] };
+
+/** Internal tab-open result. Browser tools must remove internal metadata before model output. */
+export type BrowserOpenResult = BrowserTab & {
+  ownership?: BrowserTabOwnership;
+  resolvedProfile?: string;
 };
 
 /** ARIA snapshot node exposed in structured snapshot responses. */

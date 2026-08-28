@@ -1,5 +1,4 @@
-import { mkdtempSync, rmSync } from "node:fs";
-import { realpathSync } from "node:fs";
+import { mkdtempSync, rmSync, realpathSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -139,12 +138,10 @@ describe("LogbookService vision model selection", () => {
       fullConfig: {
         tools: {
           media: {
-            image: {
-              models: [
-                { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
-                { provider: " Codex ", model: "gpt-5.5", capabilities: ["image"] },
-              ],
-            },
+            models: [
+              { provider: "openai", model: "gpt-5.5", capabilities: ["image"] },
+              { provider: " Codex ", model: "gpt-5.5", capabilities: ["image"] },
+            ],
           },
         },
       },

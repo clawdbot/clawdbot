@@ -12,26 +12,36 @@ import {
   type SystemInfoResult,
   validateSystemInfoParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { validateSystemEventParams } from "../../../packages/gateway-protocol/src/schema.js";
+import {
+  SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG,
+  validateSystemEventParams,
+} from "../../../packages/gateway-protocol/src/schema.js";
 import { listAgentIds } from "../../agents/agent-scope.js";
+import {
+  readUtilityModelSetting,
+  resolveUtilityModelRefForAgent,
+} from "../../agents/utility-model.js";
+import { tryResolveLegacyCompatibilityAgentId } from "../../config/legacy.default-agent-owner.js";
 import { resolveGatewayPort, resolveStateDir } from "../../config/paths.js";
-import { resolveMainSessionKeyFromConfig } from "../../config/sessions.js";
-import { resolveAdvertisedLanHost } from "../../infra/advertised-lan-host.js";
+import { resolveSystemMainSessionTarget } from "../../config/sessions.js";
+import { resolveAdvertisedLanHostCore } from "../../infra/advertised-lan-host.js";
 import {
   loadOrCreateProcessDeviceIdentity,
   publicKeyRawBase64UrlFromPem,
 } from "../../infra/device-identity.js";
 import { tryReadDiskSpace } from "../../infra/disk-space.js";
 import { getLastHeartbeatEvent } from "../../infra/heartbeat-events.js";
-import { setHeartbeatsEnabled } from "../../infra/heartbeat-runner.js";
-import { requestHeartbeat } from "../../infra/heartbeat-wake.js";
+import { requestHeartbeat, setHeartbeatsEnabled } from "../../infra/heartbeat-wake.js";
 import { getMachineDisplayName } from "../../infra/machine-name.js";
 import { resolveRuntimeOsLabel } from "../../infra/os-summary.js";
+import { withSystemEventOwner } from "../../infra/system-event-ownership.js";
 import { enqueueSystemEvent, isSystemEventContextChanged } from "../../infra/system-events.js";
 import { listSystemPresence, updateSystemPresence } from "../../infra/system-presence.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { createPresenceRecipientProjection } from "../presence-projection.js";
 import { getGatewayProcessInstanceId } from "../process-instance.js";
 import { broadcastPresenceSnapshot } from "../server/presence-events.js";
+import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { loadGatewaySessionRow } from "../session-utils.js";
 import type { GatewayRequestContext, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -41,7 +51,7 @@ let advertisedLanHostPromise: Promise<string | null> | null = null;
 function resolveCachedAdvertisedLanHost(): Promise<string | null> {
   // Route discovery may spawn a platform command. Keep the result process-stable
   // so each visible Settings page does not repeat that work every ten seconds.
-  advertisedLanHostPromise ??= resolveAdvertisedLanHost().catch(() => null);
+  advertisedLanHostPromise ??= resolveAdvertisedLanHostCore().catch(() => null);
   return advertisedLanHostPromise;
 }
 
@@ -52,8 +62,23 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
   const loadAverage: [number, number, number] = [oneMinute, fiveMinutes, fifteenMinutes];
   const stateDir = resolveStateDir();
   const disk = tryReadDiskSpace(stateDir);
-  const port = resolveGatewayPort(context.getRuntimeConfig());
+  const config = context.getRuntimeConfig();
+  const port = resolveGatewayPort(config);
   const lanAddress = (await resolveCachedAdvertisedLanHost()) ?? undefined;
+  const soleAgentId = tryResolveLegacyCompatibilityAgentId(config);
+  const defaultAgentUtilityModel = soleAgentId
+    ? (() => {
+        const utilitySetting = readUtilityModelSetting(config, soleAgentId);
+        const utilityModel = resolveUtilityModelRefForAgent({ cfg: config, agentId: soleAgentId });
+        return utilitySetting.kind === "disabled"
+          ? ({ status: "disabled" } as const)
+          : utilitySetting.kind === "explicit"
+            ? ({ status: "configured", model: utilitySetting.modelRef } as const)
+            : utilityModel
+              ? ({ status: "auto", model: utilityModel } as const)
+              : ({ status: "unavailable" } as const);
+      })()
+    : ({ status: "unavailable" } as const);
 
   return {
     machineName: await getMachineDisplayName(),
@@ -80,6 +105,7 @@ async function collectSystemInfo(context: GatewayRequestContext): Promise<System
           diskPath: stateDir,
         }
       : {}),
+    defaultAgentUtilityModel,
   };
 }
 
@@ -115,8 +141,11 @@ export const systemHandlers: GatewayRequestHandlers = {
     setHeartbeatsEnabled(enabled);
     respond(true, { ok: true, enabled }, undefined);
   },
-  "system-presence": ({ respond }) => {
-    const presence = listSystemPresence();
+  "system-presence": ({ respond, client, context }) => {
+    const presence = createPresenceRecipientProjection({
+      cfg: context.getRuntimeConfig(),
+      presence: listSystemPresence(),
+    })(client);
     respond(true, presence, undefined);
   },
   "system.info": async ({ params, respond, context }) => {
@@ -137,7 +166,18 @@ export const systemHandlers: GatewayRequestHandlers = {
       return;
     }
     const requestedSessionKey = normalizeOptionalString(params.sessionKey);
-    const sessionKey = requestedSessionKey ?? resolveMainSessionKeyFromConfig();
+    const cfg = context.getRuntimeConfig();
+    const requestedOwner = requestedSessionKey
+      ? resolveRequestedSessionAgentId(cfg, requestedSessionKey)
+      : undefined;
+    if (requestedOwner && !requestedOwner.ok) {
+      respond(false, undefined, requestedOwner.error);
+      return;
+    }
+    const systemTarget = requestedSessionKey
+      ? { agentId: requestedOwner?.agentId, sessionKey: requestedSessionKey }
+      : resolveSystemMainSessionTarget(cfg);
+    const { agentId: eventOwnerAgentId, sessionKey } = systemTarget;
     const wake = params.wake === true;
     const isNodePresenceLine = text.startsWith("Node:");
     if (wake && isNodePresenceLine) {
@@ -149,19 +189,23 @@ export const systemHandlers: GatewayRequestHandlers = {
       return;
     }
     if (wake && requestedSessionKey) {
-      const targetAgentId = normalizeAgentId(resolveAgentIdFromSessionKey(requestedSessionKey));
-      const configuredAgentIds = listAgentIds(context.getRuntimeConfig()).map(normalizeAgentId);
-      if (!configuredAgentIds.includes(targetAgentId)) {
+      const requestedAgentId = normalizeAgentId(
+        requestedOwner?.agentId ?? resolveAgentIdFromSessionKey(requestedSessionKey),
+      );
+      const configuredAgentIds = listAgentIds(cfg).map(normalizeAgentId);
+      if (!configuredAgentIds.includes(requestedAgentId)) {
         respond(
           false,
           undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${targetAgentId}"`),
+          errorShape(ErrorCodes.INVALID_REQUEST, `Unknown agent id "${requestedAgentId}"`),
         );
         return;
       }
       // A targeted wake starts a model run. Require a live persisted session
       // so malformed keys cannot create phantom work under agent defaults.
-      const targetSession = loadGatewaySessionRow(requestedSessionKey, { agentId: targetAgentId });
+      const targetSession = loadGatewaySessionRow(requestedSessionKey, {
+        agentId: requestedAgentId,
+      });
       if (!targetSession || targetSession.archived) {
         respond(
           false,
@@ -183,10 +227,6 @@ export const systemHandlers: GatewayRequestHandlers = {
     const platform = readStringValue(params.platform);
     const deviceFamily = readStringValue(params.deviceFamily);
     const modelIdentifier = readStringValue(params.modelIdentifier);
-    const lastInputSeconds =
-      typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
-        ? params.lastInputSeconds
-        : undefined;
     const reason = readStringValue(params.reason);
     const roles =
       Array.isArray(params.roles) && params.roles.every((t) => typeof t === "string")
@@ -199,6 +239,11 @@ export const systemHandlers: GatewayRequestHandlers = {
     const tags =
       Array.isArray(params.tags) && params.tags.every((t) => typeof t === "string")
         ? params.tags
+        : undefined;
+    const lastInputSeconds = tags?.includes(SYSTEM_PRESENCE_CLEAR_LAST_INPUT_TAG)
+      ? null
+      : typeof params.lastInputSeconds === "number" && Number.isFinite(params.lastInputSeconds)
+        ? params.lastInputSeconds
         : undefined;
     const presenceUpdate = updateSystemPresence({
       text,
@@ -257,14 +302,24 @@ export const systemHandlers: GatewayRequestHandlers = {
         }
         const deltaText = parts.join(" · ");
         if (deltaText) {
-          enqueueSystemEvent(deltaText, {
+          const eventOptions = {
             sessionKey,
             contextKey: presenceUpdate.key,
-          });
+          };
+          enqueueSystemEvent(
+            deltaText,
+            eventOwnerAgentId
+              ? withSystemEventOwner(eventOptions, eventOwnerAgentId)
+              : eventOptions,
+          );
         }
       }
     } else {
-      enqueueSystemEvent(text, { sessionKey });
+      const eventOptions = { sessionKey };
+      enqueueSystemEvent(
+        text,
+        eventOwnerAgentId ? withSystemEventOwner(eventOptions, eventOwnerAgentId) : eventOptions,
+      );
       if (wake) {
         // Targeted admin events may need a proactive response. Carry the exact
         // session through the wake so its delivery context, not main, wins.
@@ -272,8 +327,9 @@ export const systemHandlers: GatewayRequestHandlers = {
           source: "notifications-event",
           intent: "immediate",
           // The dispatcher recognizes "wake" as a payload-bearing run, so an
-          // empty HEARTBEAT.md cannot suppress this queued system event.
+          // empty monitor scratch cannot suppress this queued system event.
           reason: "wake",
+          ...(!requestedSessionKey && eventOwnerAgentId ? { agentId: eventOwnerAgentId } : {}),
           sessionKey,
           heartbeat: { target: "last" },
         });

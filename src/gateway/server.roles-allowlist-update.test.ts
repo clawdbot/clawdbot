@@ -5,11 +5,11 @@ import os from "node:os";
 import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
-import type { HealthSummary } from "../commands/health.types.js";
 import type { DeviceIdentity } from "../infra/device-identity.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
-import { approveDevicePairing, listDevicePairing } from "../infra/device-pairing.js";
-import { approveNodePairing, requestNodePairing } from "../infra/node-pairing.js";
+import { approveDevicePairing } from "../infra/device-pairing-approval.js";
+import { approveNodePairing, requestNodePairing } from "../infra/device-pairing-node.js";
+import { listDevicePairing } from "../infra/device-pairing.js";
 import { readRestartSentinel } from "../infra/restart-sentinel.js";
 import { SUPERVISOR_HINT_ENV_VARS } from "../infra/supervisor-markers.js";
 import { getActiveRuntimePluginRegistry } from "../plugins/active-runtime-registry.js";
@@ -20,6 +20,7 @@ import {
   type GatewayClientName,
 } from "../utils/message-channel.js";
 import type { GatewayClient } from "./client.js";
+import type { HealthSummary } from "./health/types.js";
 
 vi.mock("../infra/update-runner.js", () => ({
   resolveUpdateInstallSurface: vi.fn(async () => ({
@@ -339,9 +340,12 @@ async function respondToInvoke(
 }
 
 function createDeviceIdentityForTest(prefix: string) {
-  return loadOrCreateDeviceIdentity(
-    path.join(os.tmpdir(), `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.json`),
-  );
+  return loadOrCreateDeviceIdentity({
+    path: path.join(
+      os.tmpdir(),
+      `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`,
+    ),
+  });
 }
 
 describe("gateway role enforcement", () => {
@@ -361,11 +365,24 @@ describe("gateway role enforcement", () => {
       expect(invokeRes.ok).toBe(false);
       expect(invokeRes.error?.message ?? "").toContain("unauthorized role");
 
-      nodeClient = await connectNodeClientWithPairing({
+      nodeClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-role-enforcement",
         displayName: "node-role-enforcement",
+      });
+
+      const unsupportedEvent = await nodeClient.request<{
+        ok: boolean;
+        event?: string;
+        handled?: boolean;
+        reason?: string;
+      }>("node.event", { event: "test.unsupported", payload: { ok: true } });
+      expect(unsupportedEvent).toEqual({
+        ok: true,
+        event: "test.unsupported",
+        handled: false,
+        reason: "unsupported_event",
       });
 
       const binsPayload = await nodeClient.request("skills.bins", {});
@@ -486,17 +503,20 @@ describe("gateway node command allowlist", () => {
     const invokeCapture = createInvokeCapture();
 
     try {
-      const systemDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-system-run-${Date.now()}-${Math.random()}.json`),
-      );
-      const emptyDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.json`),
-      );
-      const allowedDeviceIdentity = loadOrCreateDeviceIdentity(
-        path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.json`),
-      );
+      const systemDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(
+          os.tmpdir(),
+          `openclaw-node-system-run-${Date.now()}-${Math.random()}.sqlite`,
+        ),
+      });
+      const emptyDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-node-empty-${Date.now()}-${Math.random()}.sqlite`),
+      });
+      const allowedDeviceIdentity = loadOrCreateDeviceIdentity({
+        path: path.join(os.tmpdir(), `openclaw-node-allowed-${Date.now()}-${Math.random()}.sqlite`),
+      });
 
-      systemClient = await connectNodeClientWithPairing({
+      systemClient = await connectNodeClientWithNodePairing({
         port,
         commands: ["system.run"],
         instanceId: "node-system-run",
@@ -515,7 +535,7 @@ describe("gateway node command allowlist", () => {
       await systemClient.stopAndWait();
       await waitForConnectedCount(0);
 
-      emptyClient = await connectNodeClientWithPairing({
+      emptyClient = await connectNodeClientWithNodePairing({
         port,
         commands: [],
         instanceId: "node-empty",
@@ -553,6 +573,22 @@ describe("gateway node command allowlist", () => {
       const payload = await invokeCapture.waitForInvoke();
       const requestId = payload?.id ?? "";
       const nodeIdFromReq = payload?.nodeId ?? "node-allowed";
+      for (const [progress, message] of [
+        [{ nodeId: "different-node", seq: 0, chunk: "" }, "nodeId mismatch"],
+        [{ nodeId: nodeIdFromReq, seq: 0, chunk: "🐙".repeat(5_000) }, "progress chunk too large"],
+      ] as const) {
+        await expect(
+          allowedClient.request("node.invoke.progress", { invokeId: requestId, ...progress }),
+        ).rejects.toThrow(message);
+      }
+      await expect(
+        allowedClient.request("node.invoke.progress", {
+          invokeId: requestId,
+          nodeId: nodeIdFromReq,
+          seq: 0,
+          chunk: "",
+        }),
+      ).resolves.toEqual({ ok: true, ignored: true });
       await allowedClient.request("node.invoke.result", {
         id: requestId,
         nodeId: nodeIdFromReq,
@@ -562,23 +598,37 @@ describe("gateway node command allowlist", () => {
       const invokeRes = await invokeResP;
       expect(invokeRes.ok).toBe(true);
 
-      const invokeNullResP = rpcReq(ws, "node.invoke", {
-        nodeId: allowedNodeId,
-        command: "canvas.snapshot",
-        params: { format: "png" },
-        idempotencyKey: "allowlist-null-payloadjson",
-      });
-      const payloadNull = await invokeCapture.waitForInvoke();
-      const requestIdNull = payloadNull?.id ?? "";
-      const nodeIdNull = payloadNull?.nodeId ?? "node-allowed";
-      await allowedClient.request("node.invoke.result", {
-        id: requestIdNull,
-        nodeId: nodeIdNull,
-        ok: true,
-        payloadJSON: null,
-      });
-      const invokeNullRes = await invokeNullResP;
-      expect(invokeNullRes.ok).toBe(true);
+      for (const [id, result, expectedPayload] of [
+        ["null", { payloadJSON: null, error: null }, undefined],
+        ["object", { payloadJSON: { source: "payloadJSON" } }, { source: "payloadJSON" }],
+        [
+          "explicit",
+          { payloadJSON: { source: "payloadJSON" }, payload: { source: "payload" } },
+          { source: "payload" },
+        ],
+      ] as const) {
+        const invokeResult = rpcReq<{ payload?: unknown; payloadJSON?: string | null }>(
+          ws,
+          "node.invoke",
+          {
+            nodeId: allowedNodeId,
+            command: "canvas.snapshot",
+            params: { format: "png" },
+            idempotencyKey: `allowlist-${id}-payloadjson`,
+          },
+        );
+        const captured = await invokeCapture.waitForInvoke();
+        await allowedClient.request("node.invoke.result", {
+          id: captured.id,
+          nodeId: captured.nodeId,
+          ok: true,
+          ...result,
+        });
+        const response = await invokeResult;
+        expect(response.ok).toBe(true);
+        expect(response.payload?.payloadJSON).toBeNull();
+        expect(response.payload?.payload).toEqual(expectedPayload);
+      }
     } finally {
       await systemClient?.stopAndWait();
       await emptyClient?.stopAndWait();
@@ -605,7 +655,9 @@ describe("gateway node command allowlist", () => {
       const nodeId = await findConnectedNodeIdByDisplayName(displayName);
 
       await expectPendingPairingCommands(nodeId, ["canvas.snapshot", "system.run"]);
-      await expectCanvasSnapshotDenied(nodeId, "pending-node-canvas");
+      const denied = await invokeCanvasSnapshot(nodeId, "pending-node-canvas");
+      expect(denied.ok).toBe(false);
+      expect(denied.error?.details).toMatchObject({ code: "PAIRING_CHANGED" });
     } finally {
       await nodeClient?.stopAndWait();
     }
@@ -672,7 +724,11 @@ describe("gateway node command allowlist", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        JSON.stringify({ gateway: { nodes: { denyCommands: ["canvas.snapshot"] } } }, null, 2),
+        JSON.stringify(
+          { gateway: { nodes: { commands: { deny: ["canvas.snapshot"] } } } },
+          null,
+          2,
+        ),
       );
 
       await approvePendingNodePairing(nodeId, ["canvas.snapshot"]);

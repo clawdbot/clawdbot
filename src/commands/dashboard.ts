@@ -1,17 +1,16 @@
 // Implements `openclaw dashboard` URL resolution, readiness check, clipboard, and browser launch.
-import { readConfigFileSnapshot, resolveGatewayPort } from "../config/config.js";
-import { resolveGatewayAuthToken } from "../gateway/auth-token-resolution.js";
+import { readConfigFileSnapshot } from "../config/config.js";
 import { copyToClipboard } from "../infra/clipboard.js";
-import { isSameProcessSpecificIpv4WithLoopbackListeners } from "../infra/ports-format.js";
-import { inspectPortUsage } from "../infra/ports-inspect.js";
+import { isRemoteEnvironment } from "../infra/remote-env.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
-import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
 import {
-  detectBrowserOpenSupport,
-  formatControlUiSshHint,
-  openUrl,
-  resolveControlUiLinks,
-} from "./onboard-helpers.js";
+  hasVerifiedControlUiLoopbackAlias,
+  issueControlUiBrowserHandoff,
+  resolveControlUiHandoffTarget,
+  waitForControlUiDocument,
+} from "./control-ui-handoff.js";
+import { ensureGatewayReadyForOperation } from "./gateway-readiness.js";
+import { detectBrowserOpenSupport, formatControlUiSshHint, openUrl } from "./onboard-helpers.js";
 
 type DashboardOptions = {
   json?: boolean;
@@ -25,93 +24,19 @@ const quietRuntime: RuntimeEnv = {
   exit: () => {},
 };
 
+const gatewayPasswordJsonKey = ["gateway", "Password"].join("");
+
 async function resolveDashboardTarget() {
   const snapshot = await readConfigFileSnapshot();
-  const cfg = snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {};
-  const port = resolveGatewayPort(cfg);
-  const bind = cfg.gateway?.bind ?? "loopback";
-  const basePath = cfg.gateway?.controlUi?.basePath;
-  const customBindHost = cfg.gateway?.customBindHost;
-  const resolvedToken = await resolveGatewayAuthToken({
-    cfg,
-    env: process.env,
-    envFallback: "always",
-  });
-  const token = resolvedToken.token ?? "";
-
-  const tlsEnabled = cfg.gateway?.tls?.enabled === true;
-  // A wildcard LAN address is not a browser destination, while plain HTTP on a
-  // specific interface fails secure-context checks. Same-host launches use loopback;
-  // TLS keeps specific hosts so certificate names continue to match.
-  const customBindIsWildcard = bind === "custom" && customBindHost?.trim() === "0.0.0.0";
-  const dashboardBind =
-    bind === "lan" ||
-    customBindIsWildcard ||
-    (!tlsEnabled && (bind === "tailnet" || bind === "custom"))
-      ? "loopback"
-      : bind;
-  const configuredLinks = resolveControlUiLinks({
-    port,
-    bind,
-    customBindHost,
-    basePath,
-    tlsEnabled,
-  });
-  const links =
-    dashboardBind === bind
-      ? configuredLinks
-      : resolveControlUiLinks({
-          port,
-          bind: dashboardBind,
-          customBindHost,
-          basePath,
-          tlsEnabled,
-        });
-  const loopbackAliasHost = (() => {
-    if (dashboardBind !== "loopback" || (bind !== "tailnet" && bind !== "custom")) {
-      return undefined;
-    }
-    try {
-      const host = new URL(configuredLinks.wsUrl).hostname;
-      return host === "127.0.0.1" || host === "0.0.0.0" ? undefined : host;
-    } catch {
-      return undefined;
-    }
-  })();
-  // Avoid embedding externally managed SecretRef tokens in terminal/clipboard/browser args.
-  const includeTokenInUrl = token.length > 0 && !resolvedToken.secretRefConfigured;
-  // Prefer URL fragment to avoid leaking auth tokens via query params.
-  const dashboardUrl = includeTokenInUrl
-    ? `${links.httpUrl}#token=${encodeURIComponent(token)}`
-    : links.httpUrl;
-
-  return {
-    port,
-    basePath,
-    links,
-    resolvedToken,
-    token,
-    includeTokenInUrl,
-    dashboardUrl,
-    probeUrl: loopbackAliasHost ? configuredLinks.wsUrl : links.wsUrl,
-    loopbackAliasHost,
-  };
-}
-
-async function hasVerifiedLoopbackAlias(
-  target: Awaited<ReturnType<typeof resolveDashboardTarget>>,
-): Promise<boolean> {
-  const expectedHost = target.loopbackAliasHost;
-  if (!expectedHost) {
-    return true;
+  if (snapshot.exists && !snapshot.valid) {
+    throw new Error(
+      `OpenClaw config is invalid: ${snapshot.path}. Run \`openclaw doctor --fix\` or \`openclaw config validate\`.`,
+    );
   }
-  const portUsage = await inspectPortUsage(target.port).catch(() => undefined);
-  // The configured-address probe establishes Gateway identity. This local PID check only proves
-  // that the process also owns the loopback endpoint before credentials are delivered there.
-  return Boolean(
-    portUsage &&
-    isSameProcessSpecificIpv4WithLoopbackListeners(portUsage.listeners, target.port, expectedHost),
-  );
+  return await resolveControlUiHandoffTarget({
+    config: snapshot.valid ? (snapshot.sourceConfig ?? snapshot.config) : {},
+    env: process.env,
+  });
 }
 
 async function ensureDashboardTargetReady(params: {
@@ -149,13 +74,24 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
       dashboardJsonFailure(runtime, readiness.reason);
       return;
     }
-    if (!(await hasVerifiedLoopbackAlias(target))) {
+    if (!(await hasVerifiedControlUiLoopbackAlias(target))) {
       dashboardJsonFailure(
         runtime,
         "Dashboard loopback listener could not be verified as the configured Gateway.",
       );
       return;
     }
+
+    const document = await waitForControlUiDocument({
+      url: target.documentUrl,
+      tlsConfig: target.tlsConfig,
+      waitForPending: false,
+    });
+    if (!document.ready) {
+      dashboardJsonFailure(runtime, document.reason);
+      return;
+    }
+    const browserHandoff = await issueControlUiBrowserHandoff(target.links.httpUrl);
 
     writeRuntimeJson(
       runtime,
@@ -166,6 +102,12 @@ async function dashboardJsonCommand(runtime: RuntimeEnv): Promise<void> {
         wsUrl: target.links.wsUrl,
         port: target.port,
         tokenIncluded: target.includeTokenInUrl,
+        browserUrl: browserHandoff.browserUrl,
+        browserBootstrapExpiresAtMs: browserHandoff.expiresAtMs,
+        ...(target.gatewayAuthHandoff
+          ? { [gatewayPasswordJsonKey]: target.gatewayAuthHandoff }
+          : {}),
+        ...(document.tlsFingerprint ? { tlsFingerprint: document.tlsFingerprint } : {}),
       },
       0,
     );
@@ -185,7 +127,14 @@ export async function dashboardCommand(
     return;
   }
 
-  const initialTarget = await resolveDashboardTarget();
+  let initialTarget: Awaited<ReturnType<typeof resolveDashboardTarget>>;
+  try {
+    initialTarget = await resolveDashboardTarget();
+  } catch (error) {
+    runtime.error(error instanceof Error ? error.message : String(error));
+    runtime.exit(1);
+    return;
+  }
   const readiness = await ensureDashboardTargetReady({
     target: initialTarget,
     runtime,
@@ -209,32 +158,40 @@ export async function dashboardCommand(
       return;
     }
   }
-  if (!(await hasVerifiedLoopbackAlias(target))) {
+  if (!(await hasVerifiedControlUiLoopbackAlias(target))) {
     runtime.error(
       "Dashboard loopback listener could not be verified as the configured Gateway; refusing to copy or open an authenticated URL.",
     );
     runtime.log("Restart the Gateway, then run `openclaw gateway status --deep` for details.");
     return;
   }
-  const { port, basePath, links, resolvedToken, token, includeTokenInUrl, dashboardUrl } = target;
+  const document = await waitForControlUiDocument({
+    url: target.documentUrl,
+    tlsConfig: target.tlsConfig,
+    onPending: () => runtime.log("Control UI assets are preparing; waiting for the dashboard…"),
+  });
+  if (!document.ready) {
+    runtime.error(document.reason);
+    runtime.log("Run `openclaw gateway status --deep` for details.");
+    runtime.exit(1);
+    return;
+  }
+  let browserUrl: string;
+  try {
+    browserUrl = (await issueControlUiBrowserHandoff(target.links.httpUrl)).browserUrl;
+  } catch (error) {
+    runtime.error(
+      `Could not create a one-time browser pairing link: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    runtime.log("Run `openclaw doctor`, then retry `openclaw dashboard`.");
+    return;
+  }
+  const { port, basePath, links, includeTokenInUrl, tlsConfig } = target;
 
   runtime.log(`Dashboard URL: ${links.httpUrl}`);
-  if (includeTokenInUrl) {
-    runtime.log("Token auto-auth included in browser/clipboard URL.");
-  }
-  if (resolvedToken.secretRefConfigured && token) {
-    runtime.log(
-      "Token auto-auth is disabled for SecretRef-managed gateway.auth.token; use your external token source if prompted.",
-    );
-  }
-  if (resolvedToken.unresolvedRefReason) {
-    runtime.log(`Token auto-auth unavailable: ${resolvedToken.unresolvedRefReason}`);
-    runtime.log(
-      "Set OPENCLAW_GATEWAY_TOKEN in this shell or resolve your secret provider, then rerun `openclaw dashboard`.",
-    );
-  }
+  runtime.log("One-time browser pairing included in browser/clipboard URL.");
 
-  const copied = await copyToClipboard(dashboardUrl).catch(() => false);
+  const copied = await copyToClipboard(browserUrl).catch(() => false);
   runtime.log(copied ? "Copied to clipboard." : "Copy to clipboard unavailable.");
 
   let opened = false;
@@ -242,23 +199,38 @@ export async function dashboardCommand(
   if (!options.noOpen) {
     const browserSupport = await detectBrowserOpenSupport();
     if (browserSupport.ok) {
-      opened = await openUrl(dashboardUrl);
-    }
-    if (!opened) {
+      opened = await openUrl(browserUrl);
+      if (!opened && !copied && isRemoteEnvironment()) {
+        hint = formatControlUiSshHint({
+          port,
+          basePath,
+          tlsEnabled: tlsConfig?.enabled === true,
+        });
+      } else {
+        hint = opened
+          ? undefined
+          : copied
+            ? "Browser launch failed. Open the one-time pairing URL copied to clipboard."
+            : "Browser launch failed. Open the Dashboard URL above manually.";
+      }
+    } else {
       hint = formatControlUiSshHint({
         port,
         basePath,
+        tlsEnabled: tlsConfig?.enabled === true,
       });
     }
   } else {
-    hint =
-      copied && includeTokenInUrl
-        ? "Browser launch disabled (--no-open). Token-authenticated URL copied to clipboard."
-        : "Browser launch disabled (--no-open). Use the URL above.";
+    hint = copied
+      ? "Browser launch disabled (--no-open). One-time browser pairing URL copied to clipboard."
+      : "Browser launch disabled (--no-open). Use the URL above.";
   }
 
-  const fallbackToManualAuth = !copied && !opened && includeTokenInUrl;
-  const suppressNoOpenHint = options.noOpen === true && fallbackToManualAuth;
+  const handoffDeliveryFailed = !copied && !opened;
+  const fallbackToManualAuth = handoffDeliveryFailed && includeTokenInUrl;
+  const fallbackToJsonHandoff = handoffDeliveryFailed && !includeTokenInUrl;
+  const suppressNoOpenHint =
+    options.noOpen === true && (fallbackToManualAuth || fallbackToJsonHandoff);
 
   if (opened) {
     runtime.log("Opened in your browser. Keep that tab to control OpenClaw.");
@@ -269,6 +241,10 @@ export async function dashboardCommand(
   if (fallbackToManualAuth) {
     runtime.log(
       "Token auto-auth not delivered. Append your gateway token (from OPENCLAW_GATEWAY_TOKEN or gateway.auth.token) as a URL fragment with key `token` to authenticate.",
+    );
+  } else if (fallbackToJsonHandoff) {
+    runtime.log(
+      "One-time pairing URL not delivered. Run `openclaw dashboard --json` and open its `browserUrl` within ten minutes.",
     );
   }
 }

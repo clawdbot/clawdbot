@@ -3,6 +3,8 @@ import { withServer } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { resolveNextcloudTalkRoomKind } from "./room-info.js";
 
+const REQUEST_TIMEOUT_MS = 500;
+
 describe("nextcloud talk room info fetch timeout", () => {
   it("bounds hanging room info GET requests", async () => {
     let received = false;
@@ -32,7 +34,7 @@ describe("nextcloud talk room info fetch timeout", () => {
             exit: vi.fn(),
             log: vi.fn(),
           },
-          timeoutMs: 50,
+          timeoutMs: REQUEST_TIMEOUT_MS,
         });
 
         expect(kind).toBeUndefined();

@@ -1,41 +1,68 @@
-title: Subagent completion direct fallback
+title: Subagent completion terminal-reply delivery
 
 scenario:
   id: subagent-completion-direct-fallback
   surface: subagents
   coverage:
     primary:
-      - agents.subagents
+      - agent-runtime.subagent-turns-delivery
     secondary:
-      - runtime.delivery
-      - channels.qa-channel
-  objective: Verify a yielded parent still receives a successful subagent result through direct fallback delivery when the dormant announce turn produces no visible reply.
+      - agent-runtime.subagent-turns-subagents
+      - channels.qa-channel-final-reply
+  objective: Prove visible, silent, empty, restart-recovered, and sanitized direct-fallback subagent completion behavior through real QA channel ingress.
+  gatewayConfigPatch:
+    tools:
+      alsoAllow:
+        - message
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow:
+              - message
   successCriteria:
-    - Parent launches a native subagent.
-    - Parent yields instead of waiting in-turn.
-    - Subagent completion result is delivered to the original QA DM without a thread id.
-    - Durable task delivery is marked delivered, not failed.
+    - Visible completion output reaches the originating QA DM exactly once.
+    - Exact worker NO_REPLY stays private while required parent completion represents missing child output visibly exactly once.
+    - Empty output after a side effect settles as a blocked completion while its terminal representation is delivered exactly once.
+    - Gateway restart does not replay prior terminal payloads or synthesize interruption notices for already-settled handoffs, and a post-restart completion is delivered exactly once.
+    - Direct fallback strips protected internal metadata before one channel delivery.
   docsRefs:
     - docs/tools/subagents.md
     - docs/help/testing.md
     - docs/channels/qa-channel.md
   codeRefs:
-    - src/agents/subagent-announce-delivery.ts
-    - src/agents/subagent-registry-lifecycle.ts
-    - src/agents/tools/sessions-yield-tool.ts
+    - src/agents/agent-run-terminal-reply.ts
+    - src/agents/subagents/announce/subagent-announce-delivery.ts
+    - src/agents/subagents/registry/subagent-registry-lifecycle.ts
     - extensions/qa-lab/src/providers/mock-openai/server.ts
   execution:
     kind: flow
-    summary: Reproduce yielded-parent subagent completion delivery and require frozen-result fallback to the QA DM.
+    providerMode: mock-openai
+    retryCount: 0
+    summary: Exercise terminal-reply dispositions through mock provider, ephemeral Gateway, SQLite task state, and qa-channel capture.
     config:
-      prompt: "Subagent direct fallback QA check: spawn one native subagent worker. The worker must finish with exactly QA-SUBAGENT-DIRECT-FALLBACK-OK. After spawning it, call sessions_yield and wait for the completion event. Do not use ACP."
-      expectedMarker: QA-SUBAGENT-DIRECT-FALLBACK-OK
-      expectedLabel: qa-direct-fallback-worker
+      requiredProviderMode: mock-openai
+      cases:
+        - name: visible
+          marker: QA-SUBAGENT-TERMINAL-VISIBLE-OK
+          expectedSendCount: 1
+        - name: silent
+          marker: QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED
+          expectedSendCount: 1
+        - name: fallback
+          marker: QA-SUBAGENT-TERMINAL-FALLBACK-OK
+          expectedSendCount: 1
+      restartMarker: QA-SUBAGENT-TERMINAL-RESTART-OK
+      metadataSentinel: QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK
 
 flow:
   steps:
-    - name: yielded parent receives child completion through direct fallback
+    - name: proves terminal-reply channel behavior including restart recovery
       actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message:
+              expr: "`expected provider mode ${config.requiredProviderMode}, got ${env.providerMode}`"
         - call: waitForGatewayHealthy
           args:
             - ref: env
@@ -44,65 +71,240 @@ flow:
           args:
             - ref: env
             - 120000
-        - call: reset
-        - set: sessionKey
+        - set: verdicts
           value:
-            expr: "`agent:qa:subagent-direct-fallback:${randomUUID().slice(0, 8)}`"
-        - try:
+            expr: "[]"
+        # The task ledger records terminal delivery after the subagent lifecycle
+        # owner settles it. Use that fact instead of guessing with wall-clock sleeps.
+        - set: readSettledTerminalTask
+          value:
+            lambda:
+              params:
+                - caseName
+              async: true
+              expr: "(await env.gateway.call('tasks.list', { agentId: 'qa', limit: 100 }, { timeoutMs: 10000 })).tasks?.find((task) => task.title === `qa-terminal-${caseName}` && task.deliveryStatus === 'delivered')"
+        - forEach:
+            items:
+              expr: config.cases
+            item: terminalCase
             actions:
-              - call: runAgentPrompt
-                args:
-                  - ref: env
-                  - sessionKey:
-                      ref: sessionKey
-                    message:
-                      expr: config.prompt
-                    timeoutMs:
-                      expr: liveTurnTimeoutMs(env, 90000)
+              - set: startIndex
+                value:
+                  expr: state.getSnapshot().messages.length
+              - set: requestCursor
+                value:
+                  expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+              - set: conversationId
+                value:
+                  expr: "`terminal-${terminalCase.name}-${randomUUID().slice(0, 8)}`"
+              - sendInbound:
+                  accountId: default
+                  conversation:
+                    id:
+                      ref: conversationId
+                    kind: direct
+                  senderId:
+                    ref: conversationId
+                  senderName: QA Terminal Reply Operator
+                  text:
+                    expr: "`Subagent terminal reply QA check: ${terminalCase.name}. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP.`"
               - call: waitForCondition
-                saveAs: outbound
+                saveAs: terminalTask
                 args:
                   - lambda:
-                      expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && String(message.text ?? '').includes(config.expectedMarker)).at(-1)"
-                  - expr: liveTurnTimeoutMs(env, 180000)
-                  - expr: "env.providerMode === 'mock-openai' ? 100 : 250"
-              - assert:
-                  expr: "String(outbound.text ?? '').trim().includes(config.expectedMarker)"
-                  message:
-                    expr: "`fallback completion marker missing from outbound QA DM: ${recentOutboundSummary(state)}`"
-            catchAs: fallbackError
-            catch:
-              - set: fallbackDebugRequests
-                value:
-                  expr: "env.mock ? [...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))].slice(-20).map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null, prompt: String(request.prompt ?? '').slice(0, 280), allInputText: String(request.allInputText ?? '').slice(0, 280), toolOutput: request.toolOutput ? String(request.toolOutput).slice(0, 280) : null })) : []"
-              - set: fallbackTasks
-                value:
-                  expr: "(await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }).catch((error) => ({ error: String(error?.message ?? error) })))"
-              - throw:
-                  expr: "`subagent fallback marker missing: ${fallbackError?.message ?? fallbackError}; outbound=${recentOutboundSummary(state, 8)} tasks=${JSON.stringify(fallbackTasks)} requests=${JSON.stringify(fallbackDebugRequests)}`"
-        - if:
-            expr: "Boolean(env.mock)"
-            then:
-              - set: fallbackDebugRequests
-                value:
-                  expr: "[...(await fetchJson(`${env.mock.baseUrl}/debug/requests`))]"
-              - assert:
-                  expr: "fallbackDebugRequests.some((request) => !request.toolOutput && /subagent direct fallback qa check/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === config.expectedLabel)"
-                  message:
-                    expr: "`expected sessions_spawn for yielded fallback scenario, saw ${JSON.stringify(fallbackDebugRequests.map((request) => ({ plannedToolName: request.plannedToolName ?? null, plannedToolArgs: request.plannedToolArgs ?? null })))}`"
-              - assert:
-                  expr: "fallbackDebugRequests.some((request) => /subagent direct fallback qa check/i.test(String(request.allInputText ?? '')) && request.plannedToolName === 'sessions_yield')"
-                  message:
-                    expr: "`expected sessions_yield for yielded fallback scenario, saw ${JSON.stringify(fallbackDebugRequests.map((request) => request.plannedToolName ?? null))}`"
-              - call: waitForCondition
-                saveAs: deliveredTask
-                args:
-                  - lambda:
-                      expr: "(async () => { const payload = await runQaCli(env, ['tasks', 'list', '--json', '--runtime', 'subagent'], { timeoutMs: liveTurnTimeoutMs(env, 60000), json: true }); return (payload.tasks ?? []).find((task) => task.label === config.expectedLabel && task.deliveryStatus === 'delivered' && task.status === 'succeeded') ?? null; })()"
-                  - expr: liveTurnTimeoutMs(env, 60000)
+                      async: true
+                      expr: "(async () => { const task = await readSettledTerminalTask(terminalCase.name); if (!task) return undefined; const matchingCount = state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId && String(candidate.text ?? '').trim() === terminalCase.marker).length; return terminalCase.expectedSendCount === 0 || matchingCount >= terminalCase.expectedSendCount ? task : undefined; })().catch(() => undefined)"
+                  - 60000
                   - 250
+              - set: caseOutbound
+                value:
+                  expr: "state.getSnapshot().messages.slice(startIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === conversationId)"
+              - set: matchingOutbound
+                value:
+                  expr: "caseOutbound.filter((candidate) => String(candidate.text ?? '').trim() === terminalCase.marker)"
+              - set: caseRequests
+                value:
+                  expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursor}`) : []"
               - assert:
-                  expr: "deliveredTask.deliveryStatus === 'delivered'"
+                  expr: "matchingOutbound.length === terminalCase.expectedSendCount"
                   message:
-                    expr: "`expected delivered task status for ${config.expectedLabel}, got ${JSON.stringify(deliveredTask)}`"
-      detailsExpr: "outbound.text"
+                    expr: "`terminal ${terminalCase.name}: expected ${terminalCase.expectedSendCount} outbound, got ${matchingOutbound.length}; messages=${JSON.stringify(state.getSnapshot().messages.slice(-10))} requests=${JSON.stringify(caseRequests)} logs=${JSON.stringify((env.gateway.logs?.().split('\\n') ?? []).filter((line) => /qa-channel|subagent|announce|completion|requester/i.test(line)).slice(-30))}`"
+              - assert:
+                  expr: "caseOutbound.every((candidate) => !String(candidate.text ?? '').includes(config.metadataSentinel) && !String(candidate.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT'))"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: protected internal metadata leaked; outbound=${recentOutboundSummary(state)}`"
+              - assert:
+                  expr: "caseOutbound.every((candidate) => String(candidate.text ?? '').trim() !== 'NO_REPLY')"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: exact silence token leaked to the channel; outbound=${recentOutboundSummary(state)}`"
+              - assert:
+                  expr: "caseOutbound.every((candidate) => !String(candidate.text ?? '').includes(`Agent couldn't generate a response`))"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: unexpected failure diagnostic; outbound=${recentOutboundSummary(state)}`"
+              - assert:
+                  expr: "caseOutbound.every((candidate) => !String(candidate.text ?? '').includes(`Yield:`))"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: yield raced child completion; outbound=${recentOutboundSummary(state)}`"
+              - assert:
+                  expr: "caseRequests.some((request) => request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === `qa-terminal-${terminalCase.name}`)"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: sessions_spawn not observed; requests=${JSON.stringify(caseRequests)}`"
+              - assert:
+                  expr: "!caseRequests.some((request) => request.plannedToolName === 'sessions_yield')"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: parent did not end before direct fallback; requests=${JSON.stringify(caseRequests)}`"
+              - assert:
+                  expr: "terminalTask.title === `qa-terminal-${terminalCase.name}` && terminalTask.status === 'completed' && terminalTask.deliveryStatus === 'delivered'"
+                  message:
+                    expr: "`terminal ${terminalCase.name}: task lifecycle did not settle authoritatively; task=${JSON.stringify(terminalTask)}`"
+              - set: appendVerdict
+                value:
+                  expr: "verdicts.push({ case: terminalCase.name, conversationId, taskId: terminalTask.taskId, taskDeliveryStatus: terminalTask.deliveryStatus, inputDisposition: terminalCase.name, representation: terminalCase.name === 'silent' ? 'visible representation of private child silence or missing output' : 'exact terminal text', restart: false, fallback: terminalCase.name === 'fallback', expectedTerminalSendCount: terminalCase.expectedSendCount, actualTerminalSendCount: matchingOutbound.length, capturedTerminalPayloads: matchingOutbound.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: caseOutbound.filter((message) => !matchingOutbound.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: caseOutbound.some((message) => String(message.text ?? '').trim() === 'NO_REPLY'), internalMetadataLeak: caseOutbound.some((message) => String(message.text ?? '').includes(config.metadataSentinel)), pass: true })"
+        # Every prior task is now terminal and delivery-settled, so restart from
+        # the lifecycle boundary rather than waiting an arbitrary grace period.
+        - set: preRestartOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && verdicts.some((verdict) => verdict.conversationId === message.conversation.id)).map((message) => ({ id: message.id, conversationId: message.conversation.id, text: String(message.text ?? '') }))"
+        - set: preRestartTerminalPayloads
+          value:
+            expr: "preRestartOutbound.filter((message) => verdicts.some((verdict) => verdict.capturedTerminalPayloads.includes(message.text)))"
+        - set: restartPatch
+          value:
+            expr: "({ gateway: { controlUi: { allowedOrigins: [`http://127.0.0.1:${64000 + Math.floor(Math.random() * 999)}`] } } })"
+        - call: restartGatewayWithConfigPatch
+          args:
+            - env:
+                ref: env
+              patch:
+                ref: restartPatch
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 180000
+        - call: waitForQaChannelReady
+          args:
+            - ref: env
+            - 180000
+        - set: restartStartIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: restartConversationId
+          value:
+            expr: "`terminal-restart-${randomUUID().slice(0, 8)}`"
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: restartConversationId
+              kind: direct
+            senderId:
+              ref: restartConversationId
+            senderName: QA Restart Operator
+            text: "Subagent terminal reply QA check: restart. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP."
+        - call: waitForCondition
+          saveAs: restartTask
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const task = await readSettledTerminalTask('restart'); if (!task) return undefined; const delivered = state.getSnapshot().messages.slice(restartStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker); return delivered ? task : undefined; })().catch(() => undefined)"
+            - 60000
+            - 250
+        - set: restartMatches
+          value:
+            expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId && String(candidate.text ?? '').trim() === config.restartMarker)"
+        - assert:
+            expr: "restartMatches.length === 1"
+            message:
+              expr: "`restart completion expected exactly one outbound, got ${restartMatches.length}; outbound=${recentOutboundSummary(state)}`"
+        - assert:
+            expr: "state.getSnapshot().messages.slice(restartStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === restartConversationId).every((candidate) => !String(candidate.text ?? '').includes(`Agent couldn't generate a response`))"
+            message:
+              expr: "`restart completion produced a failure diagnostic: outbound=${recentOutboundSummary(state)}`"
+        - assert:
+            expr: "restartTask.title === 'qa-terminal-restart' && restartTask.status === 'completed' && restartTask.deliveryStatus === 'delivered'"
+            message:
+              expr: "`restart completion task lifecycle did not settle authoritatively; task=${JSON.stringify(restartTask)}`"
+        # Use a new durably delivered task as the observation boundary. By then,
+        # restart recovery must not have replayed or invented output for settled tasks.
+        - set: postRestartOutbound
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && verdicts.some((verdict) => verdict.conversationId === message.conversation.id)).map((message) => ({ id: message.id, conversationId: message.conversation.id, text: String(message.text ?? '') }))"
+        - set: postRestartTerminalPayloads
+          value:
+            expr: "postRestartOutbound.filter((message) => verdicts.some((verdict) => verdict.capturedTerminalPayloads.includes(message.text)))"
+        - set: postRestartUnexpectedPayloads
+          value:
+            expr: "postRestartOutbound.filter((message) => !preRestartOutbound.some((before) => before.id === message.id))"
+        - assert:
+            expr: "JSON.stringify(postRestartTerminalPayloads) === JSON.stringify(preRestartTerminalPayloads)"
+            message:
+              expr: "`Gateway restart replayed or lost a prior terminal payload: before=${JSON.stringify(preRestartTerminalPayloads)} after=${JSON.stringify(postRestartTerminalPayloads)}`"
+        - assert:
+            expr: "postRestartUnexpectedPayloads.length === 0"
+            message:
+              expr: "`Gateway restart synthesized output for already-settled handoffs: ${JSON.stringify(postRestartUnexpectedPayloads)}`"
+        - set: appendRestartVerdict
+          value:
+            expr: "verdicts.push({ case: 'restart', conversationId: restartConversationId, taskId: restartTask.taskId, taskDeliveryStatus: restartTask.deliveryStatus, inputDisposition: 'visible', restart: true, fallback: true, preRestartTerminalMessageCount: preRestartTerminalPayloads.length, postRestartTerminalPayloadCount: postRestartTerminalPayloads.length, priorTerminalPayloadReplayCount: postRestartTerminalPayloads.length - preRestartTerminalPayloads.length, unexpectedPostRestartPayloadCount: postRestartUnexpectedPayloads.length, unexpectedPostRestartPayloads: postRestartUnexpectedPayloads.map((message) => message.text), expectedTerminalSendCount: 1, actualTerminalSendCount: restartMatches.length, capturedTerminalPayloads: restartMatches.map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
+        - set: emptyStartIndex
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: emptyRequestCursor
+          value:
+            expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/request-cursor`)).cursor : 0"
+        - set: emptyConversationId
+          value:
+            expr: "`terminal-empty-${randomUUID().slice(0, 8)}`"
+        - sendInbound:
+            accountId: default
+            conversation:
+              id:
+                ref: emptyConversationId
+              kind: direct
+            senderId:
+              ref: emptyConversationId
+            senderName: QA Empty Reply Operator
+            text: "Subagent terminal reply QA check: empty. Spawn one native worker, then finish the parent turn without waiting. Do not use ACP."
+        # Delivery can settle before the empty completion's execution metadata.
+        # Wait for every task fact asserted below plus its visible representation.
+        - call: waitForCondition
+          saveAs: emptyTask
+          args:
+            - lambda:
+                async: true
+                expr: "(async () => { const task = await readSettledTerminalTask('empty'); if (!task || task.status !== 'completed' || task.terminalOutcome !== 'blocked' || task.toolUseCount !== 1 || task.lastToolName !== 'write') return undefined; const represented = state.getSnapshot().messages.slice(emptyStartIndex).some((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === emptyConversationId && String(candidate.text ?? '').trim() === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED'); return represented ? task : undefined; })().catch(() => undefined)"
+            - 60000
+            - 250
+        - set: emptyOutbound
+          value:
+            expr: "state.getSnapshot().messages.slice(emptyStartIndex).filter((candidate) => candidate.direction === 'outbound' && candidate.conversation.id === emptyConversationId)"
+        - set: emptyRepresentation
+          value:
+            expr: "emptyOutbound.filter((candidate) => String(candidate.text ?? '').trim() === `QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED`)"
+        - set: emptyRequests
+          value:
+            expr: "env.mock ? await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${emptyRequestCursor}`) : []"
+        - assert:
+            expr: "emptyRepresentation.length === 1"
+            message:
+              expr: "`empty completion expected one intentional visible representation, got ${emptyRepresentation.length}; outbound=${recentOutboundSummary(state)} requests=${JSON.stringify(emptyRequests)} logs=${JSON.stringify((env.gateway.logs?.().split('\\n') ?? []).filter((line) => /empty response|incomplete turn|qa-terminal-empty|subagent|announce|completion/i.test(line)).slice(-50))}`"
+        - assert:
+            expr: "emptyOutbound.every((candidate) => String(candidate.text ?? '').trim() !== 'NO_REPLY' && !String(candidate.text ?? '').includes(config.metadataSentinel) && !String(candidate.text ?? '').includes('BEGIN_OPENCLAW_INTERNAL_CONTEXT'))"
+            message:
+              expr: "`empty completion leaked silence or internal metadata; outbound=${recentOutboundSummary(state)}`"
+        - assert:
+            expr: "emptyRequests.some((request) => request.plannedToolName === 'sessions_spawn' && request.plannedToolArgs?.label === 'qa-terminal-empty') && emptyRequests.some((request) => request.plannedToolName === 'write' && request.plannedToolArgs?.path === 'qa-terminal-empty-side-effect.txt') && emptyRequests.some((request) => request.plannedToolName === 'message' && request.plannedToolArgs?.action === 'send' && request.plannedToolArgs?.message === 'QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED') && !emptyRequests.some((request) => request.plannedToolName === 'sessions_yield')"
+            message:
+              expr: "`empty completion did not exercise native spawn/direct-fallback: ${JSON.stringify(emptyRequests)}`"
+        - assert:
+            expr: "emptyTask.title === 'qa-terminal-empty' && emptyTask.status === 'completed' && emptyTask.terminalOutcome === 'blocked' && emptyTask.deliveryStatus === 'delivered' && emptyTask.toolUseCount === 1 && emptyTask.lastToolName === 'write'"
+            message:
+              expr: "`empty completion execution and delivery did not settle independently; task=${JSON.stringify(emptyTask)}`"
+        - set: appendEmptyVerdict
+          value:
+            expr: "verdicts.push({ case: 'empty', conversationId: emptyConversationId, taskId: emptyTask.taskId, taskStatus: emptyTask.status, taskDeliveryStatus: emptyTask.deliveryStatus, inputDisposition: 'empty-after-side-effect', representation: 'visible ambiguity warning for producer-empty result', restart: false, fallback: false, expectedTerminalSendCount: 1, actualTerminalSendCount: emptyRepresentation.length, capturedTerminalPayloads: emptyRepresentation.map((message) => String(message.text ?? '')), auxiliaryChannelEvents: emptyOutbound.filter((message) => !emptyRepresentation.includes(message)).map((message) => String(message.text ?? '')), silenceTokenLeaked: false, internalMetadataLeak: false, pass: true })"
+        - assert:
+            expr: "verdicts.length === 5 && verdicts.every((verdict) => verdict.pass === true)"
+            message:
+              expr: "`terminal reply verdict matrix incomplete: ${JSON.stringify(verdicts)}`"
+      detailsExpr: "JSON.stringify({ harness: 'qa-channel + qa-lab bus + ephemeral Gateway child + mock-openai', verdicts }, null, 2)"

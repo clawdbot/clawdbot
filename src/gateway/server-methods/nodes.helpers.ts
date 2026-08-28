@@ -1,40 +1,13 @@
-// Node method helpers centralize validation failures, unavailable responses,
-// safe JSON parsing, and node-invoke error mapping.
+// Node method helpers centralize unavailable responses, safe JSON parsing,
+// and node-invoke error mapping.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
 } from "../../../packages/gateway-protocol/src/schema/error-codes.js";
-import {
-  formatValidationErrors,
-  type ValidationError,
-} from "../../../packages/gateway-protocol/src/validation-errors.js";
-export { safeParseJson } from "../server-json.js";
 import { formatForLog } from "../ws-log.js";
 import type { RespondFn } from "./types.js";
-
-/**
- * Shared response adapters for node-related gateway methods.
- */
-type ValidatorFn = ((value: unknown) => boolean) & {
-  errors?: ValidationError[] | null;
-};
-
-/** Responds with the protocol validation error for invalid method params. */
-export function respondInvalidParams(params: {
-  respond: RespondFn;
-  method: string;
-  validator: ValidatorFn;
-}) {
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `invalid ${params.method} params: ${formatValidationErrors(params.validator.errors)}`,
-    ),
-  );
-}
+export { parseGatewayPayload } from "../server-json.js";
 
 /** Converts thrown node-handler failures into `UNAVAILABLE` protocol errors. */
 export async function respondUnavailableOnThrow(respond: RespondFn, fn: () => Promise<void>) {
@@ -50,6 +23,16 @@ export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; err
   respond: RespondFn,
   res: T,
 ): res is T & { ok: true } {
+  return respondUnavailableOnNodeInvokeErrorWithProvenance(respond, res);
+}
+
+export function respondUnavailableOnNodeInvokeErrorWithProvenance<
+  T extends { ok: boolean; error?: unknown },
+>(
+  respond: RespondFn,
+  res: T,
+  provenance?: { nodeCommandDispatched: boolean },
+): res is T & { ok: true } {
   if (res.ok) {
     return true;
   }
@@ -60,11 +43,15 @@ export function respondUnavailableOnNodeInvokeError<T extends { ok: boolean; err
   const nodeCode = normalizeOptionalString(nodeError?.code) ?? "";
   const nodeMessage = normalizeOptionalString(nodeError?.message) ?? "node invoke failed";
   const message = nodeCode ? `${nodeCode}: ${nodeMessage}` : nodeMessage;
+  const details = {
+    nodeError: res.error ?? null,
+    ...(provenance ? { nodeCommandDispatched: provenance.nodeCommandDispatched } : {}),
+  };
   respond(
     false,
     undefined,
     errorShape(ErrorCodes.UNAVAILABLE, message, {
-      details: { nodeError: res.error ?? null },
+      details,
     }),
   );
   return false;

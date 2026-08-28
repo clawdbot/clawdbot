@@ -8,6 +8,7 @@ import {
 import type { ResolvedOpenShellPluginConfig } from "./config.js";
 
 export {
+  buildRemoteCommand,
   buildRemoteWorkdirValidationCommand,
   buildValidatedExecRemoteCommand,
 } from "openclaw/plugin-sdk/sandbox";
@@ -26,11 +27,10 @@ function buildOpenShellBaseArgv(config: ResolvedOpenShellPluginConfig): string[]
   if (config.gatewayEndpoint) {
     argv.push("--gateway-endpoint", config.gatewayEndpoint);
   }
+  if (config.workspace) {
+    argv.push("--workspace", config.workspace);
+  }
   return argv;
-}
-
-export function buildRemoteCommand(argv: string[]): string {
-  return argv.map((entry) => shellEscape(entry)).join(" ");
 }
 
 function applyGatewayEndpointToSshConfig(params: {

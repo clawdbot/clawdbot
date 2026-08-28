@@ -1,19 +1,40 @@
 /** @vitest-environment node */
-import { createHash } from "node:crypto";
+import { createHash, webcrypto } from "node:crypto";
 import {
   ConnectErrorDetailCodes,
   GATEWAY_CLIENT_CAPS,
   MIN_CLIENT_PROTOCOL_VERSION,
   PROTOCOL_VERSION,
 } from "@openclaw/gateway-client/browser";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   loadDeviceAuthToken as loadScopedDeviceAuthToken,
   storeDeviceAuthToken as storeScopedDeviceAuthToken,
 } from "../lib/nodes/index.ts";
+import * as nodes from "../lib/nodes/index.ts";
+import {
+  migrateSessionPlacementRecoveryScope,
+  readSessionPlacementRecovery,
+  writeSessionPlacementRecovery,
+} from "../lib/sessions/session-placement-recovery.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 
 const wsInstances = vi.hoisted((): MockWebSocket[] => []);
+const recoveryMigrationRuntimeMock = vi.hoisted(() => ({
+  loaded: vi.fn(),
+  migrate: vi.fn(),
+}));
+
+vi.mock("../lib/sessions/session-placement-recovery-migration.runtime.ts", () => {
+  recoveryMigrationRuntimeMock.loaded();
+  return {
+    default: (gatewayUrl: string, sourceScope: string, destinationScope: string) =>
+      recoveryMigrationRuntimeMock.migrate(gatewayUrl, sourceScope, destinationScope),
+  };
+});
+
 const DEFAULT_GATEWAY_URL = "ws://127.0.0.1:18789";
 const LEGACY_DEVICE_AUTH_STORAGE_KEY = "openclaw.device.auth.v1";
 const DEFAULT_DEVICE_AUTH_STORAGE_KEY = `${LEGACY_DEVICE_AUTH_STORAGE_KEY}:${DEFAULT_GATEWAY_URL}`;
@@ -28,10 +49,21 @@ const CONTROL_UI_OPERATOR_SCOPES = [
   "operator.read",
   "operator.write",
   "operator.approvals",
+  "operator.questions",
   "operator.pairing",
 ] as const;
 const CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES = [
   "operator.approvals",
+  "operator.questions",
+  "operator.read",
+  "operator.talk.secrets",
+  "operator.write",
+] as const;
+const CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES = [
+  "operator.admin",
+  "operator.approvals",
+  "operator.pairing",
+  "operator.questions",
   "operator.read",
   "operator.talk.secrets",
   "operator.write",
@@ -62,6 +94,37 @@ function storeDeviceAuthToken(params: {
   return storeScopedDeviceAuthToken({ ...params, gatewayUrl: DEFAULT_GATEWAY_URL });
 }
 
+function storeDeviceIdentity(deviceId: string) {
+  localStorage.setItem(
+    "openclaw-device-identity-v1",
+    JSON.stringify({
+      version: 1,
+      deviceId,
+      publicKey: "AA",
+      privateKey: "AA",
+      createdAtMs: 1,
+    }),
+  );
+}
+
+function deferDeviceIdentityDigest() {
+  const digest = createDeferred<ArrayBuffer>();
+  const digestMock = vi.fn(() => digest.promise);
+  vi.stubGlobal("crypto", { subtle: { digest: digestMock } });
+  return { digest, digestMock };
+}
+
+function createDeviceTokenState(request: (method: string) => Promise<unknown>) {
+  const state = nodes.createInitialDevicesState({
+    client: {
+      request: request as <T = unknown>(method: string, params?: unknown) => Promise<T>,
+    },
+    connected: true,
+  });
+  state.requestGeneration = 1;
+  return state;
+}
+
 type HandlerMap = {
   close: MockWebSocketHandler[];
   error: MockWebSocketHandler[];
@@ -70,17 +133,6 @@ type HandlerMap = {
 };
 
 type MockWebSocketHandler = (ev?: { code?: number; data?: string; reason?: string }) => void;
-
-function createDeferred<T>() {
-  let resolve: ((value: T) => void) | undefined;
-  const promise = new Promise<T>((res) => {
-    resolve = res;
-  });
-  if (!resolve) {
-    throw new Error("Expected deferred resolver to be initialized");
-  }
-  return { promise, resolve };
-}
 
 class MockWebSocket {
   static OPEN = 1;
@@ -133,12 +185,6 @@ class MockWebSocket {
   }
 }
 
-vi.mock("../lib/nodes/index.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../lib/nodes/index.ts")>()),
-  loadOrCreateDeviceIdentity: loadOrCreateDeviceIdentityMock,
-  signDevicePayload: signDevicePayloadMock,
-}));
-
 const { GatewayBrowserClient, GatewayRequestError, resolveGatewayErrorDetailCode } =
   await import("./gateway.ts");
 
@@ -147,12 +193,27 @@ type ConnectFrame = {
   method?: string;
   params?: {
     auth?: { token?: string; bootstrapToken?: string; password?: string; deviceToken?: string };
+    client: { buildId?: string };
     maxProtocol?: number;
     minProtocol?: number;
     caps?: string[];
     scopes?: string[];
+    device?: {
+      id?: string;
+      signedAt?: number;
+    };
   };
 };
+
+const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
+
+function requestFrameBytes(method: string, params?: unknown): number {
+  const frame =
+    params === undefined
+      ? { type: "req", id: REQUEST_FRAME_ID, method }
+      : { type: "req", id: REQUEST_FRAME_ID, method, params };
+  return new TextEncoder().encode(JSON.stringify(frame)).byteLength;
+}
 
 type RequestTimingPayload = {
   id?: string;
@@ -180,12 +241,7 @@ type ConnectTimingPayload = {
   errorCode?: string;
 };
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireFirstMockArg(
   mock: ReturnType<typeof vi.fn>,
@@ -225,7 +281,7 @@ function requireFirstSignCall(): [privateKey: string, payload: string] {
 
 function expectSignedPayloadFields(
   payload: string | undefined,
-  params: { scopes: string[]; token: string; nonce: string },
+  params: { scopes: string[]; token: string; nonce: string; signedAtMs?: number },
 ) {
   expect(payload?.split("|")).toEqual([
     "v2",
@@ -234,7 +290,7 @@ function expectSignedPayloadFields(
     "webchat",
     "operator",
     params.scopes.join(","),
-    expect.stringMatching(/^\d+$/),
+    params.signedAtMs === undefined ? expect.stringMatching(/^\d+$/) : String(params.signedAtMs),
     params.token,
     params.nonce,
   ]);
@@ -288,8 +344,11 @@ function getLatestWebSocket(): MockWebSocket {
 }
 
 function stubInsecureCrypto() {
+  // Real insecure contexts keep randomUUID/getRandomValues; only crypto.subtle
+  // is gated to secure contexts.
   vi.stubGlobal("crypto", {
     randomUUID: () => "req-insecure",
+    getRandomValues: (array: Uint8Array) => array.fill(7),
   });
 }
 
@@ -303,12 +362,16 @@ function parseLatestConnectFrame(ws: MockWebSocket): ConnectFrame {
   return JSON.parse(ws.sent.at(-1) ?? "{}") as ConnectFrame;
 }
 
-async function continueConnect(ws: MockWebSocket, nonce = "nonce-1") {
+async function continueConnect(
+  ws: MockWebSocket,
+  nonce = "nonce-1",
+  challengeTs = 1_800_000_000_000,
+) {
   ws.emitOpen();
   ws.emitMessage({
     type: "event",
     event: "connect.challenge",
-    payload: { nonce },
+    payload: { nonce, ts: challengeTs },
   });
   if (vi.isFakeTimers()) {
     await vi.advanceTimersByTimeAsync(0);
@@ -381,12 +444,18 @@ async function expectRetriedDeviceTokenConnect(params: {
 
 describe("GatewayBrowserClient", () => {
   beforeEach(() => {
+    vi.spyOn(nodes, "loadOrCreateDeviceIdentity").mockImplementation(
+      loadOrCreateDeviceIdentityMock,
+    );
+    vi.spyOn(nodes, "signDevicePayload").mockImplementation(signDevicePayloadMock);
     vi.useRealTimers();
     vi.unstubAllGlobals();
     const storage = createStorageMock();
     wsInstances.length = 0;
     loadOrCreateDeviceIdentityMock.mockReset();
     signDevicePayloadMock.mockClear();
+    recoveryMigrationRuntimeMock.loaded.mockClear();
+    recoveryMigrationRuntimeMock.migrate.mockImplementation(migrateSessionPlacementRecoveryScope);
     loadOrCreateDeviceIdentityMock.mockResolvedValue({
       deviceId: "device-1",
       privateKey: "private-key", // pragma: allowlist secret
@@ -409,12 +478,14 @@ describe("GatewayBrowserClient", () => {
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
+    vi.restoreAllMocks();
   });
 
   it("requests full control ui operator scopes with explicit shared auth", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
       token: "shared-auth-token",
+      clientBuildId: "build-a",
     });
 
     const { connectFrame } = await startConnect(client);
@@ -422,13 +493,133 @@ describe("GatewayBrowserClient", () => {
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.minProtocol).toBe(MIN_CLIENT_PROTOCOL_VERSION);
     expect(connectFrame.params?.maxProtocol).toBe(PROTOCOL_VERSION);
+    expect(connectFrame.params?.client.buildId).toBe("build-a");
     expect(connectFrame.params?.caps).toEqual([
+      GATEWAY_CLIENT_CAPS.AGENT_KIND,
+      GATEWAY_CLIENT_CAPS.APPROVALS,
       GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
       GATEWAY_CLIENT_CAPS.TERMINAL_OFFSET_SEQ,
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
+      GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
+  });
+
+  it("surfaces build identity rejection and never retries without build identity", async () => {
+    useNodeFakeTimers();
+    const onClose = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      clientBuildId: "build-a",
+      onClose,
+    });
+
+    const first = await startConnect(client);
+    expect(first.connectFrame.params?.client.buildId).toBe("build-a");
+    first.ws.emitMessage({
+      type: "res",
+      id: first.connectFrame.id,
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "invalid connect params: at /client: unexpected property 'buildId'",
+      },
+    });
+    await expectSocketClosed(first.ws);
+    expect(first.ws.lastClose).toEqual({ code: 4008, reason: "connect failed" });
+    first.ws.emitClose(4008, "connect failed");
+    expect(onClose).toHaveBeenCalledWith({
+      code: 4008,
+      reason: "connect failed",
+      error: {
+        code: "INVALID_REQUEST",
+        message: "invalid connect params: at /client: unexpected property 'buildId'",
+        details: undefined,
+        retryable: false,
+        retryAfterMs: undefined,
+      },
+      willRetry: true,
+    });
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(wsInstances).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(550);
+    const second = await continueConnect(getLatestWebSocket(), "nonce-2");
+    expect(second.connectFrame.params?.client.buildId).toBe("build-a");
+    expect(wsInstances).toHaveLength(2);
+
+    client.stop();
+    vi.useRealTimers();
+  });
+
+  it("signs device proof with Gateway time instead of browser wall-clock time", async () => {
+    useNodeFakeTimers();
+    vi.setSystemTime(new Date("2040-01-01T00:00:00.000Z"));
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+    client.start();
+
+    const challengeTs = 1_700_000_000_123;
+    const { connectFrame } = await continueConnect(
+      getLatestWebSocket(),
+      "nonce-clock-skew",
+      challengeTs,
+    );
+
+    expect(connectFrame.params?.device?.signedAt).toBe(challengeTs);
+    const signedPayload = signDevicePayloadMock.mock.calls.at(-1)?.[1];
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_OPERATOR_SCOPES],
+      token: "shared-auth-token",
+      nonce: "nonce-clock-skew",
+      signedAtMs: challengeTs,
+    });
+    client.stop();
+  });
+
+  it("fails closed when a secure device challenge omits its Gateway timestamp", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-missing-time" },
+    });
+
+    await expectSocketClosed(ws);
+    expect(ws.sent).toHaveLength(0);
+    expect(ws.lastClose).toEqual({ code: 4008, reason: "connect failed" });
+    client.stop();
+  });
+
+  it("fails closed when a secure device challenge timestamp is malformed", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+    client.start();
+    const ws = getLatestWebSocket();
+    ws.emitOpen();
+    ws.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-invalid-time", ts: "not-a-number" },
+    });
+
+    await expectSocketClosed(ws);
+    expect(ws.sent).toHaveLength(0);
+    expect(ws.lastClose).toEqual({ code: 4008, reason: "connect failed" });
+    client.stop();
   });
 
   it("requests handoff scopes with bootstrap token auth", async () => {
@@ -446,6 +637,25 @@ describe("GatewayBrowserClient", () => {
     expectSignedPayloadFields(signedPayload, {
       scopes: [...CONTROL_UI_BOOTSTRAP_OPERATOR_SCOPES],
       token: "boot-1",
+      nonce: "nonce-1",
+    });
+  });
+
+  it("requests the exact owner profile for host-authorized bootstrap auth", async () => {
+    const client = new GatewayBrowserClient({
+      url: "wss://gateway.example",
+      bootstrapToken: "boot-owner",
+      bootstrapProfile: "owner",
+    });
+
+    const { connectFrame } = await startConnect(client);
+
+    expect(connectFrame.params?.auth?.bootstrapToken).toBe("boot-owner");
+    expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES]);
+    const [, signedPayload] = requireFirstSignCall();
+    expectSignedPayloadFields(signedPayload, {
+      scopes: [...CONTROL_UI_OWNER_BOOTSTRAP_OPERATOR_SCOPES],
+      token: "boot-owner",
       nonce: "nonce-1",
     });
   });
@@ -603,6 +813,39 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
+  it("settles a companion ask from one final response", async () => {
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+    });
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: { type: "hello-ok", protocol: 4, auth: { role: "operator", scopes: [] } },
+    });
+
+    const answer = client.request(
+      "sessions.companion.ask",
+      { sessionKey: "agent:main:main", question: "What changed?" },
+      { timeoutMs: 70_000 },
+    );
+    const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+    expect(frame.method).toBe("sessions.companion.ask");
+    ws.emitMessage({
+      type: "res",
+      id: frame.id,
+      ok: true,
+      payload: { answer: "The companion was simplified.", ts: 4 },
+    });
+
+    await expect(answer).resolves.toEqual({
+      answer: "The companion was simplified.",
+      ts: 4,
+    });
+  });
+
   it("tracks inbound activity and delegates forced reconnect to the shared socket", async () => {
     const client = new GatewayBrowserClient({
       url: "ws://127.0.0.1:18789",
@@ -626,6 +869,117 @@ describe("GatewayBrowserClient", () => {
 
     client.forceReconnect("terminal liveness timeout");
     expect(ws.lastClose).toEqual({ code: 4000, reason: "terminal liveness timeout" });
+  });
+
+  it("reconnects a silently stalled socket using its advertised Gateway heartbeat", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+          policy: { tickIntervalMs: 1_000 },
+        },
+      });
+
+      await vi.advanceTimersByTimeAsync(3_000);
+
+      expect(ws.lastClose).toEqual({ code: 4000, reason: "tick timeout" });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it.each([Number.MAX_SAFE_INTEGER, 2 ** 32 + 1])(
+    "clamps the advertised heartbeat %d before scheduling its browser timer",
+    async (advertisedTickIntervalMs) => {
+      useNodeFakeTimers();
+      const setIntervalSpy = vi.spyOn(globalThis, "setInterval");
+      const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+
+      try {
+        const { ws, connectFrame } = await startConnect(client);
+        ws.emitMessage({
+          type: "res",
+          id: connectFrame.id,
+          ok: true,
+          payload: {
+            type: "hello-ok",
+            protocol: 4,
+            auth: { role: "operator", scopes: [] },
+            policy: { tickIntervalMs: advertisedTickIntervalMs },
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        expect(setIntervalSpy).toHaveBeenLastCalledWith(expect.any(Function), 2_147_483_647);
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(ws.lastClose).toBeNull();
+      } finally {
+        client.stop();
+      }
+    },
+  );
+
+  it("keeps a healthy heartbeat and explicitly unbounded request alive", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+    try {
+      const { ws, connectFrame } = await startConnect(client);
+      ws.emitMessage({
+        type: "res",
+        id: connectFrame.id,
+        ok: true,
+        payload: {
+          type: "hello-ok",
+          protocol: 4,
+          auth: { role: "operator", scopes: [] },
+          policy: { tickIntervalMs: 1_000 },
+        },
+      });
+      const request = client.request("wizard.next", {}, { timeoutMs: null });
+      const requestFrame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string };
+
+      for (let seq = 1; seq <= 4; seq += 1) {
+        await vi.advanceTimersByTimeAsync(1_000);
+        ws.emitMessage({ type: "event", event: "tick", seq, payload: {} });
+      }
+
+      expect(ws.lastClose).toBeNull();
+      ws.emitMessage({ type: "res", id: requestFrame.id, ok: true, payload: { done: true } });
+      await expect(request).resolves.toEqual({ done: true });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("disposes the Gateway heartbeat when its browser client stops", async () => {
+    useNodeFakeTimers();
+    const client = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        policy: { tickIntervalMs: 1_000 },
+      },
+    });
+
+    client.stop();
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(ws.lastClose).toEqual({ code: undefined, reason: undefined });
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("reports failed request timing without including request params", async () => {
@@ -727,7 +1081,9 @@ describe("GatewayBrowserClient", () => {
       phase: "hello",
       hasChallenge: true,
       usedFallback: false,
-      secureContext: true,
+      // The Node test host has no window, so the reported browser secure-context
+      // fact is false even though a device identity is present.
+      secureContext: false,
       hasDeviceIdentity: true,
       hasDevice: true,
       hasAuthToken: true,
@@ -750,6 +1106,7 @@ describe("GatewayBrowserClient", () => {
     ws.emitOpen();
     await vi.advanceTimersByTimeAsync(750);
 
+    expect(parseLatestConnectFrame(ws).params?.device?.signedAt).toBe(Date.now());
     expect(connectTimingPayloads(onConnectTiming).map((payload) => payload.phase)).toContain(
       "fallback",
     );
@@ -821,6 +1178,230 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
+  it.each([
+    { name: "defined params exactly at the limit", method: "status.get", params: {}, delta: 0 },
+    { name: "defined params one byte over", method: "status.get", params: {}, delta: -1 },
+    { name: "undefined params exactly at the limit", method: "status.get", delta: 0 },
+    { name: "undefined params one byte over", method: "status.get", delta: -1 },
+    {
+      name: "UTF-8 method and params exactly at the limit",
+      method: "méthod.界",
+      params: { value: "🦞" },
+      delta: 0,
+    },
+    {
+      name: "UTF-8 method and params one byte over",
+      method: "méthod.界",
+      params: { value: "🦞" },
+      delta: -1,
+    },
+  ])("enforces $name", async ({ method, params, delta }) => {
+    const maxPayload = requestFrameBytes(method, params) + delta;
+    const onHello = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: "ws://127.0.0.1:18789",
+      token: "shared-auth-token",
+      onHello,
+    });
+    const { ws, connectFrame } = await startConnect(client, `nonce-${method}-${delta}`);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: { role: "operator", scopes: [] },
+        policy: { maxPayload, maxBufferedBytes: maxPayload * 2, tickIntervalMs: 30_000 },
+      },
+    });
+    await vi.waitFor(() => expect(onHello).toHaveBeenCalledOnce());
+
+    const sentBefore = ws.sent.length;
+    const request = client.request(method, params);
+    if (delta < 0) {
+      await expect(request).rejects.toThrow("Request exceeds the Gateway payload limit");
+      expect(ws.sent).toHaveLength(sentBefore);
+    } else {
+      const frame = JSON.parse(ws.sent.at(-1) ?? "{}") as { id?: string; method?: string };
+      expect(frame.method).toBe(method);
+      expect(new TextEncoder().encode(ws.sent.at(-1)).byteLength).toBe(maxPayload);
+      ws.emitMessage({ type: "res", id: frame.id, ok: true, payload: { ok: true } });
+      await expect(request).resolves.toEqual({ ok: true });
+    }
+    if (method.includes("界")) {
+      expect(maxPayload).toBeGreaterThan(
+        JSON.stringify(
+          params === undefined
+            ? { type: "req", id: REQUEST_FRAME_ID, method }
+            : { type: "req", id: REQUEST_FRAME_ID, method, params },
+        ).length + delta,
+      );
+    }
+    client.stop();
+  });
+
+  it("does not let a stale hello runtime import publish or migrate recovery", async () => {
+    useNodeFakeTimers();
+    const sessionStorage = createStorageMock();
+    vi.stubGlobal("sessionStorage", sessionStorage);
+    const digest = createDeferred<ArrayBuffer>();
+    const digestMock = vi.fn(() => digest.promise);
+    let requestId = 0;
+    vi.stubGlobal("crypto", {
+      randomUUID: () => `req-recovery-${++requestId}`,
+      subtle: { digest: digestMock },
+    });
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    const recovery = {
+      sessionKey: "agent:cloud:stale",
+      messageId: "message-stale",
+      message: "keep the current connection",
+      target: { kind: "profile" as const, profileId: "aws" },
+      agentId: "cloud",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      recoveryScope: legacyScope,
+      phase: "sending" as const,
+    };
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws: firstWs, connectFrame: firstConnect } = await startConnect(client);
+    firstWs.emitMessage({
+      type: "res",
+      id: firstConnect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: [],
+          deviceToken: STORED_CRED,
+          recoveryMigrationAllowed: true,
+          recoveryScope: "server-stale",
+        },
+      },
+    });
+    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+    expect(recoveryMigrationRuntimeMock.loaded).not.toHaveBeenCalled();
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+
+    firstWs.emitClose(1006, "socket lost");
+    await vi.advanceTimersByTimeAsync(800);
+    const secondWs = getLatestWebSocket();
+    secondWs.emitOpen();
+
+    digest.resolve(Uint8Array.from(createHash("sha256").update(STORED_CRED).digest()).buffer);
+    await vi.waitFor(() => expect(recoveryMigrationRuntimeMock.loaded).toHaveBeenCalledOnce());
+
+    expect(onRecoveryScopeChange).not.toHaveBeenCalled();
+    expect(recoveryMigrationRuntimeMock.migrate).not.toHaveBeenCalled();
+    expect(client.recoveryScopeReady).toBe(false);
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toEqual(recovery);
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
+
+    secondWs.emitMessage({
+      type: "event",
+      event: "connect.challenge",
+      payload: { nonce: "nonce-current", ts: 1_800_000_000_000 },
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    const secondConnect = parseLatestConnectFrame(secondWs);
+    secondWs.emitMessage({
+      type: "res",
+      id: secondConnect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: [],
+          deviceToken: STORED_CRED,
+          recoveryMigrationAllowed: true,
+          recoveryScope: "server-current",
+        },
+      },
+    });
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(recoveryMigrationRuntimeMock.migrate).toHaveBeenCalledExactlyOnceWith(
+      DEFAULT_GATEWAY_URL,
+      legacyScope,
+      "server-current",
+    );
+    expect(client.recoveryScopeReady).toBe(true);
+    expect(client.recoveryScope).toBe("server-current");
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toBeNull();
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-stale", recovery.sessionKey),
+    ).toBeNull();
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, "server-current", recovery.sessionKey),
+    ).toEqual({ ...recovery, recoveryScope: "server-current" });
+    client.stop();
+    expect(client.recoveryScopeReady).toBe(false);
+  });
+
+  it("keeps stale credential recovery isolated across a shared-browser principal switch", async () => {
+    const sessionStorage = createStorageMock();
+    vi.stubGlobal("sessionStorage", sessionStorage);
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    const principalScope = "principal-recovery-scope";
+    const recovery = {
+      sessionKey: "agent:cloud:shared-browser",
+      messageId: "message-shared-browser",
+      message: "keep this task with its credential owner",
+      target: { kind: "profile" as const, profileId: "aws" },
+      agentId: "cloud",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      recoveryScope: legacyScope,
+      phase: "sending" as const,
+    };
+    expect(writeSessionPlacementRecovery(recovery)).toBe(true);
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    expect(connectFrame.params?.auth?.deviceToken).toBe(STORED_CRED);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          recoveryScope: principalScope,
+        },
+      },
+    });
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScope).toBe(principalScope);
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, legacyScope, recovery.sessionKey),
+    ).toEqual(recovery);
+    expect(
+      readSessionPlacementRecovery(DEFAULT_GATEWAY_URL, principalScope, recovery.sessionKey),
+    ).toBeNull();
+    client.stop();
+  });
+
   it("publishes a credential-scoped recovery identity after hello", async () => {
     const onRecoveryScopeChange = vi.fn();
     const client = new GatewayBrowserClient({
@@ -839,18 +1420,116 @@ describe("GatewayBrowserClient", () => {
         protocol: 4,
         auth: {
           role: "operator",
-          scopes: [...CONTROL_UI_OPERATOR_SCOPES],
-          deviceToken: "test-token-placeholder",
+          scopes: ["operator.read"],
+          deviceToken: "stored-device-token",
+          recoveryScope: "device-recovery-scope",
         },
       },
     });
 
     await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
     expect(client.recoveryScopeReady).toBe(true);
-    expect(client.recoveryScope).toBe(
-      createHash("sha256").update("test-token-placeholder").digest("hex"),
+    expect(client.recoveryScope).toBe("device-recovery-scope");
+    expect(client.recoveryScope).not.toContain("stored-device-token");
+    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })?.scopes).toEqual(
+      [...CONTROL_UI_OPERATOR_SCOPES].toSorted(),
     );
-    expect(client.recoveryScope).not.toContain("test-token-placeholder");
+    client.stop();
+  });
+
+  it("keeps the shipped credential scope for an older v4 Gateway", async () => {
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "test-auth-token",
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          deviceToken: STORED_CRED,
+        },
+      },
+    });
+
+    const legacyScope = createHash("sha256").update(STORED_CRED).digest("hex");
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(client.recoveryScope).toBe(legacyScope);
+    expect(client.recoveryScopeReady).toBe(true);
+    client.stop();
+  });
+
+  it("uses a Gateway-owned recovery scope without shared credentials on an insecure context", async () => {
+    localStorage.clear();
+    stubInsecureCrypto();
+    const onRecoveryScopeChange = vi.fn();
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      onRecoveryScopeChange,
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.admin"],
+          recoveryScope: "gateway-recovery-scope",
+        },
+      },
+    });
+
+    await vi.waitFor(() => expect(onRecoveryScopeChange).toHaveBeenCalledOnce());
+    expect(connectFrame.params?.auth).toBeUndefined();
+    // Pure-JS signing keeps device identity available even without crypto.subtle.
+    expect(connectFrame.params?.device?.id).toBe("device-1");
+    expect(client.recoveryScope).toBe("gateway-recovery-scope");
+    expect(client.recoveryScopeReady).toBe(true);
+    client.stop();
+  });
+
+  it("persists hello scopes when the device token rotates", async () => {
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      token: "test-auth-token",
+    });
+
+    const { ws, connectFrame } = await startConnect(client);
+    ws.emitMessage({
+      type: "res",
+      id: connectFrame.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        protocol: 4,
+        auth: {
+          role: "operator",
+          scopes: ["operator.read"],
+          deviceToken: "rotated-device-token",
+        },
+      },
+    });
+
+    await vi.waitFor(() => {
+      expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator" })).toMatchObject({
+        token: "rotated-device-token",
+        scopes: ["operator.read"],
+      });
+    });
     client.stop();
   });
 
@@ -992,7 +1671,7 @@ describe("GatewayBrowserClient", () => {
     });
   });
 
-  it("sends explicit shared token on insecure first connect without cached device fallback", async () => {
+  it("attaches device identity alongside an explicit shared token on an insecure context", async () => {
     stubInsecureCrypto();
     const client = new GatewayBrowserClient({
       url: "ws://gateway.example:18789",
@@ -1001,18 +1680,18 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.id).toBe("1:req-insecure");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: "shared-auth-token",
       password: undefined,
       deviceToken: undefined,
     });
-    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
-    expect(signDevicePayloadMock).not.toHaveBeenCalled();
+    expect(connectFrame.params?.device?.id).toBe("device-1");
+    expect(signDevicePayloadMock).toHaveBeenCalled();
   });
 
-  it("sends explicit shared password on insecure first connect without cached device fallback", async () => {
+  it("attaches device identity alongside an explicit shared password on an insecure context", async () => {
     stubInsecureCrypto();
     const client = new GatewayBrowserClient({
       url: "ws://gateway.example:18789",
@@ -1021,15 +1700,15 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.id).toBe("1:req-insecure");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: undefined,
       password: "shared-password", // pragma: allowlist secret
       deviceToken: undefined,
     });
-    expect(loadOrCreateDeviceIdentityMock).not.toHaveBeenCalled();
-    expect(signDevicePayloadMock).not.toHaveBeenCalled();
+    expect(connectFrame.params?.device?.id).toBe("device-1");
+    expect(signDevicePayloadMock).toHaveBeenCalled();
   });
 
   it("uses cached device tokens only when no explicit shared auth is provided", async () => {
@@ -1049,12 +1728,88 @@ describe("GatewayBrowserClient", () => {
         "operator.admin",
         "operator.approvals",
         "operator.pairing",
+        "operator.questions",
         "operator.read",
         "operator.write",
       ],
       token: "stored-device-token",
       nonce: "nonce-1",
     });
+  });
+
+  it("selects the replacement token after a successful self rotation retires the page epoch", async () => {
+    localStorage.clear();
+    storeDeviceIdentity("00");
+    loadOrCreateDeviceIdentityMock.mockResolvedValue({
+      deviceId: "00",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
+    });
+    const { digest, digestMock } = deferDeviceIdentityDigest();
+    const state = createDeviceTokenState(async () => ({
+      deviceId: "00",
+      role: "operator",
+      token: "replacement-device-token",
+      scopes: ["operator.read"],
+      rotatedAtMs: 1_800_000_000_000,
+      tokenDelivery: "in-band",
+    }));
+
+    const operation = nodes.rotateDeviceToken(state, {
+      deviceId: "00",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      role: "operator",
+    });
+    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+    state.requestGeneration += 1;
+    digest.resolve(new Uint8Array([0]).buffer);
+    await expect(operation).resolves.toEqual({
+      delivery: "in-band",
+      token: "replacement-device-token",
+    });
+
+    vi.stubGlobal("crypto", webcrypto);
+    const nextClient = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+    const { connectFrame } = await startConnect(nextClient);
+    expect(connectFrame.params?.auth).toMatchObject({
+      token: "replacement-device-token",
+      deviceToken: "replacement-device-token",
+    });
+    nextClient.stop();
+  });
+
+  it("selects no revoked token after a successful self revocation retires the page epoch", async () => {
+    localStorage.clear();
+    storeDeviceIdentity("00");
+    storeDeviceAuthToken({
+      deviceId: "00",
+      role: "operator",
+      token: "revoked-device-token",
+      scopes: ["operator.read"],
+    });
+    loadOrCreateDeviceIdentityMock.mockResolvedValue({
+      deviceId: "00",
+      privateKey: "private-key", // pragma: allowlist secret
+      publicKey: "public-key", // pragma: allowlist secret
+    });
+    const { digest, digestMock } = deferDeviceIdentityDigest();
+    const state = createDeviceTokenState(async () => ({}));
+
+    const operation = nodes.revokeDeviceToken(state, {
+      deviceId: "00",
+      gatewayUrl: DEFAULT_GATEWAY_URL,
+      role: "operator",
+    });
+    await vi.waitFor(() => expect(digestMock).toHaveBeenCalledOnce());
+    state.requestGeneration += 1;
+    digest.resolve(new Uint8Array([0]).buffer);
+    await operation;
+
+    vi.stubGlobal("crypto", webcrypto);
+    const nextClient = new GatewayBrowserClient({ url: DEFAULT_GATEWAY_URL });
+    const { connectFrame } = await startConnect(nextClient);
+    expect(connectFrame.params?.auth).toBeUndefined();
+    nextClient.stop();
   });
 
   it("uses a scoped device token when legacy cleanup fails", async () => {
@@ -1244,7 +1999,7 @@ describe("GatewayBrowserClient", () => {
     }
   });
 
-  it("retries startup-unavailable connect responses without terminal callbacks", async () => {
+  it("reports startup-unavailable while retaining automatic reconnect", async () => {
     useNodeFakeTimers();
     const onClose = vi.fn();
     const client = new GatewayBrowserClient({
@@ -1272,7 +2027,18 @@ describe("GatewayBrowserClient", () => {
       await expectSocketClosed(ws);
       expect(ws.lastClose).toEqual({ code: 4013, reason: "gateway starting" });
       ws.emitClose(4013, "gateway starting");
-      expect(onClose).not.toHaveBeenCalled();
+      expect(onClose).toHaveBeenCalledWith({
+        code: 4013,
+        reason: "gateway starting",
+        error: {
+          code: "UNAVAILABLE",
+          message: "gateway starting; retry shortly",
+          details: { reason: "startup-sidecars" },
+          retryable: true,
+          retryAfterMs: 250,
+        },
+        willRetry: true,
+      });
       expect(wsInstances).toHaveLength(1);
 
       await vi.advanceTimersByTimeAsync(249);
@@ -1411,7 +2177,7 @@ describe("GatewayBrowserClient", () => {
     firstWs.emitMessage({
       type: "event",
       event: "connect.challenge",
-      payload: { nonce: "nonce-stale" },
+      payload: { nonce: "nonce-stale", ts: 1_777_777_777_000 },
     });
     await vi.advanceTimersByTimeAsync(0);
     expect(firstWs.sent).toHaveLength(0);

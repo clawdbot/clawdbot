@@ -8,11 +8,13 @@
  * Chrome, and no gateway credential ever has to travel to a node.
  */
 import crypto from "node:crypto";
-import fs from "node:fs";
 import path from "node:path";
+import { createSecretFileAtomic, tryReadSecretFileSync } from "openclaw/plugin-sdk/secret-file";
 import { resolveOAuthDir } from "openclaw/plugin-sdk/state-paths";
 
 const RELAY_SECRET_FILE = "browser-extension-relay.secret";
+const RELAY_SECRET_REREAD_ATTEMPTS = 50;
+const RELAY_SECRET_REREAD_DELAY_MS = 10;
 
 // resolveOAuthDir returns `${stateDir}/credentials`, the shared credentials dir.
 function resolveExtensionRelaySecretPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -26,11 +28,10 @@ function normalizeToken(raw: string): string | null {
 
 /** Read the host-local relay token, or null when it has not been created yet. */
 export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  try {
-    return normalizeToken(fs.readFileSync(resolveExtensionRelaySecretPath(env), "utf8"));
-  } catch {
-    return null;
-  }
+  return normalizeToken(
+    tryReadSecretFileSync(resolveExtensionRelaySecretPath(env), "browser extension relay secret") ??
+      "",
+  );
 }
 
 /**
@@ -44,31 +45,45 @@ export function readExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): s
  * printed pairing string carries the other → 401). On EEXIST the winner's token
  * is re-read.
  */
-export function ensureExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string {
+export async function ensureExtensionRelayToken(
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<string> {
   const secretPath = resolveExtensionRelaySecretPath(env);
-  const existing = readExtensionRelayToken(env);
-  if (existing) {
-    return existing;
-  }
-  const token = crypto.randomBytes(32).toString("hex");
-  fs.mkdirSync(path.dirname(secretPath), { recursive: true, mode: 0o700 });
-  try {
-    fs.writeFileSync(secretPath, `${token}\n`, { mode: 0o600, flag: "wx" });
-    return token;
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code !== "EEXIST") {
-      throw err;
+  let lastError: unknown;
+  for (let attempt = 0; attempt < RELAY_SECRET_REREAD_ATTEMPTS; attempt += 1) {
+    let canCreate = false;
+    try {
+      const winner = readExtensionRelayToken(env);
+      if (winner) {
+        return winner;
+      }
+      canCreate = attempt === 0;
+    } catch (err) {
+      // An exclusive writer can expose an empty final file before ensure starts;
+      // retry adoption without invoking the stricter credential creation guards.
+      lastError = err;
     }
-    // Another process created it first; adopt its token.
-    const winner = readExtensionRelayToken(env);
-    if (!winner) {
-      throw new Error("extension relay secret exists but is unreadable/malformed", { cause: err });
+    if (canCreate) {
+      const token = crypto.randomBytes(32).toString("hex");
+      try {
+        await createSecretFileAtomic({
+          rootDir: path.dirname(secretPath),
+          filePath: secretPath,
+          content: `${token}\n`,
+        });
+        return token;
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "secret-exists") {
+          throw err;
+        }
+        lastError = err;
+      }
     }
-    return winner;
+    await new Promise<void>((resolve) => {
+      setTimeout(resolve, RELAY_SECRET_REREAD_DELAY_MS);
+    });
   }
-}
-
-/** Resolve the relay token for config (read-only; null until first ensured). */
-export function resolveExtensionRelayToken(env: NodeJS.ProcessEnv = process.env): string | null {
-  return readExtensionRelayToken(env);
+  throw new Error("extension relay secret exists but is unreadable/malformed", {
+    cause: lastError,
+  });
 }

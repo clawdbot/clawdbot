@@ -1,29 +1,43 @@
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
-import os from "node:os";
-import path from "node:path";
-import type { ChatType } from "../../channels/chat-type.js";
+import { prepareSystemAgentRunAdmission } from "../../agents/admitted-run-context.js";
+import {
+  createCronCreatorAuthorityCapability,
+  runWithCronCreatorAuthorityCapability,
+} from "../../agents/cron-creator-authority-context.js";
+import type { EmbeddedForegroundPromptContext } from "../../agents/embedded-agent-runner/run/params.js";
+import { runOutsidePreparedModelRuntimePluginGenerationScope } from "../../agents/prepared-model-runtime-generation-scope.js";
+import { resolveAgentRunSessionTarget } from "../../agents/run-session-target.js";
+import { SessionManager } from "../../agents/sessions/index.js";
+import { getCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
+import { getRuntimeConfig } from "../../config/config.js";
+import { resolveInternalSessionEffectsIdentity } from "../../config/sessions/internal-session-key.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { runWithGatewayIndependentRootWorkAdmission } from "../../process/gateway-work-admission.js";
 import { CommandLane } from "../../process/lanes.js";
+import type { RunSkillUsage } from "../runtime/run-usage.js";
+import { applyAutonomousSkillProposal } from "./autonomous-apply.js";
+import { recordSkillExperienceReviewOutcome } from "./collection-review-state.js";
 import { resolveSkillWorkshopConfig } from "./config.js";
 import {
   buildSkillExperienceReviewPrompt,
-  formatSkillExperienceReviewTranscript,
+  countSkillModelIterations,
+  selectCurrentSkillTurnMessages,
 } from "./experience-review-prompt.js";
+import type { SkillWorkshopProposalMutationBudget } from "./types.js";
 
 const EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS = 10;
 const EXPERIENCE_REVIEW_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_RETRY_IDLE_MS = 30_000;
 const EXPERIENCE_REVIEW_TIMEOUT_MS = 120_000;
 const EXPERIENCE_REVIEW_MAX_PENDING = 32;
-const EXPERIENCE_REVIEW_SESSION_SEGMENT = "skill-workshop-review";
 const EXPERIENCE_REVIEW_BLOCKED_TRIGGERS = new Set(["cron", "heartbeat", "memory", "overflow"]);
 const EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS = new Set([
   "cron",
   "hook",
   "subagent",
-  EXPERIENCE_REVIEW_SESSION_SEGMENT,
+  "skill-workshop-review",
 ]);
 
 const log = createSubsystemLogger("skills/workshop");
@@ -31,6 +45,7 @@ const log = createSubsystemLogger("skills/workshop");
 type ExperienceReviewAgentEndEvent = {
   messages: unknown[];
   success: boolean;
+  error?: string;
 };
 
 type ExperienceReviewAgentContext = {
@@ -41,37 +56,30 @@ type ExperienceReviewAgentContext = {
   workspaceDir?: string;
   modelProviderId?: string;
   modelId?: string;
+  modelContextWindowTokens?: number;
   authProfileId?: string;
+  modelIterations?: number;
   skillWorkshopAvailable?: boolean;
   compacted?: boolean;
-  trigger?: string;
-  messageChannel?: string | null;
-  messageProvider?: string | null;
-  chatType?: ChatType;
-  agentAccountId?: string | null;
-  groupId?: string | null;
-  groupChannel?: string | null;
-  groupSpace?: string | null;
-  memberRoleIds?: readonly string[];
-  spawnedBy?: string | null;
-  senderId?: string | null;
-  senderName?: string | null;
-  senderUsername?: string | null;
-  senderE164?: string | null;
-  senderIsOwner?: boolean;
+  foregroundPromptContext: EmbeddedForegroundPromptContext;
 };
 
 export type SkillExperienceReviewParams = {
   event: ExperienceReviewAgentEndEvent;
   ctx: ExperienceReviewAgentContext;
+  usedSkills?: readonly RunSkillUsage[];
   config?: OpenClawConfig;
 };
 
 export type ExperienceReviewCandidate = {
   ctx: ExperienceReviewAgentContext;
   config?: OpenClawConfig;
-  transcript: string;
-  modelIterations: number;
+  usedSkills?: readonly RunSkillUsage[];
+  turnAborted?: boolean;
+};
+
+type ExperienceReviewRunDeps = {
+  getCurrentConfig?: () => OpenClawConfig | Promise<OpenClawConfig>;
 };
 
 type ExperienceReviewTimer = ReturnType<typeof setTimeout>;
@@ -103,7 +111,7 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
   ) {
     return false;
   }
-  const trigger = ctx.trigger?.trim().toLowerCase();
+  const trigger = ctx.foregroundPromptContext.trigger?.trim().toLowerCase();
   if (trigger && EXPERIENCE_REVIEW_BLOCKED_TRIGGERS.has(trigger)) {
     return false;
   }
@@ -116,35 +124,11 @@ function isEligibleContext(ctx: ExperienceReviewAgentContext): boolean {
     .some((segment) => EXPERIENCE_REVIEW_BLOCKED_SESSION_SEGMENTS.has(segment));
 }
 
-function currentTurnMessages(messages: readonly unknown[]): readonly unknown[] {
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const message = messages[index];
-    if (
-      message &&
-      typeof message === "object" &&
-      !Array.isArray(message) &&
-      (message as { role?: unknown }).role === "user"
-    ) {
-      return messages.slice(index);
-    }
-  }
-  return messages;
-}
-
-function countModelIterations(messages: readonly unknown[]): number {
-  return messages.reduce<number>((count, message) => {
-    if (!message || typeof message !== "object" || Array.isArray(message)) {
-      return count;
-    }
-    return count + ((message as { role?: unknown }).role === "assistant" ? 1 : 0);
-  }, 0);
-}
-
 export async function prepareSkillExperienceReviewCandidate(
   candidate: ExperienceReviewCandidate,
   config: OpenClawConfig,
 ): Promise<ExperienceReviewCandidate | undefined> {
-  if (!resolveSkillWorkshopConfig(config).autonomous.enabled) {
+  if (resolveSkillWorkshopConfig(config).autonomous.mode === "off") {
     return undefined;
   }
   const { resolveConversationCapabilityProfile } =
@@ -152,6 +136,7 @@ export async function prepareSkillExperienceReviewCandidate(
   const { resolveSandboxRuntimeStatus } = await import("../../agents/sandbox.js");
   const { isToolAllowedByPolicies } = await import("../../agents/tool-policy-match.js");
   const { mergeAlsoAllowPolicy } = await import("../../agents/tool-policy.js");
+  const foreground = candidate.ctx.foregroundPromptContext;
   const sessionKey = candidate.ctx.sessionKey;
   if (!sessionKey || resolveSandboxRuntimeStatus({ cfg: config, sessionKey }).sandboxed) {
     return undefined;
@@ -160,21 +145,21 @@ export async function prepareSkillExperienceReviewCandidate(
     config,
     sessionKey,
     sandboxSessionKey: sessionKey,
-    agentId: candidate.ctx.agentId,
-    agentAccountId: candidate.ctx.agentAccountId,
-    messageProvider: candidate.ctx.messageProvider,
-    messageChannel: candidate.ctx.messageChannel,
-    chatType: candidate.ctx.chatType,
-    groupId: candidate.ctx.groupId,
-    groupChannel: candidate.ctx.groupChannel,
-    groupSpace: candidate.ctx.groupSpace,
-    memberRoleIds: candidate.ctx.memberRoleIds,
-    spawnedBy: candidate.ctx.spawnedBy,
-    senderId: candidate.ctx.senderId,
-    senderName: candidate.ctx.senderName,
-    senderUsername: candidate.ctx.senderUsername,
-    senderE164: candidate.ctx.senderE164,
-    senderIsOwner: candidate.ctx.senderIsOwner,
+    agentId: foreground.agentId,
+    agentAccountId: foreground.agentAccountId,
+    messageProvider: foreground.messageProvider,
+    messageChannel: foreground.messageChannel,
+    chatType: foreground.chatType,
+    groupId: foreground.groupId,
+    groupChannel: foreground.groupChannel,
+    groupSpace: foreground.groupSpace,
+    memberRoleIds: foreground.memberRoleIds,
+    spawnedBy: foreground.spawnedBy,
+    senderId: foreground.senderId,
+    senderName: foreground.senderName,
+    senderUsername: foreground.senderUsername,
+    senderE164: foreground.senderE164,
+    senderIsOwner: foreground.senderIsOwner,
     modelProvider: candidate.ctx.modelProviderId,
     modelId: candidate.ctx.modelId,
     workspaceDir: candidate.ctx.workspaceDir,
@@ -217,7 +202,7 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       clearTimer(pending.timer);
     }
     const generation = ++pending.generation;
-    const timer = setTimer(() => {
+    const timerCallback = () => {
       if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
         return;
       }
@@ -237,17 +222,13 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
           }
           reviewInFlight = true;
           try {
+            pendingBySession.delete(sessionKey);
             const candidate = deps.prepareReview
               ? await deps.prepareReview(pending.candidate)
               : pending.candidate;
             if (!candidate) {
-              pendingBySession.delete(sessionKey);
               return;
             }
-            if (pendingBySession.get(sessionKey) !== pending || pending.generation !== generation) {
-              return;
-            }
-            pendingBySession.delete(sessionKey);
             await deps.runReview(candidate);
           } finally {
             reviewInFlight = false;
@@ -256,10 +237,15 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         .catch((error: unknown) => {
           log.warn(`skill experience review failed: ${String(error)}`);
           if (pendingBySession.get(sessionKey) === pending && pending.generation === generation) {
-            arm(sessionKey, pending, EXPERIENCE_REVIEW_RETRY_IDLE_MS);
+            pendingBySession.delete(sessionKey);
           }
         });
-    }, delayMs);
+    };
+    // This timer outlives the foreground turn that armed it. Create its async
+    // resource outside the parent scope so review work admits on the current generation.
+    const timer = runOutsidePreparedModelRuntimePluginGenerationScope(() =>
+      setTimer(timerCallback, delayMs),
+    );
     pending.timer = timer;
     timer.unref?.();
   };
@@ -271,9 +257,14 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
         return;
       }
       const existing = pendingBySession.get(sessionKey);
+      // Errored completions (provider/prompt failures) are transient environment
+      // noise, not learnable evidence, and a same-model review would likely hit
+      // the same failure. User aborts carry no error and stay eligible: deep
+      // interrupted turns are exactly where corrective evidence lives.
+      const errored = typeof params.event.error === "string" && params.event.error.trim() !== "";
       if (
         existing &&
-        !params.event.success &&
+        errored &&
         params.ctx.runId?.trim() &&
         params.ctx.runId === existing.candidate.ctx.runId
       ) {
@@ -288,20 +279,40 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
       if (existing) {
         arm(sessionKey, existing, EXPERIENCE_REVIEW_IDLE_MS);
       }
-      if (!resolveSkillWorkshopConfig(params.config).autonomous.enabled) {
+      if (errored) {
+        log.debug(`experience review skipped: reason=errored-completion session=${sessionKey}`);
+        return;
+      }
+      if (resolveSkillWorkshopConfig(params.config).autonomous.mode === "off") {
         return;
       }
       if (!isEligibleContext(params.ctx)) {
+        log.debug(`experience review skipped: reason=ineligible-context session=${sessionKey}`);
         return;
       }
-      const workspaceDir = params.ctx.workspaceDir?.trim();
+      const workspaceDir = getCanonicalSkillWorkspace() ?? params.ctx.workspaceDir?.trim();
       if (!workspaceDir) {
+        log.debug(`experience review skipped: reason=missing-workspace session=${sessionKey}`);
         return;
       }
 
-      const turnMessages = currentTurnMessages(params.event.messages);
-      const modelIterations = countModelIterations(turnMessages);
-      if (params.event.success && modelIterations >= EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
+      const turnMessages = selectCurrentSkillTurnMessages(params.event.messages);
+      // Native harnesses can report exact provider iterations even when their
+      // transcript projection has a different assistant-message cardinality.
+      const reportedModelIterations = params.ctx.modelIterations;
+      const modelIterations =
+        reportedModelIterations === undefined
+          ? countSkillModelIterations(turnMessages)
+          : Number.isSafeInteger(reportedModelIterations) && reportedModelIterations >= 0
+            ? reportedModelIterations
+            : 0;
+      if (modelIterations < EXPERIENCE_REVIEW_MIN_MODEL_ITERATIONS) {
+        log.debug(
+          `experience review skipped: reason=below-depth-bar iterations=${modelIterations} session=${sessionKey}`,
+        );
+        return;
+      }
+      {
         if (!existing && pendingBySession.size >= EXPERIENCE_REVIEW_MAX_PENDING) {
           const oldest = pendingBySession.entries().next().value as
             | [string, PendingExperienceReview]
@@ -322,33 +333,23 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
             workspaceDir,
             modelProviderId: params.ctx.modelProviderId,
             modelId: params.ctx.modelId,
+            modelContextWindowTokens: params.ctx.modelContextWindowTokens,
             authProfileId: params.ctx.authProfileId,
             skillWorkshopAvailable: params.ctx.skillWorkshopAvailable,
             compacted: params.ctx.compacted,
-            trigger: params.ctx.trigger,
-            messageChannel: params.ctx.messageChannel,
-            messageProvider: params.ctx.messageProvider,
-            chatType: params.ctx.chatType,
-            agentAccountId: params.ctx.agentAccountId,
-            groupId: params.ctx.groupId,
-            groupChannel: params.ctx.groupChannel,
-            groupSpace: params.ctx.groupSpace,
-            memberRoleIds: params.ctx.memberRoleIds ? [...params.ctx.memberRoleIds] : undefined,
-            spawnedBy: params.ctx.spawnedBy,
-            senderId: params.ctx.senderId,
-            senderName: params.ctx.senderName,
-            senderUsername: params.ctx.senderUsername,
-            senderE164: params.ctx.senderE164,
-            senderIsOwner: params.ctx.senderIsOwner,
+            foregroundPromptContext: params.ctx.foregroundPromptContext,
           },
           ...(params.config ? { config: params.config } : {}),
-          transcript: formatSkillExperienceReviewTranscript(turnMessages),
-          modelIterations,
+          usedSkills: params.usedSkills ? [...params.usedSkills] : undefined,
+          turnAborted: !params.event.success,
         };
         const pending = existing ?? { candidate, generation: 0 };
         pending.candidate = candidate;
         pendingBySession.set(sessionKey, pending);
         arm(sessionKey, pending, EXPERIENCE_REVIEW_IDLE_MS);
+        log.debug(
+          `experience review scheduled: session=${sessionKey} iterations=${modelIterations} aborted=${!params.event.success}`,
+        );
       }
     },
     clear(): void {
@@ -364,74 +365,196 @@ export function createSkillExperienceReviewScheduler(deps: ExperienceReviewSched
 
 export async function runSkillExperienceReview(
   candidate: ExperienceReviewCandidate,
+  deps: ExperienceReviewRunDeps = {},
 ): Promise<void> {
-  const workspaceDir = candidate.ctx.workspaceDir;
-  const sessionKey = candidate.ctx.sessionKey;
+  // The idle timer that fires this review was armed inside the foreground
+  // run's root-work ALS context. By fire time that root is released, so any
+  // inherited-context lane enqueue is refused as GatewayDrainingError on a
+  // healthy gateway. Re-enter admission as independent root work; real
+  // restart drain still refuses it.
+  await runWithGatewayIndependentRootWorkAdmission(() =>
+    runSkillExperienceReviewInner(candidate, deps),
+  );
+}
+
+async function runSkillExperienceReviewInner(
+  candidate: ExperienceReviewCandidate,
+  deps: ExperienceReviewRunDeps,
+): Promise<void> {
+  const foregroundPromptContext = candidate.ctx.foregroundPromptContext;
+  const workspaceDir = getCanonicalSkillWorkspace() ?? candidate.ctx.workspaceDir;
+  const foregroundSessionKey = candidate.ctx.sessionKey;
+  const foregroundSessionId = candidate.ctx.sessionId;
   const modelProviderId = candidate.ctx.modelProviderId?.trim();
   const modelId = candidate.ctx.modelId?.trim();
-  if (!workspaceDir || !sessionKey || !modelProviderId || !modelId) {
+  if (
+    !workspaceDir ||
+    !foregroundSessionKey ||
+    !foregroundSessionId ||
+    !modelProviderId ||
+    !modelId
+  ) {
     return;
   }
 
-  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-skill-review-"));
+  const runId = `skill-workshop-review:${randomUUID()}`;
+  const reviewSession = resolveInternalSessionEffectsIdentity({
+    agentId: foregroundPromptContext.agentId,
+    runId,
+  });
+  const origin = foregroundPromptContext.cronCreatorCallerOrigin;
+  const capability = origin ? createCronCreatorAuthorityCapability(runId, origin) : undefined;
+  const config = candidate.config ?? getRuntimeConfig();
+  const proposalMutationBudget: SkillWorkshopProposalMutationBudget = {
+    remaining: 1,
+    readSkillHashes: new Map(),
+  };
+  const foregroundSessionTarget = await resolveAgentRunSessionTarget({
+    agentId: foregroundPromptContext.agentId,
+    config,
+    sessionId: foregroundSessionId,
+    sessionKey: foregroundSessionKey,
+    missingSessionKey: "resolve-existing",
+  });
+  const foregroundSession = SessionManager.open(foregroundSessionTarget, workspaceDir);
+  const detachedSession = SessionManager.fromEntries(foregroundSession.getEntries(), workspaceDir);
+  const { listWritableWorkspaceSkillSummaries } = await import("./workspace-skill-read.js");
+  const existingSkills = listWritableWorkspaceSkillSummaries(workspaceDir, {
+    config,
+    agentId: foregroundPromptContext.agentId,
+  });
+  const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
+  const preparedRunAdmission = prepareSystemAgentRunAdmission(
+    config,
+    runId,
+    foregroundPromptContext.agentId,
+    "skill-workshop.experience",
+  );
+  const attemptedAtMs = Date.now();
+  let outcome: "applied" | "proposed" | "nothing";
+  let proposalId: string | undefined;
+  let usage: { inputTokens: number; cachedInputTokens: number; outputTokens: number } | undefined;
+  // The review owns a private runtime identity while the explicit promptCacheKey
+  // keeps provider cache affinity with the foreground transcript it cloned.
+  registerAgentRunContext(runId, {
+    agentId: foregroundPromptContext.agentId,
+    sessionId: reviewSession.sessionId,
+    sessionKey: reviewSession.sessionKey,
+    isControlUiVisible: false,
+    projectSessionActive: false,
+    projectSessionLifecycle: false,
+    projectSessionMessages: false,
+  });
   try {
-    const sessionId = randomUUID();
-    const reviewSessionKey = `agent:${candidate.ctx.agentId ?? "main"}:${EXPERIENCE_REVIEW_SESSION_SEGMENT}:${sessionId}`;
-    const { runEmbeddedAgent } = await import("../../agents/embedded-agent.js");
-    await runEmbeddedAgent({
-      sessionId,
-      sessionKey: reviewSessionKey,
-      sandboxSessionKey: sessionKey,
-      sessionFile: path.join(tempDir, "session.jsonl"),
-      ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-      trigger: "manual",
-      // Never occupy the foreground agent lane after the idle gate opens.
-      lane: CommandLane.SkillWorkshopReview,
-      messageChannel: candidate.ctx.messageChannel ?? undefined,
-      messageProvider: candidate.ctx.messageProvider ?? undefined,
-      ...(candidate.ctx.chatType ? { chatType: candidate.ctx.chatType } : {}),
-      ...(candidate.ctx.agentAccountId ? { agentAccountId: candidate.ctx.agentAccountId } : {}),
-      groupId: candidate.ctx.groupId,
-      groupChannel: candidate.ctx.groupChannel,
-      groupSpace: candidate.ctx.groupSpace,
-      memberRoleIds: candidate.ctx.memberRoleIds ? [...candidate.ctx.memberRoleIds] : undefined,
-      spawnedBy: candidate.ctx.spawnedBy,
-      senderId: candidate.ctx.senderId,
-      senderName: candidate.ctx.senderName,
-      senderUsername: candidate.ctx.senderUsername,
-      senderE164: candidate.ctx.senderE164,
-      senderIsOwner: candidate.ctx.senderIsOwner,
-      agentHarnessId: "openclaw",
-      agentHarnessRuntimeOverride: "openclaw",
-      workspaceDir,
-      ...(candidate.config ? { config: candidate.config } : {}),
-      prompt: buildSkillExperienceReviewPrompt(candidate),
-      provider: modelProviderId,
-      model: modelId,
-      modelSelectionLocked: true,
-      modelFallbacksOverride: [],
-      ...(candidate.ctx.authProfileId
-        ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
-        : {}),
-      timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
-      runId: `skill-workshop-review:${randomUUID()}`,
-      toolsAllow: ["skill_workshop"],
-      disableMessageTool: true,
-      disableTrajectory: true,
-      skillWorkshopProposalOnly: true,
-      skillWorkshopOrigin: {
-        ...(candidate.ctx.agentId ? { agentId: candidate.ctx.agentId } : {}),
-        sessionKey,
-        ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
-      },
-      cleanupBundleMcpOnRunEnd: true,
-      bootstrapContextMode: "lightweight",
-      skillsSnapshot: { prompt: "", skills: [] },
-      verboseLevel: "off",
-      reasoningLevel: "off",
-      suppressToolErrorWarnings: true,
+    let embeddedResult: Awaited<ReturnType<typeof runEmbeddedAgent>>;
+    try {
+      const run = () =>
+        runEmbeddedAgent({
+          ...foregroundPromptContext,
+          preparedRunAdmission,
+          sessionId: reviewSession.sessionId,
+          sessionKey: reviewSession.sessionKey,
+          // Delivery authority closes with the foreground turn and cannot be reused by this fork.
+          messageActionTurnCapability: undefined,
+          sessionManager: detachedSession,
+          sessionPersistence: "detached",
+          // Never occupy the foreground agent lane after the idle gate opens.
+          lane: CommandLane.SkillWorkshopReview,
+          agentHarnessId: "openclaw",
+          agentHarnessRuntimeOverride: "openclaw",
+          workspaceDir,
+          config,
+          prompt: buildSkillExperienceReviewPrompt({ ...candidate, existingSkills }),
+          provider: modelProviderId,
+          model: modelId,
+          modelSelectionLocked: true,
+          modelFallbacksOverride: [],
+          ...(candidate.ctx.authProfileId
+            ? { authProfileId: candidate.ctx.authProfileId, authProfileIdSource: "user" as const }
+            : {}),
+          timeoutMs: EXPERIENCE_REVIEW_TIMEOUT_MS,
+          runId,
+          silentExpected: true,
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "optional",
+          toolExecutionAllow: ["skill_workshop"],
+          cleanupBundleMcpOnRunEnd: true,
+          disableTrajectory: true,
+          skillWorkshopProposalOnly: true,
+          skillWorkshopUpdateProposals: true,
+          skillWorkshopAutonomousCapture: true,
+          skillWorkshopProposalMutationBudget: proposalMutationBudget,
+          skillWorkshopOrigin: {
+            agentId: foregroundPromptContext.agentId,
+            sessionKey: foregroundSessionKey,
+            ...(candidate.ctx.runId ? { runId: candidate.ctx.runId } : {}),
+          },
+          verboseLevel: "off",
+          suppressToolErrorWarnings: true,
+          ...(capability ? { cronCreatorAuthorityCapability: capability } : {}),
+        });
+      embeddedResult = capability
+        ? await runWithCronCreatorAuthorityCapability(capability, run)
+        : await run();
+    } finally {
+      preparedRunAdmission.close();
+    }
+
+    const proposalIds = [...(proposalMutationBudget.mutatedProposalIds ?? [])];
+    proposalId = proposalIds[0];
+    outcome = proposalIds.length === 0 ? "nothing" : "proposed";
+    const currentConfig = deps.getCurrentConfig
+      ? await deps.getCurrentConfig()
+      : (await import("../../config/config.js")).getRuntimeConfig();
+    if (resolveSkillWorkshopConfig(currentConfig).autonomous.mode === "auto") {
+      const { inspectSkillProposal } = await import("./service.js");
+      for (const mutatedProposalId of proposalIds) {
+        const proposal = await inspectSkillProposal(mutatedProposalId, {
+          workspaceDir,
+          agentId: foregroundPromptContext.agentId,
+        });
+        if (
+          !proposal ||
+          proposal.record.status !== "pending" ||
+          proposal.record.autonomousCapture !== true
+        ) {
+          continue;
+        }
+        const autonomous = await applyAutonomousSkillProposal({
+          workspaceDir,
+          agentId: foregroundPromptContext.agentId,
+          config: currentConfig,
+          proposal,
+          reason: "Autonomous self-learning capture",
+        });
+        if (autonomous.status === "applied") {
+          outcome = "applied";
+        }
+      }
+    }
+    const agentUsage = embeddedResult.meta?.agentMeta?.usage;
+    usage = agentUsage
+      ? {
+          inputTokens:
+            (agentUsage.input ?? 0) + (agentUsage.cacheRead ?? 0) + (agentUsage.cacheWrite ?? 0),
+          cachedInputTokens: agentUsage.cacheRead ?? 0,
+          outputTokens: agentUsage.output ?? 0,
+        }
+      : undefined;
+  } catch (error) {
+    recordSkillExperienceReviewOutcome(workspaceDir, {
+      attemptedAtMs,
+      outcome: "failed",
+      error: String(error).slice(0, 300),
     });
+    throw error;
   } finally {
-    await fs.rm(tempDir, { recursive: true, force: true });
+    clearAgentRunContext(runId);
   }
+  recordSkillExperienceReviewOutcome(workspaceDir, {
+    attemptedAtMs,
+    outcome,
+    ...(proposalId ? { proposalId } : {}),
+    ...(usage ? { usage } : {}),
+  });
 }

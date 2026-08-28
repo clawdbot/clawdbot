@@ -1,7 +1,7 @@
 // Verifies lazy service module loading and disabled-state handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withMockedWindowsPlatform } from "../test-utils/vitest-spies.js";
-import { defaultLoadOverrideModule, startLazyPluginServiceModule } from "./lazy-service-module.js";
+import { startLazyPluginServiceModule } from "./lazy-service-module.js";
 
 type LazyPluginServiceHandle = NonNullable<
   Awaited<ReturnType<typeof startLazyPluginServiceModule>>
@@ -102,17 +102,6 @@ describe("startLazyPluginServiceModule", () => {
 
     expect(loadOverrideModule).toHaveBeenCalledWith("virtual:service");
     expect(start).toHaveBeenCalledTimes(1);
-  });
-
-  it("normalizes Windows absolute paths in the default override loader", async () => {
-    const start = createAsyncHookMock();
-    const importModule = vi.fn(async () => ({ startOverride: start }));
-
-    await withMockedWindowsPlatform(async () => {
-      await defaultLoadOverrideModule("C:\\Users\\alice\\plugin folder\\x#y.mjs", importModule);
-    });
-
-    expect(importModule).toHaveBeenCalledWith("file:///C:/Users/alice/plugin%20folder/x%23y.mjs");
   });
 
   it("leaves caller-supplied override loaders responsible for their own specifiers", async () => {

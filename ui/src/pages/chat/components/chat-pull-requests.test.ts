@@ -241,7 +241,7 @@ describe("renderChatPullRequests", () => {
     expect(container.querySelector(".chat-pr__warning")).not.toBeNull();
   });
 
-  it("renders a Create PR branch row with locale-formatted diff stats", () => {
+  it("renders a Publish PR branch row with locale-formatted diff stats", () => {
     render(
       renderChatPullRequests({
         pullRequests: [],
@@ -250,6 +250,7 @@ describe("renderChatPullRequests", () => {
         expanded: false,
         onExpand: () => {},
         onDismiss: () => {},
+        onPublish: () => {},
       }),
       container,
     );
@@ -265,14 +266,33 @@ describe("renderChatPullRequests", () => {
     expect(row?.querySelector(".chat-pr__deletions")?.textContent).toBe(
       `−${(205).toLocaleString()}`,
     );
-    const create = row?.querySelector<HTMLAnchorElement>(".chat-pr__create");
-    expect(create?.getAttribute("href")).toBe(
-      "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
-    );
-    expect(create?.textContent?.trim()).toBe("Create PR");
+    const create = row?.querySelector<HTMLButtonElement>(".chat-pr__create");
+    expect(create?.textContent?.trim()).toBe("Publish PR");
     expect(row?.querySelector(".chat-pr__warning")).toBeNull();
     // The branch row is not dismissible; it reflects the checkout itself.
     expect(row?.querySelector(".chat-pr__dismiss")).toBeNull();
+    expect(row?.querySelector("button.chat-pr__diff")).toBeNull();
+  });
+
+  it("opens the session diff from interactive branch stats", () => {
+    const onOpenSessionDiff = vi.fn();
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        branch: sessionBranch(),
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+        onOpenSessionDiff,
+      }),
+      container,
+    );
+
+    const button = container.querySelector<HTMLButtonElement>("button.chat-pr__diff");
+    expect(button?.getAttribute("aria-label")).toBe("Show session changes");
+    button?.click();
+    expect(onOpenSessionDiff).toHaveBeenCalledOnce();
   });
 
   it("hides the Create PR link while the branch has no createUrl", () => {
@@ -297,6 +317,102 @@ describe("renderChatPullRequests", () => {
     expect(row?.querySelector(".chat-pr__create")).toBeNull();
   });
 
+  it("shows Gateway publication request and terminal URL states", () => {
+    const onPublish = vi.fn();
+    const props = {
+      pullRequests: [],
+      branch: sessionBranch(),
+      rateLimited: false,
+      expanded: false,
+      onExpand: () => {},
+      onDismiss: () => {},
+      onPublish,
+    };
+    render(renderChatPullRequests(props), container);
+    const publish = container.querySelector<HTMLButtonElement>(".chat-pr__create");
+    publish?.click();
+    expect(onPublish).toHaveBeenCalledOnce();
+    expect(publish?.textContent).toContain("Publish PR");
+
+    render(
+      renderChatPullRequests({
+        ...props,
+        publicationResult: {
+          requestId: "publication-1",
+          status: "published",
+          url: "https://github.com/openclaw/openclaw/pull/125200",
+          repository: "openclaw/openclaw",
+          branch: "openclaw/ui-fix",
+          headCommit: "a".repeat(40),
+        },
+      }),
+      container,
+    );
+    expect(container.querySelector<HTMLAnchorElement>(".chat-pr__create")?.href).toBe(
+      "https://github.com/openclaw/openclaw/pull/125200",
+    );
+
+    render(
+      renderChatPullRequests({
+        ...props,
+        publicationResult: {
+          requestId: "publication-2",
+          status: "failed",
+          code: "push_rejected",
+          message: "GitHub publication failed.",
+          nextAction: "Check repository write access and retry.",
+        },
+      }),
+      container,
+    );
+    const failure = container.querySelector('.chat-pr__publication-outcome[data-state="failed"]');
+    expect(failure?.textContent).toContain("GitHub publication failed.");
+    expect(failure?.textContent).toContain("Check repository write access and retry.");
+    expect(container.querySelector<HTMLButtonElement>(".chat-pr__create")?.textContent).toContain(
+      "Retry publication",
+    );
+    expect(container.querySelector<HTMLAnchorElement>("a.chat-pr__create")?.href).toBe(
+      "https://github.com/openclaw/openclaw/pull/new/claude/cloud-workers-live-events",
+    );
+
+    render(
+      renderChatPullRequests({
+        ...props,
+        publicationError: "Repository write permission is missing.",
+      }),
+      container,
+    );
+    const retry = container.querySelector<HTMLButtonElement>(".chat-pr__create");
+    expect(retry?.textContent).toContain("Retry publication");
+    expect(retry?.title).toBe("Repository write permission is missing.");
+    expect(container.querySelector<HTMLAnchorElement>("a.chat-pr__create")?.textContent).toContain(
+      "Create PR",
+    );
+  });
+
+  it("shows the live-turn route instead of a dead cloud-idle publication action", () => {
+    render(
+      renderChatPullRequests({
+        pullRequests: [],
+        branch: sessionBranch(),
+        rateLimited: false,
+        expanded: false,
+        onExpand: () => {},
+        onDismiss: () => {},
+        publicationGuidance:
+          "Start a live agent turn and ask it to publish this cloud workspace after reconciliation.",
+      }),
+      container,
+    );
+
+    expect(container.querySelector<HTMLAnchorElement>("a.chat-pr__create")?.textContent).toContain(
+      "Create PR",
+    );
+    expect(container.querySelector(".chat-pr__publication-outcome")?.textContent).toContain(
+      "Start a live agent turn",
+    );
+  });
+
   it("marks the branch row stale when GitHub is rate limited", () => {
     render(
       renderChatPullRequests({
@@ -306,6 +422,7 @@ describe("renderChatPullRequests", () => {
         expanded: false,
         onExpand: () => {},
         onDismiss: () => {},
+        onPublish: () => {},
       }),
       container,
     );

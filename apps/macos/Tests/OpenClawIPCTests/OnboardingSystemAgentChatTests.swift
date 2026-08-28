@@ -27,6 +27,18 @@ private actor SystemAgentSessionRecorder {
     }
 }
 
+private actor SystemAgentMessageRecorder {
+    private var messages: [String] = []
+
+    func record(_ message: String) {
+        self.messages.append(message)
+    }
+
+    func snapshot() -> [String] {
+        self.messages
+    }
+}
+
 private actor SystemAgentMethodRecorder {
     private var methods: [String] = []
 
@@ -88,6 +100,20 @@ private func systemAgentRequestMethod(from message: URLSessionWebSocketTask.Mess
     return object["method"] as? String
 }
 
+private func systemAgentChatMessage(from message: URLSessionWebSocketTask.Message) -> String? {
+    let data: Data? = switch message {
+    case let .data(data): data
+    case let .string(string): string.data(using: .utf8)
+    @unknown default: nil
+    }
+    guard let data,
+          let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          object["method"] as? String == "openclaw.chat",
+          let params = object["params"] as? [String: Any]
+    else { return nil }
+    return params["message"] as? String
+}
+
 private func respondToSystemAgentHealth(
     task: GatewayTestWebSocketTask,
     id: String,
@@ -98,8 +124,15 @@ private func respondToSystemAgentHealth(
     return true
 }
 
-private func systemAgentResponse(id: String, action: String = "none") -> Data {
-    Data(
+private func systemAgentResponse(
+    id: String,
+    action: String = "none",
+    agentDraft: String? = nil,
+    questionJSON: String? = nil) -> Data
+{
+    let agentDraftField = agentDraft.map { ",\n            \"agentDraft\": \"\($0)\"" } ?? ""
+    let questionField = questionJSON.map { ",\n            \"question\": \($0)" } ?? ""
+    return Data(
         """
         {
           "type": "res",
@@ -109,7 +142,7 @@ private func systemAgentResponse(id: String, action: String = "none") -> Data {
             "sessionId": "test-session",
             "reply": "ready",
             "action": "\(action)",
-            "sensitive": false
+            "sensitive": false\(agentDraftField)\(questionField)
           }
         }
         """.utf8)
@@ -166,14 +199,79 @@ private func transientVerificationErrorResponse(id: String) -> Data {
 @Suite(.serialized)
 @MainActor
 struct OnboardingSystemAgentChatTests {
-    @Test func `onboarding wires OpenClaw agent handoff`() {
+    @Test func `fresh inference connection finishes onboarding once`() {
         let state = AppState(preview: true)
         state.connectionMode = .local
-        let view = OnboardingView(state: state)
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: state,
+            dashboardHandoffOpener: { handoffs.append($0) })
 
         view.prepareSystemAgentHandoff()
+        view.aiSetup.onConnected?()
 
-        #expect(view.systemAgentState.chat.onAgentHandoff != nil)
+        #expect(view.finishState.didFinish)
+        // Fresh connections own the remaining first-run steps via the custodian.
+        #expect(handoffs == [.custodianOnboarding])
+        #expect(!view.finish())
+        #expect(handoffs == [.custodianOnboarding])
+    }
+
+    @Test func `first run effective model is live verified before handoff`() async throws {
+        let suiteName = "OnboardingFirstRunEffectiveModelTests-\(UUID().uuidString)"
+        let defaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let methods = SystemAgentMethodRecorder()
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message),
+                      let method = systemAgentRequestMethod(from: message)
+                else { return }
+                await methods.record(method)
+                if respondToSystemAgentHealth(task: task, id: id, method: method) { return }
+                switch method {
+                case "agents.list":
+                    task.emitReceiveSuccess(.data(configuredAgentsResponse(id: id)))
+                case "openclaw.setup.verify":
+                    task.emitReceiveSuccess(.data(verifiedInferenceResponse(id: id)))
+                default:
+                    break
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://localhost:18789"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let appState = AppState(preview: true)
+        appState.connectionMode = .local
+        var handoffs: [OnboardingDashboardHandoff] = []
+        let view = OnboardingView(
+            state: appState,
+            aiSetupGateway: gateway,
+            systemAgentDefaults: defaults,
+            aiSetupRouteIdentityProvider: { "local" },
+            dashboardHandoffOpener: { handoffs.append($0) })
+
+        let initialProbe = try #require(view.onboardingDidAppear())
+        await initialProbe.value
+        for _ in 0..<200 {
+            if view.aiSetup.connected {
+                break
+            }
+            try? await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        #expect(view.aiSetup.connected)
+        #expect(view.finishState.didFinish)
+        // A live-verified pre-existing setup reopens the normal dashboard.
+        #expect(handoffs == [.dashboard])
+        #expect(await methods.snapshot() == [
+            "agents.list",
+            "health",
+            "openclaw.setup.verify",
+        ])
     }
 
     @Test func `relaunch with pending inference resumes OpenClaw`() async throws {
@@ -209,28 +307,32 @@ struct OnboardingSystemAgentChatTests {
         appState.connectionMode = .remote
         appState.remoteTransport = .direct
         appState.remoteUrl = "ws://example.invalid"
+        var handoffs: [OnboardingDashboardHandoff] = []
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
-            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" })
-        view.systemAgentState.chat = SystemAgentOnboardingChatModel(gateway: gateway)
+            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" },
+            dashboardHandoffOpener: { handoffs.append($0) })
 
         let task = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         await task.value
 
-        #expect(view.aiSetup.connectedModelRef == "openai/gpt-5.5")
-        #expect(view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat.messages.map(\.text) == ["ready"])
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "existing-model")
+        #expect(view.finishState.didFinish)
+        #expect(handoffs == [.dashboard])
+        #expect(!view.finish())
 
         let repeatedResume = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         await repeatedResume.value
 
-        #expect(view.aiSetup.connectedModelRef == "openai/gpt-5.5")
+        #expect(view.aiSetup.connected)
+        #expect(view.aiSetup.selectedKind == "existing-model")
+        #expect(handoffs == [.dashboard])
         #expect(await methods.snapshot() == [
             "health",
             "openclaw.setup.verify",
-            "openclaw.chat",
         ])
     }
 
@@ -277,10 +379,8 @@ struct OnboardingSystemAgentChatTests {
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
             aiSetupRouteIdentityProvider: { "local" })
-        view.systemAgentState.chat = SystemAgentOnboardingChatModel(gateway: gateway)
 
         await view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5").value
-        #expect(!view.systemAgentState.isPresented)
 
         var scheduledDeadlines: [(deadline: Date, routeIdentity: String)] = []
         view.aiSetup.onPendingActivationDeadline = { deadline, routeIdentity in
@@ -299,8 +399,6 @@ struct OnboardingSystemAgentChatTests {
 
         #expect(!view.aiSetup.connected)
         #expect(view.aiSetup.waitingForPendingActivationDeadline)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat.messages.isEmpty)
         #expect(scheduledDeadlines.count == 1)
         #expect(scheduledDeadlines.first?.routeIdentity == "local")
         if case let .verified(deadline) = OnboardingSystemAgentResumeStore.pendingState(
@@ -321,7 +419,7 @@ struct OnboardingSystemAgentChatTests {
         ])
     }
 
-    @Test func `superseded resume cannot present a replacement route chat`() async throws {
+    @Test func `superseded resume cannot finish a replacement route handoff`() async throws {
         let suiteName = "OnboardingSupersededResumeTests-\(UUID().uuidString)"
         let defaults = try #require(UserDefaults(suiteName: suiteName))
         defer { defaults.removePersistentDomain(forName: suiteName) }
@@ -348,12 +446,13 @@ struct OnboardingSystemAgentChatTests {
         appState.connectionMode = .remote
         appState.remoteTransport = .direct
         appState.remoteUrl = "ws://example.invalid"
+        var dashboardOpenCount = 0
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
-            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" })
-        view.systemAgentState.chat = SystemAgentOnboardingChatModel(gateway: gateway)
+            aiSetupRouteIdentityProvider: { "remote:direct:example.invalid" },
+            dashboardHandoffOpener: { _ in dashboardOpenCount += 1 })
 
         let staleResume = view.resumePendingSystemAgent(modelRef: "openai/gpt-5.5")
         for _ in 0..<200 {
@@ -363,8 +462,8 @@ struct OnboardingSystemAgentChatTests {
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
         view.resetGatewayBoundAIState()
-        // Simulate a newer route reaching connected state without presenting
-        // its chat. The stale wrapper must not infer success from this state.
+        // Simulate a newer route reaching connected state without handing off.
+        // The stale wrapper must not infer success from this state.
         view.aiSetup.onConnected = nil
         view.aiSetup.resumeConfiguredInference(modelRef: "openai/gpt-5.5")
         view.aiSetup.acceptVerifiedPendingInference(modelRef: "openai/gpt-5.5")
@@ -372,8 +471,9 @@ struct OnboardingSystemAgentChatTests {
         await staleResume.value
 
         #expect(view.aiSetup.connected)
-        #expect(!view.systemAgentState.isPresented)
-        #expect(view.systemAgentState.chat.messages.isEmpty)
+        #expect(!view.finishState.didFinish)
+        #expect(dashboardOpenCount == 0)
+        #expect(await methods.snapshot() == ["health", "openclaw.setup.verify"])
     }
 
     @Test func `cold launch resumes a completed activation immediately`() async throws {
@@ -420,61 +520,169 @@ struct OnboardingSystemAgentChatTests {
             ifOwnedBy: routeIdentity,
             activationOwner: activationOwner,
             defaults: defaults)
+        var dashboardOpenCount = 0
         let view = OnboardingView(
             state: appState,
             aiSetupGateway: gateway,
             systemAgentDefaults: defaults,
-            aiSetupRouteIdentityProvider: { routeIdentity })
-        view.systemAgentState.chat = SystemAgentOnboardingChatModel(gateway: gateway)
+            aiSetupRouteIdentityProvider: { routeIdentity },
+            dashboardHandoffOpener: { _ in dashboardOpenCount += 1 })
         let aiSetup = view.aiSetup
-        let systemAgentState = view.systemAgentState
 
         let initialProbe = try #require(view.onboardingDidAppear())
         await initialProbe.value
         for _ in 0..<200 {
-            if systemAgentState.chat.messages.map(\.text) == ["ready"] {
+            if aiSetup.connected {
                 break
             }
             try? await Task.sleep(nanoseconds: 5_000_000)
         }
 
         #expect(aiSetup.connected)
-        #expect(systemAgentState.isPresented)
-        #expect(systemAgentState.chat.messages.map(\.text) == ["ready"])
+        #expect(view.finishState.didFinish)
+        #expect(dashboardOpenCount == 1)
         #expect(OnboardingSystemAgentResumeStore.pendingState(
             for: routeIdentity,
-            defaults: defaults) == .completed)
+            defaults: defaults) == .none)
         #expect(await methods.snapshot() == [
             "agents.list",
             "health",
             "openclaw.setup.verify",
-            "openclaw.chat",
         ])
     }
 
-    @Test func `fresh inference presents and starts OpenClaw immediately`() async throws {
+    @Test func `typed question sends reply while transcript shows label`() async throws {
+        let recordedMessages = SystemAgentMessageRecorder()
+        let questionJSON =
+            """
+            {"id":"next","header":"Next step","question":"What now?","options":[
+              {"label":"Talk to my agent","reply":"talk to agent","recommended":true},
+              {"label":"Connect WhatsApp","reply":"connect whatsapp","description":"Chat there."}
+            ],"isOther":true}
+            """
         let session = GatewayTestWebSocketSession(taskFactory: {
             GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
                 guard sendIndex > 0,
                       let id = GatewayWebSocketTestSupport.requestID(from: message)
                 else { return }
-                task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
+                if let message = systemAgentChatMessage(from: message) {
+                    await recordedMessages.record(message)
+                    task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
+                } else {
+                    task.emitReceiveSuccess(.data(systemAgentResponse(
+                        id: id,
+                        questionJSON: questionJSON)))
+                }
             })
         })
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
-        let state = OnboardingSystemAgentChatState()
-        state.chat = SystemAgentOnboardingChatModel(gateway: gateway)
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
 
-        let task = state.presentAndStart()
+        await chat.startIfNeeded()
+        let assistant = try #require(chat.messages.first)
+        let question = try #require(assistant.question)
+        #expect(question.options.first?.recommended == true)
+
+        let task = try #require(chat.answerQuestion(
+            messageID: assistant.id,
+            optionLabel: "Connect WhatsApp"))
         await task.value
 
-        #expect(state.isPresented)
-        #expect(state.chat.messages.map(\.text) == ["ready"])
-        #expect(session.snapshotMakeCount() == 1)
-        #expect(session.latestTask()?.snapshotSendCount() == 2)
+        #expect(await recordedMessages.snapshot() == ["connect whatsapp"])
+        #expect(chat.messages.map(\.text) == ["ready", "Connect WhatsApp", "ready"])
+        #expect(!chat.canAnswerQuestion(assistant))
+    }
+
+    @Test func `typed question skip sends fixed reply and dismisses cards`() async throws {
+        let recordedMessages = SystemAgentMessageRecorder()
+        let questionJSON =
+            #"{"id":"next","header":"Next step","question":"What now?","options":[{"label":"A"},{"label":"B"}]}"#
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if let message = systemAgentChatMessage(from: message) {
+                    await recordedMessages.record(message)
+                    task.emitReceiveSuccess(.data(systemAgentResponse(id: id)))
+                } else {
+                    task.emitReceiveSuccess(.data(systemAgentResponse(
+                        id: id,
+                        questionJSON: questionJSON)))
+                }
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+
+        await chat.startIfNeeded()
+        let assistant = try #require(chat.messages.first)
+        let task = try #require(chat.skipQuestion(messageID: assistant.id))
+        await task.value
+
+        #expect(await recordedMessages.snapshot() == ["Skip for now"])
+        #expect(chat.messages.map(\.text) == ["ready", "Skip for now", "ready"])
+        #expect(!chat.isQuestionVisible(assistant))
+    }
+
+    @Test(arguments: [
+        #"{"id":"dupes","header":"Next step","question":"What now?","options":[{"label":"Same"},{"label":"same"}]}"#,
+        #""invalid""#,
+        #"[]"#,
+    ])
+    func `malformed typed question keeps prose reply only`(questionJSON: String) async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(systemAgentResponse(
+                    id: id,
+                    questionJSON: questionJSON)))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+
+        await chat.startIfNeeded()
+
+        #expect(chat.messages.map(\.text) == ["ready"])
+        #expect(chat.messages.first?.question == nil)
+    }
+
+    @Test func `agent handoff carries the hatch draft intent`() async throws {
+        let session = GatewayTestWebSocketSession(taskFactory: {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                task.emitReceiveSuccess(.data(systemAgentResponse(
+                    id: id,
+                    action: "open-agent",
+                    agentDraft: "hatch")))
+            })
+        })
+        let url = try #require(URL(string: "ws://example.invalid"))
+        let gateway = GatewayConnection(
+            configProvider: { (url: url, token: nil, password: nil) },
+            sessionBox: WebSocketSessionBox(session: session))
+        let chat = SystemAgentOnboardingChatModel(gateway: gateway)
+        var receivedDraft: SystemAgentDraft?
+        chat.onAgentHandoff = { receivedDraft = $0 }
+
+        await chat.startIfNeeded()
+
+        #expect(receivedDraft == .hatch)
+        #expect(receivedDraft?.composerValue == "Wake up, my friend!")
     }
 
     @Test func `settings callback refreshes inference after assistant reply`() async throws {
@@ -502,25 +710,22 @@ struct OnboardingSystemAgentChatTests {
         #expect(refreshCount == 1)
     }
 
-    @Test func `gateway reset invalidates queued send and restart tasks`() async throws {
+    @Test func `model invalidation cancels queued send and restart tasks`() async throws {
         let session = GatewayTestWebSocketSession()
         let url = try #require(URL(string: "ws://example.invalid"))
         let gateway = GatewayConnection(
             configProvider: { (url: url, token: nil, password: nil) },
             sessionBox: WebSocketSessionBox(session: session))
         let chat = SystemAgentOnboardingChatModel(gateway: gateway)
-        let state = OnboardingSystemAgentChatState()
-        state.chat = chat
         var replyCount = 0
         var handoffCount = 0
         chat.onReplyReceived = { replyCount += 1 }
-        chat.onAgentHandoff = { handoffCount += 1 }
+        chat.onAgentHandoff = { _ in handoffCount += 1 }
         chat.input = "route-bound secret"
-        state.isPresented = true
 
         let sendTask = try #require(chat.send())
         let restartTask = try #require(chat.restartAfterError())
-        state.resetForGatewayChange()
+        chat.invalidate()
         await sendTask.value
         await restartTask.value
 
@@ -528,8 +733,6 @@ struct OnboardingSystemAgentChatTests {
         #expect(chat.messages.isEmpty)
         #expect(replyCount == 0)
         #expect(handoffCount == 0)
-        #expect(!state.isPresented)
-        #expect(state.chat !== chat)
         #expect(chat.send() == nil)
         #expect(chat.restartAfterError() == nil)
     }
@@ -612,7 +815,7 @@ struct OnboardingSystemAgentChatTests {
         var replyCount = 0
         var handoffCount = 0
         chat.onReplyReceived = { replyCount += 1 }
-        chat.onAgentHandoff = { handoffCount += 1 }
+        chat.onAgentHandoff = { _ in handoffCount += 1 }
 
         let startTask = Task { await chat.startIfNeeded() }
         var requestStarted = false

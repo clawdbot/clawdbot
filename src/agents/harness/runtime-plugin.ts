@@ -1,157 +1,99 @@
-/**
- * Ensures runtime plugins required by selected native harnesses are installed.
- */
+/** Resolves the selected native harness from a run-owned plugin registry. */
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ProviderRouteOverridePresence } from "../../plugin-sdk/provider-model-types.js";
-import { withActivatedPluginIds } from "../../plugins/activation-context.js";
-import { resolveManifestActivationPlan } from "../../plugins/activation-planner.js";
-import { resolveEffectivePluginActivationState } from "../../plugins/config-state.js";
-import { isPluginEnabledByDefaultForPlatform } from "../../plugins/default-enablement.js";
+import type { PluginRegistry } from "../../plugins/registry-types.js";
 import {
-  loadPluginRegistrySnapshot,
-  normalizePluginsConfigWithRegistry,
-} from "../../plugins/plugin-registry.js";
+  pluginInstallPathMatchesRoot,
+  type PluginVerificationFailureReason,
+} from "../../plugins/runtime-degraded-state.js";
 import {
-  resolveActivatableProviderOwnerPluginIds,
-  resolveBundledProviderCompatPluginIds,
-  resolveOwningPluginIdsForProviderRef,
-} from "../../plugins/providers.js";
-import { isDefaultAgentRuntimeId, OPENCLAW_AGENT_RUNTIME_ID } from "../agent-runtime-id.js";
-import { normalizeOptionalAgentRuntimeId } from "../agent-runtime-id.js";
+  isDefaultAgentRuntimeId,
+  OPENCLAW_AGENT_RUNTIME_ID,
+  normalizeOptionalAgentRuntimeId,
+} from "../agent-runtime-id.js";
 import { isCliRuntimeAliasForProvider } from "../model-runtime-aliases.js";
 import { resolveAgentHarnessPolicy } from "./policy.js";
+import { resolveAgentHarnessOwnerPluginIds } from "./runtime-plugin-load-plan.js";
 
-function dedupePluginIds(values: readonly string[]): string[] {
-  const seen = new Set<string>();
-  const result: string[] = [];
-  for (const value of values) {
-    const pluginId = value.trim();
-    if (!pluginId || seen.has(pluginId)) {
-      continue;
+export { resolveAgentHarnessOwnerPluginIds } from "./runtime-plugin-load-plan.js";
+
+export type AgentHarnessRuntimeAvailability =
+  | {
+      status: "available";
+      ownerPluginIds: string[];
     }
-    seen.add(pluginId);
-    result.push(pluginId);
-  }
-  return result;
-}
+  | {
+      status: "unavailable";
+      ownerPluginIds: string[];
+      reason: "owner-plugin-not-activatable" | "owner-plugin-unverified" | "owner-plugin-degraded";
+      detail: string;
+    };
 
-function restrictiveAllowlistOmitsPlugin(config: OpenClawConfig | undefined, pluginId: string) {
-  const allow = config?.plugins?.allow ?? [];
-  return allow.length > 0 && !allow.includes(pluginId);
-}
+type AgentHarnessRuntimePayloadFailure = {
+  pluginId: string;
+  installPath?: string;
+  reason: PluginVerificationFailureReason;
+};
 
-function resolveSelectedMemoryPluginIds(params: {
-  config: OpenClawConfig | undefined;
-  workspaceDir: string;
-}): string[] {
-  const registry = loadPluginRegistrySnapshot({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
-  const plugins = normalizePluginsConfigWithRegistry(params.config?.plugins, registry);
-  const memorySlot = plugins.slots.memory;
-  if (
-    typeof memorySlot !== "string" ||
-    memorySlot.trim().length === 0 ||
-    restrictiveAllowlistOmitsPlugin(params.config, memorySlot)
-  ) {
-    return [];
-  }
-  const plugin = registry.plugins.find((entry) => entry.pluginId === memorySlot);
-  if (!plugin?.startup.memory) {
-    return [];
-  }
-  const activationState = resolveEffectivePluginActivationState({
-    id: plugin.pluginId,
-    origin: plugin.origin,
-    config: plugins,
-    rootConfig: params.config,
-    enabledByDefault: isPluginEnabledByDefaultForPlatform(plugin),
-  });
-  return activationState.activated ? [plugin.pluginId] : [];
-}
-
-/** Resolve manifest owners required by one selected non-core harness runtime. */
-export function resolveAgentHarnessOwnerPluginIds(params: {
+/**
+ * Resolves whether manifest-owned harness code is loadable without importing it.
+ * Callers must pass the result of a payload check performed for this invocation.
+ */
+export function resolveAgentHarnessRuntimeAvailability(params: {
   runtime: string;
   provider: string;
   config?: OpenClawConfig;
   workspaceDir: string;
-}): string[] {
-  const activationPlan = resolveManifestActivationPlan({
-    trigger: { kind: "agentHarness", runtime: params.runtime },
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-    requireExplicitManifestOwnerTrust: true,
+  payloadFailures: readonly AgentHarnessRuntimePayloadFailure[];
+  payloadCheckedPluginIds: readonly string[];
+  selectedPluginRootDirs: ReadonlyMap<string, string>;
+}): AgentHarnessRuntimeAvailability {
+  const runtime = params.runtime.trim();
+  const ownerPluginIds = resolveAgentHarnessOwnerPluginIds({
+    ...params,
+    runtime,
   });
-  const harnessPluginIds = activationPlan.entries.map((entry) => entry.pluginId);
-  if (harnessPluginIds.length === 0) {
-    return [];
+  if (ownerPluginIds.length === 0) {
+    return {
+      status: "unavailable",
+      ownerPluginIds,
+      reason: "owner-plugin-not-activatable",
+      detail: `No enabled plugin owns agent harness "${runtime}".`,
+    };
   }
-  if (params.runtime !== "codex") {
-    return harnessPluginIds;
-  }
-  if (!harnessPluginIds.includes("codex")) {
-    return harnessPluginIds;
-  }
-  if (restrictiveAllowlistOmitsPlugin(params.config, "codex")) {
-    // Respect a restrictive allowlist even when Codex would normally pull in provider owner
-    // plugins. Operators who set an allowlist expect no implicit plugin expansion.
-    return harnessPluginIds;
-  }
-  const providerOwnerPluginIds = dedupePluginIds(
-    resolveOwningPluginIdsForProviderRef({
-      provider: params.provider,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-    }) ?? [],
+  const checkedPluginIds = new Set(params.payloadCheckedPluginIds);
+  const unverifiedOwner = ownerPluginIds.find(
+    (pluginId) => !params.selectedPluginRootDirs.has(pluginId) || !checkedPluginIds.has(pluginId),
   );
-  if (providerOwnerPluginIds.length === 0) {
-    return harnessPluginIds;
+  if (unverifiedOwner) {
+    return {
+      status: "unavailable",
+      ownerPluginIds,
+      reason: "owner-plugin-unverified",
+      detail: `Agent harness "${runtime}" owner plugin "${unverifiedOwner}" payload was not verified.`,
+    };
   }
-  const safeProviderOwnerPluginIds = dedupePluginIds([
-    ...resolveBundledProviderCompatPluginIds({
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-      onlyPluginIds: providerOwnerPluginIds,
-    }),
-    ...resolveActivatableProviderOwnerPluginIds({
-      pluginIds: providerOwnerPluginIds,
-      config: params.config,
-      workspaceDir: params.workspaceDir,
-    }),
-  ]);
-  return dedupePluginIds([
-    "codex",
-    ...harnessPluginIds,
-    ...providerOwnerPluginIds.filter(
-      (pluginId) => pluginId !== "codex" && safeProviderOwnerPluginIds.includes(pluginId),
-    ),
-  ]);
+  const failedOwner = params.payloadFailures.find((failure) => {
+    if (!ownerPluginIds.includes(failure.pluginId)) {
+      return false;
+    }
+    const selectedRootDir = params.selectedPluginRootDirs.get(failure.pluginId);
+    return selectedRootDir
+      ? pluginInstallPathMatchesRoot(failure.installPath, selectedRootDir)
+      : false;
+  });
+  if (failedOwner) {
+    return {
+      status: "unavailable",
+      ownerPluginIds,
+      reason: "owner-plugin-degraded",
+      detail: `Agent harness "${runtime}" owner plugin "${failedOwner.pluginId}" is unavailable (${failedOwner.reason}).`,
+    };
+  }
+  return { status: "available", ownerPluginIds };
 }
 
-function withRuntimePluginIdsAllowed(params: {
-  config?: OpenClawConfig;
-  requiredPluginId: string;
-  pluginIds: readonly string[];
-}): OpenClawConfig | undefined {
-  if (params.pluginIds.length === 0) {
-    return params.config;
-  }
-  if (restrictiveAllowlistOmitsPlugin(params.config, params.requiredPluginId)) {
-    return params.config;
-  }
-  const allow = dedupePluginIds([...(params.config?.plugins?.allow ?? []), ...params.pluginIds]);
-  return {
-    ...params.config,
-    plugins: {
-      ...params.config?.plugins,
-      allow,
-    },
-  };
-}
-
-/** Ensures the plugin that owns the selected harness runtime is loaded before harness selection. */
+/** Resolves the selected harness from the run-owned registry without loading or activating. */
 export async function ensureSelectedAgentHarnessPlugin(params: {
   provider: string;
   modelId: string;
@@ -162,6 +104,7 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
   agentHarnessRuntimeOverride?: string;
   requestTransportOverrides?: ProviderRouteOverridePresence;
   workspaceDir: string;
+  pluginRegistry: PluginRegistry | undefined;
 }): Promise<void> {
   const pinnedHarnessId = normalizeOptionalAgentRuntimeId(params.agentHarnessId);
   const runtimeOverride = normalizeOptionalAgentRuntimeId(params.agentHarnessRuntimeOverride);
@@ -190,41 +133,9 @@ export async function ensureSelectedAgentHarnessPlugin(params: {
     return;
   }
 
-  const { ensurePluginRegistryLoaded } =
-    await import("../../plugins/runtime/runtime-registry-loader.js");
-  const pluginIds = resolveAgentHarnessOwnerPluginIds({
-    runtime,
-    provider: params.provider,
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
-  if (pluginIds.length === 0) {
-    return;
+  if (!params.pluginRegistry?.agentHarnesses.some((entry) => entry.harness.id === runtime)) {
+    throw new Error(
+      `Agent harness runtime "${runtime}" is unavailable because its plugin registration is missing from this prepared run. Enable or reinstall the plugin that provides this runtime, restart the Gateway, then retry.`,
+    );
   }
-  const memoryPluginIds = resolveSelectedMemoryPluginIds({
-    config: params.config,
-    workspaceDir: params.workspaceDir,
-  });
-  const scopedPluginIds = dedupePluginIds([...pluginIds, ...memoryPluginIds]);
-  const configWithAllowedRuntimePlugins = withRuntimePluginIdsAllowed({
-    config: params.config,
-    requiredPluginId: runtime,
-    pluginIds: scopedPluginIds,
-  });
-  const activatedConfig =
-    withActivatedPluginIds({
-      config: configWithAllowedRuntimePlugins,
-      pluginIds: scopedPluginIds,
-    }) ?? configWithAllowedRuntimePlugins;
-  ensurePluginRegistryLoaded({
-    scope: "all",
-    ...(activatedConfig
-      ? {
-          config: activatedConfig,
-          activationSourceConfig: activatedConfig,
-        }
-      : {}),
-    workspaceDir: params.workspaceDir,
-    onlyPluginIds: scopedPluginIds,
-  });
 }

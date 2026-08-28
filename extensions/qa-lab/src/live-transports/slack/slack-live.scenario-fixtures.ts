@@ -73,9 +73,24 @@ export function renderSlackTableAccessibleText(summaryText: string) {
 }
 
 type SlackProgressCommentaryExpectation = {
-  commentary: "absent" | "draft" | "standalone";
+  commentary: "headline" | "lane" | "standalone";
   toolProgress: "absent" | "draft" | "standalone";
 };
+
+function observedSlackText(message: { blockText?: string[]; text: string }) {
+  return [message.text, ...(message.blockText ?? [])].join("\n");
+}
+
+function hasSlackCommentaryLaneMarker(
+  message: { blockText?: string[]; text: string },
+  marker: string,
+) {
+  if (message.text.includes(`💬 ${marker}`) || message.text.trim() === `_${marker}_`) {
+    return true;
+  }
+  const blockText = message.blockText ?? [];
+  return blockText.some((text) => text.trim() === `• *Update* — ${marker}`);
+}
 
 export function buildSlackProgressCommentaryRun(
   sutUserId: string,
@@ -92,7 +107,7 @@ export function buildSlackProgressCommentaryRun(
     input: [
       `<@${sutUserId}> This is a Slack progress protocol test. First, emit an assistant commentary message whose entire text is exactly ${commentaryMarker}.`,
       "Do not call any tool until that commentary message is complete.",
-      `Then use the exec tool exactly once to run: grep '${toolMarker}' /dev/null || sleep 5.`,
+      `Then use the exec tool exactly once to run: sleep 5 # ${toolMarker}.`,
       `After the command finishes, reply with only this exact marker: ${finalMarker}`,
     ].join(" "),
     matchText: finalMarker,
@@ -104,34 +119,51 @@ export function buildSlackProgressCommentaryRun(
       if ((finalMessage.text ?? "").trim() !== finalMarker) {
         throw new Error("expected the Slack final answer to contain only the final marker");
       }
-      const progressMessages = messages.filter((message) => !message.text.includes(finalMarker));
+      const progressMessages = messages.filter(
+        (message) => !observedSlackText(message).includes(finalMarker),
+      );
       const commentaryMessages = progressMessages.filter((message) =>
-        message.text.includes(commentaryMarker),
+        observedSlackText(message).includes(commentaryMarker),
       );
       const commentaryTimestamps = new Set(commentaryMessages.map((message) => message.ts));
-      if (expectation.commentary === "absent" && commentaryTimestamps.size !== 0) {
-        throw new Error("expected commentary to stay out of Slack progress messages");
-      }
-      if (expectation.commentary !== "absent" && commentaryTimestamps.size !== 1) {
+      const [commentaryTs] = commentaryTimestamps;
+      if (commentaryTimestamps.size !== 1 || commentaryTs === undefined) {
         throw new Error(
           `expected exactly one Slack message identity containing commentary; got ${commentaryTimestamps.size}`,
         );
       }
-      const commentaryTs = [...commentaryTimestamps][0];
-      if (expectation.commentary === "draft" && commentaryTs !== finalMessage.ts) {
-        throw new Error("expected commentary on the progress draft finalized as the answer");
+      if (commentaryTs === finalMessage.ts) {
+        throw new Error("expected Slack progress commentary to stay separate from the fresh final");
       }
-      if (expectation.commentary === "standalone" && commentaryTs === finalMessage.ts) {
-        throw new Error("expected commentary only in the standalone verbose message");
+      // Slack prefixes durable standalone commentary with the same glyph used by
+      // draft-lane rendering, so message identity—not that marker—owns dedupe proof.
+      if (expectation.commentary !== "standalone") {
+        const commentaryLaneTimestamps = new Set(
+          commentaryMessages
+            .filter((message) => hasSlackCommentaryLaneMarker(message, commentaryMarker))
+            .map((message) => message.ts),
+        );
+        if (
+          expectation.commentary === "lane" &&
+          (commentaryLaneTimestamps.size !== 1 || !commentaryLaneTimestamps.has(commentaryTs))
+        ) {
+          throw new Error("expected commentary in the Slack progress commentary lane");
+        }
+        if (expectation.commentary === "headline" && commentaryLaneTimestamps.size !== 0) {
+          throw new Error("expected the preamble as the Slack progress status headline");
+        }
       }
       const toolTimestamps = new Set(
         progressMessages
-          .filter((message) => message.text.includes(toolMarker))
+          .filter((message) => observedSlackText(message).includes(toolMarker))
           .map((message) => message.ts),
       );
       if (expectation.toolProgress === "draft") {
-        if (toolTimestamps.size !== 1 || !toolTimestamps.has(finalMessage.ts)) {
-          throw new Error("expected tool progress on the progress draft finalized as the answer");
+        if (toolTimestamps.size !== 1 || toolTimestamps.has(finalMessage.ts)) {
+          throw new Error("expected tool progress on the draft separate from the fresh final");
+        }
+        if (expectation.commentary !== "standalone" && !toolTimestamps.has(commentaryTs)) {
+          throw new Error("expected commentary and tool progress on one Slack draft identity");
         }
       } else if (expectation.toolProgress === "standalone") {
         if (toolTimestamps.size === 0 || toolTimestamps.has(finalMessage.ts)) {
@@ -151,11 +183,11 @@ export function buildSlackProgressCommentaryRun(
         );
       }
       const commentaryDetails =
-        expectation.commentary === "draft"
-          ? "commentary on progress/final identity"
+        expectation.commentary === "lane"
+          ? "commentary in the progress lane"
           : expectation.commentary === "standalone"
             ? "one standalone commentary identity"
-            : "commentary absent from Slack progress";
+            : "preamble in the progress status headline";
       return `verified ${commentaryDetails}; tool progress ${expectation.toolProgress}; final identity unique`;
     },
   };

@@ -1,5 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { normalizeString, workboardCardSessionKey } from "./card-state.ts";
+import { isActiveWorkboardCard, normalizeString, workboardCardSessionKey } from "./card-state.ts";
 import { WORKBOARD_STATUSES, type WorkboardTaskLinkState, type WorkboardUiState } from "./types.ts";
 
 export type WorkboardHost = object;
@@ -19,7 +19,6 @@ type WorkboardRuntime = {
   loadToken?: WorkboardLoadToken;
   loadError?: string;
   lifecycleTaskRefreshPromise?: Promise<number | null>;
-  lifecycleWrites: Set<Promise<unknown>>;
   loadGeneration?: number;
   lifecycleReconciliationEpoch?: number;
   liveRefreshGeneration?: number;
@@ -36,8 +35,6 @@ type WorkboardRuntime = {
   lifecycleTaskRetryTimer?: ReturnType<typeof setTimeout>;
   lifecycleTaskContinuationTimer?: ReturnType<typeof setTimeout>;
   liveRefreshEntry?: WorkboardLiveRefreshEntry;
-  pendingStatusTransitions: Set<string>;
-  lifecycleSyncKeys: Map<string, string>;
 };
 
 const workboardRuntimes = new WeakMap<WorkboardHost, WorkboardRuntime>();
@@ -98,6 +95,25 @@ export function invalidateWorkboardLoads(host: WorkboardHost) {
   nextWorkboardLifecycleReconciliationEpoch(host);
 }
 
+export function stopWorkboardLiveRefresh(host: WorkboardHost): void {
+  const runtime = getWorkboardRuntime(host);
+  const loadInFlight = Boolean(runtime.loadPromise);
+  runtime.liveRefreshGeneration = (runtime.liveRefreshGeneration ?? 0) + 1;
+  if (runtime.liveRefreshRetryTimer) {
+    clearTimeout(runtime.liveRefreshRetryTimer);
+    delete runtime.liveRefreshRetryTimer;
+  }
+  delete runtime.liveRefreshEntry;
+  delete runtime.liveRefreshPromise;
+  delete runtime.liveChangeEpoch;
+  delete runtime.liveHighestSeenRevision;
+  delete runtime.liveAppliedRevision;
+  delete runtime.liveRefreshPending;
+  if (loadInFlight) {
+    invalidateWorkboardLoads(host);
+  }
+}
+
 function clearWorkboardLifecycleTaskPreparedTimer(host: WorkboardHost) {
   const runtime = getWorkboardRuntime(host);
   const timer = runtime.lifecycleTaskPreparedTimer;
@@ -125,24 +141,6 @@ function clearWorkboardLifecycleTaskContinuationTimer(host: WorkboardHost) {
   }
 }
 
-export function trackWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
-  getWorkboardRuntime(host).lifecycleWrites.add(write);
-}
-
-export function releaseWorkboardLifecycleWrite(host: WorkboardHost, write: Promise<unknown>) {
-  getWorkboardRuntime(host).lifecycleWrites.delete(write);
-}
-
-export async function waitForWorkboardLifecycleWrites(host: WorkboardHost) {
-  while (true) {
-    const writes = getWorkboardRuntime(host).lifecycleWrites;
-    if (!writes.size) {
-      return;
-    }
-    await Promise.allSettled(writes);
-  }
-}
-
 export function resetWorkboardLifecycleTaskConfirmations(
   state: WorkboardUiState,
   options: { host?: WorkboardHost } = {},
@@ -164,8 +162,6 @@ export function stopWorkboardLifecycleRefresh(host: WorkboardHost) {
     setWorkboardLifecycleTaskRefreshFailed(state, false);
     state.lifecycleTaskRefreshError = null;
     resetWorkboardLifecycleTaskConfirmations(state, { host });
-    // In-flight lifecycle writes clear themselves in finally. Keep them visible
-    // so reconnect loads wait for their backend mutations before becoming writable.
     // Detach stale loads so reconnecting can start fresh without letting the
     // old request clear a concurrent draft-save loading state.
     if (!state.draftSaving) {
@@ -319,7 +315,9 @@ function createDefaultState(): WorkboardUiState {
     activeHealthHighlight: null,
     showArchived: false,
     layout: "compact",
-    hideEmptyColumns: false,
+    emptyColumnMode: "show",
+    collapsedStatuses: new Set(),
+    expandedEmptyStatuses: new Set(),
     lastRefreshAt: null,
     lastRefreshStartedAt: null,
     lastRefreshError: null,
@@ -335,6 +333,7 @@ function createDefaultState(): WorkboardUiState {
     draftOpen: false,
     draftSaving: false,
     editingCardId: null,
+    editingCardBase: null,
     draftTitle: "",
     draftNotes: "",
     draftStatus: "todo",
@@ -348,7 +347,6 @@ function createDefaultState(): WorkboardUiState {
     detailCommentBody: "",
     busyCardIds: new Set(),
     draggedCardId: null,
-    syncingCardIds: new Set(),
     capturingSessionKeys: new Set(),
   };
 }
@@ -356,11 +354,7 @@ function createDefaultState(): WorkboardUiState {
 export function getWorkboardRuntime(host: WorkboardHost): WorkboardRuntime {
   let runtime = workboardRuntimes.get(host);
   if (!runtime) {
-    runtime = {
-      lifecycleWrites: new Set(),
-      pendingStatusTransitions: new Set(),
-      lifecycleSyncKeys: new Map(),
-    };
+    runtime = {};
     workboardRuntimes.set(host, runtime);
   }
   return runtime;
@@ -377,12 +371,7 @@ export function workboardMutationsReady(state: WorkboardUiState): boolean {
 }
 
 export function workboardHasActiveWrites(state: WorkboardUiState): boolean {
-  return Boolean(
-    state.draftSaving ||
-    state.busyCardIds.size ||
-    state.syncingCardIds.size ||
-    state.capturingSessionKeys.size,
-  );
+  return Boolean(state.draftSaving || state.busyCardIds.size || state.capturingSessionKeys.size);
 }
 
 function workboardHasActiveLoad(host: WorkboardHost): boolean {
@@ -405,8 +394,11 @@ export function workboardLifecycleSyncBlocked(
 
 export function workboardLifecycleRequiresTaskRefresh(state: WorkboardTaskLinkState): boolean {
   return (
-    state.tasksByCardId.size > 0 ||
+    state.cards.some((card) => isActiveWorkboardCard(card) && state.tasksByCardId.has(card.id)) ||
     state.cards.some((card) => {
+      if (!isActiveWorkboardCard(card)) {
+        return false;
+      }
       const taskId = normalizeString(card.taskId);
       return Boolean(taskId && !state.missingTaskIds.has(taskId));
     })
@@ -416,7 +408,12 @@ export function workboardLifecycleRequiresTaskRefresh(state: WorkboardTaskLinkSt
 export function shouldRefreshWorkboardTasksForLifecycle(state: WorkboardTaskLinkState): boolean {
   return (
     workboardLifecycleRequiresTaskRefresh(state) ||
-    state.cards.some((card) => card.status === "running" && Boolean(workboardCardSessionKey(card)))
+    state.cards.some(
+      (card) =>
+        isActiveWorkboardCard(card) &&
+        card.status === "running" &&
+        Boolean(workboardCardSessionKey(card)),
+    )
   );
 }
 
@@ -425,6 +422,9 @@ export function workboardTaskLinksReadyForLifecycle(
   options: { requireRunningTaskDiscovery?: boolean } = {},
 ): boolean {
   return state.cards.every((card) => {
+    if (!isActiveWorkboardCard(card)) {
+      return true;
+    }
     const taskId = normalizeString(card.taskId);
     if (taskId) {
       return state.missingTaskIds.has(taskId) || state.tasksByCardId.has(card.id);

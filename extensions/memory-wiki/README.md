@@ -100,16 +100,18 @@ normalized agent id:
 
 This resolves agents such as `support` and `marketing` to
 `~/.openclaw/wiki/support` and `~/.openclaw/wiki/marketing`. With no explicit
-path, the parent defaults to `~/.openclaw/wiki`; the default `main` agent
-therefore keeps the existing `~/.openclaw/wiki/main` path. In global scope,
-`vault.path` remains the exact shared vault path.
+path, the parent defaults to `<state-dir>/wiki`; the default `main` agent
+therefore uses `<state-dir>/wiki/main`. The state directory is `~/.openclaw` by
+default and follows `OPENCLAW_STATE_DIR` when configured. In global scope,
+`vault.path` remains the exact shared vault path; explicit paths and `~/`
+expansion keep their existing behavior.
 
 Wiki tools and compiled prompt/corpus supplements resolve the active runtime
 agent on each call. In bridge mode, an agent vault imports only public memory
 artifacts whose `agentIds` includes that agent; unowned and other-agent
-artifacts are skipped. CLI and Gateway operations require an explicit agent in
-multi-agent setups; use `openclaw wiki --agent <agentId> ...` or pass `agentId`
-to the `wiki.*` RPC request. A single configured agent may remain implicit.
+artifacts are skipped. CLI operations use the configured default agent unless
+the command passes `--agent <agentId>`; Gateway operations in multi-agent
+setups require `agentId` on the `wiki.*` RPC request.
 
 Configuration validation rejects agent scope with either
 `vaultMode: "unsafe-local"` or `obsidian.useOfficialCli: true`. Obsidian-friendly
@@ -143,7 +145,7 @@ The plugin initializes a vault like this:
 
 Generated content stays inside managed blocks. Human note blocks are preserved.
 
-Key beliefs can live in structured `claims` frontmatter with per-claim evidence, confidence, and status. Compile also emits machine-readable digests under `.openclaw-wiki/cache/` so agent/runtime consumers do not have to scrape markdown pages.
+Key beliefs can live in structured `claims` frontmatter with per-claim evidence, confidence, and status. Compile also persists a machine-readable snapshot in OpenClaw plugin state so agent/runtime consumers do not have to scrape markdown pages.
 
 When `render.createBacklinks` is enabled, compile adds deterministic `## Related` blocks to pages. Those blocks list source pages, pages that reference the current page, and nearby pages that share the same source ids.
 
@@ -182,8 +184,8 @@ openclaw wiki obsidian command workspace:quick-switcher
 openclaw wiki obsidian daily
 
 # Agent-scoped vault
-openclaw wiki --agent support status
-openclaw wiki --agent support search "refund policy"
+openclaw wiki status --agent support
+openclaw wiki search "refund policy" --agent support
 ```
 
 ## Agent tools
@@ -198,7 +200,7 @@ The plugin also registers a non-exclusive memory corpus supplement, so shared `m
 
 `wiki_apply` accepts structured `claims` payloads for synthesis and metadata updates, so the wiki can store claim-level evidence instead of only page-level prose.
 
-When `context.includeCompiledDigestPrompt` is enabled, the memory prompt supplement also appends a compact snapshot from `.openclaw-wiki/cache/agent-digest.json`. Legacy prompt assembly sees that automatically, and non-legacy context engines can pick it up when they explicitly consume memory prompt supplements via `buildActiveMemoryPromptSection(...)`.
+When `context.includeCompiledDigestPrompt` is enabled, the memory prompt supplement also appends a compact snapshot from the lifecycle-owned in-memory cache. Legacy prompt assembly sees that automatically, and non-legacy context engines can pick it up when they explicitly consume memory prompt supplements via `buildActiveMemoryPromptSection(...)`.
 
 ## Gateway RPC
 
@@ -233,5 +235,8 @@ unknown ids fail in multi-agent setups.
 - Bridge mode reads the active memory plugin through public seams only.
 - Agent scope is incompatible with `unsafe-local` and official Obsidian CLI actions.
 - Wiki pages are compiled artifacts, not the ultimate source of truth. Keep provenance attached to raw sources, memory artifacts, and daily notes.
-- The compiled agent digests in `.openclaw-wiki/cache/agent-digest.json` and `.openclaw-wiki/cache/claims.jsonl` are the stable machine-facing view of the wiki.
+- The compiled snapshot in shared SQLite plugin state is the stable machine-facing view of the wiki.
+- After editing or restoring vault files, compile again before expecting tools or prompts to use that source state. Lifecycle refresh rejects SQLite snapshots newer than a restored vault, and causal publication chaining rejects compilers started before the restore, without polling or watching files.
+- Rollback quarantine clears immediately for an in-process compile. After a separate compiler process publishes, refresh the plugin lifecycle so the daemon can validate that durable publication.
+- Pre-publication-epoch cache rows are rebuildable misses, not migrated state; the next compile replaces them.
 - Obsidian CLI support requires the official `obsidian` CLI to be installed and available on `PATH`.

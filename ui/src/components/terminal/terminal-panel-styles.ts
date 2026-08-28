@@ -1,198 +1,78 @@
 import { css } from "lit";
 
 export const terminalPanelStyles = css`
-  :host {
-    position: fixed;
-    z-index: 60;
-    color: var(--text, #d7dae0);
-    font-family: var(--font-sans, system-ui, sans-serif);
-  }
-  .tp {
-    position: fixed;
-    display: flex;
-    flex-direction: column;
-    background: var(--bg, #0e1015);
-    overflow: hidden;
-  }
   .tp--bottom {
     left: var(--shell-nav-width, 0);
     right: 0;
     bottom: 0;
-    border-top: 1px solid var(--border, #262b34);
     --tp-session-menu-max-height: calc(var(--tp-panel-height) - 44px);
   }
   .tp--right {
     top: var(--shell-topbar-height, 0);
     right: 0;
     bottom: 0;
-    border-left: 1px solid var(--border, #262b34);
+    --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
+  }
+  .tp--main {
+    /* Main mode owns the content region; later sibling docks may overlay it. */
+    top: var(--shell-topbar-height, 0);
+    left: var(--shell-nav-width, 0);
+    right: 0;
+    bottom: 0;
     --tp-session-menu-max-height: calc(100dvh - var(--shell-topbar-height, 0px) - 44px);
   }
   .tp--fullscreen {
     inset: 0;
   }
-  .tp-resizer {
-    position: absolute;
-    z-index: 2;
-    background: transparent;
+  .tp--embedded {
+    position: relative;
+    width: 100%;
+    height: 100%;
   }
-  .tp-resizer:hover {
-    background: var(--accent, #ff5c5c);
-    opacity: 0.5;
+  .tp-header .tabstrip-tab__icon {
+    color: var(--muted, #8a919e);
   }
-  .tp-resizer--bottom {
-    top: 0;
-    left: 0;
-    right: 0;
-    height: 5px;
-    cursor: ns-resize;
-  }
-  .tp-resizer--right {
-    top: 0;
-    bottom: 0;
-    left: 0;
-    width: 5px;
-    cursor: ew-resize;
-  }
+  /* Same glyph system as the side panel rail. Positioned so the session
+     menu anchors to the header, not its mid-toolbar trigger: a
+     trigger-anchored menu wider than the icons spills past the panel's
+     left edge, and header anchoring makes 100% mean "panel width". */
   .tp-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 8px;
-    padding: 0 6px 0 4px;
-    border-bottom: 1px solid var(--border, #262b34);
-    background: var(--bg, #0e1015);
-    min-height: 36px;
+    --rail-header-action-glyph-size: 15px;
+
+    position: relative;
   }
-  .tp-tabs {
-    --track-width: 0;
-    display: block;
-    overflow-x: auto;
-    scrollbar-width: none;
+  .tp-header .tabstrip-tab__icon svg,
+  .tp-header .tp-icon svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 1.6px;
   }
-  .tp-tabs::part(nav) {
-    display: flex;
-    align-items: stretch;
-    gap: 1px;
-  }
-  .tp-tabs::part(body) {
-    display: none;
-  }
-  .tp-tabs::-webkit-scrollbar {
-    display: none;
-  }
-  .tp-tab::part(base) {
-    display: flex;
-    align-items: center;
-    gap: 7px;
-    padding: 0 10px;
-    height: 36px;
-    color: var(--muted, #8a919e);
-    white-space: nowrap;
-    font-size: 12.5px;
-    border-bottom: 2px solid transparent;
-    transition:
-      color 0.12s ease,
-      background 0.12s ease;
-  }
-  .tp-tab:hover::part(base) {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 6%, transparent);
-  }
-  .tp-tab[active]::part(base) {
-    color: var(--text, #d7dae0);
-    border-bottom-color: var(--accent, #ff5c5c);
-  }
-  .tp-tab.is-exited::part(base) {
-    opacity: 0.55;
-  }
-  .tp-tab.is-connecting .tp-tab__icon {
-    animation: tp-pulse 1.2s ease-in-out infinite;
-  }
-  .tp-tab__icon {
-    display: inline-flex;
-    color: var(--accent, #4ec9a8);
-  }
-  .tp-tab.is-exited .tp-tab__icon {
-    color: var(--muted, #8a919e);
-  }
-  .tp-tab__label {
-    font-variant-numeric: tabular-nums;
-  }
-  .tp-tab__status {
-    font-size: 11px;
-    color: var(--muted, #8a919e);
-  }
-  .tp-tab__close {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    align-self: center;
-    flex: 0 0 26px;
-    width: 26px;
-    height: 26px;
-    opacity: 0;
-    border: none;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    border-radius: 6px;
-    padding: 0;
-  }
-  :where(.tp-tab:hover, .tp-tab[active]) + .tp-tab__close {
-    opacity: 0.7;
-  }
-  .tp-tab__close:hover,
-  .tp-tab__close:focus-visible {
-    opacity: 1;
-  }
-  .tp-new,
-  .tp-icon {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    width: 26px;
-    height: 26px;
-    border: none;
-    background: transparent;
-    color: var(--muted, #8a919e);
-    border-radius: 6px;
-    padding: 0;
-  }
-  .tp-new {
-    align-self: center;
-  }
-  .tp-tab__close:hover,
-  .tp-new:hover,
-  .tp-icon:hover {
-    background: color-mix(in srgb, var(--text, #d7dae0) 12%, transparent);
-    color: var(--text, #d7dae0);
-  }
-  .tp-icon.is-active {
-    color: var(--text, #d7dae0);
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
-  }
-  .tp-actions {
+  .tp-dock-modes {
     display: flex;
     align-items: center;
     gap: 2px;
-    padding-left: 6px;
   }
   .tp-session-picker {
-    position: relative;
+    position: static;
   }
   .tp-session-menu {
     position: absolute;
     z-index: 4;
-    top: 31px;
-    right: 0;
-    width: min(360px, calc(100vw - 24px));
+    top: calc(100% + 3px);
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: 360px;
+    /* Both edges are pinned, so the menu can never reach past the panel; the
+       auto margin keeps it right-aligned under its trigger while it fits. */
+    margin-left: auto;
     max-height: min(420px, var(--tp-session-menu-max-height));
     overflow-y: auto;
-    border: 1px solid var(--border, #262b34);
-    border-radius: 8px;
-    background: var(--bg, #0e1015);
-    box-shadow: 0 12px 30px rgb(0 0 0 / 35%);
-    padding: 6px;
+    padding: var(--menu-padding);
+    border: 1px solid var(--overlay-border);
+    border-radius: var(--menu-radius);
+    background: var(--bg-elevated);
+    box-shadow: var(--overlay-shadow);
   }
   .tp-session-menu__header {
     display: flex;
@@ -203,13 +83,18 @@ export const terminalPanelStyles = css`
     font-size: 12px;
     font-weight: 600;
   }
+  /* Refreshing the list is not destructive, so it reads as a plain action. */
   .tp-session-refresh {
     border: 0;
     background: transparent;
-    color: var(--accent, #ff5c5c);
+    color: var(--muted, #8a919e);
     font: inherit;
     font-weight: 500;
     padding: 2px 4px;
+  }
+  .tp-session-refresh:hover,
+  .tp-session-refresh:focus-visible {
+    color: var(--text, #d7dae0);
   }
   .tp-session {
     display: grid;
@@ -218,7 +103,8 @@ export const terminalPanelStyles = css`
     gap: 8px;
     width: 100%;
     border: 0;
-    border-radius: 6px;
+    min-height: var(--menu-item-height);
+    border-radius: var(--menu-item-radius);
     background: transparent;
     color: var(--text, #d7dae0);
     padding: 7px 8px;
@@ -226,7 +112,7 @@ export const terminalPanelStyles = css`
   }
   .tp-session:not(:disabled):hover,
   .tp-session:not(:disabled):focus-visible {
-    background: color-mix(in srgb, var(--text, #d7dae0) 10%, transparent);
+    background: var(--bg-hover);
   }
   .tp-session:disabled {
     opacity: 0.55;
@@ -295,28 +181,31 @@ export const terminalPanelStyles = css`
     border-radius: 50%;
     animation: tp-spin 0.8s linear infinite;
   }
-  .tp-empty,
   .tp-error {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
     padding: 10px 12px;
     font-size: 12px;
-    color: var(--muted, #8a919e);
-  }
-  .tp-error {
     color: var(--danger, #ff6b6b);
+  }
+  .tp-error .btn {
+    flex: 0 0 auto;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--bg-elevated);
+    color: var(--text);
+    padding: 6px 10px;
+    font: inherit;
   }
   @keyframes tp-spin {
     to {
       transform: rotate(360deg);
     }
   }
-  @keyframes tp-pulse {
-    50% {
-      opacity: 0.35;
-    }
-  }
   @media (prefers-reduced-motion: reduce) {
-    .tp-connecting__spinner,
-    .tp-tab.is-connecting .tp-tab__icon {
+    .tp-connecting__spinner {
       animation: none;
     }
   }

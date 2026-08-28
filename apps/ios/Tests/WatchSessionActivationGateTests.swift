@@ -17,6 +17,55 @@ struct WatchSessionActivationGateTests {
         }
     }
 
+    @Test func `accepted watch reply ignores later transport callbacks`() async throws {
+        try await withCheckedThrowingContinuation { continuation in
+            let completion = WatchMessageSendCompletion(continuation)
+            completion.complete(.success(()))
+            completion.complete(.failure(URLError(.timedOut)))
+            completion.complete(.success(()))
+        }
+    }
+
+    @Test func `watch transport error ignores later replies and errors`() async {
+        await #expect(throws: URLError.self) {
+            try await withCheckedThrowingContinuation { continuation in
+                let completion = WatchMessageSendCompletion(continuation)
+                completion.complete(.failure(URLError(.notConnectedToInternet)))
+                completion.complete(.success(()))
+                completion.complete(.failure(WatchMessageAcknowledgmentError.rejected("late")))
+            }
+        }
+    }
+
+    @Test func `rejected watch acknowledgment ignores a later transport error`() async {
+        await #expect(throws: WatchMessageAcknowledgmentError.self) {
+            try await withCheckedThrowingContinuation { continuation in
+                let completion = WatchMessageSendCompletion(continuation)
+                completion.complete(Result {
+                    try requireAcceptedWatchMessageReply(["ok": false, "error": "unsupported_payload"])
+                })
+                completion.complete(.failure(URLError(.timedOut)))
+            }
+        }
+    }
+
+    @Test func `racing watch callbacks complete their continuation exactly once`() async {
+        do {
+            try await withCheckedThrowingContinuation { continuation in
+                let completion = WatchMessageSendCompletion(continuation)
+                DispatchQueue.concurrentPerform(iterations: 100) { index in
+                    completion.complete(index.isMultiple(of: 2)
+                        ? .success(())
+                        : .failure(URLError(.timedOut)))
+                }
+            }
+        } catch is URLError {
+            // Either terminal callback may win; racing callbacks must never resume twice.
+        } catch {
+            Issue.record("Unexpected watch message failure: \(error)")
+        }
+    }
+
     @Test func `startup event buffering is ordered and bounded`() {
         var buffer = WatchMessagingStartupBuffer<String>(maxCount: 3)
 
@@ -87,25 +136,19 @@ struct WatchSessionActivationGateTests {
             contentsOf: iosRoot.appendingPathComponent(
                 "WatchApp/Sources/WatchConnectivityReceiver.swift"),
             encoding: .utf8)
-        let transportSource = try String(
-            contentsOf: iosRoot.appendingPathComponent(
-                "Sources/Services/WatchConnectivityTransport.swift"),
-            encoding: .utf8)
         let serviceSource = try String(
             contentsOf: iosRoot.appendingPathComponent(
                 "Sources/Services/WatchMessagingService.swift"),
             encoding: .utf8)
 
+        #expect(receiverSource.contains("final class WatchMessageAcknowledgment"))
         #expect(receiverSource.contains(
-            "let accepted = self.consumeIncomingPayload(message, transport: \"sendMessage\")"))
-        #expect(receiverSource.contains("accepted\n                ? [\"ok\": true]"))
+            "acknowledgment: WatchMessageAcknowledgment(replyHandler: replyHandler)"))
+        #expect(receiverSource.contains("acknowledgment?.accept()"))
+        #expect(receiverSource.contains("acknowledgment?.rejectUnsupportedPayload()"))
         #expect(receiverSource.contains(
-            ": [\"ok\": false, \"error\": \"unsupported_payload\"]"))
-        #expect(receiverSource.contains(
-            "private func consumeIncomingPayload(_ payload: [String: Any], transport: String) -> Bool"))
+            "acknowledgment: WatchMessageAcknowledgment? = nil) -> Bool"))
         #expect(receiverSource.contains("guard activationState == .activated else { return }"))
-        #expect(receiverSource.contains("try requireAcceptedWatchMessageReply(reply)"))
-        #expect(transportSource.contains("try requireAcceptedWatchMessageReply(reply)"))
         let callbackRegistration = try #require(
             serviceSource.range(of: "self.transport.setAppCommandHandler"))
         let activation = try #require(serviceSource.range(of: "self.transport.activate()"))

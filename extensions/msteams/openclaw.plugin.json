@@ -1,14 +1,21 @@
 {
   "id": "msteams",
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
   "name": "Microsoft Teams",
   "description": "OpenClaw Microsoft Teams channel plugin for bot conversations.",
   "activation": {
     "onStartup": false
   },
   "channels": ["msteams"],
-  "channelEnvVars": {
-    "msteams": ["MSTEAMS_APP_ID", "MSTEAMS_APP_PASSWORD", "MSTEAMS_TENANT_ID"]
-  },
+  "qaRunners": [
+    {
+      "commandName": "msteams",
+      "description": "Run Microsoft Teams Gateway QA against a local Bot Framework mock"
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

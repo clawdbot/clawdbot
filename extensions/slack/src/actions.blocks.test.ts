@@ -1,10 +1,19 @@
 // Slack tests cover actions.blocks plugin behavior.
-import { describe, expect, it } from "vitest";
+import {
+  createTestRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/channel-test-helpers";
+import type { MarkdownTableMode } from "openclaw/plugin-sdk/config-contracts";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createSlackEditTestClient, createSlackSendTestClient } from "./blocks.test-helpers.js";
+import { slackSetupPlugin } from "./channel.setup.js";
+import { countSlackTextUtf8Bytes } from "./truncate.js";
 
-const { editSlackMessage, sendSlackMessage } = await import("./actions.js");
+const { editSlackMessage, editSlackRenderedMessage, sendSlackMessage } =
+  await import("./actions.js");
 const SLACK_TEXT_LIMIT = 8000;
-const SLACK_EDIT_TEXT_LIMIT = 4000;
+const SLACK_EDIT_TEXT_MAX_BYTES = 4000;
 
 function readFirstChatUpdatePayload(client: ReturnType<typeof createSlackEditTestClient>): {
   text?: string;
@@ -67,9 +76,108 @@ describe("sendSlackMessage blocks", () => {
 });
 
 describe("editSlackMessage blocks", () => {
-  it("preserves long plain-text edits", async () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([{ pluginId: "slack", source: "test", plugin: slackSetupPlugin }]),
+    );
+  });
+  afterEach(() => resetPluginRuntimeStateForTest());
+
+  const table = "| Name | Value |\n| --- | --- |\n| Beta | 2 |";
+  const codeTable = "```\n| Name | Value |\n| ---- | ----- |\n| Beta | 2     |\n```";
+  const bulletTable = "*Beta*\n• Value: 2";
+
+  it.each<{
+    name: string;
+    channelMode?: MarkdownTableMode;
+    accountMode?: MarkdownTableMode;
+    useDefaultAccount?: boolean;
+    expected: string;
+  }>([
+    { name: "default code tables", expected: codeTable },
+    { name: "channel code tables", channelMode: "code", expected: codeTable },
+    { name: "channel bullet tables", channelMode: "bullets", expected: bulletTable },
+    { name: "disabled tables", channelMode: "off", expected: table },
+    {
+      name: "account bullet override",
+      channelMode: "off",
+      accountMode: "bullets",
+      expected: bulletTable,
+    },
+    {
+      name: "account disabled override",
+      channelMode: "code",
+      accountMode: "off",
+      expected: table,
+    },
+    {
+      name: "configured default account override",
+      channelMode: "off",
+      accountMode: "bullets",
+      useDefaultAccount: true,
+      expected: bulletTable,
+    },
+  ])(
+    "preserves $name when editing authored Markdown",
+    async ({ channelMode, accountMode, useDefaultAccount, expected }) => {
+      const client = createSlackEditTestClient();
+
+      await editSlackMessage("C123", "171234.567", table, {
+        token: "xoxb-test",
+        client,
+        accountId: useDefaultAccount ? undefined : "work",
+        cfg: {
+          channels: {
+            slack: {
+              defaultAccount: "work",
+              markdown: { tables: channelMode },
+              accounts: { work: { markdown: { tables: accountMode } } },
+            },
+          },
+        },
+      });
+
+      expect(client.chat.update).toHaveBeenCalledExactlyOnceWith({
+        channel: "C123",
+        ts: "171234.567",
+        text: expected,
+      });
+    },
+  );
+
+  it("renders authored Markdown using the same mrkdwn dialect as sends", async () => {
     const client = createSlackEditTestClient();
-    const text = "a".repeat(SLACK_TEXT_LIMIT + 500);
+
+    await editSlackMessage("C123", "171234.567", "**bold** and [OpenClaw](https://example.com)", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "171234.567",
+      text: "*bold* and <https://example.com|OpenClaw>",
+    });
+  });
+
+  it("preserves already-rendered Slack mrkdwn when finalizing a preview", async () => {
+    const client = createSlackEditTestClient();
+
+    await editSlackRenderedMessage("C123", "171234.567", "*bold*", {
+      token: "xoxb-test",
+      client,
+    });
+
+    expect(client.chat.update).toHaveBeenCalledWith({
+      channel: "C123",
+      ts: "171234.567",
+      text: "*bold*",
+    });
+  });
+
+  it("caps long plain-text edits at the live UTF-8 byte limit", async () => {
+    const client = createSlackEditTestClient();
+    const text = `${"x".repeat(3_999)}…${"a".repeat(SLACK_TEXT_LIMIT)}`;
 
     await editSlackMessage("C123", "171234.567", text, {
       token: "xoxb-test",
@@ -79,7 +187,7 @@ describe("editSlackMessage blocks", () => {
     expect(client.chat.update).toHaveBeenCalledWith({
       channel: "C123",
       ts: "171234.567",
-      text,
+      text: `${"x".repeat(3_997)}…`,
     });
   });
 
@@ -317,7 +425,7 @@ describe("editSlackMessage blocks", () => {
         client,
         blocks,
       }),
-    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-character edit limit");
+    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-byte edit limit");
     expect(client.chat.update).not.toHaveBeenCalled();
   });
 
@@ -347,7 +455,7 @@ describe("editSlackMessage blocks", () => {
         client,
         blocks,
       }),
-    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-character edit limit");
+    ).rejects.toThrow("Slack native chart or table fallback exceeds the 4000-byte edit limit");
     expect(client.chat.update).not.toHaveBeenCalled();
   });
 
@@ -374,10 +482,12 @@ describe("editSlackMessage blocks", () => {
     expect(client.chat.update).toHaveBeenCalledWith({
       channel: "C123",
       ts: "171234.567",
-      text: `${longContextText} ${longContextText} ${"a".repeat(SLACK_EDIT_TEXT_LIMIT - longContextText.length * 2 - 3)}…`,
+      text: expect.stringMatching(/…$/u),
       blocks,
     });
-    expect(readFirstChatUpdatePayload(client).text).toHaveLength(SLACK_EDIT_TEXT_LIMIT);
+    expect(countSlackTextUtf8Bytes(readFirstChatUpdatePayload(client).text ?? "")).toBe(
+      SLACK_EDIT_TEXT_MAX_BYTES,
+    );
   });
 
   it("rejects empty blocks arrays", async () => {
@@ -442,7 +552,7 @@ describe("editSlackMessage blocks", () => {
         client,
         blocks,
       }),
-    ).rejects.toThrow(/fallback exceeds the 4000-character edit limit/u);
+    ).rejects.toThrow(/fallback exceeds the 4000-byte edit limit/u);
 
     expect(client.chat.update).toHaveBeenCalledTimes(1);
   });

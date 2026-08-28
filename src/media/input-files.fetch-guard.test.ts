@@ -14,9 +14,13 @@ vi.mock("./media-services.js", () => ({
   convertHeicToJpeg: (...args: unknown[]) => convertHeicToJpegMock(...args),
 }));
 
-vi.mock("@openclaw/media-core/mime", () => ({
-  detectMime: (...args: unknown[]) => detectMimeMock(...args),
-}));
+vi.mock("@openclaw/media-core/mime", async () => {
+  const actual = await vi.importActual<typeof import("@openclaw/media-core/mime")>(
+    "@openclaw/media-core/mime",
+  );
+  detectMimeMock.mockImplementation(actual.detectMime);
+  return { ...actual, detectMime: (...args: unknown[]) => detectMimeMock(...args) };
+});
 
 vi.mock("./pdf-extract.js", () => ({
   extractPdfContent: (...args: unknown[]) => extractPdfContentMock(...args),
@@ -75,6 +79,10 @@ function mockUrlFetchResponse(params: {
 
   const release = vi.fn(async () => {});
   const responseBody = Uint8Array.from(params.fetchedBody ?? Buffer.from("url-source"));
+  const headers = new Headers();
+  if (params.fetchedContentType !== undefined) {
+    headers.set("content-type", params.fetchedContentType);
+  }
   fetchWithSsrFGuardMock.mockResolvedValueOnce({
     response: new Response(
       responseBody.buffer.slice(
@@ -83,7 +91,7 @@ function mockUrlFetchResponse(params: {
       ),
       {
         status: 200,
-        headers: { "content-type": params.fetchedContentType ?? "application/octet-stream" },
+        headers,
       },
     ),
     release,
@@ -192,6 +200,55 @@ describe("HEIC input image normalization", () => {
       },
     },
     {
+      name: "converts sniffed HEIC sequence images using the existing HEIC allowlist",
+      source: {
+        type: "base64",
+        data: Buffer.from("heic-sequence-source").toString("base64"),
+        mediaType: "image/heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"]),
+      detectedMime: "image/heic-sequence",
+      convertedBytes: Buffer.from("jpeg-heic-sequence"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-heic-sequence").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "converts sniffed HEIF sequence images using the existing HEIF allowlist",
+      source: {
+        type: "base64",
+        data: Buffer.from("heif-sequence-source").toString("base64"),
+        mediaType: "image/heif",
+      } as const,
+      limits: createImageSourceLimits(["image/heif", "image/jpeg"]),
+      detectedMime: "image/heif-sequence",
+      convertedBytes: Buffer.from("jpeg-heif-sequence"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-heif-sequence").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "converts fetched HEIC sequence images using the existing HEIC allowlist",
+      source: {
+        type: "url",
+        url: "https://example.com/photo.heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"], true),
+      detectedMime: "image/heic-sequence",
+      convertedBytes: Buffer.from("jpeg-url-sequence"),
+      fetchedContentType: "image/heic-sequence",
+      fetchedBody: Buffer.from("heic-url-sequence"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-url-sequence").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
       name: "keeps declared MIME for non-HEIC images after validation",
       source: {
         type: "base64",
@@ -204,6 +261,52 @@ describe("HEIC input image normalization", () => {
         type: "image",
         data: Buffer.from("png-like").toString("base64"),
         mimeType: "image/png",
+      },
+    },
+    {
+      name: "prefers sniffed JPEG when base64 mediaType is absent (OpenAI-compatible endpoint path)",
+      source: {
+        type: "base64",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+      } as const,
+      limits: createImageSourceLimits(["image/png", "image/jpeg"]),
+      detectedMime: "image/jpeg",
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "prefers sniffed JPEG when declared HEIC bytes are actually JPEG",
+      source: {
+        type: "base64",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mediaType: "image/heic",
+      } as const,
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"]),
+      detectedMime: "image/jpeg",
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("jpeg-bytes").toString("base64"),
+        mimeType: "image/jpeg",
+      },
+    },
+    {
+      name: "prefers sniffed MIME for URL images with a generic Content-Type header",
+      source: {
+        type: "url",
+        url: "https://example.com/photo",
+      } as const,
+      limits: createImageSourceLimits(["image/png", "image/webp"], true),
+      detectedMime: "image/webp",
+      fetchedUrl: "https://example.com/photo",
+      fetchedContentType: "application/octet-stream",
+      fetchedBody: Buffer.from("webp-bytes"),
+      expectedImage: {
+        type: "image",
+        data: Buffer.from("webp-bytes").toString("base64"),
+        mimeType: "image/webp",
       },
     },
   ] as const)("$name", async (testCase) => {
@@ -219,6 +322,7 @@ describe("HEIC input image normalization", () => {
         mediaType: "image/png",
       },
       limits: createImageSourceLimits(["image/png", "image/jpeg"]),
+      detectedMime: "application/pdf",
       expectedError: "Unsupported image MIME type: application/pdf",
     },
     {
@@ -228,13 +332,36 @@ describe("HEIC input image normalization", () => {
         url: "https://example.com/photo.png",
       },
       limits: createImageSourceLimits(["image/png", "image/jpeg"], true),
+      detectedMime: "application/pdf",
       expectedError: "Unsupported image MIME type: application/pdf",
       fetchedUrl: "https://example.com/photo.png",
       fetchedContentType: "image/png",
       fetchedBody: Buffer.from("%PDF-1.4\n"),
     },
+    {
+      name: "rejects sequence images when their canonical HEIC MIME is not allowed",
+      source: {
+        type: "base64" as const,
+        data: Buffer.from("heic-sequence-source").toString("base64"),
+        mediaType: "image/heic-sequence",
+      },
+      limits: createImageSourceLimits(["image/png", "image/jpeg"]),
+      detectedMime: "image/heic-sequence",
+      expectedError: "Unsupported image MIME type",
+    },
+    {
+      name: "rejects spoofed HEIC sequence metadata when detected bytes are not an image",
+      source: {
+        type: "base64" as const,
+        data: Buffer.from("%PDF-1.4\n").toString("base64"),
+        mediaType: "image/heic-sequence",
+      },
+      limits: createImageSourceLimits(["image/heic", "image/jpeg"]),
+      detectedMime: "application/pdf",
+      expectedError: "Unsupported image MIME type: application/pdf",
+    },
   ] as const)("$name", async (testCase) => {
-    detectMimeMock.mockResolvedValueOnce("application/pdf");
+    detectMimeMock.mockResolvedValueOnce(testCase.detectedMime);
     await expectRejectedImageMimeCase(testCase);
     expect(convertHeicToJpegMock).not.toHaveBeenCalled();
   });
@@ -391,6 +518,37 @@ describe("guarded input file URL fetches", () => {
 });
 
 describe("input file MIME sniffing", () => {
+  it("infers printable URL file bytes as text when Content-Type is absent", async () => {
+    const body = "headerless printable text";
+    mockUrlFetchResponse({
+      source: { type: "url", url: "https://example.com/notes" },
+      fetchedBody: Buffer.from(body),
+    });
+
+    await expect(
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/notes" },
+        limits: createFileSourceLimits(["text/plain"], true),
+      }),
+    ).resolves.toEqual({ filename: "file", text: body });
+  });
+
+  it("keeps an explicit octet-stream response binary for the same printable URL bytes", async () => {
+    const body = Buffer.from("headerless printable text");
+    mockUrlFetchResponse({
+      source: { type: "url", url: "https://example.com/notes" },
+      fetchedContentType: "application/octet-stream",
+      fetchedBody: body,
+    });
+
+    await expect(
+      extractFileContentFromSource({
+        source: { type: "url", url: "https://example.com/notes" },
+        limits: createFileSourceLimits(["text/plain"], true),
+      }),
+    ).rejects.toThrow("Unsupported file MIME type: application/octet-stream");
+  });
+
   it("rejects base64 files whose bytes sniff as an unsupported image despite a text media type", async () => {
     detectMimeMock.mockResolvedValueOnce("image/png");
 

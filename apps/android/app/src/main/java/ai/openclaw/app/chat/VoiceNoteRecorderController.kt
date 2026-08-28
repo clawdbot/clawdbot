@@ -37,6 +37,7 @@ internal sealed interface VoiceNoteRecorderState {
 internal data class VoiceNoteRecording(
   val file: File,
   val durationMs: Long,
+  val id: String = file.absolutePath,
 )
 
 internal interface VoiceNoteRecordingEngine {
@@ -72,20 +73,33 @@ internal class VoiceNoteRecorderController(
   val inputLevel: StateFlow<Float> = _inputLevel.asStateFlow()
 
   private var outputFile: File? = null
+  private var recordingId: String? = null
   private var elapsedJob: Job? = null
   private var ownsMic = false
 
-  suspend fun start(): Boolean {
-    synchronized(lock) {
-      if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) return false
-    }
-    if (!requestPermission()) {
-      fail("Microphone permission is required to record a voice note.")
-      return false
-    }
+  // Permission callbacks can outlive cancellation; only the current owner may start capture.
+  private var pendingStart: Any? = null
+
+  suspend fun start(id: String = UUID.randomUUID().toString()): Boolean {
+    val operation =
+      synchronized(lock) {
+        if (pendingStart != null) return false
+        if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) return false
+        Any().also { pendingStart = it }
+      }
+    val permitted =
+      try {
+        requestPermission()
+      } catch (error: Throwable) {
+        synchronized(lock) { if (pendingStart === operation) pendingStart = null }
+        throw error
+      }
 
     return synchronized(lock) {
-      if (_state.value !is VoiceNoteRecorderState.Idle && _state.value !is VoiceNoteRecorderState.Failure) {
+      if (pendingStart !== operation) return@synchronized false
+      pendingStart = null
+      if (!permitted) {
+        failLocked("Microphone permission is required to record a voice note.")
         return@synchronized false
       }
       if (!acquireMic()) {
@@ -95,7 +109,7 @@ internal class VoiceNoteRecorderController(
       ownsMic = true
 
       val startedAt = elapsedRealtimeMillis()
-      val file = File(outputDirectory, "voice-note-${UUID.randomUUID()}.m4a")
+      val file = File(outputDirectory, "voice-note-$id.m4a")
       try {
         engine.start(file)
       } catch (_: Throwable) {
@@ -107,6 +121,7 @@ internal class VoiceNoteRecorderController(
       }
 
       outputFile = file
+      recordingId = id
       _elapsedMs.value = 0L
       _state.value = VoiceNoteRecorderState.Recording(startedAtMillis = startedAt)
       startElapsedUpdates(startedAt)
@@ -119,6 +134,7 @@ internal class VoiceNoteRecorderController(
       synchronized(lock) {
         if (_state.value !is VoiceNoteRecorderState.Recording) return false
         val file = outputFile ?: return false
+        val id = recordingId ?: return false
         elapsedJob?.cancel()
         elapsedJob = null
 
@@ -153,7 +169,7 @@ internal class VoiceNoteRecorderController(
         _inputLevel.value = 0f
         _state.value = VoiceNoteRecorderState.Preparing
         releaseMicLocked()
-        VoiceNoteRecording(file = file, durationMs = durationMs)
+        VoiceNoteRecording(file = file, durationMs = durationMs, id = id)
       }
     onFinished(recording)
     return true
@@ -163,13 +179,20 @@ internal class VoiceNoteRecorderController(
     synchronized(lock) {
       if (_state.value is VoiceNoteRecorderState.Preparing) {
         outputFile = null
+        recordingId = null
         _state.value = VoiceNoteRecorderState.Idle
       }
     }
   }
 
+  fun canCommitPreparation(id: String): Boolean =
+    synchronized(lock) {
+      _state.value is VoiceNoteRecorderState.Preparing && recordingId == id
+    }
+
   fun cancel() {
     synchronized(lock) {
+      pendingStart = null
       elapsedJob?.cancel()
       elapsedJob = null
       if (_state.value is VoiceNoteRecorderState.Recording) {
@@ -178,6 +201,7 @@ internal class VoiceNoteRecorderController(
       releaseMicLocked()
       outputFile?.delete()
       outputFile = null
+      recordingId = null
       _elapsedMs.value = 0L
       _inputLevel.value = 0f
       _state.value = VoiceNoteRecorderState.Idle
@@ -188,6 +212,7 @@ internal class VoiceNoteRecorderController(
     synchronized(lock) {
       outputFile?.delete()
       outputFile = null
+      recordingId = null
       failLocked(message)
     }
   }
@@ -215,10 +240,6 @@ internal class VoiceNoteRecorderController(
       }
   }
 
-  private fun fail(message: String) {
-    synchronized(lock) { failLocked(message) }
-  }
-
   private fun failLocked(message: String) {
     _state.value = VoiceNoteRecorderState.Failure(message)
   }
@@ -226,6 +247,7 @@ internal class VoiceNoteRecorderController(
   private fun finishFailureLocked(message: String) {
     releaseMicLocked()
     outputFile = null
+    recordingId = null
     _elapsedMs.value = 0L
     _inputLevel.value = 0f
     _state.value = VoiceNoteRecorderState.Failure(message)

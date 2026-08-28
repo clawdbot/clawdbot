@@ -52,7 +52,7 @@ openclaw tui --local
 - Header: connection URL, current agent, current session.
 - Chat log: user messages, assistant replies, system notices, tool cards.
 - Status line: connection/run state (connecting, running, streaming, idle, error).
-- Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver. When `tui.footer.showRemoteHost` is enabled, remote Gateway connections also show the connection host.
+- Footer: agent + session + model + goal state + think/fast/verbose/trace/reasoning + token counts + deliver.
 - Input: text editor with autocomplete.
 
 ## Mental model: agents + sessions
@@ -66,14 +66,6 @@ openclaw tui --local
   - `per-sender` (default): each agent has many sessions.
   - `global`: the TUI always uses the `global` session (the picker may be empty).
 - The current agent + session are always visible in the footer.
-- To show the Gateway host for non-local URL-backed connections, opt in with:
-
-  ```bash
-  openclaw config set tui.footer.showRemoteHost true
-  ```
-
-  Default is `false`. Loopback and embedded local connections never show a host label.
-
 - If the session has a [goal](/tools/goal), the footer shows its compact state:
   `Pursuing goal`, `Goal paused (/goal resume)`, `Goal blocked (/goal resume)`, or `Goal achieved`.
 - When started without `--session`, gateway-mode TUI resumes the last selected session for the same gateway, agent, and session scope if that session still exists. Passing `--session`, `/session`, `/new`, or `/reset` remains explicit.
@@ -94,6 +86,7 @@ openclaw tui --local
 ## Keyboard shortcuts
 
 - Enter: send message
+- Shift+Enter or Ctrl+J: insert a newline without sending
 - Esc: abort active run
 - Ctrl+C: clear input (press twice to exit)
 - Ctrl+D: exit
@@ -112,31 +105,49 @@ Core:
 - `/gateway-status` (alias `/gwstatus`; shows Gateway connection status directly)
 - `/agent <id>` (or `/agents`)
 - `/session <key>` (or `/sessions`)
-- `/model <provider/model>` (or `/models`)
+- `/model <provider/model|default>` (or `/models`; `default` clears the session override)
+
+Gateway-connected model updates honor the optional
+[`agents.defaults.modelSelectionScope`](/gateway/config-agents#agentsdefaultsmodelselectionscope)
+setting. When it is unset, they retain their existing configured-default behavior
+for admins. The embedded local TUI stays session-only regardless of this setting.
 
 Session controls:
 
-- `/think <off|minimal|low|medium|high>` (higher tiers may add levels like `xhigh`/`max` depending on the model)
-- `/fast <status|auto|on|off>`
+- `/think <off|minimal|low|medium|high|default>` (higher tiers may add levels like `xhigh`/`max` depending on the model; `default` clears the session override)
+- `/fast <status|auto|on|off|default>` (`default` clears the session override)
 - `/verbose <on|full|off>`
 - `/trace <on|off>`
 - `/reasoning <on|off|stream>`
-- `/usage <off|tokens|full|reset>` (`reset`/`inherit`/`clear`/`default` clears the session override)
-- `/goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/usage <off|tokens|full|cost|reset>` (`cost` shows session, today, and 30-day costs; `reset`/`inherit`/`clear`/`default` clears the session override)
+- `/goal <objective> | /goal [status] | /goal start <objective> | /goal edit <objective> | /goal pause|resume|complete|block|clear`
+- `/btw <side question>` (alias: `/side`; asks without changing future session context)
 - `/elevated <on|off|ask|full>` (alias: `/elev`)
 - `/activation <mention|always>`
+- `/queue <steer|followup|collect|interrupt> [debounce:<duration>] [cap:<n>] [drop:<summarize|old|new>]`
+- `/queue default` (or `/queue reset`) clears the session override
 
 Session lifecycle:
 
 - `/new` (spawn a fresh, isolated session under a new key; does not affect other TUI clients on the old session)
 - `/reset` (reset the current session key in place)
 - `/abort` (abort the active run)
+- `/stop` (stop the active or queued run)
 - `/settings`
 - `/exit` (or `/quit`)
+
+When the current session is reset, the TUI confirms it after refreshing the transcript, including resets initiated by another client.
 
 Local mode only:
 
 - `/auth [provider]` opens the provider auth/login flow inside the TUI.
+
+Local mode implements the same queue modes inside the embedded runtime. A
+mid-run prompt follows the session's `/queue` policy: `steer` injects when the
+runtime can accept it, `followup` waits for a separate turn, `collect` combines
+pending prompts, and `interrupt` stops the current run before starting the new
+one. Explicit `/steer <message>` is Gateway-only; use `/queue steer` plus a
+normal message in local mode.
 
 OpenClaw:
 
@@ -217,7 +228,9 @@ Tips:
 ## History + streaming
 
 - On connect, the TUI loads the latest history (default 200 messages).
+- Reconnect and event-gap recovery reconcile active runs with history, retaining concurrent and newly observed runs without reviving runs that exact history has excluded.
 - Streaming responses update in place until finalized.
+- Messages sent to the same session from another client appear automatically.
 - The TUI also listens to agent tool events for richer tool cards.
 
 ## Connection details

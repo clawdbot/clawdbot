@@ -23,16 +23,6 @@ function extractCaptures(text: string, pattern: RegExp) {
   return Array.from(text.matchAll(globalPattern), (match) => match[1]?.trim()).filter(Boolean);
 }
 
-export function extractLastMatchingUserText(texts: string[], pattern: RegExp) {
-  for (let index = texts.length - 1; index >= 0; index -= 1) {
-    const text = texts[index] ?? "";
-    if (pattern.test(text)) {
-      return text;
-    }
-  }
-  return "";
-}
-
 export function extractExactReplyDirective(text: string) {
   const backtickedMatch = extractLastCapture(text, /reply(?: with)? exactly\s+`([^`]+)`/i);
   if (backtickedMatch) {
@@ -61,6 +51,35 @@ export function extractExactMarkerDirective(text: string) {
     text,
     /exact marker\b[^:\n]{0,120}:\s*([^\s`.,;:!?]+(?:-[^\s`.,;:!?]+)*)/i,
   );
+}
+
+export const QA_SLACK_PROGRESS_COMMENTARY_MARKER_RE =
+  /\bSLACK-QA-COMMENTARY-(?!DONE-)[A-F0-9]{8}\b/u;
+
+export function extractSlackProgressCommentaryDirectives(text: string) {
+  const commentaryMarker = extractLastCapture(
+    text,
+    /\b(SLACK-QA-COMMENTARY-(?!DONE-)[A-F0-9]{8})\b/u,
+  );
+  const toolMarker = extractLastCapture(text, /\b(SLACK-QA-TOOL-[A-F0-9]{8})\b/u);
+  const finalMarker = extractLastCapture(text, /\b(SLACK-QA-COMMENTARY-DONE-[A-F0-9]{8})\b/u);
+  if (!commentaryMarker || !toolMarker || !finalMarker) {
+    return null;
+  }
+  const suffix = commentaryMarker.slice("SLACK-QA-COMMENTARY-".length);
+  const execCommand = `grep 'SLACK-QA-TOOL-${suffix}' /dev/null || sleep 5`;
+  const commandDirective = extractLastCapture(
+    text,
+    /\b(grep 'SLACK-QA-TOOL-[A-F0-9]{8}' \/dev\/null \|\| sleep 5)(?=[.`\s]|$)/u,
+  );
+  if (
+    toolMarker !== `SLACK-QA-TOOL-${suffix}` ||
+    finalMarker !== `SLACK-QA-COMMENTARY-DONE-${suffix}` ||
+    commandDirective !== execCommand
+  ) {
+    return null;
+  }
+  return { commentaryMarker, execCommand, finalMarker, toolMarker };
 }
 
 export function extractWhatsAppLocationMarkerDirective(text: string) {
@@ -113,7 +132,31 @@ export function shouldUseWhatsAppContactMarker(prompt: string) {
 }
 
 export function shouldUseWhatsAppStickerMarker(prompt: string) {
-  return hasWhatsAppStructuredMessageBody(prompt, /^<media:sticker>(?:\s|$)/iu);
+  const label = "WhatsApp media:";
+  let searchFrom = 0;
+  for (;;) {
+    const labelIndex = prompt.indexOf(label, searchFrom);
+    if (labelIndex < 0) {
+      return false;
+    }
+    const fenceStart = prompt.indexOf("```json", labelIndex + label.length);
+    const fenceEnd = fenceStart >= 0 ? prompt.indexOf("```", fenceStart + 7) : -1;
+    if (fenceStart >= 0 && fenceEnd >= 0) {
+      try {
+        const value = JSON.parse(prompt.slice(fenceStart + 7, fenceEnd)) as {
+          payload?: { kind?: unknown };
+        };
+        if (value.payload?.kind === "sticker") {
+          return true;
+        }
+      } catch {
+        // Ignore malformed metadata and continue to the next matching block.
+      }
+      searchFrom = fenceEnd + 3;
+      continue;
+    }
+    searchFrom = labelIndex + label.length;
+  }
 }
 
 function extractLabeledMarkerDirective(text: string, label: string) {
@@ -165,15 +208,10 @@ function extractBareToolArg(text: string, name: string) {
 }
 
 export function hasDeclaredTool(body: Record<string, unknown>, name: string) {
-  const tools = Array.isArray(body.tools) ? body.tools : [];
-  const dynamicTools = Array.isArray(body.dynamicTools) ? body.dynamicTools : [];
-  if (
-    [...tools, ...dynamicTools].some((tool) => toolDefinitionMentionsName(tool, name)) ||
+  return (
+    hasToolDefinition(body, name) ||
     instructionTextMentionsToolName(extractInstructionsText(body), name)
-  ) {
-    return true;
-  }
-  return false;
+  );
 }
 
 export function hasToolDefinition(body: Record<string, unknown>, name: string) {
@@ -305,12 +343,17 @@ export function extractSessionStatusSessionKey(
   return /"sessionKey"\s*:\s*"([^"]+)"/.exec(toolOutput)?.[1]?.trim() ?? "";
 }
 
-export function isHeartbeatPrompt(text: string) {
+export function resolveHeartbeatPromptReply(text: string): "HEARTBEAT_OK" | "NO_REPLY" | undefined {
   const trimmed = text.trim();
   if (!trimmed || /remember this fact/i.test(trimmed)) {
-    return false;
+    return undefined;
   }
-  return /(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed);
+  if (/(?:^|\n)Read HEARTBEAT\.md if it exists\b/i.test(trimmed)) {
+    return "HEARTBEAT_OK";
+  }
+  return /(?:^|[.\n]\s*)If nothing needs attention, reply NO_REPLY\b/i.test(trimmed)
+    ? "NO_REPLY"
+    : undefined;
 }
 
 export function readFirstMediaPath(value: unknown): string {

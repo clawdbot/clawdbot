@@ -17,11 +17,7 @@ import {
 } from "../../auto-reply/command-detection.js";
 import { shouldHandleTextCommands } from "../../auto-reply/commands-registry.js";
 import { settleReplyDispatcher, withReplyDispatcher } from "../../auto-reply/dispatch.js";
-import {
-  formatAgentEnvelope,
-  formatInboundEnvelope,
-  resolveEnvelopeFormatOptions,
-} from "../../auto-reply/envelope.js";
+import { formatAgentEnvelope, resolveEnvelopeFormatOptions } from "../../auto-reply/envelope.js";
 import {
   createInboundDebouncer,
   resolveInboundDebounceMs,
@@ -33,7 +29,7 @@ import {
   matchesMentionPatterns,
   matchesMentionWithExplicit,
 } from "../../auto-reply/reply/mentions.js";
-import { dispatchReplyWithBufferedBlockDispatcher } from "../../auto-reply/reply/provider-dispatcher.js";
+import { dispatchReplyWithBufferedBlockDispatcherCore } from "../../auto-reply/reply/provider-dispatcher.js";
 import { createReplyDispatcherWithTyping } from "../../auto-reply/reply/reply-dispatcher.js";
 import {
   createAckReactionHandle,
@@ -53,44 +49,50 @@ import {
 } from "../../channels/plugins/conversation-bindings.js";
 import { loadChannelOutboundAdapter } from "../../channels/plugins/outbound/load.js";
 import { recordInboundSession } from "../../channels/session.js";
+import { runPreparedChannelTurn } from "../../channels/turn/execution.js";
 import {
-  dispatchChannelInboundReply,
-  runChannelInboundEvent,
-  runPreparedInboundReply,
-} from "../../channels/turn/kernel.js";
+  dispatchAssembledChannelTurn,
+  dispatchRoutedChannelTurn,
+} from "../../channels/turn/lifecycle.js";
+import { runChannelTurn } from "../../channels/turn/run-channel-turn.js";
 import {
   resolveChannelGroupPolicy,
   resolveChannelGroupRequireMention,
 } from "../../config/group-policy.js";
 import { resolveMarkdownTableMode } from "../../config/markdown-tables.js";
-import { resolveStorePath } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions.js";
 import { resolveSessionEntryResetFreshness } from "../../config/sessions/entry-freshness.js";
 import {
-  readSessionUpdatedAt,
+  readSessionUpdatedAtCore,
   recordInboundSessionMeta,
   updateSessionLastRoute,
 } from "../../config/sessions/session-accessor.js";
 import { getChannelActivity, recordChannelActivity } from "../../infra/channel-activity.js";
-import {
-  fetchRemoteMedia,
-  readRemoteMediaBuffer,
-  saveRemoteMedia,
-  saveResponseMedia,
-} from "../../media/fetch.js";
+import { readRemoteMediaBuffer, saveRemoteMedia, saveResponseMedia } from "../../media/fetch.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { buildPairingReply } from "../../pairing/pairing-messages.js";
 import {
   readChannelAllowFromStore,
+  removeChannelAllowFromStoreEntry,
   upsertChannelPairingRequest,
 } from "../../pairing/pairing-store.js";
 import { buildAgentSessionKey, resolveAgentRoute } from "../../routing/resolve-route.js";
 import { createChannelRuntimeContextRegistry } from "./channel-runtime-contexts.js";
 import type { PluginRuntime } from "./types.js";
 
-export function createRuntimeChannel(): PluginRuntime["channel"] {
+export function createRuntimeChannel(options?: {
+  dispatchReplyFromConfig?: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+}): PluginRuntime["channel"] {
+  const dispatchInbound: typeof dispatchRoutedChannelTurn = (params) =>
+    dispatchRoutedChannelTurn({
+      ...params,
+      ...(options?.dispatchReplyFromConfig
+        ? { dispatchReplyFromConfig: options.dispatchReplyFromConfig }
+        : {}),
+    });
   const sessionRuntime = {
-    resolveStorePath,
-    readSessionUpdatedAt,
+    resolveStorePath: resolveSessionStorePathCore,
+    readSessionUpdatedAt: readSessionUpdatedAtCore,
     // Plugin runtime property names are a shipped contract; the implementations
     // route through the session accessor boundary.
     recordSessionMetaFromInbound: recordInboundSessionMeta,
@@ -112,17 +114,15 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       convertMarkdownTables,
     },
     reply: {
-      dispatchReplyWithBufferedBlockDispatcher,
+      dispatchReplyWithBufferedBlockDispatcher: dispatchReplyWithBufferedBlockDispatcherCore,
       createReplyDispatcherWithTyping,
       resolveEffectiveMessagesConfig,
       resolveHumanDelayConfig,
-      dispatchReplyFromConfig,
+      dispatchReplyFromConfig: options?.dispatchReplyFromConfig ?? dispatchReplyFromConfig,
       withReplyDispatcher,
       settleReplyDispatcher,
       finalizeInboundContext,
       formatAgentEnvelope,
-      /** @deprecated Prefer `BodyForAgent` + structured user-context blocks (do not build plaintext envelopes for prompts). */
-      formatInboundEnvelope,
       resolveEnvelopeFormatOptions,
     },
     routing: {
@@ -133,6 +133,14 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
       buildPairingReply,
       readAllowFromStore: ({ channel, accountId, env }) =>
         readChannelAllowFromStore(channel, env, accountId),
+      removeAllowFromStoreEntry: ({ channel, entry, accountId, env, pairingAdapter }) =>
+        removeChannelAllowFromStoreEntry({
+          channel,
+          entry,
+          accountId,
+          env,
+          pairingAdapter,
+        }),
       upsertPairingRequest: ({ channel, id, accountId, meta, env, pairingAdapter }) =>
         upsertChannelPairingRequest({
           channel,
@@ -145,7 +153,7 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     media: {
       readRemoteMediaBuffer,
-      fetchRemoteMedia,
+      fetchRemoteMedia: readRemoteMediaBuffer,
       saveRemoteMedia,
       saveResponseMedia,
       saveMediaBuffer,
@@ -187,9 +195,10 @@ export function createRuntimeChannel(): PluginRuntime["channel"] {
     },
     inbound: {
       buildContext: buildChannelInboundEventContext,
-      run: runChannelInboundEvent,
-      runPreparedReply: runPreparedInboundReply,
-      dispatchReply: dispatchChannelInboundReply,
+      run: runChannelTurn,
+      runPreparedReply: runPreparedChannelTurn,
+      dispatch: dispatchInbound,
+      dispatchReply: dispatchAssembledChannelTurn,
     },
     threadBindings: {
       setIdleTimeoutBySessionKey: ({ channelId, targetSessionKey, accountId, idleTimeoutMs }) =>

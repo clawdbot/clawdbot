@@ -152,6 +152,45 @@ describe("formatCodexUsageLimitErrorMessage", () => {
     expect(message).not.toContain("Next reset");
     expect(message).not.toContain("1 hour");
   });
+
+  it("does not report exhaustion when an authoritative snapshot has no active limit", () => {
+    const message = formatCodexUsageLimitErrorMessage({
+      message: "You've reached your usage limit.",
+      codexErrorInfo: "usageLimitExceeded",
+      rateLimits: {
+        rateLimits: {
+          limitId: "codex",
+          primary: { usedPercent: 0, windowDurationMins: null, resetsAt: null },
+          secondary: null,
+          rateLimitReachedType: null,
+        },
+      },
+      rateLimitsAuthoritative: true,
+    });
+
+    expect(message).toContain("current account usage does not report an exhausted limit");
+    expect(message).not.toContain("subscription usage limit");
+    expect(message).not.toContain("could not determine a reset time");
+  });
+
+  it("does not treat an empty authoritative snapshot as exhaustion", () => {
+    const message = formatCodexUsageLimitErrorMessage({
+      message: "You've reached your usage limit.",
+      codexErrorInfo: "usageLimitExceeded",
+      rateLimits: {
+        rateLimits: {
+          limitId: "codex",
+          primary: null,
+          secondary: null,
+          rateLimitReachedType: null,
+        },
+      },
+      rateLimitsAuthoritative: true,
+    });
+
+    expect(message).toContain("current account usage does not report an exhausted limit");
+    expect(message).not.toContain("subscription usage limit");
+  });
 });
 
 describe("buildCodexAppServerUsageSnapshot", () => {

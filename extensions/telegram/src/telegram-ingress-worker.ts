@@ -3,6 +3,7 @@ import { Worker } from "node:worker_threads";
 import type { TelegramNetworkConfig } from "openclaw/plugin-sdk/config-contracts";
 
 export const TELEGRAM_INGRESS_WORKER_RUNTIME_MARKER = "openclaw.telegram-ingress-worker";
+const TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS = 2_000;
 
 export type TelegramIngressWorkerMessage =
   | {
@@ -21,6 +22,8 @@ export type TelegramIngressWorkerMessage =
       message: string;
       /** Telegram Bot API error_code (e.g. 409 for getUpdates conflicts). */
       errorCode?: number;
+      /** Actual server-directed flood wait currently being honored by the worker. */
+      retryAfterMs?: number;
       finishedAt: number;
     }
   | {
@@ -86,6 +89,31 @@ export type TelegramIngressWorkerFactory = (
   options: TelegramIngressWorkerOptions,
 ) => TelegramIngressWorkerHandle;
 
+async function stopTelegramIngressWorker(params: {
+  requestStop: () => void;
+  task: Promise<void>;
+  terminate: () => Promise<number>;
+}): Promise<void> {
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const forcedTermination = new Promise<void>((resolve, reject) => {
+    timeout = setTimeout(() => {
+      void params.terminate().then(() => resolve(), reject);
+    }, TELEGRAM_INGRESS_WORKER_STOP_GRACE_MS);
+    timeout.unref?.();
+  });
+  try {
+    params.requestStop();
+    // Keep the cooperative close path, but finish inside the host channel's
+    // stop budget. Forced termination is replay-safe because updates advance
+    // only after the parent durably spools and acknowledges them.
+    await Promise.race([params.task.catch(() => undefined), forcedTermination]);
+  } finally {
+    if (timeout) {
+      clearTimeout(timeout);
+    }
+  }
+}
+
 export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (options) => {
   const listeners = new Set<(message: TelegramIngressWorkerMessage) => void>();
   const worker = new Worker(new URL("./telegram-ingress-worker.runtime.js", import.meta.url), {
@@ -124,18 +152,15 @@ export const createTelegramIngressWorker: TelegramIngressWorkerFactory = (option
       }
     },
     async stop() {
-      Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
-        { type: "stop" } satisfies TelegramIngressWorkerCommand,
-      ]);
-      const timeout = setTimeout(() => {
-        void worker.terminate();
-      }, 15_000);
-      timeout.unref?.();
-      try {
-        await taskPromise.catch(() => undefined);
-      } finally {
-        clearTimeout(timeout);
-      }
+      await stopTelegramIngressWorker({
+        requestStop: () => {
+          Reflect.apply(Reflect.get(worker, "postMessage") as (value: unknown) => void, worker, [
+            { type: "stop" } satisfies TelegramIngressWorkerCommand,
+          ]);
+        },
+        task: taskPromise,
+        terminate: () => worker.terminate(),
+      });
     },
     task() {
       return taskPromise;

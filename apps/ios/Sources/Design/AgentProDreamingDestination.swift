@@ -4,7 +4,7 @@ import SwiftUI
 
 struct AgentProDreamingDestination: View {
     @Environment(NodeAppModel.self) private var appModel
-    let headerLeadingAction: OpenClawSidebarHeaderAction?
+    let headerSidebarAction: OpenClawSidebarHeaderAction?
     let overview: AgentOverviewSnapshot?
     let gatewayConnected: Bool
     let overviewLoading: Bool
@@ -62,14 +62,14 @@ struct AgentProDreamingDestination: View {
 
     @ViewBuilder
     private var header: some View {
-        if let headerLeadingAction {
+        if let headerSidebarAction {
             OpenClawAdaptiveHeaderRow(
                 title: "Dreaming",
                 subtitle: .localized(self.dreamingDetail),
                 titleFont: OpenClawType.title3SemiBold,
                 subtitleFont: OpenClawType.subheadMedium)
             {
-                OpenClawSidebarHeaderLeadingSlot(action: headerLeadingAction)
+                OpenClawSidebarHeaderLeadingSlot(action: headerSidebarAction)
             } accessory: {
                 EmptyView()
             }
@@ -145,13 +145,13 @@ struct AgentProDreamingDestination: View {
                     ProValuePill(value: self.dreamingValue, color: self.dreamingColor)
                 }
                 HStack(spacing: 10) {
-                    self.detailMetric(
+                    agentProDetailMetric(
                         label: "Short-term",
                         value: Self.compactNumber(self.overview?.dreaming?.shortTermCount ?? 0))
-                    self.detailMetric(
+                    agentProDetailMetric(
                         label: "Signals",
                         value: Self.compactNumber(self.overview?.dreaming?.totalSignalCount ?? 0))
-                    self.detailMetric(
+                    agentProDetailMetric(
                         label: "Promoted",
                         value: Self.compactNumber(self.overview?.dreaming?.promotedToday ?? 0))
                 }
@@ -245,7 +245,7 @@ struct AgentProDreamingDestination: View {
                             if let selectedDay {
                                 self.dreamDiaryDayView(selectedDay)
                             } else {
-                                self.emptyDetailRow(
+                                agentProEmptyDetailRow(
                                     icon: "calendar.badge.exclamationmark",
                                     title: "No day entries",
                                     detail: "The diary is present, but it does not contain dated Dream Diary blocks.")
@@ -253,7 +253,7 @@ struct AgentProDreamingDestination: View {
                         }
                         .padding(14)
                     } else {
-                        self.emptyDetailRow(
+                        agentProEmptyDetailRow(
                             icon: "book.closed",
                             title: diary.found ? "Dream diary is empty" : "No dream diary yet",
                             detail: diary.found
@@ -265,7 +265,7 @@ struct AgentProDreamingDestination: View {
                             .padding(14)
                     }
                 } else {
-                    self.emptyDetailRow(
+                    agentProEmptyDetailRow(
                         icon: "book.closed",
                         title: self.gatewayConnected ? "Diary unavailable" : "Dreaming unavailable",
                         detail: self.gatewayConnected
@@ -354,7 +354,7 @@ struct AgentProDreamingDestination: View {
             ProSectionHeader(title: title)
             ProCard(padding: 0) {
                 if entries.isEmpty {
-                    self.emptyDetailRow(
+                    agentProEmptyDetailRow(
                         icon: "doc.text.magnifyingglass",
                         title: emptyTitle,
                         detail: self.gatewayConnected ? emptyDetail : "Connect a gateway to load dreaming entries.")
@@ -407,7 +407,7 @@ struct AgentProDreamingDestination: View {
             ProCard(padding: 0) {
                 let phases = self.dreamingPhases
                 if phases.isEmpty {
-                    self.emptyDetailRow(
+                    agentProEmptyDetailRow(
                         icon: "moon.zzz",
                         title: self.gatewayConnected ? "No phase status" : "Dreaming unavailable",
                         detail: self.gatewayConnected
@@ -465,42 +465,6 @@ struct AgentProDreamingDestination: View {
         }
         .padding(.vertical, 10)
         .padding(.horizontal, 14)
-    }
-
-    private func emptyDetailRow(
-        icon: String,
-        title: OpenClawTextValue,
-        detail: OpenClawTextValue) -> some View
-    {
-        HStack(spacing: 12) {
-            ProIconBadge(systemName: icon, color: .secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                title.text
-                    .font(OpenClawType.subheadSemiBold)
-                detail.text
-                    .font(OpenClawType.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(2)
-            }
-            Spacer(minLength: 8)
-        }
-    }
-
-    private func detailMetric(label: String, value: String) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label)
-                .font(OpenClawType.caption2Medium)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .font(OpenClawType.subheadSemiBold)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(10)
-        .background(
-            Color.primary.opacity(0.055),
-            in: RoundedRectangle(cornerRadius: OpenClawRadius.sm, style: .continuous))
     }
 
     private func dreamingEntryTitle(_ entry: DreamingEntryLite) -> String {

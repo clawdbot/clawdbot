@@ -17,7 +17,7 @@ import { loadOpenClawPlugins, type PluginLoadOptions } from "./loader.js";
 import {
   cleanupPluginLoaderFixturesForTest,
   EMPTY_PLUGIN_SCHEMA,
-  makeTempDir,
+  makePluginLoaderTempDir,
   mkdirSafe,
   type PluginRegistry,
   resetPluginLoaderTestStateForTest,
@@ -25,7 +25,6 @@ import {
   useNoBundledPlugins,
   writePlugin,
 } from "./loader.test-fixtures.js";
-import { testing as runtimeRegistryLoaderTesting } from "./runtime/runtime-registry-loader.js";
 
 export const getEmbeddingProvider = (id: string) => getRegisteredEmbeddingProvider(id)?.adapter;
 
@@ -34,11 +33,11 @@ export const listEmbeddingProviders = () =>
 
 export let cachedBundledTelegramDir = "";
 
-export let cachedBundledMemoryDir = "";
+let cachedBundledMemoryDir = "";
 
-export type GlobalHookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
+type GlobalHookRunner = NonNullable<ReturnType<typeof getGlobalHookRunner>>;
 
-export type PluginStartupTraceDetail = {
+type PluginStartupTraceDetail = {
   name: string;
   metrics: ReadonlyArray<readonly [string, number | string]>;
 };
@@ -87,29 +86,64 @@ export function createDetachedTaskRuntimeStub(id: string): DetachedTaskLifecycle
   };
 }
 
-export const BUNDLED_TELEGRAM_PLUGIN_BODY = `module.exports = {
-  id: "telegram",
-  register(api) {
+export function writeFixtureText(rootDir: string, relativePath: string, body: string) {
+  const filePath = path.join(rootDir, relativePath);
+  mkdirSafe(path.dirname(filePath));
+  fs.writeFileSync(filePath, body, "utf-8");
+}
+
+export function writeFixtureJson(rootDir: string, relativePath: string, value: unknown) {
+  writeFixtureText(rootDir, relativePath, JSON.stringify(value, null, 2));
+}
+
+export function pluginManifest(id: string, channels?: string[]) {
+  return { id, configSchema: EMPTY_PLUGIN_SCHEMA, ...(channels ? { channels } : {}) };
+}
+
+export function channelPluginSource(params: {
+  pluginId: string;
+  channelId?: string;
+  label: string;
+  docsPath: string;
+  blurb: string;
+  configured?: boolean;
+  resolveAccount?: false;
+}) {
+  const channelId = params.channelId ?? params.pluginId;
+  const resolveAccount =
+    params.resolveAccount === false
+      ? "undefined"
+      : params.configured
+        ? '({ accountId: "default", token: "configured" })'
+        : '({ accountId: "default" })';
+  return `module.exports = { id: ${JSON.stringify(params.pluginId)}, register(api) {
     api.registerChannel({
       plugin: {
-        id: "telegram",
+        id: ${JSON.stringify(channelId)},
         meta: {
-          id: "telegram",
-          label: "Telegram",
-          selectionLabel: "Telegram",
-          docsPath: "/channels/telegram",
-          blurb: "telegram channel",
+          id: ${JSON.stringify(channelId)},
+          label: ${JSON.stringify(params.label)},
+          selectionLabel: ${JSON.stringify(params.label)},
+          docsPath: ${JSON.stringify(params.docsPath)},
+          blurb: ${JSON.stringify(params.blurb)},
         },
         capabilities: { chatTypes: ["direct"] },
         config: {
-          listAccountIds: () => [],
-          resolveAccount: () => ({ accountId: "default" }),
+          listAccountIds: () => ${params.configured ? '["default"]' : "[]"},
+          resolveAccount: () => ${resolveAccount},
         },
         outbound: { deliveryMode: "direct" },
       },
     });
-  },
-};`;
+  } };`;
+}
+
+const BUNDLED_TELEGRAM_PLUGIN_BODY = channelPluginSource({
+  pluginId: "telegram",
+  label: "Telegram",
+  docsPath: "/channels/telegram",
+  blurb: "telegram channel",
+});
 
 export function simplePluginBody(id: string) {
   return `module.exports = { id: ${JSON.stringify(id)}, register() {} };`;
@@ -134,7 +168,7 @@ export function setupBundledDreamingMemoryPlugins(params?: {
   coreBody?: string;
 }) {
   const selectedId = params?.selectedId ?? "memory-lancedb";
-  const bundledDir = makeTempDir();
+  const bundledDir = makePluginLoaderTempDir();
   const memoryCoreDir = path.join(bundledDir, "memory-core");
   const selectedMemoryDir = path.join(bundledDir, selectedId);
   mkdirSafe(memoryCoreDir);
@@ -155,27 +189,10 @@ export function setupBundledDreamingMemoryPlugins(params?: {
         : memoryPluginBody(selectedId),
   });
   const openSchema = { type: "object", additionalProperties: true };
-  fs.writeFileSync(
-    path.join(memoryCoreDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      { id: "memory-core", kind: "memory", configSchema: EMPTY_PLUGIN_SCHEMA },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(selectedMemoryDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: selectedId,
-        kind: params?.selectedKind ?? "memory",
-        configSchema: openSchema,
-      },
-      null,
-      2,
-    ),
-    "utf-8",
+  updatePluginManifest({ dir: memoryCoreDir }, { kind: "memory" });
+  updatePluginManifest(
+    { dir: selectedMemoryDir },
+    { kind: params?.selectedKind ?? "memory", configSchema: openSchema },
   );
   process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = bundledDir;
   return { bundledDir, selectedId };
@@ -192,7 +209,7 @@ export function writeBundledPlugin(params: {
   filename?: string;
   bundledDir?: string;
 }) {
-  const bundledDir = params.bundledDir ?? makeTempDir();
+  const bundledDir = params.bundledDir ?? makePluginLoaderTempDir();
   const plugin = writePlugin({
     id: params.id,
     dir: bundledDir,
@@ -205,7 +222,7 @@ export function writeBundledPlugin(params: {
 }
 
 export function makeOpenClawDevSourceRoot() {
-  const root = makeTempDir();
+  const root = makePluginLoaderTempDir();
   fs.writeFileSync(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }), "utf-8");
   mkdirSafe(path.join(root, "src"));
   mkdirSafe(path.join(root, "extensions"));
@@ -218,7 +235,7 @@ export function writeWorkspacePlugin(params: {
   filename?: string;
   workspaceDir?: string;
 }) {
-  const workspaceDir = params.workspaceDir ?? makeTempDir();
+  const workspaceDir = params.workspaceDir ?? makePluginLoaderTempDir();
   const workspacePluginDir = path.join(workspaceDir, ".openclaw", "extensions", params.id);
   mkdirSafe(workspacePluginDir);
   const plugin = writePlugin({
@@ -231,7 +248,7 @@ export function writeWorkspacePlugin(params: {
 }
 
 export function withStateDir<T>(run: (stateDir: string) => T) {
-  const stateDir = makeTempDir();
+  const stateDir = makePluginLoaderTempDir();
   return withEnv({ OPENCLAW_STATE_DIR: stateDir }, () => run(stateDir));
 }
 
@@ -255,7 +272,7 @@ export function loadBundledMemoryPluginRegistry(options?: {
     });
   }
 
-  const bundledDir = makeTempDir();
+  const bundledDir = makePluginLoaderTempDir();
   let pluginDir = bundledDir;
   let pluginFilename = options?.pluginFilename ?? "memory-core.cjs";
 
@@ -307,7 +324,7 @@ export function loadBundledMemoryPluginRegistry(options?: {
 
 export function setupBundledTelegramPlugin() {
   if (!cachedBundledTelegramDir) {
-    cachedBundledTelegramDir = makeTempDir();
+    cachedBundledTelegramDir = makePluginLoaderTempDir();
     writePlugin({
       id: "telegram",
       body: BUNDLED_TELEGRAM_PLUGIN_BODY,
@@ -438,7 +455,7 @@ export function expectLoadedPluginProvenance(params: {
     params.warnings.some(
       (msg) =>
         msg.includes(params.pluginId) &&
-        msg.includes("loaded without install/load-path provenance"),
+        msg.includes("OpenClaw can't verify where this plugin came from"),
     ),
     params.scenario.label,
   ).toBe(params.expectWarning);
@@ -597,9 +614,9 @@ export function createErrorLogger(errors: string[]) {
   };
 }
 
-export function createEscapingEntryFixture(params: { id: string; sourceBody: string }) {
-  const pluginDir = makeTempDir();
-  const outsideDir = makeTempDir();
+function createEscapingEntryFixture(params: { id: string; sourceBody: string }) {
+  const pluginDir = makePluginLoaderTempDir();
+  const outsideDir = makePluginLoaderTempDir();
   const outsideEntry = path.join(outsideDir, "outside.cjs");
   const linkedEntry = path.join(pluginDir, "entry.cjs");
   fs.writeFileSync(outsideEntry, params.sourceBody, "utf-8");
@@ -618,7 +635,7 @@ export function createEscapingEntryFixture(params: { id: string; sourceBody: str
   return { pluginDir, outsideEntry, linkedEntry };
 }
 
-export function resolveLoadedPluginSource(
+function resolveLoadedPluginSource(
   registry: ReturnType<typeof loadOpenClawPlugins>,
   pluginId: string,
 ) {
@@ -663,7 +680,6 @@ export function createSetupEntryChannelPluginFixture(params: {
   fullBlurb: string;
   setupBlurb: string;
   configured: boolean;
-  startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
   useBundledFullEntryContract?: boolean;
   bundledFullEntryId?: string;
   useBundledSetupEntryContract?: boolean;
@@ -678,7 +694,7 @@ export function createSetupEntryChannelPluginFixture(params: {
   requireBundledFullRuntimeBeforeLoad?: boolean;
 }) {
   useNoBundledPlugins();
-  const pluginDir = makeTempDir();
+  const pluginDir = makePluginLoaderTempDir();
   const fullMarker = path.join(pluginDir, "full-loaded.txt");
   const setupMarker = path.join(pluginDir, "setup-loaded.txt");
   const listAccountIds = params.configured ? '["default"]' : "[]";
@@ -686,41 +702,11 @@ export function createSetupEntryChannelPluginFixture(params: {
     ? '({ accountId: "default", token: "configured" })'
     : '({ accountId: "default" })';
 
-  fs.writeFileSync(
-    path.join(pluginDir, "package.json"),
-    JSON.stringify(
-      {
-        name: params.packageName,
-        openclaw: {
-          extensions: ["./index.cjs"],
-          setupEntry: "./setup-entry.cjs",
-          ...(params.startupDeferConfiguredChannelFullLoadUntilAfterListen
-            ? {
-                startup: {
-                  deferConfiguredChannelFullLoadUntilAfterListen: true,
-                },
-              }
-            : {}),
-        },
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
-  fs.writeFileSync(
-    path.join(pluginDir, "openclaw.plugin.json"),
-    JSON.stringify(
-      {
-        id: params.id,
-        configSchema: EMPTY_PLUGIN_SCHEMA,
-        channels: [params.id],
-      },
-      null,
-      2,
-    ),
-    "utf-8",
-  );
+  writeFixtureJson(pluginDir, "package.json", {
+    name: params.packageName,
+    openclaw: { extensions: ["./index.cjs"], setupEntry: "./setup-entry.cjs" },
+  });
+  writeFixtureJson(pluginDir, "openclaw.plugin.json", pluginManifest(params.id, [params.id]));
   fs.writeFileSync(
     path.join(pluginDir, "index.cjs"),
     params.useBundledFullEntryContract
@@ -765,29 +751,13 @@ module.exports = {
   register() {},
 };`
       : `require("node:fs").writeFileSync(${JSON.stringify(fullMarker)}, "loaded", "utf-8");
-module.exports = {
-  id: ${JSON.stringify(params.id)},
-  register(api) {
-    api.registerChannel({
-      plugin: {
-        id: ${JSON.stringify(params.id)},
-        meta: {
-          id: ${JSON.stringify(params.id)},
-          label: ${JSON.stringify(params.label)},
-          selectionLabel: ${JSON.stringify(params.label)},
-          docsPath: ${JSON.stringify(`/channels/${params.id}`)},
-          blurb: ${JSON.stringify(params.fullBlurb)},
-        },
-        capabilities: { chatTypes: ["direct"] },
-        config: {
-          listAccountIds: () => ${listAccountIds},
-          resolveAccount: () => ${resolveAccount},
-        },
-        outbound: { deliveryMode: "direct" },
-      },
-    });
-  },
-};`,
+${channelPluginSource({
+  pluginId: params.id,
+  label: params.label,
+  docsPath: `/channels/${params.id}`,
+  blurb: params.fullBlurb,
+  configured: params.configured,
+})}`,
     "utf-8",
   );
   fs.writeFileSync(
@@ -897,9 +867,9 @@ module.exports = {
 
 export function createEnvResolvedPluginFixture(pluginId: string) {
   useNoBundledPlugins();
-  const openclawHome = makeTempDir();
-  const ignoredHome = makeTempDir();
-  const stateDir = makeTempDir();
+  const openclawHome = makePluginLoaderTempDir();
+  const ignoredHome = makePluginLoaderTempDir();
+  const stateDir = makePluginLoaderTempDir();
   const pluginDir = path.join(openclawHome, "plugins", pluginId);
   mkdirSafe(pluginDir);
   const plugin = writePlugin({
@@ -993,7 +963,6 @@ export function collectStartupTraceMetrics(
 export const globalAfterEach0 = () => {
   resetDiagnosticEventsForTest();
   clearRuntimeConfigSnapshot();
-  runtimeRegistryLoaderTesting.resetPluginRegistryLoadedForTests();
   resetPluginLoaderTestStateForTest();
 };
 

@@ -8,6 +8,7 @@ import { isVerbose } from "../global-state.js";
 import { defaultRuntime, type OutputRuntimeEnv, type RuntimeEnv } from "../runtime.js";
 import {
   formatConsoleTimestamp,
+  formatJsonConsoleLine,
   getConsoleSettings,
   shouldLogSubsystemToConsole,
 } from "./console.js";
@@ -253,15 +254,12 @@ function formatConsoleLine(opts: {
   const displaySubsystem =
     opts.style === "json" ? opts.subsystem : formatSubsystemForConsole(opts.subsystem);
   if (opts.style === "json") {
-    return redactSensitiveText(
-      JSON.stringify({
-        time: formatConsoleTimestamp("json"),
-        level: opts.level,
-        subsystem: displaySubsystem,
-        message: opts.message,
-        ...opts.meta,
-      }),
-    );
+    return formatJsonConsoleLine({
+      level: opts.level,
+      subsystem: displaySubsystem,
+      message: opts.message,
+      meta: opts.meta,
+    });
   }
   const color = getColorForConsole();
   const prefix = `[${displaySubsystem}]`;
@@ -354,10 +352,7 @@ function logToFile(
   if (level === "silent") {
     return;
   }
-  const safeLevel = level;
-  const method = (fileLogger as unknown as Record<string, unknown>)[safeLevel] as
-    | ((...args: unknown[]) => void)
-    | undefined;
+  const method = fileLogger[level];
   if (typeof method !== "function") {
     return;
   }
@@ -370,6 +365,17 @@ function logToFile(
 
 export function createSubsystemLogger(subsystem: string): SubsystemLogger {
   const resolvedSubsystem = normalizeSubsystemLabel(subsystem);
+  let fileChild: { generation: number; logger: TsLogger<LogObj> } | undefined;
+
+  const getFileLogger = () => {
+    if (fileChild?.generation !== loggingState.generation) {
+      fileChild = {
+        generation: loggingState.generation,
+        logger: getChildLogger({ subsystem: resolvedSubsystem }),
+      };
+    }
+    return fileChild.logger;
+  };
 
   const emitLog = (level: LogLevel, message: string, meta?: Record<string, unknown>) => {
     const consoleSettings = getConsoleSettings();
@@ -392,7 +398,7 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
       fileMeta = Object.keys(rest).length > 0 ? rest : undefined;
     }
     if (fileEnabled) {
-      logToFile(getChildLogger({ subsystem: resolvedSubsystem }), level, message, fileMeta);
+      logToFile(getFileLogger(), level, message, fileMeta);
     }
     if (!consoleEnabled) {
       return;
@@ -456,10 +462,11 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
     },
     raw(message) {
       if (isFileLogLevelEnabled("info")) {
-        logToFile(getChildLogger({ subsystem: resolvedSubsystem }), "info", message, { raw: true });
+        logToFile(getFileLogger(), "info", message, { raw: true });
       }
+      const consoleSettings = getConsoleSettings();
       if (
-        shouldLogToConsole("info", { level: getConsoleSettings().level }) &&
+        shouldLogToConsole("info", { level: consoleSettings.level }) &&
         shouldLogSubsystemToConsole(resolvedSubsystem)
       ) {
         if (
@@ -471,7 +478,17 @@ export function createSubsystemLogger(subsystem: string): SubsystemLogger {
         ) {
           return;
         }
-        writeConsoleLine("info", message);
+        writeConsoleLine(
+          "info",
+          consoleSettings.style === "json"
+            ? formatJsonConsoleLine({
+                level: "info",
+                subsystem: resolvedSubsystem,
+                message,
+              })
+            : message,
+          { redacted: consoleSettings.style === "json" },
+        );
       }
     },
     child(name) {

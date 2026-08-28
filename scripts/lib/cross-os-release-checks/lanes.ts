@@ -1,5 +1,5 @@
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir, userInfo } from "node:os";
 import { join } from "node:path";
 import type {
   CandidateBuild,
@@ -18,11 +18,8 @@ import {
   normalizeRequestedRef,
   resolveDevUpdateVerificationRef,
   resolveExpectedDevUpdateRef,
-  shouldExerciseManagedGatewayLifecycleAfterInstall,
   shouldRunMainChannelDevUpdate,
   shouldRunPackagedUpgradeStatusProbe,
-  shouldStopManagedGatewayBeforeManualFallback,
-  shouldUseManagedGatewayForInstallerRuntime,
   shouldUseManagedGatewayService,
   updateTimeoutMs,
   verifyPackagedUpgradeUpdateResult,
@@ -45,7 +42,7 @@ import {
 } from "./install.ts";
 import {
   ensureDevUpdateGitInstall,
-  ensureManagedGatewayReady,
+  resolveInstalledGatewayStopArgs,
   resolveInstallerTargetVersion,
   runInstalledAgentTurn,
   runInstalledCli,
@@ -58,8 +55,14 @@ import {
   waitForInstalledGateway,
   waitForInstalledGatewayToStop,
 } from "./installed.ts";
+import { installLaneCompanions } from "./lane-companions.ts";
 import { maybeRunDiscordRoundtrip } from "./network-smokes.ts";
-import { runCleanup, startStaticFileServer, stopGateway } from "./process.ts";
+import {
+  reserveGatewayPortForLane,
+  runCleanup,
+  startStaticFileServer,
+  stopGateway,
+} from "./process.ts";
 import { logLanePhase, runTimedLanePhase } from "./reporting.ts";
 import {
   exerciseManagedGatewayLifecycle,
@@ -76,6 +79,7 @@ import { formatError, trimForSummary } from "./shared.ts";
 export async function runFreshLane(params: LaneBaseParams & { build: CandidateBuild }) {
   const lane = createLaneState("fresh");
   const cleanup: Cleanup[] = [];
+  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-candidate", async () => {
@@ -112,6 +116,8 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
       );
     }
 
+    await installLaneCompanions({ ...params, lane, env });
+
     await runTimedLanePhase(lane, "onboard", async () => {
       await runOnboard({
         lane,
@@ -137,12 +143,15 @@ export async function runFreshLane(params: LaneBaseParams & { build: CandidateBu
         logPath: join(params.logsDir, "fresh-gateway.log"),
       }),
     );
-    cleanup.push(() => stopGateway(gateway));
+    gatewayHolder.current = gateway;
+    cleanup.push(() => stopGateway(gatewayHolder.current));
 
     await runTimedLanePhase(lane, "wait-gateway", async () => {
       await waitForGateway({
         lane,
         env,
+        gatewayHolder,
+        gatewayLogPath: join(params.logsDir, "fresh-gateway.log"),
         logPath: join(params.logsDir, "fresh-gateway-status.log"),
       });
     });
@@ -194,6 +203,7 @@ export async function runUpgradeLane(
   }
   const lane = createLaneState("upgrade");
   const cleanup: Cleanup[] = [];
+  const gatewayHolder: { current: GatewayHandle | null } = { current: null };
   try {
     const env = buildLaneEnv(lane, params.providerConfig, params.providerSecretValue);
     await runTimedLanePhase(lane, "install-baseline", async () => {
@@ -317,6 +327,8 @@ export async function runUpgradeLane(
     const installed = readInstalledMetadata(lane.prefixDir);
     verifyInstalledCandidate(installed, params.build);
 
+    await installLaneCompanions({ ...params, lane, env });
+
     await runTimedLanePhase(lane, "onboard", async () => {
       await runOnboard({
         lane,
@@ -342,12 +354,15 @@ export async function runUpgradeLane(
         logPath: join(params.logsDir, "upgrade-gateway.log"),
       }),
     );
-    cleanup.push(() => stopGateway(gateway));
+    gatewayHolder.current = gateway;
+    cleanup.push(() => stopGateway(gatewayHolder.current));
 
     await runTimedLanePhase(lane, "wait-gateway", async () => {
       await waitForGateway({
         lane,
         env,
+        gatewayHolder,
+        gatewayLogPath: join(params.logsDir, "upgrade-gateway.log"),
         logPath: join(params.logsDir, "upgrade-gateway-status.log"),
       });
     });
@@ -389,10 +404,13 @@ export async function runInstallerFreshSuite(
   const lane = createLaneState("installer-fresh");
   const cleanup: Cleanup[] = [];
   const usesManagedGateway = shouldUseManagedGatewayService();
-  const useManagedGatewayAfterInstall = shouldUseManagedGatewayForInstallerRuntime();
   const manualGateway: { current: GatewayHandle | null } = { current: null };
-  try {
-    const env = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
+  const managedHostLease: { current: ManagedGatewayInstallerHostLease | null } = { current: null };
+  let managedHostOwned = false;
+  let managedHostEnv: NodeJS.ProcessEnv | null = null;
+  let managedHostCliPath = "";
+  const run = async () => {
+    const installerEnv = buildInstallerEnv(lane, params.providerConfig, params.providerSecretValue);
     // Drive the public installer against the exact candidate artifact built from the requested ref.
     const candidateServer = await startStaticFileServer({
       filePath: params.build.candidateTgz,
@@ -405,7 +423,7 @@ export async function runInstallerFreshSuite(
     logLanePhase(lane, "installer-run");
     await runInstallerSmoke({
       lane,
-      env,
+      env: installerEnv,
       installerUrl,
       installTarget,
       logPath: join(params.logsDir, "installer-fresh-install.log"),
@@ -414,7 +432,7 @@ export async function runInstallerFreshSuite(
     logLanePhase(lane, "fresh-shell");
     const freshShell = await verifyFreshShellCommand({
       lane,
-      env,
+      env: installerEnv,
       expectedNeedle: params.build.candidateVersion,
       logPath: join(params.logsDir, "installer-fresh-shell.log"),
     });
@@ -426,10 +444,56 @@ export async function runInstallerFreshSuite(
       logLanePhase(lane, "windows-browser-override-import");
       browserOverrideImportStatus = await runInstalledBrowserOverrideImportSmoke({
         lane,
-        env,
+        env: installerEnv,
         prefixDir: resolveInstalledPrefixDirFromCliPath(freshShell.cliPath),
         logPath: join(params.logsDir, "installer-fresh-windows-browser-override-import.log"),
       });
+    }
+
+    // Host services must use the runner account's real default identity. Keep the
+    // public installer isolated, then switch only the managed-service lifecycle.
+    const env = resolveManagedGatewayInstallerEnv({
+      env: installerEnv,
+      enabled: usesManagedGateway,
+    });
+    if (usesManagedGateway) {
+      const accountHome = env.HOME;
+      if (!accountHome) {
+        throw new Error("Managed installer service checks require the host account home.");
+      }
+      managedHostLease.current = acquireManagedGatewayInstallerHostLease(accountHome);
+      assertManagedGatewayInstallerHostAvailable({
+        accountHome,
+        serviceInstalled: false,
+      });
+      const serviceStatus = await runInstalledCli({
+        cliPath: freshShell.cliPath,
+        args: ["gateway", "status", "--json", "--no-probe"],
+        env,
+        cwd: lane.homeDir,
+        logPath: join(params.logsDir, "installer-fresh-gateway-preflight.log"),
+        timeoutMs: 2 * 60 * 1000,
+        check: false,
+      });
+      assertManagedGatewayInstallerHostAvailable({
+        accountHome,
+        serviceInstalled: parseManagedGatewayServiceInstalled(serviceStatus),
+        pathExists: () => false,
+      });
+      managedHostOwned = true;
+      managedHostEnv = env;
+      managedHostCliPath = freshShell.cliPath;
+    }
+
+    await installLaneCompanions({ ...params, lane, env, cliPath: freshShell.cliPath });
+
+    // Hold the configured port through onboarding and model setup so another runner process
+    // cannot claim it before the manual gateway starts. Release immediately before spawn.
+    const gatewayPortReservation = usesManagedGateway
+      ? null
+      : await reserveGatewayPortForLane(lane);
+    if (gatewayPortReservation) {
+      cleanup.push(() => gatewayPortReservation.release());
     }
 
     logLanePhase(lane, "onboard");
@@ -440,9 +504,10 @@ export async function runInstallerFreshSuite(
       providerConfig: params.providerConfig,
       installDaemon: usesManagedGateway,
       logPath: join(params.logsDir, "installer-fresh-onboard.log"),
+      allocateGatewayPort: gatewayPortReservation === null,
     });
 
-    if (shouldExerciseManagedGatewayLifecycleAfterInstall()) {
+    if (usesManagedGateway) {
       await exerciseManagedGatewayLifecycle({
         lane,
         cliPath: freshShell.cliPath,
@@ -460,46 +525,54 @@ export async function runInstallerFreshSuite(
       logPath: join(params.logsDir, "installer-fresh-models-set.log"),
     });
 
-    if (!useManagedGatewayAfterInstall) {
-      // Keep the Windows installer lane validating Scheduled Task registration during
-      // onboarding and lifecycle commands, but use a manual gateway for the runtime
-      // checks after that so the installer validation does not depend on the more
-      // failure-prone managed Windows session state for the remainder of the lane.
-      if (shouldStopManagedGatewayBeforeManualFallback()) {
-        logLanePhase(lane, "gateway-stop-managed");
-        await runInstalledCli({
+    // Keep the Windows installer lane validating Scheduled Task registration during
+    // onboarding and lifecycle commands, but use a manual gateway for the runtime
+    // checks after that so the installer validation does not depend on the more
+    // failure-prone managed Windows session state for the remainder of the lane.
+    if (usesManagedGateway) {
+      logLanePhase(lane, "gateway-stop-managed");
+      await runInstalledCli({
+        cliPath: freshShell.cliPath,
+        args: await resolveInstalledGatewayStopArgs({
           cliPath: freshShell.cliPath,
-          args: ["gateway", "stop"],
-          env,
           cwd: lane.homeDir,
-          logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed.log"),
-          timeoutMs: 2 * 60 * 1000,
-          check: false,
-        });
-        await waitForInstalledGatewayToStop({
-          lane,
-          cliPath: freshShell.cliPath,
           env,
-          logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed-status.log"),
-        });
-      }
-      logLanePhase(lane, "gateway-start");
-      const gateway = await startManualGatewayFromInstalledCli({
-        lane,
-        cliPath: freshShell.cliPath,
+          logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed-help.log"),
+        }),
         env,
-        logPath: join(params.logsDir, "installer-fresh-gateway.log"),
+        cwd: lane.homeDir,
+        logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed.log"),
+        timeoutMs: 2 * 60 * 1000,
+        check: false,
       });
-      manualGateway.current = gateway;
-      cleanup.push(() => stopGateway(manualGateway.current));
-      logLanePhase(lane, "gateway-status");
-      await waitForInstalledGateway({
+      await waitForInstalledGatewayToStop({
         lane,
         cliPath: freshShell.cliPath,
         env,
-        logPath: join(params.logsDir, "installer-fresh-gateway-status.log"),
+        logPath: join(params.logsDir, "installer-fresh-gateway-stop-managed-status.log"),
       });
     }
+    await gatewayPortReservation?.release();
+    logLanePhase(lane, "gateway-start");
+    const gateway = await startManualGatewayFromInstalledCli({
+      lane,
+      cliPath: freshShell.cliPath,
+      env,
+      logPath: join(params.logsDir, "installer-fresh-gateway.log"),
+    });
+    manualGateway.current = gateway;
+    if (!usesManagedGateway) {
+      cleanup.push(() => stopGateway(manualGateway.current));
+    }
+    logLanePhase(lane, "gateway-status");
+    await waitForInstalledGateway({
+      lane,
+      cliPath: freshShell.cliPath,
+      env,
+      gatewayHolder: manualGateway,
+      gatewayLogPath: join(params.logsDir, "installer-fresh-gateway.log"),
+      logPath: join(params.logsDir, "installer-fresh-gateway-status.log"),
+    });
 
     logLanePhase(lane, "dashboard");
     await runDashboardSmoke({
@@ -541,9 +614,68 @@ export async function runInstallerFreshSuite(
       discordStatus,
       agentOutput: trimForSummary(agent.stdout),
     };
-  } finally {
-    await runCleanup(cleanup);
+  };
+
+  let result: Awaited<ReturnType<typeof run>> | undefined;
+  let runError: Error | undefined;
+  try {
+    result = await run();
+  } catch (error) {
+    runError = error instanceof Error ? error : new Error(formatError(error));
   }
+
+  let managedCleanupError: Error | undefined;
+  const acquiredManagedHostLease = managedHostLease.current;
+  if (acquiredManagedHostLease) {
+    let hostCleanupError: Error | undefined;
+    try {
+      if (managedHostOwned && managedHostEnv && managedHostCliPath) {
+        await cleanupManagedGatewayInstallerHost({
+          accountHome: acquiredManagedHostLease.accountHome,
+          cliPath: managedHostCliPath,
+          env: managedHostEnv,
+          lane,
+          logsDir: params.logsDir,
+          manualGateway: manualGateway.current,
+        });
+      }
+    } catch (error) {
+      hostCleanupError = error instanceof Error ? error : new Error(formatError(error));
+    }
+    let leaseReleaseError: Error | undefined;
+    try {
+      acquiredManagedHostLease.release();
+    } catch (error) {
+      leaseReleaseError = error instanceof Error ? error : new Error(formatError(error));
+    }
+    if (hostCleanupError && leaseReleaseError) {
+      managedCleanupError = new AggregateError(
+        [hostCleanupError, leaseReleaseError],
+        "Managed-service cleanup and host-lease release both failed.",
+        { cause: leaseReleaseError },
+      );
+    } else {
+      managedCleanupError = hostCleanupError ?? leaseReleaseError;
+    }
+  }
+  await runCleanup(cleanup);
+  if (managedCleanupError && runError) {
+    throw new AggregateError(
+      [runError, managedCleanupError],
+      "Installer release check and managed-service cleanup both failed.",
+      { cause: managedCleanupError },
+    );
+  }
+  if (managedCleanupError) {
+    throw managedCleanupError;
+  }
+  if (runError) {
+    throw runError;
+  }
+  if (!result) {
+    throw new Error("Installer release check completed without a result.");
+  }
+  return result;
 }
 
 export async function runDevUpdateSuite(
@@ -561,11 +693,9 @@ export async function runDevUpdateSuite(
     logsDir: params.logsDir,
     suiteName: "dev-update",
   });
-  const usesManagedGateway = shouldUseManagedGatewayService();
   // Keep dev-update on a manual gateway even on Windows. The packaged lanes
   // already cover the Scheduled Task path, while repaired git installs live in
   // an ephemeral checkout that has proven flaky as a managed service in CI.
-  const useManagedGatewayAfterDevUpdate = usesManagedGateway && process.platform !== "win32";
   const requestedRef = resolveExpectedDevUpdateRef(params.ref);
   if (!shouldRunMainChannelDevUpdate(requestedRef)) {
     throw new Error(
@@ -634,13 +764,15 @@ export async function runDevUpdateSuite(
       });
     }
 
+    await installLaneCompanions({ ...params, lane, env, cliPath: verifiedShell.cliPath });
+
     logLanePhase(lane, "onboard");
     await runOnboardWithInstalledCli({
       lane,
       cliPath: verifiedShell.cliPath,
       env,
       providerConfig: params.providerConfig,
-      installDaemon: useManagedGatewayAfterDevUpdate,
+      installDaemon: false,
       logPath: join(params.logsDir, "dev-update-onboard.log"),
     });
 
@@ -653,32 +785,24 @@ export async function runDevUpdateSuite(
       logPath: join(params.logsDir, "dev-update-models-set.log"),
     });
 
-    if (!useManagedGatewayAfterDevUpdate) {
-      logLanePhase(lane, "gateway-start");
-      const gateway = await startManualGatewayFromInstalledCli({
-        lane,
-        cliPath: verifiedShell.cliPath,
-        env,
-        logPath: join(params.logsDir, "dev-update-gateway.log"),
-      });
-      manualGateway.current = gateway;
-      cleanup.push(() => stopGateway(manualGateway.current));
-      logLanePhase(lane, "gateway-status");
-      await waitForInstalledGateway({
-        lane,
-        cliPath: verifiedShell.cliPath,
-        env,
-        logPath: join(params.logsDir, "dev-update-gateway-status.log"),
-      });
-    } else {
-      logLanePhase(lane, "gateway-ready");
-      await ensureManagedGatewayReady({
-        lane,
-        cliPath: verifiedShell.cliPath,
-        env,
-        logPath: join(params.logsDir, "dev-update-gateway-ready.log"),
-      });
-    }
+    logLanePhase(lane, "gateway-start");
+    const gateway = await startManualGatewayFromInstalledCli({
+      lane,
+      cliPath: verifiedShell.cliPath,
+      env,
+      logPath: join(params.logsDir, "dev-update-gateway.log"),
+    });
+    manualGateway.current = gateway;
+    cleanup.push(() => stopGateway(manualGateway.current));
+    logLanePhase(lane, "gateway-status");
+    await waitForInstalledGateway({
+      lane,
+      cliPath: verifiedShell.cliPath,
+      env,
+      gatewayHolder: manualGateway,
+      gatewayLogPath: join(params.logsDir, "dev-update-gateway.log"),
+      logPath: join(params.logsDir, "dev-update-gateway-status.log"),
+    });
 
     logLanePhase(lane, "dashboard");
     await runDashboardSmoke({
@@ -793,4 +917,194 @@ function buildInstallerEnv(
     NODE_OPTIONS: "--max-old-space-size=8192",
     [providerMeta.secretEnv]: providerSecretValue,
   };
+}
+
+export function resolveManagedGatewayInstallerEnv(params: {
+  env: NodeJS.ProcessEnv;
+  enabled: boolean;
+  accountHome?: string;
+  hostEnv?: NodeJS.ProcessEnv;
+}): NodeJS.ProcessEnv {
+  if (!params.enabled) {
+    return params.env;
+  }
+  const accountHome = params.accountHome ?? userInfo().homedir;
+  const hostEnv = params.hostEnv ?? process.env;
+  const env: NodeJS.ProcessEnv = {
+    ...params.env,
+    HOME: accountHome,
+    USERPROFILE: accountHome,
+    APPDATA: hostEnv.APPDATA,
+    LOCALAPPDATA: hostEnv.LOCALAPPDATA,
+  };
+  const isolatedIdentityKeys = new Set(
+    [
+      "OPENCLAW_HOME",
+      "OPENCLAW_PROFILE",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_CONFIG_PATH",
+      "OPENCLAW_WINDOWS_TASK_NAME",
+      "OPENCLAW_TASK_SCRIPT_NAME",
+      "OPENCLAW_TASK_SCRIPT",
+      "OPENCLAW_SERVICE_KIND",
+    ].map((key) => key.toUpperCase()),
+  );
+  // Windows environment keys are case-insensitive. Remove every casing variant
+  // so the installed CLI cannot inherit the isolated lane identity.
+  for (const key of Object.keys(env)) {
+    if (isolatedIdentityKeys.has(key.toUpperCase())) {
+      delete env[key];
+    }
+  }
+  return env;
+}
+
+export function parseManagedGatewayServiceInstalled(result: CommandResult): boolean {
+  if (result.exitCode !== 0) {
+    throw new Error(`Managed gateway preflight failed with exit code ${result.exitCode}.`);
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(result.stdout);
+  } catch {
+    throw new Error("Managed gateway preflight did not return JSON status.");
+  }
+  // The managed installer lane is Windows-only. Its status `loaded` field is backed by
+  // isScheduledTaskInstalled, which covers both the registered task and Startup fallback.
+  const installed =
+    parsed && typeof parsed === "object" && "service" in parsed
+      ? (parsed.service as { loaded?: unknown }).loaded
+      : undefined;
+  if (typeof installed !== "boolean") {
+    throw new Error("Managed gateway preflight omitted service.loaded.");
+  }
+  return installed;
+}
+
+export function assertManagedGatewayInstallerHostAvailable(params: {
+  accountHome: string;
+  serviceInstalled: boolean;
+  pathExists?: (path: string) => boolean;
+}): void {
+  const pathExists = params.pathExists ?? existsSync;
+  const occupiedStateDirs = [".openclaw", ".clawdbot"]
+    .map((name) => join(params.accountHome, name))
+    .filter((path) => pathExists(path));
+  if (params.serviceInstalled || occupiedStateDirs.length > 0) {
+    throw new Error(
+      "Managed installer service checks require a pristine host account with no OpenClaw service or state.",
+    );
+  }
+}
+
+type ManagedGatewayInstallerHostLease = {
+  accountHome: string;
+  release: () => void;
+};
+
+export function acquireManagedGatewayInstallerHostLease(
+  accountHome: string,
+): ManagedGatewayInstallerHostLease {
+  const lockDir = join(accountHome, ".openclaw-release-check.lock");
+  try {
+    mkdirSync(lockDir);
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "EEXIST") {
+      throw new Error(
+        "Managed installer service checks require exclusive access to the host account; another check or stale lease is present.",
+        { cause: error },
+      );
+    }
+    throw error;
+  }
+  try {
+    writeFileSync(
+      join(lockDir, "owner.json"),
+      `${JSON.stringify({ pid: process.pid, startedAt: new Date().toISOString() })}\n`,
+      "utf8",
+    );
+  } catch (error) {
+    rmSync(lockDir, { recursive: true, force: true });
+    throw error;
+  }
+  let released = false;
+  return {
+    accountHome,
+    release: () => {
+      if (released) {
+        return;
+      }
+      rmSync(lockDir, { recursive: true });
+      released = true;
+    },
+  };
+}
+
+async function cleanupManagedGatewayInstallerHost(params: {
+  accountHome: string;
+  cliPath: string;
+  env: NodeJS.ProcessEnv;
+  lane: LaneState;
+  logsDir: string;
+  manualGateway: GatewayHandle | null;
+}): Promise<void> {
+  const cleanupErrors: Error[] = [];
+  try {
+    await stopGateway(params.manualGateway);
+  } catch (error) {
+    cleanupErrors.push(error instanceof Error ? error : new Error(formatError(error)));
+  }
+
+  let serviceRemoved = false;
+  try {
+    const uninstallResult = await runInstalledCli({
+      cliPath: params.cliPath,
+      args: ["gateway", "uninstall"],
+      env: params.env,
+      cwd: params.lane.homeDir,
+      logPath: join(params.logsDir, "installer-fresh-gateway-uninstall.log"),
+      timeoutMs: 2 * 60 * 1000,
+      check: false,
+    });
+    if (uninstallResult.exitCode === 0) {
+      serviceRemoved = true;
+    } else {
+      const statusResult = await runInstalledCli({
+        cliPath: params.cliPath,
+        args: ["gateway", "status", "--json", "--no-probe"],
+        env: params.env,
+        cwd: params.lane.homeDir,
+        logPath: join(params.logsDir, "installer-fresh-gateway-cleanup-status.log"),
+        timeoutMs: 2 * 60 * 1000,
+        check: false,
+      });
+      if (parseManagedGatewayServiceInstalled(statusResult)) {
+        throw new Error(
+          `Managed gateway uninstall failed with exit code ${uninstallResult.exitCode}; the service remains installed.`,
+        );
+      }
+      serviceRemoved = true;
+    }
+  } catch (error) {
+    cleanupErrors.push(error instanceof Error ? error : new Error(formatError(error)));
+  }
+
+  if (serviceRemoved) {
+    try {
+      rmSync(join(params.accountHome, ".openclaw"), { recursive: true, force: true });
+      rmSync(join(params.accountHome, ".clawdbot"), { recursive: true, force: true });
+    } catch (error) {
+      cleanupErrors.push(error instanceof Error ? error : new Error(formatError(error)));
+    }
+  }
+
+  const firstCleanupError = cleanupErrors[0];
+  if (cleanupErrors.length === 1 && firstCleanupError) {
+    throw firstCleanupError;
+  }
+  if (cleanupErrors.length > 1) {
+    throw new AggregateError(cleanupErrors, "Managed-service cleanup failed.", {
+      cause: cleanupErrors.at(-1),
+    });
+  }
 }

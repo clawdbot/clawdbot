@@ -2,19 +2,21 @@
 import {
   createAccountActionGate,
   createAccountListHelpers,
-  resolveMergedAccountConfig,
 } from "openclaw/plugin-sdk/account-helpers";
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import {
   mapAllowFromEntries,
   normalizeChannelDmPolicy,
-  resolveChannelDmAllowFrom,
-  resolveChannelDmPolicy,
   type ChannelDmPolicy,
 } from "openclaw/plugin-sdk/channel-config-helpers";
+import { resolveConfiguredFromCredentialStatuses } from "openclaw/plugin-sdk/channel-status";
+import type {
+  DiscordAccountConfig,
+  DiscordActionConfig,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
 import { resolveAccountEntry } from "openclaw/plugin-sdk/routing";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import type { DiscordAccountConfig, DiscordActionConfig, OpenClawConfig } from "./runtime-api.js";
 import { selectDiscordRuntimeConfig } from "./runtime-config.js";
 import { resolveDiscordToken, type DiscordCredentialStatus } from "./token.js";
 
@@ -28,11 +30,16 @@ export type ResolvedDiscordAccount = {
   config: DiscordAccountConfig;
 };
 
-const { listAccountIds, resolveDefaultAccountId } = createAccountListHelpers("discord", {
+const {
+  listAccountIds,
+  resolveDefaultAccountId,
+  resolveAccountConfig: resolveMergedDiscordAccountConfig,
+} = createAccountListHelpers<DiscordAccountConfig>("discord", {
   implicitDefaultAccount: {
     channelKeys: ["token"],
     envVars: ["DISCORD_BOT_TOKEN"],
   },
+  nestedObjectKeys: ["activities", "agentComponents", "botLoopProtection"],
 });
 export const listDiscordAccountIds = listAccountIds;
 export const resolveDefaultDiscordAccountId = resolveDefaultAccountId;
@@ -48,15 +55,7 @@ export function mergeDiscordAccountConfig(
   cfg: OpenClawConfig,
   accountId: string,
 ): DiscordAccountConfig {
-  const merged = resolveMergedAccountConfig<DiscordAccountConfig>({
-    channelConfig: cfg.channels?.discord as DiscordAccountConfig | undefined,
-    accounts: cfg.channels?.discord?.accounts as
-      | Record<string, Partial<DiscordAccountConfig>>
-      | undefined,
-    accountId,
-    nestedObjectKeys: ["activities", "agentComponents", "botLoopProtection"],
-  });
-  return merged;
+  return resolveMergedDiscordAccountConfig(cfg, accountId);
 }
 
 export function resolveDiscordAccountAllowFrom(params: {
@@ -68,11 +67,7 @@ export function resolveDiscordAccountAllowFrom(params: {
   );
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
-
-  const allowFrom = resolveChannelDmAllowFrom({
-    account: accountConfig as Record<string, unknown> | undefined,
-    parent: rootConfig as Record<string, unknown> | undefined,
-  });
+  const allowFrom = accountConfig?.allowFrom ?? rootConfig?.allowFrom;
   return allowFrom ? mapAllowFromEntries(allowFrom) : undefined;
 }
 
@@ -85,12 +80,7 @@ export function resolveDiscordAccountDmPolicy(params: {
   );
   const accountConfig = resolveDiscordAccountConfig(params.cfg, accountId);
   const rootConfig = params.cfg.channels?.discord as DiscordAccountConfig | undefined;
-  const policy = resolveChannelDmPolicy({
-    account: accountConfig as Record<string, unknown> | undefined,
-    parent: rootConfig as Record<string, unknown> | undefined,
-    defaultPolicy: "pairing",
-  });
-  return normalizeChannelDmPolicy(policy);
+  return normalizeChannelDmPolicy(accountConfig?.dmPolicy ?? rootConfig?.dmPolicy ?? "pairing");
 }
 
 export function createDiscordActionGate(params: {
@@ -203,4 +193,24 @@ export function listEnabledDiscordAccounts(cfg: OpenClawConfig): ResolvedDiscord
   return listDiscordAccountIds(cfg)
     .map((accountId) => resolveDiscordAccount({ cfg, accountId }))
     .filter((account) => isDiscordAccountEnabledForRuntime(account, cfg));
+}
+
+export function listDiscordStartupAccountIds(cfg: OpenClawConfig): string[] {
+  const startupAccountIds = listEnabledDiscordAccounts(cfg)
+    .filter(
+      (candidate) =>
+        resolveConfiguredFromCredentialStatuses(candidate) ??
+        Boolean(normalizeOptionalString(candidate.token)),
+    )
+    .map((candidate) => candidate.accountId);
+  const defaultAccountId = resolveDefaultDiscordAccountId(cfg);
+  // Promote only a gateway-eligible account; otherwise a disabled or unconfigured
+  // default would waste the immediate startup slot while a real bot waits.
+  if (!startupAccountIds.includes(defaultAccountId)) {
+    return startupAccountIds;
+  }
+  return [
+    defaultAccountId,
+    ...startupAccountIds.filter((candidateId) => candidateId !== defaultAccountId),
+  ];
 }

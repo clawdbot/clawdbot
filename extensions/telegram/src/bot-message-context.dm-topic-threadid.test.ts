@@ -113,6 +113,8 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expect(buildChannelInboundEventContextMock).toHaveBeenCalledOnce();
     const [turnOptions] = buildChannelInboundEventContextMock.mock.calls.at(0) ?? [];
     expect(turnOptions?.channel).toBe("telegram");
+    expect(turnOptions?.conversation.routePeer).toEqual({ kind: "direct", id: "42" });
+    expect(turnOptions?.conversation.parentId).toBeUndefined();
     expect(turnOptions?.from).toBe("telegram:1234");
     expect(turnOptions?.sender?.isBot).toBe(true);
     expect(turnOptions?.message.rawBody).toBe("hello");
@@ -178,7 +180,7 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     expectRecordedRoute({ to: "telegram:-1001234567890:topic:99", threadId: "99" });
   });
 
-  it("passes threadId to updateLastRoute for the forum General topic", async () => {
+  it("keeps the forum General topic target aligned with live routing", async () => {
     const ctx = await buildCtx({
       message: {
         chat: { id: -1001234567890, type: "supergroup", title: "Test Group", is_forum: true },
@@ -193,6 +195,6 @@ describe("buildTelegramMessageContext DM topic threadId in deliveryContext (#889
     }
     expect(recordInboundSessionMock).toHaveBeenCalled();
 
-    expectRecordedRoute({ to: "telegram:-1001234567890:topic:1", threadId: "1" });
+    expectRecordedRoute({ to: "telegram:-1001234567890", threadId: "1" });
   });
 });

@@ -1,28 +1,29 @@
 // Llm Task tests cover llm task tool plugin behavior.
-import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("../api.js", async () => {
-  const actual = await vi.importActual<typeof import("../api.js")>("../api.js");
-  return {
-    ...actual,
-    resolvePreferredOpenClawTmpDir: () => "/tmp",
-  };
-});
-
-afterAll(() => {
-  vi.doUnmock("../api.js");
-  vi.resetModules();
-});
-
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createLlmTaskTool } from "./llm-task-tool.js";
 
 type LlmTaskApi = Parameters<typeof createLlmTaskTool>[0];
-type RunEmbeddedAgent = LlmTaskApi["runtime"]["agent"]["runEmbeddedAgent"];
+type Complete = LlmTaskApi["runtime"]["llm"]["complete"];
 
-const runEmbeddedAgent = vi.fn<RunEmbeddedAgent>(async () => ({
-  meta: { durationMs: 0, startedAt: Date.now() },
-  payloads: [{ text: "{}" }],
-}));
+function completionResult(params: Parameters<Complete>[0], text = "{}") {
+  const [provider = "openai", model = "gpt-5.5"] = (params.model ?? "openai/gpt-5.5").split(
+    /\/(.+)/,
+  );
+  return {
+    text,
+    provider,
+    model,
+    agentId: "main",
+    usage: {},
+    execution: {
+      mode: "isolated-agent-runtime" as const,
+      owner: { kind: "harness" as const, id: "openclaw" },
+    },
+    audit: { caller: { kind: "plugin" as const, id: "llm-task" } },
+  };
+}
+
+const complete = vi.fn<Complete>(async (params) => completionResult(params));
 
 const resolveThinkingPolicy = vi.fn(
   ({ model, agentRuntime }: { model?: string | null; agentRuntime?: string | null }) => ({
@@ -80,10 +81,10 @@ function fakeApi(overrides: Record<string, unknown> = {}): LlmTaskApi {
       version: "test",
       agent: {
         defaults: { provider: "openai", model: "gpt-5.5" },
-        runEmbeddedAgent,
         resolveThinkingPolicy,
         normalizeThinkingLevel,
       },
+      llm: { complete },
     },
     logger: { debug() {}, info() {}, warn() {}, error() {} },
     registerTool() {},
@@ -91,33 +92,29 @@ function fakeApi(overrides: Record<string, unknown> = {}): LlmTaskApi {
   } as unknown as LlmTaskApi;
 }
 
-function mockEmbeddedRunJson(payload: unknown) {
-  runEmbeddedAgent.mockResolvedValueOnce({
-    meta: { durationMs: 0 },
-    payloads: [{ text: JSON.stringify(payload) }],
-  });
+function mockIsolatedCompletionJson(payload: unknown) {
+  complete.mockImplementationOnce(async (params) =>
+    completionResult(params, JSON.stringify(payload)),
+  );
 }
 
 function resetRunnerMocks() {
-  runEmbeddedAgent.mockReset();
-  runEmbeddedAgent.mockImplementation(async () => ({
-    meta: { durationMs: 0, startedAt: Date.now() },
-    payloads: [{ text: "{}" }],
-  }));
+  complete.mockReset();
+  complete.mockImplementation(async (params) => completionResult(params));
   resolveThinkingPolicy.mockClear();
   normalizeThinkingLevel.mockClear();
 }
 
-async function executeEmbeddedRun(input: Record<string, unknown>) {
+async function executeIsolatedCompletion(input: Record<string, unknown>) {
   const tool = createLlmTaskTool(fakeApi());
   await tool.execute("id", input);
-  return firstEmbeddedRunCall();
+  return firstIsolatedCompletionCall();
 }
 
-function firstEmbeddedRunCall() {
-  const call = runEmbeddedAgent.mock.calls[0]?.[0];
+function firstIsolatedCompletionCall() {
+  const call = complete.mock.calls[0]?.[0];
   if (!call) {
-    throw new Error("expected embedded agent run");
+    throw new Error("expected isolated completion");
   }
   return call;
 }
@@ -139,30 +136,23 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("returns parsed json", async () => {
-    runEmbeddedAgent.mockResolvedValueOnce({
-      meta: { durationMs: 0 },
-      payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
-    });
+    mockIsolatedCompletionJson({ foo: "bar" });
     const tool = createLlmTaskTool(fakeApi());
     const res = await tool.execute("id", { prompt: "return foo" });
     expect(resultJson(res)).toEqual({ foo: "bar" });
   });
 
   it("strips fenced json", async () => {
-    runEmbeddedAgent.mockResolvedValueOnce({
-      meta: { durationMs: 0 },
-      payloads: [{ text: '```json\n{"ok":true}\n```' }],
-    });
+    complete.mockImplementationOnce(async (params) =>
+      completionResult(params, '```json\n{"ok":true}\n```'),
+    );
     const tool = createLlmTaskTool(fakeApi());
     const res = await tool.execute("id", { prompt: "return ok" });
     expect(resultJson(res)).toEqual({ ok: true });
   });
 
   it("validates schema", async () => {
-    runEmbeddedAgent.mockResolvedValueOnce({
-      meta: { durationMs: 0 },
-      payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
-    });
+    mockIsolatedCompletionJson({ foo: "bar" });
     const tool = createLlmTaskTool(fakeApi());
     const schema = {
       type: "object",
@@ -176,15 +166,13 @@ describe("llm-task tool (json-only)", () => {
 
   it("validates caller schemas with repeated $id independently across calls", async () => {
     const tool = createLlmTaskTool(fakeApi());
-    runEmbeddedAgent
-      .mockResolvedValueOnce({
-        meta: { durationMs: 0 },
-        payloads: [{ text: JSON.stringify({ foo: "bar" }) }],
-      })
-      .mockResolvedValueOnce({
-        meta: { durationMs: 0 },
-        payloads: [{ text: JSON.stringify({ count: 1 }) }],
-      });
+    complete
+      .mockImplementationOnce(async (params) =>
+        completionResult(params, JSON.stringify({ foo: "bar" })),
+      )
+      .mockImplementationOnce(async (params) =>
+        completionResult(params, JSON.stringify({ count: 1 })),
+      );
 
     await expect(
       tool.execute("id", {
@@ -220,48 +208,142 @@ describe("llm-task tool (json-only)", () => {
   });
 
   it("throws on invalid json", async () => {
-    runEmbeddedAgent.mockResolvedValueOnce({
-      meta: { durationMs: 0 },
-      payloads: [{ text: "not-json" }],
-    });
+    complete.mockImplementationOnce(async (params) => completionResult(params, "not-json"));
     const tool = createLlmTaskTool(fakeApi());
     await expect(tool.execute("id", { prompt: "x" })).rejects.toThrow(/invalid json/i);
   });
 
   it("throws on schema mismatch", async () => {
-    runEmbeddedAgent.mockResolvedValueOnce({
-      meta: { durationMs: 0 },
-      payloads: [{ text: JSON.stringify({ foo: 1 }) }],
-    });
+    mockIsolatedCompletionJson({ foo: 1 });
     const tool = createLlmTaskTool(fakeApi());
     const schema = { type: "object", properties: { foo: { type: "string" } }, required: ["foo"] };
     await expect(tool.execute("id", { prompt: "x", schema })).rejects.toThrow(/match schema/i);
   });
 
-  it("passes provider/model overrides to embedded runner", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({
+  it("passes provider/model overrides to isolated completion", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({
       prompt: "x",
       provider: "anthropic",
       model: "claude-4-sonnet",
     });
-    expect(call.provider).toBe("anthropic");
-    expect(call.model).toBe("claude-4-sonnet");
+    expect(call.model).toBe("anthropic/claude-4-sonnet");
+  });
+
+  it("delegates unchanged default model selection to the host", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({ prompt: "x" });
+    expect(call.model).toBeUndefined();
+  });
+
+  it("reports the canonical provider and model returned by the execution owner", async () => {
+    complete.mockImplementationOnce(async (params) => ({
+      ...completionResult(params, '{"ok":true}'),
+      provider: "google",
+      model: "gemini-3.1-flash-preview",
+      execution: {
+        mode: "isolated-agent-runtime",
+        owner: { kind: "cli", id: "google-gemini-cli" },
+      },
+    }));
+    const result = await createLlmTaskTool(fakeApi()).execute("id", {
+      prompt: "x",
+      provider: "google-gemini-cli",
+      model: "flash",
+    });
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: '{\n  "ok": true\n}' }],
+      details: {
+        json: { ok: true },
+        provider: "google",
+        model: "gemini-3.1-flash-preview",
+      },
+    });
   });
 
   it("accepts model overrides that already include the selected provider prefix", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({
       prompt: "x",
       provider: "anthropic",
       model: "anthropic/claude-4-sonnet",
     });
-    expect(call.provider).toBe("anthropic");
-    expect(call.model).toBe("claude-4-sonnet");
+    expect(call.model).toBe("anthropic/claude-4-sonnet");
   });
 
-  it("resolves configured model aliases before dispatching the embedded run", async () => {
-    mockEmbeddedRunJson({ ok: true });
+  it("does not misparse a slash-containing model id as a provider separator", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({
+      prompt: "x",
+      provider: "groq",
+      model: "openai/gpt-oss-20b",
+    });
+    expect(call.model).toBe("groq/openai/gpt-oss-20b");
+  });
+
+  it("preserves a configured provider for a slash-containing default model", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        pluginConfig: {
+          defaultProvider: "groq",
+          defaultModel: "openai/gpt-oss-20b",
+        },
+      }),
+    );
+
+    await tool.execute("id", { prompt: "x" });
+
+    expect(firstIsolatedCompletionCall().model).toBe("groq/openai/gpt-oss-20b");
+  });
+
+  it("lets a qualified requested model override a configured provider", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        pluginConfig: {
+          defaultProvider: "groq",
+          defaultModel: "openai/gpt-oss-20b",
+        },
+      }),
+    );
+
+    await tool.execute("id", { prompt: "x", model: "google/gemini-3-flash-preview" });
+
+    expect(firstIsolatedCompletionCall().model).toBe("google/gemini-3-flash-preview");
+  });
+
+  it("resolves configured model aliases before applying an explicit provider", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const tool = createLlmTaskTool(
+      fakeApi({
+        config: {
+          agents: {
+            defaults: {
+              workspace: "/tmp",
+              model: { primary: "anthropic/claude-sonnet-4-6" },
+              models: {
+                "google/gemini-3-flash-preview": { alias: "gemini-flash" },
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    await tool.execute("id", {
+      prompt: "x",
+      provider: "groq",
+      model: "gemini-flash",
+    });
+
+    const call = firstIsolatedCompletionCall();
+    expect(call.model).toBe("google/gemini-3-flash-preview");
+  });
+
+  it("resolves configured model aliases before dispatching isolated completion", async () => {
+    mockIsolatedCompletionJson({ ok: true });
     const tool = createLlmTaskTool(
       fakeApi({
         config: {
@@ -280,24 +362,18 @@ describe("llm-task tool (json-only)", () => {
 
     await tool.execute("id", { prompt: "x", model: "gemini-flash" });
 
-    const call = firstEmbeddedRunCall();
-    expect(call.provider).toBe("google");
-    expect(call.model).toBe("gemini-3-flash-preview");
+    const call = firstIsolatedCompletionCall();
+    expect(call.model).toBe("google/gemini-3-flash-preview");
   });
 
-  it("passes thinking override to embedded runner", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({ prompt: "x", thinking: "high" });
-    expect(call.thinkLevel).toBe("high");
-    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
-      provider: "openai",
-      model: "gpt-5.5",
-      agentRuntime: "openclaw",
-    });
+  it("passes thinking override to isolated completion", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({ prompt: "x", thinking: "high" });
+    expect(call.reasoning).toBe("high");
   });
 
-  it("lets a configured Codex runtime own Ultra validation and execution", async () => {
-    mockEmbeddedRunJson({ ok: true });
+  it("delegates model-specific Ultra validation to the host", async () => {
+    mockIsolatedCompletionJson({ ok: true });
     const config = {
       agents: {
         defaults: {
@@ -318,54 +394,15 @@ describe("llm-task tool (json-only)", () => {
       thinking: "ultra",
     });
 
-    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
-      provider: "openai",
-      model: "gpt-5.6-sol",
-      agentRuntime: "codex",
-    });
-    const call = firstEmbeddedRunCall();
-    expect(call.thinkLevel).toBe("ultra");
-    expect(call.config).toBe(config);
-    expect(call.agentHarnessRuntimeOverride).toBe("codex");
-  });
-
-  it("lets an explicit OpenClaw model runtime own Luna Ultra", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const config = {
-      agents: {
-        defaults: {
-          workspace: "/tmp",
-          model: { primary: "openai/gpt-5.6-luna" },
-          models: {
-            "openai/gpt-5.6-luna": { agentRuntime: { id: "openclaw" } },
-          },
-        },
-      },
-    };
-    const tool = createLlmTaskTool(fakeApi({ config }));
-
-    await tool.execute("id", {
-      prompt: "x",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      thinking: "ultra",
-    });
-
-    expect(resolveThinkingPolicy).toHaveBeenCalledWith({
-      provider: "openai",
-      model: "gpt-5.6-luna",
-      agentRuntime: "openclaw",
-    });
-    const call = firstEmbeddedRunCall();
-    expect(call.thinkLevel).toBe("ultra");
-    expect(call.config).toBe(config);
-    expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
+    const call = firstIsolatedCompletionCall();
+    expect(call.reasoning).toBe("ultra");
+    expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 30_000 });
   });
 
   it("normalizes thinking aliases", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({ prompt: "x", thinking: "on" });
-    expect(call.thinkLevel).toBe("low");
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({ prompt: "x", thinking: "on" });
+    expect(call.reasoning).toBe("low");
   });
 
   it("throws on invalid thinking level", async () => {
@@ -373,37 +410,60 @@ describe("llm-task tool (json-only)", () => {
     await expect(tool.execute("id", { prompt: "x", thinking: "banana" })).rejects.toThrow(
       /invalid thinking level/i,
     );
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
   });
 
-  it("throws on unsupported xhigh thinking level", async () => {
-    const tool = createLlmTaskTool(fakeApi());
-    await expect(tool.execute("id", { prompt: "x", thinking: "xhigh" })).rejects.toThrow(
-      /not supported/i,
-    );
+  it("delegates model-specific xhigh validation to the host", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({ prompt: "x", thinking: "xhigh" });
+    expect(call.reasoning).toBe("xhigh");
   });
 
   it("does not pass thinkLevel when thinking is omitted", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({ prompt: "x" });
-    expect(call.thinkLevel).toBeUndefined();
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({ prompt: "x" });
+    expect(call.reasoning).toBeUndefined();
   });
 
-  it("enforces allowedModels", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const tool = createLlmTaskTool(
-      fakeApi({ pluginConfig: { allowedModels: ["openai/gpt-5.5"] } }),
+  it("does not synthesize sampling hints when they are omitted", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({ prompt: "x" });
+    expect(call.maxTokens).toBeUndefined();
+    expect(call.temperature).toBeUndefined();
+  });
+
+  it("propagates host-owned model authorization failures", async () => {
+    complete.mockRejectedValueOnce(
+      Object.assign(new Error("Plugin LLM completion model override is not allowlisted."), {
+        code: "LLM_COMPLETION_NOT_AUTHORIZED",
+      }),
     );
+    const tool = createLlmTaskTool(fakeApi());
     await expect(
       tool.execute("id", { prompt: "x", provider: "anthropic", model: "claude-4-sonnet" }),
-    ).rejects.toThrow(/not allowed/i);
+    ).rejects.toThrow(/not allowlisted/i);
   });
 
-  it("disables tools for embedded run", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({ prompt: "x" });
-    expect(call.disableTools).toBe(true);
-    expect(call.agentHarnessRuntimeOverride).toBe("openclaw");
+  it("uses the isolated-completion operation", async () => {
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({ prompt: "x" });
+    expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 30_000 });
+    expect(call.systemPrompt).toContain("JSON-only");
+    expect(call.messages).toEqual([{ role: "user", content: expect.stringContaining("TASK:\nx") }]);
+  });
+
+  it("forwards caller cancellation to the isolated completion", async () => {
+    const controller = new AbortController();
+    const cancellation = new Error("caller cancelled");
+    complete.mockImplementationOnce(async (params) => {
+      controller.abort(cancellation);
+      params.signal?.throwIfAborted();
+      return completionResult(params, '{"ok":true}');
+    });
+
+    const tool = createLlmTaskTool(fakeApi());
+    await expect(tool.execute("id", { prompt: "x" }, controller.signal)).rejects.toBe(cancellation);
+    expect(firstIsolatedCompletionCall().signal).toBe(controller.signal);
   });
 
   it("rejects malformed numeric run options before dispatch", async () => {
@@ -418,38 +478,34 @@ describe("llm-task tool (json-only)", () => {
     await expect(tool.execute("id", { prompt: "x", timeoutMs: "4096.5" })).rejects.toThrow(
       "timeoutMs must be a positive integer",
     );
-    expect(runEmbeddedAgent).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
   });
 
   it("passes valid numeric run options before dispatch", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({
       prompt: "x",
       temperature: 0.2,
       maxTokens: 512,
       timeoutMs: 10_000,
     });
 
-    expect(call.timeoutMs).toBe(10_000);
-    expect(call.streamParams).toEqual({
-      temperature: 0.2,
-      maxTokens: 512,
-    });
+    expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 10_000 });
+    expect(call.temperature).toBe(0.2);
+    expect(call.maxTokens).toBe(512);
   });
 
   it("normalizes numeric string run options before dispatch", async () => {
-    mockEmbeddedRunJson({ ok: true });
-    const call = await executeEmbeddedRun({
+    mockIsolatedCompletionJson({ ok: true });
+    const call = await executeIsolatedCompletion({
       prompt: "x",
       temperature: "0.2",
       maxTokens: "512",
       timeoutMs: "10000",
     });
 
-    expect(call.timeoutMs).toBe(10_000);
-    expect(call.streamParams).toEqual({
-      temperature: 0.2,
-      maxTokens: 512,
-    });
+    expect(call.execution).toEqual({ mode: "isolated-agent-runtime", timeoutMs: 10_000 });
+    expect(call.temperature).toBe(0.2);
+    expect(call.maxTokens).toBe(512);
   });
 });

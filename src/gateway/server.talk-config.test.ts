@@ -62,9 +62,12 @@ afterAll(async () => {
 });
 
 async function createFreshOperatorDevice(scopes: string[], nonce: string) {
-  const identity = loadOrCreateDeviceIdentity(
-    path.join(os.tmpdir(), `openclaw-talk-config-device-${process.pid}-${talkConfigDeviceSeq++}`),
-  );
+  const identity = loadOrCreateDeviceIdentity({
+    path: path.join(
+      os.tmpdir(),
+      `openclaw-talk-config-device-${process.pid}-${talkConfigDeviceSeq++}.sqlite`,
+    ),
+  });
   const signedAtMs = Date.now();
   const payload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -189,7 +192,16 @@ async function expectTalkSecretsConfig(
   await withTalkConfigConnection(
     ["operator.read", "operator.write", "operator.talk.secrets"],
     async (ws) => {
-      const res = await fetchOkTalkConfig(ws, { includeSecrets: true });
+      const secrets = await import("../secrets/runtime.js");
+      const snapshot = await secrets.prepareSecretsRuntimeSnapshot({
+        config: (await (await import("../config/config.js")).readConfigFileSnapshot()).config,
+        env: process.env,
+        includeAuthStoreRefs: false,
+        loadablePluginOrigins: new Map(),
+      });
+      const response = fetchOkTalkConfig(ws, { includeSecrets: true });
+      secrets.activateSecretsRuntimeSnapshot(snapshot);
+      const res = await response;
       expect(validateTalkConfigResult(res.payload)).toBe(true);
       expectTalkConfig(res.payload?.config?.talk, {
         provider: GENERIC_TALK_PROVIDER_ID,
@@ -287,7 +299,15 @@ describe("gateway talk.config", () => {
     await withTalkConfigConnection(["operator.read"], async (ws) => {
       const res = await fetchTalkConfig(ws, { includeSecrets: true });
       expect(res.ok).toBe(false);
-      expect(res.error?.message).toContain("missing scope: operator.talk.secrets");
+      expect(res.error).toMatchObject({
+        code: "FORBIDDEN",
+        message: "missing scope: operator.talk.secrets",
+        details: {
+          code: "MISSING_SCOPE",
+          missingScope: "operator.talk.secrets",
+          requiredScopes: ["operator.read", "operator.talk.secrets"],
+        },
+      });
     });
   });
 
@@ -414,7 +434,7 @@ describe("gateway talk.config", () => {
     });
   });
 
-  it("does not pollute Object.prototype when messages.tts.providers contains a __proto__ key", async () => {
+  it("does not pollute Object.prototype when tts.providers contains a __proto__ key", async () => {
     // Hardening regression: stripUnresolvedSecretApiKeysFromBaseTtsProviders
     // rebuilds the providers map with dynamic keys from operator config. Using
     // a plain `{}` would let `cleaned['__proto__'] = {...}` mutate
@@ -430,20 +450,18 @@ describe("gateway talk.config", () => {
           },
         },
       },
-      messages: {
-        tts: {
-          provider: GENERIC_TALK_PROVIDER_ID,
-          providers: {
-            [GENERIC_TALK_PROVIDER_ID]: {
-              apiKey: talkApiSecretRef(),
-            },
-            // Hostile operator-config payload — not a real provider id, just
-            // a value-shaped key with a SecretRef-shaped apiKey to force the
-            // strip path.
-            __proto__: {
-              apiKey: talkApiSecretRef(),
-              polluted: "yes",
-            },
+      tts: {
+        provider: GENERIC_TALK_PROVIDER_ID,
+        providers: {
+          [GENERIC_TALK_PROVIDER_ID]: {
+            apiKey: talkApiSecretRef(),
+          },
+          // Hostile operator-config payload — not a real provider id, just
+          // a value-shaped key with a SecretRef-shaped apiKey to force the
+          // strip path.
+          __proto__: {
+            apiKey: talkApiSecretRef(),
+            polluted: "yes",
           },
         },
       },

@@ -16,17 +16,21 @@ function systemdEscapeArg(value: string): string {
   if (!/[\s"\\]/.test(value)) {
     return value;
   }
-  // systemd ExecStart/Environment parsing honors backslash escapes inside
-  // quotes; match that contract for round-trip parser tests.
-  return `"${value.replace(/\\\\/g, "\\\\\\\\").replace(/"/g, '\\\\"')}"`;
+  // systemd ExecStart/Environment parsing consumes one backslash before the next
+  // character, so every backslash and quote must be escaped for the value to
+  // survive the round-trip byte-for-byte. Escaping only backslash pairs left a
+  // lone backslash unescaped, and the reader then swallowed the byte after it.
+  const escaped = value.replaceAll("\\", "\\\\").replaceAll('"', '\\"');
+  return `"${escaped}"`;
 }
 
 function renderEnvLines(env: Record<string, string | undefined> | undefined): string[] {
   if (!env) {
     return [];
   }
+  // An explicit empty NODE_OPTIONS blocks inherited supervisor preload/heap flags.
   const entries = Object.entries(env).filter(
-    ([, value]) => typeof value === "string" && value.trim(),
+    ([key, value]) => typeof value === "string" && (value.trim() || key === "NODE_OPTIONS"),
   );
   if (entries.length === 0) {
     return [];
@@ -78,7 +82,10 @@ export function buildSystemdUnit({
     "Restart=always",
     "RestartSec=5",
     "RestartPreventExitStatus=78",
-    "TimeoutStopSec=30",
+    // Must cover the gateway's SIGTERM drain budget (five minutes) plus its
+    // teardown reserve. Otherwise systemd kills the embedded model/tool
+    // process before the gateway can finish the cooperative drain.
+    "TimeoutStopSec=330",
     "TimeoutStartSec=30",
     "SuccessExitStatus=0 143",
     // Transient child processes may be selected by the OOM killer before the
@@ -104,44 +111,23 @@ export function parseSystemdExecStart(value: string): string[] {
   return splitArgsPreservingQuotes(value, { escapeMode: "backslash" });
 }
 
-export function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
+function parseSystemdEnvAssignment(raw: string): { key: string; value: string } | null {
   const trimmed = raw.trim();
   if (!trimmed) {
     return null;
   }
 
-  const unquoted = (() => {
-    const quote = trimmed[0];
-    if (!((quote === '"' || quote === "'") && trimmed.endsWith(quote))) {
-      return trimmed;
-    }
-    let out = "";
-    let escapeNext = false;
-    // systemd quote parsing consumes one backslash before the next character.
-    for (const ch of trimmed.slice(1, -1)) {
-      if (escapeNext) {
-        out += ch;
-        escapeNext = false;
-        continue;
-      }
-      if (ch === "\\\\") {
-        escapeNext = true;
-        continue;
-      }
-      out += ch;
-    }
-    return out;
-  })();
-
-  const eq = unquoted.indexOf("=");
+  // The shared splitter already removes quotes and consumes escapes before an
+  // assignment reaches this helper.
+  const eq = trimmed.indexOf("=");
   if (eq <= 0) {
     return null;
   }
-  const key = unquoted.slice(0, eq).trim();
+  const key = trimmed.slice(0, eq).trim();
   if (!key) {
     return null;
   }
-  const value = unquoted.slice(eq + 1);
+  const value = trimmed.slice(eq + 1);
   return { key, value };
 }
 

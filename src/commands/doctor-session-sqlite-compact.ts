@@ -3,6 +3,7 @@ import fs from "node:fs";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
 import {
   assertOpenClawAgentDatabaseForMaintenance,
+  clearOpenClawAgentDatabaseOpenFailure,
   ensureOpenClawAgentDatabasePermissions,
   isOpenClawAgentDatabaseOpen,
   migrateOpenClawAgentDatabaseForMaintenance,
@@ -14,7 +15,7 @@ import { compactDoctorSqliteFile } from "./doctor-sqlite-compact.js";
 /** Reclaim free pages from one agent session SQLite database. */
 export function compactDoctorSessionSqliteTarget(
   target: SessionStoreTarget,
-  options: { migrateOlderSchema?: boolean } = {},
+  options: { env?: NodeJS.ProcessEnv; operation?: "import-finalize" } = {},
 ): DoctorSessionSqliteCompactReport {
   const sqlitePath = resolveTargetSqlitePath(target);
   const beforeFileSizes = readSqliteFileSizes(sqlitePath);
@@ -40,19 +41,30 @@ export function compactDoctorSessionSqliteTarget(
       `OpenClaw agent database ${sqlitePath} is already open in this process. Stop OpenClaw and retry.`,
     );
   }
-  if (options.migrateOlderSchema) {
+  const requireQuarantineCleared = () => {
+    if (!clearOpenClawAgentDatabaseOpenFailure(sqlitePath, { env: options.env })) {
+      throw new Error(
+        `OpenClaw agent database ${sqlitePath} was repaired, but its persisted quarantine record could not be cleared. Rerun openclaw doctor --fix so the database is not refused again.`,
+      );
+    }
+  };
+  if (options.operation === "import-finalize") {
     migrateOpenClawAgentDatabaseForMaintenance({
       agentId: target.agentId,
       pathname: sqlitePath,
     });
+    requireQuarantineCleared();
   }
 
   const compact = compactDoctorSqliteFile({
-    afterMutation: () =>
+    operation: options.operation,
+    afterSuccess: () => {
+      requireQuarantineCleared();
       ensureOpenClawAgentDatabasePermissions(sqlitePath, {
         agentId: target.agentId,
         path: sqlitePath,
-      }),
+      });
+    },
     sqlitePath,
     validateBeforeMutation: (database) =>
       assertOpenClawAgentDatabaseForMaintenance(database, {

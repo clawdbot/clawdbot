@@ -48,6 +48,17 @@ describe("createLazyGatewayCronState", () => {
     expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
   });
 
+  it("respects a configured legacy cron store partition", () => {
+    const customStore = "/tmp/openclaw-custom-cron/jobs.json";
+    const params = createParams();
+    const lazy = createLazyGatewayCronState({
+      ...params,
+      cfg: { ...params.cfg, cron: { store: customStore } } as unknown as OpenClawConfig,
+    });
+
+    expect(lazy.storePath).toBe(customStore);
+  });
+
   it("does not build the heavy cron service until an async cron operation needs it", async () => {
     const cron = createCronService();
     const state = createCronState(cron);
@@ -76,6 +87,52 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["readJob"]).toHaveBeenCalledWith("demo");
   });
 
+  it("does not load cron solely to prepare a watcher handoff", async () => {
+    const lazy = createLazyGatewayCronState(createParams());
+
+    await expect(lazy.prepareExitWatcherHandoff?.()).resolves.toBeUndefined();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+  });
+
+  it("preserves a watcher owner when hot reload overtakes lazy startup", async () => {
+    const finishStart = deferred();
+    const cron = createCronService();
+    cron.start = vi.fn(async () => await finishStart.promise);
+    const watchers = {
+      reconcile: vi.fn(),
+      cancel: vi.fn(),
+      cancelAll: vi.fn(async () => {}),
+      activeJobIds: vi.fn(() => ["watched-job"]),
+      updateHandlers: vi.fn(),
+    };
+    const stopOwner = vi.fn(async () => {});
+    const prepareExitWatcherHandoff = vi.fn(async () => ({
+      current: () => watchers,
+      adopt: vi.fn(),
+      stopOwner,
+    }));
+    hoisted.setState({
+      ...createCronState(cron),
+      prepareExitWatcherHandoff,
+    });
+    const lazy = createLazyGatewayCronState(createParams());
+
+    const start = lazy.cron.start();
+    await vi.waitFor(() => expect(cron["start"]).toHaveBeenCalledOnce());
+    const handoff = await lazy.prepareExitWatcherHandoff?.();
+    expect(handoff?.current()).toBe(watchers);
+
+    await handoff?.stopOwner();
+    finishStart.resolve();
+    await start;
+    await handoff?.stopOwner();
+
+    expect(prepareExitWatcherHandoff).toHaveBeenCalledOnce();
+    expect(stopOwner).toHaveBeenCalledOnce();
+    expect(watchers.cancelAll).not.toHaveBeenCalled();
+    expect(cron["stop"]).not.toHaveBeenCalled();
+  });
+
   it("forwards run payload overrides to the loaded cron service", async () => {
     const cron = createCronService();
     hoisted.setState(createCronState(cron));
@@ -86,6 +143,61 @@ describe("createLazyGatewayCronState", () => {
 
     expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
     expect(cron["run"]).toHaveBeenCalledWith("demo", "force", { payload });
+  });
+
+  it("forwards update authority options through lazy cron loading", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const opts = {
+      commitGuard: vi.fn(),
+      captureRuntimeAuthority: vi.fn(() => undefined),
+    };
+    const precondition = vi.fn();
+    await lazy.cron.update("demo", { description: "updated" }, opts);
+    await lazy.cron.updateWithPrecondition(
+      "demo",
+      { description: "updated again" },
+      precondition,
+      opts,
+    );
+
+    expect(cron["update"]).toHaveBeenCalledExactlyOnceWith(
+      "demo",
+      { description: "updated" },
+      opts,
+    );
+    expect(cron["updateWithPrecondition"]).toHaveBeenCalledExactlyOnceWith(
+      "demo",
+      { description: "updated again" },
+      precondition,
+      opts,
+    );
+  });
+
+  it("preserves system-owned removal authority across lazy cron loading", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    await lazy.cron.remove("heartbeat-monitor", { systemOwned: true });
+
+    expect(cron["remove"]).toHaveBeenCalledExactlyOnceWith("heartbeat-monitor", {
+      systemOwned: true,
+    });
+  });
+
+  it("prepares a lazy scheduler before an operator wake without starting it", async () => {
+    const cron = createCronService();
+    hoisted.setState(createCronState(cron));
+
+    const lazy = createLazyGatewayCronState(createParams());
+    await lazy.cron.prepareWake?.();
+
+    expect(lazy.cron.wake({ mode: "now", text: "ping" })).toEqual({ ok: true });
+    expect(cron["start"]).not.toHaveBeenCalled();
+    expect(cron["wake"]).toHaveBeenCalledExactlyOnceWith({ mode: "now", text: "ping" });
   });
 
   it("starts the loaded cron service once", async () => {
@@ -271,6 +383,39 @@ describe("createLazyGatewayCronState", () => {
     expect(cron["start"]).toHaveBeenCalledTimes(2);
   });
 
+  it("forwards heartbeat reconciliation to the loaded cron service", async () => {
+    const cron = createCronService();
+    const state = createCronState(cron);
+    hoisted.setState(state);
+
+    const lazy = createLazyGatewayCronState(createParams());
+    const cfg = { agents: { defaults: { heartbeat: { every: "5m" } } } } as OpenClawConfig;
+    await lazy.reconcileHeartbeatJobs(cfg);
+
+    expect(hoisted.buildGatewayCronService).toHaveBeenCalledTimes(1);
+    expect(state.reconcileHeartbeatJobs).toHaveBeenCalledExactlyOnceWith(cfg);
+  });
+
+  it("forwards watcher reconciliation and teardown hooks through the proxy", async () => {
+    const cron = createCronService();
+    const state = createCronState(cron);
+    hoisted.setState(state);
+
+    const lazy = createLazyGatewayCronState(createParams());
+
+    // Teardown before load must not force the heavy import.
+    await lazy.stopStreamWatchers();
+    expect(hoisted.buildGatewayCronService).not.toHaveBeenCalled();
+
+    await lazy.reconcileExitWatchers();
+    await lazy.reconcileStreamWatchers();
+    expect(state.reconcileExitWatchers).toHaveBeenCalledTimes(1);
+    expect(state.reconcileStreamWatchers).toHaveBeenCalledTimes(1);
+
+    await lazy.stopStreamWatchers();
+    expect(state.stopStreamWatchers).toHaveBeenCalledTimes(1);
+  });
+
   it("does not reconcile exit watchers when cron is disabled", async () => {
     const cron = createCronService();
     const reconcileExitWatchers = vi.fn(async () => {});
@@ -303,7 +448,11 @@ function createCronState(cron: GatewayCronServiceContract): GatewayCronState {
     cron,
     storePath: "/tmp/openclaw-cron.json",
     cronEnabled: true,
-  } as GatewayCronState;
+    reconcileExitWatchers: vi.fn(async () => {}),
+    reconcileStreamWatchers: vi.fn(async () => {}),
+    stopStreamWatchers: vi.fn(async () => {}),
+    reconcileHeartbeatJobs: vi.fn(async () => "converged" as const),
+  } satisfies GatewayCronState;
 }
 
 function createCronService(): GatewayCronServiceContract {
@@ -319,10 +468,14 @@ function createCronService(): GatewayCronServiceContract {
     update: vi.fn(async () => ({ ok: true }) as never),
     updateWithPrecondition: vi.fn(async () => ({ ok: true }) as never),
     remove: vi.fn(async () => ({ ok: true }) as never),
+    removeStaleJobFamily: vi.fn(async () => 0),
+    removeAgentJobsTransactional: vi.fn(async (_agentId, commit) => await commit()),
     run: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     enqueueRun: vi.fn(async () => ({ ok: true, ran: false, reason: "invalid-spec" }) as never),
     getJob: vi.fn(() => undefined),
     readJob: vi.fn(async () => undefined),
+    readScratch: vi.fn(async () => ({ currentRevision: 0 })),
+    writeScratch: vi.fn(async () => ({ ok: true, currentRevision: 1 }) as never),
     getDefaultAgentId: vi.fn(() => "default"),
     wake: vi.fn(() => ({ ok: true })),
   };

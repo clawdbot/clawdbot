@@ -1,18 +1,18 @@
 // Senseaudio tests cover media understanding provider plugin behavior.
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import { runFfmpeg } from "openclaw/plugin-sdk/media-runtime";
 import {
   createAuthCaptureJsonFetch,
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import { transcribeSenseAudioAudio } from "./media-understanding-provider.js";
+import { senseaudioMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
+
+const transcribeSenseAudioAudio = senseaudioMediaUnderstandingProvider.transcribeAudio;
+if (!transcribeSenseAudioAudio) {
+  throw new Error("expected SenseAudio transcription capability");
+}
 
 describe("transcribeSenseAudioAudio", () => {
   it("uses SenseAudio base URL by default", async () => {
@@ -100,38 +100,5 @@ describe("transcribeSenseAudioAudio", () => {
         fetchFn,
       }),
     ).rejects.toThrow("Audio transcription response missing text");
-  });
-
-  it("can transcribe generated speech in live mode", async () => {
-    if (process.env.OPENCLAW_LIVE_TEST !== "1" || !process.env.SENSEAUDIO_API_KEY) {
-      return;
-    }
-    const say = spawnSync("sh", ["-lc", "command -v say"], { encoding: "utf8" });
-    if (say.status !== 0) {
-      return;
-    }
-
-    const tempDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-senseaudio-live-"));
-    try {
-      const aiffPath = path.join(tempDir, "speech.aiff");
-      const mp3Path = path.join(tempDir, "speech.mp3");
-      const sayResult = spawnSync("say", ["-o", aiffPath, "open claw live transcription test"], {
-        encoding: "utf8",
-      });
-      expect(sayResult.status).toBe(0);
-      await runFfmpeg(["-y", "-i", aiffPath, "-c:a", "libmp3lame", "-b:a", "96k", mp3Path]);
-
-      const result = await transcribeSenseAudioAudio({
-        buffer: readFileSync(mp3Path),
-        fileName: "speech.mp3",
-        mime: "audio/mpeg",
-        apiKey: process.env.SENSEAUDIO_API_KEY,
-        timeoutMs: 30_000,
-      });
-
-      expect(result.text.trim().length).toBeGreaterThan(0);
-    } finally {
-      rmSync(tempDir, { recursive: true, force: true });
-    }
   });
 });

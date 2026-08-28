@@ -1,11 +1,67 @@
 // Memory Host SDK tests cover response snippet behavior.
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   readMemoryHostResponseTextSnippet,
   readResponseJsonWithLimit,
 } from "./response-snippet.js";
 
 describe("readMemoryHostResponseTextSnippet", () => {
+  it.each(["prefix", "overflow", "length", "preabort"] as const)(
+    "settles %s reads while a response clone remains open",
+    async (kind) => {
+      const cancel = vi.fn();
+      const response = new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(new TextEncoder().encode("abcdefgh"));
+          },
+          cancel,
+        }),
+        { headers: kind === "length" ? { "content-length": "16" } : {} },
+      );
+      const capture = response.clone();
+      const parent = new AbortController();
+      const expected = new Error("reader aborted");
+      parent.abort(expected);
+      const operation = (
+        kind === "prefix" || kind === "preabort"
+          ? readMemoryHostResponseTextSnippet(response, {
+              maxBytes: 4,
+              signal: kind === "preabort" ? parent.signal : undefined,
+            })
+          : readResponseJsonWithLimit(response, { maxBytes: 4, errorPrefix: "fixture" })
+      ).then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        const result = await Promise.race([
+          operation,
+          new Promise<undefined>((resolve) => {
+            setImmediate(() => resolve(undefined));
+          }),
+        ]);
+        if (kind === "prefix") {
+          expect(result).toEqual({ value: "abcd... [truncated]" });
+        } else if (kind === "preabort") {
+          expect(result).toEqual({ error: expected });
+        } else {
+          expect(result).toEqual({
+            error: new Error(
+              `fixture: response body too large: ${kind === "length" ? 16 : 8} bytes (limit: 4 bytes)`,
+            ),
+          });
+        }
+        expect(response.body?.locked).toBe(false);
+        expect(cancel).not.toHaveBeenCalled();
+      } finally {
+        await capture.body?.cancel();
+        await operation;
+      }
+      expect(cancel).toHaveBeenCalledOnce();
+    },
+  );
+
   function stallingResponse(onCancel: () => void): Response {
     const reader = {
       read: () => new Promise<ReadableStreamReadResult<Uint8Array>>(() => {}),
@@ -95,5 +151,17 @@ describe("readMemoryHostResponseTextSnippet", () => {
 
     await expect(read).rejects.toThrow("json aborted");
     expect(canceled).toBe(true);
+  });
+
+  it("rejects a JSON body with invalid UTF-8 bytes", async () => {
+    const body = new Uint8Array([
+      ...new TextEncoder().encode('{"ok":"val'),
+      0xff,
+      ...new TextEncoder().encode('ue"}'),
+    ]);
+
+    await expect(
+      readResponseJsonWithLimit(new Response(body), { errorPrefix: "remote memory" }),
+    ).rejects.toThrow(/not valid for encoding/);
   });
 });

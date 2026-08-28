@@ -11,6 +11,23 @@ import {
   DEFAULT_OPENAI_EMBEDDING_MODEL,
 } from "./embedding-provider.js";
 
+function resolveEmbeddingCacheExcludedHeaders(providerId: string, baseUrl: string): string[] {
+  const excludedHeaders = ["authorization", "x-api-key", "api-key"];
+  if (providerId !== "openai") {
+    return excludedHeaders;
+  }
+  try {
+    if (new URL(baseUrl).hostname.toLowerCase().replace(/\.+$/, "") === "api.openai.com") {
+      // Native attribution changes on every upgrade; cache identity must describe embeddings,
+      // not the OpenClaw build that requested them.
+      excludedHeaders.push("version", "user-agent");
+    }
+  } catch {
+    // Invalid URLs are handled by the embedding client; keep existing custom-header identity.
+  }
+  return excludedHeaders;
+}
+
 export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapter = {
   id: "openai",
   defaultModel: DEFAULT_OPENAI_EMBEDDING_MODEL,
@@ -37,7 +54,10 @@ export const openAiMemoryEmbeddingProviderAdapter: MemoryEmbeddingProviderAdapte
           model: client.model,
           outputDimensionality: client.outputDimensionality,
           documentInputType: client.documentInputType ?? client.inputType,
-          headers: sanitizeEmbeddingCacheHeaders(client.headers, ["authorization"]),
+          headers: sanitizeEmbeddingCacheHeaders(
+            client.headers,
+            resolveEmbeddingCacheExcludedHeaders(resolvedProvider, client.baseUrl),
+          ),
         },
         batchEmbed: async (batch) => {
           const inputType = client.documentInputType ?? client.inputType;

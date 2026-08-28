@@ -1,48 +1,52 @@
 // Covers task executor runtime selection, lifecycle updates, and error paths.
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { resetAgentEventsForTest } from "../infra/agent-events.js";
+import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { resetSystemEventsForTest } from "../infra/system-events.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { captureEnv } from "../test-utils/env.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
-import {
-  getDetachedTaskLifecycleRuntime,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
-} from "./detached-task-runtime.js";
+import { getDetachedTaskLifecycleRuntime } from "./detached-task-runtime.js";
+import { setCanonicalTaskBackingDetail } from "./task-backing-authority-write.js";
+import { createSubagentTaskBackingDetail } from "./task-backing-authority.js";
+import { createAcpTaskBackingDetailForTest } from "./task-backing-authority.test-support.js";
 import {
   cancelFlowById,
   cancelFlowByIdForOwner,
   cancelDetachedTaskRunById,
-  completeTaskRunByRunId,
-  createQueuedTaskRun as createQueuedTaskRunOrNull,
-  createRunningTaskRun as createRunningTaskRunOrNull,
-  failTaskRunByRunId,
-  recordTaskRunProgressByRunId,
+  completeTaskRunByRunIdCore as completeTaskRunByRunId,
+  createQueuedTaskRunCore as createQueuedTaskRunOrNull,
+  createRunningTaskRunCore as createRunningTaskRunOrNull,
+  failTaskRunByRunIdCore as failTaskRunByRunId,
+  recordTaskRunProgressByRunIdCore as recordTaskRunProgressByRunId,
   runTaskInFlowForOwner,
-  setDetachedTaskDeliveryStatusByRunId,
-  startTaskRunByRunId,
+  setDetachedTaskDeliveryStatusByRunIdCore as setDetachedTaskDeliveryStatusByRunId,
+  startTaskRunByRunIdCore as startTaskRunByRunId,
 } from "./task-executor.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   getTaskFlowById,
   listTaskFlowRecords,
-  resetTaskFlowRegistryForTests,
+  requestFlowCancel,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
-  setTaskRegistryDeliveryRuntimeForTests,
   getTaskById,
   findTaskByRunId,
   listTasksForFlowId,
   markTaskTerminalById,
+} from "./task-registry.js";
+import type { TaskRecord } from "./task-registry.types.js";
+import {
+  configureTaskFlowRegistryRuntime,
+  resetDetachedTaskLifecycleRuntimeForTests,
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
+  resetTaskFlowRegistryForTests,
+  setDetachedTaskLifecycleRuntime,
   setTaskRegistryControlRuntimeForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  setTaskRegistryDeliveryRuntimeForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 
@@ -57,7 +61,17 @@ function createQueuedTaskRun(params: Parameters<typeof createQueuedTaskRunOrNull
 function createRunningTaskRun(
   params: Parameters<typeof createRunningTaskRunOrNull>[0],
 ): TaskRecord {
-  const task = createRunningTaskRunOrNull(params);
+  const detail =
+    params.detail ??
+    (params.runtime === "acp"
+      ? createAcpTaskBackingDetailForTest(`instance:${params.runId ?? "unknown"}`)
+      : params.runtime === "subagent"
+        ? createSubagentTaskBackingDetail(1)
+        : undefined);
+  const task = createRunningTaskRunOrNull({
+    ...params,
+    ...(detail !== undefined ? { detail } : {}),
+  });
   if (!task) {
     throw new Error("expected running task creation to succeed");
   }
@@ -99,7 +113,7 @@ vi.mock("../acp/control-plane/manager.js", () => ({
   }),
 }));
 
-vi.mock("../agents/subagent-control.js", () => ({
+vi.mock("../agents/subagents/registry/subagent-control.js", () => ({
   killSubagentRunAdmin: (params: unknown) => hoisted.killSubagentRunAdminMock(params),
 }));
 
@@ -212,6 +226,7 @@ function expectCancelledAcpChildTask(
     cfg: {} as never,
     sessionKey: "agent:codex:acp:child",
     reason: "task-cancel",
+    expectedRunId: child.runId,
   });
 }
 
@@ -483,17 +498,18 @@ describe("task-executor", () => {
           to: "notifychat:123",
         },
       });
-      const child = createRunningTaskRun({
-        runtime: "acp",
-        ownerKey: "agent:main:main",
-        scopeKind: "session",
-        parentFlowId: flow.flowId,
-        childSessionKey: "agent:codex:acp:child",
-        runId: "run-linear-cancel",
-        task: "Inspect a PR",
-        startedAt: 10,
-        deliveryStatus: "pending",
-      });
+      createRunningAcpChildTaskRun({ runId: "run-linear-cancel" });
+      const child = requireCreatedFlowTask(
+        runTaskInFlow({
+          flowId: flow.flowId,
+          runtime: "acp",
+          childSessionKey: "agent:codex:acp:child",
+          runId: "run-linear-cancel",
+          task: "Inspect a PR",
+          status: "running",
+          startedAt: 10,
+        }),
+      );
 
       const cancelled = await cancelFlowById({
         cfg: {} as never,
@@ -502,7 +518,7 @@ describe("task-executor", () => {
 
       expect(cancelled.found).toBe(true);
       expect(cancelled.cancelled).toBe(true);
-      const task = findTaskByRunId("run-linear-cancel");
+      const task = getTaskById(child.taskId);
       expect(task?.taskId).toBe(child.taskId);
       expect(task?.status).toBe("cancelled");
       const cancelledFlow = getTaskFlowById(flow.flowId);
@@ -517,6 +533,15 @@ describe("task-executor", () => {
         ownerKey: "agent:main:main",
         controllerId: "tests/managed-flow",
         goal: "Cancel a killed child",
+      });
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:worker:subagent:flow-killed",
+        runId: "run-flow-provisional-kill",
+        task: "Stop the child",
+        startedAt: 10,
       });
       const created = runTaskInFlow({
         flowId: flow.flowId,
@@ -577,6 +602,7 @@ describe("task-executor", () => {
           to: "notifychat:123",
         },
       });
+      createRunningAcpChildTaskRun({ runId: "run-flow-child" });
 
       const created = runTaskInFlow({
         flowId: flow.flowId,
@@ -607,6 +633,44 @@ describe("task-executor", () => {
       expect(task?.parentFlowId).toBe(flow.flowId);
       expect(task?.ownerKey).toBe("agent:main:main");
       expect(task?.childSessionKey).toBe("agent:codex:acp:child");
+    });
+  });
+
+  it("rejects child tasks and cancellation for ended blocked TaskFlows", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Completed without a usable result",
+        status: "blocked",
+        updatedAt: 20,
+        endedAt: 20,
+      });
+
+      const created = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "acp",
+        childSessionKey: "agent:codex:acp:child",
+        runId: "run-flow-after-blocked-completion",
+        task: "Should be denied",
+      });
+      const cancelled = await cancelFlowById({
+        cfg: {} as never,
+        flowId: flow.flowId,
+      });
+
+      expect(created).toMatchObject({
+        found: true,
+        created: false,
+        reason: "Flow is already blocked.",
+      });
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Flow is already blocked.",
+      });
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({ status: "blocked", endedAt: 20 });
+      expect(listTasksForFlowId(flow.flowId)).toStrictEqual([]);
     });
   });
 
@@ -649,6 +713,7 @@ describe("task-executor", () => {
         controllerId: "tests/managed-flow",
         goal: "Long running batch",
       });
+      createRunningAcpChildTaskRun({ runId: "run-flow-sticky-cancel" });
       const created = runTaskInFlow({
         flowId: flow.flowId,
         runtime: "acp",
@@ -736,6 +801,50 @@ describe("task-executor", () => {
       expect(created.created).toBe(false);
       expect(created.reason).toBe("Flow not found.");
       expect(listTasksForFlowId(flow.flowId)[0]).toBeUndefined();
+    });
+  });
+
+  it("does not let a managed flow cancel another owner's backing run", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const backing = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:victim",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:victim-child",
+        runId: "run-foreign-child",
+        task: "Victim task",
+        startedAt: 10,
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/managed-flow",
+        goal: "Protected flow",
+      });
+      const linked = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:acp:victim-child",
+        runId: "run-foreign-child",
+        task: "Forged projection",
+        startedAt: 10,
+        detail: {
+          ...createAcpTaskBackingDetailForTest("instance:run-foreign-child"),
+          taskId: backing.taskId,
+        },
+      });
+      expect(linked.parentFlowId).toBe(flow.flowId);
+
+      const cancelled = await cancelFlowById({ cfg: {} as never, flowId: flow.flowId });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Child task ownership could not be verified; no cancellation was performed.",
+      });
+      expect(getTaskFlowById(flow.flowId)?.cancelRequestedAt).toBeUndefined();
+      expect(hoisted.cancelSessionMock).not.toHaveBeenCalled();
     });
   });
 
@@ -1046,6 +1155,7 @@ describe("task-executor", () => {
       expect(hoisted.killSubagentRunAdminMock).toHaveBeenCalledWith({
         cfg: {} as never,
         sessionKey: "agent:codex:subagent:child",
+        expectedRunId: "run-subagent-cancel",
       });
     });
   });
@@ -1059,6 +1169,7 @@ describe("task-executor", () => {
         controllerId: "tests/cancel-flow",
         goal: "Cancel linked tasks",
       });
+      createRunningAcpChildTaskRun({ runId: "run-flow-cancel-via-runtime" });
       const child = runTaskInFlow({
         flowId: flow.flowId,
         runtime: "acp",
@@ -1098,7 +1209,7 @@ describe("task-executor", () => {
     await withTaskExecutorStateDir(async () => {
       const victim = createRunningTaskRun({
         runtime: "acp",
-        ownerKey: "agent:victim:main",
+        ownerKey: "agent:main:victim",
         scopeKind: "session",
         childSessionKey: "agent:victim:acp:child",
         runId: "run-shared-executor-scope",
@@ -1107,7 +1218,7 @@ describe("task-executor", () => {
       });
       const attacker = createRunningTaskRun({
         runtime: "cli",
-        ownerKey: "agent:attacker:main",
+        ownerKey: "agent:main:attacker",
         scopeKind: "session",
         childSessionKey: "agent:attacker:main",
         runId: "run-shared-executor-scope",
@@ -1128,6 +1239,202 @@ describe("task-executor", () => {
       expect(attackerTask?.status).toBe("failed");
       expect(attackerTask?.error).toBe("attacker controlled error");
       expect(getTaskById(victim.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("does not deliver backing lifecycle updates to a foreign managed projection", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const backing = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:victim",
+        scopeKind: "session",
+        childSessionKey: "agent:main:acp:victim-child",
+        runId: "run-shared-child",
+        task: "Victim ACP task",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/foreign-projection",
+        goal: "Foreign projection",
+      });
+      const projection = createRunningTaskRun({
+        runtime: "acp",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:acp:victim-child",
+        runId: "run-shared-child",
+        task: "Forged projection",
+        detail: {
+          ...createAcpTaskBackingDetailForTest("instance:run-shared-child"),
+          taskId: backing.taskId,
+        },
+      });
+
+      failTaskRunByRunId({
+        runId: "run-shared-child",
+        runtime: "acp",
+        sessionKey: "agent:main:acp:victim-child",
+        endedAt: 40,
+        error: "victim failure",
+      });
+
+      expect(getTaskById(backing.taskId)?.status).toBe("failed");
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("does not apply agent lifecycle events to a foreign managed projection", async () => {
+    await withTaskExecutorStateDir(async () => {
+      const backing = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:victim",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:victim-child",
+        runId: "run-agent-event-foreign-child",
+        task: "Victim subagent task",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/foreign-agent-event",
+        goal: "Foreign agent-event projection",
+      });
+      const projection = createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        parentFlowId: flow.flowId,
+        childSessionKey: "agent:main:subagent:victim-child",
+        runId: "run-agent-event-foreign-child",
+        task: "Forged agent-event projection",
+        detail: { ...createSubagentTaskBackingDetail(1), taskId: backing.taskId },
+      });
+      const currentFlow = getTaskFlowById(flow.flowId);
+      if (!currentFlow) {
+        throw new Error("Expected managed flow");
+      }
+      const cancelRequest = requestFlowCancel({
+        flowId: flow.flowId,
+        expectedRevision: currentFlow.revision,
+      });
+      if (!cancelRequest.applied) {
+        throw new Error(cancelRequest.reason);
+      }
+      const beforeFlow = getTaskFlowById(flow.flowId);
+
+      emitAgentEvent({
+        runId: "run-agent-event-foreign-child",
+        sessionKey: "agent:main:subagent:victim-child",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 40 },
+      });
+
+      expect(getTaskFlowById(flow.flowId)).toMatchObject({
+        status: beforeFlow?.status,
+        revision: beforeFlow?.revision,
+        cancelRequestedAt: beforeFlow?.cancelRequestedAt,
+      });
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
+    });
+  });
+
+  it("applies agent lifecycle events to an owner-matched managed projection", async () => {
+    await withTaskExecutorStateDir(async () => {
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:owned-child",
+        runId: "run-agent-event-owned-child",
+        task: "Owned subagent task",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/owned-agent-event",
+        goal: "Owned agent-event projection",
+      });
+      const projected = runTaskInFlow({
+        flowId: flow.flowId,
+        runtime: "subagent",
+        childSessionKey: "agent:main:subagent:owned-child",
+        runId: "run-agent-event-owned-child",
+        task: "Owned agent-event projection",
+        status: "running",
+      });
+      if (!projected.created) {
+        throw new Error(projected.reason);
+      }
+      const projection = requireCreatedFlowTask(projected);
+
+      emitAgentEvent({
+        runId: "run-agent-event-owned-child",
+        sessionKey: "agent:main:subagent:owned-child",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 40 },
+      });
+
+      expect(getTaskById(projection.taskId)).toMatchObject({
+        status: "succeeded",
+        endedAt: 40,
+      });
+    });
+  });
+
+  it("revokes a managed projection when its backing generation is replaced", async () => {
+    await withTaskExecutorStateDir(async () => {
+      createRunningTaskRun({
+        runtime: "subagent",
+        ownerKey: "agent:main:main",
+        scopeKind: "session",
+        childSessionKey: "agent:main:subagent:replaced-child",
+        runId: "run-reused-after-recovery",
+        task: "Original subagent generation",
+        deliveryStatus: "pending",
+      });
+      const flow = createManagedTaskFlow({
+        ownerKey: "agent:main:main",
+        controllerId: "tests/replaced-generation",
+        goal: "Reject replaced generation",
+      });
+      const projection = requireCreatedFlowTask(
+        runTaskInFlow({
+          flowId: flow.flowId,
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:replaced-child",
+          runId: "run-reused-after-recovery",
+          task: "Managed original generation",
+          status: "running",
+        }),
+      );
+
+      expect(
+        setCanonicalTaskBackingDetail({
+          runtime: "subagent",
+          childSessionKey: "agent:main:subagent:replaced-child",
+          runId: "run-reused-after-recovery",
+          detail: createSubagentTaskBackingDetail(2),
+        }),
+      ).toBe("updated");
+
+      const cancelled = await cancelFlowById({ cfg: {} as never, flowId: flow.flowId });
+      emitAgentEvent({
+        runId: "run-reused-after-recovery",
+        sessionKey: "agent:main:subagent:replaced-child",
+        stream: "lifecycle",
+        data: { phase: "end", endedAt: 40 },
+      });
+
+      expect(cancelled).toMatchObject({
+        found: true,
+        cancelled: false,
+        reason: "Child task ownership could not be verified; no cancellation was performed.",
+      });
+      expect(getTaskFlowById(flow.flowId)?.cancelRequestedAt).toBeUndefined();
+      expect(getTaskById(projection.taskId)?.status).toBe("running");
+      expect(hoisted.killSubagentRunAdminMock).not.toHaveBeenCalled();
     });
   });
 });

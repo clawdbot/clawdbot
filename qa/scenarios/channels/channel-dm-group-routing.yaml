@@ -5,10 +5,10 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.dm
-      - channels.group-messages
+      - channels.inbound-routing-dm
+      - channels.runtime-conversation-routing
     secondary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify direct and group replies stay on their originating conversation routes.
   successCriteria:
     - A direct message receives its marker only on the direct conversation.
@@ -72,7 +72,7 @@ flow:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: groupOutbound
         - assert:
-            expr: "dmOutbound.conversation.id !== groupOutbound.conversation.id && !String(dmOutbound.text ?? '').includes(config.groupMarker) && !String(groupOutbound.text ?? '').includes(config.dmMarker)"
+            expr: "!state.getSnapshot().messages.some((message) => message.direction === 'outbound' && ((String(message.text ?? '').includes(config.dmMarker) && (message.accountId !== dmOutbound.accountId || message.conversation.kind !== dmOutbound.conversation.kind || message.conversation.id !== dmOutbound.conversation.id)) || (String(message.text ?? '').includes(config.groupMarker) && (message.accountId !== groupOutbound.accountId || message.conversation.kind !== groupOutbound.conversation.kind || message.conversation.id !== groupOutbound.conversation.id))))"
             message:
-              expr: "`DM/group routes crossed; transcript=${formatTransportTranscript(state)}`"
+              expr: "`DM/group routes crossed; transcript=${recentOutboundSummary(state)}`"
       detailsExpr: "`${dmOutbound.conversation.kind}:${dmOutbound.text} | ${groupOutbound.conversation.kind}:${groupOutbound.text}`"

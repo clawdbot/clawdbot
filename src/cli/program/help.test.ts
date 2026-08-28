@@ -1,8 +1,9 @@
 // Help tests cover command help generation and inherited help options.
-import { Command } from "commander";
+import { Command, CommanderError } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProgramContext } from "./context.js";
 import { configureProgramHelp } from "./help.js";
+import { OpenClawCommand } from "./openclaw-command.js";
 
 const hasEmittedCliBannerMock = vi.hoisted(() => vi.fn(() => false));
 const formatCliBannerLineMock = vi.hoisted(() => vi.fn(() => "BANNER-LINE"));
@@ -117,6 +118,31 @@ describe("configureProgramHelp", () => {
     }
   }
 
+  async function parseHelp(argv: string[]) {
+    process.argv = ["node", "openclaw", ...argv];
+    let stdout = "";
+    let stderr = "";
+    const program = new OpenClawCommand().enablePositionalOptions().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.configureOutput({
+      writeOut: (value) => {
+        stdout += value;
+      },
+      writeErr: (value) => {
+        stderr += value;
+      },
+    });
+    const plugins = program.command("plugins").description("Manage plugins");
+    plugins
+      .command("list")
+      .description("List plugins")
+      .action(() => {});
+
+    const error = await program.parseAsync(process.argv).catch((cause: unknown) => cause);
+    expect(error).toBeInstanceOf(CommanderError);
+    return { error: error as CommanderError, stderr, stdout };
+  }
+
   it("adds root help hint and marks commands with subcommands", () => {
     process.argv = ["node", "openclaw", "--help"];
     const program = makeProgramWithCommands();
@@ -143,6 +169,54 @@ describe("configureProgramHelp", () => {
     expect(options?.mode).toBe("default");
     expect(help).toContain("Examples:");
     expect(help).toContain("https://docs.openclaw.ai/cli");
+  });
+
+  it("keeps valid root, group, subcommand, short, and help-command output successful", async () => {
+    const rootHelp = await parseHelp(["--help"]);
+    const shortHelp = await parseHelp(["-h"]);
+    const groupHelp = await parseHelp(["plugins", "--help"]);
+    const subcommandHelp = await parseHelp(["plugins", "list", "--help"]);
+    const helpCommand = await parseHelp(["help", "plugins"]);
+
+    for (const result of [rootHelp, shortHelp, groupHelp, subcommandHelp, helpCommand]) {
+      expect(result.error.exitCode).toBe(0);
+      expect(result.stderr).toBe("");
+    }
+    expect(rootHelp.error.code).toBe("commander.helpDisplayed");
+    expect(shortHelp.stdout).toBe(rootHelp.stdout);
+    expect(groupHelp.stdout).toContain("Usage: openclaw plugins [options] [command]");
+    expect(subcommandHelp.stdout).toContain("Usage: openclaw plugins list [options]");
+    expect(helpCommand.stdout).toBe(groupHelp.stdout);
+  });
+
+  it("formats parse errors from the exact Commander command path", async () => {
+    let stderr = "";
+    process.argv = ["node", "openclaw", "plugins", "--source", "list", "list", "--wat"];
+    const program = new OpenClawCommand().enablePositionalOptions().exitOverride();
+    configureProgramHelp(program, testProgramContext);
+    program.configureOutput({
+      writeErr: (value) => {
+        stderr += value;
+      },
+    });
+    program
+      .command("plugins")
+      .option("--source <source>")
+      .command("list")
+      .action(() => {});
+
+    const firstError = await program.parseAsync(process.argv).catch((error: unknown) => error);
+    expect(firstError).toBeInstanceOf(CommanderError);
+    process.argv = ["node", "openclaw", "plugins", "list", "--still-wat"];
+    const secondError = await program.parseAsync(process.argv).catch((error: unknown) => error);
+    expect(secondError).toBeInstanceOf(CommanderError);
+    process.argv = ["node", "openclaw", "plugins", "lis"];
+    const thirdError = await program.parseAsync(process.argv).catch((error: unknown) => error);
+    expect(thirdError).toBeInstanceOf(CommanderError);
+
+    expect(stderr.match(/Try: openclaw plugins list --help/g)).toHaveLength(2);
+    expect(stderr).not.toContain("openclaw plugins list list --help");
+    expect(stderr).toContain("Did you mean this?\n  openclaw plugins list\n");
   });
 
   it("suppresses banner formatting when parent default help requests it", () => {

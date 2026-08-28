@@ -1,10 +1,12 @@
 // Normalizes channel config compatibility fields during config loading.
+import { asNullableRecord as asObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLegacyDmAliases,
   type CompatMutationResult,
 } from "../channels/plugins/dm-access.js";
 
 export { normalizeLegacyDmAliases };
+export { asObjectRecord };
 export type { CompatMutationResult };
 
 /** Resolved streaming values a channel doctor supplies while migrating legacy aliases. */
@@ -29,12 +31,17 @@ export type NormalizeLegacyChannelAccountParams = {
   changes: string[];
 };
 
-/** Narrows unknown config JSON values to mutable object records. */
-export function asObjectRecord(value: unknown): Record<string, unknown> | null {
-  return value && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
+export type NormalizeChannelConfigEntryParams = {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+  accountId?: string;
+};
+
+export type RetiredChannelKeyRemoval = {
+  key: string;
+  pathPrefix: string;
+};
 
 function parseAliasStreamingMode(value: unknown): "off" | "partial" | "block" | "progress" | null {
   if (typeof value !== "string") {

@@ -2,6 +2,8 @@
 import { isSingleUseReplyToMode } from "openclaw/plugin-sdk/reply-reference";
 import { slackContextTargetsMatch } from "./targets.js";
 
+export const SLACK_PRIVATE_ACTION_DELIVERY_RESULT = Symbol("slack.action.delivery-result");
+
 export function resolveSlackAutoThreadId(params: {
   to: string;
   toolContext?: {

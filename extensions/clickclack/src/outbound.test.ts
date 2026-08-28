@@ -30,8 +30,11 @@ vi.mock("openclaw/plugin-sdk/outbound-media", () => ({ loadOutboundMediaFromUrl 
 vi.mock("./accounts.js", () => ({
   resolveClickClackAccount: () => ({
     baseUrl: "https://clickclack.example",
+    apiEndpoint: "http://127.0.0.1:8484",
     token: "test-token-placeholder",
     workspace: "wsp_1",
+    accountId: "default",
+    config: {},
   }),
 }));
 
@@ -111,7 +114,7 @@ describe("sendClickClackText routing", () => {
     });
 
     expect(createClientOptions).toHaveBeenCalledWith({
-      baseUrl: "https://clickclack.example",
+      baseUrl: "http://127.0.0.1:8484",
       token: "test-token-placeholder",
       correlationId: "fakeco.case_1",
     });
@@ -220,6 +223,11 @@ describe("sendClickClackMedia", () => {
   });
 
   it("preserves filename and MIME while uploading before channel delivery", async () => {
+    loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("const proof = true;"),
+      contentType: "image/png",
+      fileName: "viewer-proof.ts",
+    });
     const order: string[] = [];
     createUpload.mockImplementationOnce(async () => {
       order.push("upload");
@@ -253,7 +261,7 @@ describe("sendClickClackMedia", () => {
       workspaceId: "wsp_1",
       buffer: Buffer.from("const proof = true;"),
       filename: "viewer-proof.ts",
-      contentType: "text/typescript",
+      contentType: "image/png",
     });
     expect(createChannelMessage).toHaveBeenCalledWith(
       "general",
@@ -263,6 +271,83 @@ describe("sendClickClackMedia", () => {
     expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
     expect(order).toEqual(["upload", "message", "attach"]);
     expect(messageId).toBe("msg_out");
+  });
+
+  it("derives an extension from the MIME type when media has no filename", async () => {
+    loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("fake png bytes"),
+      contentType: "image/png",
+    });
+
+    await sendClickClackMedia({
+      cfg,
+      to: "channel:general",
+      text: "",
+      mediaUrl: "https://files.example/unnamed",
+    });
+
+    expect(createUpload).toHaveBeenCalledWith({
+      workspaceId: "wsp_1",
+      buffer: Buffer.from("fake png bytes"),
+      filename: "attachment.png",
+      contentType: "image/png",
+    });
+    expect(createChannelMessage).toHaveBeenCalledWith(
+      "general",
+      "attachment.png",
+      expect.objectContaining({ quotedMessageId: undefined }),
+    );
+  });
+
+  it("keeps the generic fallback when MIME type has no known extension", async () => {
+    loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("unknown bytes"),
+      contentType: "application/x-unknown",
+    });
+
+    await sendClickClackMedia({
+      cfg,
+      to: "channel:general",
+      text: "",
+      mediaUrl: "https://files.example/unknown",
+    });
+
+    expect(createUpload).toHaveBeenCalledWith({
+      workspaceId: "wsp_1",
+      buffer: Buffer.from("unknown bytes"),
+      filename: "attachment",
+      contentType: "application/x-unknown",
+    });
+    expect(createChannelMessage).toHaveBeenCalledWith(
+      "general",
+      "attachment",
+      expect.objectContaining({ quotedMessageId: undefined }),
+    );
+  });
+
+  it("keeps the generic fallback when MIME type is missing", async () => {
+    loadOutboundMediaFromUrl.mockResolvedValueOnce({
+      buffer: Buffer.from("opaque bytes"),
+    });
+
+    await sendClickClackMedia({
+      cfg,
+      to: "channel:general",
+      text: "",
+      mediaUrl: "https://files.example/missing-type",
+    });
+
+    expect(createUpload).toHaveBeenCalledWith({
+      workspaceId: "wsp_1",
+      buffer: Buffer.from("opaque bytes"),
+      filename: "attachment",
+      contentType: "application/octet-stream",
+    });
+    expect(createChannelMessage).toHaveBeenCalledWith(
+      "general",
+      "attachment",
+      expect.objectContaining({ quotedMessageId: undefined }),
+    );
   });
 
   it("uses the filename as the minimal media-only body and routes DMs", async () => {
@@ -300,7 +385,7 @@ describe("sendClickClackMedia", () => {
     expect(attachUpload).toHaveBeenCalledWith("msg_out", "upl_1");
   });
 
-  it("rejects oversized media before creating a ClickClack client or upload", async () => {
+  it("rejects oversized media before creating an upload or message", async () => {
     loadOutboundMediaFromUrl.mockRejectedValueOnce(new Error("media exceeds 67108864 bytes"));
 
     await expect(
@@ -312,7 +397,6 @@ describe("sendClickClackMedia", () => {
       }),
     ).rejects.toThrow("media exceeds 67108864 bytes");
 
-    expect(createClientOptions).not.toHaveBeenCalled();
     expect(createUpload).not.toHaveBeenCalled();
     expect(createChannelMessage).not.toHaveBeenCalled();
   });

@@ -95,6 +95,21 @@ describe("resolveAuthProfileFailureReason", () => {
         failoverReason: "server_error",
       }),
     ).toBeNull();
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "tls_certificate",
+      }),
+    ).toBeNull();
+  });
+
+  it("does not persist provider-scoped overload as auth-profile health", () => {
+    expect(
+      resolveAuthProfileFailureReason({
+        failoverReason: "overloaded",
+        providerStarted: true,
+        policy: "shared",
+      }),
+    ).toBeNull();
   });
 
   it("does not persist empty responses as auth-profile health", () => {

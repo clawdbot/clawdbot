@@ -4,8 +4,32 @@
  * predicates used by rotation and failure handling.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
 import type { AuthProfileFailureReason, AuthProfileStore, ProfileUsageStats } from "./types.js";
+
+/** Clears failure windows while preserving unrelated usage history. */
+export function resetAuthProfileFailureState(
+  existing: ProfileUsageStats,
+  overrides?: Partial<ProfileUsageStats>,
+): ProfileUsageStats {
+  return {
+    ...existing,
+    errorCount: 0,
+    blockedUntil: undefined,
+    blockedReason: undefined,
+    blockedSource: undefined,
+    blockedModel: undefined,
+    blockedScope: undefined,
+    cooldownUntil: undefined,
+    cooldownReason: undefined,
+    cooldownClassification: undefined,
+    cooldownModel: undefined,
+    disabledUntil: undefined,
+    disabledReason: undefined,
+    failureCounts: undefined,
+    ...overrides,
+  };
+}
 
 /** Returns true for providers whose auth-profile cooldowns are provider-managed. */
 export function isAuthCooldownBypassedForProvider(provider: string | undefined): boolean {
@@ -13,12 +37,14 @@ export function isAuthCooldownBypassedForProvider(provider: string | undefined):
   return normalized === "openrouter" || normalized === "kilocode";
 }
 
-// Per-attempt transient failures (#87462): block only the failing model so
-// fallback models on the same auth profile can still try. Other reasons (auth,
-// billing, format, server_error) remain profile-wide.
+// Per-attempt transient failures (#87462, #116464): block only the failing
+// model so fallback models on the same auth profile can still try. A model that
+// the provider does not serve (model_not_found) says nothing about sibling
+// models, so it stays model-scoped too. Other reasons (auth, billing, format,
+// server_error) remain profile-wide.
 /** Returns true when a failure should only cool down the failing model. */
 export function isModelScopedCooldownReason(reason: AuthProfileFailureReason | undefined): boolean {
-  return reason === "rate_limit" || reason === "timeout";
+  return reason === "rate_limit" || reason === "timeout" || reason === "model_not_found";
 }
 
 /** Resolves the latest active blocked/cooldown/disabled timestamp for a profile. */
@@ -224,6 +250,7 @@ export function clearExpiredCooldowns(store: AuthProfileStore, now?: number): bo
     if (cooldownExpired) {
       stats.cooldownUntil = undefined;
       stats.cooldownReason = undefined;
+      stats.cooldownClassification = undefined;
       stats.cooldownModel = undefined;
       profileMutated = true;
     }

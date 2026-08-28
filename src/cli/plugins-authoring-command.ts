@@ -1,6 +1,7 @@
 // Plugin authoring commands for init/build/validate manifest generation.
 import fs from "node:fs";
 import path from "node:path";
+import { jsonSchemaValuesEqual } from "@openclaw/normalization-core/json-schema";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { formatCwdRelativePathOrAbsolute as formatOutputPath } from "../infra/safe-cwd.js";
 import { getToolPluginMetadata, type ToolPluginMetadata } from "../plugin-sdk/tool-plugin.js";
@@ -10,14 +11,11 @@ import {
   resolvePackageExtensionEntries,
 } from "../plugins/manifest.js";
 import { unwrapDefaultModuleExport } from "../plugins/module-export.js";
-import {
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-} from "../plugins/plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "../plugins/plugin-module-loader-cache.js";
 import { buildPluginLoaderAliasMap } from "../plugins/sdk-alias.js";
 import { defaultRuntime } from "../runtime.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
-import { isRecord } from "../utils.js";
+import { isRecord, shortenHomeInString } from "../utils.js";
 import { VERSION } from "../version.js";
 
 type JsonObject = Record<string, unknown>;
@@ -31,7 +29,12 @@ export type PluginsBuildOptions = {
 export type PluginsValidateOptions = {
   root?: string;
   entry?: string;
+  json?: boolean;
 };
+
+type PluginsValidationResult =
+  | { valid: true; pluginId: string; errors: [] }
+  | { valid: false; pluginId?: string; errors: string[] };
 
 export type PluginsInitOptions = {
   directory?: string;
@@ -52,11 +55,15 @@ const SUPPORTED_PLUGIN_SCAFFOLD_TYPES = [
   "provider",
 ] as const satisfies readonly PluginScaffoldType[];
 const CLAWHUB_PACKAGE_PUBLISH_WORKFLOW_REF = "9d49df109d4ad3dc8a6ecf05d26b39f46d294721";
-
-const toolPluginEntryModuleLoaders = createPluginModuleLoaderCache();
+const TOOL_PLUGIN_API_RANGE = ">=2026.5.17";
 
 function readJsonFile(filePath: string): JsonObject {
-  return JSON.parse(fs.readFileSync(filePath, "utf8")) as JsonObject;
+  const raw = fs.readFileSync(filePath, "utf8");
+  try {
+    return JSON.parse(raw) as JsonObject;
+  } catch (err) {
+    throw new Error(`Malformed JSON in ${filePath}`, { cause: err });
+  }
 }
 
 function writeJsonFile(filePath: string, value: unknown): void {
@@ -103,10 +110,10 @@ function readPackageManifest(rootDir: string): JsonObject {
   return readJsonFile(packagePath);
 }
 
-async function importToolPluginEntry(entryPath: string): Promise<unknown> {
+async function importToolPluginEntry(entryPath: string, rootDir: string): Promise<unknown> {
   const loader = getCachedPluginModuleLoader({
-    cache: toolPluginEntryModuleLoaders,
     modulePath: entryPath,
+    rootDir,
     importerUrl: import.meta.url,
     loaderFilename: entryPath,
     aliasMap: buildPluginLoaderAliasMap(entryPath, process.argv[1], import.meta.url),
@@ -132,7 +139,7 @@ export async function loadToolPlugin(params: {
       `plugin entry not found: ${normalizeRelativePath(params.rootDir, params.entryPath)}`,
     );
   }
-  const entry = await importToolPluginEntry(params.entryPath);
+  const entry = await importToolPluginEntry(params.entryPath, params.rootDir);
   const metadata = getToolPluginMetadata(entry);
   if (!metadata) {
     throw new Error(
@@ -159,7 +166,7 @@ export function buildToolPluginManifest(params: {
     toolMetadata: _existingToolMetadata,
     ...existingManifestFields
   } = params.existingManifest ?? {};
-  return {
+  const manifest: JsonObject = {
     ...existingManifestFields,
     id: params.metadata.id,
     name: params.metadata.name,
@@ -174,6 +181,9 @@ export function buildToolPluginManifest(params: {
     },
     ...(toolMetadata ? { toolMetadata } : {}),
   };
+  // Runtime schema options can contain undefined fields that the manifest writer drops.
+  const serializedManifest = JSON.stringify(manifest);
+  return JSON.parse(serializedManifest) as JsonObject;
 }
 
 function buildToolPluginToolMetadata(
@@ -233,7 +243,7 @@ export function validateToolPluginProject(params: {
     packageManifest: params.packageManifest,
     existingManifest: params.manifest,
   });
-  if (JSON.stringify(params.manifest) !== JSON.stringify(expectedManifest)) {
+  if (!jsonSchemaValuesEqual(params.manifest, expectedManifest)) {
     errors.push("openclaw.plugin.json generated metadata is stale. Run openclaw plugins build.");
   }
   if (params.manifest.id !== params.metadata.id) {
@@ -296,8 +306,8 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   if (opts.check) {
     const currentPackage = readJsonFile(packagePath);
     if (
-      JSON.stringify(currentManifest) !== JSON.stringify(manifest) ||
-      JSON.stringify(currentPackage) !== JSON.stringify(nextPackageManifest)
+      !jsonSchemaValuesEqual(currentManifest, manifest) ||
+      !jsonSchemaValuesEqual(currentPackage, nextPackageManifest)
     ) {
       defaultRuntime.error("Generated plugin metadata is out of date. Run openclaw plugins build.");
       return defaultRuntime.exit(1);
@@ -312,15 +322,16 @@ export async function runPluginsBuildCommand(opts: PluginsBuildOptions): Promise
   defaultRuntime.log(`Updated ${formatOutputPath(packagePath, "package.json")}`);
 }
 
-export async function runPluginsValidateCommand(opts: PluginsValidateOptions): Promise<void> {
+async function collectPluginsValidationResult(
+  opts: PluginsValidateOptions,
+): Promise<PluginsValidationResult> {
   const rootDir = resolveRootDir(opts.root);
   const entryPath = resolveEntryPath(rootDir, opts.entry);
   const entryRelative = normalizeRelativePath(rootDir, entryPath);
   const packageManifest = readPackageManifest(rootDir);
   const manifestResult = loadPluginManifest(rootDir, false);
   if (!manifestResult.ok) {
-    defaultRuntime.error(manifestResult.error);
-    return defaultRuntime.exit(1);
+    return { valid: false, errors: [manifestResult.error] };
   }
   const manifest = readJsonFile(path.join(rootDir, PLUGIN_MANIFEST_FILENAME));
   const { metadata } = await loadToolPlugin({ rootDir, entryPath });
@@ -331,12 +342,43 @@ export async function runPluginsValidateCommand(opts: PluginsValidateOptions): P
     entry: entryRelative,
   });
   if (errors.length > 0) {
-    for (const error of errors) {
+    return { valid: false, pluginId: metadata.id, errors };
+  }
+
+  return { valid: true, pluginId: metadata.id, errors: [] };
+}
+
+export async function runPluginsValidateCommand(opts: PluginsValidateOptions): Promise<void> {
+  let result: PluginsValidationResult;
+  try {
+    result = await collectPluginsValidationResult(opts);
+  } catch (err) {
+    if (!opts.json) {
+      throw err;
+    }
+    result = {
+      valid: false,
+      errors: [err instanceof Error ? err.message : String(err)],
+    };
+  }
+
+  if (!result.valid) {
+    for (const error of result.errors) {
       defaultRuntime.error(error);
     }
-    return defaultRuntime.exit(1);
+    if (opts.json) {
+      defaultRuntime.writeJson({
+        ...result,
+        errors: result.errors.map(shortenHomeInString),
+      });
+    }
+    return defaultRuntime.exit(1, opts.json ? { resetStream: process.stderr } : undefined);
   }
-  defaultRuntime.log(`Plugin ${metadata.id} is valid.`);
+  if (opts.json) {
+    defaultRuntime.writeJson(result);
+    return;
+  }
+  defaultRuntime.log(`Plugin ${result.pluginId} is valid.`);
 }
 
 function assertCanCreate(filePath: string, force: boolean): void {
@@ -403,6 +445,12 @@ function createConfigSchema() {
   };
 }
 
+const createPluginPackageMetadata = (pluginApi: string) => ({
+  extensions: ["./dist/index.js"],
+  compat: { pluginApi },
+  build: { openclawVersion: VERSION },
+});
+
 function buildScaffoldTsconfig(type: PluginScaffoldType): JsonObject {
   return {
     compilerOptions: {
@@ -447,7 +495,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
     },
     files: ["dist", "openclaw.plugin.json", "README.md"],
     peerDependencies: {
-      openclaw: ">=2026.5.17",
+      openclaw: TOOL_PLUGIN_API_RANGE,
     },
     dependencies: {
       typebox: "^1.1.38",
@@ -457,9 +505,7 @@ function writeToolPluginScaffold(params: { rootDir: string; id: string; name: st
       typescript: "^5.9.0",
       vitest: "^3.2.0",
     },
-    openclaw: {
-      extensions: ["./dist/index.js"],
-    },
+    openclaw: createPluginPackageMetadata(TOOL_PLUGIN_API_RANGE),
   };
   const idLiteral = jsStringLiteral(params.id);
   const nameLiteral = jsStringLiteral(params.name);
@@ -557,17 +603,11 @@ function writeProviderPluginScaffold(params: { rootDir: string; id: string; name
       vitest: "^3.2.0",
     },
     openclaw: {
-      extensions: ["./dist/index.js"],
+      ...createPluginPackageMetadata(`>=${VERSION}`),
       install: {
         clawhubSpec: `clawhub:${packageName}`,
         defaultChoice: "clawhub",
         minHostVersion: `>=${VERSION}`,
-      },
-      compat: {
-        pluginApi: `>=${VERSION}`,
-      },
-      build: {
-        openclawVersion: VERSION,
       },
       release: {
         publishToClawHub: true,

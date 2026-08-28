@@ -7,14 +7,12 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 vi.unmock("../secrets/provider-env-vars.js");
 
 let collectProviderApiKeys: typeof import("./live-auth-keys.js").collectProviderApiKeys;
-let collectAnthropicApiKeys: typeof import("./live-auth-keys.js").collectAnthropicApiKeys;
-let isAnthropicBillingError: typeof import("./live-auth-keys.js").isAnthropicBillingError;
+let isApiKeyRateLimitError: typeof import("./live-auth-keys.js").isApiKeyRateLimitError;
 
 async function loadModulesForTest(): Promise<void> {
   vi.resetModules();
   vi.doUnmock("../secrets/provider-env-vars.js");
-  ({ collectAnthropicApiKeys, collectProviderApiKeys, isAnthropicBillingError } =
-    await import("./live-auth-keys.js"));
+  ({ collectProviderApiKeys, isApiKeyRateLimitError } = await import("./live-auth-keys.js"));
 }
 
 beforeAll(async () => {
@@ -45,60 +43,27 @@ describe("collectProviderApiKeys", () => {
   });
 });
 
-describe("collectAnthropicApiKeys", () => {
-  it("does not rotate API keys over Anthropic OAuth", () => {
-    expect(
-      collectAnthropicApiKeys({
-        env: {
-          ANTHROPIC_API_KEY: "primary-key",
-          ANTHROPIC_API_KEY_OLD: "old-key",
-          ANTHROPIC_OAUTH_TOKEN: "oauth-token",
-        },
-      }),
-    ).toEqual([]);
+describe("isApiKeyRateLimitError", () => {
+  it.each([
+    "rate_limit",
+    "rate limit reached",
+    "HTTP 429 too many requests",
+    "quota exceeded",
+    "quota_exceeded",
+    "resource exhausted",
+    "resource_exhausted",
+    "too many requests",
+  ])("preserves the intentional key-rotation signal %s", (message) => {
+    expect(isApiKeyRateLimitError(message)).toBe(true);
   });
 
-  it("keeps API-key rotation when Anthropic OAuth is unavailable", () => {
-    expect(
-      collectAnthropicApiKeys({
-        env: {
-          ANTHROPIC_API_KEY: "primary-key",
-          ANTHROPIC_API_KEY_OLD: "old-key",
-        },
-      }),
-    ).toEqual(["primary-key", "old-key"]);
-  });
-});
-
-describe("isAnthropicBillingError", () => {
-  it("does not false-positive on plain 'a 402' prose", () => {
-    const samples = [
-      "Use a 402 stainless bolt",
-      "Book a 402 room",
-      "There is a 402 near me",
-      "The building at 402 Main Street",
-    ];
-
-    for (const sample of samples) {
-      expect(isAnthropicBillingError(sample)).toBe(false);
-    }
-  });
-
-  it("matches real 402 billing payload contexts including JSON keys", () => {
-    const samples = [
-      "HTTP 402 Payment Required",
-      "status: 402",
-      "error code 402",
-      '{"status":402,"type":"error"}',
-      '{"code":402,"message":"payment required"}',
-      '{"error":{"code":402,"message":"billing hard limit reached"}}',
-      "got a 402 from the API",
-      "returned 402",
-      "received a 402 response",
-    ];
-
-    for (const sample of samples) {
-      expect(isAnthropicBillingError(sample)).toBe(true);
-    }
+  it.each([
+    "request id req-4291 failed",
+    "model gpt-5.5-preview-0429 not found",
+    "input length 14295 tokens exceeds the model limit",
+    "429 insufficient_quota",
+  ])("does not rotate keys for the non-rate-limit signal %s", (message) => {
+    // FIXED(refactor-06): embedded numbers and billing quota failures are not key-local throttles.
+    expect(isApiKeyRateLimitError(message)).toBe(false);
   });
 });

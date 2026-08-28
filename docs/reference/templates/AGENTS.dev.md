@@ -49,9 +49,20 @@ Before proposing or building a custom system, feature, workflow, tool, integrati
 - Before writing memory files, read them first; write only concrete updates, never empty placeholders.
 - Capture durable facts, preferences, and decisions; avoid secrets.
 
-## Heartbeats (optional)
+## Automations (optional)
 
-- HEARTBEAT.md can hold a tiny checklist for heartbeat runs; keep it small.
+- A scheduled automation's scratch can hold a tiny task checklist; keep it small.
+
+## Tools
+
+Skills define how tools work. Keep environment-specific details here so shared skills can update independently without exposing your local setup.
+
+Example placeholders (replace or remove them):
+
+```markdown
+- SSH: dev-server -> 192.168.1.100, user admin
+- TTS: preferred voice "Nova"; default speaker Office
+```
 
 ## Customize
 

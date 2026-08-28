@@ -5,7 +5,10 @@ type MockManifestRegistry = {
   plugins: Array<{
     id: string;
     origin: string;
-    channelEnvVars?: Record<string, string[]>;
+    packageChannel?: {
+      id: string;
+      configuredState?: { env?: { allOf?: string[]; anyOf?: string[] } };
+    };
   }>;
   diagnostics: unknown[];
 };
@@ -15,14 +18,16 @@ const pluginRegistryMocks = vi.hoisted(() => {
     plugins: [],
     diagnostics: [],
   }));
+  const loadPluginMetadataSnapshot = vi.fn((_params?: unknown) => ({
+    plugins: loadManifestRegistry().plugins,
+    manifestRegistry: loadManifestRegistry(),
+  }));
   return {
     loadPluginManifestRegistryForInstalledIndex: loadManifestRegistry,
     loadPluginManifestRegistryForPluginRegistry: loadManifestRegistry,
     loadPluginRegistrySnapshot: vi.fn(() => ({ plugins: [] })),
-    loadPluginMetadataSnapshot: vi.fn(() => ({
-      plugins: loadManifestRegistry().plugins,
-      manifestRegistry: loadManifestRegistry(),
-    })),
+    loadPluginMetadataSnapshot,
+    resolvePluginMetadataSnapshot: vi.fn((params: unknown) => loadPluginMetadataSnapshot(params)),
   };
 });
 
@@ -39,9 +44,10 @@ vi.mock("../plugins/plugin-registry.js", () => ({
 
 vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
   loadPluginMetadataSnapshot: pluginRegistryMocks.loadPluginMetadataSnapshot,
+  resolvePluginMetadataSnapshot: pluginRegistryMocks.resolvePluginMetadataSnapshot,
 }));
 
-describe("channel env vars dynamic manifest metadata", () => {
+describe("channel env vars dynamic package metadata", () => {
   beforeEach(() => {
     vi.resetModules();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
@@ -52,6 +58,10 @@ describe("channel env vars dynamic manifest metadata", () => {
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReset();
     pluginRegistryMocks.loadPluginRegistrySnapshot.mockReturnValue({ plugins: [] });
     pluginRegistryMocks.loadPluginMetadataSnapshot.mockClear();
+    pluginRegistryMocks.resolvePluginMetadataSnapshot.mockReset();
+    pluginRegistryMocks.resolvePluginMetadataSnapshot.mockImplementation((params) =>
+      pluginRegistryMocks.loadPluginMetadataSnapshot(params),
+    );
   });
 
   it("includes later-installed plugin env vars without a bundled generated map", async () => {
@@ -60,8 +70,11 @@ describe("channel env vars dynamic manifest metadata", () => {
         {
           id: "external-mattermost",
           origin: "global",
-          channelEnvVars: {
-            mattermost: ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"],
+          packageChannel: {
+            id: "mattermost",
+            configuredState: {
+              env: { anyOf: ["MATTERMOST_BOT_TOKEN", "MATTERMOST_URL"] },
+            },
           },
         },
       ],
@@ -74,5 +87,32 @@ describe("channel env vars dynamic manifest metadata", () => {
     const knownNames = mod.listKnownChannelEnvVarNames();
     expect(knownNames).toContain("MATTERMOST_BOT_TOKEN");
     expect(knownNames).toContain("MATTERMOST_URL");
+  });
+
+  it("reuses published channel metadata without rescanning manifests", async () => {
+    pluginRegistryMocks.resolvePluginMetadataSnapshot.mockReturnValue({
+      plugins: [
+        {
+          id: "external-mattermost",
+          origin: "global",
+          packageChannel: {
+            id: "mattermost",
+            configuredState: { env: { anyOf: ["MATTERMOST_BOT_TOKEN"] } },
+          },
+        },
+      ],
+      manifestRegistry: { plugins: [], diagnostics: [] },
+    });
+    const mod = await import("./channel-env-vars.js");
+
+    expect(mod.getChannelEnvVars("mattermost")).toEqual(["MATTERMOST_BOT_TOKEN"]);
+    expect(mod.listKnownChannelEnvVarNames()).toEqual(["MATTERMOST_BOT_TOKEN"]);
+    expect(pluginRegistryMocks.loadPluginMetadataSnapshot).not.toHaveBeenCalled();
+    expect(pluginRegistryMocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
+    expect(pluginRegistryMocks.resolvePluginMetadataSnapshot).toHaveBeenCalledWith({
+      config: undefined,
+      workspaceDir: undefined,
+      env: process.env,
+    });
   });
 });

@@ -8,15 +8,6 @@ import type {
 
 export type CostBreakdown = Partial<Usage["cost"]>;
 
-export type ParsedUsageEntry = {
-  usage: NormalizedUsage;
-  costTotal?: number;
-  costBreakdown?: CostBreakdown;
-  provider?: string;
-  model?: string;
-  timestamp?: Date;
-};
-
 export type ParsedTranscriptEntry = {
   message: Record<string, unknown>;
   role?: "user" | "assistant";
@@ -45,6 +36,8 @@ export type CostUsageTotals = {
   cacheReadCost: number;
   cacheWriteCost: number;
   missingCostEntries: number;
+  /** Missing-cost entry counts keyed by the raw `provider/model` attribution. */
+  missingCostByModel?: Record<string, number>;
 };
 
 type CostUsageDailyEntry = CostUsageTotals & {
@@ -71,31 +64,19 @@ export type UsageDailyBucket =
   | { mode: "utc-offset"; utcOffsetMinutes: number }
   | { mode: "time-zone"; timeZone: string };
 
-export type SessionDailyUsage = {
+type SessionDailyUsage = {
   date: string; // YYYY-MM-DD
   tokens: number;
   cost: number;
 };
 
-export type SessionDailyMessageCounts = {
+export type SessionDailyMessageCounts = SessionMessageCounts & {
   date: string; // YYYY-MM-DD
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
 };
 
-export type SessionUtcQuarterHourMessageCounts = {
+export type SessionUtcQuarterHourMessageCounts = SessionMessageCounts & {
   date: string; // YYYY-MM-DD (UTC)
   quarterIndex: number; // 0-95, UTC quarter-hour bucket (index = floor((utcH * 60 + utcM) / 15))
-  total: number;
-  user: number;
-  assistant: number;
-  toolCalls: number;
-  toolResults: number;
-  errors: number;
 };
 
 export type SessionUtcQuarterHourTokenUsage = {

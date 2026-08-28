@@ -40,12 +40,34 @@
   padding-top: var(--space-3);
 }
 
-.model-providers__layout,
+.model-providers__global-metrics {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.model-providers__global-metrics-title {
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .model-providers__fallbacks,
 .model-providers__inline-form,
 .model-providers__probe {
   display: grid;
   gap: 12px;
+}
+
+.model-providers__setup .settings-row {
+  min-height: 92px;
+  padding-block: var(--space-5);
+}
+
+.model-providers__setup .settings-row__title {
+  font-size: var(--control-ui-text-lg);
+  font-weight: 600;
 }
 
 .model-providers__credentials {
@@ -105,6 +127,10 @@
   border-color: color-mix(in srgb, var(--ok) 35%, var(--border));
 }
 
+.model-providers__probe--warning {
+  border-color: color-mix(in srgb, var(--warn) 35%, var(--border));
+}
+
 .model-providers__probe--error {
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border));
 }
@@ -112,9 +138,7 @@
 .model-providers__probe-summary,
 .model-providers__probe-target,
 .model-providers__fallback-heading,
-.model-providers__fallback-row,
-.model-providers__defaults-heading,
-.model-providers__add-heading {
+.model-providers__fallback-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -139,6 +163,13 @@
   align-items: end;
   gap: 12px;
   margin-top: 16px;
+}
+
+.model-providers__utility-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: fit-content;
 }
 
 .model-providers__fallbacks {
@@ -171,21 +202,29 @@
   grid-template-columns: minmax(160px, 0.8fr) minmax(220px, 1.4fr) auto;
 }
 
-.model-providers__card .callout,
-.model-providers__add .callout {
-  margin-top: 10px;
-}
+@media (max-width: 768px) {
+  .model-providers__head {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
 
-@media (max-width: 700px) {
+  .model-providers__identity,
+  .model-providers__head > .settings-row__control {
+    flex: 1 1 100%;
+    width: 100%;
+  }
+
+  .model-providers__head > .settings-row__control {
+    justify-content: flex-start;
+  }
+
   .model-providers__default-grid,
   .model-providers__add-form {
     grid-template-columns: 1fr;
   }
 
   .model-providers__credentials,
-  .model-providers__confirm,
-  .model-providers__defaults-heading,
-  .model-providers__add-heading {
+  .model-providers__confirm {
     align-items: flex-start;
     flex-direction: column;
   }

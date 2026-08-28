@@ -2,17 +2,41 @@
    detail overlay, and the guided setup wizard dialog. Everything else uses the
    shared settings design language. */
 
-/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
+/* Compact refresh actions should not retain the spacing and top alignment
+   reserved for settings headers with full-size controls. */
+.settings-section:has(.settings-section__actions .btn--xs.btn--icon) {
+  gap: var(--space-2);
+}
+
+@media not all and (max-width: 640px) {
+  .settings-section__header:not(:has(.settings-section__desc)):has(
+    .settings-section__actions .btn--xs.btn--icon
+  ) {
+    align-items: center;
+  }
+}
+
+.channels-empty {
+  display: grid;
+  place-items: center;
+  padding-top: var(--space-4);
+}
+
+.channels-empty .settings-empty {
+  padding-top: var(--space-1);
+}
+
 .channels-item {
   width: 100%;
   text-align: left;
 }
 
+/* Row with a leading 44px art tile (mirrors the plugins hub row anatomy). */
 .channels-tile {
   display: grid;
-  width: 44px;
-  height: 44px;
-  flex: 0 0 44px;
+  width: var(--channels-art-size, 44px);
+  height: var(--channels-art-size, 44px);
+  flex: 0 0 var(--channels-art-size, 44px);
   place-items: center;
   overflow: hidden;
   border: 1px solid var(--border);
@@ -107,6 +131,115 @@
   padding: var(--space-4) var(--space-4) var(--space-5);
 }
 
+/* ---------- DM sender access requests ---------- */
+
+.channels-pairing-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.channels-pairing-filters label {
+  display: grid;
+  flex: 0 1 220px;
+  gap: var(--space-1);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+}
+
+.channels-pairing-filters select {
+  width: 100%;
+}
+
+.channels-pairing-feedback {
+  min-height: 0;
+}
+
+.channels-pairing-feedback + .channels-pairing-feedback {
+  border-top: 0;
+}
+
+.channels-pairing-request {
+  align-items: stretch;
+}
+
+.channels-pairing-request__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+}
+
+.channels-pairing-request__actions {
+  flex-wrap: wrap;
+}
+
+.channels-pairing-request__details {
+  width: 100%;
+  color: var(--muted);
+  font-size: var(--control-ui-text-sm);
+}
+
+.channels-pairing-request__details summary {
+  width: fit-content;
+  cursor: var(--cursor-action);
+}
+
+.channels-pairing-request__details .settings-kv {
+  margin-top: var(--space-2);
+}
+
+.channels-pairing-help {
+  padding: var(--space-2) var(--space-4) var(--space-3);
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.5;
+}
+
+.channels-pairing-dialog {
+  display: grid;
+  width: min(520px, calc(100vw - 48px));
+  gap: var(--space-3);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  padding: var(--space-4);
+  background: var(--popover);
+  box-shadow: var(--shadow-xl);
+}
+
+.channels-pairing-dialog__option {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  color: var(--text);
+  cursor: var(--cursor-action);
+}
+
+.channels-pairing-dialog__option input {
+  margin-top: 3px;
+}
+
+.channels-pairing-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+@media (max-width: 640px) {
+  .channels-pairing-request__main {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .channels-pairing-request__actions {
+    justify-content: flex-start;
+  }
+}
+
 /* ---------- setup wizard dialog ---------- */
 
 .channels-wizard {
@@ -146,6 +279,13 @@
   font-size: var(--control-ui-text-sm);
 }
 
+.channels-wizard__subtitle {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
 .channels-wizard__body {
   display: grid;
   gap: var(--space-3);
@@ -169,10 +309,37 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.channels-wizard__output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.channels-wizard__output--code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
 .channels-wizard__message {
   color: var(--text-strong);
   font-weight: 620;
   line-height: 1.4;
+}
+
+.channels-wizard__text,
+.channels-wizard__secret {
+  width: 100%;
+  margin-top: 10px;
+}
+
+.channels-wizard__text {
+  display: flex;
+}
+
+.channels-wizard__text > .input {
+  min-height: 44px;
 }
 
 .channels-wizard__options {
@@ -195,7 +362,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
   padding: var(--space-2) var(--space-3);
   background: var(--card);
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
   transition:
     border-color var(--duration-fast) var(--ease-out),
     background var(--duration-fast) var(--ease-out);
@@ -230,6 +397,11 @@ wa-radio-group.channels-wizard__options::part(radios) {
   gap: var(--space-2);
 }
 
+.channels-wizard__link,
+.channels-wizard__link:hover {
+  text-decoration: none;
+}
+
 .channels-wizard__footer {
   display: flex;
   align-items: center;
@@ -257,7 +429,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
 .channels-wizard__qr img {
   width: min(260px, 70vw);
   border-radius: var(--radius-md);
-  background: #fff;
+  background: var(--brand-logo-chip-bg);
   padding: var(--space-2);
 }
 
@@ -280,7 +452,7 @@ wa-radio-group.channels-wizard__options::part(radios) {
   color: inherit;
   font: inherit;
   text-align: left;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .channels-item__detail:focus-visible {

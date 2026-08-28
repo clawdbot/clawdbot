@@ -41,7 +41,9 @@ Quick answers plus deeper troubleshooting for real-world setups (local dev, VPS,
     ```
     If RPC is down, fall back to:
     ```bash
-    tail -f "$(ls -t /tmp/openclaw/openclaw-*.log | head -1)"
+    tail -f "/tmp/openclaw/openclaw-$(date +%F).log"
+    # Named profile example:
+    tail -f "/tmp/openclaw/openclaw-dev-$(date +%F).log"
     ```
     File logs are separate from service logs; see [Logging](/logging) and [Troubleshooting](/gateway/troubleshooting).
   </Step>
@@ -68,14 +70,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
 <AccordionGroup>
   <Accordion title="What is OpenClaw, in one paragraph?">
-    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (Discord, Google Chat, iMessage, Mattermost, Signal, Slack, Telegram, WebChat, WhatsApp, and bundled channel plugins such as QQ Bot) and can also do voice plus a live Canvas on supported platforms. The **Gateway** is the always-on control plane; the assistant is the product.
+    OpenClaw is a personal AI assistant you run on your own devices. It replies on the messaging surfaces you already use (Discord, Google Chat, iMessage, Mattermost, Signal, Slack, Telegram, WebChat, WhatsApp, and bundled channel plugins such as QQ Bot) and can also do voice plus hosted widgets in chat, on session dashboards, and in the macOS panel. The **Gateway** is the always-on control plane; the assistant is the product.
   </Accordion>
 
   <Accordion title="Value proposition">
     OpenClaw is not "just a Claude wrapper." It is a **local-first control plane** that runs a capable assistant on **your own hardware**, reachable from the chat apps you already use, with stateful sessions, memory, and tools - without handing your workflows to a hosted SaaS.
 
     - **Your devices, your data**: run the Gateway wherever you want (Mac, Linux, VPS) and keep the workspace and session history local.
-    - **Real channels, not a web sandbox**: Discord/iMessage/Signal/Slack/Telegram/WhatsApp/etc, plus mobile voice and Canvas on supported platforms.
+    - **Real channels, not a web sandbox**: Discord/iMessage/Signal/Slack/Telegram/WhatsApp/etc, plus mobile voice and hosted widgets.
     - **Model-agnostic**: use Anthropic, MiniMax, OpenAI, OpenRouter, etc., with per-agent routing and failover.
     - **Local-only option**: run local models so all data can stay on your device.
     - **Multi-agent routing**: separate agents per channel, account, or task, each with its own workspace and defaults.
@@ -128,11 +130,11 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
 <AccordionGroup>
   <Accordion title="How do I customize skills without keeping the repo dirty?">
-    Use managed overrides instead of editing the repo copy. Put changes in `~/.openclaw/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.openclaw/openclaw.json`). Precedence: `<workspace>/skills` -> `<workspace>/.agents/skills` -> `~/.agents/skills` -> `~/.openclaw/skills` -> bundled -> `skills.load.extraDirs`, so managed overrides win over bundled skills without touching git. To install globally but limit visibility to some agents, keep the shared copy in `~/.openclaw/skills` and control visibility with `agents.defaults.skills` / `agents.list[].skills`. Only upstream-worthy edits should go out as PRs against the repo copy.
+    Use managed overrides instead of editing the repo copy. Put changes in `~/.openclaw/skills/<name>/SKILL.md` (or add a folder via `skills.load.extraDirs` in `~/.openclaw/openclaw.json`). Precedence: `<workspace>/skills` -> `<workspace>/.agents/skills` -> `~/.agents/skills` -> `~/.openclaw/skills` -> bundled -> `skills.load.extraDirs`, so managed overrides win over bundled skills without touching git. To install globally but limit visibility to some agents, keep the shared copy in `~/.openclaw/skills` and control visibility with `agents.defaults.skills` / `agents.entries.*.skills`. Only upstream-worthy edits should go out as PRs against the repo copy.
   </Accordion>
 
   <Accordion title="Can I load skills from a custom folder?">
-    Yes: add directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence in the order above). `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session. To limit visibility to certain agents, pair with `agents.defaults.skills` or `agents.list[].skills`.
+    Yes: add directories via `skills.load.extraDirs` in `~/.openclaw/openclaw.json` (lowest precedence in the order above). `clawhub` installs into `./skills` by default, which OpenClaw treats as `<workspace>/skills` on the next session. To limit visibility to certain agents, pair with `agents.defaults.skills` or `agents.entries.*.skills`.
   </Accordion>
 
   <Accordion title="How can I use different models or settings for different tasks?">
@@ -140,32 +142,36 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - **Cron jobs**: isolated jobs can set a `model` override per job.
     - **Agents**: route tasks to separate agents with different default models, thinking levels, and stream params.
-    - **On-demand switch**: `/model` switches the current session model at any time.
+    - **Current session only**: `/model <model> -s` (or `--session`) leaves configured defaults unchanged.
+    - **Agent default + current session**: Owner/admin `/model <model> -a` (or `--agent`) updates the selected agent.
+    - **Global default + current session**: Owner/admin `/model <model> -g` (or `--global`) updates `agents.defaults.model`.
+
+    Bare `/model <model>` keeps owner/admin configured-default persistence unless
+    you set the optional [model selection scope](/gateway/config-agents#agentsdefaultsmodelselectionscope).
 
     Example - same model, different per-agent settings:
 
     ```json5
     {
       agents: {
-        list: [
-          {
-            id: "coder",
+        ownership: "explicit",
+        entries: {
+          coder: {
             model: "xiaomi/mimo-v2.5-pro",
             thinkingDefault: "high",
             params: { temperature: 0.1 },
           },
-          {
-            id: "chat",
+          chat: {
             model: "xiaomi/mimo-v2.5-pro",
             thinkingDefault: "off",
             params: { temperature: 0.8 },
           },
-        ],
+        },
       },
     }
     ```
 
-    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`, then agent-specific overrides in flat `agents.list[].params`. Do not duplicate the same model under nested `agents.list[].models["provider/model"].params`; that path is for per-agent model catalog and runtime overrides.
+    Put shared per-model defaults in `agents.defaults.models["provider/model"].params`, then agent-specific overrides in flat `agents.entries.*.params`. Do not duplicate the same model under nested `agents.entries.*.models["provider/model"].params`; that path is for per-agent model catalog and runtime overrides.
 
     See [Cron jobs](/automation/cron-jobs), [Multi-Agent Routing](/concepts/multi-agent), [Configuration](/gateway/config-agents), [Slash commands](/tools/slash-commands).
 
@@ -189,7 +195,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - `/session idle <duration|off>` and `/session max-age <duration|off>` control auto-unfocus.
     - `/unfocus` detaches the thread.
 
-    Config: `session.threadBindings.enabled` (global switch), `session.threadBindings.idleHours` (default `24`, `0` disables), `session.threadBindings.maxAgeHours` (default `0` = no hard cap), and per-channel overrides `channels.discord.threadBindings.{enabled,idleHours,maxAgeHours}`. `channels.discord.threadBindings.spawnSessions` gates auto-bind on spawn (default `true`).
+    Config: `session.threadBindings.enabled` (global switch), `session.threadBindings.idleHours` (default `24`, `0` disables), `session.threadBindings.maxAgeHours` (default `0` = no hard cap), and `session.threadBindings.spawnSessions` for auto-bind on spawn (default `true`).
 
     Docs: [Sub-agents](/tools/subagents), [Discord](/channels/discord), [Configuration Reference](/gateway/configuration-reference), [Slash commands](/tools/slash-commands).
 
@@ -279,7 +285,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     openclaw skills check
     ```
 
-    Native `openclaw skills install` writes into the active workspace `skills/` directory by default. Add `--global` to install into the shared managed skills directory for all local agents. Install the separate `clawhub` CLI only to publish or sync your own skills. Use `agents.defaults.skills` or `agents.list[].skills` to narrow which agents see shared skills.
+    Native `openclaw skills install` writes into the active workspace `skills/` directory by default. Add `--global` to install into the shared managed skills directory for all local agents. Install the separate `clawhub` CLI only to publish or sync your own skills. Use `agents.defaults.skills` or `agents.entries.*.skills` to narrow which agents see shared skills.
 
   </Accordion>
 
@@ -339,7 +345,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     openclaw skills update --all
     ```
 
-    Native installs land in the active workspace `skills/` directory; use `--global` for all local agents, or configure `agents.defaults.skills` / `agents.list[].skills` to limit visibility. Some skills expect Homebrew-installed binaries; on Linux that means Linuxbrew.
+    Native installs land in the active workspace `skills/` directory; use `--global` for all local agents, or configure `agents.defaults.skills` / `agents.entries.*.skills` to limit visibility. Some skills expect Homebrew-installed binaries; on Linux that means Linuxbrew.
 
     See [Skills](/tools/skills), [Skills config](/tools/skills-config), [ClawHub](/tools/clawhub).
 
@@ -385,15 +391,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - Persist `/home/node` with `OPENCLAW_HOME_VOLUME` so caches survive.
     - Bake system deps into the image with `OPENCLAW_IMAGE_APT_PACKAGES`.
-    - Install Playwright browsers via the bundled CLI: `node /app/node_modules/playwright-core/cli.js install chromium`.
-    - Set `PLAYWRIGHT_BROWSERS_PATH` and persist that path.
+    - Bake Playwright Chromium and its system dependencies into the image with `OPENCLAW_INSTALL_BROWSER=1`.
 
     Docs: [Docker](/install/docker), [Browser](/tools/browser).
 
   </Accordion>
 
   <Accordion title="Can I keep DMs personal but make groups public/sandboxed with one agent?">
-    Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Docker is the default backend once sandboxing is enabled. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
+    Yes, if private traffic is **DMs** and public traffic is **groups**. Set `agents.defaults.sandbox.mode: "non-main"` so group/channel sessions (non-main keys) run in the configured sandbox backend while the main DM session stays on-host. Select `backend: "docker"` for Docker or `backend: "podman"` for Podman. Restrict tools available in sandboxed sessions via `tools.sandbox.tools`.
 
     Setup walkthrough: [Groups: personal DMs + public groups](/channels/groups#pattern-personal-dms-public-groups-single-agent). Key reference: [Gateway configuration](/gateway/config-agents#agentsdefaultssandbox).
 
@@ -404,7 +409,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     OpenClaw validates bind sources against both the normalized path and the canonical path resolved through the deepest existing ancestor, so symlink-parent escapes fail closed even when the final path segment does not exist yet.
 
-    See [Sandboxing](/gateway/sandboxing#custom-bind-mounts) and [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated#bind-mounts-security-quick-check).
+    See [Sandboxing](/gateway/sandboxing#multiple-folders-for-one-agent) and [Sandbox vs Tool Policy vs Elevated](/gateway/sandbox-vs-tool-policy-vs-elevated#bind-mounts-security-quick-check).
 
   </Accordion>
 
@@ -432,7 +437,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Does semantic memory search require an OpenAI API key?">
     Only if you use **OpenAI embeddings**, which is the default provider. Codex OAuth covers chat/completions and does **not** grant embeddings access, so signing in with Codex (OAuth or the Codex CLI login) does not enable semantic memory search. OpenAI embeddings still need a real API key (`OPENAI_API_KEY` or `models.providers.openai.apiKey`).
 
-    To stay local, set `agents.defaults.memorySearch.provider: "local"` (GGUF/llama.cpp). Other supported providers: Bedrock, DeepInfra, Gemini (`GEMINI_API_KEY` or `memorySearch.remote.apiKey`), GitHub Copilot, LM Studio, Mistral, Ollama, OpenAI-compatible, and Voyage. See [Memory](/concepts/memory) and [Memory search](/concepts/memory-search) for setup details.
+    To stay local, set `memory.search.provider: "local"` (GGUF/llama.cpp). Other supported providers: Bedrock, DeepInfra, Gemini (`GEMINI_API_KEY` or `memory.search.remote.apiKey`), GitHub Copilot, LM Studio, Mistral, Ollama, OpenAI-compatible, and Voyage. See [Memory](/concepts/memory) and [Memory search](/concepts/memory-search) for setup details.
 
   </Accordion>
 </AccordionGroup>
@@ -457,16 +462,21 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | Path                                                               | Purpose                                                            |
     | ------------------------------------------------------------------ | ------------------------------------------------------------------ |
     | `$OPENCLAW_STATE_DIR/openclaw.json`                                 | Main config (JSON5)                                                 |
-    | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                        | Legacy OAuth import (copied into auth profiles on first use)        |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth-profiles.json`     | Auth profiles (OAuth, API keys, optional `keyRef`/`tokenRef`)        |
+    | `$OPENCLAW_STATE_DIR/credentials/oauth.json`                        | Legacy OAuth migration source for `openclaw doctor --fix`           |
+    | `$OPENCLAW_STATE_DIR/state/openclaw.sqlite`                         | Shared SQLite state, including shared auth profiles                 |
     | `$OPENCLAW_STATE_DIR/secrets.json`                                  | Optional file-backed secret payload for `file` SecretRef providers   |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`              | Legacy compatibility file (static `api_key` entries scrubbed)        |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/auth.json`              | Legacy auth migration source for `openclaw doctor --fix`             |
     | `$OPENCLAW_STATE_DIR/credentials/`                                  | Provider state (for example `whatsapp/<accountId>/creds.json`)      |
     | `$OPENCLAW_STATE_DIR/agents/`                                       | Per-agent state (agentDir + legacy/archive session artifacts)        |
-    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite`  | Per-agent SQLite state, including session rows and transcripts      |
+    | `$OPENCLAW_STATE_DIR/agents/<agentId>/agent/openclaw-agent.sqlite`  | Per-agent SQLite state, including local auth profiles, sessions, and transcripts |
     | `$OPENCLAW_STATE_DIR/agents/<agentId>/sessions/`                    | Legacy session migration sources and archive/support artifacts      |
 
     Legacy single-agent path `~/.openclaw/agent/*` is migrated by `openclaw doctor`.
+
+    Legacy `auth-profiles.json` files are imported by `openclaw doctor --fix`;
+    new logins write SQLite. Agent-local profiles override the shared read-through
+    base. Older installs keep that shared store in the main agent's database until
+    doctor relocates it; see [Auth credential semantics](/auth-credential-semantics#agent-copy-portability).
 
     Your **workspace** (AGENTS.md, memory files, skills, etc.) is separate, configured via `agents.defaults.workspace` (default: `~/.openclaw/workspace`).
 
@@ -475,7 +485,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Where should AGENTS.md / SOUL.md / USER.md / MEMORY.md live?">
     These live in the **agent workspace**, not `~/.openclaw`.
 
-    - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`, optional `HEARTBEAT.md`. Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix` can merge it into `MEMORY.md` when both exist.
+    - **Workspace (per agent)**: `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`, `MEMORY.md`, `memory/YYYY-MM-DD.md`. Lowercase root `memory.md` is legacy repair input only; `openclaw doctor --fix` can merge it into `MEMORY.md` when both exist.
     - **State dir (`~/.openclaw`)**: config, channel/provider state, auth profiles, sessions, logs, shared skills (`~/.openclaw/skills`).
 
     Default workspace is `~/.openclaw/workspace`, configurable:
@@ -510,7 +520,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    Or override one agent under `agents.list[].bootstrapMaxChars` / `bootstrapTotalMaxChars`.
+    Or override one agent under `agents.entries.*.bootstrapMaxChars` / `bootstrapTotalMaxChars`.
 
     Use `/context` to check raw vs injected sizes and whether truncation happened. Keep `SOUL.md` focused on voice, stance, and personality; put operating rules in `AGENTS.md` and durable facts in memory.
 
@@ -584,32 +594,14 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   <Accordion title="Why do I need a token on localhost now?">
     OpenClaw enforces gateway auth by default, including loopback. If no explicit auth path is configured, startup resolves to token mode and generates a runtime-only token for that startup, so local WS clients must authenticate. This blocks other local processes from calling the Gateway.
 
+    On a fresh loopback start, the Gateway prepares the canonical same-user CLI device credential before `/readyz`, so normal `openclaw` CLI calls can authenticate without persisting the generated token. Other clients still need an explicit shared secret or an approved device pairing.
+
     Configure `gateway.auth.token`, `gateway.auth.password`, `OPENCLAW_GATEWAY_TOKEN`, or `OPENCLAW_GATEWAY_PASSWORD` explicitly when clients need a stable secret across restarts. You can also choose password mode, or `trusted-proxy` for identity-aware reverse proxies. For open loopback, set `gateway.auth.mode: "none"` explicitly. `openclaw doctor --generate-gateway-token` generates a token any time.
 
   </Accordion>
 
   <Accordion title="Do I have to restart after changing config?">
-    The Gateway watches the config and supports hot-reload: `gateway.reload.mode: "hybrid"` (default) hot-applies safe changes and restarts for critical ones. `hot`, `restart`, and `off` are also supported. Most `tools.*`, `agents.*` policy, `session.*`, and `messages.*` changes apply immediately with no reload action at all; `gateway.*` binding/port changes require a restart.
-  </Accordion>
-
-  <Accordion title="How do I disable funny CLI taglines?">
-    Set `cli.banner.taglineMode`:
-
-    ```json5
-    {
-      cli: {
-        banner: {
-          taglineMode: "off", // random | default | off
-        },
-      },
-    }
-    ```
-
-    - `off`: hides tagline text but keeps the banner title/version line.
-    - `default`: always uses `All your chats, one OpenClaw.`.
-    - `random`: rotating funny/seasonal taglines (default behavior).
-    - For no banner at all, set env `OPENCLAW_HIDE_BANNER=1`.
-
+    The Gateway watches the config and supports hot-reload: `gateway.reload.mode: "hybrid"` (default) hot-applies safe changes and restarts for critical ones. `off` disables config reload; the earlier `hot` and `restart` modes are retired. Most `tools.*`, `agents.*` policy, `session.*`, and `messages.*` changes apply immediately with no reload action at all; `gateway.*` binding/port changes require a restart.
   </Accordion>
 
   <Accordion title="How do I enable web search (and web fetch)?">
@@ -625,7 +617,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     | Grok | No (xAI OAuth or key) | `XAI_API_KEY` |
     | Kimi | No | `KIMI_API_KEY` or `MOONSHOT_API_KEY` |
     | MiniMax Search | No | `MINIMAX_CODE_PLAN_KEY`, `MINIMAX_CODING_API_KEY`, or `MINIMAX_API_KEY` |
-    | Ollama Web Search | Yes (needs `ollama signin`) | - |
+    | Ollama Web Search | Local: yes (needs `ollama signin`); hosted: no | Hosted: `OLLAMA_API_KEY` |
     | Perplexity | No | `PERPLEXITY_API_KEY` or `OPENROUTER_API_KEY` |
     | SearXNG | Yes (self-hosted) | `SEARXNG_BASE_URL` |
     | Tavily | No | `TAVILY_API_KEY` |
@@ -703,7 +695,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     Common pattern: **one Gateway** (for example a Raspberry Pi) plus **nodes** and **agents**.
 
     - **Gateway (central)**: owns channels (Signal/WhatsApp), routing, sessions.
-    - **Nodes (devices)**: Macs/iOS/Android connect as peripherals and expose local tools (`system.run`, `canvas`, `camera`).
+    - **Nodes (devices)**: Macs/iOS/Android connect as peripherals and expose local tools such as `system.run` and `camera`; Macs can also present hosted widgets in the native panel.
     - **Agents (workers)**: separate brains/workspaces for special roles (for example ops vs personal data).
     - **Sub-agents**: spawn background work from a main agent for parallelism.
     - **TUI**: connect to the Gateway and switch agents/sessions.
@@ -809,7 +801,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
 
     - **No inbound SSH required** - nodes connect out to the Gateway WebSocket via device pairing.
     - **Safer execution controls** - `system.run` is gated by node allowlists/approvals on that laptop.
-    - **More device tools** - nodes expose `canvas`, `camera`, and `screen` in addition to `system.run`.
+    - **More device tools** - nodes expose `camera` and `screen` in addition to `system.run`; Macs also expose the widget panel.
     - **Local browser automation** - keep the Gateway on a VPS but run Chrome locally through a node host, or attach to local Chrome via Chrome MCP.
 
     SSH is fine for ad-hoc shell access; nodes are simpler for ongoing agent workflows and device automation.
@@ -900,15 +892,17 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     - `.env` from the current working directory.
     - a global fallback `.env` from `~/.openclaw/.env` (`$OPENCLAW_STATE_DIR/.env`).
 
-    Neither `.env` file overrides existing env vars. Provider credential and endpoint-routing keys are an exception for workspace `.env`: keys such as `GEMINI_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, or any key ending in `_ENDPOINT` (and other bundled-provider auth or endpoint env vars) are ignored from workspace `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env`.
+    Normally, neither `.env` file overrides existing env vars. For an OpenClaw-installed systemd service, the global `.env` may replace only service values that OpenClaw recorded as managed; operator-owned service values still take precedence. Provider credential and endpoint-routing keys are an exception for workspace `.env`: keys such as `GEMINI_API_KEY`, `XAI_API_KEY`, `MISTRAL_API_KEY`, or any key ending in `_ENDPOINT` (and other bundled-provider auth or endpoint env vars) are ignored from workspace `.env` and should live in the process environment, `~/.openclaw/.env`, or config `env.vars`.
 
     Inline env vars in config apply only if missing from the process env:
 
     ```json5
     {
       env: {
-        OPENROUTER_API_KEY: "sk-or-...",
-        vars: { GROQ_API_KEY: "gsk-..." },
+        vars: {
+          OPENROUTER_API_KEY: "sk-or-...",
+          GROQ_API_KEY: "gsk-...",
+        },
       },
     }
     ```
@@ -960,7 +954,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Do sessions reset automatically if I never send /new?">
-    Yes. The default reset policy is **daily**: a session rolls over at a configured local hour on the gateway host (`session.reset.atHour`, default `4`, 0-23), based on when the current session started. Switch to idle-based reset instead with `mode: "idle"` and `session.reset.idleMinutes`, which expires a session after a period of inactivity (based on the last real interaction, not heartbeat/cron/exec system events).
+    No, not by default. Sessions keep the same `sessionId`, and compaction bounds the active model context as conversations grow. `/new` and `/reset` remain available, or you can opt into automatic resets with `mode: "daily"` or `mode: "idle"`. Daily mode rolls over at `session.reset.atHour` (default `4`, 0-23) on the gateway host; idle mode uses `session.reset.idleMinutes` since the last real interaction, not heartbeat/cron/exec system events.
 
     ```json5
     {
@@ -977,7 +971,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     }
     ```
 
-    `resetByType` supports `direct` (legacy alias `dm`), `group`, and `thread`. Legacy top-level `session.idleMinutes` still works as a compatibility alias for an idle-mode default when no `session.reset`/`resetByType` block is set. Sessions with an active provider-owned CLI session are not cut by the implicit daily default. See [Session management](/concepts/session) for the full lifecycle.
+    `resetByType` supports `direct`, `group`, and `thread`. Doctor migrates legacy `dm` entries to `direct`; the schema rejects `dm`. Legacy top-level `session.idleMinutes` still works as a compatibility alias for an idle-mode default when no `session.reset`/`resetByType` block is set. See [Session management](/concepts/session) for the full lifecycle.
 
   </Accordion>
 
@@ -1018,7 +1012,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
     openclaw onboard --install-daemon
     ```
 
-    Onboarding also offers **Reset** if it detects an existing config; see [Onboarding (CLI)](/start/wizard). If you used profiles (`--profile` / `OPENCLAW_PROFILE`), reset each state dir (default `~/.openclaw-<profile>`). Dev-only reset: `openclaw gateway --dev --reset` wipes dev config, credentials, sessions, and workspace.
+    To reset and immediately re-run onboarding, pass `openclaw onboard --reset`; reset is a command flag, not a **Setup mode** menu choice. See [Onboarding (CLI)](/start/wizard). If you used profiles (`--profile` / `OPENCLAW_PROFILE`), reset each state dir (default `~/.openclaw-<profile>`). Dev-only reset: `openclaw gateway --dev --reset` wipes dev config, credentials, sessions, and workspace.
 
   </Accordion>
 
@@ -1047,16 +1041,16 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
       agents: {
         defaults: {
           heartbeat: {
-            every: "2h", // or "0m" to disable
+            every: "2h", // or "0m" to disable recurring cadence
           },
         },
       },
     }
     ```
 
-    If `HEARTBEAT.md` exists but is effectively empty (only blank lines, Markdown/HTML comments, ATX headings, fence markers, or empty list-item stubs), OpenClaw skips the heartbeat run to save API calls. If the file is missing, the heartbeat still runs and the model decides what to do.
+    Heartbeat instructions live in the monitor's cron scratch. Effectively empty scratch skips the heartbeat run to save API calls; without scratch, the heartbeat still runs and the model decides what to do. `0m` does not block targeted event-driven wakes, such as a background exec completion follow-up; those can still run one agent turn without enabling recurring cadence.
 
-    Per-agent overrides use `agents.list[].heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
+    Per-agent overrides use `agents.entries.*.heartbeat`. Docs: [Heartbeat](/gateway/heartbeat).
 
   </Accordion>
 
@@ -1105,7 +1099,7 @@ First-run Q&A - install, onboard, auth routes, subscriptions, initial failures -
   </Accordion>
 
   <Accordion title="Do groups/threads share context with DMs?">
-    Direct chats collapse to the main session by default. Groups/channels have their own session keys, and Telegram topics / Discord threads are separate sessions. See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
+    Direct chats collapse to the main session by default. Groups/channels get their own session keys unless a route binding sets `session.groupScope: "main"` to merge that room into the main session; Telegram topics / Discord threads are separate sessions. See [Groups](/channels/groups) and [Group messages](/channels/group-messages).
   </Accordion>
 
   <Accordion title="How many workspaces and agents can I create?">
@@ -1260,7 +1254,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 <AccordionGroup>
   <Accordion title="Where are logs?">
-    File logs (structured): `/tmp/openclaw/openclaw-YYYY-MM-DD.log`. Set a stable path via `logging.file`; file log level via `logging.level`; console verbosity via `--verbose` and `logging.consoleLevel`.
+    File logs (structured): `/tmp/openclaw/openclaw-YYYY-MM-DD.log` for the default profile, or `/tmp/openclaw/openclaw-<profile>-YYYY-MM-DD.log` for a named profile. Set a stable path via `logging.file`; file log level via `logging.level`; console verbosity via `--verbose` and `logging.consoleLevel`.
 
     Fastest tail:
 
@@ -1460,7 +1454,7 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
   </Accordion>
 
   <Accordion title="Are ClawHub skills and third-party plugins safe to install?">
-    Treat third-party skills and plugins as code you are choosing to trust. ClawHub skill pages expose scan state before install, but scans are not a complete security boundary. OpenClaw does not run built-in local dangerous-code blocking during plugin/skill install or update; use operator-owned `security.installPolicy` for local allow/block decisions.
+    Treat third-party skills and plugins as code you are choosing to trust. ClawHub skill pages expose scan state before install, but scans are not a complete security boundary. OpenClaw does not run built-in local dangerous-code blocking during plugin/skill install or update; use operator-owned `security.installPolicy` for local allow/warn/block decisions.
 
     Safer pattern: prefer trusted authors and pinned versions, read the skill/plugin before enabling it, keep plugin/skill allowlists narrow, run untrusted-input workflows in a sandbox with minimal tools, and avoid giving third-party code broad filesystem, exec, browser, or secret access.
 
@@ -1582,13 +1576,13 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 <AccordionGroup>
   <Accordion title='What is the default model for Anthropic with an API key?'>
-    Credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example `anthropic/claude-sonnet-4-6` or `anthropic/claude-opus-4-6`). `No credentials found for profile "anthropic:default"` means the Gateway could not find Anthropic credentials in the expected `auth-profiles.json` for the running agent.
+    Credentials and model selection are separate. Setting `ANTHROPIC_API_KEY` (or storing an Anthropic API key in auth profiles) enables authentication, but the actual default model is whatever you configure in `agents.defaults.model.primary` (for example `anthropic/claude-sonnet-4-6` or `anthropic/claude-opus-4-6`). `No credentials found for profile "anthropic:default"` means the Gateway could not find Anthropic credentials in the SQLite auth stores available to the running agent.
   </Accordion>
 </AccordionGroup>
 
 ---
 
-Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or open a [GitHub discussion](https://github.com/openclaw/openclaw/discussions).
+Still stuck? Ask in [Discord](https://discord.com/invite/clawd) or use the [GitHub issue chooser](https://github.com/openclaw/openclaw/issues/new/choose).
 
 ## Related
 

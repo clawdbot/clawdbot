@@ -1,13 +1,22 @@
 // Zalo plugin module implements monitor mocks test support behavior.
+import fs from "node:fs/promises";
+import path from "node:path";
+import {
+  closeOpenClawStateDatabaseForTest,
+  createChannelIngressQueueForTests,
+} from "openclaw/plugin-sdk/channel-ingress-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import {
   createEmptyPluginRegistry,
   createRuntimeEnv,
   setActivePluginRegistry,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { vi, type Mock } from "vitest";
-import type { OpenClawConfig } from "../runtime-api.js";
 import type { ResolvedZaloAccount } from "../types.js";
 
 type MonitorModule = typeof import("../monitor.js");
@@ -23,6 +32,8 @@ const runtimeModuleId = new URL("../runtime.js", import.meta.url).pathname;
 type UnknownMock = Mock<(...args: unknown[]) => unknown>;
 type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
 const cachedMonitorModules = new Map<string, Promise<MonitorModule>>();
+let lifecycleStateDir: string | undefined;
+let previousLifecycleStateDir: string | undefined;
 
 type ZaloLifecycleMocks = {
   setWebhookMock: AsyncUnknownMock;
@@ -105,9 +116,45 @@ const importCachedWebhookModule = createLazyRuntimeModule(
 );
 
 export async function resetLifecycleTestState() {
+  // Agent close releases leases through shared state; closing shared state first
+  // can reopen it during teardown and leave Windows handles under the state dir.
+  closeOpenClawAgentDatabasesForTest();
+  closeOpenClawStateDatabaseForTest();
+  if (lifecycleStateDir) {
+    await fs.rm(lifecycleStateDir, {
+      recursive: true,
+      force: true,
+      maxRetries: 20,
+      retryDelay: 25,
+    });
+    lifecycleStateDir = undefined;
+  }
+  if (previousLifecycleStateDir === undefined) {
+    delete process.env.OPENCLAW_STATE_DIR;
+  } else {
+    process.env.OPENCLAW_STATE_DIR = previousLifecycleStateDir;
+    previousLifecycleStateDir = undefined;
+  }
   vi.clearAllMocks();
-  (await importCachedWebhookModule()).clearZaloWebhookSecurityStateForTest();
+  (await importCachedWebhookModule()).zaloWebhookRuntime.clearZaloWebhookSecurityStateForTest();
   setActivePluginRegistry(createEmptyPluginRegistry());
+}
+
+async function installLifecycleWebhookIngressState(): Promise<void> {
+  const runtime = getZaloRuntimeMock() as PluginRuntime;
+  const createdDir = await fs.mkdtemp(
+    path.join(resolvePreferredOpenClawTmpDir(), "openclaw-zalo-lifecycle-"),
+  );
+  const stateDir = await fs.realpath(createdDir);
+  previousLifecycleStateDir = process.env.OPENCLAW_STATE_DIR;
+  lifecycleStateDir = stateDir;
+  process.env.OPENCLAW_STATE_DIR = stateDir;
+  runtime.state.openChannelIngressQueue = (<T>(options: { accountId?: string }) =>
+    createChannelIngressQueueForTests<T>({
+      channelId: "zalo",
+      accountId: options.accountId ?? "default",
+      stateDir,
+    })) as PluginRuntime["state"]["openChannelIngressQueue"];
 }
 
 export function setLifecycleRuntimeCore(
@@ -150,6 +197,7 @@ export async function startWebhookLifecycleMonitor(params: {
   webhookSecret?: string;
   cacheKey?: string;
 }) {
+  await installLifecycleWebhookIngressState();
   const registry = createEmptyPluginRegistry();
   setActivePluginRegistry(registry);
   const abort = new AbortController();

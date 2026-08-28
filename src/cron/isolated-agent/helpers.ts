@@ -1,11 +1,14 @@
 /** Normalizes isolated cron run output into summaries, delivery payloads, and error state. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { hasOutboundReplyContent } from "openclaw/plugin-sdk/reply-payload";
-import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS } from "../../auto-reply/heartbeat.js";
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
-import type { ReplyPayload } from "../../auto-reply/reply-payload.js";
+import { isHeartbeatAcknowledgementText } from "../../auto-reply/heartbeat.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
+import { isSilentReplyPayloadText } from "../../auto-reply/tokens.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { shouldSkipHeartbeatOnlyDelivery } from "../heartbeat-policy.js";
 
 type DeliveryPayload = Pick<
   ReplyPayload,
@@ -19,6 +22,10 @@ type CronPayloadOutcome = {
   synthesizedText?: string;
   deliveryPayload?: DeliveryPayload;
   deliveryPayloads: DeliveryPayload[];
+  deliveryDisposition:
+    | { kind: "visible" }
+    | { kind: "heartbeat"; controlOnly: boolean }
+    | { kind: "empty" };
   deliveryPayloadHasStructuredContent: boolean;
   hasFatalErrorPayload: boolean;
   hasFatalStructuredErrorPayload: boolean;
@@ -91,31 +98,6 @@ export function pickSummaryFromOutput(text: string | undefined) {
   return clean.length > limit ? `${truncateUtf16Safe(clean, limit)}…` : clean;
 }
 
-/** Picks the last non-error payload text suitable for cron run summaries. */
-function pickSummaryFromPayloads(
-  payloads: Array<{ text?: string | undefined; isError?: boolean }>,
-) {
-  for (let i = payloads.length - 1; i >= 0; i--) {
-    if (payloads[i]?.isError) {
-      continue;
-    }
-    const summary = pickSummaryFromOutput(payloads[i]?.text);
-    if (summary) {
-      return summary;
-    }
-  }
-  for (let i = payloads.length - 1; i >= 0; i--) {
-    if (isNonTerminalToolErrorWarning(payloads[i])) {
-      continue;
-    }
-    const summary = pickSummaryFromOutput(payloads[i]?.text);
-    if (summary) {
-      return summary;
-    }
-  }
-  return undefined;
-}
-
 /** Picks the last non-empty payload text while ignoring terminal error payloads first. */
 export function pickLastNonEmptyTextFromPayloads(
   payloads: Array<{ text?: string | undefined; isError?: boolean }>,
@@ -161,6 +143,44 @@ function payloadHasStructuredDeliveryContent(payload: DeliveryPayload | null | u
   );
 }
 
+function payloadHasNonTextDeliveryContent(payload: DeliveryPayload): boolean {
+  return hasOutboundReplyContent({ ...payload, text: undefined }, { trimText: true });
+}
+
+function isHeartbeatAcknowledgementPayload(payload: DeliveryPayload): boolean {
+  return !payloadHasNonTextDeliveryContent(payload) && isHeartbeatAcknowledgementText(payload.text);
+}
+
+function resolveCronDeliveryPayloads(params: {
+  payloads: DeliveryPayload[];
+  finalAssistantVisibleText?: string;
+}): Pick<CronPayloadOutcome, "deliveryPayloads" | "deliveryDisposition"> {
+  if (params.payloads.length === 0) {
+    return { deliveryPayloads: [], deliveryDisposition: { kind: "empty" } };
+  }
+  // Structured output is always visible, even when a sibling text payload is
+  // an acknowledgement. Only the payload owner can safely preserve that batch.
+  const hasNonTextContent = params.payloads.some(payloadHasNonTextDeliveryContent);
+  const terminalText = params.finalAssistantVisibleText ?? params.payloads.at(-1)?.text;
+  if (!hasNonTextContent && isHeartbeatAcknowledgementText(terminalText)) {
+    const controlOnly = params.payloads.every((payload) =>
+      isHeartbeatAcknowledgementText(payload.text, 0),
+    );
+    return {
+      deliveryPayloads: params.payloads,
+      deliveryDisposition: { kind: "heartbeat", controlOnly },
+    };
+  }
+  return {
+    // Earlier control acknowledgements cannot become visible siblings of a
+    // later result or fail before that result reaches recipient custody.
+    deliveryPayloads: params.payloads.filter(
+      (payload) => !isHeartbeatAcknowledgementPayload(payload),
+    ),
+    deliveryDisposition: { kind: "visible" },
+  };
+}
+
 /** Picks the last payload with deliverable outbound content, preferring non-error payloads. */
 function pickLastDeliverablePayload(payloads: DeliveryPayload[]) {
   for (let i = payloads.length - 1; i >= 0; i--) {
@@ -189,20 +209,6 @@ function pickDeliverablePayloads(payloads: DeliveryPayload[]): DeliveryPayload[]
   }
   const lastDeliverablePayload = pickLastDeliverablePayload(payloads);
   return lastDeliverablePayload ? [lastDeliverablePayload] : [];
-}
-
-/**
- * Check if delivery should be skipped because the agent signaled no user-visible update.
- * Returns true when any payload is a heartbeat ack token and no payload contains media.
- */
-export function isHeartbeatOnlyResponse(payloads: DeliveryPayload[], ackMaxChars: number) {
-  return shouldSkipHeartbeatOnlyDelivery(payloads, ackMaxChars);
-}
-
-/** Resolves the non-negative heartbeat ack length used for heartbeat-only filtering. */
-export function resolveHeartbeatAckMaxChars(agentCfg?: { heartbeat?: { ackMaxChars?: number } }) {
-  const raw = agentCfg?.heartbeat?.ackMaxChars ?? DEFAULT_HEARTBEAT_ACK_MAX_CHARS;
-  return Math.max(0, raw);
 }
 
 function isCronMessagePresentationWarning(text: string | undefined): boolean {
@@ -236,11 +242,8 @@ export function resolveCronPayloadOutcome(params: {
   finalAssistantVisibleText?: string | undefined;
   preferFinalAssistantVisibleText?: boolean;
 }): CronPayloadOutcome {
-  const firstText =
-    params.payloads.find((payload) => !isNonTerminalToolErrorWarning(payload))?.text ?? "";
-  const fallbackSummary =
-    pickSummaryFromPayloads(params.payloads) ?? pickSummaryFromOutput(firstText);
   const fallbackOutputText = pickLastNonEmptyTextFromPayloads(params.payloads);
+  const fallbackSummary = pickSummaryFromOutput(fallbackOutputText);
   const deliveryPayload = pickLastDeliverablePayload(params.payloads);
   const selectedDeliveryPayloads = pickDeliverablePayloads(params.payloads);
   const deliveryPayloadHasStructuredContent = payloadHasStructuredDeliveryContent(deliveryPayload);
@@ -253,9 +256,9 @@ export function resolveCronPayloadOutcome(params: {
     .find((payload) => payload?.isError === true && Boolean(payload?.text?.trim()))
     ?.text?.trim();
   const errorPayloads = params.payloads.filter((payload) => payload?.isError === true);
-  const normalizedFinalAssistantVisibleText = normalizeOptionalString(
-    params.finalAssistantVisibleText,
-  );
+  const finalText = normalizeOptionalString(params.finalAssistantVisibleText);
+  const normalizedFinalAssistantVisibleText =
+    finalText && !isSilentReplyPayloadText(finalText) ? finalText : undefined;
   const hasSuccessfulPayloadAfterLastError =
     !params.runLevelError &&
     lastErrorPayloadIndex >= 0 &&
@@ -270,8 +273,8 @@ export function resolveCronPayloadOutcome(params: {
     normalizedFinalAssistantVisibleText !== undefined ||
     hasSuccessfulPayloadAfterLastError ||
     hasSuccessfulPayloadBeforeLastError;
-  // Some tools emit warning/error payloads before a final answer. Treat those
-  // as non-terminal only when later visible output proves the run recovered.
+  // Only genuinely visible terminal text can recover preceding tool warnings;
+  // silent control replies must leave the error fatal for scheduler alerting.
   const hasNonTerminalToolErrorWarning =
     !params.runLevelError &&
     params.failureSignal?.fatalForCron !== true &&
@@ -293,7 +296,7 @@ export function resolveCronPayloadOutcome(params: {
     !hasStructuredDeliveryPayloads &&
     errorPayloads.length > 0 &&
     errorPayloads.every((payload) => isCronToolWarning(payload?.text));
-  // Structured error payloads are fatal unless later successful output or a
+  // Structured error payloads stay fatal unless later successful output or a
   // known non-terminal warning proves the agent recovered.
   const hasFatalStructuredErrorPayload =
     hasErrorPayload &&
@@ -319,8 +322,24 @@ export function resolveCronPayloadOutcome(params: {
     ? normalizedFinalAssistantVisibleText
     : fallbackOutputText;
   const synthesizedText = normalizeOptionalString(outputText) ?? normalizeOptionalString(summary);
-  const resolvedDeliveryPayloads = shouldUseFinalAssistantVisibleText
-    ? [{ text: normalizedFinalAssistantVisibleText }]
+  const finalDeliveryPayload = shouldUseFinalAssistantVisibleText
+    ? { text: normalizedFinalAssistantVisibleText }
+    : undefined;
+  if (
+    finalDeliveryPayload &&
+    deliveryPayload &&
+    deliveryPayload.isError !== true &&
+    deliveryPayload.text === normalizedFinalAssistantVisibleText
+  ) {
+    // A replacement or assembled answer must not inherit another payload's
+    // speech. This fresh text projection never inherits transcript or custody ownership.
+    const tts = getReplyPayloadMetadata(deliveryPayload)?.tts;
+    if (tts) {
+      setReplyPayloadMetadata(finalDeliveryPayload, { tts });
+    }
+  }
+  const resolvedDeliveryPayloads = finalDeliveryPayload
+    ? [finalDeliveryPayload]
     : selectedDeliveryPayloads.length > 0
       ? selectedDeliveryPayloads
       : synthesizedText
@@ -342,12 +361,22 @@ export function resolveCronPayloadOutcome(params: {
   const fatalDeliveryPayload = fatalDeliveryText
     ? ({ text: fatalDeliveryText, isError: true } satisfies DeliveryPayload)
     : undefined;
+  const delivery = fatalDeliveryPayload
+    ? {
+        deliveryPayloads: [fatalDeliveryPayload],
+        deliveryDisposition: { kind: "visible" } as const,
+      }
+    : resolveCronDeliveryPayloads({
+        payloads: resolvedDeliveryPayloads,
+        finalAssistantVisibleText: normalizedFinalAssistantVisibleText,
+      });
   return {
     summary: fatalDeliveryText ? (pickSummaryFromOutput(fatalDeliveryText) ?? summary) : summary,
     outputText: fatalDeliveryText ?? outputText,
     synthesizedText: fatalDeliveryText ?? synthesizedText,
     deliveryPayload: fatalDeliveryPayload ?? deliveryPayload,
-    deliveryPayloads: fatalDeliveryPayload ? [fatalDeliveryPayload] : resolvedDeliveryPayloads,
+    deliveryPayloads: delivery.deliveryPayloads,
+    deliveryDisposition: delivery.deliveryDisposition,
     deliveryPayloadHasStructuredContent: fatalDeliveryPayload
       ? false
       : deliveryPayloadHasStructuredContent,

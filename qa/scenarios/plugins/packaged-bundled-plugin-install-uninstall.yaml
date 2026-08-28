@@ -2,8 +2,8 @@ title: Packaged bundled plugin install uninstall
 
 scenario:
   id: packaged-bundled-plugin-install-uninstall
-  surface: plugin-sdk-and-bundled-plugin-architecture
-  category: plugin-sdk-and-bundled-plugin-architecture.bundled-plugins
+  surface: plugins
+  category: plugins.bundled-plugins
   coverage:
     secondary:
       - plugins.packaged-bundled-plugins

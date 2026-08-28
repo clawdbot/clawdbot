@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { testing } from "./invoke.js";
+import { testing } from "./invoke.test-support.js";
 
 describe("runCommand", () => {
   afterEach(() => {
@@ -74,6 +74,26 @@ describe("runCommand", () => {
     );
     expect(result).toMatchObject({ timedOut: true, success: false, error: null });
     expect(Date.now() - startedAt).toBeLessThan(2_000);
+  });
+
+  it.runIf(process.platform !== "win32")("force-kills cancelled command trees", async () => {
+    const controller = new AbortController();
+    const startedAt = Date.now();
+    const cancelling = setTimeout(() => controller.abort(), 25);
+    try {
+      const result = await testing.runCommand(
+        [process.execPath, "-e", "process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"],
+        undefined,
+        undefined,
+        undefined,
+        controller.signal,
+      );
+
+      expect(result).toMatchObject({ timedOut: false, success: false, error: null });
+      expect(Date.now() - startedAt).toBeLessThan(2_000);
+    } finally {
+      clearTimeout(cancelling);
+    }
   });
 
   it("keeps the combined output prefix bounded", async () => {

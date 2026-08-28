@@ -11,7 +11,7 @@ OpenClaw supports three migration paths: importing from another agent system, mo
 
 ## Import from another agent system
 
-Bundled migration providers bring instructions, MCP servers, skills, model config, and (opt-in) API keys into OpenClaw. Plans are previewed before any change, secrets are redacted in reports, and apply is backed by a verified backup.
+Bundled migration providers bring instructions, MCP servers, skills, model config, and (opt-in) API keys into OpenClaw. Plans are previewed before any change and secrets are redacted in reports. Standalone `openclaw migrate` is backed by a verified backup; fresh onboarding imports instead stage and verify local artifacts before publishing them with configuration committed before any irreversible external activation.
 
 <CardGroup cols={2}>
   <Card title="Migrating from Claude" href="/install/migrating-claude" icon="brain">
@@ -29,7 +29,7 @@ The CLI entry point is [`openclaw migrate`](/cli/migrate). Onboarding can also o
 Copy the **state directory** (`~/.openclaw/` by default) and your **workspace** to preserve:
 
 - **Config** — `openclaw.json` and all gateway settings.
-- **Auth** — per-agent `auth-profiles.json` (API keys plus OAuth), plus any channel or provider state under `credentials/`.
+- **Auth** — shared and per-agent SQLite auth stores (API keys plus OAuth), plus any channel or provider state under `credentials/`.
 - **Sessions** — conversation history and agent state.
 - **Channel state** — WhatsApp login, Telegram session, and similar.
 - **Workspace files** — `MEMORY.md`, `USER.md`, skills, and prompts.
@@ -42,15 +42,19 @@ Run `openclaw status` on the old machine to confirm your state directory path. C
 
 <Steps>
   <Step title="Stop the gateway and back up">
-    On the **old** machine, stop the gateway so files are not changing mid-copy, then archive:
+    On the **old** machine, stop the Gateway, then create and verify a portable
+    archive:
 
     ```bash
     openclaw gateway stop
-    cd ~
-    tar -czf openclaw-state.tgz .openclaw
+    mkdir -p ~/Backups/openclaw
+    openclaw backup create --output ~/Backups/openclaw --verify
     ```
 
-    If you use multiple profiles (for example `~/.openclaw-work`), archive each separately.
+    Stop the Gateway before taking a machine-move snapshot. A raw copy of a
+    changing SQLite database can capture mismatched database and WAL files;
+    quiescing the Gateway also keeps the rest of the state tree stable. If you
+    use multiple profiles, run the command once with each profile selected.
 
   </Step>
 
@@ -58,15 +62,25 @@ Run `openclaw status` on the old machine to confirm your state directory path. C
     [Install](/install) the CLI (and Node if needed) on the new machine. It is fine if onboarding creates a fresh `~/.openclaw/` — you overwrite it next.
   </Step>
 
-  <Step title="Copy state directory and workspace">
-    Transfer the archive via `scp`, `rsync -a`, or an external drive, then extract:
+  <Step title="Transfer and restore to staging">
+    Transfer the generated `.tar.gz` archive via `scp`, an external drive, or
+    another protected channel. On the new machine, restore it to a fresh
+    staging directory:
 
     ```bash
-    cd ~
-    tar -xzf openclaw-state.tgz
+    openclaw backup restore <archive.tar.gz> --target ~/openclaw-restored
     ```
 
-    Confirm hidden directories were included and file ownership matches the user that will run the gateway.
+    Restore never activates in place. With the Gateway stopped, use the
+    restored `manifest.json` mapping to move the state and workspace assets to
+    their recorded destinations, or point `OPENCLAW_STATE_DIR` at the restored
+    state asset. Confirm ownership matches the user that will run the Gateway.
+
+    <Warning>
+    Restoring older channel state can desynchronize ratcheting credentials such
+    as WhatsApp. Approvals and delivery/dedupe state also roll back, and plugin
+    `node_modules` trees must be reinstalled. See [Restore a full archive](/install/backups#restore-a-full-archive).
+    </Warning>
 
   </Step>
 
@@ -98,7 +112,7 @@ awk -F= '/^(TELEGRAM_BOT_TOKEN|DISCORD_BOT_TOKEN)=/ { print $1 "=present" }' ~/.
   </Accordion>
 
   <Accordion title="Copying only openclaw.json">
-    The config file alone is not enough. Model auth profiles live under `agents/<agentId>/agent/auth-profiles.json`, and channel and provider state lives under `credentials/`. Always migrate the **entire** state directory.
+    The config file alone is not enough. Shared model auth lives in `state/openclaw.sqlite`, agent-local profiles live in `agents/<agentId>/agent/openclaw-agent.sqlite`, and channel and provider state lives under `credentials/`. Always migrate the **entire** state directory using the backup and restore flow above.
   </Accordion>
 
   <Accordion title="Permissions and ownership">

@@ -4,7 +4,16 @@ import type {
   ChannelDoctorLegacyConfigRule,
 } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { asObjectRecord, defineChannelAliasMigration } from "openclaw/plugin-sdk/runtime-doctor";
+import {
+  asObjectRecord,
+  defineChannelAliasMigration,
+  defineKeyMoveMigration,
+  defineStrayPluginEntryConfigMigration,
+  hasLegacyAccountStreamingAliases,
+  normalizeChannelConfigEntries,
+} from "openclaw/plugin-sdk/runtime-doctor-migrations";
+import { FeishuConfigSchema } from "./config-schema.js";
+import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
 
 // Feishu's legacy boolean `streaming` gated streaming-card replies with an
 // enabled default, so it migrates through the mode path (true → "partial",
@@ -25,6 +34,34 @@ const streamingAliasMigration = defineChannelAliasMigration({
 // generic alias migration moves the object verbatim, so strip the dead fields
 // afterwards or `doctor --fix` would emit a schema-invalid coalesce object.
 const LEGACY_COALESCE_FIELDS = ["enabled", "minDelayMs", "maxDelayMs"] as const;
+const LEGACY_HEARTBEAT_FIELDS = ["visibility", "intervalMs"] as const;
+const toolsBaseMigration = defineKeyMoveMigration({
+  from: ["tools", "base"],
+  to: ["tools", "bitable"],
+  match: (value) => typeof value === "boolean",
+  sourceOwn: false,
+});
+
+function sanitizeLegacyHeartbeatFields(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const heartbeat = asObjectRecord(params.entry.heartbeat);
+  if (
+    !heartbeat ||
+    (Object.keys(heartbeat).length > 0 &&
+      !LEGACY_HEARTBEAT_FIELDS.some((field) => Object.hasOwn(heartbeat, field)))
+  ) {
+    return { entry: params.entry, changed: false };
+  }
+  const next = { ...params.entry };
+  delete next.heartbeat;
+  params.changes.push(
+    `Removed ${params.pathPrefix}.heartbeat (legacy Feishu fields were never read by runtime).`,
+  );
+  return { entry: next, changed: true };
+}
 
 function sanitizeLegacyCoalesceFields(params: {
   entry: Record<string, unknown>;
@@ -57,56 +94,90 @@ function sanitizeLegacyCoalesceFields(params: {
   };
 }
 
-function sanitizeFeishuCoalesce(cfg: OpenClawConfig, changes: string[]): OpenClawConfig {
-  const channels = cfg.channels as Record<string, unknown> | undefined;
-  const entry = asObjectRecord(channels?.feishu);
-  if (!entry) {
-    return cfg;
-  }
-  const root = sanitizeLegacyCoalesceFields({
-    entry,
-    pathPrefix: "channels.feishu",
-    changes,
-  });
-  let updated = root.entry;
-  let changed = root.changed;
-
-  const accounts = asObjectRecord(updated.accounts);
-  if (accounts) {
-    let accountsChanged = false;
-    const nextAccounts = { ...accounts };
-    for (const [accountId, rawAccount] of Object.entries(accounts)) {
-      const account = asObjectRecord(rawAccount);
-      if (!account) {
-        continue;
-      }
-      const sanitized = sanitizeLegacyCoalesceFields({
-        entry: account,
-        pathPrefix: `channels.feishu.accounts.${accountId}`,
-        changes,
-      });
-      if (sanitized.changed) {
-        nextAccounts[accountId] = sanitized.entry;
-        accountsChanged = true;
-      }
-    }
-    if (accountsChanged) {
-      updated = { ...updated, accounts: nextAccounts };
-      changed = true;
-    }
-  }
-
-  if (!changed) {
-    return cfg;
-  }
-  return {
-    ...cfg,
-    channels: { ...channels, feishu: updated },
-  } as OpenClawConfig;
+function hasLegacyWebhookPath(value: unknown): boolean {
+  const path = asObjectRecord(value)?.webhookPath;
+  return typeof path === "string" && normalizeFeishuWebhookPath(path) !== path;
 }
 
-export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] =
-  streamingAliasMigration.legacyConfigRules;
+function normalizeLegacyWebhookPath(params: {
+  entry: Record<string, unknown>;
+  pathPrefix: string;
+  changes: string[];
+}): { entry: Record<string, unknown>; changed: boolean } {
+  const path = params.entry.webhookPath;
+  if (typeof path !== "string") {
+    return { entry: params.entry, changed: false };
+  }
+  const normalized = normalizeFeishuWebhookPath(path);
+  const canonical = normalized ?? DEFAULT_FEISHU_WEBHOOK_PATH;
+  if (canonical === path) {
+    return { entry: params.entry, changed: false };
+  }
+  params.changes.push(
+    normalized === null
+      ? `Reset invalid ${params.pathPrefix}.webhookPath to ${DEFAULT_FEISHU_WEBHOOK_PATH}.`
+      : `Normalized ${params.pathPrefix}.webhookPath to its HTTP request path.`,
+  );
+  return { entry: { ...params.entry, webhookPath: canonical }, changed: true };
+}
+
+function normalizeFeishuLegacyConfigEntries(
+  cfg: OpenClawConfig,
+  changes: string[],
+): OpenClawConfig {
+  return normalizeChannelConfigEntries({
+    cfg,
+    channelId: "feishu",
+    changes,
+    normalizeEntry: (params) => {
+      const tools = toolsBaseMigration.normalize(params);
+      const coalesce = sanitizeLegacyCoalesceFields({ ...params, entry: tools.entry });
+      const heartbeat = sanitizeLegacyHeartbeatFields({ ...params, entry: coalesce.entry });
+      const webhook = normalizeLegacyWebhookPath({ ...params, entry: heartbeat.entry });
+      return {
+        entry: webhook.entry,
+        changed: tools.changed || coalesce.changed || heartbeat.changed || webhook.changed,
+      };
+    },
+  }).config;
+}
+
+// The retired rich plugin-entry schema let config UIs park Feishu settings
+// under plugins.entries.feishu.config, which the runtime never reads.
+const feishuStrayEntryConfigMigration = defineStrayPluginEntryConfigMigration({
+  pluginId: "feishu",
+  channelId: "feishu",
+  validateMergedChannelConfig: (merged) => FeishuConfigSchema.safeParse(merged).success,
+});
+
+export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
+  ...streamingAliasMigration.legacyConfigRules,
+  feishuStrayEntryConfigMigration.legacyConfigRule,
+  {
+    path: ["channels", "feishu"],
+    message:
+      'channels.feishu[.accounts.<id>].webhookPath must be a canonical HTTP request path; run "openclaw doctor --fix".',
+    match: (value) => {
+      const entry = asObjectRecord(value);
+      return (
+        hasLegacyWebhookPath(entry) ||
+        hasLegacyAccountStreamingAliases(entry?.accounts, hasLegacyWebhookPath)
+      );
+    },
+  },
+  {
+    path: ["channels", "feishu"],
+    message:
+      'channels.feishu[.accounts.<id>].tools.base is legacy; use tools.bitable. Run "openclaw doctor --fix".',
+    match: (value) => {
+      const entry = asObjectRecord(value);
+      return (
+        toolsBaseMigration.hasLegacy(entry) ||
+        hasLegacyAccountStreamingAliases(entry?.accounts, toolsBaseMigration.hasLegacy)
+      );
+    },
+  },
+];
 
 export function normalizeCompatibilityConfig({
   cfg,
@@ -114,8 +185,10 @@ export function normalizeCompatibilityConfig({
   cfg: OpenClawConfig;
 }): ChannelDoctorConfigMutation {
   const aliases = streamingAliasMigration.normalizeChannelConfig({ cfg });
+  const entries = normalizeFeishuLegacyConfigEntries(aliases.config, aliases.changes);
+  const stray = feishuStrayEntryConfigMigration.normalizeConfig({ cfg: entries });
   return {
-    config: sanitizeFeishuCoalesce(aliases.config, aliases.changes),
-    changes: aliases.changes,
+    config: stray.config,
+    changes: [...aliases.changes, ...stray.changes],
   };
 }

@@ -12,12 +12,20 @@ import { resolveFutureConfigActionBlock } from "../../config/future-version-guar
 import { readConfigFileSnapshotForWrite } from "../../config/io.js";
 import { replaceConfigFile } from "../../config/mutate.js";
 import { resolveGatewayPort } from "../../config/paths.js";
+import type { GatewayBindMode } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import { OPENCLAW_WRAPPER_ENV_KEY, resolveOpenClawWrapperPath } from "../../daemon/program-args.js";
 import { readEmbeddedGatewayToken } from "../../daemon/service-audit.js";
-import { resolveGatewayService } from "../../daemon/service.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
+import { resolveManagedGatewayServiceCommand } from "../../daemon/service-types.js";
+import { resolveGatewayService, type GatewayServiceCommandConfig } from "../../daemon/service.js";
 import { isNonFatalSystemdInstallProbeError } from "../../daemon/systemd.js";
+import { resolveGatewayAuth } from "../../gateway/auth.js";
+import {
+  defaultGatewayBindMode,
+  isLoopbackHost,
+  resolveGatewayBindHost,
+} from "../../gateway/net.js";
+import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import {
   isDangerousHostEnvOverrideVarName,
   isDangerousHostEnvVarName,
@@ -33,6 +41,46 @@ import {
   parsePort,
 } from "./shared.js";
 import type { DaemonInstallOptions } from "./types.js";
+
+function resolveGatewayInstallBindMode(cfg: OpenClawConfig): GatewayBindMode {
+  return cfg.gateway?.bind ?? defaultGatewayBindMode(cfg.gateway?.tailscale?.mode ?? "off");
+}
+
+function formatNoAuthNonLoopbackInstallBlock(params: {
+  bind: GatewayBindMode;
+  bindHost: string;
+  config: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+}): string | undefined {
+  const auth = resolveGatewayAuth({
+    authConfig: params.config.gateway?.auth,
+    env: params.env,
+    tailscaleMode: params.config.gateway?.tailscale?.mode ?? "off",
+  });
+  const bindCanExposeNetwork = params.bind === "tailnet" || !isLoopbackHost(params.bindHost);
+  if (auth.mode !== "none" || !bindCanExposeNetwork) {
+    return undefined;
+  }
+  const bindReason =
+    params.bind === "tailnet" && isLoopbackHost(params.bindHost)
+      ? `gateway.bind=tailnet currently resolves to ${params.bindHost} but can later resolve to a Tailnet interface`
+      : `gateway.bind=${params.bind} resolves to ${params.bindHost}`;
+  const hints: string[] = [`${bindReason}, but gateway.auth.mode=none disables Gateway auth.`];
+  if (normalizeOptionalString(auth.token)) {
+    hints.push(
+      `This config already has gateway.auth.token; run ${formatCliCommand("openclaw config set gateway.auth.mode token")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+    );
+  } else if (normalizeOptionalString(auth.password)) {
+    hints.push(
+      `This config already has gateway.auth.password; run ${formatCliCommand("openclaw config set gateway.auth.mode password")} and then rerun ${formatCliCommand("openclaw gateway install --force")}.`,
+    );
+  } else {
+    hints.push(
+      `Configure token/password auth, use trusted-proxy auth, or set ${formatCliCommand("openclaw config set gateway.bind loopback")} before installing the managed service.`,
+    );
+  }
+  return hints.join(" ");
+}
 
 /** Merge safe existing service environment into the current install invocation environment. */
 export function mergeInstallInvocationEnv(params: {
@@ -75,9 +123,12 @@ export function mergeInstallInvocationEnv(params: {
     ) {
       continue;
     }
-    // Existing service env may contain host-specific secrets or loader overrides; keep only
-    // portable, non-dangerous values and let the current shell override them.
-    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+    // An installed CA file is additive, operator-owned Node startup trust; retain it on reinstall.
+    // Never replay service-owned TLS-disable, proxy, or loader overrides from the old environment.
+    if (
+      isDangerousHostEnvVarName(key) ||
+      (isDangerousHostEnvOverrideVarName(key) && upper !== "NODE_EXTRA_CA_CERTS")
+    ) {
       continue;
     }
     const value = rawValue.trim();
@@ -96,6 +147,12 @@ export function mergeInstallInvocationEnv(params: {
 export async function runDaemonInstall(opts: DaemonInstallOptions) {
   const { json, stdout, warnings, emit, fail } = createDaemonInstallActionContext(opts.json);
   if (failIfNixDaemonInstallMode(fail)) {
+    return;
+  }
+  try {
+    assertGatewayServiceMutationAllowed("install or rewrite the gateway service");
+  } catch (error) {
+    fail(`Gateway install blocked: ${String(error)}`);
     return;
   }
 
@@ -122,7 +179,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
   }
   const runtimeRaw = opts.runtime ? opts.runtime : DEFAULT_GATEWAY_DAEMON_RUNTIME;
   if (!isGatewayDaemonRuntime(runtimeRaw)) {
-    fail('Invalid --runtime (use "node"; Bun lacks the required node:sqlite API)');
+    fail('Invalid --runtime (use "node" or "bun")');
     return;
   }
   let wrapperPath: string | undefined;
@@ -181,8 +238,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     }
   }
   const existingServiceCommand = await service.readCommand(process.env).catch(() => null);
+  const existingManagedCommand = resolveManagedGatewayServiceCommand(existingServiceCommand);
   const existingServiceEnv: Record<string, string> | undefined =
-    existingServiceCommand?.environment;
+    existingManagedCommand?.environment;
   const installEnv = mergeInstallInvocationEnv({
     env: process.env,
     existingServiceEnv,
@@ -195,6 +253,18 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       return;
     }
   }
+  const installBind = resolveGatewayInstallBindMode(cfg);
+  const installBindHost = await resolveGatewayBindHost(installBind, cfg.gateway?.customBindHost);
+  const noAuthNonLoopbackBlock = formatNoAuthNonLoopbackInstallBlock({
+    bind: installBind,
+    bindHost: installBindHost,
+    config: cfg,
+    env: installEnv,
+  });
+  if (noAuthNonLoopbackBlock) {
+    fail(`Gateway install blocked: ${noAuthNonLoopbackBlock}`);
+    return;
+  }
   if (loaded) {
     if (!opts.force) {
       const autoRefreshMessage = await getGatewayServiceAutoRefreshMessage({
@@ -205,7 +275,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
         runtime: runtimeRaw,
         wrapperPath,
         existingEnvironment: existingServiceEnv,
-        existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
+        existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
         config: cfg,
       });
       if (autoRefreshMessage) {
@@ -240,6 +310,7 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
     explicitToken: opts.token,
     autoGenerateWhenMissing: true,
     persistGeneratedToken: true,
+    persistence: { readConfigFileSnapshotForWrite, replaceConfigFile },
   });
   if (tokenResolution.unavailableReason) {
     fail(`Gateway install blocked: ${tokenResolution.unavailableReason}`);
@@ -259,8 +330,9 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       port,
       runtime: runtimeRaw,
       wrapperPath,
+      existingCommand: existingServiceCommand,
       existingEnvironment: existingServiceEnv,
-      existingEnvironmentValueSources: existingServiceCommand?.environmentValueSources,
+      existingEnvironmentValueSources: existingManagedCommand?.environmentValueSources,
       warn: (message) => {
         if (json) {
           warnings.push(message);
@@ -310,7 +382,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
   config: OpenClawConfig;
 }): Promise<string | undefined> {
   try {
-    const currentCommand = params.currentCommand;
+    const currentCommand = resolveManagedGatewayServiceCommand(params.currentCommand);
     if (!currentCommand) {
       return undefined;
     }
@@ -321,6 +393,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         port: params.port,
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
+        existingCommand: params.currentCommand,
         existingEnvironment: params.existingEnvironment,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,
@@ -342,6 +415,7 @@ async function getGatewayServiceAutoRefreshMessage(params: {
         port: params.port,
         runtime: params.runtime,
         wrapperPath: params.wrapperPath,
+        existingCommand: params.currentCommand,
         existingEnvironment: params.existingEnvironment,
         existingEnvironmentValueSources: params.existingEnvironmentValueSources,
         warn: () => undefined,

@@ -1,12 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
-import type { TemplateContext } from "../templating.js";
 import {
   setupAgentRunnerExecutionTestState,
-  getRunAgentTurnWithFallback,
-  createMockTypingSignaler,
+  getExecuteAgentTurnForTest,
   createFollowupRun,
+  initialFallbackAttemptOptions,
   expectBlockReplyCall,
   createMinimalRunAgentTurnParams,
 } from "./agent-runner-execution.test-support.js";
@@ -14,10 +13,27 @@ import type {
   FallbackRunnerParams,
   EmbeddedAgentParams,
 } from "./agent-runner-execution.test-support.js";
+import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 
 const state = setupAgentRunnerExecutionTestState();
 
-describe("runAgentTurnWithFallback: compaction events", () => {
+async function executeTestTurn(
+  params?: Parameters<typeof createMinimalRunAgentTurnParams>[0],
+  overrides?: Partial<AgentTurnParams>,
+) {
+  const executeAgentTurn = await getExecuteAgentTurnForTest();
+  return executeAgentTurn({ ...createMinimalRunAgentTurnParams(params), ...overrides });
+}
+
+function createNotifyUserRun() {
+  const followupRun = createFollowupRun();
+  followupRun.run.config = {
+    agents: { defaults: { compaction: { notifyUser: true } } },
+  };
+  return followupRun;
+}
+
+describe("executeAgentTurn: compaction events", () => {
   it("keeps compaction start notices silent by default", async () => {
     const onBlockReply = vi.fn();
     state.runEmbeddedAgentMock.mockImplementationOnce(async (params: EmbeddedAgentParams) => {
@@ -25,29 +41,7 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { onBlockReply },
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn({ opts: { onBlockReply } }, { commandBody: "hello" });
 
     expect(result.kind).toBe("success");
     expect(onBlockReply).not.toHaveBeenCalled();
@@ -66,33 +60,16 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun: createFollowupRun(),
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {
-        onBlockReply,
-        onCompactionStart,
-        onCompactionEnd,
+    const result = await executeTestTurn(
+      {
+        opts: {
+          onBlockReply,
+          onCompactionStart,
+          onCompactionEnd,
+        },
       },
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expect(onCompactionStart).toHaveBeenCalledTimes(1);
@@ -113,7 +90,7 @@ describe("runAgentTurnWithFallback: compaction events", () => {
     try {
       state.runWithModelFallbackMock.mockImplementationOnce(
         async (params: FallbackRunnerParams) => ({
-          result: await params.run("openai", "gpt-5.5"),
+          result: await params.run("openai", "gpt-5.5", initialFallbackAttemptOptions(params)),
           provider: "openai",
           model: "gpt-5.5",
           attempts: [{ provider: "anthropic", model: "claude", error: "rate limit" }],
@@ -144,12 +121,7 @@ describe("runAgentTurnWithFallback: compaction events", () => {
         return { payloads: [{ text: "final" }], meta: {} };
       });
 
-      const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-      const result = await runAgentTurnWithFallback({
-        ...createMinimalRunAgentTurnParams({
-          opts: { onBlockReply },
-        }),
-      });
+      const result = await executeTestTurn({ opts: { onBlockReply } });
 
       expect(result.kind).toBe("success");
       expect(onBlockReply).not.toHaveBeenCalled();
@@ -170,40 +142,10 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          compaction: {
-            notifyUser: true,
-          },
-        },
-      },
-    };
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { onBlockReply },
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { followupRun: createNotifyUserRun(), opts: { onBlockReply } },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expect(onBlockReply).toHaveBeenCalledTimes(1);
@@ -226,40 +168,10 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          compaction: {
-            notifyUser: true,
-          },
-        },
-      },
-    };
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { onBlockReply },
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { followupRun: createNotifyUserRun(), opts: { onBlockReply } },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expectBlockReplyCall(onBlockReply, 0, {
@@ -290,40 +202,10 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          compaction: {
-            notifyUser: true,
-          },
-        },
-      },
-    };
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { onBlockReply },
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { followupRun: createNotifyUserRun(), opts: { onBlockReply } },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expect(onBlockReply).toHaveBeenCalledTimes(4);
@@ -366,40 +248,13 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          compaction: {
-            notifyUser: true,
-          },
-        },
+    const result = await executeTestTurn(
+      {
+        followupRun: createNotifyUserRun(),
+        opts: { onBlockReply, onCompactionStart, onCompactionEnd },
       },
-    };
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { onBlockReply, onCompactionStart, onCompactionEnd },
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     // Internal callbacks (Control UI etc.) and the user-channel notifyUser
@@ -428,40 +283,10 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          compaction: {
-            notifyUser: true,
-          },
-        },
-      },
-    };
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: { onBlockReply },
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-    });
+    const result = await executeTestTurn(
+      { followupRun: createNotifyUserRun(), opts: { onBlockReply } },
+      { commandBody: "hello" },
+    );
 
     expect(result.kind).toBe("success");
     expectBlockReplyCall(onBlockReply, 0, {
@@ -485,41 +310,10 @@ describe("runAgentTurnWithFallback: compaction events", () => {
       return { payloads: [{ text: "final" }], meta: {} };
     });
 
-    const followupRun = createFollowupRun();
-    followupRun.run.config = {
-      agents: {
-        defaults: {
-          compaction: {
-            notifyUser: true,
-          },
-        },
-      },
-    };
-
-    const runAgentTurnWithFallback = await getRunAgentTurnWithFallback();
-    const result = await runAgentTurnWithFallback({
-      commandBody: "hello",
-      followupRun,
-      sessionCtx: {
-        Provider: "whatsapp",
-        MessageSid: "msg",
-      } as unknown as TemplateContext,
-      opts: {},
-      typingSignals: createMockTypingSignaler(),
-      blockReplyPipeline: null,
-      blockStreamingEnabled: false,
-      resolvedBlockStreamingBreak: "message_end",
-      applyReplyToMode: (payload) => payload,
-      shouldEmitToolResult: () => true,
-      shouldEmitToolOutput: () => false,
-      pendingToolTasks: new Set(),
-      resetSessionAfterRoleOrderingConflict: async () => false,
-      isHeartbeat: false,
-      sessionKey: "main",
-      getActiveSessionEntry: () => undefined,
-      resolvedVerboseLevel: "off",
-      onCompactionNoticePayload,
-    });
+    const result = await executeTestTurn(
+      { followupRun: createNotifyUserRun() },
+      { commandBody: "hello", onCompactionNoticePayload },
+    );
 
     expect(result.kind).toBe("success");
     expect(onCompactionNoticePayload).toHaveBeenCalledTimes(2);

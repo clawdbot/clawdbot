@@ -5,16 +5,19 @@ import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { requireRegisteredProvider } from "openclaw/plugin-sdk/plugin-test-runtime";
 import * as providerAuth from "openclaw/plugin-sdk/provider-auth-runtime";
 import * as providerHttp from "openclaw/plugin-sdk/provider-http";
-import type { ProviderPlugin } from "openclaw/plugin-sdk/provider-model-shared";
+import {
+  GPT5_BEHAVIOR_CONTRACT,
+  GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY,
+  GPT5_HEARTBEAT_PROMPT_OVERLAY,
+  type ProviderPlugin,
+} from "openclaw/plugin-sdk/provider-model-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { buildOpenAIImageGenerationProvider } from "./image-generation-provider.js";
 import plugin from "./index.js";
-import {
-  OPENAI_FRIENDLY_PROMPT_OVERLAY,
-  OPENAI_GPT5_BEHAVIOR_CONTRACT,
-  OPENAI_HEARTBEAT_PROMPT_OVERLAY,
-  shouldApplyOpenAIPromptOverlay,
-} from "./prompt-overlay.js";
+
+const OPENAI_FRIENDLY_PROMPT_OVERLAY = GPT5_FRIENDLY_CHAT_PROMPT_OVERLAY;
+const OPENAI_GPT5_BEHAVIOR_CONTRACT = GPT5_BEHAVIOR_CONTRACT;
+const OPENAI_HEARTBEAT_PROMPT_OVERLAY = GPT5_HEARTBEAT_PROMPT_OVERLAY;
 
 const runtimeMocks = vi.hoisted(() => ({
   ensureGlobalUndiciEnvProxyDispatcher: vi.fn(),
@@ -35,7 +38,7 @@ vi.mock("./openai-chatgpt-oauth-flow.runtime.js", () => ({
   refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
 }));
 
-import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider.runtime.js";
+import { createOpenAICodexProviderRuntime } from "./openai-chatgpt-provider-runtime.factory.js";
 async function registerOpenAIPluginWithHook(params?: { pluginConfig?: Record<string, unknown> }) {
   const on = vi.fn();
   const providers: ProviderPlugin[] = [];
@@ -151,6 +154,101 @@ describe("openai plugin", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
     vi.restoreAllMocks();
+  });
+
+  it("registers the native GPT-Live offer route and cleanup lifecycle", async () => {
+    const registerHttpRoute = vi.fn();
+    const registerRuntimeLifecycle = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        config: {},
+        runtime: { config: { current: vi.fn(() => ({})) } } as never,
+        registerHttpRoute,
+        registerRuntimeLifecycle,
+      }),
+    );
+
+    expect(registerHttpRoute).toHaveBeenCalledWith({
+      path: "/plugins/openai/realtime/calls",
+      auth: "plugin",
+      match: "exact",
+      handler: expect.any(Function),
+    });
+    expect(registerRuntimeLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "openai-quicksilver-realtime-browser-session",
+        cleanup: expect.any(Function),
+      }),
+    );
+    await registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup({ reason: "disable" });
+  });
+
+  it("shares one GPT-Live broker across full registrations and ignores late old cleanup", async () => {
+    const register = () => {
+      const registerHttpRoute = vi.fn();
+      const registerRuntimeLifecycle = vi.fn();
+      plugin.register(
+        createTestPluginApi({
+          id: "openai",
+          name: "OpenAI Provider",
+          source: "test",
+          config: {},
+          runtime: { config: { current: vi.fn(() => ({})) } } as never,
+          registerHttpRoute,
+          registerRuntimeLifecycle,
+        }),
+      );
+      return {
+        handler: registerHttpRoute.mock.calls[0]?.[0].handler as unknown,
+        cleanup: registerRuntimeLifecycle.mock.calls[0]?.[0].cleanup as (ctx: {
+          reason: string;
+        }) => Promise<void> | void,
+      };
+    };
+
+    const first = register();
+    const second = register();
+    expect(second.handler).toBe(first.handler);
+
+    await first.cleanup({ reason: "disable" });
+    const replacement = register();
+    expect(replacement.handler).not.toBe(first.handler);
+
+    await second.cleanup({ reason: "disable" });
+    const afterLateCleanup = register();
+    expect(afterLateCleanup.handler).toBe(replacement.handler);
+    await replacement.cleanup({ reason: "disable" });
+  });
+
+  it("only cleans up the GPT-Live broker on plugin disable, not session reset/delete/restart", async () => {
+    const registerRuntimeLifecycle = vi.fn();
+    plugin.register(
+      createTestPluginApi({
+        id: "openai",
+        name: "OpenAI Provider",
+        source: "test",
+        config: {},
+        runtime: { config: { current: vi.fn(() => ({})) } } as never,
+        registerHttpRoute: vi.fn(),
+        registerRuntimeLifecycle,
+      }),
+    );
+
+    const lifecycle = registerRuntimeLifecycle.mock.calls[0]?.[0] as {
+      cleanup: (ctx: { reason: string }) => Promise<void> | void;
+    };
+    expect(lifecycle).toBeDefined();
+
+    for (const reason of ["reset", "delete", "restart"]) {
+      const result = lifecycle.cleanup({ reason });
+      expect(result).toBeUndefined();
+    }
+
+    const disableResult = lifecycle.cleanup({ reason: "disable" });
+    await expect(disableResult).resolves.toBeUndefined();
   });
 
   it("generates PNG buffers from the OpenAI Images API", async () => {
@@ -299,7 +397,6 @@ describe("openai plugin", () => {
     runtimeMocks.refreshOpenAICodexToken.mockResolvedValue(refreshed);
     const runtime = createOpenAICodexProviderRuntime({
       ensureGlobalUndiciEnvProxyDispatcher: runtimeMocks.ensureGlobalUndiciEnvProxyDispatcher,
-      getOAuthApiKey: vi.fn(),
       refreshOpenAICodexToken: runtimeMocks.refreshOpenAICodexToken,
     });
 
@@ -439,7 +536,7 @@ describe("openai plugin", () => {
     ).toEqual({
       stablePrefix: OPENAI_GPT5_BEHAVIOR_CONTRACT,
       sectionOverrides: {
-        interaction_style: `${OPENAI_FRIENDLY_PROMPT_OVERLAY}\n\n${OPENAI_HEARTBEAT_PROMPT_OVERLAY}`,
+        interaction_style: OPENAI_FRIENDLY_PROMPT_OVERLAY,
       },
     });
     expect(
@@ -459,12 +556,6 @@ describe("openai plugin", () => {
         modelId: "gpt-image-1",
       }),
     ).toBeUndefined();
-    expect(shouldApplyOpenAIPromptOverlay({ modelProviderId: "openai", modelId: "gpt-4.1" })).toBe(
-      false,
-    );
-    expect(
-      shouldApplyOpenAIPromptOverlay({ modelProviderId: "anthropic", modelId: "gpt-5.4" }),
-    ).toBe(false);
   });
 
   it("includes the tagged GPT-5 behavior contract in the OpenAI prompt overlay", () => {
@@ -476,7 +567,9 @@ describe("openai plugin", () => {
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Heartbeat = useful proactive progress, not chatter.",
     );
-    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain("Wake, orient, read HEARTBEAT.md, act.");
+    expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
+      "Wake, orient, use the provided monitor scratch, act.",
+    );
     expect(OPENAI_HEARTBEAT_PROMPT_OVERLAY).toContain(
       "Assigned/ongoing work: pursue spirit with judgment.",
     );

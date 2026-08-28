@@ -1,6 +1,7 @@
 import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import { isMessagingToolSendAction } from "../../agents/embedded-agent-messaging.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
+import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { ReplyPayload } from "../types.js";
@@ -34,13 +35,12 @@ export function createAgentRunEventHandler(params: {
   sourceRepliesAreToolOnly: boolean;
   provider: string;
   model: string;
+  runId: string;
   effectiveSessionId?: string;
   notifyUserAboutCompaction: boolean;
   onCompactionCompleted: () => number;
   messageToolDeliveryState: MessageToolDeliveryState;
 }): NonNullable<RunEmbeddedAgentParams["onAgentEvent"]> {
-  const commentaryTextByItem = new Map<string, string>();
-  const lastEmittedCommentaryByItem = new Map<string, string>();
   const shouldSuppressProgressAfterMessageToolDelivery = () =>
     params.sourceRepliesAreToolOnly &&
     params.messageToolDeliveryState.completed &&
@@ -150,51 +150,32 @@ export function createAgentRunEventHandler(params: {
     }
 
     if (
-      evt.stream === "assistant" &&
-      readStringValue(evt.data.phase) === "commentary" &&
-      !shouldSuppressProgressAfterMessageToolDelivery()
-    ) {
-      const commentaryItemId = readStringValue(evt.data.itemId) ?? "";
-      const snapshotText = readStringValue(evt.data.text);
-      const deltaText = readStringValue(evt.data.delta);
-      const accumulated =
-        evt.data.replace === true && snapshotText
-          ? snapshotText
-          : deltaText
-            ? `${commentaryTextByItem.get(commentaryItemId) ?? ""}${deltaText}`
-            : (snapshotText ?? "");
-      commentaryTextByItem.set(commentaryItemId, accumulated);
-      const commentaryText = accumulated.replace(/\s+/g, " ").trim();
-      if (commentaryText && lastEmittedCommentaryByItem.get(commentaryItemId) !== commentaryText) {
-        lastEmittedCommentaryByItem.set(commentaryItemId, commentaryText);
-        await params.turn.opts?.onItemEvent?.({
-          itemId: commentaryItemId || undefined,
-          kind: "preamble",
-          title: "Preamble",
-          phase: "update",
-          progressText: commentaryText,
-        });
-      }
-    }
-    if (
       evt.stream === "item" &&
       !hideItemFromChannelProgress &&
       !suppressItemChannelProgress &&
       (!suppressProgressAfterMessageToolDelivery || completedMessageToolDelivery)
     ) {
+      const itemSummary = readStringValue(evt.data.summary);
+      const itemProgressText = readStringValue(evt.data.progressText);
+      const itemMeta = readStringValue(evt.data.meta);
+      const itemCommandBearing =
+        typeof evt.data.commandBearing === "boolean" ? evt.data.commandBearing : undefined;
+      const itemApprovalId = readStringValue(evt.data.approvalId);
+      const itemApprovalSlug = readStringValue(evt.data.approvalSlug);
       await params.turn.opts?.onItemEvent?.({
         itemId: readStringValue(evt.data.itemId),
-        toolCallId: readStringValue(evt.data.toolCallId),
         kind: readStringValue(evt.data.kind),
         title: readStringValue(evt.data.title),
-        name: itemName,
         phase: itemPhase,
         status: itemStatus,
-        summary: readStringValue(evt.data.summary),
-        progressText: readStringValue(evt.data.progressText),
-        meta: readStringValue(evt.data.meta),
-        approvalId: readStringValue(evt.data.approvalId),
-        approvalSlug: readStringValue(evt.data.approvalSlug),
+        ...(itemToolCallId ? { toolCallId: itemToolCallId } : {}),
+        ...(itemName ? { name: itemName } : {}),
+        ...(itemSummary !== undefined ? { summary: itemSummary } : {}),
+        ...(itemProgressText !== undefined ? { progressText: itemProgressText } : {}),
+        ...(itemMeta !== undefined ? { meta: itemMeta } : {}),
+        ...(itemCommandBearing !== undefined ? { commandBearing: itemCommandBearing } : {}),
+        ...(itemApprovalId !== undefined ? { approvalId: itemApprovalId } : {}),
+        ...(itemApprovalSlug !== undefined ? { approvalSlug: itemApprovalSlug } : {}),
       });
     }
     if (evt.stream === "plan" && !shouldSuppressProgressAfterMessageToolDelivery()) {
@@ -202,9 +183,7 @@ export function createAgentRunEventHandler(params: {
         phase: readStringValue(evt.data.phase),
         title: readStringValue(evt.data.title),
         explanation: readStringValue(evt.data.explanation),
-        steps: Array.isArray(evt.data.steps)
-          ? evt.data.steps.filter((step): step is string => typeof step === "string")
-          : undefined,
+        steps: normalizeAgentPlanSteps(evt.data.steps),
         source: readStringValue(evt.data.source),
       });
     }

@@ -1,5 +1,7 @@
 // Mock OpenAI-compatible HTTP server helpers for E2E scenarios.
 import fs from "node:fs";
+// Raw launchers meet the repo's Node 22.22.3 minimum, where native TS stripping is enabled.
+import { truncateUtf16Safe } from "../../../packages/normalization-core/src/utf16-slice.ts";
 import { readPositiveIntEnv } from "./env-limits.mjs";
 
 const DEFAULT_REQUEST_MAX_BYTES = 4 * 1024 * 1024;
@@ -27,10 +29,15 @@ function requestBodyTooLargeError(limit) {
   });
 }
 
+/** @param {unknown} error @returns {error is Error & { code: "ETOOBIG" }} */
 export function isRequestBodyTooLargeError(error) {
-  return error instanceof Error && error.code === "ETOOBIG";
+  return error instanceof Error && "code" in error && error.code === "ETOOBIG";
 }
 
+/**
+ * @param {NodeJS.ReadableStream} req
+ * @param {{ requestLogBodyMaxBytes?: number; requestMaxBytes: number }} [limits]
+ */
 export function readBody(req, limits = readMockOpenAiHttpLimits()) {
   const { requestMaxBytes } = limits;
   return new Promise((resolve, reject) => {
@@ -67,6 +74,11 @@ export function readBody(req, limits = readMockOpenAiHttpLimits()) {
   });
 }
 
+/**
+ * @param {unknown} value
+ * @param {string} bodyText
+ * @param {{ requestLogBodyMaxBytes: number; requestMaxBytes?: number }} [limits]
+ */
 export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHttpLimits()) {
   const { requestLogBodyMaxBytes } = limits;
   const byteLength = Buffer.byteLength(bodyText, "utf8");
@@ -76,7 +88,7 @@ export function boundedRequestLogBody(value, bodyText, limits = readMockOpenAiHt
   return {
     truncated: true,
     byteLength,
-    preview: bodyText.slice(0, REQUEST_LOG_PREVIEW_CHARS),
+    preview: truncateUtf16Safe(bodyText, REQUEST_LOG_PREVIEW_CHARS),
   };
 }
 

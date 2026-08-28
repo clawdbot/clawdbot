@@ -1,57 +1,19 @@
-// Control UI chat module implements heartbeat display behavior.
-import { normalizeLowercaseStringOrEmpty } from "../string-coerce.ts";
-
-const HEARTBEAT_TOKEN = "HEARTBEAT_OK";
-const DEFAULT_HEARTBEAT_ACK_MAX_CHARS = 300;
-
-function escapeRegExp(value: string): string {
-  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-}
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
+  stripHeartbeatToken,
+} from "../../../../src/auto-reply/heartbeat.js";
 
 export function stripHeartbeatTokenForDisplay(
   raw: string,
   maxAckChars = DEFAULT_HEARTBEAT_ACK_MAX_CHARS,
-): { shouldSkip: boolean } {
-  let text = raw.trim();
-  if (!text) {
-    return { shouldSkip: true };
-  }
-  const strippedMarkup = text
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/^[*`~_]+/, "")
-    .replace(/[*`~_]+$/, "");
-  if (!text.includes(HEARTBEAT_TOKEN) && !strippedMarkup.includes(HEARTBEAT_TOKEN)) {
-    return { shouldSkip: false };
-  }
-
-  const tokenAtEnd = new RegExp(`${escapeRegExp(HEARTBEAT_TOKEN)}[^\\w]{0,4}$`);
-  let changed = true;
-  let didStrip = false;
-  text = strippedMarkup.trim();
-  while (changed) {
-    changed = false;
-    const next = text.trim();
-    if (next.startsWith(HEARTBEAT_TOKEN)) {
-      text = next.slice(HEARTBEAT_TOKEN.length).trimStart();
-      didStrip = true;
-      changed = true;
-      continue;
-    }
-    if (tokenAtEnd.test(next)) {
-      const index = next.lastIndexOf(HEARTBEAT_TOKEN);
-      const before = next.slice(0, index).trimEnd();
-      const after = next.slice(index + HEARTBEAT_TOKEN.length).trimStart();
-      text = before ? `${before}${after}`.trimEnd() : "";
-      didStrip = true;
-      changed = true;
-    }
-  }
-
-  if (!didStrip) {
-    return { shouldSkip: false };
-  }
-  return { shouldSkip: !text || text.length <= maxAckChars };
+): { shouldSkip: boolean; text: string } {
+  const result = stripHeartbeatToken(raw, { mode: "message" });
+  const text = result.didStrip && /^[*`~_]+$/.test(result.text) ? "" : result.text;
+  return {
+    shouldSkip: result.shouldSkip || (result.didStrip && text.length <= maxAckChars),
+    text,
+  };
 }
 
 function isHiddenDisplayBlockType(type: unknown): boolean {

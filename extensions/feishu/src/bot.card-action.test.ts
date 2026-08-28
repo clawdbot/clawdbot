@@ -1,5 +1,6 @@
-// Feishu tests cover bot.card action plugin behavior.
 import { createRuntimeEnv } from "openclaw/plugin-sdk/plugin-test-runtime";
+// Feishu tests cover bot.card action plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterAll, afterEach, describe, it, expect, vi, beforeEach } from "vitest";
 import type { ClawdbotConfig, RuntimeEnv } from "../runtime-api.js";
 import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
@@ -133,12 +134,7 @@ describe("Feishu Card Action Handler", () => {
     return call[0];
   }
 
-  function requireRecord(value: unknown, label: string): Record<string, unknown> {
-    if (!value || typeof value !== "object") {
-      throw new Error(`Expected ${label}`);
-    }
-    return value as Record<string, unknown>;
-  }
+  const requireRecord = createRequireRecord("object", "expected-label-capitalized");
 
   function handleMessageEvent(callIndex = 0) {
     const arg = requireRecord(
@@ -327,7 +323,35 @@ describe("Feishu Card Action Handler", () => {
 
     await handleFeishuCardAction({ cfg, event, runtime });
 
-    expect(handleMessage().content).toBe('{"text":"/new"}');
+    const message = handleMessage();
+    expect(message.content).toBe('{"text":"/new"}');
+    expect(message.mentions).toBeUndefined();
+  });
+
+  it("marks synthetic group card callbacks as mentioning the bot", async () => {
+    const event = createStructuredQuickActionEvent({
+      token: "tok5-mention",
+      action: FEISHU_APPROVAL_CONFIRM_ACTION,
+      command: "/new",
+      chatType: "group",
+    });
+
+    await handleFeishuCardAction({
+      cfg,
+      event,
+      runtime,
+      botOpenId: "ou_bot",
+    });
+
+    const message = handleMessage();
+    expect(message.chat_type).toBe("group");
+    expect(message.mentions).toEqual([
+      {
+        key: "mention_bot",
+        id: { open_id: "ou_bot" },
+        name: "bot",
+      },
+    ]);
   });
 
   it("safely rejects stale structured actions", async () => {
@@ -395,11 +419,12 @@ describe("Feishu Card Action Handler", () => {
       chatType: "p2p",
     });
 
-    await handleFeishuCardAction({ cfg, event, runtime });
+    await handleFeishuCardAction({ cfg, event, runtime, botOpenId: "ou_bot" });
 
     const message = handleMessage();
     expect(message.chat_id).toBe("p2p-chat-1");
     expect(message.chat_type).toBe("p2p");
+    expect(message.mentions).toBeUndefined();
   });
 
   it("resolves DM chat type from the Feishu chat API when card context omits it", async () => {

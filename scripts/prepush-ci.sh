@@ -23,7 +23,7 @@ run_protocol_ci_mirror() {
   before="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
 
   run_step pnpm protocol:gen
-  run_step pnpm protocol:gen:swift
+  run_step pnpm protocol:check:swift
 
   after="$(git diff --no-ext-diff -- "${targets[@]}" || true)"
   if [[ "$before" != "$after" ]]; then
@@ -48,6 +48,7 @@ has_native_swift_changes() {
     scripts/install-swift-tools.sh
     scripts/install-xcodegen.sh
     scripts/ios-write-swift-filelist.mjs
+    scripts/ios-write-swift-filelist.mts
     scripts/lint-swift.sh
   )
 

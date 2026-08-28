@@ -1,7 +1,7 @@
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 // Whatsapp tests cover channel react action plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { handleWhatsAppMessageAction } from "./channel-react-action.js";
-import type { OpenClawConfig } from "./runtime-api.js";
 
 const hoisted = vi.hoisted(() => ({
   handleWhatsAppAction: vi.fn(async () => ({ content: [{ type: "text", text: '{"ok":true}' }] })),
@@ -150,6 +150,79 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
+  it.each([
+    {
+      sourceKey: "filePath",
+      source: "/tmp/generated-attachment.bin",
+      filenameKey: "filename",
+      filename: "Quarterly Report.pdf",
+    },
+    {
+      sourceKey: "mediaUrl",
+      source: "https://example.com/download?id=42",
+      filenameKey: "fileName",
+      filename: "Invoice.pdf",
+    },
+  ])(
+    "preserves the requested $filenameKey for an upload-file $sourceKey",
+    async ({ sourceKey, source, filenameKey, filename }) => {
+      await handleWhatsAppMessageAction({
+        action: "upload-file",
+        params: {
+          to: "+1555",
+          [sourceKey]: source,
+          [filenameKey]: filename,
+          forceDocument: true,
+        },
+        cfg: baseCfg,
+        accountId: "default",
+      });
+
+      expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+        "+1555",
+        "",
+        expect.objectContaining({ mediaUrl: source, fileName: filename }),
+      );
+    },
+  );
+
+  it.each([
+    {
+      name: "a local path's contentType",
+      source: { filePath: "/tmp/generated-attachment.bin" },
+      metadata: { contentType: "image/png" },
+      expectedContentType: "image/png",
+    },
+    {
+      name: "a URL's mimeType alias",
+      source: { mediaUrl: "https://example.com/video" },
+      metadata: { mimeType: "video/mp4" },
+      expectedContentType: "video/mp4",
+    },
+    {
+      name: "contentType before a URL's mimeType alias",
+      source: { mediaUrl: "https://example.com/document" },
+      metadata: { contentType: "application/pdf", mimeType: "image/png" },
+      expectedContentType: "application/pdf",
+    },
+  ])("preserves $name for upload-file", async ({ source, metadata, expectedContentType }) => {
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: { to: "+1555", ...source, ...metadata },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "",
+      expect.objectContaining({
+        mediaUrl: source.filePath ?? source.mediaUrl,
+        contentType: expectedContentType,
+      }),
+    );
+  });
+
   it("uses toolContext current chat for same-chat upload-file", async () => {
     const mediaReadFile = vi.fn(async () => Buffer.from("media"));
 
@@ -206,12 +279,12 @@ describe("whatsapp react action messageId resolution", () => {
     expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
   });
 
-  it("sends upload-file from the hydrated buffer payload", async () => {
+  it("sends upload-file from a whitespace-heavy base64 data URL", async () => {
     await handleWhatsAppMessageAction({
       action: "upload-file",
       params: {
         to: "+1555",
-        buffer: Buffer.from("hello").toString("base64"),
+        buffer: " \n DATA:text/plain;BASE64, aG Vs\nbG8= \n ",
         contentType: "text/plain",
         filename: "hello.txt",
         filePath: "/tmp/hello.txt",
@@ -240,23 +313,114 @@ describe("whatsapp react action messageId resolution", () => {
     });
   });
 
-  it("rejects upload-file buffers above the WhatsApp media limit", async () => {
-    hoisted.resolveWhatsAppMediaMaxBytes.mockReturnValueOnce(4);
-
-    await expect(
-      handleWhatsAppMessageAction({
+  it.each([
+    {
+      name: "the data URL",
+      metadata: {},
+      expectedContentType: "image/png",
+    },
+    {
+      name: "an explicit contentType",
+      metadata: { contentType: "application/pdf" },
+      expectedContentType: "application/pdf",
+    },
+    {
+      name: "an explicit mimeType alias",
+      metadata: { mimeType: "image/jpeg" },
+      expectedContentType: "image/jpeg",
+    },
+    {
+      name: "contentType before its mimeType alias",
+      metadata: { contentType: "application/pdf", mimeType: "image/jpeg" },
+      expectedContentType: "application/pdf",
+    },
+  ])(
+    "resolves upload-file buffer MIME metadata from $name",
+    async ({ metadata, expectedContentType }) => {
+      await handleWhatsAppMessageAction({
         action: "upload-file",
         params: {
           to: "+1555",
-          buffer: Buffer.from("hello").toString("base64"),
-          contentType: "text/plain",
-          filename: "hello.txt",
+          buffer: `data:image/png;base64,${Buffer.from("image").toString("base64")}`,
+          ...metadata,
         },
         cfg: baseCfg,
         accountId: "default",
-      }),
-    ).rejects.toThrow("WhatsApp upload-file buffer exceeds configured media limit");
-    expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+      });
+
+      expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+        "+1555",
+        "",
+        expect.objectContaining({
+          mediaPayload: expect.objectContaining({
+            buffer: Buffer.from("image"),
+            contentType: expectedContentType,
+          }),
+        }),
+      );
+    },
+  );
+
+  it("prefers the filename field over its fileName alias for URL uploads", async () => {
+    await handleWhatsAppMessageAction({
+      action: "upload-file",
+      params: {
+        to: "+1555",
+        mediaUrl: "https://example.com/download",
+        filename: "preferred.pdf",
+        fileName: "ignored.pdf",
+      },
+      cfg: baseCfg,
+      accountId: "default",
+    });
+
+    expect(hoisted.sendMessageWhatsApp).toHaveBeenCalledWith(
+      "+1555",
+      "",
+      expect.objectContaining({ fileName: "preferred.pdf" }),
+    );
+  });
+
+  it.each(["SGVsbG8=!", "data:text/plain,hello", "data:text/plain;base64"])(
+    "rejects malformed upload-file buffer %s",
+    async (buffer) => {
+      await expect(
+        handleWhatsAppMessageAction({
+          action: "upload-file",
+          params: { to: "+1555", buffer },
+          cfg: baseCfg,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("must be valid base64 or a base64 data URL");
+      expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    },
+  );
+
+  it("rejects upload-file buffers above the WhatsApp media limit", async () => {
+    hoisted.resolveWhatsAppMediaMaxBytes.mockReturnValueOnce(4);
+    const encoded = Buffer.from("hello").toString("base64");
+    const bufferFromSpy = vi.spyOn(Buffer, "from");
+
+    try {
+      await expect(
+        handleWhatsAppMessageAction({
+          action: "upload-file",
+          params: {
+            to: "+1555",
+            buffer: encoded,
+            contentType: "text/plain",
+            filename: "hello.txt",
+          },
+          cfg: baseCfg,
+          accountId: "default",
+        }),
+      ).rejects.toThrow("WhatsApp upload-file buffer exceeds configured media limit");
+      const bufferFromCalls = bufferFromSpy.mock.calls as unknown[][];
+      expect(bufferFromCalls.some((call) => call[1] === "base64")).toBe(false);
+      expect(hoisted.sendMessageWhatsApp).not.toHaveBeenCalled();
+    } finally {
+      bufferFromSpy.mockRestore();
+    }
   });
 
   it("requires upload-file media path input", async () => {

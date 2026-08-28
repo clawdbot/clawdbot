@@ -20,8 +20,8 @@ A local Unix socket connects the node host service to the macOS app for exec app
 ### Gateway + node transport
 
 - The app runs the Gateway (local mode) and connects to it as a node.
-- Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.*`).
-- Node commands include `canvas.*`, `camera.snap`, `camera.clip`, `screen.snapshot`, `screen.record`, `computer.act`, `system.run`, and `system.notify`.
+- Agent actions are performed via `node.invoke` (e.g. `system.run`, `system.notify`, `canvas.present`).
+- Node commands include `canvas.present`, `canvas.hide`, `canvas.navigate`, `camera.list`, `camera.snap`, `camera.clip`, `camera.ptz.status`, `camera.ptz.control`, `screen.snapshot`, `screen.record`, `computer.act`, `system.run`, and `system.notify`.
 - The node reports a `permissions` map so agents can see whether screen, camera, microphone, speech, automation, or accessibility access is available.
 
 ### Node service + app IPC
@@ -29,6 +29,8 @@ A local Unix socket connects the node host service to the macOS app for exec app
 - A headless node host service connects to the Gateway WebSocket.
 - `system.run` requests are forwarded to the macOS app over a local Unix socket (`ExecApprovalsSocket.swift`).
 - The app performs the exec in UI context, prompts if needed, and returns output.
+- The socket owns the request lifetime. Node cancellation or a socket deadline closes the response reader, cancelling the native prompt or command and its process group. Stopping the app's exec server also cancels and drains active requests before releasing its socket lease.
+- Clients still half-close their **write** side after sending one JSONL request. That normal request EOF does not cancel execution; the response reader remains open until the result arrives.
 
 Diagram (SCI):
 
@@ -44,12 +46,14 @@ Agent -> Gateway -> Node Service (WS)
 - The built-in agent `computer` tool does **not** use this socket. A paired macOS node fulfills `computer.act` in the app process with embedded Peekaboo services.
 - UI automation uses a separate UNIX socket (`~/Library/Application Support/OpenClaw/<socket>`) and the PeekabooBridge JSON protocol.
 - Host preference order (client-side): Peekaboo.app -> Claude.app -> OpenClaw.app -> local execution.
-- Security: bridge hosts require an allowlisted TeamID (the bundled `PeekabooBridgeHostCoordinator` allowlists a fixed team plus the app's own signing team); a DEBUG-only same-UID escape hatch is guarded by `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (Peekaboo convention).
+- Security: bridge hosts require the exact signed Peekaboo client bundle identifier and Peekaboo's canonical
+  current/legacy release signer set; a DEBUG-only same-UID escape hatch is guarded by
+  `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (Peekaboo convention).
 - See: [PeekabooBridge usage](/platforms/mac/peekaboo) for details.
 
 ## Operational flows
 
-- Restart/rebuild: `scripts/restart-mac.sh` kills existing instances, rebuilds via Swift, repackages, and relaunches. It auto-detects an available signing identity and falls back to `--no-sign` if none is found; pass `--sign` to require signing (fails if no key is available) or `--no-sign` to force the unsigned path. `SIGN_IDENTITY` set in the environment is unset on the signed path, so `scripts/codesign-mac-app.sh`'s own identity auto-detection picks the cert.
+- Restart/rebuild: `scripts/restart-mac.sh` kills existing instances, rebuilds via Swift, repackages, and relaunches. It auto-detects an available signing identity and falls back to `--no-sign` if none is found; pass `--sign` to require signing (fails if no key is available) or `--no-sign` to force the unsigned path. An explicit `SIGN_IDENTITY` is preserved through packaging; otherwise `scripts/codesign-mac-app.sh` auto-detects the certificate.
 - Single instance: the app checks `NSWorkspace.runningApplications` for a duplicate bundle ID and exits if more than one instance is found (`isDuplicateInstance()` in `MenuBar.swift`).
 
 ## Hardening notes
@@ -58,7 +62,9 @@ Agent -> Gateway -> Node Service (WS)
 - PeekabooBridge: `PEEKABOO_ALLOW_UNSIGNED_SOCKET_CLIENTS=1` (DEBUG-only) may allow same-UID callers for local development.
 - All communication remains local-only; no network sockets are exposed.
 - TCC prompts originate only from the GUI app bundle; keep the signed bundle ID stable across rebuilds.
-- Exec approvals socket hardening: file mode `0600`, shared token, peer-UID check (`getpeereid`), HMAC-SHA256 challenge/response, and a short TTL on requests.
+- Exec approvals socket hardening: file mode `0600`, shared token stored in the
+  `exec_approvals_config` row of `state/openclaw.sqlite`, peer-UID check
+  (`getpeereid`), HMAC-SHA256 challenge/response, and a short TTL on requests.
 
 ## Related
 

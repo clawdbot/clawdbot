@@ -10,6 +10,7 @@ import {
   normalizePluginsConfig,
   resolveEffectivePluginActivationState,
 } from "../../plugins/config-state.js";
+import type { PluginDiscoveryResult } from "../../plugins/discovery.js";
 import {
   hasExplicitManifestOwnerTrust,
   resolveManifestOwnerBasePolicyBlock,
@@ -124,6 +125,7 @@ function resolveTrustedCatalogEntry(
     cfg: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    discovery?: PluginDiscoveryResult;
   },
   rejected: ChannelPluginCatalogEntry[] = [],
 ): ChannelPluginCatalogEntry | undefined {
@@ -141,6 +143,7 @@ function resolveTrustedCatalogEntry(
       workspaceDir: params.workspaceDir,
       env: params.env,
       ...(extraPaths ? { extraPaths } : {}),
+      ...(params.discovery ? { discovery: params.discovery } : {}),
       ...resolveRejectedCatalogLookup(rejectedEntries),
     });
     if (!candidate) {
@@ -171,6 +174,7 @@ export function getTrustedChannelPluginCatalogEntry(
     cfg: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    discovery?: PluginDiscoveryResult;
   },
 ): ChannelPluginCatalogEntry | undefined {
   return resolveTrustedCatalogEntry(channelId, params);
@@ -181,6 +185,7 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
     cfg: OpenClawConfig;
     workspaceDir?: string;
     env?: NodeJS.ProcessEnv;
+    discovery?: PluginDiscoveryResult;
   },
   onMissingFallback: (entry: ChannelPluginCatalogEntry) => ChannelPluginCatalogEntry[],
 ): ChannelPluginCatalogEntry[] {
@@ -189,6 +194,7 @@ function listChannelPluginCatalogEntriesWithTrustedFallback(
     workspaceDir: params.workspaceDir,
     env: params.env,
     ...(extraPaths ? { extraPaths } : {}),
+    ...(params.discovery ? { discovery: params.discovery } : {}),
   });
   return unfiltered.flatMap((entry) => {
     if (isTrustedLocalChannelCatalogEntry(entry, params.cfg, params.env)) {
@@ -204,6 +210,7 @@ export function listTrustedChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): ChannelPluginCatalogEntry[] {
   return listChannelPluginCatalogEntriesWithTrustedFallback(params, () => []);
 }
@@ -213,6 +220,7 @@ export function listSetupDiscoveryChannelPluginCatalogEntries(params: {
   cfg: OpenClawConfig;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
+  discovery?: PluginDiscoveryResult;
 }): ChannelPluginCatalogEntry[] {
   return listChannelPluginCatalogEntriesWithTrustedFallback(params, (entry) => [entry]);
 }

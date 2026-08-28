@@ -1,16 +1,18 @@
 // Verifies bundled plugin directory resolution.
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   resolveBundledPluginsDir,
   resolveSourceCheckoutDependencyDiagnostic,
 } from "./bundled-dir.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
 const originalBundledDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
 const originalDisableBundledPlugins = process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
+const originalTrustBundledPlugins = process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
 const originalVitest = process.env.VITEST;
 const originalArgv1 = process.argv[1];
 const originalExecArgv = [...process.execArgv];
@@ -160,6 +162,10 @@ function requireBundledDir(value: string | null | undefined): string {
   return value;
 }
 
+beforeEach(() => {
+  delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+});
+
 afterEach(() => {
   vi.restoreAllMocks();
   if (originalBundledDir === undefined) {
@@ -171,6 +177,11 @@ afterEach(() => {
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
   } else {
     process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS = originalDisableBundledPlugins;
+  }
+  if (originalTrustBundledPlugins === undefined) {
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
+  } else {
+    process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR = originalTrustBundledPlugins;
   }
   if (originalVitest === undefined) {
     delete process.env.VITEST;
@@ -367,7 +378,10 @@ describe("resolveBundledPluginsDir", () => {
     // The diagnostic also scans the real checkout hosting this test run (via
     // module-root resolution), which may itself lack node_modules in nested
     // worktrees; only assert the satisfied fixture is no longer reported.
-    expect(resolveSourceCheckoutDependencyDiagnostic()?.source).not.toBe(repoRoot);
+    expect(
+      withPluginCache(createPluginCache(), () => resolveSourceCheckoutDependencyDiagnostic())
+        ?.source,
+    ).not.toBe(repoRoot);
   });
 
   it("returns a stable empty bundled plugin directory when bundled plugins are disabled", () => {
@@ -417,6 +431,7 @@ describe("resolveBundledPluginsDir", () => {
     process.argv[1] = path.join(installedRoot, "openclaw.mjs");
     process.execArgv.length = 0;
     delete process.env.VITEST;
+    delete process.env.OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR;
     process.env.OPENCLAW_BUNDLED_PLUGINS_DIR = path.join(installedRoot, "dist", "extensions");
     delete process.env.OPENCLAW_DISABLE_BUNDLED_PLUGINS;
 

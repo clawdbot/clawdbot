@@ -4,7 +4,7 @@ import {
   runRealtimeSttLiveTest,
   synthesizeElevenLabsLiveSpeech,
 } from "openclaw/plugin-sdk/provider-test-contracts";
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { mistralMediaUnderstandingProvider } from "./media-understanding-provider.js";
 import { buildMistralRealtimeTranscriptionProvider } from "./realtime-transcription-provider.js";

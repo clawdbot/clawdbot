@@ -1,9 +1,10 @@
-// Voice Call tests cover manager.restore plugin behavior.
 import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+// Voice Call tests cover manager.restore plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { VoiceCallConfigSchema } from "./config.js";
 import { CallManager } from "./manager.js";
@@ -13,6 +14,7 @@ import {
   makePersistedCall,
   writeCallsToStore,
 } from "./manager.test-harness.js";
+import { MAX_CALL_REPLAY_KEYS } from "./manager/replay-keys.js";
 import { loadActiveCallsFromStore } from "./manager/store.js";
 import { setVoiceCallStateRuntime } from "./runtime-state.js";
 
@@ -28,6 +30,9 @@ function installStateRuntime(): void {
       openChannelIngressQueue: (() => {
         throw new Error("openChannelIngressQueue is not used by voice-call restore tests");
       }) as never,
+      openChannelIngressDrain: (() => {
+        throw new Error("openChannelIngressDrain is not used by voice-call restore tests");
+      }) as never,
     },
   });
 }
@@ -42,12 +47,7 @@ function requireSingleActiveCall(manager: CallManager) {
   return activeCall;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireSingleHangupCall(provider: FakeProvider) {
   expect(provider.hangupCalls).toHaveLength(1);
@@ -388,11 +388,15 @@ describe("CallManager verification on restore", () => {
 
   it("restores dedupe keys from terminal persisted calls so replayed webhooks stay ignored", async () => {
     const storePath = createTestStorePath();
+    const replayKeys = Array.from(
+      { length: MAX_CALL_REPLAY_KEYS + 2 },
+      (_, index) => `evt-terminal-${index}`,
+    );
     const persisted = makePersistedCall({
       state: "completed",
       endedAt: Date.now() - 5_000,
       endReason: "completed",
-      processedEventIds: ["evt-terminal-init"],
+      processedEventIds: replayKeys,
     });
     writeCallsToStore(storePath, [persisted]);
 
@@ -406,7 +410,7 @@ describe("CallManager verification on restore", () => {
     await manager.initialize(provider, "https://example.com/voice/webhook");
 
     manager.processEvent({
-      id: "evt-terminal-init",
+      id: replayKeys.at(-1) as string,
       type: "call.initiated",
       callId: String(persisted.providerCallId),
       providerCallId: String(persisted.providerCallId),
@@ -417,5 +421,18 @@ describe("CallManager verification on restore", () => {
     });
 
     expect(manager.getActiveCalls()).toHaveLength(0);
+
+    manager.processEvent({
+      id: replayKeys[0] as string,
+      type: "call.initiated",
+      callId: String(persisted.providerCallId),
+      providerCallId: String(persisted.providerCallId),
+      timestamp: Date.now(),
+      direction: "outbound",
+      from: "+15550000000",
+      to: "+15550000001",
+    });
+
+    expect(manager.getActiveCalls()).toHaveLength(1);
   });
 });

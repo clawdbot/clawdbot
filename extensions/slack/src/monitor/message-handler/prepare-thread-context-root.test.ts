@@ -72,7 +72,7 @@ describe("resolveSlackThreadHistoryFilterPolicy", () => {
         includeBotStarterAsRootContext: true,
         starterTs: "1",
       }),
-    ).toEqual({ retainCurrentBotRootTs: "1" });
+    ).toEqual({ currentBot: "root-only", rootTs: "1" });
   });
 
   it("filters current-bot messages on existing sessions", () => {
@@ -81,7 +81,17 @@ describe("resolveSlackThreadHistoryFilterPolicy", () => {
         includeBotStarterAsRootContext: false,
         starterTs: "1",
       }),
-    ).toEqual({});
+    ).toEqual({ currentBot: "omit" });
+  });
+
+  it("retains current-bot history when the owner requests thread reconstruction", () => {
+    expect(
+      resolveSlackThreadHistoryFilterPolicy({
+        includeBotStarterAsRootContext: false,
+        starterTs: "1",
+        retainCurrentBotHistory: true,
+      }),
+    ).toEqual({ currentBot: "all" });
   });
 });
 
@@ -96,7 +106,7 @@ describe("applySlackThreadHistoryFilterPolicy", () => {
     ];
     const result = applySlackThreadHistoryFilterPolicy({
       history,
-      policy: { retainCurrentBotRootTs: "1" },
+      policy: { currentBot: "root-only", rootTs: "1" },
       identity,
     });
     expect(result.kept.map((entry) => entry.ts)).toEqual(["1", "2"]);
@@ -112,17 +122,32 @@ describe("applySlackThreadHistoryFilterPolicy", () => {
     ];
     const result = applySlackThreadHistoryFilterPolicy({
       history,
-      policy: {},
+      policy: { currentBot: "omit" },
       identity,
     });
     expect(result.kept.map((entry) => entry.ts)).toEqual(["3", "4"]);
     expect(result.omittedCurrentBot).toBe(2);
   });
 
+  it("keeps all current-bot messages when reconstructing a fresh thread", () => {
+    const history = [
+      { ts: "1", userId: "U1", text: "user root" },
+      { ts: "2", botId: "B1", text: "assistant reply" },
+      { ts: "3", userId: "U_BOT", text: "assistant follow-up" },
+    ];
+    const result = applySlackThreadHistoryFilterPolicy({
+      history,
+      policy: { currentBot: "all" },
+      identity,
+    });
+    expect(result.kept).toEqual(history);
+    expect(result.omittedCurrentBot).toBe(0);
+  });
+
   it("returns an empty result for empty history", () => {
     const result = applySlackThreadHistoryFilterPolicy({
       history: [] as Array<{ ts: string; userId?: string; botId?: string }>,
-      policy: {},
+      policy: { currentBot: "omit" },
       identity,
     });
     expect(result.kept).toEqual([]);

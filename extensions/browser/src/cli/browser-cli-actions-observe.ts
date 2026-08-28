@@ -3,20 +3,27 @@
  */
 import type { Command } from "commander";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { runCommandWithRuntime } from "../core-api.js";
 import {
   BROWSER_TAB_REFERENCE_HELP,
   callBrowserRequest,
   parseBrowserPositiveIntegerOption,
+  printBrowserJsonResult,
+  runBrowserCliCommand as runBrowserObserve,
+  withBrowserActionTimeoutSlack,
   type BrowserParentOpts,
 } from "./browser-cli-shared.js";
-import { danger, defaultRuntime, shortenHomePath } from "./core-api.js";
+import { defaultRuntime, shortenHomePath } from "./core-api.js";
 
-function runBrowserObserve(action: () => Promise<void>) {
-  return runCommandWithRuntime(defaultRuntime, action, (err) => {
-    defaultRuntime.error(danger(String(err)));
-    defaultRuntime.exit(1);
-  });
+const BROWSER_CONSOLE_LEVELS = ["error", "warn", "info"] as const;
+
+function parseBrowserConsoleLevel(value: string): (typeof BROWSER_CONSOLE_LEVELS)[number] {
+  const level = BROWSER_CONSOLE_LEVELS.find((candidate) => candidate === value);
+  if (!level) {
+    throw new Error(
+      `--level must be ${BROWSER_CONSOLE_LEVELS.slice(0, -1).join(", ")}, or ${BROWSER_CONSOLE_LEVELS.at(-1)}.`,
+    );
+  }
+  return level;
 }
 
 /** Registers Browser commands that observe current page state without direct input. */
@@ -27,27 +34,26 @@ export function registerBrowserActionObserveCommands(
   browser
     .command("console")
     .description("Get recent console messages")
-    .option("--level <level>", "Filter by level (error, warn, info)")
+    .option(
+      "--level <level>",
+      `Filter by level (${BROWSER_CONSOLE_LEVELS.join(", ")})`,
+      parseBrowserConsoleLevel,
+    )
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .action(async (opts, cmd) => {
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserObserve(async () => {
-        const result = await callBrowserRequest<{ messages: unknown[] }>(
-          parent,
-          {
-            method: "GET",
-            path: "/console",
-            query: {
-              level: normalizeOptionalString(opts.level),
-              targetId: normalizeOptionalString(opts.targetId),
-              profile,
-            },
+        const result = await callBrowserRequest<{ messages: unknown[] }>(parent, {
+          method: "GET",
+          path: "/console",
+          query: {
+            level: normalizeOptionalString(opts.level),
+            targetId: normalizeOptionalString(opts.targetId),
+            profile,
           },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        });
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.writeJson(result.messages);
@@ -62,18 +68,13 @@ export function registerBrowserActionObserveCommands(
       const parent = parentOpts(cmd);
       const profile = parent?.browserProfile;
       await runBrowserObserve(async () => {
-        const result = await callBrowserRequest<{ path: string }>(
-          parent,
-          {
-            method: "POST",
-            path: "/pdf",
-            query: profile ? { profile } : undefined,
-            body: { targetId: normalizeOptionalString(opts.targetId) },
-          },
-          { timeoutMs: 20000 },
-        );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        const result = await callBrowserRequest<{ path: string }>(parent, {
+          method: "POST",
+          path: "/pdf",
+          query: profile ? { profile } : undefined,
+          body: { targetId: normalizeOptionalString(opts.targetId) },
+        });
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log(`PDF: ${shortenHomePath(result.path)}`);
@@ -87,7 +88,7 @@ export function registerBrowserActionObserveCommands(
     .option("--target-id <id>", BROWSER_TAB_REFERENCE_HELP)
     .option(
       "--timeout-ms <ms>",
-      "How long to wait for the response (default: 20000)",
+      "How long to wait for the complete response body (default: 20000)",
       (v: string) => parseBrowserPositiveIntegerOption(v, "--timeout-ms"),
     )
     .option("--max-chars <n>", "Max body chars to return (default: 200000)", (v: string) =>
@@ -112,10 +113,9 @@ export function registerBrowserActionObserveCommands(
               maxChars,
             },
           },
-          { timeoutMs: timeoutMs ?? 20000 },
+          { timeoutMs: withBrowserActionTimeoutSlack(timeoutMs) },
         );
-        if (parent?.json) {
-          defaultRuntime.writeJson(result);
+        if (printBrowserJsonResult(parent, result)) {
           return;
         }
         defaultRuntime.log(result.response.body);

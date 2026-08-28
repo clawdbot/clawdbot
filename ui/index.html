@@ -8,13 +8,20 @@
     />
     <title>OpenClaw Control</title>
     <meta name="color-scheme" content="dark light" />
+    <!-- These mirror the claw theme's --bg tokens for first paint; runtime theme application keeps them synchronized. -->
+    <meta name="theme-color" media="(prefers-color-scheme: light)" content="#faf9f7" />
+    <meta name="theme-color" media="(prefers-color-scheme: dark)" content="#0e1015" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
-    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
     <script>
+      // Configure Zod before module evaluation so its JIT probe cannot violate strict CSP.
+      globalThis.__zod_globalConfig ??= {};
+      globalThis.__zod_globalConfig.jitless = true;
+
       (function () {
-        var THEMES = { claw: 1, knot: 1, dash: 1 };
+        var THEMES = { claw: 1, knot: 1, dash: 1, absolutely: 1, tide: 1, beacon: 1, phosphor: 1 };
         var MODES = { system: 1, light: 1, dark: 1 };
         var LEGACY = {
           dark: "claw:dark",
@@ -45,27 +52,118 @@
           if (mode === "system") {
             mode = window.matchMedia("(prefers-color-scheme: light)").matches ? "light" : "dark";
           }
-          var resolved =
-            theme === "knot"
-              ? mode === "light"
-                ? "openknot-light"
-                : "openknot"
-              : theme === "dash"
-                ? mode === "light"
-                  ? "dash-light"
-                  : "dash"
-                : mode === "light"
-                  ? "light"
-                  : "dark";
+          // family -> [dark, light] resolved names. Kept in lockstep with
+          // resolveTheme() in app/theme.ts and the files in public/themes.
+          var FAMILIES = {
+            knot: ["openknot", "openknot-light"],
+            dash: ["dash", "dash-light"],
+            absolutely: ["absolutely", "absolutely-light"],
+            tide: ["tide", "tide-light"],
+            beacon: ["beacon", "beacon-light"],
+            phosphor: ["phosphor", "phosphor-light"],
+          };
+          var pair = FAMILIES[theme];
+          var resolved = pair
+            ? pair[mode === "light" ? 1 : 0]
+            : mode === "light"
+              ? "light"
+              : "dark";
+          if (pair) {
+            // Script-created links need explicit render blocking before first paint.
+            // The gateway stamps the mount prefix on <html> before this runs.
+            var base =
+              document.documentElement.getAttribute("data-openclaw-control-ui-base-path") || "";
+            var palette = document.createElement("link");
+            palette.rel = "stylesheet";
+            palette.setAttribute("blocking", "render");
+            palette.id = "openclaw-theme-palette-" + theme;
+            palette.onerror = function () {
+              palette.remove();
+            };
+            palette.href = base + "/themes/" + theme + ".css";
+            document.head.appendChild(palette);
+          }
           document.documentElement.setAttribute("data-theme", resolved);
-          document.documentElement.setAttribute(
-            "data-theme-mode",
-            resolved.includes("light") ? "light" : "dark",
-          );
+          var resolvedMode = resolved.includes("light") ? "light" : "dark";
+          document.documentElement.setAttribute("data-theme-mode", resolvedMode);
+          // Carapace CSS selects on [data-theme-resolved]; keep in lockstep.
+          document.documentElement.setAttribute("data-theme-resolved", resolvedMode);
         } catch (e) {}
       })();
     </script>
     <style>
+      /* Paint before the app stylesheet arrives so WebKit never exposes a white
+         document between its native dark canvas and the persisted UI theme. */
+      html,
+      body {
+        min-height: 100%;
+      }
+
+      html {
+        background: #0e1015;
+        color-scheme: dark;
+      }
+
+      html[data-theme-mode="light"] {
+        background: #faf9f7;
+        color-scheme: light;
+      }
+
+      html[data-theme="openknot"] {
+        background: #080808;
+      }
+
+      html[data-theme="openknot-light"] {
+        background: #f9f9fb;
+      }
+
+      html[data-theme="dash"] {
+        background: #1a1210;
+      }
+
+      html[data-theme="dash-light"] {
+        background: #f7f2ec;
+      }
+
+      html[data-theme="absolutely"] {
+        background: #1c1c1a;
+      }
+
+      html[data-theme="absolutely-light"] {
+        background: #faf9f5;
+      }
+
+      html[data-theme="tide"] {
+        background: #10151b;
+      }
+
+      html[data-theme="tide-light"] {
+        background: #f7f9fb;
+      }
+
+      html[data-theme="beacon"] {
+        background: #000000;
+      }
+
+      html[data-theme="beacon-light"] {
+        background: #ffffff;
+      }
+
+      html[data-theme="phosphor"] {
+        background: #0a0f0a;
+      }
+
+      html[data-theme="phosphor-light"] {
+        background: #f4f7f4;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: inherit;
+        color-scheme: inherit;
+      }
+
       body.openclaw-mount-fallback-active {
         margin: 0;
         min-width: 320px;
@@ -250,8 +348,7 @@
     </section>
     <script>
       (function () {
-        var tagName = "openclaw-app";
-        var app = document.querySelector(tagName);
+        var app = document.querySelector("openclaw-app");
         var fallback = document.getElementById("openclaw-mount-fallback");
         if (!app || !fallback) return;
 
@@ -267,6 +364,7 @@
         var recoveryAttempt = 0;
         var recoveryInFlight = false;
         var recoveryNavigation = false;
+        var appStarted = false;
 
         try {
           var initialUrl = new URL(window.location.href);
@@ -276,19 +374,6 @@
             window.history.replaceState(null, "", initialUrl.href);
           }
         } catch (e) {}
-
-        function appMounted() {
-          try {
-            return Boolean(
-              app.isConnected &&
-              window.customElements &&
-              typeof window.customElements.get === "function" &&
-              window.customElements.get(tagName),
-            );
-          } catch (e) {
-            return false;
-          }
-        }
 
         function hideFallback() {
           fallback.hidden = true;
@@ -301,14 +386,14 @@
 
         function scheduleRecovery() {
           window.clearTimeout(recoveryTimer);
-          if (appMounted() || recoveryAttempt >= maxRecoveryAttempts) return;
+          if (appStarted || recoveryAttempt >= maxRecoveryAttempts) return;
           var retryDelay = Math.min(delay, 1000 * Math.pow(2, recoveryAttempt));
           recoveryTimer = window.setTimeout(retryCurrentDocument, retryDelay);
         }
 
         function finishRecoveryAttempt() {
           recoveryInFlight = false;
-          if (appMounted()) return;
+          if (appStarted) return;
           if (recoveryAttempt >= maxRecoveryAttempts) {
             setSummary(
               "The gateway is still unavailable. Try again, then check the troubleshooting guide if the problem persists.",
@@ -321,9 +406,25 @@
           scheduleRecovery();
         }
 
+        function unregisterServiceWorkers() {
+          if (!navigator.serviceWorker?.getRegistrations) return;
+          // Recovery must not depend on a possibly broken worker. Navigations bypass it,
+          // so a reload can self-heal after the registrations are removed.
+          void navigator.serviceWorker
+            .getRegistrations()
+            .then(function (registrations) {
+              return Promise.all(
+                registrations.map(function (registration) {
+                  return registration.unregister();
+                }),
+              );
+            })
+            .catch(function () {});
+        }
+
         function retryCurrentDocument() {
           if (
-            appMounted() ||
+            appStarted ||
             recoveryInFlight ||
             recoveryAttempt >= maxRecoveryAttempts ||
             typeof window.fetch !== "function"
@@ -339,19 +440,31 @@
           recoveryInFlight = true;
           recoveryAttempt += 1;
           documentUrl.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+          var recoveryController = new AbortController();
+          var requestTimer = window.setTimeout(function () {
+            recoveryController.abort();
+          }, delay);
           window
-            .fetch(documentUrl.href, { cache: "no-store", credentials: "same-origin" })
+            .fetch(documentUrl.href, {
+              cache: "no-store",
+              credentials: "same-origin",
+              signal: recoveryController.signal,
+            })
             .then(function (response) {
               if (!response.ok) throw new Error("gateway unavailable");
-              window.location.replace(documentUrl.href);
+              if (!appStarted) window.location.replace(documentUrl.href);
             })
             .catch(function () {
+              unregisterServiceWorkers();
               finishRecoveryAttempt();
+            })
+            .finally(function () {
+              window.clearTimeout(requestTimer);
             });
         }
 
         function showFallback() {
-          if (appMounted()) return;
+          if (appStarted) return;
           retryCurrentDocument();
           fallback.hidden = false;
           document.body.classList.add("openclaw-mount-fallback-active");
@@ -371,19 +484,20 @@
 
         armFallbackTimer();
 
-        if (window.customElements && typeof window.customElements.whenDefined === "function") {
-          window.customElements.whenDefined(tagName).then(
-            function () {
-              window.clearTimeout(timer);
-              window.clearTimeout(recoveryTimer);
-              hideFallback();
-            },
-            function () {},
-          );
-        }
+        window.addEventListener(
+          "openclaw-control-ui-rendered",
+          function () {
+            appStarted = true;
+            window.clearTimeout(timer);
+            window.clearTimeout(recoveryTimer);
+            hideFallback();
+          },
+          { once: true },
+        );
 
         if (retry) {
           retry.addEventListener("click", function () {
+            unregisterServiceWorkers();
             window.location.reload();
           });
         }

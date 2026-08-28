@@ -1,6 +1,7 @@
 import type { Static } from "typebox";
 // Gateway Protocol schema module defines protocol validation shapes.
 import { Type } from "typebox";
+import { ApprovalChannelReviewerSchema, ApprovalScopeSchema } from "./approvals.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
 
@@ -11,7 +12,7 @@ import { NonEmptyString } from "./primitives.js";
  * persisted policy, request snapshots, and resolve decisions stay explicit.
  */
 /** One persisted allowlist entry for a command pattern or resolved executable. */
-export const ExecApprovalsAllowlistEntrySchema = closedObject({
+const ExecApprovalsAllowlistEntrySchema = closedObject({
   id: Type.Optional(NonEmptyString),
   pattern: Type.String(),
   source: Type.Optional(Type.Literal("allow-always")),
@@ -49,16 +50,16 @@ const ExecApprovalsResolvedDefaultsSchema = closedObject({
 });
 
 /** Default exec approval policy shared by all agents unless overridden. */
-export const ExecApprovalsDefaultsSchema = closedObject(ExecApprovalsPolicyFields);
+const ExecApprovalsDefaultsSchema = closedObject(ExecApprovalsPolicyFields);
 
 /** Agent-specific exec approval policy and allowlist. */
-export const ExecApprovalsAgentSchema = closedObject({
+const ExecApprovalsAgentSchema = closedObject({
   ...ExecApprovalsPolicyFields,
   allowlist: Type.Optional(Type.Array(ExecApprovalsAllowlistEntrySchema)),
 });
 
 /** Versioned exec approvals config file edited through gateway APIs. */
-export const ExecApprovalsFileSchema = closedObject({
+const ExecApprovalsFileSchema = closedObject({
   version: Type.Literal(1),
   socket: Type.Optional(
     closedObject({
@@ -76,6 +77,7 @@ export const ExecApprovalsSnapshotSchema = closedObject({
   exists: Type.Boolean(),
   hash: NonEmptyString,
   file: ExecApprovalsFileSchema,
+  resolvedDefaults: Type.Optional(ExecApprovalsResolvedDefaultsSchema),
 });
 
 const NativeExecApprovalActionSchema = Type.Union([
@@ -264,6 +266,7 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   security: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   ask: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   warningText: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  scope: Type.Optional(ApprovalScopeSchema),
   unavailableDecisions: Type.Optional(
     Type.Array(Type.String({ enum: ["allow-always"] }), {
       minItems: 1,
@@ -288,6 +291,9 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   agentId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   resolvedPath: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   sessionKey: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  sessionId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  runId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
+  toolCallId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   turnSourceChannel: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   turnSourceTo: Type.Optional(Type.Union([Type.String(), Type.Null()])),
   turnSourceAccountId: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -300,6 +306,7 @@ export const ExecApprovalRequestParamsSchema = closedObject({
   ),
   requireDeliveryRoute: Type.Optional(Type.Boolean()),
   suppressDelivery: Type.Optional(Type.Boolean()),
+  deliverToApprovalClientsOnly: Type.Optional(Type.Boolean()),
   timeoutMs: Type.Optional(Type.Integer({ minimum: 1 })),
   twoPhase: Type.Optional(Type.Boolean()),
 });
@@ -308,6 +315,50 @@ export const ExecApprovalRequestParamsSchema = closedObject({
 export const ExecApprovalResolveParamsSchema = closedObject({
   id: NonEmptyString,
   decision: NonEmptyString,
+  reviewer: Type.Optional(ApprovalChannelReviewerSchema),
+  // Per-grant expiry override for allow-always on automation approvals:
+  // days from resolution. Absent defers to tools.exec.grantExpiryDays, and
+  // an unset config keeps the grant valid until revoked. Ignored for other
+  // decisions and non-grant approvals.
+  grantExpiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
+});
+
+/** Operator listing filter for standing grants; bounded for prompt-safe output. */
+export const ExecApprovalGrantsListParamsSchema = closedObject({
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 500 })),
+});
+
+/** One standing grant projected for operator surfaces. */
+export const ExecApprovalStandingGrantSchema = closedObject({
+  grantId: NonEmptyString,
+  mintedByApprovalId: NonEmptyString,
+  agentId: NonEmptyString,
+  cronJobId: NonEmptyString,
+  cronJobName: Type.Union([Type.String({ minLength: 1, maxLength: 200 }), Type.Null()]),
+  command: Type.String({ minLength: 1, maxLength: 512 }),
+  cwd: Type.Union([Type.String({ minLength: 1, maxLength: 512 }), Type.Null()]),
+  createdAtMs: Type.Integer({ minimum: 0 }),
+  expiresAtMs: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  revokedAtMs: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  revokedBy: Type.Union([Type.String({ minLength: 1, maxLength: 200 }), Type.Null()]),
+  lastUsedAtMs: Type.Union([Type.Integer({ minimum: 0 }), Type.Null()]),
+  useCount: Type.Integer({ minimum: 0 }),
+});
+
+export const ExecApprovalGrantsListResultSchema = closedObject({
+  grants: Type.Array(ExecApprovalStandingGrantSchema, { maxItems: 500 }),
+});
+
+export const ExecApprovalGrantsRevokeParamsSchema = closedObject({
+  grantId: NonEmptyString,
+});
+
+export const ExecApprovalGrantsRevokeResultSchema = closedObject({
+  outcome: Type.Union([
+    Type.Literal("revoked"),
+    Type.Literal("already-revoked"),
+    Type.Literal("not-found"),
+  ]),
 });
 
 // Owner-local wire types derived directly from local schema consts so the
@@ -321,3 +372,8 @@ export type ExecApprovalsSnapshot = Static<typeof ExecApprovalsSnapshotSchema>;
 export type ExecApprovalGetParams = Static<typeof ExecApprovalGetParamsSchema>;
 export type ExecApprovalRequestParams = Static<typeof ExecApprovalRequestParamsSchema>;
 export type ExecApprovalResolveParams = Static<typeof ExecApprovalResolveParamsSchema>;
+export type ExecApprovalGrantsListParams = Static<typeof ExecApprovalGrantsListParamsSchema>;
+export type ExecApprovalStandingGrant = Static<typeof ExecApprovalStandingGrantSchema>;
+export type ExecApprovalGrantsListResult = Static<typeof ExecApprovalGrantsListResultSchema>;
+export type ExecApprovalGrantsRevokeParams = Static<typeof ExecApprovalGrantsRevokeParamsSchema>;
+export type ExecApprovalGrantsRevokeResult = Static<typeof ExecApprovalGrantsRevokeResultSchema>;

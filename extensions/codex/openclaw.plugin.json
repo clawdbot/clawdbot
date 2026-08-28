@@ -1,13 +1,51 @@
 {
   "id": "codex",
+  "backupResources": [
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/tmp/arg0"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/plugins"
+    },
+    {
+      "disposition": "regenerable",
+      "scope": "agent",
+      "relativePath": "codex-home/.tmp/bundled-marketplaces"
+    }
+  ],
+  "doctorContract": {
+    "configRepair": true,
+    "stateMigrations": true
+  },
+  "sessionRouteStateOwners": [
+    {
+      "id": "codex",
+      "label": "Codex",
+      "providerIds": ["codex", "codex-cli", "openai-codex"],
+      "runtimeIds": ["codex", "codex-cli"],
+      "cliSessionKeys": ["codex-cli"],
+      "authProfilePrefixes": ["codex:", "codex-cli:", "openai-codex:"]
+    }
+  ],
   "name": "Codex",
-  "description": "Codex app-server harness, model provider, and native session catalog.",
-  "providers": ["codex"],
+  "description": "Codex app-server harness and native session catalog.",
+  "cliCommands": [
+    {
+      "name": "codex",
+      "description": "Inspect and branch from Codex sessions through the Gateway",
+      "hasSubcommands": true
+    }
+  ],
   "contracts": {
     "mediaUnderstandingProviders": ["codex"],
     "migrationProviders": ["codex"],
     "tools": [
       "codex_threads",
+      "codex_plugins",
       "codex_endpoint_probe",
       "codex_sessions_list",
       "codex_session_read",
@@ -24,15 +62,14 @@
       }
     }
   },
-  "providerCatalogEntry": "./provider-discovery.ts",
-  "syntheticAuthRefs": ["codex"],
-  "nonSecretAuthMarkers": ["codex-app-server"],
   "activation": {
     "onStartup": false,
     "onAgentHarnesses": ["codex"],
     "onCommands": ["codex"],
     "onConfigPaths": [
+      "plugins.entries.codex.config.appServer.transport",
       "plugins.entries.codex.config.sessionCatalog.enabled",
+      "plugins.entries.codex.config.sessionCatalog.homes",
       "plugins.entries.codex.config.supervision.enabled"
     ]
   },
@@ -61,7 +98,24 @@
         "type": "object",
         "additionalProperties": false,
         "properties": {
-          "enabled": { "type": "boolean", "default": true }
+          "enabled": { "type": "boolean", "default": true },
+          "homes": {
+            "type": "array",
+            "items": {
+              "anyOf": [
+                { "type": "string", "minLength": 1, "pattern": "\\S" },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": ["path"],
+                  "properties": {
+                    "path": { "type": "string", "minLength": 1, "pattern": "\\S" },
+                    "label": { "type": "string", "minLength": 1, "pattern": "\\S" }
+                  }
+                }
+              ]
+            }
+          }
         }
       },
       "discovery": {
@@ -171,7 +225,7 @@
                 },
                 "marketplaceName": {
                   "type": "string",
-                  "enum": ["openai-curated", "workspace-directory"]
+                  "pattern": "^[A-Za-z0-9_-]+$"
                 },
                 "pluginName": {
                   "type": "string"
@@ -239,8 +293,7 @@
           },
           "homeScope": {
             "type": "string",
-            "enum": ["agent", "user"],
-            "default": "agent"
+            "enum": ["agent", "user"]
           },
           "command": { "type": "string" },
           "args": {
@@ -269,6 +322,10 @@
             "type": "boolean",
             "default": false
           },
+          "loopDetectionPreToolUseRelay": {
+            "type": "boolean",
+            "default": true
+          },
           "requestTimeoutMs": {
             "type": "number",
             "minimum": 1,
@@ -278,6 +335,11 @@
             "type": "number",
             "minimum": 1,
             "default": 60000
+          },
+          "turnAssistantCompletionIdleTimeoutMs": {
+            "type": "number",
+            "minimum": 1,
+            "default": 10000
           },
           "postToolRawAssistantCompletionIdleTimeoutMs": {
             "type": "number",
@@ -372,6 +434,11 @@
       "label": "Discover Codex Sessions",
       "help": "List native Codex sessions in the sidebar from this Gateway and eligible paired nodes."
     },
+    "sessionCatalog.homes": {
+      "label": "Additional Codex Homes",
+      "help": "Existing local Codex home directories to include in native session discovery. String paths use the canonical directory basename as their label; object entries can override it with label. Paths are canonicalized and deduplicated. Requires appServer.transport=stdio and a Gateway restart.",
+      "advanced": true
+    },
     "codexDynamicToolsLoading": {
       "label": "Dynamic Tools Loading",
       "help": "Use searchable to defer OpenClaw dynamic tools behind Codex tool search, or direct to expose them in the initial context.",
@@ -447,7 +514,7 @@
     },
     "computerUse.autoRepair": {
       "label": "Auto Repair",
-      "help": "When true, failed Computer Use live tests repair stale scoped Computer Use MCP children before retrying once.",
+      "help": "When true, failed Computer Use live tests reload the Codex-owned MCP runtime before retrying once.",
       "advanced": true
     },
     "computerUse.marketplaceSource": {
@@ -536,7 +603,7 @@
     },
     "appServer.transport": {
       "label": "Transport",
-      "help": "Use stdio to spawn Codex locally, unix for the shared local control socket, or websocket for a remote app-server.",
+      "help": "Use stdio to spawn Codex locally or unix for the shared local control socket. Remote websocket transport is experimental and unsupported by Codex.",
       "advanced": true
     },
     "appServer.homeScope": {
@@ -586,6 +653,11 @@
       "help": "Expose Codex's code-mode-only tool surface. OpenClaw dynamic tools remain available through Codex nested tool calls.",
       "advanced": true
     },
+    "appServer.loopDetectionPreToolUseRelay": {
+      "label": "Loop Detection Pre-tool Relay",
+      "help": "Install the Codex PreToolUse subprocess used only for OpenClaw loop detection and its no-policy marker. Disable to reduce per-tool process fan-out; before-tool and trusted policy relays remain enforced.",
+      "advanced": true
+    },
     "appServer.requestTimeoutMs": {
       "label": "Request Timeout",
       "help": "Maximum time to wait for Codex app-server control-plane requests.",
@@ -594,6 +666,11 @@
     "appServer.turnCompletionIdleTimeoutMs": {
       "label": "Turn Completion Idle Timeout",
       "help": "Maximum quiet time after Codex accepts a turn or after a turn-scoped app-server request before OpenClaw interrupts the turn while waiting for turn/completed.",
+      "advanced": true
+    },
+    "appServer.turnAssistantCompletionIdleTimeoutMs": {
+      "label": "Assistant Completion Idle Timeout",
+      "help": "Short quiet-time guard after Codex reports a completed assistant message before OpenClaw releases the turn.",
       "advanced": true
     },
     "appServer.postToolRawAssistantCompletionIdleTimeoutMs": {

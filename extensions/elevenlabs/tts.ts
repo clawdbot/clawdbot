@@ -1,4 +1,6 @@
 // Elevenlabs plugin module implements tts behavior.
+import { MAX_AUDIO_BYTES } from "openclaw/plugin-sdk/media-runtime";
+import { createBoundedProviderBinaryStream } from "openclaw/plugin-sdk/provider-binary-stream";
 import {
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
@@ -191,10 +193,17 @@ export async function elevenLabsTTSStream(params: ElevenLabsTtsRequestParams): P
     if (!response.body) {
       throw new Error("ElevenLabs API response missing audio stream");
     }
+    const boundedStream = createBoundedProviderBinaryStream(response.body, {
+      maxBytes: MAX_AUDIO_BYTES,
+      createOverflowError: ({ maxBytes }) =>
+        new Error(`ElevenLabs API error: audio response exceeds ${maxBytes} bytes`),
+      createReleaseError: () => new Error("ElevenLabs TTS stream released"),
+      cleanup: release,
+    });
     handedOff = true;
     return {
-      audioStream: response.body,
-      release,
+      audioStream: boundedStream.stream,
+      release: boundedStream.release,
     };
   } finally {
     if (!handedOff) {

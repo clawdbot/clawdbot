@@ -30,8 +30,8 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../agents/model-auth.js")>();
   return {
     ...actual,
-    resolveApiKeyForProvider: async (
-      ...args: Parameters<typeof actual.resolveApiKeyForProvider>
+    resolveApiKeyForProviderCore: async (
+      ...args: Parameters<typeof actual.resolveApiKeyForProviderCore>
     ) => {
       if (modelAuthTestControl.forceMissingProvider) {
         throw new actual.ProviderAuthError(
@@ -41,7 +41,7 @@ vi.mock("../agents/model-auth.js", async (importOriginal) => {
         );
       }
       const [params] = args;
-      return await actual.resolveApiKeyForProvider({
+      return await actual.resolveApiKeyForProviderCore({
         ...params,
         store: modelAuthTestControl.store ?? params.store,
       });
@@ -53,6 +53,12 @@ vi.mock("../plugins/providers.js", async (importOriginal) => ({
   ...(await importOriginal()),
   resolveOwningPluginIdsForProvider: () => [],
   resolveOwningPluginIdsForProviderRef: () => [],
+}));
+
+vi.mock("../plugins/provider-runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/provider-runtime.js")>()),
+  // This plugin-free suite must not load bundled plugins to find retired profiles.
+  resolveProviderDeprecatedAuthProfileIds: () => [],
 }));
 
 const AUTH_ENV = {
@@ -119,11 +125,17 @@ function createAudioCfg(params: {
       : {}),
     tools: {
       media: {
+        models: [
+          {
+            type: "provider",
+            provider: params.provider,
+            model: params.model,
+            capabilities: ["audio"],
+            ...params.entry,
+          },
+        ],
         audio: {
           enabled: true,
-          models: [
-            { type: "provider", provider: params.provider, model: params.model, ...params.entry },
-          ],
         },
       },
     },
@@ -134,9 +146,16 @@ function createVideoCfg(params: { provider: string; model: string }): OpenClawCo
   return {
     tools: {
       media: {
+        models: [
+          {
+            type: "provider",
+            provider: params.provider,
+            model: params.model,
+            capabilities: ["video"],
+          },
+        ],
         video: {
           enabled: true,
-          models: [{ type: "provider", provider: params.provider, model: params.model }],
         },
       },
     },
@@ -280,7 +299,8 @@ describe("runCapability local no-auth audio providers", () => {
           provider: "openai",
           access: "oauth-chat-token",
           refresh: "oauth-refresh-token",
-          expires: Date.now() + 60_000,
+          // Stay outside the five-minute refresh window to exercise API-key selection.
+          expires: Date.now() + 10 * 60_000,
         },
       },
     };

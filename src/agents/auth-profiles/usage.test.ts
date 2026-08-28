@@ -1,3 +1,4 @@
+import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 /**
  * Usage-state and failure cooldown tests for auth profiles.
  * Covers unusable-window helpers, provider bypasses, WHAM probes, and store
@@ -5,19 +6,25 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { MAX_DATE_TIMESTAMP_MS } from "../../shared/number-coercion.js";
+import { setLoggerOverride } from "../../logging/logger.js";
 import type { AuthProfileStore, ProfileUsageStats } from "./types.js";
 import { resolveProfileUnusableUntil } from "./usage-state.js";
 import {
   clearAuthProfileCooldown,
   clearExpiredCooldowns,
+  getSoonestCooldownExpiry,
   isProfileInCooldown,
   markAuthProfileBlockedUntil,
   markAuthProfileFailure,
+  markInlineProviderApiKeyFailure,
+  maybeReprobeWhamBlockedProfiles,
   resolveProfilesUnavailableReason,
   resolveProfileUnusableUntilForDisplay,
 } from "./usage.js";
 import { testing as authProfileUsageTesting } from "./usage.test-support.js";
+
+// Mirrors the module-local WHAM half-open reprobe interval contract (45 minutes).
+const WHAM_HALF_OPEN_REPROBE_INTERVAL_MS = 45 * 60 * 1000;
 
 const storeMocks = vi.hoisted(() => ({
   saveAuthProfileStore: vi.fn(),
@@ -43,6 +50,7 @@ beforeEach(() => {
 
 afterEach(() => {
   authProfileUsageTesting.setDepsForTest(null);
+  authProfileUsageTesting.resetWhamReprobeStateForTest();
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
@@ -78,6 +86,16 @@ function mockLockedUpdateForStore(store: AuthProfileStore): void {
   );
 }
 
+function mockLockedUpdatesForStore(store: AuthProfileStore): void {
+  storeMocks.updateAuthProfileStoreWithLock.mockImplementation(
+    async (lockParams: { updater: (store: AuthProfileStore) => boolean }) => {
+      const freshStore = structuredClone(store);
+      lockParams.updater(freshStore);
+      return freshStore;
+    },
+  );
+}
+
 function expectProfileErrorStateCleared(
   stats: NonNullable<AuthProfileStore["usageStats"]>[string] | undefined,
 ) {
@@ -85,6 +103,7 @@ function expectProfileErrorStateCleared(
   expect(stats?.blockedReason).toBeUndefined();
   expect(stats?.blockedScope).toBeUndefined();
   expect(stats?.cooldownUntil).toBeUndefined();
+  expect(stats?.cooldownClassification).toBeUndefined();
   expect(stats?.disabledUntil).toBeUndefined();
   expect(stats?.disabledReason).toBeUndefined();
   expect(stats?.errorCount).toBe(0);
@@ -146,185 +165,211 @@ describe("resolveProfileUnusableUntilForDisplay", () => {
 // ---------------------------------------------------------------------------
 
 describe("isProfileInCooldown", () => {
-  it("returns false when profile has no usage stats", () => {
-    const store = makeStore(undefined);
-    expect(isProfileInCooldown(store, "anthropic:default")).toBe(false);
+  const now = 1_700_000_000_000;
+  type CooldownCase = [
+    name: string,
+    profileId: string,
+    stats: ProfileUsageStats | undefined,
+    checks: Array<[forModel: string | undefined, expected: boolean]>,
+  ];
+  const activeCooldown = (
+    reason: ProfileUsageStats["cooldownReason"],
+    model: string | undefined,
+    extra: Partial<ProfileUsageStats> = {},
+  ): ProfileUsageStats => ({
+    cooldownUntil: now + 60_000,
+    cooldownReason: reason,
+    cooldownModel: model,
+    ...extra,
   });
-
-  it("returns true when cooldownUntil is in the future", () => {
-    const store = makeStore({
-      "anthropic:default": { cooldownUntil: Date.now() + 60_000 },
-    });
-    expect(isProfileInCooldown(store, "anthropic:default")).toBe(true);
-  });
-
-  it("returns true when blockedUntil is in the future", () => {
-    const store = makeStore({
-      "openai:default": {
-        blockedUntil: Date.now() + 60_000,
-        blockedReason: "subscription_limit",
-      },
-    });
-    expect(isProfileInCooldown(store, "openai:default")).toBe(true);
-  });
-
-  it("returns false when cooldownUntil has passed", () => {
-    const store = makeStore({
-      "anthropic:default": { cooldownUntil: Date.now() - 1_000 },
-    });
-    expect(isProfileInCooldown(store, "anthropic:default")).toBe(false);
-  });
-
-  it("returns false when cooldownUntil is out of range", () => {
-    const store = makeStore({
-      "anthropic:default": { cooldownUntil: MAX_DATE_TIMESTAMP_MS + 1 },
-    });
-    expect(isProfileInCooldown(store, "anthropic:default")).toBe(false);
-  });
-
-  it("returns true when disabledUntil is in the future (even if cooldownUntil expired)", () => {
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Date.now() - 1_000,
-        disabledUntil: Date.now() + 60_000,
-      },
-    });
-    expect(isProfileInCooldown(store, "anthropic:default")).toBe(true);
-  });
-
-  it("returns false for OpenRouter even when cooldown fields exist", () => {
-    const store = makeStore({
-      "openrouter:default": {
-        cooldownUntil: Date.now() + 60_000,
-        disabledUntil: Date.now() + 60_000,
+  const cases: CooldownCase[] = [
+    [
+      "returns false when profile has no usage stats",
+      "anthropic:default",
+      undefined,
+      [[undefined, false]],
+    ],
+    [
+      "returns true when cooldownUntil is in the future",
+      "anthropic:default",
+      { cooldownUntil: now + 60_000 },
+      [[undefined, true]],
+    ],
+    [
+      "returns true when blockedUntil is in the future",
+      "openai:default",
+      { blockedUntil: now + 60_000, blockedReason: "subscription_limit" },
+      [[undefined, true]],
+    ],
+    [
+      "returns false when cooldownUntil has passed",
+      "anthropic:default",
+      { cooldownUntil: now - 1_000 },
+      [[undefined, false]],
+    ],
+    [
+      "returns false when cooldownUntil is out of range",
+      "anthropic:default",
+      { cooldownUntil: MAX_DATE_TIMESTAMP_MS + 1 },
+      [[undefined, false]],
+    ],
+    [
+      "returns true when disabledUntil is in the future (even if cooldownUntil expired)",
+      "anthropic:default",
+      { cooldownUntil: now - 1_000, disabledUntil: now + 60_000 },
+      [[undefined, true]],
+    ],
+    [
+      "returns false for OpenRouter even when cooldown fields exist",
+      "openrouter:default",
+      activeCooldown(undefined, undefined, {
+        disabledUntil: now + 60_000,
         disabledReason: "billing",
-      },
-    });
-    expect(isProfileInCooldown(store, "openrouter:default")).toBe(false);
-  });
-
-  it("returns false for Kilocode even when cooldown fields exist", () => {
-    const store = makeStore({
-      "kilocode:default": {
-        cooldownUntil: Date.now() + 60_000,
-        disabledUntil: Date.now() + 60_000,
+      }),
+      [[undefined, false]],
+    ],
+    [
+      "returns false for Kilocode even when cooldown fields exist",
+      "kilocode:default",
+      activeCooldown(undefined, undefined, {
+        disabledUntil: now + 60_000,
         disabledReason: "billing",
-      },
-    });
-    expect(isProfileInCooldown(store, "kilocode:default")).toBe(false);
-  });
-
-  it("returns false for a different model when cooldown is model-scoped (rate_limit)", () => {
-    const store = makeStore({
-      "github-copilot:github": {
-        cooldownUntil: Date.now() + 60_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "claude-sonnet-4.6",
-      },
-    });
-    // Different model bypasses the cooldown
-    expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(false);
-    // Same model is still blocked
-    expect(
-      isProfileInCooldown(store, "github-copilot:github", undefined, "claude-sonnet-4.6"),
-    ).toBe(true);
-    // No model specified — blocked (conservative)
-    expect(isProfileInCooldown(store, "github-copilot:github")).toBe(true);
-  });
-
-  it("returns true for all models when cooldownModel is undefined (profile-wide)", () => {
-    const store = makeStore({
-      "github-copilot:github": {
-        cooldownUntil: Date.now() + 60_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: undefined,
-      },
-    });
-    expect(
-      isProfileInCooldown(store, "github-copilot:github", undefined, "claude-sonnet-4.6"),
-    ).toBe(true);
-    expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(true);
-  });
-
-  it("returns false for a different model when cooldown is model-scoped (timeout) — #87462", () => {
-    const store = makeStore({
-      "google:default": {
-        cooldownUntil: Date.now() + 60_000,
-        cooldownReason: "timeout",
-        cooldownModel: "gemini-3-flash-preview",
-      },
-    });
-    // Other Google fallback models bypass the cooldown
-    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3.1-flash-lite")).toBe(
-      false,
-    );
-    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-2.5-flash")).toBe(false);
-    // Same model stays blocked
-    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3-flash-preview")).toBe(
-      true,
-    );
-    // No model specified — blocked (conservative)
-    expect(isProfileInCooldown(store, "google:default")).toBe(true);
-  });
-
-  it("returns true for all models when timeout cooldownModel is undefined (legacy widened scope)", () => {
-    const store = makeStore({
-      "google:default": {
-        cooldownUntil: Date.now() + 60_000,
-        cooldownReason: "timeout",
-        cooldownModel: undefined,
-      },
-    });
-    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3-flash-preview")).toBe(
-      true,
-    );
-    expect(isProfileInCooldown(store, "google:default", undefined, "gemini-3.1-flash-lite")).toBe(
-      true,
-    );
-  });
-
-  it("does not bypass model-scoped cooldown when disabledUntil is active", () => {
-    const store = makeStore({
-      "github-copilot:github": {
-        cooldownUntil: Date.now() + 60_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "claude-sonnet-4.6",
-        disabledUntil: Date.now() + 120_000,
+      }),
+      [[undefined, false]],
+    ],
+    [
+      "returns false for a different model when cooldown is model-scoped (rate_limit)",
+      "github-copilot:github",
+      activeCooldown("rate_limit", "claude-sonnet-4.6"),
+      [
+        ["gpt-4.1", false],
+        ["claude-sonnet-4.6", true],
+        [undefined, true],
+      ],
+    ],
+    [
+      "returns true for all models when cooldownModel is undefined (profile-wide)",
+      "github-copilot:github",
+      activeCooldown("rate_limit", undefined),
+      [
+        ["claude-sonnet-4.6", true],
+        ["gpt-4.1", true],
+      ],
+    ],
+    [
+      "returns false for a different model when cooldown is model-scoped (timeout) — #87462",
+      "google:default",
+      activeCooldown("timeout", "gemini-3-flash-preview"),
+      [
+        ["gemini-3.1-flash-lite", false],
+        ["gemini-2.5-flash", false],
+        ["gemini-3-flash-preview", true],
+        [undefined, true],
+      ],
+    ],
+    [
+      "returns true for all models when timeout cooldownModel is undefined (legacy widened scope)",
+      "google:default",
+      activeCooldown("timeout", undefined),
+      [
+        ["gemini-3-flash-preview", true],
+        ["gemini-3.1-flash-lite", true],
+      ],
+    ],
+    [
+      "returns false for a different model when cooldown is model-scoped (model_not_found) — #116464",
+      "github-copilot:github",
+      activeCooldown("model_not_found", "claude-sonnet-4.6"),
+      [
+        ["gpt-4.1", false],
+        ["claude-sonnet-4.6", true],
+        [undefined, true],
+      ],
+    ],
+    [
+      "blocks all models when a model_not_found cooldown has no cooldownModel (profile-wide) — #116464",
+      "github-copilot:github",
+      activeCooldown("model_not_found", undefined),
+      [
+        ["gpt-4.1", true],
+        ["claude-sonnet-4.6", true],
+      ],
+    ],
+    [
+      "does not bypass model-scoped cooldown when disabledUntil is active",
+      "github-copilot:github",
+      activeCooldown("rate_limit", "claude-sonnet-4.6", {
+        disabledUntil: now + 120_000,
         disabledReason: "billing",
-      },
-    });
-    // Even though cooldownModel is for a different model, billing disable
-    // should keep the profile blocked for all models.
-    expect(isProfileInCooldown(store, "github-copilot:github", undefined, "gpt-4.1")).toBe(true);
-  });
-
-  it("bypasses model-scoped blocks and cooldowns for sibling models", () => {
-    const now = Date.now();
-    const store = makeStore({
-      "google:default": {
+      }),
+      [["gpt-4.1", true]],
+    ],
+    [
+      "bypasses model-scoped blocks and cooldowns for sibling models",
+      "google:default",
+      activeCooldown("timeout", "gemini-3-flash-preview", {
         blockedUntil: now + 120_000,
         blockedReason: "subscription_limit",
         blockedModel: "gemini-3-flash-preview",
         blockedScope: "model",
-        cooldownUntil: now + 60_000,
-        cooldownReason: "timeout",
-        cooldownModel: "gemini-3-flash-preview",
-      },
-    });
-    expect(isProfileInCooldown(store, "google:default", now, "gemini-3-flash-preview")).toBe(true);
-    expect(isProfileInCooldown(store, "google:default", now, "gemini-3.1-flash-lite")).toBe(false);
+      }),
+      [
+        ["gemini-3-flash-preview", true],
+        ["gemini-3.1-flash-lite", false],
+      ],
+    ],
+    [
+      "keeps legacy blockedModel rows active for sibling models",
+      "google:default",
+      { blockedUntil: now + 120_000, blockedModel: "gemini-3-flash-preview" },
+      [["gemini-3.1-flash-lite", true]],
+    ],
+  ];
+
+  it.each(cases)("%s", (name, profileId, stats, checks) => {
+    const store = makeStore(stats === undefined ? undefined : { [profileId]: stats });
+    for (const [forModel, expected] of checks) {
+      expect(
+        isProfileInCooldown(store, profileId, now, forModel),
+        `${name}: ${forModel ?? "profile-wide"}`,
+      ).toBe(expected);
+    }
   });
+});
 
-  it("keeps legacy blockedModel rows active for sibling models", () => {
-    const now = Date.now();
+describe("getSoonestCooldownExpiry", () => {
+  const now = 1_700_000_000_000;
+  it.each([
+    {
+      name: "treats a model_not_found cooldown for the requested model as model-scoped — #116464",
+      cooldownModel: "claude-sonnet-4.6",
+      checks: [
+        { forModel: "claude-sonnet-4.6", expected: now + 60_000 },
+        { forModel: "gpt-4.1", expected: null },
+      ],
+    },
+    {
+      name: "keeps profile-wide cooldowns visible to all models",
+      cooldownModel: undefined,
+      checks: [{ forModel: "gpt-4.1", expected: now + 60_000 }],
+    },
+  ])("$name", ({ name, cooldownModel, checks }) => {
     const store = makeStore({
-      "google:default": {
-        blockedUntil: now + 120_000,
-        blockedModel: "gemini-3-flash-preview",
+      "github-copilot:github": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "model_not_found",
+        cooldownModel,
       },
     });
-
-    expect(isProfileInCooldown(store, "google:default", now, "gemini-3.1-flash-lite")).toBe(true);
+    for (const check of checks) {
+      expect(
+        getSoonestCooldownExpiry(store, ["github-copilot:github"], {
+          now,
+          forModel: check.forModel,
+        }),
+        `${name}: ${check.forModel}`,
+      ).toBe(check.expected);
+    }
   });
 });
 
@@ -365,12 +410,13 @@ describe("resolveProfilesUnavailableReason", () => {
     ).toBe("auth_permanent");
   });
 
-  it("uses recorded non-rate-limit failure counts for active cooldown windows", () => {
+  it("prefers an explicit cooldown reason over stale failure counts", () => {
     const now = Date.now();
     const store = makeStore({
       "anthropic:default": {
         cooldownUntil: now + 60_000,
-        failureCounts: { auth: 3, rate_limit: 1 },
+        cooldownReason: "auth",
+        failureCounts: { rate_limit: 99 },
       },
     });
 
@@ -381,6 +427,28 @@ describe("resolveProfilesUnavailableReason", () => {
         now,
       }),
     ).toBe("auth");
+  });
+
+  it("returns session_expired when every cooled profile has an expired session", () => {
+    const now = Date.now();
+    const store = makeStore({
+      "anthropic:default": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { session_expired: 1 },
+      },
+      "anthropic:backup": {
+        cooldownUntil: now + 60_000,
+        failureCounts: { session_expired: 1 },
+      },
+    });
+
+    expect(
+      resolveProfilesUnavailableReason({
+        store,
+        profileIds: ["anthropic:default", "anthropic:backup"],
+        now,
+      }),
+    ).toBe("session_expired");
   });
 
   it("returns overloaded for active overloaded cooldown windows", () => {
@@ -464,48 +532,223 @@ describe("resolveProfilesUnavailableReason", () => {
 // ---------------------------------------------------------------------------
 
 describe("clearExpiredCooldowns", () => {
-  it("returns false on empty usageStats", () => {
-    const store = makeStore(undefined);
-    expect(clearExpiredCooldowns(store)).toBe(false);
-  });
-
-  it("returns false when no profiles have cooldowns", () => {
-    const store = makeStore({
-      "anthropic:default": { lastUsed: Date.now() },
-    });
-    expect(clearExpiredCooldowns(store)).toBe(false);
-  });
-
-  it("returns false when cooldown is still active", () => {
-    const future = Date.now() + 300_000;
-    const store = makeStore({
-      "anthropic:default": { cooldownUntil: future, errorCount: 3 },
-    });
-
-    expect(clearExpiredCooldowns(store)).toBe(false);
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBe(future);
-    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(3);
-  });
-
-  it("clears expired cooldownUntil and resets errorCount", () => {
-    const lastFailureAt = Date.now() - 120_000;
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Date.now() - 1_000,
-        errorCount: 4,
-        failureCounts: { rate_limit: 3, timeout: 1 },
-        lastFailureAt,
+  const now = 1_700_000_000_000;
+  type ClearExpiredCase = {
+    name: string;
+    usageStats: AuthProfileStore["usageStats"];
+    expectedMutated: boolean;
+    expectedUsageStats: AuthProfileStore["usageStats"];
+    expectCleared?: boolean;
+    explicitNow?: boolean;
+  };
+  const cases: ClearExpiredCase[] = [
+    {
+      name: "returns false on empty usageStats",
+      usageStats: undefined,
+      expectedMutated: false,
+      expectedUsageStats: undefined,
+    },
+    {
+      name: "returns false when no profiles have cooldowns",
+      usageStats: { "anthropic:default": { lastUsed: now } },
+      expectedMutated: false,
+      expectedUsageStats: { "anthropic:default": { lastUsed: now } },
+    },
+    {
+      name: "returns false when cooldown is still active",
+      usageStats: { "anthropic:default": { cooldownUntil: now + 300_000, errorCount: 3 } },
+      expectedMutated: false,
+      expectedUsageStats: {
+        "anthropic:default": { cooldownUntil: now + 300_000, errorCount: 3 },
       },
-    });
+    },
+    {
+      name: "clears expired cooldownUntil and resets errorCount",
+      usageStats: {
+        "anthropic:default": {
+          cooldownUntil: now - 1_000,
+          cooldownClassification: "wham_token_expired",
+          errorCount: 4,
+          failureCounts: { rate_limit: 3, timeout: 1 },
+          lastFailureAt: now - 120_000,
+        },
+      },
+      expectedMutated: true,
+      expectCleared: true,
+      expectedUsageStats: {
+        "anthropic:default": {
+          cooldownUntil: undefined,
+          cooldownClassification: undefined,
+          cooldownReason: undefined,
+          cooldownModel: undefined,
+          errorCount: 0,
+          failureCounts: undefined,
+          lastFailureAt: now - 120_000,
+        },
+      },
+    },
+    {
+      name: "clears expired disabledUntil and disabledReason",
+      usageStats: {
+        "anthropic:default": {
+          disabledUntil: now - 1_000,
+          disabledReason: "billing",
+          errorCount: 2,
+          failureCounts: { billing: 2 },
+        },
+      },
+      expectedMutated: true,
+      expectCleared: true,
+      expectedUsageStats: {
+        "anthropic:default": {
+          disabledUntil: undefined,
+          disabledReason: undefined,
+          errorCount: 0,
+          failureCounts: undefined,
+        },
+      },
+    },
+    {
+      name: "handles independent expiry: cooldown expired but disabled still active",
+      usageStats: {
+        "anthropic:default": {
+          cooldownUntil: now - 1_000,
+          disabledUntil: now + 3_600_000,
+          disabledReason: "billing",
+          errorCount: 5,
+          failureCounts: { rate_limit: 3, billing: 2 },
+        },
+      },
+      expectedMutated: true,
+      expectedUsageStats: {
+        "anthropic:default": {
+          cooldownUntil: undefined,
+          cooldownReason: undefined,
+          cooldownModel: undefined,
+          disabledUntil: now + 3_600_000,
+          disabledReason: "billing",
+          errorCount: 5,
+          failureCounts: { rate_limit: 3, billing: 2 },
+        },
+      },
+    },
+    {
+      name: "handles independent expiry: disabled expired but cooldown still active",
+      usageStats: {
+        "anthropic:default": {
+          cooldownUntil: now + 300_000,
+          disabledUntil: now - 1_000,
+          disabledReason: "billing",
+          errorCount: 3,
+        },
+      },
+      expectedMutated: true,
+      expectedUsageStats: {
+        "anthropic:default": {
+          cooldownUntil: now + 300_000,
+          disabledUntil: undefined,
+          disabledReason: undefined,
+          errorCount: 3,
+        },
+      },
+    },
+    {
+      name: "resets errorCount only when both cooldown and disabled have expired",
+      usageStats: {
+        "anthropic:default": {
+          cooldownUntil: now - 2_000,
+          disabledUntil: now - 1_000,
+          disabledReason: "billing",
+          errorCount: 4,
+          failureCounts: { rate_limit: 2, billing: 2 },
+        },
+      },
+      expectedMutated: true,
+      expectCleared: true,
+      expectedUsageStats: {
+        "anthropic:default": {
+          cooldownUntil: undefined,
+          cooldownReason: undefined,
+          cooldownModel: undefined,
+          disabledUntil: undefined,
+          disabledReason: undefined,
+          errorCount: 0,
+          failureCounts: undefined,
+        },
+      },
+    },
+    {
+      name: "accepts an explicit `now` timestamp for deterministic testing",
+      usageStats: { "anthropic:default": { cooldownUntil: now - 1, errorCount: 2 } },
+      expectedMutated: true,
+      expectCleared: true,
+      explicitNow: true,
+      expectedUsageStats: {
+        "anthropic:default": {
+          cooldownUntil: undefined,
+          cooldownReason: undefined,
+          cooldownModel: undefined,
+          errorCount: 0,
+          failureCounts: undefined,
+        },
+      },
+    },
+    {
+      name: "clears cooldownUntil that equals exactly `now`",
+      usageStats: { "anthropic:default": { cooldownUntil: now, errorCount: 2 } },
+      expectedMutated: true,
+      expectCleared: true,
+      explicitNow: true,
+      expectedUsageStats: {
+        "anthropic:default": {
+          cooldownUntil: undefined,
+          cooldownReason: undefined,
+          cooldownModel: undefined,
+          errorCount: 0,
+          failureCounts: undefined,
+        },
+      },
+    },
+    {
+      name: "ignores NaN and Infinity cooldown values",
+      usageStats: {
+        "anthropic:default": { cooldownUntil: Number.NaN, errorCount: 2 },
+        "openai:default": { cooldownUntil: Infinity, errorCount: 3 },
+      },
+      expectedMutated: false,
+      expectedUsageStats: {
+        "anthropic:default": { cooldownUntil: Number.NaN, errorCount: 2 },
+        "openai:default": { cooldownUntil: Infinity, errorCount: 3 },
+      },
+    },
+    {
+      name: "ignores zero and negative cooldown values",
+      usageStats: {
+        "anthropic:default": { cooldownUntil: 0, errorCount: 1 },
+        "openai:default": { cooldownUntil: -1, errorCount: 1 },
+      },
+      expectedMutated: false,
+      expectedUsageStats: {
+        "anthropic:default": { cooldownUntil: 0, errorCount: 1 },
+        "openai:default": { cooldownUntil: -1, errorCount: 1 },
+      },
+    },
+  ];
 
-    expect(clearExpiredCooldowns(store)).toBe(true);
-
-    const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.cooldownUntil).toBeUndefined();
-    expect(stats?.errorCount).toBe(0);
-    expect(stats?.failureCounts).toBeUndefined();
-    // lastFailureAt preserved for failureWindowMs decay
-    expect(stats?.lastFailureAt).toBe(lastFailureAt);
+  it.each(cases)("$name", (testCase) => {
+    const store = makeStore(structuredClone(testCase.usageStats));
+    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+    try {
+      expect(clearExpiredCooldowns(store, testCase.explicitNow ? now : undefined)).toBe(
+        testCase.expectedMutated,
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
+    expect(store.usageStats).toEqual(testCase.expectedUsageStats);
+    if (testCase.expectCleared) {
+      expectProfileErrorStateCleared(store.usageStats?.["anthropic:default"]);
+    }
   });
 
   it("clears expired blockedUntil and resets errorCount", () => {
@@ -532,88 +775,6 @@ describe("clearExpiredCooldowns", () => {
     expect(stats?.lastFailureAt).toBe(lastFailureAt);
   });
 
-  it("clears expired disabledUntil and disabledReason", () => {
-    const store = makeStore({
-      "anthropic:default": {
-        disabledUntil: Date.now() - 1_000,
-        disabledReason: "billing",
-        errorCount: 2,
-        failureCounts: { billing: 2 },
-      },
-    });
-
-    expect(clearExpiredCooldowns(store)).toBe(true);
-
-    const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.disabledUntil).toBeUndefined();
-    expect(stats?.disabledReason).toBeUndefined();
-    expect(stats?.errorCount).toBe(0);
-    expect(stats?.failureCounts).toBeUndefined();
-  });
-
-  it("handles independent expiry: cooldown expired but disabled still active", () => {
-    const future = Date.now() + 3_600_000;
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Date.now() - 1_000,
-        disabledUntil: future,
-        disabledReason: "billing",
-        errorCount: 5,
-        failureCounts: { rate_limit: 3, billing: 2 },
-      },
-    });
-
-    expect(clearExpiredCooldowns(store)).toBe(true);
-
-    const stats = store.usageStats?.["anthropic:default"];
-    // cooldownUntil cleared
-    expect(stats?.cooldownUntil).toBeUndefined();
-    // disabledUntil still active — not touched
-    expect(stats?.disabledUntil).toBe(future);
-    expect(stats?.disabledReason).toBe("billing");
-    // errorCount NOT reset because profile still has an active unusable window
-    expect(stats?.errorCount).toBe(5);
-    expect(stats?.failureCounts).toEqual({ rate_limit: 3, billing: 2 });
-  });
-
-  it("handles independent expiry: disabled expired but cooldown still active", () => {
-    const future = Date.now() + 300_000;
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: future,
-        disabledUntil: Date.now() - 1_000,
-        disabledReason: "billing",
-        errorCount: 3,
-      },
-    });
-
-    expect(clearExpiredCooldowns(store)).toBe(true);
-
-    const stats = store.usageStats?.["anthropic:default"];
-    expect(stats?.cooldownUntil).toBe(future);
-    expect(stats?.disabledUntil).toBeUndefined();
-    expect(stats?.disabledReason).toBeUndefined();
-    // errorCount NOT reset because cooldown is still active
-    expect(stats?.errorCount).toBe(3);
-  });
-
-  it("resets errorCount only when both cooldown and disabled have expired", () => {
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Date.now() - 2_000,
-        disabledUntil: Date.now() - 1_000,
-        disabledReason: "billing",
-        errorCount: 4,
-        failureCounts: { rate_limit: 2, billing: 2 },
-      },
-    });
-
-    expect(clearExpiredCooldowns(store)).toBe(true);
-
-    const stats = store.usageStats?.["anthropic:default"];
-    expectProfileErrorStateCleared(stats);
-  });
-
   it("processes multiple profiles independently", () => {
     const store = makeStore({
       "anthropic:default": {
@@ -636,68 +797,6 @@ describe("clearExpiredCooldowns", () => {
     expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBeGreaterThan(Date.now());
     expect(store.usageStats?.["openai:default"]?.errorCount).toBe(2);
   });
-
-  it("accepts an explicit `now` timestamp for deterministic testing", () => {
-    const fixedNow = 1_700_000_000_000;
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: fixedNow - 1,
-        errorCount: 2,
-      },
-    });
-
-    expect(clearExpiredCooldowns(store, fixedNow)).toBe(true);
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
-    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
-  });
-
-  it("clears cooldownUntil that equals exactly `now`", () => {
-    const fixedNow = 1_700_000_000_000;
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: fixedNow,
-        errorCount: 2,
-      },
-    });
-
-    // ts >= cooldownUntil → should clear (cooldown "until" means the instant
-    // at cooldownUntil the profile becomes available again).
-    expect(clearExpiredCooldowns(store, fixedNow)).toBe(true);
-    expect(store.usageStats?.["anthropic:default"]?.cooldownUntil).toBeUndefined();
-    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(0);
-  });
-
-  it("ignores NaN and Infinity cooldown values", () => {
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: Number.NaN,
-        errorCount: 2,
-      },
-      "openai:default": {
-        cooldownUntil: Infinity,
-        errorCount: 3,
-      },
-    });
-
-    expect(clearExpiredCooldowns(store)).toBe(false);
-    expect(store.usageStats?.["anthropic:default"]?.errorCount).toBe(2);
-    expect(store.usageStats?.["openai:default"]?.errorCount).toBe(3);
-  });
-
-  it("ignores zero and negative cooldown values", () => {
-    const store = makeStore({
-      "anthropic:default": {
-        cooldownUntil: 0,
-        errorCount: 1,
-      },
-      "openai:default": {
-        cooldownUntil: -1,
-        errorCount: 1,
-      },
-    });
-
-    expect(clearExpiredCooldowns(store)).toBe(false);
-  });
 });
 
 // ---------------------------------------------------------------------------
@@ -709,6 +808,7 @@ describe("clearAuthProfileCooldown", () => {
     const store = makeStore({
       "anthropic:default": {
         cooldownUntil: Date.now() + 60_000,
+        cooldownClassification: "wham_token_expired",
         disabledUntil: Date.now() + 3_600_000,
         disabledReason: "billing",
         errorCount: 5,
@@ -922,32 +1022,33 @@ describe("markAuthProfileFailure — active windows do not extend on retry", () 
     const stats = store.usageStats?.["anthropic:default"];
     expect(testCase.readUntil(stats)).toBe(MAX_DATE_TIMESTAMP_MS);
   });
-
-  it("preserves fractional disabled cooldown config durations", async () => {
-    const now = 1_000_000;
-    const store = makeStore({});
-
-    await markFailureAt({
-      store,
-      now,
-      reason: "billing",
-      cfg: {
-        auth: {
-          cooldowns: {
-            billingBackoffHours: 0.0166667,
-          },
-        },
-      } as OpenClawConfig,
-    });
-
-    expect(store.usageStats?.["anthropic:default"]?.disabledUntil).toBe(now + 60_000);
-  });
 });
 
 describe("markAuthProfileBlockedUntil", () => {
+  async function applyBlockedUntil(params: {
+    store: AuthProfileStore;
+    blockedUntil: number;
+    now?: number;
+    modelId?: string;
+  }): Promise<void> {
+    const nowSpy =
+      params.now === undefined ? undefined : vi.spyOn(Date, "now").mockReturnValue(params.now);
+    mockLockedUpdateForStore(params.store);
+    try {
+      await markAuthProfileBlockedUntil({
+        store: params.store,
+        profileId: "openai:default",
+        blockedUntil: params.blockedUntil,
+        source: "codex_rate_limits",
+        modelId: params.modelId,
+      });
+    } finally {
+      nowSpy?.mockRestore();
+    }
+  }
+
   it("keeps repeated same-model blocks scoped to that model", async () => {
     const now = Date.parse("2026-05-30T18:00:00.000Z");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const store = makeStore({
       "openai:default": {
         blockedUntil: now + 60_000,
@@ -955,18 +1056,7 @@ describe("markAuthProfileBlockedUntil", () => {
         blockedScope: "model",
       },
     });
-    mockLockedUpdateForStore(store);
-    try {
-      await markAuthProfileBlockedUntil({
-        store,
-        profileId: "openai:default",
-        blockedUntil: now + 120_000,
-        source: "codex_rate_limits",
-        modelId: "gpt-5.4",
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    await applyBlockedUntil({ store, now, blockedUntil: now + 120_000, modelId: "gpt-5.4" });
 
     expect(store.usageStats?.["openai:default"]?.blockedModel).toBe("gpt-5.4");
     expect(store.usageStats?.["openai:default"]?.blockedScope).toBe("model");
@@ -974,9 +1064,23 @@ describe("markAuthProfileBlockedUntil", () => {
     expect(isProfileInCooldown(store, "openai:default", now, "gpt-5.4-mini")).toBe(false);
   });
 
+  it("clears stale WHAM classification when a profile becomes blocked", async () => {
+    const now = Date.parse("2026-05-30T18:00:00.000Z");
+    const store = makeStore({
+      "openai:default": {
+        cooldownUntil: now + 60_000,
+        cooldownReason: "auth",
+        cooldownClassification: "wham_token_expired",
+      },
+    });
+
+    await applyBlockedUntil({ store, now, blockedUntil: now + 120_000 });
+
+    expect(store.usageStats?.["openai:default"]?.cooldownClassification).toBeUndefined();
+  });
+
   it("widens an active block after a different model fails", async () => {
     const now = Date.parse("2026-05-30T18:00:00.000Z");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const store = makeStore({
       "openai:default": {
         blockedUntil: now + 60_000,
@@ -984,18 +1088,7 @@ describe("markAuthProfileBlockedUntil", () => {
         blockedScope: "model",
       },
     });
-    mockLockedUpdateForStore(store);
-    try {
-      await markAuthProfileBlockedUntil({
-        store,
-        profileId: "openai:default",
-        blockedUntil: now + 120_000,
-        source: "codex_rate_limits",
-        modelId: "gpt-5.4-mini",
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    await applyBlockedUntil({ store, now, blockedUntil: now + 120_000, modelId: "gpt-5.4-mini" });
 
     expect(store.usageStats?.["openai:default"]?.blockedModel).toBeUndefined();
     expect(store.usageStats?.["openai:default"]?.blockedScope).toBeUndefined();
@@ -1004,24 +1097,12 @@ describe("markAuthProfileBlockedUntil", () => {
 
   it("never narrows an active profile-wide block", async () => {
     const now = Date.parse("2026-05-30T18:00:00.000Z");
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
     const store = makeStore({
       "openai:default": {
         blockedUntil: now + 60_000,
       },
     });
-    mockLockedUpdateForStore(store);
-    try {
-      await markAuthProfileBlockedUntil({
-        store,
-        profileId: "openai:default",
-        blockedUntil: now + 120_000,
-        source: "codex_rate_limits",
-        modelId: "gpt-5.4",
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    await applyBlockedUntil({ store, now, blockedUntil: now + 120_000, modelId: "gpt-5.4" });
 
     expect(store.usageStats?.["openai:default"]?.blockedModel).toBeUndefined();
     expect(store.usageStats?.["openai:default"]?.blockedScope).toBeUndefined();
@@ -1029,42 +1110,28 @@ describe("markAuthProfileBlockedUntil", () => {
   });
 
   it("keeps a later active blocked-until timestamp", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Date.parse("2026-05-30T18:00:00.000Z"));
     const laterBlockedUntil = Date.parse("2031-01-01T00:00:00.000Z");
     const store = makeStore({
       "openai:default": {
         blockedUntil: laterBlockedUntil,
       },
     });
-    mockLockedUpdateForStore(store);
-    try {
-      await markAuthProfileBlockedUntil({
-        store,
-        profileId: "openai:default",
-        blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
-        source: "codex_rate_limits",
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    await applyBlockedUntil({
+      store,
+      now: Date.parse("2026-05-30T18:00:00.000Z"),
+      blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
+    });
 
     expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(laterBlockedUntil);
   });
 
   it("ignores blocked-until updates when the process clock is invalid", async () => {
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(Number.NaN);
     const store = makeStore({});
-    mockLockedUpdateForStore(store);
-    try {
-      await markAuthProfileBlockedUntil({
-        store,
-        profileId: "openai:default",
-        blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
-        source: "codex_rate_limits",
-      });
-    } finally {
-      nowSpy.mockRestore();
-    }
+    await applyBlockedUntil({
+      store,
+      now: Number.NaN,
+      blockedUntil: Date.parse("2030-01-01T00:00:00.000Z"),
+    });
 
     expect(store.usageStats).toEqual({});
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
@@ -1072,14 +1139,7 @@ describe("markAuthProfileBlockedUntil", () => {
 
   it("ignores blocked-until updates outside the valid Date range", async () => {
     const store = makeStore({});
-    mockLockedUpdateForStore(store);
-
-    await markAuthProfileBlockedUntil({
-      store,
-      profileId: "openai:default",
-      blockedUntil: Number.MAX_SAFE_INTEGER,
-      source: "codex_rate_limits",
-    });
+    await applyBlockedUntil({ store, blockedUntil: Number.MAX_SAFE_INTEGER });
 
     expect(store.usageStats).toEqual({});
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
@@ -1114,11 +1174,8 @@ describe("markAuthProfileFailure — locked update failure", () => {
   it("drops bookkeeping without an unlocked full-store save", async () => {
     const store = makeStore(undefined);
     const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const previousTestConsole = process.env.OPENCLAW_TEST_CONSOLE;
-    const previousLogLevel = process.env.OPENCLAW_LOG_LEVEL;
     storeMocks.updateAuthProfileStoreWithLock.mockResolvedValueOnce(null);
-    process.env.OPENCLAW_TEST_CONSOLE = "1";
-    process.env.OPENCLAW_LOG_LEVEL = "warn";
+    setLoggerOverride({ level: "silent", consoleLevel: "warn" });
     try {
       await markAuthProfileFailure({
         store,
@@ -1135,18 +1192,24 @@ describe("markAuthProfileFailure — locked update failure", () => {
         ),
       ).toBe(true);
     } finally {
-      if (previousTestConsole === undefined) {
-        delete process.env.OPENCLAW_TEST_CONSOLE;
-      } else {
-        process.env.OPENCLAW_TEST_CONSOLE = previousTestConsole;
-      }
-      if (previousLogLevel === undefined) {
-        delete process.env.OPENCLAW_LOG_LEVEL;
-      } else {
-        process.env.OPENCLAW_LOG_LEVEL = previousLogLevel;
-      }
+      setLoggerOverride(null);
       consoleWarn.mockRestore();
     }
+  });
+});
+
+describe("markInlineProviderApiKeyFailure", () => {
+  it("does not cool an inline key after a provider timeout", async () => {
+    const store = makeStore(undefined);
+
+    await markInlineProviderApiKeyFailure({
+      store,
+      provider: "anthropic",
+      reason: "timeout",
+    });
+
+    expect(store.usageStats).toBeUndefined();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
   });
 });
 
@@ -1163,7 +1226,8 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
   async function markCodexFailureAt(params: {
     store: ReturnType<typeof makeStore>;
     now: number;
-    reason?: "rate_limit" | "no_error_details" | "unknown";
+    reason?: "auth" | "rate_limit" | "no_error_details" | "unknown";
+    modelId?: string;
     mockLock?: boolean;
   }): Promise<void> {
     const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(params.now);
@@ -1175,11 +1239,162 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
         store: params.store,
         profileId: "openai:default",
         reason: params.reason ?? "rate_limit",
+        modelId: params.modelId,
       });
     } finally {
       dateNowSpy.mockRestore();
     }
   }
+
+  it("half-opens a stale long WHAM block and clears it when capacity returns", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 6 * 24 * 60 * 60 * 1000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+      },
+    });
+    mockWhamResponse(200, { rate_limit: { limit_reached: false } });
+    mockLockedUpdatesForStore(store);
+
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+
+    await vi.waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledOnce();
+      expect(store.usageStats?.["openai:default"]?.blockedUntil).toBeUndefined();
+    });
+    expect(store.usageStats?.["openai:default"]?.lastProbeAt).toBe(now);
+    expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(2);
+  });
+
+  it("leaves non-WHAM blocks outside the half-open probe path", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 6 * 24 * 60 * 60 * 1000,
+        blockedReason: "subscription_limit",
+        blockedSource: "codex_rate_limits",
+      },
+    });
+
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("does not re-probe a WHAM block inside the half-open interval", () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 6 * 24 * 60 * 60 * 1000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        lastProbeAt: now - WHAM_HALF_OPEN_REPROBE_INTERVAL_MS + 1,
+      },
+    });
+
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(storeMocks.updateAuthProfileStoreWithLock).not.toHaveBeenCalled();
+  });
+
+  it("re-arms a stale WHAM block from the latest blocked snapshot", async () => {
+    const now = 1_700_000_000_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: now + 6 * 24 * 60 * 60 * 1000,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        blockedModel: "gpt-5.5",
+        blockedScope: "model",
+      },
+    });
+    mockWhamResponse(200, {
+      rate_limit: {
+        limit_reached: true,
+        primary_window: { used_percent: 100, reset_after_seconds: 3_600 },
+      },
+    });
+    mockLockedUpdatesForStore(store);
+    const dateNowSpy = vi.spyOn(Date, "now").mockReturnValue(now);
+
+    try {
+      maybeReprobeWhamBlockedProfiles({
+        store,
+        profileIds: ["openai:default"],
+        forModel: "gpt-5.5",
+        now,
+      });
+      await vi.waitFor(() => {
+        expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(now + 3_600_000);
+      });
+    } finally {
+      dateNowSpy.mockRestore();
+    }
+    expect(store.usageStats?.["openai:default"]?.lastProbeAt).toBe(now);
+    expect(store.usageStats?.["openai:default"]?.blockedModel).toBe("gpt-5.5");
+    expect(store.usageStats?.["openai:default"]?.blockedScope).toBe("model");
+  });
+
+  it("does not apply an available result over a newer WHAM block", async () => {
+    const now = 1_700_000_000_000;
+    const originalUntil = now + 6 * 24 * 60 * 60 * 1000;
+    const newerUntil = originalUntil + 60_000;
+    const store = makeStore({
+      "openai:default": {
+        blockedUntil: originalUntil,
+        blockedReason: "subscription_limit",
+        blockedSource: "wham",
+        lastFailureAt: now - 1,
+      },
+    });
+    let releaseResponse: ((response: Response) => void) | undefined;
+    fetchMock.mockReturnValueOnce(
+      new Promise<Response>((resolve) => {
+        releaseResponse = resolve;
+      }),
+    );
+    mockLockedUpdatesForStore(store);
+
+    maybeReprobeWhamBlockedProfiles({
+      store,
+      profileIds: ["openai:default"],
+      now,
+    });
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    const stats = store.usageStats?.["openai:default"];
+    if (!stats || !releaseResponse) {
+      throw new Error("expected claimed WHAM probe");
+    }
+    stats.blockedUntil = newerUntil;
+    stats.lastFailureAt = now + 1;
+    releaseResponse(Response.json({ rate_limit: { limit_reached: false } }));
+
+    await vi.waitFor(() => {
+      expect(storeMocks.updateAuthProfileStoreWithLock).toHaveBeenCalledTimes(2);
+    });
+    expect(store.usageStats?.["openai:default"]?.blockedUntil).toBe(newerUntil);
+  });
 
   it.each([
     {
@@ -1244,6 +1459,7 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(headers.originator).toBe("openclaw");
     expect(headers["User-Agent"]).toMatch(/^openclaw\//);
     const stats = store.usageStats?.["openai:default"];
+    expect(stats?.lastProbeAt).toBe(now);
     if (exactBlocked) {
       expect(stats?.blockedUntil).toBe(now + expectedMs);
       expect(stats?.blockedReason).toBe("subscription_limit");
@@ -1299,14 +1515,64 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     expect(storeMocks.saveAuthProfileStore).not.toHaveBeenCalled();
   });
 
-  it("maps HTTP 401 to a 12h cooldown", async () => {
+  it.each([
+    {
+      status: 401,
+      expectedMs: 12 * 60 * 60 * 1000,
+      expectedCooldownReason: "auth",
+      expectedCooldownClassification: "wham_token_expired",
+      expectedUnavailableReason: "auth",
+    },
+    {
+      status: 403,
+      expectedMs: 24 * 60 * 60 * 1000,
+      expectedCooldownReason: "auth_permanent",
+      expectedCooldownClassification: "wham_account_dead",
+      expectedUnavailableReason: "auth_permanent",
+    },
+  ])(
+    "persists WHAM HTTP $status auth classification and canonical fallback reason",
+    async ({
+      status,
+      expectedMs,
+      expectedCooldownReason,
+      expectedCooldownClassification,
+      expectedUnavailableReason,
+    }) => {
+      const now = 1_700_000_000_000;
+      const store = makeStore({});
+      mockWhamResponse(status);
+
+      await markCodexFailureAt({ store, now, modelId: "gpt-5.6-luna" });
+
+      const stats = store.usageStats?.["openai:default"];
+      expect(stats?.cooldownUntil).toBe(now + expectedMs);
+      expect(stats?.cooldownReason).toBe(expectedCooldownReason);
+      expect(stats?.cooldownClassification).toBe(expectedCooldownClassification);
+      expect(stats?.cooldownModel).toBeUndefined();
+      expect(
+        resolveProfilesUnavailableReason({
+          store,
+          profileIds: ["openai:default"],
+          now,
+        }),
+      ).toBe(expectedUnavailableReason);
+    },
+  );
+
+  it("clears stale WHAM classification on a later ordinary failure", async () => {
     const now = 1_700_000_000_000;
-    const store = makeStore({});
-    mockWhamResponse(401);
+    const store = makeStore({
+      "openai:default": {
+        cooldownUntil: now + 12 * 60 * 60 * 1000,
+        cooldownReason: "auth",
+        cooldownClassification: "wham_token_expired",
+      },
+    });
 
-    await markCodexFailureAt({ store, now });
+    await markCodexFailureAt({ store, now, reason: "auth", modelId: "gpt-5.6-luna" });
 
-    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 43_200_000);
+    expect(store.usageStats?.["openai:default"]?.cooldownClassification).toBeUndefined();
   });
 
   it("skips WHAM probe for locally expired OAuth access tokens", async () => {
@@ -1325,16 +1591,6 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
     const stats = store.usageStats?.["openai:default"];
     expect(stats?.cooldownUntil).toBe(now + 30_000);
     expect(stats?.cooldownReason).toBe("rate_limit");
-  });
-
-  it("maps HTTP 403 to a 24h cooldown", async () => {
-    const now = 1_700_000_000_000;
-    const store = makeStore({});
-    mockWhamResponse(403);
-
-    await markCodexFailureAt({ store, now });
-
-    expect(store.usageStats?.["openai:default"]?.cooldownUntil).toBe(now + 86_400_000);
   });
 
   it("maps other HTTP errors to a 5m cooldown", async () => {
@@ -1446,6 +1702,8 @@ describe("markAuthProfileFailure — WHAM-aware Codex cooldowns", () => {
 });
 
 describe("markAuthProfileFailure — per-model cooldown metadata", () => {
+  type FailureReason = Parameters<typeof markAuthProfileFailure>[0]["reason"];
+
   function makeStoreWithCopilot(usageStats: AuthProfileStore["usageStats"]): AuthProfileStore {
     const store = makeStore(usageStats);
     store.profiles["github-copilot:github"] = {
@@ -1459,131 +1717,167 @@ describe("markAuthProfileFailure — per-model cooldown metadata", () => {
   async function markFailure(params: {
     store: ReturnType<typeof makeStoreWithCopilot>;
     now: number;
+    reason: FailureReason;
     modelId?: string;
+    useFakeTime?: boolean;
   }): Promise<void> {
-    vi.useFakeTimers();
-    vi.setSystemTime(params.now);
+    if (params.useFakeTime !== false) {
+      vi.useFakeTimers();
+      vi.setSystemTime(params.now);
+    }
     mockLockedUpdateForStore(params.store);
     try {
       await markAuthProfileFailure({
         store: params.store,
         profileId: "github-copilot:github",
-        reason: "rate_limit",
+        reason: params.reason,
         modelId: params.modelId,
       });
     } finally {
-      vi.useRealTimers();
+      if (params.useFakeTime !== false) {
+        vi.useRealTimers();
+      }
     }
   }
 
-  it("records cooldownModel on first rate_limit failure", async () => {
-    const now = 1_000_000;
-    const store = makeStoreWithCopilot({});
-    await markFailure({ store, now, modelId: "claude-sonnet-4.6" });
-    const stats = store.usageStats?.["github-copilot:github"];
-    expect(stats?.cooldownReason).toBe("rate_limit");
-    expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
+  const now = 1_000_000;
+  const activeStats = (
+    reason: FailureReason,
+    modelId: string,
+  ): NonNullable<AuthProfileStore["usageStats"]>[string] => ({
+    cooldownUntil: now + 30_000,
+    cooldownReason: reason,
+    cooldownModel: modelId,
+    errorCount: 1,
+    lastFailureAt: now - 1_000,
   });
-
-  it("widens cooldownModel to undefined when a different model fails during active cooldown", async () => {
-    const now = 1_000_000;
-    const store = makeStoreWithCopilot({
-      "github-copilot:github": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "claude-sonnet-4.6",
-        errorCount: 1,
-        lastFailureAt: now - 1000,
-      },
-    });
-    // Different model fails during active cooldown
-    await markFailure({ store, now, modelId: "gpt-4.1" });
-    const stats = store.usageStats?.["github-copilot:github"];
-    // Scope widened to all models
-    expect(stats?.cooldownModel).toBeUndefined();
-    expect(stats?.cooldownReason).toBe("rate_limit");
-  });
-
-  it("preserves cooldownModel when the same model fails again during active cooldown", async () => {
-    const now = 1_000_000;
-    const store = makeStoreWithCopilot({
-      "github-copilot:github": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "claude-sonnet-4.6",
-        errorCount: 1,
-        lastFailureAt: now - 1000,
-      },
-    });
-    await markFailure({ store, now, modelId: "claude-sonnet-4.6" });
-    const stats = store.usageStats?.["github-copilot:github"];
-    expect(stats?.cooldownModel).toBe("claude-sonnet-4.6");
-  });
-
-  it("widens cooldownModel when rate_limit failure during active cooldown has no modelId", async () => {
-    const now = 1_000_000;
-    const store = makeStoreWithCopilot({
-      "github-copilot:github": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "claude-sonnet-4.6",
-        errorCount: 1,
-        lastFailureAt: now - 1000,
-      },
-    });
-    await markFailure({ store, now, modelId: undefined });
-    const stats = store.usageStats?.["github-copilot:github"];
-    expect(stats?.cooldownReason).toBe("rate_limit");
-    expect(stats?.cooldownModel).toBeUndefined();
-  });
-
-  it("updates cooldownReason when auth failure occurs during active rate_limit window", async () => {
-    const now = 1_000_000;
-    const store = makeStoreWithCopilot({
-      "github-copilot:github": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "claude-sonnet-4.6",
-        errorCount: 1,
-        lastFailureAt: now - 1000,
-      },
-    });
-    mockLockedUpdateForStore(store);
-    await markAuthProfileFailure({
-      store,
-      profileId: "github-copilot:github",
+  const cases = [
+    {
+      name: "records cooldownModel on first rate_limit failure",
+      initialStats: {},
+      reason: "rate_limit",
+      modelId: "claude-sonnet-4.6",
+      expectedReason: "rate_limit",
+      expectedModel: "claude-sonnet-4.6",
+    },
+    {
+      name: "records cooldownModel on first model_not_found failure — #116464",
+      initialStats: {},
+      reason: "model_not_found",
+      modelId: "claude-sonnet-4.6",
+      expectedReason: "model_not_found",
+      expectedModel: "claude-sonnet-4.6",
+    },
+    {
+      name: "widens cooldownModel to undefined when a different model fails during active model_not_found cooldown",
+      initialStats: activeStats("model_not_found", "claude-sonnet-4.6"),
+      reason: "model_not_found",
+      modelId: "gpt-4.1",
+      expectedReason: "model_not_found",
+      expectedModel: undefined,
+    },
+    {
+      name: "preserves cooldownModel when the same model fails again during active model_not_found cooldown",
+      initialStats: activeStats("model_not_found", "claude-sonnet-4.6"),
+      reason: "model_not_found",
+      modelId: "claude-sonnet-4.6",
+      expectedReason: "model_not_found",
+      expectedModel: "claude-sonnet-4.6",
+    },
+    {
+      name: "widens cooldownModel when model_not_found failure during active cooldown has no modelId",
+      initialStats: activeStats("model_not_found", "claude-sonnet-4.6"),
+      reason: "model_not_found",
+      modelId: undefined,
+      expectedReason: "model_not_found",
+      expectedModel: undefined,
+    },
+    {
+      name: "keeps a healthy sibling model available after a model_not_found failure on the same profile — #116464",
+      initialStats: {},
+      reason: "model_not_found",
+      modelId: "claude-sonnet-4.6",
+      expectedReason: "model_not_found",
+      expectedModel: "claude-sonnet-4.6",
+      availability: [
+        { modelId: "claude-sonnet-4.6", expected: true },
+        { modelId: "gpt-4.1", expected: false },
+      ],
+    },
+    {
+      name: "widens cooldownModel to undefined when a different model fails during active cooldown",
+      initialStats: activeStats("rate_limit", "claude-sonnet-4.6"),
+      reason: "rate_limit",
+      modelId: "gpt-4.1",
+      expectedReason: "rate_limit",
+      expectedModel: undefined,
+    },
+    {
+      name: "preserves cooldownModel when the same model fails again during active cooldown",
+      initialStats: activeStats("rate_limit", "claude-sonnet-4.6"),
+      reason: "rate_limit",
+      modelId: "claude-sonnet-4.6",
+      expectedReason: "rate_limit",
+      expectedModel: "claude-sonnet-4.6",
+    },
+    {
+      name: "widens cooldownModel when rate_limit failure during active cooldown has no modelId",
+      initialStats: activeStats("rate_limit", "claude-sonnet-4.6"),
+      reason: "rate_limit",
+      modelId: undefined,
+      expectedReason: "rate_limit",
+      expectedModel: undefined,
+    },
+    {
+      name: "updates cooldownReason when auth failure occurs during active rate_limit window",
+      initialStats: activeStats("rate_limit", "claude-sonnet-4.6"),
       reason: "auth",
       modelId: "claude-opus-4.6",
-    });
-    const stats = store.usageStats?.["github-copilot:github"];
-    // Reason should update to the new failure type, not stay as rate_limit
-    expect(stats?.cooldownReason).toBe("auth");
-    // Model scope should be cleared — auth failures are profile-wide
-    expect(stats?.cooldownModel).toBeUndefined();
-  });
-
-  it("clears cooldownModel when non-rate_limit failure hits same model during active window", async () => {
-    const now = 1_000_000;
-    const store = makeStoreWithCopilot({
-      "github-copilot:github": {
-        cooldownUntil: now + 30_000,
-        cooldownReason: "rate_limit",
-        cooldownModel: "claude-sonnet-4.6",
-        errorCount: 1,
-        lastFailureAt: now - 1000,
-      },
-    });
-    mockLockedUpdateForStore(store);
-    await markAuthProfileFailure({
-      store,
-      profileId: "github-copilot:github",
+      expectedReason: "auth",
+      expectedModel: undefined,
+      useFakeTime: false,
+    },
+    {
+      name: "clears cooldownModel when non-rate_limit failure hits same model during active window",
+      initialStats: activeStats("rate_limit", "claude-sonnet-4.6"),
       reason: "auth",
       modelId: "claude-sonnet-4.6",
+      expectedReason: "auth",
+      expectedModel: undefined,
+      useFakeTime: false,
+    },
+  ] satisfies Array<{
+    name: string;
+    initialStats: ProfileUsageStats;
+    reason: FailureReason;
+    modelId: string | undefined;
+    expectedReason: FailureReason;
+    expectedModel: string | undefined;
+    availability?: Array<{ modelId: string; expected: boolean }>;
+    useFakeTime?: boolean;
+  }>;
+
+  it.each(cases)("$name", async (testCase) => {
+    const store = makeStoreWithCopilot({
+      "github-copilot:github": structuredClone(testCase.initialStats),
     });
+    await markFailure({
+      store,
+      now,
+      reason: testCase.reason,
+      modelId: testCase.modelId,
+      useFakeTime: testCase.useFakeTime,
+    });
+
     const stats = store.usageStats?.["github-copilot:github"];
-    // Even same-model auth failure should clear model scope (auth is profile-wide)
-    expect(stats?.cooldownReason).toBe("auth");
-    expect(stats?.cooldownModel).toBeUndefined();
+    expect(stats?.cooldownReason, `${testCase.name}: cooldownReason`).toBe(testCase.expectedReason);
+    expect(stats?.cooldownModel, `${testCase.name}: cooldownModel`).toBe(testCase.expectedModel);
+    for (const availability of testCase.availability ?? []) {
+      expect(
+        isProfileInCooldown(store, "github-copilot:github", now, availability.modelId),
+        `${testCase.name}: ${availability.modelId}`,
+      ).toBe(availability.expected);
+    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

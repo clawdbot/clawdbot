@@ -1,20 +1,22 @@
+import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { sortUniqueStrings } from "@openclaw/normalization-core/string-normalization";
 // Control UI view renders activity screen content.
 import { html, nothing } from "lit";
 import { icons } from "../../components/icons.ts";
-import {
-  renderSettingsRow,
-  renderSettingsStatus,
-  renderSettingsToggle,
-} from "../../components/settings-ui.ts";
+import { renderSettingsStatus, renderSettingsToggle } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerActivityEnglish } from "../../i18n/locales/en-activity.ts";
 import { formatDurationCompact, formatTimeMs } from "../../lib/format.ts";
-import { normalizeLowercaseStringOrEmpty, sortUniqueStrings } from "../../lib/string-coerce.ts";
 import "../../styles/activity.css";
+import { activityRunInspectorHref } from "./run-inspector-model.ts";
 import type { ActivityEntry, ActivityStatus } from "./tool-activity.ts";
+
+registerActivityEnglish();
 
 const STATUS_ORDER: ActivityStatus[] = ["running", "done", "error"];
 
 type ActivityProps = {
+  basePath: string;
   entries: ActivityEntry[];
   filterText: string;
   statusFilters: Record<ActivityStatus, boolean>;
@@ -32,7 +34,7 @@ type ActivityProps = {
   onScroll: (event: Event) => void;
 };
 
-function formatTime(value: number): string {
+function formatActivityTime(value: number): string {
   return formatTimeMs(
     value,
     {
@@ -48,7 +50,7 @@ function formatDuration(value: number): string {
   if (!Number.isFinite(value) || value < 0) {
     return t("common.na");
   }
-  return formatDurationCompact(value, { spaced: true }) ?? "0ms";
+  return formatDurationCompact(value) ?? "0ms";
 }
 
 function statusLabel(status: ActivityStatus): string {
@@ -63,11 +65,16 @@ function hiddenArgumentsLabel(count: number): string {
 }
 
 function buildEntrySummary(entry: ActivityEntry): string {
-  return t("activity.entrySummary", {
-    argumentSummary: hiddenArgumentsLabel(entry.hiddenArgumentCount),
-    status: statusLabel(entry.status),
-    tool: entry.toolName,
-  });
+  if (entry.entryKind === "answer_candidate") {
+    return t(`activity.answerCandidate.${entry.candidateStatus ?? "candidate"}`);
+  }
+  return hiddenArgumentsLabel(entry.hiddenArgumentCount);
+}
+
+function entryLabel(entry: ActivityEntry): string {
+  return entry.entryKind === "answer_candidate"
+    ? t("activity.answerCandidate.title")
+    : entry.toolName;
 }
 
 function matchesEntry(entry: ActivityEntry, needle: string): boolean {
@@ -77,6 +84,8 @@ function matchesEntry(entry: ActivityEntry, needle: string): boolean {
   const haystack = normalizeLowercaseStringOrEmpty(
     [
       entry.toolName,
+      entryLabel(entry),
+      entry.candidateStatus,
       entry.status,
       entry.summary,
       buildEntrySummary(entry),
@@ -122,6 +131,90 @@ function renderStatusFilter(props: ActivityProps, status: ActivityStatus) {
   `;
 }
 
+function setLiveFilterExpanded(event: Event, expanded: boolean) {
+  if (event.currentTarget instanceof Element) {
+    event.currentTarget.previousElementSibling?.setAttribute("aria-expanded", String(expanded));
+  }
+}
+
+function renderToolFilter(props: ActivityProps, toolNames: string[]) {
+  const active = Boolean(props.toolFilter);
+  return html`
+    <button
+      id="activity-live-filter-trigger"
+      type="button"
+      class="btn btn--sm activity-live-filter-trigger ${active ? "active" : ""}"
+      title=${t("activity.filters")}
+      aria-label=${t("activity.filters")}
+      aria-haspopup="dialog"
+      aria-expanded="false"
+    >
+      ${icons.listFilter}
+    </button>
+    <wa-popover
+      class="activity-live-filter-popover"
+      for="activity-live-filter-trigger"
+      placement="bottom-end"
+      without-arrow
+      @wa-show=${(event: Event) => setLiveFilterExpanded(event, true)}
+      @wa-hide=${(event: Event) => setLiveFilterExpanded(event, false)}
+    >
+      <div class="activity-live-filter-popover__panel">
+        <label class="field">
+          <span>${t("activity.toolFilter")}</span>
+          <select
+            class="settings-select"
+            aria-label=${t("activity.toolFilter")}
+            .value=${props.toolFilter}
+            @change=${(event: Event) => {
+              if (event.currentTarget instanceof HTMLSelectElement) {
+                props.onToolFilterChange(event.currentTarget.value);
+              }
+            }}
+          >
+            <option value="">${t("activity.allTools")}</option>
+            ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
+          </select>
+        </label>
+      </div>
+    </wa-popover>
+  `;
+}
+
+function renderLiveToolbar(props: ActivityProps, toolNames: string[]) {
+  return html`
+    <div class="activity-live-toolbar">
+      <div class="activity-feed__search activity-live-search">
+        <span aria-hidden="true">${icons.search}</span>
+        <input
+          class="settings-input"
+          type="search"
+          aria-label=${t("activity.search")}
+          .value=${props.filterText}
+          placeholder=${t("activity.searchPlaceholder")}
+          @input=${(event: Event) => {
+            if (event.currentTarget instanceof HTMLInputElement) {
+              props.onFilterTextChange(event.currentTarget.value);
+            }
+          }}
+        />
+      </div>
+      <span role="group" aria-label=${t("activity.statusFilters")} class="activity-status-filters">
+        ${STATUS_ORDER.map((status) => renderStatusFilter(props, status))}
+      </span>
+      <span class="activity-live-autofollow">
+        <span>${t("activity.autoFollow")}</span>
+        ${renderSettingsToggle({
+          checked: props.autoFollow,
+          ariaLabel: t("activity.autoFollow"),
+          onChange: (checked) => props.onToggleAutoFollow(checked),
+        })}
+      </span>
+      ${renderToolFilter(props, toolNames)}
+    </div>
+  `;
+}
+
 const STATUS_KINDS = {
   running: "warn",
   done: "ok",
@@ -150,20 +243,30 @@ function renderEntry(props: ActivityProps, entry: ActivityEntry) {
               kind: statusKind(entry.status),
               label: statusLabel(entry.status),
             })}
-            <span class="activity-entry__tool mono">${entry.toolName}</span>
+            <span class="activity-entry__tool mono">${entryLabel(entry)}</span>
           </span>
           <span class="activity-entry__text">${buildEntrySummary(entry)}</span>
         </span>
         <span class="activity-entry__meta">
-          <span>${formatTime(entry.updatedAt)}</span>
+          <span>${formatActivityTime(entry.updatedAt)}</span>
           <span>${formatDuration(entry.durationMs)}</span>
         </span>
       </summary>
       <div class="activity-entry__body">
         <div class="activity-entry__facts">
-          <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
-          <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
-          <span class="mono">${t("activity.runId")}: ${entry.runId}</span>
+          ${entry.entryKind === "answer_candidate"
+            ? html`<span class="mono"
+                >${t("activity.answerCandidate.itemId")}: ${entry.itemId}</span
+              >`
+            : html`
+                <span>${hiddenArgumentsLabel(entry.hiddenArgumentCount)}</span>
+                <span class="mono">${t("activity.toolCallId")}: ${entry.toolCallId}</span>
+              `}
+          <a
+            class="activity-entry__run-link mono"
+            href=${activityRunInspectorHref(entry.runId, props.basePath)}
+            >${t("activity.runId")}: ${entry.runId}</a
+          >
           ${entry.sessionKey
             ? html`<span class="mono">${t("activity.session")}: ${entry.sessionKey}</span>`
             : nothing}
@@ -231,55 +334,7 @@ export function renderActivity(props: ActivityProps) {
         </div>
       </div>
       <div class="settings-group activity-group">
-        ${renderSettingsRow({
-          title: t("activity.search"),
-          control: html`
-            <input
-              class="settings-input"
-              type="search"
-              aria-label=${t("activity.search")}
-              .value=${props.filterText}
-              placeholder=${t("activity.searchPlaceholder")}
-              @input=${(event: Event) =>
-                props.onFilterTextChange((event.target as HTMLInputElement).value)}
-            />
-          `,
-        })}
-        ${renderSettingsRow({
-          title: t("activity.toolFilter"),
-          control: html`
-            <select
-              class="settings-select"
-              aria-label=${t("activity.toolFilter")}
-              .value=${props.toolFilter}
-              @change=${(event: Event) =>
-                props.onToolFilterChange((event.target as HTMLSelectElement).value)}
-            >
-              <option value="">${t("activity.allTools")}</option>
-              ${toolNames.map((name) => html`<option value=${name}>${name}</option>`)}
-            </select>
-          `,
-        })}
-        ${renderSettingsRow({
-          title: t("activity.statusFilters"),
-          control: html`
-            <span
-              role="group"
-              aria-label=${t("activity.statusFilters")}
-              class="activity-status-filters"
-            >
-              ${STATUS_ORDER.map((status) => renderStatusFilter(props, status))}
-            </span>
-          `,
-        })}
-        ${renderSettingsRow({
-          title: t("activity.autoFollow"),
-          control: renderSettingsToggle({
-            checked: props.autoFollow,
-            ariaLabel: t("activity.autoFollow"),
-            onChange: (checked) => props.onToggleAutoFollow(checked),
-          }),
-        })}
+        ${renderLiveToolbar(props, toolNames)}
         <div
           class="activity-stream"
           role="list"

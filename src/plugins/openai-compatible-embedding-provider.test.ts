@@ -2,7 +2,8 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { withEnvAsync } from "../test-utils/env.js";
+import { withTestTimeout } from "../../test/helpers/promise.js";
+import { UnresolvedSecretInputError } from "../config/types.secrets.js";
 import type { EmbeddingProviderCreateOptions } from "./embedding-providers.js";
 import { getRegisteredEmbeddingProvider } from "./embedding-providers.js";
 import { openAICompatibleEmbeddingProviderAdapter } from "./openai-compatible-embedding-provider.js";
@@ -76,7 +77,7 @@ async function readJsonBody(req: IncomingMessage): Promise<Record<string, unknow
 
 async function startEmbeddingServer(params?: {
   token?: string;
-  respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown>;
+  respond?: (request: CapturedRequest) => FixtureResponse | Record<string, unknown> | null;
   status?: number;
 }): Promise<{ baseUrl: string; requests: CapturedRequest[] }> {
   const requests: CapturedRequest[] = [];
@@ -101,11 +102,13 @@ async function startEmbeddingServer(params?: {
         res.writeHead(params?.status ?? 200, { "content-type": "application/json" });
         res.end(
           JSON.stringify(
-            params?.respond?.(captured) ?? {
-              object: "list",
-              data: [{ object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 }],
-              model: body.model,
-            },
+            params?.respond
+              ? params.respond(captured)
+              : {
+                  object: "list",
+                  data: [{ object: "embedding", embedding: [0.1, 0.2, 0.3], index: 0 }],
+                  model: body.model,
+                },
           ),
         );
       } catch (error) {
@@ -456,7 +459,6 @@ describe("openai-compatible generic embedding provider", () => {
           baseUrl: `  ${server.baseUrl}/  `,
           apiKey: `  ${token}  `,
           headers: {
-            Authorization: "Bearer ignored",
             "x-local-runtime": "ollama",
           },
         },
@@ -506,15 +508,14 @@ describe("openai-compatible generic embedding provider", () => {
       }),
     );
 
-    const outcome = await Promise.race([
+    const outcome = await withTestTimeout(
       provider.embed("hello").then(
         () => ({ type: "resolved" as const }),
         (error: unknown) => ({ type: "rejected" as const, error }),
       ),
-      new Promise<{ type: "timed-out" }>((resolve) => {
-        setTimeout(() => resolve({ type: "timed-out" }), 1_000);
-      }),
-    ]);
+      1_000,
+      "timed out waiting for bounded embedding error",
+    );
 
     if (outcome.type !== "rejected") {
       throw new Error(`expected embedding request to reject, got ${outcome.type}`);
@@ -524,12 +525,11 @@ describe("openai-compatible generic embedding provider", () => {
       `openai-compatible embeddings failed: HTTP 502: ${EMBEDDING_ERROR_BOUNDARY_PREFIX}... [truncated]`,
     );
     await expect(
-      Promise.race([
+      withTestTimeout(
         server.closed.then(() => "closed" as const),
-        new Promise<"open">((resolve) => {
-          setTimeout(() => resolve("open"), 1_000);
-        }),
-      ]),
+        1_000,
+        "timed out waiting for embedding error server to close",
+      ),
     ).resolves.toBe("closed");
   });
 
@@ -570,136 +570,51 @@ describe("openai-compatible generic embedding provider", () => {
       "openai-compatible embeddings failed: JSON response exceeds 16777216 bytes",
     );
     await expect(
-      Promise.race([
+      withTestTimeout(
         server.closed.then(() => "closed" as const),
-        new Promise<"open">((resolve) => {
-          setTimeout(() => resolve("open"), 1_000);
-        }),
-      ]),
+        1_000,
+        "timed out waiting for oversized response server to close",
+      ),
     ).resolves.toBe("closed");
     expect(server.getBodyBytesSent()).toBeLessThan(server.getPlannedBodyBytes() / 2);
   });
 
-  it("resolves env SecretRef API keys on the memory search secret surface", async () => {
-    const token = "env-secret-token";
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_API_KEY";
-    const server = await startEmbeddingServer({ token });
-
-    await withEnvAsync({ [envVar]: token }, async () => {
-      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+  it("rejects unresolved API-key refs instead of re-resolving runtime config", async () => {
+    const server = await startEmbeddingServer();
+    await expect(
+      createOpenAICompatibleEmbeddingProvider(
         createOptions({
           model: "text-embedding-bge-m3",
           remote: {
             baseUrl: server.baseUrl,
-            apiKey: { source: "env", provider: "default", id: envVar },
+            apiKey: { source: "env", provider: "default", id: "MISSING_TEST_VALUE" },
           },
         }),
-      );
-
-      await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
-    });
+      ),
+    ).rejects.toBeInstanceOf(UnresolvedSecretInputError);
+    expect(server.requests).toHaveLength(0);
   });
 
-  it("enforces configured env SecretRef allowlists for API keys", async () => {
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_BLOCKED_API_KEY";
+  it("rejects unresolved header refs instead of re-resolving runtime config", async () => {
     const server = await startEmbeddingServer();
-
-    await withEnvAsync({ [envVar]: "blocked-token" }, async () => {
-      await expect(
-        createOpenAICompatibleEmbeddingProvider(
-          createOptions({
-            config: {
-              secrets: {
-                providers: {
-                  default: { source: "env", allowlist: ["OPENCLAW_ALLOWED_ONLY"] },
-                },
-              },
-            } as EmbeddingProviderCreateOptions["config"],
-            model: "text-embedding-bge-m3",
-            remote: {
-              baseUrl: server.baseUrl,
-              apiKey: { source: "env", provider: "default", id: envVar },
-            },
-          }),
-        ),
-      ).rejects.toThrow("SecretRef is unresolved");
-      expect(server.requests).toHaveLength(0);
-    });
-  });
-
-  it("enforces configured env SecretRef allowlists for custom headers", async () => {
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_BLOCKED_HEADER";
-    const server = await startEmbeddingServer();
-
-    await withEnvAsync({ [envVar]: "blocked-header" }, async () => {
-      await expect(
-        createOpenAICompatibleEmbeddingProvider(
-          createOptions({
-            config: {
-              secrets: {
-                providers: {
-                  default: { source: "env", allowlist: ["OPENCLAW_ALLOWED_ONLY"] },
-                },
-              },
-            } as EmbeddingProviderCreateOptions["config"],
-            model: "text-embedding-bge-m3",
-            remote: {
-              baseUrl: server.baseUrl,
-              headers: {
-                "x-tenant-token": {
-                  source: "env",
-                  provider: "default",
-                  id: envVar,
-                } as unknown as string,
-              },
-            },
-          }),
-        ),
-      ).rejects.toThrow("SecretRef is unresolved");
-      expect(server.requests).toHaveLength(0);
-    });
-  });
-
-  it("resolves env-template API key strings before treating them as inline secrets", async () => {
-    const token = "env-template-token";
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_TEMPLATE_KEY";
-    const server = await startEmbeddingServer({ token });
-
-    await withEnvAsync({ [envVar]: token }, async () => {
-      const { provider } = await createOpenAICompatibleEmbeddingProvider(
+    await expect(
+      createOpenAICompatibleEmbeddingProvider(
         createOptions({
           model: "text-embedding-bge-m3",
           remote: {
             baseUrl: server.baseUrl,
-            apiKey: `\${${envVar}}`,
+            headers: {
+              "x-tenant-value": {
+                source: "env",
+                provider: "default",
+                id: "MISSING_TEST_VALUE",
+              } as unknown as string,
+            },
           },
         }),
-      );
-
-      await expect(provider.embed("hello")).resolves.toEqual([0.1, 0.2, 0.3]);
-      expect(server.requests[0]?.headers.authorization).toBe(`Bearer ${token}`);
-    });
-  });
-
-  it("does not treat missing env-template API key strings as inline secrets", async () => {
-    const envVar = "OPENCLAW_TEST_OPENAI_COMPATIBLE_EMBEDDING_MISSING_TEMPLATE_KEY";
-    const server = await startEmbeddingServer();
-
-    await withEnvAsync({ [envVar]: undefined }, async () => {
-      await expect(
-        createOpenAICompatibleEmbeddingProvider(
-          createOptions({
-            model: "text-embedding-bge-m3",
-            remote: {
-              baseUrl: server.baseUrl,
-              apiKey: `\${${envVar}}`,
-            },
-          }),
-        ),
-      ).rejects.toThrow(`SecretRef is unresolved (env:default:${envVar})`);
-      expect(server.requests).toHaveLength(0);
-    });
+      ),
+    ).rejects.toBeInstanceOf(UnresolvedSecretInputError);
+    expect(server.requests).toHaveLength(0);
   });
 
   it("reads connection settings from configured explicit OpenAI-compatible providers", async () => {
@@ -995,16 +910,62 @@ describe("openai-compatible generic embedding provider", () => {
     ).rejects.toThrow("missing model");
   });
 
-  it("keeps remote parser failures behind the provider-specific error prefix", async () => {
-    const server = await startEmbeddingServer({ respond: () => ({ data: [] }) });
+  it.each([
+    {
+      name: "out-of-order indexed",
+      data: [
+        { index: 1, embedding: [0.2] },
+        { index: 0, embedding: [0.1] },
+      ],
+    },
+    {
+      name: "fully positional compatible-provider",
+      data: [{ embedding: [0.1] }, { embedding: [0.2] }],
+    },
+  ])("returns $name responses in original document order", async ({ data }) => {
+    const server = await startEmbeddingServer({ respond: () => ({ data }) });
+    const { provider } = await createOpenAICompatibleEmbeddingProvider(
+      createOptions({ remote: { baseUrl: server.baseUrl } }),
+    );
+
+    await expect(provider.embedBatch(["first", "second"])).resolves.toEqual([[0.1], [0.2]]);
+  });
+
+  it.each([
+    { name: "missing vectors", input: "hello", response: { data: [] } },
+    { name: "empty direct vector", input: "hello", response: { data: [{ embedding: [] }] } },
+    {
+      name: "empty batch vector",
+      input: ["hello", "world"],
+      response: { data: [{ embedding: [1] }, { embedding: [] }] },
+    },
+    {
+      name: "mixed indexed and positional vectors",
+      input: ["hello", "world"],
+      response: { data: [{ index: 0, embedding: [1] }, { embedding: [2] }] },
+    },
+    {
+      name: "duplicate vector indexes",
+      input: ["hello", "world"],
+      response: {
+        data: [
+          { index: 0, embedding: [1] },
+          { index: 0, embedding: [2] },
+        ],
+      },
+    },
+    { name: "null response root", input: "hello", response: null },
+  ])("rejects malformed $name with the provider-specific error", async ({ input, response }) => {
+    const server = await startEmbeddingServer({ respond: () => response });
     const { provider } = await createOpenAICompatibleEmbeddingProvider(
       createOptions({
         model: "text-embedding-bge-m3",
         remote: { baseUrl: server.baseUrl },
       }),
     );
+    const request = typeof input === "string" ? provider.embed(input) : provider.embedBatch(input);
 
-    await expect(provider.embed("hello")).rejects.toThrow(
+    await expect(request).rejects.toThrow(
       "openai-compatible embeddings failed: malformed JSON response",
     );
   });

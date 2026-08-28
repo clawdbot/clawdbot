@@ -7,9 +7,9 @@ status: active
 
 OpenClaw has three related but different controls:
 
-1. **Sandbox** (`agents.defaults.sandbox.*` / `agents.list[].sandbox.*`) decides **where tools run** (sandbox backend vs host).
-2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.list[].tools.*`) decides **which tools are available/allowed**.
-3. **Elevated** (`tools.elevated.*`, `agents.list[].tools.elevated.*`) is an **exec-only escape hatch** to run outside the sandbox when you are sandboxed (`gateway` by default, or `node` when the exec target is configured to `node`).
+1. **Sandbox** (`agents.defaults.sandbox.*`, `agents.entries.*.sandbox.*`, or a required creator-role policy) decides **where tools run** (sandbox backend vs host).
+2. **Tool policy** (`tools.*`, `tools.sandbox.tools.*`, `agents.entries.*.tools.*`) decides **which tools are available/allowed**.
+3. **Elevated** (`tools.elevated.*`, `agents.entries.*.tools.elevated.*`) is an **exec-only escape hatch** from ordinary sandboxing (`gateway` by default, or `node` when the exec target is configured to `node`). It cannot bypass a creator role's required sandbox.
 
 ## Quick debug
 
@@ -33,11 +33,16 @@ It prints:
 
 Sandboxing is controlled by `agents.defaults.sandbox.mode`:
 
-- `"off"`: everything runs on the host.
+- `"off"`: sessions run on the host unless their creator's operator role requires sandboxing.
 - `"non-main"`: only non-main sessions are sandboxed (common "surprise" for groups/channels).
 - `"all"`: everything is sandboxed.
 
 `agents.defaults.sandbox.workspaceAccess` controls what the sandbox can see: `"none"`, `"ro"`, or `"rw"`.
+
+An operator role with `sandbox: "required"` overrides agent mode, cannot be
+escaped through elevated execution or host overrides, and fails closed when its
+sandbox cannot be provisioned. See
+[Named operator roles](/gateway/operator-scopes#named-operator-roles).
 
 See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace mounts, images).
 
@@ -51,15 +56,17 @@ See [Sandboxing](/gateway/sandboxing) for the full matrix (scope, workspace moun
 - Binding `/var/run/docker.sock` effectively hands host control to the sandbox; only do this intentionally.
 - Workspace access (`workspaceAccess`) is independent of bind modes.
 
+For a per-agent configuration with several host folders, access modes, and the external-source safety opt-in, see [Multiple folders for one agent](/gateway/sandboxing#multiple-folders-for-one-agent).
+
 ## Tool policy: which tools exist/are callable
 
 Two layers matter:
 
-- **Tool profile**: `tools.profile` and `agents.list[].tools.profile` (base allowlist)
-- **Provider tool profile**: `tools.byProvider[provider].profile` and `agents.list[].tools.byProvider[provider].profile`
-- **Global/per-agent tool policy**: `tools.allow`/`tools.deny` and `agents.list[].tools.allow`/`agents.list[].tools.deny`
-- **Provider tool policy**: `tools.byProvider[provider].allow/deny` and `agents.list[].tools.byProvider[provider].allow/deny`
-- **Sandbox tool policy** (only applies when sandboxed): `tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` and `agents.list[].tools.sandbox.tools.*`
+- **Tool profile**: `tools.profile` and `agents.entries.*.tools.profile` (base allowlist)
+- **Provider tool profile**: `tools.byProvider[provider].profile` and `agents.entries.*.tools.byProvider[provider].profile`
+- **Global/per-agent tool policy**: `tools.allow`/`tools.deny` and `agents.entries.*.tools.allow`/`agents.entries.*.tools.deny`
+- **Provider tool policy**: `tools.byProvider[provider].allow/deny` and `agents.entries.*.tools.byProvider[provider].allow/deny`
+- **Sandbox tool policy** (only applies when sandboxed): `tools.sandbox.tools.allow`/`tools.sandbox.tools.deny` and `agents.entries.*.tools.sandbox.tools.*`
 
 Rules of thumb:
 
@@ -68,7 +75,7 @@ Rules of thumb:
 - Tool policy is the hard stop: `/exec` cannot override a denied `exec` tool.
 - Tool policy filters tool availability by name; it does not inspect side effects inside `exec`. If `exec` is allowed, denying `write`, `edit`, or `apply_patch` does not make shell commands read-only.
 - `/exec` only changes session defaults for authorized senders; it does not grant tool access.
-- Provider tool keys accept either `provider` (e.g. `google-antigravity`) or `provider/model` (e.g. `openai/gpt-5.4`).
+- Provider tool keys accept either `provider` (e.g. `anthropic`) or `provider/model` (e.g. `openai/gpt-5.4`).
 - Gateway logs include `agents/tool-policy` audit entries when a tool policy step removes tools or a sandbox tool policy blocks a call. Use `openclaw logs` to see the rule label, config key, and affected tool names.
 
 ### Tool groups (shorthands)
@@ -89,21 +96,21 @@ Tool policies (global, agent, sandbox) support `group:*` entries that expand to 
 
 Available groups:
 
-| Group              | Tools                                                                                                                                                      |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                            |
-| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                     |
-| `group:sessions`   | `sessions_list`, `sessions_history`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`                                    |
-| `group:memory`     | `memory_search`, `memory_get`                                                                                                                              |
-| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                      |
-| `group:ui`         | `browser`, `canvas`                                                                                                                                        |
-| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                     |
-| `group:messaging`  | `message`                                                                                                                                                  |
-| `group:nodes`      | `nodes`, `computer`                                                                                                                                        |
-| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `update_plan`, `skill_workshop`                                                                   |
-| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                       |
-| `group:openclaw`   | most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins) |
-| `group:plugins`    | all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`                                                               |
+| Group              | Tools                                                                                                                                                                                                                                                    |
+| ------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `group:runtime`    | `exec`, `process`, `code_execution` (`bash` is accepted as an alias for `exec`)                                                                                                                                                                          |
+| `group:fs`         | `read`, `write`, `edit`, `apply_patch`                                                                                                                                                                                                                   |
+| `group:sessions`   | `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `suggest_task`, `dismiss_task` |
+| `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
+| `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
+| `group:ui`         | `browser`, `screen`, `terminal`, `canvas`, `progress_card`, `show_widget`                                                                                                                                                                                |
+| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                   |
+| `group:messaging`  | `message`                                                                                                                                                                                                                                                |
+| `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
+| `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
+| `group:media`      | `image`, `image_generate`, `music_generate`, `video_generate`, `tts`                                                                                                                                                                                     |
+| `group:openclaw`   | most built-in OpenClaw tools (excludes the `read`/`write`/`edit`/`apply_patch`/`exec`/`process` fs and runtime primitives, `canvas`, and provider plugins)                                                                                               |
+| `group:plugins`    | all loaded plugin-owned tools, including configured MCP servers exposed through `bundle-mcp`                                                                                                                                                             |
 
 For read-only agents, deny `group:runtime` as well as mutating filesystem tools unless sandbox filesystem policy or a separate host boundary enforces the read-only constraint.
 
@@ -115,7 +122,7 @@ For sandboxed MCP servers, the sandbox tool policy is a second allow gate. If `m
 
 Elevated does **not** grant extra tools; it only affects `exec`.
 
-- If you are sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs outside the sandbox (approvals may still apply).
+- If you are ordinarily sandboxed, `/elevated on` (or `exec` with `elevated: true`) runs outside the sandbox (approvals may still apply). Creator-role-required sandboxes reject elevated execution.
 - Use `/elevated full` to skip exec approvals for the session.
 - If you are already running direct, elevated is effectively a no-op (still gated).
 - Elevated is **not** skill-scoped and does **not** override tool allow/deny.
@@ -124,8 +131,8 @@ Elevated does **not** grant extra tools; it only affects `exec`.
 
 Gates:
 
-- Enablement: `tools.elevated.enabled` (and optionally `agents.list[].tools.elevated.enabled`)
-- Sender allowlists: `tools.elevated.allowFrom.<provider>` (and optionally `agents.list[].tools.elevated.allowFrom.<provider>`)
+- Enablement: `tools.elevated.enabled` (and optionally `agents.entries.*.tools.elevated.enabled`)
+- Sender allowlists: `tools.elevated.allowFrom.<provider>` (and optionally `agents.entries.*.tools.elevated.allowFrom.<provider>`)
 
 See [Elevated Mode](/tools/elevated).
 
@@ -135,9 +142,9 @@ See [Elevated Mode](/tools/elevated).
 
 Fix-it keys (pick one):
 
-- Disable sandbox: `agents.defaults.sandbox.mode=off` (or per-agent `agents.list[].sandbox.mode=off`)
+- Disable ordinary sandboxing: `agents.defaults.sandbox.mode=off` (or per-agent `agents.entries.*.sandbox.mode=off`); this does not override a creator role's required sandbox.
 - Allow the tool inside sandbox:
-  - remove it from `tools.sandbox.tools.deny` (or per-agent `agents.list[].tools.sandbox.tools.deny`)
+  - remove it from `tools.sandbox.tools.deny` (or per-agent `agents.entries.*.tools.sandbox.tools.deny`)
   - or add it to `tools.sandbox.tools.allow` (or per-agent allow)
 - Check `openclaw logs` for the `agents/tool-policy` entry. It records the sandbox mode and whether the allow or deny rule blocked the tool.
 
@@ -147,6 +154,7 @@ In `"non-main"` mode, group/channel keys are _not_ main. Use the main session ke
 
 ## Related
 
+- [Session permission modes](/gateway/permission-modes) -- session roots and escalation reviewers
 - [Sandboxing](/gateway/sandboxing) -- full sandbox reference (modes, scopes, backends, images)
 - [Multi-Agent Sandbox & Tools](/tools/multi-agent-sandbox-tools) -- per-agent overrides and precedence
 - [Elevated Mode](/tools/elevated)

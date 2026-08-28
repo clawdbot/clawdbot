@@ -1,13 +1,59 @@
 // QA Lab mock provider contracts, wire helpers, and scenario constants.
+import { randomUUID } from "node:crypto";
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { setTimeout as sleep } from "node:timers/promises";
+import { asNullableRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-ingress";
 import { writeJson } from "../shared/http-json.js";
 
 export type ResponsesInputItem = Record<string, unknown>;
 
+export type MockOpenAiRequestKind = "agent-initial" | "compaction-summary" | "tool-continuation";
+export type MockCompactionSummaryFaultMode =
+  | "none"
+  | "empty-output-once"
+  | "reasoning-only-output-once";
+
+type MockOpenAiRequestOutcome = "success" | "error";
+
+export type QaMockProviderDispatchRequest = {
+  route: "responses" | "anthropic-messages";
+  body: Record<string, unknown>;
+  raw: string;
+};
+
+export type QaMockProviderFailure = {
+  status: number;
+  type: string;
+  code?: string;
+  message: string;
+  presentation?: "anthropic-thinking";
+};
+
+export type QaMockProviderDispatchResult = {
+  events: StreamEvent[];
+  model: string;
+  failure?: QaMockProviderFailure;
+  onResponseSent?: () => void;
+  previewPauseMs?: number;
+  responsePauseMs?: number;
+};
+
 export type StreamEvent =
-  | { type: "response.output_item.added"; item: Record<string, unknown> }
+  | { type: "response.created"; response: { id: string } }
+  | {
+      type: "response.failed";
+      response: {
+        id: string;
+        status: "failed";
+        error?: { code: string; message: string };
+      };
+    }
+  | {
+      type: "response.output_item.added";
+      output_index?: number;
+      item: Record<string, unknown>;
+    }
   | {
       type: "response.output_text.delta";
       item_id: string;
@@ -22,8 +68,23 @@ export type StreamEvent =
       content_index: number;
       text: string;
     }
-  | { type: "response.function_call_arguments.delta"; delta: string }
-  | { type: "response.output_item.done"; item: Record<string, unknown> }
+  | {
+      type: "response.function_call_arguments.delta";
+      item_id?: string;
+      output_index?: number;
+      delta: string;
+    }
+  | {
+      type: "response.custom_tool_call_input.delta";
+      item_id: string;
+      call_id: string;
+      delta: string;
+    }
+  | {
+      type: "response.output_item.done";
+      output_index?: number;
+      item: Record<string, unknown>;
+    }
   | {
       type: "response.completed";
       response: {
@@ -101,8 +162,15 @@ export type MockOpenAiRequestSnapshot = {
   model: string;
   providerVariant: MockOpenAiProviderVariant;
   imageInputCount: number;
+  requestKind: MockOpenAiRequestKind;
+  compactionSummaryFaultMode: MockCompactionSummaryFaultMode;
+  outcome: MockOpenAiRequestOutcome;
+  errorCode?: string;
+  rawByteLength: number;
   plannedToolCallId?: string;
+  plannedToolItemId?: string;
   plannedToolName?: string;
+  plannedWireToolName?: string;
   plannedToolArgs?: Record<string, unknown>;
   toolOutputCallId?: string;
   toolOutputStructuredError?: true;
@@ -155,17 +223,29 @@ export const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
 export const QA_REASONING_ONLY_RECOVERY_PROMPT_RE = /reasoning-only continuation qa check/i;
 export const QA_REASONING_ONLY_SIDE_EFFECT_PROMPT_RE = /reasoning-only after write safety check/i;
+export const QA_MIXED_REASONING_BLANK_FALLBACK_PROMPT_RE =
+  /mixed reasoning blank fallback qa check/i;
 export const QA_ANTHROPIC_THINKING_ERROR_RECOVERY_PROMPT_RE = /anthropic thinking error qa check/i;
 export const QA_THINKING_VISIBILITY_OFF_PROMPT_RE = /qa thinking visibility check off/i;
 export const QA_THINKING_VISIBILITY_MAX_PROMPT_RE = /qa thinking visibility check max/i;
 export const QA_EMPTY_RESPONSE_RECOVERY_PROMPT_RE = /empty response continuation qa check/i;
 export const QA_EMPTY_RESPONSE_EXHAUSTION_PROMPT_RE = /empty response exhaustion qa check/i;
+export const QA_EMPTY_RESPONSE_SIDE_EFFECT_RECOVERY_PROMPT_RE =
+  /empty response after write recovery qa check/i;
+export const QA_REPEATED_REQUEST_RECOVERY_PROMPT_RE = /repeated request recovery gateway qa check/i;
+export const QA_REPEATED_REQUEST_QUEUED_REPLY_PROMPT_RE =
+  /repeated request queued reply gateway qa check/i;
+export const QA_REPEATED_REQUEST_QUEUED_REPLY_MARKER = "GATEWAY_REPEATED_REQUEST_QUEUED_OK";
 export const QA_STREAMING_PROMPT_RE = /(?:partial|quiet) streaming qa check/i;
 export const QA_FINAL_ONLY_MARKER_STREAMING_PROMPT_RE = /final-only marker streaming qa check/i;
 export const QA_BLOCK_STREAMING_PROMPT_RE = /block streaming qa check/i;
 export const QA_TOOL_PROGRESS_ERROR_PROMPT_RE = /tool progress error qa check/i;
 export const QA_TOOL_PROGRESS_PROMPT_RE = /tool progress qa check/i;
+export const QA_TOOL_LOOP_GLOBAL_BREAKER_PROMPT_RE = /global tool loop breaker qa check/i;
+export const QA_PROVIDER_HTTP_503_AFTER_TOOL_PROMPT_RE = /provider http 503 after tool qa check/i;
 export const QA_GROUP_VISIBLE_REPLY_TOOL_PROMPT_RE = /qa group visible reply tool check/i;
+export const QA_MSTEAMS_AMBIGUOUS_TIMEOUT_PROMPT_RE = /qa msteams ambiguous gateway timeout/i;
+export const QA_MSTEAMS_THREAD_DEDUPE_PROMPT_RE = /qa msteams thread message-tool final dedupe/i;
 export const QA_A2A_MESSAGE_TOOL_MIRROR_PROMPT_RE = /qa a2a message-tool mirror check/i;
 export const QA_GROUP_MESSAGE_UNAVAILABLE_FALLBACK_PROMPT_RE =
   /qa group message unavailable fallback check/i;
@@ -182,6 +262,17 @@ export const QA_TELEGRAM_LONG_FINAL_PROMPT_RE = /telegram long final qa check/i;
 export const QA_WHATSAPP_LONG_FINAL_PROMPT_RE = /whatsapp long final qa check/i;
 export const QA_SLACK_CHART_PRESENTATION_PROMPT_RE =
   /Slack native chart QA check\s+(SLACK_QA_CHART_SUMMARY_[A-Z0-9]+)[\s\S]*?reply with only this exact marker:\s*(SLACK_QA_CHART_DONE_[A-Z0-9]+)/i;
+export const QA_MESSAGE_DECISION_SUPPRESSION_PROMPT_RE =
+  /message delivery decision suppression qa check/i;
+export const QA_MESSAGE_DECISION_SEND_PROMPT_RE = /message delivery decision send qa check/i;
+export const QA_SLACK_MPIM_HISTORY_SEED_PROMPT_RE =
+  /Slack MPIM assistant-history seed check[\s\S]*?exact format:\s*(SLACK_QA_MPIM_SEED_[A-Z0-9]+)_BOT_<NONCE>/i;
+export const QA_SLACK_MPIM_HISTORY_RECALL_PROMPT_RE =
+  /Slack MPIM assistant-history recall check[\s\S]*?previous reply beginning with\s+(SLACK_QA_MPIM_SEED_[A-Z0-9]+_BOT_)[\s\S]*?exact format:\s*(SLACK_QA_MPIM_RECALL_[A-Z0-9]+)_<NONCE>[\s\S]*?otherwise reply with only:\s*(SLACK_QA_MPIM_MISSING_[A-Z0-9]+)/i;
+
+export function buildSlackMpimHistoryBotReply(seedMarker: string) {
+  return `${seedMarker}_BOT_${randomUUID().replaceAll("-", "").toUpperCase()}`;
+}
 export const QA_WHATSAPP_AGENT_MESSAGE_ACTION_REACT_PROMPT_RE =
   /react to this whatsapp(?: group)? message with thumbs up for qa action check\s+(?:WHATSAPP_QA_AGENT_REACT|WHATSAPP_QA_GROUP_AGENT_REACT)_[A-Z0-9]+/i;
 export const QA_WHATSAPP_AGENT_MESSAGE_ACTION_UPLOAD_PROMPT_RE =
@@ -200,12 +291,23 @@ export const QA_WHATSAPP_REPLY_TO_BOT_TRIGGER_MARKER_RE =
 export const QA_WHATSAPP_BATCHED_FINAL_MARKER_RE = /\bWHATSAPP_QA_BATCHED_FINAL_([A-Z0-9]+)\b/u;
 export const QA_SUBAGENT_DIRECT_FALLBACK_PROMPT_RE = /subagent direct fallback qa check/i;
 export const QA_SUBAGENT_DIRECT_FALLBACK_WORKER_RE = /subagent direct fallback worker/i;
+// A subagent that yields on its own behalf, then finishes on a later follow-up
+// dispatched to the same paused child session. The worker regex must not match
+// the follow-up text, so the two turns carry deliberately disjoint wording: the
+// kickoff yields, and only the follow-up may finish.
+export const QA_SUBAGENT_SELF_YIELD_WORKER_RE = /subagent self yield qa worker/i;
+export const QA_SUBAGENT_SELF_YIELD_FOLLOW_UP_RE = /subagent self yield qa remote job finished/i;
+export const QA_SUBAGENT_TERMINAL_MATRIX_PROMPT_RE =
+  /subagent terminal reply qa check:\s*(visible|silent|empty|restart|fallback)/i;
+export const QA_SUBAGENT_TERMINAL_MATRIX_WORKER_RE =
+  /subagent terminal reply qa worker:\s*(visible|silent|empty|restart|fallback)/i;
 
 export function buildStrandedFinalRecoveryText(): string {
   return [
-    "QA-STRANDED-85714 confirms this is a substantive private final reply that initially skipped the message tool.",
-    "The reply is intentionally long enough to exercise message_tool_only stranded-final recovery before the retry delivers it visibly.",
-  ].join(" ");
+    "QA-STRANDED-85714：近 7 日營收較前期增加 5.09%，已連續兩週回升。最大風險是集中：前五大站台占正營收 86.5%，已超過 85% 觀察門檻。",
+    "近 30 日最大單一產品占 44.2%，亦超過 40% 門檻。建議先維持成長節奏並優先降低集中風險，不建議只看總額就全面加碼。",
+    "成長主因仍待業務確認，我尚未取得該線的回覆。",
+  ].join("");
 }
 
 export function buildStrandedFinalRetryFailureText(): string {
@@ -223,6 +325,15 @@ export function isStrandedFinalRetryFailureRequest(allInputText: string): boolea
   );
 }
 export const QA_SUBAGENT_DIRECT_FALLBACK_MARKER = "QA-SUBAGENT-DIRECT-FALLBACK-OK";
+export const QA_SUBAGENT_SELF_YIELD_MARKER = "QA-SUBAGENT-SELF-YIELD-FOLLOW-UP-OK";
+export const QA_SUBAGENT_TERMINAL_MARKERS = {
+  visible: "QA-SUBAGENT-TERMINAL-VISIBLE-OK",
+  silent: "QA-SUBAGENT-TERMINAL-SILENT-REPRESENTED",
+  empty: "QA-SUBAGENT-TERMINAL-EMPTY-REPRESENTED",
+  restart: "QA-SUBAGENT-TERMINAL-RESTART-OK",
+  fallback: "QA-SUBAGENT-TERMINAL-FALLBACK-OK",
+} as const;
+export const QA_SUBAGENT_TERMINAL_METADATA_SENTINEL = "QA-SUBAGENT-TERMINAL-INTERNAL-MUST-NOT-LEAK";
 export const QA_NATIVE_STOP_DELAY_PROMPT_RE =
   /subagent recovery worker native command target proof\.\s*wait until stopped\./i;
 export const QA_NATIVE_STOP_DELAY_MS = 180_000;
@@ -232,6 +343,8 @@ export const QA_REASONING_ONLY_RETRY_NEEDLE =
   "recorded reasoning but did not produce a user-visible answer";
 export const QA_EMPTY_RESPONSE_RETRY_NEEDLE =
   "The previous attempt did not produce a user-visible answer.";
+export const QA_SETTLED_TOOL_TERMINAL_CONTINUATION_NEEDLE =
+  "The previous assistant turn completed its tool calls but did not produce a user-visible answer.";
 export const QA_SKILL_WORKSHOP_GIF_PROMPT_RE =
   /externally sourced animated GIF asset|animated GIF asset in a product UI/i;
 export const QA_SKILL_WORKSHOP_REVIEW_PROMPT_RE = /Review transcript for durable skill updates/i;
@@ -246,12 +359,20 @@ const QA_AUDIO_TRANSCRIPTION_TEXT =
 const QA_GROUP_AUDIO_TRANSCRIPTION_TEXT =
   "openclawqa reply with only this exact marker after group audio preflight: WHATSAPP_QA_GROUP_AUDIO_TRANSCRIPT_OK";
 const QA_GROUP_AUDIO_TRIGGER_SENTINEL = "OPENCLAW_QA_GROUP_AUDIO_TRIGGER";
+const QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER = "MATRIX_QA_VOICE_PREFLIGHT_TRIGGER";
+const QA_MATRIX_VOICE_TRANSCRIPTION_TEXT =
+  "C3PLQA reply with only these words Matrix QA voice pre-flight OK.";
 export const QA_MCP_CODE_MODE_API_FILE_PROMPT_RE = /mcp code mode api file qa check/i;
 
 export type MockScenarioState = {
-  anthropicThinkingErrorPhase: number;
+  anthropicThinkingErrorScenarioKeys: Set<string>;
+  compactionOverflowInjected: boolean;
+  compactionRetryActive: boolean;
+  subagentFanoutCompletedWorkers: Set<"alpha" | "beta">;
   subagentFanoutPhase: number;
   subagentHandoffSpawned: boolean;
+  repeatedRequestRecoveryAttempts: number;
+  toolLoopReadAttempts: number;
 };
 
 export function sourceDiscoveryReadPathForProvider(providerVariant: MockOpenAiProviderVariant) {
@@ -289,9 +410,7 @@ export function readBody(req: IncomingMessage): Promise<string> {
 export function parseJsonObjectBody(raw: string): Record<string, unknown> | null {
   try {
     const parsed = raw ? (JSON.parse(raw) as unknown) : {};
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null;
+    return asNullableRecord(parsed);
   } catch {
     return null;
   }
@@ -307,6 +426,9 @@ export function writeOpenAiMalformedJsonError(res: ServerResponse, label: string
 }
 
 export function transcriptionTextForAudioRequest(rawBody: string) {
+  if (rawBody.includes(QA_MATRIX_VOICE_TRANSCRIPTION_TRIGGER)) {
+    return QA_MATRIX_VOICE_TRANSCRIPTION_TEXT;
+  }
   if (rawBody.includes(QA_GROUP_AUDIO_TRIGGER_SENTINEL)) {
     return QA_GROUP_AUDIO_TRANSCRIPTION_TEXT;
   }

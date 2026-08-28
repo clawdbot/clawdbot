@@ -1,5 +1,8 @@
 // Integrates with the local Tailscale CLI for tailnet setup and sharing.
+import { fork } from "node:child_process";
 import { existsSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   asDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
@@ -9,9 +12,21 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { logVerbose } from "../globals.js";
 import { runExec } from "../process/exec.js";
+import { signalProcessTree } from "../process/kill-tree.js";
+import { isVitestRuntimeEnv } from "./env.js";
 import { toErrorObject } from "./errors.js";
+import { retryAsync } from "./retry.js";
+import {
+  TAILSCALE_ROUTE_OWNER_ARG,
+  type TailscaleRouteOwnerMessage,
+} from "./tailscale-route-owner-protocol.js";
+import { TailscaleRouteOwnershipConflictError } from "./tailscale-route-ownership-error.js";
+
+const TAILSCALE_STATUS_ATTEMPTS = 3;
+const TAILSCALE_STATUS_RETRY_DELAY_MS = 500;
+const TAILSCALE_ROUTE_START_TIMEOUT_MS = 15_000;
+const TAILSCALE_ROUTE_STOP_TIMEOUT_MS = 4_000;
 
 function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
   const trimmed = stdout.trim();
@@ -21,6 +36,45 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
     return JSON.parse(trimmed.slice(start, end + 1)) as Record<string, unknown>;
   }
   return JSON.parse(trimmed) as Record<string, unknown>;
+}
+
+function tailnetHostnameFromStatus(parsed: Record<string, unknown>): string {
+  const self =
+    typeof parsed.Self === "object" && parsed.Self !== null
+      ? (parsed.Self as Record<string, unknown>)
+      : undefined;
+  const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
+  const ips = Array.isArray(self?.TailscaleIPs)
+    ? ((parsed.Self as { TailscaleIPs?: string[] }).TailscaleIPs ?? [])
+    : [];
+  if (dns && dns.length > 0) {
+    return dns.replace(/\.$/, "");
+  }
+  const [firstIp] = ips;
+  if (firstIp !== undefined) {
+    return firstIp;
+  }
+  throw new Error("Could not determine Tailscale DNS or IP");
+}
+
+function isTransientTailscaleStatusError(error: unknown): boolean {
+  const record = readRecord(error);
+  const detail = [
+    error instanceof Error ? error.message : undefined,
+    typeof record?.stderr === "string" ? record.stderr : undefined,
+    typeof record?.stdout === "string" ? record.stdout : undefined,
+  ]
+    .filter((value): value is string => Boolean(value))
+    .join("\n")
+    .toLowerCase();
+
+  return (
+    record?.timedOut === true ||
+    detail.includes("failed to connect to local tailscale daemon") ||
+    detail.includes("failed to connect to local tailscale service") ||
+    detail.includes("connection refused") ||
+    detail.includes("503 service unavailable")
+  );
 }
 
 /**
@@ -34,12 +88,12 @@ function parsePossiblyNoisyJsonObject(stdout: string): Record<string, unknown> {
  */
 export async function findTailscaleBinary(): Promise<string | null> {
   // Helper to check if a binary exists and is executable
-  const checkBinary = async (path: string): Promise<boolean> => {
-    if (!path || !existsSync(path)) {
+  const checkBinary = async (filePath: string): Promise<boolean> => {
+    if (!filePath || !existsSync(filePath)) {
       return false;
     }
     try {
-      await runExec(path, ["--version"], { timeoutMs: 3000 });
+      await runExec(filePath, ["--version"], { timeoutMs: 3000 });
       return true;
     } catch {
       return false;
@@ -121,23 +175,7 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
         timeoutMs: 5000,
         maxBuffer: 400_000,
       });
-      const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
-      const self =
-        typeof parsed.Self === "object" && parsed.Self !== null
-          ? (parsed.Self as Record<string, unknown>)
-          : undefined;
-      const dns = typeof self?.DNSName === "string" ? self.DNSName : undefined;
-      const ips = Array.isArray(self?.TailscaleIPs)
-        ? ((parsed.Self as { TailscaleIPs?: string[] }).TailscaleIPs ?? [])
-        : [];
-      if (dns && dns.length > 0) {
-        return dns.replace(/\.$/, "");
-      }
-      const [firstIp] = ips;
-      if (firstIp !== undefined) {
-        return firstIp;
-      }
-      throw new Error("Could not determine Tailscale DNS or IP");
+      return tailnetHostnameFromStatus(stdout ? parsePossiblyNoisyJsonObject(stdout) : {});
     } catch (err) {
       lastError = err;
     }
@@ -156,14 +194,11 @@ export async function getTailnetHostname(exec: typeof runExec = runExec, detecte
 let cachedTailscaleBinary: string | null = null;
 
 function getTestTailscaleBinaryOverride(env: NodeJS.ProcessEnv = process.env): string | null {
-  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
-  if (!forcedBinary) {
+  if (!isVitestRuntimeEnv(env)) {
     return null;
   }
-  if (env.VITEST || env.NODE_ENV === "test") {
-    return forcedBinary;
-  }
-  return null;
+  const forcedBinary = env.OPENCLAW_TEST_TAILSCALE_BINARY?.trim();
+  return forcedBinary || null;
 }
 
 async function getTailscaleBinary(): Promise<string> {
@@ -177,6 +212,228 @@ async function getTailscaleBinary(): Promise<string> {
   }
   cachedTailscaleBinary = await findTailscaleBinary();
   return cachedTailscaleBinary ?? "tailscale";
+}
+
+type TailscaleRouteClaim = {
+  exited: Promise<void>;
+  isActive: () => boolean;
+  stop: () => Promise<void>;
+};
+
+function resolveTailscaleRouteOwnerUrl(currentModuleUrl = import.meta.url): URL {
+  const currentPath = fileURLToPath(currentModuleUrl);
+  const normalized = currentPath.replaceAll(path.sep, "/");
+  const distMarker = "/dist/";
+  const distIndex = normalized.lastIndexOf(distMarker);
+  if (distIndex >= 0) {
+    const distRoot = currentPath.slice(0, distIndex + distMarker.length);
+    return pathToFileURL(path.join(distRoot, "infra", "tailscale-route-owner.worker.js"));
+  }
+  const extension = path.extname(currentPath) || ".js";
+  return new URL(`./tailscale-route-owner.worker${extension}`, currentModuleUrl);
+}
+
+type TailscaleRouteOwnerFailure = Pick<
+  Extract<TailscaleRouteOwnerMessage, { type: "failed" }>,
+  "code" | "stdout" | "stderr"
+>;
+
+function isPort443RouteConflict(message: TailscaleRouteOwnerFailure): boolean {
+  return /listener already exists for port 443/i.test(`${message.stderr}\n${message.stdout}`);
+}
+
+function routeClaimError(message: TailscaleRouteOwnerFailure): Error {
+  if (isPort443RouteConflict(message)) {
+    return new TailscaleRouteOwnershipConflictError();
+  }
+  const detail = [message.stderr.trim(), message.stdout.trim()].find(Boolean);
+  return Object.assign(new Error(detail || "Tailscale route owner exited before claiming route"), {
+    code: message.code,
+    stdout: message.stdout,
+    stderr: message.stderr,
+  });
+}
+
+function waitWithTimeout(promise: Promise<void>, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), timeoutMs);
+    timer.unref?.();
+    void promise.then(
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+      () => {
+        clearTimeout(timer);
+        resolve(true);
+      },
+    );
+  });
+}
+
+async function startTailscaleRouteOwner(argv: string[]): Promise<TailscaleRouteClaim> {
+  const workerUrl = resolveTailscaleRouteOwnerUrl();
+  const execArgv = workerUrl.pathname.endsWith(".ts") ? ["--import", "tsx"] : undefined;
+  const worker = fork(
+    fileURLToPath(workerUrl),
+    [TAILSCALE_ROUTE_OWNER_ARG, JSON.stringify({ argv })],
+    {
+      execArgv,
+      stdio: ["ignore", "ignore", "ignore", "ipc"],
+    },
+  );
+  let routePid: number | undefined;
+  let ready = false;
+  let active = false;
+  let stopping = false;
+  let startupSettled = false;
+  let failure: Error | undefined;
+  let resolveExit!: () => void;
+  const exited = new Promise<void>((resolve) => {
+    resolveExit = resolve;
+  });
+
+  const startup = new Promise<void>((resolve, reject) => {
+    const settle = (error?: Error) => {
+      if (startupSettled) {
+        return;
+      }
+      startupSettled = true;
+      clearTimeout(startupTimer);
+      if (error) {
+        reject(error);
+      } else {
+        resolve();
+      }
+    };
+    const startupTimer = setTimeout(
+      () => settle(new Error("Tailscale route claim did not become ready within 15 seconds")),
+      TAILSCALE_ROUTE_START_TIMEOUT_MS,
+    );
+    startupTimer.unref?.();
+
+    worker.on("message", (message: unknown) => {
+      const event = readRecord(message);
+      if (!event) {
+        return;
+      }
+      if (event.type === "spawned") {
+        if (typeof event.pid !== "number") {
+          return;
+        }
+        routePid = event.pid;
+      } else if (event.type === "ready") {
+        ready = true;
+        active = true;
+        settle();
+      } else if (event.type === "failed") {
+        if (
+          (event.code !== null && typeof event.code !== "number") ||
+          typeof event.stdout !== "string" ||
+          typeof event.stderr !== "string"
+        ) {
+          return;
+        }
+        failure = routeClaimError({
+          code: event.code,
+          stdout: event.stdout,
+          stderr: event.stderr,
+        });
+        if (!ready) {
+          settle(failure);
+        }
+      }
+    });
+    worker.once("error", (error) => settle(toErrorObject(error, "Tailscale route owner failed")));
+    worker.once("exit", (code, signal) => {
+      active = false;
+      resolveExit();
+      if (!ready) {
+        settle(
+          failure ??
+            new Error(
+              `Tailscale route owner exited before readiness (${signal ? `signal ${signal}` : `code ${code ?? "unknown"}`})`,
+            ),
+        );
+      }
+    });
+  });
+
+  const stop = async () => {
+    if (stopping) {
+      await exited;
+      return;
+    }
+    stopping = true;
+    if (worker.connected) {
+      try {
+        worker.send({ type: "stop" }, () => undefined);
+      } catch {
+        worker.kill("SIGTERM");
+      }
+    } else {
+      worker.kill("SIGTERM");
+    }
+    if (await waitWithTimeout(exited, TAILSCALE_ROUTE_STOP_TIMEOUT_MS)) {
+      return;
+    }
+    if (routePid) {
+      signalProcessTree(routePid, "SIGKILL", { detached: process.platform !== "win32" });
+    }
+    worker.kill("SIGKILL");
+    await exited;
+  };
+
+  try {
+    await startup;
+    return { exited, isActive: () => active, stop };
+  } catch (error) {
+    await stop();
+    throw failure ?? error;
+  }
+}
+
+export async function claimTailscaleRoute(
+  mode: "serve" | "funnel",
+  target: number | string,
+): Promise<TailscaleRouteClaim> {
+  const tailscaleBin = await getTailscaleBinary();
+  const args = [mode, "--yes", "--bg=false", `${target}`];
+  try {
+    return await startTailscaleRouteOwner([tailscaleBin, ...args]);
+  } catch (error) {
+    if (!isPermissionDeniedError(error)) {
+      throw error;
+    }
+    return await startTailscaleRouteOwner(["sudo", "-n", tailscaleBin, ...args]);
+  }
+}
+
+/** Resolve the hostname after Serve startup, while the local daemon may still be settling. */
+export async function getTailnetHostnameAfterServe(
+  exec: typeof runExec = runExec,
+): Promise<string> {
+  const candidate = await getTailscaleBinary();
+  const parsed = await retryAsync(
+    async () => {
+      const { stdout } = await exec(candidate, ["status", "--json"], {
+        timeoutMs: 5000,
+        maxBuffer: 400_000,
+        // Hostname discovery is best-effort. Avoid scary command-failure logs while the
+        // local daemon settles after Serve configuration.
+        logOutput: false,
+      });
+      return stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
+    },
+    {
+      attempts: TAILSCALE_STATUS_ATTEMPTS,
+      minDelayMs: TAILSCALE_STATUS_RETRY_DELAY_MS,
+      maxDelayMs: TAILSCALE_STATUS_RETRY_DELAY_MS,
+      jitter: 0,
+      shouldRetry: isTransientTailscaleStatusError,
+    },
+  );
+  return tailnetHostnameFromStatus(parsed);
 }
 
 type ExecErrorDetails = {
@@ -226,65 +483,15 @@ function isPermissionDeniedError(err: unknown): boolean {
   );
 }
 
-// Helper to attempt a command, and retry with sudo if it fails.
-async function execWithSudoFallback(
-  exec: typeof runExec,
-  bin: string,
-  args: string[],
-  opts: { maxBuffer?: number; timeoutMs?: number },
-): Promise<{ stdout: string; stderr: string }> {
-  try {
-    return await exec(bin, args, opts);
-  } catch (err) {
-    if (!isPermissionDeniedError(err)) {
-      throw err;
-    }
-    logVerbose(`Command failed, retrying with sudo: ${bin} ${args.join(" ")}`);
-    try {
-      return await exec("sudo", ["-n", bin, ...args], opts);
-    } catch (sudoErr) {
-      const { stderr, message } = extractExecErrorText(sudoErr);
-      const detail = (stderr || message).trim();
-      if (detail) {
-        logVerbose(`Sudo retry failed: ${detail}`);
-      }
-      throw err;
-    }
-  }
-}
-
-export async function enableTailscaleServe(
-  port: number,
-  exec: typeof runExec = runExec,
-  serviceName?: string,
-) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(
-    exec,
-    tailscaleBin,
-    ["serve", ...(serviceName ? [`--service=${serviceName}`] : []), "--bg", "--yes", `${port}`],
-    {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    },
-  );
-}
-
 export async function hasTailscaleFunnelRouteForPort(
   port: number,
   exec: typeof runExec = runExec,
 ): Promise<boolean> {
-  let stdout: string;
-  try {
-    const tailscaleBin = await getTailscaleBinary();
-    const result = await exec(tailscaleBin, ["funnel", "status", "--json"], {
-      maxBuffer: 200_000,
-      timeoutMs: 5_000,
-    });
-    stdout = result.stdout;
-  } catch {
-    return false;
-  }
+  const tailscaleBin = await getTailscaleBinary();
+  const { stdout } = await exec(tailscaleBin, ["funnel", "status", "--json"], {
+    maxBuffer: 200_000,
+    timeoutMs: 5_000,
+  });
   const parsed = stdout ? parsePossiblyNoisyJsonObject(stdout) : {};
   return tailscaleFunnelStatusCoversPort(parsed, port);
 }
@@ -358,35 +565,6 @@ function funnelStatusBackendsForPort(status: Record<string, unknown>): Set<strin
     }
   }
   return backends;
-}
-
-export async function disableTailscaleServe(exec: typeof runExec = runExec, serviceName?: string) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(
-    exec,
-    tailscaleBin,
-    serviceName ? ["serve", "clear", serviceName] : ["serve", "reset"],
-    {
-      maxBuffer: 200_000,
-      timeoutMs: 15_000,
-    },
-  );
-}
-
-export async function enableTailscaleFunnel(port: number, exec: typeof runExec = runExec) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["funnel", "--bg", "--yes", `${port}`], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
-}
-
-export async function disableTailscaleFunnel(exec: typeof runExec = runExec) {
-  const tailscaleBin = await getTailscaleBinary();
-  await execWithSudoFallback(exec, tailscaleBin, ["funnel", "reset"], {
-    maxBuffer: 200_000,
-    timeoutMs: 15_000,
-  });
 }
 
 function parseWhoisIdentity(payload: Record<string, unknown>): TailscaleWhoisIdentity | null {

@@ -10,6 +10,9 @@ OpenClaw runs one Gateway (the master) on a host and connects every client to it
 - **Operators** (you, or the macOS app): direct LAN/Tailnet WebSocket is simplest when the Gateway is reachable; SSH tunneling is the universal fallback.
 - **Nodes** (iOS/Android and other devices): connect to the Gateway **WebSocket** (LAN/tailnet or SSH tunnel).
 
+Remote clients can continue the same Gateway-owned conversation by URL or short
+reference. See [Session synchronization and attachment](/concepts/session-attachment).
+
 ## The core idea
 
 The Gateway WebSocket binds to **loopback** by default, on port `18789` (`gateway.port`). For remote use, either expose it through Tailscale Serve / a trusted LAN-Tailnet bind, or forward the loopback port over SSH.
@@ -43,6 +46,8 @@ ssh -N -L 18789:127.0.0.1:18789 user@gateway-host
 
 With the tunnel up, `openclaw health` and `openclaw status --deep` reach the remote Gateway via `ws://127.0.0.1:18789`. `openclaw gateway status`, `openclaw gateway health`, `openclaw gateway probe`, and `openclaw gateway call` can also target a forwarded URL via `--url`.
 
+To replace per-client SSH tunnels with one private `wss://` endpoint while keeping the Gateway on loopback, follow [Give your Gateway a stable HTTPS URL](/gateway/stable-https-url).
+
 <Note>
 Replace `18789` with your configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`).
 </Note>
@@ -69,6 +74,15 @@ Persist a remote target so CLI commands use it by default:
 
 When the Gateway is loopback-only, keep the URL at `ws://127.0.0.1:18789` and open the SSH tunnel first. In the macOS app's SSH-tunnel transport, the discovered Gateway hostname goes in `gateway.remote.sshTarget` (`user@host` or `user@host:port`); `gateway.remote.url` stays the local tunnel URL. If the remote port differs from the local one, set `gateway.remote.remotePort`.
 
+Running `openclaw configure --section gateway` or interactive onboarding again
+preserves the remote TLS fingerprint and transport settings when you keep the
+same URL (ignoring surrounding whitespace). Changing the URL clears those
+endpoint settings. A newly confirmed discovery fingerprint replaces the saved
+pin only for the discovered URL, and your selected auth method still applies.
+Accepting a discovered direct connection selects direct transport. Choosing a
+discovered SSH tunnel clears saved transport settings for the suggested loopback
+URL, which may now reach a different host; start the displayed tunnel manually.
+
 Host-key verification is strict by default (`gateway.remote.sshHostKeyPolicy: "strict"`). Set it to `"openssh"` to delegate to your effective OpenSSH config instead; review your user and system SSH settings before enabling it.
 
 For a Gateway already reachable on a trusted LAN or Tailnet, use direct mode:
@@ -86,6 +100,100 @@ For a Gateway already reachable on a trusted LAN or Tailnet, use direct mode:
 }
 ```
 
+## Gateway behind an identity-aware proxy
+
+To deploy this way from scratch — tunnel, Access application, Gateway trusted-proxy
+auth, and node routes — see [Cloudflare Tunnel and Access](/gateway/cloudflare-access).
+This section covers only the client side: how a CLI, TUI, or app authenticates to that
+edge.
+
+Use `gateway.remote.edgeAuth` when an identity-aware proxy must authenticate the
+WebSocket upgrade before traffic reaches the Gateway. Header values are
+`SecretInput` fields, so they can come from `env`, `file`, `exec`, or `store`
+secret providers without placing credentials directly in the config.
+
+For Cloudflare Access, a generic exec secret provider can obtain a short-lived
+application token from an operator-installed `cloudflared` binary:
+
+```json5
+{
+  secrets: {
+    providers: {
+      "cloudflare-access": {
+        source: "exec",
+        command: "/usr/local/bin/cloudflared",
+        args: ["access", "token", "-app=https://gateway.example"],
+        jsonOnly: false,
+        passEnv: ["HOME"],
+        trustedDirs: ["/usr/local/bin"],
+      },
+    },
+  },
+  gateway: {
+    mode: "remote",
+    remote: {
+      url: "wss://gateway.example",
+      edgeAuth: {
+        "Cf-Access-Token": {
+          source: "exec",
+          provider: "cloudflare-access",
+          id: "token",
+        },
+      },
+    },
+  },
+}
+```
+
+`secrets.providers.*.command` must be an absolute path; replace
+`/usr/local/bin/cloudflared` with the real, non-symlink install location on your
+host, such as the resolved executable under a Homebrew prefix, and keep
+`trustedDirs` pointing at the directory that actually holds it.
+
+Exec providers run with a scrubbed environment. `cloudflared` reads its cached
+application token from the user's home directory, so `passEnv: ["HOME"]` is
+required; without it the provider exits non-zero and no header is produced.
+Run `cloudflared access login <gateway-url>` once first so a token exists to
+read.
+
+For a Cloudflare Access service token, provide the two fixed headers from any
+supported secret provider. This example reads them from environment-backed
+SecretRefs:
+
+```json5
+{
+  secrets: {
+    providers: {
+      default: { source: "env" },
+    },
+  },
+  gateway: {
+    mode: "remote",
+    remote: {
+      url: "wss://gateway.example",
+      edgeAuth: {
+        "CF-Access-Client-Id": {
+          source: "env",
+          provider: "default",
+          id: "CF_ACCESS_CLIENT_ID",
+        },
+        "CF-Access-Client-Secret": {
+          source: "env",
+          provider: "default",
+          id: "CF_ACCESS_CLIENT_SECRET",
+        },
+      },
+    },
+  },
+}
+```
+
+OpenClaw's Gateway connection code never runs `cloudflared` itself and has no
+Cloudflare dependency or login flow. Only the generic exec secret provider
+invokes the exact command an operator configures. Resolved edge-auth headers are
+sent only when the target matches the configured `gateway.remote.url` scope,
+only over `wss://`, and never across redirects.
+
 ## Credential precedence
 
 Gateway credential resolution follows one shared contract across call/probe/status paths and Discord exec-approval monitoring. Node-host uses the same contract with one local-mode exception (it ignores `gateway.remote.*`).
@@ -95,13 +203,18 @@ Gateway credential resolution follows one shared contract across call/probe/stat
   - CLI `--url` never reuses implicit config/env credentials.
   - Env `OPENCLAW_GATEWAY_URL` may use env credentials only (`OPENCLAW_GATEWAY_TOKEN` / `OPENCLAW_GATEWAY_PASSWORD`).
 - Local mode defaults:
-  - token: `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token` -> `gateway.remote.token` (remote fallback only when the local token is unset)
-  - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.auth.password` -> `gateway.remote.password` (remote fallback only when the local password is unset)
+  - token: `gateway.auth.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.remote.token` (remote fallback only when the local token is unset)
+  - password: `gateway.auth.password` -> `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` (remote fallback only when the local password is unset)
 - Remote mode defaults:
   - token: `gateway.remote.token` -> `OPENCLAW_GATEWAY_TOKEN` -> `gateway.auth.token`
   - password: `OPENCLAW_GATEWAY_PASSWORD` -> `gateway.remote.password` -> `gateway.auth.password`
-- Node-host local-mode exception: `gateway.remote.token` / `gateway.remote.password` are ignored.
-- Remote probe/status token checks are strict by default: they use `gateway.remote.token` only (no local token fallback) when targeting remote mode.
+- Node-host local-mode exception: environment credentials stay first and `gateway.remote.token` / `gateway.remote.password` are ignored because node commands target an explicit host and port.
+- Remote startup/status/wizard probes with SecretRef support treat configured
+  `gateway.remote.token` and `gateway.remote.password` as authoritative for the configured
+  target. Ambient environment credentials are considered only when neither remote credential
+  is configured. If a configured remote SecretRef cannot be resolved, the probe warns and does
+  not fall back to environment credentials; a separately configured sibling credential that
+  resolves successfully remains usable.
 - Gateway env overrides use `OPENCLAW_GATEWAY_*` only.
 
 ## Chat UI remote access
@@ -126,7 +239,7 @@ Keep the Gateway **loopback-only** unless you are sure you need a bind.
 - `gateway.remote.token` / `.password` are client credential sources; they do not configure server auth by themselves.
 - Local call paths can use `gateway.remote.*` as a fallback only when `gateway.auth.*` is unset.
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, resolution fails closed (no remote fallback masking).
-- `gateway.remote.tlsFingerprint` pins the remote TLS cert for `wss://`, including macOS direct mode. Without a stored pin, macOS only pins on first use after normal system trust passes; self-signed or private-CA Gateways need an explicit fingerprint or Remote over SSH.
+- `gateway.remote.tlsFingerprint` pins the remote TLS cert for `wss://`, including both operator/control traffic and the companion node in macOS direct mode. Without a stored pin, macOS pins on first use only after normal system trust passes; self-signed or private-CA Gateways need an explicit fingerprint or Remote over SSH.
 - **Tailscale Serve** can authenticate Control UI/WebSocket traffic via identity headers when `gateway.auth.allowTailscale: true`. HTTP API endpoints do not use that header auth and instead follow the Gateway's normal HTTP auth mode. This tokenless flow assumes the Gateway host is trusted; set it to `false` for shared-secret auth everywhere.
 - **Trusted-proxy** auth expects a non-loopback identity-aware proxy by default. Same-host loopback reverse proxies require explicit `gateway.auth.trustedProxy.allowLoopback = true`.
 - Treat browser control like operator access: tailnet-only plus deliberate node pairing.

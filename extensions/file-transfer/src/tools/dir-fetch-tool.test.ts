@@ -1,10 +1,11 @@
 // File Transfer tests cover dir fetch tar validation through the tool boundary.
-import crypto from "node:crypto";
+import crypto, { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import * as tar from "tar";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { projectBoundedTextTail } from "../shared/append-bounded-text-tail.js";
+import { DIR_FETCH_HARD_MAX_BYTES, FILE_TRANSFER_SUBDIR } from "./descriptors.js";
 
 let tmpRoot: string;
 
@@ -14,70 +15,38 @@ beforeEach(async () => {
 
 afterEach(async () => {
   vi.doUnmock("openclaw/plugin-sdk/media-store");
-  vi.doUnmock("openclaw/plugin-sdk/process-runtime");
   vi.doUnmock("../shared/audit.js");
   vi.doUnmock("./node-tool-invoke.js");
   vi.resetModules();
   await fs.rm(tmpRoot, { recursive: true, force: true });
 });
 
-function commandResult(overrides: Record<string, unknown> = {}) {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
+async function createTarBuffer(params: {
+  entries: string[];
+  setup: (sourceDir: string) => Promise<void>;
+}): Promise<Buffer> {
+  const sourceDir = path.join(tmpRoot, `source-${randomUUID()}`);
+  await fs.mkdir(sourceDir, { recursive: true });
+  await params.setup(sourceDir);
+  const chunks: Buffer[] = [];
+  for await (const chunk of tar.c({ cwd: sourceDir, gzip: true, portable: true }, params.entries)) {
+    chunks.push(Buffer.from(chunk));
+  }
+  return Buffer.concat(chunks);
 }
 
-type MockCommandResult = Record<string, unknown> & {
-  outputByteLength?: number;
-};
-
-async function importToolWithCommandResults(tarBuffer: Buffer, ...results: MockCommandResult[]) {
-  const runCommandWithTimeout = vi.fn();
-  for (const result of results) {
-    runCommandWithTimeout.mockImplementationOnce(
-      async (
-        _argv: string[],
-        options: { onOutputChunk?: (chunk: Buffer, stream: string) => boolean | void },
-      ) => {
-        if (result.error instanceof Error && result.termination === "error") {
-          throw result.error;
-        }
-        let stopped = false;
-        const stdout = typeof result.stdout === "string" ? result.stdout : "";
-        if (stdout) {
-          stopped = options.onOutputChunk?.(Buffer.from(stdout), "stdout") === false;
-        } else if (typeof result.outputByteLength === "number") {
-          stopped =
-            options.onOutputChunk?.({ byteLength: result.outputByteLength } as Buffer, "stdout") ===
-            false;
-        }
-        return commandResult({
-          ...result,
-          stdout: "",
-          ...(stopped
-            ? { code: null, killed: true, outputLimitExceeded: true, termination: "signal" }
-            : {}),
-        });
-      },
-    );
-  }
-  runCommandWithTimeout.mockResolvedValue(commandResult());
+async function importTool(tarBuffer: Buffer) {
+  const archivePath = path.join(tmpRoot, `archive-${randomUUID()}.tar.gz`);
+  const appendFileTransferAudit = vi.fn(async () => undefined);
+  const saveMediaBuffer = vi.fn(async () => {
+    await fs.writeFile(archivePath, tarBuffer);
+    return { path: archivePath };
+  });
   vi.resetModules();
-  vi.doMock("openclaw/plugin-sdk/process-runtime", () => ({
-    runCommandWithTimeout,
-  }));
   vi.doMock("openclaw/plugin-sdk/media-store", () => ({
-    saveMediaBuffer: vi.fn(async () => ({ path: path.join(tmpRoot, "archive.tar.gz") })),
+    saveMediaBuffer,
   }));
-  vi.doMock("../shared/audit.js", () => ({
-    appendFileTransferAudit: vi.fn(async () => undefined),
-  }));
+  vi.doMock("../shared/audit.js", () => ({ appendFileTransferAudit }));
   vi.doMock("./node-tool-invoke.js", () => ({
     readRequiredNodePath: (params: Record<string, unknown>) => ({
       node: String(params.node),
@@ -92,14 +61,16 @@ async function importToolWithCommandResults(tarBuffer: Buffer, ...results: MockC
         tarBase64: tarBuffer.toString("base64"),
         tarBytes: tarBuffer.byteLength,
         sha256: crypto.createHash("sha256").update(tarBuffer).digest("hex"),
-        fileCount: 1,
+        fileCount: 3,
       },
       startedAt: Date.now(),
     })),
   }));
   return {
+    archivePath,
+    appendFileTransferAudit,
+    saveMediaBuffer,
     module: await import("./dir-fetch-tool.js"),
-    runCommandWithTimeout,
   };
 }
 
@@ -110,130 +81,108 @@ async function executeDirFetch(module: typeof import("./dir-fetch-tool.js")) {
   });
 }
 
-const validListingResults = [{ stdout: "./ok.txt\n" }, { stdout: "-ok.txt\n" }] as const;
-
-describe("dir.fetch tar validation", () => {
-  it("rejects an archive before extraction when expanded bytes exceed budget", async () => {
-    const { module } = await importToolWithCommandResults(
-      Buffer.from("archive"),
-      ...validListingResults,
-      { outputByteLength: 64 * 1024 * 1024 + 1 },
-    );
-
-    await expect(executeDirFetch(module)).rejects.toThrow(
-      "dir.fetch UNCOMPRESSED_TOO_LARGE: archive expands past uncompressed budget 67108864 bytes",
-    );
-  });
-
-  it("fails uncompressed budget checks closed on wrapper errors", async () => {
-    const { module, runCommandWithTimeout } = await importToolWithCommandResults(
-      Buffer.from("archive"),
-      ...validListingResults,
-      {
-        code: null,
-        termination: "error",
-        error: new Error("budget read failed"),
+describe("dir.fetch archive extraction", () => {
+  it("extracts a bounded tar and returns the plugin-side manifest", async () => {
+    const tarBuffer = await createTarBuffer({
+      entries: ["ok.txt", "nested"],
+      setup: async (sourceDir) => {
+        await fs.writeFile(path.join(sourceDir, "ok.txt"), "ok");
+        await fs.mkdir(path.join(sourceDir, "nested"));
+        await fs.writeFile(path.join(sourceDir, "nested", "also-ok.txt"), "also ok");
       },
-    );
-
-    await expect(executeDirFetch(module)).rejects.toThrow(
-      "dir.fetch UNCOMPRESSED_TOO_LARGE: tar uncompressed budget validation error: budget read failed",
-    );
-    expect(runCommandWithTimeout).toHaveBeenLastCalledWith(
-      expect.any(Array),
-      expect.objectContaining({ tolerateOutputError: { stderr: true } }),
-    );
-  });
-
-  it("fails tar listing closed on wrapper errors", async () => {
-    const { module } = await importToolWithCommandResults(Buffer.from("archive"), {
-      code: null,
-      termination: "error",
-      error: new Error("listing read failed"),
     });
+    const { appendFileTransferAudit, module, saveMediaBuffer } = await importTool(tarBuffer);
 
-    await expect(executeDirFetch(module)).rejects.toThrow(
-      "dir.fetch UNSAFE_ARCHIVE: tar -tzf error: listing read failed",
-    );
-  });
+    const result = await executeDirFetch(module);
 
-  it("accepts successful validation and unpack", async () => {
-    const { module, runCommandWithTimeout } = await importToolWithCommandResults(
-      Buffer.from("archive"),
-      ...validListingResults,
-      {},
-      {},
-    );
-
-    await expect(executeDirFetch(module)).resolves.toMatchObject({
+    expect(result).toMatchObject({
+      content: [{ type: "text", text: expect.stringContaining("Fetched 2 files") }],
       details: {
         path: "/tmp/project",
-        fileCount: 1,
+        fileCount: 2,
       },
     });
-    expect(runCommandWithTimeout).toHaveBeenLastCalledWith(
-      expect.any(Array),
-      expect.objectContaining({
-        outputCapture: { stdout: "discard", stderr: "tail" },
-        tolerateOutputError: { stderr: true },
-      }),
+    const files = (result.details as { files: Array<{ relPath: string; localPath: string }> })
+      .files;
+    expect(files).toHaveLength(2);
+    expect(files).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          relPath: "ok.txt",
+          size: 2,
+          sha256: crypto.createHash("sha256").update("ok").digest("hex"),
+        }),
+        expect.objectContaining({
+          relPath: path.join("nested", "also-ok.txt"),
+          size: 7,
+          sha256: crypto.createHash("sha256").update("also ok").digest("hex"),
+        }),
+      ]),
+    );
+    const localPath = files.find((file) => file.relPath === "ok.txt")?.localPath;
+    await expect(fs.readFile(localPath!, "utf8")).resolves.toBe("ok");
+    expect(saveMediaBuffer).toHaveBeenCalledWith(
+      tarBuffer,
+      "application/gzip",
+      FILE_TRANSFER_SUBDIR,
+      DIR_FETCH_HARD_MAX_BYTES,
+    );
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ decision: "allowed" }),
     );
   });
 
-  it("keeps tar exit diagnostics", async () => {
-    const { module } = await importToolWithCommandResults(Buffer.from("archive"), {
-      code: 2,
-      stderr: "invalid archive",
+  it.runIf(process.platform !== "win32")(
+    "rejects a Fleet-shaped archive containing a symlink",
+    async () => {
+      const tarBuffer = await createTarBuffer({
+        entries: ["data", "auth"],
+        setup: async (sourceDir) => {
+          await fs.mkdir(path.join(sourceDir, "data"));
+          await fs.mkdir(path.join(sourceDir, "auth"));
+          await fs.writeFile(path.join(sourceDir, "data", "state.json"), "{}");
+          await fs.writeFile(path.join(sourceDir, "auth", "token"), "secret");
+          await fs.symlink("../auth/token", path.join(sourceDir, "data", "token-link"));
+        },
+      });
+      const { appendFileTransferAudit, archivePath, module } = await importTool(tarBuffer);
+
+      // A symlink entry used to hang extraction instead of rejecting; the test
+      // timeout bounds settling, so a hang regression fails without a wall-clock race.
+      await expect(executeDirFetch(module)).rejects.toThrow(/dir\.fetch UNSAFE_ARCHIVE:.*link/iu);
+      await expect(fs.access(archivePath)).rejects.toMatchObject({ code: "ENOENT" });
+      expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+        expect.objectContaining({ decision: "error", errorCode: "UNSAFE_ARCHIVE" }),
+      );
+    },
+  );
+
+  it.runIf(process.platform !== "win32")("rejects backslash-containing entry names", async () => {
+    const tarBuffer = await createTarBuffer({
+      entries: ["dir\\escape.txt"],
+      setup: async (sourceDir) => {
+        await fs.writeFile(path.join(sourceDir, "dir\\escape.txt"), "blocked");
+      },
     });
+    const { module } = await importTool(tarBuffer);
+
+    await expect(executeDirFetch(module)).rejects.toThrow(/dir\.fetch UNSAFE_ARCHIVE:.*filter/iu);
+  });
+
+  it("maps single-entry expansion limits to TREE_TOO_LARGE", async () => {
+    const tarBuffer = await createTarBuffer({
+      entries: ["large.bin"],
+      setup: async (sourceDir) => {
+        await fs.writeFile(path.join(sourceDir, "large.bin"), Buffer.alloc(16 * 1024 * 1024 + 1));
+      },
+    });
+    const { appendFileTransferAudit, module } = await importTool(tarBuffer);
 
     await expect(executeDirFetch(module)).rejects.toThrow(
-      "dir.fetch UNSAFE_ARCHIVE: tar -tzf exited 2: invalid archive",
+      /dir\.fetch UNCOMPRESSED_TOO_LARGE: archive entry extracted size exceeds limit/iu,
     );
-  });
-
-  it("stops name validation at the entry cap", async () => {
-    const tarLines = Array.from({ length: 5001 }, (_, index) => `file-${index}`).join("\n") + "\n";
-    const { module, runCommandWithTimeout } = await importToolWithCommandResults(
-      Buffer.from("archive"),
-      { stdout: tarLines },
+    expect(appendFileTransferAudit).toHaveBeenLastCalledWith(
+      expect.objectContaining({ decision: "error", errorCode: "TREE_TOO_LARGE" }),
     );
-
-    await expect(executeDirFetch(module)).rejects.toThrow(
-      "dir.fetch UNSAFE_ARCHIVE: archive contains 5001 entries; limit 5000",
-    );
-    expect(runCommandWithTimeout).toHaveBeenCalledOnce();
-  });
-
-  it("keeps recent tar stderr when listing fails noisily", async () => {
-    const oldNoise = "old-noise\n".repeat(600);
-    const recent = "recent-invalid-archive-details\n".repeat(12);
-    const { module } = await importToolWithCommandResults(Buffer.from("archive"), {
-      code: 2,
-      stderr: oldNoise + recent,
-    });
-
-    await expect(executeDirFetch(module)).rejects.toThrow(projectBoundedTextTail(recent, 200));
-  });
-
-  it("surfaces a UTF-16-safe tar stderr tail", async () => {
-    const oldNoise = "n".repeat(250);
-    const recent = "🤖" + "f".repeat(199);
-    const { module } = await importToolWithCommandResults(Buffer.from("archive"), {
-      code: 2,
-      stderr: oldNoise + recent,
-    });
-
-    let message = "";
-    try {
-      await executeDirFetch(module);
-    } catch (error) {
-      message = error instanceof Error ? error.message : String(error);
-    }
-    expect(message).toContain(projectBoundedTextTail(recent, 200));
-    expect(message).toContain("f".repeat(199));
-    expect(message).not.toContain("🤖");
-    expect(
-      /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/.test(message),
-    ).toBe(false);
   });
 });

@@ -1,6 +1,8 @@
 // Copilot tests cover runtime plugin behavior.
 import { normalize, resolve, sep } from "node:path";
 import type { CopilotClient, CopilotClientOptions } from "@github/copilot-sdk";
+import { toErrorObject as toLintErrorObject } from "openclaw/plugin-sdk/error-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ClientCreateOptions, PoolKey } from "./runtime.js";
 import { createCopilotClientPool } from "./runtime.js";
@@ -20,24 +22,6 @@ interface FakeFactoryOptions {
     id: number,
   ) => CopilotClient | Promise<CopilotClient>;
   readonly stop?: (client: FakeClient) => Promise<Error[]> | Error[];
-}
-
-function createDeferred<T>() {
-  let resolveValue: ((value: T | PromiseLike<T>) => void) | undefined;
-  let rejectValue: ((reason?: unknown) => void) | undefined;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolveValue = resolvePromise;
-    rejectValue = rejectPromise;
-  });
-  return {
-    promise,
-    resolve(value: T) {
-      resolveValue?.(value);
-    },
-    reject(reason: unknown) {
-      rejectValue?.(reason);
-    },
-  };
 }
 
 function normalizeHomeForTest(copilotHome: string): string {
@@ -122,6 +106,20 @@ describe("createCopilotClientPool", () => {
     expect(first.client).toBe(second.client);
     expect(first.key).toEqual(second.key);
     expect(sdk.ctorCalls.length).toBe(1);
+  });
+
+  it("keeps hardened empty-mode clients separate from normal clients", async () => {
+    const sdk = makeFake();
+    const pool = createCopilotClientPool({ sdkFactory: sdk.fake });
+    const key = makeKey();
+
+    const normal = await pool.acquire(key, makeOptions());
+    const isolated = await pool.acquire(key, { ...makeOptions(), mode: "empty" });
+
+    expect(normal.client).not.toBe(isolated.client);
+    expect(normal.key.clientMode).toBeUndefined();
+    expect(isolated.key.clientMode).toBe("empty");
+    expect(sdk.ctorCalls.map((options) => options.mode)).toEqual([undefined, "empty"]);
   });
 
   it("different agentId same copilotHome creates distinct clients", async () => {
@@ -486,17 +484,3 @@ describe("createCopilotClientPool", () => {
     expect(String(sdk.ctorCalls[0]?.baseDirectory)).toBe(normalizedHome);
   });
 });
-
-function toLintErrorObject(value: unknown, fallbackMessage: string): Error {
-  if (value instanceof Error) {
-    return value;
-  }
-  if (typeof value === "string") {
-    return new Error(value);
-  }
-  const error = new Error(fallbackMessage, { cause: value });
-  if ((typeof value === "object" && value !== null) || typeof value === "function") {
-    Object.assign(error, value);
-  }
-  return error;
-}

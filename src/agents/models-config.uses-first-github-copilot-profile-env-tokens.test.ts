@@ -1,6 +1,7 @@
 // Verifies GitHub Copilot profile token fallback and implicit provider planning.
 import { describe, expect, it, vi } from "vitest";
-import { planOpenClawModelsJson, planOpenClawModelsJsonWithDeps } from "./models-config.plan.js";
+import { planOpenClawModelsJson } from "./models-config.plan.js";
+import { planOpenClawModelsJsonWithDeps } from "./models-config.plan.test-support.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
@@ -31,7 +32,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 }));
 
 vi.mock("./models-config.providers.js", () => ({
-  applyNativeStreamingUsageCompat: (providers: unknown) => providers,
   enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
   normalizeProviderCatalogModelsForConfig: (providers: unknown) => providers,
   normalizeProviders: ({ providers }: { providers: unknown }) => providers,
@@ -70,20 +70,27 @@ describe("models-config", () => {
   });
 
   it("does not override explicit github-copilot provider config", async () => {
-    const plan = await planOpenClawModelsJson({
-      cfg: {
-        models: {
-          providers: {
-            "github-copilot": {
-              baseUrl: "https://copilot.local",
-              api: "openai-responses",
-              models: [],
-            },
+    const cfg = {
+      models: {
+        providers: {
+          "github-copilot": {
+            baseUrl: "https://copilot.local",
+            api: "openai-responses" as const,
+            models: [],
           },
         },
       },
-      agentDir: "/tmp/openclaw-agent",
-      env: {} as NodeJS.ProcessEnv,
+    };
+    const env = {} as NodeJS.ProcessEnv;
+    const plan = await planOpenClawModelsJson({
+      context: {
+        cfg,
+        discoveryAuthConfig: cfg,
+        sourceConfigForSecrets: cfg,
+        agentDir: "/tmp/openclaw-agent",
+        env,
+        envFingerprint: env,
+      },
       existingRaw: "",
       existingParsed: null,
     });

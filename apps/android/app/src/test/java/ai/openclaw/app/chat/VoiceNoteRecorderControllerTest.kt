@@ -1,6 +1,8 @@
 package ai.openclaw.app.chat
 
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
@@ -231,12 +233,14 @@ class VoiceNoteRecorderControllerTest {
       controller.finish()
       assertEquals(VoiceNoteRecorderState.Preparing, controller.state.value)
       assertTrue(finished.single().file.exists())
+      assertTrue(controller.canCommitPreparation(finished.single().id))
 
       // Composition-scoped staging may be cancelled before it runs; cancel()
       // must still delete the handed-off recording.
       controller.cancel()
 
       assertEquals(VoiceNoteRecorderState.Idle, controller.state.value)
+      assertFalse(controller.canCommitPreparation(finished.single().id))
       assertFalse(finished.single().file.exists())
       directory.deleteRecursively()
     }
@@ -293,6 +297,222 @@ class VoiceNoteRecorderControllerTest {
         VoiceNoteRecorderState.Failure("Microphone permission is required to record a voice note."),
         controller.state.value,
       )
+      directory.deleteRecursively()
+    }
+
+  @Test
+  fun cancelledPermissionGrantCannotStartRecording() =
+    runTest {
+      val directory = Files.createTempDirectory("voice-note-test").toFile()
+      val engine = FakeEngine()
+      val permission = CompletableDeferred<Boolean>()
+      var microphoneAcquisitions = 0
+      val controller =
+        controller(
+          directory,
+          engine,
+          requestPermission = { permission.await() },
+          acquireMic = {
+            microphoneAcquisitions += 1
+            true
+          },
+        )
+      val result = async { controller.start() }
+      runCurrent()
+
+      controller.cancel()
+      permission.complete(true)
+      runCurrent()
+
+      assertFalse(result.await())
+      assertEquals(0, microphoneAcquisitions)
+      assertEquals(0, engine.startCount)
+      assertEquals(VoiceNoteRecorderState.Idle, controller.state.value)
+      assertTrue(directory.listFiles().orEmpty().isEmpty())
+      directory.deleteRecursively()
+    }
+
+  @Test
+  fun cancelledPermissionDenialCannotReplaceIdleState() =
+    runTest {
+      val directory = Files.createTempDirectory("voice-note-test").toFile()
+      val engine = FakeEngine()
+      val permission = CompletableDeferred<Boolean>()
+      val controller = controller(directory, engine, requestPermission = { permission.await() })
+      val result = async { controller.start() }
+      runCurrent()
+
+      controller.cancel()
+      permission.complete(false)
+      runCurrent()
+
+      assertFalse(result.await())
+      assertEquals(VoiceNoteRecorderState.Idle, controller.state.value)
+      assertEquals(0, engine.startCount)
+      directory.deleteRecursively()
+    }
+
+  @Test
+  fun cancelledPermissionGrantCannotTakeOverRestartedRecording() =
+    runTest {
+      val directory = Files.createTempDirectory("voice-note-test").toFile()
+      val engine = FakeEngine()
+      val firstPermission = CompletableDeferred<Boolean>()
+      val secondPermission = CompletableDeferred<Boolean>()
+      var permissionRequests = 0
+      val controller =
+        controller(
+          directory,
+          engine,
+          requestPermission = {
+            permissionRequests += 1
+            if (permissionRequests == 1) firstPermission.await() else secondPermission.await()
+          },
+        )
+      val cancelledAttempt = async { controller.start("cancelled") }
+      runCurrent()
+      controller.cancel()
+      val replacementAttempt = async { controller.start("replacement") }
+      runCurrent()
+
+      firstPermission.complete(true)
+      runCurrent()
+
+      assertFalse(cancelledAttempt.await())
+      assertEquals(0, engine.startCount)
+
+      secondPermission.complete(true)
+      runCurrent()
+
+      assertTrue(replacementAttempt.await())
+      assertEquals(1, engine.startCount)
+      assertEquals("voice-note-replacement.m4a", requireNotNull(engine.outputFile).name)
+      controller.cancel()
+      directory.deleteRecursively()
+    }
+
+  @Test
+  fun cancelledPermissionDenialCannotReplaceRestartedRecording() =
+    runTest {
+      val directory = Files.createTempDirectory("voice-note-test").toFile()
+      val engine = FakeEngine()
+      val firstPermission = CompletableDeferred<Boolean>()
+      val secondPermission = CompletableDeferred<Boolean>()
+      var permissionRequests = 0
+      val controller =
+        controller(
+          directory,
+          engine,
+          requestPermission = {
+            permissionRequests += 1
+            if (permissionRequests == 1) firstPermission.await() else secondPermission.await()
+          },
+        )
+      val cancelledAttempt = async { controller.start("cancelled") }
+      runCurrent()
+      controller.cancel()
+      val replacementAttempt = async { controller.start("replacement") }
+      runCurrent()
+
+      firstPermission.complete(false)
+      runCurrent()
+
+      assertFalse(cancelledAttempt.await())
+      assertEquals(VoiceNoteRecorderState.Idle, controller.state.value)
+
+      secondPermission.complete(true)
+      runCurrent()
+
+      assertTrue(replacementAttempt.await())
+      assertEquals(1, engine.startCount)
+      controller.cancel()
+      directory.deleteRecursively()
+    }
+
+  @Test
+  fun overlappingStartCannotReplacePendingPermissionOwner() =
+    runTest {
+      val directory = Files.createTempDirectory("voice-note-test").toFile()
+      val engine = FakeEngine()
+      val permission = CompletableDeferred<Boolean>()
+      var permissionRequests = 0
+      val controller =
+        controller(
+          directory,
+          engine,
+          requestPermission = {
+            permissionRequests += 1
+            if (permissionRequests == 1) permission.await() else true
+          },
+        )
+      val originalAttempt = async { controller.start("original") }
+      runCurrent()
+      val overlappingAttempt = async { controller.start("overlapping") }
+      runCurrent()
+
+      assertFalse(overlappingAttempt.await())
+      assertEquals(1, permissionRequests)
+      assertEquals(0, engine.startCount)
+
+      permission.complete(true)
+      runCurrent()
+
+      assertTrue(originalAttempt.await())
+      assertEquals("voice-note-original.m4a", requireNotNull(engine.outputFile).name)
+      controller.cancel()
+      directory.deleteRecursively()
+    }
+
+  @Test
+  fun cancelledPermissionCoroutineReleasesPendingRecordingOwner() =
+    runTest {
+      val directory = Files.createTempDirectory("voice-note-test").toFile()
+      val engine = FakeEngine()
+      val permission = CompletableDeferred<Boolean>()
+      var permissionRequests = 0
+      val controller =
+        controller(
+          directory,
+          engine,
+          requestPermission = {
+            permissionRequests += 1
+            if (permissionRequests == 1) permission.await() else true
+          },
+        )
+      val cancelledAttempt = async { controller.start("cancelled") }
+      runCurrent()
+
+      cancelledAttempt.cancel()
+      cancelledAttempt.join()
+
+      assertTrue(controller.start("replacement"))
+      assertEquals(1, engine.startCount)
+      assertEquals("voice-note-replacement.m4a", requireNotNull(engine.outputFile).name)
+      controller.cancel()
+      directory.deleteRecursively()
+    }
+
+  @Test
+  fun failedPermissionRequestReleasesPendingRecordingOwner() =
+    runTest {
+      val directory = Files.createTempDirectory("voice-note-test").toFile()
+      val engine = FakeEngine()
+      var permissionRequests = 0
+      val controller =
+        controller(
+          directory,
+          engine,
+          requestPermission = {
+            permissionRequests += 1
+            if (permissionRequests == 1) error("permission host failed") else true
+          },
+        )
+
+      assertTrue(runCatching { controller.start("failed") }.isFailure)
+      assertTrue(controller.start("replacement"))
+      assertEquals(1, engine.startCount)
+      assertEquals("voice-note-replacement.m4a", requireNotNull(engine.outputFile).name)
+      controller.cancel()
       directory.deleteRecursively()
     }
 

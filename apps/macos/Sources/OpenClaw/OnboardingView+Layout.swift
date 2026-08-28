@@ -2,7 +2,7 @@ import AppKit
 import SwiftUI
 
 extension OnboardingView {
-    /// The inference-first flow has no full-page chat; OpenClaw opens in its own sheet.
+    /// The inference-first flow hands off to the dashboard as soon as AI connects.
     var usesCompactHero: Bool {
         false
     }
@@ -12,7 +12,10 @@ extension OnboardingView {
             let contentHeight = self.contentHeight(for: windowGeometry.size.height)
             VStack(spacing: 0) {
                 // Chat-heavy pages shrink the mascot so the content gets the room.
-                GlowingOpenClawIcon(size: self.heroSize, mood: self.mascotMood)
+                GlowingOpenClawIcon(
+                    size: self.heroSize,
+                    mood: self.mascotMood,
+                    accessory: self.mascotAccessory)
                     .offset(y: self.usesCompactHero ? 4 : 10)
                     .frame(height: self.heroFrameHeight)
                     .animation(.spring(response: 0.45, dampingFraction: 0.85), value: self.usesCompactHero)
@@ -58,11 +61,13 @@ extension OnboardingView {
             guard installed else { return }
             self.updateMonitoring(for: self.activePageIndex)
         }
+        .onChange(of: GatewayProcessManager.shared.status) { _, status in
+            self.reviseCLIActivationFailureIfGatewayReady(status)
+        }
         .onDisappear {
             self.onboardingDidDisappear()
         }
         .task {
-            await self.refreshPerms()
             await self.refreshCLIStatus()
             self.preferredGatewayID = GatewayDiscoveryPreferences.preferredStableID()
         }
@@ -90,8 +95,6 @@ extension OnboardingView {
         // Queued detection can otherwise proceed into a mutating activation
         // after the window or its selected route has gone away.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        systemAgentState.resetForGatewayChange()
-        stopPermissionMonitoring()
         stopDiscovery()
     }
 
@@ -136,9 +139,6 @@ extension OnboardingView {
         // The UI attempt belongs to one route, but its durable activation lease
         // must survive A -> B -> A while the old Gateway can still be mutating.
         aiSetup.resetForGatewayChange(clearPendingHandoff: false)
-        // OpenClaw sessions belong to one Gateway. Dismiss and replace the chat so
-        // changing routes cannot send an old session ID to the new endpoint.
-        systemAgentState.resetForGatewayChange()
     }
 
     @discardableResult
@@ -155,7 +155,11 @@ extension OnboardingView {
         guard !configuredGatewayProbe.isSuppressedForTemporaryConnectionCheck else { return nil }
         // Persist the latest selection before GatewayEndpointStore resolves the
         // route, so an immediate probe cannot attach to the previous endpoint.
-        guard gatewaySelectionPersister() else { return nil }
+        guard gatewaySelectionPersister() else {
+            self.aiSetup.showConfiguredGatewayProbeUnavailable(
+                summary: "Could not save Gateway settings. Check your connection settings and try again.")
+            return nil
+        }
         let expectedMode = state.connectionMode
         let expectedRouteIdentity = self.aiSetupRouteIdentityProvider()
         let expectedPendingState = OnboardingSystemAgentResumeStore.pendingState(
@@ -180,7 +184,6 @@ extension OnboardingView {
             let pendingState = OnboardingSystemAgentResumeStore.pendingState(
                 for: expectedRouteIdentity,
                 defaults: self.systemAgentDefaults)
-            let systemAgentResumePending = pendingState != .none
             self.schedulePendingActivationRecheckIfNeeded(pendingState)
 
             switch outcome {
@@ -199,26 +202,14 @@ extension OnboardingView {
                     self.waitForPendingInferenceSetup()
                     return
                 case .none:
-                    // A concurrent probe can clear an expired marker while
-                    // the dispatched activation is still returning. Keep the
-                    // setup-owned handoff, and prove inference on this route.
-                    if self.aiSetup.pendingActivationVerification {
-                        self.resumePendingSystemAgent(modelRef: modelRef)
-                        return
-                    }
+                    break
                 }
-                guard Self.shouldOpenConfiguredGatewayDashboard(
-                    onboardingVisible: self.onboardingVisible,
-                    expectedMode: expectedMode,
-                    currentMode: self.state.connectionMode,
-                    systemAgentResumePending: systemAgentResumePending,
-                    setupOwnsInferenceTransition: self.aiSetup.ownsInferenceTransition)
-                else { return }
-                self.onboardingVisible = false
-                self.configuredGatewayProbe.invalidate()
-                OnboardingController.markComplete()
-                OnboardingController.shared.close()
-                AppNavigationActions.openDashboard()
+                // agents.list projects an effective model even when it only
+                // comes from an implicit runtime default. A label is not proof
+                // that inference is configured or usable, so first run must
+                // live-verify it before completing onboarding. A definitive
+                // verification failure falls through to normal detection.
+                self.resumePendingSystemAgent(modelRef: modelRef)
             case .missing:
                 // A route-bound activation/verification can complete while the
                 // earlier agents.list request is suspended. Never let that
@@ -250,13 +241,28 @@ extension OnboardingView {
                 {
                     self.aiSetup.startIfNeeded()
                 }
-            case .unavailable:
-                // Transport/protocol failure is not evidence that inference is
-                // absent. Preserve every lease and wait for reconnect/retry.
-                self.aiSetup.showConfiguredGatewayProbeUnavailable()
+            case .unavailable, .authIssue:
+                self.showConfiguredGatewayProbeBlocker(outcome)
             case .superseded:
                 break
             }
+        }
+    }
+
+    private func showConfiguredGatewayProbeBlocker(
+        _ outcome: OnboardingConfiguredGatewayProbe.Outcome)
+    {
+        switch outcome {
+        case .unavailable:
+            // Transport/protocol failure is not evidence that inference is
+            // absent. Preserve every lease and wait for reconnect/retry.
+            self.aiSetup.showConfiguredGatewayProbeUnavailable()
+        case let .authIssue(issue):
+            // Authentication is actionable at the Gateway page and never
+            // evidence that Gateway-owned inference setup is missing.
+            self.aiSetup.showConfiguredGatewayAuthIssue(issue)
+        case .configured, .missing, .superseded:
+            assertionFailure("Expected a configured Gateway probe blocker")
         }
     }
 
@@ -292,21 +298,6 @@ extension OnboardingView {
         case .activationExpired, .completed, .none:
             break
         }
-    }
-
-    static func shouldOpenConfiguredGatewayDashboard(
-        onboardingVisible: Bool,
-        expectedMode: AppState.ConnectionMode,
-        currentMode: AppState.ConnectionMode,
-        systemAgentResumePending: Bool,
-        setupOwnsInferenceTransition: Bool) -> Bool
-    {
-        self.isCurrentConfiguredGatewayProbe(
-            onboardingVisible: onboardingVisible,
-            expectedMode: expectedMode,
-            currentMode: currentMode) &&
-            !systemAgentResumePending &&
-            !setupOwnsInferenceTransition
     }
 
     static func isCurrentConfiguredGatewayProbe(
@@ -345,6 +336,13 @@ extension OnboardingView {
         let connectionLockIndex = pageOrder.firstIndex(of: connectionPageIndex)
         let cliLockIndex = pageOrder.firstIndex(of: cliPageIndex)
         let aiLockIndex = pageOrder.firstIndex(of: aiPageIndex)
+        let remoteGatewayDecision = Self.remoteGatewayAdvanceDecision(
+            connectionMode: state.connectionMode,
+            activePageIndex: self.activePageIndex,
+            connectionPageIndex: connectionPageIndex,
+            authIssue: remoteAuthIssue,
+            probeState: remoteProbeState,
+            input: remoteGatewayProbeInput)
         return HStack(spacing: 20) {
             ZStack(alignment: .leading) {
                 Button(action: {}, label: {
@@ -376,6 +374,8 @@ extension OnboardingView {
                         index != self.currentPage
                     let isConnectionLocked = self.isConnectionSelectionBlocking &&
                         index > (connectionLockIndex ?? 0)
+                    let isRemoteGatewayLocked = !remoteGatewayDecision.canAdvance &&
+                        index > (connectionLockIndex ?? 0)
                     let isCLILocked = cliLockIndex != nil && !self.cliInstalled && index > (cliLockIndex ?? 0)
                     // Dots must honor the same setup gate as Next: no jumping
                     // past the AI page before a candidate passed its live test.
@@ -383,7 +383,7 @@ extension OnboardingView {
                         self.state.connectionMode != .unconfigured &&
                         !self.aiSetup.connected &&
                         index > (aiLockIndex ?? 0)
-                    let isLocked = isInstallLocked || isConnectionLocked || isCLILocked ||
+                    let isLocked = isInstallLocked || isConnectionLocked || isRemoteGatewayLocked || isCLILocked ||
                         isAILocked
                     Button {
                         withAnimation { self.currentPage = index }

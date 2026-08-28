@@ -29,7 +29,7 @@ type DaemonHintItem = {
 };
 
 /** Machine-readable response shape for service lifecycle commands. */
-export type DaemonActionResponse = {
+type DaemonActionResponse = {
   ok: boolean;
   action: DaemonAction;
   result?: string;
@@ -51,7 +51,7 @@ function emitDaemonActionJson(payload: DaemonActionResponse) {
 }
 
 function classifyDaemonHintText(text: string): DaemonHintKind {
-  if (text.includes("openclaw gateway install") || text.startsWith("Service not installed. Run:")) {
+  if (/\b(gateway|node) install\b/u.test(text) || text.startsWith("Service not installed. Run:")) {
     return "install";
   }
   if (text.startsWith("Restart the container or the service that manages it for ")) {
@@ -95,6 +95,70 @@ export function buildDaemonServiceSnapshot(service: GatewayService, loaded: bool
     loadedText: service.loadedText,
     notLoadedText: service.notLoadedText,
   };
+}
+
+type DaemonEmit = (payload: Omit<DaemonActionResponse, "action">) => void;
+
+/** Emit a lifecycle result and mirror its message to text output. */
+function emitDaemonActionMessage(params: {
+  json: boolean;
+  emit: DaemonEmit;
+  payload: Omit<DaemonActionResponse, "action">;
+}): void {
+  params.emit(params.payload);
+  if (!params.json && params.payload.message) {
+    defaultRuntime.log(params.payload.message);
+  }
+}
+
+/** Emit the no-op success returned when a service is already running. */
+export function emitDaemonAlreadyRunning(params: {
+  serviceNoun: string;
+  service: GatewayService;
+  pid?: number;
+  json: boolean;
+  warnings: string[];
+  emit: DaemonEmit;
+}): void {
+  const message =
+    params.pid === undefined
+      ? `${params.serviceNoun} service already running.`
+      : `${params.serviceNoun} service already running (pid ${params.pid}).`;
+  emitDaemonActionMessage({
+    json: params.json,
+    emit: params.emit,
+    payload: {
+      ok: true,
+      result: "already-running",
+      message,
+      service: buildDaemonServiceSnapshot(params.service, true),
+      warnings: params.warnings.length ? params.warnings : undefined,
+    },
+  });
+}
+
+/** Emit a service-manager restart that has been accepted but not completed. */
+export function emitDaemonScheduledRestart(params: {
+  json: boolean;
+  emit: DaemonEmit;
+  result: string;
+  message: string;
+  service: GatewayService;
+  loaded: boolean;
+  warnings: string[];
+}): true {
+  emitDaemonActionMessage({
+    json: params.json,
+    emit: params.emit,
+    payload: {
+      ok: true,
+      result: params.result,
+      message: params.message,
+      service: buildDaemonServiceSnapshot(params.service, params.loaded),
+      warnings: params.warnings.length ? params.warnings : undefined,
+    },
+  });
+  return true;
 }
 
 /** Writable sink used when JSON output should suppress service command stdout. */
@@ -166,6 +230,13 @@ export async function installDaemonServiceAndEmit(params: {
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;
   fail: (message: string, hints?: string[]) => void;
   install: () => Promise<void>;
+  /**
+   * Runs only after the service has been written AND verified as loaded, but
+   * before the success payload is emitted. Use this for post-success
+   * diagnostics (e.g. linger warnings) so they never accompany a failed
+   * install or a verification failure. Throwing here surfaces as a failure.
+   */
+  onVerified?: () => Promise<void>;
 }) {
   try {
     await params.install();
@@ -177,11 +248,31 @@ export async function installDaemonServiceAndEmit(params: {
     return;
   }
 
-  let installed;
+  let installed: boolean;
   try {
     installed = await params.service.isLoaded({ env: process.env });
-  } catch {
-    installed = true;
+  } catch (err) {
+    params.fail(
+      `${params.serviceNoun} install verification failed: ${String(err)}`,
+      await buildInstallFailureHints(err),
+    );
+    return;
+  }
+  if (!installed) {
+    params.fail(
+      `${params.serviceNoun} install verification failed: service is not ${params.service.loadedText}.`,
+    );
+    return;
+  }
+  // Post-success diagnostics run only on the verified-success path, so a
+  // failed install or verification never carries their warnings.
+  if (params.onVerified) {
+    try {
+      await params.onVerified();
+    } catch (err) {
+      params.fail(`${params.serviceNoun} post-install check failed: ${String(err)}`);
+      return;
+    }
   }
   params.emit({
     ok: true,

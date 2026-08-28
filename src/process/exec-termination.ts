@@ -17,7 +17,8 @@ export function createCommandTerminationController(params: {
   cancelController: AbortController;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
-  killProcessTree?: boolean;
+  processTree?: { mode: "graceful" } | { mode: "force" };
+  killGraceMs: number;
   isChildExited: () => boolean;
   isCommandSettled: () => boolean;
 }): { terminate: () => boolean; settle: () => Promise<void> } {
@@ -70,7 +71,7 @@ export function createCommandTerminationController(params: {
       if (graceful) {
         startTaskkill(["/PID", String(childPid), "/T"]);
         await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, COMMAND_PROCESS_TREE_KILL_GRACE_MS);
+          const timer = setTimeout(resolve, params.killGraceMs);
           timer.unref();
         });
         if (isDirectChildAlive()) {
@@ -96,13 +97,19 @@ export function createCommandTerminationController(params: {
       // target an unrelated tree; stronger ownership requires a spawn-time Job Object.
       return false;
     }
-    if (params.killProcessTree && typeof childPid === "number") {
-      processTreeSettleAt ??= Date.now() + COMMAND_PROCESS_TREE_KILL_GRACE_MS;
+    if (params.processTree && typeof childPid === "number") {
+      const force = params.processTree.mode === "force";
+      if (!force) {
+        processTreeSettleAt ??= Date.now() + params.killGraceMs;
+      }
       if (process.platform === "win32") {
-        startWindowsTermination(childPid, true);
+        startWindowsTermination(childPid, !force);
         return true;
       }
-      terminateProcessTree(childPid, { graceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS });
+      terminateProcessTree(childPid, {
+        ...(force ? { force: true } : { graceMs: params.killGraceMs }),
+        detached: true,
+      });
       return false;
     }
     if (!directChildAlive) {
@@ -120,7 +127,7 @@ export function createCommandTerminationController(params: {
       await windowsTerminationPromise;
     }
     if (
-      !params.killProcessTree ||
+      params.processTree?.mode !== "graceful" ||
       processTreeSettleAt === undefined ||
       typeof params.child.pid !== "number"
     ) {
@@ -136,7 +143,7 @@ export function createCommandTerminationController(params: {
       });
     }
     if (process.platform !== "win32") {
-      terminateProcessTree(params.child.pid, { force: true });
+      terminateProcessTree(params.child.pid, { force: true, detached: true });
     }
   };
 

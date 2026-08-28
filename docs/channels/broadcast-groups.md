@@ -39,7 +39,7 @@ Add a top-level `broadcast` section (next to `bindings`). Keys are WhatsApp peer
 
 **Result:** when OpenClaw would reply in this chat, it runs all three agents.
 
-Every listed agent id must exist in `agents.list`: config validation reports unknown ids, and the runtime skips them with a `Broadcast agent <id> not found in agents.list; skipping` warning.
+Every listed agent id must exist in `agents.entries`: config validation reports unknown ids, and the runtime skips them with a `Broadcast agent <id> not found in agents.entries; skipping` warning.
 
 ### Processing strategy
 
@@ -64,26 +64,24 @@ Every listed agent id must exist in `agents.list`: config validation reports unk
 ```json
 {
   "agents": {
-    "list": [
-      {
-        "id": "code-reviewer",
+    "entries": {
+      "code-reviewer": {
+        "default": true,
         "name": "Code Reviewer",
         "workspace": "/path/to/code-reviewer",
         "sandbox": { "mode": "all" }
       },
-      {
-        "id": "security-auditor",
+      "security-auditor": {
         "name": "Security Auditor",
         "workspace": "/path/to/security-auditor",
         "sandbox": { "mode": "all" }
       },
-      {
-        "id": "docs-generator",
+      "docs-generator": {
         "name": "Documentation Generator",
         "workspace": "/path/to/docs-generator",
         "sandbox": { "mode": "all" }
       }
-    ]
+    }
   },
   "broadcast": {
     "strategy": "parallel",
@@ -178,11 +176,11 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
     ```json
     {
       "agents": {
-        "list": [
-          { "id": "security-scanner", "name": "Security Scanner" },
-          { "id": "code-formatter", "name": "Code Formatter" },
-          { "id": "test-generator", "name": "Test Generator" }
-        ]
+        "entries": {
+          "security-scanner": { "default": true, "name": "Security Scanner" },
+          "code-formatter": { "name": "Code Formatter" },
+          "test-generator": { "name": "Test Generator" }
+        }
       }
     }
     ```
@@ -191,10 +189,13 @@ In group `120363403215116621@g.us` with agents `["alfred", "baerbel"]`:
     ```json
     {
       "agents": {
-        "list": [
-          { "id": "reviewer", "tools": { "allow": ["read", "exec"] } },
-          { "id": "fixer", "tools": { "allow": ["read", "write", "edit", "exec"] } }
-        ]
+        "entries": {
+          "reviewer": {
+            "default": true,
+            "tools": { "allow": ["read", "exec"] }
+          },
+          "fixer": { "tools": { "allow": ["read", "write", "edit", "exec"] } }
+        }
       }
     }
     ```
@@ -247,7 +248,7 @@ Broadcast groups work alongside existing routing:
   <Accordion title="Agents not responding">
     **Check:**
 
-    1. Agent IDs exist in `agents.list` (config validation rejects unknown ids).
+    1. Agent IDs exist in `agents.entries` (config validation rejects unknown ids).
     2. Peer ID format is correct (group JID like `120363403215116621@g.us`, or E.164 like `+15551234567` for DMs).
     3. The message passed normal gating (mention/activation rules still apply).
 
@@ -287,24 +288,22 @@ Broadcast groups work alongside existing routing:
         ]
       },
       "agents": {
-        "list": [
-          {
-            "id": "code-formatter",
+        "entries": {
+          "code-formatter": {
+            "default": true,
             "workspace": "~/agents/formatter",
             "tools": { "allow": ["read", "write"] }
           },
-          {
-            "id": "security-scanner",
+          "security-scanner": {
             "workspace": "~/agents/security",
             "tools": { "allow": ["read", "exec"] }
           },
-          {
-            "id": "test-coverage",
+          "test-coverage": {
             "workspace": "~/agents/testing",
             "tools": { "allow": ["read", "exec"] }
           },
-          { "id": "docs-checker", "workspace": "~/agents/docs", "tools": { "allow": ["read"] } }
-        ]
+          "docs-checker": { "workspace": "~/agents/docs", "tools": { "allow": ["read"] } }
+        }
       }
     }
     ```
@@ -320,11 +319,11 @@ Broadcast groups work alongside existing routing:
         "+15555550123": ["detect-language", "translator-en", "translator-de"]
       },
       "agents": {
-        "list": [
-          { "id": "detect-language", "workspace": "~/agents/lang-detect" },
-          { "id": "translator-en", "workspace": "~/agents/translate-en" },
-          { "id": "translator-de", "workspace": "~/agents/translate-de" }
-        ]
+        "entries": {
+          "detect-language": { "default": true, "workspace": "~/agents/lang-detect" },
+          "translator-en": { "workspace": "~/agents/translate-en" },
+          "translator-de": { "workspace": "~/agents/translate-de" }
+        }
       }
     }
     ```

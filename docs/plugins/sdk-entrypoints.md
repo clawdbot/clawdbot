@@ -36,17 +36,24 @@ built entries:
 
 - `extensions` and `setupEntry` are source entries, used for workspace and git
   checkout development.
-- `runtimeExtensions` and `runtimeSetupEntry` are preferred for installed
-  packages: they let npm packages skip runtime TypeScript compilation.
+- `runtimeExtensions` and `runtimeSetupEntry` select the built entries instead
+  of the corresponding source entries.
 - `runtimeExtensions`, when present, must match `extensions` in array length
   (entries pair positionally). `runtimeSetupEntry` requires `setupEntry`.
 - If a `runtimeExtensions`/`runtimeSetupEntry` artifact is declared but
-  missing, install/discovery fails with a packaging error; OpenClaw does not
-  silently fall back to source. Source fallback (below) only applies when no
-  runtime entry is declared at all.
-- If an installed package declares only a TypeScript source entry, OpenClaw
-  looks for a matching built `dist/*.js` (or `.mjs`/`.cjs`) peer and uses it;
-  otherwise it falls back to the TypeScript source.
+  missing, installation fails and discovery reports a packaging error for that
+  entry; OpenClaw does not silently fall back to source.
+- Without an explicit runtime entry, package discovery through
+  `plugins.load.paths` or global roots looks for matching JavaScript peers under
+  `dist/` first, then beside the TypeScript source entry, trying `.js`, `.mjs`,
+  and `.cjs` in that order at each location.
+- Package installation and managed installed-package discovery require compiled
+  output for TypeScript extension and setup entries. Missing compiled output is
+  a packaging error, not a reason to fall back to TypeScript.
+- Trusted local/source development paths can use TypeScript when no runtime
+  entry is declared. These include workspace plugins, explicit local load paths,
+  untracked local plugin directories, and linked source checkouts. Workspace
+  discovery keeps the source entry rather than inferring built peers.
 - All entry paths must stay inside the plugin package directory. Runtime
   entries and inferred built-JS peers do not make an escaping `extensions` or
   `setupEntry` source path valid.
@@ -80,6 +87,13 @@ export default defineToolPlugin({
       parameters: Type.Object({
         symbol: Type.String({ description: "Ticker symbol." }),
       }),
+      outputSchema: Type.Object(
+        {
+          symbol: Type.String(),
+          hasKey: Type.Boolean(),
+        },
+        { additionalProperties: false },
+      ),
       execute: async ({ symbol }, config) => ({ symbol, hasKey: Boolean(config.apiKey) }),
     }),
   ],
@@ -91,6 +105,9 @@ export default defineToolPlugin({
 - `execute` returns a plain string or JSON-serializable value; the helper
   wraps it as a text tool result with `details` set to the original
   (unstringified) return value.
+- `outputSchema` optionally describes that original `details` value for Code
+  Mode and Tool Search. Catalog calls reject an invalid schema before execution
+  and validate the final value before returning it.
 - For custom tool results, `openclaw/plugin-sdk/tool-results` exports
   `textResult` and `jsonResult`.
 - Tool names are static, so `openclaw plugins build` derives
@@ -134,10 +151,52 @@ export default definePluginEntry({
 
 - `id` must match your `openclaw.plugin.json` manifest.
 - External session catalogs use
-  `openclaw/plugin-sdk/session-catalog` and
-  `api.registerSessionCatalog({ id, label, list, read, continueSession?, archive? })`.
-  Core owns the `sessions.catalog.*` Gateway methods; providers return host,
-  session, and normalized transcript projections without registering RPCs.
+  `openclaw/plugin-sdk/session-catalog` and register a
+  `SessionCatalogProvider` with `api.registerSessionCatalog(...)`. Required
+  provider fields are `id`, `label`, `list`, and `read`; optional hooks are
+  `resolveCreateSession`, `continueSession`, `checkUpstreamActivity`, `archive`,
+  `openTerminal`, and `startTerminalSession`. Core owns the
+  `sessions.catalog.*` Gateway methods; providers return host, session,
+  transcript, and terminal-plan projections without registering RPCs. A list
+  provider should call the optional
+  `onHost(host)` callback as each host settles; the returned host array remains
+  required as the final compatibility snapshot.
+
+  CLI-backed catalogs that expose the same local-plus-paired-node shape can use
+  `createSessionCatalogFamily(...)`. The family composer owns canonical cursor
+  validation, node payload validation, host projection, adopted-session
+  projection, per-host publication, read routing, single-flight continuation,
+  and terminal plan routing. The provider must supply its local store reads,
+  identifiers and commands, error text, capability projection, continuation
+  availability and persistence operations, upstream-activity check, and terminal
+  executable/arguments. There are no default continuation, capability-mutation,
+  or terminal authorities. Use `createSessionCatalogNodeHostBindings(...)` to
+  build the matching list/read/terminal node commands and terminal-only invoke
+  policy from those explicit provider inputs.
+
+  The same entrypoint exports `sessionCatalogPaging`, which groups the bounded
+  list/read parameter parsers, canonical base64url cursor codec, and bounded
+  UTF-8 transcript pager. Providers pass their own identifier pattern and
+  validation messages into `parseReadParams(...)` and `parseListParams(...)`.
+
+  `resolveCreateSession({ agentId })` must return a config-derived model/runtime
+  target before OpenClaw advertises creation or calls `startTerminalSession`.
+  Use
+  [`api.runtime.agent.resolveSessionCatalogCreateTarget(...)`](/plugins/sdk-runtime#api-runtime-agent)
+  to apply the host's runtime and model-allowlist policy instead of duplicating
+  it.
+
+  `startTerminalSession({ agentId, cwd, initialMessage?, nodeId? })` creates a
+  fresh CLI terminal plan. Return either a local plan (`kind: "local"`, `argv`,
+  and the exact `cwd`, plus optional `env`, `pathEnv`, and `title`) or a paired-node
+  plan (`kind: "node"`, `nodeId`, `command`, `paramsJSON`, and the exact `cwd`).
+  The `sessions.catalog.startTerminal` RPC requires `operator.admin` plus
+  `gateway.cliAgents.enabled` and `gateway.terminal.enabled`. The caller
+  provisions `cwd`; the Gateway requires an existing absolute local directory,
+  rejects a changed plan cwd or host, and applies the normal agent-sandbox,
+  node-pairing, deadline, and connection-ownership checks before opening the
+  PTY.
+
 - `kind` is deprecated: declare an exclusive slot (`"memory"` or
   `"context-engine"`) in the `openclaw.plugin.json` manifest `kind` field
   instead. Runtime-entry `kind` remains only as a compatibility fallback for
@@ -151,13 +210,30 @@ export default definePluginEntry({
   startup config; command handlers should still validate availability when
   invoked.
 
+### Computer Use providers
+
+**Import:** `openclaw/plugin-sdk/computer-use`
+
+Node-local Computer Use plugins register one provider through
+`registerComputerUseProvider(api, provider)`. The helper owns the
+`screen.snapshot` and dangerous `computer.act` command registrations and the
+matching Gateway invoke policy; the provider owns availability, execution,
+serialization, frame state, driver lifecycle, and cleanup.
+
+The same entry point exports the canonical TypeBox schemas, static types, and
+compiled validators for the two command payloads and the snapshot result. A
+node host accepts one provider for the command pair; registering another
+provider conflicts with the existing command registration instead of creating
+a fallback stack.
+
 ## `defineChannelPluginEntry`
 
 **Import:** `openclaw/plugin-sdk/channel-core`
 
 Wraps `definePluginEntry` with channel-specific wiring: it automatically
 calls `api.registerChannel({ plugin })`, exposes an optional root-help CLI
-metadata seam, and gates `registerFull` on registration mode.
+metadata seam, and gates capability and full-runtime callbacks on registration
+mode.
 
 ```typescript
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
@@ -174,19 +250,23 @@ export default defineChannelPluginEntry({
   registerFull(api) {
     api.registerGatewayMethod(/* ... */);
   },
+  registerCapabilities(api) {
+    api.registerTranscriptSourceProvider(/* ... */);
+  },
 });
 ```
 
-| Field                 | Type                                                             | Required | Default             |
-| --------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
-| `id`                  | `string`                                                         | Yes      | -                   |
-| `name`                | `string`                                                         | Yes      | -                   |
-| `description`         | `string`                                                         | Yes      | -                   |
-| `plugin`              | `ChannelPlugin`                                                  | Yes      | -                   |
-| `configSchema`        | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
-| `setRuntime`          | `(runtime: PluginRuntime) => void`                               | No       | -                   |
-| `registerCliMetadata` | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
-| `registerFull`        | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
+| Field                  | Type                                                             | Required | Default             |
+| ---------------------- | ---------------------------------------------------------------- | -------- | ------------------- |
+| `id`                   | `string`                                                         | Yes      | -                   |
+| `name`                 | `string`                                                         | Yes      | -                   |
+| `description`          | `string`                                                         | Yes      | -                   |
+| `plugin`               | `ChannelPlugin`                                                  | Yes      | -                   |
+| `configSchema`         | `OpenClawPluginConfigSchema \| () => OpenClawPluginConfigSchema` | No       | Empty object schema |
+| `setRuntime`           | `(runtime: PluginRuntime) => void`                               | No       | -                   |
+| `registerCliMetadata`  | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
+| `registerFull`         | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
+| `registerCapabilities` | `(api: OpenClawPluginApi) => void`                               | No       | -                   |
 
 Callbacks run per registration mode (full table under
 [Registration mode](#registration-mode)):
@@ -201,10 +281,13 @@ Callbacks run per registration mode (full table under
   plugin loads.
 - `registerFull` runs only for `"full"` and `"tool-discovery"`. For
   `"tool-discovery"` it runs _instead of_ channel registration: OpenClaw
-  skips `registerChannel`/`setRuntime` entirely and calls only
-  `registerFull`, so any provider/tool registration your channel needs for
-  standalone tool discovery or execution must live there, not behind normal
-  channel setup.
+  skips `registerChannel`/`setRuntime` entirely and calls the full-runtime
+  callback followed by the capability callback. Keep tool registration in
+  `registerFull` and capability providers in `registerCapabilities`.
+- `registerCapabilities` runs for `"discovery"`, `"full"`, and
+  `"tool-discovery"`. Register inert advertised providers here so read-only
+  capability discovery can find them without starting sockets, clients,
+  workers, or services.
 - Discovery registration is non-activating, not import-free: OpenClaw may
   evaluate the trusted plugin entry and channel plugin module to build the
   snapshot. Keep top-level imports side-effect-free and put sockets,
@@ -219,8 +302,17 @@ CLI registration:
   parse tree. Descriptor names must match letters, numbers, hyphen, and
   underscore, starting with a letter or number; OpenClaw rejects other
   shapes and strips terminal control sequences from descriptions before
-  rendering help. Cover every top-level command root the registrar exposes.
+  rendering help. Cover every top-level command root the registrar exposes,
+  and declare the same name, description, and subcommand marker in the
+  plugin manifest's `cliCommands` field so root help does not import plugin code.
   `commands` alone stays on the eager compatibility path.
+- Root descriptors may define a synchronous, pure
+  `machineOutput({ argv, stdoutIsTTY })` resolver for JSON, JSONL, or other
+  machine-readable stdout modes that are not selected solely by `--json`.
+  Parse command tokens with `getRootOptionAwareCommandPath` from
+  `openclaw/plugin-sdk/cli-argv`. Keep the resolver in lightweight CLI metadata
+  and share it with full registration. Nested descriptors do not expose this
+  field.
 - Use `api.registerNodeCliFeature(...)` for paired-node feature commands so
   they land under `openclaw nodes` (equivalent to
   `registerCli(registrar, { parentPath: ["nodes"], ... })`).
@@ -247,17 +339,21 @@ import { defineSetupPluginEntry } from "openclaw/plugin-sdk/channel-core";
 export default defineSetupPluginEntry(myChannelPlugin);
 ```
 
-OpenClaw loads this instead of the full entry when a channel is disabled,
-unconfigured, or when deferred loading is enabled. See
+OpenClaw loads this instead of the full entry when a channel is disabled or
+unconfigured. See
 [Setup and Config](/plugins/sdk-setup#setup-entry) for when this matters.
 
 Pair `defineSetupPluginEntry(...)` with the narrow setup helper families:
 
-| Import                              | Use for                                                                                                                                                                            |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `openclaw/plugin-sdk/setup-runtime` | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
-| `openclaw/plugin-sdk/channel-setup` | Optional-install setup surfaces                                                                                                                                                    |
-| `openclaw/plugin-sdk/setup-tools`   | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
+| Import                                  | Use for                                                                                                                                                                            |
+| --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `openclaw/plugin-sdk/setup-runtime`     | Runtime-safe setup helpers: `createSetupTranslator`, import-safe setup patch adapters, lookup-note output, `promptResolvedAllowFrom`, `splitSetupEntries`, delegated setup proxies |
+| `openclaw/plugin-sdk/channel-setup`     | Optional-install setup surfaces                                                                                                                                                    |
+| `openclaw/plugin-sdk/channel-dm-policy` | Account-aware DM policy descriptors for setup flows                                                                                                                                |
+| `openclaw/plugin-sdk/setup-tools`       | Setup/install CLI, archive, and docs helpers                                                                                                                                       |
+| `openclaw/plugin-sdk/archive`           | Bounded archive extraction and single-entry reads                                                                                                                                  |
+| `openclaw/plugin-sdk/root-walk`         | Budgeted, root-bounded directory walking                                                                                                                                           |
+| `openclaw/plugin-sdk/secret-file`       | Pinned secret reads and first-writer-wins creation                                                                                                                                 |
 
 Keep heavy SDKs, CLI registration, and long-lived runtime services in the
 full entry.
@@ -294,23 +390,24 @@ export default defineBundledChannelSetupEntry({
 ```
 
 Use this only when a setup flow truly needs a lightweight runtime setter or
-setup-safe gateway surface before the full channel entry loads.
+setup-safe gateway surface for an unconfigured channel.
 `registerSetupRuntime` runs only for `"setup-runtime"` loads; keep it
-limited to config-only routes or methods that must exist before deferred
-full activation.
+limited to config-only routes or methods required by that setup flow.
 
 ## Registration mode
 
 `api.registrationMode` tells your plugin how it was loaded:
 
-| Mode               | When                                               | What to register                                                                                                        |
-| ------------------ | -------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- |
-| `"full"`           | Normal gateway startup                             | Everything                                                                                                              |
-| `"discovery"`      | Read-only capability discovery                     | Channel registration plus static CLI descriptors; entry code may load, but skip sockets, workers, clients, and services |
-| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Capability/tool registration only; no channel activation                                                                |
-| `"setup-only"`     | Disabled/unconfigured channel                      | Channel registration only                                                                                               |
-| `"setup-runtime"`  | Setup flow with runtime available                  | Channel registration plus only the lightweight runtime needed before the full entry loads                               |
-| `"cli-metadata"`   | Root help / CLI metadata capture                   | CLI descriptors only                                                                                                    |
+| Mode               | When                                               | Runtime     | What to register                                                                                                |
+| ------------------ | -------------------------------------------------- | ----------- | --------------------------------------------------------------------------------------------------------------- |
+| `"full"`           | Normal gateway startup                             | Live        | Everything                                                                                                      |
+| `"discovery"`      | Read-only capability discovery                     | Live        | Channel registration, static CLI descriptors, and inert providers; skip sockets, workers, clients, and services |
+| `"tool-discovery"` | Scoped load to list or run specific plugins' tools | Live        | Capability/tool registration only; no channel activation                                                        |
+| `"setup-only"`     | Disabled/unconfigured channel                      | Unavailable | Channel registration only                                                                                       |
+| `"setup-runtime"`  | Setup flow with runtime available                  | Live        | Channel registration plus only the lightweight runtime needed during setup                                      |
+| `"cli-metadata"`   | Root help / CLI metadata capture                   | Unavailable | CLI descriptors only                                                                                            |
+
+In `"cli-metadata"` and `"setup-only"` modes, accessing a runtime capability throws an error naming the plugin and mode. Defer runtime access out of `register()` or declare root commands in the manifest's `cliCommands` so CLI metadata can be collected without executing the plugin.
 
 `defineChannelPluginEntry` handles this split automatically. If you use
 `definePluginEntry` directly for a channel, check mode yourself and remember
@@ -389,6 +486,6 @@ Use `openclaw plugins inspect <id>` to see a plugin's shape.
 
 - [SDK Overview](/plugins/sdk-overview) - registration API and subpath reference
 - [Runtime Helpers](/plugins/sdk-runtime) - `api.runtime` and `createPluginRuntimeStore`
-- [Setup and Config](/plugins/sdk-setup) - manifest, setup entry, deferred loading
+- [Setup and Config](/plugins/sdk-setup) - manifest and setup entry loading
 - [Channel Plugins](/plugins/sdk-channel-plugins) - building the `ChannelPlugin` object
 - [Provider Plugins](/plugins/sdk-provider-plugins) - provider registration and hooks

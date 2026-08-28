@@ -91,6 +91,15 @@ describe("package-mac-dist plist validation", () => {
     expect(releaseBlock).not.toContain("*.debug");
   });
 
+  it("marks the distributed Control UI as an official release artifact", () => {
+    const script = readFileSync(scriptPath, "utf8");
+    const releaseMarkerIndex = script.indexOf("export OPENCLAW_CONTROL_UI_RELEASE_BUILD=1");
+    const packageAppIndex = script.indexOf('"$ROOT_DIR/scripts/package-mac-app.sh"');
+
+    expect(releaseMarkerIndex).toBeGreaterThanOrEqual(0);
+    expect(packageAppIndex).toBeGreaterThan(releaseMarkerIndex);
+  });
+
   it("does not mask canonical Sparkle build failures for release packaging", () => {
     const script = readFileSync(scriptPath, "utf8");
 
@@ -146,6 +155,17 @@ describe("package-mac-dist plist validation", () => {
     );
     chmodSync(path.join(toolsDir, "swift"), 0o755);
     writeFileSync(
+      path.join(toolsDir, "xcrun"),
+      [
+        "#!/usr/bin/env bash",
+        '[[ "${1:-}" == "xcodebuild" && "${2:-}" == "-version" ]] || exit 2',
+        "echo 'Xcode 26.4'",
+        "",
+      ].join("\n"),
+      "utf8",
+    );
+    chmodSync(path.join(toolsDir, "xcrun"), 0o755);
+    writeFileSync(
       path.join(toolsDir, "node"),
       [
         "#!/usr/bin/env bash",
@@ -164,7 +184,7 @@ describe("package-mac-dist plist validation", () => {
     `);
 
     expect(result.status).toBe(1);
-    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.2+");
+    expect(result.stderr).toContain("OpenClaw macOS app packaging requires Swift tools 6.3+");
     expect(result.stderr).toContain("Current Swift is 6.0");
     expect(result.stderr).not.toContain("node should not run before Swift preflight");
   });

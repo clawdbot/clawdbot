@@ -5,13 +5,15 @@ import path from "node:path";
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { parseSqliteSessionFileMarker } from "./legacy-sqlite-marker.js";
 import {
+  forkSessionEntryFromParentTarget,
   forkSessionFromParentTranscript,
+  loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
   replaceTranscriptEvents,
 } from "./session-accessor.js";
-import { formatSqliteSessionFileMarker, parseSqliteSessionFileMarker } from "./sqlite-marker.js";
 
 const roots: string[] = [];
 
@@ -56,11 +58,85 @@ async function persistChildEntry(params: {
   );
 }
 
+function openForkedChildSession(storePath: string, sessionId: string): SessionManager {
+  return SessionManager.open({
+    agentId: "main",
+    sessionId,
+    sessionKey: "agent:main:child",
+    storePath,
+  });
+}
+
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 
 describe("forkSessionFromParentTranscript", () => {
+  it("checks authority inside same- and cross-database transcript commits", async () => {
+    const root = await makeRoot("openclaw-parent-fork-guard-");
+    const storePath = path.join(root, "sessions.json");
+    const parentSessionId = "parent-guarded";
+    await seedParentTranscript({
+      storePath,
+      parentSessionId,
+      events: [
+        {
+          type: "session",
+          version: 3,
+          id: parentSessionId,
+          timestamp: "2026-08-18T00:00:00.000Z",
+          cwd: root,
+        },
+        {
+          type: "message",
+          id: "private-message",
+          parentId: null,
+          timestamp: "2026-08-18T00:00:01.000Z",
+          message: { role: "user", content: "private context" },
+        },
+      ],
+    });
+
+    for (const target of [
+      {
+        agentId: "main",
+        sessionId: "same-database-child",
+        sessionKey: "agent:main:guarded-child",
+        targetStorePath: undefined,
+      },
+      {
+        agentId: "work",
+        sessionId: "cross-database-child",
+        sessionKey: "agent:work:guarded-child",
+        targetStorePath: path.join(root, "work-sessions.json"),
+      },
+    ]) {
+      const commitGuard = () => {
+        throw new Error("session participation changed");
+      };
+      await expect(
+        forkSessionFromParentTranscript({
+          agentId: "main",
+          commitGuard,
+          parentEntry: { sessionId: parentSessionId, updatedAt: 1 },
+          parentSessionKey: "agent:main:main",
+          sessionKey: target.sessionKey,
+          storePath,
+          targetSessionId: target.sessionId,
+          ...(target.targetStorePath ? { targetStorePath: target.targetStorePath } : {}),
+        }),
+      ).rejects.toThrow("session participation changed");
+      await expect(
+        loadTranscriptEvents({
+          agentId: target.agentId,
+          sessionId: target.sessionId,
+          sessionKey: target.sessionKey,
+          storePath: target.targetStorePath ?? storePath,
+        }),
+      ).resolves.toEqual([]);
+    }
+  });
+
   it("forks the active branch without synchronously opening the session manager", async () => {
     const root = await makeRoot("openclaw-parent-fork-");
     const sessionsDir = path.join(root, "sessions");
@@ -139,7 +215,7 @@ describe("forkSessionFromParentTranscript", () => {
       throw new Error("Expected forked session");
     }
     const fork = forked.transcript;
-    expect(fork.sessionFile).toContain(sessionsDir);
+    expect(fork.sessionFile).toBe("agent:main:child");
     expect(fork.sessionId).not.toBe(parentSessionId);
     const forkedEntries = (await loadTranscriptEvents({
       agentId: "main",
@@ -147,16 +223,18 @@ describe("forkSessionFromParentTranscript", () => {
       sessionKey: "agent:main:child",
       storePath,
     })) as Record<string, unknown>[];
-    const expectedParentSessionFile = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId: parentSessionId,
-      storePath: parseSqliteSessionFileMarker(fork.sessionFile)!.storePath,
-    });
     const forkedHeader = forkedEntries[0];
     expect(forkedHeader?.type).toBe("session");
     expect(forkedHeader?.id).toBe(fork.sessionId);
     expect(forkedHeader?.cwd).toBe(cwd);
-    expect(forkedHeader?.parentSession).toBe(expectedParentSessionFile);
+    expect(
+      parseSqliteSessionFileMarker(
+        typeof forkedHeader?.parentSession === "string" ? forkedHeader.parentSession : undefined,
+      ),
+    ).toMatchObject({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
     expect(forkedEntries.map((entry) => entry.type)).toEqual([
       "session",
       "message",
@@ -276,7 +354,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = openForkedChildSession(storePath, fork.sessionId);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await loadTranscriptEvents({
       agentId: "main",
@@ -357,7 +435,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = openForkedChildSession(storePath, fork.sessionId);
     expect(reopened.buildSessionContext().messages).toHaveLength(2);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const records = (await loadTranscriptEvents({
@@ -433,7 +511,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = openForkedChildSession(storePath, fork.sessionId);
     expect(reopened.buildSessionContext().messages).toEqual([]);
     const continuedId = reopened.appendMessage({
       role: "user",
@@ -567,7 +645,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = openForkedChildSession(storePath, fork.sessionId);
     expect(reopened.buildSessionContext().messages).toHaveLength(1);
     reopened.appendMessage({ role: "user", content: "new root", timestamp: Date.now() });
     const records = (await loadTranscriptEvents({
@@ -647,7 +725,7 @@ describe("forkSessionFromParentTranscript", () => {
       sessionFile: fork.sessionFile,
       sessionId: fork.sessionId,
     });
-    const reopened = SessionManager.open(fork.sessionFile, sessionsDir);
+    const reopened = openForkedChildSession(storePath, fork.sessionId);
     expect(reopened.buildSessionContext().messages).toHaveLength(2);
     reopened.appendMessage({ role: "user", content: "continued", timestamp: Date.now() });
     const continuedRecords = (await loadTranscriptEvents({
@@ -704,14 +782,63 @@ describe("forkSessionFromParentTranscript", () => {
       storePath,
     })) as Record<string, unknown>[];
     expect(records).toHaveLength(1);
-    const expectedParentSessionFile = formatSqliteSessionFileMarker({
-      agentId: "main",
-      sessionId: parentSessionId,
-      storePath: parseSqliteSessionFileMarker(fork.sessionFile)!.storePath,
-    });
     const header = records[0];
     expect(header?.type).toBe("session");
     expect(header?.id).toBe(fork.sessionId);
-    expect(header?.parentSession).toBe(expectedParentSessionFile);
+    expect(
+      parseSqliteSessionFileMarker(
+        typeof header?.parentSession === "string" ? header.parentSession : undefined,
+      ),
+    ).toMatchObject({
+      agentId: "main",
+      sessionId: parentSessionId,
+    });
+  });
+
+  it("clears a reused child token snapshot after parent identity spread", async () => {
+    const root = await makeRoot("openclaw-parent-fork-reused-child-");
+    const storePath = path.join(root, "sessions.json");
+    const parentKey = "agent:main:main";
+    const childKey = "agent:main:child";
+    const parentSessionId = "parent-reused-child";
+    await replaceSessionEntry(
+      { sessionKey: parentKey, storePath },
+      { sessionId: parentSessionId, updatedAt: 1 },
+    );
+    await replaceSessionEntry(
+      { sessionKey: childKey, storePath },
+      {
+        sessionId: "old-child",
+        updatedAt: 1,
+        totalTokens: 88_876,
+        totalTokensFresh: true,
+        totalTokensVersion: 1,
+      },
+    );
+    await seedParentTranscript({
+      storePath,
+      parentSessionId,
+      events: [
+        { type: "session", version: 3, id: parentSessionId, timestamp: "2026-05-01T00:00:00Z" },
+        {
+          type: "message",
+          id: "parent-user",
+          parentId: null,
+          message: { role: "user", content: "fork me" },
+        },
+      ],
+    });
+
+    const result = await forkSessionEntryFromParentTarget({
+      storePath,
+      parentTarget: { canonicalKey: parentKey, storeKeys: [parentKey] },
+      sessionTarget: { canonicalKey: childKey, storeKeys: [childKey] },
+    });
+
+    expect(result.status).toBe("forked");
+    const childEntry = loadSessionEntry({ sessionKey: childKey, storePath });
+    expect(childEntry?.totalTokens).toBeUndefined();
+    expect(childEntry?.totalTokensFresh).toBe(false);
+    expect(childEntry?.totalTokensVersion).toBeUndefined();
   });
 });

@@ -54,18 +54,18 @@
         "api": "openai-completions",
         "models": [
           {
-            "id": "kilo/auto",
-            "name": "Kilo Auto",
+            "id": "kilo-auto/balanced",
+            "name": "Auto Balanced",
             "reasoning": true,
             "input": ["text", "image"],
             "cost": {
-              "input": 0,
-              "output": 0,
-              "cacheRead": 0,
-              "cacheWrite": 0
+              "input": 0.325,
+              "output": 1.95,
+              "cacheRead": 0.0325,
+              "cacheWrite": 0.40625
             },
             "contextWindow": 1000000,
-            "maxTokens": 128000
+            "maxTokens": 65536
           }
         ]
       }

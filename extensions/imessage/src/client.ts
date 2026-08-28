@@ -5,6 +5,7 @@ import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveUserPath } from "openclaw/plugin-sdk/text-utility-runtime";
+import { expandIMessageUserPath } from "./cli-path.js";
 import { DEFAULT_IMESSAGE_PROBE_TIMEOUT_MS } from "./constants.js";
 
 type IMessageRpcError = {
@@ -30,9 +31,21 @@ type IMessageRpcNotification = {
 type IMessageRpcClientOptions = {
   cliPath?: string;
   dbPath?: string;
+  remoteHost?: string;
   runtime?: RuntimeEnv;
   onNotification?: (msg: IMessageRpcNotification) => void;
 };
+
+export class IMessageRpcRequestError extends Error {
+  constructor(
+    message: string,
+    readonly code?: number,
+    readonly data?: unknown,
+  ) {
+    super(message);
+    this.name = "IMessageRpcRequestError";
+  }
+}
 
 type PendingRequest = {
   resolve: (value: unknown) => void;
@@ -42,6 +55,7 @@ type PendingRequest = {
 
 const PUBLIC_IMESSAGE_FULL_DISK_ACCESS_ERROR =
   "imsg cannot access ~/Library/Messages/chat.db. Grant Full Disk Access to the Gateway/launcher process and restart Gateway.";
+const IMESSAGE_RPC_CLOSE_GRACE_MS = 500;
 
 function isTestEnv(): boolean {
   if (process.env.NODE_ENV === "test") {
@@ -65,9 +79,13 @@ export class IMessageRpcClient {
   private readonly runtime?: RuntimeEnv;
   private readonly onNotification?: (msg: IMessageRpcNotification) => void;
   private readonly pending = new Map<string, PendingRequest>();
-  private readonly closed: Promise<void>;
-  private closedResolve: (() => void) | null = null;
+  private readonly terminal: Promise<Error>;
+  private terminalResolve: ((error: Error) => void) | null = null;
+  private readonly reaped: Promise<void>;
+  private reapedResolve: (() => void) | null = null;
+  private isReaped = false;
   private child: ChildProcessWithoutNullStreams | null = null;
+  private stopPromise: Promise<void> | null = null;
   private stdoutBuffer = "";
   private readonly stdoutDecoder = new StringDecoder("utf8");
   private stderrBuffer = "";
@@ -76,12 +94,18 @@ export class IMessageRpcClient {
   private publicProcessError: string | null = null;
 
   constructor(opts: IMessageRpcClientOptions = {}) {
-    this.cliPath = opts.cliPath?.trim() || "imsg";
-    this.dbPath = opts.dbPath?.trim() ? resolveUserPath(opts.dbPath) : undefined;
+    this.cliPath = expandIMessageUserPath(opts.cliPath?.trim() || "imsg");
+    const dbPath = opts.dbPath?.trim();
+    // An explicitly remote database belongs to the Messages Mac. Only local
+    // database paths are relative to the Gateway user's home directory.
+    this.dbPath = dbPath ? (opts.remoteHost?.trim() ? dbPath : resolveUserPath(dbPath)) : undefined;
     this.runtime = opts.runtime;
     this.onNotification = opts.onNotification;
-    this.closed = new Promise((resolve) => {
-      this.closedResolve = resolve;
+    this.terminal = new Promise((resolve) => {
+      this.terminalResolve = resolve;
+    });
+    this.reaped = new Promise((resolve) => {
+      this.reapedResolve = resolve;
     });
   }
 
@@ -118,16 +142,7 @@ export class IMessageRpcClient {
     // Every process/stdio error is terminal for this RPC transport. Settle the
     // client once and terminate a helper whose pipe failed; otherwise the
     // monitor can wait forever on an unusable child. #75438 covered stdin only.
-    const failFromProcessError = (err: unknown) => {
-      if (!this.finish(err instanceof Error ? err : new Error(String(err)))) {
-        return;
-      }
-      try {
-        child.kill("SIGTERM");
-      } catch {
-        // The helper may already be gone.
-      }
-    };
+    const failFromProcessError = (err: unknown) => this.failTransport(err, child);
     child.on("error", failFromProcessError);
     child.stdin.on("error", failFromProcessError);
     child.stdout.on("error", failFromProcessError);
@@ -139,38 +154,28 @@ export class IMessageRpcClient {
         // final split diagnostic can still provide its public recovery guidance.
         this.flushStdoutBuffer();
         this.flushStderrBuffer();
+        this.child = null;
       }
       this.finish(this.buildCloseError(code, signal));
+      this.markReaped();
     });
   }
 
   async stop(): Promise<void> {
-    if (!this.child) {
+    if (this.stopPromise) {
+      return await this.stopPromise;
+    }
+    const child = this.child;
+    if (!child) {
       return;
     }
-    this.stdoutBuffer = "";
-    this.stdoutDecoder.end();
-    this.stderrBuffer = "";
-    this.stderrDecoder.end();
-    this.child.stdin?.end();
-    const child = this.child;
-    this.child = null;
-
-    await Promise.race([
-      this.closed,
-      new Promise<void>((resolve) => {
-        setTimeout(() => {
-          if (!child.killed) {
-            child.kill("SIGTERM");
-          }
-          resolve();
-        }, 500);
-      }),
-    ]);
+    this.stopPromise = this.stopChild(child);
+    return await this.stopPromise;
   }
 
   async waitForClose(): Promise<void> {
-    await this.closed;
+    const error = await this.terminal;
+    throw error;
   }
 
   async request<T = unknown>(
@@ -209,20 +214,71 @@ export class IMessageRpcClient {
 
     // Reject the specific pending request on write error (e.g. EPIPE)
     // instead of letting it hang until timeout. (#75438)
-    this.child.stdin.write(line, (err) => {
-      if (err) {
-        const key = String(id);
-        const pending = this.pending.get(key);
-        if (pending) {
-          if (pending.timer) {
-            clearTimeout(pending.timer);
-          }
-          this.pending.delete(key);
-          pending.reject(err instanceof Error ? err : new Error(String(err)));
+    try {
+      this.child.stdin.write(line, (err) => {
+        if (err) {
+          this.failTransport(err, this.child);
         }
-      }
-    });
+      });
+    } catch (err) {
+      this.failTransport(err, this.child);
+    }
     return await response;
+  }
+
+  private async stopChild(child: ChildProcessWithoutNullStreams): Promise<void> {
+    try {
+      child.stdin.end();
+    } catch (err) {
+      this.failTransport(err, child);
+    }
+    if (await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS)) {
+      return;
+    }
+    this.signalChild(child, "SIGTERM");
+    if (await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS)) {
+      return;
+    }
+    this.signalChild(child, "SIGKILL");
+    if (!(await this.waitForReap(IMESSAGE_RPC_CLOSE_GRACE_MS))) {
+      throw new Error("imsg rpc did not exit after SIGKILL");
+    }
+  }
+
+  private async waitForReap(timeoutMs: number): Promise<boolean> {
+    if (this.isReaped) {
+      return true;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.reaped.then(() => true),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  private signalChild(child: ChildProcessWithoutNullStreams, signal: NodeJS.Signals): void {
+    try {
+      child.kill(signal);
+    } catch {
+      // The helper may have exited between the grace timer and the signal.
+    }
+  }
+
+  private failTransport(err: unknown, child: ChildProcessWithoutNullStreams | null): void {
+    if (!this.finish(err instanceof Error ? err : new Error(String(err)))) {
+      return;
+    }
+    if (child) {
+      this.signalChild(child, "SIGTERM");
+    }
   }
 
   private handleStdoutChunk(chunk: Buffer | string) {
@@ -329,7 +385,9 @@ export class IMessageRpcClient {
           }
         }
         const msg = suffixes.length > 0 ? `${baseMessage}: ${suffixes.join(" ")}` : baseMessage;
-        pending.reject(new Error(msg));
+        pending.reject(
+          new IMessageRpcRequestError(msg, typeof code === "number" ? code : undefined, details),
+        );
         return;
       }
       pending.resolve(parsed.result);
@@ -370,14 +428,24 @@ export class IMessageRpcClient {
   }
 
   private finish(err: Error): boolean {
-    const resolve = this.closedResolve;
+    const resolve = this.terminalResolve;
     if (!resolve) {
       return false;
     }
-    this.closedResolve = null;
+    this.terminalResolve = null;
     this.failAll(err);
-    resolve();
+    resolve(err);
     return true;
+  }
+
+  private markReaped(): void {
+    if (this.isReaped) {
+      return;
+    }
+    this.isReaped = true;
+    const resolve = this.reapedResolve;
+    this.reapedResolve = null;
+    resolve?.();
   }
 }
 

@@ -8,6 +8,21 @@ if (!MatrixConfigSchema) {
 }
 
 describe("MatrixConfigSchema SecretInput", () => {
+  it("preserves root and account join-introduction overrides without materializing defaults", () => {
+    const result = MatrixConfigSchema.safeParse({
+      joinIntro: false,
+      accounts: { work: { joinIntro: true, customField: 1 }, inherited: {} },
+    });
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        joinIntro: false,
+        accounts: { work: { joinIntro: true, customField: 1 }, inherited: {} },
+      });
+      expect(result.data).not.toHaveProperty("accounts.inherited.joinIntro");
+    }
+  });
+
   it("accepts SecretRef accessToken at top-level", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
@@ -98,6 +113,20 @@ describe("MatrixConfigSchema SecretInput", () => {
     });
   });
 
+  it.each(["groups", "rooms"] as const)("rejects unknown %s entry fields", (scope) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      [scope]: {
+        "!room:example.org": {
+          enabled: true,
+          unknownSetting: true,
+        },
+      },
+    });
+    expect(result.success).toBe(false);
+  });
+
   it("accepts nested quiet Matrix streaming mode with delivery controls", () => {
     const result = MatrixConfigSchema.safeParse({
       homeserver: "https://matrix.example.org",
@@ -133,6 +162,7 @@ describe("MatrixConfigSchema SecretInput", () => {
           label: "Shelling",
           maxLines: 4,
           toolProgress: false,
+          commandText: "status",
         },
         preview: {
           toolProgress: true,
@@ -140,5 +170,103 @@ describe("MatrixConfigSchema SecretInput", () => {
       },
     });
     expect(result.success).toBe(true);
+  });
+
+  it.each([
+    ["boolean streaming", { streaming: true }],
+    ["mode string streaming", { streaming: "progress" }],
+    ["streamMode", { streamMode: "progress" }],
+    ["chunkMode", { chunkMode: "newline" }],
+    ["blockStreaming", { blockStreaming: true }],
+    ["blockStreamingCoalesce", { blockStreamingCoalesce: { idleMs: 5 } }],
+    ["draftChunk", { draftChunk: { minChars: 10 } }],
+  ])("rejects retired account streaming input (%s) with a doctor pointer", (_name, input) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      accounts: { work: input },
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      // The channel-config wrapper reshapes failures into { issues }.
+      expect(JSON.stringify(result.issues)).toContain("doctor --fix");
+    }
+  });
+
+  it("keeps schema-open account entries with nested streaming objects", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      accounts: { work: { streaming: { mode: "progress" }, customField: 1 } },
+    });
+    expect(result.success).toBe(true);
+  });
+});
+
+describe("MatrixConfigSchema exec approvals", () => {
+  it.each([true, false, "auto"] as const)("accepts the shipped enabled mode %s", (enabled) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: {
+        enabled,
+        approvers: ["@owner:example.org"],
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({ execApprovals: { enabled } });
+    }
+  });
+
+  it("preserves omitted approval enablement without introducing a default", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { approvers: ["@owner:example.org"] },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        execApprovals: { approvers: ["@owner:example.org"] },
+      });
+      expect(result.data).not.toMatchObject({
+        execApprovals: { enabled: expect.anything() },
+      });
+    }
+  });
+
+  it("preserves the existing non-strict approval object", () => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: {
+        enabled: "auto",
+        approvers: ["@owner:example.org"],
+        unknownApprovalField: true,
+      },
+    });
+
+    expect(result.success).toBe(true);
+    if (result.success) {
+      expect(result.data).toMatchObject({
+        execApprovals: { enabled: "auto", approvers: ["@owner:example.org"] },
+      });
+      expect(result.data).not.toMatchObject({
+        execApprovals: { unknownApprovalField: true },
+      });
+    }
+  });
+
+  it.each(["on", "AUTO", 1, null])("rejects the invalid enabled mode %s", (enabled) => {
+    const result = MatrixConfigSchema.safeParse({
+      homeserver: "https://matrix.example.org",
+      accessToken: "token",
+      execApprovals: { enabled, approvers: ["@owner:example.org"] },
+    });
+
+    expect(result.success).toBe(false);
   });
 });

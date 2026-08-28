@@ -1,21 +1,25 @@
 // Memory Core provider module implements model/runtime integration.
 import type { MemoryPluginRuntime } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { resolveMemoryBackendConfig } from "openclaw/plugin-sdk/memory-core-host-runtime-files";
-import type { MemoryCoreAcquireLocalService } from "./memory/embedding-local-service.js";
+import { configureMemoryCoreDreamingState } from "./dreaming-state.js";
 import {
   closeAllMemorySearchManagers,
   closeMemorySearchManager,
   getMemorySearchManager,
 } from "./memory/index.js";
+import type { MemoryCoreRuntimeHost } from "./memory/runtime-host.js";
+import { classifyWorkspaceMemoryPaths } from "./workspace-path-classifier.js";
 
-export function createMemoryRuntime(
-  acquireLocalService?: MemoryCoreAcquireLocalService,
-): MemoryPluginRuntime {
+export function createMemoryRuntime(host: MemoryCoreRuntimeHost = {}): MemoryPluginRuntime {
+  if (host.openKeyedStore) {
+    configureMemoryCoreDreamingState(host.openKeyedStore);
+  }
+
   return {
     async getMemorySearchManager(params) {
       const { manager, debug, error } = await getMemorySearchManager({
         ...params,
-        ...(acquireLocalService ? { acquireLocalService } : {}),
+        ...(host.acquireLocalService ? { acquireLocalService: host.acquireLocalService } : {}),
       });
       return {
         manager,
@@ -26,6 +30,12 @@ export function createMemoryRuntime(
     resolveMemoryBackendConfig(params) {
       return resolveMemoryBackendConfig(params);
     },
+    async authorizeSearchHits(params) {
+      const { filterMemorySearchHitsBySessionVisibility } =
+        await import("./session-search-visibility.js");
+      return await filterMemorySearchHitsBySessionVisibility(params);
+    },
+    classifyWorkspaceMemoryPaths,
     async closeAllMemorySearchManagers() {
       await closeAllMemorySearchManagers();
     },

@@ -1,3 +1,5 @@
+import type { OpenClawConfig } from "../../config/config.js";
+import { runWithSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 /**
  * Manages context-engine lifecycle hooks for native agent harnesses.
  */
@@ -14,16 +16,35 @@ import type {
   ContextEngineRuntimeSettings,
   ContextEngineSessionTarget,
 } from "../../context-engine/types.js";
+import { runWithPreparedMemoryPromptSection } from "../../plugins/memory-state.js";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { runContextEngineMaintenance } from "../embedded-agent-runner/context-engine-maintenance.js";
 import {
   buildAfterTurnRuntimeContext,
   buildAfterTurnRuntimeContextFromUsage,
-} from "../embedded-agent-runner/run/attempt.prompt-helpers.js";
+} from "../embedded-agent-runner/run/attempt-prompt-helpers.js";
 import { stripRuntimeContextCustomMessages } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
-import type { SessionWriteLockAcquireTimeoutConfig } from "../session-write-lock.js";
 
 type HarnessContextEngine = ContextEngine;
+
+function preparePreTurnRuntimeContext(
+  runtimeContext: ContextEngineRuntimeContext | undefined,
+): ContextEngineRuntimeContext | undefined {
+  if (!runtimeContext?.rewriteTranscriptEntries) {
+    return runtimeContext;
+  }
+  const { rewriteTranscriptEntries: _rewriteTranscriptEntries, ...fenced } = runtimeContext;
+  return fenced;
+}
+
+function runWithHarnessContextEngineTranscriptFence<T>(
+  transcriptReadFence: UserTurnTranscriptAdmissionReceipt | undefined,
+  run: () => T,
+): T {
+  return runWithSessionTranscriptReadFence(transcriptReadFence, run);
+}
 
 type HarnessRuntimeSettingsParams = {
   runtimeSettings?: ContextEngineRuntimeSettings;
@@ -83,6 +104,7 @@ export async function bootstrapHarnessContextEngine(params: {
   sessionFile: string;
   sessionManager?: unknown;
   runtimeContext?: ContextEngineRuntimeContext;
+  transcriptReadFence?: UserTurnTranscriptAdmissionReceipt;
   runtimeSettings?: ContextEngineRuntimeSettings;
   contextEngineHostSupport?: ContextEngineHostSupport;
   harnessId?: string | null;
@@ -94,7 +116,7 @@ export async function bootstrapHarnessContextEngine(params: {
   fallbackReason?: string | null;
   degradedReason?: string | null;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
   warn: (message: string) => void;
 }): Promise<void> {
   if (
@@ -105,27 +127,30 @@ export async function bootstrapHarnessContextEngine(params: {
   }
   try {
     const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
-    if (typeof params.contextEngine?.bootstrap === "function") {
-      await params.contextEngine.bootstrap({
+    const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+    await runWithHarnessContextEngineTranscriptFence(params.transcriptReadFence, async () => {
+      if (typeof params.contextEngine?.bootstrap === "function") {
+        await params.contextEngine.bootstrap({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+          sessionTarget: params.sessionTarget,
+          sessionFile: params.sessionFile,
+          runtimeSettings,
+          runtimeContext,
+        });
+      }
+      await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
+        contextEngine: params.contextEngine,
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         sessionTarget: params.sessionTarget,
         sessionFile: params.sessionFile,
+        reason: "bootstrap",
+        sessionManager: params.sessionManager,
+        runtimeContext,
         runtimeSettings,
-        runtimeContext: params.runtimeContext,
+        config: params.config,
       });
-    }
-    await (params.runMaintenance ?? runHarnessContextEngineMaintenance)({
-      contextEngine: params.contextEngine,
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      sessionTarget: params.sessionTarget,
-      sessionFile: params.sessionFile,
-      reason: "bootstrap",
-      sessionManager: params.sessionManager,
-      runtimeContext: params.runtimeContext,
-      runtimeSettings,
-      config: params.config,
     });
   } catch (bootstrapErr) {
     params.warn(`context engine bootstrap failed: ${String(bootstrapErr)}`);
@@ -139,10 +164,12 @@ export async function assembleHarnessContextEngine(params: {
   contextEngine?: HarnessContextEngine;
   sessionId: string;
   sessionKey?: string;
+  agentId?: string;
   messages: AgentMessage[];
   tokenBudget?: number;
   availableTools?: Set<string>;
   citationsMode?: MemoryCitationsMode;
+  sandboxed?: boolean;
   modelId: string;
   prompt?: string;
   runtimeSettings?: ContextEngineRuntimeSettings;
@@ -155,24 +182,46 @@ export async function assembleHarnessContextEngine(params: {
   maxOutputTokens?: number | null;
   fallbackReason?: string | null;
   degradedReason?: string | null;
+  runtimeContext?: ContextEngineRuntimeContext;
+  transcriptReadFence?: UserTurnTranscriptAdmissionReceipt;
 }) {
   if (!params.contextEngine) {
     return undefined;
   }
-  const messages = stripRuntimeContextCustomMessages(params.messages);
+  const contextEngine = params.contextEngine;
+  const messages = stripRuntimeContextCustomMessages(params.messages).slice();
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
-  const result = await params.contextEngine.assemble({
-    sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
-    messages,
-    tokenBudget: params.tokenBudget,
-    ...(params.availableTools ? { availableTools: params.availableTools } : {}),
-    ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
-    model: params.modelId,
-    runtimeSettings,
-    ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
-  });
-  return ensureAssembleResultShape(result, params.contextEngine.info.id);
+  const runtimeContext = preparePreTurnRuntimeContext(params.runtimeContext);
+  const assemble = () =>
+    contextEngine.assemble({
+      sessionId: params.sessionId,
+      sessionKey: params.sessionKey,
+      messages,
+      tokenBudget: params.tokenBudget,
+      ...(params.availableTools ? { availableTools: params.availableTools } : {}),
+      ...(params.citationsMode ? { citationsMode: params.citationsMode } : {}),
+      model: params.modelId,
+      runtimeSettings,
+      runtimeContext,
+      ...(params.prompt !== undefined ? { prompt: params.prompt } : {}),
+    });
+  const result = await runWithHarnessContextEngineTranscriptFence(
+    params.transcriptReadFence,
+    async () =>
+      contextEngine.info.id === "legacy"
+        ? await assemble()
+        : await runWithPreparedMemoryPromptSection(
+            {
+              availableTools: new Set(params.availableTools),
+              citationsMode: params.citationsMode,
+              agentId: params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+              agentSessionKey: params.sessionKey,
+              sandboxed: params.sandboxed,
+            },
+            assemble,
+          ),
+  );
+  return ensureAssembleResultShape(result, contextEngine.info.id);
 }
 
 /**
@@ -238,12 +287,15 @@ export async function finalizeHarnessContextEngineTurn(params: {
   degradedReason?: string | null;
   runMaintenance?: typeof runHarnessContextEngineMaintenance;
   sessionManager?: unknown;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  config?: OpenClawConfig;
   warn: (message: string) => void;
   /** True when this turn belongs to a heartbeat run. */
   isHeartbeat?: boolean;
 }) {
   if (!params.contextEngine) {
+    return { postTurnFinalizationSucceeded: true };
+  }
+  if (params.promptError || params.aborted || params.yieldAborted) {
     return { postTurnFinalizationSucceeded: true };
   }
 
@@ -252,6 +304,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
     prePromptMessageCount: params.prePromptMessageCount,
   });
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
+  const runtimeContext = params.runtimeContext;
   let postTurnFinalizationSucceeded = true;
 
   if (typeof params.contextEngine.afterTurn === "function") {
@@ -265,7 +318,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
         prePromptMessageCount: conversationSnapshot.prePromptMessageCount,
         tokenBudget: params.tokenBudget,
         runtimeSettings,
-        runtimeContext: params.runtimeContext,
+        runtimeContext,
         isHeartbeat: params.isHeartbeat,
       });
     } catch (afterTurnErr) {
@@ -321,7 +374,7 @@ export async function finalizeHarnessContextEngineTurn(params: {
       sessionFile: params.sessionFile,
       reason: "turn",
       sessionManager: params.sessionManager,
-      runtimeContext: params.runtimeContext,
+      runtimeContext,
       runtimeSettings,
       config: params.config,
     });
@@ -389,7 +442,8 @@ export async function runHarnessContextEngineMaintenance(params: {
   degradedReason?: string | null;
   executionMode?: "foreground" | "background";
   onDeferredMaintenance?: (promise: Promise<void>) => void;
-  config?: SessionWriteLockAcquireTimeoutConfig;
+  withSessionManagerRewriteLock?: <T>(operation: () => Promise<T> | T) => Promise<T>;
+  config?: OpenClawConfig;
 }) {
   const runtimeSettings = buildHarnessContextEngineRuntimeSettings(params);
   return await runContextEngineMaintenance({
@@ -402,6 +456,7 @@ export async function runHarnessContextEngineMaintenance(params: {
     sessionManager: params.sessionManager as Parameters<
       typeof runContextEngineMaintenance
     >[0]["sessionManager"],
+    withSessionManagerRewriteLock: params.withSessionManagerRewriteLock,
     runtimeContext: params.runtimeContext,
     runtimeSettings,
     executionMode: params.executionMode,

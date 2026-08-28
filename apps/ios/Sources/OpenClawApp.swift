@@ -14,7 +14,41 @@ private struct PendingWatchPromptAction {
     var gatewayStableID: String?
 }
 
-private typealias PendingExecApprovalPrompt = ExecApprovalNotificationPrompt
+private typealias PendingExecApprovalPrompt = ApprovalNotificationPrompt
+
+/// BackgroundTasks expires on a background queue; settle there before a delayed
+/// main-actor waiter can report success or complete the same delivery twice.
+final class BackgroundWakeRefreshAttempt: @unchecked Sendable {
+    private let lock = NSLock()
+    private var wakeTask: Task<Bool, Never>?
+    private var completion: ((Bool) -> Void)?
+
+    init(wakeTask: Task<Bool, Never>, completion: @escaping (Bool) -> Void) {
+        self.wakeTask = wakeTask
+        self.completion = completion
+    }
+
+    func complete(success: Bool) {
+        self.lock.lock()
+        guard let completion = self.completion else {
+            self.lock.unlock()
+            return
+        }
+        self.completion = nil
+        let wakeTask = self.wakeTask
+        self.wakeTask = nil
+        self.lock.unlock()
+
+        if !success {
+            wakeTask?.cancel()
+        }
+        completion(success)
+    }
+
+    func expire() {
+        self.complete(success: false)
+    }
+}
 
 @MainActor
 enum OpenClawAppModelRegistry {
@@ -39,7 +73,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         return bundleId
     }
 
-    private var backgroundWakeTask: Task<Bool, Never>?
+    private var backgroundWakeAttempt: BackgroundWakeRefreshAttempt?
     private var pendingAPNsDeviceToken: Data?
     private var pendingWatchPromptActions: [PendingWatchPromptAction] = []
     private var pendingExecApprovalPrompts: [PendingExecApprovalPrompt] = []
@@ -134,7 +168,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         self.registerBackgroundWakeRefreshTask()
         let notificationCenter = UNUserNotificationCenter.current()
         notificationCenter.delegate = self
-        ExecApprovalNotificationBridge.registerCategory(center: notificationCenter)
+        ApprovalNotificationBridge.registerCategories(center: notificationCenter)
         Task { @MainActor in
             await self.registerForRemoteNotificationsIfEnrollmentReady(application)
         }
@@ -142,9 +176,9 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     }
 
     func application(
-        _ app: UIApplication,
+        _: UIApplication,
         open url: URL,
-        options: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool
+        options _: [UIApplication.OpenURLOptionsKey: Any] = [:]) -> Bool
     {
         guard DeepLinkParser.parse(url) != nil else { return false }
         guard let model = resolvedAppModel() else {
@@ -211,7 +245,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
     {
         self.logger.info("APNs remote notification received keys=\(userInfo.keys.count, privacy: .public)")
         Task { @MainActor in
-            if let push = ExecApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
+            if let push = ApprovalNotificationBridge.parseResolvedPush(userInfo: userInfo) {
                 if let appModel = self.resolvedAppModel() {
                     let handled = await appModel.handleExecApprovalResolvedRemotePush(push)
                     completionHandler(handled ? .newData : .noData)
@@ -222,7 +256,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 return
             }
             guard let appModel = self.resolvedAppModel() else {
-                if let push = ExecApprovalNotificationBridge.parseRequestedPush(userInfo: userInfo) {
+                if let push = ApprovalNotificationBridge.parseRequestedPush(userInfo: userInfo) {
                     self.pendingExecApprovalRequestedPushes.append(push)
                 }
                 self.logger.info("APNs wake skipped: appModel unavailable")
@@ -230,12 +264,12 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
                 completionHandler(.noData)
                 return
             }
-            let handled = await appModel.handleSilentPushWake(userInfo)
-            self.logger.info("APNs wake handled=\(handled, privacy: .public)")
-            if !handled {
+            let result = await appModel.handleSilentPushWake(userInfo)
+            self.logger.info("APNs wake handled=\(result.handled, privacy: .public)")
+            if !result.handled {
                 self.scheduleBackgroundWakeRefresh(afterSeconds: 90, reason: "silent_push_not_applied")
             }
-            completionHandler(handled ? .newData : .noData)
+            completionHandler(result == .newData ? .newData : .noData)
         }
     }
 
@@ -280,19 +314,22 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
 
     private func handleBackgroundWakeRefresh(task: BGAppRefreshTask) {
         self.scheduleBackgroundWakeRefresh(afterSeconds: 15 * 60, reason: "reschedule")
-        self.backgroundWakeTask?.cancel()
+        self.backgroundWakeAttempt?.expire()
 
         let wakeTask = Task { @MainActor [weak self] in
             guard let self, let appModel = self.resolvedAppModel() else { return false }
             return await appModel.handleBackgroundRefreshWake(trigger: "bg_app_refresh")
         }
-        self.backgroundWakeTask = wakeTask
+        let attempt = BackgroundWakeRefreshAttempt(wakeTask: wakeTask) { success in
+            task.setTaskCompleted(success: success)
+        }
+        self.backgroundWakeAttempt = attempt
         task.expirationHandler = {
-            wakeTask.cancel()
+            attempt.expire()
         }
         Task {
             let applied = await wakeTask.value
-            task.setTaskCompleted(success: applied)
+            attempt.complete(success: applied)
             self.backgroundWakeLogger.info(
                 "Background wake refresh finished applied=\(applied, privacy: .public)")
         }
@@ -363,10 +400,10 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             gatewayStableID: gatewayStableID)
     }
 
-    private static func parseExecApprovalPrompt(
+    private static func parseApprovalPrompt(
         from response: UNNotificationResponse) -> PendingExecApprovalPrompt?
     {
-        ExecApprovalNotificationBridge.parsePrompt(
+        ApprovalNotificationBridge.parsePrompt(
             actionIdentifier: response.actionIdentifier,
             userInfo: response.notification.request.content.userInfo)
     }
@@ -385,7 +422,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         _ = await appModel.handleBackgroundRefreshWake(trigger: "watch_prompt_action")
     }
 
-    private func routeExecApprovalPrompt(_ prompt: PendingExecApprovalPrompt) {
+    private func routeApprovalPrompt(_ prompt: PendingExecApprovalPrompt) {
         guard let appModel = resolvedAppModel() else {
             self.pendingExecApprovalPrompts.append(prompt)
             return
@@ -403,6 +440,7 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
         let userInfo = notification.request.content.userInfo
         if Self.isWatchPromptNotification(userInfo)
             || ExecApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
+            || PluginApprovalNotificationBridge.shouldPresentNotification(userInfo: userInfo)
         {
             completionHandler([.banner, .list, .sound])
             return
@@ -426,13 +464,13 @@ final class OpenClawAppDelegate: NSObject, UIApplicationDelegate, @preconcurrenc
             }
             return
         }
-        if let prompt = Self.parseExecApprovalPrompt(from: response) {
+        if let prompt = Self.parseApprovalPrompt(from: response) {
             Task { @MainActor [weak self] in
                 guard let self else {
                     completionHandler()
                     return
                 }
-                self.routeExecApprovalPrompt(prompt)
+                self.routeApprovalPrompt(prompt)
                 completionHandler()
             }
             return
@@ -671,6 +709,7 @@ struct OpenClawApp: App {
     @State private var appearanceModel: AppAppearanceModel
     @State private var appModel: NodeAppModel
     @State private var gatewayController: GatewayConnectionController
+    @State private var voiceLiveActivityCoordinator: VoiceLiveActivityCoordinator
     @UIApplicationDelegateAdaptor(OpenClawAppDelegate.self) private var appDelegate
     @Environment(\.scenePhase) private var scenePhase
 
@@ -700,6 +739,7 @@ struct OpenClawApp: App {
         OpenClawAppModelRegistry.appModel = appModel
         _appearanceModel = State(initialValue: AppAppearanceModel())
         _appModel = State(initialValue: appModel)
+        _voiceLiveActivityCoordinator = State(initialValue: VoiceLiveActivityCoordinator())
         _gatewayController = State(
             initialValue: GatewayConnectionController(
                 appModel: appModel,
@@ -718,11 +758,19 @@ struct OpenClawApp: App {
                 .environment(self.appModel.voiceWake)
                 .environment(self.gatewayController)
                 .task {
+                    if !Self.screenshotModeEnabled {
+                        self.voiceLiveActivityCoordinator.start(appModel: self.appModel)
+                    }
                     self.appModel.setScenePhase(self.scenePhase)
                     self.appDelegate.appModel = self.appModel
                     self.appDelegate.scenePhaseChanged(self.scenePhase)
                     self.applyWindowTint()
                     self.gatewayController.setScenePhase(self.scenePhase)
+                    #if DEBUG
+                    if Self.liveActivityVoicePreviewEnabled {
+                        LiveActivityManager.shared.startVoicePreview()
+                    }
+                    #endif
                 }
                 .onReceive(
                     NotificationCenter.default.publisher(for: UIContentSizeCategory.didChangeNotification),
@@ -754,6 +802,14 @@ struct OpenClawApp: App {
     private static var screenshotNotificationGuidanceEnabled: Bool {
         #if DEBUG
         ProcessInfo.processInfo.arguments.contains("--openclaw-screenshot-notification-guidance")
+        #else
+        false
+        #endif
+    }
+
+    private static var liveActivityVoicePreviewEnabled: Bool {
+        #if DEBUG
+        ProcessInfo.processInfo.arguments.contains("--openclaw-live-activity-voice-preview")
         #else
         false
         #endif

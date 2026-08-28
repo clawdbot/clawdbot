@@ -56,23 +56,27 @@ import Testing
         #expect(entry == dist.path)
     }
 
-    @Test func `log locator picks newest log file`() throws {
+    @MainActor
+    @Test func `log locator picks newest log file`() async throws {
         let fm = FileManager()
-        let dir = URL(fileURLWithPath: "/tmp/openclaw", isDirectory: true)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dir = fm.temporaryDirectory
+            .appendingPathComponent("openclaw-log-locator-\(UUID().uuidString)", isDirectory: true)
+        defer { try? fm.removeItem(at: dir) }
 
-        let older = dir.appendingPathComponent("openclaw-old-\(UUID().uuidString).log")
-        let newer = dir.appendingPathComponent("openclaw-new-\(UUID().uuidString).log")
-        fm.createFile(atPath: older.path, contents: Data("old".utf8))
-        fm.createFile(atPath: newer.path, contents: Data("new".utf8))
-        try fm.setAttributes([.modificationDate: Date(timeIntervalSinceNow: -100)], ofItemAtPath: older.path)
-        try fm.setAttributes([.modificationDate: Date()], ofItemAtPath: newer.path)
+        try await TestIsolation.withEnvValues(["OPENCLAW_LOG_DIR": dir.path]) {
+            try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+            let older = dir.appendingPathComponent("openclaw-old-\(UUID().uuidString).log")
+            let newer = dir.appendingPathComponent("openclaw-new-\(UUID().uuidString).log")
+            fm.createFile(atPath: older.path, contents: Data("old".utf8))
+            fm.createFile(atPath: newer.path, contents: Data("new".utf8))
+            try fm.setAttributes(
+                [.modificationDate: Date(timeIntervalSinceNow: -100)],
+                ofItemAtPath: older.path)
+            try fm.setAttributes([.modificationDate: Date()], ofItemAtPath: newer.path)
 
-        let best = LogLocator.bestLogFile()
-        #expect(best?.lastPathComponent == newer.lastPathComponent)
-
-        try? fm.removeItem(at: older)
-        try? fm.removeItem(at: newer)
+            let best = LogLocator.bestLogFile()
+            #expect(best?.lastPathComponent == newer.lastPathComponent)
+        }
     }
 
     @Test func `gateway entrypoint nil when missing`() {

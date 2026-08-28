@@ -5,6 +5,10 @@ PR_OPERATION_LOCK_CANDIDATE_PR=""
 PR_OPERATION_LOCK_CANDIDATE_OID=""
 PR_OPERATION_LOCK_BLOCKED_OID=""
 PR_OPERATION_LOCK_BLOCKED_REASON=""
+PR_OPERATION_COMPLETION_LEADER_PID=""
+# This is monotonic for one supervised command. Once side effects begin, a
+# descendant must not be able to reopen the auto-release validation window.
+PR_OPERATION_VALIDATION_PHASE_STATE=unannounced
 
 is_canonical_pr_number() {
   local pr="$1"
@@ -121,6 +125,69 @@ clear_pr_operation_lock_state() {
   PR_OPERATION_LOCK_CANDIDATE_OID=""
   PR_OPERATION_LOCK_BLOCKED_OID=""
   PR_OPERATION_LOCK_BLOCKED_REASON=""
+  PR_OPERATION_VALIDATION_PHASE_STATE=unannounced
+}
+
+notify_pr_operation_phase() {
+  local phase="$1"
+  if [ -z "${OPENCLAW_PR_LOCK_NOTIFY_FD:-}" ]; then
+    return 0
+  fi
+  case "$OPENCLAW_PR_LOCK_NOTIFY_FD" in ''|*[!0-9]*) return 1 ;; esac
+  printf 'phase\t%s\n' "$phase" >&"$OPENCLAW_PR_LOCK_NOTIFY_FD"
+}
+
+finish_pr_operation_completion() {
+  local operation_status="$1"
+  trap - EXIT
+  trap '' PIPE
+  # macOS system Bash 3.2 has no BASHPID. $$ identifies the top-level shell,
+  # while BASH_SUBSHELL fences forked subshells that retain the same $$.
+  if [ "${BASH_SUBSHELL:-0}" -eq 0 ] &&
+    [ "$$" = "$PR_OPERATION_COMPLETION_LEADER_PID" ]
+  then
+    notify_pr_operation_phase operation-complete 2>/dev/null || :
+  fi
+  exit "$operation_status"
+}
+
+install_pr_operation_completion_trap() {
+  [ -z "$PR_OPERATION_COMPLETION_LEADER_PID" ] || return 0
+  PR_OPERATION_COMPLETION_LEADER_PID="$$"
+  trap 'finish_pr_operation_completion "$?"' EXIT
+}
+
+# Only the runner's direct process-group leader may mint completion. Descendants
+# retain fd 3 as a diagnostic tripwire but cannot install this EXIT trap.
+if [ "${OPENCLAW_PR_DEDICATED_PROCESS_GROUP:-}" = "1" ]; then
+  if [ "${OPENCLAW_PR_LOCK_NOTIFY_FD:-}" = "3" ] &&
+    [ "${OPENCLAW_PR_LOCK_SUPERVISOR_PID:-}" = "$PPID" ] &&
+    [ "${BASH_SUBSHELL:-0}" -eq 0 ]
+  then
+    pr_operation_entry_pgid=$(ps -o pgid= -p "$$" 2>/dev/null || true)
+    pr_operation_entry_pgid="${pr_operation_entry_pgid//[[:space:]]/}"
+    if [ "$pr_operation_entry_pgid" = "$$" ]; then
+      install_pr_operation_completion_trap
+    fi
+    unset pr_operation_entry_pgid
+  fi
+  unset OPENCLAW_PR_DEDICATED_PROCESS_GROUP
+fi
+
+begin_pr_operation_validation_phase() {
+  if [ "$PR_OPERATION_VALIDATION_PHASE_STATE" != "unannounced" ]; then
+    return 0
+  fi
+  notify_pr_operation_phase validation-started || return 1
+  PR_OPERATION_VALIDATION_PHASE_STATE=validation
+}
+
+mark_pr_operation_side_effects_started() {
+  if [ "$PR_OPERATION_VALIDATION_PHASE_STATE" != "validation" ]; then
+    return 0
+  fi
+  notify_pr_operation_phase side-effects-started || return 1
+  PR_OPERATION_VALIDATION_PHASE_STATE=side_effects
 }
 
 pr_operation_lock_owner_is_current() {

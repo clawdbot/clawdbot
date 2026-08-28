@@ -18,11 +18,16 @@ Results are meant to be pasted into other commands, especially `openclaw message
 - `--account <id>`: account id (default: channel default)
 - `--json`: output JSON
 
-Default (non-JSON) output is `id` (and sometimes `name`) separated by a tab.
+Default output renders IDs and names in a table. Empty list results name the channel and account
+that were queried; JSON list output uses an empty array (`[]`). Failures exit nonzero and use the
+canonical `{ "ok": false, "error": { "type": "cli_error", "message": "..." } }` envelope in
+JSON mode.
 
 ## Notes
 
 - For many channels, results are config-backed (allowlists / configured groups) rather than a live provider directory.
+- Before a live lookup, OpenClaw resolves configured SecretRefs only for the selected channel and account. Resolved credentials remain runtime-only; plugin installation and auto-enable writes preserve the authored references without persisting runtime defaults.
+- WhatsApp group listing is live. Gateway lookups reuse its owned connection; a standalone command opens the linked session only when no other process owns that account and otherwise reports that live groups are unavailable.
 - An already-installed channel plugin can lack directory support. In that case the command reports the unsupported operation; it does not try to reinstall or upgrade the plugin to add support.
 
 ## Using results with `message send`
@@ -50,6 +55,32 @@ openclaw message send --channel slack --target user:U012ABCDEF --message "hello"
 
 ```bash
 openclaw directory self --channel zalouser
+```
+
+A channel may legitimately return no self identity. This is a successful empty result (exit code
+`0`), not a failed lookup. Channels without a self resolver report that the channel does not expose
+a self identity, without suggesting account troubleshooting:
+
+```json
+{
+  "status": "unavailable",
+  "channel": "telegram",
+  "accountId": "default",
+  "reason": "self-identity-unsupported"
+}
+```
+
+When a channel implements self lookup but returns no identity, the text output names the channel and
+account and suggests checking its configuration and authentication. JSON callers can distinguish
+that case by its reason:
+
+```json
+{
+  "status": "unavailable",
+  "channel": "msteams",
+  "accountId": "default",
+  "reason": "plugin-returned-no-self-identity"
+}
 ```
 
 ## Peers (contacts/users)

@@ -24,7 +24,7 @@ jobs:
       autoscrub-repository: ${{ steps.guard.outputs.autoscrub-repository }}
     steps:
       - name: Check out trusted base workflow scripts
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
@@ -49,7 +49,7 @@ jobs:
       pull-requests: read
     steps:
       - name: Check out trusted base workflow scripts
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false
@@ -57,7 +57,7 @@ jobs:
       - name: Create autoscrub app token
         id: app-token
         continue-on-error: true
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: "2729701"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
@@ -69,7 +69,7 @@ jobs:
         id: app-token-fallback
         continue-on-error: true
         if: steps.app-token.outcome == 'failure'
-        uses: actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3 # v3.1.1
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
         with:
           app-id: "2971289"
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY_FALLBACK }}
@@ -95,7 +95,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - name: Check out trusted base workflow scripts
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.base.sha }}
           persist-credentials: false

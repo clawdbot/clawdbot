@@ -1,16 +1,23 @@
 // Slack plugin module implements actions behavior.
 import type { Block, KnownBlock, WebClient } from "@slack/web-api";
+import { normalizeAccountId } from "openclaw/plugin-sdk/account-resolution";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
-import { resolveSlackAccount } from "./accounts.js";
+import { resolveDefaultSlackAccountId, resolveSlackAccount } from "./accounts.js";
+import { SLACK_PRIVATE_ACTION_DELIVERY_RESULT } from "./action-threading.js";
 import type { SlackAuthoredTextPlacement } from "./authored-text.js";
 import { buildSlackBlocksFallbackText } from "./blocks-fallback.js";
 import { validateSlackBlocksArray } from "./blocks-input.js";
 import { createSlackLookupClient, getSlackWriteClient } from "./client.js";
+import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { buildSlackEditTextPayload } from "./edit-text.js";
-import { SLACK_EDIT_TEXT_LIMIT } from "./limits.js";
+import { normalizeSlackOutboundText } from "./format.js";
+import { SLACK_EDIT_TEXT_MAX_BYTES } from "./limits.js";
+import { hasSlackMessageTableBlock, resolveSlackMessageText } from "./monitor/block-text.js";
 import { resolveSlackMedia } from "./monitor/media.js";
 import type { SlackMediaResult } from "./monitor/media.js";
 import { escapeSlackMrkdwn } from "./monitor/mrkdwn.js";
@@ -23,12 +30,14 @@ import {
 import { buildSlackNativeDataDeliveryPlan } from "./native-data-fallback.js";
 import { sendMessageSlack } from "./send.js";
 import { resolveSlackBotToken } from "./token.js";
-import { truncateSlackText } from "./truncate.js";
+import { countSlackTextUtf8Bytes, truncateSlackTextByUtf8Bytes } from "./truncate.js";
+import type { SlackAttachment } from "./types.js";
 
 export type SlackActionClientOpts = {
   cfg?: OpenClawConfig;
   accountId?: string;
   token?: string;
+  teamId?: string;
   client?: WebClient;
 };
 
@@ -37,6 +46,8 @@ export type SlackMessageSummary = {
   text?: string;
   user?: string;
   thread_ts?: string;
+  blocks?: unknown[];
+  attachments?: SlackAttachment[];
   reply_count?: number;
   reactions?: Array<{
     name?: string;
@@ -50,6 +61,14 @@ export type SlackMessageSummary = {
     mimetype?: string;
   }>;
 };
+
+function renderSlackReadMessageText(message: SlackMessageSummary): SlackMessageSummary {
+  if (!hasSlackMessageTableBlock(message)) {
+    return message;
+  }
+  const text = resolveSlackMessageText(message, { preserveMessageTextWhitespace: true });
+  return text && text !== message.text ? { ...message, text } : message;
+}
 
 export type SlackPin = {
   type?: string;
@@ -200,8 +219,18 @@ async function getClient(opts: SlackActionClientOpts = {}, mode: "read" | "write
   if (opts.client) {
     return opts.client;
   }
+  const accountId = opts.cfg
+    ? resolveSlackAccount({
+        cfg: requireRuntimeConfig(opts.cfg, "Slack actions"),
+        accountId: opts.accountId,
+      }).accountId
+    : normalizeAccountId(opts.accountId);
+  assertSlackDetachedTargetAllowed(accountId, opts.teamId);
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
-  return mode === "write" ? getSlackWriteClient(token) : createSlackLookupClient(token);
+  if (mode === "write") {
+    return getSlackWriteClient(token, { teamId: opts.teamId });
+  }
+  return createSlackLookupClient(token, { teamId: opts.teamId });
 }
 
 async function resolveBotUserId(client: WebClient) {
@@ -308,6 +337,7 @@ export async function sendSlackMessage(
   opts: Omit<SlackActionClientOpts, "cfg"> & {
     cfg: OpenClawConfig;
     mediaUrl?: string;
+    forceDocument?: boolean;
     mediaAccess?: {
       localRoots?: readonly string[];
       readFile?: (filePath: string) => Promise<Buffer>;
@@ -325,11 +355,16 @@ export async function sendSlackMessage(
     textIsSlackPlainText?: boolean;
   },
 ) {
+  const onDeliveryResult = Object.getOwnPropertyDescriptor(
+    opts,
+    SLACK_PRIVATE_ACTION_DELIVERY_RESULT,
+  )?.value;
   return await sendMessageSlack(to, content, {
     accountId: opts.accountId,
     cfg: opts.cfg,
     token: opts.token,
     mediaUrl: opts.mediaUrl,
+    ...(opts.forceDocument ? { forceDocument: true } : {}),
     mediaAccess: opts.mediaAccess,
     mediaLocalRoots: opts.mediaLocalRoots,
     mediaReadFile: opts.mediaReadFile,
@@ -344,11 +379,26 @@ export async function sendSlackMessage(
       : {}),
     ...(opts.uploadFileName ? { uploadFileName: opts.uploadFileName } : {}),
     ...(opts.uploadTitle ? { uploadTitle: opts.uploadTitle } : {}),
+    ...(typeof onDeliveryResult === "function" ? { onDeliveryResult } : {}),
     blocks: opts.blocks,
   });
 }
 
 export async function editSlackMessage(
+  channelId: string,
+  messageId: string,
+  content: string,
+  opts: SlackActionClientOpts & { blocks?: (Block | KnownBlock)[] } = {},
+) {
+  const accountId =
+    opts.accountId ?? (opts.cfg ? resolveDefaultSlackAccountId(opts.cfg) : undefined);
+  const tableMode = resolveMarkdownTableMode({ cfg: opts.cfg, channel: "slack", accountId });
+  const text = normalizeSlackOutboundText(content, { tableMode });
+  await editSlackRenderedMessage(channelId, messageId, text, opts);
+}
+
+// Finalized previews already contain Slack mrkdwn; a second Markdown render changes its meaning.
+export async function editSlackRenderedMessage(
   channelId: string,
   messageId: string,
   content: string,
@@ -361,14 +411,16 @@ export async function editSlackMessage(
   const nativeFallbackText = hasNativeData
     ? appendSlackNativeDataFallbackText(editText, blocks)
     : editText;
-  if (hasNativeData && nativeFallbackText.length > SLACK_EDIT_TEXT_LIMIT) {
+  if (hasNativeData && countSlackTextUtf8Bytes(nativeFallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
     throw new Error(
-      `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
+      `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
     );
   }
-  const text = hasNativeData
-    ? truncateSlackText(nativeFallbackText, SLACK_EDIT_TEXT_LIMIT)
-    : nativeFallbackText;
+  // buildSlackEditTextPayload owns normalization; do not re-trim an edit that already fits.
+  const text =
+    countSlackTextUtf8Bytes(nativeFallbackText) <= SLACK_EDIT_TEXT_MAX_BYTES
+      ? nativeFallbackText
+      : truncateSlackTextByUtf8Bytes(nativeFallbackText, SLACK_EDIT_TEXT_MAX_BYTES);
   const update = {
     channel: channelId,
     ts: messageId,
@@ -398,21 +450,21 @@ export async function editSlackMessage(
       );
     }
     const fallback = fallbackPlan.fallbackMessages[0];
-    if (!fallback || fallback.text.length > SLACK_EDIT_TEXT_LIMIT) {
+    if (!fallback || countSlackTextUtf8Bytes(fallback.text) > SLACK_EDIT_TEXT_MAX_BYTES) {
       throw new Error(
-        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
+        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
         { cause: error },
       );
     }
     const fallbackText = fallback.blocks
       ? escapeSlackMrkdwn(fallback.text)
-      : truncateSlackText(
+      : truncateSlackTextByUtf8Bytes(
           appendSlackNativeDataFallbackText(editText, blocks),
-          SLACK_EDIT_TEXT_LIMIT,
+          SLACK_EDIT_TEXT_MAX_BYTES,
         );
-    if (fallbackText.length > SLACK_EDIT_TEXT_LIMIT) {
+    if (countSlackTextUtf8Bytes(fallbackText) > SLACK_EDIT_TEXT_MAX_BYTES) {
       throw new Error(
-        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_LIMIT)}-character edit limit. Send a new message instead.`,
+        `Slack native chart or table fallback exceeds the ${String(SLACK_EDIT_TEXT_MAX_BYTES)}-byte edit limit. Send a new message instead.`,
         { cause: error },
       );
     }
@@ -462,7 +514,7 @@ export async function readSlackMessages(
     ? {
         inclusive: true,
         latest: exactMessageId,
-        oldest: undefined,
+        oldest: exactMessageId,
       }
     : {
         latest: normalizeSlackReadTimestamp(opts.before, "before"),
@@ -472,19 +524,28 @@ export async function readSlackMessages(
 
   // Use conversations.replies for thread messages, conversations.history for channel messages.
   if (opts.threadId) {
+    // Slack pages thread roots before replies; exclude the root before its limit consumes the page.
+    const oldest = exactMessageId
+      ? exactMessageId
+      : exactBounds.oldest && Number(exactBounds.oldest) > Number(opts.threadId)
+        ? exactBounds.oldest
+        : opts.threadId;
     const result = await client.conversations.replies({
       channel: channelId,
       ts: opts.threadId,
       limit: readLimit,
       ...exactBounds,
+      oldest,
     });
-    const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter((message) => {
-      if (exactMessageId) {
-        return message.ts === exactMessageId;
-      }
-      // conversations.replies includes the parent message; drop it for replies-only reads.
-      return message.ts !== opts.threadId;
-    });
+    const messages = ((result.messages ?? []) as SlackMessageSummary[])
+      .filter((message) => {
+        if (exactMessageId) {
+          return message.ts === exactMessageId;
+        }
+        // conversations.replies includes the parent message; drop it for replies-only reads.
+        return message.ts !== opts.threadId;
+      })
+      .map(renderSlackReadMessageText);
     return {
       messages,
       hasMore: exactMessageId ? false : Boolean(result.has_more),
@@ -496,9 +557,9 @@ export async function readSlackMessages(
     limit: readLimit,
     ...exactBounds,
   });
-  const messages = ((result.messages ?? []) as SlackMessageSummary[]).filter(
-    (message) => !exactMessageId || message.ts === exactMessageId,
-  );
+  const messages = ((result.messages ?? []) as SlackMessageSummary[])
+    .filter((message) => !exactMessageId || message.ts === exactMessageId)
+    .map(renderSlackReadMessageText);
   return {
     messages,
     hasMore: exactMessageId ? false : Boolean(result.has_more),
@@ -560,11 +621,6 @@ type SlackFileThreadShare = {
   threadTs?: string;
 };
 
-function normalizeSlackScopeValue(value: string | undefined): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? trimmed : undefined;
-}
-
 function collectSlackDirectShareChannelIds(file: SlackFileInfoSummary): Set<string> {
   const ids = new Set<string>();
   for (const group of [file.channels, file.groups, file.ims]) {
@@ -575,7 +631,7 @@ function collectSlackDirectShareChannelIds(file: SlackFileInfoSummary): Set<stri
       if (typeof entry !== "string") {
         continue;
       }
-      const normalized = normalizeSlackScopeValue(entry);
+      const normalized = normalizeOptionalString(entry);
       if (normalized) {
         ids.add(normalized);
       }
@@ -595,74 +651,59 @@ function collectSlackShareMaps(file: SlackFileInfoSummary): Array<Record<string,
   );
 }
 
-function collectSlackSharedChannelIds(file: SlackFileInfoSummary): Set<string> {
-  const ids = new Set<string>();
+function collectSlackShares(file: SlackFileInfoSummary): SlackFileThreadShare[] {
+  const shares: SlackFileThreadShare[] = [];
   for (const shareMap of collectSlackShareMaps(file)) {
-    for (const channelId of Object.keys(shareMap)) {
-      const normalized = normalizeSlackScopeValue(channelId);
-      if (normalized) {
-        ids.add(normalized);
-      }
-    }
-  }
-  return ids;
-}
-
-function collectSlackThreadShares(
-  file: SlackFileInfoSummary,
-  channelId: string,
-): SlackFileThreadShare[] {
-  const matches: SlackFileThreadShare[] = [];
-  for (const shareMap of collectSlackShareMaps(file)) {
-    const rawEntries = shareMap[channelId];
-    if (!Array.isArray(rawEntries)) {
-      continue;
-    }
-    for (const rawEntry of rawEntries) {
-      if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+    for (const [rawChannelId, rawEntries] of Object.entries(shareMap)) {
+      const channelId = normalizeOptionalString(rawChannelId);
+      if (!channelId || !Array.isArray(rawEntries)) {
         continue;
       }
-      const entry = rawEntry as Record<string, unknown>;
-      const ts = typeof entry.ts === "string" ? normalizeSlackScopeValue(entry.ts) : undefined;
-      const threadTs =
-        typeof entry.thread_ts === "string" ? normalizeSlackScopeValue(entry.thread_ts) : undefined;
-      matches.push({ channelId, ts, threadTs });
+      for (const rawEntry of rawEntries) {
+        if (!rawEntry || typeof rawEntry !== "object" || Array.isArray(rawEntry)) {
+          continue;
+        }
+        const entry = rawEntry as Record<string, unknown>;
+        const ts = typeof entry.ts === "string" ? normalizeOptionalString(entry.ts) : undefined;
+        const threadTs =
+          typeof entry.thread_ts === "string"
+            ? normalizeOptionalString(entry.thread_ts)
+            : undefined;
+        if (ts || threadTs) {
+          shares.push({ channelId, ts, threadTs });
+        }
+      }
     }
   }
-  return matches;
+  return shares;
 }
 
-function hasSlackScopeMismatch(params: {
+function lacksSlackScopeProof(params: {
   file: SlackFileInfoSummary;
-  channelId?: string;
+  channelId: string;
   threadId?: string;
 }): boolean {
-  const channelId = normalizeSlackScopeValue(params.channelId);
+  const channelId = normalizeOptionalString(params.channelId);
   if (!channelId) {
-    return false;
+    return true;
   }
-  const threadId = normalizeSlackScopeValue(params.threadId);
+  const threadId = normalizeOptionalString(params.threadId);
 
   const directIds = collectSlackDirectShareChannelIds(params.file);
-  const sharedIds = collectSlackSharedChannelIds(params.file);
-  const hasChannelEvidence = directIds.size > 0 || sharedIds.size > 0;
-  const inChannel = directIds.has(channelId) || sharedIds.has(channelId);
-  if (hasChannelEvidence && !inChannel) {
+  const shares = collectSlackShares(params.file);
+  const inChannel =
+    directIds.has(channelId) || shares.some((entry) => entry.channelId === channelId);
+  if (!inChannel) {
     return true;
   }
 
   if (!threadId) {
     return false;
   }
-  const threadShares = collectSlackThreadShares(params.file, channelId);
-  if (threadShares.length === 0) {
-    return false;
-  }
-  const threadEvidence = threadShares.filter((entry) => entry.threadTs || entry.ts);
-  if (threadEvidence.length === 0) {
-    return false;
-  }
-  return !threadEvidence.some((entry) => entry.threadTs === threadId || entry.ts === threadId);
+  return !shares.some(
+    (entry) =>
+      entry.channelId === channelId && (entry.threadTs === threadId || entry.ts === threadId),
+  );
 }
 
 /**
@@ -672,10 +713,12 @@ function hasSlackScopeMismatch(params: {
  */
 export async function downloadSlackFile(
   fileId: string,
-  opts: SlackActionClientOpts & { maxBytes: number; channelId?: string; threadId?: string },
+  opts: SlackActionClientOpts & { maxBytes: number; channelId: string; threadId?: string },
 ): Promise<SlackMediaResult | null> {
   const token = resolveToken(opts.token, opts.accountId, opts.cfg);
   const client = await getClient(opts);
+  const isFileAllowed = (file: SlackFileInfoSummary) =>
+    !lacksSlackScopeProof({ file, channelId: opts.channelId, threadId: opts.threadId });
 
   // Fetch fresh file metadata (includes a current url_private_download).
   const info = await client.files.info({ file: fileId });
@@ -684,7 +727,7 @@ export async function downloadSlackFile(
   if (!file?.url_private_download && !file?.url_private) {
     return null;
   }
-  if (hasSlackScopeMismatch({ file, channelId: opts.channelId, threadId: opts.threadId })) {
+  if (!isFileAllowed(file)) {
     return null;
   }
 
@@ -698,6 +741,8 @@ export async function downloadSlackFile(
         url_private_download: file.url_private_download,
       },
     ],
+    client,
+    isRefreshedFileAllowed: isFileAllowed,
     token,
     maxBytes: opts.maxBytes,
   });

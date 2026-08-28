@@ -47,7 +47,10 @@ describe("command secret targets module import", () => {
 
   it("loads registry lazily for agent runtime plugin credential targets", async () => {
     const listSecretTargetRegistryEntries = vi.fn(() => [
-      { id: "plugins.entries.example.config.webSearch.apiKey" },
+      {
+        id: "plugins.entries.example.config.webSearch.apiKey",
+        pathPatternSegments: ["plugins", "entries", "example", "config", "webSearch", "apiKey"],
+      },
       { id: "plugins.entries.example.config.other.apiKey" },
       { id: "channels.telegram.botToken" },
     ]);
@@ -61,7 +64,7 @@ describe("command secret targets module import", () => {
 
     expect(listSecretTargetRegistryEntries).not.toHaveBeenCalled();
     const ids = mod.getAgentRuntimeCommandSecretTargetIds();
-    expect(ids.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(ids.has("memory.search.remote.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.example.config.webSearch.apiKey")).toBe(true);
     expect(ids.has("plugins.entries.example.config.other.apiKey")).toBe(false);
     expect(ids.has("channels.telegram.botToken")).toBe(false);
@@ -170,7 +173,7 @@ describe("command secret targets module import", () => {
     expect(targets.has("gateway.auth.password")).toBe(true);
     expect(targets.has("gateway.remote.token")).toBe(true);
     expect(targets.has("gateway.remote.password")).toBe(true);
-    expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(targets.has("memory.search.remote.apiKey")).toBe(true);
     const pluginCall = listReadOnlyChannelPluginsForConfig.mock.calls[0] as unknown as
       | [unknown, { includePersistedAuthState?: boolean }]
       | undefined;
@@ -206,7 +209,7 @@ describe("command secret targets module import", () => {
       { includeChannelTargets: false },
     );
 
-    expect(targets.has("agents.defaults.memorySearch.remote.apiKey")).toBe(true);
+    expect(targets.has("memory.search.remote.apiKey")).toBe(true);
     expect(targets.has("gateway.auth.token")).toBe(true);
     expect(targets.has("gateway.auth.password")).toBe(true);
     expect(targets.has("gateway.remote.token")).toBe(true);

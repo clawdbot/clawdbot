@@ -1,15 +1,14 @@
 // Loads documented plugin public surfaces while preserving lazy boundaries.
-import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { openRootFileSync } from "../infra/boundary-file-read.js";
-import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
+import { MissingPublicSurfaceError } from "../plugin-sdk/facade-loader.js";
 import { resolveBundledPluginsDir } from "./bundled-dir.js";
+import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
+import { getPluginCacheRoot } from "./plugin-cache.js";
 import {
-  createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
-  type PluginModuleLoaderCache,
+  loadPluginPublicSurfaceModuleSync,
 } from "./plugin-module-loader-cache.js";
 import {
   resolveBundledPluginPublicSurfacePath,
@@ -22,16 +21,11 @@ const OPENCLAW_PACKAGE_ROOT =
     modulePath: fileURLToPath(import.meta.url),
     moduleUrl: import.meta.url,
   }) ?? fileURLToPath(new URL("../..", import.meta.url));
-const publicSurfaceModuleCache = new Map<string, unknown>();
 const sourceArtifactRequire = createRequire(import.meta.url);
-const publicSurfaceLocationCache = new Map<
-  string,
-  {
-    modulePath: string;
-    boundaryRoot: string;
-  }
->();
-const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+type PublicSurfaceLocation = {
+  modulePath: string;
+  boundaryRoot: string;
+};
 
 function isSourceArtifactPath(modulePath: string): boolean {
   switch (path.extname(modulePath).toLowerCase()) {
@@ -63,7 +57,7 @@ function createResolutionKey(params: { dirName: string; artifactBasename: string
 function resolvePublicSurfaceLocationUncached(params: {
   dirName: string;
   artifactBasename: string;
-}): { modulePath: string; boundaryRoot: string } | null {
+}): PublicSurfaceLocation | null {
   const bundledPluginsDir = resolveBundledPluginsDir();
   const modulePath = resolveBundledPluginPublicSurfacePath({
     rootDir: OPENCLAW_PACKAGE_ROOT,
@@ -86,22 +80,20 @@ function resolvePublicSurfaceLocationUncached(params: {
 function resolvePublicSurfaceLocation(params: {
   dirName: string;
   artifactBasename: string;
-}): { modulePath: string; boundaryRoot: string } | null {
+}): PublicSurfaceLocation | null {
   const key = createResolutionKey(params);
-  const cached = publicSurfaceLocationCache.get(key);
-  if (cached) {
+  const artifacts = getPluginCacheRoot(OPENCLAW_PACKAGE_ROOT).artifacts;
+  const cached = artifacts.get(`public:${key}`);
+  if (cached !== undefined) {
     return cached;
   }
   const resolved = resolvePublicSurfaceLocationUncached(params);
-  if (resolved) {
-    publicSurfaceLocationCache.set(key, resolved);
-  }
+  artifacts.set(`public:${key}`, resolved);
   return resolved;
 }
 
 function getModuleLoader(modulePath: string) {
   return getCachedPluginModuleLoader({
-    cache: moduleLoaders,
     modulePath,
     importerUrl: import.meta.url,
     preferBuiltDist: true,
@@ -122,42 +114,33 @@ function loadValidatedPublicSurfaceModule(params: {
   boundaryRoot: string;
   boundaryLabel: string;
   surfaceLabel: string;
+  origin: "bundled" | "global";
 }): object {
-  const cached = publicSurfaceModuleCache.get(params.modulePath);
-  if (cached) {
-    return cached as object;
-  }
-
-  const opened = openRootFileSync({
-    absolutePath: params.modulePath,
-    rootPath: params.boundaryRoot,
-    boundaryLabel: params.boundaryLabel,
-    rejectHardlinks: false,
+  return loadPluginPublicSurfaceModuleSync({
+    ...params,
+    rejectHardlinks: shouldRejectHardlinkedPluginFiles({
+      origin: params.origin,
+      rootDir: params.boundaryRoot,
+    }),
+    loadModule: loadPublicSurfaceModule,
   });
-  if (!opened.ok) {
-    throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
-  }
-  const validatedPath = opened.path;
-  const validatedStat = opened.stat;
-  fs.closeSync(opened.fd);
+}
 
-  const currentStat = fs.statSync(validatedPath);
-  if (!sameFileIdentity(validatedStat, currentStat)) {
-    throw new Error(`${params.surfaceLabel} changed after validation`);
-  }
-
-  const sentinel: Record<string, unknown> = {};
-  publicSurfaceModuleCache.set(params.modulePath, sentinel);
-  publicSurfaceModuleCache.set(validatedPath, sentinel);
-  try {
-    const loaded = loadPublicSurfaceModule(validatedPath) as object;
-    Object.assign(sentinel, loaded);
-    return sentinel;
-  } catch (error) {
-    publicSurfaceModuleCache.delete(params.modulePath);
-    publicSurfaceModuleCache.delete(validatedPath);
-    throw error;
-  }
+function loadBundledPublicSurfaceAtLocation(params: {
+  dirName: string;
+  artifactBasename: string;
+  location: PublicSurfaceLocation;
+}): object {
+  return loadValidatedPublicSurfaceModule({
+    modulePath: params.location.modulePath,
+    boundaryRoot: params.location.boundaryRoot,
+    boundaryLabel:
+      params.location.boundaryRoot === OPENCLAW_PACKAGE_ROOT
+        ? "OpenClaw package root"
+        : "plugin root",
+    surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
+    origin: "bundled",
+  });
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
@@ -167,17 +150,11 @@ export function loadBundledPluginPublicArtifactModuleSync<T extends object>(para
 }): T {
   const location = resolvePublicSurfaceLocation(params);
   if (!location) {
-    throw new Error(
+    throw new MissingPublicSurfaceError(
       `Unable to resolve bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
     );
   }
-  return loadValidatedPublicSurfaceModule({
-    modulePath: location.modulePath,
-    boundaryRoot: location.boundaryRoot,
-    boundaryLabel:
-      location.boundaryRoot === OPENCLAW_PACKAGE_ROOT ? "OpenClaw package root" : "plugin root",
-    surfaceLabel: `bundled plugin public surface ${params.dirName}/${params.artifactBasename}`,
-  }) as T;
+  return loadBundledPublicSurfaceAtLocation({ ...params, location }) as T;
 }
 
 // oxlint-disable-next-line typescript/no-unnecessary-type-parameters -- Dynamic public artifact loaders use caller-supplied module surface types.
@@ -185,17 +162,24 @@ export function loadPluginPublicArtifactModuleSync<T extends object>(params: {
   pluginRoot: string;
   artifactBasename: string;
 }): T {
-  const modulePath = resolvePluginRootPublicSurfacePath(params);
-  if (!modulePath) {
-    throw new Error(
+  const root = getPluginCacheRoot(params.pluginRoot);
+  const key = `public:${params.artifactBasename}`;
+  let location = root.artifacts.get(key);
+  if (location === undefined) {
+    const modulePath = resolvePluginRootPublicSurfacePath(params);
+    location = modulePath ? { modulePath, boundaryRoot: root.rootDir } : null;
+    root.artifacts.set(key, location);
+  }
+  if (!location) {
+    throw new MissingPublicSurfaceError(
       `Unable to resolve plugin public surface ${params.pluginRoot}/${params.artifactBasename}`,
     );
   }
   return loadValidatedPublicSurfaceModule({
-    modulePath,
-    boundaryRoot: path.resolve(params.pluginRoot),
+    ...location,
     boundaryLabel: "plugin root",
     surfaceLabel: `plugin public surface ${params.artifactBasename}`,
+    origin: "global",
   }) as T;
 }
 
@@ -206,19 +190,16 @@ export function loadBundledPluginPublicArtifactModuleFromCandidatesSync<T extend
   artifactCandidates: readonly string[];
 }): T | null {
   for (const artifactBasename of params.artifactCandidates) {
-    try {
-      return loadBundledPluginPublicArtifactModuleSync<T>({
+    const location = resolvePublicSurfaceLocation({
+      dirName: params.dirName,
+      artifactBasename,
+    });
+    if (location) {
+      return loadBundledPublicSurfaceAtLocation({
         dirName: params.dirName,
         artifactBasename,
-      });
-    } catch (error) {
-      if (
-        error instanceof Error &&
-        error.message.startsWith("Unable to resolve bundled plugin public surface ")
-      ) {
-        continue;
-      }
-      throw error;
+        location,
+      }) as T;
     }
   }
   return null;

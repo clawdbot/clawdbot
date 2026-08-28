@@ -37,13 +37,15 @@ actor CameraController {
         }
     }
 
-    func snap(params: OpenClawCameraSnapParams) async throws -> (
+    func snap(
+        params: OpenClawCameraSnapParams,
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
         format: String,
         base64: String,
         width: Int,
         height: Int)
     {
-        let facing = params.facing ?? .front
+        let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let format = params.format ?? .jpg
         // Default to a reasonable max width to keep gateway payload sizes manageable.
         // If you need the full-res photo, explicitly request a larger maxWidth.
@@ -59,9 +61,8 @@ actor CameraController {
             preferFrontCamera: facing == .front,
             deviceId: params.deviceId,
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: { setupError in
                 CameraError.captureFailed(setupError.localizedDescription)
             })
@@ -102,13 +103,15 @@ actor CameraController {
             height: res.heightPx)
     }
 
-    func clip(params: OpenClawCameraClipParams) async throws -> (
+    func clip(
+        params: OpenClawCameraClipParams,
+        defaultFacing: OpenClawCameraFacing = .front) async throws -> (
         format: String,
         base64: String,
         durationMs: Int,
         hasAudio: Bool)
     {
-        let facing = params.facing ?? .front
+        let facing = Self.resolveFacing(params.facing, defaultFacing: defaultFacing)
         let durationMs = Self.clampDurationMs(params.durationMs)
         let includeAudio = params.includeAudio ?? true
         let format = params.format ?? .mp4
@@ -137,9 +140,8 @@ actor CameraController {
                 includeAudio: includeAudio,
                 durationMs: durationMs),
             pickCamera: { preferFrontCamera, deviceId in
-                Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
+                try Self.pickCamera(facing: preferFrontCamera ? .front : .back, deviceId: deviceId)
             },
-            cameraUnavailableError: CameraError.cameraUnavailable,
             mapSetupError: Self.mapMovieSetupError,
             operation: { output in
                 let recording = CameraMovieRecordingOperation(output: output, outputURL: movURL)
@@ -192,19 +194,24 @@ actor CameraController {
 
     private nonisolated static func pickCamera(
         facing: OpenClawCameraFacing,
-        deviceId: String?) -> AVCaptureDevice?
+        deviceId: String?) throws -> AVCaptureDevice
     {
-        if let deviceId, !deviceId.isEmpty {
-            if let match = discoverVideoDevices().first(where: { $0.uniqueID == deviceId }) {
-                return match
-            }
-        }
-        let position: AVCaptureDevice.Position = (facing == .front) ? .front : .back
-        if let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) {
-            return device
-        }
-        // Fall back to any default camera (e.g. simulator / unusual device configurations).
-        return AVCaptureDevice.default(for: .video)
+        try CameraCapturePipelineSupport.selectCamera(
+            deviceId: deviceId,
+            matching: { deviceId in
+                self.discoverVideoDevices().first { $0.uniqueID == deviceId }
+            },
+            fallback: {
+                let position: AVCaptureDevice.Position = facing == .front ? .front : .back
+                return AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position) ??
+                    AVCaptureDevice.default(for: .video)
+            },
+            unavailableError: CameraError.cameraUnavailable,
+            deviceNotFoundError: {
+                CameraError.invalidParams(
+                    "INVALID_REQUEST: camera device not found: \($0); " +
+                        "run camera.list for current device IDs")
+            })
     }
 
     private nonisolated static func mapMovieSetupError(_ setupError: CameraSessionConfigurationError) -> CameraError {
@@ -245,6 +252,13 @@ actor CameraController {
         let v = ms ?? 3000
         // Keep clips short by default; avoid huge base64 payloads on the gateway.
         return min(60000, max(250, v))
+    }
+
+    nonisolated static func resolveFacing(
+        _ explicitFacing: OpenClawCameraFacing?,
+        defaultFacing: OpenClawCameraFacing) -> OpenClawCameraFacing
+    {
+        explicitFacing ?? defaultFacing
     }
 
     private nonisolated static func exportToMP4(inputURL: URL, outputURL: URL) async throws {

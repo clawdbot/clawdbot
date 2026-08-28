@@ -1,6 +1,7 @@
 // Browser tests cover browser cli.lazy plugin behavior.
 import { Command } from "commander";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { isBrowserMachineOutput } from "../../cli-output-mode.js";
 
 const manageMocks = vi.hoisted(() => {
   const doctorAction = vi.fn();
@@ -36,28 +37,59 @@ const manageMocks = vi.hoisted(() => {
     tabsAction,
   };
 });
+const cookieSyncMocks = vi.hoisted(() => ({
+  registerBrowserCookieSyncCommand: vi.fn(),
+}));
 const inspectMocks = vi.hoisted(() => ({
   registerBrowserInspectCommands: vi.fn(),
 }));
-const actionInputMocks = vi.hoisted(() => ({
-  registerBrowserActionInputCommands: vi.fn(),
-}));
+const actionInputMocks = vi.hoisted(() => {
+  const waitAction = vi.fn();
+  const registerBrowserActionInputCommands = vi.fn(
+    (browser: Command, parentOpts: (command: Command) => unknown) => {
+      browser
+        .command("wait")
+        .option("--url <pattern>")
+        .action((opts, command) => waitAction(opts, parentOpts(command)));
+    },
+  );
+  return { registerBrowserActionInputCommands, waitAction };
+});
 const actionObserveMocks = vi.hoisted(() => ({
   registerBrowserActionObserveCommands: vi.fn(),
 }));
 const debugMocks = vi.hoisted(() => ({
   registerBrowserDebugCommands: vi.fn(),
 }));
-const stateMocks = vi.hoisted(() => ({
-  registerBrowserStateCommands: vi.fn(),
+const stateMocks = vi.hoisted(() => {
+  const cookieSetAction = vi.fn();
+  const registerBrowserStateCommands = vi.fn(
+    (browser: Command, parentOpts: (command: Command) => unknown) => {
+      browser
+        .command("cookies")
+        .command("set")
+        .argument("<name>")
+        .argument("<value>")
+        .option("--url <url>")
+        .action((name, value, opts, command) =>
+          cookieSetAction(name, value, opts, parentOpts(command)),
+        );
+    },
+  );
+  return { cookieSetAction, registerBrowserStateCommands };
+});
+const extensionMocks = vi.hoisted(() => ({
+  registerBrowserExtensionCommands: vi.fn(),
 }));
 
 vi.mock("./browser-cli-manage.js", () => manageMocks);
+vi.mock("./browser-cli-cookie-sync.js", () => cookieSyncMocks);
 vi.mock("./browser-cli-inspect.js", () => inspectMocks);
 vi.mock("./browser-cli-actions-input.js", () => actionInputMocks);
 vi.mock("./browser-cli-actions-observe.js", () => actionObserveMocks);
 vi.mock("./browser-cli-debug.js", () => debugMocks);
 vi.mock("./browser-cli-state.js", () => stateMocks);
+vi.mock("./browser-cli-extension.js", () => extensionMocks);
 
 const { registerBrowserCli } = await import("./browser-cli.js");
 
@@ -81,6 +113,43 @@ function requireTrailingCommand(args: unknown[], label: string): Command {
 }
 
 describe("registerBrowserCli lazy browser subcommands", () => {
+  it.each([
+    ["evaluate", ["browser", "evaluate", "--fn", "return 1"]],
+    ["console", ["browser", "console"]],
+    ["cookies", ["browser", "cookies"]],
+    ["local storage", ["browser", "storage", "local", "get"]],
+    ["session storage", ["browser", "storage", "session", "get", "key"]],
+    ["native host", ["browser", "extension", "native-host"]],
+  ])("declares default JSON output for %s", (_name, args) => {
+    expect(isBrowserMachineOutput({ argv: ["node", "openclaw", ...args] })).toBe(true);
+  });
+
+  it.each(["install", "status", "uninstall-host", "pair", "cdp"])(
+    "declares explicit JSON output for extension %s",
+    (subcommand) => {
+      expect(
+        isBrowserMachineOutput({
+          argv: ["node", "openclaw", "browser", "extension", subcommand, "--json"],
+        }),
+      ).toBe(true);
+    },
+  );
+
+  it("keeps human browser commands out of machine-output mode", () => {
+    expect(isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "status"] })).toBe(false);
+    expect(
+      isBrowserMachineOutput({ argv: ["node", "openclaw", "browser", "cookies", "set"] }),
+    ).toBe(false);
+  });
+
+  it("accepts supported root options after browser", () => {
+    expect(
+      isBrowserMachineOutput({
+        argv: ["node", "openclaw", "browser", "--log-level", "debug", "evaluate"],
+      }),
+    ).toBe(true);
+  });
+
   beforeEach(() => {
     vi.unstubAllEnvs();
     manageMocks.registerBrowserManageCommands.mockClear();
@@ -90,11 +159,15 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     manageMocks.statusAction.mockClear();
     manageMocks.tabNewAction.mockClear();
     manageMocks.tabsAction.mockClear();
+    cookieSyncMocks.registerBrowserCookieSyncCommand.mockClear();
     inspectMocks.registerBrowserInspectCommands.mockClear();
     actionInputMocks.registerBrowserActionInputCommands.mockClear();
+    actionInputMocks.waitAction.mockClear();
     actionObserveMocks.registerBrowserActionObserveCommands.mockClear();
     debugMocks.registerBrowserDebugCommands.mockClear();
     stateMocks.registerBrowserStateCommands.mockClear();
+    stateMocks.cookieSetAction.mockClear();
+    extensionMocks.registerBrowserExtensionCommands.mockClear();
   });
 
   afterEach(() => {
@@ -180,6 +253,104 @@ describe("registerBrowserCli lazy browser subcommands", () => {
     expect(tabsCommand.parent?.opts().json).toBe(true);
   });
 
+  it("keeps wait action URLs out of Gateway transport options", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, ["node", "openclaw", "browser", "wait", "--url", "**/done"]);
+
+    await program.parseAsync(["browser", "wait", "--url", "**/done"], { from: "user" });
+
+    const [opts, parent] = requireFirstCall(actionInputMocks.waitAction, "wait action call");
+    expect(opts).toMatchObject({ url: "**/done" });
+    expect(parent).not.toHaveProperty("url");
+  });
+
+  it("keeps explicit Gateway and wait URLs under their separate owners", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "wait",
+      "--url",
+      "**/done",
+    ]);
+
+    await program.parseAsync(
+      ["browser", "--url", "ws://127.0.0.1:18789", "wait", "--url", "**/done"],
+      { from: "user" },
+    );
+
+    const [opts, parent] = requireFirstCall(actionInputMocks.waitAction, "wait action call");
+    expect(opts).toMatchObject({ url: "**/done" });
+    expect(parent).toMatchObject({ url: "ws://127.0.0.1:18789" });
+  });
+
+  it("keeps cookie action URLs out of Gateway transport options", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "cookies",
+      "set",
+      "session",
+      "abc",
+      "--url",
+      "https://example.com",
+    ]);
+
+    await program.parseAsync(
+      ["browser", "cookies", "set", "session", "abc", "--url", "https://example.com"],
+      { from: "user" },
+    );
+
+    const cookieCall = requireFirstCall(stateMocks.cookieSetAction, "cookie set action call");
+    const opts = cookieCall[2];
+    const parent = cookieCall[3];
+    expect(opts).toMatchObject({ url: "https://example.com" });
+    expect(parent).not.toHaveProperty("url");
+  });
+
+  it("keeps explicit Gateway and cookie URLs under their separate owners", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    registerBrowserCli(program, [
+      "node",
+      "openclaw",
+      "browser",
+      "--url",
+      "ws://127.0.0.1:18789",
+      "cookies",
+      "set",
+      "session",
+      "abc",
+      "--url",
+      "https://example.com",
+    ]);
+
+    await program.parseAsync(
+      [
+        "browser",
+        "--url",
+        "ws://127.0.0.1:18789",
+        "cookies",
+        "set",
+        "session",
+        "abc",
+        "--url",
+        "https://example.com",
+      ],
+      { from: "user" },
+    );
+
+    const cookieCall = requireFirstCall(stateMocks.cookieSetAction, "cookie set action call");
+    const opts = cookieCall[2];
+    const parent = cookieCall[3];
+    expect(opts).toMatchObject({ url: "https://example.com" });
+    expect(parent).toMatchObject({ url: "ws://127.0.0.1:18789" });
+  });
+
   it("accepts the shipped trailing browser profile order after lazy loading", async () => {
     const program = new Command().name("openclaw").enablePositionalOptions();
     registerBrowserCli(program, [
@@ -200,6 +371,36 @@ describe("registerBrowserCli lazy browser subcommands", () => {
       "tabs action",
     );
     expect(tabsCommand.parent?.opts().browserProfile).toBe("remote");
+  });
+
+  it.each([
+    ["before", ["browser", "--timeout", "60000", "status"]],
+    ["after", ["browser", "status", "--timeout", "60000"]],
+  ])(
+    "preserves parent timeout %s a lazily loaded leaf in positional mode",
+    async (_place, args) => {
+      const program = new Command().name("openclaw").enablePositionalOptions();
+      registerBrowserCli(program, ["node", "openclaw", ...args]);
+
+      await program.parseAsync(args, { from: "user" });
+
+      const command = requireTrailingCommand(
+        requireFirstCall(manageMocks.statusAction, "status action call"),
+        "status action",
+      );
+      expect(command.parent?.opts().timeout).toBe("60000");
+    },
+  );
+
+  it("preserves parent timeout before a nested lazily loaded storage-family leaf", async () => {
+    const program = new Command().name("openclaw").enablePositionalOptions();
+    const args = ["browser", "--timeout", "60000", "cookies", "set", "session", "abc"];
+    registerBrowserCli(program, ["node", "openclaw", ...args]);
+
+    await program.parseAsync(args, { from: "user" });
+
+    const cookieCall = requireFirstCall(stateMocks.cookieSetAction, "cookie set action call");
+    expect(cookieCall[3]).toMatchObject({ timeout: "60000" });
   });
 
   it("skips browser option values when selecting the lazy command group", async () => {
@@ -260,13 +461,15 @@ describe("registerBrowserCli lazy browser subcommands", () => {
 
     registerBrowserCli(program, ["node", "openclaw", "browser", "--help"]);
 
-    await vi.waitFor(() =>
-      expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1),
-    );
-    expect(inspectMocks.registerBrowserInspectCommands).toHaveBeenCalledTimes(1);
-    expect(actionInputMocks.registerBrowserActionInputCommands).toHaveBeenCalledTimes(1);
-    expect(actionObserveMocks.registerBrowserActionObserveCommands).toHaveBeenCalledTimes(1);
-    expect(debugMocks.registerBrowserDebugCommands).toHaveBeenCalledTimes(1);
-    expect(stateMocks.registerBrowserStateCommands).toHaveBeenCalledTimes(1);
+    await vi.waitFor(() => {
+      expect(manageMocks.registerBrowserManageCommands).toHaveBeenCalledTimes(1);
+      expect(cookieSyncMocks.registerBrowserCookieSyncCommand).toHaveBeenCalledTimes(1);
+      expect(inspectMocks.registerBrowserInspectCommands).toHaveBeenCalledTimes(1);
+      expect(actionInputMocks.registerBrowserActionInputCommands).toHaveBeenCalledTimes(1);
+      expect(actionObserveMocks.registerBrowserActionObserveCommands).toHaveBeenCalledTimes(1);
+      expect(debugMocks.registerBrowserDebugCommands).toHaveBeenCalledTimes(1);
+      expect(stateMocks.registerBrowserStateCommands).toHaveBeenCalledTimes(1);
+      expect(extensionMocks.registerBrowserExtensionCommands).toHaveBeenCalledTimes(1);
+    });
   });
 });

@@ -265,4 +265,32 @@ describe("buildAzureSpeechProvider", () => {
       timeoutMs: 45_000,
     });
   });
+
+  it("rejects blank credentials across readiness, discovery, and synthesis", async () => {
+    vi.stubEnv("AZURE_SPEECH_KEY", "   ");
+    vi.stubEnv("AZURE_SPEECH_API_KEY", "   ");
+    vi.stubEnv("SPEECH_KEY", "   ");
+    const provider = buildAzureSpeechProvider();
+    const providerConfig = { apiKey: "   ", region: "eastus" };
+
+    expect(provider.isConfigured({ providerConfig, timeoutMs: 1_000 })).toBe(false);
+    await expect(
+      provider.listVoices?.({ apiKey: "   ", providerConfig, timeoutMs: 1_000 }),
+    ).rejects.toThrow("Azure Speech API key missing");
+
+    const request = {
+      text: "hello",
+      cfg: {} as never,
+      providerConfig,
+      target: "audio-file" as const,
+      timeoutMs: 1_000,
+    };
+    await expect(provider.synthesize(request)).rejects.toThrow("Azure Speech API key missing");
+    await expect(provider.synthesizeTelephony?.(request)).rejects.toThrow(
+      "Azure Speech API key missing",
+    );
+
+    expect(listAzureSpeechVoicesMock).not.toHaveBeenCalled();
+    expect(azureSpeechTTSMock).not.toHaveBeenCalled();
+  });
 });

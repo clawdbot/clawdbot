@@ -1,7 +1,8 @@
 // Openai tests cover embedding batch plugin behavior.
 import { createServer } from "node:http";
-import { describe, expect, it, vi } from "vitest";
-import { parseOpenAiBatchOutput, runOpenAiEmbeddingBatches } from "./embedding-batch.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { runOpenAiEmbeddingBatches } from "./embedding-batch.js";
+import { createOpenAiEmbeddingProvider } from "./embedding-provider.js";
 
 const jsonlEncoder = new TextEncoder();
 
@@ -82,11 +83,210 @@ async function closeServer(server: ReturnType<typeof createServer>): Promise<voi
   });
 }
 
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
+
 describe("OpenAI embedding batch output", () => {
-  it("wraps malformed JSONL output", () => {
-    expect(() => parseOpenAiBatchOutput('{"custom_id":"ok"}\n{not json')).toThrow(
-      "OpenAI embedding batch output contained malformed JSONL",
-    );
+  it("preserves configured query parameters on real direct embedding requests", async () => {
+    const received: Array<{ url: string; authorization: string | undefined }> = [];
+    const server = createServer((request, response) => {
+      received.push({ url: request.url ?? "", authorization: request.headers.authorization });
+      if (request.url !== "/tenant/v1/embeddings?api-version=2024-10-21&tenant=alpha") {
+        response.writeHead(404).end("wrong embedding endpoint");
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end(JSON.stringify({ data: [{ embedding: [3, 5] }] }));
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const { provider } = await createOpenAiEmbeddingProvider({
+        config: {},
+        provider: "openai",
+        model: "text-embedding-3-small",
+        fallback: "none",
+        remote: {
+          baseUrl: `http://127.0.0.1:${port}/tenant/v1/?api-version=2024-10-21&tenant=alpha#local`,
+          apiKey: "openai-loopback-key",
+        },
+      });
+
+      await expect(provider.embed("hello", { inputType: "query" })).resolves.toEqual([3, 5]);
+      expect(received).toEqual([
+        {
+          url: "/tenant/v1/embeddings?api-version=2024-10-21&tenant=alpha",
+          authorization: "Bearer openai-loopback-key",
+        },
+      ]);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it("preserves configured query parameters through real batch upload, create, status, and output", async () => {
+    const received: Array<{ url: string; authorization: string | undefined }> = [];
+    const server = createServer((request, response) => {
+      const url = request.url ?? "";
+      received.push({ url, authorization: request.headers.authorization });
+      const parsed = new URL(url, "http://localhost");
+      if (parsed.search !== "?api-version=2024-10-21&tenant=alpha") {
+        response.writeHead(404).end("missing embedding tenant query");
+        return;
+      }
+      response.writeHead(200, { "content-type": "application/json" });
+      if (parsed.pathname === "/tenant/v1/files") {
+        response.end(JSON.stringify({ id: "input-0" }));
+      } else if (parsed.pathname === "/tenant/v1/batches") {
+        response.end(JSON.stringify({ id: "batch-0", status: "in_progress" }));
+      } else if (parsed.pathname === "/tenant/v1/batches/batch-0") {
+        response.end(
+          JSON.stringify({ id: "batch-0", status: "completed", output_file_id: "output-0" }),
+        );
+      } else if (parsed.pathname === "/tenant/v1/files/output-0/content") {
+        response.end(
+          JSON.stringify({
+            custom_id: "0",
+            response: { status_code: 200, body: { data: [{ embedding: [3, 5] }] } },
+          }),
+        );
+      } else {
+        response.end(JSON.stringify({ error: "unexpected embedding path" }));
+      }
+    });
+    const port = await listenLoopbackServer(server);
+
+    try {
+      const result = await runOpenAiEmbeddingBatches({
+        openAi: {
+          baseUrl: `http://127.0.0.1:${port}/tenant/v1/?api-version=2024-10-21&tenant=alpha#local`,
+          headers: { Authorization: "Bearer openai-loopback-key" },
+          model: "text-embedding-3-small",
+          ssrfPolicy: { allowedHostnames: ["127.0.0.1"] },
+        },
+        agentId: "main",
+        requests: [
+          {
+            custom_id: "0",
+            method: "POST",
+            url: "/v1/embeddings",
+            body: { model: "text-embedding-3-small", input: "hello" },
+          },
+        ],
+        wait: true,
+        concurrency: 1,
+        pollIntervalMs: 1,
+        timeoutMs: 10_000,
+      });
+
+      expect(result).toEqual(new Map([["0", [3, 5]]]));
+      expect(received.map(({ url }) => url)).toEqual([
+        "/tenant/v1/files?api-version=2024-10-21&tenant=alpha",
+        "/tenant/v1/batches?api-version=2024-10-21&tenant=alpha",
+        "/tenant/v1/batches/batch-0?api-version=2024-10-21&tenant=alpha",
+        "/tenant/v1/files/output-0/content?api-version=2024-10-21&tenant=alpha",
+      ]);
+      expect(
+        received.every(({ authorization }) => authorization === "Bearer openai-loopback-key"),
+      ).toBe(true);
+    } finally {
+      await closeServer(server);
+    }
+  });
+
+  it.each([
+    {
+      name: "pending status",
+      pollIntervalMs: 2_000,
+      expectedWaits: [500],
+      retryFirstStatus: false,
+    },
+    {
+      name: "retry backoff",
+      pollIntervalMs: 500,
+      expectedWaits: [500, 500],
+      retryFirstStatus: true,
+    },
+  ])("clamps $name waits to the remaining batch timeout", async (scenario) => {
+    vi.useFakeTimers();
+    vi.setSystemTime(0);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    // Provider error-body reads own independent 10s chunk timers; only poll
+    // delays belong to the embedding batch's 1s operation deadline.
+    const pollTimeoutCalls = () =>
+      setTimeoutSpy.mock.calls.filter(([, timeout]) =>
+        scenario.expectedWaits.includes(Number(timeout)),
+      );
+    let statusCalls = 0;
+    const fetchImpl = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = fetchInputUrl(input);
+      if (url.endsWith("/files") && init?.method === "POST") {
+        return jsonResponse({ id: "file-0" });
+      }
+      if (url.endsWith("/batches") && init?.method === "POST") {
+        return jsonResponse({ id: "batch-0", status: "in_progress" });
+      }
+      if (url.endsWith("/batches/batch-0")) {
+        statusCalls += 1;
+        if (scenario.retryFirstStatus && statusCalls === 1) {
+          return jsonResponse({ error: { message: "retry status" } }, 503);
+        }
+        return jsonResponse({ id: "batch-0", status: "completed", output_file_id: "output-0" });
+      }
+      if (url.endsWith("/files/output-0/content")) {
+        return new Response(
+          JSON.stringify({
+            custom_id: "0",
+            response: { status_code: 200, body: { data: [{ embedding: [1] }] } },
+          }),
+        );
+      }
+      return new Response("unexpected request", { status: 500 });
+    });
+
+    const result = runOpenAiEmbeddingBatches({
+      openAi: {
+        baseUrl: "https://openai-compatible.example/v1",
+        headers: { Authorization: "Bearer test" },
+        model: "text-embedding-3-small",
+        fetchImpl,
+      },
+      agentId: "main",
+      requests: [
+        {
+          custom_id: "0",
+          method: "POST",
+          url: "/v1/embeddings",
+          body: { model: "text-embedding-3-small", input: "payload" },
+        },
+      ],
+      wait: true,
+      concurrency: 1,
+      pollIntervalMs: scenario.pollIntervalMs,
+      timeoutMs: 1_000,
+      debug: (message) => {
+        if (!scenario.retryFirstStatus && message.includes("batch-0 in_progress")) {
+          vi.setSystemTime(500);
+        }
+      },
+    });
+    const rejection = expect(result).rejects.toMatchObject({
+      message: "openai batch batch-0 timed out after 1000ms",
+      ...(scenario.retryFirstStatus ? { cause: { status: 503 } } : {}),
+    });
+
+    for (const [index, waitMs] of scenario.expectedWaits.entries()) {
+      for (let attempt = 0; attempt < 100 && pollTimeoutCalls().length < index + 1; attempt++) {
+        await Promise.resolve();
+      }
+      expect(pollTimeoutCalls()).toHaveLength(index + 1);
+      expect(pollTimeoutCalls()[index]?.[1]).toBe(waitMs);
+      await vi.advanceTimersByTimeAsync(waitMs);
+    }
+    await rejection;
+    expect(statusCalls).toBe(scenario.retryFirstStatus ? 1 : 0);
   });
 
   it("reads a completed error file before downloading successful output", async () => {

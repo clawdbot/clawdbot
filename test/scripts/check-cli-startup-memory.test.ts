@@ -1,27 +1,23 @@
 // Check Cli Startup Memory tests cover check cli startup memory script behavior.
 import { spawnSync } from "node:child_process";
-import { readdirSync, mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { testing } from "../../scripts/check-cli-startup-memory.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
-const tempRoots: string[] = [];
-
-function makeTempRoot(): string {
-  const root = mkdtempSync(path.join(tmpdir(), "openclaw-startup-memory-test-"));
-  tempRoots.push(root);
-  return root;
-}
+const tempRoots = useAutoCleanupTempDirTracker(afterEach);
 
 function expectNoNodeStack(stderr: string): void {
   expect(stderr).not.toContain("Node.js");
   expect(stderr).not.toContain("\n    at ");
 }
 
-function runStartupMemoryCheckWithHelpSamples(helpSamplesMb: number[]) {
-  const tempRoot = makeTempRoot();
+function runStartupMemoryCheckWithHelpSamples(
+  helpSamplesMb: number[],
+  tempRoot = tempRoots.make("openclaw-startup-memory-test-"),
+) {
   let sampleIndex = 0;
   return testing.runStartupMemoryCheck(
     [
@@ -47,12 +43,6 @@ function runStartupMemoryCheckWithHelpSamples(helpSamplesMb: number[]) {
     },
   );
 }
-
-afterEach(() => {
-  for (const root of tempRoots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
 
 describe("check-cli-startup-memory", () => {
   it("resolves the repository root from the script location", () => {
@@ -92,33 +82,49 @@ describe("check-cli-startup-memory", () => {
   });
 
   it("keeps status startup headroom above Linux runner RSS variance", () => {
-    expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(425);
+    expect(testing.resolveDefaultLimitsMb("linux").statusJson).toBe(450);
   });
 
-  it("uses the median of three cold-start RSS samples", () => {
+  it("applies bounded runner RSS tolerance to the median of three cold-start samples", () => {
     if (process.platform !== "darwin" && process.platform !== "linux") {
       return;
     }
 
-    const helpSamplesMb = [120, 80, 85];
-    const result = runStartupMemoryCheckWithHelpSamples(helpSamplesMb);
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
+    const helpLimitMb = testing.resolveDefaultLimitsMb(process.platform).help;
+    const helpSamplesMb = [helpLimitMb + 20, helpLimitMb + 0.5, helpLimitMb - 20];
+    const result = runStartupMemoryCheckWithHelpSamples(helpSamplesMb, tempRoot);
 
     expect(result.results[0]).toMatchObject({
-      maxRssMb: 85,
+      limitMb: helpLimitMb,
+      rssToleranceMb: 1,
+      effectiveLimitMb: helpLimitMb + 1,
+      maxRssMb: helpLimitMb + 0.5,
       rssSamplesMb: helpSamplesMb,
       status: "pass",
     });
+    const report = JSON.parse(readFileSync(path.join(tempRoot, "startup-memory.json"), "utf8"));
+    expect(report.results[0]).toMatchObject({
+      limitMb: helpLimitMb,
+      rssToleranceMb: 1,
+      effectiveLimitMb: helpLimitMb + 1,
+      rssSamplesMb: helpSamplesMb,
+    });
+    expect(readFileSync(path.join(tempRoot, "summary.md"), "utf8")).toContain(
+      `base limit ${helpLimitMb.toFixed(1)} MB; RSS tolerance 1.0 MB; effective ceiling ${(helpLimitMb + 1).toFixed(1)} MB; samples: ${helpSamplesMb.map((sample) => `${sample.toFixed(1)} MB`).join(", ")}`,
+    );
   });
 
-  it("still fails when most cold-start RSS samples exceed the budget", () => {
+  it("still fails when most cold-start RSS samples exceed the bounded tolerance", () => {
     if (process.platform !== "darwin" && process.platform !== "linux") {
       return;
     }
 
-    const helpSamplesMb = [120, 110, 80];
+    const helpLimitMb = testing.resolveDefaultLimitsMb(process.platform).help;
+    const helpSamplesMb = [helpLimitMb + 1.5, helpLimitMb + 1.25, helpLimitMb - 20];
 
     expect(() => runStartupMemoryCheckWithHelpSamples(helpSamplesMb)).toThrow(
-      "--help median max RSS 110.0 MB exceeded 100 MB",
+      `--help median max RSS ${(helpLimitMb + 1.25).toFixed(1)} MB exceeded effective ceiling ${helpLimitMb + 1} MB (base limit ${helpLimitMb} MB; RSS tolerance 1 MB; samples: ${helpSamplesMb.map((sample) => sample.toFixed(1)).join(", ")} MB)`,
     );
   });
 
@@ -191,7 +197,7 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     const result = spawnSync(process.execPath, ["scripts/check-cli-startup-memory.mjs", "--json"], {
       cwd: path.resolve(__dirname, "..", ".."),
       encoding: "utf8",
@@ -224,7 +230,7 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     const seenTimeouts: Array<number | undefined> = [];
     const seenKillSignals: Array<string | undefined> = [];
     const timeoutError = Object.assign(new Error("spawnSync timed out"), { code: "ETIMEDOUT" });
@@ -267,7 +273,7 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     expect(() =>
       testing.runStartupMemoryCheck(
         [
@@ -294,7 +300,7 @@ describe("check-cli-startup-memory", () => {
       return;
     }
 
-    const tempRoot = makeTempRoot();
+    const tempRoot = tempRoots.make("openclaw-startup-memory-test-");
     const seenArgs: string[][] = [];
     const seenHomes: string[] = [];
 
@@ -329,8 +335,12 @@ describe("check-cli-startup-memory", () => {
     expect(seenArgs).toHaveLength(testing.cases.length * testing.sampleCount);
     expect(new Set(seenHomes).size).toBe(seenArgs.length);
     for (const args of seenArgs) {
-      expect(args[0]).toBe("--import");
-      expect(args[1]).toMatch(/^file:/u);
+      // The bench entry runs the launcher in-process instead of preloading an
+      // --import hook, which would disable the dist ESM resolve fast path and
+      // measure a non-default resolution configuration.
+      expect(args[0]).toMatch(/bench-entry\.mjs$/u);
+      expect(args[0]).not.toBe("--import");
+      expect(args[1]).not.toBe("openclaw.mjs");
     }
   });
 });

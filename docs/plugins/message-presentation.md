@@ -15,9 +15,12 @@ intent once, while each channel plugin renders the best native shape it can.
 Use presentation for portable message UI: text sections, small context/footer
 text, dividers, charts, tables, buttons, select menus, and card title/tone.
 
-Do not add new provider-native fields such as Discord `components`, Slack
-`blocks`, Telegram `buttons`, Teams `card`, or Feishu `card` to the shared
-message tool. Those are renderer outputs owned by the channel plugin.
+Do not add provider-native fields to the shared message tool by default. A
+native extension requires explicit maintainer approval, a channel-owned schema,
+documented cross-channel behavior, and capabilities that `presentation` cannot
+express. Discord `components` is the approved built-in exception for modal
+forms, media galleries, file blocks, sections with accessories, and styled
+containers. Use `presentation` for portable rich messages.
 
 ## Contract
 
@@ -77,8 +80,27 @@ type MessagePresentationAction =
       approvalKind: "exec" | "plugin";
       decision: "allow-once" | "allow-always" | "deny";
     }
+  | {
+      type: "question";
+      questionId: string;
+      optionValue: string;
+    }
+  | {
+      type: "question";
+      questionId: string;
+      intent: "custom-input";
+    }
   | { type: "url"; url: string }
-  | { type: "web-app"; url: string };
+  | {
+      type: "web-app";
+      url: string;
+      widgetId?: string;
+    }
+  | {
+      type: "web-app";
+      url?: string;
+      widgetId: string;
+    };
 
 type MessagePresentationButton = {
   label: string;
@@ -127,8 +149,28 @@ Button semantics:
   encode that action into a transport-private callback and resolve it through
   the approval service; they must not parse `/approve` command text or infer
   kind from the ID.
+- `action.type: "question"` identifies one choice for a live, runtime-authored
+  `ask_user` question. Like `approval`, this is an OpenClaw runtime action;
+  agents and plugins must not synthesize question IDs. Telegram, Discord, and
+  Slack map it to transport-private native callbacks and resolve the choice
+  through the Gateway. When the question becomes answered, expired, or
+  cancelled, those channels edit the delivered message, remove its actions,
+  and append the terminal status. WhatsApp, Signal, and iMessage render up to
+  four single-select choices as `1️⃣` through `4️⃣` reactions. Other question
+  shapes degrade to label text, and the user can answer with a plain-text
+  reply.
+- `intent: "custom-input"` switches a live question to its free-text answer
+  path without resolving it. Producers must also state the free-text route in
+  visible text. A channel can omit this one native control while keeping
+  declared-choice controls native when it cannot target a text composer safely.
+  Telegram maps it to **Other…** and Force Reply. Discord and Slack keep the
+  visible text route.
 - `action.type: "url"` opens a normal link.
-- `action.type: "web-app"` launches a channel-native web app.
+- `action.type: "web-app"` launches a channel-native web app. Set `url` for a
+  URL-backed app or `widgetId` for an OpenClaw-hosted widget whose launch
+  mechanics are owned by the channel; at least one is required. When both are
+  present, a channel can prefer its native hosted-widget launch and use the URL
+  where that mechanism is unavailable.
 - `value` is the legacy opaque callback value. New controls should use `action`
   so channel plugins can map commands and callbacks without guessing from text.
 - `url`, `webApp`, and `web_app` remain accepted as deprecated boundary inputs.
@@ -403,6 +445,25 @@ const adapter: ChannelOutboundAdapter = {
 };
 ```
 
+When a capability depends on per-account configuration or the delivery's text
+funnel — for example Telegram only renders native tables on `richMessages`
+accounts and only on the markdown path — declare the optional
+`resolvePresentationCapabilities({ cfg, accountId, formatting })` hook next to
+the static object. Core resolves capabilities once per delivery and the hook
+takes precedence over the static declaration; keep the static object as the
+account-independent baseline.
+
+```ts
+const adapter: ChannelOutboundAdapter = {
+  presentationCapabilities: BASE_CAPABILITIES,
+  resolvePresentationCapabilities: ({ cfg, accountId, formatting }) => ({
+    ...BASE_CAPABILITIES,
+    tables: isRichAccount(cfg, accountId) && formatting?.parseMode !== "HTML",
+  }),
+  // ...
+};
+```
+
 Capability booleans describe what the renderer can make interactive. Optional
 `limits` describe the generic envelope core can adapt before calling the
 renderer:
@@ -477,6 +538,12 @@ plugins own native rendering and interaction handling.
 
 Presentation must be safe to send on limited channels.
 
+Producers that hand-author the plain rendering of the same facts can mark it
+with `presentationTextMode: "fallback"` on the reply payload. Channels that
+render the presentation's data blocks natively drop that text; when every
+`table` and `chart` block degrades and no interactive block remains, the
+authored text ships verbatim instead of the generic flatten below.
+
 Fallback text includes:
 
 - `title` as the first line
@@ -501,11 +568,12 @@ keeping opaque callback data private:
 - **`approval`-typed actions** render label-only. Approval IDs and decisions are
   transport data and are not exposed through generic scalar helpers or fallback
   text.
-- **`url` / `web-app` actions** and deprecated **`url` / `webApp` / `web_app`**
-  inputs render the URL text alongside the button label, since the URL is
-  user-facing.
-- **Select options** render as label-only. The underlying option value is not
-  exposed in fallback text.
+- **`url` actions**, URL-backed **`web-app` actions**, and deprecated **`url` /
+  `webApp` / `web_app`** inputs render the URL text alongside the button label,
+  since the URL is user-facing. Hosted-widget-only actions render label-only on
+  channels without a native widget launch.
+- **Select options** follow the same rule: typed commands include the command
+  text; opaque callback actions and legacy values remain label-only.
 
 Channel adapters that add manual-command guidance in their fallback UI (e.g.
 Feishu document-comment instructions) must derive the command-present check
@@ -531,8 +599,8 @@ Current bundled renderers:
 
 | Channel         | Native render target                      | Notes                                                                                                                                                                                                             |
 | --------------- | ----------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Discord         | Components and component containers       | Preserves legacy `channelData.discord.components` for existing provider-native payload producers, but new shared sends should use `presentation`.                                                                 |
-| Feishu          | Interactive cards                         | Card header can use `title`; body avoids duplicating that title.                                                                                                                                                  |
+| Discord         | Components and component containers       | Supports the documented Discord-specific `components` extension for native layouts that `presentation` cannot express. Portable shared sends should use `presentation`.                                           |
+| Feishu          | Interactive cards                         | Card header uses `title` once. Within native cards, disabled or unsupported buttons retain label-only text; rejected URL targets and opaque callback values are omitted.                                          |
 | Matrix          | Text fallback plus structured event field | Buttons/selects advertise as supported, but every block currently renders as `renderMessagePresentationFallbackText` output carried in a `com.openclaw.presentation` event field, not native interactive widgets. |
 | Mattermost      | Text plus interactive props               | Selects and dividers are not supported; those blocks degrade to text.                                                                                                                                             |
 | Microsoft Teams | Adaptive Cards                            | Plain `message` text is included with the card when both are provided. Selects, styles, and disabled state are not supported.                                                                                     |
@@ -541,7 +609,7 @@ Current bundled renderers:
 | Plain channels  | Text fallback                             | Channels without a renderer still get readable output.                                                                                                                                                            |
 
 Provider-native payload compatibility is a transition affordance for existing
-reply producers. It is not a reason to add new shared native fields.
+reply producers. New native fields require the explicit exception review above.
 
 ## Presentation vs InteractiveReply
 
@@ -613,9 +681,8 @@ Non-deprecated helpers worth knowing:
 The legacy `InteractiveReply*` types and conversion helpers are marked
 `@deprecated` in the SDK:
 
-- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`,
-  `InteractiveReplyOption`, `InteractiveReplySelectBlock`, and
-  `InteractiveReplyTextBlock`
+- `InteractiveReply`, `InteractiveReplyBlock`, `InteractiveReplyButton`, and
+  `InteractiveReplyOption`
 - `normalizeInteractiveReply(...)`
 - `hasInteractiveReplyBlocks(...)`
 - `interactiveReplyToPresentation(...)`
@@ -631,8 +698,6 @@ them; send `presentation` and let core/channel adaptation handle rendering.
 
 Approval helpers also have presentation-first replacements:
 
-- use `buildApprovalPresentationFromActionDescriptors(...)` instead of
-  `buildApprovalInteractiveReplyFromActionDescriptors(...)`
 - use `buildApprovalPresentation(...)` instead of
   `buildApprovalInteractiveReply(...)`
 - use `buildExecApprovalPresentation(...)` instead of
@@ -684,8 +749,8 @@ messages where the provider supports those operations.
   sends.
 - Add delivery pin support through `deliveryCapabilities.pin` and
   `pinDeliveredMessage` only when the provider can pin the sent message id.
-- Do not expose new provider-native card/block/component/button fields through
-  the shared message action schema.
+- Do not expose provider-native card/block/component/button fields through the
+  shared message action schema without the explicit exception review above.
 
 ## Related docs
 

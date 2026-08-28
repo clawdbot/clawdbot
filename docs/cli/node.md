@@ -70,22 +70,41 @@ Disable it on the node if needed:
 
 ## Run (foreground)
 
+For one-paste onboarding, use [`openclaw connect`](/cli/connect). It accepts a
+single-use join URL or the same setup code forms as `--pair`, then runs this
+node-host runtime.
+
 ```bash
 openclaw node run --host <gateway-host> --port 18789
+```
+
+Or paste a short-lived node setup link from the Control UI Devices page:
+
+```bash
+openclaw node run --pair "oc-pair://<setup-code>"
 ```
 
 Options:
 
 - `--host <host>`: Gateway WebSocket host (default: `127.0.0.1`)
+- `--pair <code-or-url>`: Read the Gateway endpoint, bootstrap token, TLS mode,
+  and optional certificate pin from a setup code or `oc-pair://` URL. Explicit
+  gateway flags override values from `--pair`.
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
 - `--no-tls`: Force a plaintext Gateway connection even when the local Gateway config enables TLS
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
+- `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
 
 ## Gateway auth for node host
+
+`--pair` uses a 10-minute single-use bootstrap token for the first connection.
+After pairing, reconnects use the durable device credential. The setup link
+does not pre-approve `system.run`; normal node approval and SSH verification
+remain in force. `node install --pair` is intentionally unavailable because a
+short-lived bearer setup link must not be persisted in service arguments.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
@@ -95,6 +114,16 @@ Options:
 - If `gateway.auth.token` / `gateway.auth.password` is explicitly configured via SecretRef and unresolved, node auth resolution fails closed (no remote fallback masking).
 - In `gateway.mode=remote`, remote client fields (`gateway.remote.token` / `gateway.remote.password`) are also eligible per remote precedence rules.
 - Node host auth resolution only honors `OPENCLAW_GATEWAY_*` env vars.
+
+For a Gateway behind Cloudflare Access, set `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` together before `openclaw connect`, `openclaw node
+run`, or `openclaw node install`. The node stores env SecretRefs under its
+canonical `gateway.cloudflareAccess.clientId` and `clientSecret` connection
+keys. Installed services keep the values in the managed service environment
+file, not in service arguments or inline supervisor definitions. Access
+credentials require HTTPS/WSS; plaintext HTTP/WS fails before SecretRef
+resolution while credential-free plaintext node routes remain unchanged. See
+[Gateway deployments that cannot host nodes](/nodes#gateway-deployments-that-cannot-host-nodes).
 
 For a node connecting to a plaintext `ws://` Gateway, loopback, private IP
 literals, `.local`, and Tailnet `*.ts.net` hosts are accepted. For other
@@ -121,10 +150,16 @@ Options:
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
-- `--node-id <id>`: Override the legacy client instance ID stored in `node.json` (does not reset pairing)
+- `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
-- `--runtime <runtime>`: Service runtime (`node`)
+- `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
 - `--force`: Reinstall/overwrite if already installed
+
+> **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
+> install. Without lingering, `systemd --user` tears down the node service when
+> your last SSH session ends, so the node silently goes offline after logout.
+> `openclaw node install` prints this warning when it detects lingering is
+> disabled.
 
 Manage the service:
 
@@ -139,6 +174,9 @@ openclaw node uninstall
 Use `openclaw node run` for a foreground node host (no service).
 
 Service commands accept `--json` for machine-readable output.
+`node start` and `node restart` print install hints and exit nonzero when no
+managed node service is installed; run `openclaw node install` first. Stopping
+an absent service remains a successful no-op.
 
 The node host retries Gateway restart and network closes in-process. If the
 Gateway reports a terminal token/password/bootstrap auth pause, the node host
@@ -170,8 +208,8 @@ Inspect the local node identity the Gateway verifies against:
 openclaw node identity --json
 ```
 
-It prints the device ID and public key from `identity/device.json` and never
-creates or modifies identity files.
+It prints the device ID and public key from the `primary` row in
+`state/openclaw.sqlite` and never creates the database or a new identity.
 
 On tightly controlled node networks, the Gateway operator can explicitly opt in
 to auto-approving first-time node pairing from trusted CIDRs:
@@ -199,20 +237,21 @@ Run `openclaw devices list` again before approval.
 
 ### Identity and pairing state
 
-The headless node separates its legacy client instance ID from the signed device
-identity that the Gateway uses for pairing and routing. These files live in the
+The headless node separates its client instance ID from the signed device
+identity that the Gateway uses for pairing and routing. This state lives in the
 OpenClaw state directory (`~/.openclaw` by default, or `$OPENCLAW_STATE_DIR`
 when set):
 
-| File                        | Purpose                                                                                                                                       |
-| --------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `node.json`                 | Client instance ID under the legacy `nodeId` key, display name, and Gateway connection metadata. The client sends this value as `instanceId`. |
-| `identity/device.json`      | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity.              |
-| `identity/device-auth.json` | Paired device tokens, keyed by cryptographic device ID and role.                                                                              |
+| State                                                                   | Purpose                                                                                                                          |
+| ----------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `state/openclaw.sqlite` (`config_machine_state`, key `nodeHost.config`) | Client instance ID, display name, and Gateway connection metadata. The client sends this ID as `instanceId`.                     |
+| `state/openclaw.sqlite` (`device_identities`, `primary`)                | Signed Ed25519 keypair and derived device ID. For signed connections, this device ID is the routed node ID and pairing identity. |
+| `state/openclaw.sqlite` (`device_auth_tokens`)                          | Paired device tokens, keyed by cryptographic device ID and role.                                                                 |
 
-`--node-id` changes only the client instance ID in `node.json`. It does not
-change the cryptographic device ID or clear pairing auth. Deleting only
-`node.json` likewise does not reset pairing. To revoke and re-pair a node:
+`--node-id` changes only the client instance ID in shared SQLite state. It does
+not change the cryptographic device ID or clear pairing auth. Migrating a retired
+`node.json` with `openclaw doctor --fix` likewise does not reset pairing. To
+revoke and re-pair a node:
 
 1. On the Gateway, run `openclaw nodes remove --node <id|name|ip>`.
 2. On the node, restart the installed service with `openclaw node restart`, or
@@ -233,17 +272,21 @@ The two request IDs are distinct. An applicable trusted-CIDR policy can
 auto-approve the first-time device-pairing step; command-surface approval remains
 a separate check.
 
-Older OpenClaw releases could leave a legacy `token` field in `node.json`.
-Current OpenClaw does not use that field and removes it the next time the node
-host saves the file. Keep both files under `identity/` private; they contain the
-device keypair and auth tokens.
+Older OpenClaw releases stored node-host state in `node.json`, the signed
+identity in `identity/device.json`, and paired auth in
+`identity/device-auth.json`. Stop the node host and run
+`openclaw doctor --fix` once; Doctor claims each retired source, validates it,
+imports and verifies the canonical SQLite row, then removes the old file. Normal
+node commands fail closed with this repair instruction while either retired file
+or an interrupted Doctor claim remains. Keep `state/openclaw.sqlite` private;
+it contains the device keypair and auth tokens.
 
 ## Exec approvals
 
 `system.run` is gated by local exec approvals:
 
-- `$OPENCLAW_STATE_DIR/exec-approvals.json`, or
-  `~/.openclaw/exec-approvals.json` when the variable is unset
+- `$OPENCLAW_STATE_DIR/state/openclaw.sqlite#exec_approvals_config`, or
+  `~/.openclaw/state/openclaw.sqlite#exec_approvals_config` when the variable is unset
 - [Exec approvals](/tools/exec-approvals)
 - `openclaw approvals --node <id|name|ip>` (edit from the Gateway)
 
@@ -255,4 +298,5 @@ created are rejected instead of changing what the node executes.
 ## Related
 
 - [CLI reference](/cli)
+- [Connect a machine](/cli/connect)
 - [Nodes](/nodes)

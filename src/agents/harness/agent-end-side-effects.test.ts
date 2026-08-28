@@ -1,16 +1,12 @@
-// Verifies agent-end side effects keep plugin hooks independent from auto-capture.
+// Verifies agent-end side effects keep plugin hooks independent from experience review.
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { runSkillResearchAutoCapture } from "../../skills/research/autocapture.js";
+import { recordRunSkillUsage } from "../../skills/runtime/run-usage.js";
 import { scheduleSkillExperienceReview } from "../../skills/workshop/experience-review-default.js";
 import { awaitAgentEndSideEffects, runAgentEndSideEffects } from "./agent-end-side-effects.js";
 import {
   awaitAgentHarnessAgentEndHook,
   runAgentHarnessAgentEndHook,
 } from "./lifecycle-hook-helpers.js";
-
-vi.mock("../../skills/research/autocapture.js", () => ({
-  runSkillResearchAutoCapture: vi.fn(),
-}));
 
 vi.mock("../../skills/workshop/experience-review-default.js", () => ({
   scheduleSkillExperienceReview: vi.fn(),
@@ -21,29 +17,24 @@ vi.mock("./lifecycle-hook-helpers.js", () => ({
   runAgentHarnessAgentEndHook: vi.fn(),
 }));
 
-const mockAutoCapture = vi.mocked(runSkillResearchAutoCapture);
 const mockExperienceReview = vi.mocked(scheduleSkillExperienceReview);
 const mockAwaitAgentEndHook = vi.mocked(awaitAgentHarnessAgentEndHook);
 const mockRunAgentEndHook = vi.mocked(runAgentHarnessAgentEndHook);
 
 describe("agent end side effects", () => {
   beforeEach(() => {
-    mockAutoCapture.mockReset();
     mockExperienceReview.mockReset();
     mockAwaitAgentEndHook.mockReset();
     mockRunAgentEndHook.mockReset();
   });
 
-  it("fires plugin agent_end hooks without waiting for Skill Research auto-capture", async () => {
-    let resolveCapture: (() => void) | undefined;
-    mockAutoCapture.mockReturnValueOnce(
-      new Promise<void>((resolve) => {
-        resolveCapture = resolve;
-      }),
-    );
-
-    // Plugin hooks are user-visible lifecycle behavior; auto-capture is
-    // opportunistic and must not delay fire-and-forget agent_end dispatch.
+  it("fires plugin agent_end hooks alongside experience review scheduling", async () => {
+    recordRunSkillUsage({
+      runId: "run-1",
+      name: "release-runbook",
+      source: "workspace",
+      activation: "read",
+    });
     runAgentEndSideEffects({
       event: {
         messages: [],
@@ -54,11 +45,18 @@ describe("agent end side effects", () => {
         sessionKey: "agent:main:main",
         workspaceDir: "/workspace",
         trigger: "user",
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: "/agent",
+          workspaceDir: "/workspace",
+          sandboxSessionKey: "agent:main:main",
+          trigger: "user",
+        },
         config: {
           skills: {
             workshop: {
               autonomous: {
-                enabled: true,
+                mode: "propose",
               },
             },
           },
@@ -68,47 +66,41 @@ describe("agent end side effects", () => {
 
     expect(mockRunAgentEndHook).toHaveBeenCalledTimes(1);
     await vi.waitFor(() => expect(mockExperienceReview).toHaveBeenCalledTimes(1));
-    await vi.waitFor(() => {
-      expect(mockAutoCapture).toHaveBeenCalledWith({
-        event: {
-          messages: [],
-          success: true,
-        },
-        ctx: {
-          runId: "run-1",
-          sessionKey: "agent:main:main",
-          workspaceDir: "/workspace",
-          trigger: "user",
-          config: {
-            skills: {
-              workshop: {
-                autonomous: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-        config: {
-          skills: {
-            workshop: {
-              autonomous: {
-                enabled: true,
-              },
-            },
-          },
-        },
-      });
-    });
-
-    resolveCapture?.();
+    expect(mockExperienceReview).toHaveBeenCalledWith(
+      expect.objectContaining({
+        usedSkills: [{ name: "release-runbook", source: "workspace", activation: "read" }],
+      }),
+    );
   });
 
-  it("still runs agent_end hooks when Skill Research auto-capture fails", async () => {
-    mockAutoCapture.mockRejectedValueOnce(new Error("capture failed"));
+  it("still runs agent_end hooks when experience review scheduling fails", async () => {
+    mockExperienceReview.mockImplementationOnce(() => {
+      throw new Error("scheduling failed");
+    });
 
-    // Awaiting callers still get hook completion even when optional research
-    // capture rejects.
+    await awaitAgentEndSideEffects({
+      event: {
+        messages: [],
+        success: true,
+      },
+      ctx: {
+        runId: "run-1",
+        workspaceDir: "/workspace",
+        foregroundPromptContext: {
+          agentId: "main",
+          agentDir: "/agent",
+          workspaceDir: "/workspace",
+          sandboxSessionKey: "agent:main:main",
+          trigger: "user",
+        },
+      },
+    });
+
+    expect(mockExperienceReview).toHaveBeenCalledTimes(1);
+    expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips experience review for CLI hook contexts", async () => {
     await awaitAgentEndSideEffects({
       event: {
         messages: [],
@@ -120,17 +112,7 @@ describe("agent end side effects", () => {
       },
     });
 
-    expect(mockAutoCapture).toHaveBeenCalledWith({
-      event: {
-        messages: [],
-        success: true,
-      },
-      ctx: {
-        runId: "run-1",
-        workspaceDir: "/workspace",
-      },
-    });
+    expect(mockExperienceReview).not.toHaveBeenCalled();
     expect(mockAwaitAgentEndHook).toHaveBeenCalledTimes(1);
-    expect(mockExperienceReview).toHaveBeenCalledTimes(1);
   });
 });

@@ -1,29 +1,38 @@
+import { writeConfigMachineState } from "../state/config-machine-state.js";
 // Maintains config metadata fields written alongside user config.
 import { VERSION } from "../version.js";
+import { materializeModelPolicyAllowlist } from "./model-policy-allowlist-migration.js";
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 /** Metadata keys automatically stamped on config writes. */
-const AUTO_MANAGED_CONFIG_META_FIELDS = {
-  lastTouchedVersion: "lastTouchedVersion",
-  lastTouchedAt: "lastTouchedAt",
-} as const;
-
 export const AUTO_MANAGED_CONFIG_META_PATHS = [
-  ["meta", AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedVersion],
-  ["meta", AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedAt],
+  ["meta", "lastTouchedVersion"],
+  ["meta", "migrations", "modelPolicyAllowlist"],
 ] as const;
 
 export function stampConfigWriteMetadata(
   cfg: OpenClawConfig,
-  now: string = new Date().toISOString(),
+  _now: string = new Date().toISOString(),
   version: string = VERSION,
+  previousConfig?: unknown,
 ): OpenClawConfig {
+  const migrationStamped =
+    previousConfig === undefined
+      ? cfg
+      : materializeModelPolicyAllowlist(cfg, previousConfig).config;
   return {
-    ...cfg,
+    ...migrationStamped,
     meta: {
-      ...cfg.meta,
-      [AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedVersion]: version,
-      [AUTO_MANAGED_CONFIG_META_FIELDS.lastTouchedAt]: now,
+      ...migrationStamped.meta,
+      lastTouchedVersion: version,
     },
   };
+}
+
+/** Persist machine-owned metadata only after the matching config file commit succeeds. */
+export function recordConfigWriteMetadata(
+  now: string = new Date().toISOString(),
+  _version: string = VERSION,
+): void {
+  writeConfigMachineState("config.lastTouchedAt", now);
 }

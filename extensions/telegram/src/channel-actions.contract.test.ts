@@ -17,10 +17,43 @@ describe("telegram actions contract", () => {
             },
           },
         } as OpenClawConfig,
-        expectedActions: ["send", "poll", "react", "delete", "edit", "topic-create", "topic-edit"],
+        expectedActions: [
+          "send",
+          "poll",
+          "react",
+          "emoji-list",
+          "delete",
+          "edit",
+          "topic-create",
+          "topic-edit",
+        ],
         expectedCapabilities: ["delivery-pin", "presentation"],
       },
     ],
+  });
+
+  it("exposes provider-owned read gates and message resource aliases through the registered adapter", () => {
+    expect(telegramPlugin.actions?.providerOwnedReadGates).toEqual([
+      "react",
+      "edit",
+      "delete",
+      "emoji-list",
+    ]);
+    for (const action of ["react", "edit", "delete"] as const) {
+      expect(telegramPlugin.actions?.messageActionTargetAliases?.[action]).toEqual({
+        aliases: ["messageId"],
+        deliveryTargetAliases: [],
+      });
+    }
+  });
+
+  it("routes registered message actions through the gateway", () => {
+    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "send" as never })).toBe(
+      "gateway",
+    );
+    expect(telegramPlugin.actions?.resolveExecutionMode?.({ action: "read" as never })).toBe(
+      "gateway",
+    );
   });
 
   it.each([
@@ -68,20 +101,23 @@ describe("telegram actions contract", () => {
     },
   );
 
-  it("does not advertise a richText message-tool capability", () => {
-    const capabilities = telegramPlugin.agentPrompt?.messageToolCapabilities?.({
-      cfg: {
-        channels: {
-          telegram: {
-            botToken: "test-token-placeholder",
-            richMessages: true,
+  it("advertises markdown details only for rich-message accounts", () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          accounts: {
+            rich: { botToken: "rich-token-placeholder", richMessages: true },
+            plain: { botToken: "plain-token-placeholder", richMessages: false },
           },
         },
-      } as OpenClawConfig,
-    });
+      },
+    } as OpenClawConfig;
+    const capabilitiesFor = (accountId: string) =>
+      telegramPlugin.agentPrompt?.messageToolCapabilities?.({ cfg, accountId });
 
-    expect(capabilities).toContain("inlineButtons");
-    expect(capabilities).not.toContain("richText");
+    expect(capabilitiesFor("rich")).toContain("markdownDetails");
+    expect(capabilitiesFor("rich")).not.toContain("richText");
+    expect(capabilitiesFor("plain")).not.toContain("markdownDetails");
   });
 
   it("advertises inline buttons when legacy Telegram capabilities are empty", () => {
@@ -226,7 +262,7 @@ describe("telegram actions contract", () => {
           channel: "telegram",
           action: "send",
           cfg: {} as OpenClawConfig,
-          params: { quoteText: "  original message  " },
+          params: { quoteText: "  original message\n  " },
         },
         to: "123456",
         payload: {
@@ -241,7 +277,7 @@ describe("telegram actions contract", () => {
       channelData: {
         telegram: {
           parseMode: "MarkdownV2",
-          quoteText: "original message",
+          quoteText: "  original message\n  ",
         },
       },
     });
@@ -263,7 +299,7 @@ describe("telegram actions contract", () => {
           channel: "telegram",
           action: "send",
           cfg: {} as OpenClawConfig,
-          params: { quote_text: "  snake case quote  " },
+          params: { quote_text: " \nsnake case quote  " },
         },
         to: "123456",
         payload: { text: "Chart", presentation },
@@ -271,7 +307,7 @@ describe("telegram actions contract", () => {
     ).toEqual({
       text: "Chart",
       presentation,
-      channelData: { telegram: { quoteText: "snake case quote" } },
+      channelData: { telegram: { quoteText: " \nsnake case quote  " } },
     });
   });
 
@@ -303,5 +339,32 @@ describe("telegram actions contract", () => {
         payload: { location },
       }),
     ).resolves.toEqual({ location });
+  });
+
+  it("rejects retired native buttons before prepared presentation delivery", async () => {
+    const prepareSendPayload = telegramPlugin.actions?.prepareSendPayload;
+
+    await expect(
+      prepareSendPayload?.({
+        ctx: {
+          channel: "telegram",
+          action: "send",
+          cfg: {} as OpenClawConfig,
+          params: { buttons: '[[{"text":"Yes","callback_data":"yes"}]]' },
+        },
+        to: "123456",
+        payload: {
+          text: "Choose",
+          presentation: {
+            blocks: [
+              {
+                type: "buttons",
+                buttons: [{ label: "Yes", action: { type: "callback", value: "yes" } }],
+              },
+            ],
+          },
+        },
+      }),
+    ).rejects.toThrow(/native "buttons" is unsupported.*Use presentation/);
   });
 });

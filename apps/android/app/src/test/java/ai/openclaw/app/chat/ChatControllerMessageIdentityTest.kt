@@ -10,6 +10,24 @@ import org.junit.Assert.assertNotEquals
 import org.junit.Test
 
 class ChatControllerMessageIdentityTest {
+  @Test
+  fun reconcileMessageIdsKeepsCanonicalEntryIdentityFromReload() {
+    val previous =
+      ChatMessage(
+        id = "stable-compose-id",
+        role = "user",
+        content = listOf(ChatMessageContent(text = "hello")),
+        timestampMs = 10,
+        entryId = "old-entry",
+      )
+    val incoming = previous.copy(id = "temporary-id", entryId = "canonical-entry")
+
+    val reconciled = reconcileMessageIds(listOf(previous), listOf(incoming)).single()
+
+    assertEquals("stable-compose-id", reconciled.id)
+    assertEquals("canonical-entry", reconciled.entryId)
+  }
+
   private val json = Json { ignoreUnknownKeys = true }
 
   @Test
@@ -43,6 +61,30 @@ class ChatControllerMessageIdentityTest {
   }
 
   @Test
+  fun managedImagesParticipateInMessageIdentity() {
+    fun message(artifactId: String) =
+      ChatMessage(
+        id = artifactId,
+        role = "assistant",
+        content =
+          listOf(
+            ChatMessageContent(
+              type = "image",
+              artifactId = artifactId,
+              url = "/api/chat/media/outgoing/main/$artifactId/full",
+              mimeType = "image/png",
+            ),
+          ),
+        timestampMs = 1,
+      )
+
+    assertNotEquals(
+      messageIdentityKey(message("artifact_managed_image_11111111-1111-4111-8111-111111111111")),
+      messageIdentityKey(message("artifact_managed_image_22222222-2222-4222-8222-222222222222")),
+    )
+  }
+
+  @Test
   @OptIn(ExperimentalCoroutinesApi::class)
   fun liveHistoryDropsInternalRoleRows() =
     runTest {
@@ -55,11 +97,15 @@ class ChatControllerMessageIdentityTest {
               """
               {
                 "messages": [
-                  { "role": "user", "content": "hello" },
+                  { "role": "user", "content": "hello", "senderLabel": "  Alex (Slack)  " },
+                  { "role": "user", "content": "numeric sender", "senderLabel": 42 },
+                  { "role": "user", "content": "boolean sender", "senderLabel": true },
+                  { "role": "user", "content": "blank sender", "senderLabel": "  " },
+                  { "role": "user", "content": "null sender", "senderLabel": null },
                   { "role": "toolResult", "content": "private tool output" },
                   { "role": "internal", "text": "private reasoning" },
                   { "role": "custom", "content": "visible plugin notice" },
-                  { "role": "Assistant", "content": "reply" }
+                  { "role": "Assistant", "content": "reply", "senderLabel": "Spoofed sender" }
                 ]
               }
               """.trimIndent()
@@ -72,10 +118,77 @@ class ChatControllerMessageIdentityTest {
       controller.load("main")
       advanceUntilIdle()
 
-      assertEquals(listOf("user", "custom", "assistant"), controller.messages.value.map { it.role })
       assertEquals(
-        listOf("hello", "visible plugin notice", "reply"),
+        listOf("user", "user", "user", "user", "user", "custom", "assistant"),
+        controller.messages.value.map { it.role },
+      )
+      assertEquals(
+        listOf("hello", "numeric sender", "boolean sender", "blank sender", "null sender", "visible plugin notice", "reply"),
         controller.messages.value.map { it.content.single().text },
+      )
+      assertEquals(listOf("Alex (Slack)", null, null, null, null, null, null), controller.messages.value.map { it.senderLabel })
+    }
+
+  @Test
+  @OptIn(ExperimentalCoroutinesApi::class)
+  fun liveHistoryDecodesSystemNoticeMetadataWithoutChangingRoles() =
+    runTest {
+      val controller =
+        ChatController(
+          scope = this,
+          json = json,
+          requestGateway = { method, _ ->
+            if (method == "chat.history") {
+              """
+              {
+                "messages": [
+                  {
+                    "role": "user",
+                    "content": "[System] Continue the interrupted turn.",
+                    "provenance": {
+                      "kind": "internal_system",
+                      "sourceTool": "main_session_restart_recovery"
+                    }
+                  },
+                  {
+                    "role": "system",
+                    "content": "Compaction",
+                    "__openclaw": {
+                      "kind": "compaction",
+                      "id": "checkpoint-1",
+                      "tokensBefore": 900000.5,
+                      "tokensAfter": 24700.25
+                    }
+                  }
+                ]
+              }
+              """.trimIndent()
+            } else {
+              "{}"
+            }
+          },
+        )
+
+      controller.load("main")
+      advanceUntilIdle()
+
+      val messages = controller.messages.value
+      assertEquals(listOf("user", "system"), messages.map { it.role })
+      assertEquals(
+        ChatMessageProvenance(
+          kind = "internal_system",
+          sourceTool = "main_session_restart_recovery",
+        ),
+        messages[0].provenance,
+      )
+      assertEquals(
+        ChatTranscriptMarker(
+          kind = "compaction",
+          id = "checkpoint-1",
+          tokensBefore = 900000.5,
+          tokensAfter = 24700.25,
+        ),
+        messages[1].transcriptMarker,
       )
     }
 

@@ -1,15 +1,22 @@
 // Transcripts tool tests cover manual imports, live provider lifecycle, summary
 // artifacts, and date-qualified session selectors.
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { TranscriptStopRequest } from "../../transcripts/provider-types.js";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import type {
+  TranscriptSourceProvider,
+  TranscriptStopRequest,
+} from "../../transcripts/provider-types.js";
 import { TranscriptsStore } from "../../transcripts/store.js";
+import { startTranscripts } from "./transcripts-tool-runtime.js";
 import { createTranscriptsAutoStartService, createTranscriptsTool } from "./transcripts-tool.js";
 
-const { getTranscriptSourceProviderMock } = vi.hoisted(() => ({
+const { getTranscriptSourceProviderMock, listTranscriptSourceProvidersMock } = vi.hoisted(() => ({
   getTranscriptSourceProviderMock: vi.fn(),
+  listTranscriptSourceProvidersMock: vi.fn(() => []),
 }));
 
 vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
@@ -17,41 +24,170 @@ vi.mock("../../transcripts/provider-registry.js", async (importOriginal) => {
   return {
     ...actual,
     getTranscriptSourceProvider: getTranscriptSourceProviderMock,
+    listTranscriptSourceProviders: listTranscriptSourceProvidersMock,
   };
 });
-
-async function makeStateDir(): Promise<string> {
-  return await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-transcripts-"));
-}
+const tempDirs = createTempDirTracker();
 
 function currentDateDir(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-async function createHarness(stateDir: string, pluginConfig: Record<string, unknown> = {}) {
+async function createHarness(
+  stateDir: string,
+  pluginConfig: Record<string, unknown> = {},
+  agentId?: string,
+  origin?: { channel: string; accountId: string },
+) {
   const config = { transcripts: { enabled: true, ...pluginConfig } };
   const logger = { warn: vi.fn() };
   return {
     logger,
     service: createTranscriptsAutoStartService({ config, stateDir, logger }),
-    tool: createTranscriptsTool({ config, stateDir, logger }),
+    tool: createTranscriptsTool({
+      config,
+      stateDir,
+      logger,
+      ...(agentId ? { agentId } : {}),
+      ...(origin ? { agentChannel: origin.channel, agentAccountId: origin.accountId } : {}),
+      caller: origin
+        ? {
+            kind: "channel",
+            channel: origin.channel,
+            accountId: origin.accountId,
+            senderId: "test-sender",
+            roleIds: [],
+          }
+        : { kind: "operator", source: "local" },
+    }),
+  };
+}
+
+function storeFor(stateDir: string): TranscriptsStore {
+  return new TranscriptsStore(path.join(stateDir, "transcripts"), {
+    env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+  });
+}
+
+function discordAccountOwnership(
+  resolveAccountId: NonNullable<TranscriptSourceProvider["accessControl"]>["resolveAccountId"] = ({
+    source,
+  }) => ({ ok: true, value: source.accountId }),
+): NonNullable<TranscriptSourceProvider["accessControl"]> {
+  return {
+    channelId: "discord",
+    resolveAccountId,
+    authorize: async ({ caller, source }) =>
+      caller.kind === "operator" ||
+      (caller.channel === "discord" && caller.accountId === source.accountId)
+        ? { ok: true as const, value: undefined }
+        : { ok: false as const, error: "account denied" },
   };
 }
 
 describe("transcripts tool", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  });
+
   beforeEach(() => {
     getTranscriptSourceProviderMock.mockReset();
+    listTranscriptSourceProvidersMock.mockClear();
   });
 
   it("creates the core transcripts tool", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const { tool } = await createHarness(stateDir);
 
     expect(tool.name).toBe("transcripts");
   });
 
+  it("adds the trusted tool agent to live source ownership metadata", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-");
+    const start = vi.fn(async (request) => {
+      expect(request.session).toMatchObject({
+        source: {
+          agentId: "research",
+          meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
+          providerId: "zoom",
+        },
+        metadata: { agentId: "research" },
+      });
+      return { ok: false as const, error: "ownership checked" };
+    });
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "proof-live",
+      name: "Proof Live",
+      sourceKinds: ["live-caption"],
+      start,
+    });
+    const { tool } = await createHarness(stateDir, {}, "research");
+
+    await expect(
+      tool.execute(
+        "call-1",
+        {
+          action: "start",
+          meetingUrl: "https://zoom.us/j/1234567890?context=opaque-value#fragment",
+          providerId: "zoom",
+          sessionId: "owned-meeting",
+        },
+        undefined,
+        vi.fn(),
+      ),
+    ).rejects.toThrow("ownership checked");
+
+    expect(start).toHaveBeenCalledOnce();
+    await expect(storeFor(stateDir).readSession("owned-meeting")).resolves.toMatchObject({
+      source: { meetingUrl: "https://zoom.us/j/1234567890" },
+    });
+  });
+
+  it("lets a channel-less tool without an agent id manage its account-bound capture", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-");
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    const stop = vi.fn(async (request) => ({ ok: true as const, sessionId: request.sessionId }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      accessControl: discordAccountOwnership(),
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(stateDir);
+
+    await tool.execute(
+      "start-local",
+      {
+        action: "start",
+        providerId: "discord-voice",
+        accountId: "account-a",
+        sessionId: "local-account-bound",
+      },
+      undefined,
+      vi.fn(),
+    );
+    await expect(
+      tool.execute("status-local", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "local-account-bound" })] },
+    });
+    await tool.execute(
+      "stop-local",
+      { action: "stop", sessionId: "local-account-bound" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledWith(
+      expect.objectContaining({ source: expect.objectContaining({ accountId: "account-a" }) }),
+    );
+  });
+
   it("requires explicit enablement before execution", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const { tool } = await createHarness(stateDir, { enabled: false });
 
     await expect(tool.execute("call-1", { action: "status" }, undefined, vi.fn())).rejects.toThrow(
@@ -60,7 +196,7 @@ describe("transcripts tool", () => {
   });
 
   it("cancels a pending live capture when the agent run is aborted", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     const stop = vi.fn(async () => ({ ok: true, sessionId: "cancelled-meeting" }));
     const start = vi.fn(async (request) => {
@@ -102,7 +238,7 @@ describe("transcripts tool", () => {
   });
 
   it("keeps capturing after a successfully started agent run is later aborted", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     let emitAfterStart: (() => Promise<void>) | undefined;
     let startupSignal: AbortSignal | undefined;
@@ -110,7 +246,7 @@ describe("transcripts tool", () => {
       startupSignal = request.abortSignal;
       emitAfterStart = async () => {
         await request.onUtterance({
-          text: "captured after the start action completed",
+          text: "captured after the start action completed\nsecond\tcolumn",
           final: true,
         });
       };
@@ -141,22 +277,30 @@ describe("transcripts tool", () => {
     expect(startupSignal?.aborted).toBe(false);
     await emitAfterStart?.();
 
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "transcript.jsonl"),
-        "utf8",
-      ),
-    ).resolves.toContain("captured after the start action completed");
+    const ongoingStore = storeFor(stateDir);
+    const ongoingSession = await ongoingStore.readSession("ongoing-meeting");
+    expect(ongoingSession).toBeDefined();
+    await expect(ongoingStore.readUtterancesForSession(ongoingSession!)).resolves.toEqual([
+      expect.objectContaining({
+        text: "captured after the start action completed\nsecond\tcolumn",
+      }),
+    ]);
     await tool.execute(
       "call-2",
       { action: "stop", sessionId: "ongoing-meeting" },
       undefined,
       vi.fn(),
     );
+    await expect(
+      fs.readFile(
+        path.join(stateDir, "transcripts", currentDateDir(), "ongoing-meeting", "summary.md"),
+        "utf8",
+      ),
+    ).resolves.toContain("captured after the start action completed\\nsecond\\tcolumn");
   });
 
   it("drops late utterances and keeps repeated abort cleanup failures retryable", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     let cleanupFailuresRemaining = 2;
     const stop = vi.fn(async () =>
@@ -194,18 +338,10 @@ describe("transcripts tool", () => {
       ),
     ).rejects.toThrow("transcripts start aborted; provider cleanup failed: voice cleanup failed");
 
-    await expect(
-      fs.readFile(
-        path.join(
-          stateDir,
-          "transcripts",
-          currentDateDir(),
-          "cancelled-meeting-retry",
-          "transcript.jsonl",
-        ),
-        "utf8",
-      ),
-    ).rejects.toMatchObject({ code: "ENOENT" });
+    const cancelledStore = storeFor(stateDir);
+    const cancelledSession = await cancelledStore.readSession("cancelled-meeting-retry");
+    expect(cancelledSession).toBeDefined();
+    await expect(cancelledStore.readUtterancesForSession(cancelledSession!)).resolves.toEqual([]);
     expect(stop).toHaveBeenCalledOnce();
 
     await expect(
@@ -242,13 +378,12 @@ describe("transcripts tool", () => {
   });
 
   it("reserves a session id while provider startup is pending", async () => {
-    const stateDir = await makeStateDir();
-    let releaseStart: (() => void) | undefined;
-    const startGate = new Promise<void>((resolve) => {
-      releaseStart = resolve;
-    });
+    const stateDir = tempDirs.make("openclaw-transcripts-");
+    const started = createDeferred();
+    const startGate = createDeferred();
     const start = vi.fn(async (request) => {
-      await startGate;
+      started.resolve();
+      await startGate.promise;
       return { ok: true as const, session: request.session };
     });
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "shared-session" }));
@@ -267,33 +402,37 @@ describe("transcripts tool", () => {
       undefined,
       vi.fn(),
     );
-    await vi.waitFor(() => {
-      expect(start).toHaveBeenCalledOnce();
-    });
-
-    await expect(
-      tool.execute(
-        "call-2",
-        { action: "start", providerId: "proof-live", sessionId: "shared-session" },
+    await started.promise;
+    try {
+      await expect(
+        tool.execute(
+          "call-2",
+          { action: "start", providerId: "proof-live", sessionId: "shared-session" },
+          undefined,
+          vi.fn(),
+        ),
+      ).rejects.toThrow("transcripts session already active: shared-session");
+      await expect(
+        tool.execute("stop-pending", { action: "stop", sessionId: "shared-session" }),
+      ).resolves.toMatchObject({ details: { sessionId: "shared-session", skipped: true } });
+      expect(stop).not.toHaveBeenCalled();
+    } finally {
+      startGate.resolve();
+      await firstStart;
+      await tool.execute(
+        "call-3",
+        { action: "stop", sessionId: "shared-session" },
         undefined,
         vi.fn(),
-      ),
-    ).rejects.toThrow("transcripts session already active: shared-session");
-    releaseStart?.();
-    await firstStart;
-    await tool.execute(
-      "call-3",
-      { action: "stop", sessionId: "shared-session" },
-      undefined,
-      vi.fn(),
-    );
+      );
+    }
 
     expect(start).toHaveBeenCalledOnce();
     expect(stop).toHaveBeenCalledOnce();
   });
 
   it("keeps thrown abort cleanup failures retryable", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     let stopAttempts = 0;
     const stop = vi.fn(async (_request: TranscriptStopRequest) => {
@@ -344,7 +483,7 @@ describe("transcripts tool", () => {
   });
 
   it("keeps missing abort cleanup hooks visible until the provider can stop", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const controller = new AbortController();
     const start = vi.fn(async (request) => {
       controller.abort();
@@ -398,114 +537,10 @@ describe("transcripts tool", () => {
     expect(stop).toHaveBeenCalledOnce();
   });
 
-  it("imports a speaker transcript and writes summary artifacts", async () => {
-    const stateDir = await makeStateDir();
-    const { tool } = await createHarness(stateDir);
-
-    const result = await tool.execute(
-      "call-1",
-      {
-        action: "import",
-        providerId: "manual-transcript",
-        sessionId: "design-review",
-        title: "Design review",
-        transcript:
-          "Alex: We decided to ship Discord first.\nSam: Action item: add Slack import later.",
-      },
-      undefined,
-      vi.fn(),
-    );
-
-    expect(result).toMatchObject({
-      details: {
-        sessionId: "design-review",
-        utteranceCount: 2,
-      },
-    });
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "summary.md"),
-        "utf8",
-      ),
-    ).resolves.toContain("Sam: Action item: add Slack import later.");
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "summary.json"),
-        "utf8",
-      ),
-    ).resolves.toContain('"Alex: We decided to ship Discord first."');
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "design-review", "transcript.jsonl"),
-        "utf8",
-      ),
-    ).resolves.toContain("Alex");
-  });
-
-  it("bounds summary input while retaining the full transcript", async () => {
-    // Summary generation uses a bounded utterance window, but the durable JSONL
-    // transcript must retain every utterance.
-    const stateDir = await makeStateDir();
-    const { tool } = await createHarness(stateDir, { maxUtterances: 1 });
-
-    await tool.execute(
-      "call-1",
-      {
-        action: "import",
-        providerId: "manual-transcript",
-        sessionId: "long-meeting",
-        title: "Long meeting",
-        transcript:
-          "Alex: Action item: write the first draft.\nSam: Decision: ship the final plan.",
-      },
-      undefined,
-      vi.fn(),
-    );
-
-    const summary = await fs.readFile(
-      path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "summary.md"),
-      "utf8",
-    );
-    expect(summary).toContain("Decision: ship the final plan.");
-    expect(summary).not.toContain("Action item: write the first draft.");
-    expect(summary).toContain("## Transcript");
-    expect(summary).toContain("Sam: Decision: ship the final plan.");
-    const transcript = await fs.readFile(
-      path.join(stateDir, "transcripts", currentDateDir(), "long-meeting", "transcript.jsonl"),
-      "utf8",
-    );
-    expect(transcript).toContain("Action item: write the first draft.");
-    expect(transcript).toContain("Decision: ship the final plan.");
-  });
-
-  it("requires date-qualified selectors for repeated stored session ids", async () => {
-    const stateDir = await makeStateDir();
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
-    await store.writeSession({
-      sessionId: "standup",
-      title: "Tuesday standup",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-05-21T10:00:00.000Z",
-    });
-    await store.writeSession({
-      sessionId: "standup",
-      title: "Wednesday standup",
-      source: { providerId: "manual-transcript" },
-      startedAt: "2026-05-22T10:00:00.000Z",
-    });
-
-    await expect(store.readSession("standup")).rejects.toThrow(
-      "multiple transcripts sessions match standup",
-    );
-    await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
-      title: "Tuesday standup",
-    });
-  });
-
   it("stops date-qualified active sessions with the canonical provider session id", async () => {
     // Date-qualified selectors disambiguate storage paths; providers still own
     // the original session id.
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const start = vi.fn(async (request) => {
       await request.onUtterance({
         text: "Sam: Decision: use date-qualified selectors for repeated names.",
@@ -562,7 +597,7 @@ describe("transcripts tool", () => {
   });
 
   it("finalizes an active session when the live provider stop fails", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const start = vi.fn(async (request) => {
       await request.onUtterance({
         text: "Alex: Action item: publish the notes even after voice disconnects.",
@@ -611,17 +646,14 @@ describe("transcripts tool", () => {
         "utf8",
       ),
     ).resolves.toContain("publish the notes");
-    await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "standup", "metadata.json"),
-        "utf8",
-      ),
-    ).resolves.toContain("providerStopError");
+    await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
+      metadata: { providerStopError: "Discord voice manager is unavailable" },
+    });
   });
 
   it("does not stop a current active session when summarizing an older dated duplicate", async () => {
-    const stateDir = await makeStateDir();
-    const store = new TranscriptsStore(path.join(stateDir, "transcripts"));
+    const stateDir = tempDirs.make("openclaw-transcripts-");
+    const store = storeFor(stateDir);
     const olderSession = {
       sessionId: "standup",
       title: "Older standup",
@@ -666,6 +698,9 @@ describe("transcripts tool", () => {
     );
 
     expect(stop).not.toHaveBeenCalled();
+    await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
+      stoppedAt: olderSession.stoppedAt,
+    });
     await expect(
       fs.readFile(
         path.join(stateDir, "transcripts", "2026-05-21", "standup", "summary.md"),
@@ -690,20 +725,22 @@ describe("transcripts tool", () => {
   });
 
   it("auto-starts configured live meeting sources", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const start = vi.fn(async (request) => ({ ok: true, session: request.session }));
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "standup" }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
+      accessControl: discordAccountOwnership(),
       name: "Discord Voice",
       sourceKinds: ["live-audio"],
       start,
       stop,
     });
-    const { service } = await createHarness(stateDir, {
+    const { service, tool } = await createHarness(stateDir, {
       autoStart: [
         {
           providerId: "discord-voice",
+          accountId: "account-a",
           sessionId: "standup",
           title: "Standup",
           guildId: "guild-1",
@@ -732,24 +769,153 @@ describe("transcripts tool", () => {
       sessionId: "standup",
       title: "Standup",
       source: {
+        accountId: "account-a",
         providerId: "discord-voice",
         guildId: "guild-1",
         channelId: "channel-1",
       },
     });
     expect(request.startupWaitMs).toBe(30_000);
+    await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
+      title: "Standup",
+      source: { accountId: "account-a" },
+      metadata: {},
+    });
     await expect(
-      fs.readFile(
-        path.join(stateDir, "transcripts", currentDateDir(), "standup", "metadata.json"),
-        "utf8",
-      ),
-    ).resolves.toContain("Standup");
+      tool.execute("status-auto-start", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "standup" })] },
+    });
+    await tool.execute(
+      "stop-auto-start",
+      { action: "stop", sessionId: "standup" },
+      undefined,
+      vi.fn(),
+    );
+    expect(stop).toHaveBeenCalledOnce();
     await service.stop();
     expect(stop).toHaveBeenCalledOnce();
   });
 
+  it("does not retain an explicit account when provider resolution returns undefined", async () => {
+    const stateDir = tempDirs.make("openclaw-transcripts-");
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      accessControl: discordAccountOwnership(() => ({
+        ok: true as const,
+        value: undefined,
+      })),
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+    });
+    const store = storeFor(stateDir);
+
+    await expect(
+      startTranscripts({
+        ctx: {
+          config: { transcripts: { enabled: true } },
+          stateDir,
+          logger: { warn: vi.fn() },
+        },
+        store,
+        rawParams: {
+          providerId: "discord-voice",
+          accountId: "caller-account",
+          sessionId: "unresolved-account",
+        },
+        configuredLifecycle: true,
+      }),
+    ).rejects.toThrow(
+      "transcripts provider discord-voice could not resolve an account for configured auto-start",
+    );
+    expect(start).not.toHaveBeenCalled();
+    await expect(store.readSession("unresolved-account")).resolves.toBeUndefined();
+  });
+
+  it("keeps a session reserved while an overlapping stop is in flight", async () => {
+    const start = vi.fn(async (request) => ({ ok: true as const, session: request.session }));
+    let resolveFirstStop: ((result: { ok: true; sessionId: string }) => void) | undefined;
+    const firstStop = new Promise<{ ok: true; sessionId: string }>((resolve) => {
+      resolveFirstStop = resolve;
+    });
+    let stopCount = 0;
+    const stop = vi.fn(async (request: TranscriptStopRequest) => {
+      stopCount += 1;
+      return stopCount === 1
+        ? await firstStop
+        : { ok: true as const, sessionId: request.sessionId };
+    });
+    getTranscriptSourceProviderMock.mockReturnValue({
+      id: "discord-voice",
+      name: "Discord Voice",
+      sourceKinds: ["live-audio"],
+      start,
+      stop,
+    });
+    const { tool } = await createHarness(tempDirs.make("openclaw-transcripts-"));
+
+    await tool.execute(
+      "start-original",
+      { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
+      undefined,
+      vi.fn(),
+    );
+    const firstStopCall = tool.execute(
+      "stop-original",
+      { action: "stop", sessionId: "reused-id" },
+      undefined,
+      vi.fn(),
+    );
+    await vi.waitFor(() => expect(stop).toHaveBeenCalledOnce());
+    try {
+      await expect(
+        tool.execute(
+          "stop-overlap",
+          { action: "stop", sessionId: "reused-id" },
+          undefined,
+          vi.fn(),
+        ),
+      ).resolves.toMatchObject({ details: { sessionId: "reused-id", skipped: true } });
+      expect(stop).toHaveBeenCalledOnce();
+      await expect(
+        tool.execute(
+          "start-replacement-too-early",
+          { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
+          undefined,
+          vi.fn(),
+        ),
+      ).rejects.toThrow("transcripts session already active: reused-id");
+    } finally {
+      resolveFirstStop?.({ ok: true, sessionId: "reused-id" });
+      await firstStopCall;
+    }
+
+    const { tool: replacementTool } = await createHarness(
+      tempDirs.make("openclaw-transcripts-replacement-"),
+    );
+    await replacementTool.execute(
+      "start-replacement",
+      { action: "start", providerId: "discord-voice", sessionId: "reused-id" },
+      undefined,
+      vi.fn(),
+    );
+    await expect(
+      replacementTool.execute("replacement-status", { action: "status" }, undefined, vi.fn()),
+    ).resolves.toMatchObject({
+      details: { active: [expect.objectContaining({ sessionId: "reused-id" })] },
+    });
+    await replacementTool.execute(
+      "stop-replacement",
+      { action: "stop", sessionId: "reused-id" },
+      undefined,
+      vi.fn(),
+    );
+  });
+
   it("aborts pending auto-starts when the service stops", async () => {
-    const stateDir = await makeStateDir();
+    const stateDir = tempDirs.make("openclaw-transcripts-");
     const stop = vi.fn(async () => ({ ok: true, sessionId: "standup" }));
     const start = vi.fn(
       async (request) =>

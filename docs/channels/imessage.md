@@ -20,6 +20,14 @@ Status: native external CLI integration. The Gateway spawns `imsg rpc` and speak
 
 For the common local setup, OpenClaw setup can offer a user-confirmed Homebrew install or update for `imsg` on the signed-in Messages Mac. Manual setup and SSH-wrapper topologies remain operator-managed: install or update `imsg` in the same user context that will run the Gateway or wrapper.
 
+## Install the plugin
+
+Install the official iMessage plugin on the Gateway host, then restart the Gateway:
+
+```bash
+openclaw plugins install @openclaw/imessage
+```
+
 <CardGroup cols={3}>
   <Card title="Private API actions" icon="wand-sparkles" href="#private-api-actions">
     Replies, tapbacks, effects, polls, attachments, and group management.
@@ -92,7 +100,7 @@ openclaw pairing approve imessage <CODE>
   </Tab>
 
   <Tab title="Remote Mac over SSH">
-    Most setups do not need SSH. Use this topology only when the Gateway cannot run on the signed-in Messages Mac. OpenClaw only requires a stdio-compatible `cliPath`, so you can point `cliPath` at a wrapper script that SSHes to a remote Mac and runs `imsg`.
+    Most setups do not need SSH. Use this topology only when the Gateway cannot run on the signed-in Messages Mac. Point `cliPath` at a stdio-compatible wrapper on the **Gateway host** that SSHes to the Messages Mac and runs `imsg`. Use the wrapper's absolute path so service launches do not depend on shell home expansion.
     Install and update `imsg` on that remote Mac, not on the Gateway host:
 
 ```bash
@@ -111,8 +119,10 @@ exec ssh -T messages-mac imsg "$@"
   channels: {
     imessage: {
       enabled: true,
-      cliPath: "~/.openclaw/scripts/imsg-ssh",
-      remoteHost: "user@gateway-host", // used for SCP attachment fetches
+      cliPath: "/home/openclaw/.openclaw/scripts/imsg-ssh",
+      remoteHost: "user@messages-mac", // Mac that runs Messages.app and imsg
+      // This path is interpreted on the Messages Mac, not on the Gateway host.
+      dbPath: "/Users/user/Library/Messages/chat.db",
       includeAttachments: true,
       // Optional: extra allowed attachment roots (merged with the default
       // /Users/*/Library/Messages/Attachments).
@@ -123,9 +133,11 @@ exec ssh -T messages-mac imsg "$@"
 }
 ```
 
-    If `remoteHost` is not set, OpenClaw attempts to auto-detect it by parsing the SSH wrapper script.
+    `remoteHost` identifies the Messages Mac. OpenClaw uses it for both inbound attachment fetches and outbound attachment staging. For outbound files, OpenClaw creates an owner-only temporary path on that Mac, copies the file over the existing strict SSH/SCP transport, passes only the remote path to `imsg`, and attempts removal after success, failure, or timeout. A failed cleanup SSH call emits a warning and can leave the owner-only temporary directory behind.
+
+    An explicit `remoteHost` is recommended and wins when set. For compatibility, OpenClaw auto-detects the existing transparent `exec ssh ... imsg "$@"` wrapper shape once per process and reuses that host across monitoring, probes, sends, and private actions. Auto-detection covers only the simple documented transparent wrapper; option-rich wrappers such as ProxyJump/ProxyCommand must configure `remoteHost`.
     `remoteHost` must be `host` or `user@host` (no spaces or SSH options); unsafe values are ignored.
-    OpenClaw uses strict host-key checking for SCP, so the relay host key must already exist in `~/.ssh/known_hosts`.
+    OpenClaw uses strict host-key checking for SSH/SCP, so the Messages Mac host key must already exist in `~/.ssh/known_hosts` on the Gateway host.
     Attachment paths are validated against allowed roots (`attachmentRoots` / `remoteAttachmentRoots`).
 
 <Warning>
@@ -200,7 +212,7 @@ The helper-injection technique uses `imsg`'s own dylib to reach Messages private
 <Warning>
 **Disabling SIP is a real security tradeoff.** SIP is one of macOS's core protections against running modified system code; turning it off system-wide opens up additional attack surface and side effects. Notably, **disabling SIP on Apple Silicon Macs also disables the ability to install and run iOS apps on your Mac**.
 
-Treat this as a deliberate operational choice, especially on a primary personal Mac. For production-quality OpenClaw iMessage, prefer a dedicated Mac or bot macOS user where you are comfortable enabling the bridge. If your threat model cannot tolerate SIP being off anywhere, bundled iMessage is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
+Treat this as a deliberate operational choice, especially on a primary personal Mac. For production-quality OpenClaw iMessage, prefer a dedicated Mac or bot macOS user where you are comfortable enabling the bridge. If your threat model cannot tolerate SIP being off anywhere, the iMessage plugin is limited to basic mode — text and media send/receive only, no reactions / edit / unsend / effects / group ops.
 </Warning>
 
 ### Setup
@@ -323,7 +335,7 @@ If disabling SIP is not acceptable for your threat model:
     Mention gating for groups:
 
     - iMessage has no native mention metadata
-    - mention detection uses regex patterns (`agents.list[].groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
+    - mention detection uses regex patterns (`agents.entries.*.groupChat.mentionPatterns`, fallback `messages.groupChat.mentionPatterns`)
     - with no configured patterns, mention gating cannot be enforced
     - control commands from authorized senders bypass mention gating
 
@@ -399,15 +411,15 @@ Example:
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    entries: {
+      codex: {
+        default: true,
         runtime: {
           type: "acp",
           acp: { agent: "codex", backend: "acpx", mode: "persistent" },
         },
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -450,7 +462,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     - gateway runs on Linux/VM
     - iMessage + `imsg` runs on a Mac in your tailnet
     - `cliPath` wrapper uses SSH to run `imsg`
-    - `remoteHost` enables SCP attachment fetches
+    - `remoteHost` enables inbound fetches and owner-only outbound staging over SSH/SCP
 
     Example:
 
@@ -459,7 +471,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
       channels: {
         imessage: {
           enabled: true,
-          cliPath: "~/.openclaw/scripts/imsg-ssh",
+          cliPath: "/home/openclaw/.openclaw/scripts/imsg-ssh",
           remoteHost: "bot@mac-mini.tailnet-1234.ts.net",
           includeAttachments: true,
           dbPath: "/Users/bot/Library/Messages/chat.db",
@@ -473,6 +485,8 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     exec ssh -T bot@mac-mini.tailnet-1234.ts.net imsg "$@"
     ```
 
+    `cliPath` is an absolute, Gateway-local wrapper path. `remoteHost` and `dbPath` refer to the Messages Mac; do not rewrite the remote database path using the Gateway user's home directory.
+
     Use SSH keys so both SSH and SCP are non-interactive.
     Ensure the host key is trusted first (for example `ssh bot@mac-mini.tailnet-1234.ts.net`) so `known_hosts` is populated.
 
@@ -481,7 +495,7 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
   <Accordion title="Multi-account pattern">
     iMessage supports per-account config under `channels.imessage.accounts`.
 
-    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists.
+    Each account can override fields such as `cliPath`, `dbPath`, `allowFrom`, `dmPolicy`, `groupPolicy`, `mediaMaxMb`, history settings, and attachment root allowlists. Omitted account policies inherit the channel root; explicit account policies win. If neither scope sets them, DMs use `pairing` and groups use `allowlist`.
 
   </Accordion>
 
@@ -498,7 +512,8 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
 <AccordionGroup>
   <Accordion title="Attachments and media">
     - inbound attachment ingestion is **off by default** — set `channels.imessage.includeAttachments: true` to forward photos, voice memos, video, and other attachments to the agent. With it disabled, attachment-only iMessages are dropped before reaching the agent and may produce no `Inbound message` log line at all.
-    - remote attachment paths can be fetched via SCP when `remoteHost` is set
+    - remote inbound attachment paths can be fetched via SCP when `remoteHost` is set
+    - outbound files are staged into an owner-only temporary path on the configured or auto-detected Messages Mac, passed to `imsg` by that remote path, and cleaned up best-effort after success, failure, or timeout; cleanup failure emits a warning and can leave owner-only residue
     - attachment paths must match allowed roots:
       - `channels.imessage.attachmentRoots` (local)
       - `channels.imessage.remoteAttachmentRoots` (remote SCP mode)
@@ -525,11 +540,23 @@ See [ACP Agents](/tools/acp-agents) for shared ACP binding behavior.
     - `chat_guid:...`
     - `chat_identifier:...`
 
-    Handle targets are also supported:
+    Direct handles are also supported:
 
+    - `+1555...`
+    - `tel:+1555...`
     - `imessage:+1555...`
     - `sms:+1555...`
     - `user@example.com`
+
+    Use a service-qualified target for a contact name or mixed alphanumeric alias:
+
+    - `auto:<contact>` lets Messages choose iMessage or SMS
+    - `imessage:<contact>` requires iMessage
+    - `sms:<contact>` requires SMS
+
+    Bare contact names and mixed alphanumeric aliases are rejected instead of being converted to
+    a phone number. If an existing automation uses one, add `auto:`, `imessage:`, or `sms:` to
+    make the intended delivery service explicit.
 
     ```bash
     imsg chats --limit 20
@@ -570,16 +597,16 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
 <AccordionGroup>
   <Accordion title="Available actions">
     - **react**: Add/remove iMessage tapbacks (`messageId`, `emoji`, `remove`). Supported tapbacks map to love, like, dislike, laugh, emphasize, and question. Removing without an emoji clears whichever tapback was set.
-    - **reply**: Send a threaded reply to an existing message (`messageId`, `text` or `message`, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`). Reply-with-attachment additionally needs an `imsg` build whose `send-rich` supports `--file`.
+    - **reply**: Send a threaded reply to an existing message (`messageId`, `text` or `message`, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`). Local reply-with-attachment additionally needs an `imsg` build whose `send-rich` supports `--file`. With remote `imsg` v0.13.4, attachment replies use JSON-RPC and support the whole message or part index `0`; nonzero attachment part indices are not supported by the RPC method.
     - **sendWithEffect**: Send text with an iMessage effect (`text` or `message`, `effect` or `effectId`). Short names: slam, loud, gentle, invisibleink, confetti, lasers, fireworks, balloon, heart, echo, happybirthday, shootingstar, sparkles, spotlight.
     - **edit**: Edit a sent message on supported macOS/private API versions (`messageId`, `text` or `newText`). Only messages the gateway itself sent can be edited.
     - **unsend**: Retract a sent message on supported macOS/private API versions (`messageId`). Only messages the gateway itself sent can be unsent.
     - **upload-file**: Send media/files (`buffer` as base64 or a hydrated `media`/`path`/`filePath`, `filename`, optional `asVoice`). Legacy alias: `sendAttachment`.
     - **renameGroup**, **setGroupIcon**, **addParticipant**, **removeParticipant**, **leaveGroup**: Manage group chats when the current target is a group conversation. These mutate the host's Messages identity, so they require an owner sender or an `operator.admin` Gateway client.
     - **poll**: Create a native Apple Messages poll (`pollQuestion`, `pollOption` repeated 2 to 12 times, plus `chatGuid`, `chatId`, `chatIdentifier`, or `to`). Recipients on iOS/iPadOS/macOS 26+ see and vote on it natively; older OS versions get a "Sent a poll" text fallback. Requires `selectors.pollPayloadMessage`.
-    - **poll-vote**: Vote on an existing poll (`pollId` or `messageId`, plus exactly one of `pollOptionIndex`, `pollOptionId`, or `pollOptionText`). Requires `selectors.pollVoteMessage` and the `poll.vote` RPC method.
+    - **poll-vote**: Vote on an existing poll (`pollId` or `messageId`, plus exactly one of `pollOptionIndex`, `pollOptionId`, or `pollOptionText`). Requires `selectors.pollVoteMessage` and the `poll.vote` RPC method. Remote `imsg` v0.13.4 RPC accepts only the option ID, so remote setups must use `pollOptionId`; index and text selectors remain available to local setups.
 
-    Accepted inbound polls are rendered for the agent with the question, numbered option labels, vote counts, and the poll message ID needed by `poll-vote`.
+    Accepted inbound polls are rendered for the agent with the question, option labels, vote counts, and the poll message ID needed by `poll-vote`. Remote accounts also include each stable option ID and direct the agent to use `pollOptionId`.
 
   </Accordion>
 
@@ -623,22 +650,31 @@ All actions are enabled by default; use `channels.imessage.actions` to turn indi
 
   </Accordion>
 
-  <Accordion title="Approval reactions (👍 / 👎)">
-    When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes to iMessage, the gateway delivers an approval prompt natively and accepts a tapback to resolve it:
+  <Accordion title="Approval polls and reactions">
+    When `approvals.exec.enabled` or `approvals.plugin.enabled` is true and the request routes natively to iMessage, the gateway delivers an approval prompt with native controls:
 
-    - `👍` (Like tapback) → `allow-once`
-    - `👎` (Dislike tapback) → `deny`
-    - `allow-always` remains a manual fallback: send `/approve <id> allow-always` as a regular reply.
+    - On a probed private API bridge with poll and caption-suppression support, the prompt includes a Messages poll with each allowed decision. Older `imsg` releases without `poll send --no-comment` stay on text controls.
+    - If polls are disabled with `channels.imessage.actions.polls: false`, the bridge lacks poll support, the poll send fails, or fewer than two decisions are available, the prompt keeps the text and tapback controls.
+    - The text fallback maps `👍` (Like) to `allow-once` and `👎` (Dislike) to `deny`. It also includes `/approve <id> <decision>` commands, including `allow-always` when the request permits it.
 
-    Reaction handling requires the reacting user's handle to be an explicit approver. The approver list is read from `channels.imessage.allowFrom` (or `channels.imessage.accounts.<id>.allowFrom`); add the user's phone number in E.164 form or their Apple ID email (chat targets such as `chat_id:*` are not valid approver entries). The wildcard entry `"*"` is honored but allows any sender to approve; an empty approver list disables the reaction shortcut entirely. The reaction shortcut intentionally bypasses `reactionNotifications`, `dmPolicy`, and `groupAllowFrom` because the explicit-approver allowlist is the only gate that matters for approval resolution.
+    Poll votes and reactions require the acting user's handle to be an explicit approver. The approver list is read from `channels.imessage.allowFrom` (or `channels.imessage.accounts.<id>.allowFrom`); add the user's phone number in E.164 form or their Apple ID email (chat targets such as `chat_id:*` are not valid approver entries). The wildcard entry `"*"` is honored but allows any sender to approve; an empty approver list disables poll and reaction shortcuts entirely. These shortcuts intentionally bypass `reactionNotifications`, `dmPolicy`, and `groupAllowFrom` because the explicit-approver allowlist is the only gate that matters for approval resolution.
+
+    Native poll controls are currently limited to channel-native delivery in the originating iMessage session or an iMessage approver DM. Explicit forwarding targets selected by `approvals.exec.mode: "targets"` (and the target half of `"both"`) continue to use the existing forwarded approval message instead of an iMessage poll.
 
     `/approve` text command authorization follows the same list: when `channels.imessage.allowFrom` is non-empty, `/approve <id> <decision>` is authorized against that approver list (not the broader DM allowlist), and senders permitted on the DM allowlist but not in `allowFrom` receive an explicit denial. When `allowFrom` is empty, the same-chat fallback stays in effect and `/approve` authorizes anyone the DM allowlist permits. Add every operator who should approve — via `/approve` or via reactions — to `allowFrom`.
 
     Operator notes:
-    - The reaction binding is stored both in memory and in the gateway's persistent keyed store (TTL matched to the approval expiry), and the gateway also polls pending prompts for tapbacks, so a tapback that lands shortly after a gateway restart still resolves the approval.
+    - Poll and reaction bindings are stored both in memory and in the gateway's persistent keyed store (TTL matched to the approval expiry), and the gateway also polls pending prompts for tapbacks. After a gateway restart, a tap on an old control is recognized and swallowed instead of entering agent chat, but the restart ends the in-flight command; request a new approval rather than expecting the old control to resume it.
     - The operator's own `is_from_me=true` tapback (for example from a paired Apple device) resolves the approval when that handle is an explicit approver.
     - Approval prompts route into a group conversation only when explicit approvers are configured; otherwise any group member could approve.
     - Legacy text-style tapbacks (`Liked "…"` plain text from very old Apple clients) cannot resolve approvals because they carry no message GUID; reaction resolution requires the structured tapback metadata that current macOS / iOS clients emit.
+
+  </Accordion>
+
+  <Accordion title="Question reactions (1️⃣ / 2️⃣ / 3️⃣ / 4️⃣)">
+    For an `ask_user` prompt with one non-secret, single-select question and one to four options, OpenClaw adds numbered emoji choices. React to the delivered prompt with the matching number to answer it. The reaction must carry the stable GUID of the bot-authored message; OpenClaw then maps the number to the canonical option through the Gateway. Stale or duplicate taps are ignored.
+
+    Multi-question, multi-select, and free-text prompts remain text-reply-only. Question reactions follow normal iMessage DM/group admission rules. They are recognized even when general `reactionNotifications` is `"off"`, without turning unrelated reactions into agent events.
 
   </Accordion>
 </AccordionGroup>
@@ -663,88 +699,22 @@ Disable:
 
 ## Coalescing split-send DMs (command + URL in one composition)
 
-When a user types a command and a URL together — e.g. `Dump https://example.com/article` — Apple's Messages app splits the send into **two separate `chat.db` rows**:
+Apple can store a command and its URL preview as separate physical `chat.db` rows. `imsg` 0.13.1 and newer coalesces those rows before watch, history, or search returns the message, so OpenClaw receives one logical inbound message without adding channel-specific DM latency.
 
-1. A text message (`"Dump"`).
-2. A URL-preview balloon (`"https://..."`) with OG-preview images as attachments.
+No iMessage coalescing setting is needed. The retired `channels.imessage.coalesceSameSenderDms` key is removed by `openclaw doctor --fix`. Generic `messages.inbound` debounce remains available when you intentionally want to batch rapid text messages across a channel.
 
-The two rows arrive at OpenClaw ~0.8-2.0 s apart on most setups. Without coalescing, the agent gets the command alone on turn 1 (and often replies "send me the URL") before the URL arrives on turn 2. This is Apple's send pipeline, not anything OpenClaw or `imsg` introduces.
+If command-plus-URL sends arrive as separate agent turns, update `imsg` on the Messages Mac:
 
-`channels.imessage.coalesceSameSenderDms` opts a DM into buffering consecutive same-sender rows. When `imsg` exposes the structural URL-preview marker `balloon_bundle_id: "com.apple.messages.URLBalloonProvider"` on one of the source rows, OpenClaw merges only that real split-send and keeps any other buffered rows as separate turns. On older `imsg` builds that emit no balloon metadata at all, OpenClaw cannot tell a split-send from separate sends, so it falls back to merging the bucket. That preserves the pre-metadata behavior rather than regressing `Dump <url>` split-sends into two turns. Group chats continue to dispatch per-message so multi-user turn structure is preserved.
-
-<Tabs>
-  <Tab title="When to enable">
-    Enable when:
-
-    - You ship skills that expect `command + payload` in one message (dump, paste, save, queue, etc.).
-    - Your users paste URLs alongside commands.
-    - You can accept the added DM turn latency (see below).
-
-    Leave disabled when:
-
-    - You need minimum command latency for single-word DM triggers.
-    - All your flows are one-shot commands without payload follow-ups.
-
-  </Tab>
-  <Tab title="Enabling">
-    ```json5
-    {
-      channels: {
-        imessage: {
-          coalesceSameSenderDms: true, // opt in (default: false)
-        },
-      },
-    }
-    ```
-
-    With the flag on and no explicit `messages.inbound.byChannel.imessage` or global `messages.inbound.debounceMs`, the debounce window widens to **7000 ms** (the legacy default is 0 ms — no debouncing). The wider window is required because Apple's URL-preview split-send cadence can stretch to several seconds while Messages.app emits the preview row.
-
-    To tune the window yourself:
-
-    ```json5
-    {
-      messages: {
-        inbound: {
-          byChannel: {
-            // 7000 ms covers observed Messages.app URL-preview delays.
-            imessage: 7000,
-          },
-        },
-      },
-    }
-    ```
-
-  </Tab>
-  <Tab title="Trade-offs">
-    - **Precise merging needs current `imsg` payload metadata.** With `balloon_bundle_id` present, only the real split-send merges; the metadata-less fallback merge described above is interim back-compat, removed once `imsg` coalesces split-sends upstream.
-    - **Added latency for DM messages.** With the flag on, every DM (including standalone control commands and single-text follow-ups) waits up to the debounce window before dispatching, in case a URL-preview row is coming. Group-chat messages keep instant dispatch.
-    - **Merged output is bounded.** Merged text caps at 4000 chars with an explicit `…[truncated]` marker; attachments cap at 20; source entries cap at 10 (first-plus-latest retained beyond that). Every source GUID is tracked in `coalescedMessageGuids` for downstream telemetry.
-    - **DM-only.** Group chats fall through to per-message dispatch so the bot stays responsive when multiple people are typing.
-    - **Opt-in, per-channel.** Other channels (Discord, Slack, Telegram, WhatsApp, …) are unaffected. Legacy BlueBubbles configs that set `channels.bluebubbles.coalesceSameSenderDms` should migrate that value to `channels.imessage.coalesceSameSenderDms`.
-
-  </Tab>
-</Tabs>
-
-### Scenarios and what the agent sees
-
-The "Flag on" column shows behavior on an `imsg` build that emits `balloon_bundle_id`. On older `imsg` builds that emit no balloon metadata at all, the rows below marked "Two turns" / "N turns" instead fall back to a legacy merge (one turn): OpenClaw cannot structurally tell a split-send from separate sends, so it preserves the pre-metadata merge. Precise separation activates once the build emits balloon metadata.
-
-| User composes                                                      | `chat.db` produces                  | Flag off (default)                      | Flag on + window (imsg emits balloon metadata)                                                      |
-| ------------------------------------------------------------------ | ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------------------- |
-| `Dump https://example.com` (one send)                              | 2 rows ~1 s apart                   | Two agent turns: "Dump" alone, then URL | One turn: merged text `Dump https://example.com`                                                    |
-| `Save this 📎image.jpg caption` (attachment + text)                | 2 rows without URL balloon metadata | Two turns                               | Two turns after metadata is observed; one merged turn on old/pre-latch metadata-less sessions       |
-| `/status` (standalone command)                                     | 1 row                               | Instant dispatch                        | **Wait up to window, then dispatch**                                                                |
-| URL pasted alone                                                   | 1 row                               | Instant dispatch                        | Wait up to window, then dispatch                                                                    |
-| Text + URL sent as two deliberate separate messages, minutes apart | 2 rows outside window               | Two turns                               | Two turns (window expires between them)                                                             |
-| Rapid flood (>10 small DMs inside window)                          | N rows without URL balloon metadata | N turns                                 | N turns after metadata is observed; one bounded merged turn on old/pre-latch metadata-less sessions |
-| Two people typing in a group chat                                  | N rows from M senders               | M+ turns (one per sender bucket)        | M+ turns — group chats are not coalesced                                                            |
+```bash
+brew update && brew upgrade imsg
+```
 
 ## Inbound recovery after a bridge or gateway restart
 
-iMessage recovers messages missed while the gateway was down, and at the same time suppresses the stale "backlog bomb" Apple can flush after a Push recovery. The default behavior is always on, built on the inbound dedupe.
+iMessage recovers messages missed while the gateway was down, and at the same time suppresses the stale "backlog bomb" Apple can flush after a Push recovery. The default behavior is always on, built on durable ingress plus an age fence.
 
-- **Replay dedupe.** Every dispatched inbound message is recorded by its Apple GUID in persistent plugin state (`imessage.inbound-dedupe`), claimed at ingestion and committed after handling (released on a transient failure so it can retry). Anything already handled is dropped instead of dispatched twice. This is what lets recovery replay aggressively without per-message bookkeeping.
-- **Downtime recovery.** On startup the monitor remembers the last dispatched `chat.db` rowid (a persisted per-account cursor) and passes it to `imsg watch.subscribe` as `since_rowid`, so imsg replays the rows that landed while the gateway was down, then tails live. Replay is bounded to the most recent 500 rows and to messages up to ~2 hours old, and the dedupe drops anything already handled.
+- **Durable replay protection.** Before advancing the recovery cursor, OpenClaw journals each raw row in the shared SQLite ingress queue with its Apple GUID as the event ID. A completed row leaves a tombstone for about 4 hours, capped at 10,000 entries, so a replay with the same GUID is dropped even after a restart. A pending row stays recoverable until dispatch adopts it.
+- **Downtime recovery.** On startup the monitor remembers the last durably admitted `chat.db` rowid (a persisted per-account cursor) and passes it to `imsg watch.subscribe` as `since_rowid`, so imsg replays rows that were not yet journaled and then tails live. Rows journaled before a crash resume from SQLite. Replay is bounded to the most recent 500 rows and to messages up to ~2 hours old, and GUID tombstones drop anything already handled.
 - **Stale-backlog age fence.** Rows above the startup boundary are genuinely live; one whose send date is more than ~15 minutes older than its arrival is the Push-flush backlog and is suppressed. Replayed rows (at or below the boundary) use the wider recovery window instead, so a recently-missed message is delivered while ancient history is not.
 
 Recovery works over both local and remote `cliPath` setups, because `since_rowid` replay runs over the same `imsg` RPC connection. The difference is the window: when the gateway can read `chat.db` (local), it anchors the startup rowid boundary, caps the replay span, and delivers missed messages up to a couple of hours old. Over a remote SSH `cliPath` it cannot read the database, so the replay is uncapped and every row uses the live age fence — it still recovers recently-missed messages and still suppresses old backlog, just with the narrower live window. Run the gateway on the Messages Mac for the wider recovery window.
@@ -833,7 +803,7 @@ openclaw channels status --probe --channel imessage
     - `channels.imessage.groupPolicy`
     - `channels.imessage.groupAllowFrom`
     - `channels.imessage.groups` allowlist behavior
-    - mention pattern configuration (`agents.list[].groupChat.mentionPatterns`)
+    - mention pattern configuration (`agents.entries.*.groupChat.mentionPatterns`)
 
   </Accordion>
 

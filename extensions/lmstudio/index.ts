@@ -1,14 +1,14 @@
 // Lmstudio plugin entrypoint registers its OpenClaw integration.
 import {
   definePluginEntry,
+  type OpenClawConfig,
   type OpenClawPluginApi,
   type ProviderAuthContext,
   type ProviderAuthMethodNonInteractiveContext,
   type ProviderAuthResult,
-  type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { CUSTOM_LOCAL_AUTH_MARKER } from "openclaw/plugin-sdk/provider-auth";
+import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
 import { lmstudioMemoryEmbeddingProviderAdapter } from "./memory-embedding-adapter.js";
 import {
   LMSTUDIO_DEFAULT_API_KEY_ENV_VAR,
@@ -23,8 +23,6 @@ import { shouldUseLmstudioSyntheticAuth } from "./src/provider-auth.js";
 import { wrapLmstudioInferencePreload } from "./src/stream.js";
 
 const PROVIDER_ID = "lmstudio";
-// Intentional: dynamic models are cached per LM Studio endpoint (`baseUrl`) only.
-const cachedDynamicModels = new Map<string, ProviderRuntimeModel[]>();
 
 function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefined) {
   if (!config) {
@@ -46,7 +44,7 @@ function resolveLmstudioAugmentedCatalogEntries(config: OpenClawConfig | undefin
 
 /** Lazily loads setup helpers so provider wiring stays lightweight at startup. */
 async function loadProviderSetup() {
-  return await import("./api.js");
+  return await import("./src/setup.js");
 }
 
 export default definePluginEntry({
@@ -54,7 +52,7 @@ export default definePluginEntry({
   name: "LM Studio Provider",
   description: "Bundled LM Studio provider plugin",
   register(api: OpenClawPluginApi) {
-    api.registerMemoryEmbeddingProvider(lmstudioMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(lmstudioMemoryEmbeddingProviderAdapter);
     api.registerProvider({
       id: PROVIDER_ID,
       label: "LM Studio",
@@ -64,17 +62,46 @@ export default definePluginEntry({
         {
           id: "custom",
           label: LMSTUDIO_PROVIDER_LABEL,
-          hint: "Local/self-hosted LM Studio server",
+          hint: "Connect to a running LM Studio server and use an already loaded model",
           kind: "custom",
+          appGuidedSetup: {
+            detectAvailability: async (ctx) => {
+              const providerSetup = await loadProviderSetup();
+              return await providerSetup.detectAppGuidedLmstudioAvailability(ctx);
+            },
+            detect: async (ctx) => {
+              const providerSetup = await loadProviderSetup();
+              const result = await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
+              if (!result?.defaultModel) {
+                return null;
+              }
+              const provider = result.configPatch?.models?.providers?.[PROVIDER_ID];
+              return {
+                modelRef: result.defaultModel,
+                detail: `${result.defaultModel.slice(`${PROVIDER_ID}/`.length)} at ${provider?.baseUrl ?? "LM Studio"}`,
+              };
+            },
+            prepare: async (ctx) => {
+              const providerSetup = await loadProviderSetup();
+              return await providerSetup.prepareAppGuidedLmstudioSetup(ctx);
+            },
+          },
           run: async (ctx: ProviderAuthContext): Promise<ProviderAuthResult> => {
             const providerSetup = await loadProviderSetup();
             return await providerSetup.promptAndConfigureLmstudioInteractive({
               config: ctx.config,
               agentDir: ctx.agentDir,
+              workspaceDir: ctx.workspaceDir,
               prompter: ctx.prompter,
               secretInputMode: ctx.secretInputMode,
               allowSecretRefPrompt: ctx.allowSecretRefPrompt,
+              isRemote: ctx.isRemote,
+              signal: ctx.signal,
             });
+          },
+          validateNonInteractive: async (ctx) => {
+            const providerSetup = await loadProviderSetup();
+            return await providerSetup.validateLmstudioNonInteractive(ctx);
           },
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
             const providerSetup = await loadProviderSetup();
@@ -106,22 +133,16 @@ export default definePluginEntry({
       normalizeConfig: ({ providerConfig }) => normalizeLmstudioProviderConfig(providerConfig),
       prepareDynamicModel: async (ctx) => {
         const providerSetup = await loadProviderSetup();
-        cachedDynamicModels.set(
-          ctx.providerConfig?.baseUrl ?? "",
-          await providerSetup.prepareLmstudioDynamicModels(ctx),
-        );
+        return await providerSetup.prepareLmstudioDynamicModel(ctx);
       },
-      resolveDynamicModel: (ctx) =>
-        cachedDynamicModels
-          .get(ctx.providerConfig?.baseUrl ?? "")
-          ?.find((model) => model.id === ctx.modelId),
       augmentModelCatalog: (ctx) => resolveLmstudioAugmentedCatalogEntries(ctx.config),
       wrapStreamFn: wrapLmstudioInferencePreload,
+      ...buildProviderToolCompatFamilyHooks("llamacpp-gbnf"),
       wizard: {
         setup: {
           choiceId: PROVIDER_ID,
           choiceLabel: "LM Studio",
-          choiceHint: "Local/self-hosted LM Studio server",
+          choiceHint: "Connect to a running LM Studio server and use an already loaded model",
           groupId: PROVIDER_ID,
           groupLabel: "LM Studio",
           groupHint: "Self-hosted open-weight models",

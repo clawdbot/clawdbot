@@ -65,28 +65,38 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(params: {
       continue;
     }
     const mergedMediaUrls: string[] = [];
-    const text = payload.text;
-    for (const mediaUrl of mediaUrls) {
+    const mergedAttachments: NonNullable<ReplyPayload["attachments"]> = [];
+    let text = payload.text;
+    for (const [index, mediaUrl] of mediaUrls.entries()) {
+      const attachment = payload.attachments?.[index];
       if (shouldPreserveDisplayMediaUrl(payload, mediaUrl)) {
         mergedMediaUrls.push(mediaUrl);
+        mergedAttachments.push(attachment ?? {});
         continue;
       }
       const normalizedPayload = await normalizeMediaPaths({
         ...payload,
+        text,
         mediaUrl,
         mediaUrls: [mediaUrl],
+        attachments: attachment ? [attachment] : undefined,
       });
       const normalizedMediaUrls = resolveSendableOutboundReplyParts(normalizedPayload).mediaUrls;
+      text = normalizedPayload.text;
       if (normalizedMediaUrls.length === 0) {
         continue;
       }
       mergedMediaUrls.push(...normalizedMediaUrls);
+      mergedAttachments.push(
+        ...(normalizedPayload.attachments ?? normalizedMediaUrls.map(() => ({}))),
+      );
     }
     normalized.push({
       ...payload,
       text,
       mediaUrl: mergedMediaUrls[0],
       mediaUrls: mergedMediaUrls,
+      attachments: mergedAttachments,
     });
   }
   return normalized;

@@ -5,6 +5,7 @@ import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/st
 import { note } from "../../packages/terminal-core/src/note.js";
 import { formatCliCommand } from "../cli/command-format.js";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
+import { isDefaultInstallIdentity } from "../config/paths.js";
 import { summarizeGatewayServiceLayout } from "../daemon/service-layout.js";
 import { readGatewayServiceState, resolveGatewayService } from "../daemon/service.js";
 import { isTruthyEnvValue } from "../infra/env.js";
@@ -61,13 +62,13 @@ const NO_GATEWAY_SERVICE_UPDATE: GatewayServiceUpdatePolicy = {
 async function inspectGatewayServiceForUpdate(
   root: string,
 ): Promise<GatewayServiceUpdateInspection> {
-  if (isServiceRepairExternallyManaged()) {
+  if (!isDefaultInstallIdentity(process.env) || isServiceRepairExternallyManaged()) {
     return NO_GATEWAY_SERVICE_UPDATE;
   }
   try {
     const service = resolveGatewayService();
     const state = await readGatewayServiceState(service, { env: process.env });
-    if (!state.installed) {
+    if (state.loadState.status === "unknown" || !state.installed) {
       return NO_GATEWAY_SERVICE_UPDATE;
     }
     const layout = await summarizeGatewayServiceLayout(state.command);

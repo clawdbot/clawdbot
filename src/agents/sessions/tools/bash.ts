@@ -10,12 +10,18 @@ import { Type } from "typebox";
 import { toErrorObject } from "../../../infra/errors.js";
 import { formatDurationSeconds } from "../../../infra/format-time/format-duration.js";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
+import { COMMAND_PROCESS_TREE_KILL_GRACE_MS } from "../../../process/exec-spawn.js";
+import { createCommandTerminationController } from "../../../process/exec-termination.js";
 import { spawnCommand } from "../../../process/exec.js";
 import { keyHint } from "../../modes/interactive/components/keybinding-hints.js";
 import { truncateToVisualLines } from "../../modes/interactive/components/visual-truncate.js";
-import { theme } from "../../modes/interactive/theme/theme.js";
+import { interactiveAgentTheme as theme } from "../../modes/interactive/theme/theme.js";
 import type { AgentTool } from "../../runtime/index.js";
-import { getBashShellConfig, getShellEnv, killProcessTree } from "../../shell-utils.js";
+import {
+  buildShellCommandInvocation,
+  getBashShellConfig,
+  getBashShellEnv,
+} from "../../shell-utils.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
 import type { BashOperations } from "./bash-operations.js";
 import { OutputAccumulator } from "./output-accumulator.js";
@@ -28,15 +34,24 @@ const bashSchema = Type.Object({
   command: Type.String({ description: "Bash command." }),
   timeout: Type.Optional(Type.Number({ description: "Optional timeout seconds; default none." })),
 });
-export function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
+function resolveBashTimeoutMs(timeoutSeconds: unknown): number | undefined {
+  if (timeoutSeconds === undefined) {
+    return undefined;
+  }
   if (
     typeof timeoutSeconds !== "number" ||
     !Number.isFinite(timeoutSeconds) ||
     timeoutSeconds <= 0
   ) {
-    return undefined;
+    throw new Error("Invalid timeout: must be a positive finite number of seconds");
   }
   return resolveTimerTimeoutMs(timeoutSeconds * 1000, 1);
+}
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.bashToolTestApi")] = {
+    resolveBashTimeoutMs,
+  };
 }
 
 /**
@@ -49,43 +64,69 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
   return {
     exec: (command, cwd, { onData, signal, timeout, env }) => {
       return new Promise((resolve, reject) => {
-        const { shell, args } = getBashShellConfig(options?.shellPath);
+        const shellConfig = getBashShellConfig(options?.shellPath);
+        const invocation = buildShellCommandInvocation(command, shellConfig);
         if (!existsSync(cwd)) {
           reject(
             new Error(`Working directory does not exist: ${cwd}\nCannot execute bash commands.`),
           );
           return;
         }
-        const child = spawnCommand([shell, ...args, command], {
+        const cancelController = new AbortController();
+        const shellEnv = env ?? getBashShellEnv(shellConfig.shell);
+        const child = spawnCommand(invocation.argv, {
           baseEnv: {},
           buffer: false,
+          cancelSignal: cancelController.signal,
           cwd,
           detached: process.platform !== "win32",
-          env: env ?? getShellEnv(),
+          env: shellEnv,
+          forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+          ...(invocation.input === undefined ? {} : { input: invocation.input }),
           reject: false,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: [invocation.stdin, "pipe", "pipe"],
         });
-        const releaseOutput = releaseChildProcessOutputAfterExit(child);
+        const releaseOutput = releaseChildProcessOutputAfterExit(child.nodeChildProcess);
+        let childExited = false;
+        child.nodeChildProcess.once("exit", () => {
+          childExited = true;
+        });
+        let commandSettled = false;
+        const terminationController = createCommandTerminationController({
+          child: child.nodeChildProcess,
+          cancelController,
+          baseEnv: {},
+          env: shellEnv,
+          processTree: { mode: "force" },
+          killGraceMs: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+          isChildExited: () => childExited,
+          isCommandSettled: () => commandSettled,
+        });
+        let terminationStarted = false;
+        const terminate = () => {
+          if (terminationStarted) {
+            return;
+          }
+          terminationStarted = true;
+          if (!terminationController.terminate()) {
+            cancelController.abort();
+          }
+        };
         let timedOut = false;
         let timeoutHandle: NodeJS.Timeout | undefined;
         const timeoutMs = resolveBashTimeoutMs(timeout);
         if (timeoutMs !== undefined) {
           timeoutHandle = setTimeout(() => {
             timedOut = true;
-            if (child.pid) {
-              killProcessTree(child.pid);
-            }
+            terminate();
           }, timeoutMs);
         }
-        // Stream stdout and stderr.
-        child.stdout?.on("data", onData);
-        child.stderr?.on("data", onData);
+        // Stream stdout and stderr. Tag each pipe so downstream decode state
+        // stays per-stream; a pending sequence on one must not eat the other.
+        child.stdout?.on("data", (data: Buffer) => onData(data, "stdout"));
+        child.stderr?.on("data", (data: Buffer) => onData(data, "stderr"));
         // Handle abort signal by killing the entire process tree.
-        const onAbort = () => {
-          if (child.pid) {
-            killProcessTree(child.pid);
-          }
-        };
+        const onAbort = terminate;
         if (signal) {
           if (signal.aborted) {
             onAbort();
@@ -94,12 +135,14 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
           }
         }
         void child
-          .then((result) => {
+          .then(async (result) => {
+            commandSettled = true;
+            await terminationController.settle();
             if (result.failed && result.exitCode === undefined && result.signal === undefined) {
               if (result instanceof Error) {
                 throw result;
               }
-              throw new Error(`Failed to launch shell: ${shell}`, { cause: result });
+              throw new Error(`Failed to launch shell: ${shellConfig.shell}`, { cause: result });
             }
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
@@ -117,7 +160,9 @@ export function createLocalBashOperations(options?: { shellPath?: string }): Bas
             }
             resolve({ exitCode: result.exitCode ?? (result.failed ? 1 : 0) });
           })
-          .catch((err: unknown) => {
+          .catch(async (err: unknown) => {
+            commandSettled = true;
+            await terminationController.settle();
             if (timeoutHandle) {
               clearTimeout(timeoutHandle);
             }
@@ -144,8 +189,9 @@ function resolveSpawnContext(
   command: string,
   cwd: string,
   spawnHook?: BashSpawnHook,
+  shellPath?: string,
 ): BashSpawnContext {
-  const baseContext: BashSpawnContext = { command, cwd, env: { ...getShellEnv() } };
+  const baseContext: BashSpawnContext = { command, cwd, env: getBashShellEnv(shellPath) };
   return spawnHook ? spawnHook(baseContext) : baseContext;
 }
 
@@ -304,8 +350,9 @@ export function createBashToolDefinition(
     ) {
       void toolCallId;
       void ctx;
+      resolveBashTimeoutMs(timeout);
       const resolvedCommand = commandPrefix ? `${commandPrefix}\n${command}` : command;
-      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook);
+      const spawnContext = resolveSpawnContext(resolvedCommand, cwd, spawnHook, options?.shellPath);
       const output = new OutputAccumulator({ tempFilePrefix: "openclaw-bash" });
       let acceptingOutput = true;
       let updateTimer: NodeJS.Timeout | undefined;
@@ -356,11 +403,11 @@ export function createBashToolDefinition(
         onUpdate({ content: [], details: undefined });
       }
 
-      const handleData = (data: Buffer) => {
+      const handleData = (data: Buffer, stream?: "stdout" | "stderr") => {
         if (!acceptingOutput) {
           return;
         }
-        output.append(data);
+        output.append(data, stream);
         scheduleOutputUpdate();
       };
 

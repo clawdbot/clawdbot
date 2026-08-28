@@ -58,7 +58,7 @@ export function collectTranscriptText(value: unknown, fragments: string[]): void
 
 export function parseTranscriptLine(
   line: Buffer,
-  optionalString: (value: unknown, maxLength?: number) => string | undefined,
+  optionalString: (value: unknown, maxLength: number) => string | undefined,
 ): ClaudeTranscriptItem | undefined {
   let raw: unknown;
   try {
@@ -66,7 +66,7 @@ export function parseTranscriptLine(
   } catch {
     return undefined;
   }
-  if (!isRecord(raw) || raw.isSidechain === true || !isRecord(raw.message)) {
+  if (!isRecord(raw) || raw.isSidechain === true || raw.isMeta === true || !isRecord(raw.message)) {
     return undefined;
   }
   const role = raw.message.role;

@@ -9,6 +9,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import { formatPortRangeHint } from "../cli/error-format.js";
 import { parsePort } from "../cli/shared/parse-port.js";
 import { resolveGatewayPort } from "../config/config.js";
+import type { GatewayTrustedProxyConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isValidEnvSecretRefId, type SecretInput } from "../config/types.secrets.js";
 import {
@@ -17,9 +18,11 @@ import {
   TAILSCALE_EXPOSURE_OPTIONS,
   TAILSCALE_MISSING_BIN_NOTE_LINES,
 } from "../gateway/gateway-config-prompts.shared.js";
+import { isLoopbackAddress } from "../gateway/net.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { t } from "../wizard/i18n/index.js";
 import { buildGatewayAuthConfig } from "./configure.gateway-auth.js";
 import { confirm, password, select, text } from "./configure.shared.js";
 import {
@@ -55,6 +58,7 @@ export async function promptGatewayConfig(
       validate: validateGatewayPortInput,
     }),
     runtime,
+    1,
   );
   const port = parsePort(portRaw) ?? resolveGatewayPort(cfg);
 
@@ -90,6 +94,7 @@ export async function promptGatewayConfig(
       ],
     }),
     runtime,
+    1,
   );
 
   let customBindHost: string | undefined;
@@ -101,6 +106,7 @@ export async function promptGatewayConfig(
         validate: validateDottedDecimalIPv4Input,
       }),
       runtime,
+      1,
     );
     customBindHost = readStringValue(input);
   }
@@ -120,6 +126,7 @@ export async function promptGatewayConfig(
       initialValue: "token",
     }),
     runtime,
+    1,
   ) as GatewayAuthChoice;
 
   let tailscaleMode = guardCancel(
@@ -128,6 +135,7 @@ export async function promptGatewayConfig(
       options: [...TAILSCALE_EXPOSURE_OPTIONS],
     }),
     runtime,
+    1,
   );
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
@@ -140,16 +148,8 @@ export async function promptGatewayConfig(
     }
   }
 
-  let tailscaleResetOnExit = false;
   if (tailscaleMode !== "off") {
     note(TAILSCALE_DOCS_LINES.join("\n"), "Tailscale");
-    tailscaleResetOnExit = guardCancel(
-      await confirm({
-        message: "Reset Tailscale serve/funnel on exit?",
-        initialValue: false,
-      }),
-      runtime,
-    );
   }
 
   if (tailscaleMode !== "off" && bind !== "loopback") {
@@ -163,22 +163,19 @@ export async function promptGatewayConfig(
   }
 
   // trusted-proxy + loopback is valid when the reverse proxy runs on the same
-  // host (e.g. cloudflared, nginx, Caddy). trustedProxies must include 127.0.0.1.
+  // host, with the loopback source in trustedProxies and allowLoopback consent.
   if (authMode === "trusted-proxy" && tailscaleMode !== "off") {
     note(
       "Trusted proxy auth is incompatible with Tailscale serve/funnel. Disabling Tailscale.",
       "Note",
     );
     tailscaleMode = "off";
-    tailscaleResetOnExit = false;
   }
 
   let gatewayToken: SecretInput | undefined;
   let gatewayTokenForCalls: string | undefined;
   let gatewayPassword: string | undefined;
-  let trustedProxyConfig:
-    | { userHeader: string; requiredHeaders?: string[]; allowUsers?: string[] }
-    | undefined;
+  let trustedProxyConfig: GatewayTrustedProxyConfig | undefined;
   let trustedProxies: string[] | undefined;
   let next = cfg;
 
@@ -201,6 +198,7 @@ export async function promptGatewayConfig(
         initialValue: "plaintext",
       }),
       runtime,
+      1,
     );
     if (tokenInputMode === "ref") {
       const envVar = guardCancel(
@@ -221,6 +219,7 @@ export async function promptGatewayConfig(
           },
         }),
         runtime,
+        1,
       );
       const envVarName = normalizeOptionalString(envVar) ?? "";
       gatewayToken = {
@@ -237,6 +236,7 @@ export async function promptGatewayConfig(
           message: "Gateway token (blank to generate)",
         }),
         runtime,
+        1,
       );
       gatewayTokenForCalls = normalizeGatewayTokenInput(tokenInput) || randomToken();
       gatewayToken = gatewayTokenForCalls;
@@ -250,6 +250,7 @@ export async function promptGatewayConfig(
         validate: validateGatewayPasswordInput,
       }),
       runtime,
+      1,
     );
     gatewayPassword = normalizeOptionalString(passwordInput) ?? "";
   }
@@ -275,6 +276,7 @@ export async function promptGatewayConfig(
         validate: (value) => (value?.trim() ? undefined : "User header is required"),
       }),
       runtime,
+      1,
     );
 
     const requiredHeadersRaw = guardCancel(
@@ -283,6 +285,7 @@ export async function promptGatewayConfig(
         placeholder: "x-forwarded-proto,x-forwarded-host",
       }),
       runtime,
+      1,
     );
     const requiredHeaders = requiredHeadersRaw
       ? normalizeStringEntries(requiredHeadersRaw.split(","))
@@ -294,6 +297,7 @@ export async function promptGatewayConfig(
         placeholder: "nick@example.com,admin@company.com",
       }),
       runtime,
+      1,
     );
     const allowUsers = allowUsersRaw ? normalizeStringEntries(allowUsersRaw.split(",")) : [];
 
@@ -309,13 +313,38 @@ export async function promptGatewayConfig(
         },
       }),
       runtime,
+      1,
     );
     trustedProxies = normalizeStringEntries(trustedProxiesRaw.split(","));
 
+    const existingProxy =
+      cfg.gateway?.auth?.mode === "trusted-proxy" ? cfg.gateway.auth.trustedProxy : undefined;
+    let allowLoopback = existingProxy?.allowLoopback;
+    // Classify CIDR base addresses with the same loopback rules as runtime auth.
+    if (trustedProxies.some((address) => isLoopbackAddress(address.split("/")[0]))) {
+      const title = t("wizard.gateway.trustedProxyLoopbackTitle");
+      note(t("wizard.gateway.trustedProxyLoopbackWarning"), title);
+      allowLoopback =
+        guardCancel(
+          await confirm({
+            message: t("wizard.gateway.trustedProxyAllowLoopback"),
+            initialValue: allowLoopback === true,
+          }),
+          runtime,
+          1,
+        ) || undefined;
+      if (!allowLoopback) {
+        note(t("wizard.gateway.trustedProxyLoopbackRefused"), title);
+      }
+    }
+
     trustedProxyConfig = {
+      // Retain unprompted policy, including device enrollment, on same-mode reruns.
+      ...existingProxy,
       userHeader: normalizeOptionalString(userHeader) ?? "",
       requiredHeaders: requiredHeaders.length > 0 ? requiredHeaders : undefined,
       allowUsers: allowUsers.length > 0 ? allowUsers : undefined,
+      allowLoopback,
     };
   }
 
@@ -340,7 +369,6 @@ export async function promptGatewayConfig(
       tailscale: {
         ...next.gateway?.tailscale,
         mode: tailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };

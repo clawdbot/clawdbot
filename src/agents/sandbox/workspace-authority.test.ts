@@ -34,9 +34,9 @@ function createSessionStorePath(prefix: string): string {
 }
 
 describe("resolveSandboxWorkspaceAuthority", () => {
-  it("attests a writable Docker workspace", () => {
+  it.each(["docker", "Podman"])("attests a writable %s workspace", (backend) => {
     const result = resolveSandboxWorkspaceAuthority({
-      config: configWithSandbox({ mode: "all", workspaceAccess: "rw" }),
+      config: configWithSandbox({ mode: "all", backend, workspaceAccess: "rw" }),
       agentId: "main",
       sessionKey: "agent:main:subagent:workboard-card",
     });
@@ -52,6 +52,30 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     });
 
     expect(result).toEqual({ sandboxed: true, workspaceAccess: "ro" });
+  });
+
+  it("caps role-required access and rejects principal-shared worker authority", async () => {
+    const sessionKey = "agent:main:guest-worker";
+    const storePath = createSessionStorePath("openclaw-required-workspace-authority");
+    await replaceSessionEntry(
+      { sessionKey, storePath },
+      {
+        sessionId: "guest-worker",
+        updatedAt: Date.now(),
+        sandbox: "required",
+        createdActor: { type: "human", id: "guest-principal" },
+      },
+    );
+    const config = configWithSandbox({ mode: "off", scope: "session", workspaceAccess: "rw" });
+    config.session = { store: storePath };
+
+    expect(resolveSandboxWorkspaceAuthority({ config, agentId: "main", sessionKey })).toMatchObject(
+      {
+        sandboxed: true,
+        workspaceAccess: "ro",
+        confinementError: expect.stringContaining("not exclusive"),
+      },
+    );
   });
 
   it("rejects Docker and shell escape configurations", () => {
@@ -102,6 +126,9 @@ describe("resolveSandboxWorkspaceAuthority", () => {
     });
     expect(elevated.confinementError).toContain("elevated execution");
 
+    // Config-driven delegation cannot happen anymore: the subagent hard-deny
+    // list is non-overridable, so alsoAllow cannot re-enable sessions_spawn.
+    // The worker stays confined (no error) instead of being rejected.
     const delegatingConfig = configWithSandbox({ mode: "all", workspaceAccess: "rw" });
     delegatingConfig.tools!.sandbox!.tools!.allow = [...SAFE_WORKBOARD_TOOLS, "sessions_spawn"];
     delegatingConfig.tools!.subagents = { tools: { alsoAllow: ["sessions_spawn"] } };
@@ -110,7 +137,8 @@ describe("resolveSandboxWorkspaceAuthority", () => {
       agentId: "main",
       sessionKey: "agent:main:subagent:workboard-card",
     });
-    expect(delegating.confinementError).toContain("sessions_spawn");
+    expect(delegating.confinementError).toBeUndefined();
+    expect(delegating.sandboxed).toBe(true);
   });
 
   it("uses the runtime session visibility clamp", () => {

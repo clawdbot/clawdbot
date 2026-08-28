@@ -16,6 +16,21 @@ Provider references:
 - [Anthropic prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 - [OpenAI prompt caching](https://developers.openai.com/api/docs/guides/prompt-caching)
 
+## Keep model settings stable
+
+Prompt-cache reuse depends on provider request configuration as well as prompt
+text. Changing the model always starts a different cache lineage. Changing the
+thinking or reasoning level can also invalidate reuse even when the prompt and
+model stay the same. In particular, OpenAI reasoning-effort changes alter the
+reusable request state and can force the next turn to process the full prefix or
+conversation again. Anthropic likewise documents cache invalidation when its
+thinking budget, effort, or mode changes.
+
+If cache continuity matters, choose the model and thinking level when creating
+the session and keep both stable. Start a new session for a planned change.
+Invalidating reuse means the next request misses that cached state; it does not
+necessarily delete the provider's older cache entry before its normal expiry.
+
 ## Primary knobs
 
 ### `cacheRetention`
@@ -42,7 +57,7 @@ Merge order (later wins):
 
 1. `agents.defaults.params` - global default for all models
 2. `agents.defaults.models["provider/model"].params` - per-model override
-3. `agents.list[].params` - per-agent override, matched by agent id
+3. `agents.entries.*.params` - per-agent override, matched by agent id
 
 Source: `src/agents/embedded-agent-runner/extra-params.ts` (`resolveExtraParams`).
 
@@ -62,7 +77,7 @@ See [Session pruning](/concepts/session-pruning) for full behavior.
 
 ### Heartbeat keep-warm
 
-Heartbeat can keep cache windows warm and reduce repeated cache writes after idle gaps. Configurable globally (`agents.defaults.heartbeat`) or per agent (`agents.list[].heartbeat`).
+Heartbeat can keep cache windows warm and reduce repeated cache writes after idle gaps. Configurable globally (`agents.defaults.heartbeat`) or per agent (`agents.entries.*.heartbeat`).
 
 ```yaml
 agents:
@@ -80,7 +95,7 @@ agents:
 - Native Anthropic Messages responses expose `cache_read_input_tokens` and `cache_creation_input_tokens`, mapped to `cacheRead` and `cacheWrite`.
 - `cacheRetention: "short"` maps to the default 5-minute ephemeral cache. `cacheRetention: "long"` requests the 1-hour TTL (`cache_control: { type: "ephemeral", ttl: "1h" }`) when set explicitly. An implicit/env-driven long retention (`OPENCLAW_CACHE_RETENTION=long` with no explicit `cacheRetention`) only upgrades to the 1-hour TTL on `api.anthropic.com` or Vertex AI (`aiplatform.googleapis.com` / `*-aiplatform.googleapis.com`) hosts; other hosts keep the 5-minute cache.
 
-Source: `src/agents/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
+Source: `packages/ai/src/transports/anthropic-payload-policy.ts` (`resolveAnthropicEphemeralCacheControl`, `isLongTtlEligibleEndpoint`).
 
 ### OpenAI (direct API)
 
@@ -121,6 +136,8 @@ Source: `src/agents/embedded-agent-runner/google-prompt-cache.ts`.
 
 CLI backends that emit JSONL usage events (`jsonlDialect: "claude-stream-json"` or `"gemini-stream-json"`) go through a shared usage parser that recognizes several field-name variants, including a plain `cached` counter mapped to `cacheRead`. When the CLI's JSON payload omits a direct input-token field, OpenClaw derives it as `input_tokens - cached`. This is usage normalization only - it does not create Anthropic/OpenAI-style prompt-cache markers for these CLI-driven models.
 
+Claude Code has no OpenClaw-controlled `cache_control` breakpoint on `--append-system-prompt-file`, so OpenClaw keeps its complete system prompt in that transport. When the bounded Gateway-startup probe finds Claude Code 2.1.98 or newer, bundled `claude-cli` also passes `--exclude-dynamic-system-prompt-sections`. That Claude Code flag moves only Claude's own per-machine cwd, environment, memory-path, and Git-status sections out of its native system prompt; an older, unknown, or failed probe keeps the established argv. `cacheRetention` still has no effect on this path.
+
 Source: `src/agents/cli-output.ts` (`toCliUsage`).
 
 ### Other providers
@@ -129,11 +146,11 @@ If a provider does not support any of the above cache modes, `cacheRetention` ha
 
 ## System-prompt cache boundary
 
-OpenClaw splits the system prompt into a **stable prefix** and a **volatile suffix** at an internal cache-prefix boundary. Content above the boundary (tool definitions, skills metadata, workspace files) is ordered to stay byte-identical across turns. Content below the boundary (for example `HEARTBEAT.md`, runtime timestamps, other per-turn metadata) can change without invalidating the cached prefix.
+OpenClaw splits the system prompt into a **stable prefix** and a **volatile suffix** at an internal cache-prefix boundary. Content above the boundary (tool definitions, skills metadata, workspace files) is ordered to stay byte-identical across turns. Content below the boundary (for example runtime timestamps and other per-turn metadata) can change without invalidating the cached prefix.
 
 Key design choices:
 
-- Stable workspace project-context files are ordered before `HEARTBEAT.md` so heartbeat churn does not bust the stable prefix.
+- Stable workspace project-context files are ordered before volatile per-turn metadata so routine churn does not bust the stable prefix.
 - The boundary applies across Anthropic-family, OpenAI-family, Google, and CLI transport shaping, so all supported providers benefit from the same prefix stability.
 - Codex Responses and Anthropic Vertex requests are routed through boundary-aware cache shaping so cache reuse stays aligned with what providers actually receive.
 - System-prompt fingerprints are normalized (whitespace, line endings, hook-added context, runtime capability ordering) so semantically unchanged prompts share cache across turns.
@@ -181,7 +198,7 @@ agents:
 OpenClaw runs one combined live cache regression gate covering repeated prefixes, tool turns, image turns, MCP-style tool transcripts, and an Anthropic no-cache control.
 
 - `src/agents/live-cache-regression.live.test.ts`
-- `src/agents/live-cache-regression-runner.ts`
+- `src/agents/test-helpers/live-cache-regression-runner.ts`
 - `src/agents/live-cache-regression-baseline.ts`
 
 Run it with:
@@ -191,6 +208,12 @@ OPENCLAW_LIVE_TEST=1 OPENCLAW_LIVE_CACHE_TEST=1 pnpm test:live:cache
 ```
 
 The baseline file stores the most recently observed live numbers plus the provider-specific regression floors the test checks against. Each run uses fresh per-run session IDs and prompt namespaces so previous cache state does not pollute the current sample. Anthropic and OpenAI use different enforcement: an Anthropic floor miss is a hard regression (test fails), while an OpenAI floor miss is watch-only (recorded as a warning, does not fail the run). They do not share a single cross-provider threshold.
+
+Claude CLI prompt reuse has a separate Docker lane because it exercises Claude Code's native session transport rather than the direct Anthropic API. After a fresh turn and tool-bearing warmup resume, it allows a no-tool settlement resume to run hot or cold, dirties the workspace, and requires at least 90% reuse on the following resume without rotating the settled live-session generation. It also verifies that a thinking-level change rotates the generation and that the next steady resume restores at least 90% reuse:
+
+```sh
+pnpm test:docker:live-cli-backend:claude:cache
+```
 
 ### Anthropic live expectations
 
@@ -221,20 +244,9 @@ Why the assertions differ: Anthropic exposes explicit cache breakpoints and movi
 diagnostics:
   cacheTrace:
     enabled: true
-    filePath: "~/.openclaw/logs/cache-trace.jsonl" # optional
-    includeMessages: false # default true
-    includePrompt: false # default true
-    includeSystem: false # default true
 ```
 
-Defaults:
-
-| Key               | Default                                      |
-| ----------------- | -------------------------------------------- |
-| `filePath`        | `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl` |
-| `includeMessages` | `true`                                       |
-| `includePrompt`   | `true`                                       |
-| `includeSystem`   | `true`                                       |
+`enabled` defaults to `false`. Cache traces otherwise write to `$OPENCLAW_STATE_DIR/logs/cache-trace.jsonl` and include messages, prompt text, and the system prompt by default. Output-path and payload-inclusion overrides are environment-only controls for one-off debugging.
 
 ### Env toggles (one-off debugging)
 

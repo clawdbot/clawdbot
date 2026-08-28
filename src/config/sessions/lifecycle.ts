@@ -1,32 +1,48 @@
 // Session lifecycle timestamps prefer store metadata and fall back to transcript headers.
-import fs from "node:fs";
-import { asDateTimestampMs } from "../../shared/number-coercion.js";
+import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
+import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
+import { loadTranscriptHeaderSync, readTranscriptStatsSync } from "./session-accessor.js";
 import {
-  resolveSessionFilePath,
-  resolveSessionFilePathOptions,
-  type SessionFilePathOptions,
-} from "./paths.js";
-import { readTranscriptStatsSync } from "./session-accessor.js";
-import { isTerminalSessionStatus, type SessionEntry, type SessionScope } from "./types.js";
+  isTerminalSessionStatus,
+  type InternalSessionEntry,
+  type SessionEntry,
+  type SessionScope,
+} from "./types.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,
-  "sessionId" | "sessionFile" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
+  "sessionId" | "sessionStartedAt" | "lastInteractionAt" | "updatedAt"
 >;
 
 type SessionWorkStartEntry = Pick<
-  SessionEntry,
-  "archivedAt" | "initializationPending" | "sessionId"
+  InternalSessionEntry,
+  | "archivedAt"
+  | "initializationPending"
+  | "mainRestartRecovery"
+  | "modelSelectionLocked"
+  | "sessionId"
+  | "pendingProjectGitUrl"
+  | "pendingWorktree"
 >;
 
 type SessionWorkStartOptions = {
+  allowRestartTombstoneReplacement?: boolean;
   expectedSessionId?: string;
+  /** Only workspace preparers and lifecycle cancellation may enter pending sessions. */
+  allowPendingWorkspace?: true;
 };
+
+export function isRestartRecoveryTombstone(
+  entry: SessionWorkStartEntry | null | undefined,
+): boolean {
+  return entry?.mainRestartRecovery?.tombstone !== undefined;
+}
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
 const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
+export const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
 
 export class SessionWorkStartInvalidatedError extends Error {
   readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
@@ -49,7 +65,16 @@ export function isSessionWorkStartInvalidatedError(
   );
 }
 
-/** Lifecycle-owned initializing and archived sessions reject new work. */
+export class SessionRestartRecoveryTombstoneError extends Error {
+  readonly code = SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionRestartRecoveryTombstoneError";
+  }
+}
+
+/** Lifecycle-owned initializing, restart-tombstoned, and archived sessions reject new work. */
 export function resolveSessionWorkStartError(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
@@ -64,9 +89,25 @@ export function resolveSessionWorkStartError(
   if (entry?.initializationPending === true) {
     return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
   }
-  return entry?.archivedAt === undefined
-    ? undefined
-    : `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+  const restartRecoveryTombstone = isRestartRecoveryTombstone(entry);
+  if (restartRecoveryTombstone) {
+    if (options?.allowRestartTombstoneReplacement === true) {
+      return undefined;
+    }
+    return entry?.modelSelectionLocked === true
+      ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
+      : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`;
+  }
+  if (entry?.archivedAt !== undefined) {
+    return `Session "${sessionKey}" is archived. Restore it before starting new work.`;
+  }
+  if (
+    !options?.allowPendingWorkspace &&
+    (entry?.pendingProjectGitUrl !== undefined || entry?.pendingWorktree !== undefined)
+  ) {
+    return `Session "${sessionKey}" workspace is not ready. Wait for setup to finish or retry in chat.`;
+  }
+  return undefined;
 }
 
 // Transcript headers are read lazily to recover startedAt without parsing full files.
@@ -102,67 +143,33 @@ function parseTimestampMs(value: unknown): number | undefined {
   if (typeof value !== "string" || !value.trim()) {
     return undefined;
   }
-  const parsed = Date.parse(value);
-  return resolveTimestamp(parsed);
+  return resolveTimestamp(Date.parse(value));
 }
 
-function readFirstLine(filePath: string): string | undefined {
-  try {
-    const fd = fs.openSync(filePath, "r");
-    try {
-      const buffer = Buffer.alloc(8192);
-      const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
-      if (bytesRead <= 0) {
-        return undefined;
-      }
-      const chunk = buffer.subarray(0, bytesRead).toString("utf8");
-      const newline = chunk.indexOf("\n");
-      return newline >= 0 ? chunk.slice(0, newline) : chunk;
-    } finally {
-      fs.closeSync(fd);
-    }
-  } catch {
-    return undefined;
-  }
-}
-
-/** Reads session start time from a transcript header when store metadata is missing. */
 function readSessionHeaderStartedAtMs(params: {
-  entry: SessionLifecycleEntry | undefined;
+  entry: SessionLifecycleEntry;
   agentId?: string;
+  sessionKey?: string;
   storePath?: string;
-  pathOptions?: SessionFilePathOptions;
 }): number | undefined {
-  const sessionId = params.entry?.sessionId?.trim();
-  if (!sessionId) {
-    return undefined;
-  }
-  const pathOptions =
-    params.pathOptions ??
-    resolveSessionFilePathOptions({
-      agentId: params.agentId,
-      storePath: params.storePath,
-    });
-  let sessionFile: string;
-  try {
-    sessionFile = resolveSessionFilePath(sessionId, params.entry, pathOptions);
-  } catch {
-    return undefined;
-  }
-  const firstLine = readFirstLine(sessionFile);
-  if (!firstLine) {
+  const sessionId = params.entry.sessionId?.trim();
+  const sessionKey = params.sessionKey?.trim();
+  const agentId =
+    params.agentId ?? (sessionKey ? resolveAgentIdFromSessionKey(sessionKey) : undefined);
+  if (!sessionId || !agentId) {
     return undefined;
   }
   try {
-    const header = JSON.parse(firstLine) as {
-      type?: unknown;
-      id?: unknown;
-      timestamp?: unknown;
-    };
-    if (header.type !== "session") {
-      return undefined;
-    }
-    if (typeof header.id === "string" && header.id.trim() && header.id !== sessionId) {
+    const header = loadTranscriptHeaderSync({
+      agentId,
+      sessionId,
+      ...(params.storePath ? { storePath: params.storePath } : {}),
+      ...(sessionKey ? { sessionKey } : {}),
+    }) as { type?: unknown; id?: unknown; timestamp?: unknown } | undefined;
+    if (
+      header?.type !== "session" ||
+      (typeof header.id === "string" && header.id.trim() && header.id !== sessionId)
+    ) {
       return undefined;
     }
     return parseTimestampMs(header.timestamp);
@@ -174,8 +181,8 @@ function readSessionHeaderStartedAtMs(params: {
 export function resolveSessionLifecycleTimestamps(params: {
   entry: SessionLifecycleEntry | undefined;
   agentId?: string;
+  sessionKey?: string;
   storePath?: string;
-  pathOptions?: SessionFilePathOptions;
 }): { sessionStartedAt?: number; lastInteractionAt?: number } {
   const entry = params.entry;
   if (!entry) {
@@ -184,12 +191,7 @@ export function resolveSessionLifecycleTimestamps(params: {
   return {
     sessionStartedAt:
       resolveTimestamp(entry.sessionStartedAt) ??
-      readSessionHeaderStartedAtMs({
-        entry,
-        agentId: params.agentId,
-        storePath: params.storePath,
-        pathOptions: params.pathOptions,
-      }),
+      readSessionHeaderStartedAtMs({ ...params, entry }),
     lastInteractionAt: resolveTimestamp(entry.lastInteractionAt),
   };
 }

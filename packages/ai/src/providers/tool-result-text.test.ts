@@ -1,5 +1,68 @@
 import { describe, expect, it } from "vitest";
-import { describeToolResultMediaPlaceholder, extractToolResultText } from "./tool-result-text.js";
+import {
+  describeToolResultMediaPlaceholder,
+  describeUnsupportedToolResultMedia,
+  extractToolResultText,
+  formatToolResultText,
+  hasMediaPayload,
+  isImageWithMediaPayload,
+} from "./tool-result-text.js";
+
+describe("formatToolResultText", () => {
+  it("preserves significant boundary whitespace in nonblank tool output", () => {
+    expect(formatToolResultText({ text: "  indented\n", isError: false })).toBe("  indented\n");
+    expect(formatToolResultText({ text: "row1   \nrow2\n", isError: false })).toBe(
+      "row1   \nrow2\n",
+    );
+  });
+
+  it("falls back to placeholders only for blank tool output", () => {
+    expect(formatToolResultText({ text: "   \n\t", isError: false })).toBe("(no tool output)");
+    expect(
+      formatToolResultText({ text: "", mediaPlaceholder: "(see attached image)", isError: false }),
+    ).toBe("(see attached image)");
+  });
+
+  it("keeps the error prefix on unmodified output", () => {
+    expect(formatToolResultText({ text: "  failed  ", isError: true })).toBe(
+      "[tool error]   failed  ",
+    );
+  });
+
+  it("appends the omitted-media suffix after unmodified output", () => {
+    const text = "line with trailing spaces   ";
+    expect(
+      formatToolResultText({
+        text,
+        omittedMediaPlaceholder: "[tool image omitted]",
+        isError: false,
+      }),
+    ).toBe(`${text}\n[tool image omitted]`);
+  });
+});
+
+describe("hasMediaPayload", () => {
+  it("requires non-empty inline data instead of media metadata", () => {
+    expect(hasMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(true);
+    expect(hasMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" })).toBe(true);
+    expect(hasMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
+    expect(hasMediaPayload({ type: "image", data: "  ", mimeType: "image/png" })).toBe(false);
+    expect(hasMediaPayload({ type: "image", path: "/tmp/image.png" })).toBe(false);
+    expect(hasMediaPayload({ type: "image", url: "https://example.test/image.png" })).toBe(false);
+  });
+});
+
+describe("isImageWithMediaPayload", () => {
+  it("requires both the image type and inline payload bytes", () => {
+    expect(isImageWithMediaPayload({ type: "image", data: "aW1n", mimeType: "image/png" })).toBe(
+      true,
+    );
+    expect(isImageWithMediaPayload({ type: "image", data: "", mimeType: "image/png" })).toBe(false);
+    expect(
+      isImageWithMediaPayload({ type: "audio", data: "YXVkaW8=", mimeType: "audio/mpeg" }),
+    ).toBe(false);
+  });
+});
 
 describe("extractToolResultText", () => {
   it("keeps media-only blocks out of provider replay text", () => {
@@ -114,5 +177,26 @@ describe("describeToolResultMediaPlaceholder", () => {
         { type: "audio", mimeType: "audio/mpeg", data: "audio" },
       ]),
     ).toBe("(see attached media)");
+  });
+
+  it("does not advertise payload-less media husks", () => {
+    const husks = [
+      { type: "image", mimeType: "image/png", data: "" },
+      { type: "image", path: "/tmp/image.png" },
+      { type: "audio", mimeType: "audio/mpeg" },
+      { type: "text", text: "ordinary text", mimeType: "image/png" },
+    ];
+    expect(describeToolResultMediaPlaceholder(husks)).toBeUndefined();
+    expect(
+      describeUnsupportedToolResultMedia(husks, { images: true, audio: false }),
+    ).toBeUndefined();
+  });
+
+  it("does not treat text MIME metadata as attached media", () => {
+    expect(
+      describeToolResultMediaPlaceholder([
+        { type: "text", text: "actual tool output", mimeType: "image/svg+xml" },
+      ]),
+    ).toBeUndefined();
   });
 });

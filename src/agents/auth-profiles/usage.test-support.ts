@@ -6,6 +6,7 @@ type UsageDeps = {
 
 type AuthProfileUsageTestApi = {
   setDepsForTest(overrides: Partial<UsageDeps> | null): void;
+  resetWhamReprobeStateForTest(): void;
 };
 
 function getTestApi(): AuthProfileUsageTestApi {
@@ -16,4 +17,5 @@ function getTestApi(): AuthProfileUsageTestApi {
 
 export const testing: AuthProfileUsageTestApi = {
   setDepsForTest: (overrides) => getTestApi().setDepsForTest(overrides),
+  resetWhamReprobeStateForTest: () => getTestApi().resetWhamReprobeStateForTest(),
 };

@@ -1,5 +1,13 @@
 // Matrix plugin module implements tool actions behavior.
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
+import {
+  createActionGate,
+  jsonResult,
+  readPositiveIntegerParam,
+  readReactionParams,
+  readStringArrayParam,
+  readStringParam,
+} from "openclaw/plugin-sdk/channel-actions";
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveMatrixAccountConfig } from "./matrix/accounts.js";
 import {
@@ -17,6 +25,7 @@ import {
   getMatrixMemberInfo,
   getMatrixRoomInfo,
   getMatrixVerificationSas,
+  listMatrixEmojis,
   listMatrixPins,
   listMatrixReactions,
   listMatrixVerifications,
@@ -33,22 +42,15 @@ import {
   voteMatrixPoll,
   verifyMatrixRecoveryKey,
 } from "./matrix/actions.js";
+import type { MatrixActionClientOpts, MatrixMessageSummary } from "./matrix/actions/types.js";
 import { withAuthorizedMatrixReadTarget, type MatrixReadContext } from "./matrix/read-policy.js";
 import type { MatrixClient } from "./matrix/sdk.js";
 import { reactMatrixMessage } from "./matrix/send.js";
 import { applyMatrixProfileUpdate } from "./profile-update.js";
-import {
-  createActionGate,
-  jsonResult,
-  readPositiveIntegerParam,
-  readReactionParams,
-  readStringArrayParam,
-  readStringParam,
-} from "./runtime-api.js";
 import type { CoreConfig } from "./types.js";
 
 const messageActions = new Set(["sendMessage", "editMessage", "deleteMessage", "readMessages"]);
-const reactionActions = new Set(["react", "reactions"]);
+const reactionActions = new Set(["react", "reactions", "emoji-list"]);
 const pinActions = new Set(["pinMessage", "unpinMessage", "listPins"]);
 const pollActions = new Set(["pollVote"]);
 const profileActions = new Set(["setProfile"]);
@@ -71,6 +73,20 @@ const verificationActions = new Set([
   "verificationBackupStatus",
   "verificationBackupRestore",
 ]);
+
+function projectMatrixMessagesForDisplay(messages: readonly MatrixMessageSummary[]) {
+  return messages.map((message) => ({
+    ...message,
+    ...(message.eventId ? { id: message.eventId } : {}),
+    ...(message.sender ? { authorTag: message.sender } : {}),
+    ...(message.body !== undefined ? { content: message.body } : {}),
+    ...(typeof message.timestamp === "number" &&
+    Number.isFinite(message.timestamp) &&
+    Math.abs(message.timestamp) <= 8_640_000_000_000_000
+      ? { ts: new Date(message.timestamp).toISOString() }
+      : {}),
+  }));
+}
 
 function readRoomId(params: Record<string, unknown>, required = true): string {
   const direct = readStringParam(params, "roomId") ?? readStringParam(params, "channelId");
@@ -149,7 +165,9 @@ function readPositiveIntegerArrayParam(params: Record<string, unknown>, key: str
 export async function handleMatrixAction(
   params: Record<string, unknown>,
   cfg: CoreConfig,
-  opts: { mediaLocalRoots?: readonly string[]; readContext?: MatrixReadContext } = {},
+  opts: Pick<MatrixActionClientOpts, "mediaAccess" | "mediaLocalRoots"> & {
+    readContext?: MatrixReadContext;
+  } = {},
 ): Promise<AgentToolResult<unknown>> {
   const action = readStringParam(params, "action", { required: true });
   const accountId = readStringParam(params, "accountId") ?? undefined;
@@ -176,6 +194,19 @@ export async function handleMatrixAction(
       throw new Error("Matrix reactions are disabled.");
     }
     const roomId = readRoomId(params);
+    if (action === "emoji-list") {
+      const limit = readPositiveIntegerParam(params, "limit", {
+        message: "limit must be a positive integer.",
+      });
+      const emojis = await withReadTarget(roomId, async (target) =>
+        listMatrixEmojis(target.roomId, {
+          ...clientOpts,
+          client: target.client,
+          limit,
+        }),
+      );
+      return jsonResult({ ok: true, emojis });
+    }
     const messageId = readStringParam(params, "messageId", { required: true });
     if (action === "react") {
       const { emoji, remove, isEmpty } = readReactionParams(params, {
@@ -256,6 +287,7 @@ export async function handleMatrixAction(
         const content = readStringParam(params, "content", {
           required: !mediaUrl,
           allowEmpty: true,
+          trim: false,
         });
         const replyToId =
           readStringParam(params, "replyToId") ?? readStringParam(params, "replyTo");
@@ -268,6 +300,7 @@ export async function handleMatrixAction(
               : undefined;
         const result = await sendMatrixMessage(to, content, {
           mediaUrl: mediaUrl ?? undefined,
+          ...(opts.mediaAccess ? { mediaAccess: opts.mediaAccess } : {}),
           mediaLocalRoots: opts.mediaLocalRoots,
           replyToId: replyToId ?? undefined,
           threadId: threadId ?? undefined,
@@ -279,7 +312,7 @@ export async function handleMatrixAction(
       case "editMessage": {
         const roomId = readRoomId(params);
         const messageId = readStringParam(params, "messageId", { required: true });
-        const content = readStringParam(params, "content", { required: true });
+        const content = readStringParam(params, "content", { required: true, trim: false });
         const result = await withReadTarget(roomId, async (target) => {
           return await editMatrixMessage(target.roomId, messageId, content, {
             ...clientOpts,
@@ -310,7 +343,7 @@ export async function handleMatrixAction(
         const after = readStringParam(params, "after");
         const threadId = readStringParam(params, "threadId");
         const result = await withReadTarget(roomId, async (target) => {
-          return await readMatrixMessages(target.roomId, {
+          const messages = await readMatrixMessages(target.roomId, {
             limit: limit ?? undefined,
             before: before ?? undefined,
             after: after ?? undefined,
@@ -318,6 +351,12 @@ export async function handleMatrixAction(
             ...clientOpts,
             client: target.client,
           });
+          return {
+            ...messages,
+            messages: projectMatrixMessagesForDisplay(messages.messages),
+            roomId: target.roomId,
+            ...(threadId ? { threadId } : {}),
+          };
         });
         return jsonResult({ ok: true, ...result });
       }
@@ -357,7 +396,12 @@ export async function handleMatrixAction(
         return jsonResult({ ok: true, pinned: result.pinned });
       }
       const result = await listMatrixPins(target.roomId, actionOpts);
-      return jsonResult({ ok: true, pinned: result.pinned, events: result.events });
+      return jsonResult({
+        ok: true,
+        pinned: result.pinned,
+        events: result.events,
+        pins: projectMatrixMessagesForDisplay(result.events),
+      });
     });
   }
 

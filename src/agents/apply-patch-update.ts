@@ -5,6 +5,7 @@
  */
 import fs from "node:fs/promises";
 import { formatErrorMessage } from "../infra/errors.js";
+import { hasOnlyCrlfLineEndings, normalizeToLF, restoreLineEndings } from "./line-endings.js";
 
 const DASH_PUNCTUATION = /[\u2010-\u2015\u2212]/g;
 const SINGLE_QUOTE_PUNCTUATION = /[\u2018-\u201B]/g;
@@ -15,6 +16,7 @@ type UpdateFileChunk = {
   changeContext?: string;
   oldLines: string[];
   newLines: string[];
+  contextOldIndexes: Array<number | undefined>;
   isEndOfFile: boolean;
 };
 
@@ -33,7 +35,11 @@ export async function applyUpdateHunk(
     throw new Error(`Failed to read file to update ${filePath}: ${formatErrorMessage(err)}`);
   });
 
-  const originalLines = originalContents.split("\n");
+  // Normalizing mixed endings would rewrite untouched lines across the file.
+  // Keep the existing localized behavior unless every terminator is CRLF.
+  const preserveCrlf = hasOnlyCrlfLineEndings(originalContents);
+  const matchingContents = preserveCrlf ? normalizeToLF(originalContents) : originalContents;
+  const originalLines = matchingContents.split("\n");
   if (originalLines.length > 0 && originalLines[originalLines.length - 1] === "") {
     originalLines.pop();
   }
@@ -43,7 +49,8 @@ export async function applyUpdateHunk(
   if (newLines.length === 0 || newLines[newLines.length - 1] !== "") {
     newLines = [...newLines, ""];
   }
-  return newLines.join("\n");
+  const updatedContents = newLines.join("\n");
+  return preserveCrlf ? restoreLineEndings(updatedContents, "\r\n") : updatedContents;
 }
 
 function computeReplacements(
@@ -56,11 +63,16 @@ function computeReplacements(
 
   for (const chunk of chunks) {
     if (chunk.changeContext) {
-      const ctxIndex = seekSequence(originalLines, [chunk.changeContext], lineIndex, false);
-      if (ctxIndex === null) {
+      const contextSearch = seekSequence(originalLines, [chunk.changeContext], lineIndex, false);
+      if (contextSearch.kind === "ambiguous") {
+        throw new Error(
+          `Found ${contextSearch.occurrences} occurrences of context '${chunk.changeContext}' in ${filePath}. The context must be unique; use a more specific @@ context line.`,
+        );
+      }
+      if (contextSearch.kind === "missing") {
         throw new Error(`Failed to find context '${chunk.changeContext}' in ${filePath}`);
       }
-      lineIndex = ctxIndex + 1;
+      lineIndex = contextSearch.index + 1;
     }
 
     if (chunk.oldLines.length === 0) {
@@ -77,30 +89,63 @@ function computeReplacements(
 
     let pattern = chunk.oldLines;
     let newSlice = chunk.newLines;
-    let found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
+    let search = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
 
-    if (found === null && pattern[pattern.length - 1] === "") {
+    if (search.kind === "missing" && pattern[pattern.length - 1] === "") {
       // Parsed hunks may carry an EOF sentinel as a blank trailing line. Retry
       // without it so equivalent file contents still match.
       pattern = pattern.slice(0, -1);
       if (newSlice.length > 0 && newSlice[newSlice.length - 1] === "") {
         newSlice = newSlice.slice(0, -1);
       }
-      found = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
+      search = seekSequence(originalLines, pattern, lineIndex, chunk.isEndOfFile);
     }
 
-    if (found === null) {
+    if (search.kind === "ambiguous") {
+      throw new Error(
+        `Found ${search.occurrences} occurrences of these lines in ${filePath}. The lines must be unique; include more surrounding lines in the hunk:\n${chunk.oldLines.join("\n")}`,
+      );
+    }
+    if (search.kind === "missing") {
       throw new Error(
         `Failed to find expected lines in ${filePath}:\n${chunk.oldLines.join("\n")}`,
       );
     }
+    const found = search.index;
 
-    replacements.push([found, pattern.length, newSlice]);
+    replacements.push([
+      found,
+      pattern.length,
+      keepContextBytes({
+        originalLines,
+        matchIndex: found,
+        patternLength: pattern.length,
+        newSlice,
+        contextOldIndexes: chunk.contextOldIndexes,
+      }),
+    ]);
     lineIndex = found + pattern.length;
   }
 
   replacements.sort((a, b) => a[0] - b[0]);
   return replacements;
+}
+
+function keepContextBytes(params: {
+  originalLines: string[];
+  matchIndex: number;
+  patternLength: number;
+  newSlice: string[];
+  contextOldIndexes: Array<number | undefined>;
+}): string[] {
+  const { originalLines, matchIndex, patternLength, newSlice, contextOldIndexes } = params;
+  return newSlice.map((line, index) => {
+    const oldIndex = contextOldIndexes.at(index);
+    if (oldIndex === undefined || oldIndex >= patternLength) {
+      return line;
+    }
+    return originalLines.at(matchIndex + oldIndex) ?? line;
+  });
 }
 
 function applyReplacements(
@@ -123,23 +168,28 @@ function applyReplacements(
   return result;
 }
 
+type SequenceSearch =
+  | { kind: "found"; index: number }
+  | { kind: "ambiguous"; occurrences: number }
+  | { kind: "missing" };
+
 function seekSequence(
   lines: string[],
   pattern: string[],
   start: number,
   eof: boolean,
-): number | null {
+): SequenceSearch {
   if (pattern.length === 0) {
-    return start;
+    return { kind: "found", index: start };
   }
   if (pattern.length > lines.length) {
-    return null;
+    return { kind: "missing" };
   }
 
   const maxStart = lines.length - pattern.length;
-  const searchStart = eof && lines.length >= pattern.length ? maxStart : start;
+  const searchStart = eof ? Math.max(start, maxStart) : start;
   if (searchStart > maxStart) {
-    return null;
+    return { kind: "missing" };
   }
 
   // Fall back through increasingly tolerant comparisons. This preserves normal
@@ -152,14 +202,21 @@ function seekSequence(
     (value: string) => normalizePunctuation(value.trim()),
   ];
   for (const normalize of normalizers) {
+    let index: number | null = null;
+    let occurrences = 0;
     for (let i = searchStart; i <= maxStart; i += 1) {
       if (linesMatch(lines, pattern, i, normalize)) {
-        return i;
+        index ??= i;
+        occurrences += 1;
       }
+    }
+    if (index !== null) {
+      // Later tiers are broader, so only the first tier with any matches decides.
+      return occurrences === 1 ? { kind: "found", index } : { kind: "ambiguous", occurrences };
     }
   }
 
-  return null;
+  return { kind: "missing" };
 }
 
 function linesMatch(

@@ -1,5 +1,9 @@
 // Control UI view renders usage screen content.
 import { html, nothing } from "lit";
+import {
+  addCostUsageTotals,
+  createEmptyCostUsageTotals,
+} from "../../../../src/infra/session-cost-usage-totals.js";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import { renderSettingsPage, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
@@ -12,9 +16,9 @@ import {
   buildAggregatesFromSessions,
   buildPeakErrorHours,
   buildUsageInsightStats,
-  formatCost,
+  formatUsageCost,
   formatIsoDate,
-  formatTokens,
+  formatUsageTokens,
   renderUsageMosaic,
   sessionTouchesSelectedHours,
 } from "./metrics.ts";
@@ -30,7 +34,8 @@ import {
   setQueryTokensForKey,
 } from "./query.ts";
 import type { UsageFilterState, UsageProps, UsageSessionEntry, UsageTotals } from "./types.ts";
-import { renderSessionDetailPanel } from "./view-details.ts";
+import { renderSessionDetailPanel, usageDateKey } from "./view-details.ts";
+import { renderUsageHeatmap } from "./view-heatmap.ts";
 import {
   renderCostBreakdownCompact,
   renderCostWindowComparison,
@@ -40,55 +45,9 @@ import {
   renderUsageInsights,
 } from "./view-overview.ts";
 
-function createEmptyUsageTotals(): UsageTotals {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
-
-function addUsageTotals(
-  acc: UsageTotals,
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    totalCost: number;
-    inputCost?: number;
-    outputCost?: number;
-    cacheReadCost?: number;
-    cacheWriteCost?: number;
-    missingCostEntries?: number;
-  },
-): UsageTotals {
-  acc.input += usage.input;
-  acc.output += usage.output;
-  acc.cacheRead += usage.cacheRead;
-  acc.cacheWrite += usage.cacheWrite;
-  acc.totalTokens += usage.totalTokens;
-  acc.totalCost += usage.totalCost;
-  acc.inputCost += usage.inputCost ?? 0;
-  acc.outputCost += usage.outputCost ?? 0;
-  acc.cacheReadCost += usage.cacheReadCost ?? 0;
-  acc.cacheWriteCost += usage.cacheWriteCost ?? 0;
-  acc.missingCostEntries += usage.missingCostEntries ?? 0;
-  return acc;
-}
-
 function renderUsageLoadingStatus(label: unknown) {
   return html`
-    <span class="settings-status settings-status--accent" role="status" aria-live="polite">
+    <span class="settings-status settings-status--accent">
       <span class="usage-loading-spinner" aria-hidden="true"></span>
       ${label}
     </span>
@@ -113,9 +72,9 @@ function renderUsageLoadingState(filters: UsageFilterState) {
           </div>
         </div>
         <div class="usage-loading-grid">
-          <div class="usage-skeleton-block usage-skeleton-block--tall"></div>
-          <div class="usage-skeleton-block"></div>
-          <div class="usage-skeleton-block"></div>
+          <div class="skeleton usage-skeleton-block usage-skeleton-block--tall"></div>
+          <div class="skeleton usage-skeleton-block"></div>
+          <div class="skeleton usage-skeleton-block"></div>
         </div>
       </div>
     `,
@@ -141,9 +100,20 @@ function renderUsageEmptyState(onRefresh: () => void) {
 
 type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
 
-function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
+function renderProviderUsage(
+  providers: ProviderUsageSnapshot[],
+  unavailable: boolean,
+  stalled: boolean,
+) {
+  const notice = stalled
+    ? html`<div class="callout warning usage-callout">${t("usage.providerUsage.stalled")}</div>`
+    : unavailable
+      ? html`<div class="callout warning usage-callout">
+          ${t("usage.providerUsage.unavailable")}
+        </div>`
+      : nothing;
   if (providers.length === 0) {
-    return nothing;
+    return notice;
   }
   return renderSettingsSection(
     {
@@ -152,6 +122,7 @@ function renderProviderUsage(providers: ProviderUsageSnapshot[]) {
       description: t("usage.providerUsage.subtitle"),
     },
     html`
+      ${notice}
       <div class="usage-panel provider-usage-section">
         <div class="provider-usage-grid">
           ${providers.map(
@@ -218,9 +189,7 @@ export function renderUsage(props: UsageProps) {
           if (!s.updatedAt) {
             return false;
           }
-          const d = new Date(s.updatedAt);
-          const sessionDate = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
-          return selectedDaySet.has(sessionDate);
+          return selectedDaySet.has(usageDateKey(s.updatedAt, filters.timeZone));
         })
       : agentScopedSessions;
 
@@ -281,16 +250,24 @@ export function renderUsage(props: UsageProps) {
 
   // Compute totals from sessions
   const computeSessionTotals = (sessions: UsageSessionEntry[]): UsageTotals => {
-    return sessions.reduce(
-      (acc, s) => (s.usage ? addUsageTotals(acc, s.usage) : acc),
-      createEmptyUsageTotals(),
-    );
+    const totals = createEmptyCostUsageTotals();
+    for (const session of sessions) {
+      if (session.usage) {
+        addCostUsageTotals(totals, session.usage);
+      }
+    }
+    return totals;
   };
 
   // Compute totals from daily data for selected days (more accurate than session totals)
   const computeDailyTotals = (days: ReadonlySet<string>): UsageTotals => {
-    const matchingDays = data.costDaily.filter((d) => days.has(d.date));
-    return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
+    const totals = createEmptyCostUsageTotals();
+    for (const day of data.costDaily) {
+      if (days.has(day.date)) {
+        addCostUsageTotals(totals, day);
+      }
+    }
+    return totals;
   };
 
   // Compute display totals and count based on filters
@@ -369,9 +346,14 @@ export function renderUsage(props: UsageProps) {
       : data.costDaily;
 
   const insightStats = buildUsageInsightStats(aggregateSessions, insightTotals, insightAggregates);
-  const isEmpty = !data.loading && !data.totals && data.sessions.length === 0;
-  const cacheRefreshActive = data.cacheRefresh === "rebuilding";
-  const cacheRefreshPaused = data.cacheRefresh === "paused";
+  // The gateway always returns a totals object (all-zero when idle), so key
+  // the empty state off content — and never render it under an error callout,
+  // where "no usage data yet" would misexplain the failure.
+  const isEmpty =
+    !data.loading &&
+    !data.error &&
+    data.sessions.length === 0 &&
+    (data.totals?.totalTokens ?? 0) === 0;
   const hasMissingCost =
     (insightTotals?.missingCostEntries ?? 0) > 0 ||
     (insightTotals
@@ -477,7 +459,7 @@ export function renderUsage(props: UsageProps) {
           <div class="settings-section__header">
             <h2 class="settings-section__heading">${t("usage.filters.title")}</h2>
             <div class="settings-section__actions">
-              ${data.loading ? renderUsageLoadingStatus(t("common.refreshing")) : nothing}
+              ${data.loading ? renderUsageLoadingStatus(t("usage.loading.badge")) : nothing}
               ${isEmpty
                 ? html`<span class="usage-query-hint">${t("usage.empty.hint")}</span>`
                 : nothing}
@@ -491,11 +473,11 @@ export function renderUsage(props: UsageProps) {
                 ${displayTotals
                   ? html`
                       <span class="usage-metric-badge">
-                        <strong>${formatTokens(displayTotals.totalTokens)}</strong>
+                        <strong>${formatUsageTokens(displayTotals.totalTokens)}</strong>
                         ${t("usage.metrics.tokens")}
                       </span>
                       <span class="usage-metric-badge">
-                        <strong>${formatCost(displayTotals.totalCost)}</strong>
+                        <strong>${formatUsageCost(displayTotals.totalCost)}</strong>
                         ${t("usage.metrics.cost")}
                       </span>
                       <span class="usage-metric-badge">
@@ -662,7 +644,7 @@ export function renderUsage(props: UsageProps) {
                 <button
                   class="btn btn--sm primary"
                   @click=${filterActions.onRefresh}
-                  ?disabled=${data.requestPending}
+                  ?disabled=${data.loading}
                 >
                   ${t("common.refresh")}
                 </button>
@@ -773,37 +755,18 @@ export function renderUsage(props: UsageProps) {
             ${data.error
               ? html`<div class="callout danger usage-callout">${data.error}</div>`
               : nothing}
-            ${cacheRefreshActive || cacheRefreshPaused
+            ${data.cacheRefresh !== "complete"
               ? html`
                   <div
-                    class="callout ${cacheRefreshPaused
-                      ? "warning"
-                      : "info"} usage-callout usage-cache-notice"
+                    class="callout warning usage-callout usage-cache-warning"
                     role="status"
                     aria-live="polite"
-                    aria-atomic="true"
                   >
-                    ${cacheRefreshActive
-                      ? html`<span
-                          class="usage-loading-spinner usage-cache-notice__indicator"
-                          aria-hidden="true"
-                        ></span>`
-                      : html`<span
-                          class="usage-cache-notice__indicator usage-cache-notice__indicator--paused"
-                          aria-hidden="true"
-                        ></span>`}
-                    <span class="usage-cache-notice__content">
-                      <strong>
-                        ${cacheRefreshPaused
-                          ? t("usage.cacheStatus.pausedTitle")
-                          : t("usage.cacheStatus.rebuildingTitle")}
-                      </strong>
-                      <span>
-                        ${cacheRefreshPaused
-                          ? t("usage.cacheStatus.pausedBody")
-                          : t("usage.cacheStatus.rebuildingBody")}
-                      </span>
-                    </span>
+                    ${t(
+                      data.cacheRefresh === "exhausted"
+                        ? "usage.cacheStatus.paused"
+                        : "usage.cacheStatus.warning",
+                    )}
                   </div>
                 `
               : nothing}
@@ -817,7 +780,11 @@ export function renderUsage(props: UsageProps) {
           </div>
         </section>
 
-        ${renderProviderUsage(data.providerUsage)}
+        ${renderProviderUsage(
+          data.providerUsage,
+          data.providerUsageUnavailable,
+          data.providerUsageStalled,
+        )}
         ${isEmpty
           ? renderUsageEmptyState(filterActions.onRefresh)
           : html`
@@ -833,6 +800,7 @@ export function renderUsage(props: UsageProps) {
                 displaySessionCount,
                 totalSessions,
               )}
+              ${renderUsageHeatmap(filteredDaily, filters.startDate, filters.endDate)}
               ${renderUsageMosaic(
                 aggregateSessions,
                 filters.timeZone,
@@ -880,6 +848,8 @@ export function renderUsage(props: UsageProps) {
                         primarySelectedEntry,
                         detail.timeSeries,
                         detail.timeSeriesLoading,
+                        detail.timeSeriesStatus,
+                        detailActions.onRetryTimeSeries,
                         detail.timeSeriesMode,
                         detailActions.onTimeSeriesModeChange,
                         detail.timeSeriesBreakdownMode,
@@ -890,8 +860,11 @@ export function renderUsage(props: UsageProps) {
                         filters.startDate,
                         filters.endDate,
                         filters.selectedDays,
+                        filters.timeZone,
                         detail.sessionLogs,
                         detail.sessionLogsLoading,
+                        detail.sessionLogsStatus,
+                        detailActions.onRetrySessionLogs,
                         detail.sessionLogsExpanded,
                         detailActions.onToggleSessionLogsExpanded,
                         detail.logFilters,
@@ -914,5 +887,4 @@ export function renderUsage(props: UsageProps) {
   );
 }
 
-// Exposed for Playwright/Vitest browser unit tests.
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

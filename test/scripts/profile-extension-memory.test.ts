@@ -1,14 +1,24 @@
 // Profile Extension Memory tests cover profile extension memory script behavior.
 import { spawn, spawnSync } from "node:child_process";
-import { EventEmitter } from "node:events";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { EventEmitter, once } from "node:events";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
-import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mjs";
+import { parseArgs, runCase } from "../../scripts/profile-extension-memory.mts";
 
-const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mjs");
+const SCRIPT_PATH = path.resolve("scripts/profile-extension-memory.mts");
+const TSX_PRELOAD = path.resolve("scripts/tsx.mjs");
+const SOURCE_TSCONFIG_PATH = path.resolve("tsconfig.json");
 
 async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const started = Date.now();
@@ -17,7 +27,7 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 5_000): Pr
       return;
     }
     await new Promise((resolve) => {
-      setTimeout(resolve, 50);
+      setTimeout(resolve, 10);
     });
   }
   throw new Error("timed out waiting for condition");
@@ -33,9 +43,11 @@ function isProcessAlive(pid: number): boolean {
 }
 
 function runProfileExtensionMemory(args: string[], cwd = process.cwd()) {
-  return spawnSync(process.execPath, [SCRIPT_PATH, ...args], {
+  return spawnSync(process.execPath, ["--import", TSX_PRELOAD, SCRIPT_PATH, ...args], {
     cwd,
     encoding: "utf8",
+    // Fixture cwd controls artifacts; source imports still need the repository's aliases.
+    env: { ...process.env, TSX_TSCONFIG_PATH: SOURCE_TSCONFIG_PATH },
   });
 }
 
@@ -77,7 +89,9 @@ describe("scripts/profile-extension-memory", () => {
 
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
-    expect(result.stdout).toContain("Usage: node scripts/profile-extension-memory.mjs");
+    expect(result.stdout).toContain(
+      "Usage: node --import tsx scripts/profile-extension-memory.mts",
+    );
   });
 
   it("stops parsing options after the argument terminator", () => {
@@ -124,6 +138,95 @@ describe("scripts/profile-extension-memory", () => {
       expect(result.stderr).toContain(`[extension-memory] ${args[0]} requires a value`);
       expect(result.stderr).not.toContain("dist/extensions");
       expect(result.stderr).not.toContain("at ");
+    }
+  });
+
+  it.each([
+    {
+      name: "package-local output without a root dist tree",
+      files: ["extensions/external/dist/index.js"],
+      selected: ["external"],
+      expected: [{ dir: "external", file: "extensions/external/dist/index.js" }],
+    },
+    {
+      name: "nested output in the root plugin tree",
+      files: ["dist/extensions/external/dist/index.js"],
+      selected: ["external"],
+      expected: [{ dir: "external", file: "dist/extensions/external/dist/index.js" }],
+    },
+    ...[true, false].map((selected) => ({
+      name: `mixed internal and external output (${selected ? "selected" : "default"})`,
+      files: ["dist/extensions/internal/index.js", "extensions/external/dist/index.js"],
+      selected: selected ? ["internal", "external"] : [],
+      expected: [
+        { dir: "external", file: "extensions/external/dist/index.js" },
+        { dir: "internal", file: "dist/extensions/internal/index.js" },
+      ],
+    })),
+    ...["index.js", "dist/index.js"].map((rootEntry) => ({
+      name: `one canonical root ${rootEntry} when both builds exist`,
+      files: [`dist/extensions/external/${rootEntry}`, "extensions/external/dist/index.js"],
+      selected: ["external", "external"],
+      expected: [{ dir: "external", file: `dist/extensions/external/${rootEntry}` }],
+    })),
+    {
+      name: "source-only plugins excluded from default enumeration",
+      files: ["dist/extensions/internal/index.js"],
+      selected: [],
+      expected: [{ dir: "internal", file: "dist/extensions/internal/index.js" }],
+    },
+  ])("profiles $name", ({ files, selected, expected }) => {
+    const root = realpathSync(mkdtempSync(path.join(tmpdir(), "openclaw-extension-memory-test-")));
+    try {
+      for (const relativeFile of [
+        ...files,
+        "extensions/external/index.ts",
+        "extensions/internal/index.ts",
+        "extensions/source-only/index.ts",
+      ]) {
+        const file = path.join(root, relativeFile);
+        mkdirSync(path.dirname(file), { recursive: true });
+        writeFileSync(
+          file,
+          file.endsWith(".ts") ? 'throw new Error("source imported");\n' : "export {};\n",
+          "utf8",
+        );
+      }
+      const reportPath = path.join(root, "report.json");
+      const result = runProfileExtensionMemory(
+        [
+          ...selected.flatMap((id) => ["--extension", id]),
+          "--concurrency",
+          "1",
+          "--json",
+          reportPath,
+        ],
+        root,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stderr).not.toContain("cliStartup");
+      const report = JSON.parse(readFileSync(reportPath, "utf8"));
+      expect(report.selectedExtensions).toEqual(expected.map(({ dir }) => dir));
+      expect(report.results).toEqual(
+        expected.map(({ dir, file }) =>
+          expect.objectContaining({
+            dir,
+            file: path.join(root, file),
+            status: "ok",
+            maxRssMb: expect.any(Number),
+          }),
+        ),
+      );
+      expect(report.combined).toMatchObject({ status: "ok", maxRssMb: expect.any(Number) });
+      expect(report.counts).toEqual({
+        totalEntries: expected.length,
+        ok: expected.length,
+        fail: 0,
+        timeout: 0,
+      });
+    } finally {
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
@@ -293,40 +396,68 @@ describe("scripts/profile-extension-memory", () => {
       try {
         writeFileSync(hookPath, "", "utf8");
         const descendantScript = [
+          "import { writeFileSync } from 'node:fs';",
           "process.on('SIGTERM', () => {});",
           "setInterval(() => {}, 1000);",
+          `writeFileSync(${JSON.stringify(descendantPidPath)}, String(process.pid));`,
         ].join("");
         const body = [
           "const childProcess = await import('node:child_process');",
-          "const fs = await import('node:fs');",
-          "const descendant = childProcess.spawn(process.execPath, [",
+          "childProcess.spawn(process.execPath, [",
           "  '--input-type=module',",
           `  '--eval', ${JSON.stringify(descendantScript)},`,
           "], { stdio: 'ignore' });",
-          `fs.writeFileSync(${JSON.stringify(descendantPidPath)}, String(descendant.pid));`,
           "setInterval(() => {}, 1000);",
         ].join("\n");
-        const resultPromise = runCase({
-          body,
-          env: process.env,
-          hookPath,
-          name: "timeout-descendant",
-          repoRoot: root,
-          shutdownGraceMs: 100,
-          timeoutMs: 250,
+        const child = spawn(
+          process.execPath,
+          ["--import", hookPath, "--input-type=module", "--eval", body],
+          { cwd: root, detached: true, env: process.env, stdio: ["ignore", "pipe", "pipe"] },
+        );
+        const childClosed = new Promise<void>((resolve) => {
+          child.once("close", () => resolve());
         });
+        try {
+          await once(child, "spawn");
+          await waitForCondition(() => {
+            if (!existsSync(descendantPidPath)) {
+              return false;
+            }
+            descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+            return Number.isInteger(descendantPid) && descendantPid > 0;
+          });
+          expect(Number.isInteger(descendantPid)).toBe(true);
+          expect(isProcessAlive(descendantPid)).toBe(true);
 
-        await waitForCondition(() => existsSync(descendantPidPath));
-        descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
-        expect(Number.isInteger(descendantPid)).toBe(true);
-        expect(isProcessAlive(descendantPid)).toBe(true);
-
-        await expect(resultPromise).resolves.toMatchObject({
-          name: "timeout-descendant",
-          signal: "SIGKILL",
-          timedOut: true,
-        });
-        await waitForCondition(() => !isProcessAlive(descendantPid));
+          // Start the timeout only once a real descendant exists, independent of host startup load.
+          const resultPromise = runCase({
+            body,
+            env: process.env,
+            hookPath,
+            name: "timeout-descendant",
+            repoRoot: root,
+            shutdownGraceMs: 100,
+            timeoutMs: 250,
+            spawnImpl: () => child,
+          });
+          await expect(resultPromise).resolves.toMatchObject({
+            name: "timeout-descendant",
+            signal: "SIGKILL",
+            timedOut: true,
+          });
+          await waitForCondition(() => !isProcessAlive(descendantPid));
+        } finally {
+          if (child.pid) {
+            try {
+              process.kill(-child.pid, "SIGKILL");
+            } catch (error) {
+              if (!(error instanceof Error && "code" in error && error.code === "ESRCH")) {
+                throw error;
+              }
+            }
+          }
+          await childClosed;
+        }
       } finally {
         if (descendantPid && isProcessAlive(descendantPid)) {
           process.kill(descendantPid, "SIGKILL");
@@ -364,7 +495,7 @@ describe("scripts/profile-extension-memory", () => {
           runnerPath,
           [
             `const { runCase } = await import(${JSON.stringify(
-              pathToFileURL(path.resolve("scripts/profile-extension-memory.mjs")).href,
+              pathToFileURL(path.resolve("scripts/profile-extension-memory.mts")).href,
             )});`,
             "void runCase({",
             `  body: ${JSON.stringify(body)},`,
@@ -378,14 +509,22 @@ describe("scripts/profile-extension-memory", () => {
           ].join("\n"),
           "utf8",
         );
-        const runner = spawn(process.execPath, [runnerPath], {
+        const runner = spawn(process.execPath, ["--import", TSX_PRELOAD, runnerPath], {
           stdio: "ignore",
         });
 
         try {
-          await waitForCondition(() => existsSync(descendantPidPath));
-          descendantPid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
-          expect(Number.isInteger(descendantPid)).toBe(true);
+          await waitForCondition(() => {
+            if (!existsSync(descendantPidPath)) {
+              return false;
+            }
+            const candidatePid = Number.parseInt(readFileSync(descendantPidPath, "utf8"), 10);
+            if (!Number.isInteger(candidatePid) || candidatePid <= 0) {
+              return false;
+            }
+            descendantPid = candidatePid;
+            return true;
+          });
           expect(isProcessAlive(descendantPid)).toBe(true);
 
           const runnerExit = waitForChildExit(runner);

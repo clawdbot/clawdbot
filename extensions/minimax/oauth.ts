@@ -74,7 +74,7 @@ type TokenResult =
  * Normalize MiniMax token endpoint `expired_in` values to the auth-profile
  * contract: absolute Unix milliseconds.
  */
-export function normalizeOAuthExpires(expiredIn: unknown, now = Date.now()): number | undefined {
+function normalizeOAuthExpires(expiredIn: unknown, now = Date.now()): number | undefined {
   return resolveExpiresAtMsFromDurationOrEpoch(expiredIn, {
     nowMs: now,
     relativeSecondsThreshold: MINIMAX_RELATIVE_EXPIRY_SECONDS_THRESHOLD,

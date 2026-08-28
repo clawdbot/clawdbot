@@ -1,6 +1,8 @@
+import type { CostUsageSummary } from "../../api/types.ts";
+import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
+import type { UsageRetryState } from "../../lib/incomplete-usage-retry.ts";
 // Control UI view renders usageTypes screen content.
-
-import type { UsageCacheDisplayState } from "./cache-status.ts";
 import type {
   CostUsageDailyEntry,
   ProviderUsageSummary,
@@ -9,11 +11,40 @@ import type {
   SessionsUsageTotals,
   SessionUsageTimePoint,
 } from "./data-types.ts";
+import type { ProviderUsageSnapshot, UsageSnapshotResult } from "./request-usage-snapshot.ts";
 
 export type UsageSessionEntry = SessionsUsageEntry;
 export type UsageTotals = SessionsUsageTotals;
 export type CostDailyEntry = CostUsageDailyEntry;
 export type UsageAggregates = SessionsUsageResult["aggregates"];
+
+export type UsageTaskValue = {
+  epoch: object;
+  snapshot: UsageSnapshotResult;
+};
+
+export type UsageDetailTaskValue<T> = {
+  sessionKey: string;
+  data: T;
+};
+
+export type UsageRouteData = {
+  // Client identity alone cannot distinguish provider replacement or reconnect epochs.
+  gateway: ApplicationContext["gateway"];
+  gatewaySnapshot: ApplicationGatewaySnapshot;
+  query: {
+    startDate: string;
+    endDate: string;
+    scope: "instance" | "family";
+    timeZone: "local" | "utc";
+    agentId: string | null;
+  };
+  result: SessionsUsageResult | null;
+  costSummary: CostUsageSummary | null;
+  providerUsage: ProviderUsageSnapshot;
+  loadedAtMs: number | null;
+  error: string | null;
+};
 
 export type UsageColumnId =
   | "channel"
@@ -40,7 +71,6 @@ export type TimeSeriesPoint = SessionUsageTimePoint;
 
 type UsageDataState = {
   loading: boolean;
-  requestPending: boolean;
   error: string | null;
   sessions: UsageSessionEntry[];
   agents: string[];
@@ -48,8 +78,11 @@ type UsageDataState = {
   totals: UsageTotals | null;
   aggregates: UsageAggregates | null;
   costDaily: CostDailyEntry[];
-  cacheRefresh: UsageCacheDisplayState;
+  cacheRefresh: UsageRetryState;
   providerUsage: ProviderUsageSummary["providers"];
+  /** The gateway never converged the refresh; the empty list is not an answer. */
+  providerUsageStalled: boolean;
+  providerUsageUnavailable: boolean;
 };
 
 export type UsageFilterState = {
@@ -82,10 +115,12 @@ type UsageDetailState = {
   timeSeriesBreakdownMode: "total" | "by-type";
   timeSeries: { points: TimeSeriesPoint[] } | null;
   timeSeriesLoading: boolean;
+  timeSeriesStatus: PanelRefreshStatus;
   timeSeriesCursorStart: number | null; // Start of selected range (null = no selection)
   timeSeriesCursorEnd: number | null; // End of selected range (null = no selection)
   sessionLogs: SessionLogEntry[] | null;
   sessionLogsLoading: boolean;
+  sessionLogsStatus: PanelRefreshStatus;
   sessionLogsExpanded: boolean;
   logFilters: {
     roles: SessionLogRole[];
@@ -130,10 +165,12 @@ type UsageCallbacks = {
     onLogFilterHasToolsChange: (next: boolean) => void;
     onLogFilterQueryChange: (next: string) => void;
     onLogFilterClear: () => void;
-    onSelectSession: (key: string, shiftKey: boolean) => void;
+    onSelectSession: (key: string, shiftKey: boolean, orderedKeys: string[]) => void;
     onTimeSeriesModeChange: (mode: "cumulative" | "per-turn") => void;
     onTimeSeriesBreakdownChange: (mode: "total" | "by-type") => void;
     onTimeSeriesCursorRangeChange: (start: number | null, end: number | null) => void;
+    onRetryTimeSeries: () => void;
+    onRetrySessionLogs: () => void;
   };
 };
 

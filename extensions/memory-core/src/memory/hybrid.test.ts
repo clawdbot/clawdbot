@@ -5,6 +5,7 @@ import {
   buildFtsQuery,
   mergeHybridResults,
   scoreExactPathTieForTemporalDecay,
+  selectHybridSearchResults,
 } from "./hybrid.js";
 
 describe("memory hybrid helpers", () => {
@@ -78,6 +79,258 @@ describe("memory hybrid helpers", () => {
     expect(b?.score).toBeCloseTo(0.3 * 1);
     expect(b?.vectorScore).toBe(0);
     expect(b?.textScore).toBeCloseTo(1);
+  });
+
+  it("uses spare result capacity for below-threshold keyword-only hits", async () => {
+    const keyword = {
+      id: "keyword",
+      path: "memory/keyword.md",
+      startLine: 3,
+      endLine: 4,
+      source: "memory",
+      snippet: "keyword-only match",
+      textScore: 1,
+    };
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      vector: [
+        {
+          id: "strict",
+          path: "memory/strict.md",
+          startLine: 1,
+          endLine: 2,
+          source: "memory",
+          snippet: "strict vector match",
+          vectorScore: 0.9,
+        },
+      ],
+      keyword: [keyword],
+    });
+
+    const selected = selectHybridSearchResults({
+      merged,
+      keyword: [keyword],
+      maxResults: 2,
+      minScore: 0.35,
+    });
+
+    expect(selected.map((entry) => entry.path)).toEqual(["memory/strict.md", "memory/keyword.md"]);
+  });
+
+  it("does not let MMR-ranked keyword-only hits displace strict results", async () => {
+    const keyword = {
+      id: "keyword",
+      path: "memory/keyword-first.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory",
+      snippet: "unrelated lexical topic",
+      textScore: 1,
+    };
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      mmr: { enabled: true, lambda: 0.2 },
+      vector: [
+        {
+          id: "strict-first",
+          path: "memory/strict-first.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "shared semantic topic",
+          vectorScore: 1,
+        },
+        {
+          id: "strict-later",
+          path: "memory/strict-later.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "shared semantic topic",
+          vectorScore: 0.9,
+        },
+      ],
+      keyword: [keyword],
+    });
+    expect(merged.map((entry) => entry.path)).toEqual([
+      "memory/strict-first.md",
+      "memory/keyword-first.md",
+      "memory/strict-later.md",
+    ]);
+
+    const selected = selectHybridSearchResults({
+      merged,
+      keyword: [keyword],
+      maxResults: 2,
+      minScore: 0.35,
+    });
+
+    expect(selected.map((entry) => entry.path)).toEqual([
+      "memory/strict-first.md",
+      "memory/strict-later.md",
+    ]);
+  });
+
+  it("keeps the relaxed keyword-backed fallback when no result is strict", () => {
+    const overlapping = {
+      path: "memory/overlap.md",
+      startLine: 2,
+      endLine: 3,
+      source: "memory",
+      snippet: "overlapping vector and keyword match",
+      score: 0.2,
+      vectorScore: 0.1,
+      textScore: 0.5,
+    };
+
+    const selected = selectHybridSearchResults({
+      merged: [overlapping],
+      keyword: [overlapping],
+      maxResults: 1,
+      minScore: 0.35,
+    });
+
+    expect(selected).toEqual([overlapping]);
+  });
+
+  it("keeps null importance neutral and deterministically boosts important entries", async () => {
+    const baseEntry = {
+      id: "neutral",
+      path: "MEMORY.md",
+      startLine: 1,
+      endLine: 1,
+      source: "memory" as const,
+      snippet: "neutral",
+      vectorScore: 0.8,
+    };
+    const base = {
+      vectorWeight: 1,
+      textWeight: 0,
+      keyword: [],
+      vector: [baseEntry],
+    };
+    const neutral = await mergeHybridResults(base);
+    const important = await mergeHybridResults({
+      ...base,
+      vector: [{ ...baseEntry, id: "important", importance: 10 }],
+    });
+    const low = await mergeHybridResults({
+      ...base,
+      vector: [{ ...baseEntry, id: "low", importance: 1 }],
+    });
+
+    expect(neutral[0]?.score).toBeCloseTo(0.8);
+    expect(important[0]?.score).toBeCloseTo(1);
+    expect(low[0]?.score).toBeCloseTo(0.64);
+  });
+
+  it("boosts active-project results, demotes foreign results, and leaves global results neutral", async () => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 0,
+      activeProjectKeys: ["github.com/openclaw/openclaw"],
+      keyword: [],
+      vector: [
+        {
+          id: "same",
+          path: "MEMORY.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "same",
+          vectorScore: 0.8,
+          projectKey: "github.com/openclaw/openclaw",
+        },
+        {
+          id: "global",
+          path: "MEMORY.md",
+          startLine: 2,
+          endLine: 2,
+          source: "memory",
+          snippet: "global",
+          vectorScore: 0.8,
+        },
+        {
+          id: "foreign",
+          path: "MEMORY.md",
+          startLine: 3,
+          endLine: 3,
+          source: "memory",
+          snippet: "foreign",
+          vectorScore: 0.8,
+          projectKey: "github.com/example/other",
+        },
+      ],
+    });
+    expect(merged.map((entry) => [entry.snippet, entry.score])).toEqual([
+      ["same", 0.9199999999999999],
+      ["global", 0.8],
+      ["foreign", 0.7200000000000001],
+    ]);
+  });
+
+  it.each([
+    {
+      label: "without project affinity",
+      activeProjectKeys: undefined,
+      expected: ["memory/primary.md", "memory/diverse.md"],
+    },
+    {
+      label: "with project affinity",
+      activeProjectKeys: ["active-project"],
+      expected: ["memory/duplicate.md", "memory/diverse.md"],
+    },
+  ])("keeps a diverse hit in the selected set $label", async ({ activeProjectKeys, expected }) => {
+    const merged = await mergeHybridResults({
+      vectorWeight: 1,
+      textWeight: 0,
+      mmr: { enabled: true, lambda: 0.7 },
+      activeProjectKeys,
+      keyword: [],
+      vector: [
+        {
+          id: "primary",
+          path: "memory/primary.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "alpha beta gamma",
+          vectorScore: 0.9,
+        },
+        {
+          id: "duplicate",
+          path: "memory/duplicate.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "alpha beta gamma delta",
+          vectorScore: 0.8,
+          projectKey: "active-project",
+        },
+        {
+          id: "diverse",
+          path: "memory/diverse.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "whiskey tango",
+          vectorScore: 0.75,
+        },
+        {
+          id: "floor",
+          path: "memory/floor.md",
+          startLine: 1,
+          endLine: 1,
+          source: "memory",
+          snippet: "alpha",
+          vectorScore: 0.2,
+        },
+      ],
+    });
+
+    expect(merged.slice(0, 2).map((entry) => entry.path)).toEqual(expected);
   });
 
   it("uses path BM25 only for partial path-only hybrid hits", async () => {
@@ -561,5 +814,164 @@ describe("memory hybrid helpers", () => {
     expect(merged[0]?.score).toBeCloseTo(0.5 * 0.2 + 0.5 * 1);
     expect(merged[0]?.vectorScore).toBeCloseTo(0.2);
     expect(merged[0]?.textScore).toBeCloseTo(1);
+  });
+
+  it("preserves LIKE-fallback lexical ordering in hybrid selection (keyword-only)", async () => {
+    // Two LIKE-fallback body hits: both textScore = 0 (no BM25), no vector
+    // match, exactPathSpecificity = 0. Their weighted contentScore collapses to
+    // 0 for both, so they would tie by path without the lexical tie-break.
+    // The manager carries a boost-derived lexical score as `rankingScore`; the
+    // hybrid consumer must use it as an unweighted tie-break so the
+    // lexically-stronger hit ranks first regardless of path alphabetical order.
+    // See ClawSweeper P2 finding on #120603 / #115001.
+    //
+    // path alphabetical order (memory/aaa.md < memory/zzz.md) is intentionally
+    // the REVERSE of lexical strength, so a path-ordered tie would put aaa
+    // first while the lexical tie-break must put zzz first.
+    const keyword = [
+      {
+        id: "aaa",
+        path: "memory/aaa.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory",
+        snippet: "weak substring overlap",
+        textScore: 0,
+        hasBodyMatch: true,
+        rankingScore: 0.2,
+        pathScore: 0,
+        exactPathSpecificity: 0 as const,
+      },
+      {
+        id: "zzz",
+        path: "memory/zzz.md",
+        startLine: 1,
+        endLine: 1,
+        source: "memory",
+        snippet: "strong substring overlap with the query terms",
+        textScore: 0,
+        hasBodyMatch: true,
+        rankingScore: 0.8,
+        pathScore: 0,
+        exactPathSpecificity: 0 as const,
+      },
+    ];
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      vector: [],
+      keyword,
+    });
+
+    // Both hits tie at contentScore = 0 (no vector, LIKE carries no weighted
+    // text signal), proving the ordering below comes from the lexical tie-break
+    // and not from a restored weighted text score.
+    expect(merged.map((entry) => entry.score)).toEqual([0, 0]);
+    // The internal lexicalRank signal must not leak into the public result.
+    expect(merged.every((entry) => !("lexicalRank" in entry))).toBe(true);
+
+    const selected = selectHybridSearchResults({
+      merged,
+      keyword,
+      maxResults: 2,
+      minScore: 0,
+    });
+
+    // Lexical tie-break: zzz (rankingScore 0.8) before aaa (rankingScore 0.2),
+    // NOT path alphabetical (aaa before zzz).
+    expect(selected.map((entry) => entry.path)).toEqual(["memory/zzz.md", "memory/aaa.md"]);
+  });
+
+  const vectorResult = (id: string, path: string, vectorScore: number) => ({
+    id,
+    path,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    snippet: `vector ${id}`,
+    vectorScore,
+  });
+  const keywordResult = (id: string, path: string, textScore: number) => ({
+    id,
+    path,
+    startLine: 1,
+    endLine: 1,
+    source: "memory",
+    snippet: `keyword ${id}`,
+    textScore,
+  });
+
+  it("removes the text-weight discount only from vector-only non-text media", async () => {
+    const paths = {
+      vectorMedia: "memory/generated/photo.png",
+      vectorText: "memory/notes.md",
+      keywordMedia: "memory/clip.wav",
+      bothMedia: "memory/matched.png",
+      bothText: "memory/matched.md",
+    };
+    const merged = await mergeHybridResults({
+      vectorWeight: 0.7,
+      textWeight: 0.3,
+      isNonTextMediaPath: (path) => /\.(?:png|wav)$/u.test(path),
+      vector: [
+        vectorResult("vector-media", paths.vectorMedia, 0.8),
+        vectorResult("vector-text", paths.vectorText, 0.8),
+        vectorResult("both-media", paths.bothMedia, 0.95),
+        vectorResult("both-text", paths.bothText, 0.6),
+      ],
+      keyword: [
+        keywordResult("keyword-media", paths.keywordMedia, 0.9),
+        keywordResult("both-media", paths.bothMedia, 0.8),
+        keywordResult("both-text", paths.bothText, 0.9),
+      ],
+    });
+    const byPath = new Map(merged.map((entry) => [entry.path, entry]));
+
+    expect(byPath.get(paths.vectorMedia)?.score).toBeCloseTo(0.8);
+    expect(byPath.get(paths.vectorText)?.score).toBeCloseTo(0.7 * 0.8);
+    expect(byPath.get(paths.keywordMedia)?.score).toBeCloseTo(0.3 * 0.9);
+    expect(byPath.get(paths.bothMedia)?.score).toBeCloseTo(0.7 * 0.95 + 0.3 * 0.8);
+    expect(byPath.get(paths.bothMedia)?.textScore).toBeCloseTo(0.8);
+    expect(byPath.get(paths.bothText)?.score).toBeCloseTo(0.7 * 0.6 + 0.3 * 0.9);
+  });
+
+  it.each([
+    {
+      name: "keeps media keyword scoring when vector weight is zero",
+      vectorWeight: 0,
+      textWeight: 1,
+      path: "memory/photo.png",
+      vector: [vectorResult("candidate", "memory/photo.png", 0.95)],
+      keyword: [keywordResult("candidate", "memory/photo.png", 0.8)],
+      expected: 0.8,
+    },
+    {
+      name: "keeps vector-only text scoring when weights total two",
+      vectorWeight: 1,
+      textWeight: 1,
+      path: "memory/notes.md",
+      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
+      keyword: [],
+      expected: 0.6,
+    },
+    {
+      name: "keeps both-signal text scoring when weights total two",
+      vectorWeight: 1,
+      textWeight: 1,
+      path: "memory/notes.md",
+      vector: [vectorResult("candidate", "memory/notes.md", 0.6)],
+      keyword: [keywordResult("candidate", "memory/notes.md", 0.9)],
+      expected: 1.5,
+    },
+  ])("$name", async ({ vectorWeight, textWeight, path, vector, keyword, expected }) => {
+    const merged = await mergeHybridResults({
+      vectorWeight,
+      textWeight,
+      isNonTextMediaPath: (candidatePath) => candidatePath.endsWith(".png"),
+      vector,
+      keyword,
+    });
+
+    expect(merged.find((entry) => entry.path === path)?.score).toBeCloseTo(expected);
   });
 });

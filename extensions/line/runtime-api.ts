@@ -42,7 +42,6 @@ export {
   sendMessageLine,
 } from "./src/send.js";
 export { monitorLineProvider } from "./src/monitor.js";
-export { hasLineDirectives, parseLineDirectives } from "./src/reply-payload-transform.js";
 export {
   listLineAccountIds,
   normalizeAccountId,
@@ -65,13 +64,8 @@ export {
 export {
   type CodeBlock,
   convertCodeBlockToFlexBubble,
-  convertLinksToFlexBubble,
   convertTableToFlexBubble,
-  extractCodeBlocks,
-  extractLinks,
-  extractMarkdownTables,
   hasMarkdownToConvert,
-  type MarkdownLink,
   type MarkdownTable,
   type ProcessedLineMessage,
   processLineMessage,
@@ -96,18 +90,10 @@ export {
   type CarouselColumn,
   type CarouselTemplate,
   type ConfirmTemplate,
-  createButtonMenu,
   createButtonTemplate,
   createCarouselColumn,
   createConfirmTemplate,
-  createImageCarousel,
-  createImageCarouselColumn,
-  createLinkMenu,
-  createProductCarousel,
   createTemplateCarousel,
-  createYesNoConfirm,
-  type ImageCarouselColumn,
-  type ImageCarouselTemplate,
   type TemplateMessage,
 } from "./src/template-messages.js";
 export type {
@@ -128,31 +114,32 @@ export { datetimePickerAction, messageAction, postbackAction, uriAction } from "
 export type { Action } from "./src/actions.js";
 export {
   createActionCard,
-  createAgendaCard,
-  createAppleTvRemoteCard,
-  createCarousel,
-  createDeviceControlCard,
-  createEventCard,
   createImageCard,
   createInfoCard,
   createListCard,
-  createMediaPlayerCard,
-  createNotificationBubble,
+} from "./src/flex-templates/basic-cards.js";
+export {
+  createAgendaCard,
+  createEventCard,
   createReceiptCard,
-  toFlexMessage,
-} from "./src/flex-templates.js";
+} from "./src/flex-templates/schedule-cards.js";
+export {
+  createAppleTvRemoteCard,
+  createDeviceControlCard,
+  createMediaPlayerCard,
+} from "./src/flex-templates/media-control-cards.js";
+export { toFlexMessage } from "./src/flex-templates/message.js";
 export type {
   CardAction,
   FlexBox,
   FlexBubble,
   FlexButton,
-  FlexCarousel,
   FlexComponent,
   FlexContainer,
   FlexImage,
   FlexText,
   ListItem,
-} from "./src/flex-templates.js";
+} from "./src/flex-templates/types.js";
 export {
   cancelDefaultRichMenu,
   createDefaultMenuConfig,

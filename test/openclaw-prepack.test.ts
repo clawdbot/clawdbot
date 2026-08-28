@@ -1,6 +1,13 @@
 // OpenClaw prepack tests validate package prepack output.
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, describe, expect, it } from "vitest";
@@ -16,6 +23,85 @@ import {
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const rootPackageManager = (
+  JSON.parse(readFileSync("package.json", "utf8")) as {
+    packageManager: string;
+  }
+).packageManager;
+
+const standaloneBundledChannelSmokeFiles = [
+  "scripts/test-built-bundled-channel-entry-smoke.mts",
+  "scripts/lib/bundled-plugin-build-entries.mjs",
+  "scripts/lib/bundled-plugin-paths.mjs",
+  "scripts/lib/optional-bundled-clusters.mjs",
+  "scripts/lib/package-root-args.mts",
+  "scripts/lib/record-shared.mjs",
+  "scripts/lib/root-package-bundled-plugin-excludes.mjs",
+  "scripts/process-warning-filter.mts",
+];
+
+function runStandaloneBundledChannelSmoke(entrySource: string) {
+  const rootDir = tempDirs.make("openclaw-prepack-standalone-smoke-");
+  for (const relativePath of standaloneBundledChannelSmokeFiles) {
+    const destination = path.join(rootDir, relativePath);
+    mkdirSync(path.dirname(destination), { recursive: true });
+    copyFileSync(path.join(process.cwd(), relativePath), destination);
+  }
+
+  const packageRoot = path.join(rootDir, "package");
+  const extensionRoot = path.join(packageRoot, "dist", "extensions", "fixture-channel");
+  mkdirSync(extensionRoot, { recursive: true });
+  writeFileSync(path.join(packageRoot, "package.json"), '{"files":[]}\n');
+  writeFileSync(
+    path.join(extensionRoot, "package.json"),
+    `${JSON.stringify({
+      name: "@openclaw/fixture-channel",
+      openclaw: { channel: true, extensions: ["./index.ts"] },
+    })}\n`,
+  );
+  writeFileSync(path.join(extensionRoot, "index.js"), entrySource);
+
+  return spawnSync(
+    process.execPath,
+    [
+      path.join(rootDir, "scripts", "test-built-bundled-channel-entry-smoke.mts"),
+      "--package-root",
+      packageRoot,
+    ],
+    {
+      cwd: rootDir,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        OPENCLAW_BUNDLED_CHANNEL_SMOKE_INSTALLED_LAYOUT: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+}
+
+describe("standalone bundled channel smoke", () => {
+  it("runs without workspace packages linked at the root", () => {
+    const result = runStandaloneBundledChannelSmoke(`
+      export default {
+        kind: "bundled-channel-entry",
+        loadChannelPlugin() {
+          return { id: "fixture-channel" };
+        },
+      };
+    `);
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("channel=1");
+  });
+
+  it("rejects a non-record channel entry default export", () => {
+    const result = runStandaloneBundledChannelSmoke("export default [];\n");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("AssertionError");
+  });
+});
 
 describe("collectSourcePackWorkspaceDependencyErrors", () => {
   it("rejects the plain source pack that pnpm rewrites without bundling @openclaw/ai", () => {
@@ -27,6 +113,7 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     const rootPackageJson = {
       dependencies: { "@openclaw/ai": "workspace:*" },
       name: "openclaw-source-pack-regression",
+      packageManager: rootPackageManager,
       version,
     };
     mkdirSync(aiDir, { recursive: true });
@@ -83,6 +170,8 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     expect(existsSync(path.join(extractDir, "package", "node_modules", "@openclaw", "ai"))).toBe(
       false,
     );
+    expect(existsSync(path.join(extractDir, "package", "npm-shrinkwrap.json"))).toBe(false);
+    expect(existsSync(path.join(extractDir, "package", "package-lock.json"))).toBe(false);
     expect(collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {})).toEqual([
       "plain root packing cannot safely resolve @openclaw/ai from workspace:*: pnpm rewrites the workspace dependency to an exact version without bundling the package",
       "use `node scripts/package-openclaw-for-docker.mjs --allow-unreleased-changelog` for a self-contained source package; official npm release automation prepares and publishes @openclaw/ai separately",
@@ -95,14 +184,14 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     expect(
       collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {
         npm_command: "pack",
-        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mjs"),
+        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mts"),
         OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: aiDir,
       }),
     ).toEqual([]);
     expect(
       collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {
         npm_command: "pack",
-        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mjs"),
+        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mts"),
         OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: rootDir,
       }),
     ).toHaveLength(2);
@@ -116,10 +205,69 @@ describe("collectSourcePackWorkspaceDependencyErrors", () => {
     expect(
       collectSourcePackWorkspaceDependencyErrors(rootPackageJson, {
         npm_command: "publish",
-        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mjs"),
+        OCM_INTERNAL_NPM_BIN: path.join(rootDir, "scripts", "ocm-npm-workspace-deps.mts"),
         OPENCLAW_OCM_WORKSPACE_DEPENDENCY_DIRS: aiDir,
       }),
     ).toHaveLength(2);
+  });
+
+  it("omits build-only workspace dependencies from direct pnpm pack manifests", () => {
+    const rootDir = tempDirs.make("openclaw-direct-pack-manifest-");
+    const packDir = path.join(rootDir, "pack");
+    const extractDir = path.join(rootDir, "extract");
+    const scriptsDir = path.join(rootDir, "scripts");
+    const originalPackageJson = `${JSON.stringify(
+      {
+        name: "openclaw-direct-pack-manifest",
+        packageManager: rootPackageManager,
+        version: "2099.1.2-test.0",
+        scripts: {
+          prepack: "node scripts/package-manifest.mjs prepare",
+          postpack: "node scripts/package-manifest.mjs restore",
+          "crabbox:run": "node scripts/crabbox-wrapper.mjs run",
+        },
+        devDependencies: {
+          "@openclaw/session-url-contract": "workspace:*",
+          vitest: "4.1.10",
+        },
+      },
+      null,
+      2,
+    )}\n`;
+    mkdirSync(packDir);
+    mkdirSync(extractDir);
+    mkdirSync(scriptsDir);
+    writeFileSync(path.join(rootDir, "package.json"), originalPackageJson);
+    copyFileSync(
+      path.join(process.cwd(), "scripts", "package-manifest.mjs"),
+      path.join(scriptsDir, "package-manifest.mjs"),
+    );
+
+    const packed = spawnSync("pnpm", ["pack", "--silent", "--pack-destination", packDir], {
+      cwd: rootDir,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    expect(packed.status, packed.stderr).toBe(0);
+    const tarballs = readdirSync(packDir).filter((entry) => entry.endsWith(".tgz"));
+    expect(tarballs).toHaveLength(1);
+    const tarballName = tarballs[0];
+    if (!tarballName) {
+      throw new Error("pnpm pack did not produce the expected tarball");
+    }
+    tar.x({ cwd: extractDir, file: path.join(packDir, tarballName), sync: true });
+
+    const packedPackageJson = JSON.parse(
+      readFileSync(path.join(extractDir, "package", "package.json"), "utf8"),
+    ) as { devDependencies?: Record<string, string>; scripts?: Record<string, string> };
+    expect(packedPackageJson.devDependencies).toEqual({ vitest: "4.1.10" });
+    expect(packedPackageJson.scripts?.["crabbox:run"]).toBe("node dist/crabbox-wrapper.js run");
+    expect(readFileSync(path.join(rootDir, "package.json"), "utf8")).toBe(originalPackageJson);
+    expect(
+      existsSync(
+        path.join(rootDir, ".artifacts", "package-manifest", "package.json.prepack-backup"),
+      ),
+    ).toBe(false);
   });
 });
 

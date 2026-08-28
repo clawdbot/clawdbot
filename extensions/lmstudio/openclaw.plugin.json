@@ -6,6 +6,11 @@
   },
   "enabledByDefault": true,
   "providers": ["lmstudio"],
+  "modelCatalog": {
+    "discovery": {
+      "lmstudio": "refreshable"
+    }
+  },
   "providerRequest": {
     "providers": {
       "lmstudio": {
@@ -38,9 +43,13 @@
       "provider": "lmstudio",
       "method": "custom",
       "choiceId": "lmstudio",
+      "appGuidedDiscovery": true,
+      "appGuidedActionLabel": "Connect server",
       "appGuidedSecret": true,
       "choiceLabel": "LM Studio",
-      "choiceHint": "Local/self-hosted LM Studio server",
+      "choiceHint": "Connect to a running LM Studio server and use an already loaded model",
+      "icon": "https://cdn.simpleicons.org/lmstudio",
+      "website": "https://lmstudio.ai/download",
       "optionKey": "lmstudioApiKey",
       "cliFlag": "--lmstudio-api-key",
       "cliOption": "--lmstudio-api-key <key>",
@@ -51,7 +60,7 @@
     }
   ],
   "contracts": {
-    "memoryEmbeddingProviders": ["lmstudio"]
+    "embeddingProviders": ["lmstudio"]
   },
   "configSchema": {
     "type": "object",

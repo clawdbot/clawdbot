@@ -3,10 +3,12 @@ summary: "Redirect to /automation"
 title: "Cron vs heartbeat"
 ---
 
-This page moved. See [Scheduled Tasks (Cron) vs Heartbeat](/automation#scheduled-tasks-cron-vs-heartbeat) for the decision table.
+Heartbeat monitors are system-owned automation jobs. See [Automations vs
+Heartbeat](/automation#automations-vs-heartbeat) for guidance on choosing a
+monitor or an independently scheduled job.
 
 ## Related
 
-- [Scheduled tasks](/automation/cron-jobs)
+- [Automations](/automation/cron-jobs)
 - [Heartbeat](/gateway/heartbeat)
 - [Background tasks](/automation/tasks)

@@ -1,28 +1,26 @@
 /** Manifest-backed model catalog row loaders for `openclaw models list`. */
 import { normalizeModelCatalogProviderId } from "@openclaw/model-catalog-core/model-catalog-refs";
 import type { NormalizedModelCatalogRow } from "@openclaw/model-catalog-core/model-catalog-types";
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { planManifestModelCatalogRows } from "../../model-catalog/index.js";
+import { planEffectiveModelCatalogRows } from "../../model-catalog/index.js";
+import type { ManifestModelCatalogRowSelection } from "../../model-catalog/manifest-planner.js";
 import { loadManifestMetadataSnapshot } from "../../plugins/manifest-contract-eligibility.js";
 import type { PluginManifestRegistry } from "../../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
+import { resolvePluginContributionOwners } from "../../plugins/plugin-registry-contributions.js";
 import {
   getPluginRecord,
   isPluginEnabled,
-  resolvePluginContributionOwners,
   type PluginRegistrySnapshot,
-} from "../../plugins/plugin-registry.js";
+} from "../../plugins/plugin-registry-snapshot.js";
 
-type ManifestCatalogRowsForListMode = "static-authoritative" | "supplemental";
-
-function loadManifestCatalogRowsForPluginIds(params: {
+function planManifestCatalogRowsForPluginIds(params: {
   cfg: OpenClawConfig;
-  env?: NodeJS.ProcessEnv;
-  index: PluginRegistrySnapshot;
   registry: PluginManifestRegistry;
-  mode: ManifestCatalogRowsForListMode;
   pluginIds?: readonly string[];
   providerFilter?: string;
+  selection?: ManifestModelCatalogRowSelection;
 }): readonly NormalizedModelCatalogRow[] {
   if (params.pluginIds && params.pluginIds.length === 0) {
     return [];
@@ -34,23 +32,12 @@ function loadManifestCatalogRowsForPluginIds(params: {
         plugins: params.registry.plugins.filter((plugin) => pluginIdSet.has(plugin.id)),
       }
     : params.registry;
-  const plan = planManifestModelCatalogRows({
+  return planEffectiveModelCatalogRows({
     registry,
+    config: params.cfg,
     ...(params.providerFilter ? { providerFilter: params.providerFilter } : {}),
-  });
-  const eligibleProviders = new Set(
-    plan.entries
-      .filter((entry) =>
-        params.mode === "static-authoritative"
-          ? entry.discovery === "static"
-          : entry.discovery !== "runtime",
-      )
-      .map((entry) => entry.provider),
-  );
-  if (eligibleProviders.size === 0) {
-    return [];
-  }
-  return plan.rows.filter((row) => eligibleProviders.has(row.provider));
+    ...(params.selection ? { selection: params.selection } : {}),
+  }).rows;
 }
 
 function resolveConventionModelCatalogPluginIds(params: {
@@ -77,73 +64,155 @@ function resolveConventionModelCatalogPluginIds(params: {
 
 function resolveDeclaredModelCatalogPluginIds(params: {
   cfg: OpenClawConfig;
-  index: PluginRegistrySnapshot;
+  snapshot: PluginMetadataSnapshot;
   providerFilter: string;
 }): readonly string[] {
   return resolvePluginContributionOwners({
-    index: params.index,
+    lookUpTable: params.snapshot,
     config: params.cfg,
     contribution: "modelCatalogProviders",
     matches: params.providerFilter,
   });
 }
 
-function loadManifestCatalogRowsForList(params: {
+function resolveModelCatalogPluginIdsForProvider(params: {
   cfg: OpenClawConfig;
-  providerFilter?: string;
+  snapshot: PluginMetadataSnapshot;
+  provider: string;
+}): readonly string[] {
+  return [
+    ...new Set([
+      ...resolveConventionModelCatalogPluginIds({
+        cfg: params.cfg,
+        index: params.snapshot.index,
+        providerFilter: params.provider,
+      }),
+      ...resolveDeclaredModelCatalogPluginIds({
+        cfg: params.cfg,
+        snapshot: params.snapshot,
+        providerFilter: params.provider,
+      }),
+    ]),
+  ];
+}
+
+/**
+ * Resolves provider ownership and whether static manifest rows require runtime
+ * augmentation before they can be treated as complete catalog coverage.
+ */
+export function resolveManifestCatalogCoverageForList(params: {
+  cfg: OpenClawConfig;
+  providerIds: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
-  mode?: ManifestCatalogRowsForListMode;
   metadataSnapshot?: PluginMetadataSnapshot;
-}): readonly NormalizedModelCatalogRow[] {
-  const providerFilter = params.providerFilter
-    ? normalizeModelCatalogProviderId(params.providerFilter)
-    : undefined;
-  const mode = params.mode ?? "static-authoritative";
+}): {
+  ownedProviderIds: ReadonlySet<string>;
+  completeProviderIds: ReadonlySet<string>;
+} {
   const snapshot =
     params.metadataSnapshot ??
     loadManifestMetadataSnapshot({
       config: params.cfg,
       env: params.env ?? process.env,
     });
-  const index = snapshot.index;
-  if (!providerFilter) {
-    return loadManifestCatalogRowsForPluginIds({
+  const ownedProviderIds = new Set<string>();
+  const completeProviderIds = new Set<string>();
+  for (const rawProvider of params.providerIds) {
+    const provider = normalizeProviderId(rawProvider);
+    if (!provider) {
+      continue;
+    }
+    const pluginIds = resolveModelCatalogPluginIdsForProvider({
       cfg: params.cfg,
-      env: params.env,
-      index,
+      snapshot,
+      provider,
+    });
+    if (pluginIds.length === 0) {
+      continue;
+    }
+    ownedProviderIds.add(provider);
+    const complete = pluginIds.every((pluginId) => {
+      const plugin = snapshot.byPluginId.get(pluginId);
+      if (!plugin) {
+        return false;
+      }
+      if (plugin.modelCatalog?.runtimeAugment === true || plugin.origin !== "bundled") {
+        return false;
+      }
+      const aliasTarget = plugin.modelCatalog?.aliases?.[provider]?.provider;
+      const discoveryProvider = normalizeProviderId(aliasTarget ?? provider);
+      return plugin.modelCatalog?.discovery?.[discoveryProvider] === "static";
+    });
+    if (complete) {
+      completeProviderIds.add(provider);
+    }
+  }
+  if (params.cfg.models?.mode === "replace") {
+    for (const provider of params.providerIds) {
+      completeProviderIds.add(normalizeProviderId(provider));
+    }
+  }
+  return { ownedProviderIds, completeProviderIds };
+}
+
+function loadManifestCatalogRowsForListSelection(params: {
+  cfg: OpenClawConfig;
+  providerFilter?: string;
+  env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
+  selection?: ManifestModelCatalogRowSelection;
+}): readonly NormalizedModelCatalogRow[] {
+  const providerFilter = params.providerFilter
+    ? normalizeModelCatalogProviderId(params.providerFilter)
+    : undefined;
+  const snapshot =
+    params.metadataSnapshot ??
+    loadManifestMetadataSnapshot({
+      config: params.cfg,
+      env: params.env ?? process.env,
+    });
+  if (!providerFilter) {
+    return planManifestCatalogRowsForPluginIds({
+      cfg: params.cfg,
       registry: snapshot.manifestRegistry,
-      mode,
+      ...(params.selection ? { selection: params.selection } : {}),
     });
   }
-  const conventionRows = loadManifestCatalogRowsForPluginIds({
+  const conventionRows = planManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
-    env: params.env,
-    index,
     registry: snapshot.manifestRegistry,
-    mode,
     pluginIds: resolveConventionModelCatalogPluginIds({
       cfg: params.cfg,
-      index,
+      index: snapshot.index,
       providerFilter,
     }),
     providerFilter,
+    ...(params.selection ? { selection: params.selection } : {}),
   });
   if (conventionRows.length > 0) {
     return conventionRows;
   }
-  return loadManifestCatalogRowsForPluginIds({
+  return planManifestCatalogRowsForPluginIds({
     cfg: params.cfg,
-    env: params.env,
-    index,
     registry: snapshot.manifestRegistry,
-    mode,
     pluginIds: resolveDeclaredModelCatalogPluginIds({
       cfg: params.cfg,
-      index,
+      snapshot,
       providerFilter,
     }),
     providerFilter,
+    ...(params.selection ? { selection: params.selection } : {}),
   });
+}
+
+/** Loads manifest catalog rows without importing provider runtimes. */
+export function loadManifestCatalogRowsForList(params: {
+  cfg: OpenClawConfig;
+  providerFilter?: string;
+  env?: NodeJS.ProcessEnv;
+  metadataSnapshot?: PluginMetadataSnapshot;
+}): readonly NormalizedModelCatalogRow[] {
+  return loadManifestCatalogRowsForListSelection(params);
 }
 
 /** Loads authoritative static manifest catalog rows for model-list output. */
@@ -153,21 +222,5 @@ export function loadStaticManifestCatalogRowsForList(params: {
   env?: NodeJS.ProcessEnv;
   metadataSnapshot?: PluginMetadataSnapshot;
 }): readonly NormalizedModelCatalogRow[] {
-  return loadManifestCatalogRowsForList({
-    ...params,
-    mode: "static-authoritative",
-  });
-}
-
-/** Loads supplemental non-runtime manifest catalog rows for fallback list sources. */
-export function loadSupplementalManifestCatalogRowsForList(params: {
-  cfg: OpenClawConfig;
-  providerFilter?: string;
-  env?: NodeJS.ProcessEnv;
-  metadataSnapshot?: PluginMetadataSnapshot;
-}): readonly NormalizedModelCatalogRow[] {
-  return loadManifestCatalogRowsForList({
-    ...params,
-    mode: "supplemental",
-  });
+  return loadManifestCatalogRowsForListSelection({ ...params, selection: "static" });
 }

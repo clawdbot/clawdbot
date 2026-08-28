@@ -5,9 +5,9 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.group-messages
+      - channels.room-allowlist
     secondary:
-      - runtime.delivery
+      - channels.automatic-final-reply
   objective: Verify a blocked secondary actor stays quiet while the configured driver override still triggers a reply.
   successCriteria:
     - A mentioned message from the observer actor produces no reply.
@@ -17,7 +17,7 @@ scenario:
     - docs/concepts/qa-e2e-automation.md
   codeRefs:
     - extensions/qa-lab/src/qa-transport.ts
-    - src/channels/turn/kernel.ts
+    - src/channels/turn/run-channel-turn.ts
   execution:
     kind: flow
     summary: Exercise sender allowlist rejection and the configured driver override in one ordered flow.
@@ -27,6 +27,7 @@ scenario:
         - driver
     config:
       conversationId: qa-routing-allowlist
+      blockedMarker: QA-BLOCKED-SENDER-SHOULD-NOT-REPLY
       expectedMarker: QA-ALLOWLIST-OVERRIDE-OK
 
 flow:
@@ -38,9 +39,6 @@ flow:
         - call: waitForTransportReady
           args: [{ ref: env }, 60000]
         - resetTransport: true
-        - set: outboundStartIndex
-          value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
         - sendInbound:
             conversation:
               id: { ref: config.conversationId }
@@ -48,10 +46,9 @@ flow:
             senderId: observer
             senderName: QA Observer
             text:
-              expr: "`@openclaw reply exactly: ${config.expectedMarker}`"
+              expr: "`@openclaw reply exactly: ${config.blockedMarker}`"
         - waitForNoOutbound:
             quietMs: 1500
-            sinceIndex: { ref: outboundStartIndex }
         - sendInbound:
             conversation:
               id: { ref: config.conversationId }
@@ -68,4 +65,7 @@ flow:
             timeoutMs:
               expr: liveTurnTimeoutMs(env, 60000)
           saveAs: outbound
+        - assert:
+            expr: "!state.getSnapshot().messages.some((message) => message.direction === 'outbound' && String(message.text ?? '').includes(config.blockedMarker))"
+            message: { expr: "`blocked sender replied: ${recentOutboundSummary(state)}`" }
       detailsExpr: outbound.text

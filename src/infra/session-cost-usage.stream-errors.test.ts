@@ -7,7 +7,7 @@ import { PassThrough } from "node:stream";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { readSessionCostUsageCacheJson } from "./session-cost-usage-cache.sqlite.js";
+import { readSessionCostUsageRollupRows } from "./session-cost-usage-cache.sqlite.js";
 import { loadCostUsageSummaryFromCache, loadSessionLogs } from "./session-cost-usage.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -45,7 +45,7 @@ describe("session cost usage stream errors", () => {
       return stream as unknown as nodeFs.ReadStream;
     });
 
-    const logs = await loadSessionLogs({ sessionFile });
+    const logs = await loadSessionLogs({ agentId: "main", sessionFile });
 
     expect(logs).toEqual([]);
   });
@@ -73,9 +73,10 @@ describe("session cost usage stream errors", () => {
       };
       await loadCostUsageSummaryFromCache({
         ...range,
+        agentId: "main",
         refreshMode: "sync-when-empty",
       });
-      const cacheBefore = readSessionCostUsageCacheJson();
+      const rollupsBefore = readSessionCostUsageRollupRows();
 
       const appendedEntry = `${usageEntry("2026-07-06T12:01:00.000Z", 20)}\n`;
       await fs.appendFile(sessionFile, appendedEntry, "utf-8");
@@ -88,17 +89,25 @@ describe("session cost usage stream errors", () => {
         return stream as unknown as nodeFs.ReadStream;
       });
 
-      await loadCostUsageSummaryFromCache(range);
-      let summary = await loadCostUsageSummaryFromCache({ ...range, requestRefresh: false });
+      await loadCostUsageSummaryFromCache({ ...range, agentId: "main" });
+      let summary = await loadCostUsageSummaryFromCache({
+        ...range,
+        agentId: "main",
+        requestRefresh: false,
+      });
       await vi.waitFor(
         async () => {
-          summary = await loadCostUsageSummaryFromCache({ ...range, requestRefresh: false });
+          summary = await loadCostUsageSummaryFromCache({
+            ...range,
+            agentId: "main",
+            requestRefresh: false,
+          });
           expect(summary.cacheStatus?.status).toBe("partial");
         },
         { interval: 5, timeout: 1_000 },
       );
 
-      expect(readSessionCostUsageCacheJson()).toBe(cacheBefore);
+      expect(readSessionCostUsageRollupRows()).toEqual(rollupsBefore);
       expect(summary.totals.totalTokens).toBe(10);
       expect(summary.cacheStatus?.pendingFiles).toBe(1);
     });

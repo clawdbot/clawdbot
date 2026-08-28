@@ -1,11 +1,11 @@
 import process from "node:process";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
+import { resolveTimerTimeoutMs } from "@openclaw/normalization-core/number-coercion";
 import {
   decodeWindowsOutputBuffer,
   resolveWindowsConsoleEncoding,
 } from "../infra/windows-encoding.js";
-import { resolveTimerTimeoutMs } from "../shared/number-coercion.js";
 import { releaseChildProcessOutputAfterExit } from "./child-process.js";
 import {
   appendCapturedOutput,
@@ -16,10 +16,12 @@ import {
   MAX_PRESERVED_PENDING_LINE_BYTES,
   resolveMaxOutputBytes,
   resolveOutputCapture,
+  shouldTerminateOnOutputError,
   shouldTerminateOnOutputLimit,
   type CapturedOutputBuffers,
   type CommandOutputCaptureMode,
   type CommandOutputCaptureOption,
+  type CommandOutputErrorOption,
   type CommandOutputLimitOption,
   type CommandOutputStream,
   type PreserveOutputLine,
@@ -57,17 +59,37 @@ export type CommandOptions = {
   onOutputChunk?: (chunk: Buffer, stream: CommandOutputStream) => boolean | void;
   /** Accept a successful exit when only the selected diagnostic output stream failed. */
   tolerateOutputError?: { stdout?: boolean; stderr?: boolean };
+  /** Terminate when the selected output stream emits an error. */
+  terminateOnOutputError?: CommandOutputErrorOption;
   terminateOnOutputLimit?: CommandOutputLimitOption;
   maxPreservedOutputLines?: number;
   preserveOutputLine?: PreserveOutputLine;
   killProcessTree?: boolean;
   /** Signal used when terminating the direct child; tree termination owns its own grace policy. */
   killSignal?: NodeJS.Signals | number;
+  /** Grace between graceful termination and the force-kill fallback. */
+  killGraceMs?: number;
 };
 
 export async function runCommandWithTimeout(
   argv: string[],
   optionsOrTimeout: number | CommandOptions,
+): Promise<SpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, false);
+}
+
+/** Run a command whose stdout and stderr are defined to be UTF-8 on every platform. */
+export async function runUtf8CommandWithTimeout(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+): Promise<SpawnResult> {
+  return await runCommandWithOutputEncoding(argv, optionsOrTimeout, true);
+}
+
+async function runCommandWithOutputEncoding(
+  argv: string[],
+  optionsOrTimeout: number | CommandOptions,
+  forceUtf8: boolean,
 ): Promise<SpawnResult> {
   const options: CommandOptions =
     typeof optionsOrTimeout === "number" ? { timeoutMs: optionsOrTimeout } : optionsOrTimeout;
@@ -81,11 +103,17 @@ export async function runCommandWithTimeout(
     signal,
     killProcessTree,
     killSignal,
+    killGraceMs,
   } = options;
   const resolvedTimeoutMs =
     typeof timeoutMs === "number" ? resolveTimerTimeoutMs(timeoutMs, 1) : undefined;
   const hasInput = input !== undefined;
   const stdio = resolveCommandStdio({ hasInput, preferInherit: true });
+  const resolvedKillGraceMs = resolveTimerTimeoutMs(
+    killGraceMs,
+    COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    0,
+  );
 
   if (signal?.aborted) {
     return {
@@ -123,7 +151,7 @@ export async function runCommandWithTimeout(
     MAX_PRESERVED_PENDING_LINE_BYTES,
   );
   const maxPreservedOutputLines = Math.max(0, Math.floor(options.maxPreservedOutputLines ?? 16));
-  const windowsEncoding = resolveWindowsConsoleEncoding();
+  const windowsEncoding = forceUtf8 ? null : resolveWindowsConsoleEncoding();
   const cancelController = new AbortController();
   let termination: CommandTerminationReason | undefined;
   let childExitState: { code: number | null; signal: NodeJS.Signals | null } | undefined;
@@ -137,6 +165,7 @@ export async function runCommandWithTimeout(
   let noOutputTimer: NodeJS.Timeout | undefined;
   let outputObserverError: unknown;
   let outputErrorStream: CommandOutputStream | undefined;
+  let terminatingOutputError: Error | undefined;
 
   const { child, invocation } = spawnCommandWithInvocation(argv, {
     buffer: false,
@@ -146,7 +175,7 @@ export async function runCommandWithTimeout(
     encoding: "buffer",
     baseEnv,
     env,
-    forceKillAfterDelay: COMMAND_PROCESS_TREE_KILL_GRACE_MS,
+    forceKillAfterDelay: resolvedKillGraceMs,
     killSignal,
     ...(hasInput ? { input } : {}),
     reject: false,
@@ -154,19 +183,21 @@ export async function runCommandWithTimeout(
     stripFinalNewline: false,
     windowsVerbatimArguments: options.windowsVerbatimArguments,
   });
-  const releaseOutput = releaseChildProcessOutputAfterExit(child);
-  child.once("exit", (code, signalValue) => {
+  const nodeChild = child.nodeChildProcess;
+  const releaseOutput = releaseChildProcessOutputAfterExit(nodeChild);
+  nodeChild.once("exit", (code, signalValue) => {
     childExited = true;
     childExitState = { code, signal: signalValue };
   });
   const terminationController = createCommandTerminationController({
-    child,
+    child: nodeChild,
     cancelController,
     baseEnv,
     env,
-    killProcessTree,
+    processTree: killProcessTree ? { mode: "graceful" } : undefined,
     isChildExited: () => childExited,
     isCommandSettled: () => commandSettled,
+    killGraceMs: resolvedKillGraceMs,
   });
 
   const clearNoOutputTimer = () => {
@@ -307,12 +338,21 @@ export async function runCommandWithTimeout(
     return buffer;
   };
 
-  child.stdout?.once("error", () => {
-    outputErrorStream ??= "stdout";
-  });
-  child.stderr?.once("error", () => {
-    outputErrorStream ??= "stderr";
-  });
+  const onOutputError = (error: unknown, stream: CommandOutputStream) => {
+    outputErrorStream ??= stream;
+    if (
+      termination ||
+      options.tolerateOutputError?.[stream] === true ||
+      !shouldTerminateOnOutputError(options.terminateOnOutputError, stream)
+    ) {
+      return;
+    }
+    terminatingOutputError = toErrorObject(error, `Command ${stream} stream failed`);
+    Object.assign(terminatingOutputError, { outputErrorStream: stream });
+    cancel("signal");
+  };
+  child.stdout?.once("error", (error) => onOutputError(error, "stdout"));
+  child.stderr?.once("error", (error) => onOutputError(error, "stderr"));
   child.stdout?.on("data", (chunk) => {
     const buffer = observeOutputChunk(chunk, "stdout");
     appendPreservedOutputLines({
@@ -350,6 +390,9 @@ export async function runCommandWithTimeout(
     releaseOutput();
   });
   await terminationController.settle();
+  if (terminatingOutputError) {
+    throw terminatingOutputError;
+  }
   if (outputObserverError !== undefined) {
     throw toErrorObject(outputObserverError, "Command output observer failed");
   }
@@ -358,7 +401,7 @@ export async function runCommandWithTimeout(
   const isCauseLessWindowsShimResult =
     !termination &&
     invocation.usesWindowsExitCodeShim &&
-    typeof child.pid === "number" &&
+    typeof nodeChild.pid === "number" &&
     result.code === undefined &&
     result.cause === undefined &&
     !result.timedOut &&
@@ -376,8 +419,8 @@ export async function runCommandWithTimeout(
       if (
         childExitState?.code != null ||
         childExitState?.signal != null ||
-        child.exitCode != null ||
-        child.signalCode != null
+        nodeChild.exitCode != null ||
+        nodeChild.signalCode != null
       ) {
         break;
       }
@@ -405,10 +448,10 @@ export async function runCommandWithTimeout(
     throw error;
   }
 
-  const resolvedSignal = result.signal ?? childExitState?.signal ?? child.signalCode ?? null;
+  const resolvedSignal = result.signal ?? childExitState?.signal ?? nodeChild.signalCode ?? null;
   const resolvedCode = resolveProcessExitCode({
     explicitCode: result.exitCode ?? childExitState?.code,
-    childExitCode: child.exitCode,
+    childExitCode: nodeChild.exitCode,
     resolvedSignal,
     usesWindowsExitCodeShim: invocation.usesWindowsExitCodeShim,
     timedOut: termination === "timeout",
@@ -447,16 +490,20 @@ export async function runCommandWithTimeout(
     }
   }
 
+  const decodeCapturedOutput = (
+    capture: CapturedOutputBuffers,
+    captureMode: CommandOutputCaptureMode,
+  ): string => {
+    const buffer = finalizeCapturedOutput(capture, captureMode, forceUtf8);
+    return forceUtf8
+      ? buffer.toString("utf8")
+      : decodeWindowsOutputBuffer({ buffer, windowsEncoding });
+  };
+
   return {
-    pid: child.pid,
-    stdout: decodeWindowsOutputBuffer({
-      buffer: finalizeCapturedOutput(stdoutCapture, stdoutCaptureMode),
-      windowsEncoding,
-    }),
-    stderr: decodeWindowsOutputBuffer({
-      buffer: finalizeCapturedOutput(stderrCapture, stderrCaptureMode),
-      windowsEncoding,
-    }),
+    pid: nodeChild.pid,
+    stdout: decodeCapturedOutput(stdoutCapture, stdoutCaptureMode),
+    stderr: decodeCapturedOutput(stderrCapture, stderrCaptureMode),
     stdoutTruncatedBytes: stdoutCapture.truncatedBytes || undefined,
     stderrTruncatedBytes: stderrCapture.truncatedBytes || undefined,
     preservedStdoutLines:
@@ -465,7 +512,7 @@ export async function runCommandWithTimeout(
       stderrCapture.preservedLines.length > 0 ? stderrCapture.preservedLines : undefined,
     code: normalizedCode,
     signal: resolvedSignal,
-    killed: child.killed,
+    killed: nodeChild.killed,
     termination: termination === "output-limit" ? "signal" : termination,
     noOutputTimedOut: termination === "no-output-timeout",
     outputLimitExceeded: termination === "output-limit" || undefined,

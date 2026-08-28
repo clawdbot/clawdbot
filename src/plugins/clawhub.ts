@@ -19,23 +19,21 @@ import {
   loadZipArchiveWithPreflight,
 } from "../infra/archive.js";
 import {
-  ensureClawHubPackageTrustAcknowledged,
-  type ClawHubRiskAcknowledgementRequest,
-} from "../infra/clawhub-install-trust.js";
+  downloadClawHubPackageArchive,
+  normalizeClawHubSha256Integrity,
+  normalizeClawHubSha256Hex,
+} from "../infra/clawhub-artifacts.js";
 import {
   ClawHubRequestError,
-  downloadClawHubPackageArchive,
+  isDefaultClawHubBaseUrl,
+  resolveClawHubBaseUrl,
+} from "../infra/clawhub-client.js";
+import { checkClawHubPackageTrust } from "../infra/clawhub-install-trust.js";
+import {
   fetchClawHubPackageArtifact,
   fetchClawHubPackageDetail,
   fetchClawHubPackageVersion,
-  isDefaultClawHubBaseUrl,
-  normalizeClawHubSha256Integrity,
-  normalizeClawHubSha256Hex,
-  parseClawHubPluginSpec,
-  resolveClawHubBaseUrl,
   resolveLatestVersionFromPackage,
-  satisfiesGatewayMinimum,
-  satisfiesPluginApiRange,
   type ClawHubPackageArtifactSummary,
   type ClawHubPackageArtifactResolverResponse,
   type ClawHubPackageCompatibility,
@@ -43,21 +41,25 @@ import {
   type ClawHubPackageClawPackSummary,
   type ClawHubResolvedArtifact,
   type ClawHubPackageVersion,
-} from "../infra/clawhub.js";
+} from "../infra/clawhub-packages.js";
+import { parseClawHubPluginSpec } from "../infra/clawhub-spec.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { CLAWHUB_INSTALL_ERROR_CODE, type ClawHubInstallErrorCode } from "./clawhub-error-codes.js";
 import type { ClawHubPluginInstallRecordFields } from "./clawhub-install-records.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import {
   installPluginFromArchive,
   PLUGIN_INSTALL_ERROR_CODE,
   type InstallPluginResult,
 } from "./install.js";
+import { checkMinHostVersion } from "./min-host-version.js";
+import { satisfiesPluginApiRange } from "./package-compat.js";
 
 export { CLAWHUB_INSTALL_ERROR_CODE };
-export type { ClawHubRiskAcknowledgementRequest };
 
 type PluginInstallLogger = {
   info?: (message: string) => void;
@@ -1143,12 +1145,30 @@ function validateClawHubPluginPackage(params: {
     );
   }
 
-  if (
-    compatibility?.minGatewayVersion &&
-    !satisfiesGatewayMinimum(runtimeVersion, compatibility.minGatewayVersion)
-  ) {
+  const minGatewayVersion = compatibility?.minGatewayVersion;
+  if (minGatewayVersion) {
+    const minGatewayVersionCheck = checkMinHostVersion({
+      currentVersion: runtimeVersion,
+      minHostVersion: minGatewayVersion,
+      allowLegacyBareSemver: true,
+    });
+    if (minGatewayVersionCheck.ok) {
+      return null;
+    }
+    if (minGatewayVersionCheck.kind === "invalid") {
+      return buildClawHubInstallFailure(
+        `ClawHub package "${pkg.name}" declares invalid minGatewayVersion metadata "${sanitizeTerminalText(minGatewayVersion)}"; report the package metadata to its publisher.`,
+        CLAWHUB_INSTALL_ERROR_CODE.INVALID_GATEWAY_VERSION,
+      );
+    }
+    if (minGatewayVersionCheck.kind === "unknown_host_version") {
+      return buildClawHubInstallFailure(
+        `Plugin "${pkg.name}" requires OpenClaw >=${minGatewayVersionCheck.requirement.minimumLabel}, but this host version could not be determined. Re-run from a released build or set OPENCLAW_VERSION and retry.`,
+        CLAWHUB_INSTALL_ERROR_CODE.UNKNOWN_GATEWAY_VERSION,
+      );
+    }
     return buildClawHubInstallFailure(
-      `Plugin "${pkg.name}" requires OpenClaw >=${compatibility.minGatewayVersion}, but this host is ${runtimeVersion}.`,
+      `Plugin "${pkg.name}" requires OpenClaw >=${minGatewayVersionCheck.requirement.minimumLabel}, but this host is ${minGatewayVersionCheck.currentVersion}.`,
       CLAWHUB_INSTALL_ERROR_CODE.INCOMPATIBLE_GATEWAY,
     );
   }
@@ -1210,8 +1230,8 @@ export async function installPluginFromClawHub(
     expectedPluginId?: string;
     expectedIntegrity?: string;
     env?: RuntimeVersionEnv;
-    acknowledgeClawHubRisk?: boolean;
-    onClawHubRisk?: (request: ClawHubRiskAcknowledgementRequest) => boolean | Promise<boolean>;
+    confirmInstall?: () => boolean | Promise<boolean>;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<
   | ({
@@ -1219,6 +1239,7 @@ export async function installPluginFromClawHub(
     } & Extract<InstallPluginResult, { ok: true }> & {
         clawhub: ClawHubPluginInstallRecordFields;
         packageName: string;
+        warning?: string;
       })
   | ClawHubInstallFailure
   | Extract<InstallPluginResult, { ok: false }>
@@ -1296,19 +1317,20 @@ export async function installPluginFromClawHub(
   });
   const trustResult = officialClawHubPackage
     ? null
-    : await ensureClawHubPackageTrustAcknowledged({
+    : await checkClawHubPackageTrust({
         subject: { kind: "plugin", packageName: canonicalPackageName },
         version: versionState.version,
         baseUrl: params.baseUrl,
         token: params.token,
         timeoutMs: params.timeoutMs,
-        acknowledgeClawHubRisk: params.acknowledgeClawHubRisk,
-        onClawHubRisk: params.onClawHubRisk,
         logger: params.logger,
         mode: params.mode,
       });
   if (trustResult && !trustResult.ok) {
     return trustResult;
+  }
+  if (params.mode !== "update" && params.confirmInstall && !(await params.confirmInstall())) {
+    return buildClawHubInstallFailure("Install cancelled.");
   }
   if (!versionState.verification && !expectedClawPackSha256) {
     return buildClawHubInstallFailure(
@@ -1432,29 +1454,33 @@ export async function installPluginFromClawHub(
     params.logger?.info?.(
       `Downloading ${detail.package?.family === "bundle-plugin" ? "bundle" : "plugin"} ${releaseLabel} from ClawHub…`,
     );
-    const installResult = await installPluginFromArchive({
-      archivePath: archive.archivePath,
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-      trustedSourceLinkedOfficialInstall:
-        officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),
-      config: params.config,
-      logger: params.logger,
-      mode: params.mode,
-      extensionsDir: params.extensionsDir,
-      timeoutMs: params.timeoutMs,
-      dryRun: params.dryRun,
-      expectedPluginId: runtimeIdResolution.expectedPluginId,
-      installPolicyRequest: {
-        kind: "plugin-archive",
-        requestedSpecifier: params.spec,
-        source: {
-          kind: "clawhub",
-          authority: officialClawHubPackage ? "official" : clawhubAuthority,
-          mutable: false,
-          network: true,
+    const installResult = await installPluginFromArchive(
+      copyPluginInstallTransactionRequest(params, {
+        archivePath: archive.archivePath,
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
+        trustedSourceLinkedOfficialInstall:
+          officialClawHubPackage || isTrustedSourceLinkedOfficialPackage(detail.package!),
+        config: params.config,
+        logger: params.logger,
+        mode: params.mode,
+        extensionsDir: params.extensionsDir,
+        timeoutMs: params.timeoutMs,
+        dryRun: params.dryRun,
+        expectedPluginId: runtimeIdResolution.expectedPluginId,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+        installPolicyRequest: {
+          kind: "plugin-archive",
+          requestedSpecifier: params.spec,
+          source: {
+            kind: "clawhub",
+            authority: officialClawHubPackage ? "official" : clawhubAuthority,
+            mutable: false,
+            network: true,
+          },
         },
-      },
-    });
+      }),
+    );
     if (!installResult.ok) {
       return installResult;
     }
@@ -1485,6 +1511,7 @@ export async function installPluginFromClawHub(
     }
     return {
       ...installResult,
+      ...(trustResult?.warning ? { warning: trustResult.warning } : {}),
       packageName: canonicalPackageName,
       clawhub: {
         source: "clawhub",

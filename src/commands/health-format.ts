@@ -1,14 +1,13 @@
-import { expectDefined } from "@openclaw/normalization-core";
 /** Formatting helpers for `openclaw health` failures and channel summaries. */
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { formatChannelStatusState } from "../channels/plugins/status-state.js";
 import { isGatewayTransportError } from "../gateway/call.js";
-import type { ChannelAccountHealthSummary, HealthSummary } from "./health.types.js";
+import type { ChannelAccountHealthSummary, HealthSummary } from "../gateway/health/types.js";
 
 export function formatGatewayClosedDiagnostic(err: unknown): string | undefined {
-  if (!isGatewayTransportError(err) || err.kind !== "closed") {
+  if (!isGatewayTransportError(err) || err.kind !== "closed" || err.code === undefined) {
     return undefined;
   }
   return `Gateway connect failed: ${sanitizeTerminalText(err.message.split("\n", 1)[0] ?? "")}`;
@@ -140,7 +139,7 @@ const isProbeFailure = (summary: ChannelAccountHealthSummary): boolean => {
   return ok === false;
 };
 
-/** Formats one terse health line per channel, optionally including every account. */
+/** Formats terse channel and activated-plugin health lines for shared CLI surfaces. */
 export const formatHealthChannelLines = (
   summary: HealthSummary,
   opts: {
@@ -172,59 +171,69 @@ export const formatHealthChannelLines = (
       accountMode === "all"
         ? Object.values(accountSummaries)
         : (filteredSummaries ?? (channelSummary.accounts ? Object.values(accountSummaries) : []));
-    const baseSummary =
-      filteredSummaries && filteredSummaries.length > 0 ? filteredSummaries[0] : channelSummary;
-    const selectedSummary = expectDefined(baseSummary, "channel health summary");
-    const botUsernames = listSummaries
-      ? listSummaries
-          .map((account) => {
-            const probeRecord = asNullableRecord(account.probe);
-            const bot = probeRecord ? asNullableRecord(probeRecord.bot) : null;
-            return bot && typeof bot.username === "string" ? bot.username : null;
-          })
-          .filter((value): value is string => Boolean(value))
-      : [];
+    const activeSummaries = listSummaries.filter(
+      (account) =>
+        account.enabled !== false &&
+        account.configured !== false &&
+        account.linked !== false &&
+        account.statusState !== "disabled" &&
+        account.statusState !== "unconfigured",
+    );
+    const selectedSummary =
+      activeSummaries.find(
+        (account) =>
+          (account.healthState && account.healthState !== "healthy") ||
+          (account.statusState &&
+            account.statusState !== "linked" &&
+            account.statusState !== "configured"),
+      ) ??
+      filteredSummaries?.[0] ??
+      channelSummary;
+    const botUsernames = activeSummaries
+      .map((account) => {
+        const probeRecord = asNullableRecord(account.probe);
+        const bot = probeRecord ? asNullableRecord(probeRecord.bot) : null;
+        return bot && typeof bot.username === "string" ? bot.username : null;
+      })
+      .filter((value): value is string => Boolean(value));
     const statusState =
       typeof selectedSummary.statusState === "string" ? selectedSummary.statusState : null;
-    if (statusState) {
-      if (statusState === "linked") {
-        const authAgeMs =
-          typeof selectedSummary.authAgeMs === "number" ? selectedSummary.authAgeMs : null;
-        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
-        lines.push(`${label}: ${formatChannelStatusState(statusState)}${authLabel}`);
-      } else {
-        lines.push(`${label}: ${formatChannelStatusState(statusState)}`);
-      }
-      continue;
-    }
-
+    const healthState =
+      typeof selectedSummary.healthState === "string" && selectedSummary.healthState
+        ? selectedSummary.healthState
+        : null;
     const linked = typeof selectedSummary.linked === "boolean" ? selectedSummary.linked : null;
-    if (linked !== null) {
-      if (linked) {
-        const authAgeMs =
-          typeof selectedSummary.authAgeMs === "number" ? selectedSummary.authAgeMs : null;
-        const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
-        lines.push(`${label}: linked${authLabel}`);
-      } else {
-        lines.push(`${label}: not linked`);
-      }
-      continue;
-    }
-
     const configured =
       typeof selectedSummary.configured === "boolean" ? selectedSummary.configured : null;
-    if (configured === false) {
-      lines.push(`${label}: not configured`);
+    const inactiveState =
+      statusState === "disabled" || statusState === "unconfigured"
+        ? formatChannelStatusState(statusState)
+        : configured === false
+          ? "not configured"
+          : null;
+    // Explicit inactive/degraded facts outrank probes; passive success waits until after them.
+    // Otherwise a live probe can be hidden behind stale "healthy", "linked", or "configured".
+    const preProbeState = inactiveState
+      ? inactiveState
+      : healthState && healthState !== "healthy"
+        ? healthState
+        : statusState && statusState !== "linked" && statusState !== "configured"
+          ? formatChannelStatusState(statusState)
+          : linked === false
+            ? "not linked"
+            : null;
+    if (preProbeState) {
+      lines.push(`${label}: ${preProbeState}`);
       continue;
     }
 
     const accountTimings =
       accountMode === "all"
-        ? listSummaries
+        ? activeSummaries
             .map((account) => formatAccountProbeTiming(account))
             .filter((value): value is string => Boolean(value))
         : [];
-    const failedSummary = listSummaries.find((summaryLocal) => isProbeFailure(summaryLocal));
+    const failedSummary = activeSummaries.find((summaryLocal) => isProbeFailure(summaryLocal));
     if (failedSummary) {
       const failureLine = formatProbeLine(failedSummary.probe, { botUsernames });
       if (failureLine) {
@@ -246,11 +255,30 @@ export const formatHealthChannelLines = (
       continue;
     }
 
-    if (configured === true) {
-      lines.push(`${label}: configured`);
-      continue;
-    }
-    lines.push(`${label}: unknown`);
+    const authAgeMs =
+      typeof selectedSummary.authAgeMs === "number" ? selectedSummary.authAgeMs : null;
+    const authLabel = authAgeMs != null ? ` (auth age ${Math.round(authAgeMs / 60000)}m)` : "";
+    const passiveState = healthState
+      ? healthState
+      : statusState
+        ? `${formatChannelStatusState(statusState)}${statusState === "linked" ? authLabel : ""}`
+        : linked === true
+          ? `linked${authLabel}`
+          : configured === true
+            ? "configured"
+            : "unknown";
+    lines.push(`${label}: ${passiveState}`);
+  }
+  const failedPlugins = (summary.plugins?.errors ?? []).filter((plugin) => plugin.activated);
+  for (const plugin of failedPlugins.slice(0, 20)) {
+    const id = sanitizeTerminalText(plugin.id).slice(0, 120);
+    const error = sanitizeTerminalText(plugin.error).slice(0, 500);
+    lines.push(`Plugin ${id}: failed - ${error}; run openclaw doctor`);
+  }
+  if (failedPlugins.length > 20) {
+    lines.push(
+      `Plugins: failed - ${failedPlugins.length - 20} additional activated failures; run openclaw doctor`,
+    );
   }
   return lines;
 };

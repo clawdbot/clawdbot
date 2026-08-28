@@ -1,3 +1,4 @@
+// @vitest-environment node
 import { createRouter, definePage, type RouteLocation } from "@openclaw/uirouter";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { RouterOutletController, selectRenderedRouteMatch } from "./router-outlet-controller.ts";
@@ -76,7 +77,7 @@ describe("RouterOutletController pending presentation", () => {
     router.stop();
   });
 
-  it("keeps active content while the next route module is cold", async () => {
+  it("carries the last settled match through a cold and module-loaded navigation", async () => {
     vi.useFakeTimers();
     const secondModule = deferred<TestModule>();
     const secondData = deferred<TestData>();
@@ -102,11 +103,14 @@ describe("RouterOutletController pending presentation", () => {
     controller.setInputs({ router });
     controller.connect();
     await router.navigate("first", { label: "test" });
+    expect(controller.snapshot.settled).toBe(controller.snapshot.active);
+    expect(controller.snapshot.settled?.routeId).toBe("first");
 
     const navigation = router.navigate("second", { label: "test" });
     expect(
       selectRenderedRouteMatch(controller.snapshot.active, controller.snapshot.pending)?.routeId,
     ).toBe("first");
+    expect(controller.snapshot.settled?.routeId).toBe("first");
     await vi.advanceTimersByTimeAsync(2_000);
     expect(controller.snapshot.showPending).toBe(false);
 
@@ -116,11 +120,21 @@ describe("RouterOutletController pending presentation", () => {
       selectRenderedRouteMatch(controller.snapshot.active, controller.snapshot.pending)?.routeId,
     ).toBe("second");
     expect(controller.snapshot.active?.data).toBeUndefined();
+    expect(controller.snapshot.active?.status).toBe("pending");
+    expect(controller.snapshot.settled?.routeId).toBe("first");
 
     secondData.resolve({ label: "second" });
     await navigation;
+    expect(controller.snapshot.active?.routeId).toBe("second");
+    expect(controller.snapshot.settled).toBe(controller.snapshot.active);
+
+    const replacement = createRouter<RouteId, TestContext, TestModule, TestData>({ routes: [] });
+    controller.setInputs({ router: replacement });
+    expect(controller.snapshot.status).toBe("idle");
+    expect(controller.snapshot.settled).toBeUndefined();
     controller.disconnect();
     router.stop();
+    replacement.stop();
   });
 
   it("restarts a canceled pending delay after reconnect", async () => {
@@ -233,6 +247,34 @@ describe("RouterOutletController not-found boundary", () => {
     controller.connect();
     await flushPromises();
     expect(onNotFound).toHaveBeenCalledTimes(1);
+    controller.disconnect();
+    router.stop();
+  });
+
+  it("retries a declined fallback once recovery becomes ready", async () => {
+    const router = createTestRouter();
+    const onNotFound = vi.fn(() => false);
+    const controller = new RouterOutletController<RouteId, TestContext, TestModule, TestData>(
+      vi.fn(),
+    );
+    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: false });
+    controller.connect();
+
+    await router.navigateLocation(location("/missing"), { label: "test" });
+    await flushPromises();
+    expect(onNotFound).toHaveBeenCalledTimes(1);
+
+    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: false });
+    await flushPromises();
+    expect(onNotFound).toHaveBeenCalledTimes(1);
+
+    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: true });
+    await flushPromises();
+    expect(onNotFound).toHaveBeenCalledTimes(2);
+
+    controller.setInputs({ router, onNotFound, notFoundRecoveryReady: true });
+    await flushPromises();
+    expect(onNotFound).toHaveBeenCalledTimes(2);
     controller.disconnect();
     router.stop();
   });

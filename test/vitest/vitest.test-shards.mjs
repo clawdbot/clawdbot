@@ -1,4 +1,6 @@
 // Full-suite Vitest shard definitions used by test-projects and CI planning.
+import { agentVitestProjectConfigs } from "./vitest.agents-paths.mjs";
+
 export const autoReplyCoreTestInclude = [
   "src/auto-reply/*.test.ts",
   "src/auto-reply/usage-bar/*.test.ts",
@@ -10,12 +12,23 @@ export const autoReplyTopLevelReplyTestInclude = ["src/auto-reply/reply*.test.ts
 
 export const autoReplyReplySubtreeTestInclude = ["src/auto-reply/reply/**/*.test.ts"];
 
+export const tuiPtyTestFiles = [
+  "src/tui/tui-auth-child-pty.e2e.test.ts",
+  "src/tui/tui-pty-harness.e2e.test.ts",
+  "src/tui/tui-session-identity-pty.e2e.test.ts",
+  "src/tui/tui-reset-transition-pty.e2e.test.ts",
+  "src/tui/tui-task-suggestions-pty.e2e.test.ts",
+  "src/tui/tui-error-pty.e2e.test.ts",
+  "src/tui/tui-pty-local.e2e.test.ts",
+];
+
 export const fullSuiteVitestShards = [
   {
     config: "test/vitest/vitest.full-core-unit-fast.config.ts",
     name: "core-unit-fast",
     projects: [
       "test/vitest/vitest.unit-fast.config.ts",
+      "test/vitest/vitest.unit-fast-isolated.config.ts",
       "test/vitest/vitest.unit-fast-fake-timers.config.ts",
     ],
   },
@@ -83,6 +96,7 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.tui.config.ts",
       "test/vitest/vitest.tui-pty.config.ts",
       "test/vitest/vitest.ui.config.ts",
+      "test/vitest/vitest.ui-isolated.config.ts",
       "test/vitest/vitest.utils.config.ts",
       "test/vitest/vitest.wizard.config.ts",
     ],
@@ -94,15 +108,14 @@ export const fullSuiteVitestShards = [
       "test/vitest/vitest.gateway-core.config.ts",
       "test/vitest/vitest.gateway-client.config.ts",
       "test/vitest/vitest.gateway-methods.config.ts",
+      "test/vitest/vitest.gateway-methods-isolated.config.ts",
       "test/vitest/vitest.gateway-server.config.ts",
+      "test/vitest/vitest.gateway-server-isolated.config.ts",
+      "test/vitest/vitest.cli-process.config.ts",
       "test/vitest/vitest.cli.config.ts",
       "test/vitest/vitest.commands-light.config.ts",
       "test/vitest/vitest.commands.config.ts",
-      "test/vitest/vitest.agents-core-isolated.config.ts",
-      "test/vitest/vitest.agents-core.config.ts",
-      "test/vitest/vitest.agents-embedded-agent.config.ts",
-      "test/vitest/vitest.agents-support.config.ts",
-      "test/vitest/vitest.agents-tools.config.ts",
+      ...agentVitestProjectConfigs,
       "test/vitest/vitest.daemon.config.ts",
       "test/vitest/vitest.plugin-sdk-light.config.ts",
       "test/vitest/vitest.plugin-sdk.config.ts",

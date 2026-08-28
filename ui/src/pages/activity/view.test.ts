@@ -15,6 +15,7 @@ function createEntry(overrides: Partial<ActivityEntry> = {}): ActivityEntry {
     runId: "run-1",
     sessionKey: "main",
     toolName: "exec",
+    entryKind: "tool",
     status: "running",
     startedAt: 1_000,
     updatedAt: 120_900,
@@ -34,6 +35,7 @@ function createProps(overrides: Partial<ActivityProps> = {}): ActivityProps {
     error: true,
   };
   return {
+    basePath: "/control",
     entries: [createEntry()],
     filterText: "",
     statusFilters,
@@ -79,8 +81,94 @@ describe("renderActivity", () => {
 
     const stream = container.querySelector(".activity-stream");
     expect(stream?.getAttribute("role")).toBe("list");
-    expect(stream?.getAttribute("aria-label")).toBe("Tool activity entries");
+    expect(stream?.getAttribute("aria-label")).toBe("Agent activity entries");
     expect(container.querySelector(".activity-entry")?.getAttribute("role")).toBe("listitem");
+  });
+
+  it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
+    await i18n.setLocale("en");
+    const container = document.createElement("div");
+    document.body.append(container);
+    const onFilterTextChange = vi.fn();
+    const onToolFilterChange = vi.fn();
+
+    render(
+      renderActivity(
+        createProps({
+          entries: [
+            createEntry({ toolName: "exec" }),
+            createEntry({ id: "run-2", toolName: "read" }),
+          ],
+          onFilterTextChange,
+          onToolFilterChange,
+        }),
+      ),
+      container,
+    );
+
+    const toolbar = container.querySelector(".activity-live-toolbar");
+    expect(
+      toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
+    ).toHaveLength(3);
+    expect(toolbar?.querySelector(".activity-live-autofollow wa-switch")).not.toBeNull();
+    const filterTrigger = toolbar?.querySelector("#activity-live-filter-trigger");
+    expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");
+
+    const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
+    if (!search) {
+      throw new Error("Expected the live activity search input");
+    }
+    search.value = "run";
+    search.dispatchEvent(new Event("input"));
+    expect(onFilterTextChange).toHaveBeenCalledWith("run");
+
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    if (!tool) {
+      throw new Error("Expected the live activity tool filter");
+    }
+    tool.value = "read";
+    tool.dispatchEvent(new Event("change"));
+    expect(onToolFilterChange).toHaveBeenCalledWith("read");
+  });
+
+  it("renders selected answer candidates without tool-only facts", async () => {
+    await i18n.setLocale("en");
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderActivity(
+        createProps({
+          entries: [
+            createEntry({
+              id: "run-1:answer_candidate:answer-1",
+              entryKind: "answer_candidate",
+              itemId: "answer-1",
+              toolCallId: "answer-1",
+              toolName: "answer_candidate",
+              candidateStatus: "selected",
+              status: "done",
+              outputPreview: "Final answer",
+            }),
+          ],
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".activity-entry__tool")?.textContent?.trim()).toBe(
+      "Answer candidate",
+    );
+    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
+      "Selected answer",
+    );
+    expect(container.querySelector(".activity-entry__facts")?.textContent).toContain(
+      "Item: answer-1",
+    );
+    expect(container.querySelector(".activity-entry__facts")?.textContent).not.toContain(
+      "arguments hidden",
+    );
   });
 
   it("lets the route shell own the page heading", async () => {
@@ -106,5 +194,20 @@ describe("renderActivity", () => {
       (element) => element.textContent?.trim(),
     );
     expect(meta).toContain("2m");
+  });
+
+  it("links the displayed run id to the deep-link inspector", async () => {
+    await i18n.setLocale("en");
+    const container = document.createElement("div");
+    document.body.append(container);
+
+    render(
+      renderActivity(createProps({ entries: [createEntry({ runId: "live run:a/b" })] })),
+      container,
+    );
+
+    expect(
+      container.querySelector<HTMLAnchorElement>(".activity-entry__run-link")?.getAttribute("href"),
+    ).toBe("/control/activity?view=run&run=live%20run%3Aa%2Fb");
   });
 });

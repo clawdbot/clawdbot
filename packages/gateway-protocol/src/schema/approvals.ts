@@ -4,6 +4,7 @@ import { Type } from "typebox";
 import { APPROVAL_ID_WELL_FORMED_UNICODE_PATTERN } from "./approval-id.js";
 import { closedObject } from "./closed-object.js";
 import { NonEmptyString } from "./primitives.js";
+import { withSince } from "./since.js";
 
 export { isWellFormedApprovalId } from "./approval-id.js";
 
@@ -71,6 +72,55 @@ export const PluginApprovalSeveritySchema = Type.Union([
   Type.Literal("critical"),
 ]);
 
+/** Message/email delivery blast radius declared by the approval owner. */
+export const MessageSendApprovalScopeSchema = closedObject({
+  kind: Type.Literal("message-send"),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+  recipientCount: Type.Integer({ minimum: 1, maximum: 1_000_000 }),
+  recipients: Type.Optional(
+    Type.Array(Type.String({ minLength: 1, maxLength: 128 }), { maxItems: 5 }),
+  ),
+  audience: Type.Optional(Type.Union([Type.Literal("internal"), Type.Literal("external")])),
+});
+
+/** Payment blast radius declared by the approval owner. */
+export const PaymentApprovalScopeSchema = closedObject({
+  kind: Type.Literal("payment"),
+  amount: Type.String({ minLength: 1, maxLength: 40 }),
+  currency: Type.String({ minLength: 1, maxLength: 12 }),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+});
+
+/** External publication blast radius declared by the approval owner. */
+export const ExternalPostApprovalScopeSchema = closedObject({
+  kind: Type.Literal("external-post"),
+  target: Type.String({ minLength: 1, maxLength: 128 }),
+  visibility: Type.Union([Type.Literal("public"), Type.Literal("restricted")]),
+});
+
+/**
+ * What allow-always mints for an automation approval: a standing grant bound
+ * to this exact command and automation. Absent expiresInDays means the grant
+ * lives until revoked or the automation changes.
+ */
+export const StandingGrantApprovalScopeSchema = closedObject({
+  kind: Type.Literal("standing-grant"),
+  automation: Type.String({ minLength: 1, maxLength: 128 }),
+  command: Type.String({ minLength: 1, maxLength: 256 }),
+  expiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
+});
+
+/**
+ * Owner-declared blast-radius facts for a pending approval. Variants are
+ * named schemas so native protocol generators emit the discriminated union.
+ */
+export const ApprovalScopeSchema = Type.Union([
+  MessageSendApprovalScopeSchema,
+  PaymentApprovalScopeSchema,
+  ExternalPostApprovalScopeSchema,
+  StandingGrantApprovalScopeSchema,
+]);
+
 const ApprovalAllowedDecisionsSchema = Type.Array(ApprovalDecisionSchema, {
   minItems: 1,
   maxItems: 3,
@@ -95,6 +145,7 @@ export const ExecApprovalPresentationSchema = Type.Object(
     host: Type.Optional(Type.Union([Type.String(), Type.Null()])),
     nodeId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
     agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+    scope: Type.Optional(ApprovalScopeSchema),
     allowedDecisions: ApprovalAllowedDecisionsSchema,
   },
   {
@@ -109,10 +160,12 @@ export const PluginApprovalPresentationSchema = closedObject({
   kind: Type.Literal("plugin"),
   title: Type.String({ minLength: 1, maxLength: 80 }),
   description: Type.String({ minLength: 1, maxLength: 512 }),
+  detail: Type.Optional(Type.String({ minLength: 1, maxLength: 16_384 })),
   severity: PluginApprovalSeveritySchema,
   pluginId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   toolName: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   agentId: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  scope: Type.Optional(ApprovalScopeSchema),
   allowedDecisions: ApprovalAllowedDecisionsSchema,
 });
 
@@ -141,8 +194,27 @@ const ApprovalRecordCommonFields = {
   presentation: ApprovalPresentationSchema,
 };
 
+/** Reviewer-safe origin attribution for terminal approval history. */
+const ApprovalHistorySourceAttributionSchema = closedObject({
+  agentId: Type.Optional(NonEmptyString),
+  sessionKey: Type.Optional(NonEmptyString),
+});
+
+/** Reviewer attribution recorded by the durable approval ledger. */
+const ApprovalHistoryResolverAttributionSchema = closedObject({
+  kind: Type.Union([
+    Type.Literal("device"),
+    Type.Literal("channel"),
+    Type.Literal("runtime"),
+    Type.Literal("system"),
+  ]),
+  id: Type.Optional(NonEmptyString),
+});
+
 const ApprovalResolutionFields = {
   resolvedAtMs: Type.Integer({ minimum: 0 }),
+  source: Type.Optional(ApprovalHistorySourceAttributionSchema),
+  resolver: Type.Optional(ApprovalHistoryResolverAttributionSchema),
 };
 
 /** Approval that has not yet accepted a reviewer decision. */
@@ -208,11 +280,35 @@ export const ApprovalGetParamsSchema = closedObject({ id: ApprovalRecordCommonFi
 /** Current durable state for one authorized approval lookup. */
 export const ApprovalGetResultSchema = closedObject({ approval: ApprovalSnapshotSchema });
 
+/** Cursor-based query for the retained terminal approval ledger. */
+export const ApprovalHistoryParamsSchema = closedObject({
+  cursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+  limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 100 })),
+  kind: Type.Optional(ApprovalKindSchema),
+});
+
+/** Newest-first page from the retained terminal approval ledger. */
+export const ApprovalHistoryResultSchema = closedObject({
+  items: Type.Array(TerminalApprovalSnapshotSchema),
+  nextCursor: Type.Optional(Type.String({ minLength: 1, maxLength: 512 })),
+});
+
 /** Reviewer decision for one approval identified by its exact full id. */
+export const ApprovalChannelReviewerSchema = closedObject({
+  channel: NonEmptyString,
+  accountId: NonEmptyString,
+  senderId: NonEmptyString,
+});
+
 export const ApprovalResolveParamsSchema = closedObject({
   id: ApprovalRecordCommonFields.id,
   kind: ApprovalKindSchema,
   decision: ApprovalDecisionSchema,
+  reviewer: Type.Optional(ApprovalChannelReviewerSchema),
+  // Per-grant expiry override for allow-always on automation (exec) approvals:
+  // days from resolution. Absent defers to tools.exec.grantExpiryDays; unset
+  // config keeps the grant valid until revoked. Ignored for other kinds.
+  grantExpiresInDays: Type.Optional(Type.Integer({ minimum: 1, maximum: 3650 })),
 });
 
 /** First-answer outcome plus the canonical recorded state returned to all contenders. */
@@ -228,32 +324,41 @@ const SessionApprovalEventCommonFields = {
 };
 
 /** Sanitized pending transition delivered only to an opted-in session audience. */
-export const PendingSessionApprovalEventSchema = closedObject({
-  ...SessionApprovalEventCommonFields,
-  phase: Type.Literal("pending"),
-  approval: PendingApprovalSnapshotSchema,
-});
+export const PendingSessionApprovalEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    ...SessionApprovalEventCommonFields,
+    phase: Type.Literal("pending"),
+    approval: PendingApprovalSnapshotSchema,
+  }),
+);
 
 /** Sanitized terminal transition delivered only to an opted-in session audience. */
-export const TerminalSessionApprovalEventSchema = closedObject({
-  ...SessionApprovalEventCommonFields,
-  phase: Type.Literal("terminal"),
-  approval: TerminalApprovalSnapshotSchema,
-});
+export const TerminalSessionApprovalEventSchema = withSince(
+  "2026.7",
+  closedObject({
+    ...SessionApprovalEventCommonFields,
+    phase: Type.Literal("terminal"),
+    approval: TerminalApprovalSnapshotSchema,
+  }),
+);
 
 /** Sanitized approval transition delivered only to an opted-in session audience. */
-export const SessionApprovalEventSchema = Type.Union([
-  PendingSessionApprovalEventSchema,
-  TerminalSessionApprovalEventSchema,
-]);
+export const SessionApprovalEventSchema = withSince(
+  "2026.7",
+  Type.Union([PendingSessionApprovalEventSchema, TerminalSessionApprovalEventSchema]),
+);
 
 /** Authoritative pending approval set returned when a session stream subscribes. */
-export const SessionApprovalReplaySchema = closedObject({
-  sessionKey: NonEmptyString,
-  updatedAtMs: Type.Integer({ minimum: 0 }),
-  approvals: Type.Array(PendingApprovalSnapshotSchema),
-  truncated: Type.Boolean(),
-});
+export const SessionApprovalReplaySchema = withSince(
+  "2026.7",
+  closedObject({
+    sessionKey: NonEmptyString,
+    updatedAtMs: Type.Integer({ minimum: 0 }),
+    approvals: Type.Array(PendingApprovalSnapshotSchema),
+    truncated: Type.Boolean(),
+  }),
+);
 
 // Owner-local wire types derived directly from local schema consts so the
 // public plugin-sdk declaration graph never pulls in the ProtocolSchemas registry.
@@ -262,6 +367,7 @@ export type ApprovalDecision = Static<typeof ApprovalDecisionSchema>;
 export type ApprovalAllowDecision = Static<typeof ApprovalAllowDecisionSchema>;
 export type ApprovalTerminalReason = Static<typeof ApprovalTerminalReasonSchema>;
 export type PluginApprovalSeverity = Static<typeof PluginApprovalSeveritySchema>;
+export type ApprovalScope = Static<typeof ApprovalScopeSchema>;
 export type ExecApprovalPresentation = Static<typeof ExecApprovalPresentationSchema>;
 export type PluginApprovalPresentation = Static<typeof PluginApprovalPresentationSchema>;
 export type SystemAgentApprovalPresentation = Static<typeof SystemAgentApprovalPresentationSchema>;
@@ -270,6 +376,9 @@ export type PendingApprovalSnapshot = Static<typeof PendingApprovalSnapshotSchem
 export type ApprovalSnapshot = Static<typeof ApprovalSnapshotSchema>;
 export type ApprovalGetParams = Static<typeof ApprovalGetParamsSchema>;
 export type ApprovalGetResult = Static<typeof ApprovalGetResultSchema>;
+export type ApprovalHistoryParams = Static<typeof ApprovalHistoryParamsSchema>;
+export type ApprovalHistoryResult = Static<typeof ApprovalHistoryResultSchema>;
+export type ApprovalChannelReviewer = Static<typeof ApprovalChannelReviewerSchema>;
 export type ApprovalResolveParams = Static<typeof ApprovalResolveParamsSchema>;
 export type ApprovalResolveResult = Static<typeof ApprovalResolveResultSchema>;
 export type AllowedApprovalSnapshot = Static<typeof AllowedApprovalSnapshotSchema>;

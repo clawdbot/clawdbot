@@ -4,27 +4,24 @@ import { captureEnv } from "../test-utils/env.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SUBAGENT_KILL_TASK_ERROR } from "./detached-task-runtime-contract.js";
 import {
-  createRunningTaskRun as createRunningTaskRunOrNull,
-  finalizeTaskRunByRunId,
+  createRunningTaskRunCore as createRunningTaskRunOrNull,
+  finalizeTaskRunByRunIdCore as finalizeTaskRunByRunId,
 } from "./task-executor.js";
-import {
-  listTaskFlowAuditFindings,
-  type TaskFlowAuditCode,
-  type TaskFlowAuditFinding,
-} from "./task-flow-registry.audit.js";
+import { listTaskFlowAuditFindings } from "./task-flow-registry.audit.js";
+import type { TaskFlowAuditCode, TaskFlowAuditFinding } from "./task-flow-registry.audit.types.js";
 import {
   createManagedTaskFlow as createManagedTaskFlowOrNull,
   requestFlowCancel,
-  resetTaskFlowRegistryForTests,
   setFlowWaiting,
 } from "./task-flow-registry.js";
-import { configureTaskFlowRegistryRuntime } from "./task-flow-registry.store.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskRecord } from "./task-registry.types.js";
 import {
+  configureTaskFlowRegistryRuntime,
   resetTaskRegistryDeliveryRuntimeForTests,
   resetTaskRegistryForTests,
-} from "./task-registry.js";
-import type { TaskRecord } from "./task-registry.types.js";
+  resetTaskFlowRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const ORIGINAL_ENV = captureEnv(["OPENCLAW_STATE_DIR"]);
 

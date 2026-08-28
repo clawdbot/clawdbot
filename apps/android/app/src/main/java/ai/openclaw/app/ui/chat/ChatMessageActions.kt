@@ -51,12 +51,15 @@ internal fun ChatMessageActionHost(
   text: String,
   onReply: (String) -> Unit,
   modifier: Modifier = Modifier,
+  showSessionActions: Boolean = false,
+  onRewind: (() -> Unit)? = null,
+  onFork: (() -> Unit)? = null,
   enabled: Boolean = true,
   listenActive: Boolean = false,
   onToggleListen: (() -> Unit)? = null,
   content: @Composable () -> Unit,
 ) {
-  if (!enabled || text.isBlank()) {
+  if (!enabled || (text.isBlank() && !showSessionActions)) {
     Box(modifier = modifier) { content() }
     return
   }
@@ -78,27 +81,43 @@ internal fun ChatMessageActionHost(
       expanded = menuExpanded,
       onDismissRequest = { menuExpanded = false },
     ) {
-      onToggleListen?.let { toggleListen ->
-        MessageActionItem(label = if (listenActive) nativeString("Stop") else nativeString("Listen")) {
-          toggleListen()
+      if (text.isNotBlank()) {
+        onToggleListen?.let { toggleListen ->
+          MessageActionItem(label = if (listenActive) nativeString("Stop") else nativeString("Listen")) {
+            toggleListen()
+            menuExpanded = false
+          }
+        }
+        MessageActionItem(label = nativeString("Copy")) {
+          copyChatMessage(context, text)
+          menuExpanded = false
+        }
+        MessageActionItem(label = nativeString("Select text")) {
+          menuExpanded = false
+          selectText = true
+        }
+        MessageActionItem(label = nativeString("Share")) {
+          shareChatMessage(context, text)
+          menuExpanded = false
+        }
+        MessageActionItem(label = nativeString("Reply")) {
+          onReply(quoteChatMessage(text))
           menuExpanded = false
         }
       }
-      MessageActionItem(label = nativeString("Copy")) {
-        copyChatMessage(context, text)
-        menuExpanded = false
-      }
-      MessageActionItem(label = nativeString("Select text")) {
-        menuExpanded = false
-        selectText = true
-      }
-      MessageActionItem(label = nativeString("Share")) {
-        shareChatMessage(context, text)
-        menuExpanded = false
-      }
-      MessageActionItem(label = nativeString("Reply")) {
-        onReply(quoteChatMessage(text))
-        menuExpanded = false
+      if (showSessionActions) {
+        onRewind?.let { rewind ->
+          MessageActionItem(label = nativeString("Rewind to here")) {
+            rewind()
+            menuExpanded = false
+          }
+        }
+        onFork?.let { fork ->
+          MessageActionItem(label = nativeString("Fork from here")) {
+            fork()
+            menuExpanded = false
+          }
+        }
       }
     }
   }

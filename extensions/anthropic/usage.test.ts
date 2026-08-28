@@ -1,26 +1,7 @@
+import { CLAUDE_CLI_PROFILE_ID as SDK_CLAUDE_CLI_PROFILE_ID } from "openclaw/plugin-sdk/provider-auth";
 import { describe, expect, it, vi } from "vitest";
-import {
-  fetchAnthropicAdminUsage,
-  fetchAnthropicUsage,
-  formatClaudePlanLabel,
-  resolveAnthropicUsageAuth,
-} from "./usage.js";
-
-vi.mock("openclaw/plugin-sdk/provider-auth", async (importActual) => {
-  const actual = await importActual<typeof import("openclaw/plugin-sdk/provider-auth")>();
-  return {
-    ...actual,
-    readClaudeCliCredentialsCached: vi.fn(() => ({
-      type: "oauth",
-      provider: "anthropic",
-      access: "cli-access",
-      refresh: "cli-refresh",
-      expires: Date.now() + 3_600_000,
-      subscriptionType: "max",
-      rateLimitTier: "default_max_20x",
-    })),
-  };
-});
+import { CLAUDE_CLI_PROFILE_ID } from "./cli-constants.js";
+import { fetchAnthropicUsage, resolveAnthropicUsageAuth } from "./usage.js";
 
 function requestUrl(input: string | URL | Request): URL {
   return new URL(input instanceof Request ? input.url : input);
@@ -75,21 +56,42 @@ describe("Anthropic provider usage", () => {
       );
     });
 
-    const result = await fetchAnthropicAdminUsage({
-      apiKey: "sk-ant-admin-test",
+    const auth = await resolveAnthropicUsageAuth({
+      config: {},
+      env: { ANTHROPIC_ADMIN_API_KEY: "sk-ant-admin-test" },
+      provider: "anthropic",
+      resolveApiKeyFromConfigAndStore: () => undefined,
+      resolveOAuthToken: async () => null,
+    });
+    if (!("token" in auth) || !auth.token) {
+      throw new Error("expected encoded Anthropic Admin API credentials");
+    }
+    const result = await fetchAnthropicUsage({
+      config: {},
+      env: {},
+      provider: "anthropic",
+      token: auth.token,
       timeoutMs: 5_000,
       fetchFn: fetchFn as typeof fetch,
-      now: Date.parse("2026-07-06T12:00:00Z"),
-      periodDays: 2,
     });
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       provider: "anthropic",
+      displayName: "Anthropic",
+      windows: [],
       plan: "Admin API",
-      billing: [{ type: "spend", amount: 12.34, unit: "USD", period: "2d" }],
+      billing: [
+        {
+          type: "spend",
+          label: "30-day API spend",
+          amount: 12.34,
+          unit: "USD",
+          period: "30d",
+        },
+      ],
       costHistory: {
         unit: "USD",
-        periodDays: 2,
+        periodDays: 30,
         daily: [
           {
             date: "2026-07-06",
@@ -101,9 +103,19 @@ describe("Anthropic provider usage", () => {
             totalTokens: 1_700,
           },
         ],
-        models: [{ name: "claude-opus-4-8", totalTokens: 1_700 }],
+        models: [
+          {
+            name: "claude-opus-4-8",
+            inputTokens: 1_000,
+            cacheReadTokens: 300,
+            cacheWriteTokens: 150,
+            outputTokens: 250,
+            totalTokens: 1_700,
+          },
+        ],
         categories: [{ name: "Claude API", amount: 12.34 }],
       },
+      summary: "1,700 tokens",
     });
     for (const [input, init] of fetchFn.mock.calls) {
       const url = requestUrl(input);
@@ -158,10 +170,12 @@ describe("Anthropic provider usage", () => {
     });
   });
 
-  it("falls back to the synced claude-cli OAuth profile when anthropic has none", async () => {
-    const resolveOAuthToken = vi.fn(async (params?: { provider?: string }) =>
-      params?.provider === "claude-cli" ? { token: "claude-cli-token" } : null,
-    );
+  it("keeps the local retired profile id aligned with the plugin-sdk constant", () => {
+    expect(CLAUDE_CLI_PROFILE_ID).toBe(SDK_CLAUDE_CLI_PROFILE_ID);
+  });
+
+  it("does not refresh the native Claude login for usage polling", async () => {
+    const resolveOAuthToken = vi.fn(async () => null);
     const result = await resolveAnthropicUsageAuth({
       config: {},
       env: {},
@@ -169,22 +183,14 @@ describe("Anthropic provider usage", () => {
       resolveApiKeyFromConfigAndStore: () => undefined,
       resolveOAuthToken,
     });
-    expect(result).toEqual({ token: "claude-cli-token" });
-    expect(resolveOAuthToken).toHaveBeenNthCalledWith(1);
-    expect(resolveOAuthToken).toHaveBeenNthCalledWith(2, { provider: "claude-cli" });
+    expect(result).toEqual({ handled: true });
+    expect(resolveOAuthToken).toHaveBeenCalledOnce();
+    expect(resolveOAuthToken).toHaveBeenCalledWith({
+      excludeProfileIds: ["anthropic:claude-cli"],
+    });
   });
 
-  it.each([
-    { subscription: "max", tier: "default_max_20x", expected: "Max (20x)" },
-    { subscription: "pro", tier: undefined, expected: "Pro" },
-    { subscription: "max", tier: "default", expected: "Max" },
-    { subscription: undefined, tier: "default_max_20x", expected: undefined },
-    { subscription: "  ", tier: undefined, expected: undefined },
-  ])("formats plan label for $subscription/$tier", ({ subscription, tier, expected }) => {
-    expect(formatClaudePlanLabel(subscription, tier)).toBe(expected);
-  });
-
-  it("prefers plan metadata from the resolved auth profile over CLI reads", async () => {
+  it("uses plan metadata from the resolved auth profile", async () => {
     const fetchFn = vi.fn(
       async () => new Response(JSON.stringify({ five_hour: { utilization: 10 } }), { status: 200 }),
     );
@@ -201,7 +207,7 @@ describe("Anthropic provider usage", () => {
     expect(snapshot.plan).toBe("Pro");
   });
 
-  it("labels OAuth usage snapshots with the local Claude CLI plan", async () => {
+  it("does not read Claude CLI auth to label OAuth usage", async () => {
     const fetchFn = vi.fn(
       async () =>
         new Response(
@@ -220,7 +226,7 @@ describe("Anthropic provider usage", () => {
       timeoutMs: 5000,
       fetchFn,
     });
-    expect(snapshot.plan).toBe("Max (20x)");
+    expect(snapshot.plan).toBeUndefined();
     expect(snapshot.windows).toHaveLength(2);
   });
 

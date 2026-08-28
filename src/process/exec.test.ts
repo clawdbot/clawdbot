@@ -1,7 +1,9 @@
 // Exec tests cover command execution, output capture, and cancellation behavior.
 import type { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
+import fs from "node:fs/promises";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import { setVerbose } from "../global-state.js";
 import { attachChildProcessBridge } from "./child-process-bridge.js";
@@ -492,6 +494,25 @@ describe("runCommandBuffered", () => {
     expect(result.stdout.byteLength).toBeLessThanOrEqual(16);
   });
 
+  it("caps stdout and stderr under one aggregate output budget", async () => {
+    const result = await runCommandBuffered(
+      [
+        process.execPath,
+        "-e",
+        "process.stdout.write('abcd'); setImmediate(() => process.stderr.write('efgh'))",
+      ],
+      {
+        maxCombinedOutputBytes: 6,
+        maxOutputBytes: 8,
+        timeoutMs: 3_000,
+      },
+    );
+
+    expect(result.termination).toBe("output-limit");
+    expect(result.outputLimitStream).toBe("stderr");
+    expect(result.stdout.byteLength + result.stderr.byteLength).toBe(6);
+  });
+
   it("maps timeout and pre-aborted signals without throwing", async () => {
     const timedOut = await runCommandBuffered(
       [process.execPath, "-e", "setInterval(() => {}, 1_000)"],
@@ -629,6 +650,20 @@ describe("runExec", () => {
     );
     expect(stdout).toBe("input");
     expect(stderr).toBe("base");
+  });
+
+  it("supports an inherited file descriptor as stdin", async () => {
+    const handle = await fs.open(fileURLToPath(import.meta.url), "r");
+    try {
+      const { stdout } = await runExec(
+        process.execPath,
+        ["-e", "process.stdin.pipe(process.stdout)"],
+        { stdinFileDescriptor: handle.fd, timeoutMs: 3_000 },
+      );
+      expect(stdout).toContain("// Exec tests cover command execution");
+    } finally {
+      await handle.close();
+    }
   });
 
   it("can keep sensitive output out of verbose logs", async () => {

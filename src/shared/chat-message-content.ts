@@ -23,6 +23,16 @@ export function extractFirstTextBlock(message: unknown): string | undefined {
 
 export type AssistantPhase = "commentary" | "final_answer";
 
+type AssistantTextSignature = { id?: string; phase?: AssistantPhase } | null;
+type AssistantTextSignatureBlock = { textSignature?: unknown };
+
+// Provider partials mutate blocks in place. Pair the stable block identity with
+// its current signature text so a replacement can never reuse a stale parse.
+const assistantTextSignatureCache = new WeakMap<
+  object,
+  { text: unknown; result: AssistantTextSignature }
+>();
+
 function isAssistantTextContentBlockType(value: unknown): boolean {
   return value === "text" || value === "input_text" || value === "output_text";
 }
@@ -34,28 +44,36 @@ export function normalizeAssistantPhase(value: unknown): AssistantPhase | undefi
 
 /** Parses assistant text block signatures, preserving legacy raw ids when not JSON encoded. */
 export function parseAssistantTextSignature(
-  value: unknown,
-): { id?: string; phase?: AssistantPhase } | null {
+  block: AssistantTextSignatureBlock,
+): AssistantTextSignature {
+  const value = block.textSignature;
+  const cached = assistantTextSignatureCache.get(block);
+  if (cached && cached.text === value) {
+    return cached.result;
+  }
+  let result: AssistantTextSignature;
   if (typeof value !== "string" || value.trim().length === 0) {
-    return null;
-  }
-  if (!value.startsWith("{")) {
-    return { id: value };
-  }
-  try {
-    const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
-    if (parsed.v !== 1) {
-      return null;
+    result = null;
+  } else if (!value.startsWith("{")) {
+    result = { id: value };
+  } else {
+    try {
+      const parsed = JSON.parse(value) as { id?: unknown; phase?: unknown; v?: unknown };
+      result =
+        parsed.v === 1
+          ? {
+              ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
+              ...(normalizeAssistantPhase(parsed.phase)
+                ? { phase: normalizeAssistantPhase(parsed.phase) }
+                : {}),
+            }
+          : null;
+    } catch {
+      result = null;
     }
-    return {
-      ...(typeof parsed.id === "string" ? { id: parsed.id } : {}),
-      ...(normalizeAssistantPhase(parsed.phase)
-        ? { phase: normalizeAssistantPhase(parsed.phase) }
-        : {}),
-    };
-  } catch {
-    return null;
   }
+  assistantTextSignatureCache.set(block, { text: value, result });
+  return result;
 }
 
 /** Resolves a message phase only when the top-level phase or all explicit blocks agree. */
@@ -80,7 +98,7 @@ export function resolveAssistantMessagePhase(message: unknown): AssistantPhase |
     if (!isAssistantTextContentBlockType(record.type)) {
       continue;
     }
-    const phase = parseAssistantTextSignature(record.textSignature)?.phase;
+    const phase = parseAssistantTextSignature(record)?.phase;
     if (phase) {
       explicitPhases.add(phase);
     }
@@ -163,7 +181,7 @@ export function extractAssistantTextForPhase(
     if (!isAssistantTextContentBlockType(record.type)) {
       return false;
     }
-    return Boolean(parseAssistantTextSignature(record.textSignature)?.phase);
+    return Boolean(parseAssistantTextSignature(record)?.phase);
   });
 
   // Once explicit phased blocks exist, unphased extraction should not revive legacy text.
@@ -180,7 +198,7 @@ export function extractAssistantTextForPhase(
       if (!isAssistantTextContentBlockType(record.type) || typeof record.text !== "string") {
         return null;
       }
-      const signature = parseAssistantTextSignature(record.textSignature);
+      const signature = parseAssistantTextSignature(record);
       const resolvedPhase =
         signature?.phase ?? (hasExplicitPhasedTextBlocks ? undefined : messagePhase);
       if (!shouldIncludeContent(resolvedPhase)) {
@@ -198,7 +216,7 @@ export function extractAssistantTextForPhase(
 }
 
 /** Returns user-visible assistant text, preferring final answers over legacy unphased text. */
-export function extractAssistantVisibleText(message: unknown): string | undefined {
+export function extractAssistantPhaseText(message: unknown): string | undefined {
   const finalAnswerText = extractAssistantTextForPhase(message, { phase: "final_answer" });
   if (finalAnswerText) {
     return finalAnswerText;

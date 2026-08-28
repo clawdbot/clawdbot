@@ -1,5 +1,6 @@
 // Matrix plugin module implements env auth behavior.
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "openclaw/plugin-sdk/account-id";
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getMatrixScopedEnvVarNames } from "../../env-vars.js";
 
 type MatrixEnvConfig = {
@@ -12,7 +13,7 @@ type MatrixEnvConfig = {
 };
 
 function cleanEnv(value: unknown): string {
-  return typeof value === "string" ? value.trim() : "";
+  return normalizeOptionalString(value) ?? "";
 }
 
 export function resolveGlobalMatrixEnvConfig(env: NodeJS.ProcessEnv): MatrixEnvConfig {

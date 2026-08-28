@@ -44,6 +44,7 @@
     "build": "tsdown src/index.ts src/ip.ts src/ipv4.ts src/redact-sensitive-url.ts src/url-protocol.ts src/url-userinfo.ts --no-config --platform node --format esm --dts --out-dir dist --clean"
   },
   "dependencies": {
-    "ipaddr.js": "2.4.0"
+    "@openclaw/normalization-core": "workspace:*",
+    "ipaddr.js": "2.5.0"
   }
 }

@@ -1,18 +1,21 @@
 // Gateway status probe helper used by `gateway status` service diagnostics.
+import { redactSensitiveUrlLikeString } from "@openclaw/net-policy/redact-sensitive-url";
+import {
+  classifyGatewayConnectFailure,
+  ConnectErrorDetailCodes,
+  readConnectErrorDetailCode,
+} from "../../../packages/gateway-protocol/src/connect-error-details.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import type { GatewayProbeResult } from "../../gateway/probe.js";
+import type { GatewayProbeAuthSummary, GatewayProbeServerSummary } from "../../gateway/probe.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import { withProgress } from "../progress.js";
 
 type GatewayStatusProbeKind = "connect" | "read";
-type GatewayStatusRequireRpcProbeResult = {
-  ok: true;
-  authProbe: GatewayProbeResult | null;
-};
-type GatewayStatusProbeResult = GatewayProbeResult | GatewayStatusRequireRpcProbeResult;
-
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../../gateway/probe.js"));
+const CONNECT_ERROR_DETAIL_CODE_VALUES: ReadonlySet<string> = new Set(
+  Object.values(ConnectErrorDetailCodes),
+);
 
 async function loadProbeGatewayModule(): Promise<typeof import("../../gateway/probe.js")> {
   return await probeGatewayModuleLoader.load();
@@ -31,23 +34,25 @@ function resolveProbeFailureMessage(result: {
   return result.error ?? closeHint ?? "gateway probe failed";
 }
 
-function resolveGatewayStatusProbeDetails(result: GatewayStatusProbeResult) {
-  return "authProbe" in result ? result.authProbe : result;
-}
-
-function readRuntimeVersionFromStatusPayload(payload: unknown): string | null {
-  if (!payload || typeof payload !== "object") {
-    return null;
-  }
-  const runtimeVersion = (payload as { runtimeVersion?: unknown }).runtimeVersion;
-  return typeof runtimeVersion === "string" && runtimeVersion.trim().length > 0
-    ? runtimeVersion.trim()
-    : null;
+function projectGatewayConnectFailure(params: {
+  details?: unknown;
+  message: string;
+  reason?: string;
+}) {
+  // Daemon status is serialized for diagnostics, so raw gateway details must
+  // stop here; only closed classification facts may cross this boundary.
+  const failure = classifyGatewayConnectFailure(params);
+  const detailCode = readConnectErrorDetailCode(params.details);
+  return {
+    kind: failure.kind,
+    ...(detailCode && CONNECT_ERROR_DETAIL_CODE_VALUES.has(detailCode) ? { detailCode } : {}),
+  };
 }
 
 /** Probe Gateway connectivity or read-capability status with optional RPC verification. */
 export async function probeGatewayStatus(opts: {
   url: string;
+  localPortOverride?: number;
   token?: string;
   password?: string;
   config?: OpenClawConfig;
@@ -61,17 +66,51 @@ export async function probeGatewayStatus(opts: {
 }) {
   const kind = (opts.requireRpc ? "read" : "connect") satisfies GatewayStatusProbeKind;
   try {
-    let statusRuntimeVersion: string | null = null;
-    const result = await withProgress<GatewayStatusProbeResult>(
+    const result = await withProgress(
       {
         label: "Checking gateway status...",
         indeterminate: true,
         enabled: opts.json !== true,
       },
       async () => {
+        if (opts.requireRpc) {
+          const allowRpcConfigCredentials = opts.allowRpcConfigCredentials !== false;
+          if (!allowRpcConfigCredentials && !opts.token && !opts.password) {
+            throw new Error(
+              "gateway status RPC skipped because configured gateway credentials are disabled for this status request",
+            );
+          }
+          const { resolveProbeAuthSummary } = await loadProbeGatewayModule();
+          const { callGateway } = await import("../../gateway/call.js");
+          let auth: GatewayProbeAuthSummary | undefined;
+          let server: GatewayProbeServerSummary | undefined;
+          await callGateway({
+            url: opts.url,
+            localPortOverride: opts.localPortOverride,
+            token: opts.token,
+            password: opts.password,
+            tlsFingerprint: opts.tlsFingerprint,
+            preauthHandshakeTimeoutMs: opts.preauthHandshakeTimeoutMs,
+            ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
+            method: "status",
+            timeoutMs: opts.timeoutMs,
+            sharedStateMode: "read-only",
+            ...(opts.configPath ? { configPath: opts.configPath } : {}),
+            onHelloOk: (hello) => {
+              auth = resolveProbeAuthSummary({
+                role: hello.auth.role,
+                scopes: hello.auth.scopes,
+                authMetadataPresent: true,
+              });
+              server = hello.server;
+            },
+          });
+          return { ok: true as const, auth, server };
+        }
         const { probeGateway } = await loadProbeGatewayModule();
-        const probeOpts = {
+        return await probeGateway({
           url: opts.url,
+          ...(opts.config ? { config: opts.config } : {}),
           auth: {
             token: opts.token,
             password: opts.password,
@@ -82,37 +121,13 @@ export async function probeGatewayStatus(opts: {
             : {}),
           timeoutMs: opts.timeoutMs,
           includeDetails: false,
-        };
-        if (opts.requireRpc) {
-          const allowRpcConfigCredentials = opts.allowRpcConfigCredentials !== false;
-          if (!allowRpcConfigCredentials && !opts.token && !opts.password) {
-            throw new Error(
-              "gateway status RPC skipped because configured gateway credentials are disabled for this status request",
-            );
-          }
-          const { callGateway } = await import("../../gateway/call.js");
-          const statusPayload = await callGateway({
-            url: opts.url,
-            token: opts.token,
-            password: opts.password,
-            tlsFingerprint: opts.tlsFingerprint,
-            ...(allowRpcConfigCredentials && opts.config ? { config: opts.config } : {}),
-            method: "status",
-            timeoutMs: opts.timeoutMs,
-            ...(opts.configPath ? { configPath: opts.configPath } : {}),
-          });
-          statusRuntimeVersion = readRuntimeVersionFromStatusPayload(statusPayload);
-          const authProbe = await probeGateway(probeOpts).catch(() => null);
-          return { ok: true as const, authProbe };
-        }
-        return await probeGateway(probeOpts);
+        });
       },
     );
-    const probeDetails = resolveGatewayStatusProbeDetails(result);
-    const auth = probeDetails?.auth;
-    const server = probeDetails?.server;
+    const auth = result.auth;
+    const server = result.server;
     const serverSummary = server ? { server } : {};
-    const version = server?.version ?? ("authProbe" in result ? statusRuntimeVersion : null);
+    const version = server?.version ?? null;
     if (result.ok) {
       return {
         ok: true,
@@ -128,6 +143,7 @@ export async function probeGatewayStatus(opts: {
         ...(version != null ? { version } : {}),
       } as const;
     }
+    const error = redactSensitiveUrlLikeString(resolveProbeFailureMessage(result));
     return {
       ok: false,
       kind,
@@ -135,13 +151,22 @@ export async function probeGatewayStatus(opts: {
       auth,
       ...serverSummary,
       ...(version != null ? { version } : {}),
-      error: resolveProbeFailureMessage(result),
+      connectFailure: projectGatewayConnectFailure({
+        details: result.connectErrorDetails,
+        message: error,
+        reason: result.close?.reason,
+      }),
+      // Probe failure text can echo the credential-bearing target URL (close
+      // reasons, transport errors); status renderers print it verbatim.
+      error,
     } as const;
   } catch (err) {
+    const error = redactSensitiveUrlLikeString(formatErrorMessage(err));
     return {
       ok: false,
       kind,
-      error: formatErrorMessage(err),
+      connectFailure: projectGatewayConnectFailure({ message: error }),
+      error,
     } as const;
   }
 }

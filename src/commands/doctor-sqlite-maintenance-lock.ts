@@ -32,6 +32,22 @@ type DoctorSqliteMaintenanceLockDeps = {
   lockOptions?: MaintenanceLockOptions;
 };
 
+export type DoctorSqliteMaintenanceAuthority = {
+  assertCurrent(): void;
+};
+
+export class DoctorSqliteMaintenanceLockUnavailableError extends Error {
+  constructor(
+    operation: string,
+    public override readonly cause: GatewayLockError,
+  ) {
+    super(
+      `Cannot run ${operation} while the Gateway or another SQLite maintenance command owns this OpenClaw state directory. Stop the Gateway and retry.`,
+    );
+    this.name = "DoctorSqliteMaintenanceLockUnavailableError";
+  }
+}
+
 function assertMaintenancePathsOwnedByStateDir(
   env: NodeJS.ProcessEnv,
   operation: string,
@@ -44,12 +60,11 @@ function assertMaintenancePathsOwnedByStateDir(
   const stateCanonicalDir = resolvePathViaExistingAncestorSync(stateDir);
   for (const protectedPath of protectedPaths) {
     const absolutePath = path.resolve(protectedPath);
-    let resolvedPath: ReturnType<typeof resolveRootPathSync>;
     try {
       if (!isPathInside(stateDir, absolutePath) && !isPathInside(stateCanonicalDir, absolutePath)) {
         throw new Error("path is not lexically owned by the active state directory");
       }
-      resolvedPath = resolveRootPathSync({
+      resolveRootPathSync({
         absolutePath,
         boundaryLabel: "OpenClaw state directory",
         rootCanonicalPath: stateCanonicalDir,
@@ -61,13 +76,66 @@ function assertMaintenancePathsOwnedByStateDir(
         { cause: error },
       );
     }
-    if (
-      resolvedPath.exists &&
-      resolvedPath.kind === "file" &&
-      fs.statSync(resolvedPath.canonicalPath).nlink > 1
-    ) {
+  }
+  assertDoctorSqliteMaintenancePathsNotAliased(operation, protectedPaths, [stateDir]);
+}
+
+/** Reject file aliases that destructive SQLite maintenance would mutate in place. */
+export function assertDoctorSqliteMaintenancePathsNotAliased(
+  operation: string,
+  protectedPaths: readonly string[],
+  ownershipRoots: readonly string[] = [],
+): void {
+  const resolvedRoots = ownershipRoots.map((candidate) => path.resolve(candidate));
+  for (const protectedPath of new Set(protectedPaths.map((candidate) => path.resolve(candidate)))) {
+    assertPathComponentsNotSymbolicLinks(operation, protectedPath, resolvedRoots);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(protectedPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        continue;
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Cannot run ${operation} for a symbolic-link path: ${protectedPath}. Replace the symbolic link with an owned regular file and retry.`,
+      );
+    }
+    if (stat.isFile() && stat.nlink > 1) {
       throw new Error(
         `Cannot run ${operation} for a hard-linked path: ${protectedPath}. Remove the additional hard link and retry.`,
+      );
+    }
+  }
+}
+
+function assertPathComponentsNotSymbolicLinks(
+  operation: string,
+  protectedPath: string,
+  ownershipRoots: readonly string[],
+): void {
+  const rootPath = ownershipRoots.find((candidate) => isPathInside(candidate, protectedPath));
+  if (!rootPath) {
+    return;
+  }
+  const relativePath = path.relative(rootPath, protectedPath);
+  let currentPath = rootPath;
+  for (const segment of relativePath.split(path.sep).filter(Boolean)) {
+    currentPath = path.join(currentPath, segment);
+    let stat: fs.Stats;
+    try {
+      stat = fs.lstatSync(currentPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        return;
+      }
+      throw error;
+    }
+    if (stat.isSymbolicLink()) {
+      throw new Error(
+        `Cannot run ${operation} through a symbolic-link path component: ${currentPath}. Replace the symbolic link with an owned directory or regular file and retry.`,
       );
     }
   }
@@ -83,7 +151,7 @@ export async function withDoctorSqliteMaintenanceLock<T>(
     env?: NodeJS.ProcessEnv;
     operation: string;
     protectedPaths?: readonly string[];
-    run: () => Promise<T> | T;
+    run: (authority: DoctorSqliteMaintenanceAuthority) => Promise<T> | T;
   },
   deps: DoctorSqliteMaintenanceLockDeps = {},
 ): Promise<T> {
@@ -102,10 +170,7 @@ export async function withDoctorSqliteMaintenanceLock<T>(
     });
   } catch (error) {
     if (error instanceof GatewayLockError) {
-      throw new Error(
-        `Cannot run ${params.operation} while the Gateway or another SQLite maintenance command owns this OpenClaw state directory. Stop the Gateway and retry.`,
-        { cause: error },
-      );
+      throw new DoctorSqliteMaintenanceLockUnavailableError(params.operation, error);
     }
     throw error;
   }
@@ -113,10 +178,18 @@ export async function withDoctorSqliteMaintenanceLock<T>(
     throw new Error(`Cannot run ${params.operation} without exclusive OpenClaw state ownership.`);
   }
 
+  let active = true;
   try {
     assertMaintenancePathsOwnedByStateDir(env, params.operation, params.protectedPaths ?? []);
-    return await params.run();
+    return await params.run({
+      assertCurrent() {
+        if (!active) {
+          throw new Error("Doctor SQLite maintenance authority has expired.");
+        }
+      },
+    });
   } finally {
+    active = false;
     await lock.release();
   }
 }

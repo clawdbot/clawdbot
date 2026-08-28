@@ -13,11 +13,11 @@ import type {
   SpeechProviderPlugin,
 } from "openclaw/plugin-sdk/speech-core";
 import {
-  asObject,
   parseSpeechDirectiveNumberOverride,
+  resolveSpeechProviderApiKey,
   trimToUndefined,
 } from "openclaw/plugin-sdk/speech-core";
-import { asFiniteNumberInRange } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { asFiniteNumberInRange, asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_MINIMAX_TTS_BASE_URL,
   MINIMAX_TTS_MODELS,
@@ -52,20 +52,16 @@ type MinimaxTtsProviderOverrides = {
 };
 
 function resolveConfiguredPortalTtsBaseUrl(cfg: OpenClawConfig | undefined): string | undefined {
-  const providers = asObject(asObject(cfg?.models)?.providers);
-  const portalProvider = asObject(providers?.[MINIMAX_PORTAL_PROVIDER_ID]);
+  const providers = asOptionalRecord(asOptionalRecord(cfg?.models)?.providers);
+  const portalProvider = asOptionalRecord(providers?.[MINIMAX_PORTAL_PROVIDER_ID]);
   const portalBaseUrl = trimToUndefined(portalProvider?.baseUrl);
   return portalBaseUrl ? normalizeMinimaxTtsBaseUrl(portalBaseUrl) : undefined;
 }
 
 function resolveMinimaxTokenPlanEnvKey(): string | undefined {
-  for (const envVar of MINIMAX_TOKEN_PLAN_ENV_VARS) {
-    const value = trimToUndefined(process.env[envVar]);
-    if (value) {
-      return value;
-    }
-  }
-  return undefined;
+  return resolveSpeechProviderApiKey(
+    ...MINIMAX_TOKEN_PLAN_ENV_VARS.map((envVar) => process.env[envVar]),
+  );
 }
 
 async function resolveMinimaxPortalProfileToken(
@@ -81,11 +77,18 @@ async function resolveMinimaxTtsApiKey(params: {
   cfg: OpenClawConfig | undefined;
   configApiKey?: string;
 }): Promise<string | undefined> {
-  return (
-    params.configApiKey ??
-    (await resolveMinimaxPortalProfileToken(params.cfg)) ??
-    resolveMinimaxTokenPlanEnvKey() ??
-    trimToUndefined(process.env.MINIMAX_API_KEY)
+  return resolveSpeechProviderApiKey(
+    params.configApiKey,
+    await resolveMinimaxPortalProfileToken(params.cfg),
+    resolveMinimaxDirectTtsApiKey(),
+  );
+}
+
+function resolveMinimaxDirectTtsApiKey(configApiKey?: string): string | undefined {
+  return resolveSpeechProviderApiKey(
+    configApiKey,
+    resolveMinimaxTokenPlanEnvKey(),
+    process.env.MINIMAX_API_KEY,
   );
 }
 
@@ -93,12 +96,12 @@ function normalizeMinimaxProviderConfig(
   rawConfig: Record<string, unknown>,
   cfg?: OpenClawConfig,
 ): MinimaxTtsProviderConfig {
-  const providers = asObject(rawConfig.providers);
-  const raw = asObject(providers?.minimax) ?? asObject(rawConfig.minimax);
+  const providers = asOptionalRecord(rawConfig.providers);
+  const raw = asOptionalRecord(providers?.minimax) ?? asOptionalRecord(rawConfig.minimax);
   return {
     apiKey: normalizeResolvedSecretInputString({
       value: raw?.apiKey,
-      path: "messages.tts.providers.minimax.apiKey",
+      path: "tts.providers.minimax.apiKey",
     }),
     baseUrl: normalizeMinimaxTtsBaseUrl(
       trimToUndefined(raw?.baseUrl) ??
@@ -279,10 +282,8 @@ export function buildMinimaxSpeechProvider(): SpeechProviderPlugin {
     listVoices: async () => MINIMAX_TTS_VOICES.map((voice) => ({ id: voice, name: voice })),
     isConfigured: ({ cfg, providerConfig }) =>
       Boolean(
-        readMinimaxProviderConfig(providerConfig, cfg).apiKey ||
-        isProviderAuthProfileConfigured({ cfg, provider: MINIMAX_PORTAL_PROVIDER_ID }) ||
-        resolveMinimaxTokenPlanEnvKey() ||
-        process.env.MINIMAX_API_KEY,
+        resolveMinimaxDirectTtsApiKey(readMinimaxProviderConfig(providerConfig, cfg).apiKey) ||
+        isProviderAuthProfileConfigured({ cfg, provider: MINIMAX_PORTAL_PROVIDER_ID }),
       ),
     synthesize: async (req) => {
       const config = readMinimaxProviderConfig(req.providerConfig, req.cfg);

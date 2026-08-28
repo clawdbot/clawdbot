@@ -9,20 +9,12 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import type { CodexAppServerStartOptions, CodexManagedCommandOrder } from "./config.js";
+import { resolveMacOSDesktopCodexAppServerCommandCandidates } from "./desktop-app-paths.js";
 import { MANAGED_CODEX_APP_SERVER_PACKAGE } from "./version.js";
 
 const CODEX_APP_SERVER_MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 const CODEX_PLUGIN_ROOT = resolveDefaultCodexPluginRoot(CODEX_APP_SERVER_MODULE_DIR);
-// ChatGPT.app is the current desktop owner; keep Codex.app as the legacy fallback.
-const MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS = [
-  "/Applications/ChatGPT.app/Contents/Resources/codex",
-  "/Applications/Codex.app/Contents/Resources/codex",
-] as const;
-
-type ManagedCodexAppServerPaths = {
-  commandPath: string;
-  candidateCommandPaths: string[];
-};
+let registeredCodexPluginRoot: string | undefined;
 
 type ResolveManagedCodexAppServerOptions = {
   platform?: NodeJS.Platform;
@@ -37,6 +29,11 @@ type ResolveManagedCodexNativeCommandOptions = {
   resolvePackageJson?: (packageName: string, root: string) => string | undefined;
 };
 
+/** Records the process-stable plugin root prepared by OpenClaw's plugin loader. */
+export function setManagedCodexPluginRoot(pluginRoot: string | undefined): void {
+  registeredCodexPluginRoot = pluginRoot;
+}
+
 /** Rewrites managed stdio start options to point at an executable Codex binary path. */
 export async function resolveManagedCodexAppServerStartOptions(
   startOptions: CodexAppServerStartOptions,
@@ -47,14 +44,14 @@ export async function resolveManagedCodexAppServerStartOptions(
   }
 
   const platform = options.platform ?? process.platform;
-  const paths = resolveManagedCodexAppServerPaths({
+  const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
+    options.pluginRoot ?? registeredCodexPluginRoot ?? CODEX_PLUGIN_ROOT,
     platform,
-    pluginRoot: options.pluginRoot,
-    managedCommandOrder: startOptions.managedCommandOrder,
-  });
+    startOptions.managedCommandOrder ?? "package-first",
+  );
   const pathExists = options.pathExists ?? commandPathExists;
   const commandPaths = await findManagedCodexAppServerCommandPaths({
-    candidateCommandPaths: paths.candidateCommandPaths,
+    candidateCommandPaths,
     pathExists,
     platform,
   });
@@ -75,10 +72,7 @@ export function resolveManagedCodexNativeCommand(
   options: ResolveManagedCodexNativeCommandOptions = {},
 ): string | undefined {
   const platform = options.platform ?? process.platform;
-  if (
-    platform === "darwin" &&
-    MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS.some((candidate) => candidate === command)
-  ) {
+  if (isManagedCodexDesktopCommand(command, platform)) {
     return command;
   }
   const target = resolveCodexNativeTarget(platform, options.arch ?? process.arch);
@@ -108,6 +102,19 @@ export function resolveManagedCodexNativeCommand(
     }
   }
   return undefined;
+}
+
+/** Returns whether a command is one of the standard macOS desktop app executables. */
+export function isManagedCodexDesktopCommand(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
+  return (
+    platform === "darwin" &&
+    resolveMacOSDesktopCodexAppServerCommandCandidates(platform).some(
+      (candidate) => candidate === command,
+    )
+  );
 }
 
 function resolveManagedCodexPackageRootForCommand(
@@ -178,24 +185,6 @@ function resolvePackageJsonFromRoot(packageName: string, root: string): string |
   }
 }
 
-/** Returns the preferred and fallback managed Codex binary paths for a plugin root. */
-function resolveManagedCodexAppServerPaths(params: {
-  platform?: NodeJS.Platform;
-  pluginRoot?: string;
-  managedCommandOrder?: CodexManagedCommandOrder;
-}): ManagedCodexAppServerPaths {
-  const platform = params.platform ?? process.platform;
-  const candidateCommandPaths = resolveManagedCodexAppServerCommandCandidates(
-    params.pluginRoot ?? CODEX_PLUGIN_ROOT,
-    platform,
-    params.managedCommandOrder ?? "package-first",
-  );
-  return {
-    commandPath: candidateCommandPaths[0] ?? "",
-    candidateCommandPaths,
-  };
-}
-
 function resolveManagedCodexAppServerCommandCandidates(
   pluginRoot: string,
   platform: NodeJS.Platform,
@@ -219,7 +208,7 @@ function resolveManagedCodexAppServerCommandCandidates(
 }
 
 function resolveDesktopCodexAppServerCommandCandidates(platform: NodeJS.Platform): string[] {
-  return platform === "darwin" ? [...MACOS_DESKTOP_CODEX_APP_SERVER_COMMANDS] : [];
+  return resolveMacOSDesktopCodexAppServerCommandCandidates(platform);
 }
 
 function resolveDefaultCodexPluginRoot(moduleDir: string): string {
@@ -299,20 +288,20 @@ function resolveManagedCodexPackageBinCandidate(root: string): string | null {
     const packageJson = JSON.parse(readFileSync(packageJsonPath, "utf8")) as {
       bin?: unknown;
     };
+    const packageBin =
+      packageJson.bin && typeof packageJson.bin === "object"
+        ? (packageJson.bin as Record<string, unknown>)
+        : undefined;
     const binPath =
       typeof packageJson.bin === "string"
         ? packageJson.bin
-        : isRecord(packageJson.bin) && typeof packageJson.bin.codex === "string"
-          ? packageJson.bin.codex
+        : typeof packageBin?.codex === "string"
+          ? packageBin.codex
           : null;
     return binPath ? path.resolve(packageRoot, binPath) : null;
   } catch {
     return null;
   }
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null;
 }
 
 function isDistExtensionRoot(pluginRoot: string, platform: NodeJS.Platform): boolean {

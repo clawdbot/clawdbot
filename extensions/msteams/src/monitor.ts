@@ -6,6 +6,7 @@ import {
   isDangerousNameMatchingEnabled,
   keepHttpServerTaskAlive,
   mergeAllowlist,
+  resolveChannelMediaMaxBytes,
   summarizeMapping,
   type OpenClawConfig,
   type RuntimeEnv,
@@ -25,11 +26,23 @@ import {
 } from "./monitor-handler.js";
 import type { MSTeamsMessageHandlerDeps } from "./monitor-handler.types.js";
 import {
+  publishMSTeamsBlocked,
+  publishMSTeamsReady,
+  publishMSTeamsRecovering,
+  publishMSTeamsStopped,
+  type MSTeamsStatusSink,
+} from "./monitor-status.js";
+import { createMSTeamsIngress } from "./msteams-ingress.js";
+import {
   createMSTeamsPollStoreState,
   extractMSTeamsPollVote,
   type MSTeamsPollStore,
 } from "./polls.js";
+import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
+import { createMSTeamsReplayContext } from "./replay-context.js";
 import {
+  looksLikeMSTeamsConversationId,
+  projectStableMSTeamsGroupAllowlist,
   projectStableMSTeamsUserAllowlist,
   projectStableMSTeamsTeamsConfig,
   resolveMSTeamsTeamsConfig,
@@ -54,6 +67,7 @@ type MonitorMSTeamsOpts = {
   abortSignal?: AbortSignal;
   conversationStore?: MSTeamsConversationStore;
   pollStore?: MSTeamsPollStore;
+  statusSink?: MSTeamsStatusSink;
 };
 
 type MonitorMSTeamsResult = {
@@ -70,12 +84,14 @@ export async function monitorMSTeamsProvider(
   let msteamsCfg = cfg.channels?.msteams;
   if (!msteamsCfg?.enabled) {
     log.debug?.("msteams provider disabled");
+    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams provider is disabled");
     return { app: null, shutdown: async () => {} };
   }
 
   const creds = resolveMSTeamsCredentials(msteamsCfg);
   if (!creds) {
     log.error("msteams credentials not configured");
+    publishMSTeamsBlocked(opts.statusSink, "Microsoft Teams credentials are not configured");
     return { app: null, shutdown: async () => {} };
   }
   const appId = creds.appId; // Extract for use in closures
@@ -91,7 +107,9 @@ export async function monitorMSTeamsProvider(
   const configuredAllowFrom = msteamsCfg.allowFrom;
   const configuredGroupAllowFrom = msteamsCfg.groupAllowFrom;
   let allowFrom = projectStableMSTeamsUserAllowlist(configuredAllowFrom);
-  let groupAllowFrom = projectStableMSTeamsUserAllowlist(configuredGroupAllowFrom);
+  let groupAllowFrom = projectStableMSTeamsGroupAllowlist(
+    configuredGroupAllowFrom ?? configuredAllowFrom,
+  );
   let teamsConfig = projectStableMSTeamsTeamsConfig(msteamsCfg.teams);
   const allowNameMatching = isDangerousNameMatchingEnabled(msteamsCfg);
 
@@ -104,7 +122,9 @@ export async function monitorMSTeamsProvider(
   const cleanAllowEntries = (entries?: string[]) =>
     entries?.map((entry) => cleanAllowEntry(entry)).filter((entry) => entry && entry !== "*") ?? [];
   const isMutableUserEntry = (entry: string) =>
-    !isStableUserId(entry) && !/^accessGroup:/i.test(entry);
+    !isStableUserId(entry) &&
+    !/^accessGroup:/i.test(entry) &&
+    !looksLikeMSTeamsConversationId(normalizeMSTeamsConversationId(entry));
 
   const resolveAllowlistUsers = async (label: string, entries: string[]) => {
     if (entries.length === 0) {
@@ -161,6 +181,11 @@ export async function monitorMSTeamsProvider(
     );
   }
 
+  if (configuredGroupAllowFrom == null && groupAllowFrom) {
+    // Group fallback must include users resolved from the DM list without admitting DM chats.
+    groupAllowFrom = mergeAllowlist({ existing: groupAllowFrom, additions: allowFrom ?? [] });
+  }
+
   msteamsCfg = {
     ...msteamsCfg,
     allowFrom,
@@ -177,12 +202,11 @@ export async function monitorMSTeamsProvider(
 
   const port = msteamsCfg.webhook?.port ?? 3978;
   const textLimit = core.channel.text.resolveTextChunkLimit(cfg, "msteams");
-  const MB = 1024 * 1024;
-  const agentDefaults = cfg.agents?.defaults;
   const mediaMaxBytes =
-    typeof agentDefaults?.mediaMaxMb === "number" && agentDefaults.mediaMaxMb > 0
-      ? Math.floor(agentDefaults.mediaMaxMb * MB)
-      : 8 * MB;
+    resolveChannelMediaMaxBytes({
+      cfg,
+      resolveChannelLimitMb: ({ cfg: channelCfg }) => channelCfg.channels?.msteams?.mediaMaxMb,
+    }) ?? 8 * 1024 * 1024;
   const conversationStore = opts.conversationStore ?? createMSTeamsConversationStoreState();
   const pollStore = opts.pollStore ?? createMSTeamsPollStoreState();
 
@@ -292,6 +316,23 @@ export async function monitorMSTeamsProvider(
   };
   registerMSTeamsHandlers(handler, handlerDeps);
 
+  const ingress = createMSTeamsIngress({
+    accountId: appId,
+    runtime,
+    dispatch: async (activity, lifecycle, liveContext) => {
+      // The journaled activity is the dispatch payload; the live context only
+      // supplies the transport surface. A duplicate delivery's context must
+      // not swap in its own (possibly mutated) activity object.
+      if (liveContext) {
+        liveContext.activity = activity;
+      }
+      const context =
+        liveContext ??
+        createMSTeamsReplayContext(activity, app, resolveMSTeamsSdkCloudOptions(msteamsCfg));
+      return await handler.run!(context, lifecycle);
+    },
+  });
+
   // Handle adaptiveCard/action invokes (Action.Execute Universal Action Model).
   // We must return an InvokeResponse-shaped value so Teams updates the card UI;
   // returning nothing or letting the catch-all process it makes Teams report
@@ -375,11 +416,9 @@ export async function monitorMSTeamsProvider(
           };
         }
       }
-      // Non-poll card actions may dispatch into the agent. Acknowledge the
-      // invoke immediately so Teams does not time out while that work runs.
-      void handler.run!(adaptedCtx).catch((err: unknown) => {
-        log.error("msteams card.action dispatch failed", { error: formatUnknownError(err) });
-      });
+      // The SDK has already authenticated this invoke. Acknowledge only after
+      // the raw activity is durable; agent work drains independently.
+      await ingress.accept(activity, adaptedCtx);
       return {
         statusCode: 200,
         type: "application/vnd.microsoft.activity.message",
@@ -512,48 +551,63 @@ export async function monitorMSTeamsProvider(
   // handler dispatch system. The SDK has already validated JWT and parsed the
   // activity by this point.
   app.on("activity", async (ctx) => {
-    try {
-      const adaptedCtx = adaptSdkContext(ctx, app);
-      const activity = adaptedCtx.activity;
-      // Skip invokes that have dedicated typed routes above.
-      if (activity?.type === "invoke") {
-        if (activity?.name === "adaptiveCard/action") {
-          return;
-        }
-        if (activity?.name === "fileConsent/invoke") {
-          return;
-        }
-        if (activity?.name === "signin/tokenExchange" || activity?.name === "signin/verifyState") {
-          return;
-        }
+    const adaptedCtx = adaptSdkContext(ctx, app);
+    const activity = adaptedCtx.activity;
+    // Skip invokes that have dedicated typed routes above.
+    if (activity?.type === "invoke") {
+      if (activity?.name === "adaptiveCard/action") {
+        return;
       }
+      if (activity?.name === "fileConsent/invoke") {
+        return;
+      }
+      if (activity?.name === "signin/tokenExchange" || activity?.name === "signin/verifyState") {
+        return;
+      }
+    }
+    if (activity?.type === "message") {
+      // Throwing rejects the SDK route, so a failed SQLite append is never acked.
+      await ingress.accept(activity, adaptedCtx);
+      return;
+    }
+    try {
       await handler.run!(adaptedCtx);
     } catch (err) {
-      log.error("msteams webhook failed", { error: formatUnknownError(err) });
+      log.error("msteams non-turn activity failed", { error: formatUnknownError(err) });
     }
   });
 
   // Initialize the SDK App — registers the POST route on Express and sets up
   // JWT validation middleware internally.
   await app.initialize();
+  ingress.start();
 
   // Start listening and fail fast if bind/listen fails.
+  // skipAuth is private-QA-only and must never expose an unauthenticated
+  // webhook beyond loopback. Production keeps Express' existing bind behavior.
+  const privateQaRuntime = resolveMSTeamsPrivateQaRuntime();
   const httpServer = await new Promise<Server>((resolve, reject) => {
-    const server = expressApp.listen(port, (err) => (err ? reject(err) : resolve(server)));
-  }).catch((err: unknown) => {
+    const onListen = (err?: Error) => (err ? reject(err) : resolve(server));
+    const server = privateQaRuntime
+      ? expressApp.listen(port, privateQaRuntime.listenHost, onListen)
+      : expressApp.listen(port, onListen);
+  }).catch(async (err: unknown) => {
     log.error("msteams server error", { error: formatUnknownError(err) });
+    await ingress.stop();
     throw err;
   });
   log.info(`msteams provider started on port ${port}`);
+  publishMSTeamsReady(opts.statusSink);
   applyMSTeamsWebhookTimeouts(httpServer);
 
   httpServer.on("error", (err) => {
     log.error("msteams server error", { error: formatUnknownError(err) });
+    publishMSTeamsRecovering(opts.statusSink, formatUnknownError(err));
   });
 
   const shutdown = async () => {
     log.info("shutting down msteams provider");
-    return new Promise<void>((resolve) => {
+    await new Promise<void>((resolve) => {
       httpServer.close((err) => {
         if (err) {
           log.debug?.("msteams server close error", { error: formatUnknownError(err) });
@@ -561,6 +615,8 @@ export async function monitorMSTeamsProvider(
         resolve();
       });
     });
+    await ingress.stop();
+    publishMSTeamsStopped(opts.statusSink);
   };
 
   // Keep this task alive until close so gateway runtime does not treat startup as exit.
@@ -579,7 +635,8 @@ export async function monitorMSTeamsProvider(
  */
 function buildActivityHandler(): MSTeamsActivityHandler {
   type Handler = (context: unknown, next: () => Promise<void>) => Promise<void>;
-  const messageHandlers: Handler[] = [];
+  type MessageHandler = Parameters<MSTeamsActivityHandler["onMessage"]>[0];
+  const messageHandlers: MessageHandler[] = [];
   const membersAddedHandlers: Handler[] = [];
   const reactionsAddedHandlers: Handler[] = [];
   const reactionsRemovedHandlers: Handler[] = [];
@@ -601,14 +658,17 @@ function buildActivityHandler(): MSTeamsActivityHandler {
       reactionsRemovedHandlers.push(cb);
       return handler;
     },
-    async run(context: unknown) {
+    async run(context, turnAdoptionLifecycle) {
       const ctx = context as { activity?: { type?: string } };
       const activityType = ctx?.activity?.type;
       const noop = async () => {};
 
       if (activityType === "message") {
         for (const h of messageHandlers) {
-          await h(context, noop);
+          const result = await h(context, noop, turnAdoptionLifecycle);
+          if (result) {
+            return result;
+          }
         }
       } else if (activityType === "conversationUpdate") {
         for (const h of membersAddedHandlers) {
@@ -629,6 +689,7 @@ function buildActivityHandler(): MSTeamsActivityHandler {
           }
         }
       }
+      return undefined;
     },
   };
 

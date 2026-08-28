@@ -1,31 +1,83 @@
-import { html, nothing } from "lit";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type {
   SessionCatalog,
   SessionCatalogHost,
   SessionCatalogSession,
 } from "../../../packages/gateway-protocol/src/index.ts";
-import type { GatewaySessionRow } from "../api/types.ts";
-import type { NavigationRouteId } from "../app-navigation.ts";
-import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
+import { repoName } from "../lib/session-display.ts";
 import type {
   CatalogSessionContinuedDetail,
   CatalogSessionKey,
 } from "../lib/sessions/catalog-key.ts";
 import { buildCatalogSessionKey } from "../lib/sessions/catalog-key.ts";
-import { searchForSession } from "../lib/sessions/index.ts";
-import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import { shouldHandleNavigationClick } from "./app-sidebar-nav-menus.ts";
-import { icons } from "./icons.ts";
+import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts";
 
 export function formatSidebarTimestamp(timestampMs: number | null | undefined): string {
-  const value = formatRelativeTimestamp(timestampMs, { fallback: "" });
-  if (value === "just now") {
-    return "now";
+  const now = Date.now();
+  if (
+    timestampMs != null &&
+    Number.isFinite(timestampMs) &&
+    timestampMs <= now &&
+    now - timestampMs < 60_000
+  ) {
+    return t("common.now");
   }
-  return value.endsWith(" ago") ? value.slice(0, -" ago".length) : value;
+  return formatRelativeTimestamp(timestampMs, {
+    fallback: "",
+    suffix: timestampMs != null && timestampMs > now,
+  });
+}
+
+export function normalizeCatalogTimestamp(timestamp: number | undefined): number | undefined {
+  return timestamp !== undefined && timestamp < 1_000_000_000_000 ? timestamp * 1000 : timestamp;
+}
+
+export function findCatalogSessionHovercardRow(params: {
+  catalogs: readonly SessionCatalog[];
+  sessionKey: string;
+  liveRow?: SidebarSessionHovercardRow;
+}): SidebarSessionHovercardRow | undefined {
+  for (const catalog of params.catalogs) {
+    for (const host of catalog.hosts) {
+      for (const session of host.sessions) {
+        const key =
+          session.sessionKey ??
+          buildCatalogSessionKey({
+            catalogId: catalog.id,
+            hostId: host.hostId,
+            threadId: session.threadId,
+          });
+        if (key !== params.sessionKey) {
+          continue;
+        }
+        const cwd = normalizeOptionalString(session.cwd);
+        const branch = normalizeOptionalString(session.gitBranch);
+        // A catalog cwd is authoritative workspace context, but it does not by
+        // itself prove repository identity; only projected Git facts do that.
+        return {
+          ...params.liveRow,
+          label: session.name || session.threadId,
+          createdActor: params.liveRow?.createdActor ?? session.createdActor,
+          createdAt: params.liveRow?.createdAt ?? normalizeCatalogTimestamp(session.createdAt),
+          updatedAt: params.liveRow?.updatedAt ?? normalizeCatalogTimestamp(session.updatedAt),
+          workContext: cwd
+            ? branch || session.pullRequest
+              ? {
+                  kind: "project",
+                  name: repoName(cwd),
+                  path: cwd,
+                  ...(branch ? { branch } : {}),
+                }
+              : { kind: "workspace", name: repoName(cwd), path: cwd }
+            : params.liveRow?.workContext,
+        };
+      }
+    }
+  }
+  return params.liveRow;
 }
 
 /** Session keys already adopted into OpenClaw sessions; the regular list hides
@@ -35,8 +87,8 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
   for (const catalog of catalogs) {
     for (const host of catalog.hosts) {
       for (const session of host.sessions) {
-        if (session.openClawSessionKey) {
-          keys.add(session.openClawSessionKey);
+        if (session.sessionKey) {
+          keys.add(session.sessionKey);
         }
       }
     }
@@ -44,17 +96,58 @@ export function adoptedCatalogSessionKeys(catalogs: readonly SessionCatalog[]): 
   return keys;
 }
 
+/** Catalogs the sidebar actually renders. Adopted-key exclusion must read this
+    same projection: excluding a key whose catalog is hidden (or whose section
+    the archived filter suppresses) deletes the session from the entire sidebar
+    with no row anywhere. */
+export function visibleSessionCatalogProjection(
+  catalogs: readonly SessionCatalog[],
+  hiddenCatalogIds: ReadonlySet<string>,
+  archivedFilter: boolean,
+): SessionCatalog[] {
+  return archivedFilter ? [] : catalogs.filter((catalog) => !hiddenCatalogIds.has(catalog.id));
+}
+
+export function visibleCatalogHosts(
+  hosts: readonly SessionCatalogHost[],
+  ownerId?: string | null,
+  liveOwnerIdBySessionKey: ReadonlyMap<string, string | undefined> = new Map(),
+): SessionCatalogHost[] {
+  const visible: SessionCatalogHost[] = [];
+  for (const host of hosts) {
+    const sessions = host.sessions.filter((session) => {
+      if (!ownerId) {
+        return true;
+      }
+      const sessionKey = session.sessionKey;
+      const adopted = Boolean(sessionKey && liveOwnerIdBySessionKey.has(sessionKey));
+      const effectiveOwnerId =
+        adopted && sessionKey ? liveOwnerIdBySessionKey.get(sessionKey) : session.createdActor?.id;
+      return effectiveOwnerId === ownerId;
+    });
+    if (sessions.length > 0) {
+      visible.push(sessions.length === host.sessions.length ? host : { ...host, sessions });
+    }
+  }
+  return visible;
+}
+
 export type CatalogBackingSessionDisplay = {
   label: string;
+  catalogIdentityKey: string;
+  catalogMenuOpen: boolean;
+  rowRef?: (element: Element | undefined) => void;
   subtitle?: string;
-  meta: string;
-  title: string;
+  pullRequest?: SessionCatalogSession["pullRequest"];
 };
 
 export type CatalogSessionMenuRequest = {
   key: CatalogSessionKey;
-  search: string;
+  agentId: string;
+  routeId: "chat" | "new-session";
+  navigation: ApplicationNavigationOptions;
   canOpenTerminal: boolean;
+  meta: string;
 };
 
 /** Stamps a freshly adopted session key onto its catalog row so the sidebar
@@ -73,7 +166,7 @@ export function bindAdoptedCatalogSession(
                   ...host,
                   sessions: host.sessions.map((session) =>
                     session.threadId === detail.threadId
-                      ? { ...session, openClawSessionKey: detail.sessionKey }
+                      ? { ...session, sessionKey: detail.sessionKey }
                       : session,
                   ),
                 }
@@ -82,283 +175,4 @@ export function bindAdoptedCatalogSession(
         }
       : catalog,
   );
-}
-
-type SessionCatalogGroupsParams = {
-  catalogs: readonly SessionCatalog[];
-  connected: boolean;
-  basePath: string;
-  routeSessionKey: string;
-  newSessionAgentId: string;
-  collapsedSections: ReadonlySet<string>;
-  loadingMoreCatalogIds: ReadonlySet<string>;
-  liveRows: readonly GatewaySessionRow[];
-  renderLiveRow: (row: GatewaySessionRow, display: CatalogBackingSessionDisplay) => unknown;
-  onToggleSection: (sectionId: string) => void;
-  onLoadMore: (catalogId: string) => void;
-  onOpenNewSession?: (agentId: string, target?: NewSessionTarget) => void;
-  onNavigate?: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
-  catalogOpenTarget: "viewer" | "terminal";
-  terminalAvailable: boolean;
-  onOpenTerminal: (key: CatalogSessionKey) => void;
-  onOpenMenu: (
-    request: CatalogSessionMenuRequest,
-    x: number,
-    y: number,
-    trigger?: HTMLElement,
-  ) => void;
-};
-
-function renderCatalogHeaderStatus(hasActiveRun: boolean, hasUnread: boolean) {
-  if (hasActiveRun) {
-    return html`<span
-      class="session-run-spinner"
-      role="img"
-      aria-label=${t("sessionsView.activeRun")}
-      title=${t("sessionsView.activeRun")}
-    ></span>`;
-  }
-  return hasUnread
-    ? html`<span
-        class="session-unread-dot"
-        role="img"
-        aria-label=${t("sessionsView.unread")}
-      ></span>`
-    : nothing;
-}
-
-export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
-  // Adopted rows reuse the live session row so activity, unread state, and
-  // the session menu behave exactly like the regular list.
-  const liveRowsByKey = new Map<string, GatewaySessionRow>();
-  for (const row of params.liveRows) {
-    if (!liveRowsByKey.has(row.key)) {
-      liveRowsByKey.set(row.key, row);
-    }
-  }
-  return params.catalogs.map((catalog) => {
-    const sectionId = `catalog:${catalog.id}`;
-    const collapsed = params.collapsedSections.has(sectionId);
-    const hosts = catalog.hosts;
-    const rows = hosts.flatMap((host) => host.sessions.map((session) => ({ host, session })));
-    const liveRows = rows.flatMap(({ session }) => {
-      const row = session.openClawSessionKey
-        ? liveRowsByKey.get(session.openClawSessionKey)
-        : undefined;
-      return row ? [row] : [];
-    });
-    const hasActiveRun = liveRows.some((row) => row.hasActiveRun === true);
-    const hasUnread = liveRows.some((row) => row.unread === true);
-    const loadingMore = params.loadingMoreCatalogIds.has(catalog.id);
-    const hasMore = hosts.some((host) => Boolean(host.nextCursor));
-    const canCreateSession = catalog.capabilities.createSession !== undefined;
-    const errorMessages = [
-      ...(catalog.error ? [`[${catalog.error.code}] ${catalog.error.message}`] : []),
-      ...hosts.flatMap((host) =>
-        host.error ? [`[${host.error.code}] ${host.error.message}`] : [],
-      ),
-    ];
-    const hasError = errorMessages.length > 0;
-    // Keep provider failures distinguishable from successful empty results.
-    // Hiding both states would silently mask unavailable session sources.
-    if (rows.length === 0 && !hasMore && !hasError && !catalog.capabilities.createSession) {
-      return nothing;
-    }
-    const errorMessage = errorMessages.join("; ");
-    const errorHelp = `${errorMessage}. Configure native session discovery in Settings > Automation > Plugins.`;
-    return html`
-      <div class="sidebar-recent-sessions__group" data-session-section=${sectionId}>
-        <div class="sidebar-recent-sessions__head">
-          <button
-            type="button"
-            class="sidebar-session-group-toggle"
-            aria-expanded=${String(!collapsed)}
-            aria-label=${hasError ? `${catalog.label}: ${errorHelp}` : catalog.label}
-            title=${hasError ? errorHelp : nothing}
-            @click=${() => params.onToggleSection(sectionId)}
-          >
-            <span class="sidebar-session-group-toggle__icon" aria-hidden="true"
-              >${collapsed ? icons.chevronRight : icons.chevronDown}</span
-            >
-            <span class="sidebar-recent-sessions__label-text">${catalog.label}</span>
-            ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
-            <span
-              class="sidebar-session-group-count ${hasError
-                ? "sidebar-session-group-count--error"
-                : ""}"
-              data-session-catalog-error=${hasError ? catalog.id : nothing}
-              aria-hidden="true"
-              >${hasError ? icons.alertTriangle : rows.length}</span
-            >
-          </button>
-          ${canCreateSession
-            ? html`<button
-                type="button"
-                class="sidebar-session-sort sidebar-session-new sidebar-session-catalog-new"
-                title=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                ?disabled=${!params.connected}
-                @click=${() =>
-                  params.onOpenNewSession?.(params.newSessionAgentId, {
-                    catalogId: catalog.id,
-                  })}
-              >
-                ${icons.plus}
-              </button>`
-            : nothing}
-        </div>
-        ${collapsed
-          ? nothing
-          : html`<div class="sidebar-recent-sessions__list">
-                ${hosts.map((host) => renderCatalogHostGroup(catalog, host, liveRowsByKey, params))}
-              </div>
-              ${hasMore
-                ? html`<button
-                    type="button"
-                    class="sidebar-session-catalog-load-more"
-                    data-session-catalog-load-more=${catalog.id}
-                    ?disabled=${loadingMore}
-                    aria-busy=${String(loadingMore)}
-                    @click=${() => params.onLoadMore(catalog.id)}
-                  >
-                    ${t("chat.selectors.loadMoreSessions")}
-                  </button>`
-                : nothing}`}
-      </div>
-    `;
-  });
-}
-
-function renderCatalogHostGroup(
-  catalog: SessionCatalog,
-  host: SessionCatalogHost,
-  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
-  params: SessionCatalogGroupsParams,
-) {
-  if (host.sessions.length === 0 && !host.nextCursor && !host.error) {
-    return nothing;
-  }
-  const errorHelp = host.error ? `[${host.error.code}] ${host.error.message}` : undefined;
-  return html`
-    <section class="sidebar-session-catalog-host" data-session-catalog-host=${host.hostId}>
-      <div
-        class="sidebar-session-catalog-host__head"
-        aria-label=${errorHelp ? `${host.label}: ${errorHelp}` : host.label}
-        title=${errorHelp ?? host.label}
-      >
-        <span class="sidebar-session-catalog-host__label">${host.label}</span>
-        <span
-          class="sidebar-session-catalog-host__count ${host.error
-            ? "sidebar-session-catalog-host__count--error"
-            : ""}"
-          aria-hidden="true"
-          >${host.error ? icons.alertTriangle : host.sessions.length}</span
-        >
-      </div>
-      <div class="sidebar-session-catalog-host__sessions">
-        ${host.sessions.map((session) =>
-          renderCatalogSessionRow(catalog, host, session, liveRowsByKey, params),
-        )}
-      </div>
-    </section>
-  `;
-}
-
-function renderCatalogSessionRow(
-  catalog: SessionCatalog,
-  host: SessionCatalogHost,
-  session: SessionCatalogSession,
-  liveRowsByKey: ReadonlyMap<string, GatewaySessionRow>,
-  params: SessionCatalogGroupsParams,
-) {
-  const rawTimestamp = session.recencyAt ?? session.updatedAt ?? session.createdAt;
-  const timestamp =
-    typeof rawTimestamp === "number" && rawTimestamp < 1_000_000_000_000
-      ? rawTimestamp * 1000
-      : rawTimestamp;
-  const adoptedRow = session.openClawSessionKey
-    ? liveRowsByKey.get(session.openClawSessionKey)
-    : undefined;
-  if (adoptedRow) {
-    const label = session.name || session.threadId;
-    return params.renderLiveRow(adoptedRow, {
-      label,
-      meta: formatSidebarTimestamp(timestamp),
-      title: `${label} · ${host.label}`,
-    });
-  }
-  const catalogKey = {
-    catalogId: catalog.id,
-    hostId: host.hostId,
-    threadId: session.threadId,
-  } satisfies CatalogSessionKey;
-  const key = session.openClawSessionKey ?? buildCatalogSessionKey(catalogKey);
-  const search = searchForSession(key);
-  const href = `${pathForRoute("chat", params.basePath)}${search}`;
-  const active = params.routeSessionKey !== "" && key === params.routeSessionKey;
-  const canOpenTerminal = session.canOpenTerminal === true && params.terminalAvailable;
-  const openTerminal = () => params.onOpenTerminal(catalogKey);
-  const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
-    params.onOpenMenu(
-      { key: catalogKey, search, canOpenTerminal: session.canOpenTerminal === true },
-      x,
-      y,
-      trigger,
-    );
-  return html`
-    <div
-      class="sidebar-recent-session session-row-host ${active
-        ? "sidebar-recent-session--active"
-        : ""}"
-      data-session-key=${key}
-      @contextmenu=${(event: MouseEvent) => {
-        event.preventDefault();
-        openMenu(event.clientX, event.clientY);
-      }}
-    >
-      <a
-        href=${href}
-        class="sidebar-recent-session__link"
-        title=${`${session.name || session.threadId} · ${host.label}`}
-        @click=${(event: MouseEvent) => {
-          if (!shouldHandleNavigationClick(event)) {
-            return;
-          }
-          event.preventDefault();
-          if (params.catalogOpenTarget === "terminal" && canOpenTerminal) {
-            openTerminal();
-          } else {
-            params.onNavigate?.("chat", { search });
-          }
-        }}
-      >
-        <span class="sidebar-recent-session__text">
-          <span class="sidebar-recent-session__name hover-marquee"
-            >${session.name || session.threadId}</span
-          >
-        </span>
-      </a>
-      <span class="sidebar-recent-session__aside session-row-aside">
-        <span class="session-row-trail">${formatSidebarTimestamp(timestamp)}</span>
-        <span class="session-row-actions">
-          <button
-            class="session-action"
-            data-catalog-session-menu="true"
-            type="button"
-            title=${t("chat.sidebar.openSessionMenu")}
-            aria-label=${t("chat.sidebar.openSessionMenu")}
-            aria-haspopup="menu"
-            @click=${(event: MouseEvent) => {
-              event.stopPropagation();
-              const trigger = event.currentTarget as HTMLElement;
-              const rect = trigger.getBoundingClientRect();
-              openMenu(rect.right, rect.bottom + 4, trigger);
-            }}
-          >
-            ${icons.moreHorizontal}
-          </button>
-        </span>
-      </span>
-    </div>
-  `;
 }

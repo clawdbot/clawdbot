@@ -36,6 +36,7 @@ import { verifyGoogleChatRequest } from "./auth.js";
 
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -177,21 +178,29 @@ async function verifyOutcomeWithin(
   | { status: "rejected"; error: unknown }
   | { status: "pending" }
 > {
-  return await Promise.race([
-    promise.then(
-      (value) => ({ status: "resolved" as const, value }),
-      (error: unknown) => ({ status: "rejected" as const, error }),
-    ),
-    new Promise<{ status: "pending" }>((resolve) => {
-      setTimeout(() => resolve({ status: "pending" as const }), timeoutMs);
-    }),
-  ]);
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    return await Promise.race([
+      promise.then(
+        (value) => ({ status: "resolved" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      ),
+      new Promise<{ status: "pending" }>((resolve) => {
+        timeout = setTimeout(() => resolve({ status: "pending" as const }), timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeout !== undefined) {
+      clearTimeout(timeout);
+    }
+  }
 }
 
 describe("googlechat cert-fetch — real guard proof", () => {
   it("times out a stalled cert fetch through the real production guard", async () => {
     const realFetch = globalThis.fetch;
     const server = await startHangingLoopbackServer();
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
     const certFetchTimeout = captureCertFetchTimeout();
     let pendingVerify: Promise<{ ok: boolean; reason?: string }> | undefined;
 
@@ -219,10 +228,19 @@ describe("googlechat cert-fetch — real guard proof", () => {
       expect(certFetchTimeout.scheduled()).toBe(true);
       expect(fetchMock.mock.calls[0]?.[1]?.signal).toBeInstanceOf(AbortSignal);
 
-      // Mutation control: without firing the deadline the verification stays
-      // pending, proving the rejection below comes from the real timeout.
-      const beforeFire = await verifyOutcomeWithin(pendingVerify, 500);
-      expect(beforeFire.status).toBe("pending");
+      // Mutation control: advance the original 500ms pending window without
+      // sleeping, then prove only the production deadline can settle it.
+      let verifySettled = false;
+      void pendingVerify.then(
+        () => {
+          verifySettled = true;
+        },
+        () => {
+          verifySettled = true;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(500);
+      expect(verifySettled).toBe(false);
 
       // Fire the captured production deadline; the composed signal aborts the
       // in-flight loopback request and verifyGoogleChatRequest returns ok:false.

@@ -1,30 +1,41 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { RuntimeEnv } from "../../runtime.js";
+import type { OutputRuntimeEnv } from "../../runtime.js";
 
 const mocks = vi.hoisted(() => ({
   fetchClawHubPromotions: vi.fn(),
 }));
 
-vi.mock("../../infra/clawhub.js", async () => {
-  const actual =
-    await vi.importActual<typeof import("../../infra/clawhub.js")>("../../infra/clawhub.js");
+vi.mock("../../infra/clawhub-promotions.js", async () => {
+  const actual = await vi.importActual<typeof import("../../infra/clawhub-promotions.js")>(
+    "../../infra/clawhub-promotions.js",
+  );
   return {
     ...actual,
     fetchClawHubPromotions: mocks.fetchClawHubPromotions,
   };
 });
 
-const { ClawHubRequestError } = await import("../../infra/clawhub.js");
+const { ClawHubRequestError } = await import("../../infra/clawhub-client.js");
 const { promosListCommand } = await import("./list.js");
 
 function makeRuntime() {
   const lines: string[] = [];
-  const runtime = {
-    log: vi.fn((line: string) => lines.push(line)),
+  const stdout: string[] = [];
+  const writeStdout = vi.fn((value: string): void => {
+    stdout.push(value);
+  });
+  const runtime: OutputRuntimeEnv = {
+    log: vi.fn((...args: unknown[]): void => {
+      lines.push(args.map(String).join(" "));
+    }),
     error: vi.fn(),
     exit: vi.fn(),
-  } as unknown as RuntimeEnv;
-  return { runtime, lines };
+    writeStdout,
+    writeJson: vi.fn((value: unknown, space = 2) => {
+      writeStdout(JSON.stringify(value, null, space > 0 ? space : undefined));
+    }),
+  };
+  return { runtime, lines, stdout };
 }
 
 const promotion = {
@@ -59,6 +70,23 @@ describe("promosListCommand", () => {
     expect(output).toContain("openclaw promos claim spring-models");
   });
 
+  it.each([
+    { remainingMs: 60 * 60 * 1_000, label: "ends today" },
+    { remainingMs: 25 * 60 * 60 * 1_000, label: "1 day left" },
+  ])(
+    "reports $label for a promotion with $remainingMs milliseconds left",
+    async ({ remainingMs, label }) => {
+      mocks.fetchClawHubPromotions.mockResolvedValue([
+        { ...promotion, endsAt: Date.now() + remainingMs },
+      ]);
+      const { runtime, lines } = makeRuntime();
+
+      await promosListCommand({}, runtime);
+
+      expect(lines[0]).toContain(`(${label})`);
+    },
+  );
+
   it("prints an empty-state line when nothing is live", async () => {
     mocks.fetchClawHubPromotions.mockResolvedValue([]);
     const { runtime, lines } = makeRuntime();
@@ -83,11 +111,14 @@ describe("promosListCommand", () => {
     mocks.fetchClawHubPromotions.mockRejectedValue(
       new ClawHubRequestError({ path: "/api/v1/promotions", status: 404, body: "not found" }),
     );
-    const { runtime, lines } = makeRuntime();
+    const { runtime, lines, stdout } = makeRuntime();
 
     await promosListCommand({ json: true }, runtime);
 
-    expect(JSON.parse(lines.join("\n"))).toEqual({ promotions: [] });
+    expect(lines).toEqual([]);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.writeStdout).toHaveBeenCalledOnce();
+    expect(JSON.parse(stdout.join(""))).toEqual({ promotions: [] });
   });
 
   it("strips terminal control sequences from remote promotion text", async () => {
@@ -107,13 +138,16 @@ describe("promosListCommand", () => {
     expect(output).toContain("Free");
   });
 
-  it("emits JSON with --json", async () => {
+  it("writes JSON to stdout with --json", async () => {
     mocks.fetchClawHubPromotions.mockResolvedValue([promotion]);
-    const { runtime, lines } = makeRuntime();
+    const { runtime, lines, stdout } = makeRuntime();
 
     await promosListCommand({ json: true }, runtime);
 
-    const parsed = JSON.parse(lines.join("\n")) as { promotions: Array<{ slug: string }> };
+    expect(lines).toEqual([]);
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.writeStdout).toHaveBeenCalledOnce();
+    const parsed = JSON.parse(stdout.join("")) as { promotions: Array<{ slug: string }> };
     expect(parsed.promotions[0]?.slug).toBe("spring-models");
   });
 });

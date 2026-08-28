@@ -19,6 +19,7 @@ export function lazyCompile<T>(
   schema: TSchema,
   precheck?: (data: unknown) => ValidationError | undefined,
 ): ProtocolValidator<T>;
+/* @__NO_SIDE_EFFECTS__ */
 export function lazyCompile<T = unknown>(
   schema: TSchema,
   precheck?: (data: unknown) => ValidationError | undefined,

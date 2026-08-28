@@ -4,7 +4,8 @@ import { GrammyError } from "grammy";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
 import { TelegramBotApiFileTooLargeError } from "../bot-handlers.media.js";
 import type { TelegramTransport } from "../fetch.js";
-import { readTelegramRetryAfterMs } from "../network-errors.js";
+import type { TelegramResolvedMedia } from "../message-cache-persistence.js";
+import { isRetryableTelegramApiError, readTelegramRetryAfterMs } from "../network-errors.js";
 import { cacheSticker, getCachedSticker } from "../sticker-cache.js";
 import {
   formatErrorMessage,
@@ -16,8 +17,8 @@ import {
   shouldRetryTelegramTransportFallback,
   sleepWithAbort,
 } from "./delivery.resolve-media.runtime.js";
-import { resolveTelegramMediaPlaceholder } from "./helpers.js";
-import type { StickerMetadata, TelegramContext } from "./types.js";
+import { resolveTelegramPrimaryMedia } from "./helpers.js";
+import type { TelegramContext } from "./types.js";
 
 const FILE_TOO_BIG_RE = /file is too big/i;
 const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
@@ -65,17 +66,21 @@ function isFileTooBigError(err: unknown): boolean {
   return FILE_TOO_BIG_RE.test(formatErrorMessage(err));
 }
 
-/**
- * Returns true if the error is a transient network error that should be retried.
- * Returns false for permanent errors like "file is too big" (400 Bad Request).
- */
 function isRetryableGetFileError(err: unknown): boolean {
-  // Don't retry "file is too big" - it's a permanent 400 error
   if (isFileTooBigError(err)) {
     return false;
   }
-  // Retry all other errors (network issues, timeouts, etc.)
-  return true;
+  if (isRetryableTelegramApiError(err, { context: "polling" })) {
+    return true;
+  }
+  // Telegram reports pending file availability as a documented getFile 400.
+  return (
+    GrammyErrorCtor !== undefined &&
+    err instanceof GrammyErrorCtor &&
+    err.method === "getFile" &&
+    err.error_code === 400 &&
+    /\bfile is temporarily unavailable\b/i.test(err.description)
+  );
 }
 
 interface MediaMetadata {
@@ -371,16 +376,7 @@ async function resolveStickerMedia(params: {
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
-}): Promise<
-  | {
-      path: string;
-      contentType?: string;
-      placeholder: string;
-      stickerMetadata?: StickerMetadata;
-    }
-  | null
-  | undefined
-> {
+}): Promise<(TelegramResolvedMedia & { path: string }) | null | undefined> {
   const { msg, ctx, maxBytes, token, transport, abortSignal } = params;
   if (!msg.sticker) {
     return undefined;
@@ -427,9 +423,13 @@ async function resolveStickerMedia(params: {
       });
     }
     return {
+      id: saved.id,
       path: saved.path,
+      size: saved.size,
       contentType: saved.contentType,
-      placeholder: "<media:sticker>",
+      kind: "sticker",
+      fileUniqueId: sticker.file_unique_id,
+      savedAt: Date.now(),
       stickerMetadata: {
         emoji,
         setName,
@@ -442,9 +442,13 @@ async function resolveStickerMedia(params: {
 
   // Cache miss - return metadata for vision processing
   return {
+    id: saved.id,
     path: saved.path,
+    size: saved.size,
     contentType: saved.contentType,
-    placeholder: "<media:sticker>",
+    kind: "sticker",
+    fileUniqueId: sticker.file_unique_id,
+    savedAt: Date.now(),
     stickerMetadata: {
       emoji: sticker.emoji ?? undefined,
       setName: sticker.set_name ?? undefined,
@@ -463,12 +467,7 @@ export async function resolveMedia(params: {
   trustedLocalFileRoots?: readonly string[];
   dangerouslyAllowPrivateNetwork?: boolean;
   abortSignal?: AbortSignal;
-}): Promise<{
-  path: string;
-  contentType?: string;
-  placeholder: string;
-  stickerMetadata?: StickerMetadata;
-} | null> {
+}): Promise<(TelegramResolvedMedia & { path: string; fileName?: string }) | null> {
   const {
     ctx,
     maxBytes,
@@ -517,8 +516,21 @@ export async function resolveMedia(params: {
     dangerouslyAllowPrivateNetwork,
     abortSignal,
   });
-  const placeholder = saved.contentType?.startsWith("audio/")
-    ? "<media:audio>"
-    : (resolveTelegramMediaPlaceholder(msg) ?? "<media:document>");
-  return { path: saved.path, contentType: saved.contentType, placeholder };
+  const nativeKind = resolveTelegramPrimaryMedia(msg)?.kind ?? "document";
+  const kind =
+    nativeKind === "sticker"
+      ? nativeKind
+      : saved.contentType?.startsWith("audio/")
+        ? "audio"
+        : nativeKind;
+  return {
+    id: saved.id,
+    path: saved.path,
+    size: saved.size,
+    contentType: saved.contentType,
+    ...(metadata.fileName ? { fileName: metadata.fileName } : {}),
+    kind,
+    fileUniqueId: m.file_unique_id,
+    savedAt: Date.now(),
+  };
 }

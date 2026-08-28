@@ -53,6 +53,61 @@ describe("Web Awesome adapters", () => {
     );
   });
 
+  it("removes closing dropdown menus from native Tab order before their animation", async () => {
+    const { dropdown } = await createDropdown();
+    const menu = dropdown.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
+    expect(menu?.hasAttribute("inert")).toBe(false);
+
+    dropdown.dispatchEvent(
+      new Event("wa-hide", { bubbles: true, cancelable: true, composed: true }),
+    );
+
+    await Promise.resolve();
+    expect(menu?.hasAttribute("inert")).toBe(true);
+    dropdown.dispatchEvent(
+      new Event("wa-show", { bubbles: true, cancelable: true, composed: true }),
+    );
+    expect(menu?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("keeps a canceled dropdown hide interactive", async () => {
+    const { dropdown } = await createDropdown();
+    dropdown.addEventListener("wa-hide", (event) => event.preventDefault(), { once: true });
+
+    dropdown.dispatchEvent(
+      new Event("wa-hide", { bubbles: true, cancelable: true, composed: true }),
+    );
+
+    await Promise.resolve();
+    expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.hasAttribute("inert")).toBe(false);
+  });
+
+  it("keeps a dropdown interactive when a later document listener cancels its hide", async () => {
+    const { dropdown } = await createDropdown();
+    const cancelHide = (event: Event) => {
+      if (event.target === dropdown) {
+        event.preventDefault();
+      }
+    };
+    document.addEventListener("wa-hide", cancelHide);
+
+    try {
+      const hideEvent = new Event("wa-hide", {
+        bubbles: true,
+        cancelable: true,
+        composed: true,
+      });
+      expect(dropdown.dispatchEvent(hideEvent)).toBe(false);
+      await Promise.resolve();
+
+      expect(dropdown.shadowRoot?.querySelector('[part="menu"]')?.hasAttribute("inert")).toBe(
+        false,
+      );
+    } finally {
+      document.removeEventListener("wa-hide", cancelHide);
+    }
+  });
+
   it("restores a durable trigger only after keyboard dismissal", async () => {
     const { dropdown } = await createDropdown();
     dropdown.addEventListener("keydown", trackDropdownKeyboardDismissal);

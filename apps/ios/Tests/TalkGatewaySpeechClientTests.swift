@@ -317,6 +317,36 @@ struct TalkGatewaySpeechClientTests {
         #expect(routing.route == .gatewayTalkSpeak)
     }
 
+    @Test func `system voice keeps BCP 47 locale separate from provider language`() {
+        let manager = TalkModeManager(allowSimulatorCapture: true)
+        manager._test_applyLoadedTalkConfig(
+            Self.parseSpeechProvider("elevenlabs", speechLocale: "tr_TR"),
+            providerSelection: .gatewayDefault)
+
+        let configured = manager._test_resolvedSpeechLanguages(
+            directiveLanguage: nil,
+            localSelection: TalkSpeechLocale.automaticID)
+        let directive = manager._test_resolvedSpeechLanguages(
+            directiveLanguage: "de_DE",
+            localSelection: "fr-FR")
+        let providerCompatible = manager._test_resolvedSpeechLanguages(
+            directiveLanguage: "tr",
+            localSelection: TalkSpeechLocale.automaticID)
+        let unavailableDirective = manager._test_resolvedSpeechLanguages(
+            directiveLanguage: "zz-ZZ",
+            localSelection: TalkSpeechLocale.automaticID,
+            isSystemVoiceAvailable: { $0 == "tr-TR" })
+
+        #expect(configured.provider == nil)
+        #expect(configured.systemVoice == "tr-TR")
+        #expect(directive.provider == nil)
+        #expect(directive.systemVoice == "de-DE")
+        #expect(providerCompatible.provider == "tr")
+        #expect(providerCompatible.systemVoice == "tr")
+        #expect(unavailableDirective.provider == nil)
+        #expect(unavailableDirective.systemVoice == "tr-TR")
+    }
+
     @Test func `explicit realtime config keeps realtime relay`() {
         let parsed = TalkModeGatewayConfigParser.parse(
             config: [
@@ -362,20 +392,23 @@ struct TalkGatewaySpeechClientTests {
     private static func parseSpeechProvider(
         _ provider: String,
         model: String? = "speech-model",
-        interruptOnSpeech: Bool = false) -> TalkModeGatewayConfigState
+        interruptOnSpeech: Bool = false,
+        speechLocale: String? = nil) -> TalkModeGatewayConfigState
     {
         let providerConfig: [String: String] = model.map { ["model": $0] } ?? [:]
+        var talkConfig: [String: Any] = [
+            "provider": provider,
+            "providers": [provider: providerConfig],
+            "resolved": [
+                "provider": provider,
+                "config": providerConfig,
+            ],
+            "interruptOnSpeech": interruptOnSpeech,
+        ]
+        talkConfig["speechLocale"] = speechLocale
         return TalkModeGatewayConfigParser.parse(
             config: [
-                "talk": [
-                    "provider": provider,
-                    "providers": [provider: providerConfig],
-                    "resolved": [
-                        "provider": provider,
-                        "config": providerConfig,
-                    ],
-                    "interruptOnSpeech": interruptOnSpeech,
-                ],
+                "talk": talkConfig,
             ],
             defaultProvider: "elevenlabs",
             defaultModelIdFallback: "eleven_v3",

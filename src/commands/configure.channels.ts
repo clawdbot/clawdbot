@@ -100,6 +100,7 @@ export async function removeChannelConfigWizard(
         options,
       }),
       runtime,
+      1,
     );
 
     if (choice.kind === "done") {
@@ -114,6 +115,7 @@ export async function removeChannelConfigWizard(
         initialValue: false,
       }),
       runtime,
+      1,
     );
     if (!confirmed) {
       continue;
@@ -128,10 +130,11 @@ export async function removeChannelConfigWizard(
     }
 
     note(
-      [`${label} removed from config.`, "Note: credentials/sessions on disk are unchanged."].join(
-        "\n",
-      ),
-      "Channel removed",
+      [
+        `${label} selected for removal from config.`,
+        "Note: credentials/sessions on disk are unchanged.",
+      ].join("\n"),
+      "Channel removal",
     );
   }
 }

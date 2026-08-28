@@ -2,7 +2,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EXEC_APPROVAL_TIMEOUT_MS } from "../../infra/exec-approvals.js";
 import { parseTimeoutMs } from "../parse-timeout.js";
-import { callGatewayCli, callNodePairApprovalGatewayCli } from "./rpc.js";
+import { callNodesGatewayCli, callNodePairApprovalGatewayCli } from "./rpc.js";
 
 /**
  * Regression test for #12098:
@@ -11,8 +11,8 @@ import { callGatewayCli, callNodePairApprovalGatewayCli } from "./rpc.js";
  * must be at least as long as the approval timeout so the gateway has enough
  * time to collect the user's decision.
  *
- * The root cause: callGatewayCli reads opts.timeout for the transport timeout.
- * Before the fix, node exec flows called callGatewayCli("exec.approval.request",
+ * The root cause: callNodesGatewayCli reads opts.timeout for the transport timeout.
+ * Before the fix, node exec flows called callNodesGatewayCli("exec.approval.request",
  * opts, ...) without overriding opts.timeout, so the 35s CLI default raced
  * against the 120s approval wait on the gateway side. The CLI always lost.
  *
@@ -51,8 +51,8 @@ describe("exec approval transport timeout (#12098)", () => {
     callGatewaySpy.mockResolvedValue({ decision: "allow-once" });
   });
 
-  it("callGatewayCli forwards opts.timeout as the transport timeoutMs", async () => {
-    await callGatewayCli("exec.approval.request", { timeout: "35000" } as never, {
+  it("callNodesGatewayCli forwards opts.timeout as the transport timeoutMs", async () => {
+    await callNodesGatewayCli("exec.approval.request", { timeout: "35000" } as never, {
       timeoutMs: 120_000,
     });
 
@@ -62,9 +62,9 @@ describe("exec approval transport timeout (#12098)", () => {
     expect(callOpts.timeoutMs).toBe(35_000);
   });
 
-  it("callGatewayCli rejects invalid opts.timeout instead of forwarding NaN", async () => {
+  it("callNodesGatewayCli rejects invalid opts.timeout instead of forwarding NaN", async () => {
     await expect(
-      callGatewayCli("exec.approval.request", { timeout: "nope" } as never, {
+      callNodesGatewayCli("exec.approval.request", { timeout: "nope" } as never, {
         timeoutMs: 120_000,
       }),
     ).rejects.toThrow("Invalid --timeout");
@@ -91,7 +91,7 @@ describe("exec approval transport timeout (#12098)", () => {
     const transportTimeoutMs = Math.max(parseTimeoutMs("35000") ?? 0, approvalTransportFloorMs);
     expect(transportTimeoutMs).toBe(approvalTransportFloorMs);
 
-    await callGatewayCli(
+    await callNodesGatewayCli(
       "exec.approval.request",
       { timeout: "35000" } as never,
       { timeoutMs: approvalTimeoutMs },
@@ -114,7 +114,7 @@ describe("exec approval transport timeout (#12098)", () => {
     );
     expect(transportTimeoutMs).toBe(approvalTransportFloorMs);
 
-    await callGatewayCli(
+    await callNodesGatewayCli(
       "exec.approval.request",
       { timeout: String(userTimeout) } as never,
       { timeoutMs: approvalTimeoutMs },
@@ -132,7 +132,7 @@ describe("exec approval transport timeout (#12098)", () => {
     const transportTimeoutMs = Math.max(parseTimeoutMs("foo") ?? 0, approvalTransportFloorMs);
     expect(transportTimeoutMs).toBe(approvalTransportFloorMs);
 
-    await callGatewayCli(
+    await callNodesGatewayCli(
       "exec.approval.request",
       { timeout: "foo" } as never,
       { timeoutMs: approvalTimeoutMs },

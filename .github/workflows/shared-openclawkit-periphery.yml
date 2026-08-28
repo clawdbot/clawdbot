@@ -24,19 +24,12 @@ jobs:
     steps:
       - name: Checkout
         if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 1
+          fetch-depth: 2
           fetch-tags: false
           persist-credentials: false
           submodules: false
-
-      - name: Ensure base commit
-        if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
-        uses: ./.github/actions/ensure-base-commit
-        with:
-          base-sha: ${{ github.event.pull_request.base.sha }}
-          fetch-ref: ${{ github.event.pull_request.base.ref }}
 
       - name: Detect changed paths
         id: scope
@@ -52,14 +45,12 @@ jobs:
               return;
             }
 
-            const baseSha = context.payload.pull_request?.base?.sha;
-            if (!baseSha) {
-              throw new Error("missing pull request base SHA");
-            }
+            // pull_request checks out GitHub's synthetic merge commit. Its first
+            // parent is the exact base tree used to produce the tested result.
             const result = await exec.getExecOutput("git", [
               "diff",
               "--quiet",
-              baseSha,
+              "HEAD^1",
               "HEAD",
               "--",
               "apps/ios/",
@@ -69,6 +60,7 @@ jobs:
               "scripts/periphery-intersection.mjs",
               "scripts/ios-configure-signing.sh",
               "scripts/ios-write-swift-filelist.mjs",
+              "scripts/ios-write-swift-filelist.mts",
               "scripts/ios-write-version-xcconfig.sh",
               "test/scripts/periphery-intersection.test.ts",
             ], { ignoreReturnCode: true, silent: true });
@@ -81,11 +73,11 @@ jobs:
     name: Scan shared kit from iOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -95,7 +87,7 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
             if [ -d "$xcode_app/Contents/Developer" ]; then
               sudo xcode-select -s "$xcode_app/Contents/Developer"
               break
@@ -103,8 +95,8 @@ jobs:
           done
           xcodebuild -version
           xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.* ]]; then
-            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
             exit 1
           fi
           swift --version
@@ -112,13 +104,18 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           install-bun: "false"
 
       - name: Install iOS scan tooling
         run: |
           brew update
-          brew install xcodegen periphery
+          brew install periphery
           swift_tools_dir="$RUNNER_TEMP/openclaw-swift-tools"
+          # Homebrew's xcodegen bottle can arrive corrupted on runner images;
+          # use the repo's pinned, checksummed release installer like ci.yml.
+          ./scripts/install-xcodegen.sh "$swift_tools_dir"
+          "$swift_tools_dir/xcodegen" --version
           ./scripts/install-swift-tools.sh "$swift_tools_dir"
           echo "$swift_tools_dir" >> "$GITHUB_PATH"
           "$swift_tools_dir/swiftformat" --version
@@ -156,24 +153,27 @@ jobs:
             cp "$output_dir/periphery.stdout.json" "$output_dir/periphery.json"
           fi
 
+      # Failed-job reruns retain successful producer artifacts from the original attempt.
+      # Keep artifact slots run-scoped; rerun producers overwrite their slot.
       - name: Upload iOS consumer report
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-ios-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-ios
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   scan-macos:
     name: Scan shared kit from macOS
     needs: scope
     if: ${{ needs.scope.outputs.should-scan == 'true' }}
-    runs-on: ${{ github.event_name == 'workflow_dispatch' && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
+    runs-on: ${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'macos-26' || (github.repository == 'openclaw/openclaw' && 'blacksmith-12vcpu-macos-26' || 'macos-26') }}
     timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -183,7 +183,7 @@ jobs:
       - name: Verify Xcode
         run: |
           set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.5.app /Applications/Xcode-26.5.0.app; do
+          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
             if [ -d "$xcode_app/Contents/Developer" ]; then
               sudo xcode-select -s "$xcode_app/Contents/Developer"
               break
@@ -191,8 +191,8 @@ jobs:
           done
           xcodebuild -version
           xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.* ]]; then
-            echo "error: expected Xcode 26.x, got $xcode_version" >&2
+          if [[ "$xcode_version" != 26.6* ]]; then
+            echo "error: expected Xcode 26.6, got $xcode_version" >&2
             exit 1
           fi
           swift --version
@@ -229,10 +229,11 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-macos-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-macos
           if-no-files-found: error
           retention-days: 14
+          overwrite: true
 
   intersect:
     name: Intersect shared OpenClawKit dead code
@@ -241,7 +242,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - name: Checkout
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 1
           fetch-tags: false
@@ -251,13 +252,13 @@ jobs:
       - name: Download iOS consumer report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: shared-periphery-ios-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-ios-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-ios
 
       - name: Download macOS consumer report
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
-          name: shared-periphery-macos-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-macos-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-macos
 
       - name: Intersect exact Swift identities
@@ -273,7 +274,8 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: shared-periphery-intersection-${{ github.run_id }}-${{ github.run_attempt }}
+          name: shared-periphery-intersection-${{ github.run_id }}
           path: ${{ runner.temp }}/shared-periphery-intersection
           if-no-files-found: warn
           retention-days: 14
+          overwrite: true

@@ -3,7 +3,8 @@ import type { ReplyToMode } from "openclaw/plugin-sdk/config-contracts";
 import { createReplyReferencePlanner } from "openclaw/plugin-sdk/reply-reference";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
-import { ChannelType, getChannelMessage, type Client } from "../internal/discord.js";
+import { isDiscordThreadChannelType } from "../channel-type.js";
+import { ChannelType, DiscordError, getChannelMessage, type Client } from "../internal/discord.js";
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelNameSafe,
@@ -12,12 +13,14 @@ import {
 } from "./channel-access.js";
 import {
   resolveDiscordChannelInfo,
+  resolveDiscordMessageChannelId,
+} from "./message-channel-info.js";
+import type { DiscordChannelInfo, DiscordChannelInfoClient } from "./message-channel-info.js";
+import { formatDiscordMediaText } from "./message-media.js";
+import {
   resolveDiscordEmbedText,
   resolveDiscordForwardedMessagesTextFromSnapshots,
-  resolveDiscordMessageChannelId,
-  type DiscordChannelInfo,
-  type DiscordChannelInfoClient,
-} from "./message-utils.js";
+} from "./message-text.js";
 import { getCachedThreadStarter, setCachedThreadStarter } from "./threading.cache.js";
 import type {
   DiscordMessageEvent,
@@ -30,17 +33,11 @@ import type {
   DiscordThreadStarterRestMessage,
 } from "./threading.types.js";
 
-function isDiscordThreadType(type: ChannelType | undefined): boolean {
-  return (
-    type === ChannelType.PublicThread ||
-    type === ChannelType.PrivateThread ||
-    type === ChannelType.AnnouncementThread
-  );
-}
-
 function isDiscordForumParentType(parentType: ChannelType | undefined): boolean {
   return parentType === ChannelType.GuildForum || parentType === ChannelType.GuildMedia;
 }
+
+const IN_FLIGHT_DISCORD_THREAD_STARTERS = new Map<string, Promise<DiscordThreadStarter | null>>();
 
 export function resolveDiscordThreadChannel(params: {
   isGuildMessage: boolean;
@@ -62,7 +59,7 @@ export function resolveDiscordThreadChannel(params: {
   if (isThreadChannel) {
     return channel as unknown as DiscordThreadChannel;
   }
-  if (!isDiscordThreadType(channelInfo?.type)) {
+  if (!isDiscordThreadChannelType(channelInfo?.type)) {
     return null;
   }
   const messageChannelId =
@@ -111,27 +108,52 @@ export async function resolveDiscordThreadParentInfo(params: {
 export async function resolveDiscordThreadStarter(params: {
   channel: DiscordThreadChannel;
   client: Client;
+  accountId: string;
   parentId?: string;
   parentType?: ChannelType;
   resolveTimestampMs: (value?: string | null) => number | undefined;
 }): Promise<DiscordThreadStarter | null> {
-  const cacheKey = params.channel.id;
+  const messageChannelId = resolveDiscordThreadStarterMessageChannelId(params);
+  if (!messageChannelId) {
+    return null;
+  }
+  const cacheKey = `${params.accountId}:${params.channel.id}:${messageChannelId}`;
   const now = Date.now();
   const cached = getCachedThreadStarter(cacheKey, now);
   if (cached) {
-    return cached;
+    return cached.kind === "hit" ? cached.starter : null;
   }
+  const inFlight = IN_FLIGHT_DISCORD_THREAD_STARTERS.get(cacheKey);
+  if (inFlight) {
+    return inFlight;
+  }
+  const pending = resolveDiscordThreadStarterUncached(params, cacheKey, messageChannelId);
+  IN_FLIGHT_DISCORD_THREAD_STARTERS.set(cacheKey, pending);
   try {
-    const messageChannelId = resolveDiscordThreadStarterMessageChannelId(params);
-    if (!messageChannelId) {
-      return null;
+    return await pending;
+  } finally {
+    if (IN_FLIGHT_DISCORD_THREAD_STARTERS.get(cacheKey) === pending) {
+      IN_FLIGHT_DISCORD_THREAD_STARTERS.delete(cacheKey);
     }
+  }
+}
+
+async function resolveDiscordThreadStarterUncached(
+  params: Parameters<typeof resolveDiscordThreadStarter>[0],
+  cacheKey: string,
+  messageChannelId: string,
+): Promise<DiscordThreadStarter | null> {
+  const cacheMiss = () => {
+    setCachedThreadStarter(cacheKey, { kind: "miss" }, Date.now());
+  };
+  try {
     const starter = await fetchDiscordThreadStarterMessage({
       client: params.client,
       messageChannelId,
       threadId: params.channel.id,
     });
     if (!starter) {
+      cacheMiss();
       return null;
     }
     const payload = buildDiscordThreadStarterPayload({
@@ -139,13 +161,21 @@ export async function resolveDiscordThreadStarter(params: {
       resolveTimestampMs: params.resolveTimestampMs,
     });
     if (!payload) {
+      cacheMiss();
       return null;
     }
-    setCachedThreadStarter(cacheKey, payload, Date.now());
+    setCachedThreadStarter(cacheKey, { kind: "hit", starter: payload }, Date.now());
     return payload;
-  } catch {
+  } catch (error) {
+    if (isDiscordThreadStarterNegativeCacheError(error)) {
+      cacheMiss();
+    }
     return null;
   }
+}
+
+function isDiscordThreadStarterNegativeCacheError(error: unknown): boolean {
+  return error instanceof DiscordError && (error.status === 403 || error.status === 404);
 }
 
 function resolveDiscordThreadStarterMessageChannelId(params: {
@@ -186,9 +216,14 @@ function buildDiscordThreadStarterPayload(params: {
 
 function resolveDiscordThreadStarterText(starter: DiscordThreadStarterRestMessage): string {
   const content = normalizeOptionalString(starter.content) ?? "";
-  const embedText = resolveDiscordEmbedText(starter.embeds?.[0]);
+  const embedText = resolveDiscordEmbedText(starter.embeds);
   const forwardedText = resolveDiscordForwardedMessagesTextFromSnapshots(starter.message_snapshots);
-  return content || embedText || forwardedText;
+  const text = content || embedText || forwardedText;
+  const mediaText = formatDiscordMediaText({
+    attachments: starter.attachments ?? undefined,
+    stickers: starter.sticker_items ?? undefined,
+  });
+  return [text, mediaText].filter(Boolean).join("\n");
 }
 
 function resolveDiscordThreadStarterIdentity(

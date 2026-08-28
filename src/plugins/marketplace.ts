@@ -13,16 +13,20 @@ import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { readRegularFile } from "../infra/regular-file.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type { InstallPolicySource } from "../security/install-policy.js";
 import { resolveUserPath } from "../utils.js";
 import { isImmutableGitCommitRef } from "./git-install.js";
 import type { InstallSafetyOverrides } from "./install-security-scan.js";
+import { copyPluginInstallTransactionRequest } from "./install-transaction.js";
+import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
 import { installPluginFromPath, type InstallPluginResult } from "./install.js";
 
 const DEFAULT_GIT_TIMEOUT_MS = 120_000;
 const DEFAULT_MARKETPLACE_DOWNLOAD_TIMEOUT_MS = 120_000;
 const MAX_MARKETPLACE_ARCHIVE_BYTES = 256 * 1024 * 1024;
+const MAX_MARKETPLACE_MANIFEST_BYTES = 16 * 1024 * 1024;
 const MARKETPLACE_MANIFEST_CANDIDATES = [
   path.join(".claude-plugin", "marketplace.json"),
   "marketplace.json",
@@ -597,7 +601,28 @@ async function loadMarketplace(params: {
     remoteRef?: string;
     cleanup?: () => Promise<void>;
   }): Promise<{ ok: true; marketplace: LoadedMarketplace } | { ok: false; error: string }> => {
-    const raw = await fs.readFile(paramsLocal.manifestPath, "utf-8");
+    let raw: string;
+    try {
+      // Resolve symlinks so a marketplace.json that points to a regular file
+      // keeps working, while the bounded regular-file read still rejects
+      // directories, FIFOs, and oversized targets.
+      const resolvedManifestPath = await fs.realpath(paramsLocal.manifestPath);
+      const { buffer } = await readRegularFile({
+        filePath: resolvedManifestPath,
+        maxBytes: MAX_MARKETPLACE_MANIFEST_BYTES,
+      });
+      raw = buffer.toString("utf-8");
+    } catch (err) {
+      await paramsLocal.cleanup?.();
+      const message = err instanceof Error ? err.message : String(err);
+      // readRegularFile rejects symlinks/non-files and caps file size. Only the
+      // size cap should be reported as an oversize manifest; other read failures
+      // need their own diagnostic so users don't chase the wrong problem.
+      if (message.startsWith("File exceeds")) {
+        return { ok: false, error: "Marketplace manifest too large" };
+      }
+      return { ok: false, error: `Marketplace manifest unreadable: ${message}` };
+    }
     const parsed = parseMarketplaceManifest(raw, paramsLocal.manifestPath);
     if (!parsed.ok) {
       await paramsLocal.cleanup?.();
@@ -649,27 +674,39 @@ async function loadMarketplace(params: {
     return undefined;
   };
 
+  // Resolve aliases against one snapshot so a cycle cannot retain a plugin lifecycle lease.
   const knownMarketplaces = await readClaudeKnownMarketplaces();
-  const known = knownMarketplaces[params.source];
-  if (known) {
+  const visitedKnownMarketplaces = new Set<string>();
+  let source = params.source;
+
+  while (true) {
+    const known = knownMarketplaces[source];
+    if (!known) {
+      break;
+    }
+    if (visitedKnownMarketplaces.has(source)) {
+      return {
+        ok: false,
+        error: `known marketplace source cycle: ${[...visitedKnownMarketplaces, source].join(" -> ")}`,
+      };
+    }
+    visitedKnownMarketplaces.add(source);
+
     if (known.installLocation) {
       const local = await resolveLocalMarketplaceSource(known.installLocation);
       if (local?.ok) {
-        return await loadResolvedLocalMarketplace(local, params.source);
+        return await loadResolvedLocalMarketplace(local, source);
       }
     }
 
     const normalizedSource = normalizeEntrySource(known.source);
-    if (normalizedSource.ok) {
-      return await loadMarketplace({
-        source: marketplaceEntrySourceToInput(normalizedSource.source),
-        logger: params.logger,
-        timeoutMs: params.timeoutMs,
-      });
+    if (!normalizedSource.ok) {
+      break;
     }
+    source = marketplaceEntrySourceToInput(normalizedSource.source);
   }
 
-  const local = await resolveLocalMarketplaceSource(params.source);
+  const local = await resolveLocalMarketplaceSource(source);
   if (local?.ok === false) {
     return local;
   }
@@ -679,7 +716,7 @@ async function loadMarketplace(params: {
   }
 
   const cloned = await cloneMarketplaceRepo({
-    source: params.source,
+    source,
     timeoutMs: params.timeoutMs,
     logger: params.logger,
   });
@@ -921,8 +958,7 @@ async function downloadUrlToTempFile(
       tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-marketplace-download-"));
       const createdTmpDir = tmpDir;
       const targetPath = path.resolve(createdTmpDir, fileName);
-      const relativeTargetPath = path.relative(createdTmpDir, targetPath);
-      if (relativeTargetPath === ".." || relativeTargetPath.startsWith(`..${path.sep}`)) {
+      if (!isPathInside(createdTmpDir, targetPath)) {
         throw new Error("invalid download filename");
       }
       await streamMarketplaceResponseToFile({
@@ -959,8 +995,7 @@ async function ensureInsideMarketplaceRoot(
 ): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
   const resolved = path.resolve(rootDir, candidate);
   const resolvedExists = await pathExists(resolved);
-  const relative = path.relative(rootDir, resolved);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`)) {
+  if (!isPathInside(rootDir, resolved)) {
     return {
       ok: false,
       error: `plugin source escapes marketplace root: ${candidate}`,
@@ -1253,6 +1288,7 @@ export async function installPluginFromMarketplace(
     extensionsDir?: string;
     dryRun?: boolean;
     expectedPluginId?: string;
+    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   },
 ): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
@@ -1291,31 +1327,35 @@ export async function installPluginFromMarketplace(
     }
     installCleanup = resolved.cleanup;
 
-    const result = await installPluginFromPath({
-      dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
-      config: params.config,
-      path: resolved.path,
-      logger: params.logger,
-      mode: params.mode,
-      extensionsDir: params.extensionsDir,
-      timeoutMs: params.timeoutMs,
-      dryRun: params.dryRun,
-      expectedPluginId: params.expectedPluginId,
-      installPolicyRequest: {
-        kind: marketplaceInstallPolicyRequestKind({
-          marketplaceOrigin: loaded.marketplace.origin,
-          resolvedPath: resolved.path,
-          source: entry.source,
-        }),
-        requestedSpecifier: `${entry.name}@${params.marketplace}`,
-        source: marketplaceInstallPolicySource({
-          marketplaceOrigin: loaded.marketplace.origin,
-          marketplaceRef: loaded.marketplace.remoteRef,
-          resolvedPath: resolved.path,
-          source: entry.source,
-        }),
-      },
-    });
+    const result = await installPluginFromPath(
+      copyPluginInstallTransactionRequest(params, {
+        dangerouslyForceUnsafeInstall: params.dangerouslyForceUnsafeInstall,
+        onInstallPolicyWarning: params.onInstallPolicyWarning,
+        config: params.config,
+        path: resolved.path,
+        logger: params.logger,
+        mode: params.mode,
+        extensionsDir: params.extensionsDir,
+        timeoutMs: params.timeoutMs,
+        dryRun: params.dryRun,
+        expectedPluginId: params.expectedPluginId,
+        onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
+        installPolicyRequest: {
+          kind: marketplaceInstallPolicyRequestKind({
+            marketplaceOrigin: loaded.marketplace.origin,
+            resolvedPath: resolved.path,
+            source: entry.source,
+          }),
+          requestedSpecifier: `${entry.name}@${params.marketplace}`,
+          source: marketplaceInstallPolicySource({
+            marketplaceOrigin: loaded.marketplace.origin,
+            marketplaceRef: loaded.marketplace.remoteRef,
+            resolvedPath: resolved.path,
+            source: entry.source,
+          }),
+        },
+      }),
+    );
     if (!result.ok) {
       return result;
     }

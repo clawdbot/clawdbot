@@ -1,75 +1,23 @@
-// Realtime transcription provider registry stores transcription provider factories.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  resolvePluginCapabilityProvider,
-  resolvePluginCapabilityProviders,
-} from "../plugins/capability-provider-runtime.js";
-import {
-  buildCapabilityProviderMaps,
-  normalizeCapabilityProviderId,
-} from "../plugins/provider-registry-shared.js";
-import type { RealtimeTranscriptionProviderPlugin } from "../plugins/types.js";
+import { createMediaProviderRegistry } from "../media-generation/provider-registry.js";
+import { normalizeCapabilityProviderId } from "../plugins/provider-registry-shared.js";
 import type { RealtimeTranscriptionProviderId } from "./provider-types.js";
 
-// Provider registry helpers for realtime transcription. Plugin ids and aliases
-// share the generic capability-provider registry machinery.
-export function normalizeRealtimeTranscriptionProviderId(
-  providerId: string | undefined,
-): RealtimeTranscriptionProviderId | undefined {
-  return normalizeCapabilityProviderId(providerId);
-}
+export { normalizeCapabilityProviderId as normalizeRealtimeTranscriptionProviderId };
 
-function resolveRealtimeTranscriptionProviderEntries(
-  cfg?: OpenClawConfig,
-): RealtimeTranscriptionProviderPlugin[] {
-  return resolvePluginCapabilityProviders({
-    key: "realtimeTranscriptionProviders",
-    cfg,
-  });
-}
-
-function buildProviderMaps(cfg?: OpenClawConfig): {
-  canonical: Map<string, RealtimeTranscriptionProviderPlugin>;
-  aliases: Map<string, RealtimeTranscriptionProviderPlugin>;
-} {
-  return buildCapabilityProviderMaps(resolveRealtimeTranscriptionProviderEntries(cfg));
-}
-
-/** Lists canonical realtime transcription providers for the active config. */
-export function listRealtimeTranscriptionProviders(
-  cfg?: OpenClawConfig,
-): RealtimeTranscriptionProviderPlugin[] {
-  return [...buildProviderMaps(cfg).canonical.values()];
-}
-
-/** Resolves a realtime transcription provider by id or alias. */
-export function getRealtimeTranscriptionProvider(
-  providerId: string | undefined,
-  cfg?: OpenClawConfig,
-): RealtimeTranscriptionProviderPlugin | undefined {
-  const normalized = normalizeRealtimeTranscriptionProviderId(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  const directProvider = resolvePluginCapabilityProvider({
-    key: "realtimeTranscriptionProviders",
-    providerId: normalized,
-    cfg,
-  });
-  if (directProvider) {
-    return directProvider;
-  }
-  return buildProviderMaps(cfg).aliases.get(normalized);
-}
+/** Realtime transcription uses targeted lookup to avoid broad capability discovery. */
+export const {
+  listProviders: listRealtimeTranscriptionProviders,
+  getProvider: getRealtimeTranscriptionProvider,
+} = createMediaProviderRegistry("realtimeTranscriptionProviders", { directLookup: true });
 
 /** Canonicalizes a configured provider id while preserving unknown ids. */
 export function canonicalizeRealtimeTranscriptionProviderId(
   providerId: string | undefined,
   cfg?: OpenClawConfig,
 ): RealtimeTranscriptionProviderId | undefined {
-  const normalized = normalizeRealtimeTranscriptionProviderId(providerId);
-  if (!normalized) {
-    return undefined;
-  }
-  return getRealtimeTranscriptionProvider(normalized, cfg)?.id ?? normalized;
+  const normalized = normalizeCapabilityProviderId(providerId);
+  return normalized
+    ? (getRealtimeTranscriptionProvider(normalized, cfg)?.id ?? normalized)
+    : undefined;
 }

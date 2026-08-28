@@ -1,12 +1,13 @@
 /** Removes an idle exact-run continuation through the session lifecycle owner. */
 import { getRuntimeConfig } from "../config/config.js";
-import { resolveStorePath } from "../config/sessions/paths.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   deleteSessionEntryLifecycle,
   loadSessionEntry,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
+import { loadPendingSessionDeliveries } from "../infra/session-delivery-queue-storage.js";
 import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
 import { hasPendingGeneratedMediaTaskForSessionKey } from "./task-status-access.js";
@@ -29,16 +30,31 @@ function canRemoveCronRunContinuation(marker: SessionEntry["cronRunContinuation"
   );
 }
 
-export async function removeCronRunContinuationSessionIfIdle(sessionKey: string): Promise<void> {
+export async function removeCronRunContinuationSessionIfIdle(
+  sessionKey: string,
+  settledDeliveryId?: string,
+): Promise<void> {
   if (
     !parseCronRunScopeSuffix(sessionKey).runId ||
     hasPendingGeneratedMediaTaskForSessionKey(sessionKey)
   ) {
     return;
   }
+  const pendingSessionDeliveries = await loadPendingSessionDeliveries();
+  if (
+    pendingSessionDeliveries.some(
+      (entry) =>
+        entry.sessionKey === sessionKey &&
+        entry.id !== settledDeliveryId &&
+        entry.settlementOutcome === undefined &&
+        entry.acknowledgedAt === undefined,
+    )
+  ) {
+    return;
+  }
   const agentId = resolveAgentIdFromSessionKey(sessionKey);
   const cfg = getRuntimeConfig();
-  const storePath = resolveStorePath(cfg.session?.store, { agentId });
+  const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
   const entry = loadSessionEntry({
     agentId,
     sessionKey,

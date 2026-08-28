@@ -19,7 +19,6 @@ describe("createDiscordClient", () => {
         channels: {
           discord: {
             token: "discord-token",
-            retry: { attempts: 2, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
           },
         },
       },
@@ -33,6 +32,34 @@ describe("createDiscordClient", () => {
 
     await expect(request(operation, "send")).resolves.toBe("sent");
     expect(operation).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps explicit-token retries bound to the REST account", async () => {
+    registerGateway("default", { isConnected: false } as GatewayPlugin);
+    registerGateway("ops", { isConnected: true } as GatewayPlugin);
+    const client = createDiscordClient({
+      cfg: {
+        channels: {
+          discord: {
+            defaultAccount: "ops",
+            accounts: { ops: { token: "configured-token" } },
+          },
+        },
+      },
+      token: "explicit-token",
+      rest: {} as RequestClient,
+      retry: { attempts: 3, minDelayMs: 0, maxDelayMs: 0, jitter: 0 },
+    });
+    const operation = vi
+      .fn()
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockRejectedValueOnce(new TypeError("fetch failed"))
+      .mockResolvedValue("sent");
+
+    expect(client.account.accountId).toBe("ops");
+    await expect(client.request(operation, "send")).resolves.toBe("sent");
+    expect(operation).toHaveBeenCalledTimes(4);
   });
 });
 
@@ -57,38 +84,6 @@ describe("createDiscordRestClient", () => {
     expect(result.token).toBe("explicit-token");
     expect(result.rest).toBe(fakeRest);
     expect(result.account.accountId).toBe("default");
-  });
-
-  it("keeps account retry config when explicit token is provided", () => {
-    const cfg = {
-      channels: {
-        discord: {
-          accounts: {
-            ops: {
-              token: {
-                source: "exec",
-                provider: "vault",
-                id: "discord/ops-token",
-              },
-              retry: {
-                attempts: 7,
-              },
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
-
-    const result = createDiscordRestClient({
-      cfg,
-      accountId: "ops",
-      token: "Bot explicit-account-token",
-      rest: fakeRest,
-    });
-
-    expect(result.token).toBe("explicit-account-token");
-    expect(result.account.accountId).toBe("ops");
-    expect(result.account.config.retry).toEqual({ attempts: 7 });
   });
 
   it("applies a caller timeout to a dedicated REST client", () => {

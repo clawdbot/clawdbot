@@ -17,6 +17,9 @@ public struct ToolDisplaySummary: Sendable, Equatable {
 }
 
 public enum ToolDisplayRegistry {
+    private static let resourceBundleName = "OpenClawKit_OpenClawKit"
+    private static let resourceBundle = locateResourceBundle()
+
     private struct ToolDisplayActionSpec: Decodable {
         let label: String?
         let detailKeys: [String]?
@@ -83,7 +86,7 @@ public enum ToolDisplayRegistry {
     }
 
     private static func loadConfig() -> ToolDisplayConfig {
-        guard let url = OpenClawKitResources.bundle.url(forResource: "tool-display", withExtension: "json") else {
+        guard let url = self.resourceBundle.url(forResource: "tool-display", withExtension: "json") else {
             return self.defaultConfig()
         }
         do {
@@ -92,6 +95,57 @@ public enum ToolDisplayRegistry {
         } catch {
             return self.defaultConfig()
         }
+    }
+
+    private static func locateResourceBundle() -> Bundle {
+        if let mainResourceURL = Bundle.main.resourceURL,
+           let bundle = Bundle(
+               url: mainResourceURL.appendingPathComponent("\(self.resourceBundleName).bundle"))
+        {
+            return bundle
+        }
+
+        if Bundle.main.url(forResource: "tool-display", withExtension: "json") != nil {
+            return Bundle.main
+        }
+
+        return self.loadModuleBundleSafely() ?? Bundle.main
+    }
+
+    private static func loadModuleBundleSafely() -> Bundle? {
+        let candidates: [URL?] = [
+            Bundle.main.resourceURL,
+            Bundle.main.bundleURL,
+            Bundle(for: ToolDisplayBundleLocator.self).resourceURL,
+            Bundle(for: ToolDisplayBundleLocator.self).bundleURL,
+        ]
+
+        for candidate in candidates {
+            guard let baseURL = candidate else { continue }
+
+            var roots = [
+                baseURL,
+                baseURL.appendingPathComponent("Resources"),
+                baseURL.appendingPathComponent("Contents/Resources"),
+            ]
+            var current = baseURL
+            for _ in 0..<5 {
+                current = current.deletingLastPathComponent()
+                roots.append(current)
+                roots.append(current.appendingPathComponent("Resources"))
+                roots.append(current.appendingPathComponent("Contents/Resources"))
+            }
+
+            for root in roots {
+                if let bundle = Bundle(
+                    url: root.appendingPathComponent("\(self.resourceBundleName).bundle"))
+                {
+                    return bundle
+                }
+            }
+        }
+
+        return nil
     }
 
     private static func defaultConfig() -> ToolDisplayConfig {
@@ -219,3 +273,5 @@ public enum ToolDisplayRegistry {
         return value.replacingOccurrences(of: home, with: "~")
     }
 }
+
+private final class ToolDisplayBundleLocator {}

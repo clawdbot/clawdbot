@@ -58,12 +58,25 @@ Canonical security policy and reporting:
 
 We prioritize secure defaults, but also expose clear knobs for trusted high-power workflows.
 
+Privacy follows the same default rule.
+OpenClaw sends no usage analytics, tracking identifiers, or attribution tags unless the operator turned that on themselves.
+The setup wizard offers optional anonymous feature statistics, with no selected by default; the daily update check reports version and platform and can be disabled.
+See [Usage telemetry and update checks](https://docs.openclaw.ai/gateway/telemetry).
+
 ## Plugins & Memory
 
 OpenClaw has an extensive plugin API.
 Core stays lean; optional capabilities should usually ship as plugins.
 We are generally slimming down core while expanding what plugins can do.
 If a useful feature cannot be built as a plugin yet, we welcome PRs and design discussions that extend the plugin API instead of adding one-off core behavior.
+
+Two layers, two bars.
+The core carries a per-call tax: each core tool, prompt line, and config key reaches every operator on every model request, so additions there face the strictest scrutiny.
+Plugins, skills, channels, and apps carry no such tax, and we want that surface to keep growing.
+When our contribution rules read as hostile to a feature, re-check the layer: usually they object to where it plugs in, not to the feature existing.
+
+Recurring demand defines interfaces.
+Once several independent PRs or requests wire in the same kind of capability, the right response is a contract, not a queue of merges: land the seam in core or the SDK, port the bundled implementation onto it, and let the remaining candidates ship as plugins against it.
 
 There are two broad plugin styles:
 
@@ -117,9 +130,9 @@ It is widely known, fast to iterate in, and easy to read, modify, and extend.
 - New core skills when they can live on [ClawHub](https://clawhub.ai/)
 - Full-doc translation sets for all docs (deferred; we plan AI-generated translations later)
 - Commercial service integrations that do not clearly fit the model-provider category
+- Cloud-based sandbox providers as OpenClaw plugins; implement provider support in [Crabbox](https://github.com/openclaw/crabbox) instead
 - Wrapper channels around already supported channels without a clear capability or security gap
 - MCP work that duplicates existing MCP, ACPX, plugin, or ClawHub paths without a clear product or security gap
-- Agent-hierarchy frameworks (manager-of-managers / nested planner trees) as a default architecture
 - Heavy orchestration layers that duplicate existing agent and tool infrastructure
 
 This list is a roadmap guardrail, not a law of physics.

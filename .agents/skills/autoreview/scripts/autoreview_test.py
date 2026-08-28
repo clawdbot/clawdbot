@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
+import copy
 import importlib.util
 import json
 import os
@@ -102,6 +104,685 @@ class AutoreviewCursorTests(unittest.TestCase):
         self.assertIn("review engine result was not structured JSON", str(exc_info.exception))
 
 
+class AutoreviewPriorityTests(unittest.TestCase):
+    def test_default_priority_is_p0(self) -> None:
+        with mock.patch.object(sys, "argv", ["autoreview"]):
+            args = AUTOREVIEW.parse_args()
+        self.assertEqual(args.max_priority, "P0")
+
+    def test_priority_filter_omits_lower_findings_and_cleans_verdict(self) -> None:
+        report = copy.deepcopy(DRAFT_REPORT)
+        AUTOREVIEW.filter_findings_by_priority(report, "P0")
+        self.assertEqual(report["findings"], [])
+        self.assertEqual(report["overall_correctness"], "patch is correct")
+        self.assertIn("below the requested P0", report["overall_explanation"])
+
+
+def amp_test_stream(
+    cwd: Path,
+    *,
+    tools: list[object] | None = None,
+    mcp_servers: list[object] | None = None,
+    trigger: str = "Run the isolated autoreview adapter.",
+    tool_name: str = "autoreview_generate",
+    tool_input: object = None,
+    tool_result_id: str = "amp-tool-use",
+    tool_error: bool = False,
+    tool_result_content: str | None = None,
+) -> str:
+    if tool_input is None:
+        tool_input = {}
+    if tool_result_content is None:
+        tool_result_content = (
+            "Autoreview generation failed." if tool_error else "Adapter completed."
+        )
+    return "\n".join(
+        [
+            json.dumps(
+                {
+                    "type": "system",
+                    "subtype": "init",
+                    "cwd": str(cwd),
+                    "session_id": "amp-test-session",
+                    "tools": ["autoreview_generate"] if tools is None else tools,
+                    "mcp_servers": [] if mcp_servers is None else mcp_servers,
+                    "agent_mode": "medium",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [{"type": "text", "text": trigger}],
+                    },
+                    "parent_tool_use_id": None,
+                    "session_id": "amp-test-session",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [
+                            {
+                                "type": "tool_use",
+                                "id": "amp-tool-use",
+                                "name": tool_name,
+                                "input": tool_input,
+                            }
+                        ],
+                    },
+                    "parent_tool_use_id": None,
+                    "session_id": "amp-test-session",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "user",
+                    "message": {
+                        "role": "user",
+                        "content": [
+                            {
+                                "type": "tool_result",
+                                "tool_use_id": tool_result_id,
+                                "content": tool_result_content,
+                                "is_error": tool_error,
+                            }
+                        ],
+                    },
+                    "parent_tool_use_id": None,
+                    "session_id": "amp-test-session",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "assistant",
+                    "message": {
+                        "role": "assistant",
+                        "content": [{"type": "text", "text": "Completed."}],
+                    },
+                    "parent_tool_use_id": None,
+                    "session_id": "amp-test-session",
+                }
+            ),
+            json.dumps(
+                {
+                    "type": "result",
+                    "subtype": "success",
+                    "is_error": False,
+                    "result": "Completed.",
+                    "session_id": "amp-test-session",
+                }
+            ),
+        ]
+    ) + "\n"
+
+
+def amp_test_plugin_list(plugin_path: Path) -> str:
+    return "\n".join(
+        [
+            f"✓ {plugin_path} active",
+            "  tool: autoreview_generate",
+            "  agent: autoreview-adapter",
+            "  agent mode: autoreview",
+        ]
+    ) + "\n"
+
+
+def amp_test_mcp_denial_result(
+    command: list[str],
+    env: dict[str, str],
+) -> subprocess.CompletedProcess[str]:
+    skills_root = Path(env["HOME"]) / ".config" / "agents" / "skills"
+    probe_roots = list(skills_root.glob("autoreview-mcp-deny-*"))
+    if len(probe_roots) != 1:
+        raise AssertionError(f"expected one MCP denial probe, found {probe_roots}")
+    mcp_config = json.loads((probe_roots[0] / "mcp.json").read_text(encoding="utf-8"))
+    probe_name = next(iter(mcp_config))
+    return subprocess.CompletedProcess(
+        command,
+        0,
+        "12 tools available\n",
+        f"error connecting to {probe_name}: MCP server is not allowed by MCP permissions\n",
+    )
+
+
+class AutoreviewAmpTests(unittest.TestCase):
+    def test_amp_bin_cli_option_and_defaults(self) -> None:
+        with mock.patch.object(
+            sys,
+            "argv",
+            ["autoreview", "--engine", "amp", "--amp-bin", "/tmp/trusted-amp"],
+        ):
+            args = AUTOREVIEW.parse_args()
+        reviewer = AUTOREVIEW.reviewer_args(args)[0]
+        self.assertEqual(reviewer.amp_bin, "/tmp/trusted-amp")
+        self.assertEqual(reviewer.model, "openai/gpt-5.6-sol")
+        self.assertEqual(reviewer.thinking, "high")
+        self.assertFalse(reviewer.tools)
+
+    @unittest.skipIf(os.name == "nt", "Amp runtime is unsupported on native Windows")
+    def test_amp_isolation_probe_requires_api_key_and_flags(self) -> None:
+        args = argparse.Namespace(amp_bin="amp")
+        required_flags = " ".join(
+            [
+                "--execute",
+                "--stream-json",
+                "--stream-json-input",
+                "--plugin-ready-timeout",
+                "--settings-file",
+                "--no-ide",
+            ]
+        )
+        with tempfile.TemporaryDirectory(prefix="autoreview-amp-probe-test.") as tmpdir, mock.patch.dict(
+            os.environ,
+            {"AMP_API_KEY": "test-key"},
+            clear=False,
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "resolve_command",
+            return_value="/usr/bin/amp",
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "safe_engine_env",
+            return_value={},
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "safe_temp_root",
+            return_value=Path(tmpdir),
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "run",
+            return_value=subprocess.CompletedProcess(["amp", "--help"], 0, required_flags, ""),
+        ):
+            self.assertEqual(
+                AUTOREVIEW.ensure_amp_isolation_supported(args, Path(tmpdir)),
+                "/usr/bin/amp",
+            )
+
+        with mock.patch.dict(os.environ, {"AMP_API_KEY": ""}, clear=False), mock.patch.object(
+            AUTOREVIEW,
+            "resolve_command",
+            return_value="/usr/bin/amp",
+        ):
+            with self.assertRaisesRegex(SystemExit, "requires AMP_API_KEY"):
+                AUTOREVIEW.ensure_amp_isolation_supported(args, Path("/tmp/repo"))
+
+    def test_amp_isolation_probe_rejects_native_windows(self) -> None:
+        args = argparse.Namespace(amp_bin="amp")
+        repo = Path("/tmp/repo")
+        context = (
+            contextlib.nullcontext()
+            if os.name == "nt"
+            else mock.patch.object(AUTOREVIEW.os, "name", "nt")
+        )
+        with context:
+            with self.assertRaisesRegex(SystemExit, "native Windows"):
+                AUTOREVIEW.ensure_amp_isolation_supported(args, repo)
+
+    @unittest.skipIf(os.name == "nt", "Amp runtime is unsupported on native Windows")
+    def test_amp_run_keeps_review_prompt_out_of_outer_agent(self) -> None:
+        args = argparse.Namespace(
+            amp_bin="amp",
+            max_output_chars=2_000_000,
+            model="openai/gpt-5.6-sol",
+            stream_engine_output=False,
+            thinking="high",
+        )
+        secret_prompt = "review diff PRIVATE_REVIEW_MARKER_8f3c"
+        observed: dict[str, object] = {}
+
+        def fake_preflight(
+            command: list[str],
+            cwd: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            env = kwargs["env"]
+            assert isinstance(env, dict)
+            runtime_root = Path(str(env["XDG_CONFIG_HOME"])).parent
+            plugin_root = Path(str(env["XDG_CONFIG_HOME"])) / "amp" / "plugins"
+            plugin_path = next(plugin_root.glob("autoreview-*.ts"))
+            if command[-2:] == ["tools", "list"]:
+                observed["mcp_preflight_prompt_exists"] = (
+                    runtime_root / "review-prompt.txt"
+                ).exists()
+                return amp_test_mcp_denial_result(command, env)
+            observed["preflight_command"] = command
+            observed["preflight_prompt_exists"] = (
+                runtime_root / "review-prompt.txt"
+            ).exists()
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                amp_test_plugin_list(plugin_path),
+                "",
+            )
+
+        def fake_execute(
+            command: list[str],
+            cwd: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            observed["command"] = command
+            observed["cwd"] = cwd
+            observed["input"] = kwargs["input_text"]
+            observed["env"] = kwargs["env"]
+            env = kwargs["env"]
+            assert isinstance(env, dict)
+            runtime_root = Path(str(env["XDG_CONFIG_HOME"])).parent
+            prompt_path = runtime_root / "review-prompt.txt"
+            result_path = runtime_root / "review-result.json"
+            settings_path = runtime_root / "settings.json"
+            plugin_root = Path(str(env["XDG_CONFIG_HOME"])) / "amp" / "plugins"
+            plugin_path = next(plugin_root.glob("autoreview-*.ts"))
+            observed["prompt"] = prompt_path.read_text(encoding="utf-8")
+            observed["settings"] = json.loads(settings_path.read_text(encoding="utf-8"))
+            observed["plugin"] = plugin_path.read_text(encoding="utf-8")
+            observed["plugin_path"] = plugin_path
+            observed["workspace"] = list(cwd.iterdir())
+            result_path.write_text(json.dumps(FINAL_REPORT), encoding="utf-8")
+            result_path.chmod(0o600)
+            return subprocess.CompletedProcess(command, 0, amp_test_stream(cwd), "")
+
+        inherited = {
+            "AMP_API_KEY": "test-key",
+            "AMP_URL": "https://attacker.invalid",
+            "NODE_OPTIONS": "--require=/tmp/attack.js",
+            "PYTHONPATH": "/tmp/attack",
+            "PLUGINS": "inherited-plugins",
+        }
+        with tempfile.TemporaryDirectory(prefix="autoreview-amp-run-test.") as tmpdir:
+            repo = Path(tmpdir) / "repo"
+            repo.mkdir()
+            with mock.patch.dict(os.environ, inherited, clear=False), mock.patch.object(
+                AUTOREVIEW,
+                "ensure_amp_isolation_supported",
+                return_value="/usr/bin/amp",
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "run",
+                side_effect=fake_preflight,
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "run_with_heartbeat",
+                side_effect=fake_execute,
+            ):
+                output = AUTOREVIEW.run_amp(args, repo, secret_prompt)
+
+        self.assertEqual(json.loads(output), FINAL_REPORT)
+        self.assertFalse(observed["mcp_preflight_prompt_exists"])
+        self.assertFalse(observed["preflight_prompt_exists"])
+        preflight_command = observed["preflight_command"]
+        self.assertIsInstance(preflight_command, list)
+        assert isinstance(preflight_command, list)
+        self.assertEqual(preflight_command[-2:], ["plugins", "list"])
+        command = observed["command"]
+        self.assertIsInstance(command, list)
+        assert isinstance(command, list)
+        self.assertIn("--execute", command)
+        self.assertIn("--stream-json-input", command)
+        self.assertIn("--settings-file", command)
+        self.assertNotIn("--orb-execute", command)
+        self.assertEqual(command[command.index("--mode") + 1], "autoreview")
+        self.assertNotIn(secret_prompt, " ".join(command))
+        self.assertNotIn(secret_prompt, str(observed["input"]))
+        self.assertEqual(observed["prompt"], secret_prompt)
+        self.assertEqual(observed["workspace"], [])
+        settings = observed["settings"]
+        self.assertIsInstance(settings, dict)
+        assert isinstance(settings, dict)
+        self.assertNotIn("amp.tools.disable", settings)
+        self.assertNotIn("amp.tools.enable", settings)
+        self.assertEqual(settings["amp.updates.mode"], "disabled")
+        self.assertEqual(
+            settings["amp.mcpPermissions"],
+            [
+                {"matches": {"command": "*"}, "action": "reject"},
+                {"matches": {"url": "*"}, "action": "reject"},
+            ],
+        )
+        plugin = observed["plugin"]
+        self.assertIsInstance(plugin, str)
+        assert isinstance(plugin, str)
+        self.assertIn("amp.ai.generate", plugin)
+        self.assertIn("amp.registerTool", plugin)
+        self.assertIn("amp.createAgent", plugin)
+        self.assertIn('tools: ["autoreview_generate"]', plugin)
+        self.assertIn("readFileSync", plugin)
+        self.assertNotIn(secret_prompt, plugin)
+        env = observed["env"]
+        self.assertIsInstance(env, dict)
+        assert isinstance(env, dict)
+        self.assertEqual(env["AMP_API_KEY"], "test-key")
+        self.assertNotIn("AMP_URL", env)
+        self.assertNotIn("NODE_OPTIONS", env)
+        self.assertNotIn("PYTHONPATH", env)
+        self.assertEqual(env["PLUGINS"], "all")
+        plugin_path = observed["plugin_path"]
+        self.assertIsInstance(plugin_path, Path)
+        assert isinstance(plugin_path, Path)
+        self.assertRegex(plugin_path.stem, r"^autoreview-[0-9a-f]{32}$")
+        cwd = observed["cwd"]
+        self.assertIsInstance(cwd, Path)
+        assert isinstance(cwd, Path)
+        self.assertNotEqual(cwd.resolve(), repo.resolve())
+        self.assertEqual(Path(env["HOME"]).parent, cwd.parent)
+
+    def test_amp_stream_attestation_rejects_bad_events(self) -> None:
+        cwd = Path("/tmp/amp-review-empty")
+        misplaced_events = [
+            json.loads(line) for line in amp_test_stream(cwd).splitlines()
+        ]
+        tool_use = misplaced_events[2]["message"]["content"].pop()
+        misplaced_events[4]["message"]["content"].append(tool_use)
+        misplaced = "\n".join(json.dumps(event) for event in misplaced_events) + "\n"
+        extra_result_events = [
+            json.loads(line) for line in amp_test_stream(cwd).splitlines()
+        ]
+        extra_result_events[3]["message"]["content"].append(
+            {"type": "text", "text": "unexpected"}
+        )
+        extra_result = (
+            "\n".join(json.dumps(event) for event in extra_result_events) + "\n"
+        )
+        cases = {
+            "malformed": "not-json\n",
+            "tools": amp_test_stream(cwd, tools=["autoreview_generate", "shell_command"]),
+            "mcp": amp_test_stream(cwd, mcp_servers=[{"name": "server"}]),
+            "trigger": amp_test_stream(cwd, trigger="untrusted diff"),
+            "wrong tool": amp_test_stream(cwd, tool_name="shell_command"),
+            "tool input": amp_test_stream(cwd, tool_input={"command": "id"}),
+            "tool result": amp_test_stream(cwd, tool_result_id="wrong-id"),
+            "unsanitized error": amp_test_stream(
+                cwd,
+                tool_error=True,
+                tool_result_content="provider echoed PRIVATE_REVIEW_MARKER_8f3c",
+            ),
+            "multiple init": amp_test_stream(cwd).splitlines()[0] + "\n" + amp_test_stream(cwd),
+            "multiple result": amp_test_stream(cwd) + amp_test_stream(cwd).splitlines()[-1] + "\n",
+            "misplaced tool use": misplaced,
+            "extra tool result content": extra_result,
+        }
+        for label, stream in cases.items():
+            with self.subTest(label=label), self.assertRaisesRegex(
+                SystemExit,
+                "amp isolation attestation failed",
+            ):
+                AUTOREVIEW.attest_amp_stream(stream, cwd)
+
+        self.assertTrue(AUTOREVIEW.attest_amp_stream(amp_test_stream(cwd), cwd))
+        self.assertFalse(
+            AUTOREVIEW.attest_amp_stream(amp_test_stream(cwd, tool_error=True), cwd)
+        )
+
+    @unittest.skipIf(os.name == "nt", "Amp runtime is unsupported on native Windows")
+    def test_amp_run_reports_timeout_before_stream_attestation(self) -> None:
+        args = argparse.Namespace(
+            amp_bin="amp",
+            engine_timeout_seconds=0.01,
+            max_output_chars=2_000_000,
+            model="openai/gpt-5.6-sol",
+            stream_engine_output=False,
+            thinking="high",
+        )
+
+        def fake_preflight(
+            command: list[str],
+            cwd: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            env = kwargs["env"]
+            assert isinstance(env, dict)
+            if command[-2:] == ["tools", "list"]:
+                return amp_test_mcp_denial_result(command, env)
+            plugin_root = Path(str(env["XDG_CONFIG_HOME"])) / "amp" / "plugins"
+            plugin_path = next(plugin_root.glob("autoreview-*.ts"))
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                amp_test_plugin_list(plugin_path),
+                "",
+            )
+
+        def fake_execute(
+            command: list[str],
+            cwd: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            self.assertEqual(kwargs["max_runtime_seconds"], 0.01)
+            return subprocess.CompletedProcess(
+                command,
+                124,
+                '{"type":"system","subtype":"init"}\n',
+                "amp engine timed out after 0.01s",
+            )
+
+        with tempfile.TemporaryDirectory(prefix="autoreview-amp-timeout-test.") as tmpdir:
+            repo = Path(tmpdir) / "repo"
+            repo.mkdir()
+            with mock.patch.object(
+                AUTOREVIEW,
+                "ensure_amp_isolation_supported",
+                return_value="/usr/bin/amp",
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "run",
+                side_effect=fake_preflight,
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "run_with_heartbeat",
+                side_effect=fake_execute,
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "attest_amp_stream",
+                side_effect=AssertionError("timeout stream must not be attested"),
+            ) as attest:
+                with self.assertRaises(SystemExit) as exc_info:
+                    AUTOREVIEW.run_amp(args, repo, "review")
+
+        message = str(exc_info.exception)
+        self.assertIn("amp engine failed (124)", message)
+        self.assertIn("amp engine timed out after 0.01s", message)
+        attest.assert_not_called()
+
+    def test_amp_plugin_inventory_attestation_fails_closed(self) -> None:
+        cwd = Path("/tmp/amp-review-empty")
+        plugin_path = cwd.parent / "config" / "amp" / "plugins" / "autoreview-token.ts"
+        valid = amp_test_plugin_list(plugin_path)
+        AUTOREVIEW.attest_amp_plugin_inventory(valid, plugin_path, cwd)
+
+        cases = {
+            "missing": "",
+            "inactive": valid.replace("✓", "✗", 1).replace(" active", " error", 1),
+            "other plugin": valid
+            + amp_test_plugin_list(plugin_path.with_name("unexpected.ts")),
+            "event handler": valid + "  events: agent.start\n",
+            "other tool": valid.replace(
+                "  agent: autoreview-adapter",
+                "  tool: shell_command\n  agent: autoreview-adapter",
+            ),
+        }
+        for label, output in cases.items():
+            with self.subTest(label=label), self.assertRaisesRegex(
+                SystemExit,
+                "amp plugin isolation preflight failed",
+            ):
+                AUTOREVIEW.attest_amp_plugin_inventory(output, plugin_path, cwd)
+
+    @unittest.skipIf(os.name == "nt", "Amp runtime is unsupported on native Windows")
+    def test_amp_run_surfaces_direct_generation_failure(self) -> None:
+        args = argparse.Namespace(
+            amp_bin="amp",
+            max_output_chars=2_000_000,
+            model="openai/gpt-5.6-sol",
+            stream_engine_output=False,
+            thinking="high",
+        )
+
+        def fake_preflight(
+            command: list[str],
+            cwd: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            env = kwargs["env"]
+            assert isinstance(env, dict)
+            if command[-2:] == ["tools", "list"]:
+                return amp_test_mcp_denial_result(command, env)
+            plugin_root = Path(str(env["XDG_CONFIG_HOME"])) / "amp" / "plugins"
+            plugin_path = next(plugin_root.glob("autoreview-*.ts"))
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                amp_test_plugin_list(plugin_path),
+                "",
+            )
+
+        def fake_execute(
+            command: list[str],
+            cwd: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            env = kwargs["env"]
+            assert isinstance(env, dict)
+            error_path = Path(str(env["XDG_CONFIG_HOME"])).parent / "review-error.txt"
+            error_path.write_text("provider rejected model", encoding="utf-8")
+            error_path.chmod(0o600)
+            return subprocess.CompletedProcess(
+                command,
+                0,
+                amp_test_stream(cwd, tool_error=True),
+                "",
+            )
+
+        with tempfile.TemporaryDirectory(prefix="autoreview-amp-error-test.") as tmpdir:
+            repo = Path(tmpdir) / "repo"
+            repo.mkdir()
+            with mock.patch.object(
+                AUTOREVIEW,
+                "ensure_amp_isolation_supported",
+                return_value="/usr/bin/amp",
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "run",
+                side_effect=fake_preflight,
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "run_with_heartbeat",
+                side_effect=fake_execute,
+            ):
+                with self.assertRaisesRegex(SystemExit, "provider rejected model"):
+                    AUTOREVIEW.run_amp(args, repo, "review")
+
+
+class AutoreviewTruffleHogTests(unittest.TestCase):
+    def test_findings_map_to_prompt_dataset_untracked_and_diff_paths(self) -> None:
+        prompt = "\n".join(
+            (
+                "# Prompt file: review-notes.md",
+                "prompt body",
+                "# Dataset: evidence.json",
+                "dataset body",
+                "# Untracked File",
+                'path: "new/config.ts"',
+                "source-line 1: redacted example",
+                "diff --git a/old.ts b/new.ts",
+                "--- a/old.ts",
+                "+++ b/new.ts",
+                "@@ -1 +1 @@",
+                "+redacted example",
+            )
+        )
+        output = "\n".join(
+            json.dumps(
+                {
+                    "SourceMetadata": {
+                        "Data": {"Filesystem": {"line": line_number}}
+                    }
+                }
+            )
+            for line_number in (2, 4, 7, 12)
+        )
+
+        self.assertEqual(
+            AUTOREVIEW.trufflehog_review_pack_paths(prompt, output),
+            ["evidence.json", "new.ts", "new/config.ts", "review-notes.md"],
+        )
+
+    def test_deleted_diff_finding_maps_to_original_path(self) -> None:
+        prompt = "\n".join(
+            (
+                "# Change Bundle",
+                "diff --git a/config.ts b/config.ts",
+                "deleted file mode 100644",
+                "--- a/config.ts",
+                "+++ /dev/null",
+                "@@ -1 +0,0 @@",
+                "-redacted example",
+            )
+        )
+        output = json.dumps(
+            {
+                "SourceMetadata": {
+                    "Data": {"Filesystem": {"Line": 7}}
+                }
+            }
+        )
+
+        self.assertEqual(
+            AUTOREVIEW.trufflehog_review_pack_paths(prompt, output),
+            ["config.ts"],
+        )
+
+    def test_unusable_scanner_output_falls_back_without_echoing_it(self) -> None:
+        output = "not-json\n" + json.dumps(
+            {
+                "SourceMetadata": {
+                    "Data": {"Filesystem": {"line": "invalid"}}
+                },
+                "Raw": "must-not-be-returned",
+            }
+        )
+
+        self.assertEqual(
+            AUTOREVIEW.trufflehog_review_pack_paths("prompt", output),
+            ["review pack"],
+        )
+
+    def test_scanner_command_requests_verified_and_unknown_results(self) -> None:
+        prompt = "review pack with redacted examples only"
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = Path(tempdir)
+
+            def run_scanner(
+                command: list[str],
+                cwd: Path,
+                **kwargs: object,
+            ) -> subprocess.CompletedProcess[str]:
+                self.assertEqual(cwd, Path(command[2]).parent)
+                self.assertEqual(Path(command[2]).read_text(encoding="utf-8"), prompt)
+                self.assertEqual(
+                    command[3:],
+                    [
+                        "--json",
+                        "--no-color",
+                        "--results=verified,unknown",
+                        "--fail",
+                        "--fail-on-scan-errors",
+                    ],
+                )
+                self.assertEqual(kwargs["check"], False)
+                return subprocess.CompletedProcess(command, 0, "", "")
+
+            with mock.patch.object(
+                AUTOREVIEW,
+                "find_command",
+                return_value="/trusted/trufflehog",
+            ), mock.patch.object(AUTOREVIEW, "run", side_effect=run_scanner):
+                AUTOREVIEW.scan_outgoing_review_pack(repo, prompt)
+
+
 class AutoreviewCompatibilityTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -125,43 +806,147 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
                 os.environ[key] = value
         cls.home_dir.cleanup()
 
-    def test_harness_rejects_disabled_cursor_engine(self) -> None:
-        harness_path = SCRIPT_PATH.with_name("test-review-harness.py")
-        namespace = runpy.run_path(str(harness_path))
-        with self.assertRaises(SystemExit):
-            namespace["parse_args"](["--engine", "cursor"])
-
-    def test_cursor_agent_bin_cli_alias(self) -> None:
+    def test_kimi_bin_cli_option(self) -> None:
         with mock.patch.object(
             sys,
             "argv",
-            ["autoreview", "--cursor-agent-bin", "/tmp/legacy-cursor"],
+            ["autoreview", "--kimi-bin", "/tmp/trusted-kimi"],
         ):
             args = AUTOREVIEW.parse_args()
-        self.assertEqual(args.cursor_bin, "/tmp/legacy-cursor")
+        self.assertEqual(args.kimi_bin, "/tmp/trusted-kimi")
 
-    def test_cursor_agent_bin_env_alias(self) -> None:
-        with mock.patch.dict(
-            os.environ,
-            {"CURSOR_AGENT_BIN": "/tmp/legacy-cursor"},
-            clear=False,
+    def test_kimi_reviewer_disables_tools(self) -> None:
+        args = argparse.Namespace(
+            engine="kimi",
+            model=None,
+            thinking=["on"],
+            fallback_model=None,
+            codex_config=None,
+            codex_speed=None,
+            tools=True,
+        )
+
+        reviewer = AUTOREVIEW.reviewer_args(args)[0]
+
+        self.assertEqual(reviewer.engine, "kimi")
+        self.assertEqual(reviewer.thinking, "on")
+        self.assertFalse(reviewer.tools)
+
+    def test_kimi_isolation_requires_current_cli_contract(self) -> None:
+        args = argparse.Namespace(kimi_bin="kimi")
+        required_flags = " ".join(
+            [
+                "--agent-file",
+                "--skills-dir",
+                "--prompt",
+                "--output-format",
+                "--model",
+            ]
+        )
+
+        def fake_run(command: list[str], *_args: object, **_kwargs: object) -> subprocess.CompletedProcess[str]:
+            if "--version" in command:
+                return subprocess.CompletedProcess(command, 0, "0.31.1", "")
+            return subprocess.CompletedProcess(command, 0, required_flags, "")
+
+        with tempfile.TemporaryDirectory(prefix="autoreview-kimi-probe-test.") as tmpdir, mock.patch.object(
+            AUTOREVIEW,
+            "resolve_command",
+            return_value="/usr/bin/kimi",
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "safe_engine_env",
+            return_value={},
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "safe_temp_root",
+            return_value=Path(tmpdir),
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "run",
+            side_effect=fake_run,
         ):
-            os.environ.pop("CURSOR_BIN", None)
-            with mock.patch.object(sys, "argv", ["autoreview"]):
-                args = AUTOREVIEW.parse_args()
-        self.assertEqual(args.cursor_bin, "/tmp/legacy-cursor")
+            self.assertEqual(
+                AUTOREVIEW.ensure_kimi_isolation_supported(args, Path(tmpdir)),
+                "/usr/bin/kimi",
+            )
 
-    def test_cursor_agent_reviewer_alias_normalizes_to_cursor(self) -> None:
-        self.assertEqual(
-            AUTOREVIEW.parse_reviewer_token("cursor-agent:auto"),
-            ("cursor", "auto", None),
+    def test_kimi_runs_with_empty_tools_skills_and_mcp(self) -> None:
+        args = argparse.Namespace(
+            kimi_bin="kimi",
+            model="kimi-model",
+            stream_engine_output=False,
+            thinking="on",
         )
+        observed: dict[str, object] = {}
 
-    def test_cursor_agent_keyed_option_normalizes_to_cursor(self) -> None:
-        self.assertEqual(
-            AUTOREVIEW.parse_keyed_options(["cursor-agent=auto"], "model"),
-            (None, {"cursor": "auto"}),
-        )
+        def fake_run(
+            command: list[str],
+            cwd: Path,
+            **kwargs: object,
+        ) -> subprocess.CompletedProcess[str]:
+            observed["command"] = command
+            observed["cwd"] = cwd
+            observed["env"] = kwargs["env"]
+            env = kwargs["env"]
+            assert isinstance(env, dict)
+            home = Path(str(env["KIMI_CODE_HOME"]))
+            observed["agent"] = (home / "reviewer.md").read_text(encoding="utf-8")
+            observed["config"] = (home / "config.toml").read_text(encoding="utf-8")
+            observed["skills"] = list((home / "skills").iterdir())
+            observed["workspace"] = list(cwd.iterdir())
+            stream = (
+                json.dumps({"role": "meta", "type": "system.version", "version": "0.31.1"})
+                + "\n"
+                + json.dumps({"role": "assistant", "content": json.dumps(FINAL_REPORT)})
+                + "\n"
+            )
+            return subprocess.CompletedProcess(command, 0, stream, "")
+
+        with tempfile.TemporaryDirectory(prefix="autoreview-kimi-run-test.") as tmpdir:
+            repo = Path(tmpdir) / "repo"
+            repo.mkdir()
+            with mock.patch.object(
+                AUTOREVIEW,
+                "ensure_kimi_isolation_supported",
+                return_value="/usr/bin/kimi",
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "load_kimi_review_config",
+                return_value=({"telemetry": False}, None),
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "run_with_heartbeat",
+                side_effect=fake_run,
+            ):
+                output = AUTOREVIEW.run_kimi(args, repo, "review prompt")
+
+        self.assertEqual(json.loads(output), FINAL_REPORT)
+        command = observed["command"]
+        self.assertIsInstance(command, list)
+        assert isinstance(command, list)
+        self.assertEqual(command[command.index("--prompt") + 1], "review prompt")
+        self.assertEqual(command[command.index("--output-format") + 1], "stream-json")
+        self.assertEqual(command[command.index("--model") + 1], "kimi-model")
+        self.assertNotIn("--thinking", command)
+        agent = observed["agent"]
+        self.assertIsInstance(agent, str)
+        assert isinstance(agent, str)
+        self.assertIn("tools: []", agent)
+        self.assertIn("subagents: []", agent)
+        config = observed["config"]
+        self.assertIsInstance(config, str)
+        assert isinstance(config, str)
+        self.assertIn("[thinking]", config)
+        self.assertIn("enabled = true", config)
+        self.assertEqual(observed["skills"], [])
+        self.assertEqual(observed["workspace"], [])
+        env = observed["env"]
+        self.assertIsInstance(env, dict)
+        assert isinstance(env, dict)
+        self.assertEqual(env["KIMI_DISABLE_TELEMETRY"], "1")
+        self.assertEqual(env["KIMI_CODE_NO_AUTO_UPDATE"], "1")
+        self.assertNotEqual(Path(str(env["KIMI_CODE_HOME"])), repo)
 
     def test_codex_config_status_exposes_keys_only(self) -> None:
         args = argparse.Namespace(codex_config=['model_verbosity="low"'])
@@ -198,6 +983,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
             AUTOREVIEW,
             "resolve_command",
+            return_value="/usr/bin/codex",
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "ensure_codex_isolation_supported",
             return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
             AUTOREVIEW,
@@ -244,7 +1033,7 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory(prefix="autoreview-codex-workspace-test.") as tmpdir:
             repo = Path(tmpdir)
-            (repo / ".env").write_text("OPENAI_API_KEY=ignored-secret\n")
+            (repo / ".env").write_text("ignored environment fixture\n")
             with mock.patch.dict(
                 os.environ,
                 {"CODEX_HOME": ""},
@@ -252,6 +1041,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             ), mock.patch.object(
                 AUTOREVIEW,
                 "resolve_command",
+                return_value="/usr/bin/codex",
+            ), mock.patch.object(
+                AUTOREVIEW,
+                "ensure_codex_isolation_supported",
                 return_value="/usr/bin/codex",
             ), mock.patch.object(
                 AUTOREVIEW,
@@ -317,6 +1110,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
             AUTOREVIEW,
             "resolve_command",
             return_value="/usr/bin/codex",
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "ensure_codex_isolation_supported",
+            return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
             AUTOREVIEW,
             "prepare_codex_runtime_auth",
@@ -357,6 +1154,10 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="autoreview-codex-fallback.") as tmpdir, mock.patch.object(
             AUTOREVIEW,
             "resolve_command",
+            return_value="/usr/bin/codex",
+        ), mock.patch.object(
+            AUTOREVIEW,
+            "ensure_codex_isolation_supported",
             return_value="/usr/bin/codex",
         ), mock.patch.object(AUTOREVIEW, "codex_auth_config_flags", return_value=[]), mock.patch.object(
             AUTOREVIEW,
@@ -441,156 +1242,6 @@ class AutoreviewCompatibilityTests(unittest.TestCase):
         }
         with self.assertRaisesRegex(SystemExit, "result was not structured JSON"):
             AUTOREVIEW.extract_json(json.dumps(payload))
-
-    def test_retry_filter_only_matches_parse_failures(self) -> None:
-        self.assertTrue(AUTOREVIEW.is_structured_output_failure("review engine returned non-JSON output: nope"))
-        self.assertTrue(AUTOREVIEW.is_structured_output_failure("review engine result was not structured JSON:\nnope"))
-        self.assertFalse(AUTOREVIEW.is_structured_output_failure("review JSON missing required key: findings"))
-        self.assertFalse(AUTOREVIEW.is_structured_output_failure("finding 0 has invalid priority"))
-
-    def test_cursor_workspace_instructions_fail_closed(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
-            repo = Path(tmpdir)
-            args = argparse.Namespace(
-                thinking=None,
-                tools=True,
-                web_search=True,
-                cursor_allow_workspace_instructions=False,
-                cursor_bin="cursor-agent",
-                model="auto",
-                stream_engine_output=False,
-            )
-            with self.assertRaises(SystemExit) as exc_info:
-                AUTOREVIEW.run_cursor(args, repo, "prompt")
-            self.assertIn("cursor engine is unavailable", str(exc_info.exception))
-
-    def test_cursor_local_mcp_requires_explicit_approval(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
-            repo = Path(tmpdir)
-            (repo / ".cursor").mkdir()
-            (repo / ".cursor" / "mcp.json").write_text("{}\n")
-            args = argparse.Namespace(
-                thinking=None,
-                tools=True,
-                web_search=True,
-                cursor_allow_workspace_instructions=True,
-                cursor_bin="cursor-agent",
-                model="auto",
-                stream_engine_output=False,
-            )
-            with self.assertRaises(SystemExit) as exc_info:
-                AUTOREVIEW.run_cursor(args, repo, "prompt")
-            self.assertIn("cursor engine is unavailable", str(exc_info.exception))
-
-    def test_cursor_local_hooks_are_always_refused(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
-            repo = Path(tmpdir)
-            (repo / ".cursor").mkdir()
-            (repo / ".cursor" / "hooks.json").write_text("{}\n")
-            args = argparse.Namespace(
-                thinking=None,
-                tools=True,
-                web_search=True,
-                cursor_allow_workspace_instructions=True,
-                cursor_bin="cursor-agent",
-                model="auto",
-                stream_engine_output=False,
-            )
-            with self.assertRaises(SystemExit) as exc_info:
-                AUTOREVIEW.run_cursor(args, repo, "prompt")
-            self.assertIn("cursor engine is unavailable", str(exc_info.exception))
-
-    def test_cursor_local_permissions_are_always_refused(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
-            repo = Path(tmpdir)
-            (repo / ".cursor").mkdir()
-            (repo / ".cursor" / "cli.json").write_text("{}\n")
-            args = argparse.Namespace(
-                thinking=None,
-                tools=True,
-                web_search=True,
-                cursor_allow_workspace_instructions=True,
-                cursor_bin="cursor-agent",
-                model="auto",
-                stream_engine_output=False,
-            )
-            with self.assertRaises(SystemExit) as exc_info:
-                AUTOREVIEW.run_cursor(args, repo, "prompt")
-            self.assertIn("cursor engine is unavailable", str(exc_info.exception))
-
-    def test_cursor_is_disabled_without_repo_only_read_sandbox(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="autoreview-cursor-test.") as tmpdir:
-            root = Path(tmpdir)
-            repo = root / "repo"
-            repo.mkdir()
-            cursor_bin = root / "cursor-agent"
-            AUTOREVIEW.write_executable(cursor_bin, AUTOREVIEW.fake_cursor_script())
-            args = argparse.Namespace(
-                thinking=None,
-                tools=True,
-                web_search=True,
-                cursor_allow_workspace_instructions=True,
-                cursor_bin=str(cursor_bin),
-                model=None,
-                stream_engine_output=False,
-            )
-            with mock.patch.object(AUTOREVIEW, "cursor_global_hook_paths", return_value=[]):
-                with self.assertRaisesRegex(SystemExit, "Cursor read permissions"):
-                    AUTOREVIEW.run_cursor(args, repo, "prompt")
-
-    def test_cursor_engine_fails_closed_end_to_end(self) -> None:
-        with tempfile.TemporaryDirectory(prefix="autoreview-cursor-e2e.") as tmpdir:
-            root = Path(tmpdir)
-            repo = root / "repo"
-            repo.mkdir()
-            subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.name", "AutoReview Test"], cwd=repo, check=True)
-            subprocess.run(["git", "config", "user.email", "autoreview@example.invalid"], cwd=repo, check=True)
-            source = repo / "example.txt"
-            source.write_text("before\n")
-            subprocess.run(["git", "add", "example.txt"], cwd=repo, check=True)
-            subprocess.run(["git", "commit", "--quiet", "-m", "test: seed fixture"], cwd=repo, check=True)
-            source.write_text("after\n")
-
-            cursor_bin = root / "cursor-agent"
-            record_path = root / "record.json"
-            AUTOREVIEW.write_executable(cursor_bin, AUTOREVIEW.fake_cursor_script())
-            env = os.environ.copy()
-            env.update(
-                {
-                    "AUTOREVIEW_FAKE_RECORD": str(record_path),
-                    "AUTOREVIEW_FAKE_CURSOR_INVOCATIONS": str(root / "cursor-invocations.jsonl"),
-                    "GIT_CONFIG_GLOBAL": str(root / "hostile-gitconfig"),
-                    "NODE_OPTIONS": "--require=hostile.js",
-                    "PYTHONPATH": str(root / "hostile-python"),
-                    "PATH": f"{repo}{os.pathsep}{env.get('PATH', '')}",
-                    "HOME": str(root),
-                    "USERPROFILE": str(root),
-                }
-            )
-            result = subprocess.run(
-                [
-                    sys.executable,
-                    str(SCRIPT_PATH),
-                    "--mode",
-                    "local",
-                    "--engine",
-                    "cursor",
-                    "--cursor-bin",
-                    str(cursor_bin),
-                    "--cursor-allow-workspace-instructions",
-                ],
-                cwd=repo,
-                env=env,
-                text=True,
-                capture_output=True,
-                check=False,
-            )
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("Cursor read permissions", result.stderr)
-            self.assertFalse(record_path.exists())
-
 
 if __name__ == "__main__":
     unittest.main()

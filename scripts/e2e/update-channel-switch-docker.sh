@@ -18,7 +18,7 @@ PACKAGE_TGZ="$(docker_e2e_prepare_package_tgz update-channel-switch "${OPENCLAW_
 # Bare lanes mount the package artifact instead of baking app sources into the image.
 docker_e2e_package_mount_args "$PACKAGE_TGZ"
 OPENCLAW_TEST_STATE_SCRIPT_B64="$(
-  node "$ROOT_DIR/scripts/lib/openclaw-test-state.mjs" shell \
+  node --import tsx "$ROOT_DIR/scripts/lib/openclaw-test-state.mts" shell \
     --label update-channel-switch \
     --scenario update-stable |
     base64 |
@@ -61,7 +61,8 @@ node scripts/e2e/lib/package-git-fixture.mjs prepare "$git_root"
 node scripts/e2e/lib/update-channel-switch/assertions.mjs prepare-git-fixture "$git_root"
 (
   cd "$git_root"
-  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=optional --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
+  # Git-style fixtures still need optional native prebuilds; omit only development dependencies.
+  if ! openclaw_e2e_maybe_timeout "${OPENCLAW_E2E_NPM_INSTALL_TIMEOUT:-600s}" npm install --omit=dev --no-fund --no-audit >/tmp/openclaw-git-install.log 2>&1; then
     openclaw_e2e_print_log /tmp/openclaw-git-install.log >&2
     exit 1
   fi
@@ -93,10 +94,68 @@ export OPENCLAW_PACKAGE_ACCEPTANCE_LEGACY_COMPAT
 command -v openclaw >/dev/null
 openclaw_e2e_enable_openclaw_cli_timeout
 
+registry_port_file=/tmp/openclaw-update-channel-registry.port
+registry_log=/tmp/openclaw-update-channel-registry.log
+registry_pid=""
+cleanup_registry() {
+  if [ -n "$registry_pid" ]; then
+    kill "$registry_pid" 2>/dev/null || true
+    wait "$registry_pid" 2>/dev/null || true
+  fi
+}
+trap cleanup_registry EXIT
+rm -f "$registry_port_file"
+OPENCLAW_NPM_REGISTRY_DIST_TAGS="latest=0.0.0,beta=$package_version" \
+  OPENCLAW_NPM_REGISTRY_UPSTREAM=https://registry.npmjs.org \
+  node scripts/e2e/lib/plugins/npm-registry-server.mjs \
+    "$registry_port_file" \
+    openclaw \
+    "$package_version" \
+    "$package_tgz" \
+    >"$registry_log" 2>&1 &
+registry_pid="$!"
+for _ in $(seq 1 100); do
+  if [ -s "$registry_port_file" ]; then
+    break
+  fi
+  if ! kill -0 "$registry_pid" 2>/dev/null; then
+    openclaw_e2e_print_log "$registry_log" >&2
+    exit 1
+  fi
+  sleep 0.1
+done
+if [ ! -s "$registry_port_file" ]; then
+  openclaw_e2e_print_log "$registry_log" >&2
+  echo "Timed out waiting for update-channel npm fixture registry." >&2
+  exit 1
+fi
+export NPM_CONFIG_REGISTRY="http://127.0.0.1:$(cat "$registry_port_file")"
+export npm_config_registry="$NPM_CONFIG_REGISTRY"
+
 openclaw_e2e_eval_test_state_from_b64 "${OPENCLAW_TEST_STATE_SCRIPT_B64:?missing OPENCLAW_TEST_STATE_SCRIPT_B64}"
 
 export OPENCLAW_GIT_DIR="$git_root"
 export OPENCLAW_UPDATE_DEV_TARGET_REF="$fixture_sha"
+
+echo "==> package stable -> package beta channel"
+set +e
+beta_json="$(openclaw update --channel beta --yes --json --no-restart)"
+beta_status=$?
+set -e
+printf "%s\n" "$beta_json"
+if [ "$beta_status" -ne 0 ]; then
+  exit "$beta_status"
+fi
+UPDATE_JSON="$beta_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-update beta
+node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-config-channel beta
+node scripts/e2e/lib/update-channel-switch/assertions.mjs \
+  assert-installed-version \
+  /tmp/npm-prefix/lib/node_modules/openclaw \
+  "$package_version"
+
+status_json="$(openclaw update status --json)"
+printf "%s\n" "$status_json"
+STATUS_JSON="$status_json" node scripts/e2e/lib/update-channel-switch/assertions.mjs assert-status-kind package
 
 echo "==> package -> git dev channel"
 set +e

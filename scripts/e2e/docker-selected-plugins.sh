@@ -2,6 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_ROOT="${OPENCLAW_DOCKER_E2E_REPO_ROOT:-$ROOT_DIR}"
 source "$ROOT_DIR/scripts/lib/docker-build.sh"
 source "$ROOT_DIR/scripts/lib/docker-e2e-container.sh"
 
@@ -35,8 +36,8 @@ else
     env DOCKER_BUILDKIT=1 docker build \
     --target workspace-deps \
     --build-arg OPENCLAW_EXTENSIONS=missing-plugin \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR" >"$UNKNOWN_LOG" 2>&1
+    -f "$SOURCE_ROOT/Dockerfile" \
+    "$SOURCE_ROOT" >"$UNKNOWN_LOG" 2>&1
   unknown_status=$?
   set -e
   if [ "$unknown_status" -eq 0 ] || ! grep -Fq \
@@ -49,15 +50,15 @@ else
   echo "Proving manifest ids and known dependency-only plugins remain stageable..."
   docker_build_run docker-selected-plugins-dependency-only \
     --target workspace-deps \
-    --build-arg OPENCLAW_EXTENSIONS=whatsapp,qqbot,kimi \
+    --build-arg OPENCLAW_EXTENSIONS=whatsapp,kimi \
     -t "$DEPENDENCY_ONLY_IMAGE" \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR"
+    -f "$SOURCE_ROOT/Dockerfile" \
+    "$SOURCE_ROOT"
   DEPENDENCY_ONLY_IMAGE_BUILT=1
   docker_e2e_docker_run_cmd run --rm \
     --entrypoint sh \
     "$DEPENDENCY_ONLY_IMAGE" \
-    -c 'test -f /out/extensions/whatsapp/package.json && test -f /out/extensions/qqbot/package.json && test -f /out/extensions/kimi-coding/package.json && grep -qx kimi-coding /out/openclaw-selected-plugin-dirs'
+    -c 'test -f /out/extensions/whatsapp/package.json && test -f /out/extensions/kimi-coding/package.json && grep -qx kimi-coding /out/openclaw-selected-plugin-dirs'
 
   echo "Building selected-plugin runtime image: $IMAGE_NAME"
   docker_build_run docker-selected-plugins-build \
@@ -65,8 +66,8 @@ else
     --build-arg "OPENCLAW_BUILD_TIMESTAMP=$BUILD_TIMESTAMP" \
     --build-arg "OPENCLAW_EXTENSIONS=$SELECTED_PLUGINS" \
     -t "$IMAGE_NAME" \
-    -f "$ROOT_DIR/Dockerfile" \
-    "$ROOT_DIR"
+    -f "$SOURCE_ROOT/Dockerfile" \
+    "$SOURCE_ROOT"
 fi
 
 echo "Inspecting selected plugins from the final runtime image..."

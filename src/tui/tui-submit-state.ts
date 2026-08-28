@@ -4,7 +4,19 @@ export type TuiPendingSubmit =
   | { phase: "sending"; runId: string; draftText: string }
   | { phase: "accepted"; runId: string; draftText: string | null };
 
-export type TuiChatSubmitAdmission = "allowed" | "disconnected" | "pending";
+export type TuiChatSubmitAdmission =
+  | { status: "allowed" }
+  | { status: "blocked"; reason: "disconnected" }
+  | { status: "blocked"; reason: "pending" }
+  | { status: "blocked"; reason: "session-transition"; command: "new" | "reset" };
+
+export type TuiChatSubmitBlock = Exclude<TuiChatSubmitAdmission, { status: "allowed" }>;
+
+/** Session-transition state captured when Enter reached the submit coalescer. */
+export type TuiChatSubmitSnapshot = {
+  sessionTransition: "new" | "reset" | null;
+  sessionTransitionEpoch: number;
+};
 
 type PendingSubmitState = { pendingSubmit: TuiPendingSubmit | null };
 
@@ -87,15 +99,15 @@ export function resolveTuiChatSubmitAdmission(params: {
   message: string;
 }): TuiChatSubmitAdmission {
   if (!params.isConnected) {
-    return "disconnected";
+    return { status: "blocked", reason: "disconnected" };
   }
   if (
     isChatStopCommandText(params.message) &&
     (params.activeChatRunId || params.pendingSubmit?.phase === "accepted")
   ) {
-    return "allowed";
+    return { status: "allowed" };
   }
-  return params.pendingSubmit ? "pending" : "allowed";
+  return params.pendingSubmit ? { status: "blocked", reason: "pending" } : { status: "allowed" };
 }
 
 export function disconnectedTuiChatSubmitMessage(local: boolean): string {

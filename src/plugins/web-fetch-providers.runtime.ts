@@ -27,6 +27,7 @@ function resolveWebFetchCandidatePluginIds(params: {
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): string[] | undefined {
   return resolveManifestDeclaredWebProviderCandidatePluginIds({
     contract: "webFetchProviders",
@@ -37,6 +38,7 @@ function resolveWebFetchCandidatePluginIds(params: {
     onlyPluginIds: params.onlyPluginIds,
     origin: params.origin,
     sandboxed: params.sandboxed,
+    manifestRecords: params.manifestRecords,
   });
 }
 
@@ -62,6 +64,7 @@ export function resolvePluginWebFetchProviders(params: {
   mode?: "runtime" | "setup";
   origin?: PluginManifestRecord["origin"];
   sandboxed?: boolean;
+  manifestRecords?: readonly PluginManifestRecord[];
 }): PluginWebFetchProviderEntry[] {
   return resolvePluginWebProviders(params, {
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,
@@ -80,6 +83,7 @@ export function resolveRuntimeWebFetchProviders(params: {
   env?: PluginLoadOptions["env"];
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
+  manifestRecords?: readonly PluginManifestRecord[];
 }): PluginWebFetchProviderEntry[] {
   return resolveRuntimeWebProviders(params, {
     resolveBundledResolutionConfig: resolveBundledWebFetchResolutionConfig,

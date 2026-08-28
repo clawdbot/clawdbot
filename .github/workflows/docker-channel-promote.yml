@@ -1,0 +1,182 @@
+name: Docker Channel Promotion
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing stable or extended-stable release tag
+        required: true
+        type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+  DOCKERHUB_REGISTRY: docker.io
+  DOCKERHUB_IMAGE_NAME: openclaw/openclaw
+
+jobs:
+  resolve:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    outputs:
+      version: ${{ steps.policy.outputs.version }}
+      channel: ${{ steps.policy.outputs.channel }}
+      default_aliases: ${{ steps.policy.outputs.default_aliases }}
+      slim_aliases: ${{ steps.policy.outputs.slim_aliases }}
+      browser_aliases: ${{ steps.policy.outputs.browser_aliases }}
+    steps:
+      - name: Require a main-branch dispatch
+        env:
+          WORKFLOW_REF: ${{ github.ref }}
+        run: |
+          set -euo pipefail
+          if [[ "${WORKFLOW_REF}" != "refs/heads/main" ]]; then
+            echo "::error::Docker channel promotion must be dispatched from main; got ${WORKFLOW_REF}."
+            exit 1
+          fi
+
+      - name: Checkout trusted promotion tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve release channel policy
+        id: policy
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]; then
+            echo "::error::Expected a final stable or extended-stable release tag; got ${RELEASE_TAG}."
+            exit 1
+          fi
+          git rev-parse --verify "refs/tags/${RELEASE_TAG}^{commit}" >/dev/null
+          version="${RELEASE_TAG#v}"
+          policy="$(node scripts/lib/docker-release-policy.mjs "${version}")"
+          channel="$(jq -r '.channel' <<< "${policy}")"
+          default_aliases="$(jq -r '.movingAliases.default | join(" ")' <<< "${policy}")"
+          slim_aliases="$(jq -r '.movingAliases.slim | join(" ")' <<< "${policy}")"
+          browser_aliases="$(jq -r '.movingAliases.browser | join(" ")' <<< "${policy}")"
+          {
+            echo "version=${version}"
+            echo "channel=${channel}"
+            echo "default_aliases=${default_aliases}"
+            echo "slim_aliases=${slim_aliases}"
+            echo "browser_aliases=${browser_aliases}"
+          } >> "$GITHUB_OUTPUT"
+          {
+            echo "## Docker channel promotion plan"
+            echo "- Version: ${version}"
+            echo "- Channel: ${channel}"
+            echo "- Default aliases: ${default_aliases}"
+            echo "- Slim aliases: ${slim_aliases}"
+            echo "- Browser aliases: ${browser_aliases}"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  approve:
+    name: Approve ${{ inputs.tag }} to ${{ needs.resolve.outputs.channel }} (${{ needs.resolve.outputs.default_aliases }})
+    needs: resolve
+    # Keep human approval outside the queued writer so waiting for approval
+    # cannot block a tag-driven Docker release in docker-release-publish.
+    # WARNING: KEEP CHANNEL PROMOTION GATED BY THE docker-release ENVIRONMENT.
+    runs-on: ubuntu-24.04
+    environment: docker-release
+    permissions: {}
+    steps:
+      - name: Record approval
+        env:
+          RELEASE_TAG: ${{ inputs.tag }}
+          DEFAULT_ALIASES: ${{ needs.resolve.outputs.default_aliases }}
+          SLIM_ALIASES: ${{ needs.resolve.outputs.slim_aliases }}
+          BROWSER_ALIASES: ${{ needs.resolve.outputs.browser_aliases }}
+        run: |
+          echo "Approved Docker channel promotion for ${RELEASE_TAG}"
+          echo "Default aliases: ${DEFAULT_ALIASES}"
+          echo "Slim aliases: ${SLIM_ALIASES}"
+          echo "Browser aliases: ${BROWSER_ALIASES}"
+
+  promote:
+    needs: [resolve, approve]
+    runs-on: ubuntu-24.04
+    concurrency:
+      group: docker-release-publish
+      cancel-in-progress: false
+      queue: max
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Validate Docker Hub publish credentials
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DOCKERHUB_USERNAME}" || -z "${DOCKERHUB_TOKEN}" ]]; then
+            echo "::error::Docker Hub publishing requires DOCKERHUB_USERNAME and DOCKERHUB_TOKEN secrets."
+            exit 1
+          fi
+
+      - name: Checkout trusted promotion tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Pre-pull BuildKit image
+        shell: bash
+        env:
+          BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3 4; do
+            if docker pull "${BUILDKIT_IMAGE}"; then
+              exit 0
+            fi
+            if [[ "${attempt}" -eq 4 ]]; then
+              echo "::error::Failed to pull ${BUILDKIT_IMAGE} after ${attempt} attempts."
+              exit 1
+            fi
+            sleep "$((attempt * 5))"
+          done
+
+      - name: Set up Docker Builder
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Login to GitHub Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.DOCKERHUB_REGISTRY }}
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Promote and verify channel aliases
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
+          GHCR_IMAGE: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          DOCKERHUB_IMAGE: ${{ env.DOCKERHUB_REGISTRY }}/${{ env.DOCKERHUB_IMAGE_NAME }}
+        run: |
+          set -euo pipefail
+          node scripts/docker-channel-promote.mjs \
+            --version "${VERSION}" \
+            --image "${GHCR_IMAGE}" \
+            --image "${DOCKERHUB_IMAGE}" \
+            --allow-rollback
+          {
+            echo "## Docker channel promotion"
+            echo "- Version: ${VERSION}"
+            echo "- Registries: ${GHCR_IMAGE}, ${DOCKERHUB_IMAGE}"
+            echo "- Rollback: explicitly approved"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -4,7 +4,11 @@ import type { LookupFn } from "openclaw/plugin-sdk/ssrf-runtime";
 import { withFetchPreconnect } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveStreamingCardSendMode } from "./streaming-card-send-mode.js";
-import { FeishuStreamingSession, mergeStreamingText } from "./streaming-card.js";
+import {
+  FeishuStreamingFinalizationError,
+  FeishuStreamingSession,
+  mergeStreamingText,
+} from "./streaming-card.js";
 
 const FEISHU_JSON_MAX_BYTES = 16 * 1024 * 1024;
 type FeishuStreamingFetch = typeof fetch;
@@ -39,10 +43,9 @@ type StreamingRequest = {
 const serverStops: Array<() => Promise<void>> = [];
 const HERMETIC_PUBLIC_LOOKUP_ADDRESS = "93.184.216.34";
 
-const hermeticPublicLookup: LookupFn = (async (_hostname: string, _options?: unknown) => ({
-  address: HERMETIC_PUBLIC_LOOKUP_ADDRESS,
-  family: 4,
-})) as LookupFn;
+const hermeticPublicLookup: LookupFn = async () => [
+  { address: HERMETIC_PUBLIC_LOOKUP_ADDRESS, family: 4 },
+];
 
 async function readRequestBody(req: IncomingMessage): Promise<string> {
   let body = "";
@@ -282,6 +285,167 @@ describe("FeishuStreamingSession", () => {
     } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
     return { authTokens, client, deps };
   }
+
+  function mockAcceptedStreamingCard(params: {
+    accountId: string;
+    response?: { code: number; msg: string; data?: { message_id?: string } };
+    rejectClose?: boolean;
+  }) {
+    const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+    const deps = createMemoryFetch((url, body) => {
+      if (url.pathname.includes("/auth/")) {
+        return jsonResponse({
+          code: 0,
+          msg: "ok",
+          tenant_access_token: "token",
+          expire: 7200,
+        });
+      }
+      if (url.pathname.endsWith("/cardkit/v1/cards")) {
+        return jsonResponse({ code: 0, msg: "ok", data: { card_id: "card_accepted" } });
+      }
+      requests.push({ path: url.pathname, body: JSON.parse(body) as Record<string, unknown> });
+      return jsonResponse(
+        params.rejectClose && url.pathname.endsWith("/settings")
+          ? { code: 91400, msg: "close rejected" }
+          : { code: 0, msg: "ok" },
+      );
+    });
+    const response = params.response ?? { code: 0, msg: "ok", data: {} };
+    const create = vi.fn(async () => response);
+    const reply = vi.fn(async () => response);
+    const remove = vi.fn(async () => ({ code: 0, msg: "ok" }));
+    const client = {
+      im: { message: { create, reply, delete: remove } },
+    } as unknown as ConstructorParameters<typeof FeishuStreamingSession>[0];
+    const session = new FeishuStreamingSession(
+      client,
+      { appId: params.accountId, appSecret: "test-secret" },
+      undefined,
+      deps,
+    );
+    return { session, requests, create, reply, remove };
+  }
+
+  it.each([
+    { mode: "create", options: undefined, method: "create" },
+    { mode: "root_create", options: { rootId: "root_1" }, method: "create" },
+    {
+      mode: "reply",
+      options: { replyToMessageId: "inbound_1", replyInThread: true },
+      method: "reply",
+    },
+  ] as const)(
+    "updates and closes an accepted $mode card when its optional message receipt is absent",
+    async ({ mode, options, method }) => {
+      const { session, requests, create, reply } = mockAcceptedStreamingCard({
+        accountId: `accepted-without-receipt-${mode}`,
+      });
+
+      await session.start("chat_1", "chat_id", options);
+      await session.update("The accepted answer");
+
+      await expect(session.closeWithResult("The accepted answer")).resolves.toEqual({
+        visibleReplySent: true,
+        content: "The accepted answer",
+      });
+      expect(method === "reply" ? reply : create).toHaveBeenCalledOnce();
+      expect(method === "reply" ? create : reply).not.toHaveBeenCalled();
+      if (mode === "root_create") {
+        expect(create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.objectContaining({ root_id: "root_1" }),
+          }),
+        );
+      } else if (mode === "create") {
+        expect(create).toHaveBeenCalledWith(
+          expect.objectContaining({
+            data: expect.not.objectContaining({ root_id: expect.anything() }),
+          }),
+        );
+      } else {
+        expect(reply).toHaveBeenCalledWith(
+          expect.objectContaining({
+            path: { message_id: "inbound_1" },
+            data: expect.objectContaining({ reply_in_thread: true }),
+          }),
+        );
+      }
+      expect(requests.map(({ path }) => path)).toEqual([
+        "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+        "/open-apis/cardkit/v1/cards/card_accepted/settings",
+      ]);
+      expect(session.isActive()).toBe(false);
+    },
+  );
+
+  it("clears an accepted preview without requesting deletion with an absent message receipt", async () => {
+    const { session, requests, remove } = mockAcceptedStreamingCard({
+      accountId: "discard-without-receipt",
+    });
+
+    await session.start("chat_1");
+    await session.update("Transient preview");
+    await session.discard();
+
+    expect(remove).not.toHaveBeenCalled();
+    expect(requests.map(({ path }) => path)).toEqual([
+      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+      "/open-apis/cardkit/v1/cards/card_accepted/elements/content",
+      "/open-apis/cardkit/v1/cards/card_accepted/settings",
+    ]);
+    expect(JSON.parse(String(requests[1]?.body.element))).toEqual({
+      tag: "markdown",
+      content: "",
+      element_id: "content",
+    });
+    expect(session.isActive()).toBe(false);
+  });
+
+  it("deletes an accepted preview normally when its message receipt is present", async () => {
+    const { session, requests, remove } = mockAcceptedStreamingCard({
+      accountId: "discard-with-receipt",
+      response: { code: 0, msg: "ok", data: { message_id: "om_accepted" } },
+    });
+
+    await session.start("chat_1");
+    await session.update("Transient preview");
+    await session.discard();
+
+    expect(remove).toHaveBeenCalledExactlyOnceWith({ path: { message_id: "om_accepted" } });
+    expect(requests.map(({ path }) => path)).toEqual([
+      "/open-apis/cardkit/v1/cards/card_accepted/elements/content/content",
+    ]);
+    expect(session.isActive()).toBe(false);
+  });
+
+  it("preserves accepted visible card content when receipt-free finalization fails", async () => {
+    const { session } = mockAcceptedStreamingCard({
+      accountId: "failed-close-without-receipt",
+      rejectClose: true,
+    });
+
+    await session.start("chat_1");
+    await session.update("Already visible answer");
+
+    await expect(session.closeWithResult("Already visible answer")).rejects.toMatchObject({
+      name: "FeishuStreamingFinalizationError",
+      result: {
+        visibleReplySent: true,
+        content: "Already visible answer",
+      },
+    });
+  });
+
+  it("still rejects provider-declined streaming card messages", async () => {
+    const { session } = mockAcceptedStreamingCard({
+      accountId: "declined-streaming-card",
+      response: { code: 230099, msg: "message rejected" },
+    });
+
+    await expect(session.start("chat_1")).rejects.toThrow("Send card failed: message rejected");
+    expect(session.isActive()).toBe(false);
+  });
 
   it("rejects oversized streaming tenant-token JSON before buffering the full body", async () => {
     let streamState:
@@ -746,7 +910,18 @@ describe("FeishuStreamingSession", () => {
       },
     });
 
-    await expect(session.close(undefined, { note: "model note" })).resolves.toBe(true);
+    const error = await session
+      .closeWithResult(undefined, { note: "model note" })
+      .catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(FeishuStreamingFinalizationError);
+    expect(error).toMatchObject({
+      result: {
+        visibleReplySent: true,
+        content: "visible answer",
+        messageId: "om_rejected_note_and_close",
+      },
+    });
 
     expect(noteBodies).toHaveLength(1);
     expect(settingsBodies).toHaveLength(1);

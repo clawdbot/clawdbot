@@ -4,19 +4,24 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
-import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store.js";
-import {
-  createDeferred,
-  createRunningCronServiceState,
-} from "../../../src/cron/service.test-harness.js";
+import { clearSessionStoreCacheForTest } from "../../../src/config/sessions/store-writer-state.js";
+import { createRunningCronServiceState } from "../../../src/cron/service.test-harness.js";
 import type { CronServiceDeps } from "../../../src/cron/service/state.js";
 import type { CronJob, CronJobState } from "../../../src/cron/types.js";
 import { resetAgentEventsForTest } from "../../../src/infra/agent-events.js";
-import { waitForActiveTasks } from "../../../src/process/command-queue.js";
+import { getTotalQueueSize } from "../../../src/process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../../src/process/command-queue.test-support.js";
 import { useFrozenTime, useRealTime } from "../../../src/test-utils/frozen-time.js";
+import { createDeferred } from "../promise.js";
 
 const TOP_OF_HOUR_STAGGER_MS = 5 * 60 * 1_000;
+
+async function waitForCommandQueueIdle(timeoutMs: number): Promise<void> {
+  const deadlineAt = Date.now() + timeoutMs;
+  while (getTotalQueueSize() > 0 && Date.now() < deadlineAt) {
+    await new Promise<void>((resolve) => setTimeout(resolve, 10));
+  }
+}
 
 export const noopLogger = {
   info: () => {},
@@ -43,7 +48,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
     vi.clearAllTimers();
     vi.restoreAllMocks();
     useRealTime();
-    await waitForActiveTasks(250);
+    await waitForCommandQueueIdle(250);
     resetCommandQueueStateForTest();
     clearSessionStoreCacheForTest();
     resetAgentEventsForTest();
@@ -51,7 +56,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
 
   afterAll(async () => {
     useRealTime();
-    await waitForActiveTasks(250);
+    await waitForCommandQueueIdle(250);
     await fs.rm(fixtureRoot, { recursive: true, force: true });
   });
 
@@ -64,7 +69,7 @@ export function setupCronRegressionFixtures(options?: { prefix?: string; baseTim
   };
 }
 
-export { createDeferred, createRunningCronServiceState };
+export { createRunningCronServiceState };
 
 export function topOfHourOffsetMs(jobId: string) {
   const digest = crypto.createHash("sha256").update(jobId).digest();
@@ -148,8 +153,4 @@ export function createIsolatedRegressionJob(params: {
     delivery: { mode: "announce" },
     state: params.state ?? {},
   };
-}
-
-export async function writeCronStoreSnapshot(storePath: string, jobs: unknown[]) {
-  await fs.writeFile(storePath, JSON.stringify({ version: 1, jobs }), "utf-8");
 }

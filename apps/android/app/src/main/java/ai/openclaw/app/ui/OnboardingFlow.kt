@@ -8,12 +8,14 @@ import ai.openclaw.app.R
 import ai.openclaw.app.SensitiveFeatureConfig
 import ai.openclaw.app.gateway.GatewayEndpoint
 import ai.openclaw.app.gateway.isLocalCleartextGatewayHost
+import ai.openclaw.app.gateway.normalizeGatewayTlsFingerprintInput
 import ai.openclaw.app.hasPhotoReadPermission
 import ai.openclaw.app.i18n.NativeText
 import ai.openclaw.app.i18n.nativeString
 import ai.openclaw.app.i18n.nativeText
 import ai.openclaw.app.i18n.resolveNativeTextResource
 import ai.openclaw.app.i18n.verbatimText
+import ai.openclaw.app.locationModeAfterBackgroundSettings
 import ai.openclaw.app.node.DeviceNotificationListenerService
 import ai.openclaw.app.photoReadPermissionsForRequest
 import ai.openclaw.app.ui.design.ClawDesignTheme
@@ -22,6 +24,7 @@ import ai.openclaw.app.ui.design.ClawScaffold
 import ai.openclaw.app.ui.design.ClawSecondaryButton
 import ai.openclaw.app.ui.design.ClawTextField
 import ai.openclaw.app.ui.design.ClawTheme
+import ai.openclaw.app.ui.design.MascotMood
 import ai.openclaw.app.ui.design.OpenClawMascot
 import android.Manifest
 import android.content.ClipData
@@ -57,6 +60,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.PaddingValues
@@ -72,6 +76,7 @@ import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
@@ -103,6 +108,7 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -123,6 +129,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
@@ -281,6 +288,34 @@ internal fun OnboardingErrorCode.nativeTextOrNull(): NativeText? {
   }
 }
 
+/** Visible errors outrank step defaults; connected recovery is the only pre-handoff success surface. */
+internal fun onboardingMascotMood(
+  step: OnboardingStep,
+  recoveryState: GatewayRecoveryUiState? = null,
+  setupErrorCode: OnboardingErrorCode = OnboardingErrorCode.None,
+  setupScanErrorCode: OnboardingErrorCode = OnboardingErrorCode.None,
+): MascotMood {
+  if (
+    setupErrorCode != OnboardingErrorCode.None ||
+    setupScanErrorCode != OnboardingErrorCode.None ||
+    recoveryState == GatewayRecoveryUiState.Failed
+  ) {
+    return MascotMood.Sad
+  }
+  return when (step) {
+    OnboardingStep.Recovery ->
+      if (recoveryState == GatewayRecoveryUiState.Connected) MascotMood.Celebrating else MascotMood.Working
+    OnboardingStep.NodeApproval -> MascotMood.Thinking
+    OnboardingStep.Permissions -> MascotMood.Curious
+    OnboardingStep.Welcome,
+    OnboardingStep.Gateway,
+    OnboardingStep.SetupCode,
+    OnboardingStep.EnterSetupCode,
+    OnboardingStep.Manual,
+    -> MascotMood.Idle
+  }
+}
+
 private const val GATEWAY_CONNECT_SETTLING_MS = 2_500L
 private const val GATEWAY_CONNECT_TIMEOUT_MS = 20_000L
 private const val NODE_APPROVAL_REFRESH_OBSERVE_TIMEOUT_MS = 750L
@@ -295,6 +330,9 @@ private val OnboardingHeroMarkSize = 78.dp
 private val OnboardingButtonHeight = 56.dp
 private val OnboardingActionGap = 10.dp
 private val OnboardingBottomInset = 16.dp
+private val OnboardingScannerMaxWidth = 360.dp
+private const val OnboardingFormStackBreakpointDp = 340f
+private const val OnboardingLargeFontScale = 1.3f
 
 private fun onboardingContentPadding() =
   PaddingValues(
@@ -305,6 +343,11 @@ private fun onboardingContentPadding() =
   )
 
 private fun Modifier.onboardingActionButton() = fillMaxWidth().height(OnboardingButtonHeight)
+
+internal fun onboardingFormUsesStackedLayout(
+  availableWidthDp: Float,
+  fontScale: Float,
+): Boolean = availableWidthDp < OnboardingFormStackBreakpointDp || fontScale >= OnboardingLargeFontScale
 
 internal data class OnboardingBackDestination(
   val step: OnboardingStep,
@@ -368,8 +411,9 @@ fun OnboardingFlow(
   modifier: Modifier = Modifier,
 ) {
   val appearanceThemeMode by viewModel.appearanceThemeMode.collectAsState()
+  val gatewayAccentArgb by viewModel.gatewayAccentArgb.collectAsState()
   val onboardingDark = appearanceThemeMode.isDark(systemDark = isSystemInDarkTheme())
-  ClawDesignTheme(dark = onboardingDark) {
+  ClawDesignTheme(dark = onboardingDark, accentArgb = gatewayAccentArgb) {
     val context = LocalContext.current
     val gatewayConnectionDisplay by viewModel.gatewayConnectionDisplay.collectAsState()
     val statusText = gatewayConnectionDisplay.statusText
@@ -751,6 +795,11 @@ fun OnboardingFlow(
     setupScanErrorCode.nativeTextOrNull()?.let { message ->
       SetupScanErrorDialog(
         message = message.resolveNativeTextResource(),
+        mascotMood =
+          onboardingMascotMood(
+            step = step,
+            setupScanErrorCode = setupScanErrorCode,
+          ),
         onDismiss = { setupScanErrorCode = OnboardingErrorCode.None },
         onChooseAnotherImage = {
           setupScanErrorCode = OnboardingErrorCode.None
@@ -767,35 +816,77 @@ fun OnboardingFlow(
     }
 
     pendingTrust?.let { prompt ->
+      val manualEntry = prompt.fingerprintSha256 == null
+      val systemTrustAvailable = prompt.systemTrustAvailable
+      var manualFingerprint by
+        rememberSaveable(prompt.endpoint.stableId, prompt.probeFailure) {
+          mutableStateOf("")
+        }
+      val normalizedManualFingerprint = normalizeGatewayTlsFingerprintInput(manualFingerprint)
       AlertDialog(
         onDismissRequest = viewModel::declineGatewayTrustPrompt,
         containerColor = ClawTheme.colors.surfaceRaised,
         title = { Text(stringResource(R.string.trust_this_gateway), style = ClawTheme.type.section, color = ClawTheme.colors.text) },
         text = {
           val message =
-            if (prompt.previousFingerprintSha256.isNullOrBlank()) {
-              stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
-            } else {
-              stringResource(
-                R.string.gateway_trust_changed,
-                prompt.previousFingerprintSha256,
-                prompt.fingerprintSha256,
+            when {
+              manualEntry ->
+                nativeString(
+                  "The gateway certificate could not be read automatically. Paste the SHA-256 fingerprint obtained on the gateway host.",
+                )
+              prompt.previousFingerprintSha256.isNullOrBlank() ->
+                stringResource(R.string.gateway_trust_first_seen, prompt.fingerprintSha256)
+              else ->
+                stringResource(
+                  R.string.gateway_trust_changed,
+                  prompt.previousFingerprintSha256,
+                  prompt.fingerprintSha256,
+                )
+            }
+          Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(
+              message,
+              style = ClawTheme.type.body,
+              color = ClawTheme.colors.textMuted,
+            )
+            if (systemTrustAvailable) {
+              Text(
+                nativeString("This gateway now presents a certificate trusted by this device."),
+                style = ClawTheme.type.body,
+                color = ClawTheme.colors.textMuted,
               )
             }
-          Text(
-            message,
-            style = ClawTheme.type.body,
-            color = ClawTheme.colors.textMuted,
-          )
+            if (manualEntry) {
+              OutlinedTextField(
+                value = manualFingerprint,
+                onValueChange = { manualFingerprint = it },
+                modifier = Modifier.fillMaxWidth(),
+                label = { Text(nativeString("SHA-256 fingerprint")) },
+                singleLine = true,
+              )
+            }
+          }
         },
         confirmButton = {
-          TextButton(onClick = viewModel::acceptGatewayTrustPrompt) {
+          TextButton(
+            onClick = {
+              viewModel.acceptGatewayTrustPrompt(if (manualEntry) normalizedManualFingerprint else null)
+            },
+            enabled = !manualEntry || normalizedManualFingerprint != null,
+          ) {
             Text(nativeString("Trust"))
           }
         },
         dismissButton = {
-          TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
-            Text(nativeString("Cancel"))
+          Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (systemTrustAvailable) {
+              TextButton(onClick = viewModel::useSystemGatewayTrustPrompt) {
+                Text(nativeString("Use system trust"))
+              }
+            }
+            TextButton(onClick = viewModel::declineGatewayTrustPrompt) {
+              Text(nativeString("Cancel"))
+            }
           }
         },
       )
@@ -805,6 +896,7 @@ fun OnboardingFlow(
       OnboardingStep.Welcome ->
         WelcomeScreen(
           modifier = modifier,
+          mascotMood = onboardingMascotMood(step = step),
           onConnect = { step = OnboardingStep.Gateway },
         )
       OnboardingStep.Gateway ->
@@ -868,6 +960,7 @@ fun OnboardingFlow(
           modifier = modifier,
           setupCode = setupCode,
           error = setupErrorCode.nativeTextOrNull()?.resolveNativeTextResource(),
+          mascotMood = onboardingMascotMood(step = step, setupErrorCode = setupErrorCode),
           onBack = ::goBack,
           onSetupCodeChange = {
             setupCode = it
@@ -884,6 +977,7 @@ fun OnboardingFlow(
           token = token,
           password = password,
           error = setupErrorCode.nativeTextOrNull()?.resolveNativeTextResource(),
+          mascotMood = onboardingMascotMood(step = step, setupErrorCode = setupErrorCode),
           onBack = ::goBack,
           onManualHostChange = {
             manualHost = it
@@ -978,23 +1072,30 @@ fun OnboardingFlow(
 }
 
 @Composable
-private fun WelcomeScreen(
+internal fun WelcomeScreen(
+  mascotMood: MascotMood,
   onConnect: () -> Unit,
   modifier: Modifier = Modifier,
 ) {
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
-    Column(modifier = Modifier.fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally) {
-      OnboardingHeroTopSpacer(afterHeader = false)
-      OnboardingIntroHero(
-        title = nativeString("Welcome to OpenClaw"),
-        subtitle = nativeString("Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools."),
-        mark = { WelcomeLogo() },
-      )
-      Spacer(modifier = Modifier.height(24.dp))
-      WelcomeChecklist()
-      Spacer(modifier = Modifier.height(16.dp))
-      SecurityNotice()
-      Spacer(modifier = Modifier.weight(1f))
+    Column(modifier = Modifier.fillMaxSize()) {
+      // Keep actions outside the scroller so font scaling cannot push them out of reach.
+      Column(
+        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        OnboardingHeroTopSpacer(afterHeader = false)
+        OnboardingIntroHero(
+          title = nativeString("Welcome to OpenClaw"),
+          subtitle = nativeString("Turn this device into a secure OpenClaw node for chat, voice, camera, and device tools."),
+          mark = { WelcomeLogo(mood = mascotMood, announceLogo = true) },
+        )
+        Spacer(modifier = Modifier.height(24.dp))
+        WelcomeChecklist()
+        Spacer(modifier = Modifier.height(16.dp))
+        SecurityNotice()
+        Spacer(modifier = Modifier.height(24.dp))
+      }
       OnboardingActions {
         ClawPrimaryButton(text = nativeString("Continue"), onClick = onConnect, modifier = Modifier.onboardingActionButton())
       }
@@ -1003,7 +1104,12 @@ private fun WelcomeScreen(
 }
 
 @Composable
-private fun WelcomeLogo() {
+private fun WelcomeLogo(
+  mood: MascotMood,
+  // Only the welcome hero announces the logo; status/error reuses are
+  // decorative and must stay silent for TalkBack.
+  announceLogo: Boolean = false,
+) {
   Surface(
     modifier = Modifier.size(OnboardingHeroMarkSize),
     shape = CircleShape,
@@ -1012,7 +1118,11 @@ private fun WelcomeLogo() {
     border = BorderStroke(1.dp, ClawTheme.colors.border),
   ) {
     Box(modifier = Modifier.fillMaxSize().padding(12.dp), contentAlignment = Alignment.Center) {
-      OpenClawMascot(contentDescription = nativeString("OpenClaw logo"), modifier = Modifier.fillMaxSize())
+      OpenClawMascot(
+        contentDescription = if (announceLogo) nativeString("OpenClaw logo") else null,
+        modifier = Modifier.fillMaxSize(),
+        mood = mood,
+      )
     }
   }
 }
@@ -1120,7 +1230,7 @@ private fun SoftPanel(
 }
 
 @Composable
-private fun GatewaySetupScreen(
+internal fun GatewaySetupScreen(
   nearbyGateway: GatewayEndpoint?,
   onBack: () -> Unit,
   onSetupCode: () -> Unit,
@@ -1132,8 +1242,12 @@ private fun GatewaySetupScreen(
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize()) {
       OnboardingHeader(title = nativeText(""), onBack = onBack)
-      OnboardingHeroTopSpacer(afterHeader = true)
-      Column(modifier = Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
+      // Keep actions outside the scroller so font scaling cannot push them out of reach.
+      Column(
+        modifier = Modifier.weight(1f).fillMaxWidth().verticalScroll(rememberScrollState()),
+        horizontalAlignment = Alignment.CenterHorizontally,
+      ) {
+        OnboardingHeroTopSpacer(afterHeader = true)
         OnboardingIntroHero(
           title = nativeString("Connect Gateway"),
           subtitle = nativeString("Scan a QR code or use the setup code from your OpenClaw Gateway."),
@@ -1149,8 +1263,8 @@ private fun GatewaySetupScreen(
             }
           },
         )
+        Spacer(modifier = Modifier.height(24.dp))
       }
-      Spacer(modifier = Modifier.weight(1f))
       OnboardingActions {
         ClawPrimaryButton(
           text = nativeString("Scan QR or setup code"),
@@ -1260,16 +1374,19 @@ private fun SetupCodeInstructionsScreen(
           }
         }
         item {
-          ScanQrTile(
-            scannerActive = scannerActive,
-            cameraPermissionGranted = cameraPermissionGranted,
-            scanner = scanner,
-            onClick = onScan,
-            onClose = onCloseScanner,
-            onRequestCameraPermission = onRequestCameraPermission,
-            onCodeScanned = onCodeScanned,
-            onCameraError = onCameraError,
-          )
+          Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            ScanQrTile(
+              scannerActive = scannerActive,
+              cameraPermissionGranted = cameraPermissionGranted,
+              scanner = scanner,
+              onClick = onScan,
+              onClose = onCloseScanner,
+              onRequestCameraPermission = onRequestCameraPermission,
+              onCodeScanned = onCodeScanned,
+              onCameraError = onCameraError,
+              modifier = Modifier.widthIn(max = OnboardingScannerMaxWidth),
+            )
+          }
         }
       }
       OnboardingActions {
@@ -1293,6 +1410,7 @@ private fun SetupCodeInstructionsScreen(
 @Composable
 private fun SetupScanErrorDialog(
   message: String,
+  mascotMood: MascotMood,
   onDismiss: () -> Unit,
   onChooseAnotherImage: () -> Unit,
   onEnterSetupCode: () -> Unit,
@@ -1333,6 +1451,10 @@ private fun SetupScanErrorDialog(
             color = ClawTheme.colors.text,
             modifier = Modifier.weight(1f),
           )
+        }
+
+        Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+          WelcomeLogo(mood = mascotMood)
         }
 
         Text(
@@ -1630,6 +1752,7 @@ private fun analyzeSetupQrFrame(
 private fun SetupCodeEntryScreen(
   setupCode: String,
   error: String?,
+  mascotMood: MascotMood,
   onBack: () -> Unit,
   onSetupCodeChange: (String) -> Unit,
   onUseSetupCode: () -> Unit,
@@ -1639,6 +1762,11 @@ private fun SetupCodeEntryScreen(
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
       Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
         OnboardingHeader(title = nativeText("Enter setup code"), onBack = onBack)
+        if (error != null) {
+          Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+            WelcomeLogo(mood = mascotMood)
+          }
+        }
         LabeledField(label = nativeString("Setup code")) {
           ClawTextField(
             value = setupCode,
@@ -1665,6 +1793,7 @@ private fun ManualGatewaySetupScreen(
   token: String,
   password: String,
   error: String?,
+  mascotMood: MascotMood,
   onBack: () -> Unit,
   onManualHostChange: (String) -> Unit,
   onManualPortChange: (String) -> Unit,
@@ -1681,6 +1810,7 @@ private fun ManualGatewaySetupScreen(
         requestedTls = manualTls,
       )
     }
+  val fontScale = LocalDensity.current.fontScale
   ClawScaffold(modifier = modifier, contentPadding = onboardingContentPadding()) {
     Column(modifier = Modifier.fillMaxSize().imePadding(), verticalArrangement = Arrangement.SpaceBetween) {
       LazyColumn(
@@ -1693,9 +1823,18 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Gateway URL")) {
-            Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-              ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
-              ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              if (onboardingFormUsesStackedLayout(maxWidth.value, fontScale)) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.fillMaxWidth())
+                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.fillMaxWidth())
+                }
+              } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                  ClawTextField(value = manualHost, onValueChange = onManualHostChange, placeholder = nativeString("Host"), modifier = Modifier.weight(1f))
+                  ClawTextField(value = manualPort, onValueChange = onManualPortChange, placeholder = nativeString("Port"), modifier = Modifier.width(104.dp))
+                }
+              }
             }
             Text(
               text = nativeString("Use the Gateway computer's LAN address or secure remote hostname."),
@@ -1721,18 +1860,39 @@ private fun ManualGatewaySetupScreen(
         }
         item {
           LabeledField(label = nativeString("Connection security")) {
-            Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
-              TogglePill(
-                text = nativeString("Unencrypted"),
-                selected = !transport.effectiveTls,
-                enabled = !transport.requiresTls,
-                onClick = { onManualTlsChange(false) },
-              )
-              TogglePill(
-                text = nativeString("Secure (TLS)"),
-                selected = transport.effectiveTls,
-                onClick = { onManualTlsChange(true) },
-              )
+            BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
+              val stacked = onboardingFormUsesStackedLayout(maxWidth.value, fontScale)
+              if (stacked) {
+                Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(9.dp)) {
+                  TogglePill(
+                    text = nativeString("Unencrypted"),
+                    selected = !transport.effectiveTls,
+                    enabled = !transport.requiresTls,
+                    onClick = { onManualTlsChange(false) },
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                  TogglePill(
+                    text = nativeString("Secure (TLS)"),
+                    selected = transport.effectiveTls,
+                    onClick = { onManualTlsChange(true) },
+                    modifier = Modifier.fillMaxWidth(),
+                  )
+                }
+              } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(9.dp)) {
+                  TogglePill(
+                    text = nativeString("Unencrypted"),
+                    selected = !transport.effectiveTls,
+                    enabled = !transport.requiresTls,
+                    onClick = { onManualTlsChange(false) },
+                  )
+                  TogglePill(
+                    text = nativeString("Secure (TLS)"),
+                    selected = transport.effectiveTls,
+                    onClick = { onManualTlsChange(true) },
+                  )
+                }
+              }
             }
             transport.helperText?.let { helperText ->
               Text(
@@ -1744,6 +1904,11 @@ private fun ManualGatewaySetupScreen(
           }
         }
         error?.let { message ->
+          item {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+              WelcomeLogo(mood = mascotMood)
+            }
+          }
           item {
             InlineError(title = nativeString("Could not test connection"), body = message)
           }
@@ -1911,7 +2076,13 @@ private fun GatewayRecoveryScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
       ) {
-        GatewayRecoveryIcon(state = recoveryState)
+        WelcomeLogo(
+          mood =
+            onboardingMascotMood(
+              step = OnboardingStep.Recovery,
+              recoveryState = recoveryState,
+            ),
+        )
         Spacer(modifier = Modifier.height(13.dp))
         Text(text = recoveryTitle.resolveNativeTextResource(), style = ClawTheme.type.display, color = ClawTheme.colors.text, textAlign = TextAlign.Center)
         Spacer(modifier = Modifier.height(8.dp))
@@ -2008,46 +2179,6 @@ private fun copyGatewayDiagnostic(
 }
 
 @Composable
-private fun GatewayRecoveryIcon(state: GatewayRecoveryUiState) {
-  val icon =
-    when (state) {
-      GatewayRecoveryUiState.Connected -> Icons.Default.CheckCircle
-      GatewayRecoveryUiState.NodeCapabilityApprovalPending -> Icons.Default.Security
-      GatewayRecoveryUiState.ApprovalRequired -> Icons.Default.WifiTethering
-      GatewayRecoveryUiState.Pairing -> Icons.Default.WifiTethering
-      GatewayRecoveryUiState.Finishing -> Icons.Default.WifiTethering
-      GatewayRecoveryUiState.TakingLonger -> Icons.Default.WifiTethering
-      GatewayRecoveryUiState.Failed -> Icons.Default.ErrorOutline
-    }
-  val tint =
-    when (state) {
-      GatewayRecoveryUiState.Connected -> ClawTheme.colors.success
-      GatewayRecoveryUiState.NodeCapabilityApprovalPending -> ClawTheme.colors.warning
-      GatewayRecoveryUiState.ApprovalRequired -> ClawTheme.colors.warning
-      GatewayRecoveryUiState.Pairing -> ClawTheme.colors.text
-      GatewayRecoveryUiState.Finishing -> ClawTheme.colors.text
-      GatewayRecoveryUiState.TakingLonger -> ClawTheme.colors.warning
-      GatewayRecoveryUiState.Failed -> ClawTheme.colors.warning
-    }
-  Surface(
-    modifier = Modifier.size(62.dp),
-    shape = CircleShape,
-    color =
-      when (state) {
-        GatewayRecoveryUiState.Connected -> ClawTheme.colors.successSoft
-        GatewayRecoveryUiState.TakingLonger -> ClawTheme.colors.warningSoft
-        GatewayRecoveryUiState.Failed -> ClawTheme.colors.warningSoft
-        else -> ClawTheme.colors.surfaceRaised
-      },
-    contentColor = tint,
-  ) {
-    Box(contentAlignment = Alignment.Center) {
-      Icon(imageVector = icon, contentDescription = null, modifier = Modifier.size(36.dp), tint = tint)
-    }
-  }
-}
-
-@Composable
 private fun NodeApprovalScreen(
   approval: GatewayNodeCapabilityApproval,
   checkingApproval: Boolean,
@@ -2086,7 +2217,7 @@ private fun NodeApprovalScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
       ) {
-        GatewayRecoveryIcon(state = GatewayRecoveryUiState.NodeCapabilityApprovalPending)
+        WelcomeLogo(mood = onboardingMascotMood(step = OnboardingStep.NodeApproval))
         Spacer(modifier = Modifier.height(13.dp))
         Text(
           text = nativeString("Approve node access"),
@@ -2322,6 +2453,11 @@ private fun PermissionSetupScreen(
           PermissionTopBar(onBack = onBack)
         }
         item {
+          Box(modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp), contentAlignment = Alignment.Center) {
+            WelcomeLogo(mood = onboardingMascotMood(step = OnboardingStep.Permissions))
+          }
+        }
+        item {
           Text(
             text = nativeString("Only enable access you are comfortable letting OpenClaw use while this phone is connected. You can change these later in Android Settings."),
             style = ClawTheme.type.body,
@@ -2392,13 +2528,14 @@ private fun OnboardingHeader(
 private fun TogglePill(
   text: String,
   selected: Boolean,
+  modifier: Modifier = Modifier,
   enabled: Boolean = true,
   onClick: () -> Unit,
 ) {
   Surface(
     onClick = onClick,
     enabled = enabled,
-    modifier = Modifier.height(34.dp),
+    modifier = modifier.heightIn(min = 34.dp),
     shape = RoundedCornerShape(ClawTheme.radii.pill),
     color = if (selected) ClawTheme.colors.primary else ClawTheme.colors.surfaceRaised,
     contentColor = if (selected) ClawTheme.colors.primaryText else ClawTheme.colors.textMuted,
@@ -2967,25 +3104,25 @@ internal fun canFinishOnboarding(
 private val requiredContactPermissions = listOf(Manifest.permission.READ_CONTACTS, Manifest.permission.WRITE_CONTACTS)
 private val requiredCalendarPermissions = listOf(Manifest.permission.READ_CALENDAR, Manifest.permission.WRITE_CALENDAR)
 
-internal fun initialCameraCapabilityEnabled(
+internal fun initialDeviceCapabilityEnabled(
   savedCapabilityEnabled: Boolean,
-  androidCameraPermissionGranted: Boolean,
-): Boolean = savedCapabilityEnabled && androidCameraPermissionGranted
+  androidPermissionGranted: Boolean,
+): Boolean = savedCapabilityEnabled && androidPermissionGranted
 
-internal fun cameraPermissionRowStatusText(
+internal fun deviceCapabilityRowStatusText(
   capabilityEnabled: Boolean,
-  androidCameraPermissionGranted: Boolean,
+  androidPermissionGranted: Boolean,
 ): NativeText =
   when {
     capabilityEnabled -> nativeText("Enabled")
-    androidCameraPermissionGranted -> nativeText("Off")
+    androidPermissionGranted -> nativeText("Off")
     else -> nativeText("Not allowed")
   }
 
-internal fun cameraCapabilityAfterRowTap(
+internal fun deviceCapabilityAfterRowTap(
   currentCapabilityEnabled: Boolean,
-  androidCameraPermissionGranted: Boolean,
-): Boolean? = if (androidCameraPermissionGranted) !currentCapabilityEnabled else null
+  androidPermissionGranted: Boolean,
+): Boolean? = if (androidPermissionGranted) !currentCapabilityEnabled else null
 
 private fun permissionRowStatusText(granted: Boolean): NativeText = if (granted) nativeText("Granted") else nativeText("Not granted")
 
@@ -3011,9 +3148,15 @@ private fun rememberPermissionState(
   val currentLocationMode by viewModel.locationMode.collectAsState()
   var microphoneGranted by rememberSaveable { mutableStateOf(hasPermission(context, Manifest.permission.RECORD_AUDIO)) }
   val cameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA)
-  var cameraGranted by rememberSaveable { mutableStateOf(initialCameraCapabilityEnabled(currentCameraEnabled, cameraPermissionGranted)) }
+  var cameraGranted by rememberSaveable { mutableStateOf(initialDeviceCapabilityEnabled(currentCameraEnabled, cameraPermissionGranted)) }
+
+  fun hasLocationPermission(): Boolean =
+    hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) ||
+      hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION)
+
+  val locationPermissionGranted = hasLocationPermission()
   var locationGranted by rememberSaveable {
-    mutableStateOf(hasPermission(context, Manifest.permission.ACCESS_FINE_LOCATION) || hasPermission(context, Manifest.permission.ACCESS_COARSE_LOCATION))
+    mutableStateOf(initialDeviceCapabilityEnabled(currentLocationMode != LocationMode.Off, locationPermissionGranted))
   }
   val photosPermissions = photoReadPermissionsForRequest()
   var photosGranted by rememberSaveable { mutableStateOf(hasPhotoReadPermission(context)) }
@@ -3086,6 +3229,7 @@ private fun rememberPermissionState(
         }
       motionGranted = permissions[Manifest.permission.ACTIVITY_RECOGNITION] ?: motionGranted
       smsGranted =
+        !smsAvailable ||
         mergedRequiredPermissionGrantState(
           permissions = permissions,
           requiredPermissions = listOf(Manifest.permission.SEND_SMS, Manifest.permission.READ_SMS),
@@ -3100,9 +3244,9 @@ private fun rememberPermissionState(
 
   fun requestCameraCapability() {
     val nextCapabilityEnabled =
-      cameraCapabilityAfterRowTap(
+      deviceCapabilityAfterRowTap(
         currentCapabilityEnabled = cameraGranted,
-        androidCameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA),
+        androidPermissionGranted = hasPermission(context, Manifest.permission.CAMERA),
       )
     if (nextCapabilityEnabled != null) {
       cameraGranted = nextCapabilityEnabled
@@ -3122,14 +3266,26 @@ private fun rememberPermissionState(
         nativeText("Capture photos and clips from this phone"),
         Icons.Default.CameraAlt,
         cameraGranted,
-        cameraPermissionRowStatusText(
+        deviceCapabilityRowStatusText(
           capabilityEnabled = cameraGranted,
-          androidCameraPermissionGranted = hasPermission(context, Manifest.permission.CAMERA),
+          androidPermissionGranted = cameraPermissionGranted,
         ),
         ::requestCameraCapability,
       ),
-      PermissionRowModel(PermissionRowId.Location, nativeText("Location"), nativeText("Read this phone's location"), Icons.Default.LocationOn, locationGranted) {
-        request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+      PermissionRowModel(
+        PermissionRowId.Location,
+        nativeText("Location"),
+        nativeText("Read this phone's location"),
+        Icons.Default.LocationOn,
+        locationGranted,
+        deviceCapabilityRowStatusText(locationGranted, locationPermissionGranted),
+      ) {
+        val nextCapabilityEnabled = deviceCapabilityAfterRowTap(locationGranted, hasLocationPermission())
+        if (nextCapabilityEnabled != null) {
+          locationGranted = nextCapabilityEnabled
+        } else {
+          request(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
+        }
       },
       if (photosAvailable) {
         PermissionRowModel(PermissionRowId.Photos, nativeText("Photos"), nativeText("Read recent photos and media"), Icons.Default.Image, photosGranted) {
@@ -3173,6 +3329,16 @@ private fun rememberPermissionState(
       },
     )
 
+  val requestedLocationMode =
+    locationModeAfterBackgroundSettings(
+      previousMode = currentLocationMode.takeUnless { it == LocationMode.Off } ?: LocationMode.WhileUsing,
+      foregroundGranted = locationGranted,
+      backgroundGranted =
+        currentLocationMode == LocationMode.Always &&
+          SensitiveFeatureConfig.backgroundLocationEnabled &&
+          hasPermission(context, Manifest.permission.ACCESS_BACKGROUND_LOCATION),
+    )
+
   return PermissionState(
     rows = rows,
     requiresNodeApprovalAfterApply =
@@ -3180,14 +3346,14 @@ private fun rememberPermissionState(
         currentCameraEnabled = currentCameraEnabled,
         requestedCameraEnabled = cameraGranted,
         currentLocationMode = currentLocationMode,
-        requestedLocationMode = if (locationGranted) LocationMode.WhileUsing else LocationMode.Off,
+        requestedLocationMode = requestedLocationMode,
         currentSmsGranted = currentSmsGranted,
         requestedSmsGranted = smsGranted,
       ),
     applyToViewModel = {
       viewModel.setCameraEnabled(cameraGranted)
-      viewModel.setLocationMode(if (locationGranted) LocationMode.WhileUsing else LocationMode.Off)
-      viewModel.setNotificationForwardingEnabled(notificationListenerGranted)
+      viewModel.setLocationMode(requestedLocationMode)
+      viewModel.setNotificationForwardingEnabled(notificationListenerGranted && viewModel.notificationForwardingEnabled.value)
     },
   )
 }

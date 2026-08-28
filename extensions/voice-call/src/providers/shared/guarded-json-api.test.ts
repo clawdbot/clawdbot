@@ -71,10 +71,38 @@ describe("guardedJsonApiRequest", () => {
     expect(release).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects malformed UTF-8 provider JSON instead of returning corrupted identifiers", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        Buffer.concat([
+          Buffer.from('{"call_control_id":"call-'),
+          Buffer.from([0xff]),
+          Buffer.from('"}'),
+        ]),
+        { status: 200 },
+      ),
+      release,
+    });
+
+    await expect(
+      guardedJsonApiRequest({
+        url: "https://api.example.com/v1/calls",
+        method: "POST",
+        headers: { Authorization: "Bearer token" },
+        allowedHostnames: ["api.example.com"],
+        auditContext: "voice-call:test",
+        errorPrefix: "provider error",
+      }),
+    ).rejects.toThrow("provider error: malformed JSON response");
+
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
   it("returns undefined for empty bodies and allowed 404s", async () => {
     const release = vi.fn(async () => {});
     fetchWithSsrFGuardMock.mockResolvedValueOnce({
-      response: new Response(null, { status: 204 }),
+      response: new Response("", { status: 200 }),
       release,
     });
 
@@ -162,6 +190,42 @@ describe("guardedJsonApiRequest", () => {
     expect(caught?.message).not.toContain("tail");
     expect(caught?.message.length).toBeLessThan(8_300);
     expect(tracked.wasCanceled()).toBe(true);
+    expect(release).toHaveBeenCalledTimes(1);
+  });
+
+  it("redacts credential-bearing content from provider error bodies", async () => {
+    const release = vi.fn(async () => {});
+    const secretBasic = "QUMxMjM6c3VwZXItc2VjcmV0LWF1dGgtdG9rZW4";
+    const secretApiKey = "sk-live-1234567890abcdef";
+    fetchWithSsrFGuardMock.mockResolvedValue({
+      response: new Response(
+        JSON.stringify({
+          message: "Authentication failed",
+          detail: `Authorization: Basic ${secretBasic} rejected; retry with api_key=${secretApiKey}`,
+        }),
+        { status: 401 },
+      ),
+      release,
+    });
+
+    let caught: Error | undefined;
+    try {
+      await guardedJsonApiRequest({
+        url: "https://api.example.com/v1/calls/9",
+        method: "POST",
+        headers: { Authorization: `Basic ${secretBasic}` },
+        allowedHostnames: ["api.example.com"],
+        auditContext: "voice-call:test",
+        errorPrefix: "provider error",
+      });
+    } catch (error) {
+      caught = error as Error;
+    }
+
+    expect(caught?.message).toContain("provider error: 401 ");
+    expect(caught?.message).not.toContain(secretBasic);
+    expect(caught?.message).not.toContain(secretApiKey);
+    expect(caught?.message).toContain("***");
     expect(release).toHaveBeenCalledTimes(1);
   });
 

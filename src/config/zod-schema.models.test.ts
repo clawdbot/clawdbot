@@ -16,9 +16,6 @@ describe("ModelsConfigSchema", () => {
     "novita-ai",
     "novitaai",
     "ollama-cloud",
-    "qwen-cli",
-    "qwen-oauth",
-    "qwen-portal",
     "qwen-token-plan",
     "x-ai",
     "z.ai",
@@ -34,6 +31,21 @@ describe("ModelsConfigSchema", () => {
 
     expect(result.success).toBe(true);
   });
+
+  it.each(["qwen-cli", "qwen-oauth", "qwen-portal"])(
+    "rejects retired Qwen Portal provider overlay %s",
+    (providerId) => {
+      const result = ModelsConfigSchema.safeParse({
+        providers: {
+          [providerId]: {
+            timeoutSeconds: 600,
+          },
+        },
+      });
+
+      expect(result.success).toBe(false);
+    },
+  );
 
   it("requires the legacy bailian-token-plan owner to remain an exact custom provider", () => {
     expect(
@@ -113,6 +125,26 @@ describe("ModelsConfigSchema", () => {
               id: "gpt-5.6-luna",
               name: "GPT-5.6 Luna",
               compat: { supportsTemperature: false },
+            },
+          ],
+        },
+      },
+    });
+
+    expect(result.success).toBe(true);
+  });
+
+  it("accepts catalog-declared instructions compatibility", () => {
+    const result = ModelsConfigSchema.safeParse({
+      providers: {
+        "my-proxy": {
+          baseUrl: "https://proxy.example.com/v1",
+          api: "openai-responses",
+          models: [
+            {
+              id: "custom-model",
+              name: "Custom Model",
+              compat: { supportsInstructions: false },
             },
           ],
         },

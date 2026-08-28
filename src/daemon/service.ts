@@ -3,15 +3,17 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { assertGatewayServiceMutationAllowed } from "../infra/gateway-supervision.js";
 import { parseTcpPort, parseTcpPortFromArgs } from "../infra/tcp-port.js";
-import { VERSION } from "../version.js";
 import { assertFutureConfigActionAllowed } from "./future-config-guard.js";
 import {
   installLaunchAgent,
+  isLaunchAgentEnabled,
   isLaunchAgentLoaded,
   readLaunchAgentProgramArguments,
   readLaunchAgentRuntime,
   restartLaunchAgent,
+  startLaunchAgent,
   stageLaunchAgent,
   stopLaunchAgent,
   uninstallLaunchAgent,
@@ -22,10 +24,13 @@ import {
   readScheduledTaskCommand,
   readScheduledTaskRuntime,
   restartScheduledTask,
+  startScheduledTask,
   stageScheduledTask,
   stopScheduledTask,
   uninstallScheduledTask,
 } from "./schtasks.js";
+import { mergeGatewayServiceEnv } from "./service-env-merge.js";
+import { resolveServiceEntrypoint } from "./service-layout.js";
 import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type {
   GatewayServiceCommandConfig,
@@ -33,6 +38,7 @@ import type {
   GatewayServiceEnv,
   GatewayServiceEnvArgs,
   GatewayServiceInstallArgs,
+  GatewayServiceLoadState,
   GatewayServiceManageArgs,
   GatewayServiceReadOptions,
   GatewayServiceRestartResult,
@@ -42,11 +48,13 @@ import type {
   GatewayServiceState,
 } from "./service-types.js";
 import {
+  findInstalledSystemdGatewayScope,
   installSystemdService,
   isSystemdServiceEnabled,
   readSystemdServiceExecStart,
   readSystemdServiceRuntime,
   restartSystemdService,
+  startSystemdService,
   stageSystemdService,
   stopSystemdService,
   uninstallSystemdService,
@@ -74,41 +82,25 @@ export type GatewayService = {
   stage: (args: GatewayServiceStageArgs) => Promise<void>;
   install: (args: GatewayServiceInstallArgs) => Promise<void>;
   uninstall: (args: GatewayServiceManageArgs) => Promise<void>;
+  start: (args: GatewayServiceControlArgs) => Promise<void>;
   stop: (args: GatewayServiceControlArgs) => Promise<void>;
   restart: (args: GatewayServiceControlArgs) => Promise<GatewayServiceRestartResult>;
   isLoaded: (args: GatewayServiceEnvArgs) => Promise<boolean>;
-  readCommand: (env: GatewayServiceEnv) => Promise<GatewayServiceCommandConfig | null>;
+  isEnabled?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  hasInstalledDefinition?: (args: GatewayServiceEnvArgs) => Promise<boolean>;
+  readCommand: (
+    env: GatewayServiceEnv,
+    opts?: GatewayServiceReadOptions,
+  ) => Promise<GatewayServiceCommandConfig | null>;
   readRuntime: (
     env: GatewayServiceEnv,
     opts?: GatewayServiceReadOptions,
   ) => Promise<GatewayServiceRuntime>;
 };
 
-function mergeGatewayServiceEnv(
-  baseEnv: GatewayServiceEnv,
-  command: GatewayServiceCommandConfig | null,
-): GatewayServiceEnv {
-  if (!command?.environment) {
-    return baseEnv;
-  }
-  const merged = {
-    ...baseEnv,
-    ...command.environment,
-  };
-  for (const key of [
-    "OPENCLAW_LAUNCHD_LABEL",
-    "OPENCLAW_SYSTEMD_UNIT",
-    "OPENCLAW_WINDOWS_TASK_NAME",
-  ]) {
-    // Explicit caller env selects the target service identity; installed command
-    // env may come from a different profile or stale service file.
-    const value = baseEnv[key]?.trim();
-    if (value) {
-      merged[key] = value;
-    }
-  }
-  return merged;
-}
+type ReadGatewayServiceStateArgs = GatewayServiceEnvArgs & {
+  validateEnvBeforeStatusRead?: (env: GatewayServiceEnv) => void;
+};
 
 const TEMP_PROGRAM_ROOTS = [os.tmpdir(), "/tmp", "/private/tmp", "/var/tmp"].map((entry) =>
   path.resolve(entry),
@@ -138,19 +130,10 @@ function collectGatewayServiceStartRepairIssues(
   expectedPort?: number,
 ): GatewayServiceStartRepairIssue[] {
   const command = state.command;
-  if (!state.loaded || !command) {
+  if (state.loadState.status !== "loaded" || !command) {
     return [];
   }
   const issues: GatewayServiceStartRepairIssue[] = [];
-  const serviceVersion = command.environment?.OPENCLAW_SERVICE_VERSION?.trim();
-  if (serviceVersion && serviceVersion !== VERSION) {
-    // Version drift often means the service points at old package paths; require
-    // reinstall/repair before pretending restart succeeded.
-    issues.push({
-      code: "version-mismatch",
-      message: `service was installed by OpenClaw ${serviceVersion}, current CLI is ${VERSION}`,
-    });
-  }
   const servicePort =
     parseTcpPortFromArgs(command.programArguments) ??
     parseTcpPort(command.environment?.OPENCLAW_GATEWAY_PORT ?? "");
@@ -160,7 +143,10 @@ function collectGatewayServiceStartRepairIssues(
       message: `service port ${servicePort} does not match current gateway config port ${expectedPort}`,
     });
   }
-  for (const candidate of command.programArguments.slice(0, 2)) {
+  for (const candidate of new Set([
+    command.programArguments[0],
+    resolveServiceEntrypoint(command),
+  ])) {
     if (isTemporaryProgramPath(candidate)) {
       issues.push({
         code: "temporary-program",
@@ -197,23 +183,46 @@ export function formatGatewayServiceStartRepairIssues(
   return issues.map((issue) => issue.message).join("; ");
 }
 
-export async function readGatewayServiceState(
+export async function readGatewayServiceLoadState(
   service: GatewayService,
   args: GatewayServiceEnvArgs = {},
+): Promise<GatewayServiceLoadState> {
+  try {
+    const loaded = await service.isLoaded(args);
+    return { status: loaded ? "loaded" : "not-loaded" };
+  } catch (error) {
+    return { status: "unknown", detail: String(error) };
+  }
+}
+
+export async function readGatewayServiceState(
+  service: GatewayService,
+  args: ReadGatewayServiceStateArgs = {},
 ): Promise<GatewayServiceState> {
   const baseEnv = args.env ?? (process.env as GatewayServiceEnv);
-  const command = await service.readCommand(baseEnv).catch(() => null);
+  const { timeoutMs } = args;
+  // Keep command and status probes on the same fail-soft manager deadline.
+  const command = await service.readCommand(baseEnv, { timeoutMs }).catch(() => null);
   const env = mergeGatewayServiceEnv(baseEnv, command);
-  // Propagate the status read deadline so a wedged service manager fails soft
-  // instead of hanging both probes. readCommand parses local files and needs no
-  // bound; isLoaded/readRuntime can spawn service-manager subprocesses.
-  const [loaded, runtime] = await Promise.all([
-    service.isLoaded({ env, timeoutMs: args.timeoutMs }).catch(() => false),
-    service.readRuntime(env, { timeoutMs: args.timeoutMs }).catch(() => undefined),
+  // Callers that may mutate the selected service can reject persisted selector
+  // drift before isLoaded/readRuntime invoke the native service manager.
+  args.validateEnvBeforeStatusRead?.(env);
+  const [installed, loadState, runtime] = await Promise.all([
+    command !== null
+      ? true
+      : (service.hasInstalledDefinition?.({ env, timeoutMs }).catch(() => false) ?? false),
+    readGatewayServiceLoadState(service, { env, timeoutMs }),
+    service.readRuntime(env, { timeoutMs }).catch(
+      (error: unknown) =>
+        ({
+          status: "unknown",
+          detail: String(error),
+        }) satisfies GatewayServiceRuntime,
+    ),
   ]);
   return {
-    installed: command !== null,
-    loaded,
+    installed,
+    loadState,
     running: runtime?.status === "running",
     env,
     command,
@@ -231,10 +240,21 @@ export async function startGatewayService(
     { env: args.env },
     expectedPort,
   );
-  if (!state.loaded && !state.installed) {
+  if (state.loadState.status === "unknown") {
+    throw new Error(`Service status inspection failed: ${state.loadState.detail}`);
+  }
+  if (state.loadState.status === "not-loaded" && !state.installed) {
     return {
       outcome: "missing-install",
       state,
+    };
+  }
+
+  if (state.loadState.status === "loaded" && state.running) {
+    return {
+      outcome: "already-running",
+      state,
+      issues: repairIssues,
     };
   }
 
@@ -246,23 +266,40 @@ export async function startGatewayService(
     };
   }
 
+  let nextState: GatewayServiceState;
   try {
-    const restartResult = await service.restart({ ...args, env: state.env });
-    const nextState = await readGatewayServiceState(service, { env: state.env });
-    return {
-      outcome: restartResult.outcome === "scheduled" ? "scheduled" : "started",
-      state: nextState,
-    };
+    await service.start({ ...args, env: state.env });
+    nextState = await readGatewayServiceState(service, { env: state.env });
   } catch (err) {
-    const nextState = await readGatewayServiceState(service, { env: state.env });
-    if (!nextState.installed) {
+    const recoveryState = await readGatewayServiceState(service, { env: state.env });
+    if (!recoveryState.installed) {
       return {
         outcome: "missing-install",
-        state: nextState,
+        state: recoveryState,
       };
     }
     throw err;
   }
+
+  if (nextState.loadState.status === "unknown") {
+    throw new Error(`Service status inspection failed after start: ${nextState.loadState.detail}`);
+  }
+  const runtime = nextState.runtime;
+  const failedState = normalizeLowercaseStringOrEmpty(runtime?.state) === "failed";
+  const newFailedExit =
+    runtime?.status === "stopped" &&
+    typeof runtime.lastExitStatus === "number" &&
+    runtime.lastExitStatus !== 0 &&
+    runtime.lastExitStatus !== state.runtime?.lastExitStatus;
+  if (failedState || newFailedExit) {
+    const failure = failedState ? "state failed" : `exit ${runtime?.lastExitStatus}`;
+    throw new Error(`Service failed to start (${failure}). Check the service logs and retry.`);
+  }
+
+  return {
+    outcome: "started",
+    state: nextState,
+  };
 }
 
 export function describeGatewayServiceRestart(
@@ -308,6 +345,7 @@ function createUnsupportedGatewayService(): GatewayService {
     stage: rejectUnsupportedGatewayService,
     install: rejectUnsupportedGatewayService,
     uninstall: rejectUnsupportedGatewayService,
+    start: rejectUnsupportedGatewayService,
     stop: rejectUnsupportedGatewayService,
     restart: rejectUnsupportedGatewayService,
     isLoaded: rejectUnsupportedGatewayService,
@@ -327,9 +365,11 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageLaunchAgent),
     install: ignoreServiceWriteResult(installLaunchAgent),
     uninstall: uninstallLaunchAgent,
+    start: startLaunchAgent,
     stop: stopLaunchAgent,
     restart: restartLaunchAgent,
     isLoaded: isLaunchAgentLoaded,
+    isEnabled: isLaunchAgentEnabled,
     readCommand: readLaunchAgentProgramArguments,
     readRuntime: readLaunchAgentRuntime,
   },
@@ -340,9 +380,12 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageSystemdService),
     install: ignoreServiceWriteResult(installSystemdService),
     uninstall: uninstallSystemdService,
+    start: startSystemdService,
     stop: stopSystemdService,
     restart: restartSystemdService,
     isLoaded: isSystemdServiceEnabled,
+    hasInstalledDefinition: async ({ env }) =>
+      (await findInstalledSystemdGatewayScope(env ?? process.env)) !== null,
     readCommand: readSystemdServiceExecStart,
     readRuntime: readSystemdServiceRuntime,
   },
@@ -353,6 +396,7 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
     stage: ignoreServiceWriteResult(stageScheduledTask),
     install: ignoreServiceWriteResult(installScheduledTask),
     uninstall: uninstallScheduledTask,
+    start: startScheduledTask,
     stop: stopScheduledTask,
     restart: restartScheduledTask,
     isLoaded: isScheduledTaskInstalled,
@@ -361,31 +405,31 @@ const GATEWAY_SERVICE_REGISTRY: Record<SupportedGatewayServicePlatform, GatewayS
   },
 };
 
-function withFutureConfigGuard(service: GatewayService): GatewayService {
+function guardGatewayServiceMutation<TArgs extends { env?: GatewayServiceEnv }, TResult>(
+  action: string,
+  mutate: (args: TArgs) => Promise<TResult>,
+): (args: TArgs) => Promise<TResult> {
+  return async (args) => {
+    // Mutations must satisfy both lifecycle ownership and durable-config
+    // version guards before invoking any platform service manager.
+    assertGatewayServiceMutationAllowed(action, process.env);
+    if (args.env && args.env !== process.env) {
+      assertGatewayServiceMutationAllowed(action, args.env);
+    }
+    await assertFutureConfigActionAllowed(action);
+    return await mutate(args);
+  };
+}
+
+function withGatewayServiceMutationGuards(service: GatewayService): GatewayService {
   return {
     ...service,
-    stage: async (args) => {
-      // Service mutations rewrite durable launchd/systemd/schtasks files, so
-      // block them when config was produced by a newer OpenClaw.
-      await assertFutureConfigActionAllowed("rewrite the gateway service");
-      return await service.stage(args);
-    },
-    install: async (args) => {
-      await assertFutureConfigActionAllowed("install or rewrite the gateway service");
-      return await service.install(args);
-    },
-    uninstall: async (args) => {
-      await assertFutureConfigActionAllowed("uninstall the gateway service");
-      return await service.uninstall(args);
-    },
-    stop: async (args) => {
-      await assertFutureConfigActionAllowed("stop the gateway service");
-      return await service.stop(args);
-    },
-    restart: async (args) => {
-      await assertFutureConfigActionAllowed("restart the gateway service");
-      return await service.restart(args);
-    },
+    stage: guardGatewayServiceMutation("rewrite the gateway service", service.stage),
+    install: guardGatewayServiceMutation("install or rewrite the gateway service", service.install),
+    uninstall: guardGatewayServiceMutation("uninstall the gateway service", service.uninstall),
+    start: guardGatewayServiceMutation("start the gateway service", service.start),
+    stop: guardGatewayServiceMutation("stop the gateway service", service.stop),
+    restart: guardGatewayServiceMutation("restart the gateway service", service.restart),
   };
 }
 
@@ -397,7 +441,7 @@ function isSupportedGatewayServicePlatform(
 
 export function resolveGatewayService(): GatewayService {
   if (isSupportedGatewayServicePlatform(process.platform)) {
-    return withFutureConfigGuard(GATEWAY_SERVICE_REGISTRY[process.platform]);
+    return withGatewayServiceMutationGuards(GATEWAY_SERVICE_REGISTRY[process.platform]);
   }
   return createUnsupportedGatewayService();
 }

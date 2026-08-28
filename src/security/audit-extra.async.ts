@@ -3,7 +3,6 @@
  *
  * These functions perform I/O (filesystem, config reads) to detect security issues.
  */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import {
@@ -21,8 +20,11 @@ import { MANIFEST_KEY } from "../compat/legacy-names.js";
 import type { OpenClawConfig, ConfigFileSnapshot } from "../config/config.js";
 import { collectIncludePathsRecursive } from "../config/includes-scan.js";
 import { resolveOAuthDir } from "../config/paths.js";
-import { normalizeAgentId } from "../routing/session-key.js";
+import { readRegularFile, statRegularFile } from "../infra/fs-safe.js";
+import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
+import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
+import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import type { SkillScanFinding } from "../skills/security/scanner.js";
 import { listInstalledPluginDirs } from "./installed-plugin-dirs.js";
 import { extensionUsesSkippedScannerPath, isPathInside } from "./scan-paths.js";
@@ -47,7 +49,6 @@ type ExecDockerRawFn = (
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
 type CodeSafetySummaryCache = Map<string, Promise<unknown>>;
-const loadSkillsModule = createLazyRuntimeModule(() => import("../skills/loading/workspace.js"));
 
 const loadConfigModule = createLazyRuntimeModule(() => import("../config/config.js"));
 
@@ -96,9 +97,29 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
+const MAX_PLUGIN_MANIFEST_BYTES = 1024 * 1024;
+// Skill file audit reads are bounded like other audit reads; matches the
+// workspace loader's DEFAULT_MAX_SKILL_FILE_BYTES so oversized SKILL.md files
+// cannot force an unbounded read during the code-safety scan.
+const MAX_SKILL_AUDIT_FILE_BYTES = 256_000;
+
 async function readPluginManifestExtensions(pluginPath: string): Promise<string[]> {
   const manifestPath = path.join(pluginPath, "package.json");
-  const raw = await fs.readFile(manifestPath, "utf-8").catch(() => "");
+  const statResult = await statRegularFile(manifestPath);
+  if (statResult.missing) {
+    return [];
+  }
+  if (statResult.stat.size > MAX_PLUGIN_MANIFEST_BYTES) {
+    throw new Error(
+      `Plugin manifest at ${manifestPath} is too large (${statResult.stat.size} bytes, max ${MAX_PLUGIN_MANIFEST_BYTES})`,
+    );
+  }
+
+  const { buffer } = await readRegularFile({
+    filePath: manifestPath,
+    maxBytes: MAX_PLUGIN_MANIFEST_BYTES,
+  });
+  const raw = buffer.toString("utf-8");
   if (!raw.trim()) {
     return [];
   }
@@ -155,23 +176,47 @@ async function getCodeSafetySummary(params: {
     dirPath: params.dirPath,
     includeFiles: params.includeFiles,
   });
-  const cache = params.summaryCache;
-  if (cache) {
-    const hit = cache.get(cacheKey);
-    if (hit) {
-      return (await hit) as SkillScanSummary;
-    }
+  const scan = async () => {
     const skillScanner = await loadSkillScannerModule();
-    const pending = skillScanner.scanDirectoryWithSummary(params.dirPath, {
+    return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
       includeFiles: params.includeFiles,
     });
-    cache.set(cacheKey, pending);
-    return await pending;
-  }
-  const skillScanner = await loadSkillScannerModule();
-  return await skillScanner.scanDirectoryWithSummary(params.dirPath, {
-    includeFiles: params.includeFiles,
-  });
+  };
+  return params.summaryCache
+    ? ((await getOrCreatePromise(params.summaryCache, cacheKey, scan)) as SkillScanSummary)
+    : await scan();
+}
+
+async function getSkillCodeSafetySummary(params: {
+  dirPath: string;
+  skillFilePath: string;
+  summaryCache?: CodeSafetySummaryCache;
+}): Promise<SkillScanSummary> {
+  const [summary, skillContent, skillScanner] = await Promise.all([
+    getCodeSafetySummary({
+      dirPath: params.dirPath,
+      summaryCache: params.summaryCache,
+    }),
+    readRegularFile({
+      filePath: params.skillFilePath,
+      maxBytes: MAX_SKILL_AUDIT_FILE_BYTES,
+    }).then(({ buffer }) => buffer.toString("utf-8")),
+    loadSkillScannerModule(),
+  ]);
+  const skillFindings = [
+    ...skillScanner.scanSkillContent(skillContent, params.skillFilePath),
+    ...skillScanner.scanSource(skillContent, params.skillFilePath),
+  ];
+
+  return {
+    ...summary,
+    scannedFiles: summary.scannedFiles + 1,
+    critical:
+      summary.critical + skillFindings.filter((finding) => finding.severity === "critical").length,
+    warn: summary.warn + skillFindings.filter((finding) => finding.severity === "warn").length,
+    info: summary.info + skillFindings.filter((finding) => finding.severity === "info").length,
+    findings: [...summary.findings, ...skillFindings],
+  };
 }
 
 // --------------------------------------------------------------------------
@@ -597,19 +642,22 @@ export async function collectStateDeepFilesystemFindings(params: {
     }
   }
 
-  const agentIds = Array.isArray(params.cfg.agents?.list)
-    ? params.cfg.agents?.list
-        .map(
-          (a) =>
-            normalizeOptionalString(
-              a && typeof a === "object" ? (a as { id?: unknown }).id : undefined,
-            ) ?? "",
-        )
-        .filter(Boolean)
-    : [];
-  const { resolveDefaultAgentId } = await loadAgentScopeModule();
-  const defaultAgentId = resolveDefaultAgentId(params.cfg);
-  const ids = uniqueStrings([defaultAgentId, ...agentIds]).map((id) => normalizeAgentId(id));
+  const agentScope = await loadAgentScopeModule();
+  const agentIds = agentScope.listAgentEntries(params.cfg).map((agent) => agent.id);
+  let defaultAgentId: string | undefined;
+  if (agentIds.length > 0) {
+    try {
+      defaultAgentId = agentScope.resolveDefaultAgentId(params.cfg);
+    } catch {
+      // Security audits must still inspect known agent stores when a malformed
+      // roster prevents normal default selection; config findings report that defect.
+    }
+  }
+  const ids = uniqueStrings([
+    LEGACY_IMPLICIT_AGENT_ID,
+    ...(defaultAgentId ? [defaultAgentId] : []),
+    ...agentIds,
+  ]).map((id) => normalizeAgentId(id));
 
   for (const agentId of ids) {
     const agentDir = path.join(params.stateDir, "agents", agentId, "agent");
@@ -851,22 +899,29 @@ export async function collectPluginsCodeSafetyFindings(params: {
 export async function collectInstalledSkillsCodeSafetyFindings(params: {
   cfg: OpenClawConfig;
   stateDir: string;
+  workspaceDir?: string;
   summaryCache?: CodeSafetySummaryCache;
 }): Promise<SecurityAuditFinding[]> {
   const findings: SecurityAuditFinding[] = [];
   const pluginExtensionsDir = path.join(params.stateDir, "extensions");
   const scannedSkillDirs = new Set<string>();
-  const [{ listAgentWorkspaceDirs }, { resolveSkillSource }] = await Promise.all([
-    loadAgentWorkspaceDirsModule(),
-    loadSkillSourceModule(),
-  ]);
-  const workspaceDirs = listAgentWorkspaceDirs(params.cfg);
-  const { loadWorkspaceSkillEntries } = await loadSkillsModule();
-
+  const [{ listAgentWorkspaceDirs, listExplicitAgentWorkspaceDirs }, { resolveSkillSource }] =
+    await Promise.all([loadAgentWorkspaceDirsModule(), loadSkillSourceModule()]);
+  const workspaceDirs = new Set(params.workspaceDir ? [params.workspaceDir] : []);
+  try {
+    for (const workspaceDir of listAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  } catch {
+    // Deep audit accepts raw pre-migration and malformed configs. Continue
+    // scanning every entry-authored workspace instead of turning a finding into a crash.
+    for (const workspaceDir of listExplicitAgentWorkspaceDirs(params.cfg)) {
+      workspaceDirs.add(workspaceDir);
+    }
+  }
   for (const workspaceDir of workspaceDirs) {
-    const entries = loadWorkspaceSkillEntries(workspaceDir, {
+    const entries = loadWorkspaceSkills(workspaceDir, {
       config: params.cfg,
-      includeArchived: true,
     });
     for (const entry of entries) {
       if (resolveSkillSource(entry.skill) === "openclaw-bundled") {
@@ -884,8 +939,9 @@ export async function collectInstalledSkillsCodeSafetyFindings(params: {
       scannedSkillDirs.add(skillDir);
 
       const skillName = entry.skill.name;
-      const summary = await getCodeSafetySummary({
+      const summary = await getSkillCodeSafetySummary({
         dirPath: skillDir,
+        skillFilePath: entry.skill.filePath,
         summaryCache: params.summaryCache,
       }).catch((err: unknown) => {
         findings.push({

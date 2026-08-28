@@ -1,4 +1,5 @@
 // Voice Call tests cover manager.notify plugin behavior.
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { createManagerHarness, FakeProvider } from "./manager.test-harness.js";
 
@@ -47,6 +48,13 @@ class FailStartListeningProvider extends FakeProvider {
   }
 }
 
+class FailHangupProvider extends FakeProvider {
+  override async hangupCall(input: Parameters<FakeProvider["hangupCall"]>[0]): Promise<void> {
+    this.hangupCalls.push(input);
+    throw new Error("synthetic hangup failure");
+  }
+}
+
 function requireCall(
   manager: Awaited<ReturnType<typeof createManagerHarness>>["manager"],
   callId: string,
@@ -77,12 +85,7 @@ function requireFirstPlayTtsCall(provider: FakeProvider) {
   return call;
 }
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (value === null || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label} to be a record`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label-record");
 
 function requireSingleStartListeningCall(provider: FakeProvider) {
   expect(provider.startListeningCalls).toHaveLength(1);
@@ -138,6 +141,38 @@ function expectFirstPlayTtsText(provider: FakeProvider, text: string) {
 }
 
 describe("CallManager notify and mapping", () => {
+  it("logs a failed notify auto-hangup and leaves the call active for retry", async () => {
+    vi.useFakeTimers();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const provider = new FailHangupProvider("plivo");
+      const { manager } = await createManagerHarness(
+        { outbound: { notifyHangupDelaySec: 1 } },
+        provider,
+      );
+      const callId = await initiateCallWithMessage(manager, "+15550000014", "Notify", "notify");
+
+      manager.processEvent({
+        id: "evt-notify-failed-hangup",
+        type: "call.answered",
+        callId,
+        providerCallId: "call-uuid",
+        timestamp: Date.now(),
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(provider.hangupCalls).toHaveLength(1);
+      expect(manager.getCall(callId)).toBeDefined();
+      expect(warn).toHaveBeenCalledWith(
+        `[voice-call] Notify mode failed to hang up call ${callId}: synthetic hangup failure`,
+      );
+    } finally {
+      warn.mockRestore();
+      vi.useRealTimers();
+    }
+  });
+
   it("upgrades providerCallId mapping when provider ID changes", async () => {
     const { manager } = await createManagerHarness();
 

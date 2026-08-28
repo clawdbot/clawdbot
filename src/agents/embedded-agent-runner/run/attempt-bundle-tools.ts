@@ -1,23 +1,27 @@
 import { getPluginToolMeta } from "../../../plugins/tools.js";
 import { createBundleLspToolRuntime } from "../../agent-bundle-lsp-runtime.js";
+import { assignSafeServerNames, TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
+import { loadSessionMcpConfig } from "../../agent-bundle-mcp-runtime-config.js";
 import {
   getOrCreateSessionMcpRuntime,
   materializeBundleMcpToolsForRun,
 } from "../../agent-bundle-mcp-tools.js";
 import { filterLocalModelLeanTools } from "../../local-model-lean.js";
 import { normalizeAgentRuntimeTools } from "../../runtime-plan/tools.js";
+import { isRuntimeToolAllowed } from "../../tool-policy-match.js";
+import { replaceWithEffectiveToolAllowlist } from "../../tool-policy.js";
 import { filterRuntimeCompatibleTools } from "../../tool-schema-projection.js";
 import { logRuntimeToolSchemaQuarantine } from "../../tool-schema-quarantine.js";
-import { replaceWithEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
+import { captureFinalEffectiveCronCreatorToolAllowlist } from "../../tools/cron-tool.js";
 import { applyFinalEffectiveToolPolicy } from "../effective-tool-policy.js";
 import { log } from "../logger.js";
 import type { prepareEmbeddedAttemptSetup } from "./attempt-setup.js";
-import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-base-prepare.js";
 import {
   applyEmbeddedAttemptToolsAllow,
   shouldCreateBundleLspRuntimeForAttempt,
   shouldCreateBundleMcpRuntimeForAttempt,
 } from "./attempt-tool-construction-plan.js";
+import type { prepareEmbeddedAttemptToolBase } from "./attempt-tool-prepare.js";
 import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type AttemptSetup = Awaited<ReturnType<typeof prepareEmbeddedAttemptSetup>>;
@@ -35,7 +39,9 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
 }) {
   const {
     cronCreatorToolAllowlist,
+    cronCreatorToolAllowlistCaptureRef,
     effectiveToolsAllow,
+    inheritedToolAllowlist,
     localModelLeanPreserveToolNames,
     runtimeCapabilityProfile,
     toolsEnabled,
@@ -62,31 +68,62 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
         sessionId: params.attempt.sessionId,
       }),
   });
-  const clientTools =
-    toolsEnabled && !params.isRawModelRun && !params.attempt.forceRestartSafeTools
+  const providedClientTools =
+    toolsEnabled &&
+    !params.attempt.disableTools &&
+    !params.isRawModelRun &&
+    !params.attempt.forceRestartSafeTools &&
+    !params.attempt.forceCodeModeReconciliationTools
       ? params.attempt.clientTools
       : undefined;
-  const bundleMcpEnabled =
-    !params.attempt.forceRestartSafeTools &&
-    shouldCreateBundleMcpRuntimeForAttempt({
-      toolsEnabled,
-      disableTools: params.attempt.disableTools || params.isRawModelRun,
-      toolsAllow: params.attempt.toolsAllow,
-    });
+  // Client functions share the attempt's authority; filter before their names
+  // can reserve bundled tools or enter deferred catalogs and provider requests.
+  const clientTools =
+    providedClientTools && effectiveToolsAllow
+      ? providedClientTools.filter((definition) =>
+          isRuntimeToolAllowed(definition.function.name, effectiveToolsAllow),
+        )
+      : providedClientTools;
   const bundleMetadataSnapshot = params.getCurrentAttemptPluginMetadataSnapshot();
   // Scoped registries are partial views; only complete snapshots can bypass bundle discovery.
   const bundleManifestRegistry =
     bundleMetadataSnapshot?.pluginIds === undefined
       ? bundleMetadataSnapshot?.manifestRegistry
       : undefined;
+  const mcpConfig = {
+    workspaceDir: params.effectiveWorkspace,
+    cfg: params.attempt.config,
+    manifestRegistry: bundleManifestRegistry,
+    toolOverrides: params.attempt.toolOverrides,
+  };
+  const bundleMcpEnabled =
+    !params.attempt.forceRestartSafeTools &&
+    !params.attempt.forceCodeModeReconciliationTools &&
+    shouldCreateBundleMcpRuntimeForAttempt({
+      toolsEnabled,
+      disableTools: params.attempt.disableTools || params.isRawModelRun,
+      toolsAllow: params.attempt.toolsAllow,
+      resolveConfiguredMcpNamespaces: () => {
+        const configuredNames = Object.keys(params.attempt.config?.mcp?.servers ?? {});
+        if (configuredNames.length === 0) {
+          return [];
+        }
+        const { loaded } = loadSessionMcpConfig({ ...mcpConfig, logDiagnostics: false });
+        // Use the complete merged declaration order: bundled peers can own a
+        // collision suffix before a configured server. This does not connect MCP.
+        const safeNames = assignSafeServerNames(Object.keys(loaded.mcpServers));
+        return configuredNames.flatMap((name) => {
+          const safeName = safeNames.get(name);
+          return safeName ? [`${safeName}${TOOL_NAME_SEPARATOR}`] : [];
+        });
+      },
+    });
   const bundleMcpSessionRuntime = bundleMcpEnabled
     ? await getOrCreateSessionMcpRuntime({
+        ...mcpConfig,
         sessionId: params.attempt.sessionId,
         sessionKey: params.attempt.sessionKey,
-        workspaceDir: params.effectiveWorkspace,
         agentDir: params.agentDir,
-        cfg: params.attempt.config,
-        manifestRegistry: bundleManifestRegistry,
         // senderId is only set from the verified inbound sender (sessionCtx.SenderId
         // or the triggering run's sender on follow-ups). Cron/subagent/heartbeat runs
         // leave it unset, so requester-scoped MCP stays fail-closed for those paths.
@@ -98,6 +135,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   const bundleMcpRuntime = bundleMcpSessionRuntime
     ? await materializeBundleMcpToolsForRun({
         runtime: bundleMcpSessionRuntime,
+        agentId: params.sessionAgentId,
         reservedToolNames: [
           ...tools.map((tool) => tool.name),
           ...(clientTools?.map((tool) => tool.function.name) ?? []),
@@ -108,6 +146,7 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
   try {
     const bundleLspEnabled =
       !params.attempt.forceRestartSafeTools &&
+      !params.attempt.forceCodeModeReconciliationTools &&
       shouldCreateBundleLspRuntimeForAttempt({
         toolsEnabled,
         disableTools: params.attempt.disableTools || params.isRawModelRun,
@@ -138,6 +177,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
     const filteredBundledTools = applyFinalEffectiveToolPolicy({
       bundledTools: [...allowedBundleMcpTools, ...allowedBundleLspTools],
       config: params.attempt.config,
+      workspaceDir: params.effectiveWorkspace,
+      metadataSnapshot: bundleMetadataSnapshot,
       conversationCapabilityProfile: runtimeCapabilityProfile,
       warn: (message) => log.warn(message),
     });
@@ -150,6 +191,8 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       const allowedAppTools = applyFinalEffectiveToolPolicy({
         bundledTools: runtimeAllowedAppTools,
         config: params.attempt.config,
+        workspaceDir: params.effectiveWorkspace,
+        metadataSnapshot: bundleMetadataSnapshot,
         conversationCapabilityProfile: runtimeCapabilityProfile,
         warn: (message) => log.warn(message),
       });
@@ -186,15 +229,23 @@ export async function prepareEmbeddedAttemptBundleTools(params: {
       agentId: params.sessionAgentId,
       preserveToolNames: localModelLeanPreserveToolNames,
     });
-    if (cronCreatorToolAllowlist.length > 0) {
-      // Cron is built before bundled tools; refresh its cap against the complete surface.
-      replaceWithEffectiveCronCreatorToolAllowlist(
+    const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+    if (cronCreatorToolAllowlistCaptureRef) {
+      // Cron is constructed before bundled tools; capture only the executable
+      // surface that survived provider normalization and schema quarantine.
+      captureFinalEffectiveCronCreatorToolAllowlist(
         cronCreatorToolAllowlist,
-        projectedTools,
+        cronCreatorToolAllowlistCaptureRef,
+        schemaProjection.tools,
         (tool) => getPluginToolMeta(tool),
       );
     }
-    const schemaProjection = filterRuntimeCompatibleTools(projectedTools);
+    if (inheritedToolAllowlist?.length) {
+      // Spawn tools close over this ref before MCP/LSP materialize. Refresh it
+      // only after final policy and schema projection so children inherit the
+      // parent's complete authorized surface, never denied bundled tools.
+      replaceWithEffectiveToolAllowlist(inheritedToolAllowlist, schemaProjection.tools);
+    }
     logRuntimeToolSchemaQuarantine({
       diagnostics: schemaProjection.diagnostics,
       tools: projectedTools,

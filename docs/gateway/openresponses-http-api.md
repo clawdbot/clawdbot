@@ -10,7 +10,9 @@ The Gateway can serve an OpenResponses-compatible `POST /v1/responses` endpoint.
 
 Requests run as a normal Gateway agent run (same codepath as `openclaw agent`), so routing, permissions, and config match your Gateway.
 
-Enable or disable with `gateway.http.endpoints.responses.enabled`. When enabled, the same compatibility surface also serves `GET /v1/models`, `GET /v1/models/{id}`, `POST /v1/embeddings`, and `POST /v1/chat/completions`.
+Enable or disable with `gateway.http.endpoints.responses.enabled`. When enabled, the same compatibility surface also serves `GET /v1/models`, `GET /v1/models/{id}`, and `POST /v1/embeddings`.
+
+`POST /v1/chat/completions` is enabled separately with `gateway.http.endpoints.chatCompletions.enabled`. See [OpenAI Chat Completions](/gateway/openai-http-api).
 
 ## Authentication, security, and routing
 
@@ -85,6 +87,8 @@ Provide tools with `tools: [{ type: "function", name, description?, parameters? 
 
 If the agent calls a tool, the response returns a `function_call` output item. Send a follow-up request with `function_call_output` to continue the turn.
 
+Clients that manage their own history can append `response.output` to `input`, then append new user messages or `function_call_output` items. Keep returned assistant metadata and function-call IDs, names, and arguments unchanged. Alternatively, supply `previous_response_id` and only the new input items.
+
 For `tool_choice: "required"` and function-pinned `tool_choice`, the endpoint narrows the exposed client function-tool set, instructs the runtime to call a client tool before responding, and rejects the turn if it does not include a matching structured client-tool call, matching the `/v1/chat/completions` contract. Non-streaming requests return `502` with an `api_error`; streaming requests emit a `response.failed` event.
 
 ## Images (`input_image`)
@@ -135,9 +139,10 @@ URL fetch defaults:
 - Optional hostname allowlists are supported per input type (`files.urlAllowlist`, `images.urlAllowlist`): exact host (`"cdn.example.com"`) or wildcard subdomains (`"*.assets.example.com"`, does not match the apex). Empty or omitted allowlists mean no hostname allowlist restriction.
 - To disable URL-based fetches entirely, set `files.allowUrl: false` and/or `images.allowUrl: false`.
 
-## File + image limits (config)
+## File + image limits
 
-Defaults can be tuned under `gateway.http.endpoints.responses`:
+The endpoint uses a built-in 20 MB request-body limit. File and image source
+policy remains configurable under `gateway.http.endpoints.responses`:
 
 ```json5
 {
@@ -146,7 +151,6 @@ Defaults can be tuned under `gateway.http.endpoints.responses`:
       endpoints: {
         responses: {
           enabled: true,
-          maxBodyBytes: 20000000,
           maxUrlParts: 8,
           files: {
             allowUrl: true,
@@ -195,7 +199,6 @@ Defaults when omitted:
 
 | Key                      | Default   |
 | ------------------------ | --------- |
-| `maxBodyBytes`           | 20MB      |
 | `maxUrlParts`            | 8         |
 | `files.maxBytes`         | 5MB       |
 | `files.maxChars`         | 60k       |

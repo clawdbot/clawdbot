@@ -1,4 +1,5 @@
 // Line plugin module implements schedule cards behavior.
+import { normalizeLineAction } from "../actions.js";
 import { attachFooterText } from "./common.js";
 import type { Action, FlexBox, FlexBubble, FlexComponent, FlexText } from "./types.js";
 
@@ -333,7 +334,7 @@ export function createEventCard(params: {
       contents: bodyContents,
       paddingAll: "xl",
       backgroundColor: "#FFFFFF",
-      action,
+      action: action === undefined ? undefined : normalizeLineAction(action, 40),
     },
   };
 }

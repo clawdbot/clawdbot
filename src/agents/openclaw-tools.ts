@@ -1,53 +1,57 @@
-/** Builds the per-run built-in and plugin tool inventory. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type {
-  SourceReplyDeliveryMode,
-  TaskSuggestionDeliveryMode,
-} from "../auto-reply/get-reply-options.types.js";
-import type { ChatType } from "../channels/chat-type.js";
-import type { InboundEventKind } from "../channels/inbound-event/kind.js";
-import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
+import { isCoreCanvasHostEnabled } from "../canvas/config.js";
+import { createShowWidgetTool, hasRegisteredShowWidgetKinds } from "../canvas/widget-tool.js";
 import { selectApplicableRuntimeConfig } from "../config/config.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { callGateway } from "../gateway/call.js";
+import { resolveControlUiSessionLinkBase } from "../config/control-ui-link-base.js";
 import { isEmbeddedMode } from "../infra/embedded-mode.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { getActiveRuntimeWebToolsMetadata } from "../secrets/runtime-web-tools-state.js";
+import { getActiveRuntimeWebToolsMetadataFromState } from "../secrets/runtime-web-tools-state.js";
 import { isCronRunSessionKey } from "../sessions/session-key-utils.js";
-import type { SkillWorkshopRunOptions } from "../skills/workshop/types.js";
-import { resolveTranscriptsConfig } from "../transcripts/config.js";
-import { normalizeDeliveryContext } from "../utils/delivery-context.js";
-import type { GatewayMessageChannel } from "../utils/message-channel.js";
 import { resolveAgentWorkspaceDir, resolveSessionAgentIds } from "./agent-scope.js";
+import { bindAssembledAgentToolActionDescriptor } from "./agent-tool-metadata.js";
 import {
   type HookContext,
   isToolWrappedWithBeforeToolCallHook,
   wrapToolWithBeforeToolCallHook,
 } from "./agent-tools.before-tool-call.js";
-import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { resolveOpenClawPluginToolsForOptions } from "./openclaw-plugin-tools.js";
+import { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
 import {
   isToolExplicitlyAllowedByFactoryPolicy,
   mergeFactoryPolicyList,
   resolveImageToolFactoryAvailable,
   resolveOptionalMediaToolFactoryPlan,
 } from "./openclaw-tools.media-factory-plan.js";
+import { createMediaGenerationAsyncStartCallback } from "./openclaw-tools.media-yield.js";
 import { applyNodesToolWorkspaceGuard } from "./openclaw-tools.nodes-workspace-guard.js";
 import {
   collectPresentOpenClawTools,
-  shouldIncludeUpdatePlanToolForOpenClawTools,
+  shouldIncludeAskUserToolForOpenClawTools,
+  shouldIncludeProgressCardToolForOpenClawTools,
+  shouldIncludeSecretsToolForOpenClawTools,
 } from "./openclaw-tools.registration.js";
-import type { SandboxFsBridge } from "./sandbox/fs-bridge.js";
-import type { SpawnedToolContext } from "./spawned-context.js";
-import type { ToolFsPolicy } from "./tool-fs-policy.js";
+import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
+import { createOpenClawSwarmToolGroups } from "./openclaw-tools.swarm.js";
+import { resolveTranscriptsTool } from "./openclaw-tools.transcripts.js";
+import type { OpenClawToolsOptions } from "./openclaw-tools.types.js";
+import { resolveWidgetPresentationForRun } from "./openclaw-tools.widget-presentation.js";
 import { resolveToolLoopDetectionConfig } from "./tool-loop-detection-config.js";
 import { createAgentsListTool } from "./tools/agents-list-tool.js";
+import { createAskUserTool } from "./tools/ask-user-tool.js";
 import type { AnyAgentTool } from "./tools/common.js";
 import { createComputerTool } from "./tools/computer-tool.js";
-import { createCronTool, type CronCreatorToolAllowlistEntry } from "./tools/cron-tool.js";
+import {
+  createConversationsListTool,
+  createConversationsSendTool,
+  createConversationsTurnTool,
+} from "./tools/conversation-tools.js";
+import { createCronTool } from "./tools/cron-tool.js";
+import { createDashboardTool } from "./tools/dashboard-tool.js";
 import { createEmbeddedCallGateway } from "./tools/embedded-gateway-stub.js";
 import { createGatewayToolCallerWrapper } from "./tools/gateway-caller-context.js";
 import { createGatewayTool } from "./tools/gateway-tool.js";
+import { createGitHubIdentityStatusTool } from "./tools/github-identity-status-tool.js";
+import { createGitHubPublishTool } from "./tools/github-publish-tool.js";
 import {
   createCreateGoalTool,
   createGetGoalTool,
@@ -56,11 +60,17 @@ import {
 import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { createImageGenerateTool } from "./tools/image-generate-tool.js";
 import { createImageTool } from "./tools/image-tool.js";
-import { createMessageTool } from "./tools/message-tool.js";
+import { callAgentToolGatewayRequest } from "./tools/in-process-gateway.js";
+import { createMessageTool } from "./tools/message-tool-execution.js";
+import { createMobileUiTool } from "./tools/mobile-ui-tool.js";
 import { createMusicGenerateTool } from "./tools/music-generate-tool.js";
 import { createNodesTool } from "./tools/nodes-tool.js";
 import { createOpenClawDelegateToolsForRun } from "./tools/openclaw-delegate-tool.js";
 import { createPdfTool } from "./tools/pdf-tool.js";
+import { createPortalTool } from "./tools/portal-tool.js";
+import { createProgressCardTool } from "./tools/progress-card-tool.js";
+import { createScreenTool } from "./tools/screen-tool.js";
+import { createSecretsTool } from "./tools/secrets-tool.js";
 import { createSessionStatusTool } from "./tools/session-status-tool.js";
 import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
@@ -72,152 +82,17 @@ import { createSessionsYieldTool } from "./tools/sessions-yield-tool.js";
 import { createConfiguredSkillWorkshopTool } from "./tools/skill-workshop-tool-factory.js";
 import { createSubagentsTool } from "./tools/subagents-tool.js";
 import { createTaskSuggestionTools } from "./tools/task-suggestion-tools.js";
-import { createTranscriptsTool } from "./tools/transcripts-tool.js";
+import { createTerminalTool } from "./tools/terminal-tool.js";
 import { createTtsTool } from "./tools/tts-tool.js";
-import { createUpdatePlanTool } from "./tools/update-plan-tool.js";
 import { createVideoGenerateTool } from "./tools/video-generate-tool.js";
 import { createWebFetchTool, createWebSearchTool } from "./tools/web-tools.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
-/**
- * Drops tools whose requiredClientCaps the originating gateway client did not
- * declare. Capability availability is a hard fact, not policy: every tool
- * assembly path (core, plugin-only plans) must apply it or gated tools leak
- * onto surfaces that cannot render them.
- */
-export function filterToolsByClientCaps(
-  tools: AnyAgentTool[],
-  declaredClientCaps: string[] | undefined,
-): AnyAgentTool[] {
-  const clientCaps = new Set(declaredClientCaps ?? []);
-  return tools.filter(
-    (tool) => !tool.requiredClientCaps?.some((requiredCap) => !clientCaps.has(requiredCap)),
-  );
-}
-export function createOpenClawTools(
-  options?: {
-    sandboxBrowserBridgeUrl?: string;
-    allowHostBrowserControl?: boolean;
-    agentSessionKey?: string;
-    /**
-     * The actual live run session key. When the tool is constructed with a sandbox/policy
-     * session key, this allows `session_status({sessionKey:"current"})` to resolve to
-     * the live run session instead of the stale sandbox key.
-     */
-    runSessionKey?: string;
-    agentChannel?: GatewayMessageChannel;
-    runId?: string;
-    agentAccountId?: string;
-    /** Delivery target for topic/thread routing. */
-    agentTo?: string;
-    /** Thread/topic identifier for routing replies to the originating thread. */
-    agentThreadId?: string | number;
-    /** Trusted platform-native conversation id for the active inbound turn. */
-    nativeChannelId?: string;
-    /** Opaque host-issued capability for current-turn channel message actions. */
-    messageActionTurnCapability?: string;
-    agentDir?: string;
-    sandboxRoot?: string;
-    sandboxContainerWorkdir?: string;
-    sandboxFsBridge?: SandboxFsBridge;
-    fsPolicy?: ToolFsPolicy;
-    sandboxed?: boolean;
-    config?: OpenClawConfig;
-    /** Capabilities declared by the gateway client that originated this run. */
-    clientCaps?: string[];
-    pluginToolAllowlist?: string[];
-    pluginToolDenylist?: string[];
-    /** Effective caller tool surface to persist on isolated cron agentTurn jobs. */
-    cronCreatorToolAllowlist?: CronCreatorToolAllowlistEntry[];
-    /** Current channel ID for auto-threading. */
-    currentChannelId?: string;
-    /** Trusted normalized conversation kind for the active inbound turn. */
-    currentChatType?: ChatType;
-    /** Routable target for the current conversation when it differs from the native channel ID. */
-    currentMessagingTarget?: string;
-    /** Current thread timestamp for auto-threading. */
-    currentThreadTs?: string;
-    /** Current inbound message id for action fallbacks. */
-    currentMessageId?: string | number;
-    /** True when the current inbound turn carried audio media. */
-    currentInboundAudio?: boolean;
-    /** Dynamic audio state for runs that can accept steered input after tool creation. */
-    hasCurrentInboundAudio?: () => boolean;
-    /** Reply-to mode for auto-threading. */
-    replyToMode?: "off" | "first" | "all" | "batched";
-    /** Mutable ref to track if a reply was sent (for "first" mode). */
-    hasRepliedRef?: { value: boolean };
-    /** Fail closed instead of posting same-channel thread-originated replies at the root. */
-    sameChannelThreadRequired?: boolean;
-    /** If true, the model has native vision capability */
-    modelHasVision?: boolean;
-    /** Mutable model-context generation used to expire screenshot coordinate frames. */
-    computerContextEpoch?: { value: number };
-    /** Active model provider for provider-specific tool gating. */
-    modelProvider?: string;
-    /** Active model id for provider/model-specific tool gating. */
-    modelId?: string;
-    /** Internal review-run restrictions and proposal provenance. */
-    skillWorkshop?: SkillWorkshopRunOptions;
-    /** If true, nodes action="invoke" can call media-returning commands directly. */
-    allowMediaInvokeCommands?: boolean;
-    /** Explicit agent ID override for cron/hook sessions. */
-    requesterAgentIdOverride?: string;
-    /** Trusted sender identity bit for channel action auth. */
-    senderIsOwner?: boolean;
-    /** Server-owned operation-local origin for conversation-read visibility policy. */
-    conversationReadOrigin?: ConversationReadInvocationOrigin;
-    /** Restrict the cron tool to self-removing this active cron job. */
-    cronSelfRemoveOnlyJobId?: string;
-    /** Require explicit message targets (no implicit last-route sends). */
-    requireExplicitMessageTarget?: boolean;
-    /** Visible source replies must be sent through the message tool when set to message_tool_only. */
-    sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
-    /** Action sink available for model-proposed follow-up tasks. */
-    taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
-    inboundEventKind?: InboundEventKind;
-    /** If true, omit the message tool from the tool list. */
-    disableMessageTool?: boolean;
-    /** If true, include the heartbeat response tool for structured heartbeat outcomes. */
-    enableHeartbeatTool?: boolean;
-    /** If true, skip plugin tool resolution and return only shipped core tools. */
-    disablePluginTools?: boolean;
-    /**
-     * Wrap returned tools with the before_tool_call hook at construction time.
-     * Defaults to true; callers that already enforce the hook at a later shared
-     * boundary should opt out explicitly.
-     */
-    wrapBeforeToolCallHook?: boolean;
-    /** Override or extend the default hook context used by construction-time wrapping. */
-    beforeToolCallHookContext?: HookContext;
-    /** Records hot-path tool-prep stages for reply startup diagnostics. */
-    recordToolPrepStage?: (name: string) => void;
-    /** Trusted sender id from inbound context (not tool args). */
-    requesterSenderId?: string | null;
-    /** Auth profiles already loaded for this run; used for prompt-time tool availability. */
-    authProfileStore?: AuthProfileStore;
-    /** Ephemeral session UUID — regenerated on /new and /reset. */
-    sessionId?: string;
-    /**
-     * Explicit one-shot local CLI runs should not keep plugin-owned process
-     * resources alive after emitting their result.
-     */
-    oneShotCliRun?: boolean;
-    /**
-     * Workspace directory to pass to spawned subagents for inheritance.
-     * Defaults to workspaceDir. Use this to pass the actual agent workspace when the
-     * session itself is running in a copied-workspace sandbox (`ro` or `none`) so
-     * subagents inherit the real workspace path instead of the sandbox copy.
-     */
-    spawnWorkspaceDir?: string;
-    /** Current runtime directory used as the default project for follow-up suggestions. */
-    cwd?: string;
-    /** Callback invoked when sessions_yield tool is called. */
-    onYield?: (message: string) => Promise<void> | void;
-    /** Allow plugin tools for this tool set to late-bind the gateway subagent. */
-    allowGatewaySubagentBinding?: boolean;
-  } & SpawnedToolContext,
-): AnyAgentTool[] {
+
+export { filterToolsByClientCaps } from "./openclaw-tools.client-caps.js";
+export function createOpenClawTools(options?: OpenClawToolsOptions): AnyAgentTool[] {
   const resolvedConfig = options?.config;
+  const sessionConfig = options?.sessionConfigSource === "runtime" ? undefined : resolvedConfig;
+  const activeProjectKeys = options?.preparedModelRuntime?.activeProjectKeys ?? [];
   const runtimeSnapshot = getActiveSecretsRuntimeConfigSnapshot();
   const availabilityConfig = selectApplicableRuntimeConfig({
     inputConfig: resolvedConfig,
@@ -225,31 +100,29 @@ export function createOpenClawTools(
     runtimeSourceConfig: runtimeSnapshot?.sourceConfig,
   });
   const { sessionAgentId } = resolveSessionAgentIds({
-    sessionKey: options?.agentSessionKey,
+    sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
     config: resolvedConfig,
     agentId: options?.requesterAgentIdOverride,
   });
-  // Fall back to the session agent workspace so plugin loading stays workspace-stable
-  // even when a caller forgets to thread workspaceDir explicitly.
+  const swarmToolGroups = createOpenClawSwarmToolGroups({
+    config: resolvedConfig,
+    effectiveRequesterAgentId: sessionAgentId,
+    agentSessionKey: options?.agentSessionKey,
+    runSessionKey: options?.runSessionKey,
+    runId: options?.runId,
+    swarmCollector: options?.swarmCollector,
+    swarmOutputSchema: options?.swarmOutputSchema,
+  });
   const inferredWorkspaceDir =
     options?.workspaceDir || !resolvedConfig
       ? undefined
       : resolveAgentWorkspaceDir(resolvedConfig, sessionAgentId);
   const workspaceDir = resolveWorkspaceRoot(options?.workspaceDir ?? inferredWorkspaceDir);
-  const spawnWorkspaceDir = resolveWorkspaceRoot(
-    options?.spawnWorkspaceDir ?? options?.workspaceDir ?? inferredWorkspaceDir,
-  );
-  const runtimeCwd = resolveWorkspaceRoot(
-    options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir,
-  );
+  const spawnWorkspaceDir = resolveWorkspaceRoot(options?.spawnWorkspaceDir ?? workspaceDir);
   options?.recordToolPrepStage?.("openclaw-tools:session-workspace");
-  const deliveryContext = normalizeDeliveryContext({
-    channel: options?.agentChannel,
-    to: options?.agentTo,
-    accountId: options?.agentAccountId,
-    threadId: options?.agentThreadId,
-  });
-  const runtimeWebTools = getActiveRuntimeWebToolsMetadata();
+  const widgetPresentation = resolveWidgetPresentationForRun(options);
+  const gatewayCallerAccountId = options?.gatewayCallerAccountId ?? options?.agentAccountId;
+  const runtimeWebTools = getActiveRuntimeWebToolsMetadataFromState();
   const sandbox =
     options?.sandboxRoot && options?.sandboxFsBridge
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
@@ -260,90 +133,77 @@ export function createOpenClawTools(
     authStore: options?.authProfileStore,
     toolAllowlist: options?.pluginToolAllowlist,
     toolDenylist: options?.pluginToolDenylist,
+    preparedModelRuntime: options?.preparedModelRuntime,
   });
   const trimmedRunSessionKey = options?.runSessionKey?.trim();
   const mediaGenerationAgentSessionKey =
     trimmedRunSessionKey && isCronRunSessionKey(trimmedRunSessionKey)
       ? trimmedRunSessionKey
       : options?.agentSessionKey;
-  const mediaGenerationAsyncStartCallback = mediaGenerationAgentSessionKey
-    ? isCronRunSessionKey(mediaGenerationAgentSessionKey)
-      ? undefined
-      : options?.onYield
-    : options?.onYield;
-  const taskSuggestionSessionKey = normalizeOptionalString(
-    options?.runSessionKey ?? options?.agentSessionKey,
-  );
-  const imageToolAgentDir = options?.agentDir;
-  const imageTool = resolveImageToolFactoryAvailable({
-    config: availabilityConfig ?? resolvedConfig,
-    agentDir: imageToolAgentDir,
-    workspaceDir,
-    modelHasVision: options?.modelHasVision,
-    authStore: options?.authProfileStore,
-  })
-    ? createImageTool({
-        config: availabilityConfig ?? options?.config,
-        agentDir: imageToolAgentDir!,
-        authProfileStore: options?.authProfileStore,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
-        agentChannel: options?.agentChannel,
-        agentAccountId: options?.agentAccountId,
-        currentChannelId: options?.currentChannelId,
-        modelHasVision: options?.modelHasVision,
-        deferAutoModelResolution: true,
-      })
-    : null;
+  const mediaGenerationAsyncStartCallback = createMediaGenerationAsyncStartCallback({
+    sessionKey: mediaGenerationAgentSessionKey,
+    onYield: options?.onYield,
+  });
+  const taskKey = normalizeOptionalString(options?.runSessionKey ?? options?.agentSessionKey);
+  const imageTool =
+    options?.agentDir &&
+    resolveImageToolFactoryAvailable({
+      config: availabilityConfig ?? resolvedConfig,
+      agentDir: options.agentDir,
+      workspaceDir,
+      modelHasVision: options?.modelHasVision,
+      authStore: options?.authProfileStore,
+      preparedModelRuntime: options?.preparedModelRuntime,
+    })
+      ? createImageTool({
+          config: availabilityConfig ?? options?.config,
+          agentId: sessionAgentId,
+          agentDir: options.agentDir,
+          preparedModelRuntime: options?.preparedModelRuntime,
+          authProfileStore: options?.authProfileStore,
+          workspaceDir,
+          sandbox,
+          fsPolicy: options?.fsPolicy,
+          agentChannel: options?.agentChannel,
+          agentAccountId: options?.agentAccountId,
+          currentChannelId: options?.currentChannelId,
+          modelHasVision: options?.modelHasVision,
+          deferAutoModelResolution: true,
+        })
+      : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-tool");
+  const mediaGenerationToolOptions = {
+    config: options?.config,
+    agentDir: options?.agentDir,
+    authProfileStore: options?.authProfileStore,
+    agentSessionKey: mediaGenerationAgentSessionKey,
+    requesterAgentId: sessionAgentId,
+    requesterOrigin: widgetPresentation.deliveryContext ?? undefined,
+    workspaceDir,
+    preparedModelRuntime: options?.preparedModelRuntime,
+    sandbox,
+    fsPolicy: options?.fsPolicy,
+    onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
+  };
   const imageGenerateTool = optionalMediaTools.imageGenerate
-    ? createImageGenerateTool({
-        config: options?.config,
-        agentDir: options?.agentDir,
-        authProfileStore: options?.authProfileStore,
-        agentSessionKey: mediaGenerationAgentSessionKey,
-        requesterOrigin: deliveryContext ?? undefined,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
-        onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
-      })
+    ? createImageGenerateTool(mediaGenerationToolOptions)
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:image-generate-tool");
   const videoGenerateTool = optionalMediaTools.videoGenerate
-    ? createVideoGenerateTool({
-        config: options?.config,
-        agentDir: options?.agentDir,
-        authProfileStore: options?.authProfileStore,
-        agentSessionKey: mediaGenerationAgentSessionKey,
-        requesterOrigin: deliveryContext ?? undefined,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
-        onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
-      })
+    ? createVideoGenerateTool(mediaGenerationToolOptions)
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:video-generate-tool");
   const musicGenerateTool = optionalMediaTools.musicGenerate
-    ? createMusicGenerateTool({
-        config: options?.config,
-        agentDir: options?.agentDir,
-        authProfileStore: options?.authProfileStore,
-        agentSessionKey: mediaGenerationAgentSessionKey,
-        requesterOrigin: deliveryContext ?? undefined,
-        workspaceDir,
-        sandbox,
-        fsPolicy: options?.fsPolicy,
-        onAsyncTaskStarted: mediaGenerationAsyncStartCallback,
-      })
+    ? createMusicGenerateTool(mediaGenerationToolOptions)
     : null;
   options?.recordToolPrepStage?.("openclaw-tools:music-generate-tool");
   const pdfTool =
     optionalMediaTools.pdf && options?.agentDir?.trim()
       ? createPdfTool({
           config: options?.config,
+          agentId: sessionAgentId,
           agentDir: options.agentDir,
+          preparedModelRuntime: options?.preparedModelRuntime,
           authProfileStore: options?.authProfileStore,
           workspaceDir,
           sandbox,
@@ -354,6 +214,7 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:pdf-tool");
   const webSearchTool = createWebSearchTool({
     config: options?.config,
+    enabled: options?.webSearchEnabled,
     agentDir: options?.agentDir,
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
@@ -365,6 +226,7 @@ export function createOpenClawTools(
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
     lateBindRuntimeConfig: true,
+    hostnameAllowlistRef: options?.webFetchHostnameAllowlistRef,
   });
   options?.recordToolPrepStage?.("openclaw-tools:web-fetch-tool");
   const messageTool = options?.disableMessageTool
@@ -372,14 +234,18 @@ export function createOpenClawTools(
     : createMessageTool({
         agentAccountId: options?.agentAccountId,
         agentSessionKey: options?.agentSessionKey,
+        runSessionKey: options?.runSessionKey,
         runId: options?.runId,
         agentId: sessionAgentId,
         sessionId: options?.sessionId,
         messageActionTurnCapability: options?.messageActionTurnCapability,
         config: options?.config,
+        preparedMessageToolCatalog: options?.preparedModelRuntime?.messageToolCatalog,
         currentChannelId: options?.currentChannelId,
         currentChatType: options?.currentChatType,
-        currentMessagingTarget: options?.currentMessagingTarget,
+        currentMessagingTarget:
+          options?.currentMessagingTarget ??
+          (options?.sourceReplyOnly ? options.agentTo : undefined),
         currentChannelProvider: options?.agentChannel,
         currentThreadTs: options?.currentThreadTs,
         currentInboundAudio: options?.currentInboundAudio,
@@ -390,17 +256,21 @@ export function createOpenClawTools(
         hasRepliedRef: options?.hasRepliedRef,
         sameChannelThreadRequired: options?.sameChannelThreadRequired,
         sandboxRoot: options?.sandboxRoot,
+        sandboxContainerWorkdir: options?.sandboxContainerWorkdir,
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         sourceReplyDeliveryMode: options?.sourceReplyDeliveryMode,
+        sourceReplyOnly: options?.sourceReplyOnly,
         inboundEventKind: options?.inboundEventKind,
         requesterSenderId: options?.requesterSenderId ?? undefined,
         senderIsOwner: options?.senderIsOwner,
         conversationReadOrigin: options?.conversationReadOrigin,
+        workspaceDir,
       });
   const heartbeatTool = options?.enableHeartbeatTool ? createHeartbeatResponseTool() : null;
   options?.recordToolPrepStage?.("openclaw-tools:message-tool");
   const nodesToolBase = createNodesTool({
     agentSessionKey: options?.agentSessionKey,
+    agentId: sessionAgentId,
     agentChannel: options?.agentChannel,
     agentAccountId: options?.agentAccountId,
     currentChannelId: options?.currentChannelId,
@@ -426,46 +296,58 @@ export function createOpenClawTools(
     resolvedConfig?.tools?.deny,
     options?.pluginToolDenylist,
   );
-  const messageExplicitlyAllowed = isToolExplicitlyAllowedByFactoryPolicy({
-    toolName: "message",
-    allowlist: explicitFactoryAllowlist,
-    denylist: explicitFactoryDenylist,
-  });
   const includeMessageTool =
     !embedded ||
     options?.sourceReplyDeliveryMode === "message_tool_only" ||
-    messageExplicitlyAllowed;
-  const includeSubagentSpawnTool = !embedded || options?.allowGatewaySubagentBinding === true;
-  const effectiveCallGateway = embedded ? createEmbeddedCallGateway() : callGateway;
-  const includeUpdatePlanTool = shouldIncludeUpdatePlanToolForOpenClawTools({
-    config: resolvedConfig,
-    agentSessionKey: options?.agentSessionKey,
-    agentId: options?.requesterAgentIdOverride,
-    modelProvider: options?.modelProvider,
-    modelId: options?.modelId,
-    pluginToolAllowlist: options?.pluginToolAllowlist,
-    pluginToolDenylist: options?.pluginToolDenylist,
-  });
-  const includeTranscriptsTool = resolveTranscriptsConfig(resolvedConfig?.transcripts).enabled;
+    isToolExplicitlyAllowedByFactoryPolicy({
+      toolName: "message",
+      allowlist: explicitFactoryAllowlist,
+      denylist: explicitFactoryDenylist,
+    });
+  const sessionLookupToolOptions = {
+    agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+    sandboxed: options?.sandboxed,
+    config: sessionConfig,
+    callGateway: embedded ? createEmbeddedCallGateway() : callAgentToolGatewayRequest,
+    sessionLinkBase: resolveControlUiSessionLinkBase(resolvedConfig),
+  };
+  const progressCardTool = shouldIncludeProgressCardToolForOpenClawTools({
+    ...options,
+    agentId: sessionAgentId,
+  })
+    ? createProgressCardTool({
+        agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      })
+    : null;
+  const transcriptsTool = resolveTranscriptsTool(resolvedConfig, sessionAgentId, options);
   const tools: AnyAgentTool[] = [
+    createDashboardTool({
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      agentId: sessionAgentId,
+    }),
     ...(embedded
       ? []
       : [
           nodesTool,
+          createMobileUiTool({ idempotencyScope: options?.runId }),
           ...(options?.modelHasVision === false
             ? []
             : [
                 createComputerTool({
                   config: options?.config,
                   modelHasVision: options?.modelHasVision,
-                  // Run ids survive attempt/session reconstruction but do not
-                  // span later assistant runs that may reuse a provider call id.
+                  // Run ids expire before later assistant runs can reuse a provider call id.
                   idempotencyScope: options?.runId,
                   contextEpoch: options?.computerContextEpoch,
+                  registerRunCleanup: options?.registerRunCleanup,
                 }),
               ]),
           createCronTool({
-            agentSessionKey: options?.agentSessionKey,
+            // Use the durable runSessionKey; cleanup-retired policy keys leave cron jobs dangling.
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentId: sessionAgentId,
+            agentAccountId: gatewayCallerAccountId,
+            config: options?.config,
             currentDeliveryContext: {
               channel: options?.agentChannel,
               to: options?.currentChannelId ?? options?.agentTo,
@@ -473,24 +355,62 @@ export function createOpenClawTools(
               threadId: options?.currentThreadTs ?? options?.agentThreadId,
             },
             creatorToolAllowlist: options?.cronCreatorToolAllowlist,
-            ...(options?.cronSelfRemoveOnlyJobId
-              ? { selfRemoveOnlyJobId: options.cronSelfRemoveOnlyJobId }
-              : {}),
+            creatorToolAllowlistCaptureRef: options?.cronCreatorToolAllowlistCaptureRef,
+            resolveCreatorToolAuthority: options?.resolveCronCreatorToolAuthority,
+            creatorAuthorityUnavailableReason: options?.cronCreatorAuthorityUnavailableReason,
+            runId: options?.runId,
+            selfRemoveOnlyJobId: options?.cronSelfRemoveOnlyJobId,
           }),
           createSessionsTool({
             agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentSessionId: options?.sessionId,
+            requesterAgentIdOverride: sessionAgentId,
             sandboxed: options?.sandboxed,
-            config: resolvedConfig,
+            config: sessionConfig,
           }),
+          createScreenTool({
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            agentId: sessionAgentId,
+          }),
+          ...(options?.sandboxed
+            ? []
+            : [
+                createTerminalTool({
+                  agentId: sessionAgentId,
+                  agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+                  sessionId: options?.sessionId,
+                  config: resolvedConfig,
+                  execSession: options?.execSession,
+                  execOverrides: options?.execOverrides,
+                  runId: options?.runId,
+                  approvalReviewerDeviceIds: options?.approvalReviewerDeviceIds,
+                }),
+                createPortalTool(),
+              ]),
         ]),
-    ...(!embedded && taskSuggestionSessionKey && options?.taskSuggestionDeliveryMode === "gateway"
+    ...(!embedded && taskKey && options?.taskSuggestionDeliveryMode === "gateway"
       ? createTaskSuggestionTools({
-          sessionKey: taskSuggestionSessionKey,
+          sessionKey: taskKey,
           agentId: sessionAgentId,
-          cwd: runtimeCwd,
+          cwd: resolveWorkspaceRoot(options?.cwd ?? options?.workspaceDir ?? inferredWorkspaceDir),
         })
       : []),
     ...(messageTool && includeMessageTool ? [messageTool] : []),
+    ...(!isCoreCanvasHostEnabled(resolvedConfig) &&
+    !hasRegisteredShowWidgetKinds() &&
+    !widgetPresentation.currentChannelPresenter
+      ? []
+      : [
+          createShowWidgetTool({
+            sessionId: options?.sessionId,
+            agentId: sessionAgentId,
+            agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            inlineHostEnabled: isCoreCanvasHostEnabled(resolvedConfig),
+            inlineClientAvailable: options?.clientCaps?.includes("inline-widgets") === true,
+            presenters: widgetPresentation.presenters,
+            presenterContext: widgetPresentation.context,
+          }),
+        ]),
     ...collectPresentOpenClawTools([heartbeatTool]),
     createTtsTool({
       agentChannel: options?.agentChannel,
@@ -498,7 +418,11 @@ export function createOpenClawTools(
       agentId: sessionAgentId,
       agentAccountId: options?.agentAccountId,
     }),
-    ...(includeTranscriptsTool ? [createTranscriptsTool({ config: resolvedConfig })] : []),
+    ...(options?.githubPublicationAvailable !== undefined
+      ? [createGitHubIdentityStatusTool()]
+      : []),
+    ...(options?.githubPublicationAvailable === true ? [createGitHubPublishTool()] : []),
+    ...collectPresentOpenClawTools([transcriptsTool]),
     ...collectPresentOpenClawTools([imageGenerateTool, musicGenerateTool, videoGenerateTool]),
     ...(embedded
       ? []
@@ -508,7 +432,7 @@ export function createOpenClawTools(
         ]),
     createAgentsListTool({
       agentSessionKey: options?.agentSessionKey,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
+      requesterAgentIdOverride: sessionAgentId,
     }),
     createGetGoalTool({
       agentSessionKey: options?.agentSessionKey,
@@ -539,43 +463,84 @@ export function createOpenClawTools(
             runId: options?.runId,
             messageId: options?.currentMessageId,
             run: options?.skillWorkshop,
+            modelContextWindowTokens: options?.modelContextWindowTokens,
           }),
         ]),
-    ...(includeUpdatePlanTool ? [createUpdatePlanTool()] : []),
-    createSessionsListTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
+    ...collectPresentOpenClawTools([progressCardTool]),
+    ...swarmToolGroups.structuredOutput,
+    ...(shouldIncludeAskUserToolForOpenClawTools({
       config: resolvedConfig,
-      callGateway: effectiveCallGateway,
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      pluginToolDenylist: options?.pluginToolDenylist,
+    })
+      ? [
+          createAskUserTool({
+            agentId: sessionAgentId,
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+          }),
+        ]
+      : []),
+    ...(shouldIncludeSecretsToolForOpenClawTools({
+      config: resolvedConfig,
+      agentSessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+      pluginToolDenylist: options?.pluginToolDenylist,
+    })
+      ? [
+          createSecretsTool({
+            agentId: sessionAgentId,
+            sessionKey: options?.runSessionKey ?? options?.agentSessionKey,
+            runId: options?.runId,
+          }),
+        ]
+      : []),
+    createSessionsListTool({
+      ...sessionLookupToolOptions,
+      requesterAgentIdOverride: sessionAgentId,
     }),
     createSessionsHistoryTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: effectiveCallGateway,
+      ...sessionLookupToolOptions,
+      requesterAgentIdOverride: sessionAgentId,
     }),
-    createSessionsSearchTool({
-      agentId: sessionAgentId,
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: effectiveCallGateway,
-    }),
+    createSessionsSearchTool({ ...sessionLookupToolOptions, agentId: sessionAgentId }),
     ...(embedded
       ? []
       : [
+          createConversationsListTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
+          createConversationsSendTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
+          createConversationsTurnTool({
+            agentId: sessionAgentId,
+            agentSessionId: options?.sessionId,
+            agentSessionKey: options?.agentSessionKey,
+            config: resolvedConfig,
+            senderIsOwner: options?.senderIsOwner,
+          }),
+          // Keep the in-process caller so materialized agent roots retain their creation stamp.
           createSessionsSendTool({
+            agentId: sessionAgentId,
             agentSessionKey: options?.agentSessionKey,
             agentChannel: options?.agentChannel,
             sandboxed: options?.sandboxed,
-            config: resolvedConfig,
-            callGateway,
+            config: sessionConfig,
           }),
         ]),
-    ...(includeSubagentSpawnTool
+    ...(!embedded || options?.allowGatewaySubagentBinding === true
       ? [
           createSessionsSpawnTool({
             agentSessionKey: options?.agentSessionKey,
+            requesterTurnRunId: options?.runId,
             completionOwnerKey: options?.runSessionKey,
             agentChannel: options?.agentChannel,
             agentAccountId: options?.agentAccountId,
@@ -584,34 +549,48 @@ export function createOpenClawTools(
             currentMessagingTarget: options?.currentMessagingTarget,
             currentChannelId: options?.currentChannelId,
             currentThreadTs: options?.currentThreadTs,
+            currentMessageId: options?.currentMessageId,
             agentGroupId: options?.agentGroupId,
             agentGroupChannel: options?.agentGroupChannel,
             agentGroupSpace: options?.agentGroupSpace,
             agentMemberRoleIds: options?.agentMemberRoleIds,
             sandboxed: options?.sandboxed,
             config: resolvedConfig,
-            requesterAgentIdOverride: options?.requesterAgentIdOverride,
+            requesterAgentIdOverride: sessionAgentId,
+            requesterRunId: options?.runId,
+            swarmCollector: options?.swarmCollector,
             workspaceDir: spawnWorkspaceDir,
+            sessionPermissionPolicy: options?.sessionPermissionPolicy,
             inheritedToolAllowlist: options?.inheritedToolAllowlist,
             inheritedToolDenylist: options?.inheritedToolDenylist,
           }),
         ]
       : []),
+    ...swarmToolGroups.agentsWait,
     createSessionsYieldTool({
       sessionId: options?.sessionId,
+      claimYield: createRequesterYieldCallback({
+        requesterSessionKey: trimmedRunSessionKey || options?.agentSessionKey,
+        requesterAgentId: sessionAgentId,
+        requesterTurnRunId: options?.runId,
+        claimYieldCompletion: options?.claimYieldCompletion,
+      }),
       onYield: options?.onYield,
     }),
     createSubagentsTool({
       agentSessionKey: options?.agentSessionKey,
-      config: resolvedConfig,
+      agentId: sessionAgentId,
+      config: sessionConfig,
     }),
     createSessionStatusTool({
       agentSessionKey: options?.agentSessionKey,
+      requesterAgentIdOverride: sessionAgentId,
       runSessionKey: options?.runSessionKey,
-      config: resolvedConfig,
+      config: sessionConfig,
       sandboxed: options?.sandboxed,
       activeModelProvider: options?.modelProvider,
       activeModelId: options?.modelId,
+      metadataSnapshot: options?.preparedModelRuntime?.metadataSnapshot,
       activeDeliveryContext: {
         channel: options?.agentChannel,
         to: options?.currentChannelId ?? options?.agentTo,
@@ -624,16 +603,12 @@ export function createOpenClawTools(
   options?.recordToolPrepStage?.("openclaw-tools:core-tool-list");
   let allTools = tools;
   if (!options?.disablePluginTools) {
-    const existingToolNames = new Set<string>();
-    for (const tool of tools) {
-      existingToolNames.add(tool.name);
-    }
     allTools = [
       ...tools,
       ...resolveOpenClawPluginToolsForOptions({
-        options,
+        options: { ...options, activeProjectKeys },
         resolvedConfig,
-        existingToolNames,
+        existingToolNames: new Set(tools.map((tool) => tool.name)),
       }),
     ];
     options?.recordToolPrepStage?.("openclaw-tools:plugin-tools");
@@ -641,9 +616,15 @@ export function createOpenClawTools(
 
   allTools = filterToolsByClientCaps(allTools, options?.clientCaps);
   options?.recordToolPrepStage?.("openclaw-tools:client-capabilities");
+  for (const tool of allTools) {
+    bindAssembledAgentToolActionDescriptor(tool);
+  }
 
   const hookAgentId = options?.requesterAgentIdOverride ?? sessionAgentId;
-  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(hookAgentId, options);
+  const wrapGatewayCallerIdentity = createGatewayToolCallerWrapper(
+    hookAgentId,
+    options ? { ...options, agentAccountId: gatewayCallerAccountId } : options,
+  );
 
   if (options?.wrapBeforeToolCallHook === false) {
     return allTools.map(wrapGatewayCallerIdentity);
@@ -656,10 +637,7 @@ export function createOpenClawTools(
     ...(options?.currentChannelId ? { channelId: options.currentChannelId } : {}),
     loopDetection: resolveToolLoopDetectionConfig({ cfg: resolvedConfig, agentId: hookAgentId }),
   };
-  const hookContext = {
-    ...defaultHookContext,
-    ...options?.beforeToolCallHookContext,
-  };
+  const hookContext = { ...defaultHookContext, ...options?.beforeToolCallHookContext };
   options?.recordToolPrepStage?.("openclaw-tools:tool-hooks");
   return allTools
     .map((tool) =>

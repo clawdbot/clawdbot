@@ -1,3 +1,4 @@
+// @vitest-environment node
 // Control UI tests cover chat model select state behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
@@ -8,6 +9,7 @@ import {
   DEFAULT_CHAT_MODEL_CATALOG,
 } from "../../test-helpers/chat-model.ts";
 import {
+  isChatModelUnavailable,
   resolveChatFastModeSelectState,
   resolveChatModelOverrideValue,
   resolveChatModelSelectState,
@@ -120,6 +122,25 @@ describe("chat-model-select-state", () => {
     });
   });
 
+  it("finds the active row across the legacy main alias window", () => {
+    // Pre-hello (or legacy-alias) states select "main" while the row list
+    // already carries the canonical agent:main:main key; a strict compare
+    // missed the row and the picker fell back to the agent default.
+    const sessionsResult = createSessionsListResult({
+      model: "gpt-5.3-codex",
+      modelProvider: "openai",
+    });
+    const session = expectDefined(sessionsResult.sessions[0], "alias fixture row");
+    sessionsResult.sessions[0] = { ...session, key: "agent:main:main" };
+    const value = resolveChatModelOverrideValue(
+      createChatModelState({
+        chatModelCatalog: DEFAULT_CHAT_MODEL_CATALOG,
+        sessionsResult,
+      }),
+    );
+    expect(value).toBe("openai/gpt-5.3-codex");
+  });
+
   it("uses the server-qualified value when the active session provider is present", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(DEEPSEEK_CHAT_MODEL),
@@ -169,7 +190,7 @@ describe("chat-model-select-state", () => {
     expect(resolveChatModelSelectState(state).currentOverride).toBe("deepseek/deepseek-chat");
   });
 
-  it("preserves already-qualified active-session models when the provider is stale and the catalog is empty", () => {
+  it("keeps the active model value but does not synthesize a picker option when the catalog is empty", () => {
     const state = createChatModelState({
       sessionsResult: createSessionsListResult({
         model: "openai/gpt-5-mini",
@@ -179,10 +200,20 @@ describe("chat-model-select-state", () => {
 
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
-    expect(resolved.options).toEqual([
-      { value: "openai/gpt-5-mini", label: "gpt-5-mini · openai" },
-      { value: "openai/gpt-5", label: "gpt-5 · openai" },
-    ]);
+    expect(resolved.options).toEqual([]);
+  });
+
+  it("does not synthesize configured models outside catalog results", () => {
+    const state = createChatModelState({
+      sessionsResult: createSessionsListResult({
+        model: "openai/gpt-5-mini",
+        modelProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+    expect(resolved.options).toEqual([]);
   });
 
   it("builds picker options without introducing a bare duplicate", () => {
@@ -202,7 +233,7 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
-  it("omits unavailable catalog entries from picker options", () => {
+  it("keeps configured unavailable catalog entries visible but disabled", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(
         {
@@ -227,40 +258,67 @@ describe("chat-model-select-state", () => {
     });
 
     const resolved = resolveChatModelSelectState(state);
-    expect(resolved.defaultSelectable).toBe(true);
-    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5.5", label: "GPT-5.5" },
+      {
+        value: "codex/gpt-5.3-codex-spark",
+        label: "GPT-5.3 Codex Spark",
+        disabled: true,
+      },
+    ]);
   });
 
-  it("keeps an available OpenAI route when an unavailable legacy route has the same model id", () => {
-    const state = createChatModelState({
-      chatModelCatalog: createModelCatalog(
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "openai",
-          available: true,
-        },
-        {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
-          provider: "codex",
-          available: false,
-        },
-      ),
-      sessionsResult: createSessionsListResult({
-        model: "gpt-5.5",
-        modelProvider: "codex",
-        defaultsModel: "gpt-5.5",
-        defaultsProvider: "codex",
-      }),
-    });
+  it.each([
+    {
+      name: "available",
+      available: true,
+      options: [{ value: "openai/gpt-5.5", label: "GPT-5.5" }],
+    },
+    {
+      name: "indeterminate",
+      available: undefined,
+      options: [{ value: "openai/gpt-5.5", label: "GPT-5.5" }],
+    },
+    {
+      name: "all-cold",
+      available: false,
+      options: [
+        { value: "openai/gpt-5.5", label: "GPT-5.5 · openai", disabled: true },
+        { value: "codex/gpt-5.5", label: "GPT-5.5 · codex", disabled: true },
+      ],
+    },
+  ])(
+    "preserves $name route labels and options beside a cold legacy alias",
+    ({ available, options }) => {
+      const state = createChatModelState({
+        chatModelCatalog: createModelCatalog(
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "openai",
+            available,
+          },
+          {
+            id: "gpt-5.5",
+            name: "GPT-5.5",
+            provider: "codex",
+            available: false,
+          },
+        ),
+        sessionsResult: createSessionsListResult({
+          model: "gpt-5.5",
+          modelProvider: "codex",
+          defaultsModel: "gpt-5.5",
+          defaultsProvider: "codex",
+        }),
+      });
 
-    const resolved = resolveChatModelSelectState(state);
-    expect(resolved.currentOverride).toBe("openai/gpt-5.5");
-    expect(resolved.defaultModel).toBe("openai/gpt-5.5");
-    expect(resolved.defaultSelectable).toBe(true);
-    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
-  });
+      const resolved = resolveChatModelSelectState(state);
+      expect(resolved.currentOverride).toBe("openai/gpt-5.5");
+      expect(resolved.defaultModel).toBe("openai/gpt-5.5");
+      expect(resolved.options).toEqual(options);
+    },
+  );
 
   it("preserves an exact available OpenAI route when a legacy route is also available", () => {
     const state = createChatModelState({
@@ -291,33 +349,37 @@ describe("chat-model-select-state", () => {
     expect(resolved.defaultModel).toBe("openai/gpt-5.5");
   });
 
-  it("does not reintroduce an unavailable current or default model", () => {
+  it("keeps an all-cold default identity visible as a disabled option", () => {
     const state = createChatModelState({
       chatModelCatalog: createModelCatalog(
         {
-          id: "gpt-5.5",
-          name: "GPT-5.5",
+          id: "gpt-5.6-sol",
+          name: "GPT-5.6 Sol",
           provider: "openai",
-          available: true,
+          available: false,
         },
         {
-          id: "gpt-5.3-codex-spark",
-          name: "GPT-5.3 Codex Spark",
-          provider: "codex",
+          id: "gpt-5.6-luna",
+          name: "GPT-5.6 Luna",
+          provider: "openai",
           available: false,
         },
       ),
       sessionsResult: createSessionsListResult({
-        model: "gpt-5.3-codex-spark",
+        model: "gpt-5.6-sol",
         modelProvider: "openai",
-        defaultsModel: "gpt-5.3-codex-spark",
+        defaultsModel: "gpt-5.6-sol",
         defaultsProvider: "openai",
       }),
     });
 
     const resolved = resolveChatModelSelectState(state);
-    expect(resolved.defaultSelectable).toBe(false);
-    expect(resolved.options).toEqual([{ value: "openai/gpt-5.5", label: "GPT-5.5" }]);
+    expect(resolved.defaultLabel).toBe("Default (GPT-5.6 Sol)");
+    expect(isChatModelUnavailable("gpt-5.6-sol", "openai", state.chatModelCatalog)).toBe(true);
+    expect(resolved.options).toEqual([
+      { value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol", disabled: true },
+      { value: "openai/gpt-5.6-luna", label: "GPT-5.6 Luna", disabled: true },
+    ]);
   });
 
   it("supports fast mode for a default legacy Codex provider", () => {
@@ -344,20 +406,24 @@ describe("chat-model-select-state", () => {
     ).toBe(true);
   });
 
-  it("uses the session provider for fast mode with a slash-containing raw model id", () => {
+  it.each([
+    { name: "missing", providers: [] },
+    { name: "ambiguous", providers: ["xai", "proxy"] },
+  ])("uses the session provider with a $name raw-id catalog", ({ providers }) => {
+    const model = "google/gemma-4-26b-a4b-it";
     const sessionsResult = createSessionsListResult({
-      model: "google/gemma-4-26b-a4b-it",
+      model,
       modelProvider: "xai",
-      defaultsModel: "google/gemma-4-26b-a4b-it",
+      defaultsModel: model,
       defaultsProvider: "xai",
     });
 
     expect(
       resolveChatFastModeSelectState({
         activeRunId: null,
-        catalog: [],
+        catalog: providers.map((provider) => ({ id: model, name: "Gemma", provider })),
         connected: true,
-        currentModelOverride: "google/gemma-4-26b-a4b-it",
+        currentModelOverride: model,
         gatewayAvailable: true,
         loading: false,
         sending: false,
@@ -557,6 +623,49 @@ describe("chat-model-select-state", () => {
     ]);
   });
 
+  it("keeps versioned catalog names visible for configured family aliases", () => {
+    const state = createChatModelState({
+      chatModelCatalog: createModelCatalog(
+        {
+          id: "claude-opus-4-8",
+          alias: "opus",
+          name: "Opus 4.8",
+          provider: "anthropic",
+        },
+        {
+          id: "claude-sonnet-5",
+          alias: "sonnet",
+          name: "Sonnet 5",
+          provider: "anthropic",
+        },
+        {
+          id: "moonshotai/kimi-k2.5",
+          alias: "Kimi K2.5 (NVIDIA)",
+          name: "Kimi K2.5",
+          provider: "nvidia",
+        },
+      ),
+      sessionsResult: createSessionsListResult({
+        model: "claude-opus-4-8",
+        modelProvider: "anthropic",
+        defaultsModel: "claude-opus-4-8",
+        defaultsProvider: "anthropic",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+
+    expect(resolved.defaultLabel).toBe("Default (Opus 4.8 · opus)");
+    expect(resolved.options).toEqual([
+      { value: "anthropic/claude-opus-4-8", label: "Opus 4.8 · opus" },
+      { value: "anthropic/claude-sonnet-5", label: "Sonnet 5 · sonnet" },
+      {
+        value: "nvidia/moonshotai/kimi-k2.5",
+        label: "Kimi K2.5 (NVIDIA)",
+      },
+    ]);
+  });
+
   it("uses the active agent model for the default label", () => {
     const state = createChatModelState({
       agentDefaultModel: "anthropic/claude-opus-4-5",
@@ -583,6 +692,97 @@ describe("chat-model-select-state", () => {
     const resolved = resolveChatModelSelectState(state);
     expect(resolved.defaultModel).toBe("anthropic/claude-opus-4-5");
     expect(resolved.defaultLabel).toBe("Default (Claude Opus 4.5)");
+  });
+
+  it("keeps a canonical agent default as one named picker option", () => {
+    const state = createChatModelState({
+      agentDefaultModel: "openai/gpt-5.6-sol",
+      chatModelCatalog: createModelCatalog({
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+
+    expect(resolved.defaultLabel).toBe("Default (GPT-5.6 Sol)");
+    expect(resolved.options).toEqual([{ value: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol" }]);
+  });
+
+  // The session model equals the agent default in every case, so anything other than
+  // the recorded marker would have to guess — and would always guess "inherited".
+  it.each([
+    { name: "inherited default", source: null, expected: null },
+    { name: "user pin the default grew into", source: "user" as const, expected: "user" },
+    { name: "automatic fallback", source: "auto" as const, expected: "auto" },
+  ])("resolves $expected from provenance for $name", ({ source, expected }) => {
+    const state = createChatModelState({
+      agentDefaultModel: "openai/gpt-5.6-sol",
+      chatModelCatalog: createModelCatalog({
+        id: "gpt-5.6-sol",
+        name: "GPT-5.6 Sol",
+        provider: "openai",
+      }),
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5.6-sol",
+        modelProvider: "openai",
+        modelOverrideSource: source,
+        defaultsModel: "gpt-5.6-sol",
+        defaultsProvider: "openai",
+      }),
+    });
+
+    const resolved = resolveChatModelSelectState(state);
+    expect(resolved.currentOverride).toBe("openai/gpt-5.6-sol");
+    expect(resolved.modelOverrideSource).toBe(expected);
+  });
+
+  it("reads pin provenance from a canonical main row when the route uses the alias key", () => {
+    const state = createChatModelState({
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5-mini",
+        modelProvider: "openai",
+        modelOverrideSource: "user",
+      }),
+    });
+    // Route key stays the `main` alias while the Gateway reports the canonical row.
+    expectDefined(state.sessionsResult?.sessions[0], "main session row").key = "agent:main:main";
+
+    const resolved = resolveChatModelSelectState(state);
+
+    expect(resolved.currentOverride).toBe("openai/gpt-5-mini");
+    expect(resolved.modelOverrideSource).toBe("user");
+  });
+
+  // `currentOverride` already lets a pending local selection outrank the row, so
+  // provenance has to follow it — otherwise the picker would report a model and an
+  // origin belonging to two different points in time.
+  it("keeps provenance and the effective model on the same in-flight selection", () => {
+    const pendingPin = createChatModelState({
+      modelOverrides: { main: "openai/gpt-5-mini" },
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5",
+        modelProvider: "openai",
+        modelOverrideSource: null,
+      }),
+    });
+
+    expect(resolveChatModelSelectState(pendingPin).currentOverride).toBe("openai/gpt-5-mini");
+    expect(resolveChatModelSelectState(pendingPin).modelOverrideSource).toBe("user");
+
+    const pendingReset = {
+      ...pendingPin,
+      modelOverrides: { main: null },
+      sessionsResult: createSessionsListResult({
+        model: "gpt-5-mini",
+        modelProvider: "openai",
+        modelOverrideSource: "user" as const,
+      }),
+    };
+
+    expect(resolveChatModelSelectState(pendingReset).currentOverride).toBe("");
+    expect(resolveChatModelSelectState(pendingReset).modelOverrideSource).toBeNull();
   });
 
   it("disambiguates duplicate friendly names in picker options and default labels", () => {

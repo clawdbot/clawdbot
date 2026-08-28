@@ -2,6 +2,11 @@
 // capability SDKs do not depend on each other.
 
 export {
+  inspectTlsCertificateError,
+  type TlsCertificateErrorDetails,
+  type TlsCertificateErrorKind,
+} from "@openclaw/ai/internal/shared";
+export {
   assertOkOrThrowHttpError,
   assertOkOrThrowProviderError,
   assertProviderBinaryResponseContent,
@@ -18,6 +23,10 @@ export {
   readResponseTextLimited,
   truncateErrorDetail,
 } from "../agents/provider-http-errors.js";
+export {
+  readProviderResponseErrorText,
+  redactProviderResponseErrorText,
+} from "../agents/provider-request-header-redaction.js";
 export {
   buildAudioTranscriptionFormData,
   createProviderOperationDeadline,

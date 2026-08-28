@@ -4,14 +4,13 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.media-rich-content
+      - matrix.encrypted-media-upload-download
   execution:
     kind: flow
     channel: matrix
     timeoutMs: 180000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixConfigOverrides:
         encryption: true
         startupVerification: off

@@ -1,5 +1,5 @@
 // Google Meet tests cover google meet plugin behavior.
-import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-env";
+import { isLiveTestEnabled } from "openclaw/plugin-sdk/test-live";
 import { describe, expect, it } from "vitest";
 import { buildGoogleMeetExportManifest, googleMeetExportFileNames } from "./src/cli.js";
 import {

@@ -40,7 +40,7 @@ type PluginHostRuntimeState = {
 };
 
 const PLUGIN_HOST_RUNTIME_STATE_KEY = Symbol.for("openclaw.pluginHostRuntimeState");
-const CLOSED_RUN_IDS_MAX = 512;
+const TRACKED_RUN_IDS_MAX = 512;
 const PLUGIN_TERMINAL_EVENT_CLEANUP_WAIT_MS = 5_000;
 const log = createSubsystemLogger("plugins/host-hooks");
 
@@ -63,17 +63,21 @@ function copyJsonValue(value: PluginJsonValue): PluginJsonValue {
   return structuredClone(value);
 }
 
-function markPluginRunClosed(runId: string): void {
-  const state = getPluginHostRuntimeState();
-  state.closedRunIds.delete(runId);
-  state.closedRunIds.add(runId);
-  while (state.closedRunIds.size > CLOSED_RUN_IDS_MAX) {
-    const oldest = state.closedRunIds.values().next().value;
+function rememberBoundedRunId(runIds: Set<string>, runId: string): void {
+  runIds.delete(runId);
+  runIds.add(runId);
+
+  while (runIds.size > TRACKED_RUN_IDS_MAX) {
+    const oldest = runIds.values().next().value;
     if (oldest === undefined) {
       break;
     }
-    state.closedRunIds.delete(oldest);
+    runIds.delete(oldest);
   }
+}
+
+function markPluginRunClosed(runId: string): void {
+  rememberBoundedRunId(getPluginHostRuntimeState().closedRunIds, runId);
 }
 
 function isPluginRunClosed(runId: string): boolean {
@@ -81,16 +85,7 @@ function isPluginRunClosed(runId: string): boolean {
 }
 
 function markTerminalEventCleanupExpired(runId: string): void {
-  const state = getPluginHostRuntimeState();
-  state.terminalEventCleanupExpiredRunIds.delete(runId);
-  state.terminalEventCleanupExpiredRunIds.add(runId);
-  while (state.terminalEventCleanupExpiredRunIds.size > CLOSED_RUN_IDS_MAX) {
-    const oldest = state.terminalEventCleanupExpiredRunIds.values().next().value;
-    if (oldest === undefined) {
-      break;
-    }
-    state.terminalEventCleanupExpiredRunIds.delete(oldest);
-  }
+  rememberBoundedRunId(getPluginHostRuntimeState().terminalEventCleanupExpiredRunIds, runId);
 }
 
 function isTerminalEventCleanupExpired(runId: string): boolean {
@@ -297,6 +292,7 @@ function logAgentEventSubscriptionFailure(params: {
 export function dispatchPluginAgentEventSubscriptions(params: {
   registry: PluginRegistry | null | undefined;
   event: AgentEventPayload;
+  isLive: () => boolean;
 }): void {
   const subscriptions = params.registry?.agentEventSubscriptions ?? [];
   const pendingHandlers: Promise<void>[] = [];
@@ -311,11 +307,16 @@ export function dispatchPluginAgentEventSubscriptions(params: {
     let handlerActive = true;
     const ctx: PluginAgentEventSubscriptionContext = {
       getRunContext: ((namespace: string) =>
-        getPluginRunContext({
-          pluginId,
-          get: { runId, namespace },
-        })) as PluginAgentEventSubscriptionContext["getRunContext"],
+        params.isLive()
+          ? getPluginRunContext({
+              pluginId,
+              get: { runId, namespace },
+            })
+          : undefined) as PluginAgentEventSubscriptionContext["getRunContext"],
       setRunContext: (namespace: string, value: PluginJsonValue) => {
+        if (!params.isLive()) {
+          return;
+        }
         setPluginRunContext({
           pluginId,
           patch: { runId, namespace, value },
@@ -323,6 +324,9 @@ export function dispatchPluginAgentEventSubscriptions(params: {
         });
       },
       clearRunContext: (namespace?: string) => {
+        if (!params.isLive()) {
+          return;
+        }
         clearPluginRunContext({ pluginId, runId, namespace });
       },
     };
@@ -461,6 +465,7 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
   preserveJobIds?: ReadonlySet<string>;
   excludeJobKeys?: ReadonlySet<string>;
   shouldCleanup?: () => boolean;
+  cleanupOwnerRegistry?: PluginRegistry;
   preserveOwnerRegistry?: PluginRegistry | null;
 }): Promise<Array<{ pluginId: string; hookId: string; error: unknown }>> {
   const state = getPluginHostRuntimeState();
@@ -561,6 +566,14 @@ export async function cleanupPluginSessionSchedulerJobs(params: {
         return failures;
       }
       if (params.sessionKey && record.job.sessionKey !== params.sessionKey) {
+        continue;
+      }
+      // Dynamic jobs share a process-global index. Registry retirement must only
+      // clean its own records or it can delete jobs owned by another live surface.
+      if (
+        params.cleanupOwnerRegistry !== undefined &&
+        record.ownerRegistry !== params.cleanupOwnerRegistry
+      ) {
         continue;
       }
       if (registryRecordKeys.has(schedulerJobKey(pluginId, jobId, record.job.sessionKey))) {

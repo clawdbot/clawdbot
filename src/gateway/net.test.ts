@@ -1,5 +1,6 @@
 // Gateway net tests cover bind-host selection, loopback/private host detection,
 // trusted proxy IP resolution, container defaults, and interface matching.
+import net from "node:net";
 import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resetContainerEnvironmentCacheForTest } from "../infra/container-environment.js";
@@ -19,6 +20,7 @@ import {
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
+  resolveGatewayRequiredListenHosts,
   resolveHostName,
 } from "./net.js";
 
@@ -418,6 +420,17 @@ describe("resolveGatewayListenHosts", () => {
   });
 });
 
+describe("resolveGatewayRequiredListenHosts", () => {
+  it.each([
+    ["127.0.0.1", ["127.0.0.1"]],
+    ["0.0.0.0", ["0.0.0.0"]],
+    ["::1", ["::1"]],
+    ["100.64.0.1", ["100.64.0.1", "127.0.0.1"]],
+  ])("returns required startup hosts for %s", (host, expected) => {
+    expect(resolveGatewayRequiredListenHosts(host)).toEqual(expected);
+  });
+});
+
 describe("pickPrimaryLanIPv4", () => {
   afterEach(() => {
     vi.restoreAllMocks();
@@ -496,7 +509,14 @@ describe("isPrivateOrLoopbackAddress", () => {
   });
 
   it("rejects public IP addresses", () => {
-    const rejected = ["1.1.1.1", "8.8.8.8", "172.32.0.1", "203.0.113.10", "2001:4860:4860::8888"];
+    const rejected = [
+      "1.1.1.1",
+      "8.8.8.8",
+      "172.32.0.1",
+      "203.0.113.10",
+      "2001:4860:4860::8888",
+      "64:ff9b:1::8.8.8.8",
+    ];
     for (const ip of rejected) {
       expect(isPrivateOrLoopbackAddress(ip)).toBe(false);
     }
@@ -552,6 +572,7 @@ describe("isPrivateOrLoopbackHost", () => {
     expect(isPrivateOrLoopbackHost("1.1.1.1")).toBe(false);
     expect(isPrivateOrLoopbackHost("8.8.8.8")).toBe(false);
     expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);
+    expect(isPrivateOrLoopbackHost("[64:ff9b:1::8.8.8.8]")).toBe(false);
   });
 
   it("rejects empty/falsy input", () => {
@@ -686,7 +707,9 @@ describe("resolveGatewayBindHost", () => {
   });
 
   it("returns 127.0.0.1 for loopback mode", async () => {
+    const createServerSpy = vi.spyOn(net, "createServer");
     expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
+    expect(createServerSpy).not.toHaveBeenCalled();
   });
 
   it("returns 0.0.0.0 for lan mode", async () => {

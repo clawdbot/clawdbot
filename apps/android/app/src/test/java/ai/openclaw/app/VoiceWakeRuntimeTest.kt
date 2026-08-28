@@ -9,6 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -21,6 +22,13 @@ import java.util.UUID
 
 @RunWith(RobolectricTestRunner::class)
 class VoiceWakeRuntimeTest {
+  private var runtimeUnderTest: NodeRuntime? = null
+
+  @After
+  fun closeRuntime() {
+    runtimeUnderTest?.let(::closeNodeRuntimeTestFixture)
+  }
+
   @Test
   fun disconnectedSaveDoesNotCreateLocalOverride() {
     val runtime = createTestRuntime()
@@ -173,7 +181,7 @@ class VoiceWakeRuntimeTest {
       )
     val prefs = SecurePrefs(app, securePrefsOverride = securePrefs)
     prefs.setVoiceWakeEnabled(true)
-    val runtime = NodeRuntime(app, prefs, mode = NodeRuntimeMode.ScreenshotFixture)
+    val runtime = NodeRuntime(app, prefs, mode = NodeRuntimeMode.ScreenshotFixture).also { runtimeUnderTest = it }
     val endpoint = GatewayEndpoint.manual("127.0.0.1", 18789)
     writeField(runtime, "connectedEndpoint", endpoint)
 
@@ -197,6 +205,27 @@ class VoiceWakeRuntimeTest {
     runtime.releaseVoiceNoteMic()
   }
 
+  @Test
+  fun dictationAndVoiceNoteCannotShareTheMicrophone() {
+    val runtime = createTestRuntime()
+
+    assertTrue(runtime.tryAcquireDictationMic())
+    assertFalse(runtime.tryAcquireVoiceNoteMic())
+    assertFalse(runtime.setCameraAudioCaptureActive(true))
+
+    runtime.releaseDictationMic()
+    assertTrue(runtime.tryAcquireVoiceNoteMic())
+    assertFalse(runtime.tryAcquireDictationMic())
+
+    runtime.releaseVoiceNoteMic()
+    assertTrue(runtime.tryAcquireDictationMic())
+    runtime.releaseDictationMic()
+
+    assertTrue(runtime.setCameraAudioCaptureActive(true))
+    assertFalse(runtime.tryAcquireDictationMic())
+    assertTrue(runtime.setCameraAudioCaptureActive(false))
+  }
+
   private fun createTestRuntime(): NodeRuntime {
     val app = RuntimeEnvironment.getApplication()
     val securePrefs =
@@ -204,7 +233,7 @@ class VoiceWakeRuntimeTest {
         "openclaw.node.voicewake.runtime.test.${UUID.randomUUID()}",
         Context.MODE_PRIVATE,
       )
-    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs))
+    return NodeRuntime(app, SecurePrefs(app, securePrefsOverride = securePrefs)).also { runtimeUnderTest = it }
   }
 
   private fun seedConnectedRuntime(runtime: NodeRuntime): GatewayEndpoint {

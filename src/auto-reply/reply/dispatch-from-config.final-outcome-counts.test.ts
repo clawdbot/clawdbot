@@ -1,36 +1,55 @@
-// Tests final outcome accounting for dispatch-from-config runs.
+// Tests settled dispatcher outcome accounting for dispatch-from-config runs.
 import { describe, expect, it } from "vitest";
-import { getDispatcherFinalOutcomeCounts } from "./dispatch-from-config.transcript.js";
-import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
+import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
 
-describe("getDispatcherFinalOutcomeCounts (#89116)", () => {
-  it("returns failed: 0 when the dispatcher does not implement getFailedCounts", () => {
-    // Some ReplyDispatcher variants omit the optional count methods entirely; the
-    // previous code called dispatcher.getFailedCounts() unguarded and threw
-    // "TypeError: dispatcher.getFailedCounts is not a function".
-    const dispatcher = {
-      getCancelledCounts: () => ({ tool: 0, block: 0, final: 2 }),
-      // getFailedCounts intentionally absent
-    } as unknown as ReplyDispatcher;
+describe("settled dispatcher final outcomes", () => {
+  it("rethrows an opted-in proven no-send failure when nothing was visible", async () => {
+    const error = new PlatformMessageNotDispatchedError("offline before dispatch", {
+      cause: new Error("offline"),
+    });
+    const dispatcher = createReplyDispatcher({
+      deliver: async () => {
+        throw error;
+      },
+      propagateRetryableNoSendFailure: true,
+    });
 
-    expect(() => getDispatcherFinalOutcomeCounts(dispatcher)).not.toThrow();
-    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({ cancelled: 2, failed: 0 });
+    dispatcher.sendFinalReply({ text: "retry me" });
+    dispatcher.markComplete();
+
+    await expect(dispatcher.waitForIdle()).rejects.toBe(error);
   });
 
-  it("returns cancelled: 0 when getCancelledCounts is absent (existing behavior preserved)", () => {
-    const dispatcher = {
-      getFailedCounts: () => ({ tool: 0, block: 1, final: 3 }),
-    } as unknown as ReplyDispatcher;
+  it("keeps non-visible, pre-send, and post-send outcomes distinct", async () => {
+    const dispatcher = createReplyDispatcher({
+      deliver: async (_payload, info) => {
+        if (info.kind === "tool") {
+          return { visibleReplySent: false };
+        }
+        if (info.kind === "block") {
+          throw Object.assign(new Error("connect failed"), {
+            code: "ECONNREFUSED",
+            syscall: "connect",
+          });
+        }
+        throw new Error("send outcome unknown");
+      },
+    });
 
-    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({ cancelled: 0, failed: 3 });
-  });
+    dispatcher.sendToolResult({ text: "hidden" });
+    dispatcher.sendBlockReply({ text: "never sent" });
+    dispatcher.sendFinalReply({ text: "maybe sent" });
+    dispatcher.markComplete();
+    const receipt = await dispatcher.waitForIdle();
 
-  it("uses the real final counts when both methods are present", () => {
-    const dispatcher = {
-      getCancelledCounts: () => ({ tool: 0, block: 0, final: 1 }),
-      getFailedCounts: () => ({ tool: 0, block: 0, final: 5 }),
-    } as unknown as ReplyDispatcher;
-
-    expect(getDispatcherFinalOutcomeCounts(dispatcher)).toEqual({ cancelled: 1, failed: 5 });
+    expect(receipt).toMatchObject({
+      counts: {
+        tool: { deliveredNotVisible: 1 },
+        block: { failedBeforeSend: 1 },
+        final: { failedAfterSend: 1 },
+      },
+      anyVisibleDelivered: true,
+    });
   });
 });

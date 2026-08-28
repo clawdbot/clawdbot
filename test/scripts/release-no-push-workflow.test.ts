@@ -27,10 +27,12 @@ const UPDATE_MIGRATION = ".github/workflows/update-migration.yml";
 const PERFORMANCE = ".github/workflows/openclaw-performance.yml";
 const LIVE_BUILD = "scripts/test-live-build-docker.sh";
 const DOCKER_E2E_IMAGE_HELPER = "scripts/lib/docker-e2e-image.sh";
+const RELEASE_FILTER_VALIDATOR = resolve("scripts/github/validate-release-suite-filters.sh");
 
 type WorkflowInput = {
   default?: boolean | number | string;
   options?: string[];
+  required?: boolean;
   type?: string;
 };
 
@@ -50,6 +52,7 @@ type WorkflowJob = {
   needs?: string | string[];
   outputs?: Record<string, string>;
   permissions?: PermissionMap;
+  secrets?: Record<string, string> | "inherit";
   steps?: WorkflowStep[];
   uses?: string;
   with?: Record<string, boolean | number | string>;
@@ -58,9 +61,11 @@ type WorkflowJob = {
 type Workflow = {
   jobs?: Record<string, WorkflowJob>;
   on?: {
+    push?: unknown;
     workflow_call?: {
       inputs?: Record<string, WorkflowInput>;
       outputs?: Record<string, { description?: string; value?: string }>;
+      secrets?: Record<string, { required?: boolean }>;
     };
     workflow_dispatch?: { inputs?: Record<string, WorkflowInput> };
   };
@@ -187,7 +192,459 @@ function expectReadOnlyPackagePermission(workflowJob: WorkflowJob): void {
   expect(permissionAt(workflowJob.permissions, "packages", "none")).toBe("read");
 }
 
+function executeReleaseGroupCapture(
+  group: string,
+  runReleaseSoak = false,
+  liveSuiteFilter = "",
+  crossOsSuiteFilter = "",
+) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-release-groups-"));
+  const output = join(root, "github-output");
+  writeFileSync(output, "");
+  try {
+    const capture = step(
+      job(readWorkflow(RELEASE_CHECKS), "resolve_target"),
+      "Capture selected inputs",
+    );
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", capture.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CANDIDATE_ARTIFACT_JSON_INPUT: "",
+        GITHUB_OUTPUT: output,
+        RELEASE_ALLOW_UNRELEASED_CHANGELOG_INPUT: "false",
+        RELEASE_CODEX_PLUGIN_SPEC_INPUT: "",
+        RELEASE_CROSS_OS_SUITE_FILTER_INPUT: crossOsSuiteFilter,
+        RELEASE_FAIL_FAST_INPUT: "false",
+        RELEASE_FILTER_VALIDATOR,
+        RELEASE_LIVE_SUITE_FILTER_INPUT: liveSuiteFilter,
+        RELEASE_MODE_INPUT: "both",
+        RELEASE_PACKAGE_ACCEPTANCE_PACKAGE_SPEC_INPUT: "",
+        RELEASE_PACKAGE_SPEC_INPUT: "",
+        RELEASE_PROFILE_INPUT: "beta",
+        RELEASE_PROVIDER_INPUT: "openai",
+        RELEASE_QA_DISCORD_LIVE_CI_ENABLED: "false",
+        RELEASE_QA_SLACK_LIVE_CI_ENABLED: "false",
+        RELEASE_QA_WHATSAPP_LIVE_CI_ENABLED: "false",
+        RELEASE_REF_INPUT: "main",
+        RELEASE_RERUN_GROUP_INPUT: group,
+        RELEASE_RUN_MATURITY_SCORECARD_INPUT: "false",
+        RELEASE_RUN_RELEASE_SOAK_INPUT: String(runReleaseSoak),
+        RELEASE_SKIP_PACKAGE_TELEGRAM_E2E_INPUT: "false",
+      },
+    });
+    const outputText = readFileSync(output, "utf8").trim();
+    const outputs = outputText
+      ? Object.fromEntries(
+          outputText.split("\n").map((line) => {
+            const separator = line.indexOf("=");
+            return [line.slice(0, separator), line.slice(separator + 1)];
+          }),
+        )
+      : {};
+    return { outputs, result };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
+function runReleaseGroupCapture(
+  group: string,
+  runReleaseSoak = false,
+  liveSuiteFilter = "",
+  crossOsSuiteFilter = "",
+): Record<string, string> {
+  const execution = executeReleaseGroupCapture(
+    group,
+    runReleaseSoak,
+    liveSuiteFilter,
+    crossOsSuiteFilter,
+  );
+  expect(execution.result.status, `${group}: ${execution.result.stderr}`).toBe(0);
+  return execution.outputs;
+}
+
+function executeParentFilterValidation(
+  group: string,
+  liveSuiteFilter = "",
+  crossOsSuiteFilter = "",
+) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-parent-filter-normalization-"));
+  const output = join(root, "github-output");
+  writeFileSync(output, "");
+  try {
+    const normalize = step(
+      job(readWorkflow(FULL_RELEASE), "resolve_target"),
+      "Validate suite filters",
+    );
+    const result = spawnSync("bash", ["-euo", "pipefail", "-c", normalize.run ?? ""], {
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: output,
+        RAW_CROSS_OS_SUITE_FILTER: crossOsSuiteFilter,
+        RAW_LIVE_SUITE_FILTER: liveSuiteFilter,
+        RELEASE_FILTER_VALIDATOR,
+        RERUN_GROUP: group,
+      },
+    });
+    return { output: readFileSync(output, "utf8"), result };
+  } finally {
+    rmSync(root, { force: true, recursive: true });
+  }
+}
+
 describe("release validation no-push transport", () => {
+  it("routes release retries through explicit concrete groups and resource gates", () => {
+    const full = readWorkflow(FULL_RELEASE);
+    const release = readWorkflow(RELEASE_CHECKS);
+    const umbrellaGroups = full.on?.workflow_dispatch?.inputs?.rerun_group?.options ?? [];
+    const releaseGroups = release.on?.workflow_dispatch?.inputs?.rerun_group?.options ?? [];
+    const dispatch = step(job(full, "release_checks"), "Dispatch release checks");
+    const capture = step(job(release, "resolve_target"), "Capture selected inputs");
+    const parentFilters = step(job(full, "resolve_target"), "Validate suite filters");
+
+    expect(umbrellaGroups).toEqual([
+      "all",
+      "ci",
+      "plugin-prerelease",
+      "install-smoke",
+      "cross-os",
+      "live-e2e",
+      "package",
+      "qa-parity",
+      "qa-live",
+      "npm-telegram",
+      "performance",
+    ]);
+    expect(umbrellaGroups).not.toContain("release-checks");
+    expect(umbrellaGroups).not.toContain("qa");
+    expect(releaseGroups).not.toContain("release-checks");
+    expect(releaseGroups).toContain("qa");
+    expect(parentFilters.env?.RELEASE_FILTER_VALIDATOR).toBe(
+      "workflow/scripts/github/validate-release-suite-filters.sh",
+    );
+    expect(capture.env?.RELEASE_FILTER_VALIDATOR).toBe(
+      "workflow/scripts/github/validate-release-suite-filters.sh",
+    );
+    expect(dispatch.run).toContain('-f rerun_group="$RERUN_GROUP"');
+    expect(dispatch.run).not.toContain("child_rerun_group");
+    const candidate = job(full, "prepare_release_candidate");
+    expect(candidate.if).not.toContain('"release-checks"');
+    expect(candidate.if).toContain(
+      'contains(fromJSON(\'["all","plugin-prerelease","cross-os","package"]\'), inputs.rerun_group)',
+    );
+    expect(candidate.if).toContain(
+      "(inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
+    );
+    expect(capture.run).toContain(
+      "release_check_groups=(install-smoke cross-os package qa-parity)",
+    );
+    expect(capture.run).toContain("release_check_groups=(qa-parity qa-live)");
+    expect(capture.run).toContain("release_check_groups_json=");
+    expect(capture.run).toContain("package_required=false");
+    expect(capture.run).toContain("docker_required=false");
+    expect(job(release, "prepare_release_package").if).toBe(
+      "needs.resolve_target.outputs.package_required == 'true'",
+    );
+    expect(job(release, "docker_e2e_release_checks").if).toBe(
+      "needs.resolve_target.outputs.docker_required == 'true'",
+    );
+    expect(job(release, "install_smoke_release_checks").if).toBe(
+      "needs.resolve_target.outputs.install_smoke_scheduled == 'true'",
+    );
+    expect(job(release, "qa_lab_parity_lane_release_checks").if).toBe(
+      "needs.resolve_target.outputs.qa_parity_scheduled == 'true'",
+    );
+    expect(job(release, "qa_live_release_checks").if).toContain(
+      "needs.resolve_target.outputs.qa_live_scheduled == 'true'",
+    );
+  });
+
+  it.each([
+    {
+      group: "install-smoke",
+      groups: ["install-smoke"],
+      packageRequired: "false",
+      dockerRequired: "false",
+    },
+    {
+      group: "qa",
+      groups: ["qa-parity", "qa-live"],
+      packageRequired: "false",
+      dockerRequired: "false",
+    },
+    {
+      group: "qa-parity",
+      groups: ["qa-parity"],
+      packageRequired: "false",
+      dockerRequired: "false",
+    },
+    {
+      group: "qa-live",
+      groups: ["qa-live"],
+      packageRequired: "false",
+      dockerRequired: "false",
+    },
+    {
+      group: "cross-os",
+      groups: ["cross-os"],
+      packageRequired: "true",
+      dockerRequired: "false",
+    },
+    {
+      group: "package",
+      groups: ["package"],
+      packageRequired: "true",
+      dockerRequired: "false",
+    },
+    {
+      group: "live-e2e",
+      groups: ["live-e2e"],
+      packageRequired: "true",
+      dockerRequired: "true",
+    },
+  ])(
+    "maps $group to explicit release resources",
+    ({ group, groups, packageRequired, dockerRequired }) => {
+      const outputs = runReleaseGroupCapture(group);
+      expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(groups);
+      expect(outputs.package_required).toBe(packageRequired);
+      expect(outputs.docker_required).toBe(dockerRequired);
+    },
+  );
+
+  it("expands all only to the profile-selected concrete groups", () => {
+    const beta = runReleaseGroupCapture("all");
+    const soak = runReleaseGroupCapture("all", true);
+
+    expect(JSON.parse(beta.release_check_groups_json ?? "null")).toEqual([
+      "install-smoke",
+      "cross-os",
+      "package",
+      "qa-parity",
+    ]);
+    expect(beta.docker_required).toBe("false");
+    expect(JSON.parse(soak.release_check_groups_json ?? "null")).toEqual([
+      "install-smoke",
+      "cross-os",
+      "package",
+      "qa-parity",
+      "live-e2e",
+      "qa-live",
+    ]);
+    expect(soak.docker_required).toBe("true");
+  });
+
+  it("skips package and Docker prep for a focused repo live-E2E retry", () => {
+    const outputs = runReleaseGroupCapture("live-e2e", false, " Repo-E2E,\trepo-smoke ");
+
+    expect(JSON.parse(outputs.release_check_groups_json ?? "null")).toEqual(["live-e2e"]);
+    expect(outputs.live_e2e_scheduled).toBe("true");
+    expect(outputs.live_suite_filter).toBe("repo-e2e,repo-smoke");
+    expect(outputs.repo_live_suite_filter).toBe("repo-e2e,repo-smoke");
+    expect(outputs.package_required).toBe("false");
+    expect(outputs.docker_required).toBe("false");
+  });
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty live filter %j before install-smoke scheduling",
+    (filter) => {
+      const parent = executeParentFilterValidation("install-smoke", filter);
+      const child = executeReleaseGroupCapture("install-smoke", false, filter);
+
+      expect(parent.result.status).not.toBe(0);
+      expect(parent.result.stderr).toContain(
+        "live_suite_filter must contain at least one suite selector",
+      );
+      expect(child.result.status).not.toBe(0);
+      expect(child.result.stderr).toContain(
+        "live_suite_filter must contain at least one suite selector",
+      );
+      expect(child.outputs.install_smoke_scheduled).toBeUndefined();
+    },
+  );
+
+  it.each([
+    "all",
+    "ci",
+    "plugin-prerelease",
+    "install-smoke",
+    "cross-os",
+    "live-e2e",
+    "package",
+    "qa-parity",
+    "npm-telegram",
+    "performance",
+  ])("parent rejects a QA selector with rerun_group=%s before scheduling", (group) => {
+    const { output, result } = executeParentFilterValidation(group, "qa-live-matrix");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "QA live_suite_filter selectors require rerun_group=qa or qa-live",
+    );
+    expect(output).toBe("");
+  });
+
+  it.each([
+    "all",
+    "ci",
+    "plugin-prerelease",
+    "install-smoke",
+    "cross-os",
+    "package",
+    "qa-parity",
+    "qa-live",
+    "npm-telegram",
+    "performance",
+  ])("parent rejects a repo-live selector with rerun_group=%s before scheduling", (group) => {
+    const { output, result } = executeParentFilterValidation(group, "repo-e2e");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "Repo live_suite_filter selectors require rerun_group=live-e2e",
+    );
+    expect(output).toBe("");
+  });
+
+  it.each([
+    "all",
+    "ci",
+    "plugin-prerelease",
+    "install-smoke",
+    "live-e2e",
+    "package",
+    "qa-parity",
+    "qa-live",
+    "npm-telegram",
+    "performance",
+  ])("parent rejects a cross-OS selector with rerun_group=%s before scheduling", (group) => {
+    const { output, result } = executeParentFilterValidation(group, "", "windows/packaged-upgrade");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+    expect(output).toBe("");
+  });
+
+  it.each([
+    ["qa-live", "qa-live-matrix", ""],
+    ["live-e2e", " Repo-E2E,\trepo-smoke ", ""],
+    ["cross-os", "", " Windows/Packaged-Upgrade "],
+  ])(
+    "parent accepts rerun_group=%s with its owned selector",
+    (group, liveSuiteFilter, crossOsSuiteFilter) => {
+      const { output, result } = executeParentFilterValidation(
+        group,
+        liveSuiteFilter,
+        crossOsSuiteFilter,
+      );
+
+      expect(result.status, result.stderr).toBe(0);
+      expect(output).not.toBe("");
+    },
+  );
+
+  it.each(["qa", "release-checks", "bogus", ""])(
+    "parent rejects unsupported controller rerun_group=%j before scheduling",
+    (group) => {
+      const { output, result } = executeParentFilterValidation(group);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(`controller rerun_group is invalid: ${group}.`);
+      expect(output).toBe("");
+    },
+  );
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty live filter %j before live-E2E can widen or require prep",
+    (filter) => {
+      const { outputs, result } = executeReleaseGroupCapture("live-e2e", false, filter);
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("live_suite_filter must contain at least one suite selector");
+      expect(outputs.live_e2e_scheduled).toBeUndefined();
+      expect(outputs.package_required).toBeUndefined();
+      expect(outputs.docker_required).toBeUndefined();
+    },
+  );
+
+  it.each(["\t", "   ", ",,,", " \t, , "])(
+    "rejects raw nonempty cross-OS filter %j before cross-OS scheduling",
+    (filter) => {
+      const parent = executeParentFilterValidation("cross-os", "", filter);
+      const child = executeReleaseGroupCapture("cross-os", false, "", filter);
+
+      expect(parent.result.status).not.toBe(0);
+      expect(parent.result.stderr).toContain(
+        "cross_os_suite_filter must contain at least one suite selector",
+      );
+      expect(child.result.status).not.toBe(0);
+      expect(child.result.stderr).toContain(
+        "cross_os_suite_filter must contain at least one suite selector",
+      );
+      expect(child.outputs.cross_os_scheduled).toBeUndefined();
+    },
+  );
+
+  it("fails before a QA selector can collapse into an unfiltered live-E2E run", () => {
+    const { outputs, result } = executeReleaseGroupCapture("live-e2e", false, "qa-live-matrix");
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      "QA live_suite_filter selectors require rerun_group=qa or qa-live",
+    );
+    expect(outputs.repo_live_suite_filter).toBeUndefined();
+    expect(outputs.live_e2e_scheduled).toBeUndefined();
+  });
+
+  it.each(["all", "install-smoke", "cross-os", "live-e2e", "package", "qa-parity"])(
+    "rejects a QA selector with rerun_group=%s",
+    (group) => {
+      const { result } = executeReleaseGroupCapture(group, false, "qa-live-matrix");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "QA live_suite_filter selectors require rerun_group=qa or qa-live",
+      );
+    },
+  );
+
+  it.each(["all", "install-smoke", "cross-os", "package", "qa", "qa-parity", "qa-live"])(
+    "rejects a repo-live selector with rerun_group=%s",
+    (group) => {
+      const { result } = executeReleaseGroupCapture(group, false, "repo-e2e");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain(
+        "Repo live_suite_filter selectors require rerun_group=live-e2e",
+      );
+    },
+  );
+
+  it.each(["all", "install-smoke", "live-e2e", "package", "qa", "qa-parity", "qa-live"])(
+    "rejects a cross-OS selector with rerun_group=%s",
+    (group) => {
+      const { result } = executeReleaseGroupCapture(group, false, "", "windows/packaged-upgrade");
+
+      expect(result.status).not.toBe(0);
+      expect(result.stderr).toContain("cross_os_suite_filter requires rerun_group=cross-os");
+    },
+  );
+
+  it.each([
+    ["qa", "qa-live-matrix"],
+    ["qa-live", "qa-live-matrix"],
+    ["live-e2e", "repo-e2e"],
+  ])("accepts rerun_group=%s with selector %s", (group, filter) => {
+    const outputs = runReleaseGroupCapture(group, false, filter);
+    expect(outputs.rerun_group).toBe(group);
+  });
+
+  it("accepts a cross-OS selector only for the cross-OS group", () => {
+    const outputs = runReleaseGroupCapture("cross-os", false, "", "windows/packaged-upgrade");
+    expect(outputs.cross_os_suite_filter).toBe("windows/packaged-upgrade");
+  });
+
   it("builds planned live images locally without entering pull fallback", () => {
     const workflow = readWorkflow(LIVE_E2E);
     for (const jobName of [
@@ -195,8 +652,8 @@ describe("release validation no-push transport", () => {
       "validate_docker_lanes",
       "validate_docker_openwebui",
     ]) {
-      const job = workflow.jobs?.[jobName];
-      const runStep = job?.steps?.find((candidate) =>
+      const workflowJob = workflow.jobs?.[jobName];
+      const runStep = workflowJob?.steps?.find((candidate) =>
         candidate.run?.includes("test-live-build-docker.sh"),
       );
 
@@ -207,6 +664,7 @@ describe("release validation no-push transport", () => {
 
   it("keeps every local reusable-workflow permission request within its caller ceiling", () => {
     const readOnlyCalls = [
+      [FULL_RELEASE, "prepare_release_candidate"],
       [PLUGIN_PRERELEASE, "plugin-prerelease-docker-suite"],
       [RELEASE_CHECKS, "live_repo_e2e_release_checks"],
       [RELEASE_CHECKS, "docker_e2e_release_checks"],
@@ -304,39 +762,51 @@ describe("release validation no-push transport", () => {
     expect(releaseHelper.with?.["persist-credentials"]).toBe(false);
   });
 
-  it("rejects every child whose workflow SHA differs from the parent workflow SHA", () => {
+  it("records exact adopted child identity without monitoring or cancellation", () => {
     const full = readWorkflow(FULL_RELEASE);
     for (const [jobName, stepName] of [
-      ["normal_ci", "Dispatch and monitor CI"],
-      ["plugin_prerelease", "Dispatch and monitor plugin prerelease"],
-      ["release_checks", "Dispatch and monitor release checks"],
-      ["npm_telegram", "Dispatch and monitor npm Telegram E2E"],
-      ["performance", "Dispatch and monitor OpenClaw Performance"],
+      ["normal_ci", "Dispatch CI"],
+      ["plugin_prerelease", "Dispatch plugin prerelease"],
+      ["release_checks", "Dispatch release checks"],
+      ["npm_telegram", "Dispatch npm Telegram E2E"],
+      ["performance", "Dispatch OpenClaw Performance"],
     ] as const) {
       const dispatch = step(job(full, jobName), stepName);
+      const dispatchRun = dispatch.run ?? "";
       expect(dispatch.env?.PARENT_WORKFLOW_SHA, jobName).toBe("${{ github.sha }}");
-      expect(dispatch.run, jobName).toContain('"$child_head_sha" != "$PARENT_WORKFLOW_SHA"');
-      expect(dispatch.run, jobName).toContain("expected parent workflow SHA");
+      expect(dispatchRun, jobName).toContain(
+        'if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]; then',
+      );
+      expect(dispatchRun.match(/\.head_sha == \$head_sha/gu), jobName).toBeNull();
+      expect(dispatchRun, jobName).toContain('run_json="$(validate_child_run "$run_id")"');
+      expect(dispatchRun, jobName).not.toContain("trap cancel_child");
+      expect(dispatchRun, jobName).not.toContain("cancel_child_on_failure");
+      expect(dispatchRun, jobName).not.toContain("exit_on_parent_signal");
+      expect(dispatchRun, jobName).not.toContain("disable_child_cleanup");
+      expect(dispatchRun, jobName).not.toContain("poll_count=0");
+      expect(dispatchRun, jobName).not.toContain("cancel_child");
+      expect(
+        dispatchRun.indexOf('run_json="$(validate_child_run "$run_id")"'),
+        jobName,
+      ).toBeLessThan(dispatchRun.indexOf('echo "run_id=${run_id}" >> "$GITHUB_OUTPUT"'));
+      expect(
+        dispatchRun.indexOf('run_json="$(validate_child_run "$run_id")"'),
+        jobName,
+      ).toBeLessThan(dispatchRun.indexOf('if [[ "$child_head_sha" != "$PARENT_WORKFLOW_SHA" ]]'));
     }
-
-    const verify = step(job(full, "summary"), "Verify child workflow results");
-    expect(verify.env?.PARENT_WORKFLOW_SHA).toBe("${{ github.sha }}");
-    expect(verify.run).toContain('"$head_sha" != "$PARENT_WORKFLOW_SHA"');
-    expect(verify.run).not.toContain('"$head_sha" != "$TARGET_SHA"');
   });
 
   it("keeps the Release SHA wrapper as the durable evidence identity", () => {
     const full = readWorkflow(FULL_RELEASE);
-    const verify = step(job(full, "summary"), "Verify child workflow results");
+    const verify = step(job(full, "summary"), "Verify exact release state artifacts");
     const dispatch = step(job(full, "summary"), "Request release evidence update");
 
-    expect(verify.run).toContain(
-      'echo "Dispatched ${workflow}: https://github.com/${GITHUB_REPOSITORY}/actions/runs/${run_id}"',
-    );
-    expect(verify.run).toContain('"ci.yml"');
-    expect(verify.run).toContain('"openclaw-release-checks.yml"');
+    expect(verify.run).toBe("node scripts/full-release-validation-state.mjs verify");
     expect(dispatch.run).not.toContain('GITHUB_RUN_ID_VALUE="$EVIDENCE_ROOT_RUN_ID"');
     expect(dispatch.run).toContain("reused green product evidence from chain-root run");
+    expect(dispatch.run).toContain("--connect-timeout 10");
+    expect(dispatch.run).toContain("--max-time 30");
+    expect(dispatch.run).toContain("https://api.github.com/repos/openclaw/releases/dispatches");
   });
 
   it("publishes an attempt-qualified canonical manifest plus a temporary legacy alias", () => {
@@ -356,9 +826,10 @@ describe("release validation no-push transport", () => {
     const packageAcceptance = readWorkflow(PACKAGE_ACCEPTANCE);
     const pluginPrerelease = readWorkflow(PLUGIN_PRERELEASE);
 
-    expect(fullText).toContain("dispatch_and_wait plugin-prerelease.yml");
-    expect(fullText).toContain("dispatch_and_wait openclaw-release-checks.yml");
-    expect(fullText).toContain("gh workflow run openclaw-performance.yml");
+    expect(fullText).toContain("dispatch_child plugin-prerelease.yml");
+    expect(fullText).toContain("dispatch_child openclaw-release-checks.yml");
+    expect(fullText).toContain("dispatch_child openclaw-performance.yml");
+    expect(fullText).toContain('gh workflow run "$workflow" --ref "$CHILD_WORKFLOW_REF" "$@"');
 
     const preparePackage = job(release, "prepare_release_package");
     const live = job(release, "live_repo_e2e_release_checks");
@@ -493,6 +964,19 @@ describe("release validation no-push transport", () => {
 
     const dockerProducer = job(workflow, "prepare_docker_e2e_image");
     const liveProducer = job(workflow, "prepare_live_test_image");
+    const liveProducerSteps = liveProducer.steps ?? [];
+    const liveBuildIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Build shared live-test image",
+    );
+    const trustedHarnessIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Checkout trusted release harness",
+    );
+    const livePackIndex = liveProducerSteps.findIndex(
+      (candidate) => candidate.name === "Pack live-test image artifact",
+    );
+    expect(liveBuildIndex).toBeGreaterThanOrEqual(0);
+    expect(trustedHarnessIndex).toBeGreaterThan(liveBuildIndex);
+    expect(livePackIndex).toBeGreaterThan(trustedHarnessIndex);
     expect(permissionAt(workflow.permissions, "actions", "none")).toBe("read");
     expect(permissionAt(workflow.permissions, "packages", "none")).toBe("read");
     expectReadOnlyPackagePermission(dockerProducer);
@@ -567,9 +1051,17 @@ describe("release validation no-push transport", () => {
       expect(producer.outputs?.image_archive_sha256).toContain("archive_sha256");
       expect(producer.outputs?.image_artifact_id).toContain("artifact-id");
       expect(producer.outputs?.image_artifact_digest).toContain("artifact-digest");
-      expect(producer.outputs?.image_artifact_run_id).toBe("${{ github.run_id }}");
-      expect(producer.outputs?.image_artifact_run_attempt).toBe("${{ github.run_attempt }}");
     }
+    expect(dockerProducer.outputs?.image_artifact_run_id).toContain("github.run_id");
+    expect(dockerProducer.outputs?.image_artifact_run_id).toContain(
+      "inputs.shared_image_artifact_run_id",
+    );
+    expect(dockerProducer.outputs?.image_artifact_run_attempt).toContain("github.run_attempt");
+    expect(dockerProducer.outputs?.image_artifact_run_attempt).toContain(
+      "inputs.shared_image_artifact_run_attempt",
+    );
+    expect(liveProducer.outputs?.image_artifact_run_id).toBe("${{ github.run_id }}");
+    expect(liveProducer.outputs?.image_artifact_run_attempt).toBe("${{ github.run_attempt }}");
     expect(dockerProducer.outputs?.package_artifact_id).toContain("artifact-id");
     expect(dockerProducer.outputs?.package_artifact_digest).toContain("artifact-digest");
     expect(dockerProducer.outputs?.package_artifact_run_attempt).toContain("run_attempt");
@@ -615,13 +1107,21 @@ describe("release validation no-push transport", () => {
     ]) {
       const build = step(dockerProducer, name);
       expect(build.if).toContain("shared_image_policy == 'no-push-artifact'");
-      expect(build.run).toContain("--load");
-      expect(build.run).toContain("--sbom=false");
-      expect(build.run).toContain("--provenance=false");
       expect(build.run).not.toContain("--push");
       expect(build.run).not.toContain("--sbom=true");
       expect(build.run).not.toContain("--provenance=mode=max");
     }
+    const bareBuild = step(dockerProducer, "Build bare Docker E2E image artifact");
+    expect(bareBuild.run).toContain("docker build");
+    expect(bareBuild.run).toContain("--target bare");
+    expect(bareBuild.run).toContain('--tag "$IMAGE_REF"');
+    const functionalBuild = step(dockerProducer, "Build functional Docker E2E image artifact");
+    expect(functionalBuild.run).toContain("docker build");
+    expect(functionalBuild.run).toContain("--target functional");
+    expect(functionalBuild.run).toContain(
+      "--build-context openclaw_package=.artifacts/docker-e2e-package",
+    );
+    expect(functionalBuild.run).toContain('--tag "$IMAGE_REF"');
     const packDockerArtifact = step(dockerProducer, "Pack Docker E2E image artifact");
     expect(packDockerArtifact.env?.PACKAGE_SHA256).toBe("${{ steps.package.outputs.sha256 }}");
     expect(packDockerArtifact.run).toContain("shared-image-artifact.sh");
@@ -633,11 +1133,20 @@ describe("release validation no-push transport", () => {
     );
     expect(packDockerArtifact.run).toContain("archive_sha256=");
     const validatePackage = step(dockerProducer, "Validate OpenClaw Docker E2E package");
+    expect(step(dockerProducer, "Setup trusted release harness")).toMatchObject({
+      uses: "./.release-harness/.github/actions/setup-release-harness",
+      with: { "node-version": "${{ env.NODE_VERSION }}" },
+    });
+    expect(step(dockerProducer, "Setup trusted release harness").if).toBeUndefined();
     expect(validatePackage.env).toMatchObject({
-      EXPECTED_PACKAGE_FILE_NAME: "${{ inputs.package_file_name }}",
-      EXPECTED_PACKAGE_SHA256: "${{ inputs.package_sha256 }}",
-      EXPECTED_PACKAGE_SOURCE_SHA: "${{ inputs.package_source_sha }}",
-      EXPECTED_PACKAGE_VERSION: "${{ inputs.package_version }}",
+      EXPECTED_PACKAGE_FILE_NAME:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_file_name || '' }}",
+      EXPECTED_PACKAGE_SHA256:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_sha256 || '' }}",
+      EXPECTED_PACKAGE_SOURCE_SHA:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_source_sha || '' }}",
+      EXPECTED_PACKAGE_VERSION:
+        "${{ needs.validate_selected_ref.outputs.package_artifact_present == 'true' && inputs.package_version || '' }}",
     });
     expect(validatePackage.run).toContain('"$SHARED_IMAGE_POLICY" == "no-push-artifact"');
     expect(validatePackage.run).toContain(
@@ -645,6 +1154,12 @@ describe("release validation no-push transport", () => {
     );
     expect(validatePackage.run).toContain("package/dist/build-info.json");
     expect(validatePackage.run).toContain('[[ "$package_source_sha" == "$SELECTED_SHA" ]]');
+    expect(validatePackage.run).toContain("scripts/check-openclaw-package-tarball.mjs");
+    expect(validatePackage.run).toContain(
+      "cd .release-harness && pnpm exec node scripts/check-openclaw-package-tarball.mjs",
+    );
+    expect(validatePackage.run).toContain('"$GITHUB_WORKSPACE/$target"');
+    expect(validatePackage.run).not.toContain("pnpm --dir .release-harness");
     const targetedRun = step(
       job(workflow, "validate_docker_lanes"),
       "Run targeted Docker E2E lanes",
@@ -677,7 +1192,7 @@ describe("release validation no-push transport", () => {
     }
     expect(step(dockerProducer, "Upload Docker E2E image artifact")).toMatchObject({
       id: "upload_image_artifact",
-      if: "inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_e2e_image == '1'",
+      if: "inputs.shared_image_policy == 'no-push-artifact' && steps.plan.outputs.needs_e2e_image == '1' && inputs.shared_image_artifact_id == ''",
       with: { "if-no-files-found": "error" },
     });
     expect(step(liveProducer, "Pack live-test image artifact").run).toContain(
@@ -926,6 +1441,89 @@ describe("release validation no-push transport", () => {
       expect(text).not.toContain("create-github-app-token");
       expect(text).not.toContain("git push");
     }
+  });
+
+  it("routes Docker publication through release publish after immutable npm evidence", () => {
+    const dockerRelease = readWorkflow(DOCKER_RELEASE);
+    const releasePublishPath = ".github/workflows/openclaw-release-publish.yml";
+    const releasePublish = readWorkflow(releasePublishPath);
+    const dockerCall = job(releasePublish, "publish_docker");
+
+    expect(dockerRelease.on?.push).toBeUndefined();
+    expect(dockerRelease.on?.workflow_dispatch).toBeUndefined();
+    expect(dockerRelease.on?.workflow_call?.inputs).toMatchObject({
+      tag: { required: true, type: "string" },
+      release_sha: { required: true, type: "string" },
+    });
+    expect(dockerRelease.on?.workflow_call?.secrets).toEqual({
+      DOCKERHUB_USERNAME: { required: true },
+      DOCKERHUB_TOKEN: { required: true },
+    });
+
+    const callers = readdirSync(".github/workflows")
+      .filter((name) => name.endsWith(".yml") || name.endsWith(".yaml"))
+      .filter((name) =>
+        readFileSync(join(".github/workflows", name), "utf8").includes(
+          "uses: ./.github/workflows/docker-release.yml",
+        ),
+      )
+      .toSorted();
+    // docker-image-refresh.yml is the sanctioned second caller: it rebuilds
+    // already-published releases behind the same docker-release environment
+    // approval; its own guard test covers those safety properties.
+    expect(callers).toEqual(["docker-image-refresh.yml", "openclaw-release-publish.yml"]);
+
+    expect(dockerCall.needs).toEqual([
+      "resolve_release_target",
+      "publish",
+      "verify_core_npm_registry",
+    ]);
+    expect(dockerCall.if).toContain("needs.publish.result == 'success'");
+    expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
+    expect(dockerCall.with).toEqual({
+      tag: "${{ inputs.tag }}",
+      release_sha: "${{ needs.resolve_release_target.outputs.sha }}",
+      focused_release_evidence_run_id:
+        "${{ inputs.release_evidence_mode == 'authorized-beta-focused-v1' && inputs.focused_release_evidence_run_id || '' }}",
+      focused_release_evidence_run_attempt:
+        "${{ needs.resolve_release_target.outputs.focused_release_evidence_run_attempt }}",
+      focused_release_evidence_workflow_full_ref:
+        "${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_full_ref }}",
+      focused_release_evidence_workflow_sha:
+        "${{ needs.resolve_release_target.outputs.focused_release_evidence_workflow_sha }}",
+    });
+    expect(dockerCall.secrets).toEqual({
+      DOCKERHUB_USERNAME: "${{ secrets.DOCKERHUB_USERNAME }}",
+      DOCKERHUB_TOKEN: "${{ secrets.DOCKERHUB_TOKEN }}",
+    });
+    expect(
+      step(
+        job(releasePublish, "resolve_release_target"),
+        "Validate OpenClaw npm preflight manifest",
+      ).run,
+    ).toContain("Preflight manifest SHA mismatch");
+    expect(
+      step(
+        job(releasePublish, "resolve_release_target"),
+        "Validate full release validation manifest",
+      ).run,
+    ).toContain("Full release validation target SHA mismatch");
+    expect(readFileSync(releasePublishPath, "utf8")).toContain(
+      "kept draft until Docker publication succeeds",
+    );
+    expect(job(releasePublish, "finalize_github_release").needs).toEqual([
+      "publish",
+      "publish_docker",
+    ]);
+
+    const identity = step(
+      job(dockerRelease, "validate_release_identity"),
+      "Verify tag, SHA, and package identity agree",
+    );
+    expect(identity.run).toContain('git rev-parse "refs/tags/${RELEASE_TAG}^{commit}"');
+    expect(identity.run).toContain('"${tag_sha}" != "${RELEASE_SHA}"');
+    expect(identity.run).toContain('"v${package_version}" != "${RELEASE_TAG}"');
+    expect(identity.run).toContain("^v${package_version}-[1-9][0-9]*$");
   });
 
   it("fails a missing required local live image before any registry pull", () => {

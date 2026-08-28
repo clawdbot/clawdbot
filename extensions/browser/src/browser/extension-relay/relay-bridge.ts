@@ -7,7 +7,9 @@
  * thin forwarder — the old assets/chrome-extension put this logic in an
  * untestable MV3 service worker, which is why it rotted and was removed.
  */
+import { once } from "node:events";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveCreateTargetParams } from "./create-target-params.js";
 import {
   type ExtensionToRelayMessage,
   parseExtensionMessage,
@@ -52,6 +54,8 @@ type TabState = {
   /** Set while chrome.debugger is attached: real CDP targetId + synthetic root sessionId. */
   attached?: { targetId: string; sessionId: string };
   attaching?: Promise<{ targetId: string; sessionId: string }>;
+  /** Extension loss invalidated attachment work that auto-attach clients still expect restored. */
+  restoreAttachment: boolean;
 };
 
 type CdpClientState = {
@@ -90,6 +94,7 @@ function toErrorPayload(
  */
 export class ExtensionRelayBridge {
   private extension: { socket: BridgeSocket; identity: ExtensionIdentity } | null = null;
+  private readonly extensionCandidates = new Set<BridgeSocket>();
   private readonly clients = new Set<CdpClientState>();
   private readonly tabs = new Map<number, TabState>();
   /** Browser-level sessions created by Playwright for page-scoped CDP access. */
@@ -101,10 +106,18 @@ export class ExtensionRelayBridge {
   private readonly pendingExtension = new Map<number, PendingExtensionCommand>();
   private nextSeq = 1;
   private nextSessionOrdinal = 1;
+  private nextExtensionCandidateOrdinal = 1;
+  private latestPromotedCandidateOrdinal = 0;
   private pingTimer: NodeJS.Timeout | null = null;
+  private missedPongs = 0;
   private readonly onStateChange?: () => void;
+  private readonly connectionEvents = new EventTarget();
 
-  constructor(opts: { onStateChange?: () => void } = {}) {
+  constructor(
+    opts: {
+      onStateChange?: () => void;
+    } = {},
+  ) {
     this.onStateChange = opts.onStateChange;
   }
 
@@ -113,14 +126,71 @@ export class ExtensionRelayBridge {
     return this.extension !== null;
   }
 
+  /** Wait for an authenticated extension hello without polling its CDP endpoint. */
+  async waitForExtensionConnection(signal: AbortSignal, timeoutMs: number): Promise<boolean> {
+    if (this.extensionConnected) {
+      return true;
+    }
+    const timeout = new AbortController();
+    const timer = setTimeout(() => timeout.abort(), timeoutMs);
+    try {
+      await once(this.connectionEvents, "ready", {
+        signal: AbortSignal.any([signal, timeout.signal]),
+      });
+      return this.extensionConnected;
+    } catch (error) {
+      signal.throwIfAborted();
+      if (timeout.signal.aborted) {
+        return false;
+      }
+      throw error;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
   /** Identity of the paired browser, when connected. */
   get identity(): ExtensionIdentity | null {
     return this.extension?.identity ?? null;
   }
 
-  /** Tabs currently shared with OpenClaw (the extension's tab group). */
-  sharedTabs(): RelayTabInfo[] {
+  /** Tabs currently reported as accessible by the extension. */
+  accessibleTabs(): RelayTabInfo[] {
     return [...this.tabs.values()].map((tab) => tab.info);
+  }
+
+  /** Capture the exact extension connection and tab instance for one browser operation. */
+  captureOperationTarget(targetId: string): (() => string | undefined) | undefined {
+    const extension = this.extension;
+    const target = this.tabByTargetId(targetId);
+    if (!extension || !target) {
+      return undefined;
+    }
+    // Chrome tab ids survive renderer swaps but can be reused by another browser;
+    // pin both the authenticated extension owner and the exact granted tab instance.
+    return () =>
+      this.extension === extension && this.tabs.get(target.tabId) === target.tab
+        ? target.tab.attached?.targetId
+        : undefined;
+  }
+
+  /**
+   * DevTools-style descriptors for `/json/list`: RelayTabInfo plus the `id`
+   * and `type` fields CDP discovery clients expect. `id` is the live debugger
+   * targetId once a tab is attached; before that it is the same `tab-<tabId>`
+   * fallback ensureTabAttached mints, so unattached tabs still list stably.
+   * No per-target webSocketDebuggerUrl: all CDP traffic multiplexes over the
+   * single browser endpoint (`/cdp`).
+   */
+  devtoolsTargetDescriptors(): Array<RelayTabInfo & { id: string; type: string }> {
+    return [...this.tabs.values()].map((tab) => ({
+      tabId: tab.info.tabId,
+      url: tab.info.url,
+      title: tab.info.title,
+      active: tab.info.active,
+      id: tab.attached?.targetId ?? `tab-${tab.info.tabId}`,
+      type: "page",
+    }));
   }
 
   /** Number of connected CDP clients (diagnostics). */
@@ -137,26 +207,41 @@ export class ExtensionRelayBridge {
     onMessage: (raw: string) => void;
     onClose: () => void;
   } {
-    if (this.extension) {
-      // Replace the previous connection: MV3 service workers restart and the
-      // stale socket may linger half-open. Newest connection wins.
-      log.info("extension reconnected; replacing previous relay connection");
-      this.extension.socket.close(4000, "replaced by newer extension connection");
-      this.handleExtensionGone();
-    }
-    let helloSeen = false;
+    const candidateOrdinal = this.nextExtensionCandidateOrdinal++;
+    let candidateState: "awaiting-hello" | "active" | "rejected" = "awaiting-hello";
+    this.extensionCandidates.add(socket);
+    const rejectCandidate = (code: number, reason: string) => {
+      candidateState = "rejected";
+      this.extensionCandidates.delete(socket);
+      socket.close(code, reason);
+    };
     const onMessage = (raw: string) => {
-      const msg = parseExtensionMessage(raw);
-      if (!msg) {
-        log.warn("dropping malformed extension relay frame");
+      if (candidateState === "rejected") {
         return;
       }
-      if (!helloSeen) {
-        if (msg.type !== "hello") {
-          socket.close(4001, "expected hello");
+      const msg = parseExtensionMessage(raw);
+      if (candidateState === "awaiting-hello") {
+        if (msg?.type !== "hello") {
+          rejectCandidate(4001, "expected valid hello");
           return;
         }
-        helloSeen = true;
+        if (candidateOrdinal < this.latestPromotedCandidateOrdinal) {
+          rejectCandidate(4000, "superseded by newer extension connection");
+          return;
+        }
+        candidateState = "active";
+        this.extensionCandidates.delete(socket);
+        this.latestPromotedCandidateOrdinal = candidateOrdinal;
+        if (this.extension) {
+          // Authentication happens before bridge attachment. Keep the active
+          // socket until its replacement also proves it can speak the relay protocol.
+          log.info("extension reconnected; replacing previous relay connection");
+          const previous = this.extension;
+          previous.socket.close(4000, "replaced by newer extension connection");
+          if (this.extension === previous) {
+            this.handleExtensionGone();
+          }
+        }
         this.extension = {
           socket,
           identity: {
@@ -167,12 +252,22 @@ export class ExtensionRelayBridge {
         };
         this.syncTabs(msg.tabs);
         this.startPing();
+        this.connectionEvents.dispatchEvent(new Event("ready"));
         this.onStateChange?.();
+        return;
+      }
+      if (this.extension?.socket !== socket) {
+        return;
+      }
+      if (!msg) {
+        log.warn("dropping malformed extension relay frame");
         return;
       }
       this.handleExtensionMessage(msg);
     };
     const onClose = () => {
+      candidateState = "rejected";
+      this.extensionCandidates.delete(socket);
       if (this.extension?.socket === socket) {
         this.handleExtensionGone();
         this.onStateChange?.();
@@ -218,6 +313,8 @@ export class ExtensionRelayBridge {
         break;
       }
       case "pong":
+        this.missedPongs = 0;
+        break;
       case "hello":
         break;
     }
@@ -231,9 +328,11 @@ export class ExtensionRelayBridge {
       pending.reject(new Error("extension disconnected"));
     }
     this.pendingExtension.clear();
-    // Tell CDP clients their pages are gone; the tab list itself survives so a
-    // reconnecting extension can re-expose the same tabs.
+    // Retire attach work synchronously so a replacement snapshot cannot reuse
+    // a rejected promise. Keep the tab list so the same ids can be re-exposed.
     for (const [tabId, tab] of this.tabs) {
+      tab.restoreAttachment ||= tab.attached !== undefined || tab.attaching !== undefined;
+      tab.attaching = undefined;
       if (tab.attached) {
         this.emitDetachedFromTarget(tabId, tab.attached.sessionId, tab.attached.targetId);
         tab.attached = undefined;
@@ -244,13 +343,27 @@ export class ExtensionRelayBridge {
 
   private startPing(): void {
     this.stopPing();
+    const owner = this.extension;
     this.pingTimer = setInterval(() => {
+      if (!owner || this.extension !== owner) {
+        return;
+      }
+      // An OPEN socket can outlive a dead worker; only its pong proves commands still arrive.
+      if (++this.missedPongs > 2) {
+        owner.socket.close(4000, "extension heartbeat timeout");
+        if (this.extension === owner) {
+          this.handleExtensionGone();
+          this.onStateChange?.();
+        }
+        return;
+      }
       this.sendToExtension({ type: "ping" });
     }, EXTENSION_PING_INTERVAL_MS);
     this.pingTimer.unref?.();
   }
 
   private stopPing(): void {
+    this.missedPongs = 0;
     if (this.pingTimer) {
       clearInterval(this.pingTimer);
       this.pingTimer = null;
@@ -288,6 +401,7 @@ export class ExtensionRelayBridge {
 
   private syncTabs(tabs: RelayTabInfo[]): void {
     const nextIds = new Set(tabs.map((tab) => tab.tabId));
+    const shouldAutoAttach = [...this.clients].some((client) => client.autoAttach);
     for (const [tabId, tab] of this.tabs) {
       if (!nextIds.has(tabId)) {
         if (tab.attached) {
@@ -298,21 +412,20 @@ export class ExtensionRelayBridge {
     }
     for (const info of tabs) {
       const existing = this.tabs.get(info.tabId);
+      const shouldAttach = !existing || existing.restoreAttachment;
       if (existing) {
         existing.info = info;
       } else {
-        this.tabs.set(info.tabId, { info });
-        // Newly shared tab: expose it to auto-attach clients right away so an
-        // agent mid-session sees tabs the user shares via the toolbar action.
-        if ([...this.clients].some((client) => client.autoAttach)) {
-          void this.ensureTabAttached(info.tabId)
-            .then(({ targetId, sessionId }) => {
-              this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
-            })
-            .catch((err: unknown) => {
-              log.warn(`auto-attach of shared tab ${info.tabId} failed: ${String(err)}`);
-            });
-        }
+        this.tabs.set(info.tabId, { info, restoreAttachment: false });
+      }
+      if (shouldAutoAttach && shouldAttach) {
+        void this.ensureTabAttached(info.tabId)
+          .then(({ targetId, sessionId }) => {
+            this.announceAttachedTab(info.tabId, targetId, sessionId, { onlyAutoAttach: true });
+          })
+          .catch((err: unknown) => {
+            log.warn(`auto-attach of accessible tab ${info.tabId} failed: ${String(err)}`);
+          });
       }
     }
   }
@@ -320,7 +433,7 @@ export class ExtensionRelayBridge {
   private async ensureTabAttached(tabId: number): Promise<{ targetId: string; sessionId: string }> {
     const tab = this.tabs.get(tabId);
     if (!tab) {
-      throw new Error(`tab ${tabId} is not shared with OpenClaw`);
+      throw new Error(`tab ${tabId} is not available to OpenClaw`);
     }
     if (tab.attached) {
       return tab.attached;
@@ -335,8 +448,8 @@ export class ExtensionRelayBridge {
       const targetId = typeof result?.targetId === "string" ? result.targetId : `tab-${tabId}`;
       const sessionId = `openclaw-tab-${tabId}-${this.nextSessionOrdinal++}`;
       const attached = { targetId, sessionId };
-      // Identity check, not just presence: the tab could have left the group and
-      // rejoined under the same tabId while this attach was in flight, replacing
+      // Identity check, not just presence: the tab could have lost and regained
+      // access under the same tabId while this attach was in flight, replacing
       // the TabState. Writing onto the new TabState would bind stale attach data.
       const current = this.tabs.get(tabId);
       if (current !== tab) {
@@ -345,13 +458,17 @@ export class ExtensionRelayBridge {
         throw new Error(`tab ${tabId} closed during attach`);
       }
       current.attached = attached;
+      current.restoreAttachment = false;
       return attached;
     })();
     tab.attaching = attaching;
     try {
       return await attaching;
     } finally {
-      tab.attaching = undefined;
+      // A replacement extension may already have started a fresh attach for this tab.
+      if (tab.attaching === attaching) {
+        tab.attaching = undefined;
+      }
     }
   }
 
@@ -367,6 +484,24 @@ export class ExtensionRelayBridge {
       attached: true,
       canAccessOpener: false,
     };
+  }
+
+  private enumerateTargetInfos():
+    | { status: "available"; targetInfos: Record<string, unknown>[] }
+    | {
+        status: "unavailable";
+        reason: "extension-disconnected" | "target-identity-unresolved";
+      } {
+    if (!this.extensionConnected) {
+      return { status: "unavailable", reason: "extension-disconnected" };
+    }
+    if ([...this.tabs.values()].some((tab) => !tab.attached)) {
+      return { status: "unavailable", reason: "target-identity-unresolved" };
+    }
+    const targetInfos = [...this.tabs.values()].map((tab) =>
+      this.targetInfoForTab(tab, tab.attached?.targetId ?? ""),
+    );
+    return { status: "available", targetInfos };
   }
 
   private announceAttachedTab(
@@ -410,7 +545,7 @@ export class ExtensionRelayBridge {
       }
     }
     // Playwright's page-scoped CDP sessions listen on their synthetic parent
-    // browser session, so detach those aliases there when the shared tab goes.
+    // browser session, so detach those aliases there when tab access is revoked.
     for (const [auxiliarySessionId, auxiliary] of this.auxiliaryTabSessions) {
       if (auxiliary.tabId !== tabId) {
         continue;
@@ -696,10 +831,16 @@ export class ExtensionRelayBridge {
         return;
       }
       case "Target.getTargets": {
-        const targetInfos = [...this.tabs.values()]
-          .filter((tab) => tab.attached)
-          .map((tab) => this.targetInfoForTab(tab, tab.attached?.targetId ?? ""));
-        this.respond(client, request, { targetInfos });
+        const enumeration = this.enumerateTargetInfos();
+        if (enumeration.status === "unavailable") {
+          const message =
+            enumeration.reason === "extension-disconnected"
+              ? "Extension is disconnected"
+              : "Target identities are unavailable";
+          this.respondError(client, request, message, -32002);
+          return;
+        }
+        this.respond(client, request, { targetInfos: enumeration.targetInfos });
         return;
       }
       case "Target.attachToBrowserTarget": {
@@ -740,7 +881,7 @@ export class ExtensionRelayBridge {
       case "Target.attachToTarget": {
         const targetId = request.params?.targetId as string | undefined;
         const found = targetId ? this.tabByTargetId(targetId) : null;
-        // Also allow attach by tab that is shared but not yet debugger-attached.
+        // Also allow attach by tab that is accessible but not yet debugger-attached.
         if (!found && targetId) {
           this.respondError(client, request, `No target with given id found: ${targetId}`, -32602);
           return;
@@ -807,9 +948,9 @@ export class ExtensionRelayBridge {
       }
       case "Target.createTarget": {
         const url = typeof request.params?.url === "string" ? request.params.url : "about:blank";
-        const created = (await this.callExtension({ type: "createTab", url })) as {
-          tabId?: unknown;
-        } | null;
+        const createParams = resolveCreateTargetParams(request.params);
+        const command = { type: "createTab", url, ...createParams } as const;
+        const created = (await this.callExtension(command)) as { tabId?: unknown } | null;
         if (typeof created?.tabId !== "number") {
           this.respondError(client, request, "extension did not return a tabId for createTab");
           return;
@@ -818,6 +959,7 @@ export class ExtensionRelayBridge {
         if (!this.tabs.has(tabId)) {
           this.tabs.set(tabId, {
             info: { tabId, url, title: "", active: false },
+            restoreAttachment: false,
           });
         }
         const attached = await this.ensureTabAttached(tabId);
@@ -864,6 +1006,13 @@ export class ExtensionRelayBridge {
         this.respond(client, request, {});
         return;
       }
+      case "Target.getBrowserContexts": {
+        // Real Chrome reports only contexts made via Target.createBrowserContext
+        // here — never the default one — so the relay's answer is always empty.
+        // Puppeteer's connect bootstrap (chrome-devtools-mcp) requires this.
+        this.respond(client, request, { browserContextIds: [] });
+        return;
+      }
       case "Target.createBrowserContext": {
         this.respondError(
           client,
@@ -886,8 +1035,13 @@ export class ExtensionRelayBridge {
       pending.reject(new Error("extension relay stopped"));
     }
     this.pendingExtension.clear();
+    for (const candidate of this.extensionCandidates) {
+      candidate.close(1001, "relay stopped");
+    }
+    this.extensionCandidates.clear();
     this.extension?.socket.close(1001, "relay stopped");
     this.extension = null;
+    this.connectionEvents.dispatchEvent(new Event("ready"));
     for (const client of this.clients) {
       client.socket.close(1001, "relay stopped");
     }

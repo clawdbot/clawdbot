@@ -1,25 +1,27 @@
 import { z } from "zod";
+import { GUARD_RULES_MAX_CHARS } from "../protocol/guard.js";
+import type { ReefAutonomy } from "./friend-types.js";
 
 const HandleSchema = z.string().regex(/^[a-z0-9][a-z0-9_-]{0,62}$/);
-const PublicKeySchema = z
+// No trim transform: the raw text is hashed into the policy identity, and the
+// manifest JSON Schemas must express identical validity (non-blank via \S).
+const GuardRuleTextSchema = z
   .string()
-  .length(43)
-  .regex(/^[A-Za-z0-9_-]+$/);
-
-export const ReefFriendSchema = z
-  .object({
-    autonomy: z.enum(["notify-only", "bounded", "extended"]).default("bounded"),
-    ed25519PublicKey: PublicKeySchema,
-    x25519PublicKey: PublicKeySchema,
-    keyEpoch: z.number().int().positive(),
-    safetyNumberChanged: z.boolean().default(false),
-  })
-  .strict();
+  .max(GUARD_RULES_MAX_CHARS)
+  .regex(/\S/, "rules text must not be blank");
+const RelayUrlSchema = z
+  .string()
+  .regex(
+    /^[hH][tT][tT][pP][sS]?:\/\/[^\\/?#@]+\/?$/,
+    "Reef relay URL must be an HTTP(S) origin without credentials, path, query, or hash",
+  )
+  .url();
 
 export const ReefChannelConfigSchema = z
   .object({
     enabled: z.boolean().default(true),
-    relayUrl: z.url().default("https://reefwire.ai"),
+    configWrites: z.boolean().optional(),
+    relayUrl: RelayUrlSchema.default("https://reefwire.ai"),
     handle: HandleSchema.optional(),
     email: z.email().optional(),
     guard: z
@@ -29,23 +31,27 @@ export const ReefChannelConfigSchema = z
         apiKeyEnv: z.string().regex(/^[A-Z_][A-Z0-9_]*$/),
         policyVersion: z.string().min(1),
         timeoutMs: z.number().int().min(100).max(120_000),
+        rules: z
+          .object({
+            outbound: GuardRuleTextSchema.optional(),
+            inbound: GuardRuleTextSchema.optional(),
+          })
+          .strict()
+          .optional(),
       })
       .strict()
       .optional(),
     stateDir: z.string().min(1).optional(),
-    friends: z.record(HandleSchema, ReefFriendSchema).default({}),
     requestPolicy: z.enum(["code-only", "friends-of-friends", "open"]).default("code-only"),
-    dmPolicy: z.literal("pairing").default("pairing"),
-    allowFrom: z.array(HandleSchema).default([]),
+    // Upgrade-only snapshot. Runtime trust is SQLite-backed; doctor imports valid rows.
+    friends: z.unknown().optional(),
   })
   .strict();
 
 export type ReefChannelConfig = z.infer<typeof ReefChannelConfigSchema>;
-export type ReefFriendConfig = z.infer<typeof ReefFriendSchema>;
 
 export type ReefCoreConfig = {
   channels?: { reef?: Partial<ReefChannelConfig> };
-  commands?: { useAccessGroups?: boolean };
   session?: { store?: string };
 };
 
@@ -61,7 +67,11 @@ export function normalizeReefTarget(raw: string): string | undefined {
   return HandleSchema.safeParse(target).success ? target : undefined;
 }
 
-export function autonomyBudget(autonomy: ReefFriendConfig["autonomy"]): {
+export function parseReefRelayUrl(raw: string): string {
+  return new URL(RelayUrlSchema.parse(raw)).origin;
+}
+
+export function autonomyBudget(autonomy: ReefAutonomy): {
   notifyOnly: boolean;
   botLoopProtection: {
     enabled: true;

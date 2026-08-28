@@ -4,6 +4,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveGatewayPort } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.js";
+import type { GatewayServiceLoadState } from "../../daemon/service-types.js";
+import { projectGatewayUrlForDiagnostics } from "../../gateway/connection-details.js";
 import { resolveControlUiLinks } from "../../gateway/control-ui-links.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
 import {
@@ -11,12 +13,13 @@ import {
   resolveUpdateChannelDisplay,
 } from "../../infra/update-channels.js";
 import { formatGitInstallLabel, type UpdateCheckResult } from "../../infra/update-check.js";
+import { redactSensitiveText } from "../../logging/redact.js";
 import { VERSION } from "../../version.js";
 import { formatUpdateOneLiner, resolveUpdateAvailability } from "../status.update.js";
 
 export { formatTimeAgo } from "../../infra/format-time/format-relative.ts";
 
-export type StatusOverviewRow = {
+type StatusOverviewRow = {
   Item: string;
   Value: string;
 };
@@ -27,6 +30,10 @@ type StatusGatewayConnection = {
   url: string;
   urlSource?: string;
 };
+
+function resolveStatusGatewayDisplayUrl(connection: StatusGatewayConnection): string {
+  return projectGatewayUrlForDiagnostics(connection.url);
+}
 
 type StatusGatewayProbe = {
   connectLatencyMs?: number | null;
@@ -51,12 +58,14 @@ type StatusGatewaySelf =
 type StatusManagedService = {
   label: string;
   installed: boolean | null;
+  loadState?: GatewayServiceLoadState;
   managedByOpenClaw?: boolean;
   loadedText: string;
   runtimeShort?: string | null;
   runtime?: {
     status?: string | null;
     pid?: number | null;
+    detail?: string | null;
   } | null;
 };
 
@@ -148,26 +157,32 @@ export function formatStatusTailscaleValue(params: {
 }
 
 /** Formats launchd/systemd service state into one row-friendly string. */
-export function formatStatusServiceValue(params: {
-  label: string;
-  installed: boolean;
-  managedByOpenClaw?: boolean;
-  loadedText: string;
-  runtimeShort?: string | null;
-  runtimeStatus?: string | null;
-  runtimePid?: number | null;
-}): string {
-  if (!params.installed) {
+export function formatStatusServiceValue(params: StatusManagedService): string {
+  const inspectionDetail =
+    params.loadState?.status === "unknown"
+      ? params.loadState.detail
+      : params.runtime?.status === "unknown"
+        ? params.runtime.detail
+        : undefined;
+  const inspectionFailed = params.loadState?.status === "unknown" || Boolean(inspectionDetail);
+  // A missing definition does not make a failed native inspection evidence of absence.
+  if (params.installed === false && !inspectionFailed) {
     return `${params.label} not installed`;
   }
   const installedPrefix = params.managedByOpenClaw ? "installed · " : "";
+  const loadedText = inspectionDetail
+    ? `${params.loadedText} (inspection failed: ${redactSensitiveText(inspectionDetail, { mode: "tools" })})`
+    : params.loadedText;
   const runtimeSuffix = params.runtimeShort
     ? ` · ${params.runtimeShort}`
     : [
-        params.runtimeStatus ? ` · ${params.runtimeStatus}` : "",
-        params.runtimePid ? ` (pid ${params.runtimePid})` : "",
+        params.runtime?.status ? ` · ${params.runtime.status}` : "",
+        params.runtime?.pid ? ` (pid ${params.runtime.pid})` : "",
       ].join("");
-  return `${params.label} ${installedPrefix}${params.loadedText}${runtimeSuffix}`;
+  const runtimeText = inspectionFailed
+    ? redactSensitiveText(runtimeSuffix, { mode: "tools" })
+    : runtimeSuffix;
+  return `${params.label} ${installedPrefix}${loadedText}${runtimeText}`;
 }
 
 /** Returns the dashboard URL when the Control UI is enabled for the current gateway binding. */
@@ -237,7 +252,7 @@ export function buildStatusOverviewRows(params: {
 
 /** Builds overview rows directly from raw scan/update/gateway inputs. */
 export function buildStatusOverviewSurfaceRows(params: {
-  cfg: Pick<OpenClawConfig, "update" | "gateway">;
+  cfg: Pick<OpenClawConfig, "update" | "gateway" | "telemetry">;
   update: StatusUpdateLike;
   tailscaleMode: string;
   tailscaleDns?: string | null;
@@ -376,9 +391,8 @@ export function buildGatewayStatusSummaryParts(params: {
   authText: string;
   modeLabel: string;
 } {
-  const targetText = params.remoteUrlMissing
-    ? `fallback ${params.gatewayConnection.url}`
-    : params.gatewayConnection.url;
+  const displayUrl = resolveStatusGatewayDisplayUrl(params.gatewayConnection);
+  const targetText = params.remoteUrlMissing ? `fallback ${displayUrl}` : displayUrl;
   const targetTextWithSource = params.gatewayConnection.urlSource
     ? `${targetText} (${params.gatewayConnection.urlSource})`
     : targetText;
@@ -453,24 +467,8 @@ export function buildStatusGatewaySurfaceValues(params: {
       params.advertisedControlUiLinks?.httpUrl ?? resolveStatusDashboardUrl({ cfg: params.cfg }),
     gatewayValue,
     gatewaySelfValue,
-    gatewayServiceValue: formatStatusServiceValue({
-      label: params.gatewayService.label,
-      installed: params.gatewayService.installed !== false,
-      managedByOpenClaw: params.gatewayService.managedByOpenClaw,
-      loadedText: params.gatewayService.loadedText,
-      runtimeShort: params.gatewayService.runtimeShort,
-      runtimeStatus: params.gatewayService.runtime?.status,
-      runtimePid: params.gatewayService.runtime?.pid,
-    }),
-    nodeServiceValue: formatStatusServiceValue({
-      label: params.nodeService.label,
-      installed: params.nodeService.installed !== false,
-      managedByOpenClaw: params.nodeService.managedByOpenClaw,
-      loadedText: params.nodeService.loadedText,
-      runtimeShort: params.nodeService.runtimeShort,
-      runtimeStatus: params.nodeService.runtime?.status,
-      runtimePid: params.nodeService.runtime?.pid,
-    }),
+    gatewayServiceValue: formatStatusServiceValue(params.gatewayService),
+    nodeServiceValue: formatStatusServiceValue(params.nodeService),
   };
 }
 
@@ -504,7 +502,7 @@ export function buildGatewayStatusJsonPayload(params: {
 }) {
   return {
     mode: params.gatewayMode,
-    url: params.gatewayConnection.url,
+    url: resolveStatusGatewayDisplayUrl(params.gatewayConnection),
     urlSource: params.gatewayConnection.urlSource,
     misconfigured: params.remoteUrlMissing,
     reachable: params.gatewayReachable,
@@ -512,19 +510,11 @@ export function buildGatewayStatusJsonPayload(params: {
     self: params.gatewaySelf ?? null,
     error: params.gatewayProbe?.error ?? null,
     authWarning: params.gatewayProbeAuthWarning ?? null,
-    ...(params.gatewayProbe?.health &&
-    typeof params.gatewayProbe.health === "object" &&
-    "modelPricing" in params.gatewayProbe.health
-      ? {
-          // Preserve model pricing when the gateway already returned it; do not synthesize pricing locally.
-          modelPricing: (params.gatewayProbe.health as { modelPricing?: unknown }).modelPricing,
-        }
-      : {}),
   };
 }
 
 /** Redacts common credential shapes before text is printed in status diagnostics. */
-export function redactSecrets(text: string): string {
+export function redactStatusSecrets(text: string): string {
   if (!text) {
     return text;
   }

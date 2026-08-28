@@ -1,10 +1,12 @@
+import { defineChannelSetupContract } from "openclaw/plugin-sdk/channel-setup";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 // Raft plugin setup owns only the Raft CLI profile, never Raft credentials.
-import { createPatchedAccountSetupAdapter } from "openclaw/plugin-sdk/setup";
 import {
+  createPatchedAccountSetupAdapter,
   createDetectedBinaryStatus,
   formatDocsLink,
   setSetupChannelEnabled,
+  type ChannelSetupInput,
 } from "openclaw/plugin-sdk/setup";
 import { detectBinary } from "openclaw/plugin-sdk/setup-tools";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -16,18 +18,36 @@ import {
   type ResolvedRaftAccount,
 } from "./accounts.js";
 
+type RaftSetupInput = ChannelSetupInput & {
+  profile?: string;
+};
+
 const raftSetupAdapter = createPatchedAccountSetupAdapter({
   channelKey: RAFT_CHANNEL_ID,
   buildPatch: (input) => {
-    const profile = normalizeOptionalString(input.profile);
+    const profile = normalizeOptionalString((input as RaftSetupInput).profile);
     return profile ? { profile } : {};
   },
   validateInput: ({ cfg, accountId, input }) => {
-    if (normalizeOptionalString(input.profile) ?? resolveRaftAccount({ cfg, accountId }).profile) {
+    const setupInput = input as RaftSetupInput;
+    if (
+      normalizeOptionalString(setupInput.profile) ??
+      resolveRaftAccount({ cfg, accountId }).profile
+    ) {
       return null;
     }
     return "Raft requires a CLI profile.";
   },
+});
+
+const raftSetupContract = defineChannelSetupContract({
+  fields: {
+    profile: {
+      kind: "string",
+      cli: { flags: "--profile <profile>", description: "Raft CLI profile" },
+    },
+  },
+  legacyAdapter: raftSetupAdapter,
 });
 
 export const raftSetupPlugin: ChannelPlugin<ResolvedRaftAccount> = {
@@ -44,7 +64,7 @@ export const raftSetupPlugin: ChannelPlugin<ResolvedRaftAccount> = {
   capabilities: {
     chatTypes: ["direct"],
   },
-  setup: raftSetupAdapter,
+  setupContract: raftSetupContract,
   config: {
     listAccountIds: listRaftAccountIds,
     resolveAccount: (cfg, accountId) => resolveRaftAccount({ cfg, accountId }),

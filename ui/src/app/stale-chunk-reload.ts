@@ -1,4 +1,4 @@
-// Stale hashed-chunk recovery for lazy routes.
+// Stale hashed-chunk recovery for lazy routes and the entry stylesheet.
 //
 // A gateway update replaces `ui/dist` in place, so a document loaded before the
 // update still references the old hashed chunk URLs; the first visit to a lazy
@@ -9,6 +9,8 @@
 // service worker, so reloading against the freshly served index.html is the
 // only recovery path there.
 import { CONTROL_UI_BUILD_INFO } from "../build-info.ts";
+import { t } from "../i18n/index.ts";
+import { getSafeSessionStorage } from "../local-storage.ts";
 
 const RELOAD_GUARD_STORAGE_KEY = "openclaw.controlUi.staleChunkReloadBuildId";
 // Bounds document probes across rapid re-renders of the same error state.
@@ -31,9 +33,18 @@ type StaleChunkReloadDeps = {
   reload?: () => void;
 };
 
-const lastAttemptAtByStorage = new WeakMap<object, number>();
-let lastAttemptWithoutStorage: number | null = null;
-let inFlightDocumentProbe: Promise<boolean> | null = null;
+type MissingStylesheetRecoveryDeps = {
+  isCssApplied?: () => boolean;
+  schedule?: () => Promise<boolean>;
+  retry?: () => Promise<boolean>;
+};
+
+const recoveryByStorage = new WeakMap<
+  object,
+  { attemptsByBuild: Map<string, number>; latestBuildId: string }
+>();
+const unavailableStorage = {};
+let inFlightDocumentProbe: { buildId?: string; promise: Promise<boolean> } | null = null;
 
 export function isStaleChunkImportError(error: unknown): boolean {
   return (
@@ -43,21 +54,15 @@ export function isStaleChunkImportError(error: unknown): boolean {
 }
 
 function reloadControlUiDocument(): void {
-  window.location.reload();
+  const url = new URL(window.location.href);
+  // The pre-app mount recovery strips this one-shot cache buster before bootstrap.
+  url.searchParams.set("openclaw_mount_recovery", String(Date.now()));
+  window.location.replace(url.href);
 }
 
-function sessionStorageOrNull(): Pick<Storage, "getItem" | "setItem"> | null {
-  try {
-    return window.sessionStorage;
-  } catch {
-    // Storage can be disabled; recovery then stays manual via the Retry button.
-    return null;
-  }
-}
-
-function probeControlUiDocument(): Promise<boolean> {
+function probeControlUiDocument(buildId?: string): Promise<boolean> {
   if (inFlightDocumentProbe) {
-    return inFlightDocumentProbe;
+    return inFlightDocumentProbe.promise;
   }
   const probe = (async () => {
     const controller = new AbortController();
@@ -76,11 +81,11 @@ function probeControlUiDocument(): Promise<boolean> {
     }
   })();
   const settledProbe = probe.finally(() => {
-    if (inFlightDocumentProbe === settledProbe) {
+    if (inFlightDocumentProbe?.promise === settledProbe) {
       inFlightDocumentProbe = null;
     }
   });
-  inFlightDocumentProbe = settledProbe;
+  inFlightDocumentProbe = { buildId, promise: settledProbe };
   return settledProbe;
 }
 
@@ -115,19 +120,7 @@ function persistGuardBuildId(
  * app webviews) instead of the recoverable panel error.
  */
 export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  const now = deps.now?.() ?? Date.now();
-  const storage = deps.storage === undefined ? sessionStorageOrNull() : deps.storage;
-  const lastAttemptAt = storage
-    ? (lastAttemptAtByStorage.get(storage) ?? null)
-    : lastAttemptWithoutStorage;
-  if (lastAttemptAt !== null && now - lastAttemptAt < ATTEMPT_COOLDOWN_MS) {
-    return false;
-  }
-  if (storage) {
-    lastAttemptAtByStorage.set(storage, now);
-  } else {
-    lastAttemptWithoutStorage = now;
-  }
+  const storage = deps.storage === undefined ? getSafeSessionStorage() : deps.storage;
   const buildId = deps.buildId ?? CONTROL_UI_BUILD_INFO.buildId;
   // One automatic reload per build id: if the reloaded document still fails
   // with the same build, the build itself is broken and reloading cannot help.
@@ -135,30 +128,121 @@ export async function scheduleStaleChunkReload(deps: StaleChunkReloadDeps = {}):
   if (readGuardBuildId(storage) === buildId) {
     return false;
   }
-  if (!(await probeControlUiDocument())) {
+  const now = deps.now?.() ?? Date.now();
+  const storageIdentity = storage ?? unavailableStorage;
+  const recovery = recoveryByStorage.get(storageIdentity) ?? {
+    attemptsByBuild: new Map<string, number>(),
+    latestBuildId: buildId,
+  };
+  const { attemptsByBuild } = recovery;
+  for (const [attemptedBuildId, attemptedAt] of attemptsByBuild) {
+    if (now - attemptedAt >= ATTEMPT_COOLDOWN_MS) {
+      attemptsByBuild.delete(attemptedBuildId);
+    }
+  }
+  if (attemptsByBuild.has(buildId)) {
+    return false;
+  }
+  attemptsByBuild.set(buildId, now);
+  recovery.latestBuildId = buildId;
+  recoveryByStorage.set(storageIdentity, recovery);
+  // A newer build cannot inherit the failed probe started for an older build.
+  const joinedOlderBuildProbe = Boolean(
+    inFlightDocumentProbe && inFlightDocumentProbe.buildId !== buildId,
+  );
+  if (
+    !(await probeControlUiDocument(buildId)) &&
+    (!joinedOlderBuildProbe || !(await probeControlUiDocument(buildId)))
+  ) {
     return false;
   }
   // A reload resets the in-memory state, so without a persisted guard a broken
   // build would reload forever. When storage is unavailable or rejects the
   // write, leave recovery to the manual Retry path instead of reloading.
-  if (!persistGuardBuildId(storage, buildId)) {
+  if (recovery.latestBuildId !== buildId || !persistGuardBuildId(storage, buildId)) {
     return false;
   }
   (deps.reload ?? reloadControlUiDocument)();
   return true;
 }
 
+// A restarting gateway is the common case behind this banner: the stale chunk
+// exists precisely because the gateway was just updated. Give the restart time
+// to finish rather than declining the reload on the first failed probe.
+const REACHABLE_WAIT_TIMEOUT_MS = 30_000;
+const REACHABLE_WAIT_INTERVAL_MS = 1_000;
+
 /**
- * User-initiated retry: bypasses the automatic-reload rate guard but keeps the
- * reachability probe — reloading against an unreachable gateway replaces the
- * recoverable panel error with a fatal navigation error in app webviews.
+ * Keeps the advertised bound local instead of trusting the probe to time out:
+ * the default probe aborts itself, but a caller-supplied one need not, and a
+ * probe that never settles would strand the caller's pending UI forever.
  */
-export async function retryStaleChunkReload(deps: StaleChunkReloadDeps = {}): Promise<boolean> {
-  if (!(await probeControlUiDocument())) {
+async function probeWithinDeadline(
+  probe: () => Promise<boolean>,
+  remainingMs: number,
+): Promise<boolean> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<boolean>((resolve) => {
+    timer = setTimeout(() => resolve(false), remainingMs);
+  });
+  try {
+    return await Promise.race([probe(), expired]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * User-initiated retry that survives the restart which caused the stale chunk:
+ * poll until the gateway answers, then reload if the caller still owns recovery.
+ * Unreachable or retired requests keep the current document instead of navigating
+ * into a fatal error page or discarding a newer action.
+ */
+export async function retryStaleChunkReloadWhenReachable(
+  deps: StaleChunkReloadDeps & {
+    timeoutMs?: number;
+    intervalMs?: number;
+    probe?: () => Promise<boolean>;
+    wait?: (ms: number) => Promise<void>;
+    canReload?: () => boolean;
+  } = {},
+): Promise<boolean> {
+  if (deps.canReload?.() === false) {
     return false;
   }
-  (deps.reload ?? reloadControlUiDocument)();
-  return true;
+  const now = deps.now ?? Date.now;
+  const probe = deps.probe ?? probeControlUiDocument;
+  const wait =
+    deps.wait ??
+    ((ms: number) =>
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, ms);
+      }));
+  const intervalMs = deps.intervalMs ?? REACHABLE_WAIT_INTERVAL_MS;
+  const deadline = now() + (deps.timeoutMs ?? REACHABLE_WAIT_TIMEOUT_MS);
+  for (let attempt = 0; ; attempt += 1) {
+    const remaining = deadline - now();
+    // The interval wait can carry the loop past the deadline, so re-check here:
+    // only the first attempt may probe from outside the window.
+    if (attempt > 0 && remaining <= 0) {
+      return false;
+    }
+    // The first attempt always probes, so timeoutMs: 0 means "single shot"
+    // rather than "never ask"; the probe's own abort bounds that case.
+    const reachable = remaining > 0 ? await probeWithinDeadline(probe, remaining) : await probe();
+    if (reachable) {
+      // The probe may outlive Close, a new request, or a failed replay-state write.
+      if (deps.canReload?.() === false) {
+        return false;
+      }
+      (deps.reload ?? reloadControlUiDocument)();
+      return true;
+    }
+    if (now() >= deadline) {
+      return false;
+    }
+    await wait(intervalMs);
+  }
 }
 
 /**
@@ -178,4 +262,112 @@ export function installStaleChunkReloadListener(
   };
   window.addEventListener("vite:preloadError", onPreloadError);
   return () => window.removeEventListener("vite:preloadError", onPreloadError);
+}
+
+export function installMissingStylesheetRecovery(
+  deps: MissingStylesheetRecoveryDeps = {},
+): () => void {
+  const isCssApplied =
+    deps.isCssApplied ??
+    (() =>
+      getComputedStyle(document.documentElement).getPropertyValue("--openclaw-css-ok").trim() ===
+      "1");
+  const schedule = deps.schedule ?? scheduleStaleChunkReload;
+  // Single-shot (timeoutMs: 0) keeps the stylesheet banner's existing
+  // behavior; only the lazy-route button waits out a restart.
+  const retry = deps.retry ?? (() => retryStaleChunkReloadWhenReachable({ timeoutMs: 0 }));
+  let detected = false;
+  let uninstalled = false;
+  let banner: HTMLDivElement | null = null;
+
+  const removeListeners = () => {
+    window.removeEventListener("load", checkStylesheet);
+    window.removeEventListener("error", onResourceError, true);
+  };
+
+  const showBanner = () => {
+    if (uninstalled || banner) {
+      return;
+    }
+    banner = document.createElement("div");
+    banner.setAttribute("role", "alert");
+    // All styles are inline because the entry stylesheet is broken by definition.
+    Object.assign(banner.style, {
+      position: "fixed",
+      top: "0",
+      left: "0",
+      right: "0",
+      zIndex: "2147483647",
+      display: "flex",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: "12px",
+      padding: "12px 16px",
+      background: "#1f2937",
+      color: "#ffffff",
+      fontFamily: "system-ui, sans-serif",
+      fontSize: "14px",
+    });
+    const message = document.createElement("span");
+    message.textContent = t("lazyView.stylesFailed");
+    const reloadButton = document.createElement("button");
+    reloadButton.type = "button";
+    reloadButton.textContent = t("common.reload");
+    Object.assign(reloadButton.style, {
+      border: "0",
+      borderRadius: "4px",
+      padding: "6px 12px",
+      background: "#ffffff",
+      color: "#111827",
+      cursor: "pointer",
+      font: "inherit",
+    });
+    reloadButton.addEventListener("click", () => void retry());
+    banner.append(message, reloadButton);
+    document.body.append(banner);
+  };
+
+  const detectMissingStylesheet = async () => {
+    if (detected || uninstalled) {
+      return;
+    }
+    detected = true;
+    removeListeners();
+    const reloaded = await schedule();
+    if (!reloaded) {
+      showBanner();
+    }
+  };
+
+  function checkStylesheet() {
+    if (isCssApplied()) {
+      removeListeners();
+      return;
+    }
+    void detectMissingStylesheet();
+  }
+
+  function onResourceError(event: Event) {
+    const resource = event.target;
+    if (!(resource instanceof HTMLLinkElement) || !resource.relList.contains("stylesheet")) {
+      return;
+    }
+    // Resource errors do not bubble, so capture is required. This can miss an
+    // error fired before module evaluation; the load-time sentinel is authoritative.
+    void detectMissingStylesheet();
+  }
+
+  window.addEventListener("error", onResourceError, true);
+  if (document.readyState === "complete") {
+    checkStylesheet();
+  } else {
+    window.addEventListener("load", checkStylesheet, { once: true });
+  }
+
+  return () => {
+    uninstalled = true;
+    removeListeners();
+    banner?.remove();
+    banner = null;
+  };
 }

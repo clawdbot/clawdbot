@@ -40,6 +40,48 @@ describe("amazon-bedrock-mantle provider plugin", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("returns raw discovery for the host to merge with materialized config", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          data: [
+            {
+              id: "anthropic.claude-opus-4-7",
+              object: "model",
+              input_modalities: ["text", "image"],
+            },
+          ],
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+
+    const result = await provider.catalog?.run({
+      config: {
+        models: {
+          providers: {
+            "amazon-bedrock-mantle": {
+              baseUrl: "https://explicit.example.test/v1",
+              models: [{ id: "anthropic.claude-opus-4-7", input: ["text"] }],
+            },
+          },
+        },
+      },
+      env: {
+        AWS_BEARER_TOKEN_BEDROCK: "test-token",
+        AWS_REGION: "us-east-1",
+      },
+    } as never);
+
+    if (!result || !("provider" in result)) {
+      throw new Error("expected single provider catalog result");
+    }
+    expect(result.provider.baseUrl).toBe("https://bedrock-mantle.us-east-1.api.aws/v1");
+    expect(result.provider.models[0]?.input).toEqual(["text", "image"]);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
   it("registers with correct provider ID and label", async () => {
     const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
     expect(provider.id).toBe("amazon-bedrock-mantle");
@@ -84,6 +126,32 @@ describe("amazon-bedrock-mantle provider plugin", () => {
         },
       } as never),
     ).toBeUndefined();
+  });
+
+  it("restores missing or stale Opus 5 pricing during runtime normalization", async () => {
+    const provider = await registerSingleProviderPlugin(bedrockMantlePlugin);
+    const model = {
+      id: "anthropic.claude-opus-5",
+      name: "Claude Opus 5",
+      api: "anthropic-messages",
+      provider: "amazon-bedrock-mantle",
+      baseUrl: "https://bedrock-mantle.us-east-1.api.aws/anthropic",
+      reasoning: true,
+      input: ["text", "image"],
+      contextWindow: 1_000_000,
+      maxTokens: 128_000,
+      params: { canonicalModelId: "claude-opus-5" },
+    };
+    const expectedCost = { input: 5, output: 25, cacheRead: 0.5, cacheWrite: 6.25 };
+
+    for (const cost of [undefined, { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 }]) {
+      const normalized = provider.normalizeResolvedModel?.({
+        provider: "amazon-bedrock-mantle",
+        modelId: "anthropic.claude-opus-5",
+        model: { ...model, cost },
+      } as never);
+      expect(normalized?.cost).toEqual(expectedCost);
+    }
   });
 
   it("restores missing or stale Sonnet 5 pricing during runtime normalization", async () => {

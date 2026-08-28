@@ -1,3 +1,4 @@
+import { resolveAllowlistMatchByCandidates } from "openclaw/plugin-sdk/allow-from";
 import {
   resolveScopeRequireMention,
   resolveScopeToolsPolicy,
@@ -33,16 +34,11 @@ export function resolveNextcloudTalkAllowlistMatch(params: {
   senderId: string;
 }): AllowlistMatch<"wildcard" | "id"> {
   const allowFrom = normalizeNextcloudTalkAllowlist(params.allowFrom);
-  if (allowFrom.length === 0) {
-    return { allowed: false };
-  }
-  if (allowFrom.includes("*")) {
-    return { allowed: true, matchKey: "*", matchSource: "wildcard" };
-  }
   const senderId = normalizeNextcloudTalkAllowEntry(params.senderId);
-  return allowFrom.includes(senderId)
-    ? { allowed: true, matchKey: senderId, matchSource: "id" }
-    : { allowed: false };
+  return resolveAllowlistMatchByCandidates({
+    allowList: allowFrom,
+    candidates: [{ value: senderId, source: "id" }],
+  });
 }
 
 export function resolveNextcloudTalkRoomMatch(params: {

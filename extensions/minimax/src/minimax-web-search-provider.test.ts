@@ -1,6 +1,7 @@
 // Minimax tests cover minimax web search provider plugin behavior.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { minimaxWebSearchTesting } from "../test-api.js";
+import { createMiniMaxWebSearchProvider } from "./minimax-web-search-provider.js";
 
 const {
   MINIMAX_SEARCH_ENDPOINT_GLOBAL,
@@ -8,7 +9,6 @@ const {
   resolveMiniMaxApiKey,
   resolveMiniMaxEndpoint,
   resolveMiniMaxRegion,
-  readMiniMaxSearchJsonResponse,
 } = minimaxWebSearchTesting;
 
 function restoreEnvValue(key: string, value: string | undefined) {
@@ -40,6 +40,77 @@ describe("minimax web search provider", () => {
     restoreEnvValue("MINIMAX_CODING_API_KEY", originalCodingApiKey);
     restoreEnvValue("MINIMAX_OAUTH_TOKEN", originalOauthToken);
     restoreEnvValue("MINIMAX_API_KEY", originalApiKey);
+  });
+
+  it("does not send an already canceled MiniMax search", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(JSON.stringify({ organic: [], base_resp: { status_code: 0 } }), {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      }),
+    );
+    const tool = createMiniMaxWebSearchProvider().createTool({
+      config: {
+        plugins: {
+          entries: { minimax: { config: { webSearch: { apiKey: "minimax-test-key" } } } },
+        },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    controller.abort(new Error("MiniMax caller canceled"));
+
+    try {
+      await expect(
+        tool.execute({ query: "minimax pre-canceled" }, { signal: controller.signal }),
+      ).rejects.toThrow("MiniMax caller canceled");
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      fetchMock.mockRestore();
+    }
+  });
+
+  it("aborts the guarded MiniMax request with the caller's reason", async () => {
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockImplementation(
+      async (_url, init) =>
+        await new Promise<Response>((_resolve, reject) => {
+          if (!init?.signal) {
+            reject(new Error("MiniMax request lost caller cancellation"));
+            return;
+          }
+          init.signal.addEventListener("abort", () => reject(init.signal?.reason as Error), {
+            once: true,
+          });
+        }),
+    );
+    const tool = createMiniMaxWebSearchProvider().createTool({
+      config: {
+        plugins: {
+          entries: { minimax: { config: { webSearch: { apiKey: "minimax-test-key" } } } },
+        },
+      },
+      searchConfig: {},
+    });
+    if (!tool) {
+      throw new Error("Expected tool definition");
+    }
+    const controller = new AbortController();
+    const result = tool.execute(
+      { query: "minimax in-flight cancellation" },
+      { signal: controller.signal },
+    );
+
+    try {
+      await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      controller.abort(new Error("MiniMax request canceled in flight"));
+      await expect(result).rejects.toThrow("MiniMax request canceled in flight");
+      expect(fetchMock.mock.calls[0]?.[1]?.signal?.aborted).toBe(true);
+    } finally {
+      fetchMock.mockRestore();
+    }
   });
 
   describe("resolveMiniMaxRegion", () => {
@@ -168,11 +239,5 @@ describe("minimax web search provider", () => {
     it("uses correct CN endpoint", () => {
       expect(MINIMAX_SEARCH_ENDPOINT_CN).toBe("https://api.minimaxi.com/v1/coding_plan/search");
     });
-  });
-
-  it("reports malformed Search API JSON with a stable provider error", async () => {
-    await expect(
-      readMiniMaxSearchJsonResponse(new Response("{ nope"), "MiniMax Search API error"),
-    ).rejects.toThrow("MiniMax Search API error: malformed JSON response");
   });
 });

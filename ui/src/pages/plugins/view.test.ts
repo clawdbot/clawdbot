@@ -5,6 +5,7 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import { createInspectResult } from "./plugins-page.test-support.ts";
 import { CONNECTOR_SUGGESTIONS } from "./presentation.ts";
 import { pluginRowKey, renderPlugins } from "./view.ts";
 
@@ -49,6 +50,13 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     messages: {},
     pendingRemoval: {},
     detailPluginId: null,
+    detailInspection: null,
+    detailInspectionError: null,
+    consent: null,
+    consentInspection: null,
+    consentInspectionLoading: false,
+    consentInspectionError: null,
+    iconUrls: {},
     canMutate: true,
     mutationBlockedReason: null,
     pageNotice: null,
@@ -60,9 +68,14 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onQueryChange: () => undefined,
     onFilterChange: () => undefined,
     onRefresh: () => undefined,
+    onIconError: () => undefined,
     onShowDetails: () => undefined,
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
+    onCancelConsent: () => undefined,
+    onConfirmConsent: () => undefined,
+    onRetryConsentInspection: () => undefined,
+    onDismissMessage: () => undefined,
     onRequestUninstall: () => undefined,
     onCancelUninstall: () => undefined,
     onUninstall: () => undefined,
@@ -146,6 +159,71 @@ describe("renderPlugins", () => {
     ).toContain("manifest invalid");
   });
 
+  it("keeps plugin fallback monograms on complete grapheme clusters", () => {
+    const cases = [
+      { id: "emoji-tools", name: "😀 Tools", expected: "😀T" },
+      { id: "mixed-emoji", name: "A😀", expected: "A😀" },
+      { id: "heart-tools", name: "❤️ Tools", expected: "❤️T" },
+      { id: "flag-tools", name: "🇺🇸 Tools", expected: "🇺🇸T" },
+      { id: "developer-tools", name: "👩‍💻 Tools", expected: "👩‍💻T" },
+      { id: "developer-name", name: "👩‍💻Dev", expected: "👩‍💻D" },
+      { id: "combining-mark", name: "é Tools", expected: "ÉT" },
+    ];
+    const plugins = cases.map(({ id, name }) => createPlugin({ id, name, origin: "global" }));
+    const container = mount(createProps({ result: createResult(plugins) }));
+
+    for (const { id, expected } of cases) {
+      expect(
+        container.querySelector(`[data-plugin-id="${id}"] .plugins-tile--fallback > span`)
+          ?.textContent,
+      ).toBe(expected);
+    }
+  });
+
+  it("renders proxied plugin icons and falls back after an image error", () => {
+    const plugin = createPlugin({
+      id: "remote-icon",
+      name: "FireCrawl",
+      origin: "official",
+      hasIcon: true,
+    });
+    const onIconError = vi.fn();
+    const first = mount(
+      createProps({
+        result: createResult([plugin]),
+        iconUrls: { "remote-icon": "blob:firecrawl-icon" },
+        onIconError,
+      }),
+    );
+    const image = first.querySelector<HTMLImageElement>(
+      '[data-plugin-id="remote-icon"] .plugins-tile img.plugins-icon',
+    );
+    expect(image?.getAttribute("src")).toBe("blob:firecrawl-icon");
+    image?.dispatchEvent(new Event("error"));
+    expect(onIconError).toHaveBeenCalledWith("remote-icon");
+
+    const fallback = mount(createProps({ result: createResult([plugin]) }));
+    expect(
+      fallback.querySelector('[data-plugin-id="remote-icon"] .plugins-tile--fallback')?.textContent,
+    ).toContain("FI");
+  });
+
+  it("keeps plugin monograms usable when Intl.Segmenter is unavailable", async () => {
+    const originalSegmenter = Intl.Segmenter;
+    Object.defineProperty(Intl, "Segmenter", { configurable: true, value: undefined });
+    vi.resetModules();
+
+    try {
+      const freshModulePath = "./presentation.ts?without-intl-segmenter";
+      const { pluginMonogram } = await import(/* @vite-ignore */ freshModulePath);
+      expect(pluginMonogram("😀 Tools")).toBe("😀T");
+      expect(pluginMonogram("👩‍💻 Tools")).toBe("👩T");
+    } finally {
+      Object.defineProperty(Intl, "Segmenter", { configurable: true, value: originalSegmenter });
+      vi.resetModules();
+    }
+  });
+
   it("filters the installed inventory by state", () => {
     const plugins = [
       createPlugin({ id: "on", name: "On", enabled: true, state: "enabled" }),
@@ -166,6 +244,44 @@ describe("renderPlugins", () => {
       group.dispatchEvent(new Event("change", { bubbles: true }));
     }
     expect(onFilterChange).toHaveBeenCalledWith("issues");
+  });
+
+  it.each(["@openclaw/workboard", "  @OPENCLAW/WORKBOARD  "])(
+    "finds an installed plugin by its scoped package name %s",
+    (query) => {
+      const plugin = createPlugin({ packageName: "@openclaw/workboard" });
+      const container = mount(createProps({ query, result: createResult([plugin]) }));
+
+      expect(container.querySelector('[data-plugin-id="workboard"]')).not.toBeNull();
+      expect(normalizedText(container)).toContain("@openclaw/workboard");
+    },
+  );
+
+  it.each([
+    { shelf: "featured", featured: true },
+    { shelf: "official", featured: false },
+  ])("finds an official $shelf plugin by its scoped package name", ({ featured }) => {
+    const plugin = createPlugin({
+      id: "calendar-runtime",
+      name: "Shared Calendar",
+      packageName: "@openclaw/calendar-runtime",
+      description: "Schedule team events.",
+      origin: "official",
+      installed: false,
+      enabled: false,
+      state: "not-installed",
+      featured,
+      install: { source: "official", pluginId: "calendar-runtime" },
+    });
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        query: "@openclaw/calendar-runtime",
+        result: createResult([plugin]),
+      }),
+    );
+
+    expect(container.querySelector('[data-plugin-id="calendar-runtime"]')).not.toBeNull();
   });
 
   it("offers enable and remove through direct row actions", () => {
@@ -220,7 +336,7 @@ describe("renderPlugins", () => {
     );
 
     const confirm = container.querySelector<HTMLElement>(".plugins-remove-confirm");
-    expect(normalizedText(confirm)).toContain("Remove this plugin?");
+    expect(normalizedText(confirm)).toContain("Remove this plugin package and all of its entries?");
     confirm?.querySelector<HTMLButtonElement>(".btn.danger")?.click();
     expect(onUninstall).toHaveBeenCalledWith("community-thing", rowKey);
     confirm?.querySelectorAll<HTMLButtonElement>("button")[1]?.click();
@@ -230,8 +346,19 @@ describe("renderPlugins", () => {
   it("opens the detail overlay from a row and renders actions and metadata", () => {
     const onShowDetails = vi.fn();
     const clickable = mount(createProps({ onShowDetails }));
-    clickable.querySelector<HTMLElement>('[data-plugin-id="workboard"]')?.click();
+    const row = clickable.querySelector<HTMLElement>('[data-plugin-id="workboard"]');
+    const detailButton = row?.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    expect(detailButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton?.type).toBe("button");
+    expect(detailButton?.getAttribute("aria-label")).toBe("Workboard");
+    detailButton?.focus();
+    expect(document.activeElement).toBe(detailButton);
+    detailButton?.click();
+    expect(onShowDetails).toHaveBeenCalledOnce();
     expect(onShowDetails).toHaveBeenCalledWith("workboard");
+
+    row?.click();
+    expect(onShowDetails).toHaveBeenCalledTimes(2);
 
     const onSetEnabled = vi.fn();
     const container = mount(
@@ -251,6 +378,50 @@ describe("renderPlugins", () => {
     expect(onShowDetails).toHaveBeenCalledWith(null);
   });
 
+  it("keeps declared capabilities and effective grants visible in installed plugin details", () => {
+    const inspection = createInspectResult({
+      declared: {
+        ...createInspectResult().declared,
+        tools: ["workboard_create"],
+      },
+    });
+    const container = mount(
+      createProps({ detailPluginId: "workboard", detailInspection: inspection }),
+    );
+
+    const details = container.querySelector(".plugins-detail__capabilities");
+    expect(normalizedText(details)).toContain("Declared capabilities");
+    expect(normalizedText(details)).toContain("workboard_create");
+    expect(normalizedText(details)).toContain("Prompt injection Allowed (default)");
+    expect(normalizedText(details)).toContain("Conversation access Off (default)");
+  });
+
+  it("shows the inspection loading state in installed plugin details", () => {
+    const container = mount(createProps({ detailPluginId: "workboard" }));
+
+    expect(normalizedText(container.querySelector(".plugins-detail__capabilities"))).toContain(
+      "Loading capability details…",
+    );
+  });
+
+  it("shows an inspection error and retries from installed plugin details", () => {
+    const onShowDetails = vi.fn();
+    const container = mount(
+      createProps({
+        detailPluginId: "workboard",
+        detailInspectionError: "Inspection unavailable",
+        onShowDetails,
+      }),
+    );
+
+    const details = container.querySelector(".plugins-detail__capabilities");
+    expect(normalizedText(details?.querySelector('[role="alert"]') ?? null)).toContain(
+      "Inspection unavailable",
+    );
+    details?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(onShowDetails).toHaveBeenCalledWith("workboard");
+  });
+
   it("lists MCP servers with direct toggle and remove plus the add form", () => {
     const onMcpToggle = vi.fn();
     const onMcpRemove = vi.fn();
@@ -262,9 +433,12 @@ describe("renderPlugins", () => {
           {
             name: "github",
             enabled: true,
-            transport: "http",
+            transport: "streamable-http",
             target: "https://api.githubcopilot.com/mcp/",
             auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
           },
         ],
         onMcpToggle,
@@ -281,13 +455,14 @@ describe("renderPlugins", () => {
     actionButton(row, "Remove github")?.click();
     expect(onMcpRemove).toHaveBeenCalledWith("github");
 
-    const form = container.querySelector<HTMLFormElement>(".plugins-mcp-form")!;
+    const form = container.querySelector<HTMLFormElement>(".mcp-server-form")!;
     form.querySelector<HTMLInputElement>('[name="mcp-name"]')!.value = "context7";
     form.querySelector<HTMLInputElement>('[name="mcp-target"]')!.value =
       "https://mcp.context7.com/mcp";
     form.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
     expect(onMcpAdd).toHaveBeenCalledWith({
       name: "context7",
+      transport: "streamable-http",
       target: "https://mcp.context7.com/mcp",
     });
   });
@@ -318,10 +493,48 @@ describe("renderPlugins", () => {
     container
       .querySelector<HTMLButtonElement>('[data-plugin-id="tavily"] .plugins-install')
       ?.click();
-    expect(onInstall).toHaveBeenCalledWith(pluginRowKey("tavily"), {
-      source: "official",
-      pluginId: "tavily",
-    });
+    expect(onInstall).toHaveBeenCalledWith(
+      {
+        source: "official",
+        pluginId: "tavily",
+      },
+      pluginRowKey("tavily"),
+    );
+  });
+
+  it("renders featured plugins newest-featured first", () => {
+    const plugins = [
+      createPlugin({
+        id: "not-featured",
+        name: "Not Featured",
+        featured: false,
+        origin: "official",
+        installed: false,
+        order: 0,
+      }),
+      createPlugin({
+        id: "older-popular",
+        name: "Older Popular",
+        featured: true,
+        featuredAt: 100,
+        order: 1,
+      }),
+      createPlugin({
+        id: "newest-featured",
+        name: "Newest Featured",
+        featured: true,
+        featuredAt: 200,
+        order: 99,
+      }),
+    ];
+
+    const container = mount(createProps({ activeTab: "discover", result: createResult(plugins) }));
+
+    expect(
+      [...container.querySelectorAll<HTMLElement>("[data-plugin-id]")].map(
+        (row) => row.dataset.pluginId,
+      ),
+    ).toEqual(["newest-featured", "older-popular", "not-featured"]);
   });
 
   it("adds MCP connectors and routes ClawHub connector searches", () => {
@@ -348,7 +561,16 @@ describe("renderPlugins", () => {
       createProps({
         activeTab: "discover",
         mcpServers: [
-          { name: "github", enabled: true, transport: "http", target: "https://x", auth: "oauth" },
+          {
+            name: "github",
+            enabled: true,
+            transport: "streamable-http",
+            target: "https://x",
+            auth: "oauth",
+            toolFilter: false,
+            parallel: false,
+            tls: null,
+          },
         ],
       }),
     );
@@ -411,10 +633,13 @@ describe("renderPlugins", () => {
     expect(normalizedText(result)).toContain("149.3K");
     expect(normalizedText(result)).toContain("Code plugin");
     result?.querySelector<HTMLButtonElement>('[aria-label="Install Calendar Plus"]')?.click();
-    expect(onInstall).toHaveBeenCalledWith(clawHubKey("@openclaw/calendar-plus"), {
-      source: "clawhub",
-      packageName: "@openclaw/calendar-plus",
-    });
+    expect(onInstall).toHaveBeenCalledWith(
+      {
+        source: "clawhub",
+        packageName: "@openclaw/calendar-plus",
+      },
+      clawHubKey("@openclaw/calendar-plus"),
+    );
   });
 
   it("keeps discovery available while disabling all read-only mutations", () => {
@@ -451,7 +676,7 @@ describe("renderPlugins", () => {
     expect(onSetEnabled).not.toHaveBeenCalled();
   });
 
-  it("renders row-local risk acknowledgement and busy state", () => {
+  it("renders a row-local ClawHub install error without a risk retry action", () => {
     const packageName = "@openclaw/calendar-plus";
     const key = clawHubKey(packageName);
     const onInstall = vi.fn();
@@ -476,7 +701,6 @@ describe("renderPlugins", () => {
           [key]: {
             kind: "error",
             text: "Review required.",
-            acknowledge: { packageName, version: "2.0.0" },
           },
         },
         onInstall,
@@ -486,13 +710,270 @@ describe("renderPlugins", () => {
     const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`);
     expect(row?.getAttribute("aria-busy")).toBe("false");
     expect(row?.querySelector('[role="alert"]')?.textContent).toContain("Review required.");
-    row?.querySelector<HTMLButtonElement>(".plugins-row-message button")?.click();
-    expect(onInstall).toHaveBeenCalledWith(key, {
-      source: "clawhub",
-      packageName,
-      version: "2.0.0",
-      acknowledgeClawHubRisk: true,
+    expect(row?.querySelector(".plugins-row-message button")).toBeNull();
+    expect(onInstall).not.toHaveBeenCalled();
+  });
+
+  it("renders install policy findings with cancel and acknowledged retry actions", () => {
+    const plugin = createPlugin({
+      id: "kitchen-sink",
+      name: "OpenClaw Kitchen Sink",
+      installed: false,
+      enabled: false,
+      state: "disabled",
+      install: { source: "official", pluginId: "kitchen-sink" },
     });
+    const key = pluginRowKey(plugin.id);
+    const onInstall = vi.fn();
+    const onDismissMessage = vi.fn();
+    const onShowDetails = vi.fn();
+    const request = { source: "official" as const, pluginId: "kitchen-sink" };
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        result: createResult([plugin]),
+        messages: {
+          [key]: {
+            kind: "warning",
+            text: "ClawScan found issues to review.",
+            installPolicyWarning: {
+              request,
+              details: {
+                installPolicyCode: "install_policy_warning_acknowledgement_required",
+                targetName: "openclaw-kitchen-sink-fixture",
+                targetType: "plugin",
+                requestMode: "install",
+                reason: "ClawScan found issues to review.",
+                findings: [
+                  {
+                    ruleId: "informational-finding",
+                    severity: "info",
+                    message: "The package declares a network integration.",
+                  },
+                  {
+                    ruleId: "semgrep-finding",
+                    severity: "warn",
+                    message: "Semgrep found a risky command.",
+                    file: "index.ts",
+                    line: 12,
+                  },
+                  {
+                    ruleId: "critical-finding",
+                    severity: "critical",
+                    message: "The package executes an untrusted binary.",
+                  },
+                ],
+              },
+            },
+          },
+        },
+        onInstall,
+        onDismissMessage,
+        onShowDetails,
+      }),
+    );
+
+    const row = expectDefined(
+      container.querySelector<HTMLElement>('[data-plugin-id="kitchen-sink"]'),
+      "kitchen sink plugin row",
+    );
+    const alert = expectDefined(row.querySelector('[role="alert"]'), "install policy warning");
+    expect(normalizedText(alert)).toContain("Security review needed");
+    expect(normalizedText(alert)).toContain("Policy warnings: 3");
+    expect(normalizedText(alert)).toContain("Not installed");
+    expect(normalizedText(alert)).toContain(
+      "Install anyway approves every install-policy warning encountered during this install",
+    );
+    expect(normalizedText(alert)).toContain("Findings");
+    expect(normalizedText(alert)).toContain("Info The package declares a network integration.");
+    expect(normalizedText(alert)).toContain("Warning Semgrep found a risky command.");
+    expect(normalizedText(alert)).toContain("Critical The package executes an untrusted binary.");
+    expect(normalizedText(alert)).toContain("Semgrep found a risky command.");
+    expect(normalizedText(alert.querySelector(".plugins-policy-review__reason"))).toBe(
+      "ClawScan found issues to review.",
+    );
+    const technicalDetails = expectDefined(
+      alert.querySelector<HTMLDetailsElement>(".plugins-policy-review__details"),
+      "install policy scan details",
+    );
+    expect(technicalDetails.open).toBe(false);
+    expect(normalizedText(technicalDetails.querySelector("summary"))).toBe("Details");
+    expect(
+      technicalDetails?.querySelector(".plugins-policy-review__details-chevron svg"),
+    ).not.toBeNull();
+    expect(normalizedText(technicalDetails)).not.toContain("ClawScan found issues to review.");
+    expect(normalizedText(technicalDetails)).toContain("semgrep-finding");
+    expect(normalizedText(technicalDetails)).toContain("index.ts:12");
+    technicalDetails.querySelector("summary")?.click();
+    expect(technicalDetails.open).toBe(true);
+    expect(onShowDetails).not.toHaveBeenCalled();
+    technicalDetails.querySelector<HTMLElement>(".plugins-policy-review__details-body")?.click();
+    expect(onShowDetails).not.toHaveBeenCalled();
+
+    actionButton(alert, "Cancel")?.click();
+    expect(onDismissMessage).toHaveBeenCalledWith(key);
+
+    actionButton(alert, "Install anyway")?.click();
+    expect(onInstall).toHaveBeenCalledWith(
+      {
+        ...request,
+        acknowledgeInstallPolicyWarning: true,
+      },
+      key,
+    );
+  });
+
+  it("shares one install-policy review across catalog, search, and detail aliases", () => {
+    const plugin = createPlugin({
+      id: "lobster",
+      name: "Lobster",
+      packageName: "@openclaw/lobster",
+      installed: false,
+      enabled: false,
+      state: "disabled",
+      install: { source: "official", pluginId: "lobster" },
+    });
+    const identity = pluginRowKey(plugin.id);
+    const request = { source: "official", pluginId: "lobster" } as const;
+    const onInstall = vi.fn();
+    const onDismissMessage = vi.fn();
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        query: "lobster",
+        result: createResult([plugin]),
+        detailPluginId: plugin.id,
+        searchResults: [
+          {
+            score: 1,
+            package: {
+              name: "@openclaw/lobster",
+              displayName: "Lobster",
+              family: "code-plugin",
+              channel: "official",
+              isOfficial: true,
+              runtimeId: "lobster",
+            },
+          },
+        ],
+        messages: {
+          [identity]: {
+            kind: "warning",
+            text: "Review this plugin.",
+            installPolicyWarning: {
+              request,
+              details: {
+                installPolicyCode: "install_policy_warning_acknowledgement_required",
+                targetName: "@openclaw/lobster",
+                targetType: "plugin",
+                requestMode: "install",
+                reason: "Review this plugin.",
+              },
+            },
+          },
+        },
+        onInstall,
+        onDismissMessage,
+      }),
+    );
+
+    const catalogRow = expectDefined(
+      container.querySelector<HTMLElement>('[data-plugin-id="lobster"]'),
+      "catalog row",
+    );
+    const searchRow = expectDefined(
+      container.querySelector<HTMLElement>('[data-package-name="@openclaw/lobster"]'),
+      "search row",
+    );
+    const detail = expectDefined(
+      container.querySelector<HTMLElement>('[data-detail-plugin-id="lobster"]'),
+      "detail",
+    );
+    for (const surface of [catalogRow, searchRow, detail]) {
+      expect(normalizedText(surface.querySelector('[role="alert"]'))).toContain(
+        "Review this plugin.",
+      );
+      expect(actionButton(surface, "Install Lobster")).toBeNull();
+    }
+
+    actionButton(searchRow, "Install anyway")?.click();
+    expect(onInstall).toHaveBeenCalledWith(
+      { ...request, acknowledgeInstallPolicyWarning: true },
+      identity,
+    );
+    actionButton(detail, "Cancel")?.click();
+    expect(onDismissMessage).toHaveBeenCalledWith(identity);
+  });
+
+  it("preserves a search-only runtime identity when installing", () => {
+    const onInstall = vi.fn();
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        query: "lobster",
+        result: createResult([]),
+        searchResults: [
+          {
+            score: 1,
+            package: {
+              name: "@openclaw/lobster",
+              displayName: "Lobster",
+              family: "code-plugin",
+              channel: "official",
+              isOfficial: true,
+              runtimeId: "lobster",
+            },
+          },
+        ],
+        onInstall,
+      }),
+    );
+
+    actionButton(container, "Install Lobster")?.click();
+    expect(onInstall).toHaveBeenCalledWith(
+      { source: "clawhub", packageName: "@openclaw/lobster" },
+      "plugin:lobster",
+    );
+  });
+
+  it("keeps the not-installed outcome visible for reason-only policy warnings", () => {
+    const plugin = createPlugin({
+      id: "reason-only",
+      name: "Reason Only",
+      installed: false,
+      enabled: false,
+      state: "disabled",
+      install: { source: "official", pluginId: "reason-only" },
+    });
+    const key = pluginRowKey(plugin.id);
+    const container = mount(
+      createProps({
+        activeTab: "discover",
+        result: createResult([plugin]),
+        messages: {
+          [key]: {
+            kind: "warning",
+            text: "Review this package source.",
+            installPolicyWarning: {
+              request: { source: "official", pluginId: "reason-only" },
+              details: {
+                installPolicyCode: "install_policy_warning_acknowledgement_required",
+                targetName: "reason-only",
+                targetType: "plugin",
+                requestMode: "install",
+                reason: "Review this package source.",
+              },
+            },
+          },
+        },
+      }),
+    );
+
+    const alert = expectDefined(
+      container.querySelector('[data-plugin-id="reason-only"] [role="alert"]'),
+      "reason-only install policy warning",
+    );
+    expect(normalizedText(alert)).toContain("Review this package source. Not installed.");
   });
 
   it("correlates installed ClawHub packages without a search runtime id", () => {
@@ -509,6 +990,7 @@ describe("renderPlugins", () => {
       install: undefined,
     });
     const onSetEnabled = vi.fn();
+    const onShowDetails = vi.fn();
     const container = mount(
       createProps({
         activeTab: "discover",
@@ -527,6 +1009,7 @@ describe("renderPlugins", () => {
           },
         ],
         onSetEnabled,
+        onShowDetails,
       }),
     );
 
@@ -535,6 +1018,13 @@ describe("renderPlugins", () => {
     expect(row.querySelector(".plugins-install")).toBeNull();
     actionButton(row, "Disable")?.click();
     expect(onSetEnabled).toHaveBeenCalledWith("calendar-runtime", false, clawHubKey(packageName));
+    expect(onShowDetails).not.toHaveBeenCalled();
+    const detailButton = row.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    expect(detailButton).toBeInstanceOf(HTMLButtonElement);
+    expect(detailButton?.getAttribute("aria-label")).toBe("Calendar Plus");
+    detailButton?.click();
+    expect(onShowDetails).toHaveBeenCalledOnce();
+    expect(onShowDetails).toHaveBeenCalledWith("calendar-runtime");
   });
 
   it("does not present an empty catalog alongside an initial list failure", () => {

@@ -38,8 +38,8 @@ describe("resolveDiscordTextCommandAccess", () => {
       allowTextCommands: true,
       hasControlCommand: true,
     });
-    expect(result.authorized).toBe(true);
-    expect(result.shouldBlockControlCommand).toBe(false);
+    expect(result.commandAccess.authorized).toBe(true);
+    expect(result.commandAccess.shouldBlockControlCommand).toBe(false);
   });
 
   it("authorizes guild text commands from member access facts", async () => {
@@ -53,8 +53,8 @@ describe("resolveDiscordTextCommandAccess", () => {
       allowTextCommands: true,
       hasControlCommand: true,
     });
-    expect(result.authorized).toBe(true);
-    expect(result.shouldBlockControlCommand).toBe(false);
+    expect(result.commandAccess.authorized).toBe(true);
+    expect(result.commandAccess.shouldBlockControlCommand).toBe(false);
   });
 
   it("blocks unauthorized guild text control commands", async () => {
@@ -68,24 +68,37 @@ describe("resolveDiscordTextCommandAccess", () => {
       allowTextCommands: true,
       hasControlCommand: true,
     });
-    expect(result.authorized).toBe(false);
-    expect(result.shouldBlockControlCommand).toBe(true);
+    expect(result.commandAccess.authorized).toBe(false);
+    expect(result.commandAccess.shouldBlockControlCommand).toBe(true);
   });
 
-  it("preserves configured mode when access groups are disabled", async () => {
-    const result = await resolveDiscordTextCommandAccess({
+  it("applies the PluralKit provenance downgrade to strict group commands", async () => {
+    const ordinary = await resolveDiscordTextCommandAccess({
       accountId: "default",
       sender,
-      ownerAllowFrom: [],
+      ownerAllowFrom: ["discord:123"],
       memberAccessConfigured: false,
       memberAllowed: false,
       allowNameMatching: false,
-      cfg: { commands: { useAccessGroups: false } },
       allowTextCommands: true,
       hasControlCommand: true,
+      minIdentifierAuthentication: "verified",
     });
-    expect(result.authorized).toBe(true);
-    expect(result.shouldBlockControlCommand).toBe(false);
+    const pluralKit = await resolveDiscordTextCommandAccess({
+      accountId: "default",
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      ownerAllowFrom: ["pk:pk-member-1"],
+      memberAccessConfigured: false,
+      memberAllowed: false,
+      allowNameMatching: false,
+      allowTextCommands: true,
+      hasControlCommand: true,
+      minIdentifierAuthentication: "verified",
+    });
+
+    expect(ordinary.commandAccess.authorized).toBe(true);
+    expect(pluralKit.commandAccess.authorized).toBe(false);
+    expect(pluralKit.commandAccess.shouldBlockControlCommand).toBe(true);
   });
 });
 
@@ -123,6 +136,19 @@ describe("resolveDiscordDmCommandAccess", () => {
 
     expect(result.senderAccess.decision).toBe("allow");
     expect(dmCommandAuthorized(result)).toBe(true);
+  });
+
+  it("authorizes a matching Discord tag when name matching is enabled", async () => {
+    const result = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["alice#0001"],
+      sender: { id: "999", name: "alice", tag: "alice#0001" },
+      allowNameMatching: true,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(result.senderAccess.allowed).toBe(true);
   });
 
   it("blocks open DMs when configured allowlist does not match", async () => {
@@ -177,6 +203,7 @@ describe("resolveDiscordDmCommandAccess", () => {
         id: "pk-member-1",
         name: "Echo",
         tag: "Echo",
+        isPluralKit: true,
       },
       allowNameMatching: false,
       readStoreAllowFrom: async () => ["pk:pk-member-1"],
@@ -184,6 +211,39 @@ describe("resolveDiscordDmCommandAccess", () => {
 
     expect(result.senderAccess.decision).toBe("allow");
     expect(dmCommandAuthorized(result)).toBe(true);
+  });
+
+  it("distinguishes Gateway-bound Discord ids from asserted PluralKit member ids", async () => {
+    const ordinary = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["discord:123"],
+      sender,
+      allowNameMatching: false,
+      minIdentifierAuthentication: "verified",
+      readStoreAllowFrom: async () => [],
+    });
+    const pluralKit = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["pk:pk-member-1"],
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      allowNameMatching: false,
+      minIdentifierAuthentication: "verified",
+      readStoreAllowFrom: async () => [],
+    });
+    const compatiblePluralKitDefault = await resolveDiscordDmCommandAccess({
+      accountId: "default",
+      dmPolicy: "allowlist",
+      configuredAllowFrom: ["pk:pk-member-1"],
+      sender: { id: "pk-member-1", name: "Echo", isPluralKit: true },
+      allowNameMatching: false,
+      readStoreAllowFrom: async () => [],
+    });
+
+    expect(ordinary.senderAccess.decision).toBe("allow");
+    expect(pluralKit.senderAccess.decision).toBe("block");
+    expect(compatiblePluralKitDefault.senderAccess.decision).toBe("allow");
   });
 
   it("authorizes allowlist DMs from a Discord channel audience access group", async () => {
@@ -283,7 +343,7 @@ describe("resolveDiscordDmCommandAccess", () => {
       configuredAllowFrom: [],
       sender,
       allowNameMatching: false,
-      cfg: { commands: { useAccessGroups: false } },
+      cfg: {},
       readStoreAllowFrom: async () => [],
     });
 

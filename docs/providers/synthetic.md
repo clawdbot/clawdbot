@@ -7,8 +7,8 @@ title: "Synthetic"
 ---
 
 [Synthetic](https://synthetic.new) exposes Anthropic-compatible endpoints.
-OpenClaw bundles it as the `synthetic` provider and uses the Anthropic
-Messages API.
+OpenClaw provides it through the official `@openclaw/synthetic-provider`
+plugin and uses the Anthropic Messages API.
 
 | Property | Value                                 |
 | -------- | ------------------------------------- |
@@ -20,6 +20,12 @@ Messages API.
 ## Getting started
 
 <Steps>
+  <Step title="Install the plugin">
+    ```bash
+    openclaw plugins install @openclaw/synthetic-provider
+    openclaw gateway restart
+    ```
+  </Step>
   <Step title="Get an API key">
     Get a `SYNTHETIC_API_KEY` from your Synthetic account, or let onboarding
     prompt you for one.
@@ -32,7 +38,7 @@ Messages API.
   <Step title="Verify the default model">
     Onboarding sets the default model to:
     ```text
-    synthetic/hf:MiniMaxAI/MiniMax-M2.5
+    synthetic/hf:MiniMaxAI/MiniMax-M3
     ```
   </Step>
 </Steps>
@@ -47,11 +53,11 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
 
 ```json5
 {
-  env: { SYNTHETIC_API_KEY: "sk-..." },
+  env: { vars: { SYNTHETIC_API_KEY: "sk-..." } },
   agents: {
     defaults: {
-      model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M2.5" },
-      models: { "synthetic/hf:MiniMaxAI/MiniMax-M2.5": { alias: "MiniMax M2.5" } },
+      model: { primary: "synthetic/hf:MiniMaxAI/MiniMax-M3" },
+      models: { "synthetic/hf:MiniMaxAI/MiniMax-M3": { alias: "MiniMax M3" } },
     },
   },
   models: {
@@ -63,12 +69,12 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
         api: "anthropic-messages",
         models: [
           {
-            id: "hf:MiniMaxAI/MiniMax-M2.5",
-            name: "MiniMax M2.5",
-            reasoning: false,
-            input: ["text"],
+            id: "hf:MiniMaxAI/MiniMax-M3",
+            name: "MiniMax M3",
+            reasoning: true,
+            input: ["text", "image"],
             cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-            contextWindow: 192000,
+            contextWindow: 262144,
             maxTokens: 65536,
           },
         ],
@@ -78,43 +84,31 @@ changes its base URL, override `models.providers.synthetic.baseUrl`.
 }
 ```
 
-## Built-in catalog
+## Model discovery
 
-All Synthetic models use cost `0` (input/output/cache).
+With a Synthetic credential, OpenClaw discovers current text models from
+Synthetic's [`/openai/v1/models` API](https://dev.synthetic.new/docs/openai/models).
+Inference still uses the Anthropic Messages API. Newly advertised models, including
+small models and `syn:` aliases, do not need an OpenClaw catalog update.
 
-| Model ID                                               | Context window | Max tokens | Reasoning | Input        |
-| ------------------------------------------------------ | -------------- | ---------- | --------- | ------------ |
-| `hf:MiniMaxAI/MiniMax-M2.5`                            | 192,000        | 65,536     | no        | text         |
-| `hf:moonshotai/Kimi-K2-Thinking`                       | 256,000        | 8,192      | yes       | text         |
-| `hf:zai-org/GLM-4.7`                                   | 198,000        | 128,000    | no        | text         |
-| `hf:deepseek-ai/DeepSeek-R1-0528`                      | 128,000        | 8,192      | no        | text         |
-| `hf:deepseek-ai/DeepSeek-V3-0324`                      | 128,000        | 8,192      | no        | text         |
-| `hf:deepseek-ai/DeepSeek-V3.1`                         | 128,000        | 8,192      | no        | text         |
-| `hf:deepseek-ai/DeepSeek-V3.1-Terminus`                | 128,000        | 8,192      | no        | text         |
-| `hf:deepseek-ai/DeepSeek-V3.2`                         | 159,000        | 8,192      | no        | text         |
-| `hf:meta-llama/Llama-3.3-70B-Instruct`                 | 128,000        | 8,192      | no        | text         |
-| `hf:meta-llama/Llama-4-Maverick-17B-128E-Instruct-FP8` | 524,000        | 8,192      | no        | text         |
-| `hf:moonshotai/Kimi-K2-Instruct-0905`                  | 256,000        | 8,192      | no        | text         |
-| `hf:moonshotai/Kimi-K2.5`                              | 256,000        | 8,192      | yes       | text + image |
-| `hf:openai/gpt-oss-120b`                               | 128,000        | 8,192      | no        | text         |
-| `hf:Qwen/Qwen3-235B-A22B-Instruct-2507`                | 256,000        | 8,192      | no        | text         |
-| `hf:Qwen/Qwen3-Coder-480B-A35B-Instruct`               | 256,000        | 8,192      | no        | text         |
-| `hf:Qwen/Qwen3-VL-235B-A22B-Instruct`                  | 250,000        | 8,192      | no        | text + image |
-| `hf:zai-org/GLM-4.5`                                   | 128,000        | 128,000    | no        | text         |
-| `hf:zai-org/GLM-4.6`                                   | 198,000        | 128,000    | no        | text         |
-| `hf:zai-org/GLM-5`                                     | 256,000        | 128,000    | yes       | text + image |
-| `hf:deepseek-ai/DeepSeek-V3`                           | 128,000        | 8,192      | no        | text         |
-| `hf:Qwen/Qwen3-235B-A22B-Thinking-2507`                | 256,000        | 8,192      | yes       | text         |
+The live catalog supplies context and output limits, image input, reasoning,
+tool support, and usage-based token prices. Those prices are estimates, not a
+subscription bill. See Synthetic's [current model list](https://dev.synthetic.new/docs/api/models)
+for availability and its recommended aliases.
+
+Offline catalog generation and unavailable or unusable discovery responses use
+the bundled seed models. Your selected model is not changed automatically.
+When you override the inference base URL, OpenClaw skips Synthetic's fixed
+discovery URL so a proxy credential is not sent to Synthetic.
 
 <Tip>
 Model refs use the form `synthetic/<modelId>`. Use
-`openclaw models list --provider synthetic` to see all models available on your
-account.
+`openclaw models list --provider synthetic` to inspect your configured models.
 </Tip>
 
 <AccordionGroup>
   <Accordion title="Model allowlist">
-    If you enable a model allowlist (`agents.defaults.models`), add every
+    If you enable a model allowlist (`agents.defaults.modelPolicy.allow`), add every
     Synthetic model you plan to use. Models not in the allowlist are hidden
     from the agent.
   </Accordion>

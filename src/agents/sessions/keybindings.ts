@@ -61,9 +61,6 @@ interface AppKeybindings {
   "app.tree.filter.cycleBackward": true;
 }
 
-/** Union of OpenClaw-specific app key ids. */
-export type AppKeybinding = keyof AppKeybindings;
-
 declare module "@earendil-works/pi-tui" {
   interface Keybindings extends AppKeybindings {}
 }

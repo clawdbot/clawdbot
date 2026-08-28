@@ -21,6 +21,7 @@ import { registerMessageReactionsCommands } from "./message/register.reactions.j
 import { registerMessageReadEditDeleteCommands } from "./message/register.read-edit-delete.js";
 import { registerMessageSendCommand } from "./message/register.send.js";
 import { registerMessageThreadCommands } from "./message/register.thread.js";
+import { applyParentDefaultHelpAction } from "./parent-default-help.js";
 
 /** Register the `message` command group with shared channel option helpers. */
 export function registerMessageCommands(program: Command, ctx: ProgramContext) {
@@ -49,10 +50,7 @@ ${formatHelpExamples([
 ])}
 
 ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/message")}`,
-    )
-    .action(() => {
-      message.help({ error: true });
-    });
+    );
 
   const helpers = createMessageCliHelpers(message, ctx.messageChannelOptions);
   registerMessageSendCommand(message, helpers);
@@ -67,4 +65,11 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/message", "docs.openclaw.ai/cli/m
   registerMessageEmojiCommands(message, helpers);
   registerMessageStickerCommands(message, helpers);
   registerMessageDiscordAdminCommands(message, helpers);
+
+  for (const command of message.commands) {
+    if (command.commands.length > 0) {
+      applyParentDefaultHelpAction(command);
+    }
+  }
+  applyParentDefaultHelpAction(message);
 }

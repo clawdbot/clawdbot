@@ -14,7 +14,7 @@ type WaitForNoOutboundOptions = {
 
 function findFailureOutboundMessage(
   state: QaTransportState,
-  options?: { sinceIndex?: number; cursorSpace?: "all" | "outbound" },
+  options?: { accountId?: string; sinceIndex?: number; cursorSpace?: "all" | "outbound" },
 ) {
   return findTransportFailureOutboundMessage(state, options);
 }
@@ -23,22 +23,27 @@ async function waitForOutboundMessage(
   state: QaTransportState,
   predicate: (message: QaBusMessage) => boolean,
   timeoutMs = 15_000,
-  options?: { sinceIndex?: number },
+  options?: { accountId?: string; sinceIndex?: number },
 ) {
   return await waitForQaTransportCondition(() => {
     const failureMessage = findFailureOutboundMessage(state, options);
     if (failureMessage) {
-      throw new Error(extractQaFailureReplyText(failureMessage.text) ?? failureMessage.text);
+      throw new Error(extractQaFailureReplyText(failureMessage) ?? failureMessage.text);
     }
     const match = state
       .getSnapshot()
       .messages.filter((message: QaBusMessage) => message.direction === "outbound")
       .slice(options?.sinceIndex ?? 0)
-      .find(predicate);
+      .find(
+        (message) =>
+          !message.deleted &&
+          (!options?.accountId || message.accountId === options.accountId) &&
+          predicate(message),
+      );
     if (!match) {
       return undefined;
     }
-    const failureReply = extractQaFailureReplyText(match.text);
+    const failureReply = extractQaFailureReplyText(match);
     if (failureReply) {
       throw new Error(failureReply);
     }
@@ -73,7 +78,7 @@ function recentOutboundSummary(state: QaTransportState, limit = 5) {
     .getSnapshot()
     .messages.filter((message: QaBusMessage) => message.direction === "outbound")
     .slice(-limit)
-    .map((message: QaBusMessage) => `${message.conversation.id}:${message.text}`)
+    .map(({ accountId, conversation: { kind, id }, text }) => `${accountId}:${kind}:${id}:${text}`)
     .join(" | ");
 }
 
@@ -136,22 +141,6 @@ function formatConversationTranscript(
   return formatTransportTranscript(state, params);
 }
 
-async function waitForTransportOutboundMessage(
-  state: QaTransportState,
-  predicate: (message: QaBusMessage) => boolean,
-  timeoutMs?: number,
-) {
-  return await waitForOutboundMessage(state, predicate, timeoutMs);
-}
-
-async function waitForChannelOutboundMessage(
-  state: QaTransportState,
-  predicate: (message: QaBusMessage) => boolean,
-  timeoutMs?: number,
-) {
-  return await waitForTransportOutboundMessage(state, predicate, timeoutMs);
-}
-
 async function waitForNoTransportOutbound(
   state: QaTransportState,
   timeoutMs = 1_200,
@@ -165,9 +154,7 @@ export {
   formatTransportTranscript,
   readTransportTranscript,
   recentOutboundSummary,
-  waitForChannelOutboundMessage,
   waitForNoOutbound,
   waitForNoTransportOutbound,
   waitForOutboundMessage,
-  waitForTransportOutboundMessage,
 };

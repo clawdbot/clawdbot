@@ -1,6 +1,8 @@
 // Wizard session tests cover session creation and state transitions.
+
 import { describe, expect, test, vi } from "vitest";
-import { WizardSession } from "./session.js";
+import { DEVICE_CODE_PHISHING_WARNING } from "./prompts.js";
+import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 function noteRunner() {
   return new WizardSession(async (prompter) => {
@@ -11,6 +13,38 @@ function noteRunner() {
 }
 
 describe("WizardSession", () => {
+  test.each([true, false, "true", "false", 1, {}, null, undefined])(
+    "only literal true confirms a wire answer (%j)",
+    async (answer) => {
+      let confirmed: boolean | undefined;
+      const session = new WizardSession(async (prompter) => {
+        confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
+      });
+      const step = (await session.next()).step;
+      if (!step) {
+        throw new Error("expected confirmation step");
+      }
+      await session.answer(step.id, answer);
+      await session.whenSettled();
+      expect(confirmed).toBe(answer === true);
+    },
+  );
+
+  test.each([
+    ["select", undefined, true],
+    ["multiselect", undefined, true],
+    ["text", undefined, true],
+    ["confirm", undefined, true],
+    ["action", "client", true],
+    ["action", "gateway", false],
+    ["note", undefined, false],
+    ["progress", undefined, false],
+  ] as const satisfies ReadonlyArray<
+    readonly [WizardStep["type"], WizardStep["executor"], boolean]
+  >)("classifies whether %s/%s awaits user input", (type, executor, expected) => {
+    expect(wizardStepAwaitsInput({ id: "step", type, executor })).toBe(expected);
+  });
+
   test("steps progress in order", async () => {
     const session = noteRunner();
 
@@ -65,6 +99,32 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
   });
 
+  test("returns the exact prepared model only on the terminal result", async () => {
+    const session = new WizardSession(async (_prompter, _signal, owner) => {
+      owner.setPreparedModelRef("ollama/qwen3:0.6b");
+    });
+
+    await expect(session.next()).resolves.toEqual({
+      done: true,
+      status: "done",
+      preparedModelRef: "ollama/qwen3:0.6b",
+    });
+  });
+
+  test("does not expose a prepared model when the wizard fails", async () => {
+    const session = new WizardSession(async (_prompter, _signal, owner) => {
+      owner.setPreparedModelRef("ollama/qwen3:0.6b");
+      throw new Error("activation setup failed");
+    });
+
+    await expect(session.next()).resolves.toMatchObject({
+      done: true,
+      status: "error",
+      error: "Error: activation setup failed",
+    });
+    expect(await session.next()).not.toHaveProperty("preparedModelRef");
+  });
+
   test("attaches an explicit browser destination to the next client step", async () => {
     const session = new WizardSession(async (prompter) => {
       await prompter.openUrl?.("https://provider.example/oauth?state=state-1");
@@ -96,8 +156,12 @@ describe("WizardSession", () => {
     expect(first.step).toMatchObject({
       type: "note",
       title: "Provider sign-in",
-      message:
-        "Enter this one-time code in your browser.\nCode: ABCD-1234\nCode expires in 15 minutes. Never share it.",
+      message: [
+        "Enter this one-time code in your browser.",
+        "Code: ABCD-1234",
+        "Code expires in 15 minutes.",
+        DEVICE_CODE_PHISHING_WARNING,
+      ].join("\n"),
       externalUrl: "https://provider.example/device",
       deviceCode: {
         code: "ABCD-1234",
@@ -271,5 +335,76 @@ describe("WizardSession", () => {
       throw new Error("expected plain step");
     }
     await session.answer(plainStep.id, "alice");
+  });
+
+  test("bridges confirm, progress updates, and notes in order", async () => {
+    let markInitialUpdateQueued!: () => void;
+    const initialUpdateQueued = new Promise<void>((resolve) => {
+      markInitialUpdateQueued = resolve;
+    });
+    let releaseHalfway!: () => void;
+    const halfway = new Promise<void>((resolve) => {
+      releaseHalfway = resolve;
+    });
+    let releaseDone!: () => void;
+    const done = new Promise<void>((resolve) => {
+      releaseDone = resolve;
+    });
+    const session = new WizardSession(async (prompter) => {
+      await prompter.confirm({ message: "Download model?", initialValue: false });
+      const progress = prompter.progress("Starting download");
+      progress.update("Downloading model... 10%");
+      markInitialUpdateQueued();
+      await halfway;
+      progress.update("Downloading model... 50%");
+      await done;
+      progress.stop("Model downloaded");
+      await prompter.note("Ready to use", "Prepared");
+    });
+
+    const confirm = await session.next();
+    expect(confirm.step).toMatchObject({
+      type: "confirm",
+      message: "Download model?",
+      initialValue: false,
+    });
+    if (!confirm.step) {
+      throw new Error("expected confirm step");
+    }
+    await session.answer(confirm.step.id, true);
+    await initialUpdateQueued;
+
+    expect(await session.next()).toMatchObject({
+      step: {
+        type: "progress",
+        message: "Starting download",
+        executor: "gateway",
+      },
+    });
+
+    expect(await session.next()).toMatchObject({
+      step: { type: "progress", message: "Downloading model... 10%" },
+    });
+
+    const halfwayStep = session.next();
+    releaseHalfway();
+    expect(await halfwayStep).toMatchObject({
+      step: { type: "progress", message: "Downloading model... 50%" },
+    });
+
+    const doneStep = session.next();
+    releaseDone();
+    const completedProgress = await doneStep;
+    expect(completedProgress).toMatchObject({
+      step: { type: "progress", message: "Model downloaded" },
+    });
+    if (!completedProgress.step) {
+      throw new Error("expected completed progress step");
+    }
+    await expect(session.answer(completedProgress.step.id, undefined)).resolves.toBeUndefined();
+
+    expect(await session.next()).toMatchObject({
+      step: { type: "note", title: "Prepared", message: "Ready to use" },
+    });
   });
 });

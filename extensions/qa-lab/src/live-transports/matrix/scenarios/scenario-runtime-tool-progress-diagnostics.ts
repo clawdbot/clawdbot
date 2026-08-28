@@ -1,4 +1,5 @@
 // QA Lab Matrix tool-progress diagnostics preserve actionable failure evidence.
+import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { MatrixQaObservedEvent } from "../substrate/events.js";
 import { isMatrixQaMessageLikeKind } from "./scenario-runtime-shared.js";
 
@@ -19,7 +20,7 @@ export function findMatrixQaUnexpectedWorkingEvents(params: {
     if (event.eventId === params.previewEventId || event.eventId === params.finalEventId) {
       return false;
     }
-    return event.relatesTo?.eventId !== params.previewEventId;
+    return event.replacesEventId !== params.previewEventId;
   });
 }
 
@@ -56,7 +57,7 @@ function truncateMatrixQaToolProgressBody(body: string | undefined) {
   if (!body) {
     return "<none>";
   }
-  return body.length <= 240 ? body : `${body.slice(0, 237)}...`;
+  return body.length <= 240 ? body : `${truncateUtf16Safe(body, 237)}...`;
 }
 
 function describeMatrixQaToolProgressCandidate(event: MatrixQaObservedEvent) {
@@ -65,6 +66,7 @@ function describeMatrixQaToolProgressCandidate(event: MatrixQaObservedEvent) {
     : "<none>";
   return [
     `${event.eventId} kind=${event.kind}`,
+    `replaces=${event.replacesEventId ?? "<none>"}`,
     `relation=${relation}`,
     `body=${JSON.stringify(truncateMatrixQaToolProgressBody(event.body))}`,
   ].join(" ");
@@ -92,7 +94,7 @@ export function buildMatrixQaToolProgressTimeoutMessage(params: {
       }
       return (
         event.eventId === params.previewEventId ||
-        event.relatesTo?.eventId === params.previewEventId ||
+        event.replacesEventId === params.previewEventId ||
         event.body !== undefined
       );
     })
@@ -151,7 +153,7 @@ export function buildMatrixQaToolProgressFinalTimeoutMessage(params: {
       ) {
         return false;
       }
-      return event.relatesTo?.eventId === params.previewEventId;
+      return event.replacesEventId === params.previewEventId;
     })
     .slice(-8);
   const candidateDetails =

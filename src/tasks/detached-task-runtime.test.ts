@@ -1,5 +1,7 @@
 // Covers detached task runtime spawning, events, and cancellation handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import { withPluginRegistrationContext } from "../plugins/runtime.js";
 import {
   getDetachedTaskLifecycleRuntimeRegistration,
   registerDetachedTaskLifecycleRuntime,
@@ -13,13 +15,15 @@ import {
   finalizeTaskRunByRunId,
   getDetachedTaskLifecycleRuntime,
   recordTaskRunProgressByRunId,
-  resetDetachedTaskLifecycleRuntimeForTests,
-  setDetachedTaskLifecycleRuntime,
   setDetachedTaskDeliveryStatusByRunId,
   startTaskRunByRunId,
   tryRecoverTaskBeforeMarkLost,
 } from "./detached-task-runtime.js";
 import type { TaskRecord } from "./task-registry.types.js";
+import {
+  resetDetachedTaskLifecycleRuntimeForTests,
+  setDetachedTaskLifecycleRuntime,
+} from "./task-runtime.test-helpers.js";
 
 const { mockFindTaskByRunIdForStatus, mockListTasksForSessionKeyForStatus, mockLogWarn } =
   vi.hoisted(() => ({
@@ -341,6 +345,35 @@ describe("detached-task-runtime", () => {
     expect(registration?.pluginId).toBe("tests/detached-runtime");
     expect(registration?.runtime).toBe(runtime);
     expect(getDetachedTaskLifecycleRuntime()).toBe(runtime);
+  });
+
+  it("replaces the active detached runtime registration", () => {
+    const first = { ...getDetachedTaskLifecycleRuntime() };
+    const second = { ...getDetachedTaskLifecycleRuntime() };
+
+    registerDetachedTaskLifecycleRuntime("first", first);
+    registerDetachedTaskLifecycleRuntime("second", second);
+
+    expect(getDetachedTaskLifecycleRuntimeRegistration()).toEqual({
+      pluginId: "second",
+      runtime: second,
+    });
+  });
+
+  it("does not let a registering plugin displace another owner's detached runtime", () => {
+    const building = createEmptyPluginRegistry();
+    const original = { ...getDetachedTaskLifecycleRuntime() };
+    const replacement = { ...getDetachedTaskLifecycleRuntime() };
+    building.detachedTaskRuntimes.push({ pluginId: "first-plugin", runtime: original });
+
+    expect(() =>
+      withPluginRegistrationContext(building, "failing-plugin", () => {
+        registerDetachedTaskLifecycleRuntime("spoofed-plugin", replacement);
+      }),
+    ).toThrow("detached task runtime already registered by first-plugin");
+    expect(building.detachedTaskRuntimes).toEqual([
+      { pluginId: "first-plugin", runtime: original },
+    ]);
   });
 
   it("falls back to legacy complete and fail hooks when a runtime has no finalizer", () => {

@@ -31,11 +31,19 @@ export function makeModelSnapshotEntry(data: {
   };
 }
 
-export function makeInMemorySessionManager(entries: SessionEntry[]): SessionManager {
+export function makeInMemorySessionManager(
+  entries: SessionEntry[],
+  activeBranchEntries: SessionEntry[] = entries,
+): SessionManager {
   return {
     getEntries: vi.fn(() => entries),
+    getBranch: vi.fn(() => activeBranchEntries),
     appendCustomEntry: vi.fn((customType: string, data: unknown) => {
-      entries.push({ type: "custom", customType, data });
+      const entry = { type: "custom", customType, data };
+      entries.push(entry);
+      if (activeBranchEntries !== entries) {
+        activeBranchEntries.push(entry);
+      }
     }),
   } as unknown as SessionManager;
 }
@@ -43,6 +51,7 @@ export function makeInMemorySessionManager(entries: SessionEntry[]): SessionMana
 export function makeMockSessionManager(): SessionManager {
   return {
     getEntries: vi.fn().mockReturnValue([]),
+    getBranch: vi.fn().mockReturnValue([]),
     appendCustomEntry: vi.fn(),
   } as unknown as SessionManager;
 }
@@ -114,6 +123,7 @@ export async function loadSanitizeSessionHistoryWithCleanMocks(): Promise<Saniti
 export function makeReasoningAssistantMessages(opts?: {
   thinkingSignature?: "object" | "json";
   includeText?: boolean;
+  timestamp?: number;
 }): AgentMessage[] {
   const thinkingSignature: unknown =
     opts?.thinkingSignature === "json"
@@ -136,6 +146,7 @@ export function makeReasoningAssistantMessages(opts?: {
     {
       role: "assistant",
       content,
+      ...(opts?.timestamp === undefined ? {} : { timestamp: opts.timestamp }),
     },
   ];
 
@@ -185,7 +196,10 @@ function makeSnapshotChangedOpenAIReasoningScenario() {
   ];
   return {
     sessionManager: makeInMemorySessionManager(sessionEntries),
-    messages: makeReasoningAssistantMessages({ thinkingSignature: "object", includeText: true }),
+    messages: makeReasoningAssistantMessages({
+      thinkingSignature: "object",
+      includeText: true,
+    }),
     modelId: "gpt-5.4",
   };
 }

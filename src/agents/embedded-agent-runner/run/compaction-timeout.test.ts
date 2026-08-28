@@ -233,6 +233,29 @@ describe("compaction-timeout helpers", () => {
       expectedLength: 1,
     },
     {
+      name: "excluded custom tail",
+      tail: castAgentMessage({
+        role: "custom",
+        customType: "display-note",
+        content: "display-only activity",
+        display: true,
+        excludeFromContext: true,
+        timestamp: 2,
+      }),
+      expectedLength: 1,
+    },
+    {
+      name: "undisplayed model-visible custom tail",
+      tail: castAgentMessage({
+        role: "custom",
+        customType: "openclaw-runtime-context",
+        content: "runtime context",
+        display: false,
+        timestamp: 2,
+      }),
+      expectedLength: 2,
+    },
+    {
       name: "tool result tail",
       tail: castAgentMessage({
         role: "toolResult",

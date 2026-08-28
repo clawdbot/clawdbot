@@ -1,379 +1,35 @@
-/**
- * Converts raw provider/transport errors into concise user-facing copy.
- */
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalLowercaseString,
-} from "../../../packages/normalization-core/src/string-coerce.js";
+/** Strips internal scaffolding from text before user-facing delivery. */
 import { stripPlainTextToolCallBlocks } from "../../../packages/tool-call-repair/src/index.js";
+import { CURRENT_MESSAGE_MARKER, HISTORY_CONTEXT_MARKER } from "../../auto-reply/reply/history.js";
 import { stripInboundMetadata } from "../../auto-reply/reply/strip-inbound-meta.js";
-import {
-  extractLeadingHttpStatus,
-  formatRawAssistantErrorForUi,
-  isCloudflareOrHtmlErrorPage,
-  isGenericProviderInternalError,
-  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
-  parseApiErrorInfo,
-  parseApiErrorPayload,
-} from "../../shared/assistant-error-format.js";
 import { coerceChatContentText } from "../../shared/chat-content.js";
+import { escapeRegExp } from "../../shared/regexp.js";
 import {
   stripAssistantInternalTraceLines,
   stripLegacyBracketToolCallBlocks,
   stripMinimaxToolCallXml,
   stripToolCallXmlTags,
 } from "../../shared/text/assistant-visible-text.js";
+import { findCodeRegions, isInsideCode } from "../../shared/text/code-regions.js";
 import { stripFinalTags } from "../../shared/text/final-tags.js";
-import { formatExecDeniedUserMessage } from "../exec-approval-result.js";
+import { EXEC_NO_OUTPUT_PLACEHOLDER } from "../bash-tools.exec-output.js";
 import { stripInternalRuntimeContext } from "../internal-runtime-context.js";
-import { stableStringify } from "../stable-stringify.js";
-import {
-  isBillingErrorMessage,
-  isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
-  isTimeoutErrorMessage,
-} from "./failover-matches.js";
 
-/** Format the billing failure copy with optional provider/model context.
- *
- * When `authMode` is `"oauth"` or `"token"` (i.e. Anthropic Max or a static
- * bearer-token subscription) the user has no API key to top up, so we emit
- * neutral copy that directs them to check their account instead (#80877).
- */
-export function formatBillingErrorMessage(
-  provider?: string,
-  model?: string,
-  authMode?: string,
-): string {
-  const providerName = provider?.trim();
-  const modelName = model?.trim();
-  const providerLabel =
-    providerName && modelName ? `${providerName} (${modelName})` : providerName || undefined;
-
-  // OAuth and static-token credentials do not have an API key to top up.
-  const isSubscriptionAuth = authMode === "oauth" || authMode === "token";
-  if (isSubscriptionAuth) {
-    if (providerLabel) {
-      return `⚠️ ${providerLabel} returned a billing error — check your account for subscription or usage limits, then try again.`;
-    }
-    return "⚠️ API provider returned a billing error — check your account for subscription or usage limits, then try again.";
-  }
-
-  if (providerLabel) {
-    return `⚠️ ${providerLabel} returned a billing error — your API key has run out of credits or has an insufficient balance. Check your ${providerName} billing dashboard and top up or switch to a different API key.`;
-  }
-  return "⚠️ API provider returned a billing error — your API key has run out of credits or has an insufficient balance. Check your provider's billing dashboard and top up or switch to a different API key.";
-}
-
-export const BILLING_ERROR_USER_MESSAGE = formatBillingErrorMessage();
-
-const RATE_LIMIT_ERROR_USER_MESSAGE = "⚠️ API rate limit reached. Please try again later.";
-const MODEL_CAPACITY_ERROR_USER_MESSAGE =
-  "⚠️ Selected model is at capacity. Try a different model, or wait and retry.";
-const OVERLOADED_ERROR_USER_MESSAGE =
-  "The AI service is temporarily overloaded. Please try again in a moment.";
 const TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE = /^[ \t]*\[tool calls omitted\][ \t]*$/i;
-const ERROR_PREFIX_RE =
-  /^(?:error|(?:[a-z][\w-]*\s+)?api\s*error|openai\s*error|anthropic\s*error|gateway\s*error|codex\s*error|request failed|failed|exception)(?:\s+\d{3})?[:\s-]+/i;
-const CONTEXT_OVERFLOW_ERROR_HEAD_RE =
-  /^(?:context overflow:|request_too_large\b|request size exceeds\b|request exceeds the maximum size\b|context length exceeded\b|maximum context length\b|prompt is too long\b|exceeds model context window\b)/i;
-const HTTP_ERROR_HINTS = [
-  "error",
-  "bad request",
-  "not found",
-  "unauthorized",
-  "forbidden",
-  "internal server",
-  "service unavailable",
-  "gateway",
-  "rate limit",
-  "overloaded",
-  "timeout",
-  "timed out",
-  "invalid",
-  "too many requests",
-  "permission",
-];
-const RATE_LIMIT_SPECIFIC_HINT_RE =
-  /\bmin(ute)?s?\b|\bhours?\b|\bseconds?\b|\btry again in\b|\bresets?\b|\bplan\b|\bquota\b/i;
-const MODEL_CAPACITY_ERROR_RE = /\b(?:selected\s+)?model\s+(?:is\s+)?at capacity\b/i;
-const NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH = 16_384;
-const NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE = /^codex\s*error(?:\s+\d{3})?[:\s-]+/i;
-
-function extractProviderRateLimitMessage(raw: string): string | undefined {
-  const withoutPrefix = raw.replace(ERROR_PREFIX_RE, "").trim();
-  const info = parseApiErrorInfo(raw) ?? parseApiErrorInfo(withoutPrefix);
-  const candidate =
-    info?.message ?? (extractLeadingHttpStatus(withoutPrefix)?.rest || withoutPrefix);
-
-  if (!candidate || !RATE_LIMIT_SPECIFIC_HINT_RE.test(candidate)) {
-    return undefined;
-  }
-
-  if (isCloudflareOrHtmlErrorPage(withoutPrefix)) {
-    return undefined;
-  }
-
-  const trimmed = candidate.trim();
-  if (
-    trimmed.length > 300 ||
-    trimmed.startsWith("{") ||
-    /^(?:<!doctype\s+html\b|<html\b)/i.test(trimmed)
-  ) {
-    return undefined;
-  }
-
-  return `⚠️ ${trimmed}`;
-}
-
-export function formatRateLimitOrOverloadedErrorCopy(raw: string): string | undefined {
-  if (MODEL_CAPACITY_ERROR_RE.test(raw)) {
-    return MODEL_CAPACITY_ERROR_USER_MESSAGE;
-  }
-  const isRateLimit = isRateLimitErrorMessage(raw);
-  if (isRateLimit) {
-    const providerMessage = extractProviderRateLimitMessage(raw);
-    if (providerMessage) {
-      return providerMessage;
-    }
-  }
-  // Retry classification still owns 429 backoff; user copy can preserve the provider's
-  // overload wording when there is no more actionable retry/reset detail.
-  if (isOverloadedErrorMessage(raw)) {
-    return OVERLOADED_ERROR_USER_MESSAGE;
-  }
-  if (isRateLimit) {
-    return RATE_LIMIT_ERROR_USER_MESSAGE;
-  }
-  return undefined;
-}
-
-export function formatTransportErrorCopy(raw: string): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-
-  if (isCloudflareOrHtmlErrorPage(raw)) {
-    return undefined;
-  }
-
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-
-  if (
-    /\beconnrefused\b/i.test(raw) ||
-    lower.includes("connection refused") ||
-    lower.includes("actively refused")
-  ) {
-    return "LLM request failed: connection refused by the provider endpoint.";
-  }
-
-  if (
-    /\beconnreset\b|\beconnaborted\b|\benetreset\b|\bepipe\b/i.test(raw) ||
-    lower.includes("socket hang up") ||
-    lower.includes("connection reset") ||
-    lower.includes("connection aborted")
-  ) {
-    return "LLM request failed: network connection was interrupted.";
-  }
-
-  if (
-    /\benotfound\b|\beai_again\b/i.test(raw) ||
-    lower.includes("getaddrinfo") ||
-    lower.includes("no such host") ||
-    lower.includes("dns")
-  ) {
-    return "LLM request failed: DNS lookup for the provider endpoint failed.";
-  }
-
-  if (
-    /\benetunreach\b|\behostunreach\b|\behostdown\b/i.test(raw) ||
-    lower.includes("network is unreachable") ||
-    lower.includes("host is unreachable")
-  ) {
-    return "LLM request failed: the provider endpoint is unreachable from this host.";
-  }
-
-  if (
-    lower.includes("fetch failed") ||
-    lower.includes("connection error") ||
-    lower.includes("network request failed")
-  ) {
-    return "LLM request failed: network connection error.";
-  }
-
-  if (raw.includes("网络错误") || raw.includes("网络异常") || raw.includes("连接错误")) {
-    return "LLM request failed: provider reported a network error.";
-  }
-
-  return undefined;
-}
-
-export function formatDiskSpaceErrorCopy(raw: string): string | undefined {
-  if (!raw) {
-    return undefined;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  if (
-    /\benospc\b/i.test(raw) ||
-    lower.includes("no space left on device") ||
-    lower.includes("disk full")
-  ) {
-    return (
-      "OpenClaw could not write local session data because the disk is full. " +
-      "Free some disk space and try again."
-    );
-  }
-  return undefined;
-}
-
-function isReasoningConstraintErrorMessage(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  return (
-    lower.includes("reasoning is mandatory") ||
-    lower.includes("reasoning is required") ||
-    lower.includes("requires reasoning") ||
-    (lower.includes("reasoning") && lower.includes("cannot be disabled"))
-  );
-}
-
-export function isInvalidStreamingEventOrderError(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  return (
-    lower.includes("unexpected event order") &&
-    lower.includes("message_start") &&
-    lower.includes("message_stop")
-  );
-}
-
-export function isStreamingJsonParseError(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
-  const trimmed = raw.trim();
-  if (trimmed === MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE) {
-    return true;
-  }
-  return false;
-}
-
-function hasRateLimitTpmHint(raw: string): boolean {
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  return /\btpm\b/i.test(lower) || lower.includes("tokens per minute");
-}
-
-function looksLikeGenericContextOverflowError(raw: string): boolean {
-  if (!raw) {
-    return false;
-  }
-  const lower = normalizeLowercaseStringOrEmpty(raw);
-  const hasRequestSizeExceeds = lower.includes("request size exceeds");
-  const hasContextWindow =
-    lower.includes("context window") ||
-    lower.includes("context length") ||
-    lower.includes("maximum context length");
-  return (
-    lower.includes("request_too_large") ||
-    (lower.includes("invalid_argument") && lower.includes("maximum number of tokens")) ||
-    lower.includes("request exceeds the maximum size") ||
-    lower.includes("context length exceeded") ||
-    lower.includes("maximum context length") ||
-    lower.includes("prompt is too long") ||
-    lower.includes("prompt too long") ||
-    lower.includes("exceeds model context window") ||
-    lower.includes("model token limit") ||
-    (lower.includes("input exceeds") && lower.includes("maximum number of tokens")) ||
-    (hasRequestSizeExceeds && hasContextWindow) ||
-    lower.includes("context overflow:") ||
-    lower.includes("exceed context limit") ||
-    lower.includes("exceeds the model's maximum context") ||
-    (lower.includes("max_tokens") && lower.includes("exceed") && lower.includes("context")) ||
-    (lower.includes("input length") && lower.includes("exceed") && lower.includes("context")) ||
-    (lower.includes("413") && lower.includes("too large")) ||
-    lower.includes("context_window_exceeded") ||
-    raw.includes("上下文过长") ||
-    raw.includes("上下文超出") ||
-    raw.includes("上下文长度超") ||
-    raw.includes("超出最大上下文") ||
-    raw.includes("请压缩上下文")
-  );
-}
-
-function shouldRewriteContextOverflowText(raw: string): boolean {
-  if (hasRateLimitTpmHint(raw) || isReasoningConstraintErrorMessage(raw)) {
-    return false;
-  }
-  if (!looksLikeGenericContextOverflowError(raw)) {
-    return false;
-  }
-  return (
-    isRawApiErrorPayload(raw) ||
-    isLikelyHttpErrorText(raw) ||
-    ERROR_PREFIX_RE.test(raw) ||
-    CONTEXT_OVERFLOW_ERROR_HEAD_RE.test(raw)
-  );
-}
-
-export function getApiErrorPayloadFingerprint(raw?: string): string | null {
-  if (!raw) {
-    return null;
-  }
-  const payload = parseApiErrorPayload(raw);
-  if (!payload) {
-    return null;
-  }
-  return stableStringify(payload);
-}
-
-export function isRawApiErrorPayload(raw?: string): boolean {
-  return getApiErrorPayloadFingerprint(raw) !== null;
-}
-
-function isLikelyProviderErrorType(type?: string): boolean {
-  const normalized = normalizeOptionalLowercaseString(type);
-  if (!normalized) {
-    return false;
-  }
-  return normalized.endsWith("_error");
-}
-
-function shouldRewriteRawPayloadWithoutErrorContext(raw: string): boolean {
-  if (raw.length > NON_ERROR_PROVIDER_PAYLOAD_MAX_LENGTH) {
-    return false;
-  }
-  if (!NON_ERROR_PROVIDER_PAYLOAD_PREFIX_RE.test(raw)) {
-    return false;
-  }
-  const info = parseApiErrorInfo(raw);
-  if (!info) {
-    return false;
-  }
-  if (isLikelyProviderErrorType(info.type)) {
-    return true;
-  }
-  if (info.httpCode) {
-    const parsedCode = Number(info.httpCode);
-    if (Number.isFinite(parsedCode) && parsedCode >= 400) {
-      return true;
-    }
-  }
-  return false;
-}
 
 function stripFinalTagsFromText(text: unknown): string {
   const normalized = coerceChatContentText(text);
-  if (!normalized) {
-    return normalized;
-  }
-  return stripFinalTags(normalized);
+  return normalized ? stripFinalTags(normalized) : normalized;
 }
 
-function stripToolCallsOmittedPlaceholderLines(text: string): string {
+function stripInternalPlaceholderLines(text: string): string {
+  if (
+    !text.toLowerCase().includes("[tool calls omitted]") &&
+    !text.includes(EXEC_NO_OUTPUT_PLACEHOLDER)
+  ) {
+    return text;
+  }
+  let protectedRegions: ReturnType<typeof findCodeRegions> | undefined;
   let result = "";
   let start = 0;
   while (start < text.length) {
@@ -381,12 +37,160 @@ function stripToolCallsOmittedPlaceholderLines(text: string): string {
     const end = newlineIndex === -1 ? text.length : newlineIndex + 1;
     const chunk = text.slice(start, end);
     const line = chunk.endsWith("\n") ? chunk.slice(0, -1).replace(/\r$/, "") : chunk;
-    if (!TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line)) {
+    const isInternalPlaceholder =
+      TOOL_CALLS_OMITTED_PLACEHOLDER_LINE_RE.test(line) ||
+      line.trim() === EXEC_NO_OUTPUT_PLACEHOLDER;
+    if (
+      !isInternalPlaceholder ||
+      isInsideCode(start, (protectedRegions ??= findCodeRegions(text)))
+    ) {
       result += chunk;
     }
     start = end;
   }
   return result;
+}
+
+function stripVerifiedConversationContext(
+  text: string,
+  conversationContext?: string,
+  streaming = false,
+): string {
+  const source = conversationContext?.trim();
+  if (
+    !source ||
+    (!source.includes(HISTORY_CONTEXT_MARKER) && !source.includes(CURRENT_MESSAGE_MARKER))
+  ) {
+    return text;
+  }
+  const containsConversationMarker =
+    text.includes(HISTORY_CONTEXT_MARKER) || text.includes(CURRENT_MESSAGE_MARKER);
+  if (!streaming && !containsConversationMarker) {
+    return text;
+  }
+  const sourceCodeRegions = findCodeRegions(source);
+  const ownsConversationContext = [HISTORY_CONTEXT_MARKER, CURRENT_MESSAGE_MARKER].some(
+    (marker) => {
+      let markerOffset = source.indexOf(marker);
+      while (markerOffset !== -1) {
+        const markerEnd = markerOffset + marker.length;
+        const startsLine = markerOffset === 0 || source[markerOffset - 1] === "\n";
+        const endsLine =
+          markerEnd === source.length || source[markerEnd] === "\n" || source[markerEnd] === "\r";
+        if (startsLine && endsLine && !isInsideCode(markerOffset, sourceCodeRegions)) {
+          return true;
+        }
+        markerOffset = source.indexOf(marker, markerEnd);
+      }
+      return false;
+    },
+  );
+  if (!ownsConversationContext) {
+    return text;
+  }
+
+  const normalizedSource = source.replace(/\r\n?/gu, "\n");
+  const markdownLinePrefix =
+    "[ \\t]*(?:(?:>|[-+*](?=[ \\t])|#{1,6}(?=[ \\t])|\\d{1,9}[.)](?=[ \\t]))[ \\t]*)*";
+  let result = text;
+  if (containsConversationMarker) {
+    const promptPattern = normalizedSource
+      .split("\n")
+      .map(escapeRegExp)
+      .join(`(?:\\r\\n?|\\n)${markdownLinePrefix}`);
+    const copiedPrompt = new RegExp(`(?:^${markdownLinePrefix})?${promptPattern}`, "gmu");
+    // Markdown formatting does not make an exact owner-bound private prompt safe to disclose.
+    result = text.replace(copiedPrompt, "");
+  }
+  if (!streaming) {
+    return result;
+  }
+
+  const sourceStart = normalizedSource[0];
+  if (!sourceStart) {
+    return result;
+  }
+  const firstSourceLine = normalizedSource.split("\n", 1)[0] ?? normalizedSource;
+  const completedSourceStart = result.indexOf(firstSourceLine);
+  // Anchor every completed prompt start; wrappers can be arbitrarily wide and markers can repeat.
+  const searchStart =
+    completedSourceStart === -1
+      ? Math.max(0, result.length - normalizedSource.length * 2)
+      : completedSourceStart;
+  const markdownWrapper = new RegExp(`^${markdownLinePrefix}$`, "u");
+  const incompleteMarkdownWrapper = new RegExp(
+    `^${markdownLinePrefix}(?:[-+*]|#{1,6}|\\d{1,9}[.)]?)?$`,
+    "u",
+  );
+  let candidateStart = result.indexOf(sourceStart, searchStart);
+  let completedCandidates = 0;
+  while (candidateStart !== -1) {
+    const remainingLength = result.length - candidateStart;
+    const startsPromptLine =
+      remainingLength >= firstSourceLine.length
+        ? result.startsWith(firstSourceLine, candidateStart)
+        : firstSourceLine.startsWith(result.slice(candidateStart));
+    if (!startsPromptLine) {
+      candidateStart = result.indexOf(sourceStart, candidateStart + 1);
+      continue;
+    }
+    // Bound attacker-controlled full-marker floods without releasing an ambiguous private suffix.
+    if (++completedCandidates > 16) {
+      return result.slice(0, searchStart);
+    }
+    const suffix = result.slice(candidateStart).replace(/\r\n?/gu, "\n");
+    const sourceLines = normalizedSource.split("\n");
+    let lineIndex = 0;
+    const unwrappedSuffix = suffix.replace(/\n([^\n]*)/gu, (_match, line: string) => {
+      const sourceLine = sourceLines[++lineIndex];
+      if (sourceLine === undefined) {
+        return `\n${line}`;
+      }
+      if (!sourceLine) {
+        return incompleteMarkdownWrapper.test(line) ? "\n" : `\n${line}`;
+      }
+      const sourceLineStart = sourceLine.charAt(0);
+      let contentStart = line.indexOf(sourceLineStart);
+      while (contentStart !== -1) {
+        const content = line.slice(contentStart);
+        if (sourceLine.startsWith(content) && markdownWrapper.test(line.slice(0, contentStart))) {
+          return `\n${content}`;
+        }
+        contentStart = line.indexOf(sourceLineStart, contentStart + 1);
+      }
+      return incompleteMarkdownWrapper.test(line) ? "\n" : `\n${line}`;
+    });
+    if (
+      (suffix.length < normalizedSource.length && normalizedSource.startsWith(suffix)) ||
+      (unwrappedSuffix.length < normalizedSource.length &&
+        normalizedSource.startsWith(unwrappedSuffix))
+    ) {
+      // A later stream update can complete private prompt bytes that cannot be retracted once sent.
+      return result.slice(0, candidateStart);
+    }
+    candidateStart = result.indexOf(sourceStart, candidateStart + 1);
+  }
+  return result;
+}
+
+export function createVerifiedConversationContextStreamFilter(
+  getConversationContext?: () => string | undefined,
+): (delta: string) => string {
+  let accumulatedText = "";
+  let releasedText: string | null = "";
+  return (delta) => {
+    accumulatedText += delta;
+    const conversationContext = getConversationContext?.();
+    const safeText = stripVerifiedConversationContext(accumulatedText, conversationContext, true);
+    // Already delivered stream text cannot be retracted if its safe projection changes.
+    if (releasedText === null || !safeText.startsWith(releasedText)) {
+      releasedText = null;
+      return "";
+    }
+    const newlySafeText = safeText.slice(releasedText.length);
+    releasedText = safeText;
+    return newlySafeText;
+  };
 }
 
 function collapseConsecutiveDuplicateBlocks(text: string): string {
@@ -398,127 +202,50 @@ function collapseConsecutiveDuplicateBlocks(text: string): string {
   if (blocks.length < 2) {
     return text;
   }
-
-  const normalizeBlock = (value: string) => value.trim().replace(/\s+/g, " ");
   const result: string[] = [];
   let lastNormalized: string | null = null;
-
   for (const block of blocks) {
-    const normalized = normalizeBlock(block);
+    const normalized = block.trim().replace(/\s+/g, " ");
     if (lastNormalized && normalized === lastNormalized) {
       continue;
     }
     result.push(block.trim());
     lastNormalized = normalized;
   }
-
-  if (result.length === blocks.length) {
-    return text;
-  }
-  return result.join("\n\n");
+  return result.length === blocks.length ? text : result.join("\n\n");
 }
 
-export function isLikelyHttpErrorText(raw: string): boolean {
-  if (isCloudflareOrHtmlErrorPage(raw)) {
-    return true;
-  }
-  const status = extractLeadingHttpStatus(raw);
-  if (!status) {
-    return false;
-  }
-  if (status.code < 400) {
-    return false;
-  }
-  const message = normalizeLowercaseStringOrEmpty(status.rest);
-  return HTTP_ERROR_HINTS.some((hint) => message.includes(hint));
-}
-
-export function sanitizeUserFacingText(text: unknown, opts?: { errorContext?: boolean }): string {
+export function sanitizeUserFacingText(
+  text: unknown,
+  opts?: { errorContext?: boolean; conversationContext?: string; streaming?: boolean },
+): string {
   const raw = coerceChatContentText(text);
   if (!raw) {
     return raw;
   }
-  const errorContext = opts?.errorContext ?? false;
-  const stripped = stripInboundMetadata(stripInternalRuntimeContext(stripFinalTagsFromText(raw)));
+  const withoutConversationContext = stripVerifiedConversationContext(
+    raw,
+    opts?.conversationContext,
+    opts?.streaming,
+  );
+  const stripped = stripInboundMetadata(
+    stripInternalRuntimeContext(stripFinalTagsFromText(withoutConversationContext)),
+  );
   const withoutToolCallXml = stripToolCallXmlTags(stripMinimaxToolCallXml(stripped), {
     stripFunctionCallsXmlPayloads: true,
   });
-  // Replay repair may synthesize this placeholder to keep provider transcripts valid.
-  // It is internal scaffolding, so drop standalone placeholder lines before delivery
-  // while preserving ordinary inline mentions a user may be discussing.
-  const withoutPlaceholder = stripToolCallsOmittedPlaceholderLines(withoutToolCallXml);
-  const withoutInternalTraceLines = errorContext
+  // Replay repair and empty exec output produce placeholders that never belong in visible replies.
+  const withoutPlaceholder = stripInternalPlaceholderLines(withoutToolCallXml);
+  const withoutInternalTraceLines = opts?.errorContext
     ? stripAssistantInternalTraceLines(withoutPlaceholder)
     : withoutPlaceholder;
   const withoutToolCallBlocks = stripPlainTextToolCallBlocks(
     stripLegacyBracketToolCallBlocks(withoutInternalTraceLines),
+    { resolveProtectedRanges: findCodeRegions },
   );
-  const trimmed = withoutToolCallBlocks.trim();
-  if (!trimmed) {
+  if (!withoutToolCallBlocks.trim()) {
     return "";
   }
-
-  if (!errorContext && shouldRewriteRawPayloadWithoutErrorContext(trimmed)) {
-    return formatRawAssistantErrorForUi(trimmed);
-  }
-  if (errorContext) {
-    const execDeniedMessage = formatExecDeniedUserMessage(trimmed);
-    if (execDeniedMessage) {
-      return execDeniedMessage;
-    }
-
-    const diskSpaceCopy = formatDiskSpaceErrorCopy(trimmed);
-    if (diskSpaceCopy) {
-      return diskSpaceCopy;
-    }
-
-    if (/incorrect role information|roles must alternate/i.test(trimmed)) {
-      return (
-        "Message ordering conflict - please try again. " +
-        "If this persists, use /new to start a fresh session."
-      );
-    }
-
-    // Keep this sanitizer on generic overflow heuristics only so callers can
-    // avoid importing the heavier provider-runtime-aware error classifier.
-    if (shouldRewriteContextOverflowText(trimmed)) {
-      return (
-        "Context overflow: prompt too large for the model. " +
-        "Try /reset (or /new) to start a fresh session, or use a larger-context model."
-      );
-    }
-
-    if (isBillingErrorMessage(trimmed)) {
-      return BILLING_ERROR_USER_MESSAGE;
-    }
-    if (isGenericProviderInternalError(trimmed)) {
-      return formatRawAssistantErrorForUi(trimmed);
-    }
-    if (isInvalidStreamingEventOrderError(trimmed)) {
-      return "LLM request failed: provider returned an invalid streaming response. Please try again.";
-    }
-    if (isRawApiErrorPayload(trimmed) || isLikelyHttpErrorText(trimmed)) {
-      return formatRawAssistantErrorForUi(trimmed);
-    }
-    if (isStreamingJsonParseError(trimmed)) {
-      return "LLM streaming response contained a malformed fragment. Please try again.";
-    }
-    if (ERROR_PREFIX_RE.test(trimmed)) {
-      const prefixedCopy = formatRateLimitOrOverloadedErrorCopy(trimmed);
-      if (prefixedCopy) {
-        return prefixedCopy;
-      }
-      const transportCopy = formatTransportErrorCopy(trimmed);
-      if (transportCopy) {
-        return transportCopy;
-      }
-      if (isTimeoutErrorMessage(trimmed)) {
-        return "LLM request timed out.";
-      }
-      return formatRawAssistantErrorForUi(trimmed);
-    }
-  }
-
   const withoutLeadingEmptyLines = withoutToolCallBlocks.replace(/^(?:[ \t]*\r?\n)+/, "");
   return collapseConsecutiveDuplicateBlocks(withoutLeadingEmptyLines);
 }

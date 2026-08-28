@@ -1,7 +1,7 @@
 // Doctor-only import for the retired TUI last-session JSON store.
-import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-coerce";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -12,9 +12,15 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "./kysely-sync.js";
+import {
+  assertLegacyMigrationSourceUnchanged,
+  claimAndRemoveLegacyMigrationSource,
+  readLegacyMigrationSourceSnapshotSync,
+  type LegacyMigrationSourceSnapshot as LegacySourceSnapshot,
+} from "./state-migrations.source-snapshot.js";
 import type { LegacyStateDetection, MigrationMessages } from "./state-migrations.types.js";
 
-type TuiLastSessionMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "tui_last_sessions">;
+type TuiLastSessionMigrationDatabase = Pick<OpenClawStateKyselyDatabase, "config_machine_state">;
 
 type LegacyTuiLastSession = {
   scopeKey: string;
@@ -22,16 +28,8 @@ type LegacyTuiLastSession = {
   updatedAt: number;
 };
 
-type LegacySourceSnapshot = {
-  dev: number;
-  ino: number;
-  mtimeMs: number;
-  raw: string;
-  sha256: string;
-  size: number;
-};
-
 const LEGACY_RECORD_KEYS = new Set(["sessionKey", "updatedAt"]);
+const TUI_LAST_SESSION_STATE_KEY_PREFIX = "tui.lastSession.";
 
 function resolveLegacyTuiLastSessionPath(stateDir: string): string {
   return path.join(stateDir, "tui", "last-session.json");
@@ -50,91 +48,20 @@ export function detectLegacyTuiLastSessions(params: {
 }
 
 function readLegacySourceSnapshot(sourcePath: string): LegacySourceSnapshot {
-  const before = fs.statSync(sourcePath);
-  if (!before.isFile()) {
-    throw new Error("legacy TUI last-session source is not a regular file");
-  }
-  const raw = fs.readFileSync(sourcePath, "utf8");
-  const after = fs.statSync(sourcePath);
-  if (
-    before.dev !== after.dev ||
-    before.ino !== after.ino ||
-    before.size !== after.size ||
-    before.mtimeMs !== after.mtimeMs
-  ) {
-    throw new Error("legacy TUI last-session source changed while doctor was reading it");
-  }
-  return {
-    dev: after.dev,
-    ino: after.ino,
-    mtimeMs: after.mtimeMs,
-    raw,
-    sha256: createHash("sha256").update(raw).digest("hex"),
-    size: after.size,
-  };
+  return readLegacyMigrationSourceSnapshotSync({
+    sourcePath,
+    label: "TUI last-session",
+    followSymlinks: true,
+  });
 }
 
 function assertLegacySourceUnchanged(sourcePath: string, expected: LegacySourceSnapshot): void {
-  const current = readLegacySourceSnapshot(sourcePath);
-  if (!legacySourceSnapshotsMatch(current, expected)) {
-    throw new Error("legacy TUI last-session source changed after doctor loaded it");
-  }
-}
-
-function legacySourceSnapshotsMatch(
-  current: LegacySourceSnapshot,
-  expected: LegacySourceSnapshot,
-): boolean {
-  return (
-    current.dev === expected.dev &&
-    current.ino === expected.ino &&
-    current.size === expected.size &&
-    current.mtimeMs === expected.mtimeMs &&
-    current.sha256 === expected.sha256
-  );
-}
-
-function restoreClaimAfterCleanupFailure(params: {
-  claimPath: string;
-  sourcePath: string;
-}): string | null {
-  if (!fs.existsSync(params.claimPath) || fs.existsSync(params.sourcePath)) {
-    return null;
-  }
-  try {
-    fs.renameSync(params.claimPath, params.sourcePath);
-    return null;
-  } catch (error) {
-    return `; the claimed source remains at ${params.claimPath} because restore also failed: ${String(error)}`;
-  }
-}
-
-function claimAndRemoveVerifiedLegacySource(params: {
-  sourcePath: string;
-  snapshot: LegacySourceSnapshot;
-  beforeClaim?: () => void;
-  removeSource?: (sourcePath: string) => void;
-}): void {
-  params.beforeClaim?.();
-  const claimPath = `${params.sourcePath}.doctor-importing-${process.pid}-${randomUUID()}`;
-  fs.renameSync(params.sourcePath, claimPath);
-  try {
-    const claimedSnapshot = readLegacySourceSnapshot(claimPath);
-    if (!legacySourceSnapshotsMatch(claimedSnapshot, params.snapshot)) {
-      throw new Error("legacy TUI last-session source changed before doctor could claim it");
-    }
-    (params.removeSource ?? fs.unlinkSync)(claimPath);
-  } catch (error) {
-    const restoreFailure = restoreClaimAfterCleanupFailure({
-      claimPath,
-      sourcePath: params.sourcePath,
-    });
-    throw new Error(`${String(error)}${restoreFailure ?? ""}`, { cause: error });
-  }
-}
-
-function isObjectRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
+  assertLegacyMigrationSourceUnchanged({
+    sourcePath,
+    snapshot: expected,
+    label: "TUI last-session",
+    followSymlinks: true,
+  });
 }
 
 function isHeartbeatSessionKey(sessionKey: string): boolean {
@@ -179,10 +106,13 @@ function parseLegacyTuiLastSessions(raw: string): LegacyTuiLastSession[] {
 }
 
 function rowMatches(
-  row: { session_key: string; updated_at: number } | undefined,
+  row: { value_json: string; updated_at_ms: number } | undefined,
   expected: LegacyTuiLastSession,
 ): boolean {
-  return row?.session_key === expected.sessionKey && row.updated_at === expected.updatedAt;
+  return (
+    row?.value_json === JSON.stringify(expected.sessionKey) &&
+    row.updated_at_ms === expected.updatedAt
+  );
 }
 
 /** Import, verify, and remove the retired JSON store during an explicit doctor repair. */
@@ -224,28 +154,31 @@ export function migrateLegacyTuiLastSessions(params: {
       ({ db }) => {
         const tuiDb = getNodeSqliteKysely<TuiLastSessionMigrationDatabase>(db);
         for (const record of activeRecords) {
+          const stateKey = `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${record.scopeKey}`;
           const existing = executeSqliteQueryTakeFirstSync(
             db,
             tuiDb
-              .selectFrom("tui_last_sessions")
-              .select(["session_key", "updated_at"])
-              .where("scope_key", "=", record.scopeKey),
+              .selectFrom("config_machine_state")
+              .select(["value_json", "updated_at_ms"])
+              .where("state_key", "=", stateKey),
           );
           if (!existing) {
             executeSqliteQuerySync(
               db,
-              tuiDb.insertInto("tui_last_sessions").values({
-                scope_key: record.scopeKey,
-                session_key: record.sessionKey,
-                updated_at: record.updatedAt,
+              tuiDb.insertInto("config_machine_state").values({
+                state_key: stateKey,
+                value_json: JSON.stringify(record.sessionKey),
+                updated_at_ms: record.updatedAt,
               }),
             );
             expectedRows.set(record.scopeKey, record);
             importedCount += 1;
             continue;
           }
-          if (existing.updated_at === record.updatedAt) {
-            if (existing.session_key !== record.sessionKey) {
+          // SAFETY: The TUI owner stores each tui.lastSession value as a JSON string.
+          const existingSessionKey = JSON.parse(existing.value_json) as string;
+          if (existing.updated_at_ms === record.updatedAt) {
+            if (existingSessionKey !== record.sessionKey) {
               throw new Error(
                 `scope ${record.scopeKey} has divergent JSON and SQLite pointers at the same timestamp`,
               );
@@ -253,11 +186,11 @@ export function migrateLegacyTuiLastSessions(params: {
             expectedRows.set(record.scopeKey, record);
             continue;
           }
-          if (existing.updated_at > record.updatedAt) {
+          if (existing.updated_at_ms > record.updatedAt) {
             expectedRows.set(record.scopeKey, {
               scopeKey: record.scopeKey,
-              sessionKey: existing.session_key,
-              updatedAt: existing.updated_at,
+              sessionKey: existingSessionKey,
+              updatedAt: existing.updated_at_ms,
             });
             supersededCount += 1;
             continue;
@@ -265,9 +198,12 @@ export function migrateLegacyTuiLastSessions(params: {
           executeSqliteQuerySync(
             db,
             tuiDb
-              .updateTable("tui_last_sessions")
-              .set({ session_key: record.sessionKey, updated_at: record.updatedAt })
-              .where("scope_key", "=", record.scopeKey),
+              .updateTable("config_machine_state")
+              .set({
+                value_json: JSON.stringify(record.sessionKey),
+                updated_at_ms: record.updatedAt,
+              })
+              .where("state_key", "=", stateKey),
           );
           expectedRows.set(record.scopeKey, record);
           importedCount += 1;
@@ -290,9 +226,9 @@ export function migrateLegacyTuiLastSessions(params: {
       const row = executeSqliteQueryTakeFirstSync(
         database.db,
         tuiDb
-          .selectFrom("tui_last_sessions")
-          .select(["session_key", "updated_at"])
-          .where("scope_key", "=", expected.scopeKey),
+          .selectFrom("config_machine_state")
+          .select(["value_json", "updated_at_ms"])
+          .where("state_key", "=", `${TUI_LAST_SESSION_STATE_KEY_PREFIX}${expected.scopeKey}`),
       );
       if (!rowMatches(row, expected)) {
         throw new Error(`SQLite verification failed for scope ${expected.scopeKey}`);
@@ -305,9 +241,11 @@ export function migrateLegacyTuiLastSessions(params: {
   }
 
   try {
-    claimAndRemoveVerifiedLegacySource({
+    claimAndRemoveLegacyMigrationSource({
       sourcePath: params.detected.sourcePath,
       snapshot,
+      label: "TUI last-session",
+      followSymlinks: true,
       beforeClaim: params.beforeClaim,
       removeSource: params.removeSource,
     });

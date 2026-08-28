@@ -10,6 +10,7 @@ import {
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
+import { buildTelegramGroupPeerId, type TelegramThreadSpec } from "./bot/helpers.js";
 
 type TelegramErrorPolicy = "always" | "once" | "silent";
 
@@ -44,27 +45,25 @@ export function resolveTelegramErrorPolicy(params: {
     params.topicConfig,
   ];
   let policy: TelegramErrorPolicy = "always";
-  let cooldownMs = DEFAULT_ERROR_COOLDOWN_MS;
 
   for (const config of configs) {
     if (config?.errorPolicy) {
       policy = config.errorPolicy;
     }
-    if (typeof config?.errorCooldownMs === "number") {
-      cooldownMs = config.errorCooldownMs;
-    }
   }
 
-  return { policy, cooldownMs };
+  return { policy, cooldownMs: DEFAULT_ERROR_COOLDOWN_MS };
 }
 
 export function buildTelegramErrorScopeKey(params: {
   accountId: string;
   chatId: string | number;
-  threadId?: string | number | null;
+  threadSpec?: TelegramThreadSpec;
 }): string {
-  const threadId = params.threadId == null ? "main" : String(params.threadId);
-  return `${params.accountId}:${String(params.chatId)}:${threadId}`;
+  return `${params.accountId}:${buildTelegramGroupPeerId(
+    params.chatId,
+    params.threadSpec ?? { scope: "none" },
+  )}`;
 }
 
 export function shouldSuppressTelegramError(params: {

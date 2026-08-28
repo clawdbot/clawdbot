@@ -1,16 +1,15 @@
 // Discord provider module implements model/runtime integration.
-import path from "node:path";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
-import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import {
   Client,
   ReadyListener,
-  type BaseCommand,
   type BaseMessageInteractiveComponent,
+  type DiscordCommand,
   type Modal,
   type Plugin,
 } from "../internal/discord.js";
@@ -27,6 +26,7 @@ import {
   waitForDiscordGatewayPluginRegistration,
 } from "./gateway-plugin.js";
 import { createDiscordGatewaySupervisor } from "./gateway-supervisor.js";
+import { DiscordGuildJoinIntroductionListener } from "./listeners.guild-join.js";
 import {
   DiscordMessageListener,
   DiscordPresenceGuildCreateListener,
@@ -36,6 +36,7 @@ import {
   DiscordPresenceReadyListener,
   DiscordReactionListener,
   DiscordReactionRemoveListener,
+  DiscordThreadDeleteListener,
   DiscordThreadUpdateListener,
   registerDiscordListener,
 } from "./listeners.js";
@@ -93,17 +94,13 @@ export async function createDiscordMonitorClient(params: {
   applicationId: string;
   token: string;
   restFetch?: typeof fetch;
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   components: BaseMessageInteractiveComponent[];
   modals: Modal[];
   voiceEnabled: boolean;
-  discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0] & {
-    eventQueue?: Pick<
-      DiscordEventQueueOptions,
-      "listenerTimeout" | "maxQueueSize" | "maxConcurrency"
-    >;
-  };
+  discordConfig: Parameters<typeof resolveDiscordPresenceUpdate>[0];
   runtime: RuntimeEnv;
+  commandDeployHashStore?: DiscordCommandDeployHashStore;
   createClient: CreateClientFn;
   createGatewayPlugin: typeof createDiscordGatewayPlugin;
   createGatewaySupervisor: typeof createDiscordGatewaySupervisor;
@@ -128,7 +125,6 @@ export async function createDiscordMonitorClient(params: {
   const eventQueueOpts = {
     listenerTimeout: 120_000,
     slowListenerThreshold: 30_000,
-    ...params.discordConfig.eventQueue,
   } satisfies DiscordEventQueueOptions;
   const readyListener = createDiscordStatusReadyListener({
     discordConfig: params.discordConfig,
@@ -142,11 +138,7 @@ export async function createDiscordMonitorClient(params: {
       publicKey: "a",
       token: params.token,
       autoDeploy: false,
-      commandDeployHashStorePath: path.join(
-        resolveStateDir(process.env),
-        "discord",
-        "command-deploy-cache.json",
-      ),
+      commandDeployHashStore: params.commandDeployHashStore,
       requestOptions: {
         timeout: DISCORD_REST_TIMEOUT_MS,
         runtimeProfile: "persistent",
@@ -266,6 +258,17 @@ export function registerDiscordMonitorListeners(params: {
     params.client.listeners,
     new DiscordMessageListener(params.messageHandler, params.logger, params.trackInboundEvent),
   );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordGuildJoinIntroductionListener({
+      cfg: params.cfg,
+      accountId: params.accountId,
+      botUserId: params.botUserId,
+      groupPolicy: params.groupPolicy,
+      guildEntries: params.guildEntries,
+      logger: params.logger,
+    }),
+  );
 
   if (shouldRegisterDiscordReactionListeners(params)) {
     const reactionListenerOptions: ConstructorParameters<typeof DiscordReactionListener>[0] = {
@@ -295,7 +298,11 @@ export function registerDiscordMonitorListeners(params: {
   }
   registerDiscordListener(
     params.client.listeners,
-    new DiscordThreadUpdateListener(params.cfg, params.accountId, params.logger),
+    new DiscordThreadUpdateListener(params.cfg, params.logger),
+  );
+  registerDiscordListener(
+    params.client.listeners,
+    new DiscordThreadDeleteListener(params.cfg, params.accountId, params.logger),
   );
 
   if (params.discordConfig.intents?.presence) {

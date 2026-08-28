@@ -1,3 +1,4 @@
+import { parseStrictFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { InvalidArgumentError, type Command } from "commander";
 import { validateDiskSize } from "../../fleet/cell-profile.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
@@ -29,8 +30,8 @@ function parsePort(value: string): number {
 }
 
 function parseCpus(value: string): string {
-  const cpus = Number(value);
-  if (!Number.isFinite(cpus) || cpus <= 0) {
+  const cpus = parseStrictFiniteNumber(value);
+  if (cpus === undefined || cpus <= 0) {
     throw new InvalidArgumentError("--cpus must be a positive number.");
   }
   return value;

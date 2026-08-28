@@ -10,11 +10,10 @@ import {
   isAuthErrorMessage,
   isBillingErrorMessage,
   isOverloadedErrorMessage,
-  isRateLimitErrorMessage,
   isServerErrorMessage,
   isTimeoutErrorMessage,
-} from "./embedded-agent-helpers/failover-matches.js";
-import { isAnthropicBillingError, isApiKeyRateLimitError } from "./live-auth-keys.js";
+} from "./failover/classify.js";
+import { isApiKeyRateLimitError } from "./live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "./live-model-errors.js";
 
 type LiveProviderDriftReason =
@@ -47,8 +46,23 @@ function liveProviderErrorText(error: unknown): string {
   return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
 }
 
+function isAnthropicBillingError(message: string): boolean {
+  const lower = normalizeLowercaseStringOrEmpty(message);
+  if (
+    lower.includes("credit balance") ||
+    lower.includes("insufficient credit") ||
+    lower.includes("payment required") ||
+    (lower.includes("billing") && lower.includes("disabled"))
+  ) {
+    return true;
+  }
+  return /["']?(?:status|code)["']?\s*[:=]\s*402\b|\bhttp\s*402\b|\berror(?:\s+code)?\s*[:=]?\s*402\b|\b(?:got|returned|received)\s+(?:a\s+)?402\b|^\s*402\spayment/i.test(
+    lower,
+  );
+}
+
 /** Returns whether an error is expected live auth/account drift. */
-export function isLiveAuthDrift(error: unknown): boolean {
+function isLiveAuthDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   const message = normalizeLowercaseStringOrEmpty(raw);
   return (
@@ -59,15 +73,14 @@ export function isLiveAuthDrift(error: unknown): boolean {
 }
 
 /** Returns whether an error is expected live billing/quota drift. */
-export function isLiveBillingDrift(error: unknown): boolean {
+function isLiveBillingDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   return isBillingErrorMessage(raw) || isAnthropicBillingError(raw);
 }
 
 /** Returns whether an error is expected live rate-limit drift. */
-export function isLiveRateLimitDrift(error: unknown): boolean {
-  const raw = liveProviderErrorText(error);
-  return isRateLimitErrorMessage(raw) || isApiKeyRateLimitError(raw);
+function isLiveRateLimitDrift(error: unknown): boolean {
+  return isApiKeyRateLimitError(liveProviderErrorText(error));
 }
 
 /** Returns whether an error is expected live timeout drift. */
@@ -81,7 +94,7 @@ function isLiveModelNotFoundDrift(error: unknown): boolean {
 }
 
 /** Returns whether an error is expected upstream/provider availability drift. */
-export function isLiveProviderUnavailableDrift(error: unknown): boolean {
+function isLiveProviderUnavailableDrift(error: unknown): boolean {
   const raw = liveProviderErrorText(error);
   const htmlCandidate = raw.trim().replace(/^error:\s*/i, "");
   const msg = normalizeLowercaseStringOrEmpty(raw);

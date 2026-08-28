@@ -1,7 +1,6 @@
 // Gateway assistant-avatar projection binds the selected value to effective metadata.
 import {
   openLocalAgentAvatarFile,
-  readOpenedLocalAgentAvatarDataUrl,
   type OpenedLocalAgentAvatarFile,
 } from "../agents/identity-avatar-file.js";
 import type { AgentAvatarResolution } from "../agents/identity-avatar.js";
@@ -14,8 +13,9 @@ import {
   isWindowsAbsolutePath,
   looksLikeAvatarPath,
 } from "../shared/avatar-policy.js";
+import { createGatewayAvatarDataUrlCache } from "./assistant-avatar-cache.js";
 import { DEFAULT_ASSISTANT_IDENTITY } from "./assistant-identity.js";
-import { CONTROL_UI_AVATAR_PREFIX, normalizeControlUiBasePath } from "./control-ui-shared.js";
+import { buildControlUiResourcePath, matchControlUiResourceUrl } from "./control-ui-contract.js";
 
 type GatewayAssistantIdentity = {
   agentId: string;
@@ -33,14 +33,15 @@ type OpenGatewayAssistantAvatarProjection = {
   openedFile?: OpenedLocalAgentAvatarFile;
 };
 
+const gatewayAvatarDataUrlCache = createGatewayAvatarDataUrlCache();
+
 function resolveSameOriginAvatarUrl(cfg: OpenClawConfig, source: string): string | undefined {
-  const basePath = normalizeControlUiBasePath(cfg.gateway?.controlUi?.basePath);
-  const unbasedPrefix = `${CONTROL_UI_AVATAR_PREFIX}/`;
-  const basedPrefix = basePath ? `${basePath}${unbasedPrefix}` : unbasedPrefix;
-  if (basePath && source.startsWith(unbasedPrefix)) {
-    return `${basePath}${source}`;
+  const basePath = cfg.gateway?.controlUi?.basePath;
+  const unbased = matchControlUiResourceUrl("agentAvatar", source);
+  if (unbased) {
+    return `${buildControlUiResourcePath("agentAvatar", basePath, unbased.value)}${unbased.search}${unbased.hash}`;
   }
-  return source.startsWith(basedPrefix) ? source : undefined;
+  return matchControlUiResourceUrl("agentAvatar", source, basePath) ? source : undefined;
 }
 
 /**
@@ -104,7 +105,7 @@ export function resolveGatewayAssistantAvatar(params: {
     return { avatar: source, resolution: opened.resolution };
   }
 
-  const dataUrl = readOpenedLocalAgentAvatarDataUrl(opened.openedFile);
+  const dataUrl = gatewayAvatarDataUrlCache.read(opened.openedFile);
   if (!dataUrl) {
     return {
       avatar: identity.emoji ?? DEFAULT_ASSISTANT_IDENTITY.avatar,

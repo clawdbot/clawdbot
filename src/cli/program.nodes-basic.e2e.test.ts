@@ -1,8 +1,13 @@
 // Program nodes basic e2e tests cover node command registration through the full CLI program.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createIosNodeListResponse } from "./program.nodes-test-helpers.js";
-import { callGateway, runtime } from "./program.test-mocks.js";
+import { GatewayProtocolRequestTimeoutError } from "../../packages/gateway-client/src/protocol-request.js";
+import { GatewayClientRequestError } from "../../packages/gateway-client/src/request-error.js";
+import {
+  createIosNodeListResponse,
+  formatRuntimeLogCallArg,
+} from "./program.nodes-test-helpers.js";
+import { programGatewayCallMock, runtime } from "./program.test-mocks.js";
 
 let registerNodesCli: typeof import("./nodes-cli.js").registerNodesCli;
 
@@ -16,23 +21,6 @@ type GatewayCallRequest = {
   requiredStoredDeviceAuthScopes?: unknown;
   requireLocalBackendSharedAuth?: boolean;
 };
-
-function formatRuntimeLogCallArg(value: unknown): string {
-  if (typeof value === "string") {
-    return value;
-  }
-  if (typeof value === "number" || typeof value === "boolean" || typeof value === "bigint") {
-    return String(value);
-  }
-  if (value == null) {
-    return "";
-  }
-  try {
-    return JSON.stringify(value);
-  } catch {
-    return "[unserializable]";
-  }
-}
 
 describe("cli program (nodes basics)", () => {
   let program: Command;
@@ -54,7 +42,7 @@ describe("cli program (nodes basics)", () => {
   }
 
   function gatewayRequests(): GatewayCallRequest[] {
-    return callGateway.mock.calls.map(([request]) => request as GatewayCallRequest);
+    return programGatewayCallMock.mock.calls.map(([request]) => request as GatewayCallRequest);
   }
 
   function writeJsonArgAt(index: number): unknown {
@@ -75,7 +63,7 @@ describe("cli program (nodes basics)", () => {
   }
 
   function mockGatewayWithIosNodeListAnd(method: "node.describe" | "node.invoke", result: unknown) {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return createIosNodeListResponse();
@@ -95,7 +83,7 @@ describe("cli program (nodes basics)", () => {
 
   it("runs nodes list with the effective paired node view while preserving paired metadata", async () => {
     const now = Date.now();
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.pair.list") {
         return {
@@ -204,7 +192,7 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs unfiltered nodes list with pairing data when node.list is unavailable", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.pair.list") {
         return {
@@ -229,11 +217,17 @@ describe("cli program (nodes basics)", () => {
     const output = getRuntimeOutput();
     expect(output).toContain("Pending: 0 · Paired: 1");
     expect(output).toContain("Pairing Scoped");
+    // The degraded table must never look authoritative: the fallback is
+    // announced on stderr so --json stdout stays parseable.
+    expect(runtime.error).toHaveBeenCalledWith(
+      expect.stringContaining("live node view unavailable"),
+    );
+    expect(output).not.toContain("live node view unavailable");
   });
 
   it("sanitizes untrusted nodes list table fields while preserving JSON values", async () => {
     const now = Date.now();
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.pair.list") {
         return {
@@ -286,7 +280,7 @@ describe("cli program (nodes basics)", () => {
 
   it("runs nodes list --connected and filters to connected nodes", async () => {
     const now = Date.now();
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.pair.list") {
         return {
@@ -325,25 +319,56 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("Two");
   });
 
-  it("runs nodes status --last-connected and filters by age", async () => {
-    const now = Date.now();
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+  it("counts catalog-only paired nodes in the filtered list total", async () => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
+      if (opts.method === "node.pair.list") {
+        return {
+          pending: [],
+          paired: [{ nodeId: "paired-store", displayName: "Paired Store" }],
+        };
+      }
+      if (opts.method === "node.list") {
+        return {
+          nodes: [
+            { nodeId: "paired-store", connected: true },
+            {
+              nodeId: "catalog-only",
+              displayName: "Catalog Only",
+              paired: true,
+              connected: true,
+            },
+          ],
+        };
+      }
+      return { ok: true };
+    });
+
+    await runProgram(["nodes", "list", "--connected"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toMatch(/^Pending: 0 · Paired: 2$/m);
+    expect(output).toContain("Paired Store");
+    expect(output).toContain("Catalog Only");
+  });
+
+  it("runs nodes status --last-connected using the recorded node.list fact", async () => {
+    const now = Date.now();
+    const methods: string[] = [];
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const opts = (args[0] ?? {}) as { method?: string };
+      methods.push(opts.method ?? "");
       if (opts.method === "node.list") {
         return {
           ts: now,
           nodes: [
-            { nodeId: "n1", displayName: "One", connected: false },
-            { nodeId: "n2", displayName: "Two", connected: false },
-          ],
-        };
-      }
-      if (opts.method === "node.pair.list") {
-        return {
-          pending: [],
-          paired: [
-            { nodeId: "n1", lastConnectedAtMs: now - 1_000 },
-            { nodeId: "n2", lastConnectedAtMs: now - 2 * 24 * 60 * 60 * 1000 },
+            { nodeId: "n1", displayName: "One", connected: false, lastConnectedAtMs: now - 1_000 },
+            {
+              nodeId: "n2",
+              displayName: "Two",
+              connected: false,
+              lastConnectedAtMs: now - 2 * 24 * 60 * 60 * 1000,
+            },
           ],
         };
       }
@@ -351,10 +376,43 @@ describe("cli program (nodes basics)", () => {
     });
     await runProgram(["nodes", "status", "--last-connected", "24h"]);
 
-    expectGatewayRequest("node.pair.list", {});
+    // The gateway records lastConnectedAtMs on node.list rows; re-joining
+    // node.pair.list broke --last-connected for read-scoped callers.
+    expect(methods).not.toContain("node.pair.list");
     const output = getRuntimeOutput();
     expect(output).toContain("One");
     expect(output).not.toContain("Two");
+  });
+
+  it.each([
+    { command: "status", duration: "24h" },
+    { command: "status", duration: "1h30m" },
+    { command: "status", duration: "0" },
+    { command: "status", duration: " 24H " },
+    { command: "list", duration: "24h" },
+    { command: "list", duration: "1h30m" },
+    { command: "list", duration: "0" },
+    { command: "list", duration: " 24H " },
+  ])("preserves nodes $command --last-connected $duration", async ({ command, duration }) => {
+    const node = {
+      nodeId: "recent-node",
+      displayName: "Recent Node",
+      paired: true,
+      connected: true,
+      lastConnectedAtMs: Date.now() + 60_000,
+    };
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const { method } = (args[0] ?? {}) as { method?: string };
+      return method === "node.pair.list" ? { pending: [], paired: [node] } : { nodes: [node] };
+    });
+
+    await runProgram(["nodes", command, "--last-connected", duration, "--json"]);
+
+    const result = writeJsonArgAt(0) as {
+      nodes?: Array<{ nodeId: string }>;
+      paired?: Array<{ nodeId: string }>;
+    };
+    expect((result.nodes ?? result.paired)?.map(({ nodeId }) => nodeId)).toEqual(["recent-node"]);
   });
 
   it.each([
@@ -401,7 +459,8 @@ describe("cli program (nodes basics)", () => {
         "S10 Ultra",
         "Detail",
         "device: Android",
-        "hw: samsung",
+        "hw:",
+        "samsung",
         "SM-X926B",
         "Status",
         "unpaired",
@@ -454,7 +513,7 @@ describe("cli program (nodes basics)", () => {
       ],
     },
   ])("runs nodes status and renders $label", async ({ node, expectedOutput }) => {
-    callGateway.mockResolvedValue({
+    programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [node],
     });
@@ -471,8 +530,49 @@ describe("cli program (nodes basics)", () => {
     ).toBe(true);
   });
 
+  it.each([
+    {
+      platform: "win32",
+      pathEnv: "C:\\one;D:\\two;E:\\three;F:\\four",
+      expectedPath: "path: C:\\one;D:\\two;…;F:\\four",
+      rejectedPath: "path: C:\\one;D:…:\\four",
+    },
+    {
+      platform: "windows",
+      pathEnv: "C:\\one;D:\\two;E:\\three;F:\\four",
+      expectedPath: "path: C:\\one;D:\\two;…;F:\\four",
+      rejectedPath: "path: C:\\one;D:…:\\four",
+    },
+    {
+      platform: "linux",
+      pathEnv: "/one:/two:/three:/four",
+      expectedPath: "path: /one:/two:…:/four",
+      rejectedPath: "path: /one:/two:/three:/four",
+    },
+  ])("renders $platform node PATH entries with their platform delimiter", async (fixture) => {
+    programGatewayCallMock.mockResolvedValue({
+      ts: Date.now(),
+      nodes: [
+        {
+          nodeId: `${fixture.platform}-node`,
+          displayName: `${fixture.platform} node`,
+          platform: fixture.platform,
+          pathEnv: fixture.pathEnv,
+          paired: true,
+          connected: true,
+        },
+      ],
+    });
+
+    await runProgram(["nodes", "status"]);
+
+    const output = getRuntimeOutput();
+    expect(output).toContain(fixture.expectedPath);
+    expect(output).not.toContain(fixture.rejectedPath);
+  });
+
   it("keeps connection age adjacent to connection status before pending approval", async () => {
-    callGateway.mockResolvedValue({
+    programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [
         {
@@ -493,12 +593,13 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes describe and calls node.describe", async () => {
+    const unsafeEffectiveCommand = "camera.snap\u001b[2J\neffective-spoof";
     mockGatewayWithIosNodeListAnd("node.describe", {
       ts: Date.now(),
       nodeId: "ios-node",
       displayName: "iOS Node",
       caps: ["camera"],
-      commands: ["camera.snap"],
+      commands: [unsafeEffectiveCommand],
       approvalState: "pending-reapproval",
       pendingRequestId: "request-approval",
       pendingDeclaredCaps: ["camera", "canvas"],
@@ -520,7 +621,8 @@ describe("cli program (nodes basics)", () => {
 
     const out = getRuntimeOutput();
     expect(out).toContain("Commands");
-    expect(out).toContain("camera.snap");
+    expect(out).toContain("camera.snap\\neffective-spoof");
+    expect(out).not.toContain("\neffective-spoof");
     expect(out).toContain("Approval");
     expect(out).toContain("reapproval pending");
     expect(out).toContain("Pending request");
@@ -532,10 +634,16 @@ describe("cli program (nodes basics)", () => {
     expect(out).toContain("openclaw nodes approve request-approval");
     expect(out).not.toContain("\u001b");
     expect(out).not.toContain("[2K");
+    expect(out).not.toContain("[2J");
+
+    await runProgram(["nodes", "describe", "--node", "ios-node", "--json"]);
+
+    const json = writeJsonArgAt(-1) as { commands?: string[] };
+    expect(json.commands).toEqual([unsafeEffectiveCommand]);
   });
 
   it("keeps explicit gateway options in node reapproval guidance without leaking auth", async () => {
-    callGateway.mockResolvedValue({
+    programGatewayCallMock.mockResolvedValue({
       ts: Date.now(),
       nodes: [
         {
@@ -569,198 +677,8 @@ describe("cli program (nodes basics)", () => {
     expect(output).not.toContain("secret-token");
   });
 
-  it("falls back to read-only node status when pairing diagnostics are unavailable", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        scopes?: string[];
-        useStoredDeviceAuth?: boolean;
-      };
-      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("stored device auth unavailable"), {
-          name: "GatewayCredentialsRequiredError",
-        });
-      }
-      if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {
-        throw Object.assign(new Error("unauthorized: pairing scope unavailable"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-          details: { code: "AUTH_SCOPE_MISMATCH" },
-        });
-      }
-      if (opts.method === "node.list") {
-        return {
-          ts: Date.now(),
-          nodes: [
-            {
-              nodeId: "read-only-node",
-              displayName: "Read Only Node",
-              approvalState: "approved",
-              paired: true,
-              connected: false,
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    });
-
-    await runProgram(["nodes", "status"]);
-
-    const requests = gatewayRequests().filter((request) => request.method === "node.list");
-    expect(requests).toHaveLength(3);
-    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
-    expect(requests[0]?.requiredStoredDeviceAuthScopes).toEqual([
-      "operator.read",
-      "operator.pairing",
-    ]);
-    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.clientName).toBe("gateway-client");
-    expect(requests[1]?.mode).toBe("backend");
-    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
-    expect(requests[2]?.useStoredDeviceAuth).toBeUndefined();
-    expect(requests[2]?.scopes).toBeUndefined();
-    expect(getRuntimeOutput()).toContain("Read Only Node");
-  });
-
-  it("keeps remote explicit diagnostic credentials on the read-only path", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        requireLocalBackendSharedAuth?: boolean;
-        useStoredDeviceAuth?: boolean;
-      };
-      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("stored device auth disabled for explicit credentials"), {
-          name: "GatewayStoredDeviceAuthUnavailableError",
-        });
-      }
-      if (opts.method === "node.list" && opts.requireLocalBackendSharedAuth) {
-        throw Object.assign(new Error("local backend shared auth unavailable for remote target"), {
-          name: "GatewayLocalBackendSharedAuthUnavailableError",
-        });
-      }
-      return {
-        nodes: [
-          {
-            nodeId: "remote-read-only-node",
-            displayName: "Remote Read Only Node",
-            paired: true,
-            connected: false,
-          },
-        ],
-      };
-    });
-
-    await runProgram([
-      "nodes",
-      "status",
-      "--url",
-      "wss://gateway.example.test",
-      "--token",
-      "explicit-token",
-    ]);
-
-    const requests = gatewayRequests().filter((request) => request.method === "node.list");
-    expect(requests).toHaveLength(3);
-    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
-    expect(requests[0]?.requiredStoredDeviceAuthScopes).toEqual([
-      "operator.read",
-      "operator.pairing",
-    ]);
-    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.clientName).toBe("gateway-client");
-    expect(requests[1]?.mode).toBe("backend");
-    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
-    expect(requests[2]?.scopes).toBeUndefined();
-    expect(getRuntimeOutput()).toContain("Remote Read Only Node");
-  });
-
-  it("does not retry node diagnostics after a transport failure", async () => {
-    callGateway.mockRejectedValue(new Error("gateway timed out"));
-
-    await expect(runProgram(["nodes", "status"])).rejects.toThrow("exit");
-
-    const requests = gatewayRequests().filter((request) => request.method === "node.list");
-    expect(requests).toHaveLength(1);
-    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
-  });
-
-  it("falls back to configured auth after stored device auth is rejected", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as { method?: string; useStoredDeviceAuth?: boolean };
-      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("unauthorized: device token mismatch"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-          details: { code: "AUTH_DEVICE_TOKEN_MISMATCH" },
-        });
-      }
-      if (opts.method === "node.list") {
-        return {
-          nodes: [
-            {
-              nodeId: "configured-auth-node",
-              displayName: "Configured Auth Node",
-              paired: true,
-              connected: false,
-            },
-          ],
-        };
-      }
-      return { ok: true };
-    });
-
-    await runProgram(["nodes", "status"]);
-
-    const requests = gatewayRequests().filter((request) => request.method === "node.list");
-    expect(requests).toHaveLength(2);
-    expect(requests[0]?.useStoredDeviceAuth).toBe(true);
-    expect(requests[1]?.useStoredDeviceAuth).toBeUndefined();
-    expect(getRuntimeOutput()).toContain("Configured Auth Node");
-  });
-
-  it("falls back to configured auth when stored device auth lacks read scope", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
-      const opts = (args[0] ?? {}) as {
-        method?: string;
-        scopes?: string[];
-        useStoredDeviceAuth?: boolean;
-      };
-      if (opts.method === "node.list" && opts.useStoredDeviceAuth) {
-        throw Object.assign(new Error("missing scope: operator.read"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
-        });
-      }
-      if (opts.method === "node.list" && opts.scopes?.includes("operator.pairing")) {
-        return {
-          nodes: [
-            {
-              nodeId: "shared-auth-node",
-              displayName: "Shared Auth Node",
-              paired: true,
-              connected: false,
-            },
-          ],
-        };
-      }
-      return { nodes: [] };
-    });
-
-    await runProgram(["nodes", "status"]);
-
-    const requests = gatewayRequests().filter((request) => request.method === "node.list");
-    expect(requests).toHaveLength(2);
-    expect(requests[1]?.scopes).toEqual(["operator.read", "operator.pairing"]);
-    expect(requests[1]?.clientName).toBe("gateway-client");
-    expect(requests[1]?.mode).toBe("backend");
-    expect(requests[1]?.requireLocalBackendSharedAuth).toBe(true);
-    expect(getRuntimeOutput()).toContain("Shared Auth Node");
-  });
-
   it("describes pending-only nodes through the pairing diagnostics view", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as {
         method?: string;
         params?: { nodeId?: string };
@@ -804,15 +722,15 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("describes nodes through the paired-node fallback on older gateways", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as {
         method?: string;
         params?: { nodeId?: string };
       };
       if (opts.method === "node.list") {
-        throw Object.assign(new Error("unknown method: node.list"), {
-          name: "GatewayClientRequestError",
-          gatewayCode: "INVALID_REQUEST",
+        throw new GatewayClientRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown method: node.list",
         });
       }
       if (opts.method === "node.pair.list") {
@@ -858,7 +776,7 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("runs nodes approve with the pending request approval scopes", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.pair.list") {
         return {
@@ -899,7 +817,7 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("falls back to command-derived nodes approve scopes", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.pair.list") {
         return {
@@ -932,21 +850,21 @@ describe("cli program (nodes basics)", () => {
   });
 
   it("rejects unsupported node approval backend methods at runtime", async () => {
-    const { callNodePairApprovalGatewayCliRuntime } = await import("./nodes-cli/rpc.runtime.js");
+    const { callNodePairApprovalGatewayCli } = await import("./nodes-cli/rpc.js");
 
     await expect(
-      callNodePairApprovalGatewayCliRuntime(
+      callNodePairApprovalGatewayCli(
         "node.invoke" as never,
         { json: true },
         {},
         { scopes: ["operator.admin"] },
       ),
     ).rejects.toThrow("unsupported node pair approval gateway method: node.invoke");
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(programGatewayCallMock).not.toHaveBeenCalled();
   });
 
   it("runs nodes remove and calls node.pair.remove", async () => {
-    callGateway.mockImplementation(async (...args: unknown[]) => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
       const opts = (args[0] ?? {}) as { method?: string };
       if (opts.method === "node.list") {
         return {
@@ -967,6 +885,32 @@ describe("cli program (nodes basics)", () => {
 
     await runProgram(["nodes", "remove", "--node", "iOS Node"]);
     expectGatewayRequest("node.pair.remove", { nodeId: "ios-node" });
+  });
+
+  it("runs nodes rename and preserves the successful node.rename payload", async () => {
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const { method } = (args[0] ?? {}) as { method?: string };
+      return method === "node.list"
+        ? { nodes: [{ nodeId: "ios-node", displayName: "iOS Node", paired: true }] }
+        : { ok: true, nodeId: "ios-node", displayName: "Renamed Node" };
+    });
+
+    await runProgram([
+      "nodes",
+      "rename",
+      "--node",
+      "iOS Node",
+      "--name",
+      " Renamed Node ",
+      "--json",
+    ]);
+
+    expectGatewayRequest("node.rename", { nodeId: "ios-node", displayName: "Renamed Node" });
+    expect(writeJsonArgAt(0)).toEqual({
+      ok: true,
+      nodeId: "ios-node",
+      displayName: "Renamed Node",
+    });
   });
 
   it("runs nodes invoke and calls node.invoke", async () => {
@@ -999,5 +943,34 @@ describe("cli program (nodes basics)", () => {
     const invokeRequest = gatewayRequests().find((candidate) => candidate.method === "node.invoke");
     expect(invokeRequest?.clientName).toBe("cli");
     expect(invokeRequest?.mode).toBe("cli");
+  });
+
+  it("reports the inventory timeout instead of invoking a stale paired node", async () => {
+    const timeout = new GatewayProtocolRequestTimeoutError({
+      method: "node.list",
+      timeoutMs: 80,
+      requestSent: true,
+    });
+    programGatewayCallMock.mockImplementation(async (...args: unknown[]) => {
+      const { method } = (args[0] ?? {}) as { method?: string };
+      if (method === "node.list") {
+        throw timeout;
+      }
+      if (method === "node.pair.list") {
+        return { pending: [], paired: [{ nodeId: "stale-node", displayName: "Stale Node" }] };
+      }
+      throw new GatewayClientRequestError({
+        code: "UNAVAILABLE",
+        message: "node not connected",
+      });
+    });
+
+    await expect(
+      runProgram(["nodes", "invoke", "--node", "Stale Node", "--command", "canvas.hide"]),
+    ).rejects.toThrow("exit");
+
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(timeout.message));
+    expect(gatewayRequests().map(({ method }) => method)).toEqual(["node.list"]);
+    expect(runtime.writeJson).not.toHaveBeenCalled();
   });
 });

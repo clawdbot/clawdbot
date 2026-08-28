@@ -14,7 +14,7 @@ Giving an agent a channel puts it in a position to run commands on your machine 
 
 - Always set `channels.whatsapp.allowFrom` (never run open-to-the-world on your personal Mac).
 - Use a dedicated WhatsApp number for the assistant.
-- Heartbeats default to every 30 minutes. Disable until you trust the setup by setting `agents.defaults.heartbeat.every: "0m"`.
+- Heartbeats default to every 30 minutes. Set `agents.defaults.heartbeat.every: "0m"` to disable recurring polling while you evaluate the setup. Targeted event-driven follow-ups can still run, so keep tool policy and sandboxing conservative until you trust the setup.
 
 ## Prerequisites
 
@@ -64,7 +64,7 @@ When onboarding finishes, OpenClaw auto-opens the dashboard and prints a clean (
 
 OpenClaw reads operating instructions and "memory" from its workspace directory.
 
-By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and creates it (plus starter `AGENTS.md`, `SOUL.md`, `TOOLS.md`, `IDENTITY.md`, `USER.md`, `HEARTBEAT.md`) automatically on onboarding or first agent run. `BOOTSTRAP.md` is only created for a brand-new workspace and should not come back after you delete it. `MEMORY.md` is optional and never auto-created; when present, it loads for normal sessions. Subagent sessions only inject `AGENTS.md` and `TOOLS.md`.
+By default, OpenClaw uses `~/.openclaw/workspace` as the agent workspace, and creates it (plus starter `AGENTS.md`, `SOUL.md`, `IDENTITY.md`, `USER.md`) automatically on onboarding or first agent run. Put environment-specific tool notes in the `## Tools` section of `AGENTS.md`. `BOOTSTRAP.md` is only created for a brand-new workspace and should not come back after you delete it. `MEMORY.md` is optional and never auto-created; when present, it loads for normal sessions. Subagent sessions only inject `AGENTS.md`.
 
 <Tip>
 Treat this folder like OpenClaw's memory and make it a git repo (ideally private) so your `AGENTS.md` and memory files are backed up. If git is installed, brand-new workspaces are auto-initialized with `git init`.
@@ -120,22 +120,20 @@ Example:
   logging: { level: "info" },
   agents: {
     defaults: {
-      model: { primary: "anthropic/claude-opus-4-8" },
       workspace: "~/.openclaw/workspace",
       thinkingDefault: "high",
       timeoutSeconds: 1800,
       // Start with 0; enable later.
       heartbeat: { every: "0m" },
     },
-    list: [
-      {
-        id: "main",
+    entries: {
+      main: {
         default: true,
         groupChat: {
           mentionPatterns: ["@openclaw", "openclaw"],
         },
       },
-    ],
+    },
   },
   channels: {
     whatsapp: {
@@ -168,12 +166,12 @@ Example:
 ## Heartbeats (proactive mode)
 
 By default, OpenClaw runs a heartbeat every 30 minutes with the prompt:
-`Read HEARTBEAT.md if it exists (workspace context). Follow it strictly. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply HEARTBEAT_OK.`
-Set `agents.defaults.heartbeat.every: "0m"` to disable.
+`Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.`
+Set `agents.defaults.heartbeat.every: "0m"` to disable recurring cadence. Targeted event-driven wakes, such as background exec completion follow-ups, remain available and do not create a recurring schedule. Heartbeat checklists live in the monitor's cron scratch (see [Heartbeat](/gateway/heartbeat)); `openclaw doctor --fix` migrates a legacy workspace `HEARTBEAT.md` into it.
 
-- If `HEARTBEAT.md` exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
-- If the file is missing, the heartbeat still runs and the model decides what to do.
-- If the agent replies with `HEARTBEAT_OK` (optionally with short padding; see `agents.defaults.heartbeat.ackMaxChars`), OpenClaw suppresses outbound delivery for that heartbeat.
+- If the monitor scratch exists but is effectively empty (only blank lines, Markdown/HTML comments, Markdown headings like `# Heading`, fence markers, or empty checklist stubs), OpenClaw skips the heartbeat run to save API calls.
+- If no scratch exists, the heartbeat still runs and the model decides what to do.
+- If the agent replies with `NO_REPLY`, OpenClaw suppresses outbound delivery for that heartbeat. Legacy `HEARTBEAT_OK` replies remain supported with a fixed 300-character acknowledgment budget.
 - By default, heartbeat delivery to DM-style `user:<id>` targets is allowed. Set `agents.defaults.heartbeat.directPolicy: "block"` to suppress direct-target delivery while keeping heartbeat runs active.
 - Heartbeats run full agent turns - shorter intervals burn more tokens.
 
@@ -191,9 +189,15 @@ Set `agents.defaults.heartbeat.every: "0m"` to disable.
 
 Inbound attachments (images/audio/docs) can be surfaced to your command via templates:
 
-- `{{MediaPath}}` (local temp file path)
-- `{{MediaUrl}}` (pseudo-URL)
+- `{{AttachmentPath}}` (local temp file path)
+- `{{AttachmentUrl}}` (original URL or provider reference)
+- `{{AttachmentContentType}}` (MIME content type)
+- `{{AttachmentDir}}` (directory containing the local path)
+- `{{AttachmentIndex}}` (zero-based source fact index)
 - `{{Transcript}}` (if audio transcription is enabled)
+
+The older `{{MediaPath}}`, `{{MediaUrl}}`, `{{MediaType}}`, and `{{MediaDir}}`
+names remain available as deprecated compatibility aliases.
 
 Outbound attachments from the agent use structured media fields on the message tool or reply payload, such as `media`, `mediaUrl`, `mediaUrls`, `path`, or `filePath`. Example message-tool arguments:
 
@@ -205,6 +209,12 @@ Outbound attachments from the agent use structured media fields on the message t
 ```
 
 OpenClaw sends structured media alongside the text. Legacy final assistant replies may still be normalized for compatibility, but tool output, browser output, streaming blocks, and message actions do not parse text as attachment commands.
+
+If you must use a legacy final-reply `MEDIA:` line, keep it as standalone plain
+text. Markdown wrappers, code fences, and inline prose such as
+`**MEDIA:/path.png**`, `` `MEDIA:/path.png` ``, or
+`Here is the image: MEDIA:/path.png` stay text and do not attach media. See
+[Rich output protocol](/reference/rich-output-protocol#legacy-media-lines).
 
 Local-path behavior follows the same file-read trust model as the agent:
 
@@ -224,7 +234,8 @@ openclaw status --deep   # probe channels (WhatsApp Web + Telegram + Discord + S
 openclaw health --json   # gateway health snapshot over the WS connection
 ```
 
-Logs live under `/tmp/openclaw/` (default: `openclaw-YYYY-MM-DD.log`).
+Logs live under `/tmp/openclaw/`: `openclaw-YYYY-MM-DD.log` for the default
+profile and `openclaw-<profile>-YYYY-MM-DD.log` for named profiles.
 
 ## Next steps
 

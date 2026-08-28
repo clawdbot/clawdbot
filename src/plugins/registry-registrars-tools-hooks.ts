@@ -1,36 +1,45 @@
 import path from "node:path";
-import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
+import {
+  normalizeStringEntries,
+  uniqueValues,
+} from "@openclaw/normalization-core/string-normalization";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { registerInternalHook, unregisterInternalHook } from "../hooks/internal-hooks.js";
+import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
+import { withTimeout } from "../utils/with-timeout.js";
 import type { AgentToolResultMiddleware } from "./agent-tool-result-middleware-types.js";
 import {
+  agentToolResultMiddlewareRegistrationCoversTool,
+  appendAgentToolResultMiddlewareScope,
   normalizeAgentToolResultMiddlewareRuntimeIds,
   normalizeAgentToolResultMiddlewareRuntimes,
 } from "./agent-tool-result-middleware.js";
 import { CODEX_APP_SERVER_EXTENSION_RUNTIME_ID } from "./codex-app-server-extension-factory.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
-import { getPluginCompatRecord } from "./compat/registry.js";
+import {
+  resolveConversationAccessAllowed,
+  resolvePromptInjectionAllowed,
+} from "./hook-policy-decisions.js";
 import {
   resolveTypedHookTimeoutMs,
   type PluginRegistryState,
   type PluginTypedHookPolicy,
 } from "./registry-state.js";
-import type { PluginRecord } from "./registry-types.js";
+import type {
+  PluginAgentToolResultMiddlewareRegistration,
+  PluginRecord,
+} from "./registry-types.js";
 import {
   findUndeclaredPluginToolNames,
   normalizePluginToolContractNames,
   normalizePluginToolNames,
 } from "./tool-contracts.js";
+import { normalizePluginToolMatcher } from "./tool-hook-matcher.js";
 import {
-  DEPRECATED_PLUGIN_HOOKS,
   isConversationHookName,
-  isDeprecatedPluginHookName,
+  isPluginHookAgentTrigger,
   isPluginHookName,
   isPromptInjectionHookName,
-  stripPromptMutationFieldsFromLegacyHookResult,
 } from "./types.js";
 import type {
   OpenClawPluginApi,
@@ -40,68 +49,28 @@ import type {
   OpenClawPluginToolOptions,
   PluginHookHandlerMap,
   PluginHookName,
+  PluginHookRegistrationOptions,
   PluginHookRegistration as TypedPluginHookRegistration,
 } from "./types.js";
 
-const LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT = getPluginCompatRecord("legacy-deactivate-hook-alias");
-const LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT = getPluginCompatRecord("legacy-subagent-spawning-hook");
-
-const ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY = Symbol.for("openclaw.activePluginHookRegistrations");
-const activePluginHookRegistrations = resolveGlobalSingleton<
-  Map<string, Array<{ event: string; handler: Parameters<typeof registerInternalHook>[1] }>>
->(ACTIVE_PLUGIN_HOOK_REGISTRATIONS_KEY, () => new Map());
-
-function formatLegacyDeactivateHookAliasDiagnostic(): string {
-  const removeAfter =
-    LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.removeAfter ?? "a future breaking release";
-  return (
-    `typed hook "deactivate" is deprecated (${LEGACY_DEACTIVATE_HOOK_ALIAS_COMPAT.code}); ` +
-    `use "gateway_stop". This compatibility alias will be removed after ${removeAfter}.`
-  );
-}
-
-function formatDeprecatedTypedHookDiagnostic(hookName: PluginHookName): string | undefined {
-  if (!isDeprecatedPluginHookName(hookName) || hookName === "deactivate") {
+function normalizeEligibleTriggers(value: unknown) {
+  if (!Array.isArray(value)) {
     return undefined;
   }
-  const deprecation = DEPRECATED_PLUGIN_HOOKS[hookName];
-  const compat =
-    hookName === "subagent_spawning" ? LEGACY_SUBAGENT_SPAWNING_HOOK_COMPAT : undefined;
-  const removeAfter = compat?.removeAfter ?? deprecation.removeAfter ?? "a future breaking release";
-  const code = compat?.code ?? "deprecated-plugin-hook";
-  return (
-    `typed hook "${hookName}" is deprecated (${code}); ` +
-    `${deprecation.reason} Use ${deprecation.replacement}. ` +
-    `This compatibility hook will be removed after ${removeAfter}.`
-  );
+  const triggers = Array.from(value);
+  if (triggers.length === 0 || !triggers.every(isPluginHookAgentTrigger)) {
+    return undefined;
+  }
+  return uniqueValues(triggers);
 }
 
 function canRegisterInstalledTrustedHook(record: PluginRecord): boolean {
   return record.origin === "bundled" || (record.enabled && record.explicitlyEnabled === true);
 }
 
-const constrainLegacyPromptInjectionHook = (
-  handler: PluginHookHandlerMap["before_agent_start"],
-): PluginHookHandlerMap["before_agent_start"] => {
-  return (event, ctx) => {
-    const result = handler(event, ctx);
-    if (result && typeof result === "object" && "then" in result) {
-      return Promise.resolve(result).then((resolved) =>
-        stripPromptMutationFieldsFromLegacyHookResult(resolved),
-      );
-    }
-    return stripPromptMutationFieldsFromLegacyHookResult(result);
-  };
-};
-
 export function createToolHookRegistrars(state: PluginRegistryState) {
-  const {
-    registry,
-    registryParams,
-    pluginHookRollback,
-    pluginsWithChannelRegistrationConflict,
-    pushDiagnostic,
-  } = state;
+  const { registry, registryParams, pluginsWithChannelRegistrationConflict, pushDiagnostic } =
+    state;
 
   const registerCodexAppServerExtensionFactory = (
     record: PluginRecord,
@@ -170,6 +139,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     record: PluginRecord,
     handler: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[0],
     options: Parameters<OpenClawPluginApi["registerAgentToolResultMiddleware"]>[1],
+    policy?: PluginTypedHookPolicy,
   ) => {
     if (typeof (handler as unknown) !== "function") {
       pushDiagnostic({
@@ -181,6 +151,7 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       return;
     }
     const runtimes = normalizeAgentToolResultMiddlewareRuntimes(options);
+    const matcher = normalizePluginToolMatcher(options?.matcher);
     if (runtimes.length === 0) {
       pushDiagnostic({
         level: "error",
@@ -216,12 +187,23 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       (entry) => entry.pluginId === record.id && entry.rawHandler === handler,
     );
     if (existing) {
-      existing.runtimes = uniqueValues([...existing.runtimes, ...runtimes]);
+      appendAgentToolResultMiddlewareScope(existing, { runtimes, matcher });
       return;
     }
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: "after_tool_call", policy });
     const safeHandler: AgentToolResultMiddleware = async (event, ctx) => {
+      if (
+        !agentToolResultMiddlewareRegistrationCoversTool(registration, ctx.runtime, event.toolName)
+      ) {
+        return;
+      }
       try {
-        return await handler(event, ctx);
+        // fs-safe bounds only this await; it cannot cancel plugin work, so late side effects remain possible.
+        return await withTimeout(
+          Promise.resolve(handler(event, ctx)),
+          timeoutMs ?? 0,
+          `agent tool result middleware for ${record.id}`,
+        );
       } catch (error) {
         registryParams.logger.warn(
           `[plugins] agent tool result middleware failed for ${record.id}`,
@@ -229,15 +211,17 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
         throw error;
       }
     };
-    registry.agentToolResultMiddlewares.push({
+    const registration: PluginAgentToolResultMiddlewareRegistration = {
       pluginId: record.id,
       pluginName: record.name,
       rawHandler: handler,
       handler: safeHandler,
       runtimes,
+      scopes: [{ runtimes, ...(matcher ? { matcher } : {}) }],
       source: record.source,
       rootDir: record.rootDir,
-    });
+    };
+    registry.agentToolResultMiddlewares.push(registration);
   };
 
   const registerTool = (
@@ -295,12 +279,28 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
   const registerHook = (
     record: PluginRecord,
     events: string | string[],
-    handler: Parameters<typeof registerInternalHook>[1],
+    handler: InternalHookHandler,
     opts: OpenClawPluginHookOptions | undefined,
     config: OpenClawPluginApi["config"],
     pluginConfig: unknown,
   ) => {
     const normalizedEvents = normalizeStringEntries(Array.isArray(events) ? events : [events]);
+    // Typed lifecycle names (before_tool_call, message_received, ...) are dispatched only by
+    // the typed hook runner; registerHook uses the legacy internal-hook path so they never
+    // fire. Warn so authors move to `api.on(...)` instead of trusting a false "loaded".
+    for (const event of normalizedEvents) {
+      if (isPluginHookName(event)) {
+        pushDiagnostic({
+          level: "warn",
+          pluginId: record.id,
+          source: record.source,
+          message:
+            `hook event "${event}" is dispatched by the typed hook runner only; ` +
+            `api.registerHook registrations for it are not invoked. ` +
+            `Use api.on("${event}", ...) instead.`,
+        });
+      }
+    }
     const entry = opts?.entry ?? null;
     const hookName = entry?.hook.name ?? opts?.name?.trim();
     if (!hookName) {
@@ -353,21 +353,9 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       source: record.source,
     });
     const hookSystemEnabled = config?.hooks?.internal?.enabled !== false;
-    if (
-      !registryParams.activateGlobalSideEffects ||
-      !hookSystemEnabled ||
-      opts?.register === false
-    ) {
+    if (!hookSystemEnabled || opts?.register === false) {
       return;
     }
-    const previousRegistrations = activePluginHookRegistrations.get(hookName) ?? [];
-    for (const registration of previousRegistrations) {
-      unregisterInternalHook(registration.event, registration.handler);
-    }
-    const nextRegistrations: Array<{
-      event: string;
-      handler: Parameters<typeof registerInternalHook>[1];
-    }> = [];
     for (const event of normalizedEvents) {
       const wrappedHandler: typeof handler = async (evt) => {
         const context = evt.context;
@@ -385,20 +373,20 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
           }
         }
       };
-      registerInternalHook(event, wrappedHandler);
-      nextRegistrations.push({ event, handler: wrappedHandler });
+      registry.legacyInternalHooks.push({
+        pluginId: record.id,
+        name: hookName,
+        event,
+        handler: wrappedHandler,
+      });
     }
-    activePluginHookRegistrations.set(hookName, nextRegistrations);
-    const rollbackEntries = pluginHookRollback.get(record.id) ?? [];
-    rollbackEntries.push({ name: hookName, previousRegistrations: [...previousRegistrations] });
-    pluginHookRollback.set(record.id, rollbackEntries);
   };
 
   const registerTypedHook = <K extends PluginHookName>(
     record: PluginRecord,
     hookName: K,
     handler: PluginHookHandlerMap[K],
-    opts?: { priority?: number; timeoutMs?: number },
+    opts?: PluginHookRegistrationOptions<K>,
     policy?: PluginTypedHookPolicy,
   ) => {
     if (!isPluginHookName(hookName)) {
@@ -410,98 +398,70 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
       });
       return;
     }
-    const effectiveHookName = hookName === "deactivate" ? "gateway_stop" : hookName;
-    if (hookName === "deactivate") {
+    if (!resolvePromptInjectionAllowed(policy) && isPromptInjectionHookName(hookName)) {
       pushDiagnostic({
         level: "warn",
         pluginId: record.id,
         source: record.source,
-        message: formatLegacyDeactivateHookAliasDiagnostic(),
+        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
       });
-    } else {
-      const diagnostic = formatDeprecatedTypedHookDiagnostic(hookName);
-      if (diagnostic) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: diagnostic,
-        });
-      }
+      return;
     }
-    let effectiveHandler = handler;
-    if (policy?.allowPromptInjection === false && isPromptInjectionHookName(effectiveHookName)) {
-      if (effectiveHookName !== "before_agent_start") {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-        });
-        return;
-      }
-      pushDiagnostic({
-        level: "warn",
-        pluginId: record.id,
-        source: record.source,
-        message: `typed hook "${effectiveHookName}" prompt fields constrained by plugins.entries.${record.id}.hooks.allowPromptInjection=false`,
-      });
-      effectiveHandler = constrainLegacyPromptInjectionHook(
-        handler as PluginHookHandlerMap["before_agent_start"],
-      ) as PluginHookHandlerMap[K];
-    }
-    if (isConversationHookName(effectiveHookName)) {
-      const explicitConversationAccess = policy?.allowConversationAccess;
-      if (record.origin !== "bundled" && explicitConversationAccess !== true) {
+    if (
+      isConversationHookName(hookName) &&
+      !resolveConversationAccessAllowed(record.origin, policy)
+    ) {
+      if (record.origin !== "bundled") {
         pushDiagnostic({
           level: "warn",
           pluginId: record.id,
           source: record.source,
           message:
-            `typed hook "${effectiveHookName}" blocked because non-bundled plugins must set ` +
+            `typed hook "${hookName}" blocked because non-bundled plugins must set ` +
             `plugins.entries.${record.id}.hooks.allowConversationAccess=true`,
         });
         return;
       }
-      if (record.origin === "bundled" && explicitConversationAccess === false) {
-        pushDiagnostic({
-          level: "warn",
-          pluginId: record.id,
-          source: record.source,
-          message: `typed hook "${effectiveHookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
-        });
-        return;
-      }
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${hookName}" blocked by plugins.entries.${record.id}.hooks.allowConversationAccess=false`,
+      });
+      return;
     }
-    const timeoutMs = resolveTypedHookTimeoutMs({ hookName: effectiveHookName, opts, policy });
+    const timeoutMs = resolveTypedHookTimeoutMs({ hookName, opts, policy });
+    const eligibleTriggers =
+      hookName === "before_agent_reply"
+        ? normalizeEligibleTriggers(opts?.eligibleTriggers)
+        : undefined;
+    const matcher =
+      hookName === "before_tool_call" || hookName === "after_tool_call"
+        ? normalizePluginToolMatcher(opts?.matcher)
+        : undefined;
+    if (opts?.matcher && hookName !== "before_tool_call" && hookName !== "after_tool_call") {
+      pushDiagnostic({
+        level: "warn",
+        pluginId: record.id,
+        source: record.source,
+        message: `typed hook "${hookName}" ignores tool matcher`,
+      });
+    }
     record.hookCount += 1;
     registry.typedHooks.push({
       pluginId: record.id,
-      hookName: effectiveHookName,
-      handler: effectiveHandler,
+      ...(opts?.registrationId ? { registrationId: opts.registrationId } : {}),
+      hookName,
+      handler,
+      ...(matcher ? { matcher } : {}),
       priority: opts?.priority,
       ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+      ...(eligibleTriggers ? { eligibleTriggers } : {}),
+      ...(hookName === "before_prompt_build" && opts?.requiresToolAuthority === true
+        ? { requiresToolAuthority: true }
+        : {}),
       source: record.source,
     } as TypedPluginHookRegistration);
-  };
-
-  const rollbackHooks = (pluginId: string) => {
-    const hookRollbackEntries = pluginHookRollback.get(pluginId) ?? [];
-    for (const entry of hookRollbackEntries.toReversed()) {
-      const activeRegistrations = activePluginHookRegistrations.get(entry.name) ?? [];
-      for (const registration of activeRegistrations) {
-        unregisterInternalHook(registration.event, registration.handler);
-      }
-      if (entry.previousRegistrations.length === 0) {
-        activePluginHookRegistrations.delete(entry.name);
-        continue;
-      }
-      for (const registration of entry.previousRegistrations) {
-        registerInternalHook(registration.event, registration.handler);
-      }
-      activePluginHookRegistrations.set(entry.name, [...entry.previousRegistrations]);
-    }
-    pluginHookRollback.delete(pluginId);
   };
 
   return {
@@ -510,6 +470,5 @@ export function createToolHookRegistrars(state: PluginRegistryState) {
     registerTool,
     registerHook,
     registerTypedHook,
-    rollbackHooks,
   };
 }

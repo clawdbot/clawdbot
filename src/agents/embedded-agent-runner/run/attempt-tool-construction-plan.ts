@@ -5,15 +5,23 @@ import { TOOL_NAME_SEPARATOR } from "../../agent-bundle-mcp-names.js";
 import {
   type CoreToolFactoryFamily,
   type OpenClawCodingToolConstructionPlan,
+  listCoreToolFactoryDescriptors,
   resolveCoreToolFactoryFamily,
 } from "../../core-tool-factory-descriptors.js";
-import { isToolAllowedByPolicyName } from "../../tool-policy-match.js";
+import { mayMatchGlobWithPrefix } from "../../glob-pattern.js";
 import {
+  isRuntimeToolAllowed,
+  isRuntimeToolAllowedForConstruction,
+} from "../../tool-policy-match.js";
+import {
+  attachToolAllowlistIntersection,
   buildPluginToolGroups,
   expandPolicyWithPluginGroups,
+  expandShippedCoreToolPolicyNames,
   expandToolGroups,
   normalizeToolList,
-  normalizeToolName,
+  normalizeToolPolicyName,
+  readToolAllowlistIntersection,
 } from "../../tool-policy.js";
 
 const ALL_CODING_TOOL_CONSTRUCTION_PLAN: OpenClawCodingToolConstructionPlan = {
@@ -43,12 +51,8 @@ function isBundleMcpAllowlistName(normalized: string): boolean {
   return normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR);
 }
 
-function isPluginGroupAllowlistName(normalized: string): boolean {
-  return normalized === "group:plugins";
-}
-
 function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
-  return toolsAllow.some((entry) => normalizeToolName(entry) === "*");
+  return toolsAllow.some((entry) => normalizeToolPolicyName(entry) === "*");
 }
 
 /**
@@ -66,42 +70,55 @@ export function applyEmbeddedAttemptToolsAllow<T extends { name: string }>(
   if (!toolsAllow) {
     return tools;
   }
-  if (toolsAllow.length === 0) {
-    return [];
-  }
-  if (hasWildcardToolAllowlist(toolsAllow)) {
-    return tools;
-  }
-  const pluginGroups = options?.toolMeta
-    ? buildPluginToolGroups({ tools, toolMeta: options.toolMeta })
-    : undefined;
-  const policy = pluginGroups
-    ? expandPolicyWithPluginGroups({ allow: toolsAllow }, pluginGroups)
-    : { allow: toolsAllow };
-  return tools.filter((tool) => isToolAllowedByPolicyName(tool.name, policy));
+  const restrictions = readToolAllowlistIntersection(toolsAllow) ?? [toolsAllow];
+  return restrictions.reduce<T[]>((currentTools, restriction) => {
+    if (restriction.length === 0) {
+      return [];
+    }
+    if (hasWildcardToolAllowlist(restriction)) {
+      return currentTools;
+    }
+    const pluginGroups = options?.toolMeta
+      ? buildPluginToolGroups({ tools: currentTools, toolMeta: options.toolMeta })
+      : undefined;
+    const policy = pluginGroups
+      ? expandPolicyWithPluginGroups({ allow: restriction }, pluginGroups)
+      : { allow: expandShippedCoreToolPolicyNames(restriction) };
+    return currentTools.filter((tool) => isRuntimeToolAllowed(tool.name, policy?.allow));
+  }, tools);
 }
 
 /**
- * Adds the message tool to a narrowed allowlist when the caller must support
- * forced source-reply delivery. Wildcard and undefined allowlists already cover
- * message, while an empty allowlist becomes message-only.
+ * Adds host-required tools to a narrowed runtime allowlist. Wildcard and
+ * undefined allowlists already cover every required tool.
  */
 export function mergeForcedEmbeddedAttemptToolsAllow(
   toolsAllow: string[] | undefined,
-  params: { forceMessageTool?: boolean },
+  params: { forceMessageTool?: boolean; forceToolNames?: readonly string[] },
 ): string[] | undefined {
-  if (
-    !params.forceMessageTool ||
-    toolsAllow === undefined ||
-    hasWildcardToolAllowlist(toolsAllow)
-  ) {
+  if (toolsAllow === undefined || hasWildcardToolAllowlist(toolsAllow)) {
     return toolsAllow;
   }
-  if (toolsAllow.length === 0) {
-    return ["message"];
+  const required = [
+    ...(params.forceMessageTool ? ["message"] : []),
+    ...(params.forceToolNames ?? []),
+  ];
+  if (required.length === 0) {
+    return toolsAllow;
   }
-  const normalized = new Set(toolsAllow.map((entry) => normalizeToolName(entry)));
-  return normalized.has("message") ? toolsAllow : [...toolsAllow, "message"];
+  const normalized = new Set(toolsAllow.map((entry) => normalizeToolPolicyName(entry)));
+  const missing = required.filter((name) => !normalized.has(normalizeToolPolicyName(name)));
+  if (missing.length === 0) {
+    return toolsAllow;
+  }
+  const restrictions = readToolAllowlistIntersection(toolsAllow);
+  const merged = [...toolsAllow, ...missing];
+  return restrictions
+    ? attachToolAllowlistIntersection(
+        merged,
+        restrictions.map((restriction) => restriction.concat(missing)),
+      )
+    : merged;
 }
 
 function resolveCodingToolConstructionPlanForAllowlist(
@@ -110,20 +127,37 @@ function resolveCodingToolConstructionPlanForAllowlist(
   if (!toolsAllow) {
     return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
   }
-  if (toolsAllow.length === 0) {
+  const restrictions = readToolAllowlistIntersection(toolsAllow);
+  if (!restrictions && toolsAllow.length === 0) {
     return cloneCodingToolConstructionPlan(NO_CODING_TOOL_CONSTRUCTION_PLAN);
   }
-  if (hasWildcardToolAllowlist(toolsAllow)) {
+  if (!restrictions && hasWildcardToolAllowlist(toolsAllow)) {
     return cloneCodingToolConstructionPlan(ALL_CODING_TOOL_CONSTRUCTION_PLAN);
   }
-  const expanded = expandToolGroups(toolsAllow);
+  const constructionEntries = restrictions?.flat() ?? toolsAllow;
+  const expanded = expandToolGroups(expandShippedCoreToolPolicyNames(constructionEntries));
   const normalized = normalizeToolList(expanded);
-  const coreFamilies = new Set<CoreToolFactoryFamily>();
+  const constructionRestrictions = restrictions ?? [toolsAllow];
+  // Construct every family containing a tool that the final runtime policy can retain.
+  // Otherwise a valid glob can survive filtering after its factory was never run.
+  const coreFamilies = new Set<CoreToolFactoryFamily>(
+    listCoreToolFactoryDescriptors()
+      .filter(({ name }) =>
+        constructionRestrictions.every(
+          (restriction) =>
+            restriction.length > 0 &&
+            isRuntimeToolAllowedForConstruction(
+              name,
+              expandShippedCoreToolPolicyNames(restriction),
+            ),
+        ),
+      )
+      .map(({ family }) => family),
+  );
   let includePluginTools = false;
   for (const name of normalized) {
     const family = resolveCoreToolFactoryFamily(name);
     if (family) {
-      coreFamilies.add(family);
       continue;
     }
     // Plugin ids/tool names are not known to the local factory catalog.
@@ -203,7 +237,7 @@ function shouldCreateBundleRuntimeForAttempt(
     disableTools?: boolean;
     toolsAllow?: string[];
   },
-  matchesAllowlist: (normalizedToolName: string) => boolean,
+  matchesAllowlist: (normalizedToolNames: string[]) => boolean,
 ): boolean {
   if (!params.toolsEnabled || params.disableTools === true) {
     return false;
@@ -217,21 +251,33 @@ function shouldCreateBundleRuntimeForAttempt(
   if (hasWildcardToolAllowlist(params.toolsAllow)) {
     return true;
   }
-  return params.toolsAllow.some((toolName) => matchesAllowlist(normalizeToolName(toolName)));
+  return matchesAllowlist(params.toolsAllow.map(normalizeToolPolicyName));
 }
 
 /**
  * Decides whether the bundled MCP runtime is needed for this attempt. Bundle
- * runtime creation follows explicit bundle/plugin allowlist names rather than
- * generic local tool names.
+ * runtime creation follows explicit bundle/plugin names or globs that can reach
+ * a configured server namespace. Final tool policy remains authoritative.
  */
 export function shouldCreateBundleMcpRuntimeForAttempt(params: {
   toolsEnabled: boolean;
   disableTools?: boolean;
   toolsAllow?: string[];
+  resolveConfiguredMcpNamespaces?: () => string[];
 }): boolean {
-  return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
-    return isBundleMcpAllowlistName(normalized) || isPluginGroupAllowlistName(normalized);
+  return shouldCreateBundleRuntimeForAttempt(params, (names) => {
+    if (names.some((name) => isBundleMcpAllowlistName(name) || name === "group:plugins")) {
+      return true;
+    }
+    // Discovery can start all enabled static servers, even if a later glob
+    // constraint matches no tool. Only final full-name policy grants tools.
+    const globs = names.filter((name) => name.includes("*"));
+    return (
+      globs.length > 0 &&
+      (params.resolveConfiguredMcpNamespaces?.() ?? []).some((namespace) =>
+        globs.some((glob) => mayMatchGlobWithPrefix(glob, namespace.toLowerCase())),
+      )
+    );
   });
 }
 
@@ -245,7 +291,7 @@ export function shouldCreateBundleLspRuntimeForAttempt(params: {
   disableTools?: boolean;
   toolsAllow?: string[];
 }): boolean {
-  return shouldCreateBundleRuntimeForAttempt(params, (normalized) => {
-    return normalized.startsWith("lsp_");
-  });
+  return shouldCreateBundleRuntimeForAttempt(params, (names) =>
+    names.some((name) => name.startsWith("lsp_")),
+  );
 }

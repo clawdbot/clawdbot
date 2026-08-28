@@ -1,16 +1,25 @@
 // Subagent delivery-context tests protect route metadata inheritance for child
 // agent sessions and outbound delivery through channel plugins.
+import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "vitest";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import type { SessionEntry } from "../config/sessions/types.js";
 import {
   createChannelTestPluginBase,
   createDirectOutboundTestAdapter,
 } from "../test-utils/channel-plugins.js";
+import { projectSessionDeliveryFields } from "../utils/delivery-context.shared.js";
 import { setRegistry } from "./server.agent.gateway-server-agent.mocks.js";
 import { createRegistry } from "./server.e2e-registry-helpers.js";
 import { installConnectedSessionStoreGatewaySuite } from "./test-helpers.connected-session-store.js";
-import { installGatewayTestHooks, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
+import {
+  installGatewayTestHooks,
+  onceMessage,
+  prepareGatewayReplyRuntimeForTest,
+  testState,
+  writeSessionStore,
+} from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -44,19 +53,7 @@ const defaultRegistry = createRegistry([
   },
 ]);
 
-type StoredEntry = {
-  route?: {
-    channel?: string;
-    accountId?: string;
-    target?: { to?: string; rawTo?: string; chatType?: string };
-    thread?: { id?: string | number; kind?: string; source?: string };
-  };
-  deliveryContext?: { channel?: string; to?: string; threadId?: string; accountId?: string };
-  lastChannel?: string;
-  lastTo?: string;
-  lastThreadId?: string | number;
-  lastAccountId?: string;
-};
+type StoredEntry = SessionEntry & ReturnType<typeof projectSessionDeliveryFields>;
 
 type StoreEntries = Parameters<typeof writeSessionStore>[0]["entries"];
 
@@ -80,15 +77,24 @@ async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
   if (!entry) {
     throw new Error(`expected stored entry ${key}`);
   }
-  return entry;
+  return { ...entry, ...projectSessionDeliveryFields(entry.delivery) };
 }
 
 async function sendAgentRequest(params: Record<string, unknown>): Promise<void> {
-  const res = await rpcReq(gatewaySuite.ws, "agent", {
-    deliver: false,
-    ...params,
-  });
+  await prepareGatewayReplyRuntimeForTest();
+  const id = randomUUID();
+  // Acceptance precedes execution; the next fixture must not delete a session with an active run.
+  const finalResponse = onceMessage(
+    gatewaySuite.ws,
+    (message) =>
+      message.type === "res" && message.id === id && message.payload?.status !== "accepted",
+  );
+  gatewaySuite.ws.send(
+    JSON.stringify({ type: "req", id, method: "agent", params: { deliver: false, ...params } }),
+  );
+  const res = await finalResponse;
   expect(res.ok).toBe(true);
+  expect(res.payload?.status).toBe("ok");
 }
 
 function expectDeliveryContextFields(entry: StoredEntry, expected: Record<string, unknown>): void {
@@ -224,10 +230,10 @@ describe("subagent session deliveryContext from spawn request params", () => {
     });
   });
 
-  test("pre-patched subagent session (via sessions.patch) inherits deliveryContext from agent request", async () => {
-    // Simulates the real subagent spawn flow: spawnSubagentDirect calls sessions.patch
-    // first (to set spawnDepth, spawnedBy, etc.), then calls callSubagentGateway({method: "agent"}).
-    // The sessions.patch creates a partial entry without deliveryContext.
+  test("pre-created subagent session inherits deliveryContext from agent request", async () => {
+    // Simulates the real subagent spawn flow: the trusted session accessor persists lineage
+    // before callSubagentGateway({method: "agent"}) seeds the delivery context.
+    // The direct lineage write creates a partial entry without deliveryContext.
     // The agent handler must seed deliveryContext from the request params.
     await prepareSessionStore({
       "agent:main:subagent:pre-patched": {

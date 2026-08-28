@@ -1,6 +1,6 @@
 import type {
   AgentMessage,
-  EmbeddedRunAttemptParams,
+  EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { attachCodexMirrorIdentity, attachUpstreamUserText } from "./upstream-prompt-provenance.js";
@@ -47,9 +47,7 @@ function buildFromPrepared(
   return {
     role: "user",
     ...metadata,
-    ...(preparedUserMessage
-      ? (preparedUserMessage as unknown as Record<string, unknown>)
-      : { content: params.prompt }),
+    ...(preparedUserMessage ?? { content: params.transcriptPrompt ?? params.prompt }),
   } as AgentMessage;
 }
 

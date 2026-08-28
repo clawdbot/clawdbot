@@ -1,45 +1,28 @@
+import { oversizedJsonResponse } from "openclaw/plugin-sdk/test-fixtures";
 // Qwen tests cover media understanding provider plugin behavior.
 import {
   createRequestCaptureJsonFetch,
   installPinnedHostnameTestHooks,
-} from "openclaw/plugin-sdk/test-env";
+} from "openclaw/plugin-sdk/test-media-understanding";
 import { describe, expect, it } from "vitest";
-import { describeQwenVideo } from "./media-understanding-provider.js";
+import { buildQwenMediaUnderstandingProvider } from "./media-understanding-provider.js";
 
 installPinnedHostnameTestHooks();
 
-function oversizedJsonResponse(params: { chunkCount: number; chunkSize: number }): {
-  response: Response;
-  getReadCount: () => number;
-  wasCanceled: () => boolean;
-} {
-  const chunk = new Uint8Array(params.chunkSize);
-  let readCount = 0;
-  let canceled = false;
-  return {
-    response: new Response(
-      new ReadableStream<Uint8Array>({
-        pull(controller) {
-          if (readCount >= params.chunkCount) {
-            controller.close();
-            return;
-          }
-          readCount += 1;
-          controller.enqueue(chunk);
-        },
-        cancel() {
-          canceled = true;
-        },
-      }),
-      {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      },
-    ),
-    getReadCount: () => readCount,
-    wasCanceled: () => canceled,
-  };
+const qwenProvider = buildQwenMediaUnderstandingProvider();
+const describeQwenVideo = qwenProvider.describeVideo;
+if (!describeQwenVideo) {
+  throw new Error("expected Qwen video description capability");
 }
+
+describe("qwen media understanding provider", () => {
+  it("uses a currently served multimodal default", () => {
+    expect(qwenProvider.defaultModels).toEqual({
+      image: "qwen3.6-plus",
+      video: "qwen3.6-plus",
+    });
+  });
+});
 
 describe("describeQwenVideo", () => {
   it("builds the expected OpenAI-compatible video payload", async () => {

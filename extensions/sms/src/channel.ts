@@ -12,12 +12,20 @@ import {
   type ChannelPlugin,
 } from "openclaw/plugin-sdk/channel-core";
 import {
-  createMessageReceiptFromOutboundResults,
+  createAccountStatusSink,
   defineChannelMessageAdapter,
 } from "openclaw/plugin-sdk/channel-outbound";
 import { createConditionalWarningCollector } from "openclaw/plugin-sdk/channel-policy";
+import {
+  defineChannelSetupContract,
+  type ChannelSetupInput,
+} from "openclaw/plugin-sdk/channel-setup";
 import { createEmptyChannelDirectoryAdapter } from "openclaw/plugin-sdk/directory-runtime";
-import { normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  createComputedAccountStatusAdapter,
+  createDefaultChannelRuntimeState,
+} from "openclaw/plugin-sdk/status-helpers";
+import { isRecord, normalizeStringEntries } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
 import {
   inspectSmsAccount,
@@ -27,6 +35,7 @@ import {
   resolveSmsAccount,
 } from "./accounts.js";
 import { SmsChannelConfigSchema } from "./config-schema.js";
+import { listRecentSmsDeliveryRecords } from "./delivery-observations.js";
 import { collectSmsStartupWarnings, startSmsGatewayAccount } from "./gateway.js";
 import type { SmsChannelRuntime } from "./inbound.js";
 import {
@@ -35,11 +44,28 @@ import {
   normalizeSmsPhoneNumber,
 } from "./phone.js";
 import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
-import { sendSmsTextChunks, toSmsPlainText } from "./send.js";
+import {
+  createSmsMessageReceipt,
+  prepareSmsMediaAttempt,
+  sendPreparedSmsMediaAttempt,
+  sendSmsTextChunks,
+  toSmsPlainText,
+  type PreparedSmsMediaAttempt,
+} from "./send.js";
 import { formatSmsProbeLines, probeSmsAccount, type SmsProbe } from "./status.js";
 import type { ResolvedSmsAccount } from "./types.js";
 
 const CHANNEL_ID = "sms";
+
+type SmsSetupInput = ChannelSetupInput & {
+  accountSid?: string;
+  authToken?: string;
+  fromNumber?: string;
+  messagingServiceSid?: string;
+  webhookPath?: string;
+  publicWebhookUrl?: string;
+  dmPolicy?: string;
+};
 
 const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
   sectionKey: CHANNEL_ID,
@@ -58,6 +84,7 @@ const smsConfigAdapter = createHybridChannelConfigAdapter<ResolvedSmsAccount>({
     "dmPolicy",
     "allowFrom",
     "textChunkLimit",
+    "mediaMaxMb",
   ],
   resolveAllowFrom: (account) => account.allowFrom,
   formatAllowFrom: (allowFrom) =>
@@ -79,13 +106,20 @@ const collectSmsSecurityWarnings = createConditionalWarningCollector<ResolvedSms
   (account) =>
     account.dangerouslyDisableSignatureValidation &&
     "- SMS: Twilio signature validation is disabled. Only use this for local testing.",
-  (account) =>
-    account.dmPolicy === "open" &&
-    account.allowFrom.includes("*") &&
-    '- SMS: dmPolicy="open" allows any phone number to message the bot.',
 );
+const collectSmsOpenDmFindings = createConditionalWarningCollector.findings({
+  collectWarnings: createConditionalWarningCollector<ResolvedSmsAccount>(
+    (account) =>
+      account.dmPolicy === "open" &&
+      account.allowFrom.includes("*") &&
+      '- SMS: dmPolicy="open" allows any phone number to message the bot.',
+  ),
+  checkId: "channels.sms.dm.open",
+  severity: "critical",
+  title: "SMS security warning",
+});
 
-function smsSetupPatch(input: Record<string, unknown>): Record<string, unknown> {
+function smsSetupPatch(input: SmsSetupInput): Record<string, unknown> {
   const patch: Record<string, unknown> = {};
   for (const key of [
     "accountSid",
@@ -97,7 +131,7 @@ function smsSetupPatch(input: Record<string, unknown>): Record<string, unknown> 
     "publicWebhookUrl",
     "dmPolicy",
     "allowFrom",
-  ]) {
+  ] as const) {
     if (input[key] !== undefined) {
       patch[key] = input[key];
     }
@@ -108,7 +142,7 @@ function smsSetupPatch(input: Record<string, unknown>): Record<string, unknown> 
 function applySmsAccountConfig(params: {
   cfg: OpenClawConfig;
   accountId: string;
-  input: Record<string, unknown>;
+  input: SmsSetupInput;
 }): OpenClawConfig {
   const patch = smsSetupPatch(params.input);
   const channels = { ...params.cfg.channels };
@@ -126,33 +160,65 @@ function applySmsAccountConfig(params: {
   return { ...params.cfg, channels };
 }
 
+const smsSetupContract = defineChannelSetupContract({
+  fields: {
+    accountSid: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--account-sid <sid>", description: "Twilio account SID" },
+    },
+    authToken: {
+      kind: "string",
+      sensitive: true,
+      cli: { flags: "--auth-token <token>", description: "Twilio auth token" },
+    },
+    fromNumber: {
+      kind: "string",
+      cli: { flags: "--from-number <e164>", description: "Twilio sender phone number" },
+    },
+    messagingServiceSid: {
+      kind: "string",
+      cli: { flags: "--messaging-service-sid <sid>", description: "Twilio Messaging Service SID" },
+    },
+    defaultTo: {
+      kind: "string",
+      cli: { flags: "--default-to <e164>", description: "Default SMS recipient" },
+    },
+    webhookPath: {
+      kind: "string",
+      cli: { flags: "--webhook-path <path>", description: "SMS webhook path" },
+    },
+    publicWebhookUrl: {
+      kind: "string",
+      cli: { flags: "--public-webhook-url <url>", description: "Public SMS webhook URL" },
+    },
+    dmPolicy: {
+      kind: "choice",
+      choices: ["pairing", "allowlist", "open", "disabled"],
+      cli: { flags: "--dm-policy <policy>", description: "SMS DM policy" },
+    },
+    allowFrom: {
+      kind: "string-list",
+      cli: { flags: "--allow-from <numbers>", description: "Allowed SMS senders" },
+    },
+  },
+  adapter: { applyAccountConfig: applySmsAccountConfig },
+});
+
 function createSmsReceipt(params: {
   results: Array<{ sid: string; to: string; from?: string; status?: string }>;
-  kind: "text";
+  kind: "text" | "media";
 }) {
   const first = params.results[0];
   if (!first) {
     throw new Error("SMS send did not return a Twilio Message SID.");
   }
+  const receipt = createSmsMessageReceipt(params);
   return {
     channel: CHANNEL_ID,
     messageId: first.sid,
     chatId: first.to,
-    receipt: createMessageReceiptFromOutboundResults({
-      results: params.results.map((result) => ({
-        channel: CHANNEL_ID,
-        messageId: result.sid,
-        chatId: result.to,
-        toJid: result.to,
-        conversationId: result.to,
-        meta: {
-          ...(result.from ? { from: result.from } : {}),
-          ...(result.status ? { status: result.status } : {}),
-        },
-      })),
-      threadId: first.to,
-      kind: params.kind,
-    }),
+    receipt,
   };
 }
 
@@ -171,14 +237,111 @@ async function sendSmsText(ctx: {
   accountId?: string | null;
   to: string;
   text: string;
+  onPlatformSendDispatch?: Parameters<typeof sendSmsTextChunks>[0]["onPlatformSendDispatch"];
+  onDeliveryResult?: Parameters<typeof sendSmsTextChunks>[0]["onDeliveryResult"];
 }) {
   const account = resolveSmsAccount(ctx.cfg, ctx.accountId);
   const to = normalizeSmsPhoneNumber(ctx.to) || account.defaultTo;
   if (!looksLikeSmsPhoneNumber(to)) {
     throw new Error(`Invalid SMS target: ${ctx.to}`);
   }
-  const results = await sendSmsTextChunks({ account, to, text: ctx.text });
+  const results = await sendSmsTextChunks({
+    account,
+    to,
+    text: ctx.text,
+    onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+    onDeliveryResult: ctx.onDeliveryResult,
+  });
   return createSmsReceipt({ results, kind: "text" });
+}
+
+type SmsAttachmentContext = {
+  cfg: OpenClawConfig;
+  accountId?: string | null;
+  to: string;
+  text: string;
+  mediaUrl: string;
+  mediaAccess?: Parameters<typeof prepareSmsMediaAttempt>[0]["mediaAccess"];
+  mediaLocalRoots?: readonly string[];
+  mediaReadFile?: (filePath: string) => Promise<Buffer>;
+  onPlatformSendDispatch?: Parameters<
+    typeof sendPreparedSmsMediaAttempt
+  >[0]["onPlatformSendDispatch"];
+  onDeliveryResult?: Parameters<typeof sendPreparedSmsMediaAttempt>[0]["onDeliveryResult"];
+};
+
+type PreparedSmsAttachmentAttempt = {
+  account: ResolvedSmsAccount;
+  to: string;
+  attempt: PreparedSmsMediaAttempt;
+  platformDispatchStarted: boolean;
+};
+
+// Core passes the same context object through lifecycle preparation and send.
+// Object identity keeps hosted bearer URLs scoped to exactly one MMS attempt.
+const preparedSmsAttachmentAttempts = new WeakMap<object, Promise<PreparedSmsAttachmentAttempt>>();
+
+function resolveSmsAttachmentAttemptToken(
+  attemptToken: unknown,
+): Pick<PreparedSmsAttachmentAttempt, "attempt" | "platformDispatchStarted"> | undefined {
+  if (
+    !isRecord(attemptToken) ||
+    typeof attemptToken.platformDispatchStarted !== "boolean" ||
+    !isRecord(attemptToken.attempt) ||
+    typeof attemptToken.attempt.cleanupHostedMedia !== "function"
+  ) {
+    return undefined;
+  }
+  return attemptToken as Pick<PreparedSmsAttachmentAttempt, "attempt" | "platformDispatchStarted">;
+}
+
+async function prepareSmsAttachmentAttempt(
+  ctx: SmsAttachmentContext,
+): Promise<PreparedSmsAttachmentAttempt> {
+  const account = resolveSmsAccount(ctx.cfg, ctx.accountId);
+  const to = normalizeSmsPhoneNumber(ctx.to) || account.defaultTo;
+  if (!looksLikeSmsPhoneNumber(to)) {
+    throw new Error(`Invalid SMS target: ${ctx.to}`);
+  }
+  const attempt = await prepareSmsMediaAttempt({
+    account,
+    text: ctx.text,
+    mediaUrl: ctx.mediaUrl,
+    mediaAccess: ctx.mediaAccess,
+    mediaLocalRoots: ctx.mediaLocalRoots,
+    mediaReadFile: ctx.mediaReadFile,
+  });
+  return { account, to, attempt, platformDispatchStarted: false };
+}
+
+function getOrPrepareSmsAttachmentAttempt(
+  ctx: SmsAttachmentContext,
+): Promise<PreparedSmsAttachmentAttempt> {
+  const existing = preparedSmsAttachmentAttempts.get(ctx);
+  if (existing) {
+    return existing;
+  }
+  const created = prepareSmsAttachmentAttempt(ctx);
+  preparedSmsAttachmentAttempts.set(ctx, created);
+  return created;
+}
+
+async function sendPreparedSmsAttachment(ctx: SmsAttachmentContext) {
+  const preparation = preparedSmsAttachmentAttempts.get(ctx);
+  preparedSmsAttachmentAttempts.delete(ctx);
+  if (!preparation) {
+    throw new Error("SMS message lifecycle did not prepare the MMS attachment.");
+  }
+  const prepared = await preparation;
+  const results = await sendPreparedSmsMediaAttempt({
+    ...prepared,
+    onPlatformSendDispatch: async () => {
+      await ctx.onPlatformSendDispatch?.();
+      prepared.platformDispatchStarted = true;
+    },
+    onDeliveryResult: ctx.onDeliveryResult,
+  });
+  return createSmsReceipt({ results, kind: "media" });
 }
 
 const smsMessageAdapter = defineChannelMessageAdapter({
@@ -186,12 +349,33 @@ const smsMessageAdapter = defineChannelMessageAdapter({
   durableFinal: {
     capabilities: {
       text: true,
-      media: false,
+      media: true,
       messageSendingHooks: true,
     },
   },
   send: {
+    lifecycle: {
+      beforeSendAttempt: async (ctx) => {
+        if (ctx.kind !== "media") {
+          return undefined;
+        }
+        return await getOrPrepareSmsAttachmentAttempt(ctx);
+      },
+      afterSendFailure: async (ctx) => {
+        if (ctx.kind !== "media") {
+          return;
+        }
+        const attemptToken = resolveSmsAttachmentAttemptToken(ctx.attemptToken);
+        // Core can fail after staging but before the adapter starts. Discard only
+        // while the attempt still proves Twilio's HTTP boundary was never crossed.
+        if (!attemptToken || attemptToken.platformDispatchStarted) {
+          return;
+        }
+        await attemptToken.attempt.cleanupHostedMedia();
+      },
+    },
     text: async (ctx) => await sendSmsText(ctx),
+    media: async (ctx) => await sendPreparedSmsAttachment(ctx),
   },
 });
 
@@ -220,15 +404,15 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
       id: CHANNEL_ID,
       label: "SMS",
       selectionLabel: "SMS (Twilio)",
-      detailLabel: "Twilio SMS",
+      detailLabel: "Twilio SMS/MMS",
       docsPath: "/channels/sms",
       docsLabel: "sms",
-      blurb: "Twilio-backed SMS with inbound webhooks and outbound replies.",
+      blurb: "Twilio-backed SMS/MMS with inbound webhooks and outbound replies.",
       order: 88,
     },
     capabilities: {
       chatTypes: ["direct"],
-      media: false,
+      media: true,
       threads: false,
       reactions: false,
       edit: false,
@@ -239,9 +423,7 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     },
     reload: { configPrefixes: [`channels.${CHANNEL_ID}`] },
     configSchema: SmsChannelConfigSchema,
-    setup: {
-      applyAccountConfig: applySmsAccountConfig,
-    },
+    setupContract: smsSetupContract,
     config: {
       ...smsConfigAdapter,
       inspectAccount: inspectSmsAccount,
@@ -258,6 +440,8 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
     messaging: {
       targetPrefixes: ["twilio-sms"],
       normalizeTarget: (target) => normalizeSmsPhoneNumber(target),
+      inferTargetChatType: ({ to }) =>
+        looksLikeSmsPhoneNumber(normalizeSmsPhoneNumber(to)) ? "direct" : undefined,
       resolveOutboundSessionRoute: (params) => resolveSmsOutboundSessionRoute(params),
       targetResolver: {
         looksLikeId: looksLikeSmsPhoneNumber,
@@ -271,32 +455,49 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
           ctx.log?.warn?.("SMS channel runtime is not available; webhook route not started");
           return;
         }
+        const statusSink = createAccountStatusSink({
+          accountId: ctx.account.accountId,
+          setStatus: ctx.setStatus,
+        });
         return await startSmsGatewayAccount({
           cfg: ctx.cfg,
           account: ctx.account,
           channelRuntime: ctx.channelRuntime as unknown as SmsChannelRuntime,
           abortSignal: ctx.abortSignal,
           log: ctx.log,
+          statusSink,
         });
       },
     },
-    status: {
-      buildAccountSnapshot: ({ account }) => {
+    status: createComputedAccountStatusAdapter<ResolvedSmsAccount, SmsProbe>({
+      defaultRuntime: createDefaultChannelRuntimeState(DEFAULT_ACCOUNT_ID),
+      resolveAccountSnapshot: ({ account }) => {
         const configured = isSmsAccountConfigured(account);
         return {
           accountId: account.accountId,
           name: account.fromNumber || account.messagingServiceSid || "SMS",
           enabled: account.enabled,
           configured,
-          statusState: !account.enabled ? "disabled" : configured ? "configured" : "unconfigured",
+          extra: {
+            statusState: !account.enabled ? "disabled" : configured ? "configured" : "unconfigured",
+          },
         };
       },
-      probeAccount: async ({ account, timeoutMs }) => await probeSmsAccount({ account, timeoutMs }),
+      probeAccount: async ({ account, timeoutMs }) => {
+        const startedAt = Date.now();
+        const deliveryRecords = await listRecentSmsDeliveryRecords(account);
+        const elapsedMs = Math.max(0, Date.now() - startedAt);
+        return await probeSmsAccount({
+          account,
+          timeoutMs: Math.max(1, timeoutMs - elapsedMs),
+          options: { deliveryRecords },
+        });
+      },
       formatCapabilitiesProbe: ({ probe }) => formatSmsProbeLines(probe),
       buildCapabilitiesDiagnostics: async ({ account }) => ({
         lines: collectSmsStartupWarnings(account).map((text) => ({ text, tone: "warn" })),
       }),
-    },
+    }),
     secrets: {
       secretTargetRegistryEntries,
       collectRuntimeConfigAssignments,
@@ -305,7 +506,7 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
       messageToolHints: () => [
         "",
         "### SMS Formatting",
-        "SMS is plain text only. Keep replies brief, avoid markdown tables, and split long details into short messages.",
+        "SMS text is plain text. MMS attachments are supported; keep captions brief and avoid markdown tables.",
       ],
     },
     message: smsMessageAdapter,
@@ -327,7 +528,10 @@ export const smsPlugin: ChannelPlugin<ResolvedSmsAccount, SmsProbe> = createChat
   },
   security: {
     resolveDmPolicy: resolveSmsDmPolicy,
-    collectWarnings: ({ account }) => collectSmsSecurityWarnings(account),
+    collectWarnings: ({ account }) => [
+      ...collectSmsSecurityWarnings(account),
+      ...collectSmsOpenDmFindings(account),
+    ],
   },
   outbound: {
     deliveryMode: "gateway",

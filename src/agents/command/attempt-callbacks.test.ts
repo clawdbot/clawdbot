@@ -26,7 +26,7 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     expect(state.lifecycleEnded).toBe(false);
   });
 
-  it("tracks terminal lifecycle phases", () => {
+  it("tracks terminal lifecycle phases", async () => {
     const state = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
@@ -34,14 +34,14 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     };
     const callbacks = createAgentAttemptLifecycleCallbacks(state);
 
-    callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+    await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
     expect(state.lifecycleEnded).toBe(false);
 
-    callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "end" } });
+    await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "end" } });
     expect(state.lifecycleEnded).toBe(true);
   });
 
-  it("retains deferred lifecycle errors without marking the attempt terminal", () => {
+  it("retains deferred lifecycle errors without marking the attempt terminal", async () => {
     const state: AgentAttemptLifecycleState = {
       currentTurnUserMessagePersisted: false,
       lifecycleFinishing: false,
@@ -49,7 +49,7 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     };
     const callbacks = createAgentAttemptLifecycleCallbacks(state);
 
-    callbacks.onAgentEvent({
+    await callbacks.onAgentEvent({
       stream: "lifecycle",
       data: { phase: "finishing", error: "provider failed" },
     });
@@ -57,5 +57,24 @@ describe("createAgentAttemptLifecycleCallbacks", () => {
     expect(state.lifecycleError).toBe("provider failed");
     expect(state.lifecycleFinishing).toBe(true);
     expect(state.lifecycleEnded).toBe(false);
+  });
+
+  it("replaces a failed candidate lifecycle when a retry starts", async () => {
+    const state: AgentAttemptLifecycleState = {
+      currentTurnUserMessagePersisted: true,
+      lifecycleError: "provider failed",
+      lifecycleFinishing: true,
+      lifecycleEnded: false,
+    };
+    const callbacks = createAgentAttemptLifecycleCallbacks(state);
+
+    await callbacks.onAgentEvent({ stream: "lifecycle", data: { phase: "start" } });
+
+    expect(state).toEqual({
+      currentTurnUserMessagePersisted: true,
+      lifecycleError: undefined,
+      lifecycleFinishing: false,
+      lifecycleEnded: false,
+    });
   });
 });

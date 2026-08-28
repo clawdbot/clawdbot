@@ -1,4 +1,7 @@
 // Plugin install plan tests cover install planning for local, registry, and bundled plugins.
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { installedPluginRoot } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import { PLUGIN_INSTALL_ERROR_CODE } from "../plugins/install.js";
@@ -8,67 +11,78 @@ import {
 } from "../plugins/official-external-install-trust.js";
 import {
   resolveBundledInstallPlanForCatalogEntry,
-  resolveBundledInstallPlanBeforeNpm,
   resolveBundledInstallPlanForNpmFailure,
+  resolvePluginInstallSourcePlan,
 } from "./plugin-install-plan.js";
 
+function createSourceCheckoutPlugin(pluginId: string): {
+  packageRoot: string;
+  pluginRoot: string;
+} {
+  const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-plan-"));
+  fs.mkdirSync(path.join(packageRoot, ".git"));
+  fs.mkdirSync(path.join(packageRoot, "src"));
+  fs.mkdirSync(path.join(packageRoot, "extensions"));
+  const pluginRoot = path.join(packageRoot, "dist", "extensions", pluginId);
+  fs.mkdirSync(pluginRoot, { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, "package.json"), JSON.stringify({ name: "openclaw" }));
+  fs.writeFileSync(path.join(packageRoot, "pnpm-workspace.yaml"), "packages: []\n");
+  return { packageRoot, pluginRoot };
+}
+
 describe("plugin install plan helpers", () => {
-  it("prefers bundled plugin for bare plugin-id specs", () => {
-    const findBundledSource = vi.fn().mockReturnValue({
-      pluginId: "voice-call",
-      localPath: installedPluginRoot("/tmp", "voice-call"),
-      npmSpec: "@openclaw/voice-call",
+  it.each([
+    "clawhub:",
+    "clawhub:demo@",
+    "clawhub:@scope/pkg@",
+    "CLAWHUB:",
+    "ClAwHuB:demo@",
+    " clawhub:demo@ ",
+  ])("rejects the malformed explicit ClawHub selector %s before npm fallback", (raw) => {
+    expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toEqual({
+      ok: false,
+      error: `Unsupported ClawHub plugin spec: ${raw}`,
     });
-
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "voice-call",
-      findBundledSource,
-    });
-
-    expect(findBundledSource).toHaveBeenCalledWith({ kind: "pluginId", value: "voice-call" });
-    expect(result?.bundledSource.pluginId).toBe("voice-call");
-    expect(result?.warning).toContain('bare install spec "voice-call"');
   });
 
-  it("prefers bundled plugin for scoped npm package specs", () => {
-    const findBundledSource = vi
-      .fn()
-      .mockImplementation(({ kind, value }: { kind: "pluginId" | "npmSpec"; value: string }) => {
-        if (kind === "npmSpec" && value === "@openclaw/voice-call") {
-          return {
-            pluginId: "voice-call",
-            localPath: installedPluginRoot("/tmp", "voice-call"),
-            npmSpec: "@openclaw/voice-call",
-          };
-        }
-        return undefined;
+  it.each(["clawhub:demo", "CLAWHUB:demo", "clawhub:@scope/pkg@1.2.3"])(
+    "keeps the valid explicit ClawHub selector %s on the ClawHub install path",
+    (raw) => {
+      expect(resolvePluginInstallSourcePlan({ raw, mode: "install" })).toMatchObject({
+        ok: true,
+        request: { source: "clawhub", spec: raw },
       });
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "@openclaw/voice-call@2026.5.20",
-      findBundledSource,
-    });
+    },
+  );
 
-    expect(findBundledSource).toHaveBeenCalledWith({
-      kind: "npmSpec",
-      value: "@openclaw/voice-call@2026.5.20",
-    });
-    expect(findBundledSource).toHaveBeenCalledWith({
-      kind: "npmSpec",
-      value: "@openclaw/voice-call",
-    });
-    expect(result?.bundledSource.pluginId).toBe("voice-call");
-    expect(result?.warning).toContain('npm install spec "@openclaw/voice-call@2026.5.20"');
-    expect(result?.warning).toContain("npm:@openclaw/voice-call@2026.5.20");
-  });
+  it.skipIf(process.platform === "win32")(
+    "keeps an existing ClawHub-prefixed local path on the local install path",
+    () => {
+      const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-plan-clawhub-"));
+      const localPath = path.join(tempRoot, "clawhub:demo@");
+      fs.mkdirSync(localPath);
 
-  it("skips bundled pre-plan for npm specs that do not match bundled packages", () => {
-    const findBundledSource = vi.fn();
-    const result = resolveBundledInstallPlanBeforeNpm({
-      rawSpec: "@openclaw/not-bundled",
-      findBundledSource,
-    });
+      try {
+        expect(resolvePluginInstallSourcePlan({ raw: localPath, mode: "install" })).toMatchObject({
+          ok: true,
+          request: {
+            source: "local",
+            path: localPath,
+          },
+        });
+      } finally {
+        fs.rmSync(tempRoot, { recursive: true, force: true });
+      }
+    },
+  );
 
-    expect(result).toBeNull();
+  it("keeps explicit npm specs with local-looking suffixes on the registry path", () => {
+    expect(resolvePluginInstallSourcePlan({ raw: "npm:plugin.js", mode: "install" })).toMatchObject(
+      {
+        ok: true,
+        request: { source: "npm", spec: "plugin.js" },
+      },
+    );
   });
 
   it("resolves exact official external plugin ids before npm fallback", () => {
@@ -76,28 +90,28 @@ describe("plugin install plan helpers", () => {
 
     expect(result).toEqual({
       pluginId: "wecom-openclaw-plugin",
-      npmSpec: "@wecom/wecom-openclaw-plugin@2026.5.7",
+      npmSpec: "@wecom/wecom-openclaw-plugin@2026.7.2",
       expectedIntegrity:
-        "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
+        "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
     });
   });
 
   it("skips official external plan for explicit npm selectors", () => {
     expect(resolveCatalogOfficialExternalInstallPlan("wecom-openclaw-plugin@beta")).toBeNull();
     expect(
-      resolveCatalogOfficialExternalInstallPlan("@wecom/wecom-openclaw-plugin@2026.5.7"),
+      resolveCatalogOfficialExternalInstallPlan("@wecom/wecom-openclaw-plugin@2026.7.2"),
     ).toBeNull();
   });
 
   it("trusts exact official external npm packages without remapping the spec", () => {
     const result = resolveCatalogOfficialExternalNpmPackageTrust(
-      "@wecom/wecom-openclaw-plugin@2026.5.7",
+      "@wecom/wecom-openclaw-plugin@2026.7.2",
     );
 
     expect(result).toEqual({
       pluginId: "wecom-openclaw-plugin",
       expectedIntegrity:
-        "sha512-TCkP9as00WfEhgFWG8YL/rcmaWGIshAki2HQh83nTRccGfVBCoGjrEboTTqq3yDmK9koWTV11zi8u8A4dNtvug==",
+        "sha512-7kqdBIOF3SgDDoBoFtO6jxnxofbYSgbKdxZDNabD0y0jg2xKcVqlXZOOJ9+XQho/QOtIFrnRH2IRnPukFEYwJg==",
       trustedSourceLinkedOfficialInstall: true,
     });
   });
@@ -195,6 +209,48 @@ describe("plugin install plan helpers", () => {
       value: "@openclaw/voice-call",
     });
     expect(result?.warning).toContain("npm package unavailable");
+  });
+
+  it("does not fall back to source checkout bundles after npm package-not-found", () => {
+    const { packageRoot, pluginRoot } = createSourceCheckoutPlugin("codex");
+    try {
+      const findBundledSource = vi.fn().mockReturnValue({
+        pluginId: "codex",
+        localPath: pluginRoot,
+        npmSpec: "@openclaw/codex",
+      });
+
+      const result = resolveBundledInstallPlanForNpmFailure({
+        rawSpec: "@openclaw/codex",
+        code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND,
+        findBundledSource,
+      });
+
+      expect(result).toBeNull();
+    } finally {
+      fs.rmSync(packageRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("allows bare plugin ids to fall back to source checkout bundles", () => {
+    const { packageRoot, pluginRoot } = createSourceCheckoutPlugin("codex");
+    try {
+      const findBundledSource = vi.fn().mockReturnValue({
+        pluginId: "codex",
+        localPath: pluginRoot,
+        npmSpec: "@openclaw/codex",
+      });
+
+      const result = resolveBundledInstallPlanForNpmFailure({
+        rawSpec: "codex",
+        code: PLUGIN_INSTALL_ERROR_CODE.NPM_PACKAGE_NOT_FOUND,
+        findBundledSource,
+      });
+
+      expect(result?.bundledSource.pluginId).toBe("codex");
+    } finally {
+      fs.rmSync(packageRoot, { recursive: true, force: true });
+    }
   });
 
   it("skips fallback for non-not-found npm failures", () => {

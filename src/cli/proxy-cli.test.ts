@@ -3,17 +3,24 @@ import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { registerProxyCli } from "./proxy-cli.js";
 
-const { runDebugProxySessionsCommand, runDebugProxyStartCommand, runProxyValidateCommand } =
-  vi.hoisted(() => ({
-    runDebugProxySessionsCommand: vi.fn(),
-    runDebugProxyStartCommand: vi.fn(),
-    runProxyValidateCommand: vi.fn(),
-  }));
+const {
+  runDebugProxyCoverageCommand,
+  runDebugProxyQueryCommand,
+  runDebugProxySessionsCommand,
+  runDebugProxyStartCommand,
+  runProxyValidateCommand,
+} = vi.hoisted(() => ({
+  runDebugProxyCoverageCommand: vi.fn(),
+  runDebugProxyQueryCommand: vi.fn(),
+  runDebugProxySessionsCommand: vi.fn(),
+  runDebugProxyStartCommand: vi.fn(),
+  runProxyValidateCommand: vi.fn(),
+}));
 
 vi.mock("./proxy-cli.runtime.js", () => ({
-  runDebugProxyCoverageCommand: vi.fn(),
+  runDebugProxyCoverageCommand,
   runDebugProxyPurgeCommand: vi.fn(),
-  runDebugProxyQueryCommand: vi.fn(),
+  runDebugProxyQueryCommand,
   runDebugProxyRunCommand: vi.fn(),
   runDebugProxySessionsCommand,
   runDebugProxyStartCommand,
@@ -34,6 +41,8 @@ describe("proxy cli", () => {
   }
 
   beforeEach(() => {
+    runDebugProxyCoverageCommand.mockReset();
+    runDebugProxyQueryCommand.mockReset();
     runDebugProxySessionsCommand.mockReset();
     runDebugProxyStartCommand.mockReset();
     runProxyValidateCommand.mockReset();
@@ -67,6 +76,47 @@ describe("proxy cli", () => {
       "--apns-authority",
       "--timeout-ms",
     ]);
+
+    expect(
+      Object.fromEntries(
+        ["coverage", "sessions", "query"].map((name) => {
+          const command = proxy?.commands.find((candidate) => candidate.name() === name);
+          return [name, command?.options.map((option) => option.long)];
+        }),
+      ),
+    ).toEqual({
+      coverage: ["--json"],
+      sessions: ["--json", "--limit"],
+      query: ["--preset", "--json", "--session"],
+    });
+  });
+
+  it.each([
+    {
+      args: ["proxy", "coverage", "--json"],
+      invoke: runDebugProxyCoverageCommand,
+      expected: undefined,
+    },
+    {
+      args: ["proxy", "sessions", "--json", "--limit", "5"],
+      invoke: runDebugProxySessionsCommand,
+      expected: { json: true, limit: 5 },
+    },
+    {
+      args: ["proxy", "query", "--json", "--preset", "double-sends", "--session", "capture-1"],
+      invoke: runDebugProxyQueryCommand,
+      expected: { json: true, preset: "double-sends", sessionId: "capture-1" },
+    },
+  ])("passes --json through proxy reporting command $args", async ({ args, invoke, expected }) => {
+    const program = createProgram();
+
+    await program.parseAsync(["node", "openclaw", ...args]);
+
+    if (expected === undefined) {
+      expect(invoke).toHaveBeenCalledWith();
+    } else {
+      expect(invoke).toHaveBeenCalledWith(expected);
+    }
   });
 
   it.each([

@@ -3,32 +3,42 @@
  * Covers token/api-key/OAuth profile compatibility, SecretRefs, and provider
  * runtime formatting behavior.
  */
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
+import { resolveAuthProfileSecretOwnerId } from "../../secrets/runtime-auth-profile-owner.js";
+import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-state.js";
 import { withEnvAsync } from "../../test-utils/env.js";
-import type { AuthProfileStore } from "./types.js";
+import type { AuthProfileStore, RuntimeAuthProfileStore } from "./types.js";
 
 vi.hoisted(() => {
   vi.resetModules();
 });
 
+const resolveProviderOAuthCredentialWithPlugin = vi.hoisted(() =>
+  vi.fn(async () => ({ status: "unhandled" as const })),
+);
+
 vi.mock("../cli-credentials.js", () => ({
-  readClaudeCliCredentialsCached: () => null,
   readCodexCliCredentialsCached: () => null,
   readMiniMaxCliCredentialsCached: () => null,
   resetCliCredentialCachesForTest: () => undefined,
 }));
 
 vi.mock("../../plugins/provider-runtime.runtime.js", () => ({
+  buildProviderAuthDoctorHintWithPlugin: async () => undefined,
   formatProviderAuthProfileApiKeyWithPlugin: async (params: { context?: { access?: string } }) =>
     params.context?.access,
-  refreshProviderOAuthCredentialWithPlugin: async () => null,
+  resolveProviderOAuthCredentialWithPlugin,
 }));
 
 let resolveApiKeyForProfile: typeof import("./oauth.js").resolveApiKeyForProfile;
+let clearRuntimeAuthProfileStoreSnapshots: typeof import("./runtime-snapshots.js").clearRuntimeAuthProfileStoreSnapshots;
+let setRuntimeAuthProfileStoreSnapshot: typeof import("./runtime-snapshots.js").setRuntimeAuthProfileStoreSnapshot;
 
 async function loadOAuthModuleForTest() {
   ({ resolveApiKeyForProfile } = await import("./oauth.js"));
+  ({ clearRuntimeAuthProfileStoreSnapshots, setRuntimeAuthProfileStoreSnapshot } =
+    await import("./runtime-snapshots.js"));
 }
 
 function cfgFor(profileId: string, provider: string, mode: "api_key" | "token" | "oauth") {
@@ -112,7 +122,106 @@ async function expectResolvedApiKey(params: {
 
 beforeAll(loadOAuthModuleForTest);
 
+beforeEach(() => {
+  resolveProviderOAuthCredentialWithPlugin.mockClear();
+  clearRuntimeAuthProfileStoreSnapshots();
+  setActiveDegradedSecretOwners([]);
+  // SecretRef cases consume the materialized store published by runtime activation.
+  setRuntimeAuthProfileStoreSnapshot({
+    version: 1,
+    profiles: {
+      "openai:default": {
+        type: "api_key",
+        provider: "openai",
+        key: ["sk", "openai", "ref"].join("-"),
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+      "openai:inline-env": {
+        type: "api_key",
+        provider: "openai",
+        key: ["sk", "openai", "inline"].join("-"),
+        keyRef: { source: "env", provider: "default", id: "OPENAI_API_KEY" },
+      },
+      "github-copilot:default": {
+        type: "token",
+        provider: "github-copilot",
+        token: ["gh", "ref", "token"].join("-"),
+        tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+      },
+      "github-copilot:no-inline-token": {
+        type: "token",
+        provider: "github-copilot",
+        token: ["gh", "ref", "token"].join("-"),
+        tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+      },
+      "github-copilot:inline-env": {
+        type: "token",
+        provider: "github-copilot",
+        token: ["gh", "inline", "token"].join("-"),
+        tokenRef: { source: "env", provider: "default", id: "GITHUB_TOKEN" },
+      },
+    },
+  });
+});
+
+describe("resolveApiKeyForProfile retired external CLI profiles", () => {
+  it("rejects a persisted Claude CLI token even when legacy metadata marks it external", async () => {
+    const profileId = "anthropic:claude-cli";
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "anthropic",
+          access: "copied-native-access",
+          refresh: "copied-native-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      },
+      runtimePersistedProfileIds: [profileId],
+      runtimeExternalCliProfileIds: [profileId],
+    };
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "anthropic", "oauth"),
+        store,
+        profileId,
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
+  });
+
+  it("rejects a runtime-only Claude CLI token without refreshing it", async () => {
+    const profileId = "anthropic:claude-cli";
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "oauth",
+          provider: "claude-cli",
+          access: "current-native-access",
+          refresh: "current-native-refresh",
+          expires: Date.now() + 60 * 60_000,
+        },
+      },
+      runtimeExternalCliProfileIds: [profileId],
+    };
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "claude-cli", "oauth"),
+        store,
+        profileId,
+      }),
+    ).resolves.toBeNull();
+    expect(resolveProviderOAuthCredentialWithPlugin).not.toHaveBeenCalled();
+  });
+});
+
 afterAll(() => {
+  clearRuntimeAuthProfileStoreSnapshots();
+  setActiveDegradedSecretOwners([]);
   vi.doUnmock("../cli-credentials.js");
   vi.doUnmock("../../plugins/provider-runtime.runtime.js");
   vi.resetModules();
@@ -301,6 +410,51 @@ describe("resolveApiKeyForProfile token expiry handling", () => {
       store,
     });
     expect(result).toBeNull();
+  });
+
+  it("uses current expired metadata before applying degraded owner state", async () => {
+    const profileId = "github-copilot:expired-ref";
+    const tokenRef = { source: "env" as const, provider: "default", id: "EXPIRED_TOKEN" };
+    setRuntimeAuthProfileStoreSnapshot({
+      version: 1,
+      profiles: {
+        [profileId]: {
+          type: "token",
+          provider: "github-copilot",
+          token: "unused",
+          tokenRef,
+          expires: Date.now() + 60_000,
+        },
+      },
+    });
+    setActiveDegradedSecretOwners([
+      {
+        ownerKind: "account",
+        ownerId: resolveAuthProfileSecretOwnerId({ profileId }),
+        state: "unavailable",
+        paths: [`auth-profiles.${profileId}.token`],
+        refKeys: ["env:default:EXPIRED_TOKEN"],
+        reason: "secret reference was not found",
+      },
+    ]);
+
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "github-copilot", "token"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "token",
+              provider: "github-copilot",
+              tokenRef,
+              expires: Date.now() - 1,
+            },
+          },
+        },
+        profileId,
+      }),
+    ).resolves.toBeNull();
   });
 });
 
@@ -492,5 +646,28 @@ describe("resolveApiKeyForProfile secret refs", () => {
         process.env.GITHUB_TOKEN = previous;
       }
     }
+  });
+
+  it("does not materialize an explicit ref at request time", async () => {
+    const profileId = "openai:unpublished";
+    await expect(
+      resolveApiKeyForProfile({
+        cfg: cfgFor(profileId, "openai", "api_key"),
+        store: {
+          version: 1,
+          profiles: {
+            [profileId]: {
+              type: "api_key",
+              provider: "openai",
+              keyRef: { source: "env", provider: "default", id: "UNPUBLISHED_OPENAI_KEY" },
+            },
+          },
+        },
+        profileId,
+      }),
+    ).rejects.toMatchObject({
+      code: "SECRET_SURFACE_UNAVAILABLE",
+      ownerKind: "account",
+    });
   });
 });

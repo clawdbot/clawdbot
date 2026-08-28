@@ -84,7 +84,7 @@ export async function renderQrPngBase64(
 }
 
 /** Wraps PNG base64 in the exact data URL prefix expected by chat/media callers. */
-export function formatQrPngDataUrl(base64: string): string {
+function formatQrPngDataUrl(base64: string): string {
   return `${QR_PNG_DATA_URL_PREFIX}${base64}`;
 }
 

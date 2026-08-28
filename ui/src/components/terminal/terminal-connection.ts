@@ -1,5 +1,6 @@
 // Typed terminal RPCs plus per-session event routing; DOM-free for focused tests.
 
+import type { TerminalOpenParams } from "@openclaw/gateway-protocol";
 import { BoundedBuffer } from "../../../../src/shared/bounded-buffer.ts";
 
 type TerminalRequestOptions = { timeoutMs?: number | null; signal?: AbortSignal };
@@ -26,12 +27,6 @@ type TerminalOpenResult = {
   title?: string;
 };
 
-type TerminalCatalogReference = {
-  catalogId: string;
-  hostId: string;
-  threadId: string;
-};
-
 type TerminalAttachResult = TerminalOpenResult & {
   /** Recent output replayed into the emulator before live data resumes. */
   buffer: string;
@@ -46,6 +41,7 @@ export type TerminalSessionInfo = {
   cwd: string;
   confined: boolean;
   attached: boolean;
+  owner?: "conn" | `agent:${string}`;
   createdAtMs: number;
 };
 
@@ -56,14 +52,22 @@ type TerminalExitInfo = {
   error?: string;
 };
 
+type TerminalReplay = {
+  data: string;
+  newlyObservedFrom: number;
+  mode: "initial" | "recovery";
+  signal: AbortSignal;
+};
+
 type SessionSink = {
   onData: (data: string) => void;
-  /** Clears emulator state before replaying the authoritative ring snapshot. */
-  onReplay?: (data: string, newlyObservedFrom: number) => void;
+  /** Replays a ring snapshot into a fresh sink or replaces a gapped live sink. */
+  onReplay: (replay: TerminalReplay) => void | Promise<void>;
   onExit: (info: TerminalExitInfo) => void;
 };
 
 type StreamState = {
+  abort: AbortController;
   sink: SessionSink;
   seqMode: "unknown" | "offset" | "counter";
   expectedSeq: number | null;
@@ -76,6 +80,8 @@ type PendingEvent =
 
 const TERMINAL_LIVENESS_IDLE_MS = 20_000;
 const TERMINAL_LIVENESS_PROBE_TIMEOUT_MS = 5_000;
+const TERMINAL_LIVENESS_MAX_CONSECUTIVE_FAILURES = 2;
+const TERMINAL_LIVENESS_FAILURE_RETRY_MS = 5_000;
 // The Gateway owns the 30s open deadline. This longer browser watchdog only
 // recovers a half-open socket when the Gateway's response cannot arrive.
 const TERMINAL_OPEN_WATCHDOG_MS = 35_000;
@@ -84,6 +90,32 @@ export class TerminalOpenTimeoutError extends Error {
     super("terminal open timed out", { cause });
     this.name = "TerminalOpenTimeoutError";
   }
+}
+
+/** A session opened without the fields the protocol guarantees cannot drive a
+ *  tab label, uploads, or a replay. Fail here so the panel reports an unusable
+ *  gateway instead of surfacing a downstream TypeError as its only content. */
+export class TerminalOpenUnusableSessionError extends Error {
+  constructor(readonly field: string) {
+    super(`terminal session response is missing ${field}`);
+    this.name = "TerminalOpenUnusableSessionError";
+  }
+}
+
+function nonEmptyStringField(value: unknown): boolean {
+  return typeof value === "string" && value.length > 0;
+}
+
+/** Names the first protocol-required field the payload failed to deliver.
+ *  `terminal.open`/`terminal.attach` responses reach the panel through a bare
+ *  cast, so every consumer downstream would otherwise trust unchecked data. */
+function missingTerminalSessionField(result: Partial<TerminalAttachResult>): string | null {
+  for (const field of ["sessionId", "agentId", "shell", "cwd"] as const) {
+    if (!nonEmptyStringField(result[field])) {
+      return field;
+    }
+  }
+  return null;
 }
 
 function isTerminalOpenRequestTimeout(error: unknown): boolean {
@@ -108,9 +140,15 @@ export class TerminalConnection {
   // capped buffer becomes a detectable gap instead of silent output loss.
   private readonly pending = new Map<string, BoundedBuffer<PendingEvent>>();
   private unsubscribe: (() => void) | null = null;
+  // Fence for replies that outlive dispose(): without it a late open/attach
+  // would resurrect stream state and re-arm the liveness loop on a connection
+  // whose panel is gone or was replaced by a reconnect.
+  private disposed = false;
   private pendingOpenCount = 0;
   private livenessTimer: ReturnType<typeof setTimeout> | null = null;
   private livenessProbeInFlight = false;
+  private livenessProbeFailures = 0;
+  private lastLivenessFailureActivityVersion: number | null = null;
   private lastTerminalActivityAtMs = Date.now();
   private inboundActivityVersion = 0;
 
@@ -170,7 +208,7 @@ export class TerminalConnection {
             if (stream.recovering) {
               this.bufferEarly(payload.sessionId, { kind: "exit", info });
             } else {
-              this.deliverExit(payload.sessionId, stream.sink, info);
+              this.deliverExit(payload.sessionId, stream, info);
             }
           } else {
             this.bufferEarly(payload.sessionId, { kind: "exit", info });
@@ -181,10 +219,7 @@ export class TerminalConnection {
   }
 
   /** Opens a session and registers its output/exit sinks before returning. */
-  async open(
-    params: { agentId?: string; cols: number; rows: number; catalog?: TerminalCatalogReference },
-    sink: SessionSink,
-  ): Promise<TerminalOpenResult> {
+  async open(params: TerminalOpenParams, sink: SessionSink): Promise<TerminalOpenResult> {
     let result: TerminalOpenResult;
     try {
       result = await this.requestWhileHoldingStream(() =>
@@ -199,11 +234,30 @@ export class TerminalConnection {
       if (isTerminalOpenRequestTimeout(error)) {
         // The server should answer first. A later browser timeout means this
         // socket cannot carry the response, so disconnect to cancel ownership.
-        this.client.forceReconnect("terminal open watchdog timeout");
+        this.forceReconnect("terminal open watchdog timeout");
       }
       throw new TerminalOpenTimeoutError(error);
     }
-    this.adoptSession(result.sessionId, sink, { seqMode: "unknown", expectedSeq: 0 });
+    const missingField = missingTerminalSessionField(result);
+    if (missingField) {
+      // The gateway already created the session. Without the fields the protocol
+      // guarantees it cannot be driven, so release it here instead of leaving a
+      // live server session that nothing owns and nothing can close.
+      if (nonEmptyStringField(result.sessionId)) {
+        void this.close(result.sessionId);
+      }
+      throw new TerminalOpenUnusableSessionError(missingField);
+    }
+    if (this.disposed) {
+      return result;
+    }
+    const stream = this.setStream(result.sessionId, sink, {
+      seqMode: "unknown",
+      expectedSeq: 0,
+      recovering: false,
+    });
+    this.flushPending(result.sessionId, stream);
+    this.scheduleLivenessCheck();
     return result;
   }
 
@@ -212,19 +266,47 @@ export class TerminalConnection {
     const result = await this.requestWhileHoldingStream(() =>
       this.client.request<TerminalAttachResult>("terminal.attach", { sessionId }),
     );
+    // Same unchecked cast as open(): a replay without its buffer would throw on
+    // `result.buffer.length` further down instead of reporting a bad response.
+    const missingAttachField =
+      missingTerminalSessionField(result) ?? (typeof result.buffer === "string" ? null : "buffer");
+    if (missingAttachField) {
+      throw new TerminalOpenUnusableSessionError(missingAttachField);
+    }
     const offset =
       typeof result.seq === "number" && Number.isSafeInteger(result.seq) ? result.seq : null;
-    this.adoptSession(
-      sessionId,
-      sink,
-      offset !== null
-        ? { seqMode: "offset", expectedSeq: offset }
-        : { seqMode: "counter", expectedSeq: null },
-      result.buffer,
-      // Old protocol-4 replies have no snapshot high-water. Preserve raced
-      // counter frames because they may have been emitted after the snapshot.
-      offset ?? undefined,
-    );
+    if (this.disposed) {
+      return result;
+    }
+    const stream = this.setStream(sessionId, sink, {
+      seqMode: offset === null ? "counter" : "offset",
+      expectedSeq: offset,
+      recovering: true,
+    });
+    const signal = stream.abort.signal;
+    try {
+      await sink.onReplay({
+        data: result.buffer,
+        newlyObservedFrom: result.buffer.length,
+        mode: "initial",
+        signal,
+      });
+    } catch (error) {
+      if (!signal.aborted) {
+        this.removeStream(sessionId);
+        this.pending.delete(sessionId);
+        this.maybeUnsubscribe();
+      }
+      throw error;
+    }
+    if (signal.aborted) {
+      return result;
+    }
+    stream.recovering = false;
+    // Old protocol-4 replies have no snapshot high-water. Preserve raced
+    // counter frames because they may have been emitted after the snapshot.
+    this.flushPending(sessionId, stream, offset ?? undefined, true);
+    this.scheduleLivenessCheck();
     return result;
   }
 
@@ -245,28 +327,6 @@ export class TerminalConnection {
       this.maybeUnsubscribe();
       throw err;
     }
-  }
-
-  /** Registers a sink, then flushes events that raced after open/attach. */
-  private adoptSession(
-    sessionId: string,
-    sink: SessionSink,
-    baseline: Pick<StreamState, "seqMode" | "expectedSeq">,
-    replay?: string,
-    coveredThroughSeq?: number,
-  ): void {
-    const stream: StreamState = { sink, ...baseline, recovering: false };
-    this.streams.set(sessionId, stream);
-    this.lastTerminalActivityAtMs = Date.now();
-    if (replay !== undefined) {
-      if (sink.onReplay) {
-        sink.onReplay(replay, replay.length);
-      } else {
-        sink.onData(replay);
-      }
-    }
-    this.flushPending(sessionId, stream, coveredThroughSeq, replay !== undefined);
-    this.scheduleLivenessCheck();
   }
 
   /** Validates one frame's arithmetic continuity before exposing its bytes. */
@@ -319,10 +379,11 @@ export class TerminalConnection {
       return;
     }
     stream.recovering = true;
+    const signal = stream.abort.signal;
     void this.client
       .request<TerminalAttachResult>("terminal.attach", { sessionId })
-      .then((result) => {
-        if (this.streams.get(sessionId) !== stream) {
+      .then(async (result) => {
+        if (signal.aborted) {
           return;
         }
         const offset =
@@ -340,14 +401,6 @@ export class TerminalConnection {
         const previouslyObservedThrough = stream.expectedSeq;
         stream.seqMode = "offset";
         stream.expectedSeq = offset;
-        if (!stream.sink.onReplay) {
-          // Recovery must replace emulator state. Appending a full ring replay
-          // would duplicate bytes already rendered before the detected gap.
-          stream.recovering = false;
-          this.pending.delete(sessionId);
-          this.client.forceReconnect("terminal replay reset unavailable");
-          return;
-        }
         // The ring may include both bytes already delivered and the gap's
         // missing suffix. Preserve that boundary so response-producing
         // emulators do not answer historical control queries twice.
@@ -356,12 +409,20 @@ export class TerminalConnection {
           typeof previouslyObservedThrough === "number"
             ? Math.max(0, Math.min(result.buffer.length, previouslyObservedThrough - replayStart))
             : 0;
-        stream.sink.onReplay(result.buffer, newlyObservedFrom);
+        await stream.sink.onReplay({
+          data: result.buffer,
+          newlyObservedFrom,
+          mode: "recovery",
+          signal,
+        });
+        if (signal.aborted) {
+          return;
+        }
         stream.recovering = false;
         this.flushPending(sessionId, stream, offset, true);
       })
       .catch(() => {
-        if (this.streams.get(sessionId) !== stream) {
+        if (signal.aborted) {
           return;
         }
         const queued = this.pending.get(sessionId)?.drain();
@@ -375,7 +436,7 @@ export class TerminalConnection {
             if (event.kind === "data") {
               stream.sink.onData(event.data);
             } else {
-              this.deliverExit(sessionId, stream.sink, event.info);
+              this.deliverExit(sessionId, stream, event.info);
               break;
             }
           }
@@ -383,7 +444,7 @@ export class TerminalConnection {
         }
         stream.recovering = false;
         this.pending.delete(sessionId);
-        this.client.forceReconnect("terminal replay failed");
+        this.forceReconnect("terminal replay failed");
       });
   }
 
@@ -423,17 +484,34 @@ export class TerminalConnection {
       } else if (stream.recovering) {
         this.bufferEarly(sessionId, event);
       } else {
-        this.deliverExit(sessionId, stream.sink, event.info);
+        this.deliverExit(sessionId, stream, event.info);
       }
     }
   }
 
   /** Own cleanup: replayed exits can arrive before the caller records the session id. */
-  private deliverExit(sessionId: string, sink: SessionSink, info: TerminalExitInfo): void {
-    sink.onExit(info);
-    this.streams.delete(sessionId);
+  private deliverExit(sessionId: string, stream: StreamState, info: TerminalExitInfo): void {
+    this.removeStream(sessionId);
+    stream.sink.onExit(info);
     this.pending.delete(sessionId);
     this.maybeUnsubscribe();
+  }
+
+  private setStream(
+    sessionId: string,
+    sink: SessionSink,
+    state: Pick<StreamState, "seqMode" | "expectedSeq" | "recovering">,
+  ): StreamState {
+    this.removeStream(sessionId);
+    const stream = { abort: new AbortController(), sink, ...state };
+    this.streams.set(sessionId, stream);
+    this.lastTerminalActivityAtMs = Date.now();
+    return stream;
+  }
+
+  private removeStream(sessionId: string): void {
+    this.streams.get(sessionId)?.abort.abort();
+    this.streams.delete(sessionId);
   }
 
   private bufferEarly(sessionId: string, event: PendingEvent): void {
@@ -448,8 +526,19 @@ export class TerminalConnection {
 
   /** Terminal traffic delays the next probe without resetting a timer per chunk. */
   private noteTerminalActivity(): void {
+    this.resetLivenessProbeFailures();
     this.lastTerminalActivityAtMs = Date.now();
     this.inboundActivityVersion += 1;
+  }
+
+  private forceReconnect(reason: string): void {
+    this.resetLivenessProbeFailures();
+    this.client.forceReconnect(reason);
+  }
+
+  private resetLivenessProbeFailures(): void {
+    this.livenessProbeFailures = 0;
+    this.lastLivenessFailureActivityVersion = null;
   }
 
   private scheduleLivenessCheck(delayMs = TERMINAL_LIVENESS_IDLE_MS): void {
@@ -475,43 +564,80 @@ export class TerminalConnection {
       return;
     }
     const activityBefore = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
+    if (
+      this.lastLivenessFailureActivityVersion !== null &&
+      activityBefore !== this.lastLivenessFailureActivityVersion
+    ) {
+      // A frame arrived since the last failed probe, so the socket is proven alive. Treat it like
+      // any other activity: restart the full idle window instead of immediately re-probing on the
+      // short failure-retry backoff (matches the during-probe activity path).
+      this.resetLivenessProbeFailures();
+      this.lastTerminalActivityAtMs = Date.now();
+      this.scheduleLivenessCheck();
+      return;
+    }
+    let nextDelayMs = TERMINAL_LIVENESS_IDLE_MS;
     this.livenessProbeInFlight = true;
     void this.client
       .request("terminal.list", undefined, { timeoutMs: TERMINAL_LIVENESS_PROBE_TIMEOUT_MS })
       .then(() => {
         // The response itself proves the inbound half of the socket is alive.
+        this.resetLivenessProbeFailures();
         this.lastTerminalActivityAtMs = Date.now();
       })
       .catch(() => {
         if (this.streams.size === 0) {
+          this.resetLivenessProbeFailures();
           return;
         }
         const activityNow = this.client.inboundActivitySeq ?? this.inboundActivityVersion;
-        if (activityNow === activityBefore) {
-          this.lastTerminalActivityAtMs = Date.now();
-          this.client.forceReconnect("terminal liveness timeout");
-        } else {
+        if (activityNow !== activityBefore) {
           // Any valid inbound frame proves the socket is not half-open.
+          this.resetLivenessProbeFailures();
           this.lastTerminalActivityAtMs = Date.now();
+          return;
         }
+        this.livenessProbeFailures += 1;
+        this.lastLivenessFailureActivityVersion = activityNow;
+        if (this.livenessProbeFailures >= TERMINAL_LIVENESS_MAX_CONSECUTIVE_FAILURES) {
+          // One probe cannot distinguish a dead socket from a stalled Gateway event loop.
+          this.forceReconnect("terminal liveness timeout");
+          return;
+        }
+        // Keep the old activity time so the short retry performs another probe.
+        nextDelayMs = TERMINAL_LIVENESS_FAILURE_RETRY_MS;
       })
       .finally(() => {
         this.livenessProbeInFlight = false;
-        this.scheduleLivenessCheck();
+        this.scheduleLivenessCheck(nextDelayMs);
       });
   }
 
   async input(sessionId: string, data: string): Promise<void> {
-    await this.client.request("terminal.input", { sessionId, data }).catch(() => undefined);
+    await this.requestAction("terminal.input", sessionId, { sessionId, data });
   }
 
   async resize(sessionId: string, cols: number, rows: number): Promise<void> {
-    await this.client.request("terminal.resize", { sessionId, cols, rows }).catch(() => undefined);
+    await this.requestAction("terminal.resize", sessionId, { sessionId, cols, rows });
+  }
+
+  private async requestAction(method: string, sessionId: string, params: unknown): Promise<void> {
+    const stream = this.streams.get(sessionId);
+    const result = await this.client.request<{ ok: boolean }>(method, params).catch(() => null);
+    if (result?.ok !== false || !stream || this.streams.get(sessionId) !== stream) {
+      return;
+    }
+    this.deliverExit(sessionId, stream, {
+      exitCode: null,
+      signal: null,
+      reason: "disconnected",
+      error: "Terminal session is no longer available. Open a new terminal session.",
+    });
   }
 
   /** Closes a session server-side and drops its local stream state. */
   async close(sessionId: string): Promise<void> {
-    this.streams.delete(sessionId);
+    this.removeStream(sessionId);
     this.pending.delete(sessionId);
     await this.client.request("terminal.close", { sessionId }).catch(() => undefined);
     // terminal.exit precedes the close response and can otherwise be buffered.
@@ -524,6 +650,10 @@ export class TerminalConnection {
   }
 
   dispose(): void {
+    this.disposed = true;
+    for (const stream of this.streams.values()) {
+      stream.abort.abort();
+    }
     this.streams.clear();
     this.pending.clear();
     this.stopLiveness();
@@ -539,6 +669,7 @@ export class TerminalConnection {
   }
 
   private stopLiveness(): void {
+    this.resetLivenessProbeFailures();
     if (this.livenessTimer) {
       clearTimeout(this.livenessTimer);
       this.livenessTimer = null;

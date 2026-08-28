@@ -117,7 +117,7 @@ harness in the same sense as the others above.
 
 Custom acpx agent aliases can be configured in acpx itself, but OpenClaw
 policy still checks `acp.allowedAgents` and any
-`agents.list[].runtime.acp.agent` mapping before dispatch.
+`agents.entries.*.runtime.acp.agent` mapping before dispatch.
 
 ## Operator runbook
 
@@ -158,7 +158,7 @@ Quick `/acp` flow from chat:
     - `cancel` aborts the active turn when the backend supports cancellation; it does not delete the binding or session metadata.
     - `close` ends the ACP session from OpenClaw's point of view and removes the binding. A harness may still keep its own upstream history if it supports resume.
     - The acpx plugin cleans up OpenClaw-owned wrapper and adapter process trees after `close`, and reaps stale OpenClaw-owned ACPX orphans during Gateway startup.
-    - Idle runtime workers are eligible for cleanup after `acp.runtime.ttlMinutes`; stored session metadata remains available for `/acp sessions`.
+    - Idle runtime workers are eligible for cleanup after the built-in idle period; stored session metadata remains available for `/acp sessions`.
 
   </Accordion>
   <Accordion title="Native Codex routing rules">
@@ -211,7 +211,7 @@ Quick `/acp` flow from chat:
     calls. It targets ACP harness ids such as `codex`, `claude`, `droid`,
     `gemini`, or `opencode`. Do not pass a normal OpenClaw config agent id
     from `agents_list` unless that entry is explicitly configured with
-    `agents.list[].runtime.type="acp"`; otherwise use the default sub-agent
+    `agents.entries.*.runtime.type="acp"`; otherwise use the default sub-agent
     runtime. When an OpenClaw agent is configured with
     `runtime.type="acp"`, OpenClaw uses `runtime.acp.agent` as the underlying
     harness id.
@@ -305,8 +305,7 @@ Examples:
     - `acp.enabled=true`
     - `acp.dispatch.enabled` is on by default (set `false` to pause automatic ACP thread dispatch; explicit `sessions_spawn({ runtime: "acp" })` calls still work).
     - Channel-adapter thread session spawns enabled (default: `true`):
-      - Discord: `channels.discord.threadBindings.spawnSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
+      - Discord/Telegram: `session.threadBindings.spawnSessions=true`
 
     Thread binding support is adapter-specific. If the active channel adapter
     does not support thread bindings, OpenClaw returns a clear
@@ -359,28 +358,46 @@ For non-ephemeral workflows, configure persistent ACP bindings in top-level
 
 ### Runtime defaults per agent
 
-Use `agents.list[].runtime` to define ACP defaults once per agent:
+Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 
-- `agents.list[].runtime.type="acp"`
-- `agents.list[].runtime.acp.agent` (harness id, e.g. `codex` or `claude`)
-- `agents.list[].runtime.acp.backend`
-- `agents.list[].runtime.acp.mode`
-- `agents.list[].runtime.acp.cwd`
+- `agents.entries.*.runtime.type="acp"`
+- `agents.entries.*.runtime.acp.agent` (harness id, e.g. `codex` or `claude`)
+- `agents.entries.*.runtime.acp.backend`
+- `agents.entries.*.runtime.acp.mode`
+- `agents.entries.*.runtime.acp.cwd`
 
 **Override precedence for ACP bound sessions:**
 
 1. `bindings[].acp.*`
-2. `agents.list[].runtime.acp.*`
+2. `agents.entries.*.runtime.acp.*`
 3. Global ACP defaults (e.g. `acp.backend`)
+
+Configured bindings also forward the owning agent's explicit model and thinking
+policy. Thinking uses the agent's `thinkingDefault`, then per-model
+`agents.defaults.models["provider/model"].params.thinking`, then
+`agents.defaults.thinkingDefault`. Without configured policy, the external
+harness keeps its own defaults.
+
+Changing a configured model or thinking value updates the existing session
+before its next turn without replacing the conversation. Each option is saved
+only after the harness accepts it; a rejected option returns an error and keeps
+that option's previous selection. Model and thinking changes are independent,
+not an atomic batch. Removing a default
+uses any remaining configured policy; if none remains, OpenClaw retains the
+session's last selection. Omission is not a backend reset. To change thinking
+explicitly, use `/acp set thinking <level>` with a level supported by the harness.
+For Codex ACP, `off` only omits a fresh session's startup override. Switching an
+existing session to `off` is unsupported and returns an error without clearing
+its current reasoning effort or conversation.
 
 ### Example
 
 ```json5
 {
   agents: {
-    list: [
-      {
-        id: "codex",
+    ownership: "explicit",
+    entries: {
+      codex: {
         runtime: {
           type: "acp",
           acp: {
@@ -391,14 +408,13 @@ Use `agents.list[].runtime` to define ACP defaults once per agent:
           },
         },
       },
-      {
-        id: "claude",
+      claude: {
         runtime: {
           type: "acp",
           acp: { agent: "claude", backend: "acpx", mode: "persistent" },
         },
       },
-    ],
+    },
   },
   bindings: [
     {
@@ -548,14 +564,13 @@ Two ways to start an ACP session:
 </ParamField>
 <ParamField path="streamTo" type='"parent"'>
   `"parent"` streams initial ACP run progress summaries back to the requester
-  session as system events. Accepted responses include `streamLogPath`
-  pointing to a session-scoped JSONL log (`<sessionId>.acp-stream.jsonl`) you
-  can tail for full relay history. Parent progress streams show assistant
-  commentary and ACP status progress by default unless
-  `streaming.progress.commentary=false`. Discord also defaults parent
-  previews to progress mode when no stream mode is configured. Status
-  progress still honors `acp.stream.tagVisibility`, so tags such as `plan`
-  remain hidden unless explicitly enabled.
+  session as system events. OpenClaw records the full relay history in the
+  child agent's SQLite state and removes it with the child session. Parent
+  progress streams show assistant commentary and ACP status progress by default unless
+  `streaming.progress.commentary=false`. Discord parent progress requires an
+  explicit `streaming.mode: "progress"`; unset Discord streaming stays quiet.
+  Status progress still honors `acp.stream.tagVisibility`, so tags such as
+  `plan` remain hidden unless explicitly enabled.
 </ParamField>
 
 ACP `sessions_spawn` runs use `agents.defaults.subagents.runTimeoutSeconds`
@@ -569,7 +584,7 @@ config-the-default error).
   before `session/new`; slash forms such as `openai/gpt-5.4/high` also set
   Codex ACP reasoning effort. When omitted, `sessions_spawn({ runtime: "acp" })`
   uses existing subagent model defaults (`agents.defaults.subagents.model` or
-  `agents.list[].subagents.model`) when configured; otherwise it lets the ACP
+  `agents.entries.*.subagents.model`) when configured; otherwise it lets the ACP
   harness use its own default model. Other harnesses must advertise ACP
   `models` and support `session/set_model`; otherwise OpenClaw/acpx fails
   clearly instead of silently falling back to the target agent default.
@@ -578,7 +593,7 @@ config-the-default error).
   Explicit thinking/reasoning effort. For Codex ACP, `minimal` maps to low
   effort, `low`/`medium`/`high`/`xhigh` map directly, and `off` omits the
   reasoning-effort startup override. When omitted, ACP spawns use existing
-  subagent thinking defaults and per-model
+  subagent thinking defaults, the configured target agent's `thinkingDefault`, and per-model
   `agents.defaults.models["provider/model"].params.thinking` for the selected
   model.
 </ParamField>
@@ -611,8 +626,7 @@ config-the-default error).
 
     - On non-thread binding surfaces, default behavior is effectively `off`.
     - Thread-bound spawn requires channel policy support:
-      - Discord: `channels.discord.threadBindings.spawnSessions=true`
-      - Telegram: `channels.telegram.threadBindings.spawnSessions=true`
+      - Discord/Telegram: `session.threadBindings.spawnSessions=true`
     - Use `--bind here` when you want to pin the current conversation without creating a child thread.
 
   </Tab>
@@ -634,6 +648,15 @@ work. The delivery path depends on that shape.
     Follow-up messages in the bound conversation route directly to the ACP
     session, and ACP output is delivered back to that same
     channel/thread/topic.
+
+    When an ACP agent requests structured input during a delivered turn,
+    OpenClaw presents supported form fields as transient Gateway questions in
+    batches of up to three. Single- and multi-select fields support up to four
+    choices. URL requests show the literal HTTP(S) URL with explicit Continue
+    and Decline choices; OpenClaw does not fetch or open it. Explicitly secret
+    fields use a warned, ephemeral text-reply prompt and are never stored in a
+    Gateway question record. Malformed or unsupported requests produce a
+    visible explanation and are declined instead of returning empty answers.
 
     What OpenClaw sends to the harness:
 
@@ -791,14 +814,16 @@ Runtime controls (`spawn`, `cancel`, `steer`, `close`, `status`, `set-mode`,
 `set`, `cwd`, `permissions`, `timeout`, `model`, and `reset-options`) require
 owner identity from external channels and `operator.admin` from internal
 Gateway clients. Authorized non-owner senders can still use `sessions`,
-`doctor`, `install`, and `help`.
+`doctor`, `install`, and `help`. For non-owner senders, `/acp sessions`
+lists only the current bound or requester session; owner identity and
+`operator.admin` clients see all recent sessions.
 
 `/acp status` shows the effective runtime options plus runtime-level and
 backend-level session identifiers. Unsupported-control errors surface
-clearly when a backend lacks a capability. `/acp sessions` reads the store
-for the current bound or requester session; target tokens (`session-key`,
-`session-id`, or `session-label`) resolve through gateway session discovery,
-including custom per-agent `session.store` roots.
+clearly when a backend lacks a capability. Commands that accept target tokens
+(`session-key`, `session-id`, or `session-label`) resolve them through gateway
+session discovery, including custom per-agent `session.store` roots. `/acp sessions`
+does not accept a target token.
 
 ### Runtime options mapping
 
@@ -842,6 +867,7 @@ see [ACP agents - setup](/tools/acp-agents-setup).
 | `sessions_spawn sandbox="require" is unsupported for runtime="acp" ...`                   | `sandbox="require"` requested for ACP runtime.                                                                         | Use `runtime="subagent"` for required sandboxing, or use ACP with `sandbox="inherit"` from a non-sandboxed session.                                                      |
 | `Cannot apply --model ... did not advertise model support`                                | The target harness does not expose generic ACP model switching.                                                        | Use a harness that advertises ACP `models`/`session/set_model`, use Codex ACP model refs, or configure the model directly in the harness if it has its own startup flag. |
 | Missing ACP metadata for bound session                                                    | Stale/deleted ACP session metadata.                                                                                    | Recreate with `/acp spawn`, then rebind/focus thread.                                                                                                                    |
+| ACP input request is declined or cancelled                                                | The form/URL is malformed, exceeds field/choice limits, uses unsupported constraints, or the owning turn ended.        | Read the visible decline reason, retry with a standard primitive form or valid HTTP(S) URL, and keep the originating turn active while answering.                        |
 | `PermissionPromptUnavailableError: Permission prompt unavailable in non-interactive mode` | `permissionMode` blocks writes/exec in non-interactive ACP session.                                                    | Set `plugins.entries.acpx.config.permissionMode` to `approve-all` and restart gateway. See [Permission configuration](/tools/acp-agents-setup#permission-configuration). |
 | ACP session fails early with little output                                                | Permission prompts are blocked by `permissionMode`/`nonInteractivePermissions`.                                        | Check gateway logs for `AcpRuntimeError`. For full permissions, set `permissionMode=approve-all`; for graceful degradation, set `nonInteractivePermissions=deny`.        |
 | ACP session stalls indefinitely after completing work                                     | Harness process finished but ACP session did not report completion.                                                    | Update OpenClaw; current acpx cleanup reaps OpenClaw-owned stale wrapper and adapter processes on close and Gateway startup.                                             |

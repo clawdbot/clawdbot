@@ -49,7 +49,7 @@ Token credentials (`type: "token"`) support inline `token` and/or `tokenRef`.
 
 ## Agent copy portability
 
-Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the default/main agent store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`).
+Agent auth inheritance is read-through. When an agent has no local profile, it resolves profiles from the shared auth store at runtime without copying secret material into its own credential store (`agents/<agentId>/agent/openclaw-agent.sqlite`). The shared store lives in `state/openclaw.sqlite` after `openclaw doctor --fix` performs the one-time relocation. Until then, doctor reports the legacy `agents/main/agent/openclaw-agent.sqlite` owner and leaves that agent undeletable.
 
 Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 
@@ -57,7 +57,11 @@ Explicit copy flows, such as `openclaw agents add`, use this portability policy:
 - `oauth` profiles are not portable by default because refresh tokens can be single-use or rotation-sensitive.
 - Provider-owned OAuth flows may opt in with `copyToAgents: true` only when copying refresh material across agents is known safe; the opt-in only applies when the profile carries inline access/refresh material.
 
-Non-portable profiles remain available through read-through inheritance unless the target agent signs in separately and creates its own local profile.
+Non-portable profiles remain available through the shared read-through base unless the target agent signs in separately and creates its own local profile.
+
+`openclaw agent exec` preserves the original shared-store root when switching to temporary run state. Its bounded credential scope reads portable `api_key` and `token` profiles from that shared store without persisting copies; the configured agent's local profiles still win. Shared OAuth profiles are excluded from this temporary scope, even with `copyToAgents: true`, so the run does not acquire another refresh owner. `--auth-env-only` disables stored credential access entirely.
+
+Auth writes that explicitly select a state directory, including isolated QA staging, use that directory's shared store for ownership and OAuth deduplication. Their runtime publication and rollback retain the same owner; another process-local state root is not an inherited base. An unrelated outer database may be older, newer, or unreadable without blocking an isolated write, but an unreadable or newer database in the selected target still fails closed. Writes without an explicit state directory retain the normal ambient state and agent-directory configuration.
 
 ## Config-only auth routes
 
@@ -69,6 +73,7 @@ Do not write `type: "aws-sdk"` into the credential store; stored credentials are
 
 - When `auth.order.<provider>` or the auth-store order override is set for a provider, `models status --probe` only probes profile ids that remain in the resolved auth order for that provider. The stored override wins over `auth.order` config.
 - A stored profile for that provider that is omitted from the explicit order is not silently tried later. Probe output reports it with `reasonCode: excluded_by_auth_order` and the detail `Excluded by auth.order for this provider.`
+- A valid session user pin is an explicit per-session exception: OpenClaw tries that profile first even when it is omitted from the provider order, then uses the ordered same-provider profiles as retry candidates. A cooldown or disabled window applies only to the affected profile; it does not suppress its eligible siblings.
 
 ## Probe target resolution
 

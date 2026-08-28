@@ -122,7 +122,6 @@ A plugin can register a context engine using the plugin API:
 
 ```ts
 import { buildMemorySystemPromptAddition } from "openclaw/plugin-sdk/core";
-import { resolveSessionAgentId } from "openclaw/plugin-sdk/memory-host-core";
 
 export default function register(api) {
   api.registerContextEngine("my-engine", (ctx) => ({
@@ -130,6 +129,11 @@ export default function register(api) {
       id: "my-engine",
       name: "My Context Engine",
       ownsCompaction: true,
+      acceptedHostParams: ["sessionKey", "runtimeContext"],
+      transcriptSemantics: {
+        currentTurnFence: "before-current-turn-entry-v1",
+        turnAdvancementIdempotency: "atomic-idempotent-v1",
+      },
     },
 
     async ingest({ sessionId, message, isHeartbeat }) {
@@ -152,7 +156,6 @@ export default function register(api) {
         systemPromptAddition: buildMemorySystemPromptAddition({
           availableTools: availableTools ?? new Set(),
           citationsMode,
-          agentId: resolveSessionAgentId({ config: ctx.config, sessionKey }),
           agentSessionKey: sessionKey,
         }),
       };
@@ -162,13 +165,25 @@ export default function register(api) {
       // Summarize older context
       return { ok: true, compacted: true };
     },
+
+    async commitTurn({ advancementKey, messages }) {
+      // Atomically store the accepted turn and advancementKey. Return
+      // "duplicate" when that exact key was committed by an earlier retry.
+      return await commitAcceptedTurn({
+        advancementKey,
+        messages,
+      });
+    },
   }));
 }
 ```
 
 The factory `ctx` includes optional `config`, `agentDir`, and `workspaceDir`
 values so plugins can initialize per-agent or per-workspace state before the
-first lifecycle hook runs.
+first lifecycle call. Before a non-legacy `assemble()` call, the host completes
+registered async memory prompt preparation. The synchronous
+`buildMemorySystemPromptAddition(...)` helper reads that immutable run snapshot;
+pass the supplied tool, citation, agent, and session context through unchanged.
 
 Then enable it in config:
 
@@ -191,12 +206,44 @@ Then enable it in config:
 
 Required members:
 
-| Member             | Kind     | Purpose                                                  |
-| ------------------ | -------- | -------------------------------------------------------- |
-| `info`             | Property | Engine id, name, version, and whether it owns compaction |
-| `ingest(params)`   | Method   | Store a single message                                   |
-| `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`) |
-| `compact(params)`  | Method   | Summarize/reduce context                                 |
+| Member             | Kind     | Purpose                                                                            |
+| ------------------ | -------- | ---------------------------------------------------------------------------------- |
+| `info`             | Property | Engine id, name, version, accepted host parameters, and whether it owns compaction |
+| `ingest(params)`   | Method   | Store a single message                                                             |
+| `assemble(params)` | Method   | Build context for a model run (returns `AssembleResult`)                           |
+| `compact(params)`  | Method   | Summarize/reduce context                                                           |
+
+Set `info.acceptedHostParams` to restrict the host-added lifecycle fields the
+engine receives. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
+`sessionTarget`, and `runtimeContext`. OpenClaw intersects the declaration with
+the fields available for each lifecycle method, so undeclared or unknown keys
+are never injected. Engines without this declaration receive every current
+host field; declare an explicit list, including `[]`, when the engine validates
+a narrower input shape.
+
+For durable admitted turns, declare both transcript semantics:
+
+- `currentTurnFence: "before-current-turn-entry-v1"`
+- `turnAdvancementIdempotency: "atomic-idempotent-v1"`
+
+and implement `commitTurn(...)` as one atomic, idempotent write keyed by
+`advancementKey`. Return `{ status: "committed" }` for the first write and
+`{ status: "duplicate" }` when a host retry presents an already-committed key.
+The `messages` payload contains only the inclusive range from the admitted user
+entry through the accepted terminal entry. Engines that need the earlier
+transcript during bootstrap or rebuild should read it through the transcript
+cursor API, `readSessionTranscriptVisibleMessageDelta(...)`.
+Pre-turn transcript reads during bootstrap, maintenance, assembly, and retries
+then see the exact transcript prefix before the admitted user message. The host
+calls `commitTurn` only for the accepted successful turn; failed or aborted
+turns do not advance context-engine state.
+
+Without the full declaration and method, OpenClaw uses the legacy context path
+for the whole logical turn, including retries. The configured context-engine
+slot is not changed, and OpenClaw tries the configured engine again on the next
+logical turn. The same turn-local degradation applies if a declared fence
+cannot be honored because its exact admitted message is missing, rewritten, or
+already crossed by a transcript cursor.
 
 `assemble` returns an `AssembleResult` with:
 
@@ -261,10 +308,9 @@ rendered directly to users and does not create a dedicated reporting surface.
 - `diagnostics`: closed fallback and degraded reason codes when known
 
 Fields that can be unknown are represented as `null`; discriminator fields such
-as runtime mode and selection source remain non-nullable. Older engines remain
-compatible: if a strict legacy engine rejects `runtimeSettings` as an unknown
-property, OpenClaw retries the lifecycle call without it instead of quarantining
-the engine.
+as runtime mode and selection source remain non-nullable. Engines that restrict
+host parameters and accept `runtimeSettings` must include it in
+`info.acceptedHostParams`.
 
 ### Host requirements
 
@@ -366,7 +412,7 @@ The slot is exclusive at run time - only one registered context engine is resolv
     Compaction is one responsibility of the context engine. The legacy engine delegates to OpenClaw's built-in summarization. Plugin engines can implement any compaction strategy (DAG summaries, vector retrieval, etc.).
   </Accordion>
   <Accordion title="Memory plugins">
-    Memory plugins (`plugins.slots.memory`) are separate from context engines. Memory plugins provide search/retrieval; context engines control what the model sees. They can work together - a context engine might use memory plugin data during assembly. Plugin engines that want the active memory prompt path should prefer `buildMemorySystemPromptAddition(...)` from `openclaw/plugin-sdk/core`, which converts the active memory prompt sections into a ready-to-prepend `systemPromptAddition`. If an engine needs lower-level control, it can still pull raw lines from `openclaw/plugin-sdk/memory-host-core` via `buildActiveMemoryPromptSection(...)`.
+    Memory plugins (`plugins.slots.memory`) are separate from context engines. Memory plugins provide search/retrieval; context engines control what the model sees. They can work together - a context engine might use memory plugin data during assembly. Plugin engines that want the active memory prompt path should use `buildMemorySystemPromptAddition(...)` from `openclaw/plugin-sdk/core`, which converts the host-prepared memory prompt sections into a ready-to-prepend `systemPromptAddition` without exposing memory-plugin layout.
   </Accordion>
   <Accordion title="Session pruning">
     Trimming old tool results in-memory still runs regardless of which context engine is active.

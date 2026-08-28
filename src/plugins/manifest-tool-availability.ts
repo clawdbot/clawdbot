@@ -3,7 +3,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { coerceSecretRef, type SecretRef } from "../config/types.secrets.js";
-import { resolveDefaultSecretProviderAlias } from "../secrets/ref-contract.js";
+import { canResolveEnvSecretRefInReadOnlyPath } from "../plugin-sdk/secret-ref-readonly.internal.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type {
   PluginManifestCapabilityProviderAuthSignal,
@@ -64,21 +64,17 @@ function readEffectiveConfigs(params: {
 
 function hasConfiguredSecretRefInConfigPath(params: {
   config?: OpenClawConfig;
-  env: NodeJS.ProcessEnv;
   ref: SecretRef;
 }): boolean {
+  if (params.ref.source === "env") {
+    return canResolveEnvSecretRefInReadOnlyPath({
+      cfg: params.config,
+      provider: params.ref.provider,
+      id: params.ref.id,
+    });
+  }
   const providerConfig = params.config?.secrets?.providers?.[params.ref.provider];
-  if (params.ref.source !== "env") {
-    return Boolean(providerConfig && providerConfig.source === params.ref.source);
-  }
-  if (!providerConfig) {
-    return params.ref.provider === resolveDefaultSecretProviderAlias(params.config ?? {}, "env");
-  }
-  if (providerConfig.source !== "env") {
-    return false;
-  }
-  const allowlist = providerConfig.allowlist;
-  return !allowlist || allowlist.includes(params.ref.id);
+  return Boolean(providerConfig && providerConfig.source === params.ref.source);
 }
 
 function hasConfiguredValue(params: {
@@ -91,7 +87,6 @@ function hasConfiguredValue(params: {
     return (
       hasConfiguredSecretRefInConfigPath({
         config: params.config,
-        env: params.env,
         ref: secretRef,
       }) &&
       (secretRef.source !== "env" || Boolean(params.env[secretRef.id]?.trim()))
@@ -210,11 +205,7 @@ export function manifestPluginSetupProviderEnvVars(
   plugin: PluginManifestRecord,
   providerId: string,
 ): readonly string[] {
-  const direct = plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars;
-  if (direct && direct.length > 0) {
-    return direct;
-  }
-  return plugin.providerAuthEnvVars?.[providerId] ?? [];
+  return plugin.setup?.providers?.find((provider) => provider.id === providerId)?.envVars ?? [];
 }
 
 export function hasNonEmptyManifestEnvCandidate(

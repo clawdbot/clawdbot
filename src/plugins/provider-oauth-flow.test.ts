@@ -27,4 +27,35 @@ describe("createVpsAwareOAuthHandlers", () => {
     );
     await expect(handlers.onPrompt({ message: "Paste callback" })).resolves.toBe("callback-value");
   });
+
+  it("forwards prompt cancellation to remote manual entry", async () => {
+    const controller = new AbortController();
+    const text = vi.fn(
+      (params: { signal?: AbortSignal }) =>
+        new Promise<string>((_resolve, reject) => {
+          params.signal?.addEventListener("abort", () => reject(new Error("prompt aborted")), {
+            once: true,
+          });
+        }),
+    );
+    const handlers = createVpsAwareOAuthHandlers({
+      isRemote: true,
+      prompter: {
+        note: vi.fn(async () => undefined),
+        text,
+      } as unknown as WizardPrompter,
+      runtime: { log: vi.fn() } as unknown as RuntimeEnv,
+      spin: { update: vi.fn(), stop: vi.fn() } as ReturnType<WizardPrompter["progress"]>,
+      openUrl: vi.fn(async () => undefined),
+      localBrowserMessage: "Opening browser",
+      manualPromptSignal: controller.signal,
+    });
+
+    await handlers.onAuth({ url: "https://provider.example/oauth?state=state-1" });
+    const prompt = handlers.onPrompt({ message: "Paste callback" });
+    controller.abort();
+
+    await expect(prompt).rejects.toThrow("prompt aborted");
+    expect(text).toHaveBeenCalledWith(expect.objectContaining({ signal: controller.signal }));
+  });
 });

@@ -24,11 +24,13 @@ import {
   resolveInboundMentionDecision,
 } from "openclaw/plugin-sdk/channel-mention-gating";
 import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   chunkMarkdownTextWithMode,
   resolveChunkMode,
   resolveTextChunkLimit,
 } from "openclaw/plugin-sdk/reply-chunking";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { beforeAll, describe, it, vi } from "vitest";
 import {
@@ -36,7 +38,6 @@ import {
   createMatrixTextMessageEvent,
 } from "./matrix/monitor/handler.test-helpers.js";
 import type { MatrixClient } from "./matrix/sdk.js";
-import type { PluginRuntime, ReplyPayload } from "./runtime-api.js";
 import { installMatrixTestRuntime } from "./test-runtime.js";
 
 const ROOM_ID = "!room:example.org";
@@ -84,6 +85,7 @@ function createRecordingMatrixClient(recorder: WireRecorder): Partial<MatrixClie
   };
   const client: Partial<MatrixClient> = {
     getUserId: async () => BOT_USER_ID,
+    prepareRoomForMessageSend: async () => "m.room.message",
     sendMessage: async (roomId: string, content: Record<string, unknown>) => {
       const eventId = mintEventId();
       // Snapshot before recording: edit flows reuse content structures, and the
@@ -161,7 +163,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
     }
   };
 
-  // The scripted steps stand in for the model run: dispatchReplyFromConfig
+  // The scripted steps stand in for the model run: dispatchInboundMessage
   // stays pending until the script's final/cancel step settles it, so the
   // handler's post-dispatch flow (including the finally-block draft abandon
   // path) runs exactly where the real run would settle.
@@ -188,7 +190,7 @@ async function setupMatrixTrace(recorder: WireRecorder) {
         markRunComplete: () => {},
       };
     },
-    dispatchReplyFromConfig: (async (args: { replyOptions?: MatrixTraceReplyOptions }) => {
+    dispatchInboundMessage: (async (args: { replyOptions?: MatrixTraceReplyOptions }) => {
       capturedReplyOptions = args?.replyOptions;
       notifyCaptured();
       const result = await runGate;
@@ -328,8 +330,8 @@ const MATRIX_TRACE_SCENARIOS: readonly DeliveryTraceScenario[] = [
     ],
   },
   // Previews are mentions-inert and an edit cannot retro-notify, so a final
-  // whose text would activate mentions redacts the preview and re-sends the
-  // final as a fresh mention-bearing event.
+  // whose text would activate mentions is sent fresh before the preview is
+  // redacted. A failed replacement therefore leaves the preview visible.
   {
     name: "final-mentions-fresh",
     steps: [

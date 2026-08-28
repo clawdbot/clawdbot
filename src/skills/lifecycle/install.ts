@@ -17,7 +17,7 @@ import {
   resolveSkillsInstallPreferences as defaultResolveSkillsInstallPreferences,
 } from "../loading/config.js";
 import { resolveSkillSource } from "../loading/source.js";
-import { loadWorkspaceSkillEntries as defaultLoadWorkspaceSkillEntries } from "../loading/workspace.js";
+import { loadWorkspaceSkills as defaultLoadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import type { SkillEntry, SkillInstallSpec, SkillsInstallPreferences } from "../types.js";
 import { installDownloadSpec } from "./install-download.js";
 import { formatInstallFailureMessage } from "./install-output.js";
@@ -34,7 +34,7 @@ export type { SkillInstallSkipReason } from "./install-types.js";
 
 type SkillsInstallDeps = {
   hasBinary: (bin: string) => boolean;
-  loadWorkspaceSkillEntries: typeof defaultLoadWorkspaceSkillEntries;
+  loadWorkspaceSkills: typeof defaultLoadWorkspaceSkills;
   resolveNodeInstallStateDir: () => string;
   resolveBrewExecutable: () => string | undefined;
   isContainerEnvironment: () => boolean;
@@ -43,7 +43,7 @@ type SkillsInstallDeps = {
 
 const defaultSkillsInstallDeps: SkillsInstallDeps = {
   hasBinary: defaultHasBinary,
-  loadWorkspaceSkillEntries: defaultLoadWorkspaceSkillEntries,
+  loadWorkspaceSkills: defaultLoadWorkspaceSkills,
   resolveNodeInstallStateDir: resolveDefaultNodeInstallStateDir,
   resolveBrewExecutable: defaultResolveBrewExecutable,
   isContainerEnvironment: defaultIsContainerEnvironment,
@@ -91,6 +91,7 @@ function normalizeSkillInstallSpec(spec: SkillInstallSpec): SkillInstallSpecMeta
     ...(spec.package ? { package: spec.package } : {}),
     ...(spec.module ? { module: spec.module } : {}),
     ...(spec.url ? { url: spec.url } : {}),
+    ...(spec.sha256 ? { sha256: spec.sha256 } : {}),
     ...(spec.archive ? { archive: spec.archive } : {}),
     ...(spec.extract !== undefined ? { extract: spec.extract } : {}),
     ...(spec.stripComponents !== undefined ? { stripComponents: spec.stripComponents } : {}),
@@ -680,7 +681,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   const timeoutMs = Math.min(Math.max(params.timeoutMs ?? 300_000, 1_000), 900_000);
   const workspaceDir = resolveUserPath(params.workspaceDir);
   const deps = getSkillsInstallDeps();
-  const entries = deps.loadWorkspaceSkillEntries(workspaceDir);
+  const entries = deps.loadWorkspaceSkills(workspaceDir);
   const entry = entries.find((item) => item.skill.name === params.skillName);
   if (!entry) {
     return {
@@ -819,7 +820,7 @@ export async function installSkill(params: SkillInstallRequest): Promise<SkillIn
   return withWarnings(normalizedResult, warnings);
 }
 
-export const testing = {
+const testing = {
   resolveDefaultNodeInstallStateDir,
   setDepsForTest(overrides?: Partial<SkillsInstallDeps>): void {
     skillsInstallDeps = {
@@ -828,4 +829,9 @@ export const testing = {
     };
   },
 };
+
+if (process.env.VITEST || process.env.NODE_ENV === "test") {
+  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.skillsInstallTestApi")] =
+    testing;
+}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

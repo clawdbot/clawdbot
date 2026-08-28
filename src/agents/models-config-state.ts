@@ -1,6 +1,6 @@
 // Process-wide models.json coordination state. Dynamic imports can load this
 // module multiple times, so Symbol.for keeps write locks and ready-cache shared.
-import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
+import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 
 const MODELS_JSON_STATE_KEY = Symbol.for("openclaw.modelsJsonState");
 
@@ -31,9 +31,3 @@ export const MODELS_JSON_STATE = (() => {
   }
   return globalState[MODELS_JSON_STATE_KEY];
 })();
-
-/** Clear models.json write/ready caches for tests. */
-export function resetModelsJsonReadyCacheForTest(): void {
-  MODELS_JSON_STATE.writeQueue = new KeyedAsyncQueue();
-  MODELS_JSON_STATE.readyCache.clear();
-}

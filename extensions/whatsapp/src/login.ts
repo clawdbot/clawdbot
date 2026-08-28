@@ -2,8 +2,7 @@
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger, success } from "openclaw/plugin-sdk/runtime-env";
-import { defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
+import { danger, success, defaultRuntime, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { resolveWhatsAppAccount } from "./accounts.js";
 import { restoreCredsFromBackupIfNeeded } from "./auth-store.js";
 import { closeWaSocketSoon, waitForWhatsAppLoginResult } from "./connection-controller.js";
@@ -25,7 +24,7 @@ export async function loginWeb(
 ) {
   const cfg = getRuntimeConfig();
   const account = resolveWhatsAppAccount({ cfg, accountId });
-  const socketTiming = resolveWhatsAppSocketTiming(cfg);
+  const socketTiming = resolveWhatsAppSocketTiming();
   const restoredFromBackup = await restoreCredsFromBackupIfNeeded(account.authDir, {
     beforeCredentialPersistence: options?.beforeCredentialPersistence,
   });

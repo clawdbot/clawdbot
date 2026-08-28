@@ -18,6 +18,14 @@ vi.mock("./accounts.js", () => ({
     accountId: "default",
     enabled: true,
     baseUrl: "http://signal.local",
+    transport: {
+      kind: "managed-native",
+      baseUrl: "http://signal.local",
+      cliPath: "signal-cli",
+      httpHost: "127.0.0.1",
+      httpPort: 8080,
+      startupTimeoutMs: 30_000,
+    },
     configured: true,
     config: { account: "+15550001111" },
   }),
@@ -61,30 +69,44 @@ describe("sendReactionSignal", () => {
     rpcMock.mockClear().mockResolvedValue({ timestamp: 123 });
   });
 
-  it("uses recipients array and targetAuthor for uuid dms", async () => {
-    await sendReactionSignal("uuid:123e4567-e89b-12d3-a456-426614174000", 123, "🔥", {
-      cfg: SIGNAL_TEST_CFG,
-    });
+  it.each([
+    {
+      name: "UUID",
+      recipient: "uuid:123e4567-e89b-12d3-a456-426614174000",
+      expectedRecipient: "123e4567-e89b-12d3-a456-426614174000",
+    },
+    {
+      name: "mixed-case Signal and UUID prefixes",
+      recipient: "  SiGnAl:  UuId:123E4567-E89B-12D3-A456-426614174000  ",
+      expectedRecipient: "123E4567-E89B-12D3-A456-426614174000",
+    },
+    {
+      name: "Signal-prefixed phone number",
+      recipient: " SiGnAl: +15551230000 ",
+      expectedRecipient: "+15551230000",
+    },
+  ])("uses recipients and targetAuthor for $name DMs", async ({ recipient, expectedRecipient }) => {
+    await sendReactionSignal(recipient, 123, "🔥", { cfg: SIGNAL_TEST_CFG });
 
     expect(rpcMock).toHaveBeenCalledWith(
       "sendReaction",
       {
         emoji: "🔥",
         targetTimestamp: 123,
-        targetAuthor: "123e4567-e89b-12d3-a456-426614174000",
-        recipients: ["123e4567-e89b-12d3-a456-426614174000"],
+        targetAuthor: expectedRecipient,
+        recipients: [expectedRecipient],
         account: "+15550001111",
       },
       {
         baseUrl: "http://signal.local",
         timeoutMs: undefined,
-        apiMode: undefined,
+        transportKind: "managed-native",
       },
     );
     const params = requireRpcParams();
-    expect(params.recipients).toEqual(["123e4567-e89b-12d3-a456-426614174000"]);
+    expect(params.recipients).toEqual([expectedRecipient]);
     expect(params.groupIds).toBeUndefined();
-    expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(params.targetAuthor).toBe(expectedRecipient);
     expect(params).not.toHaveProperty("recipient");
     expect(params).not.toHaveProperty("groupId");
   });
@@ -93,13 +115,30 @@ describe("sendReactionSignal", () => {
     await sendReactionSignal("", 123, "✅", {
       cfg: SIGNAL_TEST_CFG,
       groupId: "group-id",
-      targetAuthorUuid: "uuid:123e4567-e89b-12d3-a456-426614174000",
+      targetAuthorUuid: " SiGnAl: UuId:123E4567-E89B-12D3-A456-426614174000 ",
     });
 
     const params = requireRpcParams();
     expect(params.recipients).toBeUndefined();
     expect(params.groupIds).toEqual(["group-id"]);
-    expect(params.targetAuthor).toBe("123e4567-e89b-12d3-a456-426614174000");
+    expect(params.targetAuthor).toBe("123E4567-E89B-12D3-A456-426614174000");
+  });
+
+  it("honors an explicit container endpoint override", async () => {
+    await sendReactionSignal("+15551230000", 123, "✅", {
+      cfg: SIGNAL_TEST_CFG,
+      baseUrl: "http://container:8080",
+      transportKind: "container",
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "sendReaction",
+      expect.any(Object),
+      expect.objectContaining({
+        baseUrl: "http://container:8080",
+        transportKind: "container",
+      }),
+    );
   });
 
   it("defaults targetAuthor to recipient for removals", async () => {

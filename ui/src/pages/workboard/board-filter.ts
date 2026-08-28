@@ -1,31 +1,14 @@
 import { t } from "../../i18n/index.ts";
-import type {
-  WorkboardBoardSummary,
-  WorkboardCard,
-  WorkboardUiState,
-} from "../../lib/workboard/index.ts";
+import {
+  matchesBoardFilter,
+  workboardCardBoardId,
+  WORKBOARD_ALL_BOARDS_FILTER,
+} from "../../lib/workboard/board-filter.ts";
+import { workboardBoardLabel } from "../../lib/workboard/board-presentation.ts";
+import type { WorkboardBoardSummary, WorkboardCard } from "../../lib/workboard/index.ts";
 import type { WorkboardSelectOption } from "./workboard-select.ts";
 
-export const WORKBOARD_ALL_BOARDS_FILTER = "__all__";
-
-function cardBoardId(card: WorkboardCard): string {
-  return card.metadata?.automation?.boardId?.trim() || "default";
-}
-
-export function matchesBoardFilter(
-  card: WorkboardCard,
-  filter: WorkboardUiState["boardFilter"],
-): boolean {
-  return filter === WORKBOARD_ALL_BOARDS_FILTER || cardBoardId(card) === filter;
-}
-
-function boardLabel(board: WorkboardBoardSummary): string {
-  const name = board.name?.trim();
-  if (name && name !== board.id) {
-    return `${name} (${board.id})`;
-  }
-  return name || (board.id === "default" ? t("workboard.defaultBoard") : board.id);
-}
+export { matchesBoardFilter, WORKBOARD_ALL_BOARDS_FILTER };
 
 function boardDescription(board: WorkboardBoardSummary): string {
   const params = { active: String(board.active), total: String(board.total) };
@@ -53,7 +36,7 @@ export function buildBoardFilterOptions(
     }
   }
   for (const card of cards) {
-    const id = cardBoardId(card);
+    const id = workboardCardBoardId(card);
     const board: WorkboardBoardSummary = uniqueBoards.get(id) ?? {
       id,
       total: 0,
@@ -77,37 +60,17 @@ export function buildBoardFilterOptions(
     if (right.id === "default") {
       return 1;
     }
-    return boardLabel(left).localeCompare(boardLabel(right));
+    return workboardBoardLabel(left).localeCompare(workboardBoardLabel(right));
   });
   return [
     { value: WORKBOARD_ALL_BOARDS_FILTER, label: t("workboard.allBoards") },
     ...sortedBoards.map((board) => ({
       value: board.id,
-      label: boardLabel(board),
+      label: workboardBoardLabel(board),
       description: boardDescription(board),
+      boardId: board.id,
+      icon: board.icon,
+      color: board.color,
     })),
   ];
-}
-
-export function normalizeActiveBoardFilter(
-  options: readonly WorkboardSelectOption[],
-  filter: WorkboardUiState["boardFilter"],
-): WorkboardUiState["boardFilter"] {
-  return options.some((option) => option.value === filter) ? filter : WORKBOARD_ALL_BOARDS_FILTER;
-}
-
-export function boardFilterFromSearch(search: string): string {
-  const board = new URLSearchParams(search).get("board")?.trim();
-  return board && board !== WORKBOARD_ALL_BOARDS_FILTER ? board : WORKBOARD_ALL_BOARDS_FILTER;
-}
-
-export function searchForBoardFilter(search: string, filter: string): string {
-  const params = new URLSearchParams(search);
-  if (filter === WORKBOARD_ALL_BOARDS_FILTER) {
-    params.delete("board");
-  } else {
-    params.set("board", filter);
-  }
-  const next = params.toString();
-  return next ? `?${next}` : "";
 }

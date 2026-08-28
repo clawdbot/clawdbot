@@ -2,13 +2,18 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  ErrorCodes,
+  errorShape,
+  missingScopeErrorShape,
+} from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import { AGENT_SESSION_RESET_COMMAND_RE } from "../agent-command-policy.js";
+import { setGatewayDedupeEntries } from "../agent-turn/agent-dedupe.js";
+import { clientHasAdminScope } from "../agent-turn/agent-handler-helpers.js";
 import { ADMIN_SCOPE } from "../method-scopes.js";
 import { formatForLog } from "../ws-log.js";
-import { setGatewayDedupeEntries } from "./agent-dedupe.js";
-import { clientHasAdminScope, RESET_COMMAND_RE } from "./agent-handler-helpers.js";
 import type { AgentRunRequest } from "./agent-request-types.js";
 import {
   buildBareSessionResetResponse,
@@ -17,6 +22,7 @@ import {
   runSessionResetFromAgent,
 } from "./agent-session-reset.js";
 import { emitSessionsChanged } from "./session-change-event.js";
+import { resolveAgentRunSessionCreation } from "./session-creation-provenance.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 export type CommittedResetCompletion = {
@@ -60,7 +66,7 @@ export async function runAgentResetPhase(params: {
     effectiveTranscriptInputText: params.effectiveTranscriptInputText,
     message: params.message,
   };
-  const resetCommandMatch = params.message.match(RESET_COMMAND_RE);
+  const resetCommandMatch = params.message.match(AGENT_SESSION_RESET_COMMAND_RE);
   if (!resetCommandMatch || !params.requestedSessionKey) {
     return { ...base, stop: false, accepted: false };
   }
@@ -77,7 +83,7 @@ export async function runAgentResetPhase(params: {
     params.respond(
       false,
       undefined,
-      errorShape(ErrorCodes.INVALID_REQUEST, `missing scope: ${ADMIN_SCOPE}`),
+      missingScopeErrorShape({ missingScope: ADMIN_SCOPE, requiredScopes: [ADMIN_SCOPE] }),
     );
     return { ...base, stop: true, accepted: false };
   }
@@ -87,10 +93,15 @@ export async function runAgentResetPhase(params: {
   try {
     resetResult = await runSessionResetFromAgent({
       key: params.requestedSessionKey,
-      ...(params.requestedSessionKey === "global" && params.agentId
-        ? { agentId: params.agentId }
-        : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
+      creation: resolveAgentRunSessionCreation(params.client),
+      ...(params.client?.authenticatedUserProfile
+        ? { requestingOperatorProfileId: params.client.authenticatedUserProfile.profileId }
+        : {}),
+      ...(params.client?.internal?.operatorRoleActor
+        ? { operatorRoleActor: params.client.internal.operatorRoleActor }
+        : {}),
       assertCurrent: () => assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
       onCommitted: (commit) => {
         params.setCommittedResetCompletion({
@@ -177,7 +188,7 @@ export async function runAgentResetPhase(params: {
     params.respond(true, responsePayload, undefined, { runId: params.runId });
     emitSessionsChanged(params.context, {
       sessionKey: resetResult.key,
-      ...(resetResult.key === "global" && params.agentId ? { agentId: params.agentId } : {}),
+      ...(params.agentId ? { agentId: params.agentId } : {}),
       reason: resetReason,
     });
     return { ...next, stop: true, accepted: true };

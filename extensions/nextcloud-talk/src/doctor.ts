@@ -1,9 +1,9 @@
 // Nextcloud Talk plugin module implements doctor behavior.
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { ChannelDoctorAdapter } from "openclaw/plugin-sdk/channel-contract";
 import { migratePersistentDedupeLegacyJsonFile } from "openclaw/plugin-sdk/persistent-dedupe";
+import { fileExists } from "openclaw/plugin-sdk/security-runtime";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { listNextcloudTalkAccountIds, resolveNextcloudTalkAccount } from "./accounts.js";
 import { probeNextcloudTalkBotResponseFeature } from "./bot-preflight.js";
@@ -13,12 +13,11 @@ import {
 } from "./doctor-contract.js";
 import {
   NEXTCLOUD_TALK_PLUGIN_ID,
+  NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
   NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
-} from "./replay-guard.js";
+  NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
+} from "./replay-migration-contract.js";
 import type { CoreConfig } from "./types.js";
-
-const REPLAY_DEDUPE_TTL_MS = 24 * 60 * 60 * 1000;
-const REPLAY_DEDUPE_MAX_ENTRIES = 10_000;
 
 function sanitizeLegacyReplaySegment(value: string): string {
   const trimmed = value.trim();
@@ -26,15 +25,6 @@ function sanitizeLegacyReplaySegment(value: string): string {
     return "default";
   }
   return trimmed.replace(/[^a-zA-Z0-9_-]/g, "_");
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-  try {
-    await fs.access(filePath);
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function collectNextcloudTalkBotResponseWarnings(params: {
@@ -74,18 +64,18 @@ async function repairNextcloudTalkReplayDedupeState(params: {
 
   for (const accountId of listNextcloudTalkAccountIds(params.cfg)) {
     const legacyPath = path.join(replayDir, `${sanitizeLegacyReplaySegment(accountId)}.json`);
-    if (!(await fileExists(legacyPath))) {
+    if (!fileExists(legacyPath)) {
       continue;
     }
     try {
       const result = await migratePersistentDedupeLegacyJsonFile({
         filePath: legacyPath,
         namespace: accountId,
-        ttlMs: REPLAY_DEDUPE_TTL_MS,
+        ttlMs: NEXTCLOUD_TALK_REPLAY_DEDUPE_TTL_MS,
         memoryMaxSize: 0,
         pluginId: NEXTCLOUD_TALK_PLUGIN_ID,
         namespacePrefix: NEXTCLOUD_TALK_REPLAY_DEDUPE_NAMESPACE_PREFIX,
-        stateMaxEntries: REPLAY_DEDUPE_MAX_ENTRIES,
+        stateMaxEntries: NEXTCLOUD_TALK_REPLAY_DEDUPE_MAX_ENTRIES,
         env,
       });
       changes.push(

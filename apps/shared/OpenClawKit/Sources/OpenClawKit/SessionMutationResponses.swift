@@ -17,6 +17,6 @@ struct OpenClawSessionsCompactError: Error, LocalizedError, Sendable {
 
     var errorDescription: String? {
         let detail = self.reason?.trimmingCharacters(in: .whitespacesAndNewlines)
-        return detail?.isEmpty == false ? detail : "Session compaction failed"
+        return detail?.isEmpty == false ? detail : "Thread compaction failed"
     }
 }

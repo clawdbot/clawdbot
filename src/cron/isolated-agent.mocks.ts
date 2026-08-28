@@ -4,15 +4,52 @@
 import "../utils/usage-format.js";
 import { vi } from "vitest";
 
+const loadPreparedModelCatalog = vi.hoisted(() => vi.fn());
+
 vi.mock("../agents/embedded-agent.js", () => ({
   abortEmbeddedAgentRun: vi.fn().mockReturnValue(false),
   runEmbeddedAgent: vi.fn(),
   resolveEmbeddedSessionLane: (key: string) => `session:${key.trim() || "main"}`,
 }));
 
-vi.mock("../agents/model-catalog.js", () => ({
-  loadModelCatalog: vi.fn(),
-}));
+vi.mock("../agents/prepared-model-catalog.js", async () => {
+  const { resolveAgentDir, resolveAgentWorkspaceDir, resolveDefaultAgentId } =
+    await vi.importActual<typeof import("../agents/agent-scope.js")>("../agents/agent-scope.js");
+  return {
+    loadPreparedModelCatalog,
+    loadPreparedModelCatalogSnapshot: vi.fn(async (params) => ({
+      entries: (await loadPreparedModelCatalog(params)) ?? [],
+      routeVariants: [],
+    })),
+    loadProviderScopedThinkingCatalog: vi.fn(
+      async (params) => (await loadPreparedModelCatalog(params)) ?? [],
+    ),
+    loadPublishedPreparedModelCatalog: loadPreparedModelCatalog,
+    publishedModelCatalogOwnerMatchesAgent: (owner: { agentId: string }, agentId: string) =>
+      owner.agentId === agentId.trim().toLowerCase(),
+    loadResolvedPublishedModelCatalogOwner: vi.fn(
+      async (params: {
+        agentId?: string;
+        agentDir?: string;
+        config?: object;
+        workspaceDir?: string;
+      }) => {
+        const config = params.config ?? {};
+        const agentId = params.agentId ?? resolveDefaultAgentId(config);
+        return {
+          agentId,
+          agentDir: params.agentDir ?? resolveAgentDir(config, agentId),
+          workspaceDir: params.workspaceDir ?? resolveAgentWorkspaceDir(config, agentId),
+          config,
+          modelCatalog: {
+            entries: (await loadPreparedModelCatalog(params)) ?? [],
+            routeVariants: [],
+          },
+        };
+      },
+    ),
+  };
+});
 
 vi.mock("../agents/model-selection.js", async () => {
   const actual = await vi.importActual<typeof import("../agents/model-selection.js")>(
@@ -24,12 +61,16 @@ vi.mock("../agents/model-selection.js", async () => {
   };
 });
 
-vi.mock("../agents/subagent-announce.js", () => ({
-  runSubagentAnnounceFlow: vi.fn(),
+vi.mock("../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
 }));
 
-vi.mock("../plugins/runtime-plugins.runtime.js", () => ({
-  ensureRuntimePluginsLoaded: vi.fn(),
+vi.mock("../agents/runtime-plugins.js", () => ({
+  loadAgentRuntimePluginRegistryHandle: vi.fn(),
+}));
+
+vi.mock("../agents/subagents/announce/subagent-announce.js", () => ({
+  runSubagentAnnounceFlow: vi.fn(),
 }));
 
 vi.mock("../gateway/call.js", () => ({

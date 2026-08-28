@@ -2,10 +2,11 @@
 import fs from "node:fs";
 import fsp from "node:fs/promises";
 import path from "node:path";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import { resolvePluginNpmProjectsDir } from "./install-paths.js";
 
 function isMissing(error: unknown): boolean {
-  return (error as NodeJS.ErrnoException).code === "ENOENT";
+  return isNotFoundPathError(error);
 }
 
 function sortPaths(paths: string[]): string[] {

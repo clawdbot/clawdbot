@@ -1,12 +1,10 @@
 /**
- * Regression coverage for plugin tool context and delivery defaults.
- * Verifies requester metadata, plugin tool wrapping, and default preservation.
+ * Regression coverage for plugin tool context and delivery metadata.
+ * Verifies requester metadata, workspace selection, and delivery routing.
  */
 import path from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveOpenClawPluginToolInputs } from "./openclaw-tools.plugin-context.js";
-import { applyPluginToolDeliveryDefaults } from "./plugin-tool-delivery-defaults.js";
-import type { AnyAgentTool } from "./tools/common.js";
 
 describe("openclaw plugin tool context", () => {
   it("forwards trusted requester sender identity", () => {
@@ -90,6 +88,31 @@ describe("openclaw plugin tool context", () => {
 
     expect(result.context.sessionKey).toBe("agent:main:telegram:direct:12345");
     expect(result.context.sessionId).toBe("a1b2c3d4-e5f6-7890-abcd-ef1234567890");
+  });
+
+  it("forwards trusted private conversation recall context", () => {
+    const conversationRecall = {
+      anchorSessionKey: "agent:main:telegram:direct:owner",
+      scope: "same-agent-private" as const,
+      corpus: "sessions" as const,
+    };
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        conversationRecall,
+      },
+    });
+
+    expect(result.context.conversationRecall).toEqual(conversationRecall);
+  });
+
+  it("forwards host-prepared active project keys", () => {
+    const activeProjectKeys = ["github.com/OpenClaw/OpenClaw"];
+    const result = resolveOpenClawPluginToolInputs({
+      options: { config: {} as never, activeProjectKeys },
+    });
+
+    expect(result.context.activeProjectKeys).toBe(activeProjectKeys);
   });
 
   it("forwards runtime-owned active model metadata", () => {
@@ -240,124 +263,47 @@ describe("openclaw plugin tool context", () => {
     });
   });
 
-  it("does not inject ambient thread defaults into plugin tools", async () => {
-    const executeMock = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: {},
-    }));
-    const sharedTool: AnyAgentTool = {
-      name: "plugin-thread-default",
-      label: "plugin-thread-default",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: {
-          threadId: { type: "string" },
-        },
+  it("uses the current conversation target when agentTo is unavailable", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "discord",
+        currentChannelId: "discord:channel:987654321",
+        agentAccountId: "molty",
       },
-      execute: executeMock,
-    };
-
-    const [first] = applyPluginToolDeliveryDefaults({
-      tools: [sharedTool],
-      deliveryContext: { threadId: "111.222" },
-    });
-    const [second] = applyPluginToolDeliveryDefaults({
-      tools: [sharedTool],
-      deliveryContext: { threadId: "333.444" },
     });
 
-    expect(first).toBe(sharedTool);
-    expect(second).toBe(sharedTool);
-
-    await first?.execute("call-1", {});
-    await second?.execute("call-2", {});
-
-    expect(executeMock).toHaveBeenNthCalledWith(1, "call-1", {});
-    expect(executeMock).toHaveBeenNthCalledWith(2, "call-2", {});
+    expect(result.context.deliveryContext).toStrictEqual({
+      channel: "discord",
+      to: "discord:channel:987654321",
+      accountId: "molty",
+    });
   });
 
-  it("does not inject messageThreadId defaults for missing params objects", async () => {
-    const executeMock = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: {},
-    }));
-    const tool: AnyAgentTool = {
-      name: "plugin-message-thread-default",
-      label: "plugin-message-thread-default",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: {
-          messageThreadId: { type: "number" },
-        },
+  it("keeps an explicit agent target ahead of the current conversation target", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "discord",
+        agentTo: "channel:111",
+        currentMessagingTarget: "channel:222",
+        currentChannelId: "333",
       },
-      execute: executeMock,
-    };
-
-    const [wrapped] = applyPluginToolDeliveryDefaults({
-      tools: [tool],
-      deliveryContext: { threadId: "77" },
     });
 
-    await wrapped?.execute("call-1", undefined);
-
-    expect(executeMock).toHaveBeenCalledWith("call-1", undefined);
+    expect(result.context.deliveryContext?.to).toBe("channel:111");
   });
 
-  it("does not infer string thread ids for tools that declare thread parameters", async () => {
-    const executeMock = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: {},
-    }));
-    const tool: AnyAgentTool = {
-      name: "plugin-string-thread-default",
-      label: "plugin-string-thread-default",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: {
-          threadId: { type: "string" },
-        },
+  it("keeps the routable conversation target ahead of the native channel id", () => {
+    const result = resolveOpenClawPluginToolInputs({
+      options: {
+        config: {} as never,
+        agentChannel: "slack",
+        currentMessagingTarget: "user:U123",
+        currentChannelId: "D123",
       },
-      execute: executeMock,
-    };
-
-    const [wrapped] = applyPluginToolDeliveryDefaults({
-      tools: [tool],
-      deliveryContext: { threadId: "77" },
     });
 
-    await wrapped?.execute("call-1", {});
-
-    expect(executeMock).toHaveBeenCalledWith("call-1", {});
-  });
-
-  it("preserves explicit thread params when ambient defaults exist", async () => {
-    const executeMock = vi.fn(async () => ({
-      content: [{ type: "text" as const, text: "ok" }],
-      details: {},
-    }));
-    const tool: AnyAgentTool = {
-      name: "plugin-thread-override",
-      label: "plugin-thread-override",
-      description: "test",
-      parameters: {
-        type: "object",
-        properties: {
-          threadId: { type: "string" },
-        },
-      },
-      execute: executeMock,
-    };
-
-    const [wrapped] = applyPluginToolDeliveryDefaults({
-      tools: [tool],
-      deliveryContext: { threadId: "111.222" },
-    });
-
-    await wrapped?.execute("call-1", { threadId: "explicit" });
-
-    expect(executeMock).toHaveBeenCalledWith("call-1", { threadId: "explicit" });
+    expect(result.context.deliveryContext?.to).toBe("user:U123");
   });
 });

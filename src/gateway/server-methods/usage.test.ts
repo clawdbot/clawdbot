@@ -5,8 +5,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { OpenClawConfig } from "../../config/config.js";
-import { withTempDir } from "../../test-helpers/temp-dir.js";
+import { withTestDir } from "../../test-helpers/temp-dir.js";
+import { withEnvAsync } from "../../test-utils/env.js";
 
 vi.mock("../../infra/session-cost-usage.js", async () => {
   const actual = await vi.importActual<typeof import("../../infra/session-cost-usage.js")>(
@@ -41,7 +43,12 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadCombinedSessionStoreForGateway: vi.fn(() => ({ storePath: "(multiple)", store: {} })),
+    loadCombinedSessionStoreForGatewayCore: vi.fn(() => ({
+      agentIdBySessionKey: new Map(),
+      durableTargets: [],
+      storePath: "(multiple)",
+      store: {},
+    })),
   };
 });
 
@@ -93,8 +100,8 @@ describe("gateway usage helpers", () => {
     endDate: string,
   ) {
     const range = expectDateRange(result);
-    expect(range.startMs).toBe(testApi.parseDateToMs(startDate));
-    expect(range.endMs).toBe(testApi.parseDateToMs(endDate)! + dayMs - 1);
+    expect(range.startMs).toBe(Date.parse(`${startDate}T00:00:00.000Z`));
+    expect(range.endMs).toBe(Date.parse(`${endDate}T00:00:00.000Z`) + dayMs - 1);
   }
 
   function expectDateRange(result: ReturnType<typeof testApi.resolveDateRange>) {
@@ -121,28 +128,9 @@ describe("gateway usage helpers", () => {
 
   beforeEach(() => {
     testApi.costUsageCache.clear();
+    testApi.sessionsUsageCache.clear();
     vi.useRealTimers();
     vi.clearAllMocks();
-  });
-
-  it("parseDateToMs accepts YYYY-MM-DD and rejects invalid input", () => {
-    expect(testApi.parseDateToMs("2026-02-05")).toBe(Date.UTC(2026, 1, 5));
-    expect(testApi.parseDateToMs(" 2026-02-05 ")).toBe(Date.UTC(2026, 1, 5));
-    expect(testApi.parseDateToMs("2026-2-5")).toBeUndefined();
-    expect(testApi.parseDateToMs("nope")).toBeUndefined();
-    expect(testApi.parseDateToMs(undefined)).toBeUndefined();
-  });
-
-  it("parseDateToMs rejects out-of-range calendar dates instead of rolling them over", () => {
-    // Impossible dates that still match the YYYY-MM-DD shape must not silently shift to a real day.
-    expect(testApi.parseDateToMs("2026-02-30")).toBeUndefined(); // would roll to Mar 2
-    expect(testApi.parseDateToMs("2026-04-31")).toBeUndefined(); // would roll to May 1
-    expect(testApi.parseDateToMs("2025-02-29")).toBeUndefined(); // non-leap Feb 29
-    expect(testApi.parseDateToMs("2026-13-01")).toBeUndefined(); // month too large
-    expect(testApi.parseDateToMs("2026-00-10")).toBeUndefined(); // month zero
-    expect(testApi.parseDateToMs("2026-01-00")).toBeUndefined(); // day zero
-    // Real leap day must stay valid (guard against over-rejection).
-    expect(testApi.parseDateToMs("2024-02-29")).toBe(Date.UTC(2024, 1, 29));
   });
 
   it.each([
@@ -150,6 +138,8 @@ describe("gateway usage helpers", () => {
     [{ endDate: "2026-2-5" }, "invalid endDate"],
     [{ startDate: 0 }, "invalid startDate"],
     [{ endDate: [] }, "invalid endDate"],
+    [{ startDate: "2026-02-01" }, "startDate and endDate must be provided together"],
+    [{ endDate: "2026-02-01" }, "startDate and endDate must be provided together"],
     [{ startDate: "2026-02-01", endDate: "2026-13-01" }, "invalid endDate"],
     [{ startDate: "2026-02-03", endDate: "2026-02-02" }, "startDate must not be after endDate"],
   ])("resolveDateRange rejects invalid explicit ranges", (params, error) => {
@@ -245,25 +235,29 @@ describe("gateway usage helpers", () => {
     },
   );
 
-  it("parseUtcOffsetToMinutes supports whole-hour and half-hour offsets", () => {
-    expect(testApi.parseUtcOffsetToMinutes("UTC-4")).toBe(-240);
-    expect(testApi.parseUtcOffsetToMinutes("UTC+5:30")).toBe(330);
-    expect(testApi.parseUtcOffsetToMinutes(" UTC+14 ")).toBe(14 * 60);
-  });
+  it.each([
+    ["usage.cost", { startDate: "2026-02-01" }],
+    ["usage.cost", { endDate: "2026-02-01" }],
+    ["sessions.usage", { startDate: "2026-02-01" }],
+    ["sessions.usage", { endDate: "2026-02-01" }],
+  ] as const)("%s rejects an incomplete explicit date range", async (method, params) => {
+    const respond = vi.fn();
+    await expectDefined(
+      usageHandlers[method],
+      "usageHandlers[method] test invariant",
+    )({
+      respond,
+      params,
+      context: { getRuntimeConfig: vi.fn(() => ({})) },
+    } as unknown as Parameters<(typeof usageHandlers)[typeof method]>[0]);
 
-  it("parseUtcOffsetToMinutes rejects invalid offsets", () => {
-    expect(testApi.parseUtcOffsetToMinutes("UTC+14:30")).toBeUndefined();
-    expect(testApi.parseUtcOffsetToMinutes("UTC+5:99")).toBeUndefined();
-    expect(testApi.parseUtcOffsetToMinutes("UTC+25")).toBeUndefined();
-    expect(testApi.parseUtcOffsetToMinutes("GMT+5")).toBeUndefined();
-    expect(testApi.parseUtcOffsetToMinutes(undefined)).toBeUndefined();
-  });
-
-  it("parseDays coerces strings/numbers to integers", () => {
-    expect(testApi.parseDays(7.9)).toBe(7);
-    expect(testApi.parseDays("30")).toBe(30);
-    expect(testApi.parseDays("")).toBeUndefined();
-    expect(testApi.parseDays("nope")).toBeUndefined();
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      errorShape(ErrorCodes.INVALID_REQUEST, "startDate and endDate must be provided together"),
+    );
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).not.toHaveBeenCalled();
+    expect(vi.mocked(discoverAllSessions)).not.toHaveBeenCalled();
   });
 
   it("resolveDateRange uses explicit start/end as UTC when mode is missing (backward compatible)", () => {
@@ -274,13 +268,13 @@ describe("gateway usage helpers", () => {
     expectUtcDateRange(result, "2026-02-01", "2026-02-02");
   });
 
-  it("resolveDateRange uses explicit UTC mode", () => {
+  it("resolveDateRange accepts a leap day in explicit UTC mode", () => {
     const result = testApi.resolveDateRange({
-      startDate: "2026-02-01",
-      endDate: "2026-02-02",
+      startDate: "2024-02-29",
+      endDate: "2024-03-01",
       mode: "utc",
     });
-    expectUtcDateRange(result, "2026-02-01", "2026-02-02");
+    expectUtcDateRange(result, "2024-02-29", "2024-03-01");
   });
 
   it("resolveDateRange uses specific UTC offset for explicit dates", () => {
@@ -352,7 +346,7 @@ describe("gateway usage helpers", () => {
         startDate: "2026-02-01",
         endDate: "2026-02-02",
         mode: "specific",
-        utcOffset: "bad-value",
+        utcOffset: "UTC+14:30",
       }),
     );
     expect(missingOffset.startMs).toBe(Date.UTC(2026, 1, 1));
@@ -413,12 +407,16 @@ describe("gateway usage helpers", () => {
     });
   });
 
-  it("resolveDateRange clamps days to at least 1 and defaults to 30 days", () => {
+  it("resolveDateRange clamps days to its supported bounds and defaults to 30 days", () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-02-05T12:34:56.000Z"));
     const oneDay = expectDateRange(testApi.resolveDateRange({ days: 0 }));
     expect(oneDay.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
     expect(oneDay.startMs).toBe(Date.UTC(2026, 1, 5));
+
+    const maxDays = expectDateRange(testApi.resolveDateRange({ days: Number.MAX_SAFE_INTEGER }));
+    expect(maxDays.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
+    expect(maxDays.startMs).toBe(Date.UTC(2026, 1, 5) - (36600 - 1) * dayMs);
 
     const def = expectDateRange(testApi.resolveDateRange({}));
     expect(def.endMs).toBe(Date.UTC(2026, 1, 5) + dayMs - 1);
@@ -447,6 +445,37 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(0)?.[0]?.refreshMode).toBe(
       "background",
     );
+  });
+
+  it("keeps refreshing cost summaries fresh for the TTL window", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-02-05T00:00:00.000Z"));
+    vi.mocked(loadCostUsageSummaryFromCache).mockResolvedValueOnce({
+      ...costSummary({ totalTokens: 1, totalCost: 0 }),
+      cacheStatus: {
+        status: "refreshing",
+        cachedFiles: 1,
+        pendingFiles: 1,
+        staleFiles: 1,
+      },
+    });
+
+    const config = {
+      agents: { entries: { ops: { default: true } } },
+    } as OpenClawConfig;
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+
+    const entry = testApi.costUsageCache.get("agent:ops:1-2:gateway");
+    expect(entry?.updatedAt).toBe(Date.now());
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("ops");
+
+    await vi.advanceTimersByTimeAsync(29_999);
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await testApi.loadCostUsageSummaryCached({ startMs: 1, endMs: 2, config });
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(2);
   });
 
   it("keeps cost usage cache entries scoped by agentId", async () => {
@@ -478,6 +507,22 @@ describe("gateway usage helpers", () => {
     expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls.at(1)?.[0]).toMatchObject({
       agentId: "research",
     });
+  });
+
+  it("refreshes aggregate cost usage when the configured agent set changes", async () => {
+    const request = { startDate: "2026-02-01", endDate: "2026-02-02", agentScope: "all" };
+    const respond = vi.fn();
+    for (const entries of [{ main: {} }, { main: {}, research: {} }]) {
+      await expectDefined(
+        usageHandlers["usage.cost"],
+        "cost handler",
+      )({
+        respond,
+        params: request,
+        context: { getRuntimeConfig: () => ({ agents: { entries } }) },
+      } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+    }
+    expect(respond.mock.calls.map((call) => call[1].totals.totalTokens)).toEqual([1, 2]);
   });
 
   it("keeps cost usage cache entries scoped by the complete day bucket", async () => {
@@ -617,8 +662,34 @@ describe("gateway usage helpers", () => {
     );
   });
 
+  it("aggregates all-agent cost over the gateway agent universe, including on-disk system agents", async () => {
+    await withTestDir({ prefix: "openclaw-usage-universe-" }, async (stateDir) => {
+      await fs.mkdir(`${stateDir}/agents/openclaw`, { recursive: true });
+      await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+        await expectDefined(
+          usageHandlers["usage.cost"],
+          'usageHandlers["usage.cost"] test invariant',
+        )({
+          respond: vi.fn(),
+          params: { startDate: "2026-02-03", endDate: "2026-02-04", agentScope: "all" },
+          context: {
+            getRuntimeConfig: () => ({ agents: { list: [{ id: "main" }] } }),
+          },
+        } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
+      });
+
+      const loadedAgentIds = vi
+        .mocked(loadCostUsageSummaryFromCache)
+        .mock.calls.map((call) => (call[0] as { agentId?: string }).agentId);
+      expect(loadedAgentIds).toContain("main");
+      // sessions.usage discovers this on-disk system agent's sessions; cost
+      // totals must cover the same agent set or the two views diverge.
+      expect(loadedAgentIds).toContain("openclaw");
+    });
+  });
+
   it("does not project local avatar bytes for usage-only agent enumeration", async () => {
-    await withTempDir({ prefix: "openclaw-usage-avatar-" }, async (workspace) => {
+    await withTestDir({ prefix: "openclaw-usage-avatar-" }, async (workspace) => {
       await fs.writeFile(`${workspace}/avatar.png`, "avatar");
       const config: OpenClawConfig = {
         agents: {
@@ -659,7 +730,7 @@ describe("gateway usage helpers", () => {
     );
 
     const config = {
-      agents: { list: [{ id: "main" }, { id: "opus" }] },
+      agents: { list: [{ id: "main", default: true }, { id: "opus" }] },
       session: {},
     } as OpenClawConfig;
     const context = { getRuntimeConfig: () => config };
@@ -676,7 +747,7 @@ describe("gateway usage helpers", () => {
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
 
     expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(1);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBeUndefined();
+    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[0]?.[0]?.agentId).toBe("main");
     expect(defaultRespond.mock.calls[0]?.[1]).toMatchObject({
       totals: { totalTokens: 10, totalCost: 1 },
     });
@@ -714,8 +785,7 @@ describe("gateway usage helpers", () => {
       context,
     } as unknown as Parameters<(typeof usageHandlers)["usage.cost"]>[0]);
 
-    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(4);
-    expect(vi.mocked(loadCostUsageSummaryFromCache).mock.calls[3]?.[0]?.agentId).toBe("main");
+    expect(vi.mocked(loadCostUsageSummaryFromCache)).toHaveBeenCalledTimes(3);
     expect(mainRespond.mock.calls[0]?.[1]).toMatchObject({
       totals: { totalTokens: 10, totalCost: 1 },
     });

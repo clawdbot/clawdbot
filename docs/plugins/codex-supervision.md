@@ -9,8 +9,9 @@ read_when:
 ---
 
 Codex supervision is an opt-in capability of the official `codex` plugin. It
-shows non-archived Codex Desktop and CLI source sessions from the Gateway
-computer and opted-in paired computers in the normal sessions sidebar and Chat pane.
+shows non-archived Codex CLI, VS Code, Atlas, and ChatGPT source sessions from
+the Gateway computer and opted-in paired computers in the normal sessions
+sidebar and Chat pane.
 
 The initial release deliberately keeps ownership narrow:
 
@@ -86,13 +87,17 @@ Enable the `codex` plugin and its supervision capability in `openclaw.json`:
 If `plugins.allow` is present, include `codex`. Restart the Gateway after
 changing plugin activation.
 
-With no explicit `appServer` connection settings, supervision uses a separate
-managed stdio supervision connection against the native user Codex home. The
-ordinary Codex harness remains agent-scoped by default. This makes native
-sessions visible in both apps without making ordinary OpenClaw turns share
-native Codex state. Set `appServer.homeScope: "user"` explicitly if the harness
-should share that state too. Supervision honors explicit `appServer` connection
-settings instead of replacing them with its local user-home default.
+With no explicit `appServer` connection settings, supervision uses managed
+stdio connections for the available local Codex stores. The catalog combines
+the process user's `CODEX_HOME` with existing `codex-home` stores under configured
+OpenClaw agent directories, deduplicates canonical paths, and assigns each store
+an opaque local host id. Each store gets its own App Server connection; its path
+is never exposed in the catalog. List, read, continue, archive, adoption, and
+terminal resume keep the selected source while retaining the explicit OpenClaw
+route agent as owner. The ordinary Codex harness remains agent-scoped by default.
+Set `appServer.homeScope: "user"` explicitly if the harness should share native
+Codex state too. Supervision honors explicit `appServer` connection settings
+instead of replacing them with its local user-home default.
 
 A Chat adopted from the **Codex** sidebar group is not an ordinary harness session.
 Its private supervision binding uses the supervision connection for source
@@ -136,6 +141,12 @@ closed instead of risking the node or Gateway connection.
 Open the **Codex** group in the normal sessions sidebar. It lists the same sessions
 grouped by host. **Load more sessions** appends the next page from each host that
 has older rows, and those appended rows survive the sidebar's periodic refresh.
+Each host appears as soon as its own native listing settles. The visible page
+reconciles after node-connectivity changes, when it regains focus, and at most
+every 30 seconds; a changed result gets a faster follow-up pass. Sessions created
+in Codex Desktop, the CLI, or another native client therefore appear without a
+full page reload. The first page follows Codex's own most-recently-updated order,
+so a newly created native session is eligible immediately.
 Each returned search page scans a bounded number of native pages per host rather
 than sending the query to App Server, because native search can also match
 transcript previews.
@@ -159,29 +170,31 @@ The terminal CLI exposes the same non-archived catalog and Gateway-local branch
 and archive actions:
 
 ```bash
-openclaw codex sessions [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [--url <url>] [--token <token>] [--timeout <ms>] [--expect-final]
-openclaw codex continue <thread-id> [--json] [--url <url>] [--token <token>] [--timeout <ms>] [--expect-final]
-openclaw codex archive <thread-id> --confirm-no-other-runner [--json] [--url <url>] [--token <token>] [--timeout <ms>] [--expect-final]
+openclaw codex sessions [--agent <id>] [--search <text>] [--host <id>] [--limit <count>] [--cursor <cursor>] [--json] [--url <url>] [--token <token>] [--timeout <ms>] [--expect-final]
+openclaw codex continue <thread-id> [--agent <id>] [--host <id>] [--json] [--url <url>] [--token <token>] [--timeout <ms>] [--expect-final]
+openclaw codex archive <thread-id> --confirm-no-other-runner [--agent <id>] [--host <id>] [--json] [--url <url>] [--token <token>] [--timeout <ms>] [--expect-final]
 ```
 
 `openclaw codex sessions` options:
 
+- `--agent <id>` selects the OpenClaw owner in a multi-agent Gateway.
 - `--search <text>` searches session titles case-insensitively.
 - `--host <id>` limits the response to one stable catalog host, such as
-  `gateway:local` or `node:<node-id>`.
+  `gateway:local`, an opaque `gateway:local:<source-id>`, or `node:<node-id>`.
 - `--limit <count>` sets 1 through 100 rows per host; the default is 50.
 - `--cursor <cursor>` continues one host page and therefore requires `--host`.
 - `--json` prints the structured Gateway response.
 
-All three commands inherit `--url`, `--token`, and `--timeout <ms>` from the
+All three commands accept `--agent <id>` and inherit `--url`, `--token`, and `--timeout <ms>` from the
 Gateway client. Session listing defaults to 75,000 ms so cold paired-node
 catalogs can complete; continue and archive default to 30,000 ms. They also expose the shared
 `--expect-final` switch, which does not change these unary supervision RPCs.
 Each command requires the `operator.write` Gateway scope.
 Standard `-h, --help` output is available on each subcommand.
 There is no archived or include-archived option. `sessions` can list paired
-hosts, but `continue` and `archive` always target `gateway:local`; paired rows
-are list-only. Archive always requires `--confirm-no-other-runner`.
+hosts. `continue` and `archive` default to `gateway:local`; pass the listed
+opaque local `--host` id to target another local Codex store. Paired rows remain
+list-only. Archive always requires `--confirm-no-other-runner`.
 
 These shell commands are distinct from the in-chat `/codex` runtime commands.
 `/codex threads [filter]` lists App Server threads available to the current
@@ -264,11 +277,11 @@ the source thread or displaying the pending Chat. Starting a distinct canonical
 harness thread on the first turn lets another Codex process keep owning the
 source without creating competing rollout writers.
 
-The original CLI or VS Code source remains visible to native clients and the
-OpenClaw catalog. The canonical branch is stored as a native Codex thread, but
-its source kind is `appServer`; Codex Desktop or another native client may filter
-that source kind, so the branch itself is not guaranteed to appear in every
-native history view.
+The original CLI, VS Code, Atlas, or ChatGPT source remains visible to native
+clients and the OpenClaw catalog. The canonical branch is stored as a native
+Codex thread, but its source kind is `appServer`; Codex Desktop or another
+native client may filter that source kind, so the branch itself is not guaranteed
+to appear in every native history view.
 
 An active row reported by OpenClaw's App Server cannot start a new branch. Wait
 for the current turn to finish and refresh the catalog. Codex App Server

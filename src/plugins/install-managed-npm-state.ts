@@ -12,8 +12,9 @@ import {
   restoreManagedNpmRootPeerDependencySnapshot,
 } from "../infra/npm-managed-root.js";
 import { parseRegistryNpmSpec, validateRegistryNpmSpec } from "../infra/npm-registry-spec.js";
+import { isNotFoundPathError } from "../infra/path-guards.js";
 import { createSafeNpmInstallEnv } from "../infra/safe-package-install.js";
-import { runCommandWithTimeout } from "../process/exec.js";
+import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import {
   resolvePluginNpmGenerationProjectDir,
   resolvePluginNpmGenerationProjectDirPrefix,
@@ -30,10 +31,11 @@ const MANAGED_NPM_PROJECT_QUARANTINE_DIR = "_openclaw-quarantined-npm-projects";
 const MANAGED_NPM_PROJECT_REBUILD_ARTIFACTS = [
   "node_modules",
   "package-lock.json",
+  // Pre-migration projects may retain a root shrinkwrap that npm 11 prefers.
   "npm-shrinkwrap.json",
 ] as const;
 
-export function isNpmAliasOverrideComparatorError(result: {
+export function isNpmAliasOverrideCompatibilityError(result: {
   stdout: string;
   stderr: string;
 }): boolean {
@@ -433,8 +435,18 @@ export async function cleanupManagedNpmPluginInstallRollbackSnapshot(params: {
   }
 }
 
-export function formatNpmCommandFailureOutput(result: { stdout: string; stderr: string }): string {
-  return result.stderr.trim() || result.stdout.trim();
+export function formatNpmCommandFailureOutput(result: SpawnResult): string {
+  const detail = result.stderr.trim() || result.stdout.trim();
+  if (detail) {
+    return detail;
+  }
+  if (result.code !== null) {
+    return `exit code ${result.code} (no output from npm)`;
+  }
+  if (result.signal) {
+    return `signal ${result.signal} (no output from npm)`;
+  }
+  return `termination ${result.termination} (no output from npm)`;
 }
 
 export function isManagedNpmProjectCorruptionInstallFailure(result: {
@@ -602,7 +614,7 @@ async function listManagedNpmPackageDirsForPackage(params: {
   try {
     entries = await fs.readdir(projectsDir, { withFileTypes: true });
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+    if (isNotFoundPathError(error)) {
       return packageDirs;
     }
     throw error;

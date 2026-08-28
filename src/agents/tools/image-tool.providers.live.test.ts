@@ -3,7 +3,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
+import { coerceErrorMessage as formatLiveError, expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ModelApi } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -18,10 +18,11 @@ import {
   isBillingErrorMessage,
   isOverloadedErrorMessage,
   isServerErrorMessage,
-} from "../../plugin-sdk/test-env.js";
+} from "../failover/classify.js";
 import { isLiveTestEnabled } from "../live-test-helpers.js";
-import { isLiveAuthDrift } from "../live-test-provider-drift.js";
-import { createImageTool, testing } from "./image-tool.js";
+import { isLiveAuthDrift } from "../live-test-provider-drift.test-support.js";
+import { createImageTool } from "./image-tool.js";
+import { testing } from "./image-tool.test-support.js";
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY?.trim() ?? "";
 const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY?.trim() ?? "";
@@ -109,10 +110,6 @@ function readJpegDimensions(buffer: Buffer): { width: number; height: number } {
   throw new Error("JPEG dimensions not found");
 }
 
-function formatLiveError(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
-}
-
 function isSkippableLiveError(error: unknown): boolean {
   const message = formatLiveError(error);
   return (
@@ -157,9 +154,16 @@ function createLiveConfig(testCase: LiveProviderCase): OpenClawConfig {
     },
     tools: {
       media: {
+        models: [
+          {
+            provider: testCase.provider,
+            model: testCase.model,
+            timeoutSeconds: 90,
+            capabilities: ["image"],
+          },
+        ],
         image: {
           timeoutSeconds: 90,
-          models: [{ provider: testCase.provider, model: testCase.model, timeoutSeconds: 90 }],
         },
       },
     },
@@ -232,7 +236,7 @@ async function runLiveDownscaleCase(testCase: LiveProviderCase) {
       result = await tool.execute(`live-${testCase.provider}-large-image`, {
         prompt:
           "Look at the center of the image. Reply with one lowercase word naming that center color.",
-        image: imagePath,
+        path: imagePath,
       });
     } catch (err) {
       if (isSkippableLiveError(err)) {

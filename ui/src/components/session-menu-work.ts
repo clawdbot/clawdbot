@@ -1,23 +1,20 @@
 import type { WorktreeRecord } from "../../../packages/gateway-protocol/src/index.js";
 import type {
   ControlUiSessionPullRequest,
-  ControlUiSessionPullRequests,
+  ControlUiSessionPullRequestSnapshot,
 } from "../../../src/gateway/control-ui-contract.js";
+import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { isNativeLocalGateway } from "../app/native-editor-locality.runtime.ts";
 
 // Shared by the app sidebar and the Sessions page: both hosts resolve the
 // same worktree-session extras (PR link, checkout path) when opening the
 // session context menu, after the menu is already visible.
-type SessionMenuWorkClient = {
-  request: <T>(method: string, params?: unknown) => Promise<T>;
-};
-
 type SessionMenuWorkParams = {
-  client: SessionMenuWorkClient;
-  /** controlUi.sessionPullRequests is optional gateway surface; skip when absent. */
-  pullRequestsAvailable: boolean;
-  sessionKey: string;
-  agentId?: string;
+  client: Pick<GatewayBrowserClient, "request">;
+  /** Omitted when the Gateway does not advertise pushed PR snapshots. */
+  loadPullRequests?: () => Promise<ControlUiSessionPullRequestSnapshot | undefined>;
   worktreeId?: string;
+  execNode?: string;
 };
 
 type SessionMenuWorkResult = {
@@ -27,12 +24,7 @@ type SessionMenuWorkResult = {
 
 // Menu offers a single Open PR action; prefer the PR a maintainer most
 // likely wants: active first, merged history next, closed last.
-const PR_STATE_ORDER: ReadonlyArray<ControlUiSessionPullRequest["state"]> = [
-  "open",
-  "draft",
-  "merged",
-  "closed",
-];
+const PR_STATE_ORDER = ["open", "draft", "merged", "closed"] as const;
 
 function pickSessionMenuPullRequestUrl(
   pullRequests: readonly ControlUiSessionPullRequest[],
@@ -47,15 +39,9 @@ function pickSessionMenuPullRequestUrl(
 }
 
 async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string | null> {
-  if (!params.pullRequestsAvailable) {
-    return null;
-  }
   try {
-    const result = await params.client.request<ControlUiSessionPullRequests>(
-      "controlUi.sessionPullRequests",
-      { sessionKey: params.sessionKey, ...(params.agentId ? { agentId: params.agentId } : {}) },
-    );
-    return pickSessionMenuPullRequestUrl(result.pullRequests);
+    const snapshot = await params.loadPullRequests?.();
+    return pickSessionMenuPullRequestUrl(snapshot?.pullRequests ?? []);
   } catch {
     // Optional affordance: a GitHub or gateway hiccup just leaves Open PR disabled.
     return null;
@@ -64,7 +50,10 @@ async function loadPullRequestUrl(params: SessionMenuWorkParams): Promise<string
 
 async function loadWorktreePath(params: SessionMenuWorkParams): Promise<string | null> {
   const worktreeId = params.worktreeId;
-  if (!worktreeId) {
+  if (!worktreeId || params.execNode) {
+    return null;
+  }
+  if (!isNativeLocalGateway()) {
     return null;
   }
   try {

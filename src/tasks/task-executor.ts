@@ -1,6 +1,5 @@
 // Executes task records through configured runtimes and updates registry state.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { formatErrorMessage } from "../infra/errors.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   DetachedRunningTaskCreateParams,
@@ -9,29 +8,29 @@ import type {
   DetachedTaskFailParams,
   DetachedTaskFinalizeParams,
 } from "./detached-task-runtime-contract.js";
-import { getRegisteredDetachedTaskLifecycleRuntime } from "./detached-task-runtime-state.js";
 import {
-  assertTaskCancellationReadyById,
-  cancelTaskById,
   createTaskRecord,
   findTaskByRunId as findTaskByRunIdInRegistry,
   getTaskById,
   isParentFlowLinkError,
   linkTaskToFlowById,
-  listTaskRecordsUnsorted as listTaskRecordsUnsortedInRegistry,
   listTasksForFlowId,
   markTaskTerminalById as markTaskTerminalByIdInRegistry,
   markTaskRunningByRunId,
-  finalizeTaskRunByRunId as finalizeTaskRunByRunIdInRegistry,
+  finalizeTaskRecordByRunId,
   recordTaskProgressByRunId,
   setTaskRunDeliveryStatusByRunId,
 } from "./runtime-internal.js";
+import {
+  hasAuthoritativeTaskBacking,
+  resolveManagedTaskBackingDetail,
+} from "./task-backing-authority.js";
 import {
   isProvisionalSubagentKillTask,
   isTaskFlowCancellationPending,
 } from "./task-cancellation-state.js";
 import { getTaskFlowByIdForOwner } from "./task-flow-owner-access.js";
-import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 import {
   createTaskFlowForTask,
   deleteTaskFlowRecordById,
@@ -100,7 +99,7 @@ function ensureSingleTaskFlow(params: {
   }
 }
 
-export function createQueuedTaskRun(params: DetachedTaskCreateParams): TaskRecord | null {
+export function createQueuedTaskRunCore(params: DetachedTaskCreateParams): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "queued",
@@ -118,7 +117,9 @@ export function getFlowTaskSummary(flowId: string): TaskRegistrySummary {
   return summarizeTaskRecords(listTasksForFlowId(flowId));
 }
 
-export function createRunningTaskRun(params: DetachedRunningTaskCreateParams): TaskRecord | null {
+export function createRunningTaskRunCore(
+  params: DetachedRunningTaskCreateParams,
+): TaskRecord | null {
   const task = createTaskRecord({
     ...params,
     status: "running",
@@ -134,10 +135,6 @@ export function createRunningTaskRun(params: DetachedRunningTaskCreateParams): T
 
 export function findTaskByRunId(runId: string): TaskRecord | undefined {
   return findTaskByRunIdInRegistry(runId);
-}
-
-export function listTaskRecordsUnsorted(): TaskRecord[] {
-  return listTaskRecordsUnsortedInRegistry();
 }
 
 type RunTaskInFlowParams = {
@@ -159,7 +156,7 @@ type RunTaskInFlowParams = {
   progressSummary?: string | null;
 };
 
-export function startTaskRunByRunId(params: {
+export function startTaskRunByRunIdCore(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -171,10 +168,11 @@ export function startTaskRunByRunId(params: {
   return markTaskRunningByRunId(params);
 }
 
-export function recordTaskRunProgressByRunId(params: {
+export function recordTaskRunProgressByRunIdCore(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
+  childSessionKey?: string | null;
   lastEventAt?: number;
   progressSummary?: string | null;
   eventSummary?: string | null;
@@ -182,15 +180,15 @@ export function recordTaskRunProgressByRunId(params: {
   return recordTaskProgressByRunId(params);
 }
 
-export function completeTaskRunByRunId(params: DetachedTaskCompleteParams) {
-  return finalizeTaskRunByRunId({
+export function completeTaskRunByRunIdCore(params: DetachedTaskCompleteParams) {
+  return finalizeTaskRunByRunIdCore({
     ...params,
     status: "succeeded",
   });
 }
 
-export function finalizeTaskRunByRunId(params: DetachedTaskFinalizeParams) {
-  return finalizeTaskRunByRunIdInRegistry(params);
+export function finalizeTaskRunByRunIdCore(params: DetachedTaskFinalizeParams) {
+  return finalizeTaskRecordByRunId(params);
 }
 
 export function finalizeTaskRunById(
@@ -199,14 +197,14 @@ export function finalizeTaskRunById(
   return markTaskTerminalByIdInRegistry(params);
 }
 
-export function failTaskRunByRunId(params: DetachedTaskFailParams) {
-  return finalizeTaskRunByRunId({
+export function failTaskRunByRunIdCore(params: DetachedTaskFailParams) {
+  return finalizeTaskRunByRunIdCore({
     ...params,
     status: params.status ?? "failed",
   });
 }
 
-export function setDetachedTaskDeliveryStatusByRunId(params: {
+export function setDetachedTaskDeliveryStatusByRunIdCore(params: {
   runId: string;
   runtime?: TaskRuntime;
   sessionKey?: string;
@@ -231,12 +229,6 @@ type RunTaskInFlowResult = {
   flow?: TaskFlowRecord;
   task?: TaskRecord;
 };
-
-function isTerminalFlowStatus(status: TaskFlowRecord["status"]): boolean {
-  return (
-    status === "succeeded" || status === "failed" || status === "cancelled" || status === "lost"
-  );
-}
 
 function markFlowCancelRequested(flow: TaskFlowRecord): TaskFlowRecord | FlowUpdateFailure {
   if (flow.cancelRequestedAt != null) {
@@ -359,11 +351,36 @@ function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
       flow,
     };
   }
-  if (isTerminalFlowStatus(flow.status)) {
+  if (isTerminalTaskFlow(flow)) {
     return {
       found: true,
       created: false,
       reason: `Flow is already ${flow.status}.`,
+      flow,
+    };
+  }
+
+  const childSessionKey = params.childSessionKey?.trim();
+  const runId = params.runId?.trim();
+  const managedBackingDetail =
+    childSessionKey && runId && (params.runtime === "acp" || params.runtime === "subagent")
+      ? resolveManagedTaskBackingDetail({
+          runtime: params.runtime,
+          scopeKind: "session",
+          ownerKey: flow.ownerKey,
+          childSessionKey,
+          runId,
+        })
+      : undefined;
+  if (
+    childSessionKey &&
+    (params.runtime === "acp" || params.runtime === "subagent") &&
+    !managedBackingDetail
+  ) {
+    return {
+      found: true,
+      created: false,
+      reason: "Task backing ownership could not be verified.",
       flow,
     };
   }
@@ -384,18 +401,19 @@ function runTaskInFlow(params: RunTaskInFlowParams): RunTaskInFlowResult {
     preferMetadata: params.preferMetadata,
     notifyPolicy: params.notifyPolicy,
     deliveryStatus: params.deliveryStatus ?? "pending",
+    ...(managedBackingDetail !== undefined ? { detail: managedBackingDetail } : {}),
   };
   let task: TaskRecord | null;
   try {
     task =
       params.status === "running"
-        ? createRunningTaskRun({
+        ? createRunningTaskRunCore({
             ...common,
             startedAt: params.startedAt,
             lastEventAt: params.lastEventAt,
             progressSummary: params.progressSummary,
           })
-        : createQueuedTaskRun(common);
+        : createQueuedTaskRunCore(common);
   } catch (error) {
     return mapRunTaskInFlowCreateError({
       error,
@@ -474,7 +492,7 @@ export async function cancelFlowById(params: {
       reason: "Flow not found.",
     };
   }
-  if (isTerminalFlowStatus(flow.status)) {
+  if (isTerminalTaskFlow(flow)) {
     const provisionalTasks = listTasksForFlowId(flow.flowId).filter(isProvisionalSubagentKillTask);
     if (flow.status === "cancelled" && provisionalTasks.length > 0) {
       for (const task of provisionalTasks) {
@@ -510,6 +528,17 @@ export async function cancelFlowById(params: {
       tasks: listTasksForFlowId(flow.flowId),
     };
   }
+  const linkedTasks = listTasksForFlowId(flow.flowId);
+  const activeTasks = linkedTasks.filter(isTaskFlowCancellationPending);
+  if (activeTasks.some((task) => !hasAuthoritativeTaskBacking(task))) {
+    return {
+      found: true,
+      cancelled: false,
+      reason: "Child task ownership could not be verified; no cancellation was performed.",
+      flow,
+      tasks: linkedTasks,
+    };
+  }
   const cancelRequestedFlow = markFlowCancelRequested(flow);
   if ("reason" in cancelRequestedFlow) {
     return {
@@ -520,8 +549,6 @@ export async function cancelFlowById(params: {
       tasks: listTasksForFlowId(flow.flowId),
     };
   }
-  const linkedTasks = listTasksForFlowId(flow.flowId);
-  const activeTasks = linkedTasks.filter(isTaskFlowCancellationPending);
   for (const task of activeTasks) {
     await cancelDetachedTaskRunById({
       cfg: params.cfg,
@@ -541,7 +568,7 @@ export async function cancelFlowById(params: {
   }
   const now = Date.now();
   const refreshedFlow = getTaskFlowById(flow.flowId) ?? cancelRequestedFlow;
-  if (isTerminalFlowStatus(refreshedFlow.status)) {
+  if (isTerminalTaskFlow(refreshedFlow)) {
     return {
       found: true,
       cancelled: refreshedFlow.status === "cancelled",
@@ -598,32 +625,6 @@ export async function cancelDetachedTaskRunById(params: {
   taskId: string;
   reason?: string;
 }) {
-  const task = getTaskById(params.taskId);
-  const registeredRuntime = getRegisteredDetachedTaskLifecycleRuntime();
-  if (!task) {
-    if (registeredRuntime) {
-      const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
-      if (cancelled.found) {
-        return cancelled;
-      }
-    }
-    return cancelTaskById(params);
-  }
-  try {
-    assertTaskCancellationReadyById(task.taskId);
-  } catch (error) {
-    return {
-      found: true,
-      cancelled: false,
-      reason: formatErrorMessage(error),
-      task,
-    };
-  }
-  if (registeredRuntime) {
-    const cancelled = await registeredRuntime.cancelDetachedTaskRunById(params);
-    if (cancelled.found) {
-      return cancelled;
-    }
-  }
-  return cancelTaskById(params);
+  const runtime = await import("./task-executor-cancel.runtime.js");
+  return runtime.cancelDetachedTaskRunByIdCore(params);
 }

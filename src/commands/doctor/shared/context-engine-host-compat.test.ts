@@ -3,7 +3,6 @@ import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import {
   getContextEngineRegistration,
-  registerContextEngine,
   registerContextEngineForOwner,
 } from "../../../context-engine/registry.js";
 import type { ContextEngine, ContextEngineHostCapability } from "../../../context-engine/types.js";
@@ -11,10 +10,6 @@ import {
   collectContextEngineHostCompatibilityWarnings,
   maybeRepairContextEngineHostCompatibility,
 } from "./context-engine-host-compat.js";
-
-vi.mock("../../../agents/agent-scope-config.js", () => ({
-  resolveDefaultAgentDir: vi.fn(() => "/tmp/openclaw-doctor-host-compat"),
-}));
 
 vi.mock("../../../agents/cli-backends.js", () => ({
   resolveCliBackendConfig: vi.fn((runtimeId: string) => ({ id: runtimeId })),
@@ -38,15 +33,20 @@ vi.mock("../../../context-engine/init.js", () => ({
   ensureContextEnginesInitialized: vi.fn(),
 }));
 
-vi.mock("../../../plugins/runtime/runtime-registry-loader.js", () => ({
-  ensurePluginRegistryLoaded: vi.fn(),
-}));
-
 let engineCounter = 0;
 
 function uniqueEngineId(): string {
   engineCounter += 1;
   return `doctor-host-compat-${engineCounter}`;
+}
+
+function registerTestContextEngine(
+  id: string,
+  factory: Parameters<typeof registerContextEngineForOwner>[1],
+) {
+  return registerContextEngineForOwner(id, factory, `doctor-test-owner-${id}`, {
+    allowSameOwnerRefresh: true,
+  });
 }
 
 function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): string {
@@ -75,7 +75,7 @@ function registerEngine(requiredCapabilities: ContextEngineHostCapability[]): st
       return { ok: true, compacted: false };
     },
   };
-  registerContextEngine(id, () => engine);
+  registerTestContextEngine(id, () => engine);
   return id;
 }
 
@@ -149,25 +149,61 @@ describe("doctor context-engine host compatibility", () => {
     expect(warnings).toEqual([]);
   });
 
-  it("repairs an incompatible context engine by switching the global slot to legacy", async () => {
-    const engineId = registerEngine(["assemble-before-prompt"]);
-    const result = await maybeRepairContextEngineHostCompatibility({
+  it("uses the system agent when inspecting an explicit multi-agent roster", async () => {
+    const engineId = registerEngine([]);
+    const warnings = await collectContextEngineHostCompatibilityWarnings({
       cfg: configWithEngine(engineId, {
         agents: {
+          ownership: "explicit",
           defaults: {
+            systemAgent: { agentId: "main" },
             model: "anthropic/claude-sonnet-4-6",
-            models: {
-              "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
-            },
+          },
+          entries: {
+            main: { agentDir: "/tmp/openclaw-doctor-host-compat" },
+            helper: {},
+            third: {},
           },
         },
       }),
       doctorFixCommand: "openclaw doctor --fix",
     });
 
-    expect(result.config.plugins?.slots?.contextEngine).toBe("legacy");
+    expect(warnings).toEqual([]);
+  });
+
+  it("repairs an incompatible context engine by resetting the global slot to legacy", async () => {
+    const engineId = registerEngine(["assemble-before-prompt"]);
+    const cfg = configWithEngine(engineId, {
+      plugins: {
+        slots: {
+          memory: "custom-memory",
+        },
+      },
+      agents: {
+        defaults: {
+          model: "anthropic/claude-sonnet-4-6",
+          models: {
+            "anthropic/claude-sonnet-4-6": { agentRuntime: { id: "claude-cli" } },
+          },
+        },
+      },
+    });
+    const warnings = await collectContextEngineHostCompatibilityWarnings({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+    const result = await maybeRepairContextEngineHostCompatibility({
+      cfg,
+      doctorFixCommand: "openclaw doctor --fix",
+    });
+
+    expect(warnings.join("\n")).toContain(
+      'remove the plugins.slots.contextEngine override and restore the default "legacy"',
+    );
+    expect(result.config.plugins?.slots).toEqual({ memory: "custom-memory" });
     expect(result.changes).toEqual([
-      `Set plugins.slots.contextEngine to "legacy" because context engine "${engineId}" is incompatible with every configured agent-run host.`,
+      `Reset plugins.slots.contextEngine to the default "legacy" because context engine "${engineId}" is incompatible with every configured agent-run host.`,
     ]);
   });
 

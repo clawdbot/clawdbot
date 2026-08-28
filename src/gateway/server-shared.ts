@@ -13,6 +13,8 @@ export function pendingChatSendDedupeKey(runId: string): string {
 export type DedupeEntry = {
   ts: number;
   ok: boolean;
+  /** Optional effectful-request fingerprint for methods with caller-supplied operation ids. */
+  requestIdentity?: string;
   payload?: unknown;
   error?: ErrorShape;
 };

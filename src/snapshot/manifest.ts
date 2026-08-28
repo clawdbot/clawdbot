@@ -1,7 +1,7 @@
-import { createHash } from "node:crypto";
 import type { BigIntStats, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { sha256File } from "../infra/directory-durability.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { root } from "../infra/fs-safe.js";
 import { isValidAgentId, normalizeAgentId } from "../routing/session-key.js";
@@ -95,17 +95,15 @@ async function hashFileHandle(
   target?: OpenFileHandle,
 ): Promise<Omit<SnapshotArtifactDigest, "stat">> {
   const initialStat = await source.stat({ bigint: true });
-  const hash = createHash("sha256");
-  const buffer = Buffer.allocUnsafe(1024 * 1024);
   let sizeBytes = 0;
-  while (true) {
-    const { bytesRead } = await source.read(buffer, 0, buffer.length, sizeBytes);
-    if (bytesRead === 0) {
-      break;
-    }
-    hash.update(buffer.subarray(0, bytesRead));
-    let bytesWritten = 0;
-    if (target) {
+  if (target) {
+    const buffer = Buffer.allocUnsafe(1024 * 1024);
+    while (true) {
+      const { bytesRead } = await source.read(buffer, 0, buffer.length, sizeBytes);
+      if (bytesRead === 0) {
+        break;
+      }
+      let bytesWritten = 0;
       while (bytesWritten < bytesRead) {
         const result = await target.write(
           buffer,
@@ -118,14 +116,15 @@ async function hashFileHandle(
         }
         bytesWritten += result.bytesWritten;
       }
+      sizeBytes += bytesRead;
     }
-    sizeBytes += bytesRead;
   }
+  const hashed = await sha256File(target ?? source);
   const finalStat = await source.stat({ bigint: true });
-  if (!sameMutationFingerprint(initialStat, finalStat)) {
+  if (!sameMutationFingerprint(initialStat, finalStat) || (target && sizeBytes !== hashed.bytes)) {
     throw new Error("Snapshot artifact changed while being read.");
   }
-  return { sha256: hash.digest("hex"), sizeBytes };
+  return { sha256: hashed.digest, sizeBytes: hashed.bytes };
 }
 
 function sameMutationFingerprint(left: BigIntStats, right: BigIntStats): boolean {

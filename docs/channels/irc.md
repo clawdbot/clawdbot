@@ -42,6 +42,12 @@ openclaw gateway run
 
 Prefer a private IRC server for bot coordination. If you intentionally use a public IRC network, common choices include Libera.Chat, OFTC, and Snoonet. Avoid predictable public channels for bot or swarm backchannel traffic.
 
+## Inbound durability
+
+OpenClaw writes each accepted IRC `PRIVMSG` to its durable ingress queue before normal policy checks and agent dispatch. Pending or retryable messages survive a Gateway restart and remain serialized per channel or direct-message peer.
+
+IRC does not provide a replayable delivery ID or resend messages missed by a disconnected client. OpenClaw therefore assigns a local ID that is stable only within the current TCP connection. The queue protects the local accept-to-dispatch window; it cannot recover a message that never reached OpenClaw or deduplicate a server resend across connections.
+
 ## Connection settings
 
 | Key                           | Default                       | Notes                                                       |
@@ -54,7 +60,10 @@ Prefer a private IRC server for bot coordination. If you intentionally use a pub
 | `realname`                    | `OpenClaw`                    | Realname/GECOS field                                        |
 | `password` / `passwordFile`   | none                          | Server password; file must be a regular file                |
 | `channels`                    | none                          | Channels to join (`["#openclaw"]`)                          |
+| `replyToMode`                 | `all`                         | Reply-reference mode: `off`, `first`, `all`, or `batched`   |
 | `accounts` / `defaultAccount` | none                          | Multi-account setup; env vars fill only the default account |
+
+Named accounts inherit the channel-wide reply mode; override it with `channels.irc.accounts.<id>.replyToMode`.
 
 ## Security defaults
 

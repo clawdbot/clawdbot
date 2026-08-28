@@ -13,7 +13,7 @@ This page covers **model provider** authentication (API keys, OAuth, Claude CLI 
 OpenClaw supports OAuth and API keys for model providers. For an always-on gateway host, an API key is the most predictable option; subscription/OAuth flows work too when they match your provider account model.
 
 - Full OAuth flow and storage layout: [/concepts/oauth](/concepts/oauth)
-- SecretRef-based auth (`env`/`file`/`exec` providers): [Secrets Management](/gateway/secrets)
+- SecretRef-based auth (`env`/`file`/`exec`/`store` providers): [Secrets Management](/gateway/secrets)
 - Credential eligibility/reason codes used by `models status --probe`: [Auth Credential Semantics](/auth-credential-semantics)
 
 ## Recommended setup: API key (any provider)
@@ -56,9 +56,13 @@ claude auth status --text
 openclaw models auth login --provider anthropic --method cli --set-default
 ```
 
-This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic model selection through the local `claude-cli` backend and store the matching OpenClaw auth profile.
+This is two steps: log Claude Code into Anthropic on the host, then tell OpenClaw to route Anthropic models through the local `claude-cli` backend.
 
-If `claude` isn't on `PATH`, install Claude Code or set `agents.defaults.cliBackends.claude-cli.command` to the binary path.
+OpenClaw never reads, stores, refreshes, or forwards the native login tokens. The installed `claude` process reads and refreshes its own login. `CLAUDE_CONFIG_DIR` selects a separate Claude login when set on the Gateway process. OpenClaw-managed setup tokens and API keys remain separate credentials.
+
+The gateway service must resolve `claude` on `PATH`. If a deployment needs a
+nonstandard executable path, register a wrapper through a
+[CLI backend plugin](/plugins/cli-backend-plugins).
 
 ## Manual token entry
 
@@ -165,10 +169,10 @@ openclaw models auth login --provider anthropic --force
 
 ### Per-session (chat command)
 
-- `/model <alias-or-id>@<profileId>` pins a specific provider credential for the current session (example profile ids: `anthropic:default`, `anthropic:work`).
+- `/model <alias-or-id>@<profileId> -s` pins a specific provider credential for the current session (example profile ids: `anthropic:default`, `anthropic:work`).
 - `/model` (or `/model list`) shows a compact picker; `/model status` shows the full view (candidates + next auth profile, plus provider endpoint details when configured).
 
-If you change auth order or profile pinning for a chat that's already running, send `/new` or `/reset` to start a fresh session — existing sessions keep their current model/profile selection until reset.
+Changes to `auth.order` affect automatic profile selection. `/new` and `/reset` clear auto-selected fallback/rotation state but preserve valid explicit user model/profile pins; choose another explicit `@profile` selection to replace a user profile pin.
 
 ### Per-agent (CLI override)
 

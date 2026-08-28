@@ -12,7 +12,7 @@ import {
   normalizeOptionalSecretInput,
   type OpenClawConfig,
   type SecretInput,
-  upsertAuthProfileWithLock,
+  upsertAuthProfileWithLockOrThrow,
   validateApiKeyInput,
 } from "openclaw/plugin-sdk/provider-auth-api-key";
 import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-onboard";
@@ -32,17 +32,6 @@ type PixVerseAuthResult = {
   configPatch: OpenClawConfig;
   notes: string[];
 };
-
-type UpsertAuthProfileParams = Parameters<typeof upsertAuthProfileWithLock>[0];
-
-async function upsertAuthProfileWithLockOrThrow(params: UpsertAuthProfileParams): Promise<void> {
-  const updated = await upsertAuthProfileWithLock(params);
-  if (!updated) {
-    throw new Error(
-      "Failed to update auth profile store; the auth store lock may be busy. Wait a moment and retry.",
-    );
-  }
-}
 
 function normalizePixVerseRegion(value: unknown): PixVerseApiRegion | undefined {
   const region = normalizeOptionalString(value)?.toLowerCase();
@@ -66,7 +55,7 @@ function pixVerseRegionNote(region: PixVerseApiRegion): string {
   return `PixVerse endpoint: ${label} (${PIXVERSE_BASE_URL_BY_REGION[region]})`;
 }
 
-export function applyPixVerseProviderConfig(
+function applyPixVerseProviderConfig(
   cfg: OpenClawConfig,
   region: PixVerseApiRegion,
   options?: { resetBaseUrl?: boolean },
@@ -94,13 +83,13 @@ export function applyPixVerseProviderConfig(
   };
 }
 
-export function applyPixVerseConfig(
+function applyPixVerseConfig(
   cfg: OpenClawConfig,
   region: PixVerseApiRegion,
   options?: { resetBaseUrl?: boolean },
 ): OpenClawConfig {
   const next = applyPixVerseProviderConfig(cfg, region, options);
-  if (next.agents?.defaults?.videoGenerationModel) {
+  if (next.agents?.defaults?.mediaModels?.video) {
     return next;
   }
   return {
@@ -109,8 +98,9 @@ export function applyPixVerseConfig(
       ...next.agents,
       defaults: {
         ...next.agents?.defaults,
-        videoGenerationModel: {
-          primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF,
+        mediaModels: {
+          ...next.agents?.defaults?.mediaModels,
+          video: { primary: PIXVERSE_DEFAULT_VIDEO_MODEL_REF },
         },
       },
     },
@@ -154,6 +144,7 @@ async function runPixVerseApiKeyAuth(ctx: ProviderAuthContext): Promise<PixVerse
         : ctx.secretInputMode,
     config: ctx.config,
     env: ctx.env,
+    workspaceDir: ctx.workspaceDir,
     expectedProviders: [PIXVERSE_PROVIDER_ID],
     provider: PIXVERSE_PROVIDER_ID,
     envLabel: "PIXVERSE_API_KEY",

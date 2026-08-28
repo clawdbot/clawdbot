@@ -100,7 +100,7 @@ describe("dependency guard workflow", () => {
     for (const [index, job] of jobs.entries()) {
       const steps = job?.steps ?? [];
       const checkoutStep = workflowStep(steps, 0, `dependency guard checkout step ${index}`);
-      expect(checkoutStep.uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
+      expect(checkoutStep.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
       expect(checkoutStep.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
       expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
       expect(steps.at(-1)?.run).toBe("node scripts/github/dependency-guard.mjs");
@@ -139,7 +139,7 @@ describe("dependency guard workflow", () => {
     const finalRunStep = workflowStep(finalSteps, 1, "dependency guard final run step");
     expect(detectRunStep.env?.OPENCLAW_DEPENDENCY_GUARD_MODE).toBe("detect");
     expect(primaryTokenStep.uses).toBe(
-      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
     );
     expect(primaryTokenStep.with).toMatchObject({
       "app-id": "2729701",
@@ -149,7 +149,7 @@ describe("dependency guard workflow", () => {
     });
     expect(primaryTokenStep["continue-on-error"]).toBe(true);
     expect(fallbackTokenStep.uses).toBe(
-      "actions/create-github-app-token@1b10c78c7865c340bc4f6099eb2f838309f1e8c3",
+      "actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1",
     );
     expect(fallbackTokenStep.with).toMatchObject({
       "app-id": "2971289",
@@ -171,7 +171,7 @@ describe("dependency guard workflow", () => {
     expect(steps).toHaveLength(2);
     const checkoutStep = workflowStep(steps, 0, "final dependency guard checkout step");
     const runStep = workflowStep(steps, 1, "final dependency guard run step");
-    expect(checkoutStep.uses).toBe("actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd");
+    expect(checkoutStep.uses).toBe("actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1");
     expect(checkoutStep.with?.ref).toBe("${{ github.event.pull_request.base.sha }}");
     expect(checkoutStep.with?.["persist-credentials"]).toBe(false);
     expect(runStep.run).toBe("node scripts/github/dependency-guard.mjs");
@@ -194,7 +194,6 @@ describe("dependency guard workflow", () => {
     const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
     expect(script).toContain('filename.endsWith("package.json")');
     expect(script).toContain('filename.endsWith("package-lock.json")');
-    expect(script).toContain('filename.endsWith("npm-shrinkwrap.json")');
     expect(script).toContain('filename.endsWith("pnpm-lock.yaml")');
     expect(script).toContain('filename === "pnpm-workspace.yaml"');
     expect(script).toContain('filename.startsWith("patches/")');
@@ -207,7 +206,6 @@ describe("dependency guard workflow", () => {
     const guardSources = `${script}\n${sharedScript}`;
     expect(script).toContain('filename.endsWith("pnpm-lock.yaml")');
     expect(script).toContain('filename.endsWith("package-lock.json")');
-    expect(script).toContain('filename.endsWith("npm-shrinkwrap.json")');
     expect(script).toContain('"optionalDependencies"');
     expect(script).toContain('"peerDependencies"');
     expect(script).toContain('"overrides"');
@@ -221,6 +219,15 @@ describe("dependency guard workflow", () => {
     expect(script).toContain("createAutoscrubCommit");
     expect(script).toContain("chore: remove dependency lockfile change");
     expect(script).toContain("process.exitCode = 1");
+  });
+
+  it("keeps removal-only dependency changes informational", () => {
+    const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
+
+    expect(script).toContain("isRemovalOnlyDependencyGraphChange");
+    expect(script).toContain("Dependency removals detected; guard is informational.");
+    expect(script).toContain("/dependency-graph/compare/");
+    expect(script).toContain('change.change_type === "removed"');
   });
 
   it("cleans dependency label and guard comment after successful autoscrub", () => {
@@ -245,13 +252,15 @@ describe("dependency guard workflow", () => {
     expect(autoscrubCommentIndex).toBeGreaterThan(deleteCommentIndex);
   });
 
-  it("checks trusted actors before autoscrub can mutate dependency changes", () => {
+  it("checks trusted actors before dependency graph comparison and autoscrub", () => {
     const script = readFileSync("scripts/github/dependency-guard.mjs", "utf8");
     const trustedActorIndex = script.indexOf("const trustedActor =");
+    const dependencyGraphCompareIndex = script.indexOf("const dependencyGraphChanges =");
     const autoscrubCandidateIndex = script.indexOf("const autoscrubCandidate =");
     const autoscrubOutputIndex = script.indexOf('await setOutput("autoscrub", "true")');
 
     expect(trustedActorIndex).toBeGreaterThan(0);
+    expect(dependencyGraphCompareIndex).toBeGreaterThan(trustedActorIndex);
     expect(autoscrubCandidateIndex).toBeGreaterThan(trustedActorIndex);
     expect(autoscrubOutputIndex).toBeGreaterThan(trustedActorIndex);
   });
@@ -266,8 +275,7 @@ describe("dependency guard workflow", () => {
     );
     expect(codeowners).toContain("/scripts/github/dependency-guard.mjs @openclaw/openclaw-secops");
     expect(codeowners).toContain("/package-lock.json @openclaw/openclaw-secops");
-    expect(codeowners).toContain("/npm-shrinkwrap.json @openclaw/openclaw-secops");
     expect(codeowners).toContain("/extensions/*/package-lock.json @openclaw/openclaw-secops");
-    expect(codeowners).toContain("/extensions/*/npm-shrinkwrap.json @openclaw/openclaw-secops");
+    expect(codeowners).toContain("/pnpm-lock.yaml @openclaw/openclaw-secops");
   });
 });

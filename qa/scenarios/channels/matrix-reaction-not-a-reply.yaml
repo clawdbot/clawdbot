@@ -4,14 +4,15 @@ scenario:
   surface: channels
   coverage:
     primary:
-      - channels.message-actions
+      - matrix.message-send-read-edit-delete
   execution:
     kind: flow
     channel: matrix
+    suiteIsolation: isolated
+    isolationReason: Posts native reaction state against a fresh canary reply and cannot inherit a shared Matrix session.
     timeoutMs: 8000
     retryCount: 0
     config:
-      requiredChannelDriver: live
       matrixRequireCanary: true
 
 flow:

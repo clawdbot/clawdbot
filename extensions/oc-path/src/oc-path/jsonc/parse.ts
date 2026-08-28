@@ -41,26 +41,27 @@ type JsoncParserNode = {
 };
 
 export function parseJsonc(raw: string): JsoncParseResult {
-  if (raw.trim().length === 0) {
-    return { ast: { kind: "jsonc", raw, root: null }, diagnostics: [] };
-  }
-
   // Pre-parse byte-length cap. Symmetric with the post-parse depth cap
   // at `nodeToJsoncValue`. Without this, `parseTree` would allocate the
   // full tree before our walker noticed; bounding at the source keeps
   // memory pressure proportional to input size.
-  if (raw.length > MAX_JSONC_INPUT_BYTES) {
+  const inputBytes = Buffer.byteLength(raw, "utf8");
+  if (inputBytes > MAX_JSONC_INPUT_BYTES) {
     return {
       ast: { kind: "jsonc", raw, root: null },
       diagnostics: [
         {
           line: 1,
-          message: `input exceeds MAX_JSONC_INPUT_BYTES (${MAX_JSONC_INPUT_BYTES} bytes; got ${raw.length})`,
+          message: `input exceeds MAX_JSONC_INPUT_BYTES (${MAX_JSONC_INPUT_BYTES} bytes; got ${inputBytes})`,
           severity: "error",
           code: "OC_JSONC_INPUT_TOO_LARGE",
         },
       ],
     };
+  }
+
+  if (raw.trim().length === 0) {
+    return { ast: { kind: "jsonc", raw, root: null }, diagnostics: [] };
   }
 
   const parseSource = raw.startsWith("\uFEFF") ? raw.slice(1) : raw;

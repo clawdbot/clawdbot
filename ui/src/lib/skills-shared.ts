@@ -6,6 +6,9 @@ import { t } from "../i18n/index.ts";
 export function computeSkillMissing(skill: SkillStatusEntry): string[] {
   return [
     ...skill.missing.bins.map((b) => `bin:${b}`),
+    ...(skill.missing.anyBins.length > 0
+      ? [`bin:any of (${skill.missing.anyBins.join(", ")})`]
+      : []),
     ...skill.missing.env.map((e) => `env:${e}`),
     ...skill.missing.config.map((c) => `config:${c}`),
     ...skill.missing.os.map((o) => `os:${o}`),

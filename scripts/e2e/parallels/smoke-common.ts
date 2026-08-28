@@ -1,25 +1,33 @@
 // Smoke Common helper supports OpenClaw script workflows.
 import { readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { stripLeadingPackageManagerSeparator } from "../../lib/arg-utils.mts";
+import { resolveProviderConfig } from "../../lib/cross-os-release-checks/config.ts";
+import { parseTcpPort } from "./env-limits.ts";
 import { extractLastOpenClawVersionFromLog } from "./filesystem.ts";
-import { run, say } from "./host-command.ts";
-import { resolveHostIp, resolveHostPort } from "./host-server.ts";
-import { startHostServer } from "./host-server.ts";
+import { run, say, die } from "./host-command.ts";
+import {
+  resolveHostIp,
+  resolveHostPort,
+  startHostServer,
+  startNpmRegistryServer,
+} from "./host-server.ts";
 import { runSmokeLane, type SmokeLane, type SmokeLaneStatus } from "./lane-runner.ts";
 import {
   packageBuildCommitFromTgz,
   packageVersionFromTgz,
   packOpenClaw,
 } from "./package-artifact.ts";
+import { ensureValue, parseMode, parseProvider } from "./provider-auth.ts";
 import type { HostServer, Mode, PackageArtifact, Provider, SnapshotInfo } from "./types.ts";
 
-export interface SmokeHostOptions {
+interface SmokeHostOptions {
   hostIp?: string;
   hostPort: number;
   hostPortExplicit: boolean;
 }
 
-export interface SmokeRunOptions {
+interface SmokeRunOptions {
   installVersion?: string;
   json: boolean;
   keepServer: boolean;
@@ -28,6 +36,84 @@ export interface SmokeRunOptions {
   provider: Provider;
   snapshotHint: string;
   targetPackageSpec?: string;
+}
+
+export interface SmokeCliOptions extends SmokeHostOptions, SmokeRunOptions {
+  apiKeyEnv?: string;
+  installUrl: string;
+  latestVersion?: string;
+  modelId?: string;
+  vmName: string;
+}
+
+type SmokeCliParserConfig<TOptions extends SmokeCliOptions> = {
+  flagHandlers?: Record<string, (options: TOptions) => void>;
+  usage: () => string;
+  valueHandlers?: Record<string, (options: TOptions, value: string) => void>;
+};
+
+export function parseSmokeCliArgs<TOptions extends SmokeCliOptions>(
+  argv: string[],
+  options: TOptions,
+  config: SmokeCliParserConfig<TOptions>,
+): TOptions {
+  const args = stripLeadingPackageManagerSeparator(argv);
+  const valueHandlers: Record<string, (value: string) => void> = {
+    "--api-key-env": (value) => (options.apiKeyEnv = value),
+    "--host-ip": (value) => (options.hostIp = value),
+    "--host-port": (value) => {
+      options.hostPort = parseTcpPort(value, "--host-port");
+      options.hostPortExplicit = true;
+    },
+    "--install-url": (value) => (options.installUrl = value),
+    "--install-version": (value) => (options.installVersion = value),
+    "--latest-version": (value) => (options.latestVersion = value),
+    "--mode": (value) => (options.mode = parseMode(value)),
+    "--model": (value) => (options.modelId = value),
+    "--npm-registry": (value) => (options.npmRegistry = value),
+    "--openai-api-key-env": (value) => (options.apiKeyEnv = value),
+    "--provider": (value) => (options.provider = parseProvider(value)),
+    "--snapshot-hint": (value) => (options.snapshotHint = value),
+    "--target-package-spec": (value) => (options.targetPackageSpec = value),
+    "--vm": (value) => (options.vmName = value),
+  };
+  for (const [flag, handler] of Object.entries(config.valueHandlers ?? {})) {
+    valueHandlers[flag] = (value) => handler(options, value);
+  }
+  const flagHandlers: Record<string, () => void> = {
+    "--json": () => (options.json = true),
+    "--keep-server": () => (options.keepServer = true),
+  };
+  for (const [flag, handler] of Object.entries(config.flagHandlers ?? {})) {
+    flagHandlers[flag] = () => handler(options);
+  }
+
+  for (let index = 0; index < args.length; index += 1) {
+    const arg = args[index];
+    if (arg === undefined) {
+      die(`missing argument at index ${index}`);
+    }
+    if (arg === "--") {
+      break;
+    }
+    const valueHandler = Object.hasOwn(valueHandlers, arg) ? valueHandlers[arg] : undefined;
+    if (valueHandler) {
+      valueHandler(ensureValue(args, index, arg));
+      index += 1;
+      continue;
+    }
+    const flagHandler = Object.hasOwn(flagHandlers, arg) ? flagHandlers[arg] : undefined;
+    if (flagHandler) {
+      flagHandler();
+      continue;
+    }
+    if (arg === "-h" || arg === "--help") {
+      process.stdout.write(config.usage());
+      process.exit(0);
+    }
+    die(`unknown arg: ${arg}`);
+  }
+  return options;
 }
 
 interface SmokeLaneStatuses {
@@ -71,11 +157,14 @@ interface CommonSmokeSummary {
 export abstract class SmokeRunController<TOptions extends SmokeRunOptions & SmokeHostOptions> {
   protected hostIp = "";
   protected hostPort = 0;
+  protected options: TOptions;
   protected runDir = "";
   protected server: HostServer | null = null;
   protected tgzDir = "";
 
-  protected constructor(protected options: TOptions) {}
+  protected constructor(options: TOptions) {
+    this.options = options;
+  }
 
   protected abstract runFreshLane(): Promise<void>;
   protected abstract runUpgradeLane(): Promise<void>;
@@ -166,13 +255,38 @@ function logSmokeRunStart(input: {
   say(`Run logs: ${input.runDir}`);
 }
 
-async function startSmokeArtifactServer(input: {
+export function npmRegistryEnv(registry?: string): Record<string, string> {
+  return registry ? { NPM_CONFIG_REGISTRY: registry, npm_config_registry: registry } : {};
+}
+
+export function posixStopGatewayScript(managedCommand?: string): string {
+  // Embedded turns require exclusive state ownership. Unmanaged stop sends
+  // SIGTERM without waiting; Darwin pads the run loop's process title with spaces.
+  const stop = managedCommand
+    ? `gateway_stop_args=(gateway stop)
+if ${managedCommand} gateway stop --help | grep -Eq '^[[:space:]]+--force([[:space:]]|$)'; then
+  gateway_stop_args+=(--force)
+fi
+${managedCommand} "\${gateway_stop_args[@]}"`
+    : "pkill -f '^openclaw-gateway([[:space:]]|$)' || [ \"$?\" -eq 1 ]";
+  return `${stop}
+gateway_stop_deadline=$((SECONDS + 30))
+while pgrep -f '^openclaw-gateway([[:space:]]|$)' >/dev/null; do
+  if [ "$SECONDS" -ge "$gateway_stop_deadline" ]; then
+    echo "gateway did not release state ownership before the local agent turn" >&2
+    exit 1
+  fi
+  sleep 1
+done`;
+}
+
+export async function startSmokeArtifactServer(input: {
   artifact: PackageArtifact;
   dir: string;
   hostIp: string;
   label: string;
   port: number;
-}): Promise<{ hostPort: number; server: HostServer }> {
+}): Promise<HostServer> {
   const server = await startHostServer({
     artifactPath: input.artifact.path,
     dir: input.dir,
@@ -180,7 +294,36 @@ async function startSmokeArtifactServer(input: {
     label: input.label,
     port: input.port,
   });
-  return { hostPort: server.port, server };
+  if (!input.artifact.registryPackages?.length) {
+    return server;
+  }
+  try {
+    const registry = await startNpmRegistryServer({
+      hostIp: input.hostIp,
+      packages: [
+        {
+          name: "openclaw",
+          version: await expectedPackageTargetVersion(input.artifact),
+          tarballPath: input.artifact.path,
+        },
+        ...input.artifact.registryPackages,
+      ],
+    });
+    return {
+      ...server,
+      registry: { url: registry.url, hostUrl: registry.hostUrl },
+      stop: async () => {
+        try {
+          await server.stop();
+        } finally {
+          await registry.stop();
+        }
+      },
+    };
+  } catch (error) {
+    await server.stop().catch(() => undefined);
+    throw error;
+  }
 }
 
 export async function packAndServeSmokeArtifact(
@@ -189,12 +332,18 @@ export async function packAndServeSmokeArtifact(
   hostIp: string,
   hostPort: number,
   label: string,
-  requireControlUi = false,
+  requireControlUi: boolean,
+  provider: Provider,
 ): Promise<readonly [artifact: PackageArtifact, server: HostServer, hostPort: number]> {
+  const providerConfig = resolveProviderConfig(provider);
+  if (!providerConfig) {
+    die(`missing release smoke configuration for provider: ${provider}`);
+  }
   const artifact = await packOpenClaw({
     destination: tgzDir,
     packageSpec,
     requireControlUi,
+    requiredCompanionPackages: providerConfig.requiredCompanionPackages,
   });
   const server = await startSmokeArtifactServer({
     artifact,
@@ -203,7 +352,7 @@ export async function packAndServeSmokeArtifact(
     label,
     port: hostPort,
   });
-  return [artifact, server.server, server.hostPort];
+  return [artifact, server, server.port];
 }
 
 async function runRequestedSmokeLanes(input: {

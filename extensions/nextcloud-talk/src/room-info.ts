@@ -7,6 +7,7 @@ import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runt
 import { fetchWithSsrFGuard, type RuntimeEnv } from "../runtime-api.js";
 import type { ResolvedNextcloudTalkAccount } from "./accounts.js";
 import { resolveNextcloudTalkApiCredentials } from "./api-credentials.js";
+import { releaseNextcloudTalkGuardedResponse } from "./guarded-response.js";
 
 const ROOM_CACHE_TTL_MS = 5 * 60 * 1000;
 const ROOM_CACHE_ERROR_TTL_MS = 30 * 1000;
@@ -28,13 +29,6 @@ function cacheRoomInfo(
 ): void {
   roomCache.set(key, value);
   pruneMapToMaxSize(roomCache, ROOM_CACHE_MAX_ENTRIES);
-}
-
-function coerceRoomType(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isSafeInteger(value) && value > 0) {
-    return value;
-  }
-  return parseStrictPositiveInteger(value);
 }
 
 function resolveRoomKindFromType(type: number | undefined): "direct" | "group" | undefined {
@@ -116,12 +110,12 @@ export async function resolveNextcloudTalkRoomKind(params: {
       const payload = await readProviderJsonResponse<{
         ocs?: { data?: { type?: number | string } };
       }>(response, "Nextcloud Talk room info failed");
-      const type = coerceRoomType(payload.ocs?.data?.type);
+      const type = parseStrictPositiveInteger(payload.ocs?.data?.type);
       const kind = resolveRoomKindFromType(type);
       cacheRoomInfo(key, { fetchedAt: Date.now(), kind });
       return kind;
     } finally {
-      await release();
+      await releaseNextcloudTalkGuardedResponse({ response, release });
     }
   } catch (err) {
     cacheRoomInfo(key, {

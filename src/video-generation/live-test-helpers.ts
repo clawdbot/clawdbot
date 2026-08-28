@@ -50,15 +50,18 @@ export function resolveLiveVideoResolution(params: {
   if (providerId === "pixverse") {
     return "540P";
   }
+  if (providerId === "alibaba" || providerId === "qwen") {
+    return "720P";
+  }
   return "480P";
 }
 
-export function parseCsvFilter(raw?: string): Set<string> | null {
+export function parseVideoProviderFilter(raw?: string): Set<string> | null {
   return parseLiveCsvFilter(raw);
 }
 
 export function resolveConfiguredLiveVideoModels(cfg: OpenClawConfig): Map<string, string> {
-  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.videoGenerationModel);
+  return resolveConfiguredLiveProviderModels(cfg.agents?.defaults?.mediaModels?.video);
 }
 
 export function canRunBufferBackedVideoToVideoLiveLane(params: {

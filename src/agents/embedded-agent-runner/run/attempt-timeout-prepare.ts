@@ -1,7 +1,7 @@
 /**
- * Owns the run deadline, compaction grace, and external abort listener.
+ * Owns the run deadline and compaction grace.
  */
-import { isSignalTimeoutReason } from "../../failover-error.js";
+import { observeAgentRunApprovalWait } from "../../agent-run-approval-wait.js";
 import type { AgentSession } from "../../sessions/index.js";
 import { log } from "../logger.js";
 import {
@@ -16,12 +16,8 @@ type AttemptCompactionState = {
 
 type EmbeddedAttemptTimeoutParams = Pick<
   EmbeddedRunAttemptParams,
-  "abortSignal" | "onAttemptTimeoutArmed" | "runId" | "sessionId" | "timeoutMs"
+  "onAttemptTimeoutArmed" | "runId" | "sessionId" | "timeoutMs"
 >;
-
-function getAbortReason(signal: AbortSignal): unknown {
-  return "reason" in signal ? (signal as { reason?: unknown }).reason : undefined;
-}
 
 export function prepareEmbeddedAttemptTimeout(input: {
   attempt: EmbeddedAttemptTimeoutParams;
@@ -30,7 +26,6 @@ export function prepareEmbeddedAttemptTimeout(input: {
   compactionTimeoutMs: number;
   isProbeSession: boolean;
   abortRun: (isTimeout?: boolean, reason?: unknown) => void;
-  markExternalAbort: () => void;
   markTimedOutDuringCompaction: () => void;
   markTimedOutByRunBudget: () => void;
 }) {
@@ -39,6 +34,8 @@ export function prepareEmbeddedAttemptTimeout(input: {
   let abortTimer: NodeJS.Timeout | undefined;
   let runAbortDeadlineAtMs = Date.now() + attempt.timeoutMs;
   let compactionGraceUsed = false;
+  let pausedRemainingMs = 0;
+  const approvalWait = observeAgentRunApprovalWait(attempt);
 
   const scheduleAbortTimer = (delayMs: number, reason: "initial" | "compaction-grace") => {
     runAbortDeadlineAtMs = Date.now() + Math.max(1, delayMs);
@@ -77,6 +74,8 @@ export function prepareEmbeddedAttemptTimeout(input: {
         ) {
           input.markTimedOutDuringCompaction();
         }
+        // Settlement owns partial-output publication because abort or failure
+        // can still supersede this timeout while queued events drain.
         input.markTimedOutByRunBudget();
         input.abortRun(true);
         if (!abortWarnTimer) {
@@ -96,44 +95,28 @@ export function prepareEmbeddedAttemptTimeout(input: {
     );
   };
 
+  approvalWait.onChange = (pending) => {
+    if (pending) {
+      // Human review consumes neither the run budget nor an active compaction grace window.
+      pausedRemainingMs = Math.max(1, runAbortDeadlineAtMs - Date.now());
+      clearTimeout(abortTimer);
+    } else {
+      scheduleAbortTimer(pausedRemainingMs, compactionGraceUsed ? "compaction-grace" : "initial");
+    }
+  };
   scheduleAbortTimer(attempt.timeoutMs, "initial");
   attempt.onAttemptTimeoutArmed?.();
-
-  const onAbort = () => {
-    input.markExternalAbort();
-    const reason = attempt.abortSignal ? getAbortReason(attempt.abortSignal) : undefined;
-    const timeout = reason ? isSignalTimeoutReason(reason) : false;
-    if (
-      shouldFlagCompactionTimeout({
-        isTimeout: timeout,
-        isCompactionPendingOrRetrying: input.compactionState.isCompacting(),
-        isCompactionInFlight: activeSession.isCompacting,
-      })
-    ) {
-      input.markTimedOutDuringCompaction();
-    }
-    input.abortRun(timeout, reason);
-  };
-  if (attempt.abortSignal) {
-    if (attempt.abortSignal.aborted) {
-      onAbort();
-    } else {
-      attempt.abortSignal.addEventListener("abort", onAbort, { once: true });
-    }
-  }
 
   return {
     getRunAbortDeadlineAtMs: () => runAbortDeadlineAtMs,
     clearTimers: () => {
+      approvalWait.dispose();
       if (abortTimer) {
         clearTimeout(abortTimer);
       }
       if (abortWarnTimer) {
         clearTimeout(abortWarnTimer);
       }
-    },
-    removeAbortSignalListener: () => {
-      attempt.abortSignal?.removeEventListener("abort", onAbort);
     },
   };
 }

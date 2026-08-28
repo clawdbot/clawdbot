@@ -8,12 +8,74 @@ import type { AddressInfo } from "node:net";
 import { describe, expect, it } from "vitest";
 import { FailoverError } from "../failover-error.js";
 import {
+  buildAuthProfileUnusableHint,
   buildOAuthRefreshFailureLoginCommand,
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
   formatOAuthRefreshFailureLoginCommandMarkdown,
   OAuthRefreshFailureError,
 } from "./oauth-refresh-failure.js";
+
+describe("buildAuthProfileUnusableHint", () => {
+  it.each(["auth", "auth_permanent"] as const)(
+    "gives re-authentication guidance for canonical %s cooldowns",
+    (reason) => {
+      expect(
+        buildAuthProfileUnusableHint({
+          kind: "cooldown",
+          reason,
+          provider: "openai",
+          profileId: "openai:default",
+        }),
+      ).toContain(
+        "Re-authenticate with `openclaw models auth login --provider openai --profile-id 'openai:default'`.",
+      );
+    },
+  );
+
+  it("keeps Claude subscription and Anthropic API-key recovery distinct", () => {
+    expect(
+      buildAuthProfileUnusableHint({
+        kind: "cooldown",
+        reason: "session_expired",
+        provider: "claude-cli",
+        profileId: "anthropic:claude-cli",
+      }),
+    ).toContain(
+      "claude auth login && openclaw models auth login --provider anthropic --method cli --profile-id 'anthropic:claude-cli'",
+    );
+    expect(
+      buildAuthProfileUnusableHint({
+        kind: "cooldown",
+        reason: "auth",
+        provider: "anthropic",
+        profileId: "anthropic:api-key",
+      }),
+    ).toContain("openclaw models auth login --provider anthropic --profile-id 'anthropic:api-key'");
+    expect(
+      buildAuthProfileUnusableHint({
+        kind: "cooldown",
+        reason: "auth",
+        provider: "anthropic",
+        profileId: "anthropic:api-key",
+      }),
+    ).not.toContain("claude auth login");
+  });
+
+  it("routes legacy Gemini CLI profiles to supported Google API-key setup", () => {
+    const hint = buildAuthProfileUnusableHint({
+      kind: "cooldown",
+      reason: "session_expired",
+      provider: "google-gemini-cli",
+      profileId: "google-gemini-cli:legacy",
+    });
+
+    expect(hint).toBe(
+      "Gemini CLI OAuth cannot be repaired by OpenClaw. Connect Google with an AI Studio API key using `openclaw models auth login --provider google`, then select that Google profile for the Gemini CLI runtime.",
+    );
+    expect(hint).not.toContain("--provider google-gemini-cli");
+  });
+});
 
 describe("oauth refresh failure hints", () => {
   it("builds OpenAI refresh-failure login hints", () => {
@@ -89,6 +151,34 @@ describe("oauth refresh failure hints", () => {
     });
   });
 
+  it("classifies provider requests to log in again", () => {
+    expect(
+      classifyOAuthRefreshFailure(
+        "OAuth token refresh failed for openai: Your session ended. Please log in again.",
+      ),
+    ).toEqual({
+      provider: "openai",
+      reason: "sign_in_again",
+    });
+  });
+
+  it("classifies refresh failures preserved in failover raw error metadata", () => {
+    expect(
+      classifyOAuthRefreshFailureError(
+        new FailoverError("Authentication refresh failed", {
+          reason: "auth_permanent",
+          provider: "openai",
+          profileId: "openai:work",
+          rawError: "OAuth token refresh failed for openai: refresh_token_invalidated",
+        }),
+      ),
+    ).toEqual({
+      provider: "openai",
+      profileId: "openai:work",
+      reason: "token_invalidated",
+    });
+  });
+
   it("classifies claude-cli subprocess 401 OAuth expiry as a provider refresh failure", () => {
     // Error message format emitted by the claude subprocess when its stored
     // OAuth token has expired, forwarded through the FailoverError message.
@@ -117,6 +207,20 @@ describe("oauth refresh failure hints", () => {
     expect(classifyOAuthRefreshFailureError(error)).toEqual({
       provider: "claude-cli",
       reason: "revoked",
+    });
+  });
+
+  it("classifies structured claude-cli logged-out failures without the provider prefix in the message", () => {
+    const error = new FailoverError("Not logged in \u00b7 Please run /login", {
+      reason: "auth",
+      provider: "claude-cli",
+      model: "claude-sonnet-4-20250514",
+      status: 401,
+    });
+
+    expect(classifyOAuthRefreshFailureError(error)).toEqual({
+      provider: "claude-cli",
+      reason: "sign_in_again",
     });
   });
 

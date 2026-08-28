@@ -34,7 +34,7 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     const { session, emit } = createStubSessionHarness();
     const onBlockReply = vi.fn();
 
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       runId: "run",
       onBlockReply,
@@ -46,7 +46,7 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
       },
     });
 
-    return { emit, onBlockReply };
+    return { emit, onBlockReply, subscription };
   }
 
   it("carries reply_to_current across tag-only block chunks", () => {
@@ -83,7 +83,8 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     emit({ type: "message_end", message: assistantMessage });
 
     expect(onBlockReply).toHaveBeenCalledTimes(2);
-    expect(replyTexts(onBlockReply)).toEqual(["Hello", "[["]);
+    expect(replyTexts(onBlockReply)).toEqual(["Hello", " [["]);
+    expect(replyTexts(onBlockReply).join("")).toBe("Hello [[");
   });
 
   it("streams partial replies past reply_to tags split across chunks", () => {
@@ -109,5 +110,52 @@ describe("subscribeEmbeddedAgentSession reply tags", () => {
     for (const call of onPartialReply.mock.calls) {
       expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
     }
+  });
+
+  it("strips a malformed reply prefix when the stream ends", () => {
+    const { session, emit } = createStubSessionHarness();
+    const onPartialReply = vi.fn();
+
+    subscribeEmbeddedAgentSession({
+      session,
+      runId: "run",
+      onPartialReply,
+    });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "[[reply_to_" });
+    emitAssistantTextDelta({ emit, delta: "current] Visible reply" });
+    emitAssistantTextEnd({ emit });
+
+    const payload = lastReplyPayload(onPartialReply);
+    expect(payload.text).toBe("Visible reply");
+    expect(payload.replyToCurrent).toBeUndefined();
+    expect(payload.replyToTag).toBeUndefined();
+    for (const call of onPartialReply.mock.calls) {
+      expect(call[0]?.text?.includes("[[reply_to")).toBe(false);
+    }
+  });
+
+  it("strips a malformed reply prefix from the final block reply", async () => {
+    const { emit, onBlockReply, subscription } = createBlockReplyHarness();
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emitAssistantTextDelta({ emit, delta: "[[reply_to_" });
+    emitAssistantTextDelta({ emit, delta: "current] Visible reply" });
+    emitAssistantTextEnd({ emit });
+
+    const assistantMessage = {
+      role: "assistant",
+      content: [{ type: "text", text: "[[reply_to_current] Visible reply" }],
+    } as AssistantMessage;
+    emit({ type: "message_end", message: assistantMessage });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).toHaveBeenCalledTimes(1);
+    const payload = replyPayloadAt(onBlockReply, 0);
+    expect(payload.text).toBe("Visible reply");
+    expect(payload.replyToCurrent).toBeFalsy();
+    expect(payload.replyToTag).toBeFalsy();
+    expect(payload.text).not.toContain("[[reply_to");
   });
 });

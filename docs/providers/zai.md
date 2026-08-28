@@ -20,7 +20,7 @@ OpenClaw uses the `zai` provider with a Z.AI API key.
 ## GLM models
 
 GLM is a model family, not a separate provider. In OpenClaw, GLM models use
-refs such as `zai/glm-5.2`: provider `zai`, model id `glm-5.2`.
+refs such as `zai/glm-5.3`: provider `zai`, model id `glm-5.3`.
 
 ## Getting started
 
@@ -82,10 +82,15 @@ openclaw plugins install @openclaw/zai-provider
 
 | Onboarding choice   | Base URL                                      | Default model |
 | ------------------- | --------------------------------------------- | ------------- |
-| `zai-global`        | `https://api.z.ai/api/paas/v4`                | `glm-5.1`     |
-| `zai-cn`            | `https://open.bigmodel.cn/api/paas/v4`        | `glm-5.1`     |
-| `zai-coding-global` | `https://api.z.ai/api/coding/paas/v4`         | `glm-5.2`     |
-| `zai-coding-cn`     | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.2`     |
+| `zai-global`        | `https://api.z.ai/api/paas/v4`                | `glm-5.2`     |
+| `zai-cn`            | `https://open.bigmodel.cn/api/paas/v4`        | `glm-5.2`     |
+| `zai-coding-global` | `https://api.z.ai/api/coding/paas/v4`         | `glm-5.3`     |
+| `zai-coding-cn`     | `https://open.bigmodel.cn/api/coding/paas/v4` | `glm-5.3`     |
+
+Z.AI also publishes the Anthropic-compatible Coding Plan base URL
+`https://api.z.ai/api/anthropic`. OpenClaw's Z.AI choices use the documented
+OpenAI Chat Completions endpoints above; the Anthropic URL is for clients that
+speak Anthropic Messages directly.
 
 `zai-api-key` auto-detects one of these four by probing your key against each
 endpoint's chat-completions API, checking general endpoints (`zai-global`,
@@ -136,16 +141,16 @@ you want to force a specific Coding Plan or general API surface.
 
 ```json5
 {
-  env: { ZAI_API_KEY: "sk-..." },
+  env: { vars: { ZAI_API_KEY: "sk-..." } },
   models: {
     providers: {
       zai: {
-        // GLM-5.2 uses the Coding Plan endpoint.
+        // GLM-5.3 uses the Coding Plan endpoint.
         baseUrl: "https://api.z.ai/api/coding/paas/v4",
       },
     },
   },
-  agents: { defaults: { model: { primary: "zai/glm-5.2" } } },
+  agents: { defaults: { model: { primary: "zai/glm-5.3" } } },
 }
 ```
 
@@ -160,38 +165,45 @@ openclaw models list --all --provider zai
 
 The manifest-backed catalog currently includes:
 
-| Model ref            | Notes                           |
-| -------------------- | ------------------------------- |
-| `zai/glm-5.2`        | Coding Plan default; 1M context |
-| `zai/glm-5.1`        | General API default             |
-| `zai/glm-5`          |                                 |
-| `zai/glm-5-turbo`    |                                 |
-| `zai/glm-5v-turbo`   |                                 |
-| `zai/glm-4.7`        |                                 |
-| `zai/glm-4.7-flash`  |                                 |
-| `zai/glm-4.7-flashx` |                                 |
-| `zai/glm-4.6`        |                                 |
-| `zai/glm-4.6v`       |                                 |
-| `zai/glm-4.5`        |                                 |
-| `zai/glm-4.5-air`    |                                 |
-| `zai/glm-4.5-flash`  |                                 |
-| `zai/glm-4.5v`       |                                 |
+| Model ref           | Notes                                              |
+| ------------------- | -------------------------------------------------- |
+| `zai/glm-5.3`       | Coding Plan default; 1,048,576-token context       |
+| `zai/glm-5.3-flash` | Multimodal text and image model; 1,048,576 context |
+| `zai/glm-5.2`       | General API default; 1M context                    |
+| `zai/glm-5-turbo`   | OpenClaw-optimized text model; 200K context        |
+| `zai/glm-5v-turbo`  | Multimodal coding model; 200K context              |
+| `zai/glm-5.1`       | Deprecated; hidden unless configured; use GLM-5.2  |
+
+Pay-as-you-go catalog rows follow Z.AI's current
+[API pricing](https://docs.z.ai/guides/overview/pricing). GLM-5.3 Flash uses
+its pay-as-you-go list prices even when temporary discounts are available.
+GLM-5.3 is currently a Coding Plan model, so its local catalog cost is zero;
+Coding Plan subscriptions use plan quota instead of per-token billing. See the live
+[subscription page](https://z.ai/subscribe) for plan pricing and availability.
 
 <Tip>
-GLM models are available as `zai/<model>` (example: `zai/glm-5`).
+GLM models are available as `zai/<model>` (example: `zai/glm-5.3`).
 </Tip>
 
 <Note>
-Coding Plan setup defaults to `zai/glm-5.2`; general API setup keeps
-`zai/glm-5.1`. On the Coding Plan endpoints, auto-detection falls back to
-`glm-5.1` and then `glm-4.7` when the key/plan does not expose GLM-5.2. GLM
-versions and availability can change; run `openclaw models list --all --provider zai`
-to see the catalog known to your installed version.
+Fresh Coding Plan setup defaults to `zai/glm-5.3`; general API setup remains on
+`zai/glm-5.2`. On Coding Plan endpoints, auto-detection falls back through
+`glm-5.1` and `glm-4.7` when a key or regional endpoint does not expose GLM-5.3
+directly. Z.AI currently routes Coding Plan requests for GLM-5.2 and GLM-5.1 to
+GLM-5.3. Run
+`openclaw models list --all --provider zai` to see the catalog known to your
+installed version.
 </Note>
 
 ## Thinking levels
 
 <Tabs>
+  <Tab title="GLM-5.3 and Flash">
+    Levels: `low`, `high`, and `max` (default `max`). OpenClaw maps these to
+    Z.AI's `reasoning_effort` request field. An explicit `off` setting maps to
+    `reasoning_effort: "low"` because GLM-5.3 models do not support disabling
+    reasoning entirely.
+  </Tab>
   <Tab title="GLM-5.2">
     Full range: `off`, `low`, `high`, `max` (default `off`). OpenClaw maps
     `low` and `high` to Z.AI's `high` reasoning effort, and `max` to Z.AI's
@@ -246,7 +258,7 @@ Setting thinking to `off` avoids responses that spend the output budget on
       agents: {
         defaults: {
           models: {
-            "zai/glm-5.2": {
+            "zai/glm-5.3": {
               params: { preserveThinking: true },
             },
           },

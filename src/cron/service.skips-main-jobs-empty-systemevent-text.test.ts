@@ -7,7 +7,7 @@ import {
   withCronServiceForTest,
 } from "./service.test-harness.js";
 import { createCronServiceState } from "./service/state.js";
-import { executeJobCore } from "./service/timer.js";
+import { executeJobCore } from "./service/timer.test-support.js";
 import type { CronJob } from "./types.js";
 
 const noopLogger = createNoopLogger();

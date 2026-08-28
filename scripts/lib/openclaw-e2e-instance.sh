@@ -47,6 +47,20 @@ openclaw_e2e_resolve_entrypoint() {
   echo "OpenClaw entrypoint not found under dist/" >&2
   return 1
 }
+openclaw_e2e_run_script_entrypoint() {
+  local stem="${1:?missing OpenClaw E2E script stem}"
+  shift
+  if [ -f "$stem.mts" ]; then
+    tsx "$stem.mts" "$@"
+    return
+  fi
+  if [ -f "$stem.mjs" ]; then
+    node "$stem.mjs" "$@"
+    return
+  fi
+  echo "OpenClaw E2E script entrypoint not found: $stem.{mts,mjs}" >&2
+  return 1
+}
 openclaw_e2e_package_root() {
   local prefix="${1:-}"
   if [ -n "$prefix" ]; then
@@ -202,12 +216,26 @@ NODE
 }
 openclaw_e2e_print_log() {
   local path="$1"
-  local max_bytes max_lines
+  local max_bytes max_lines redactor_module
   max_bytes="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_BYTES 262144)" || return $?
   max_lines="$(openclaw_e2e_read_nonnegative_int_env OPENCLAW_E2E_LOG_TAIL_LINES 120)" || return $?
   [ -f "$path" ] || return 0
   echo "--- $path ---"
-  tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true
+  redactor_module="${OPENCLAW_E2E_REDACTOR_MODULE:-$(openclaw_e2e_package_root)/dist/plugin-sdk/logging-core.js}"
+  [ -f "$redactor_module" ] || redactor_module="$PWD/dist/plugin-sdk/logging-core.js"
+  if [ ! -f "$redactor_module" ]; then
+    echo "[failure log omitted: canonical redactor unavailable]"
+    return 0
+  fi
+  if ! { tail -c "$max_bytes" "$path" 2>/dev/null | tail -n "$max_lines" || tail -n "$max_lines" "$path" || true; } | \
+    node --input-type=module -e '
+      import fs from "node:fs";
+      import { pathToFileURL } from "node:url";
+      const { redactSensitiveText } = await import(pathToFileURL(process.argv[1]).href);
+      process.stdout.write(redactSensitiveText(fs.readFileSync(0, "utf8"), { mode: "tools" }));
+    ' "$redactor_module"; then
+    echo "[failure log omitted: canonical redaction failed]"
+  fi
 }
 openclaw_e2e_install_package() {
   local log_file="$1"
@@ -497,6 +525,32 @@ openclaw_e2e_run_logged() {
 openclaw_e2e_run_command() {
   local timeout_value="${OPENCLAW_E2E_COMMAND_TIMEOUT:-300s}"
   openclaw_e2e_maybe_timeout "$timeout_value" "$@"
+}
+openclaw_e2e_fixture_plugin_command() {
+  local runner=()
+  while [[ "${1:-}" != "--" && "$#" -gt 0 ]]; do
+    runner+=("$1")
+    shift
+  done
+  shift
+  local help consent
+  # Preserve the successful candidate help result for evidence checks after mutation.
+  # Clear it first so a failed replacement probe cannot expose stale capabilities.
+  OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=
+  # Use the caller's bounded runner for both calls; never cache across package replacement.
+  help="$("${runner[@]}" "$1" "$2" --help)" || {
+    local probe_status=$?
+    printf '%s\nPlugin fixture help probe failed with status %s: %s %s\n' "$help" "$probe_status" "$1" "$2" >&2
+    return "$probe_status"
+  }
+  consent="$(printf '%s' "$help" | node scripts/e2e/lib/package-compat.mjs fixture-consent)" || return $?
+  if [[ -n "$consent" ]]; then
+    OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=1
+    set -- "$@" "$consent"
+  else
+    OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED=0
+  fi
+  "${runner[@]}" "$@"
 }
 openclaw_e2e_enable_openclaw_cli_timeout() {
   OPENCLAW_E2E_CLI_BIN="$(type -P openclaw)"

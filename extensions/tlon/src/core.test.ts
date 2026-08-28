@@ -8,36 +8,17 @@ import {
 import type { WizardPrompter } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../api.js";
+import { tlonPlugin } from "./channel.js";
 import { tlonChannelConfigSchema } from "./config-schema.js";
 import { tlonSetupWizard } from "./setup-surface.js";
-import { normalizeShip, resolveTlonOutboundTarget } from "./targets.js";
+import { resolveTlonOutboundTarget } from "./targets.js";
 import { listTlonAccountIds, resolveTlonAccount } from "./types.js";
 
 const tlonTestPlugin = {
   id: "tlon",
   meta: { label: "Tlon" },
   setupWizard: tlonSetupWizard,
-  config: {
-    listAccountIds: listTlonAccountIds,
-    defaultAccountId: () => "default",
-    resolveAllowFrom: ({ cfg, accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
-      resolveTlonAccount(cfg, accountId).dmAllowlist,
-    formatAllowFrom: ({
-      allowFrom,
-    }: {
-      cfg: OpenClawConfig;
-      allowFrom: Array<string | number> | undefined | null;
-    }) => {
-      const entries: string[] = [];
-      for (const entry of allowFrom ?? []) {
-        const normalized = normalizeShip(String(entry));
-        if (normalized) {
-          entries.push(normalized);
-        }
-      }
-      return entries;
-    },
-  },
+  config: tlonPlugin.config,
   setup: {
     resolveAccountId: ({ accountId }: { cfg: OpenClawConfig; accountId?: string | null }) =>
       accountId ?? "default",
@@ -139,6 +120,17 @@ describe("tlon core", () => {
     });
   });
 
+  it("accepts implicit mention policy at root and account scope", () => {
+    expect(
+      parseTlonConfig({
+        implicitMentions: { threadParticipation: false },
+        accounts: {
+          primary: { implicitMentions: { replyToBot: false } },
+        },
+      }),
+    ).toMatchObject({ success: true });
+  });
+
   it("configures ship, auth, and discovery settings", async () => {
     const prompter = createTestWizardPrompter({
       text: vi.fn(async ({ message }: { message: string }) => {
@@ -194,6 +186,55 @@ describe("tlon core", () => {
     expect(result.cfg.channels?.tlon?.network?.dangerouslyAllowPrivateNetwork).toBe(false);
   });
 
+  it("never sends an existing login code back through setup prompts", async () => {
+    const existingCode = "lidlut-existing-secret-code";
+    const text = vi.fn(async ({ message }: { message: string }) => {
+      if (message === "Login code") {
+        return "lidlut-replacement-code";
+      }
+      throw new Error(`Unexpected prompt: ${message}`);
+    });
+    const confirm = vi.fn(async ({ message }: { message: string }) => {
+      if (message.startsWith("Ship name") || message.startsWith("Ship URL")) {
+        return true;
+      }
+      if (message.startsWith("Login code")) {
+        return false;
+      }
+      if (message === "Enable auto-discovery of group channels?") {
+        return true;
+      }
+      return false;
+    });
+    const prompter = createTestWizardPrompter({
+      text: text as WizardPrompter["text"],
+      confirm,
+    });
+
+    const result = await runSetupWizardConfigure({
+      configure: tlonConfigure,
+      cfg: {
+        channels: {
+          tlon: {
+            ship: "~sampel-palnet",
+            url: "https://urbit.example.com",
+            code: existingCode,
+          },
+        },
+      } as OpenClawConfig,
+      prompter,
+      options: {},
+    });
+
+    expect(result.cfg.channels?.tlon?.code).toBe("lidlut-replacement-code");
+    expect(JSON.stringify({ confirms: confirm.mock.calls, texts: text.mock.calls })).not.toContain(
+      existingCode,
+    );
+    const codePrompt = text.mock.calls.find(([args]) => args.message === "Login code")?.[0];
+    expect(codePrompt).toMatchObject({ sensitive: true });
+    expect(codePrompt).not.toHaveProperty("initialValue");
+  });
+
   it("resolves dm targets to normalized ships", () => {
     expect(resolveTlonOutboundTarget("dm/sampel-palnet")).toEqual({
       ok: true,
@@ -215,6 +256,11 @@ describe("tlon core", () => {
       throw new Error("expected invalid target");
     }
     expect(resolved.error.message).toMatch(/invalid tlon target/i);
+  });
+
+  it("does not invent an account when the Tlon channel is unconfigured", () => {
+    expect(listTlonAccountIds({} as OpenClawConfig)).toEqual([]);
+    expect(listTlonAccountIds({ channels: { tlon: {} } } as OpenClawConfig)).toEqual([]);
   });
 
   it("lists named accounts and the implicit default account", () => {

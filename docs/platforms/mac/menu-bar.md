@@ -12,6 +12,10 @@ title: "Menu bar"
 - A root "Context" item opens a submenu with recent sessions instead of expanding them in the root menu.
 - A "Nodes" block in the root menu lists paired **devices** only (from `node.list`), not client/presence entries.
 - A root "Usage" section appears below Context when provider usage snapshots are available, followed by cost details when available.
+- When two or more Gateways are available, the first status row includes the primary Gateway name and a root "Gateways" section lists every Gateway with its health and primary marker. Select a row to open or focus that Gateway's dashboard; hold Option to reveal "Set as Primary…" for eligible saved Gateways.
+- **Quick Chat** opens the floating main-session composer; its current global shortcut appears beside the item.
+
+Single-Gateway setups keep the existing menu unchanged. With two or more Gateways, the app's main **Gateways** menu also assigns Command-1 through Command-9 in catalog order. Its checkmark follows the frontmost dashboard window, and selecting an item switches that window in place or opens the selected Gateway when no dashboard window exists.
 
 ## State model
 
@@ -59,6 +63,7 @@ title: "Menu bar"
 
 ## Status row text (menu)
 
+- With two or more Gateways, the connection label appends the primary Gateway's catalog display name, such as `OpenClaw Active — Mac Studio`.
 - While work is active: `<Session role> · <activity label>` (`"\(roleLabel) · \(activity.label)"` in `MenuContentView`), where role label is `Main` or `Other`.
 - When idle: falls back to the health summary.
 

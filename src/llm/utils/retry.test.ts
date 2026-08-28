@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AssistantMessage } from "../types.js";
+import { failoverClassificationCorpus } from "../../agents/failover/failover-classification.corpus.cases.test-support.js";
+import { failoverRetryExpectations } from "../../agents/failover/failover-retry.expected.test-support.js";
+import {
+  PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE,
+  PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
+  type AssistantMessage,
+} from "../types.js";
 import { isRetryableAssistantError } from "./retry.js";
 
 function errorMessage(message: string): AssistantMessage {
@@ -24,6 +30,56 @@ function errorMessage(message: string): AssistantMessage {
 }
 
 describe("isRetryableAssistantError", () => {
+  it("freezes one retry decision for every failover corpus row", () => {
+    expect(Object.keys(failoverRetryExpectations).toSorted()).toEqual(
+      failoverClassificationCorpus.map((row) => row.id).toSorted(),
+    );
+  });
+
+  it.each(failoverClassificationCorpus)(
+    "preserves the retry decision for $id [$source]",
+    ({ id, signal }) => {
+      const message = signal.message
+        ? errorMessage(signal.message)
+        : ({ ...errorMessage(""), errorMessage: undefined } as AssistantMessage);
+      message.provider = ("provider" in signal ? signal.provider : undefined) ?? "test-provider";
+
+      expect(isRetryableAssistantError(message)).toBe(
+        failoverRetryExpectations[id as keyof typeof failoverRetryExpectations],
+      );
+    },
+  );
+
+  it.each([PROVIDER_FAILURE_WITH_OUTPUT_ERROR_CODE, PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE])(
+    "does not retry replay-unsafe provider outcome %s",
+    (errorCode) => {
+      expect(
+        isRetryableAssistantError({
+          ...errorMessage("The WebSocket closed after dispatch"),
+          errorCode,
+        }),
+      ).toBe(false);
+    },
+  );
+
+  it("retries an incomplete terminal stream that retained visible partial text", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("Bedrock stream ended before messageStop"),
+        content: [{ type: "text", text: "I have" }],
+      }),
+    ).toBe(true);
+  });
+
+  it("retries a structured transient Undici error", () => {
+    expect(
+      isRetryableAssistantError({
+        ...errorMessage("provider connection closed"),
+        errorCode: "UND_ERR_HEADERS_TIMEOUT",
+      }),
+    ).toBe(true);
+  });
+
   it.each([
     "An error occurred while processing your request. You can retry your request.",
     "The system encountered an unexpected error. Try your request again.",
@@ -51,6 +107,10 @@ describe("isRetryableAssistantError", () => {
     "429 temporary provider response",
     "HTTP 500 temporary provider response",
     "503: temporary provider response",
+    "524 status code (no body)",
+    "The socket connection was closed unexpectedly by fetch",
+    "ResourceExhausted: Worker local total request limit reached",
+    "resource_exhausted: transient worker capacity exhausted",
   ])("retries explicit transient HTTP statuses: %s", (text) => {
     expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
   });
@@ -108,6 +168,52 @@ describe("isRetryableAssistantError", () => {
       isRetryableAssistantError(
         errorMessage(
           "429 RESOURCE_EXHAUSTED: Quota exceeded for quota metric requests per minute; please retry your request",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it.each([
+    "OpenAI API error (500): 500 The server had an error while processing your request. Sorry about that!",
+    "Azure OpenAI API error (502): Bad gateway from upstream",
+    "Mistral API error (503): service temporarily unavailable",
+    "Provider API error (504): gateway timeout",
+  ])("retries built-in provider-wrapped transient 5xx: %s", (text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(true);
+  });
+
+  it("does not treat permanent provider-wrapped 4xx as retryable", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage("OpenAI API error (400): 400 Model Id [gpt-5.4-nano] not found"),
+      ),
+    ).toBe(false);
+  });
+
+  it.each([
+    ["authentication failure", "OpenAI API error (401): Invalid authentication credentials"],
+    [
+      "authorization failure",
+      "Azure OpenAI API error (403): OAuth authentication is currently not allowed for this organization",
+    ],
+    ["model not found", "Mistral API error (404): model not found"],
+    [
+      "quota exhausted",
+      "OpenAI API error (429): insufficient_quota: Your account has insufficient quota balance to run this request.",
+    ],
+    [
+      "envelope embedded in user text",
+      'Invalid request: user text contained "OpenAI API error (500): invalid input"',
+    ],
+  ])("does not retry permanent provider-wrapped errors (%s): %s", (_label, text) => {
+    expect(isRetryableAssistantError(errorMessage(text))).toBe(false);
+  });
+
+  it("retries a provider-wrapped short-window rate limit", () => {
+    expect(
+      isRetryableAssistantError(
+        errorMessage(
+          "OpenAI API error (429): RESOURCE_EXHAUSTED: Quota exceeded for requests per minute; please retry your request",
         ),
       ),
     ).toBe(true);

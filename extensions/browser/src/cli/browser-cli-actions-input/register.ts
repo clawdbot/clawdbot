@@ -3,12 +3,13 @@
  */
 import type { Command } from "commander";
 import type { BrowserParentOpts } from "../browser-cli-shared.js";
+import { registerBrowserBatchCommands } from "./register.batch.js";
 import { registerBrowserElementCommands } from "./register.element.js";
 import { registerBrowserFilesAndDownloadsCommands } from "./register.files-downloads.js";
 import { registerBrowserFormWaitEvalCommands } from "./register.form-wait-eval.js";
 import { registerBrowserNavigationCommands } from "./register.navigation.js";
 
-/** Registers navigation, element, file/download, form, wait, and evaluate commands. */
+/** Registers navigation, element, file/download, form, wait, evaluate, and batch commands. */
 export function registerBrowserActionInputCommands(
   browser: Command,
   parentOpts: (cmd: Command) => BrowserParentOpts,
@@ -17,4 +18,5 @@ export function registerBrowserActionInputCommands(
   registerBrowserElementCommands(browser, parentOpts);
   registerBrowserFilesAndDownloadsCommands(browser, parentOpts);
   registerBrowserFormWaitEvalCommands(browser, parentOpts);
+  registerBrowserBatchCommands(browser, parentOpts);
 }

@@ -4,13 +4,14 @@
 import os from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, test } from "vitest";
+import { WebSocket } from "ws";
 import {
   BACKEND_GATEWAY_CLIENT,
   connectReq,
   CONTROL_UI_CLIENT,
   ConnectErrorDetailCodes,
   createSignedDevice,
-  getFreePort,
+  getGatewayTestPort,
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
   readConnectChallengeNonce,
@@ -18,8 +19,9 @@ import {
   originForPort,
   rpcReq,
   restoreGatewayToken,
-  startGatewayServer,
+  startTestGatewayServer,
   testState,
+  testTailscaleWhois,
   installGatewayTestHooks,
 } from "./server.auth.test-helpers.js";
 
@@ -52,6 +54,36 @@ function expectAuthErrorDetails(params: {
   if (params.recommendedNextStep !== undefined) {
     expect(details?.recommendedNextStep).toBe(params.recommendedNextStep);
   }
+}
+
+async function expectProxyUpgradeRejected(port: number, headers: Record<string, string>) {
+  await new Promise<void>((resolve, reject) => {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}`, { headers });
+    const timer = setTimeout(() => {
+      ws.terminate();
+      reject(new Error("timed out waiting for proxy upgrade rejection"));
+    }, 5_000);
+    ws.once("open", () => {
+      clearTimeout(timer);
+      ws.terminate();
+      reject(new Error("expected proxy-shaped upgrade to be rejected"));
+    });
+    ws.once("unexpected-response", (_request, response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      response.on("end", () => {
+        clearTimeout(timer);
+        expect(response.statusCode).toBe(403);
+        expect(body).toContain("proxy_attribution_required");
+        expect(body).toContain("gateway.trustedProxies");
+        resolve();
+      });
+    });
+    ws.once("error", () => {});
+  });
 }
 
 async function expectSharedOperatorScopesCleared(
@@ -137,21 +169,21 @@ async function expectLocalCliSharedAuthScopesPreserved(
 
 describe("gateway auth compatibility baseline", () => {
   describe("token mode", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port = 0;
-    let prevToken: string | undefined;
+    let previousCredential: string | undefined;
 
     beforeAll(async () => {
-      prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      previousCredential = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "token", token: "secret" };
       process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
-      port = await getFreePort();
-      server = await startGatewayServer(port);
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port);
     });
 
     afterAll(async () => {
       await server.close();
-      restoreGatewayToken(prevToken);
+      restoreGatewayToken(previousCredential);
     });
 
     test("keeps valid shared-token connect behavior unchanged", async () => {
@@ -236,14 +268,15 @@ describe("gateway auth compatibility baseline", () => {
     test("keeps local backend device-token reconnects out of pairing", async () => {
       const identityPath = path.join(
         os.tmpdir(),
-        `openclaw-backend-device-${process.pid}-${port}.json`,
+        `openclaw-backend-device-${process.pid}-${port}.sqlite`,
       );
       const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
         await import("../infra/device-identity.js");
-      const { approveDevicePairing, requestDevicePairing, rotateDeviceToken } =
-        await import("../infra/device-pairing.js");
+      const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+      const { rotateDeviceToken } = await import("../infra/device-pairing-tokens.js");
+      const { requestDevicePairing } = await import("../infra/device-pairing.js");
 
-      const identity = loadOrCreateDeviceIdentity(identityPath);
+      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
       const pending = await requestDevicePairing({
         deviceId: identity.deviceId,
         publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
@@ -298,8 +331,55 @@ describe("gateway auth compatibility baseline", () => {
     });
   });
 
+  describe("unattributable proxy ingress", () => {
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
+    let port = 0;
+    let prevToken: string | undefined;
+
+    beforeAll(async () => {
+      prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
+      testState.gatewayAuth = {
+        mode: "token",
+        token: "secret",
+        rateLimit: { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000 },
+      };
+      process.env.OPENCLAW_GATEWAY_TOKEN = "secret";
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port);
+    });
+
+    afterAll(async () => {
+      await server.close();
+      restoreGatewayToken(prevToken);
+    });
+
+    test("rejects before credentials can bypass attribution", async () => {
+      testTailscaleWhois.value = { login: "spoofed@example.com", name: "Spoofed" };
+      const headers = {
+        "x-forwarded-for": "203.0.113.10",
+        "x-forwarded-proto": "https",
+        "x-forwarded-host": "gateway.example.com",
+        "tailscale-user-login": "spoofed@example.com",
+      };
+      await expectProxyUpgradeRejected(port, headers);
+    });
+
+    test("rejects browser-origin upgrades before browser auth fallback", async () => {
+      await expectProxyUpgradeRejected(port, {
+        origin: "https://control.example.com",
+        "x-forwarded-for": "203.0.113.10",
+      });
+    });
+
+    test("keeps headerless loopback transport indistinguishable from direct local", async () => {
+      const ws = await openWs(port);
+      expect(ws.readyState).toBe(WebSocket.OPEN);
+      ws.close();
+    });
+  });
+
   describe("password mode", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port = 0;
     let prevToken: string | undefined;
 
@@ -307,8 +387,8 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "password", password: "secret" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getFreePort();
-      server = await startGatewayServer(port);
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port);
     });
 
     afterAll(async () => {
@@ -356,7 +436,7 @@ describe("gateway auth compatibility baseline", () => {
   });
 
   describe("none mode", () => {
-    let server: Awaited<ReturnType<typeof startGatewayServer>>;
+    let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
     let port = 0;
     let prevToken: string | undefined;
 
@@ -364,8 +444,8 @@ describe("gateway auth compatibility baseline", () => {
       prevToken = process.env.OPENCLAW_GATEWAY_TOKEN;
       testState.gatewayAuth = { mode: "none" };
       delete process.env.OPENCLAW_GATEWAY_TOKEN;
-      port = await getFreePort();
-      server = await startGatewayServer(port, { controlUiEnabled: true });
+      port = await getGatewayTestPort();
+      server = await startTestGatewayServer(port, { controlUiEnabled: true });
     });
 
     afterAll(async () => {
@@ -411,7 +491,7 @@ describe("gateway auth compatibility baseline", () => {
       try {
         const deviceIdentityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-first-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-first-${process.pid}-${port}.sqlite`,
         );
         const res = await connectReq(ws, {
           skipDefaultAuth: true,
@@ -438,16 +518,16 @@ describe("gateway auth compatibility baseline", () => {
       try {
         const { loadOrCreateDeviceIdentity, publicKeyRawBase64UrlFromPem } =
           await import("../infra/device-identity.js");
-        const { approveDevicePairing, requestDevicePairing } =
-          await import("../infra/device-pairing.js");
+        const { approveDevicePairing } = await import("../infra/device-pairing-approval.js");
+        const { requestDevicePairing } = await import("../infra/device-pairing.js");
         const nonce = await readConnectChallengeNonce(ws);
         const identityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-${process.pid}-${port}.sqlite`,
         );
         const staleIdentityPath = path.join(
           os.tmpdir(),
-          `openclaw-auth-none-control-ui-stale-${process.pid}-${port}.json`,
+          `openclaw-auth-none-control-ui-stale-${process.pid}-${port}.sqlite`,
         );
         const { identity, device } = await createSignedDevice({
           token: null,
@@ -457,7 +537,7 @@ describe("gateway auth compatibility baseline", () => {
           identityPath,
           nonce,
         });
-        const staleIdentity = loadOrCreateDeviceIdentity(staleIdentityPath);
+        const staleIdentity = loadOrCreateDeviceIdentity({ path: staleIdentityPath });
         const pending = await requestDevicePairing({
           deviceId: identity.deviceId,
           publicKey: publicKeyRawBase64UrlFromPem(staleIdentity.publicKeyPem),

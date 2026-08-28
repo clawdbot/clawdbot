@@ -1,82 +1,19 @@
 // Shared runtime probes used by status text and JSON commands.
 // Heavy modules stay lazily loaded so fast status output avoids security/provider/gateway costs.
 
-import { resolveDefaultAgentDir } from "../agents/agent-scope.js";
-import { resolveAgentHarnessPolicy } from "../agents/harness/policy.js";
-import { resolveModelAuthLabel } from "../agents/model-auth-label.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../agents/openai-routing.js";
+import type { Result } from "@openclaw/normalization-core/result";
 import type { OpenClawConfig } from "../config/types.js";
 import type { HeartbeatEventPayload } from "../infra/heartbeat-events.js";
 import { createLazyImportLoader } from "../shared/lazy-promise.js";
-import {
-  buildCodexSyntheticUsageAuth,
-  mergeUsageSummaries,
-  shouldUseCodexSyntheticUsageForRuntime,
-  resolveUsageCredentialType,
-} from "../status/codex-synthetic-usage.js";
 import type { HealthSummary } from "./health.js";
+import type { StatusUsageSummaryOptions } from "./status-usage.runtime.js";
 import { getDaemonStatusSummary, getNodeDaemonStatusSummary } from "./status.daemon.js";
 
-const providerUsageLoader = createLazyImportLoader(() => import("../infra/provider-usage.js"));
+const statusUsageModuleLoader = createLazyImportLoader(() => import("./status-usage.runtime.js"));
 const securityAuditModuleLoader = createLazyImportLoader(
   () => import("../security/audit.runtime.js"),
 );
-const readOnlyChannelPluginsModuleLoader = createLazyImportLoader(
-  () => import("../channels/plugins/read-only.js"),
-);
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
-
-function loadProviderUsage() {
-  return providerUsageLoader.load();
-}
-
-function loadSecurityAuditModule() {
-  return securityAuditModuleLoader.load();
-}
-
-function loadReadOnlyChannelPluginsModule() {
-  return readOnlyChannelPluginsModuleLoader.load();
-}
-
-function loadGatewayCallModule() {
-  return gatewayCallModuleLoader.load();
-}
-
-function shouldUseConfiguredCodexSyntheticUsage(params: {
-  config: OpenClawConfig;
-  agentDir: string;
-}): boolean {
-  const configuredDefault = resolveDefaultModelForAgent({
-    cfg: params.config,
-    allowPluginNormalization: false,
-  });
-  const policy = resolveAgentHarnessPolicy({
-    config: params.config,
-    provider: configuredDefault.provider,
-    modelId: configuredDefault.model,
-  });
-  if (
-    !shouldUseCodexSyntheticUsageForRuntime({
-      provider: configuredDefault.provider,
-      effectiveHarness: policy.runtime,
-    })
-  ) {
-    return false;
-  }
-  const authLabel = resolveModelAuthLabel({
-    provider: configuredDefault.provider,
-    acceptedProviderIds: listOpenAIAuthProfileProvidersForAgentRuntime({
-      provider: configuredDefault.provider,
-      harnessRuntime: policy.runtime,
-      config: params.config,
-    }),
-    cfg: params.config,
-    agentDir: params.agentDir,
-    includeExternalProfiles: false,
-  });
-  return resolveUsageCredentialType(authLabel) !== "api_key";
-}
 
 /** Runs the lightweight security audit used by status JSON/all output. */
 export async function resolveStatusSecurityAudit(params: {
@@ -84,12 +21,9 @@ export async function resolveStatusSecurityAudit(params: {
   sourceConfig: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  const { runSecurityAudit } = await loadSecurityAuditModule();
-  const { resolveReadOnlyChannelPluginsForConfig } = await loadReadOnlyChannelPluginsModule();
-  const readOnlyPlugins = resolveReadOnlyChannelPluginsForConfig(params.config, {
-    activationSourceConfig: params.sourceConfig,
-    includeSetupFallbackPlugins: false,
-  });
+  const { runSecurityAudit } = await securityAuditModuleLoader.load();
+  // The audit owns setup-backed capabilities; inventory projections can name
+  // accounts without carrying their channel security adapters.
   return await runSecurityAudit({
     config: params.config,
     sourceConfig: params.sourceConfig,
@@ -98,44 +32,17 @@ export async function resolveStatusSecurityAudit(params: {
     includeFilesystem: true,
     includeChannelSecurity: true,
     loadPluginSecurityCollectors: false,
-    // Missing configured channel plugins make plugin-specific collectors unreliable; omit plugin list then.
-    ...(readOnlyPlugins.missingConfiguredChannelIds.length === 0
-      ? { plugins: readOnlyPlugins.plugins }
-      : {}),
   });
 }
 
-type StatusUsageSummaryOptions = {
-  config: OpenClawConfig;
-  timeoutMs?: number;
-  agentDir?: string;
-};
-
-/** Loads provider usage for status output, defaulting to the config's default agent directory. */
+/** Loads optional usage and its credential resolver only when requested. */
 export async function resolveStatusUsageSummary(params: StatusUsageSummaryOptions) {
-  const { loadProviderUsageSummary } = await loadProviderUsage();
-  const agentDir = params.agentDir ?? resolveDefaultAgentDir(params.config);
-  const usage = await loadProviderUsageSummary({
-    timeoutMs: params.timeoutMs,
-    config: params.config,
-    agentDir,
-  });
-  if (!shouldUseConfiguredCodexSyntheticUsage({ config: params.config, agentDir })) {
-    return usage;
-  }
-  const codexUsage = await loadProviderUsageSummary({
-    timeoutMs: params.timeoutMs,
-    providers: ["openai"],
-    auth: [buildCodexSyntheticUsageAuth()],
-    config: params.config,
-    agentDir,
-  });
-  return mergeUsageSummaries(usage, codexUsage);
+  return (await statusUsageModuleLoader.load()).resolveStatusUsageSummary(params);
 }
 
-/** Exposes the lazily loaded provider-usage module for callers that need its helpers. */
+/** Exposes provider-usage formatting for callers that requested usage. */
 export async function loadStatusProviderUsageModule() {
-  return await loadProviderUsage();
+  return (await statusUsageModuleLoader.load()).loadStatusProviderUsageModule();
 }
 
 /** Calls gateway health and lets errors propagate to deep status callers. */
@@ -143,7 +50,7 @@ export async function resolveStatusGatewayHealth(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
 }) {
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway<HealthSummary>({
     method: "health",
     params: { probe: true },
@@ -168,7 +75,7 @@ export async function resolveStatusGatewayHealthSafe(params: {
     // Preserve the probe error so status-all can explain why health was not called.
     return { error: params.gatewayProbeError ?? "gateway unreachable" };
   }
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway<HealthSummary>({
     method: "health",
     params: { probe: true },
@@ -178,28 +85,34 @@ export async function resolveStatusGatewayHealthSafe(params: {
   }).catch((err: unknown) => ({ error: String(err) }));
 }
 
-/** Reads gateway delivery diagnostics when reachable, returning null on failures. */
+export type StatusGatewayDiagnosticsResult = Result<unknown, string>;
+
+/** Reads gateway diagnostics while preserving whether data or an unavailable outcome was observed. */
 export async function resolveStatusGatewayDiagnosticsSafe(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
   gatewayReachable: boolean;
+  type?: string;
   callOverrides?: {
     url: string;
     token?: string;
     password?: string;
   };
-}) {
+}): Promise<StatusGatewayDiagnosticsResult> {
   if (!params.gatewayReachable) {
-    return null;
+    return { ok: false, error: "gateway unreachable" };
   }
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway<unknown>({
     method: "diagnostics.stability",
-    params: { limit: 1000 },
+    params: { limit: 1000, ...(params.type ? { type: params.type } : {}) },
     timeoutMs: params.timeoutMs,
     config: params.config,
     ...params.callOverrides,
-  }).catch(() => null);
+  }).then<StatusGatewayDiagnosticsResult, StatusGatewayDiagnosticsResult>(
+    (value) => ({ ok: true, value }),
+    (error: unknown) => ({ ok: false, error: String(error) }),
+  );
 }
 
 /** Reads the most recent gateway heartbeat only when the gateway probe succeeded. */
@@ -211,7 +124,7 @@ async function resolveStatusLastHeartbeat(params: {
   if (!params.gatewayReachable) {
     return null;
   }
-  const { callGateway } = await loadGatewayCallModule();
+  const { callGateway } = await gatewayCallModuleLoader.load();
   return await callGateway<HeartbeatEventPayload | null>({
     method: "last-heartbeat",
     params: {},
@@ -235,6 +148,7 @@ export async function resolveStatusServiceSummaries(timeoutMs?: number) {
 
 type StatusUsageSummary = Awaited<ReturnType<typeof resolveStatusUsageSummary>>;
 type StatusGatewayHealth = Awaited<ReturnType<typeof resolveStatusGatewayHealth>>;
+type StatusGatewayHealthResult = StatusGatewayHealth | { error: string };
 type StatusLastHeartbeat = Awaited<ReturnType<typeof resolveStatusLastHeartbeat>>;
 type StatusGatewayServiceSummary = Awaited<ReturnType<typeof getDaemonStatusSummary>>;
 type StatusNodeServiceSummary = Awaited<ReturnType<typeof getNodeDaemonStatusSummary>>;
@@ -244,6 +158,7 @@ type StatusSecurityAudit = Awaited<ReturnType<typeof resolveStatusSecurityAudit>
 async function resolveStatusRuntimeDetails(params: {
   config: OpenClawConfig;
   timeoutMs?: number;
+  agentId?: string;
   usage?: boolean;
   deep?: boolean;
   gatewayReachable: boolean;
@@ -260,14 +175,16 @@ async function resolveStatusRuntimeDetails(params: {
     ? await resolveUsageSummary({
         timeoutMs: params.timeoutMs,
         config: params.config,
+        ...(params.agentId ? { agentId: params.agentId } : {}),
       })
     : undefined;
+  // JSON status remains nonthrowing, but requested probe failures must stay visible.
   const health = params.deep
     ? params.suppressHealthErrors
       ? await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
-        }).catch(() => undefined)
+        }).catch((error: unknown) => ({ error: String(error) }))
       : await resolveGatewayHealthSummary({
           config: params.config,
           timeoutMs: params.timeoutMs,
@@ -291,7 +208,7 @@ async function resolveStatusRuntimeDetails(params: {
   };
   return result satisfies {
     usage?: StatusUsageSummary;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;
@@ -303,6 +220,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   config: OpenClawConfig;
   sourceConfig: OpenClawConfig;
   timeoutMs?: number;
+  agentId?: string;
   usage?: boolean;
   deep?: boolean;
   gatewayReachable: boolean;
@@ -329,6 +247,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   const runtimeDetails = await resolveStatusRuntimeDetails({
     config: params.config,
     timeoutMs: params.timeoutMs,
+    ...(params.agentId ? { agentId: params.agentId } : {}),
     usage: params.usage,
     deep: params.deep,
     gatewayReachable: params.gatewayReachable,
@@ -342,7 +261,7 @@ export async function resolveStatusRuntimeSnapshot(params: {
   } satisfies {
     securityAudit?: StatusSecurityAudit;
     usage?: StatusUsageSummary;
-    health?: StatusGatewayHealth;
+    health?: StatusGatewayHealthResult;
     lastHeartbeat: StatusLastHeartbeat;
     gatewayService: StatusGatewayServiceSummary;
     nodeService: StatusNodeServiceSummary;

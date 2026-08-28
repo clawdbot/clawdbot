@@ -10,7 +10,7 @@ export type McpClientTempState = {
   tokenFile: string;
 };
 
-export type ReconnectableMcpClientHandle = {
+type ReconnectableMcpClientHandle = {
   cleanup: () => void;
   client: { close: () => Promise<unknown> };
   transport: { close: () => Promise<unknown> };

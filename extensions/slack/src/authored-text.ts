@@ -1,5 +1,5 @@
 // Slack-private authored text placement after block compilation.
-import type { InteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
+import type { LegacyInteractiveReply } from "openclaw/plugin-sdk/interactive-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 export type SlackAuthoredTextPlacement = "none" | "blocks" | "outside-blocks";
@@ -10,7 +10,7 @@ function normalizeComparableSlackText(text: string): string {
 
 function isSlackAuthoredTextRepresentedInInteractive(
   text: string,
-  interactive?: InteractiveReply,
+  interactive?: LegacyInteractiveReply,
 ): boolean {
   return isSlackAuthoredTextRepresentedInFragments(
     text,
@@ -43,7 +43,7 @@ function isSlackAuthoredTextRepresentedInFragments(
 /** Resolve placement from producer facts, before accessibility text changes the payload text. */
 export function resolveSlackAuthoredTextPlacement(params: {
   text?: string;
-  interactive?: InteractiveReply;
+  interactive?: LegacyInteractiveReply;
   renderedInBlocks?: boolean;
   renderedTextFragments?: readonly string[];
 }): SlackAuthoredTextPlacement {

@@ -26,6 +26,7 @@ export type RealtimeVoiceAgentConsultArgs = {
   question: string;
   context?: string;
   responseStyle?: string;
+  confirmationId?: string;
 };
 /** Compact transcript entry included in delegated agent prompts. */
 export type RealtimeVoiceAgentConsultTranscriptEntry = {
@@ -53,6 +54,11 @@ export const REALTIME_VOICE_AGENT_CONSULT_TOOL: RealtimeVoiceTool = {
       responseStyle: {
         type: "string",
         description: "Optional style hint for the spoken answer.",
+      },
+      confirmationId: {
+        type: "string",
+        description:
+          "Server-issued confirmation id from a prior VOICE_CONFIRMATION_REQUIRED result, supplied only after the user explicitly confirms aloud.",
       },
     },
     required: ["question"],
@@ -167,6 +173,45 @@ export function buildRealtimeVoiceAgentConsultPolicyInstructions(config: {
   ].join("\n");
 }
 
+/** Build the shared instructions for a realtime voice agent session. */
+export function buildRealtimeVoiceSessionInstructions(params: {
+  base: string;
+  isAgentProxy: boolean;
+  bootstrapContextInstructions?: string;
+  toolPolicy: RealtimeVoiceAgentConsultToolPolicy;
+  consultPolicy: "auto" | "always";
+}): string {
+  if (params.isAgentProxy) {
+    return [
+      params.base,
+      params.bootstrapContextInstructions?.trim(),
+      "Mode: OpenClaw agent proxy.",
+      "You are the realtime voice surface for the same OpenClaw agent the user can message directly.",
+      "Do not mention a backend, supervisor, helper, or separate system. Present the result as your own work.",
+      "Delegate substantive requests, actions, tool work, current facts, memory, workspace context, and user-specific context with openclaw_agent_consult.",
+      "Do not block, refuse, or downscope at the voice layer. Delegate to OpenClaw and treat its result as authoritative.",
+      "Answer directly only for greetings, acknowledgements, brief latency tests, or filler while waiting.",
+      'While waiting for OpenClaw data or tool results, use at most one short natural backchannel such as "yeah", "mm-hmm", "got it", or "one sec"; vary it and do not treat it as the final answer.',
+      "When OpenClaw sends an internal exact answer to speak, do not call tools. Say only that answer.",
+      buildRealtimeVoiceAgentConsultPolicyInstructions({
+        toolPolicy: params.toolPolicy,
+        consultPolicy: params.consultPolicy,
+      }),
+    ].join("\n\n");
+  }
+  return [
+    params.base,
+    params.bootstrapContextInstructions?.trim(),
+    'While waiting for OpenClaw data or tool results, use at most one short natural backchannel such as "yeah", "mm-hmm", "got it", or "one sec"; vary it and do not treat it as the final answer.',
+    buildRealtimeVoiceAgentConsultPolicyInstructions({
+      toolPolicy: params.toolPolicy,
+      consultPolicy: params.consultPolicy,
+    }),
+  ]
+    .filter(Boolean)
+    .join("\n\n");
+}
+
 /** Parse provider-owned consult tool arguments into the normalized contract. */
 export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoiceAgentConsultArgs {
   const question =
@@ -177,10 +222,14 @@ export function parseRealtimeVoiceAgentConsultArgs(args: unknown): RealtimeVoice
   if (!question) {
     throw new Error("question required");
   }
+  const context = readConsultStringArg(args, "context");
+  const responseStyle = readConsultStringArg(args, "responseStyle");
+  const confirmationId = readConsultStringArg(args, "confirmationId");
   return {
     question,
-    context: readConsultStringArg(args, "context"),
-    responseStyle: readConsultStringArg(args, "responseStyle"),
+    context,
+    responseStyle,
+    ...(confirmationId ? { confirmationId } : {}),
   };
 }
 

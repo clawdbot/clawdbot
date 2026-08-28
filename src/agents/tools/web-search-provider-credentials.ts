@@ -16,12 +16,6 @@ export function resolveWebSearchProviderCredential(params: {
   path: string;
   envVars: string[];
 }): string | undefined {
-  const fromConfigRaw = normalizeSecretInputString(params.credentialValue);
-  const fromConfig = normalizeSecretInput(fromConfigRaw);
-  if (fromConfig) {
-    return fromConfig;
-  }
-
   const credentialRef = resolveSecretInputRef({ value: params.credentialValue }).ref;
   if (credentialRef) {
     if (credentialRef.source !== "env") {
@@ -33,6 +27,12 @@ export function resolveWebSearchProviderCredential(params: {
       return fromEnvRef;
     }
     return undefined;
+  }
+
+  const fromConfigRaw = normalizeSecretInputString(params.credentialValue);
+  const fromConfig = normalizeSecretInput(fromConfigRaw);
+  if (fromConfig) {
+    return fromConfig;
   }
 
   for (const envVar of params.envVars) {

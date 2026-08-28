@@ -2,6 +2,7 @@
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { addGatewayServiceCommands } from "./register-service-commands.js";
+import { registerDaemonCli } from "./register.js";
 
 const runDaemonInstall = vi.fn(async (_opts: unknown) => {});
 const runDaemonRestart = vi.fn(async (_opts: unknown) => {});
@@ -58,12 +59,13 @@ describe("addGatewayServiceCommands", () => {
   it.each([
     {
       name: "forwards install option collisions from parent gateway command",
-      argv: ["install", "--force", "--port", "19000", "--token", "tok_test"],
+      argv: ["install", "--force", "--port", "19000", "--token", "tok_test", "--runtime", "bun"],
       assert: () => {
         const opts = expectSingleDaemonCall(runDaemonInstall);
         expect(opts.force).toBe(true);
         expect(opts.port).toBe("19000");
         expect(opts.token).toBe("tok_test");
+        expect(opts.runtime).toBe("bun");
       },
     },
     {
@@ -91,6 +93,14 @@ describe("addGatewayServiceCommands", () => {
       },
     },
     {
+      name: "forwards stop force control",
+      argv: ["stop", "--force"],
+      assert: () => {
+        const opts = expectSingleDaemonCall(runDaemonStop);
+        expect(opts.force).toBe(true);
+      },
+    },
+    {
       name: "forwards status auth collisions from parent gateway command",
       argv: ["status", "--token", "tok_status", "--password", "pw_status"],
       assert: () => {
@@ -112,5 +122,52 @@ describe("addGatewayServiceCommands", () => {
     const gateway = createGatewayParentLikeCommand();
     await gateway.parseAsync(argv, { from: "user" });
     assert();
+  });
+
+  it.each(
+    [
+      { leaf: "status", runner: runDaemonStatus },
+      { leaf: "install", runner: runDaemonInstall },
+      { leaf: "uninstall", runner: runDaemonUninstall },
+      { leaf: "start", runner: runDaemonStart },
+      { leaf: "stop", runner: runDaemonStop },
+      { leaf: "restart", runner: runDaemonRestart },
+    ].flatMap(({ leaf, runner }) => [
+      { name: `daemon --json ${leaf}`, argv: ["daemon", "--json", leaf], runner },
+      { name: `daemon ${leaf} --json`, argv: ["daemon", leaf, "--json"], runner },
+    ]),
+  )("forwards JSON mode for $name", async ({ argv, runner }) => {
+    const program = new Command().enablePositionalOptions().exitOverride();
+    registerDaemonCli(program);
+
+    await program.parseAsync(argv, { from: "user" });
+
+    expect(expectSingleDaemonCall(runner).json).toBe(true);
+  });
+
+  it("inherits an explicit parent port instead of a status leaf default", async () => {
+    const gateway = createGatewayParentLikeCommand().enablePositionalOptions();
+    const status = gateway.commands.find((command) => command.name() === "status")!;
+    status.setOptionValueWithSource("port", "19003", "default");
+
+    await gateway.parseAsync(["--port", "19002", "status"], { from: "user" });
+
+    expect(expectSingleDaemonCall(runDaemonStatus).rpc).toMatchObject({
+      port: "19002",
+      localPortOverride: 19002,
+    });
+  });
+
+  it.each([
+    { argv: ["status", "--port", "0"], error: "--port must be an integer between 1 and 65535." },
+    {
+      argv: ["--port", "19002", "status", "--url", "ws://localhost:19002"],
+      error: "Use either --url or --port, not both.",
+    },
+  ])("rejects invalid status options $argv", async ({ argv, error }) => {
+    const gateway = createGatewayParentLikeCommand().enablePositionalOptions().exitOverride();
+
+    await expect(gateway.parseAsync(argv, { from: "user" })).rejects.toThrow(error);
+    expect(runDaemonStatus).not.toHaveBeenCalled();
   });
 });

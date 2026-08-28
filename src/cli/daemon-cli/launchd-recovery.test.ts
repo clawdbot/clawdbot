@@ -3,6 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const launchAgentPlistExists = vi.hoisted(() => vi.fn());
 const repairLaunchAgentBootstrap = vi.hoisted(() => vi.fn());
+const assertNoSystemLaunchDaemonOwnership = vi.hoisted(() => vi.fn());
 
 vi.mock("../../daemon/launchd.js", () => ({
   formatLaunchAgentGuiSessionError: (params: {
@@ -17,6 +18,13 @@ vi.mock("../../daemon/launchd.js", () => ({
   launchAgentPlistExists: (env: Record<string, string | undefined>) => launchAgentPlistExists(env),
   repairLaunchAgentBootstrap: (args: { env?: Record<string, string | undefined> }) =>
     repairLaunchAgentBootstrap(args),
+  resolveLaunchAgentLabel: (env: Record<string, string | undefined>) =>
+    env.OPENCLAW_LAUNCHD_LABEL ?? "ai.openclaw.gateway",
+}));
+
+vi.mock("../../daemon/launchd-system.js", () => ({
+  assertNoSystemLaunchDaemonOwnership: (label: string) =>
+    assertNoSystemLaunchDaemonOwnership(label),
 }));
 
 let recoverInstalledLaunchAgent: typeof import("./launchd-recovery.js").recoverInstalledLaunchAgent;
@@ -29,6 +37,8 @@ describe("recoverInstalledLaunchAgent", () => {
   beforeEach(() => {
     launchAgentPlistExists.mockReset();
     repairLaunchAgentBootstrap.mockReset();
+    assertNoSystemLaunchDaemonOwnership.mockReset();
+    assertNoSystemLaunchDaemonOwnership.mockResolvedValue(undefined);
     launchAgentPlistExists.mockResolvedValue(false);
     repairLaunchAgentBootstrap.mockResolvedValue({ ok: true, status: "repaired" });
   });
@@ -38,6 +48,7 @@ describe("recoverInstalledLaunchAgent", () => {
 
     await expect(recoverInstalledLaunchAgent({ result: "started" })).resolves.toBeNull();
     expect(launchAgentPlistExists).not.toHaveBeenCalled();
+    expect(assertNoSystemLaunchDaemonOwnership).not.toHaveBeenCalled();
   });
 
   it("returns null when the LaunchAgent plist is missing", async () => {
@@ -45,6 +56,7 @@ describe("recoverInstalledLaunchAgent", () => {
     launchAgentPlistExists.mockResolvedValue(false);
 
     await expect(recoverInstalledLaunchAgent({ result: "started" })).resolves.toBeNull();
+    expect(assertNoSystemLaunchDaemonOwnership).toHaveBeenCalledWith("ai.openclaw.gateway");
     expect(repairLaunchAgentBootstrap).not.toHaveBeenCalled();
   });
 
@@ -87,4 +99,34 @@ describe("recoverInstalledLaunchAgent", () => {
       "requires a logged-in macOS GUI session",
     );
   });
+
+  it("surfaces system ownership even when no user LaunchAgent plist exists", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+    launchAgentPlistExists.mockResolvedValue(false);
+    assertNoSystemLaunchDaemonOwnership.mockRejectedValue(
+      new Error("System LaunchDaemon system/ai.openclaw.gateway owns this label"),
+    );
+
+    await expect(recoverInstalledLaunchAgent({ result: "started" })).rejects.toThrow(
+      "System LaunchDaemon system/ai.openclaw.gateway owns this label",
+    );
+    expect(launchAgentPlistExists).not.toHaveBeenCalled();
+  });
+
+  it.each(["system-launchdaemon-conflict", "system-launchdaemon-unverifiable"] as const)(
+    "preserves typed %s bootstrap failures",
+    async (status) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue("darwin");
+      launchAgentPlistExists.mockResolvedValue(true);
+      repairLaunchAgentBootstrap.mockResolvedValue({
+        ok: false,
+        status,
+        detail: "system ownership recovery guidance",
+      });
+
+      await expect(recoverInstalledLaunchAgent({ result: "restarted" })).rejects.toThrow(
+        "system ownership recovery guidance",
+      );
+    },
+  );
 });

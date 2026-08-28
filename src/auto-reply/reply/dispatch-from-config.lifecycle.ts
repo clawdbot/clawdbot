@@ -1,8 +1,24 @@
 import crypto from "node:crypto";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveActiveEmbeddedRunSessionId } from "../../agents/embedded-agent-runner/run-state.js";
+import { normalizeChatType } from "../../channels/chat-type.js";
+import { resolveGroupSessionKey } from "../../config/sessions/group.js";
+import { isRestartRecoveryTombstone } from "../../config/sessions/lifecycle.js";
+import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isRecoverableTerminalSessionStatus } from "../../config/sessions/terminal-status.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import {
+  resolveWorkerPlacementArchiveRestoreError,
+  type SessionWorkerPlacementContext,
+} from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
 import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import { classifySessionStateActor } from "../../sessions/session-state-events.js";
+import {
+  isNativeCommandTurn,
+  resolveCommandTurnTargetSessionKey,
+} from "../command-turn-context.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import {
   createAbortAwareDispatcher,
@@ -10,6 +26,8 @@ import {
 } from "./dispatch-from-config.abort.js";
 import type { InboundMessageAuditTerminalRecorder } from "./dispatch-from-config.audit.js";
 import { shouldLetSlackRoutedThreadBypassBusyReplyOperation } from "./dispatch-from-config.context.js";
+import { loadSessionStoreEntry } from "./dispatch-from-config.runtime.js";
+import { createReplyTurnLedger } from "./dispatch-from-config.turn-ledger.js";
 import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { waitForReplyDispatcherIdle } from "./reply-dispatcher.js";
 import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
@@ -24,13 +42,174 @@ import {
   resolveReplyTurnKind,
   runWithReplyOperationLifecycleAdmission,
 } from "./reply-turn-admission.js";
+import { canReplaceRestartTombstoneFromParent } from "./session-parent-fork-prepare.js";
+import { resolveAuthorizedSessionResetCommand } from "./session-reset-command.js";
 
 type DispatchReplyOperationAcquisition =
   | { status: "ready" }
   | { status: "busy" }
   | { status: "aborted" };
 
+async function restoreArchivedDispatchSession(params: {
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  hasPluginOwnedBinding: boolean;
+  placementContext?: SessionWorkerPlacementContext;
+  sessionKey?: string;
+  storePath?: string;
+}): Promise<SessionEntry | undefined> {
+  const { ctx, entry, hasPluginOwnedBinding, sessionKey, storePath } = params;
+  if (
+    !entry ||
+    !sessionKey ||
+    !storePath ||
+    entry.archivedAt === undefined ||
+    isRestartRecoveryTombstone(entry) ||
+    hasPluginOwnedBinding ||
+    ctx.InboundAccessAuthorized !== true ||
+    ctx.InboundEventKind === "room_event" ||
+    isNativeCommandTurn(ctx.CommandTurn) ||
+    classifySessionStateActor({ inputProvenance: ctx.InputProvenance }).actorType !== "human"
+  ) {
+    return entry;
+  }
+  let placementContext = params.placementContext;
+  if (!placementContext) {
+    try {
+      placementContext = (
+        await import("../../gateway/session-worker-placement-context.js")
+      ).resolveSessionWorkerPlacementContext();
+    } catch {
+      return entry;
+    }
+  }
+  const snapshotSessionId = entry.sessionId;
+  const snapshotArchivedAt = entry.archivedAt;
+  // Admission must see the current owner: a rebound, re-archive, or unsafe placement stays untouched.
+  return (
+    (await updateSessionEntry({ sessionKey, storePath }, (currentEntry) => {
+      if (
+        currentEntry.sessionId !== snapshotSessionId ||
+        currentEntry.archivedAt !== snapshotArchivedAt ||
+        isRestartRecoveryTombstone(currentEntry)
+      ) {
+        return null;
+      }
+      try {
+        const placement = currentEntry.sessionId
+          ? placementContext.workerSessionPlacementService
+              ?.getMany([currentEntry.sessionId])
+              .get(currentEntry.sessionId)
+          : undefined;
+        if (
+          resolveWorkerPlacementArchiveRestoreError({
+            context: placementContext,
+            key: sessionKey,
+            placement,
+          })
+        ) {
+          return null;
+        }
+      } catch {
+        return null;
+      }
+      return { archivedAt: undefined, archivedBy: undefined };
+    })) ?? undefined
+  );
+}
+
+function resolveDispatchResetAdmission(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
+  ctx: FinalizedMsgContext;
+  entry?: SessionEntry;
+  hasPluginOwnedBinding: boolean;
+  sessionKey?: string;
+  storePath?: string;
+}): {
+  allowRestartTombstoneParentFork: boolean;
+  allowRestartTombstoneReset: boolean;
+  resetTriggered: boolean;
+} {
+  const { ctx, entry } = params;
+  const parentSessionKey = normalizeOptionalString(ctx.ParentSessionKey);
+  const commandTarget = resolveCommandTurnTargetSessionKey(ctx);
+  const nativeCommandTarget = isNativeCommandTurn(ctx.CommandTurn) ? commandTarget : undefined;
+  const actorType = classifySessionStateActor({
+    inputProvenance: ctx.InputProvenance,
+  }).actorType;
+  const mayReplaceRestartTombstoneFromParent = canReplaceRestartTombstoneFromParent({
+    actorType,
+    entry,
+    // Parent existence is the only remaining fact. Avoid its synchronous store
+    // lookup until the already-loaded child and inbound authority require it.
+    hasParentForkSource: true,
+    hasPluginOwnedBinding: params.hasPluginOwnedBinding,
+    inboundAccessAuthorized: ctx.InboundAccessAuthorized,
+    inboundEventKind: ctx.InboundEventKind,
+    nativeCommandTarget: commandTarget,
+    sessionKey: params.sessionKey,
+  });
+  let hasParentForkSource = false;
+  if (
+    mayReplaceRestartTombstoneFromParent &&
+    parentSessionKey &&
+    parentSessionKey !== params.sessionKey &&
+    params.storePath
+  ) {
+    try {
+      hasParentForkSource = Boolean(
+        loadSessionStoreEntry({
+          agentId: params.agentId,
+          storePath: params.storePath,
+          sessionKey: parentSessionKey,
+          readConsistency: "latest",
+          clone: false,
+        })?.sessionId,
+      );
+    } catch {
+      hasParentForkSource = false;
+    }
+  }
+  const allowRestartTombstoneParentFork =
+    mayReplaceRestartTombstoneFromParent && hasParentForkSource;
+  if (
+    params.hasPluginOwnedBinding ||
+    entry?.pluginOwnerId !== undefined ||
+    ctx.InboundAccessAuthorized !== true ||
+    ctx.InboundEventKind === "room_event" ||
+    (nativeCommandTarget !== undefined && nativeCommandTarget !== params.sessionKey) ||
+    actorType !== "human"
+  ) {
+    return {
+      allowRestartTombstoneParentFork,
+      allowRestartTombstoneReset: false,
+      resetTriggered: false,
+    };
+  }
+  const normalizedChatType = normalizeChatType(ctx.ChatType);
+  const isGroup =
+    normalizedChatType != null && normalizedChatType !== "direct"
+      ? true
+      : Boolean(resolveGroupSessionKey(ctx));
+  const { resetCommand } = resolveAuthorizedSessionResetCommand({
+    agentId: params.agentId,
+    cfg: params.cfg,
+    commandAuthorized: ctx.CommandAuthorized,
+    ctx,
+    isGroup,
+  });
+  const resetTriggered = resetCommand.matchedResetTriggerLower !== undefined;
+  return {
+    resetTriggered,
+    allowRestartTombstoneParentFork,
+    allowRestartTombstoneReset: resetTriggered && isRestartRecoveryTombstone(entry),
+  };
+}
+
 export function createDispatchReplyOperationCoordinator(params: {
+  agentId: string;
+  cfg: OpenClawConfig;
   ctx: FinalizedMsgContext;
   dispatcher: ReplyDispatcher;
   dispatchOperationSessionKey?: string;
@@ -41,6 +220,7 @@ export function createDispatchReplyOperationCoordinator(params: {
     storePath?: string;
   };
   replyOptions?: DispatchFromConfigParams["replyOptions"];
+  sessionWorkerPlacementContext?: SessionWorkerPlacementContext;
   resolveOperationExpectedSessionId: () => string | undefined;
   routeThreadId?: string | number;
 }) {
@@ -51,6 +231,9 @@ export function createDispatchReplyOperationCoordinator(params: {
   let preDispatchLifecycleAbortController: AbortController | undefined;
   let dispatchLifecycleAbortController: AbortController | undefined;
   let preDispatchLifecycleInterrupted = false;
+  let dispatchResetTriggered = false;
+  let allowRestartTombstoneParentFork = false;
+  let allowRestartTombstoneReset = false;
   const dispatchLifecycleWork = new Set<Promise<void>>();
 
   const trackDispatchLifecycleWork = (work: Promise<unknown>) => {
@@ -121,7 +304,32 @@ export function createDispatchReplyOperationCoordinator(params: {
 
   const ensureDispatchReplyOperation = async (
     phase: "pre_dispatch" | "dispatch",
+    hasPluginOwnedBinding = false,
   ): Promise<DispatchReplyOperationAcquisition> => {
+    // Archive restoration belongs to pre-dispatch ownership resolution. Later calls only upgrade admission.
+    if (phase === "pre_dispatch") {
+      params.operationSessionStoreEntry.entry = await restoreArchivedDispatchSession({
+        ctx: params.ctx,
+        entry: params.operationSessionStoreEntry.entry,
+        hasPluginOwnedBinding,
+        placementContext: params.sessionWorkerPlacementContext,
+        sessionKey: params.dispatchOperationSessionKey,
+        storePath: params.operationSessionStoreEntry.storePath,
+      });
+      ({
+        resetTriggered: dispatchResetTriggered,
+        allowRestartTombstoneParentFork,
+        allowRestartTombstoneReset,
+      } = resolveDispatchResetAdmission({
+        agentId: params.agentId,
+        cfg: params.cfg,
+        ctx: params.ctx,
+        entry: params.operationSessionStoreEntry.entry,
+        hasPluginOwnedBinding,
+        sessionKey: params.dispatchOperationSessionKey,
+        storePath: params.operationSessionStoreEntry.storePath,
+      }));
+    }
     if (phase === "dispatch") {
       // The next full reply operation revalidates the persisted session. Drop
       // the hook-only lease after its queued delivery settles so a waiting
@@ -156,12 +364,28 @@ export function createDispatchReplyOperationCoordinator(params: {
       params.operationSessionStoreEntry.entry?.sessionId ??
       crypto.randomUUID();
     const replyTurnKind = resolveReplyTurnKind(params.replyOptions);
+    const activeReplyOperation = replyRunRegistry.get(params.dispatchOperationSessionKey);
+    const activeEmbeddedSessionId = resolveActiveEmbeddedRunSessionId(
+      params.dispatchOperationSessionKey,
+    );
+    const allowGatewayEmbeddedQueueResolution =
+      replyTurnKind === "visible" &&
+      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
+      activeReplyOperation === undefined &&
+      activeEmbeddedSessionId === operationSessionId;
+    if (allowGatewayEmbeddedQueueResolution) {
+      // An embedded owner can outlive its reply-operation registration. Do not
+      // create a competing operation for the same session before queue policy
+      // gets a chance to steer the active backend.
+      return { status: "ready" };
+    }
     const allowActivePreDispatch = phase === "pre_dispatch" && replyTurnKind === "visible";
     const allowGatewayQueueResolution =
       phase === "dispatch" &&
       replyTurnKind === "visible" &&
-      params.replyOptions?.queuedFollowupLifecycle !== undefined &&
-      replyRunRegistry.get(params.dispatchOperationSessionKey) !== undefined;
+      params.replyOptions?.turnAdoptionLifecycle !== undefined &&
+      activeReplyOperation !== undefined &&
+      activeReplyOperation.turnKind !== "heartbeat";
     if (allowGatewayQueueResolution) {
       // Gateway turns need to reach getReplyFromConfig while the owner is active;
       // that layer applies the session's steer/followup/collect/drop policy.
@@ -187,13 +411,15 @@ export function createDispatchReplyOperationCoordinator(params: {
       expectedActiveOperation: params.initialDispatchReplyOperation,
       storePath: params.operationSessionStoreEntry.storePath,
       kind: replyTurnKind,
-      resetTriggered: false,
+      resetTriggered: dispatchResetTriggered,
+      allowRestartTombstoneParentFork,
+      allowRestartTombstoneReset,
       routeThreadId: params.routeThreadId,
+      originatingLeafEntryId: params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
       upstreamAbortSignal: params.replyOptions?.abortSignal,
       waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
       retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
       onLifecycleInterrupt,
-      onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
     });
     if (
       admission.status === "skipped" &&
@@ -234,13 +460,16 @@ export function createDispatchReplyOperationCoordinator(params: {
           expectedActiveOperation: params.initialDispatchReplyOperation,
           storePath: params.operationSessionStoreEntry.storePath,
           kind: replyTurnKind,
-          resetTriggered: false,
+          resetTriggered: dispatchResetTriggered,
+          allowRestartTombstoneParentFork,
+          allowRestartTombstoneReset,
           routeThreadId: params.routeThreadId,
+          originatingLeafEntryId:
+            params.replyOptions?.turnAdoptionLifecycle?.originatingLeafEntryId,
           upstreamAbortSignal: params.replyOptions?.abortSignal,
           waitForActive: !allowActivePreDispatch && !allowSlackRoutedThreadBypass,
           retainLifecycleAdmissionOnActive: allowActivePreDispatch || allowSlackRoutedThreadBypass,
           onLifecycleInterrupt,
-          onReplyAdmissionWaitChange: params.replyOptions?.onReplyAdmissionWaitChange,
         });
       }
     }
@@ -351,6 +580,7 @@ export function createDispatchReplyOperationCoordinator(params: {
   const getQueuedFollowupAbortSignal = () =>
     dispatchReplyOperation?.abortSignal ?? params.replyOptions?.abortSignal;
   let observedReplyDelivery = false;
+  let agentRunTerminalOutcome: "completed" | "failed" | undefined;
   const markObservedReplyDelivery = async () => {
     if (observedReplyDelivery) {
       return;
@@ -358,17 +588,23 @@ export function createDispatchReplyOperationCoordinator(params: {
     observedReplyDelivery = true;
     await params.replyOptions?.onObservedReplyDelivery?.();
   };
-  const getReplyOptions = () => {
+  const getReplyOptions = (): DispatchFromConfigParams["replyOptions"] => {
     const abortSignal = getDispatchAbortSignal();
-    const onAgentRunStart = params.messageAuditTerminal
-      ? (runId: string) => {
-          params.messageAuditTerminal?.observeRunId(runId);
-          params.replyOptions?.onAgentRunStart?.(runId);
-        }
-      : undefined;
-    if (!abortSignal && !onAgentRunStart) {
-      return params.replyOptions;
-    }
+    const onAgentRunStart: NonNullable<
+      NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunStart"]
+    > = (runId, executionIdentityToken) => {
+      agentRunTerminalOutcome = "completed";
+      params.messageAuditTerminal?.observeRunId(runId);
+      params.replyOptions?.onAgentRunStart?.(runId, executionIdentityToken);
+    };
+    const onAgentRunTerminalOutcome: NonNullable<
+      NonNullable<DispatchFromConfigParams["replyOptions"]>["onAgentRunTerminalOutcome"]
+    > = (outcome) => {
+      if (outcome === "failed" || agentRunTerminalOutcome === undefined) {
+        agentRunTerminalOutcome = outcome;
+      }
+      params.replyOptions?.onAgentRunTerminalOutcome?.(outcome);
+    };
     return {
       ...params.replyOptions,
       ...(abortSignal
@@ -377,7 +613,8 @@ export function createDispatchReplyOperationCoordinator(params: {
             queuedFollowupAbortSignal: getQueuedFollowupAbortSignal(),
           }
         : {}),
-      ...(onAgentRunStart ? { onAgentRunStart } : {}),
+      onAgentRunStart,
+      onAgentRunTerminalOutcome,
       ...(dispatchReplyOperation ? { replyOperation: dispatchReplyOperation } : {}),
     };
   };
@@ -393,7 +630,10 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
   };
 
-  const failDispatchReplyOperation = (error: unknown) => {
+  const failDispatchReplyOperation = (error: unknown, terminalOutcome?: "failed") => {
+    if (terminalOutcome === "failed" && agentRunTerminalOutcome === "completed") {
+      agentRunTerminalOutcome = "failed";
+    }
     const completionBarrier = waitForDispatchLifecycleWorkAndDelivery();
     void releasePreDispatchLifecycleAdmission(() => waitForReplyDispatcherIdle(params.dispatcher));
     if (!dispatchReplyOperation) {
@@ -417,14 +657,24 @@ export function createDispatchReplyOperationCoordinator(params: {
     }
   };
 
+  const turnLedger = createReplyTurnLedger(params.dispatcher);
   return {
     completeDispatchReplyOperation,
+    // Hook-queued payloads must settle through the turn ledger too, or a
+    // hook-delivered visible reply could trigger the no-visible-reply fallback.
     dispatchHookDispatcher: createAbortAwareDispatcher({
-      dispatcher: params.dispatcher,
+      dispatcher: {
+        ...params.dispatcher,
+        sendToolResult: (payload) => turnLedger.sendQueued("tool", payload).queued,
+        sendBlockReply: (payload) => turnLedger.sendQueued("block", payload).queued,
+        sendFinalReply: (payload) => turnLedger.sendQueued("final", payload).queued,
+      },
       isAborted: isPreDispatchOperationAborted,
     }),
+    turnLedger,
     ensureDispatchReplyOperation,
     failDispatchReplyOperation,
+    getAgentRunTerminalOutcome: () => agentRunTerminalOutcome,
     getDispatchAbortOperation: () => dispatchAbortOperation,
     getDispatchAbortSignal,
     getDispatchReplyOperation: () => dispatchReplyOperation,

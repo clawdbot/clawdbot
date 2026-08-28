@@ -1,16 +1,29 @@
 // Transcript persistence and source-reply rewrites shared by chat send and abort.
-import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
+import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
+import {
+  appendReplyMediaFailureWarning,
+  getReplyPayloadMetadata,
+} from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
-  patchSessionEntry,
+  loadTranscriptEventRowsAfterSeqSync,
+  patchSessionEntryCore,
   publishTranscriptUpdate,
+  readSessionTranscriptWatermark,
+  rewriteTranscriptEventRowsExact,
   withTranscriptWriteLock,
   type SessionTranscriptWriteScope,
   type TranscriptEvent,
 } from "../../config/sessions/session-accessor.js";
+import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { resolveMirroredTranscriptText } from "../../config/sessions/transcript-mirror.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type { AssistantDisplayContentBlock } from "./chat-assistant-content.js";
+import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
+import { splitMediaFromOutput } from "../../media/parse.js";
+import {
+  sanitizeAssistantDisplayText,
+  type AssistantDisplayContentBlock,
+} from "./chat-assistant-content.js";
 import {
   appendInjectedAssistantMessageToTranscript,
   type GatewayInjectedTtsSupplementMarker,
@@ -30,6 +43,8 @@ type AssistantTranscriptScopeParams = {
   agentId?: string;
 };
 
+type ResolvedAssistantTranscriptScope = SessionTranscriptWriteScope & { sessionId: string };
+
 export type SourceReplyTranscriptMirrorMetadata = NonNullable<
   ReturnType<typeof getReplyPayloadMetadata>
 >["sourceReplyTranscriptMirror"];
@@ -43,7 +58,7 @@ export type SourceReplyContentState = {
 
 export function assistantTranscriptScope(
   params: AssistantTranscriptScopeParams,
-): SessionTranscriptWriteScope | null {
+): ResolvedAssistantTranscriptScope | null {
   const sessionKey = params.sessionKey.trim();
   if (!sessionKey || !params.sessionId.trim()) {
     return null;
@@ -56,22 +71,13 @@ export function assistantTranscriptScope(
   };
 }
 
-function transcriptEventRecord(event: TranscriptEvent): Record<string, unknown> | undefined {
-  return event && typeof event === "object" && !Array.isArray(event)
-    ? (event as Record<string, unknown>)
-    : undefined;
-}
-
 function transcriptEventId(event: TranscriptEvent): string | undefined {
   const id = transcriptEventRecord(event)?.id;
   return typeof id === "string" && id.trim().length > 0 ? id : undefined;
 }
 
 function transcriptEventMessage(event: TranscriptEvent): Record<string, unknown> | undefined {
-  const message = transcriptEventRecord(event)?.message;
-  return message && typeof message === "object" && !Array.isArray(message)
-    ? (message as Record<string, unknown>)
-    : undefined;
+  return transcriptEventRecord(transcriptEventRecord(event)?.message);
 }
 
 function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
@@ -92,6 +98,94 @@ function findAssistantTranscriptMessageByIdempotencyKeyInEvents(
     return null;
   }
   return { messageId, message };
+}
+
+function findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
+  events: readonly TranscriptEvent[],
+  params: {
+    assistantMessageIndex: number;
+    mediaUrls: readonly string[];
+  },
+): { messageId: string; message: Record<string, unknown> } | null {
+  const expectedMedia = new Set(
+    params.mediaUrls
+      .map((value) => normalizeMediaReferenceForComparison(value))
+      .filter((value) => value.length > 0),
+  );
+  if (
+    expectedMedia.size === 0 ||
+    !Number.isSafeInteger(params.assistantMessageIndex) ||
+    params.assistantMessageIndex < 1
+  ) {
+    return null;
+  }
+  const target = events.filter((event) => transcriptEventMessage(event)?.role === "assistant")[
+    params.assistantMessageIndex - 1
+  ];
+  const message = target ? transcriptEventMessage(target) : undefined;
+  const messageId = target ? transcriptEventId(target) : undefined;
+  const text = message ? extractAssistantTranscriptText(message) : undefined;
+  if (!messageId || !message || !text) {
+    return null;
+  }
+  const actualMedia = new Set(
+    (splitMediaFromOutput(text).mediaUrls ?? [])
+      .map((value) => normalizeMediaReferenceForComparison(value))
+      .filter((value) => value.length > 0),
+  );
+  const exactMediaMatch =
+    actualMedia.size === expectedMedia.size &&
+    [...expectedMedia].every((value) => actualMedia.has(value));
+  return exactMediaMatch ? { messageId, message } : null;
+}
+
+function mergeManagedMediaIntoAssistantContent(params: {
+  message: Record<string, unknown>;
+  replacement: AssistantDisplayContentBlock[];
+}): AssistantDisplayContentBlock[] | null {
+  const original = Array.isArray(params.message.content)
+    ? (params.message.content as AssistantDisplayContentBlock[])
+    : [];
+  const managedBlocks = params.replacement.filter((block) => block?.type !== "text");
+  const mediaFailureWarning = appendReplyMediaFailureWarning(undefined);
+  const preserveMediaFailureWarning = params.replacement.some(
+    (block) =>
+      block?.type === "text" &&
+      typeof block.text === "string" &&
+      block.text.includes(mediaFailureWarning),
+  );
+  if (managedBlocks.length === 0 && !preserveMediaFailureWarning) {
+    return null;
+  }
+  let replaced = false;
+  const merged: AssistantDisplayContentBlock[] = [];
+  for (const block of original) {
+    if (block?.type !== "text" || typeof block.text !== "string") {
+      merged.push(block);
+      continue;
+    }
+    const split = splitMediaFromOutput(block.text);
+    const visibleText = sanitizeAssistantDisplayText(split.text, {
+      preserveBoundaries: true,
+    });
+    if (visibleText) {
+      const { textSignature: _textSignature, ...rest } = block;
+      merged.push({
+        ...rest,
+        text: preserveMediaFailureWarning
+          ? appendReplyMediaFailureWarning(visibleText)
+          : visibleText,
+      });
+    }
+    if (split.mediaUrls?.length && !replaced) {
+      merged.push(...managedBlocks);
+      replaced = true;
+    }
+  }
+  if (replaced && preserveMediaFailureWarning && merged.length === 0) {
+    merged.push({ type: "text", text: mediaFailureWarning });
+  }
+  return replaced ? merged : null;
 }
 
 function findSourceReplyTranscriptMirrorByIdempotencyKeyInEvents(
@@ -188,7 +282,7 @@ export async function appendAssistantTranscriptMessage(params: {
   idempotencyKey?: string;
   abortMeta?: {
     aborted: true;
-    origin: "rpc" | "stop-command";
+    origin: "rpc" | "stop-command" | "placement-abandon";
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
@@ -225,7 +319,7 @@ async function touchAssistantTranscriptSessionEntry(
     return;
   }
   const transcriptMarkerUpdatedAt = Date.now();
-  await patchSessionEntry(
+  await patchSessionEntryCore(
     {
       storePath: scope.storePath,
       sessionKey: scope.sessionKey,
@@ -333,6 +427,96 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
       request: target.request,
     }));
   });
+}
+
+export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: {
+  content: AssistantDisplayContentBlock[];
+  idempotencyKey: string;
+  scope: SessionTranscriptWriteScope;
+}): Promise<{ messageId: string } | null> {
+  const idempotencyKey = params.idempotencyKey.trim();
+  if (!idempotencyKey || params.content.length === 0) {
+    return null;
+  }
+  return await withTranscriptWriteLock(params.scope, async (transcript) => {
+    const events = await transcript.readEvents();
+    const target = findAssistantTranscriptMessageByIdempotencyKeyInEvents(events, idempotencyKey);
+    if (!target) {
+      return null;
+    }
+    const rewrittenEvents = events.map((event) =>
+      transcriptEventId(event) === target.messageId
+        ? Object.assign({}, event as Record<string, unknown>, {
+            message: {
+              ...target.message,
+              content: params.content,
+            },
+          })
+        : event,
+    );
+    await transcript.replaceEvents(rewrittenEvents);
+    return { messageId: target.messageId };
+  });
+}
+
+export async function rewriteAssistantTranscriptMessageByTurnIndexAndMedia(params: {
+  afterSeq: number;
+  assistantMessageIndex: number;
+  content: AssistantDisplayContentBlock[];
+  expectedGeneration: string | null;
+  mediaUrls: readonly string[];
+  scope: ResolvedAssistantTranscriptScope;
+}): Promise<{ generation: string; messageId: string } | null> {
+  if (params.content.length === 0 || params.mediaUrls.length === 0) {
+    return null;
+  }
+  const currentWatermark = readSessionTranscriptWatermark(params.scope);
+  const initialGenerationMaterialized = params.expectedGeneration === null && params.afterSeq === 0;
+  if (currentWatermark.generation !== params.expectedGeneration && !initialGenerationMaterialized) {
+    return null;
+  }
+  // The pre-dispatch SQLite sequence is the exact turn boundary; timestamps can collide.
+  // Exact-row rewrites preserve that sequence while rotating the generation returned to callers.
+  const currentTurnRows = loadTranscriptEventRowsAfterSeqSync(params.scope, params.afterSeq);
+  const target = findAssistantTranscriptMessageByTurnIndexAndMediaInEvents(
+    currentTurnRows.map((row) => row.event),
+    params,
+  );
+  if (!target) {
+    return null;
+  }
+  const targetRow = currentTurnRows.find(
+    (row) => transcriptEventId(row.event) === target.messageId,
+  );
+  if (!targetRow) {
+    return null;
+  }
+  const mergedContent = mergeManagedMediaIntoAssistantContent({
+    message: target.message,
+    replacement: params.content,
+  });
+  if (!mergedContent) {
+    return null;
+  }
+  const rewrittenMessage = applyAssistantDeliveryDirectives({
+    ...target.message,
+    content: mergedContent,
+  });
+  const rewrittenEvent = Object.assign({}, targetRow.event as Record<string, unknown>, {
+    message: rewrittenMessage,
+  });
+  const rewritten = await rewriteTranscriptEventRowsExact(params.scope, {
+    allowInitialGenerationMaterialization: initialGenerationMaterialized,
+    expectedGeneration: params.expectedGeneration,
+    rows: [
+      {
+        event: rewrittenEvent,
+        expectedEventJson: JSON.stringify(targetRow.event),
+        seq: targetRow.seq,
+      },
+    ],
+  });
+  return rewritten ? { generation: rewritten.generation, messageId: target.messageId } : null;
 }
 
 export async function publishAssistantTranscriptRewrite(params: {

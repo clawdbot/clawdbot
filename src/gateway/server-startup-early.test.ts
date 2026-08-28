@@ -2,6 +2,7 @@
  * Early gateway startup helper tests.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { runGatewayShutdownSteps } from "./server-shutdown.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 type StartGatewayDiscovery = typeof import("./server-discovery-runtime.js").startGatewayDiscovery;
@@ -13,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   primeRemoteSkillsCache: vi.fn(),
   refreshRemoteBinsForConnectedNodes: vi.fn(),
   registerSkillsChangeListener: vi.fn(),
+  closeSkillsWatchers: vi.fn(),
   skillsChangeUnsub: vi.fn(),
   ensureContextWindowCacheLoaded: vi.fn(),
   ensureTaskRuntimeStateReady: vi.fn(),
@@ -37,6 +39,7 @@ vi.mock("../skills/runtime/remote.js", () => ({
 
 vi.mock("../skills/runtime/refresh.js", () => ({
   registerSkillsChangeListener: mocks.registerSkillsChangeListener,
+  closeSkillsWatchers: mocks.closeSkillsWatchers,
 }));
 
 vi.mock("../agents/context.js", () => ({
@@ -80,6 +83,7 @@ function earlyRuntimeInput(
     log,
     logDiscovery: log,
     nodeRegistry: {} as never,
+    swapBonjourStop: () => null,
     ...maintenanceState,
     skillsRefreshDelayMs: 30_000,
     getSkillsRefreshTimer: () => null,
@@ -98,6 +102,7 @@ describe("startGatewayEarlyRuntime", () => {
     mocks.primeRemoteSkillsCache.mockReset();
     mocks.refreshRemoteBinsForConnectedNodes.mockReset();
     mocks.registerSkillsChangeListener.mockReset();
+    mocks.closeSkillsWatchers.mockReset();
     mocks.registerSkillsChangeListener.mockReturnValue(mocks.skillsChangeUnsub);
     mocks.skillsChangeUnsub.mockReset();
     mocks.ensureContextWindowCacheLoaded.mockReset();
@@ -142,11 +147,118 @@ describe("startGatewayEarlyRuntime", () => {
     expect(mocks.registerSkillsChangeListener).toHaveBeenCalledTimes(1);
     expect(earlyRuntime.getActiveTaskCount()).toBe(1);
 
-    earlyRuntime.skillsChangeUnsub();
+    await earlyRuntime.skillsChangeUnsub();
     expect(mocks.skillsChangeUnsub).toHaveBeenCalledTimes(1);
+    expect(mocks.closeSkillsWatchers).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([false, true])(
+    "stops acquired discovery exactly once after later startup failure (cleanup rejects: %s)",
+    async (cleanupRejects) => {
+      const startupError = new Error("remote skills registry failed");
+      const cleanupError = new Error("discovery cleanup failed");
+      const stopDiscovery = vi.fn(async () => {
+        if (cleanupRejects) {
+          throw cleanupError;
+        }
+      });
+      const owner: { current: (() => Promise<void>) | null } = { current: null };
+      const swapBonjourStop = (next: typeof owner.current) => {
+        const previous = owner.current;
+        owner.current = next;
+        return previous;
+      };
+      mocks.startGatewayDiscovery.mockResolvedValueOnce({ bonjourStop: stopDiscovery });
+      mocks.setSkillsRemoteRegistry.mockImplementationOnce(() => {
+        throw startupError;
+      });
+      const onCleanupError = vi.fn();
+
+      const startup = startGatewayEarlyRuntime(
+        earlyRuntimeInput({ minimalTestGateway: false, swapBonjourStop }),
+      ).catch(async (error: unknown) => {
+        await runGatewayShutdownSteps({
+          steps: [
+            { name: "discovery resident", run: async () => await swapBonjourStop(null)?.() },
+            { name: "gateway close", run: async () => await swapBonjourStop(null)?.() },
+          ],
+          onError: onCleanupError,
+        });
+        throw error;
+      });
+
+      await expect(startup).rejects.toBe(startupError);
+      expect(stopDiscovery).toHaveBeenCalledOnce();
+      expect(owner.current).toBeNull();
+      expect(onCleanupError).toHaveBeenCalledTimes(cleanupRejects ? 1 : 0);
+    },
+  );
+
+  it("broadcasts remote-node skill invalidations to operator clients", async () => {
+    const broadcast = vi.fn();
+
+    await startGatewayEarlyRuntime(
+      earlyRuntimeInput({
+        minimalTestGateway: false,
+        broadcast,
+      }),
+    );
+
+    const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0] as
+      | ((event: { reason: "remote-node" }) => void)
+      | undefined;
+    expect(listener).toBeDefined();
+
+    listener?.({ reason: "remote-node" });
+
+    expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason: "remote-node" });
+    expect(mocks.refreshRemoteBinsForConnectedNodes).not.toHaveBeenCalled();
+  });
+
+  it("broadcasts local skill changes after the coalesced remote-bin refresh", async () => {
+    vi.useFakeTimers();
+    const broadcast = vi.fn();
+    let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+    let finishRefresh: (() => void) | undefined;
+    mocks.refreshRemoteBinsForConnectedNodes.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    try {
+      await startGatewayEarlyRuntime(
+        earlyRuntimeInput({
+          minimalTestGateway: false,
+          broadcast,
+          getSkillsRefreshTimer: () => refreshTimer,
+          setSkillsRefreshTimer: (timer) => {
+            refreshTimer = timer;
+          },
+        }),
+      );
+
+      const listener = mocks.registerSkillsChangeListener.mock.calls.at(-1)?.[0] as
+        | ((event: { reason: "watch" }) => void)
+        | undefined;
+      listener?.({ reason: "watch" });
+      await vi.advanceTimersByTimeAsync(30_000);
+
+      expect(mocks.refreshRemoteBinsForConnectedNodes).toHaveBeenCalledWith({});
+      expect(broadcast).not.toHaveBeenCalled();
+
+      finishRefresh?.();
+      await Promise.resolve();
+      expect(broadcast).toHaveBeenCalledWith("skills.changed", { reason: "watch" });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("fails before discovery and task maintenance when task state cannot restore", async () => {
+    const stopDiscovery = vi.fn(async () => {});
+    const swapBonjourStop = vi.fn(() => null);
+    mocks.startGatewayDiscovery.mockResolvedValue({ bonjourStop: stopDiscovery });
     mocks.ensureTaskRuntimeStateReady.mockImplementationOnce(() => {
       throw new Error("task-flow registry restore failed");
     });
@@ -155,11 +267,14 @@ describe("startGatewayEarlyRuntime", () => {
       startGatewayEarlyRuntime(
         earlyRuntimeInput({
           minimalTestGateway: false,
+          swapBonjourStop,
         }),
       ),
     ).rejects.toThrow("task-flow registry restore failed");
 
     expect(mocks.startGatewayDiscovery).not.toHaveBeenCalled();
+    expect(swapBonjourStop).not.toHaveBeenCalled();
+    expect(stopDiscovery).not.toHaveBeenCalled();
     expect(mocks.configureTaskRegistryMaintenance).not.toHaveBeenCalled();
     expect(mocks.startTaskRegistryMaintenance).not.toHaveBeenCalled();
   });

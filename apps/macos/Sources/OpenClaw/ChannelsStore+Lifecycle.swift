@@ -1,4 +1,5 @@
 import Foundation
+import OpenClawKit
 import OpenClawProtocol
 
 func whatsappLoginWaitRequestTimeoutMs(
@@ -25,14 +26,16 @@ extension ChannelsStore {
         self.startCount += 1
         guard self.startCount == 1 else { return }
         guard self.pollTask == nil else { return }
+        GatewayPushSubscription.restartTask(task: &self.gatewayPushTask) { [weak self] push in
+            self?.handleGatewayPush(push)
+        }
         self.pollTask = Task.detached { [weak self] in
             guard let self else { return }
             await self.refresh(probe: false)
             async let schemaLoad: Void = self.loadConfigSchema()
             async let configLoad: Void = self.loadConfig(force: false)
             _ = await (schemaLoad, configLoad)
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: UInt64(self.interval * 1_000_000_000))
+            while await SimpleTaskSupport.waitForNextOperation(interval: self.interval) {
                 await self.refresh(probe: false)
             }
         }
@@ -45,6 +48,23 @@ extension ChannelsStore {
         guard self.startCount == 0 else { return }
         self.pollTask?.cancel()
         self.pollTask = nil
+        self.gatewayPushTask?.cancel()
+        self.gatewayPushTask = nil
+    }
+
+    static func gatewayPushRequestsConfigRefresh(_ push: GatewayPush) -> Bool {
+        switch push {
+        case let .event(event):
+            event.event == "config.changed"
+        case .snapshot, .seqGap:
+            true
+        }
+    }
+
+    private func handleGatewayPush(_ push: GatewayPush) {
+        guard Self.gatewayPushRequestsConfigRefresh(push) else { return }
+        // Change events contain only a hash; refetch without overwriting a dirty local draft.
+        Task { await self.loadConfig(force: false, refresh: true) }
     }
 
     func refresh(probe: Bool) async {

@@ -17,6 +17,8 @@ export type InputProvenance = {
   sourceTool?: string;
 };
 
+export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
+
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS = [
   "agent_harness_task",
@@ -64,14 +66,22 @@ export function applyInputProvenanceToUserMessage(
   if (existing) {
     return message;
   }
-  return {
-    ...(message as unknown as Record<string, unknown>),
+  return Object.assign({}, message, {
     provenance: inputProvenance,
-  } as unknown as AgentMessage;
+  });
 }
 
 export function isInterSessionInputProvenance(value: unknown): boolean {
   return normalizeInputProvenance(value)?.kind === "inter_session";
+}
+
+export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  return (
+    provenance?.kind === "internal_system" &&
+    normalizeOptionalString(provenance.sourceTool)?.toLowerCase() ===
+      MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL
+  );
 }
 
 const AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET: ReadonlySet<string> = new Set(
@@ -83,8 +93,18 @@ export function isAgentMediatedCompletionSourceTool(value: unknown): boolean {
   return sourceTool ? AGENT_MEDIATED_COMPLETION_SOURCE_TOOL_SET.has(sourceTool) : false;
 }
 
+export function isCompletionReportInputProvenance(value: unknown): boolean {
+  const provenance = normalizeInputProvenance(value);
+  if (provenance?.kind !== "inter_session") {
+    return false;
+  }
+  const sourceTool = normalizeOptionalString(provenance.sourceTool)?.toLowerCase();
+  return sourceTool === "subagent_announce" || isAgentMediatedCompletionSourceTool(sourceTool);
+}
+
 const USER_FACING_SESSION_STATE_PRESERVING_SOURCE_TOOLS: ReadonlySet<string> = new Set([
   ...AGENT_MEDIATED_COMPLETION_SOURCE_TOOLS,
+  "exec_approval_followup",
   "subagent_announce",
   "subagent_interrupted_resume",
 ]);

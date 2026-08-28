@@ -1,12 +1,20 @@
 import type { WebSocket } from "ws";
 import { DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS } from "../../packages/gateway-client/src/timeouts.js";
 import type {
+  WorkerGitHubPublishParams,
+  WorkerGitHubPublishResponseFrame,
   WorkerHeartbeatParams,
   WorkerHeartbeatResponseFrame,
   WorkerHelloOk,
   WorkerLiveEventParams,
   WorkerLiveEventResponseFrame,
+  WorkerPortalParams,
+  WorkerPortalResponseFrame,
   WorkerProtocolCloseReason,
+  WorkerSessionsSendParams,
+  WorkerSessionsSendResponseFrame,
+  WorkerSessionsSpawnParams,
+  WorkerSessionsSpawnResponseFrame,
   WorkerTranscriptCommitParams,
   WorkerTranscriptCommitResponseFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
@@ -19,43 +27,44 @@ import type {
   WorkerInferenceTerminalFrame,
 } from "../../packages/gateway-protocol/src/schema/worker-inference.js";
 import { computeBackoff, sleepWithAbort, type BackoffPolicy } from "../infra/backoff.js";
+import { notifyListeners } from "../shared/listeners.js";
 import {
   connectWorkerConnectionAttempt,
   isRetryableWorkerCloseReason,
 } from "./worker-connection-admission.js";
 import {
+  WORKER_ADMISSION_DEADLINE_MS,
   WorkerAdmissionDeadlineExceededError,
   WorkerAdmissionError,
   WorkerConnectionInterruptedError,
   WorkerConnectionStoppedError,
   WorkerFencedError,
+  formatWorkerConnectionFailure,
   isFencedCloseReason,
   resolvePositiveTimeout,
-  toError,
+  toWorkerConnectionError,
   type WorkerConnectionExit,
   type WorkerConnectionOptions,
   type WorkerConnectionState,
   type WorkerFencedReason,
 } from "./worker-connection-contract.js";
+import { WorkerConnectionEndpointError } from "./worker-connection-endpoint.js";
 import { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
 
-export {
-  WorkerConnectionInterruptedError,
-  WorkerConnectionStoppedError,
-  WorkerFencedError,
-} from "./worker-connection-contract.js";
+export { WorkerConnectionInterruptedError } from "./worker-connection-contract.js";
 export type { WorkerConnectionState } from "./worker-connection-contract.js";
 
 const DEFAULT_RECONNECT_BACKOFF: BackoffPolicy = {
   initialMs: 250,
   maxMs: 30_000,
   factor: 2,
-  jitter: 0,
+  jitter: 0.1,
 };
 
 const DEFAULT_ADMISSION_TIMEOUT_MS = DEFAULT_PREAUTH_HANDSHAKE_TIMEOUT_MS;
-const DEFAULT_ADMISSION_DEADLINE_MS = 120_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 30_000;
+const WORKER_SESSION_SPAWN_TIMEOUT_MS = 15 * 60_000;
+const WORKER_SESSION_SEND_TIMEOUT_SLACK_MS = 60_000;
 
 type ReadyWaiter = {
   resolve: (hello: WorkerHelloOk) => void;
@@ -88,7 +97,7 @@ export class WorkerConnection {
     );
     this.admissionDeadlineMs = resolvePositiveTimeout(
       options.admissionDeadlineMs,
-      DEFAULT_ADMISSION_DEADLINE_MS,
+      WORKER_ADMISSION_DEADLINE_MS,
     );
     this.requestTimeoutMs = resolvePositiveTimeout(
       options.requestTimeoutMs,
@@ -152,6 +161,14 @@ export class WorkerConnection {
     return () => this.stateListeners.delete(listener);
   }
 
+  onTerminalError(listener: (error: Error) => void): () => void {
+    return this.onStateChange((state) => {
+      if (this.isTerminal(state)) {
+        listener(this.terminalError(state));
+      }
+    });
+  }
+
   onInferenceEvent(listener: (frame: WorkerInferenceEventFrame) => void): () => void {
     return this.frames.onInferenceEvent(listener);
   }
@@ -182,39 +199,85 @@ export class WorkerConnection {
   }
 
   requestHeartbeat(params: WorkerHeartbeatParams): Promise<WorkerHeartbeatResponseFrame> {
-    return this.frames.requestHeartbeat(params);
+    return this.frames.request("heartbeat", params);
   }
 
   requestTranscriptCommit(
     params: WorkerTranscriptCommitParams,
   ): Promise<WorkerTranscriptCommitResponseFrame> {
-    return this.frames.requestTranscriptCommit(params);
+    return this.frames.request("transcript", params);
   }
 
   requestLiveEvent(params: WorkerLiveEventParams): Promise<WorkerLiveEventResponseFrame> {
-    return this.frames.requestLiveEvent(params);
+    return this.frames.request("live-event", params);
+  }
+
+  requestSessionsSpawn(
+    params: WorkerSessionsSpawnParams,
+  ): Promise<WorkerSessionsSpawnResponseFrame> {
+    const timeoutMs = Math.max(this.requestTimeoutMs, WORKER_SESSION_SPAWN_TIMEOUT_MS);
+    return this.requestDurableSessionOperation(() =>
+      this.frames.request("sessions-spawn", params, undefined, timeoutMs),
+    );
+  }
+
+  requestSessionsSend(params: WorkerSessionsSendParams): Promise<WorkerSessionsSendResponseFrame> {
+    const requestedTimeoutMs =
+      (params.timeoutSeconds ?? 30) * 1_000 + WORKER_SESSION_SEND_TIMEOUT_SLACK_MS;
+    const timeoutMs = Math.max(this.requestTimeoutMs, requestedTimeoutMs);
+    return this.requestDurableSessionOperation(() =>
+      this.frames.request("sessions-send", params, undefined, timeoutMs),
+    );
+  }
+
+  requestGitHubPublish(
+    params: WorkerGitHubPublishParams,
+  ): Promise<WorkerGitHubPublishResponseFrame> {
+    return this.requestDurableSessionOperation(() => this.frames.request("github-publish", params));
+  }
+
+  requestPortal(params: WorkerPortalParams): Promise<WorkerPortalResponseFrame> {
+    return this.frames.request("portal", params);
+  }
+
+  private async requestDurableSessionOperation<T>(request: () => Promise<T>): Promise<T> {
+    for (;;) {
+      try {
+        return await request();
+      } catch (error) {
+        if (!(error instanceof WorkerConnectionInterruptedError) || this.isTerminal()) {
+          throw error;
+        }
+        // The Gateway durably coordinates these calls by toolCallId. Reconnect
+        // and replay the identical request until a response arrives or the
+        // credential/connection is terminal; transient reconnects cannot invent
+        // a second operation.
+        await this.waitForReady();
+      }
+    }
   }
 
   requestInferenceStart(
     params: WorkerInferenceStartParams,
     beforeResolve?: (frame: WorkerInferenceStartResponseFrame) => void,
   ): Promise<WorkerInferenceStartResponseFrame> {
-    return this.frames.requestInferenceStart(params, beforeResolve);
+    return this.frames.request("inference-start", params, beforeResolve);
   }
 
   requestInferenceCancel(
     params: WorkerInferenceCancelParams,
   ): Promise<WorkerInferenceCancelResponseFrame> {
-    return this.frames.requestInferenceCancel(params);
+    return this.frames.request("inference-cancel", params);
   }
 
   private async connectUntilReady(): Promise<WorkerHelloOk> {
     const startedAt = Date.now();
     let attempt = 0;
+    let lastFailure: Error | undefined;
     while (!this.isTerminal()) {
       let remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
       if (remainingMs <= 0) {
-        throw this.failAdmissionDeadline();
+        throw this.failAdmissionDeadline(attempt, lastFailure);
       }
       if (attempt > 0) {
         this.transition({ kind: "reconnecting", attempt });
@@ -227,16 +290,28 @@ export class WorkerConnection {
             this.reconnectAbort.signal,
           );
         } catch (error) {
-          throw this.isTerminal() ? this.terminalError() : toError(error);
+          throw this.isTerminal() ? this.terminalError() : toWorkerConnectionError(error);
         }
         remainingMs = this.admissionDeadlineMs - (Date.now() - startedAt);
         if (remainingMs <= 0) {
-          throw this.failAdmissionDeadline();
+          throw this.failAdmissionDeadline(attempt, lastFailure);
         }
       }
       try {
-        return await this.connectOnce(attempt, Math.min(this.admissionTimeoutMs, remainingMs));
+        const hello = await this.connectOnce(
+          attempt,
+          Math.min(this.admissionTimeoutMs, remainingMs),
+        );
+        this.reportConnectionFailure(undefined);
+        return hello;
       } catch (error) {
+        if (this.isTerminal()) {
+          throw this.terminalError();
+        }
+        lastFailure = toWorkerConnectionError(error);
+        this.reportConnectionFailure(
+          new Error(formatWorkerConnectionFailure(this.options, lastFailure)),
+        );
         if (error instanceof WorkerAdmissionError) {
           if (error.retryable) {
             attempt += 1;
@@ -245,8 +320,9 @@ export class WorkerConnection {
           this.handleAdmissionFailure(error);
           throw error;
         }
-        if (this.isTerminal()) {
-          throw this.terminalError();
+        if (error instanceof WorkerConnectionEndpointError) {
+          this.finishFailed(error);
+          throw error;
         }
         attempt += 1;
       }
@@ -281,7 +357,6 @@ export class WorkerConnection {
         this.socket = undefined;
         const interrupted = new WorkerConnectionInterruptedError();
         this.frames.rejectPending(interrupted);
-        return interrupted;
       },
       onReadyClose: (reason) => this.handleReadyClose(reason),
     });
@@ -309,7 +384,7 @@ export class WorkerConnection {
       await this.connectUntilReady();
     } catch (error) {
       if (!this.isTerminal()) {
-        this.finishFailed(toError(error));
+        this.finishFailed(toWorkerConnectionError(error));
       }
     } finally {
       this.reconnectPromise = undefined;
@@ -357,7 +432,7 @@ export class WorkerConnection {
       }
     } catch (error) {
       if (!(error instanceof WorkerConnectionInterruptedError) && !this.isTerminal()) {
-        this.finishFailed(toError(error));
+        this.finishFailed(toWorkerConnectionError(error));
         return;
       }
     }
@@ -386,15 +461,19 @@ export class WorkerConnection {
     for (const waiter of waiters) {
       waiter.resolve(hello);
     }
-    for (const listener of this.readyListeners) {
-      listener(hello);
-    }
+    notifyListeners(this.readyListeners, hello);
   }
 
   private transition(state: WorkerConnectionState): void {
     this.stateValue = state;
-    for (const listener of this.stateListeners) {
-      listener(state);
+    notifyListeners(this.stateListeners, state);
+  }
+
+  private reportConnectionFailure(error: Error | undefined): void {
+    try {
+      this.options.onConnectionFailure?.(error);
+    } catch {
+      // Diagnostics must never change connection retry or admission behavior.
     }
   }
 
@@ -433,31 +512,34 @@ export class WorkerConnection {
     this.resolveExit(exit);
   }
 
-  private failAdmissionDeadline(): Error {
+  private failAdmissionDeadline(attempts: number, lastFailure: Error | undefined): Error {
     if (this.isTerminal()) {
       return this.terminalError();
     }
-    const error = new WorkerAdmissionDeadlineExceededError();
+    const error = new WorkerAdmissionDeadlineExceededError(
+      formatWorkerConnectionFailure(
+        this.options,
+        lastFailure ?? "no connection attempt completed",
+        attempts,
+      ),
+    );
+    this.reportConnectionFailure(error);
     this.finishFailed(error);
     return error;
   }
 
-  private isTerminal(): boolean {
-    return (
-      this.stateValue.kind === "failed" ||
-      this.stateValue.kind === "fenced" ||
-      this.stateValue.kind === "stopped"
-    );
+  private isTerminal(state: WorkerConnectionState = this.stateValue): boolean {
+    return state.kind === "failed" || state.kind === "fenced" || state.kind === "stopped";
   }
 
-  private terminalError(): Error {
-    if (this.stateValue.kind === "failed") {
-      return this.stateValue.error;
+  private terminalError(state: WorkerConnectionState = this.stateValue): Error {
+    if (state.kind === "failed") {
+      return state.error;
     }
-    if (this.stateValue.kind === "fenced") {
-      return new WorkerFencedError(this.stateValue.reason);
+    if (state.kind === "fenced") {
+      return new WorkerFencedError(state.reason);
     }
-    if (this.stateValue.kind === "stopped") {
+    if (state.kind === "stopped") {
       return new WorkerConnectionStoppedError();
     }
     return new WorkerConnectionInterruptedError("worker connection terminated");

@@ -66,23 +66,6 @@ describe("buildEmbeddedRunPayloads", () => {
     expect(payloads[0]?.isError).toBe(expected.isError);
   }
 
-  function expectNoPayloads(params: Parameters<typeof buildPayloads>[0]) {
-    const payloads = buildPayloads(params);
-    expect(payloads).toHaveLength(0);
-  }
-
-  function expectNoSyntheticCompletionForSession(sessionKey: string) {
-    expectNoPayloads({
-      sessionKey,
-      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
-    });
-  }
-
   it("suppresses raw API error JSON when the assistant errored", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJson],
@@ -92,6 +75,37 @@ describe("buildEmbeddedRunPayloads", () => {
     expectOverloadedFallback(payloads);
     expect(payloads[0]?.isError).toBe(true);
     expect(payloads.map((payload) => payload.text)).not.toContain(errorJson);
+  });
+
+  it("turns returned OpenAI refresh failures into Codex login recovery", () => {
+    const payloads = buildPayloads({
+      provider: "openai",
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "OAuth token refresh failed for openai: refresh_token_invalidated",
+        content: [],
+      }),
+    });
+
+    expect(payloads).toEqual([
+      {
+        text: expect.stringContaining("/login codex"),
+        isError: true,
+        presentation: {
+          blocks: [
+            {
+              type: "buttons",
+              buttons: [
+                {
+                  label: "Log in to Codex",
+                  action: { type: "command", command: "/login codex" },
+                },
+              ],
+            },
+          ],
+        },
+      },
+    ]);
   });
 
   it("suppresses mutating tool warnings when an assistant error reply already covers the turn", () => {
@@ -127,7 +141,6 @@ describe("buildEmbeddedRunPayloads", () => {
     const payloads = buildPayloads({
       assistantTexts: [errorJsonPretty],
       lastAssistant: makeAssistant({ errorMessage: errorJson }),
-      inlineToolResultsAllowed: true,
       verboseLevel: "on",
     });
 
@@ -178,6 +191,28 @@ describe("buildEmbeddedRunPayloads", () => {
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
+  });
+
+  it("suppresses streamed assistant text and reasoning when the assistant errored", () => {
+    const payloads = buildPayloads({
+      assistantTexts: ["provider error details"],
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: "provider failed",
+        content: [
+          { type: "thinking", thinking: "partial hidden reasoning" },
+          { type: "text", text: "provider error details" },
+        ],
+      }),
+      reasoningLevel: "on",
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "LLM request failed.",
+      isError: true,
+    });
+    expectNoPayloadTextContaining(payloads, "provider error details");
+    expectNoPayloadTextContaining(payloads, "partial hidden reasoning");
   });
 
   it("surfaces a terminal error after only a message-tool progress update", () => {
@@ -250,6 +285,23 @@ describe("buildEmbeddedRunPayloads", () => {
     });
     expectNoPayloadTextContaining(payloads, "SECRET_CANARY_69737");
     expectNoPayloadTextContaining(payloads, "LLM request rejected");
+  });
+
+  it("surfaces /new guidance for terminal thinking-signature replay failures", () => {
+    const rawError =
+      '{"type":"error","error":{"type":"invalid_request_error","message":"messages.1.content.1: Invalid `signature` in `thinking` block"}}';
+    const payloads = buildPayloads({
+      lastAssistant: makeAssistant({
+        stopReason: "error",
+        errorMessage: rawError,
+        content: [],
+      }),
+    });
+
+    expectSinglePayloadSummary(payloads, {
+      text: "Session history or replay state is invalid. Use /new to start a fresh session and try again.",
+      isError: true,
+    });
   });
 
   it("uses structured provider details for model-not-found reply payloads", () => {
@@ -331,6 +383,59 @@ describe("buildEmbeddedRunPayloads", () => {
     expectNoPayloadTextContaining(payloads, "Need answer concise");
     expectNoPayloadTextContaining(payloads, "[[reply_to_current]]");
   });
+
+  it.each(["request timed out", "LLM request timed out."])(
+    "defers assistant timeout %j to its terminal owner without changing tool-warning policy",
+    (errorMessage) => {
+      const payloads = buildPayloads({
+        deferAssistantTimeoutError: true,
+        runAborted: true,
+        assistantTexts: [],
+        lastAssistant: makeAssistant({
+          stopReason: "aborted",
+          errorMessage,
+          content: [],
+        }),
+        lastToolError: {
+          toolName: "exec",
+          error: "command exited with code 1",
+          middlewareError: true,
+        },
+      });
+
+      expect(payloads).toEqual([]);
+    },
+  );
+
+  it.each([
+    {
+      label: "connection failures",
+      rawError: "connect ECONNREFUSED 127.0.0.1:443",
+      visibleError: "connection refused",
+    },
+    {
+      label: "authentication refresh timeouts",
+      rawError:
+        'OAuth refresh call "refreshProviderOAuthCredentialWithPlugin(openai)" exceeded hard timeout (120000ms)',
+      visibleError: "Authentication refresh timed out",
+    },
+  ])(
+    "preserves $label while terminal timeout handling is deferred",
+    ({ rawError, visibleError }) => {
+      const payloads = buildPayloads({
+        deferAssistantTimeoutError: true,
+        runAborted: true,
+        assistantTexts: [],
+        lastAssistant: makeAssistant({
+          stopReason: "aborted",
+          errorMessage: rawError,
+          content: [],
+        }),
+      });
+
+      expect(payloads).toEqual([{ text: expect.stringContaining(visibleError), isError: true }]);
+    },
+  );
 
   it("suppresses raw aborted assistant error messages in user-facing reply payloads", () => {
     const payloads = buildPayloads({
@@ -451,755 +556,4 @@ describe("buildEmbeddedRunPayloads", () => {
 
     expectSinglePayloadText(payloads, errorJsonPretty.trim());
   });
-
-  it("adds a fallback error when a tool fails and no assistant output exists", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "tab not found" },
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Browser",
-      absentDetail: "tab not found",
-    });
-  });
-
-  it("does not add tool error fallback when assistant output exists", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["All good"],
-      lastAssistant: makeStoppedAssistant(),
-      lastToolError: { toolName: "browser", error: "tab not found" },
-    });
-
-    expectSinglePayloadText(payloads, "All good");
-  });
-
-  it("does not add synthetic completion text when tools run without final assistant text", () => {
-    expectNoPayloads({
-      sessionKey: "agent:main:discord:direct:u123",
-      toolMetas: [{ toolName: "write", meta: "/tmp/out.md" }],
-      lastAssistant: makeStoppedAssistant(),
-    });
-  });
-
-  it("does not add synthetic completion text for channel sessions", () => {
-    expectNoSyntheticCompletionForSession("agent:main:discord:channel:c123");
-  });
-
-  it("does not add synthetic completion text for group sessions", () => {
-    expectNoSyntheticCompletionForSession("agent:main:telegram:group:g123");
-  });
-
-  it("does not add synthetic completion text when messaging tool already delivered output", () => {
-    expectNoPayloads({
-      sessionKey: "agent:main:discord:direct:u123",
-      toolMetas: [{ toolName: "message_send", meta: "sent to #ops" }],
-      didSendViaMessagingTool: true,
-      lastAssistant: makeAssistant({
-        stopReason: "stop",
-        errorMessage: undefined,
-        content: [],
-      }),
-    });
-  });
-
-  it("does not add synthetic completion text when the run still has a tool error", () => {
-    expectNoPayloads({
-      toolMetas: [{ toolName: "browser", meta: "open https://example.com" }],
-      lastToolError: { toolName: "browser", error: "url required" },
-    });
-  });
-
-  it("does not add synthetic completion text when no tools ran", () => {
-    expectNoPayloads({
-      lastAssistant: makeStoppedAssistant(),
-    });
-  });
-
-  it("adds compact tool error fallback when the assistant only invoked tools and verbose mode is on", () => {
-    const payloads = buildPayloads({
-      lastAssistant: makeAssistant({
-        stopReason: "toolUse",
-        errorMessage: undefined,
-        content: [
-          {
-            type: "toolCall",
-            id: "toolu_01",
-            name: "exec",
-            arguments: { command: "echo hi" },
-          },
-        ],
-      }),
-      lastToolError: { toolName: "exec", error: "Command exited with code 1" },
-      verboseLevel: "on",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "code 1",
-    });
-  });
-
-  it("does not add tool error fallback when assistant text exists after tool calls", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Checked the page and recovered with final answer."],
-      lastAssistant: makeAssistant({
-        stopReason: "toolUse",
-        errorMessage: undefined,
-        content: [
-          {
-            type: "toolCall",
-            id: "toolu_01",
-            name: "browser",
-            arguments: { action: "search", query: "openclaw docs" },
-          },
-        ],
-      }),
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "Checked the page and recovered with final answer.",
-    });
-  });
-
-  it.each(["url required", "url missing", "invalid parameter: url"])(
-    "suppresses recoverable non-mutating tool error: %s",
-    (error) => {
-      expectNoPayloads({
-        lastToolError: { toolName: "browser", error },
-      });
-    },
-  );
-
-  it("suppresses non-mutating non-recoverable tool errors when messages.suppressToolErrors is enabled", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-      config: { messages: { suppressToolErrors: true } },
-    });
-  });
-
-  it("suppresses mutating tool errors when suppressToolErrorWarnings is enabled", () => {
-    expectNoPayloads({
-      lastToolError: { toolName: "exec", error: "command not found" },
-      suppressToolErrorWarnings: true,
-    });
-  });
-
-  it.each([
-    {
-      name: "suppresses mutating tool errors when messages.suppressToolErrors is enabled",
-      payload: {
-        lastToolError: { toolName: "write", error: "connection timeout" },
-        config: { messages: { suppressToolErrors: true } },
-      },
-      title: "Write",
-      absentDetail: "connection timeout",
-      suppressed: true,
-    },
-    {
-      name: "shows recoverable tool errors for mutating tools",
-      payload: {
-        lastToolError: { toolName: "message", meta: "reply", error: "text required" },
-      },
-      title: "Message",
-      absentDetail: "required",
-    },
-    {
-      name: "shows non-recoverable tool failure summaries to the user",
-      payload: {
-        lastToolError: { toolName: "browser", error: "connection timeout" },
-      },
-      title: "Browser",
-      absentDetail: "connection timeout",
-    },
-  ])("$name", ({ payload, title, absentDetail, suppressed }) => {
-    const payloads = buildPayloads(payload);
-    if (suppressed) {
-      expect(payloads).toEqual([]);
-      return;
-    }
-    expectSingleToolErrorPayload(payloads, { title, absentDetail });
-  });
-
-  it("shows mutating tool errors when assistant output claims success", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Done."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "write", error: "file missing" },
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("Done.");
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Write");
-    expect(payloads[1]?.text).not.toContain("missing");
-    expect(getReplyPayloadMetadata(payloads[1] as object)?.nonTerminalToolErrorWarning).toBe(
-      undefined,
-    );
-  });
-
-  it("still shows write tool errors when timedOut is true but no fileTarget was recorded", () => {
-    // Without `fileTarget` we cannot distinguish a confirmed file write from
-    // an unrelated mutating-tool timeout, so the default-visible warning is
-    // preserved to avoid hiding real failures.
-    const payloads = buildPayloads({
-      assistantTexts: ["Done."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "write",
-        error: "invoke timed out",
-        timedOut: true,
-        mutatingAction: true,
-      },
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Write");
-  });
-
-  it("still shows write tool errors when timedOut and fileTarget only prove the attempted path", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Done."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "write",
-        error: "invoke timed out",
-        timedOut: true,
-        mutatingAction: true,
-        fileTarget: { path: "/tmp/openclaw/output.md" },
-      },
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Write");
-  });
-
-  it("does not warn for timed-out exec errors when a successful user-facing reply exists", () => {
-    // Exec/bash use the generic recovery rule, not the mutating-tool branch:
-    // a successful final reply is proof the agent recovered (#103574).
-    const payloads = buildPayloads({
-      assistantTexts: ["The script is ready."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "exec",
-        error: "command timed out",
-        timedOut: true,
-        mutatingAction: true,
-      },
-    });
-
-    expectSinglePayloadSummary(payloads, { text: "The script is ready." });
-  });
-
-  it("does not warn for exec-like tool errors when a successful user-facing reply exists", () => {
-    // Production repro: mid-run bash/exec failure recovered with a correct final answer.
-    const payloads = buildPayloads({
-      assistantTexts: ["The script is ready to use and saved in your workspace."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "exec",
-        error: "/bin/bash: line 1: python: command not found",
-        mutatingAction: true,
-      },
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "The script is ready to use and saved in your workspace.",
-    });
-  });
-
-  it("does not warn for bash tool errors when a successful user-facing reply exists", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Recovered after the command failed."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "bash",
-        error: "exit code 1",
-        mutatingAction: true,
-      },
-    });
-
-    expectSinglePayloadSummary(payloads, { text: "Recovered after the command failed." });
-  });
-
-  it("keeps exec-like tool error warnings when there is no user-facing reply", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        error: "/bin/bash: line 1: python: command not found",
-        mutatingAction: true,
-      },
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Exec",
-      absentDetail: "python: command not found",
-    });
-  });
-
-  it("keeps exec-like tool error warnings for recoverable-looking errors when there is no reply", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "bash",
-        error: "invalid argument: missing required flag --agent",
-        mutatingAction: true,
-      },
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Bash",
-      absentDetail: "missing required flag",
-    });
-  });
-
-  it("suppresses exec-like tool errors when messages.suppressToolErrors is enabled", () => {
-    expectNoPayloads({
-      lastToolError: {
-        toolName: "bash",
-        error: "command not found",
-        mutatingAction: true,
-      },
-      config: { messages: { suppressToolErrors: true } },
-    });
-  });
-
-  it("shows mutating tool errors when assistant output does not acknowledge the failure", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["No issues found. The update is complete."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "edit", error: "file missing" },
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe("No issues found. The update is complete.");
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Edit");
-    expect(payloads[1]?.text).not.toContain("missing");
-  });
-
-  it("shows mutating tool errors when assistant says it did not find issues in the file", () => {
-    const text = "I did not find any issues in the file. The update is complete.";
-    const payloads = buildPayloads({
-      assistantTexts: [text],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "edit", error: "file missing" },
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe(text);
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Edit");
-    expect(payloads[1]?.text).not.toContain("missing");
-  });
-
-  it.each([
-    "I did not need to update the file; it is already correct.",
-    "I did not have to edit the file because it was already correct.",
-  ])("shows mutating tool errors when assistant output uses no-op phrasing: %s", (text) => {
-    const payloads = buildPayloads({
-      assistantTexts: [text],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "edit", error: "file missing" },
-    });
-
-    expect(payloads).toHaveLength(2);
-    expect(payloads[0]?.text).toBe(text);
-    expect(payloads[1]?.isError).toBe(true);
-    expect(payloads[1]?.text).toContain("Edit");
-    expect(payloads[1]?.text).not.toContain("missing");
-  });
-
-  it("suppresses mutating tool errors when assistant output explicitly acknowledges the failed action", () => {
-    const text = "I couldn't update the file, so no changes were applied.";
-    const payloads = buildPayloads({
-      assistantTexts: [text],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "edit", error: "file missing" },
-    });
-
-    expectSinglePayloadSummary(payloads, { text });
-  });
-
-  it("suppresses exec warnings when assistant output explicitly acknowledges the command failure", () => {
-    const text = "I couldn't run the command because python was not found.";
-    const payloads = buildPayloads({
-      assistantTexts: [text],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: { toolName: "exec", error: "/bin/bash: line 1: python: command not found" },
-    });
-
-    expectSinglePayloadSummary(payloads, { text });
-  });
-
-  it("does not treat session_status read failures as mutating when explicitly flagged", () => {
-    const payloads = buildPayloads({
-      assistantTexts: ["Status loaded."],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "session_status",
-        error: "model required",
-        mutatingAction: false,
-      },
-    });
-
-    expectSinglePayloadSummary(payloads, { text: "Status loaded." });
-  });
-
-  it("dedupes identical tool warning text already present in assistant output", () => {
-    const seed = buildPayloads({
-      lastToolError: {
-        toolName: "write",
-        error: "file missing",
-        mutatingAction: true,
-      },
-    });
-    const warningText = seed[0]?.text;
-    expect(warningText).toBe("⚠️ ✍️ Write failed");
-
-    const payloads = buildPayloads({
-      assistantTexts: [warningText ?? ""],
-      lastAssistant: { stopReason: "end_turn" } as unknown as AssistantMessage,
-      lastToolError: {
-        toolName: "write",
-        error: "file missing",
-        mutatingAction: true,
-      },
-    });
-
-    expectSinglePayloadSummary(payloads, { text: warningText ?? "" });
-  });
-
-  it("keeps exec failure labels outside markdown command text", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /path/to/daily-cost-audit.py",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /path/to/daily-cost-audit.py` (exit 1)",
-      isError: true,
-    });
-    expect(payloads[0]?.text).not.toContain("`run python3");
-  });
-
-  it("prefers raw exec metadata when tool progress detail includes it", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /tmp/audit.py · `python3 /tmp/audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("prefers raw exec metadata when the literal command contains backticks", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run node inline script, `node -e 'console.log(1, `x`)'`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: ``node -e 'console.log(1, `x`)'`` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("preserves raw exec context before trailing raw command metadata", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /tmp/audit.py, node: mac-1, `python3 /tmp/audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 /tmp/audit.py` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("preserves raw exec cwd context before trailing raw command metadata", () => {
-    const cwdPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 audit.py (in /tmp/build) · `python3 audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const workspaceNodePayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 audit.py (workspace), node: mac-1, `python3 audit.py`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const semanticCompactPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "check git status (repo), `git status`",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(cwdPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 audit.py (in /tmp/build)` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(workspaceNodePayloads, {
-      text: "⚠️ 🛠️ Exec failed: `node: mac-1 · python3 audit.py (workspace)` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(semanticCompactPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `git status (repo)` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("does not promote display-summary commas into raw exec context", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: 'search "foo,bar" in src, `rg "foo,bar" src`',
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `rg "foo,bar" src` (exit 1)',
-      isError: true,
-    });
-  });
-
-  it("does not treat parenthesized raw command arguments as cwd context", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: 'list files in (in progress) · `ls "(in progress)"`',
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `ls "(in progress)"` (exit 1)',
-      isError: true,
-    });
-  });
-
-  it("does not duplicate compact cwd labels already present in raw command arguments", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: 'print text (repo) · `printf "%s" "(repo)"`',
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: '⚠️ 🛠️ Exec failed: `printf "%s" "(repo)"` (exit 1)',
-      isError: true,
-    });
-  });
-
-  it("strips literal synthetic run prefixes without stripping semantic run summaries", () => {
-    const genericPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run make build",
-        error: "Command failed with exit code 2",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const semanticPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const scriptPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run deploy",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const compoundPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests → install dependencies",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const inlineScriptPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run node inline script",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const heredocPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 inline script (heredoc)",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const sedSummaryPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run sed on file",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-    const pipelineSummaryPayloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run tests -> show first 3 lines",
-        error: "Command failed with exit code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(genericPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `make build` (exit 2)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(semanticPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(scriptPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run deploy` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(compoundPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests → install dependencies` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(inlineScriptPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run node inline script` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(heredocPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run python3 inline script (heredoc)` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(sedSummaryPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run sed on file` (exit 1)",
-      isError: true,
-    });
-    expectSinglePayloadSummary(pipelineSummaryPayloads, {
-      text: "⚠️ 🛠️ Exec failed: `run tests -> show first 3 lines` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("keeps arbitrary exec cwd suffixes inside markdown command text", () => {
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "exec",
-        meta: "run python3 /tmp/audit.py (in /tmp/build @everyone)",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Exec failed: `python3 /tmp/audit.py (in /tmp/build @everyone)` (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("wraps markdown-capable mutating tool warnings so mention-looking names stay inert", () => {
-    // Non-recoverable error so the generic exec-like rule still surfaces a warning
-    // for this no-reply formatting case (recoverable keywords would suppress it).
-    const payloads = buildPayloads({
-      lastToolError: {
-        toolName: "bash",
-        meta: "show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt (workspace)",
-        error: "Command exited with code 1",
-        mutatingAction: true,
-      },
-      toolResultFormat: "markdown",
-    });
-
-    expectSinglePayloadSummary(payloads, {
-      text: "⚠️ 🛠️ Bash failed: `show matrix-progress-@room-@alice:matrix-qa.test-!room:matrix-qa.test.txt` (workspace) (exit 1)",
-      isError: true,
-    });
-  });
-
-  it("keeps non-recoverable tool errors compact when verbose mode is on", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-      verboseLevel: "on",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Browser",
-      absentDetail: "connection timeout",
-    });
-  });
-
-  it("includes non-recoverable tool error details when verbose mode is full", () => {
-    const payloads = buildPayloads({
-      lastToolError: { toolName: "browser", error: "connection timeout" },
-      verboseLevel: "full",
-    });
-
-    expectSingleToolErrorPayload(payloads, {
-      title: "Browser",
-      detail: "connection timeout",
-    });
-  });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

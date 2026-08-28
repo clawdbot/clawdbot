@@ -10,7 +10,8 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { clearUsageBarTemplateCacheForTest, loadUsageBarTemplate } from "./template.js";
+import { loadUsageBarTemplate } from "./template.js";
+import { clearUsageBarTemplateCacheForTest } from "./template.test-support.js";
 
 const state = vi.hoisted(() => ({
   created: 0,

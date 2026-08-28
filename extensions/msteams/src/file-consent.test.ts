@@ -51,6 +51,12 @@ const firstFetchCall = (fetchFn: ReturnType<typeof vi.fn<typeof fetch>>) => {
   return call;
 };
 
+const responseWithCancel = (status: number, statusText?: string) => {
+  const cancel = vi.fn();
+  const body = new ReadableStream<Uint8Array>({ cancel });
+  return { response: new Response(body, { status, statusText }), cancel };
+};
+
 // ─── isPrivateOrReservedIP ───────────────────────────────────────────────────
 
 describe("isPrivateOrReservedIP", () => {
@@ -477,7 +483,8 @@ describe("uploadToConsentUrl", () => {
   });
 
   it("allows upload to a valid SharePoint URL and performs PUT", async () => {
-    const mockFetch = vi.fn<typeof fetch>(async () => new Response(null, { status: 200 }));
+    const { response, cancel } = responseWithCancel(200);
+    const mockFetch = vi.fn<typeof fetch>(async () => response);
     const buffer = Buffer.from("file content");
 
     await uploadToConsentUrl({
@@ -500,14 +507,12 @@ describe("uploadToConsentUrl", () => {
     expect(opts?.body).toEqual(new Uint8Array(buffer));
     expect(opts?.signal).toBeInstanceOf(AbortSignal);
     expect(opts?.signal?.aborted).toBe(false);
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("throws on non-OK response after passing validation", async () => {
-    const mockFetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 403,
-      statusText: "Forbidden",
-    });
+    const { response, cancel } = responseWithCancel(403, "Forbidden");
+    const mockFetch = vi.fn<typeof fetch>(async () => response);
 
     await expect(
       uploadToConsentUrl({
@@ -517,6 +522,7 @@ describe("uploadToConsentUrl", () => {
         validationOpts: { resolveFn: publicResolve },
       }),
     ).rejects.toThrow("File upload to consent URL failed: 403 Forbidden");
+    expect(cancel).toHaveBeenCalledOnce();
   });
 
   it("blocks HTTP (non-HTTPS) upload before fetch is called", async () => {

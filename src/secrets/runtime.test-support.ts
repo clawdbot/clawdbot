@@ -111,10 +111,6 @@ export function resetPluginWebSearchProvidersMock() {
   resolvePluginWebSearchProvidersMock.mockReturnValue(buildTestWebSearchProviders());
 }
 
-export function getResolvePluginWebSearchProvidersMock() {
-  return resolvePluginWebSearchProvidersMock;
-}
-
 export function setupSecretsRuntimeSnapshotTestHooks(): {
   prepareSecretsRuntimeSnapshot: PrepareSecretsRuntimeSnapshot;
 } {

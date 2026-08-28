@@ -129,6 +129,43 @@ describe("vercel ai gateway provider catalog", () => {
     });
   });
 
+  it("excludes non-language models while preserving vision and legacy catalog rows", async () => {
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: jsonResponse({
+        data: [
+          {
+            id: "alibaba/qwen3-235b-a22b-thinking",
+            type: "language",
+            tags: ["vision", "reasoning"],
+          },
+          ...[
+            ["embedding", "alibaba/qwen3-embedding-0.6b"],
+            ["image", "bfl/flux-2-flex"],
+            ["video", "alibaba/wan-v2.5-t2v-preview"],
+            ["reranking", "cohere/rerank-v3.5"],
+            ["speech", "fish-audio/s1"],
+            ["transcription", "fish-audio/transcribe-1"],
+            ["realtime", "openai/gpt-realtime-1.5"],
+          ].map(([type, id]) => ({ id, type })),
+          { id: "custom/legacy-model" },
+        ],
+      }),
+      release: async () => {},
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    });
+
+    await withLiveDiscovery(async () => {
+      expect((await buildVercelAiGatewayProvider()).models).toMatchObject([
+        {
+          id: "alibaba/qwen3-235b-a22b-thinking",
+          reasoning: true,
+          input: ["text", "image"],
+        },
+        { id: "custom/legacy-model", input: ["text"] },
+      ]);
+    });
+  });
+
   it("falls back to the static catalog for malformed successful model list payloads", async () => {
     for (const payload of [[], { data: {} }, { data: [null] }]) {
       clearLiveCatalogCacheForTests();
@@ -185,5 +222,27 @@ describe("vercel ai gateway provider catalog", () => {
         maxTokens: VERCEL_AI_GATEWAY_DEFAULT_MAX_TOKENS,
       });
     });
+  });
+
+  it("uses the trusted environment proxy for the official live catalog", async () => {
+    const release = vi.fn(async () => {});
+    fetchWithSsrFGuardMock.mockResolvedValueOnce({
+      response: jsonResponse({ data: [{ id: "custom/live-model" }] }),
+      release,
+      finalUrl: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+    });
+
+    await withLiveDiscovery(async () => {
+      const models = await discoverVercelAiGatewayModels();
+
+      expect(models.map((model) => model.id)).toStrictEqual(["custom/live-model"]);
+    });
+    expect(fetchWithSsrFGuardMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: "trusted_env_proxy",
+        url: `${VERCEL_AI_GATEWAY_BASE_URL}/v1/models`,
+      }),
+    );
+    expect(release).toHaveBeenCalledOnce();
   });
 });

@@ -2,7 +2,17 @@
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-const { startQaLabServer, startQaGatewayChild, startQaProviderServer } = vi.hoisted(() => ({
+const {
+  cleanupTransportAfterGatewayStop,
+  cleanupTransportBeforeGatewayStop,
+  createQaTransportAdapter,
+  startQaGatewayChild,
+  startQaLabServer,
+  startQaProviderServer,
+} = vi.hoisted(() => ({
+  cleanupTransportAfterGatewayStop: vi.fn(),
+  cleanupTransportBeforeGatewayStop: vi.fn(),
+  createQaTransportAdapter: vi.fn(),
   startQaLabServer: vi.fn(),
   startQaGatewayChild: vi.fn(),
   startQaProviderServer: vi.fn(),
@@ -20,6 +30,10 @@ vi.mock("./providers/server-runtime.js", () => ({
   startQaProviderServer,
 }));
 
+vi.mock("./qa-transport-registry.js", () => ({
+  createQaTransportAdapter,
+}));
+
 import { runQaManualLane } from "./manual-lane.runtime.js";
 
 describe("runQaManualLane", () => {
@@ -27,15 +41,33 @@ describe("runQaManualLane", () => {
   const gatewayStop = vi.fn();
   const mockStop = vi.fn();
   const labStop = vi.fn();
+  let outboundReply: string | null;
 
   beforeEach(() => {
+    outboundReply = "Protocol note: mock reply.";
     gatewayCall.mockReset();
     gatewayStop.mockReset();
     mockStop.mockReset();
     labStop.mockReset();
+    cleanupTransportAfterGatewayStop.mockReset();
+    cleanupTransportBeforeGatewayStop.mockReset();
+    cleanupTransportAfterGatewayStop.mockResolvedValue(undefined);
+    cleanupTransportBeforeGatewayStop.mockResolvedValue(undefined);
+    createQaTransportAdapter.mockReset();
     startQaLabServer.mockReset();
     startQaGatewayChild.mockReset();
     startQaProviderServer.mockReset();
+
+    createQaTransportAdapter.mockResolvedValue({
+      adapter: {
+        buildAgentDelivery: () => ({
+          channel: "qa-channel",
+          to: "dm:qa-operator",
+        }),
+      },
+      cleanupBeforeGatewayStop: cleanupTransportBeforeGatewayStop,
+      cleanupAfterGatewayStop: cleanupTransportAfterGatewayStop,
+    });
 
     startQaLabServer.mockResolvedValue({
       listenUrl: "http://127.0.0.1:43124",
@@ -48,13 +80,16 @@ describe("runQaManualLane", () => {
         searchMessages: vi.fn(() => []),
         waitFor: vi.fn(),
         getSnapshot: () => ({
-          messages: [
-            {
-              direction: "outbound",
-              conversation: { id: "qa-operator" },
-              text: "Protocol note: mock reply.",
-            },
-          ],
+          messages:
+            outboundReply === null
+              ? []
+              : [
+                  {
+                    direction: "outbound",
+                    conversation: { id: "qa-operator" },
+                    text: outboundReply,
+                  },
+                ],
         }),
       },
       stop: labStop,
@@ -105,8 +140,107 @@ describe("runQaManualLane", () => {
     });
     expect(result.reply).toBe("Protocol note: mock reply.");
     expect(gatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportBeforeGatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportBeforeGatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
+      gatewayStop.mock.invocationCallOrder[0] ?? 0,
+    );
+    expect(gatewayStop.mock.invocationCallOrder[0]).toBeLessThan(
+      cleanupTransportAfterGatewayStop.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(labStop).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    {
+      label: "timed-out run despite a stale reply",
+      waited: { status: "timeout", error: "provider stalled" },
+      reply: "stale assistant reply",
+      error: "provider stalled",
+    },
+    {
+      label: "failed run despite a stale reply",
+      waited: { status: "error", error: "authentication failed" },
+      reply: "stale assistant reply",
+      error: "authentication failed",
+    },
+    {
+      label: "successful run without an outbound reply",
+      waited: { status: "ok" },
+      reply: null,
+      error: "manual lane did not produce a successful reply",
+    },
+    {
+      label: "successful run with a whitespace-only reply",
+      waited: { status: "ok" },
+      reply: "   ",
+      error: "manual lane did not produce a successful reply",
+    },
+    {
+      label: "legacy completed run without an outbound reply",
+      waited: { status: "error", error: "completed" },
+      reply: null,
+      error: "manual lane did not produce a successful reply",
+    },
+    {
+      label: "legacy completed run with a whitespace-only reply",
+      waited: { status: "error", error: " completed " },
+      reply: "   ",
+      error: "manual lane did not produce a successful reply",
+    },
+    {
+      label: "timed-out run without an outbound reply",
+      waited: { status: "timeout", error: "provider stalled" },
+      reply: null,
+      error: "manual lane did not produce a successful reply",
+    },
+    {
+      label: "failed run with a whitespace-only reply",
+      waited: { status: "error", error: "authentication failed" },
+      reply: "   ",
+      error: "manual lane did not produce a successful reply",
+    },
+  ])("rejects a $label after resource cleanup", async ({ waited, reply, error }) => {
+    outboundReply = reply;
+    gatewayCall.mockReset().mockResolvedValueOnce({ runId: "run-1" }).mockResolvedValueOnce(waited);
+
+    await expect(
+      runQaManualLane({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
+        message: "check the kickoff file",
+        replySettleMs: 0,
+      }),
+    ).rejects.toThrow(error);
+
+    expect(gatewayStop).toHaveBeenCalledOnce();
+    expect(cleanupTransportBeforeGatewayStop).toHaveBeenCalledOnce();
+    expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledOnce();
+    expect(mockStop).toHaveBeenCalledOnce();
+    expect(labStop).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { status: "ok" },
+    { status: "completed" },
+    { status: "succeeded" },
+    { status: "error", error: " completed " },
+  ])("accepts the canonical successful agent wait result %#", async (waited) => {
+    gatewayCall.mockReset().mockResolvedValueOnce({ runId: "run-1" }).mockResolvedValueOnce(waited);
+
+    await expect(
+      runQaManualLane({
+        repoRoot: "/tmp/openclaw-repo",
+        providerMode: "mock-openai",
+        primaryModel: "mock-openai/gpt-5.6-luna",
+        alternateModel: "mock-openai/gpt-5.6-luna-alt",
+        message: "check the kickoff file",
+        replySettleMs: 0,
+      }),
+    ).resolves.toMatchObject({ waited, reply: "Protocol note: mock reply." });
   });
 
   it("skips the mock provider bootstrap for live frontier runs", async () => {
@@ -149,6 +283,7 @@ describe("runQaManualLane", () => {
     ).rejects.toThrow("gateway startup failed");
 
     expect(gatewayStop).not.toHaveBeenCalled();
+    expect(cleanupTransportAfterGatewayStop).toHaveBeenCalledTimes(1);
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(labStop).toHaveBeenCalledTimes(1);
   });
@@ -169,6 +304,8 @@ describe("runQaManualLane", () => {
     ).rejects.toThrow("gateway stop failed");
 
     expect(gatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportBeforeGatewayStop).toHaveBeenCalledTimes(1);
+    expect(cleanupTransportAfterGatewayStop).not.toHaveBeenCalled();
     expect(mockStop).toHaveBeenCalledTimes(1);
     expect(labStop).toHaveBeenCalledTimes(1);
   });

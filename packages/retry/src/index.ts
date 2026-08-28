@@ -18,7 +18,11 @@ export function computeBackoffSchedule(scheduleMs: readonly number[], attempt: n
   return attempt <= 0 ? 0 : (scheduleMs[index] ?? 0);
 }
 
-export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Promise<void> {
+export async function sleepWithAbort(
+  ms: number,
+  abortSignal?: AbortSignal,
+  options: { ref?: boolean } = {},
+): Promise<void> {
   if (!Number.isFinite(ms) || ms <= 0) {
     return;
   }
@@ -37,7 +41,12 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Pro
       }
       timer = null;
       cleanup();
-      reject(new Error("aborted", { cause: abortSignal?.reason ?? new Error("aborted") }));
+      // This leaf package cannot import the host abort helper; preserve its contract here.
+      const error = new Error("aborted", {
+        cause: abortSignal?.reason ?? new Error("aborted"),
+      });
+      error.name = "AbortError";
+      reject(error);
     };
     abortSignal?.addEventListener("abort", onAbort, { once: true });
     if (abortSignal?.aborted) {
@@ -50,6 +59,10 @@ export async function sleepWithAbort(ms: number, abortSignal?: AbortSignal): Pro
       timer = null;
       resolve();
     }, delayMs);
+    // Retry loops can stay abortable without keeping an otherwise idle process alive.
+    if (options.ref === false) {
+      timer.unref?.();
+    }
     if (abortSignal?.aborted) {
       onAbort();
     }
@@ -151,12 +164,8 @@ const defaultSleep = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
-function asFiniteNumber(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
-}
-
 function clampNumber(value: unknown, fallback: number, min?: number, max?: number): number {
-  const next = asFiniteNumber(value);
+  const next = Number.isFinite(value as number) ? (value as number) : undefined;
   if (next === undefined) {
     return fallback;
   }
@@ -164,12 +173,13 @@ function clampNumber(value: unknown, fallback: number, min?: number, max?: numbe
 }
 
 function resolveAttemptCount(value: unknown, fallback: number): number {
-  return Math.max(1, Math.round(asFiniteNumber(value) ?? fallback));
+  const attemptCount = Number.isFinite(value as number) ? (value as number) : fallback;
+  return Math.max(1, Math.round(attemptCount));
 }
 
 function resolveRetryDelayMs(value: number): number {
   const finite =
-    value === Number.POSITIVE_INFINITY ? MAX_TIMER_TIMEOUT_MS : (asFiniteNumber(value) ?? 0);
+    value === Number.POSITIVE_INFINITY ? MAX_TIMER_TIMEOUT_MS : Number.isFinite(value) ? value : 0;
   return Math.min(Math.max(Math.round(finite), 0), MAX_TIMER_TIMEOUT_MS);
 }
 
@@ -177,7 +187,7 @@ function resolveJitterConfig(value: unknown, fallback: number | "full"): number 
   if (value === "full") {
     return "full";
   }
-  const fraction = asFiniteNumber(value);
+  const fraction = Number.isFinite(value as number) ? (value as number) : undefined;
   return fraction === undefined ? fallback : Math.min(Math.max(fraction, 0), 1);
 }
 

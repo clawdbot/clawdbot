@@ -85,6 +85,31 @@ describe("markdownToSignalText", () => {
     expect(res.styles).toEqual([{ start: prefix.length, length: 4, style: "BOLD" }]);
   });
 
+  it.each([
+    {
+      name: "nested style around an expanded link",
+      markdown: "**[docs](https://example.com) _nested_ tail**",
+      expected: {
+        text: "docs (https://example.com) nested tail",
+        styles: [
+          { start: 0, length: 4, style: "BOLD" },
+          { start: 26, length: 12, style: "BOLD" },
+          { start: 27, length: 6, style: "ITALIC" },
+        ],
+      },
+    },
+    {
+      name: "CJK with emoji offsets",
+      markdown: "前置 **粗体😀** 后置",
+      expected: {
+        text: "前置 粗体😀 后置",
+        styles: [{ start: 3, length: 4, style: "BOLD" }],
+      },
+    },
+  ])("preserves the $name golden output", ({ markdown, expected }) => {
+    expect(markdownToSignalText(markdown)).toEqual(expected);
+  });
+
   describe("duplicate URL display", () => {
     it("does not duplicate URL for normalized equivalent labels", () => {
       const equivalentCases = [

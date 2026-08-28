@@ -29,6 +29,7 @@ function createMockContext(overrides?: {
       toolMetaById: new Map(),
       toolMetas: [],
       toolSummaryById: new Set(),
+      liveEditDiffStateById: new Map(),
       itemActiveIds: new Set(),
       itemStartedCount: 0,
       itemCompletedCount: 0,
@@ -36,10 +37,12 @@ function createMockContext(overrides?: {
       pendingMessagingTargets: new Map(),
       pendingMessagingMediaUrls: new Map(),
       pendingToolMediaUrls: [],
+      pendingToolMediaAttachments: [],
+      pendingToolMediaTrustByUrl: new Map(),
       pendingToolAudioAsVoice: false,
-      pendingToolTrustedLocalMedia: false,
       messagingToolSentTexts: [],
       messagingToolSentTextsNormalized: [],
+      currentSourceMessagingToolSentTextsNormalized: [],
       messagingToolSentMediaUrls: [],
       messagingToolSourceReplyPayloads: [],
       messageToolOnlySourceReplyDelivered: false,
@@ -61,6 +64,7 @@ function createMockContext(overrides?: {
     // Fill in remaining required fields with no-ops.
     blockChunker: null,
     noteLastAssistant: vi.fn(),
+    noteCompletedAssistant: vi.fn(),
     stripBlockTags: vi.fn((t: string) => t),
     emitBlockChunk: vi.fn(),
     flushBlockReplyBuffer: vi.fn(),
@@ -77,6 +81,7 @@ function createMockContext(overrides?: {
     recordAssistantUsage: vi.fn(),
     incrementCompactionCount: vi.fn(),
     getUsageTotals: vi.fn(() => undefined),
+    getLastAssistantUsage: vi.fn(() => undefined),
     getCompactionCount: vi.fn(() => 0),
   } as unknown as EmbeddedAgentSubscribeContext;
 }
@@ -289,6 +294,70 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(onToolResult).not.toHaveBeenCalled();
     expect(ctx.state.pendingToolMediaUrls).toEqual(["https://example.com/file.png"]);
+  });
+
+  it("aligns retained attachment metadata after filtering local media and merging duplicates", async () => {
+    const ctx = createMockContext();
+    ctx.state.pendingToolMediaUrls.push("https://example.com/existing.png");
+    ctx.state.pendingToolMediaAttachments?.push({});
+
+    await handleToolExecutionEnd(ctx, {
+      type: "tool_execution_end",
+      toolName: "plugin_tool",
+      toolCallId: "generated-media",
+      isError: false,
+      result: {
+        details: {
+          media: {
+            mediaUrls: [
+              "/tmp/private.png",
+              "https://example.com/existing.png",
+              "https://example.com/video.mp4",
+            ],
+            attachments: [
+              { type: "image", path: "/tmp/private.png", name: "private.png" },
+              {
+                type: "image",
+                url: "https://example.com/existing.png",
+                name: "existing.png",
+                width: 320,
+              },
+              {
+                type: "video",
+                url: "https://example.com/video.mp4",
+                name: "friendly-video.mp4",
+                durationMs: 5_000,
+                width: 1280,
+                height: 720,
+                trustedLocalMedia: true,
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    expect(ctx.state.pendingToolMediaUrls).toEqual([
+      "https://example.com/existing.png",
+      "https://example.com/video.mp4",
+    ]);
+    expect(ctx.state.pendingToolMediaAttachments).toEqual([
+      {
+        type: "image",
+        url: "https://example.com/existing.png",
+        name: "existing.png",
+        width: 320,
+      },
+      {
+        type: "video",
+        url: "https://example.com/video.mp4",
+        name: "friendly-video.mp4",
+        durationMs: 5_000,
+        width: 1280,
+        height: 720,
+      },
+    ]);
+    expect(ctx.state.pendingToolMediaTrustByUrl.get("https://example.com/video.mp4")).toBe(false);
   });
 
   it("does NOT emit local media for MCP-provenance results", async () => {
@@ -677,7 +746,7 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
-    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+    expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(true);
   });
 
   it("queues trusted TTS local media when the exact built-in name is absent", async () => {
@@ -706,6 +775,6 @@ describe("handleToolExecutionEnd media emission", () => {
 
     expect(ctx.state.pendingToolMediaUrls).toEqual(["/tmp/reply.opus"]);
     expect(ctx.state.pendingToolAudioAsVoice).toBe(true);
-    expect(ctx.state.pendingToolTrustedLocalMedia).toBe(true);
+    expect(ctx.state.pendingToolMediaTrustByUrl.get("/tmp/reply.opus")).toBe(true);
   });
 });

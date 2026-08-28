@@ -2,11 +2,11 @@ title: ClawHub skill install evidence
 
 scenario:
   id: clawhub-skill-installs
-  surface: clawhub-and-external-plugin-distribution
-  category: clawhub-and-external-plugin-distribution.plugin-lifecycle-and-health
+  surface: clawhub
+  category: clawhub.plugin-lifecycle-and-health
   coverage:
     primary:
-      - clawhub.skill-installs
+      - clawhub.clawhub-skill-installs
   objective: Link ClawHub-backed skill install e2e coverage to ClawHub maturity accounting.
   successCriteria:
     - The CLI resolves a ClawHub skill install descriptor.

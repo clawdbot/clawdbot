@@ -1,8 +1,9 @@
 // Covers exec approval config normalization and safe-bin policy.
-import fs from "node:fs";
-import path from "node:path";
+import { existsSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { makeTempDir } from "./exec-approvals-test-helpers.js";
+import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import { tryParsePersistedExecApprovals } from "./exec-approvals-config.js";
+import { makeExecApprovalsTempDir } from "./exec-approvals-test-helpers.js";
 import {
   isSafeBinUsage,
   matchAllowlist,
@@ -10,34 +11,39 @@ import {
   normalizeSafeBins,
   resolveExecApprovals,
   resolveExecApprovalsFromFile,
+  saveExecApprovals,
   type ExecApprovalsAgent,
   type ExecAllowlistEntry,
   type ExecApprovalsFile,
 } from "./exec-approvals.js";
 
+describe.sequential("exec approval temp fixture cleanup", () => {
+  let cleanupProbeRoot = "";
+
+  it("creates a disposable fixture root", () => {
+    cleanupProbeRoot = makeExecApprovalsTempDir();
+    expect(existsSync(cleanupProbeRoot)).toBe(true);
+  });
+
+  it("removes the fixture root before the next test", () => {
+    expect(existsSync(cleanupProbeRoot), cleanupProbeRoot).toBe(false);
+  });
+});
+
 describe("exec approvals wildcard agent", () => {
   it("merges wildcard allowlist entries with agent entries", () => {
-    const dir = makeTempDir();
+    const dir = makeExecApprovalsTempDir();
     const prevOpenClawHome = process.env.OPENCLAW_HOME;
 
     try {
       process.env.OPENCLAW_HOME = dir;
-      const approvalsPath = path.join(dir, ".openclaw", "exec-approvals.json");
-      fs.mkdirSync(path.dirname(approvalsPath), { recursive: true });
-      fs.writeFileSync(
-        approvalsPath,
-        JSON.stringify(
-          {
-            version: 1,
-            agents: {
-              "*": { allowlist: [{ pattern: "/bin/hostname" }] },
-              main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
-            },
-          },
-          null,
-          2,
-        ),
-      );
+      saveExecApprovals({
+        version: 1,
+        agents: {
+          "*": { allowlist: [{ pattern: "/bin/hostname" }] },
+          main: { allowlist: [{ pattern: "/usr/bin/uname" }] },
+        },
+      });
 
       const resolved = resolveExecApprovals("main");
       expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual([
@@ -45,6 +51,7 @@ describe("exec approvals wildcard agent", () => {
         "/usr/bin/uname",
       ]);
     } finally {
+      closeOpenClawStateDatabaseForTest();
       if (prevOpenClawHome === undefined) {
         delete process.env.OPENCLAW_HOME;
       } else {
@@ -62,6 +69,7 @@ describe("exec approvals node host allowlist check", () => {
   it.each([
     {
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "python3",
         resolvedPath: "/usr/bin/python3",
         resolvedRealPath: "/usr/bin/python3",
@@ -74,6 +82,7 @@ describe("exec approvals node host allowlist check", () => {
       // Simulates symlink resolution:
       // /opt/homebrew/bin/python3 -> /opt/homebrew/opt/python@3.14/bin/python3.14
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "python3",
         resolvedPath: "/opt/homebrew/opt/python@3.14/bin/python3.14",
         executableName: "python3.14",
@@ -83,6 +92,7 @@ describe("exec approvals node host allowlist check", () => {
     },
     {
       resolution: {
+        kind: "executable" as const,
         rawExecutable: "unknown-tool",
         resolvedPath: "/usr/local/bin/unknown-tool",
         executableName: "unknown-tool",
@@ -100,6 +110,7 @@ describe("exec approvals node host allowlist check", () => {
 
   it("does not treat unknown tools as safe bins", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "unknown-tool",
       resolvedPath: "/usr/local/bin/unknown-tool",
       executableName: "unknown-tool",
@@ -114,6 +125,7 @@ describe("exec approvals node host allowlist check", () => {
 
   it("satisfies via safeBins even when not in allowlist", () => {
     const resolution = {
+      kind: "executable" as const,
       rawExecutable: "head",
       resolvedPath: "/usr/bin/head",
       executableName: "head",
@@ -146,7 +158,7 @@ describe("exec approvals default agent migration", () => {
         default: { allowlist: [{ pattern: "/bin/legacy" }] },
       },
     };
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
     expect(resolved.file.agents?.main?.allowlist?.[0]?.pattern).toBe("/bin/legacy");
@@ -160,10 +172,40 @@ describe("exec approvals default agent migration", () => {
         default: { ask: "off", allowlist: [{ pattern: "/bin/legacy" }] },
       },
     };
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
     expect(resolved.agent.ask).toBe("always");
     expect(resolved.allowlist.map((entry) => entry.pattern)).toEqual(["/bin/main", "/bin/legacy"]);
     expect(resolved.file.agents?.default).toBeUndefined();
+  });
+});
+
+describe("persisted exec approvals schema", () => {
+  it("keeps legacy string allowlist entries while normalizing them", () => {
+    const parsed = tryParsePersistedExecApprovals(
+      JSON.stringify({
+        version: 1,
+        agents: { main: { allowlist: ["  ls  ", { pattern: "cat", source: "legacy" }] } },
+      }),
+    );
+    expect(parsed?.agents?.main?.allowlist?.[0]).toMatchObject({ pattern: "ls" });
+    expect(parsed?.agents?.main?.allowlist?.[1]).toEqual(
+      expect.objectContaining({ pattern: "cat", source: undefined }),
+    );
+  });
+
+  it.each([
+    { name: "version", value: { version: 2 } },
+    { name: "socket token", value: { version: 1, socket: { token: 42 } } },
+    { name: "policy enum", value: { version: 1, defaults: { security: "none" } } },
+    {
+      name: "allowlist metadata",
+      value: {
+        version: 1,
+        agents: { main: { allowlist: [{ pattern: "ls", lastUsedAt: "now" }] } },
+      },
+    },
+  ])("rejects invalid persisted $name", ({ value }) => {
+    expect(tryParsePersistedExecApprovals(JSON.stringify(value))).toBeNull();
   });
 });
 
@@ -429,7 +471,7 @@ describe("normalizeExecApprovals strips invalid security/ask enum values (#59006
         "*": { security: "none", ask: "off" },
       },
     } as unknown as ExecApprovalsFile;
-    const resolved = resolveExecApprovalsFromFile({ file });
+    const resolved = resolveExecApprovalsFromFile({ file, agentId: "main" });
     // Invalid "none" in defaults is stripped, so fallback to DEFAULT_SECURITY ("full")
     expect(resolved.defaults.security).toBe("full");
     // Invalid "never" in defaults is stripped, so fallback to DEFAULT_ASK ("off")

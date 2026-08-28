@@ -1,12 +1,12 @@
 import {
-  asOptionalRecord as asRecord,
+  asOptionalRecord,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { extractTextContentParts } from "./query.js";
 import {
   ACTIVE_MEMORY_PLUGIN_TAG,
-  ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER,
+  ACTIVE_MEMORY_CONTEXT_HEADER,
   NO_RECALL_VALUES,
   STRUCTURED_MEMORY_EMPTY_STATUSES,
   STRUCTURED_MEMORY_FAILURE_STATUSES,
@@ -179,7 +179,7 @@ function readExplicitMemoryEvidence(source: Record<string, unknown>): boolean | 
 }
 
 function readStructuredMemoryFailure(source: unknown): boolean | undefined {
-  const record = asRecord(source);
+  const record = asOptionalRecord(source);
   if (!record) {
     return undefined;
   }
@@ -206,7 +206,7 @@ function readStructuredMemoryEvidence(source: unknown): boolean | undefined {
   if (Array.isArray(source)) {
     return source.length > 0;
   }
-  const record = asRecord(source);
+  const record = asOptionalRecord(source);
   return record ? readExplicitMemoryEvidence(record) : undefined;
 }
 
@@ -247,6 +247,17 @@ function isTimeoutBoilerplateSummary(value: string): boolean {
   return TIMEOUT_BOILERPLATE_PATTERNS.some((pattern) => pattern.test(value));
 }
 
+const ASSISTANT_CHITCHAT_PATTERNS = [
+  /^(?:hello|hi|hey|greetings)\b(?=.{0,120}(?:\b(?:help|assist|message|question|need)\b|\b(?:how|what)\s+(?:can|may|do)\b|cut off|come through))/i,
+  /^(?:hello|hi|hey|greetings)[!.,?]?\s*$/i,
+  /^(?:it\s+)?(?:seems?|looks?)\s+like\s+(?:your\s+)?(?:message|text|input|query).{0,40}(?:cut\s+off|incomplete|didn'?t\s+come\s+through|missing)/i,
+  /^(?:could|can|would|please).{0,20}(?:provide|share|give|clarify|elaborate|repeat).{0,20}(?:details|information|context)/i,
+  /^(?:(?:i(?:'?m|\s+am)\s+(?:here|happy|ready|glad)\s+to|i\s+can)\s+(?:help|assist)|(?:please\s+)?(?:let\s+me\s+know|tell\s+me|feel\s+free).{0,30}(?:help|assist|question|need))/i,
+  /^(?:您好|你好|嗨)(?:[！!？?，,\s]*$|(?=.{0,120}(?:帮助|请问|问题|需要|消息|请求)))/u,
+  /^(?:看起来|似乎).{0,20}(?:消息|信息).{0,20}(?:没有|未|截断|不完整)/u,
+  /^(?:当前模型|当前日期|当前时间|今天).{0,100}(?:帮助|请|如果)/u,
+];
+
 function normalizeActiveSummary(rawReply: string): string | null {
   const trimmed = rawReply.trim();
   if (normalizeNoRecallValue(trimmed)) {
@@ -256,7 +267,8 @@ function normalizeActiveSummary(rawReply: string): string | null {
   if (
     !singleLine ||
     normalizeNoRecallValue(singleLine) ||
-    isTimeoutBoilerplateSummary(singleLine)
+    isTimeoutBoilerplateSummary(singleLine) ||
+    ASSISTANT_CHITCHAT_PATTERNS.some((pattern) => pattern.test(singleLine))
   ) {
     return null;
   }
@@ -305,7 +317,7 @@ function buildPromptPrefix(summary: string | null): string | undefined {
   if (!metadata) {
     return undefined;
   }
-  return [ACTIVE_MEMORY_UNTRUSTED_CONTEXT_HEADER, metadata].join("\n");
+  return [ACTIVE_MEMORY_CONTEXT_HEADER, metadata].join("\n");
 }
 
 export {

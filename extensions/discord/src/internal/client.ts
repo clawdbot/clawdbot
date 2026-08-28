@@ -1,7 +1,8 @@
 // Discord plugin module implements client behavior.
 import type { APIInteraction } from "discord-api-types/v10";
+import type { DiscordCommandDeployHashStore } from "../command-deploy-store.js";
 import { DiscordCommandDeployer, type DeployCommandOptions } from "./command-deploy.js";
-import type { BaseCommand } from "./commands.js";
+import type { DiscordCommand } from "./commands.js";
 import { ComponentRegistry } from "./component-registry.js";
 import { BaseMessageInteractiveComponent, type Modal } from "./components.js";
 import { DiscordEntityCache } from "./entity-cache.js";
@@ -46,7 +47,7 @@ interface ClientOptions {
   disableDeployRoute?: boolean;
   disableInteractionsRoute?: boolean;
   disableEventsRoute?: boolean;
-  commandDeployHashStorePath?: string;
+  commandDeployHashStore?: DiscordCommandDeployHashStore;
   devGuilds?: string[];
   eventQueue?: DiscordEventQueueOptions;
   restCacheTtlMs?: number;
@@ -56,7 +57,7 @@ export class Client {
   routes: Route[] = [];
   plugins: Array<{ id: string; plugin: Plugin }> = [];
   options: ClientOptions;
-  commands: BaseCommand[];
+  commands: DiscordCommand[];
   listeners: AnyListener[];
   rest: RequestClient;
   componentHandler = new ComponentRegistry<BaseMessageInteractiveComponent>();
@@ -70,7 +71,7 @@ export class Client {
   constructor(
     options: ClientOptions,
     handlers: {
-      commands?: BaseCommand[];
+      commands?: DiscordCommand[];
       listeners?: AnyListener[];
       components?: BaseMessageInteractiveComponent[];
       modals?: Modal[];
@@ -99,7 +100,7 @@ export class Client {
       clientId: this.options.clientId,
       commands: this.commands,
       devGuilds: this.options.devGuilds,
-      hashStorePath: this.options.commandDeployHashStorePath,
+      hashStore: this.options.commandDeployHashStore,
       rest: () => this.rest,
     });
     for (const component of handlers.components ?? []) {
@@ -161,6 +162,10 @@ export class Client {
 
   async fetchMember(guildId: string, userId: string): Promise<GuildMember> {
     return await this.entityCache.fetchMember(guildId, userId);
+  }
+
+  async fetchGuildEmojis<T>(guildId: string, fetcher: () => Promise<T>): Promise<T> {
+    return await this.entityCache.fetchGuildEmojis(guildId, fetcher);
   }
 
   async deployCommands(options: DeployCommandOptions = {}) {

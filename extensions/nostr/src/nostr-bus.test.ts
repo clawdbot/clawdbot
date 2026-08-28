@@ -62,9 +62,33 @@ describe("validatePrivateKey", () => {
   });
 
   describe("nsec format", () => {
-    it("rejects invalid nsec (wrong checksum)", () => {
-      const badNsec = "nsec1invalidinvalidinvalidinvalidinvalidinvalidinvalidinvalid";
-      expectThrowsError(() => validatePrivateKey(badNsec));
+    it("accepts uppercase bech32 private keys", () => {
+      const nsec = nip19.nsecEncode(Buffer.from(TEST_HEX_PRIVATE_KEY, "hex"));
+
+      expect(validatePrivateKey(nsec.toUpperCase())).toEqual(validatePrivateKey(nsec));
+    });
+
+    it("rejects mixed-case bech32 private keys", () => {
+      const nsec = nip19.nsecEncode(Buffer.from(TEST_HEX_PRIVATE_KEY, "hex"));
+
+      expectThrowsError(() => validatePrivateKey(`N${nsec.slice(1)}`));
+    });
+
+    it.each([
+      "nsec1not-a-real-secret",
+      (() => {
+        const nsec = nip19.nsecEncode(Buffer.from(TEST_HEX_PRIVATE_KEY, "hex"));
+        return `${nsec.slice(0, -1)}${nsec.endsWith("q") ? "p" : "q"}`;
+      })(),
+    ])("rejects invalid nsec without including it in the error", (badNsec) => {
+      let error: unknown;
+      try {
+        validatePrivateKey(badNsec);
+      } catch (caught) {
+        error = caught;
+      }
+      expect(error).toBeInstanceOf(Error);
+      expect(String(error)).not.toContain(badNsec);
     });
 
     it("rejects npub (wrong type)", () => {
@@ -112,6 +136,14 @@ describe("normalizePubkey", () => {
 
     it("trims surrounding whitespace before decoding", () => {
       expect(normalizePubkey(`  ${NPUB}  `)).toBe(HEX);
+    });
+
+    it("decodes uppercase bech32 public keys", () => {
+      expect(normalizePubkey(NPUB.toUpperCase())).toBe(HEX);
+    });
+
+    it("rejects mixed-case bech32 public keys", () => {
+      expectThrowsError(() => normalizePubkey(`N${NPUB.slice(1)}`));
     });
   });
 });

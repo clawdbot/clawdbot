@@ -4,10 +4,6 @@ on:
   schedule:
     - cron: "41 4 * * *"
   workflow_call:
-    outputs:
-      matrix_status:
-        description: Matrix release profile status
-        value: ${{ jobs.run_live_matrix.outputs.status }}
     inputs:
       ref:
         description: Ref, tag, or SHA to run
@@ -17,38 +13,33 @@ on:
         description: Exact resolved SHA expected from the trusted caller
         required: true
         type: string
-      matrix_profile:
-        description: Matrix QA profile
+      lock_scope:
+        description: Concurrency scope for a trusted single-lane reusable call
         required: false
-        default: release
+        default: all
         type: string
-      matrix_provider_mode:
-        description: Matrix provider mode
-        required: false
-        default: mock-openai
-        type: string
-      matrix_primary_model:
-        description: Matrix primary model
-        required: false
-        default: mock-openai/gpt-5.6-luna
-        type: string
-      matrix_alternate_model:
-        description: Matrix alternate model
-        required: false
-        default: mock-openai/gpt-5.6-luna-alt
-        type: string
-      matrix_attempts:
-        description: Matrix lane attempts
-        required: false
-        default: 2
-        type: number
       run_mock_parity:
         description: Run the mock parity lane
         required: false
         default: false
         type: boolean
+      run_buzz:
+        description: Run the Buzz live lane
+        required: false
+        default: false
+        type: boolean
+      buzz_scenario:
+        description: Optional comma-separated Buzz scenario ids
+        required: false
+        default: ""
+        type: string
       run_matrix:
         description: Run the Matrix live lane
+        required: false
+        default: false
+        type: boolean
+      fail_fast:
+        description: Stop the Matrix QA lane after its first failed check or scenario
         required: false
         default: false
         type: boolean
@@ -62,6 +53,11 @@ on:
         required: false
         default: false
         type: boolean
+      discord_provider_mode:
+        description: Provider mode for the Discord live transport lane
+        required: false
+        default: live-frontier
+        type: string
       run_whatsapp:
         description: Run the WhatsApp live lane
         required: false
@@ -72,17 +68,31 @@ on:
         required: false
         default: false
         type: boolean
-      matrix_advisory:
-        description: Report Matrix failure through the status output instead of failing the reusable job
+    secrets:
+      OPENAI_API_KEY:
+        description: OpenAI API key used by live QA scenarios
         required: false
-        default: false
-        type: boolean
+      OPENCLAW_QA_CONVEX_SITE_URL:
+        description: Convex credential broker URL
+        required: false
+      OPENCLAW_QA_CONVEX_SECRET_CI:
+        description: Convex CI credential
+        required: false
   workflow_dispatch:
     inputs:
       ref:
         description: Ref, tag, or SHA to run
         required: true
         default: main
+        type: string
+      run_buzz:
+        description: Run the Buzz live lane (requires a pooled Buzz credential)
+        required: false
+        default: false
+        type: boolean
+      buzz_scenario:
+        description: Optional comma-separated Buzz scenario ids
+        required: false
         type: string
       scenario:
         description: Optional comma-separated Telegram scenario ids
@@ -92,6 +102,14 @@ on:
         description: Optional comma-separated Discord scenario ids
         required: false
         type: string
+      discord_provider_mode:
+        description: Provider mode for the Discord live transport lane
+        required: false
+        default: live-frontier
+        type: choice
+        options:
+          - live-frontier
+          - mock-openai
       whatsapp_scenario:
         description: Optional comma-separated WhatsApp scenario ids
         required: false
@@ -100,24 +118,16 @@ on:
         description: Optional comma-separated Slack scenario ids
         required: false
         type: string
-      matrix_profile:
-        description: Matrix QA profile for the live Matrix lane
-        required: false
-        default: all
-        type: choice
-        options:
-          - fast
-          - release
-          - all
-          - transport
-
 permissions:
   contents: read
   pull-requests: read
 
 concurrency:
-  group: qa-lab-all-lanes-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}
+  # Trusted reusable callers name their single-lane scope explicitly. Manual
+  # and scheduled aggregate runs retain the shared all-lanes lock.
+  group: qa-lab-${{ inputs.lock_scope || 'all' }}-${{ github.event_name != 'schedule' && inputs.ref || github.sha }}
   cancel-in-progress: false
+  queue: max
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -131,6 +141,7 @@ jobs:
   authorize_actor:
     name: Authorize workflow actor
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 10
     outputs:
       authorized: ${{ steps.permission.outputs.authorized }}
     steps:
@@ -169,12 +180,13 @@ jobs:
     needs: authorize_actor
     if: needs.authorize_actor.outputs.authorized == 'true'
     runs-on: blacksmith-8vcpu-ubuntu-2404
+    timeout-minutes: 30
     outputs:
       selected_revision: ${{ steps.validate.outputs.selected_revision }}
       trusted_reason: ${{ steps.validate.outputs.trusted_reason }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ github.event_name != 'schedule' && inputs.ref || github.sha }}
@@ -260,7 +272,7 @@ jobs:
       OPENCLAW_LIVE_SETUP_TOKEN_VALUE: ""
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -269,6 +281,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -329,7 +342,7 @@ jobs:
       OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -338,6 +351,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -358,7 +372,7 @@ jobs:
           NODE_OPTIONS: --max-old-space-size=12288
         run: pnpm build
 
-      - name: Run live runtime parity lane
+      - name: Run live core runtime-pair lane
         id: run_lane
         shell: bash
         env:
@@ -375,8 +389,7 @@ jobs:
           pnpm openclaw qa suite \
             --repo-root . \
             --provider-mode live-frontier \
-            --runtime-parity-tier standard \
-            --runtime-parity-tier live-only \
+            --runtime-pair-lane core \
             --concurrency "${QA_PARITY_CONCURRENCY}" \
             --model "${OPENCLAW_CI_OPENAI_MODEL}" \
             --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
@@ -384,6 +397,25 @@ jobs:
             --fast \
             --allow-failures \
             --output-dir "${output_dir}/runtime-suite"
+
+      - name: Run pinned GPT-5.4 gateway restart runtime pair
+        shell: bash
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          set -euo pipefail
+
+          pnpm openclaw qa suite \
+            --repo-root . \
+            --provider-mode live-frontier \
+            --scenario gateway-restart-multi-live \
+            --concurrency 1 \
+            --model openai/gpt-5.4 \
+            --alt-model openai/gpt-5.4 \
+            --runtime-pair openclaw,codex \
+            --fast \
+            --output-dir "${{ steps.run_lane.outputs.output_dir }}/gateway-restart-gpt-5.4-runtime-pair"
 
       - name: Generate live runtime token-efficiency report
         if: steps.run_lane.outcome == 'success'
@@ -410,16 +442,17 @@ jobs:
   run_live_matrix:
     name: Run Matrix live QA lane
     needs: [authorize_actor, validate_selected_ref]
-    if: (github.event_name != 'workflow_call' || inputs.run_matrix) && !(github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all')
-    continue-on-error: ${{ github.event_name == 'workflow_call' && inputs.matrix_advisory }}
+    if: inputs.expected_sha == '' || inputs.run_matrix
     runs-on: blacksmith-16vcpu-ubuntu-2404
-    timeout-minutes: 60
+    timeout-minutes: 90
+    concurrency:
+      group: qa-live-matrix-${{ needs.validate_selected_ref.outputs.selected_revision }}
+      cancel-in-progress: false
+      queue: max
     environment: qa-live-shared
-    outputs:
-      status: ${{ steps.record_status.outputs.status }}
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -428,21 +461,9 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
-
-      - name: Validate required QA credential env
-        env:
-          MATRIX_PROVIDER_MODE: ${{ inputs.expected_sha != '' && inputs.matrix_provider_mode || github.event_name == 'workflow_dispatch' && 'mock-openai' || 'live-frontier' }}
-          OPENAI_API_KEY: ${{ (inputs.expected_sha != '' && inputs.matrix_provider_mode == 'live-frontier' || inputs.expected_sha == '' && github.event_name != 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          if [[ "${MATRIX_PROVIDER_MODE}" == "live-frontier" && -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "Missing required OPENAI_API_KEY." >&2
-            exit 1
-          fi
 
       - name: Build private QA runtime
         env:
@@ -453,49 +474,26 @@ jobs:
         id: run_lane
         shell: bash
         env:
-          OPENAI_API_KEY: ${{ (inputs.expected_sha != '' && inputs.matrix_provider_mode == 'live-frontier' || inputs.expected_sha == '' && github.event_name != 'workflow_dispatch') && secrets.OPENAI_API_KEY || '' }}
-          INPUT_MATRIX_PROFILE: ${{ inputs.expected_sha != '' && inputs.matrix_profile || github.event_name == 'workflow_dispatch' && inputs.matrix_profile || 'release' }}
-          MATRIX_ALTERNATE_MODEL: ${{ inputs.expected_sha != '' && inputs.matrix_alternate_model || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna-alt' || env.OPENCLAW_CI_OPENAI_FALLBACK_MODEL }}
-          MATRIX_ATTEMPTS: ${{ inputs.expected_sha != '' && inputs.matrix_attempts || 1 }}
-          MATRIX_PRIMARY_MODEL: ${{ inputs.expected_sha != '' && inputs.matrix_primary_model || github.event_name == 'workflow_dispatch' && 'mock-openai/gpt-5.6-luna' || env.OPENCLAW_CI_OPENAI_MODEL }}
-          MATRIX_PROVIDER_MODE: ${{ inputs.expected_sha != '' && inputs.matrix_provider_mode || github.event_name == 'workflow_dispatch' && 'mock-openai' || 'live-frontier' }}
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          FAIL_FAST: ${{ inputs.fail_fast }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_LIVE_OPENAI_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
 
-          if [[ ! "${MATRIX_ATTEMPTS}" =~ ^[1-9][0-9]*$ ]]; then
-            echo "matrix_attempts must be a positive integer; got: ${MATRIX_ATTEMPTS}" >&2
-            exit 1
+          output_dir=".artifacts/qa-e2e/matrix-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${output_dir}"
+
+          matrix_args=(
+            --repo-root . \
+            --output-dir "${output_dir}" \
+            --provider-mode mock-openai \
+            --fast
+          )
+          if [[ "$FAIL_FAST" == "true" ]] && pnpm openclaw qa matrix --help 2>/dev/null | grep -F -q -- "--fail-fast"; then
+            matrix_args+=(--fail-fast)
           fi
-          case "${MATRIX_PROVIDER_MODE}" in
-            mock-openai|live-frontier) ;;
-            *)
-              echo "matrix_provider_mode must be mock-openai or live-frontier; got: ${MATRIX_PROVIDER_MODE}" >&2
-              exit 1
-              ;;
-          esac
-
-          output_dir=".artifacts/qa-e2e/matrix-live-${INPUT_MATRIX_PROFILE}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
-
-          for attempt in $(seq 1 "${MATRIX_ATTEMPTS}"); do
-            attempt_output_dir="${output_dir}/attempt-${attempt}"
-            if pnpm openclaw qa matrix \
-              --repo-root . \
-              --output-dir "${attempt_output_dir}" \
-              --provider-mode "${MATRIX_PROVIDER_MODE}" \
-              --model "${MATRIX_PRIMARY_MODEL}" \
-              --alt-model "${MATRIX_ALTERNATE_MODEL}" \
-              --profile "${INPUT_MATRIX_PROFILE}" \
-              --fast; then
-              exit 0
-            fi
-            if [[ "${attempt}" == "${MATRIX_ATTEMPTS}" ]]; then
-              exit 1
-            fi
-            echo "Matrix live lane failed on attempt ${attempt}; retrying..." >&2
-            sleep 10
-          done
+          pnpm openclaw qa matrix "${matrix_args[@]}"
 
       - name: Upload Matrix QA artifacts
         id: upload_artifacts
@@ -503,54 +501,24 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ inputs.expected_sha != '' && format('release-qa-live-matrix-{0}', inputs.expected_sha) || format('qa-live-matrix-{0}-{1}', github.run_id, github.run_attempt) }}
-          path: ${{ steps.run_lane.outputs.output_dir }}
+          path: .artifacts/qa-e2e/matrix-live-${{ github.run_id }}-${{ github.run_attempt }}
           retention-days: 14
           if-no-files-found: error
 
-      - name: Record Matrix QA status
-        id: record_status
-        if: always()
-        shell: bash
-        env:
-          RUN_OUTCOME: ${{ steps.run_lane.outcome }}
-          UPLOAD_OUTCOME: ${{ steps.upload_artifacts.outcome }}
-        run: |
-          set -euo pipefail
-
-          status="success"
-          for outcome in "${RUN_OUTCOME:-}" "${UPLOAD_OUTCOME:-}"; do
-            case "${outcome}" in
-              failure) status="failure" ;;
-              cancelled)
-                if [[ "${status}" != "failure" ]]; then
-                  status="cancelled"
-                fi
-                ;;
-              success|skipped|"") ;;
-              *) status="failure" ;;
-            esac
-          done
-          echo "status=${status}" >> "$GITHUB_OUTPUT"
-
-  run_live_matrix_sharded:
-    name: Run Matrix live QA lane (${{ matrix.profile }})
+  run_live_buzz:
+    name: Run Buzz live QA lane with Convex leases
     needs: [authorize_actor, validate_selected_ref]
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.matrix_profile == 'all' }}
+    if: inputs.run_buzz
     runs-on: blacksmith-16vcpu-ubuntu-2404
     timeout-minutes: 60
+    concurrency:
+      group: qa-live-buzz-shared
+      cancel-in-progress: false
+      queue: max
     environment: qa-live-shared
-    strategy:
-      fail-fast: false
-      matrix:
-        profile:
-          - transport
-          - media
-          - e2ee-smoke
-          - e2ee-deep
-          - e2ee-cli
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -559,55 +527,123 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
-      - name: Validate required QA credential env
+      - name: Resolve Buzz QA runner
+        id: resolve_buzz
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          SELECTED_REVISION: ${{ needs.validate_selected_ref.outputs.selected_revision }}
         shell: bash
         run: |
           set -euo pipefail
 
-          if [[ -z "${OPENAI_API_KEY:-}" ]]; then
-            echo "Missing required OPENAI_API_KEY." >&2
-            exit 1
-          fi
+          output_dir=".artifacts/qa-e2e/buzz-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mkdir -p "${output_dir}"
+          echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
+
+          OUTPUT_DIR="${output_dir}" node --input-type=module <<'NODE'
+          import fs from "node:fs";
+
+          const manifestPath = "extensions/buzz/openclaw.plugin.json";
+          const manifest = fs.existsSync(manifestPath)
+            ? JSON.parse(fs.readFileSync(manifestPath, "utf8"))
+            : {};
+          const available =
+            Array.isArray(manifest.qaRunners) &&
+            manifest.qaRunners.some((runner) => runner?.commandName === "buzz");
+          fs.appendFileSync(process.env.GITHUB_OUTPUT, `available=${available}\n`);
+          if (!available) {
+            fs.writeFileSync(
+              `${process.env.OUTPUT_DIR}/skipped.json`,
+              `${JSON.stringify(
+                {
+                  status: "skipped",
+                  reason: "selected ref does not declare the Buzz QA runner",
+                  revision: process.env.SELECTED_REVISION,
+                },
+                null,
+                2,
+              )}\n`,
+            );
+          }
+          NODE
+
+      - name: Validate required Buzz QA credential env
+        if: steps.resolve_buzz.outputs.available == 'true'
+        env:
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          for key in OPENCLAW_QA_CONVEX_SITE_URL OPENCLAW_QA_CONVEX_SECRET_CI; do
+            if [[ -z "${!key:-}" ]]; then
+              echo "Missing required ${key}." >&2
+              exit 1
+            fi
+          done
 
       - name: Build private QA runtime
+        if: steps.resolve_buzz.outputs.available == 'true'
         env:
           NODE_OPTIONS: --max-old-space-size=12288
         run: pnpm build
 
-      - name: Run Matrix live lane shard
+      - name: Run Buzz live lane
+        if: steps.resolve_buzz.outputs.available == 'true'
         id: run_lane
         shell: bash
         env:
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENCLAW_QA_CONVEX_SITE_URL: ${{ secrets.OPENCLAW_QA_CONVEX_SITE_URL }}
+          OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
+          OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
+          OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
+          INPUT_SCENARIO: ${{ inputs.buzz_scenario || '' }}
         run: |
           set -euo pipefail
 
-          output_dir=".artifacts/qa-e2e/matrix-live-${{ matrix.profile }}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          output_dir="${{ steps.resolve_buzz.outputs.output_dir }}"
+          scenario_args=()
+
+          if [[ -n "${INPUT_SCENARIO// }" ]]; then
+            IFS=',' read -r -a raw_scenarios <<<"${INPUT_SCENARIO}"
+            for raw in "${raw_scenarios[@]}"; do
+              scenario="$(printf '%s' "${raw}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+              if [[ -n "${scenario}" ]]; then
+                scenario_args+=(--scenario "${scenario}")
+              fi
+            done
+          fi
+
           echo "output_dir=${output_dir}" >> "$GITHUB_OUTPUT"
 
-          pnpm openclaw qa matrix \
+          pnpm openclaw qa buzz \
             --repo-root . \
             --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
-            --model "${OPENCLAW_CI_OPENAI_MODEL}" \
-            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
-            --profile "${{ matrix.profile }}" \
-            --fast
+            --provider-mode mock-openai \
+            --credential-source convex \
+            --credential-role ci \
+            "${scenario_args[@]}"
 
-      - name: Upload Matrix QA shard artifacts
+      - name: Upload Buzz QA artifacts
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: qa-live-matrix-${{ matrix.profile }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ steps.run_lane.outputs.output_dir }}
+          name: ${{ inputs.expected_sha != '' && format('release-qa-live-buzz-{0}-{1}', inputs.expected_sha, github.run_attempt) || format('qa-live-buzz-{0}-{1}', github.run_id, github.run_attempt) }}
+          path: ${{ steps.resolve_buzz.outputs.output_dir }}
           retention-days: 14
           if-no-files-found: error
+
+      - name: Require requested Buzz QA runner
+        if: always() && inputs.expected_sha == '' && steps.resolve_buzz.outcome == 'success' && steps.resolve_buzz.outputs.available != 'true'
+        shell: bash
+        run: |
+          echo "::error::The selected ref does not declare the requested Buzz QA runner."
+          exit 1
 
   run_live_telegram:
     name: Run Telegram live QA lane with Convex leases
@@ -618,7 +654,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -627,6 +663,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -715,7 +752,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -724,6 +761,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -742,13 +780,25 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_DISCORD_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.discord_scenario || '' }}
+          PROVIDER_MODE: ${{ inputs.discord_provider_mode || 'live-frontier' }}
         run: |
           set -euo pipefail
 
           output_dir=".artifacts/qa-e2e/discord-live-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           scenario_args=()
+          provider_args=(--provider-mode "${PROVIDER_MODE}")
+
+          if [[ "${PROVIDER_MODE}" == "live-frontier" ]]; then
+            provider_args+=(
+              --model openai/gpt-5.6-luna
+              --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}"
+              --fast
+            )
+          elif [[ "${PROVIDER_MODE}" != "mock-openai" ]]; then
+            echo "Unsupported Discord provider mode: ${PROVIDER_MODE}" >&2
+            exit 2
+          fi
 
           if [[ -n "${INPUT_SCENARIO// }" ]]; then
             IFS=',' read -r -a raw_scenarios <<<"${INPUT_SCENARIO}"
@@ -765,10 +815,7 @@ jobs:
           pnpm openclaw qa discord \
             --repo-root . \
             --output-dir "${output_dir}" \
-            --provider-mode live-frontier \
-            --model openai/gpt-5.6-luna \
-            --alt-model "${OPENCLAW_CI_OPENAI_FALLBACK_MODEL}" \
-            --fast \
+            "${provider_args[@]}" \
             --credential-source convex \
             --credential-role ci \
             "${scenario_args[@]}"
@@ -794,7 +841,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -803,6 +850,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -821,7 +869,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_WHATSAPP_CAPTURE_CONTENT: "1"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.whatsapp_scenario || '' }}
         run: |
           set -euo pipefail
@@ -870,7 +917,7 @@ jobs:
     environment: qa-live-shared
     steps:
       - name: Checkout selected ref
-        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: ${{ needs.validate_selected_ref.outputs.selected_revision }}
@@ -879,6 +926,7 @@ jobs:
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env
         with:
+          cache-mode: restore
           node-version: ${{ env.NODE_VERSION }}
           install-bun: "true"
 
@@ -897,7 +945,6 @@ jobs:
           OPENCLAW_QA_CONVEX_SECRET_CI: ${{ secrets.OPENCLAW_QA_CONVEX_SECRET_CI }}
           OPENCLAW_QA_CREDENTIAL_ACQUIRE_TIMEOUT_MS: "1800000"
           OPENCLAW_QA_REDACT_PUBLIC_METADATA: "1"
-          OPENCLAW_QA_SLACK_CAPTURE_CONTENT: "1"
           OPENCLAW_QA_TRANSPORT_READY_TIMEOUT_MS: "180000"
           INPUT_SCENARIO: ${{ github.event_name == 'workflow_dispatch' && inputs.slack_scenario || '' }}
         run: |

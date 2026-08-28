@@ -5,6 +5,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
 } from "../../packages/normalization-core/src/string-coerce.js";
+import type { ThinkingLevelMap } from "../llm/types.js";
 
 export { normalizeFastMode };
 export type { FastMode };
@@ -25,12 +26,19 @@ export type TraceLevel = "off" | "on" | "raw";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
 export type ReasoningLevel = "off" | "on" | "stream";
 type UsageDisplayLevel = "off" | "tokens" | "full";
-/** Minimal model catalog entry needed to choose thinking defaults. */
+/** Prepared model catalog fields reused while choosing and dispatching a queued runtime. */
 export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
   api?: string;
+  contextWindow?: number;
+  contextTokens?: number;
   reasoning?: boolean;
+  configuredReasoning?: boolean;
+  /** Concrete runtime owner of thinking policy; internal and never project to clients. */
+  thinkingPolicyProvider?: string;
+  thinkingLevelMap?: ThinkingLevelMap;
+  input?: readonly ("text" | "image" | "audio" | "video" | "document")[];
   params?: Record<string, unknown>;
   compat?: {
     thinkingFormat?: string;
@@ -83,7 +91,8 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (collapsed === "xhigh" || collapsed === "extrahigh") {
     return "xhigh";
   }
-  if (["off"].includes(key)) {
+  // `none` is a documented provider-native spelling for disabled reasoning; store canonical off.
+  if (["off", "none"].includes(key)) {
     return "off";
   }
   if (["on", "enable", "enabled"].includes(key)) {
@@ -117,18 +126,15 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
 }
 
 /** Chooses the default thinking level for one provider/model catalog entry. */
-export function resolveThinkingDefaultForModel(params: {
+export function resolveThinkingDefaultForModelCore(params: {
   provider: string;
   model: string;
-  catalog?: ThinkingCatalogEntry[];
+  catalog?: readonly ThinkingCatalogEntry[];
 }): ThinkLevel {
   const candidate = params.catalog?.find(
     (entry) => entry.provider === params.provider && entry.id === params.model,
   );
-  if (candidate?.reasoning) {
-    return "low";
-  }
-  return "off";
+  return candidate?.reasoning ? "low" : "off";
 }
 
 type OnOffFullLevel = "off" | "on" | "full";

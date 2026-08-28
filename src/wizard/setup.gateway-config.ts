@@ -15,11 +15,11 @@ import {
   resolveSecretInputRef,
   type SecretInput,
 } from "../config/types.secrets.js";
+import { provisionGatewayTokenStoreRef } from "../gateway/auth-token-store-ref.js";
 import {
   maybeAddTailnetOriginToControlUiAllowedOrigins,
   TAILSCALE_EXPOSURE_OPTIONS,
 } from "../gateway/gateway-config-prompts.shared.js";
-import { DEFAULT_DANGEROUS_NODE_COMMANDS } from "../gateway/node-command-policy.js";
 import { findTailscaleBinary } from "../infra/tailscale.js";
 import { resolveSecretInputModeForEnvSelection } from "../plugins/provider-auth-mode.js";
 import { promptSecretRefForSetup } from "../plugins/provider-auth-ref.js";
@@ -121,6 +121,7 @@ export async function configureGatewayForSetup(
               hint: t("wizard.gateway.bindCustomHint"),
             },
           ],
+          initialValue: quickstartGateway.bind,
         });
 
   let customBindHost = quickstartGateway.customBindHost;
@@ -150,7 +151,7 @@ export async function configureGatewayForSetup(
             },
             { value: "password", label: t("common.password") },
           ],
-          initialValue: "token",
+          initialValue: quickstartGateway.authMode,
         })) as GatewayAuthChoice);
 
   const tailscaleMode: GatewayWizardSettings["tailscaleMode"] =
@@ -159,6 +160,7 @@ export async function configureGatewayForSetup(
       : await prompter.select<GatewayWizardSettings["tailscaleMode"]>({
           message: t("wizard.gateway.tailscaleExposure"),
           options: getLocalizedTailscaleExposureOptions(),
+          initialValue: quickstartGateway.tailscaleMode,
         });
 
   // Detect Tailscale binary before proceeding with serve/funnel setup.
@@ -174,13 +176,8 @@ export async function configureGatewayForSetup(
     }
   }
 
-  let tailscaleResetOnExit = flow === "quickstart" ? quickstartGateway.tailscaleResetOnExit : false;
   if (tailscaleMode !== "off" && flow !== "quickstart") {
     await prompter.note(t("wizard.gatewayTailscale.docsNote"), "Tailscale");
-    tailscaleResetOnExit = await prompter.confirm({
-      message: t("wizard.gateway.tailscaleReset"),
-      initialValue: false,
-    });
   }
 
   // Safety + constraints:
@@ -208,11 +205,10 @@ export async function configureGatewayForSetup(
       value: quickstartGateway.token,
       defaults: nextConfig.secrets?.defaults,
     }).ref;
-    const tokenMode =
-      flow === "quickstart" && opts.secretInputMode !== "ref" // pragma: allowlist secret
-        ? quickstartTokenRef
-          ? "ref"
-          : "plaintext"
+    const tokenMode = quickstartTokenRef
+      ? "ref"
+      : flow === "quickstart" && opts.secretInputMode !== "ref" // pragma: allowlist secret
+        ? "plaintext"
         : await resolveSecretInputModeForEnvSelection({
             prompter,
             explicitMode: opts.secretInputMode,
@@ -224,8 +220,9 @@ export async function configureGatewayForSetup(
               refHint: t("wizard.gateway.refHint"),
             },
           });
+    const ambientToken = normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
     if (tokenMode === "ref") {
-      if (flow === "quickstart" && quickstartTokenRef) {
+      if (quickstartTokenRef) {
         gatewayTokenInput = quickstartTokenRef;
         gatewayToken = await resolveSetupSecretInputString({
           config: nextConfig,
@@ -233,6 +230,17 @@ export async function configureGatewayForSetup(
           path: "gateway.auth.token",
           env: process.env,
         });
+      } else if (!quickstartTokenString && !ambientToken) {
+        // Nothing exists for an env/file/exec ref to point at, so asking where the
+        // token lives has no answerable option. Setup mints it into the shared
+        // secret store instead and config keeps only the reference.
+        const provisioned = provisionGatewayTokenStoreRef({ config: nextConfig });
+        gatewayTokenInput = provisioned.ref;
+        gatewayToken = provisioned.token;
+        await prompter.note(
+          t("wizard.gateway.tokenStoreProvisioned", { name: provisioned.ref.id }),
+          t("wizard.gateway.auth"),
+        );
       } else {
         const resolved = await promptSecretRefForSetup({
           provider: "gateway-auth-token",
@@ -248,13 +256,10 @@ export async function configureGatewayForSetup(
         gatewayToken = resolved.resolvedValue;
       }
     } else if (flow === "quickstart") {
-      gatewayToken =
-        (quickstartTokenString ?? normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN)) ||
-        randomToken();
+      gatewayToken = (quickstartTokenString ?? ambientToken) || randomToken();
       gatewayTokenInput = gatewayToken;
     } else {
-      const existingToken =
-        quickstartTokenString ?? normalizeGatewayTokenInput(process.env.OPENCLAW_GATEWAY_TOKEN);
+      const existingToken = quickstartTokenString ?? ambientToken;
       let tokenInput: string | undefined;
       if (existingToken) {
         const keep = await prompter.confirm({
@@ -281,8 +286,20 @@ export async function configureGatewayForSetup(
   }
 
   if (authMode === "password") {
+    const existingPassword = normalizeSecretInputString(quickstartGateway.password);
+    const existingPasswordRef = resolveSecretInputRef({
+      value: quickstartGateway.password,
+      defaults: nextConfig.secrets?.defaults,
+    }).ref;
+    const quickstartNeedsPasswordRef =
+      flow === "quickstart" &&
+      opts.secretInputMode === "ref" &&
+      !existingPasswordRef &&
+      quickstartGateway.password !== opts.baseConfig.gateway?.auth?.password;
     let password: SecretInput | undefined =
-      flow === "quickstart" && quickstartGateway.password ? quickstartGateway.password : undefined;
+      flow === "quickstart" && !quickstartNeedsPasswordRef
+        ? quickstartGateway.password
+        : (existingPasswordRef ?? undefined);
     if (!password) {
       const selectedMode = await resolveSecretInputModeForEnvSelection({
         prompter,
@@ -306,13 +323,25 @@ export async function configureGatewayForSetup(
         });
         password = resolved.ref;
       } else {
-        password = normalizeWizardTextInput(
-          await prompter.text({
-            message: t("wizard.gateway.passwordPrompt"),
-            validate: validateGatewayPasswordInput,
-            sensitive: true,
-          }),
-        );
+        let passwordInput: string | undefined;
+        if (existingPassword) {
+          const keep = await prompter.confirm({
+            message: t("wizard.gateway.existingPasswordConfirm", {
+              password: maskApiKey(existingPassword),
+            }),
+            initialValue: true,
+          });
+          passwordInput = keep ? existingPassword : undefined;
+        }
+        password =
+          passwordInput ??
+          normalizeWizardTextInput(
+            await prompter.text({
+              message: t("wizard.gateway.passwordPrompt"),
+              validate: validateGatewayPasswordInput,
+              sensitive: true,
+            }),
+          );
       }
     }
     nextConfig = {
@@ -350,27 +379,9 @@ export async function configureGatewayForSetup(
       tailscale: {
         ...nextConfig.gateway?.tailscale,
         mode: tailscaleMode as GatewayTailscaleMode,
-        resetOnExit: tailscaleResetOnExit,
       },
     },
   };
-
-  if (
-    flow === "quickstart" &&
-    bind === "loopback" &&
-    nextConfig.gateway?.controlUi?.allowInsecureAuth === undefined
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        controlUi: {
-          ...nextConfig.gateway?.controlUi,
-          allowInsecureAuth: true,
-        },
-      },
-    };
-  }
 
   nextConfig = ensureControlUiAllowedOriginsForNonLoopbackBind(nextConfig, {
     requireControlUiEnabled: true,
@@ -381,27 +392,6 @@ export async function configureGatewayForSetup(
     tailscaleBin,
   });
 
-  // If this is a new gateway setup (no existing gateway settings), start with a
-  // denylist for high-risk node commands. Users can arm these temporarily via
-  // /phone arm ... (phone-control plugin).
-  if (
-    !quickstartGateway.hasExisting &&
-    nextConfig.gateway?.nodes?.denyCommands === undefined &&
-    nextConfig.gateway?.nodes?.allowCommands === undefined &&
-    nextConfig.gateway?.nodes?.browser === undefined
-  ) {
-    nextConfig = {
-      ...nextConfig,
-      gateway: {
-        ...nextConfig.gateway,
-        nodes: {
-          ...nextConfig.gateway?.nodes,
-          denyCommands: [...DEFAULT_DANGEROUS_NODE_COMMANDS],
-        },
-      },
-    };
-  }
-
   return {
     nextConfig,
     settings: {
@@ -411,7 +401,6 @@ export async function configureGatewayForSetup(
       authMode,
       gatewayToken,
       tailscaleMode: tailscaleMode as GatewayTailscaleMode,
-      tailscaleResetOnExit,
     },
   };
 }

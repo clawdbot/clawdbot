@@ -1,72 +1,88 @@
-// Zalo API module exposes the plugin public contract.
+export type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
+export type {
+  GroupPolicy,
+  MarkdownTableMode,
+  OpenClawConfig,
+} from "openclaw/plugin-sdk/config-contracts";
+export type {
+  BaseProbeResult,
+  BaseTokenResolution,
+  ChannelAccountSnapshot,
+  ChannelMessageActionAdapter,
+  ChannelMessageActionName,
+  ChannelStatusIssue,
+} from "openclaw/plugin-sdk/channel-contract";
+export type { SecretInput } from "openclaw/plugin-sdk/secret-input";
+export type { ChannelPlugin, PluginRuntime, WizardPrompter } from "openclaw/plugin-sdk/core";
+export type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
+export type { OutboundReplyPayload } from "openclaw/plugin-sdk/reply-payload";
+export {
+  DEFAULT_ACCOUNT_ID,
+  buildChannelConfigSchema,
+  createDedupeCache,
+  formatPairingApproveHint,
+  jsonResult,
+  normalizeAccountId,
+  readStringParam,
+  resolveClientIp,
+} from "openclaw/plugin-sdk/core";
 export {
   addWildcardAllowFrom,
   applyAccountNameToChannelSection,
-  applyBasicWebhookRequestGuards,
   applySetupAccountConfigPatch,
-  type BaseProbeResult,
-  type BaseTokenResolution,
-  buildBaseAccountStatusSnapshot,
-  buildChannelConfigSchema,
-  buildSecretInputSchema,
   buildSingleChannelSecretPromptState,
-  buildTokenChannelStatusSummary,
-  type ChannelAccountSnapshot,
-  type ChannelMessageActionAdapter,
-  type ChannelMessageActionName,
-  type ChannelPlugin,
-  type ChannelStatusIssue,
-  chunkTextForOutbound,
-  createChannelPairingController,
-  createChannelMessageReplyPipeline,
-  createDedupeCache,
-  createFixedWindowRateLimiter,
-  createWebhookAnomalyTracker,
-  DEFAULT_ACCOUNT_ID,
-  deliverTextOrMediaReply,
-  formatAllowFromLowercase,
-  formatPairingApproveHint,
-  type GroupPolicy,
-  hasConfiguredSecretInput,
-  isNormalizedSenderAllowed,
-  isNumericTargetId,
-  jsonResult,
-  logTypingFailure,
-  type MarkdownTableMode,
   mergeAllowFromEntries,
   migrateBaseNameToDefaultAccount,
-  normalizeAccountId,
+  promptSingleChannelSecretInput,
+  runSingleChannelSecretStep,
+  setTopLevelChannelDmPolicyWithAllowFrom,
+} from "openclaw/plugin-sdk/setup";
+export {
+  buildSecretInputSchema,
+  hasConfiguredSecretInput,
   normalizeResolvedSecretInputString,
   normalizeSecretInputString,
-  type OpenClawConfig,
-  type OutboundReplyPayload,
+} from "openclaw/plugin-sdk/secret-input";
+export {
+  buildTokenChannelStatusSummary,
   PAIRING_APPROVED_MESSAGE,
-  type PluginRuntime,
-  promptSingleChannelSecretInput,
-  readJsonWebhookBodyOrReject,
-  readStringParam,
-  registerPluginHttpRoute,
-  type RegisterWebhookPluginRouteOptions,
-  registerWebhookTarget,
-  type RegisterWebhookTargetOptions,
-  registerWebhookTargetWithPluginRoute,
-  type ReplyPayload,
-  resolveClientIp,
+} from "openclaw/plugin-sdk/channel-status";
+export { buildBaseAccountStatusSnapshot } from "openclaw/plugin-sdk/status-helpers";
+export { chunkTextForOutbound } from "openclaw/plugin-sdk/text-chunking";
+export {
+  formatAllowFromLowercase,
+  isNormalizedSenderAllowed,
+} from "openclaw/plugin-sdk/allow-from";
+export {
   resolveDefaultGroupPolicy,
-  resolveInboundRouteEnvelopeBuilderWithRuntime,
   resolveOpenProviderRuntimeGroupPolicy,
+  warnMissingProviderGroupPolicyFallbackOnce,
+} from "openclaw/plugin-sdk/runtime-group-policy";
+export { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
+export { createChannelMessageReplyPipeline } from "openclaw/plugin-sdk/channel-outbound";
+export { logTypingFailure } from "openclaw/plugin-sdk/channel-feedback";
+export {
+  deliverTextOrMediaReply,
+  isNumericTargetId,
+  sendPayloadWithChunkedTextAndMedia,
+} from "openclaw/plugin-sdk/reply-payload";
+export { waitForAbortSignal } from "openclaw/plugin-sdk/runtime";
+export {
+  applyBasicWebhookRequestGuards,
+  createFixedWindowRateLimiter,
+  createWebhookAnomalyTracker,
+  readJsonWebhookBodyOrReject,
+  registerPluginHttpRoute,
+  registerWebhookTarget,
+  registerWebhookTargetWithPluginRoute,
   resolveWebhookPath,
   resolveWebhookTargetWithAuthOrRejectSync,
-  runSingleChannelSecretStep,
-  type RuntimeEnv,
-  type SecretInput,
-  sendPayloadWithChunkedTextAndMedia,
-  setTopLevelChannelDmPolicyWithAllowFrom,
-  setZaloRuntime,
-  waitForAbortSignal,
-  warnMissingProviderGroupPolicyFallbackOnce,
   WEBHOOK_ANOMALY_COUNTER_DEFAULTS,
   WEBHOOK_RATE_LIMIT_DEFAULTS,
   withResolvedWebhookRequestPipeline,
-  type WizardPrompter,
-} from "./src/runtime-api.js";
+} from "openclaw/plugin-sdk/webhook-ingress";
+export type {
+  RegisterWebhookPluginRouteOptions,
+  RegisterWebhookTargetOptions,
+} from "openclaw/plugin-sdk/webhook-ingress";
+export { setZaloRuntime } from "./src/runtime.js";

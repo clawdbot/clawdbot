@@ -5,27 +5,23 @@
  */
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../config/config.js";
 import { setEmbeddedMode } from "../infra/embedded-mode.js";
 import {
   EmbeddedPluginApprovalBroker,
   setEmbeddedPluginApprovalBroker,
 } from "../infra/embedded-plugin-approval-broker.js";
-import {
-  getGlobalHookRunner,
-  initializeGlobalHookRunner,
-  resetGlobalHookRunner,
-} from "../plugins/hook-runner-global.js";
+import { getGlobalHookRunner, resetGlobalHookRunner } from "../plugins/hook-runner-global.js";
 import type { HookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
-import {
-  pinActivePluginChannelRegistry,
-  releasePinnedPluginChannelRegistry,
-  setActivePluginRegistry,
-} from "../plugins/runtime.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { PluginApprovalResolutions } from "../plugins/types.js";
+import { resolveBeforeToolCallApprovalOutcome } from "./agent-tools.before-tool-call.approval.js";
 import { runBeforeToolCallHook } from "./agent-tools.before-tool-call.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { callGatewayTool } from "./tools/gateway.js";
 
 vi.mock("../plugins/hook-runner-global.js", async () => {
@@ -57,12 +53,7 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
 const mockGetGlobalHookRunner = vi.mocked(getGlobalHookRunner);
 const mockCallGatewayTool = vi.mocked(callGatewayTool);
 
-function requireRecord(value: unknown, label: string): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`expected ${label}`);
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-label");
 
 function requireApprovalRequestCall(label: string): {
   timeoutParams: Record<string, unknown>;
@@ -116,6 +107,29 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     resetGlobalHookRunner();
   });
 
+  it("carries the host receipt fence beside the execution identity token", async () => {
+    const executionIdentityToken = createExecutionIdentityAdmissionToken("run-receipt-fence");
+    const receiptAuthority = vi.fn(() => true);
+    runBeforeToolCallMock.mockResolvedValue({});
+
+    await withGatewayToolCallerIdentity(
+      {
+        agentId: "main",
+        sessionKey: "agent:main:session",
+        operationalRunInstance: { instanceId: "instance-receipt", runId: "run-receipt-fence" },
+        executionIdentityToken,
+        receiptAuthority,
+      },
+      () => runBeforeToolCallHook({ toolName: "exec", params: { command: "true" } }),
+    );
+
+    const call = requireBeforeToolCall(runBeforeToolCallMock, "receipt-fenced hook invocation");
+    expect(call[2]?.token).toBe(executionIdentityToken);
+    expect(call[2]?.assertAuthority).toEqual(expect.any(Function));
+    expect(call[2]?.assertAuthority()).toBe(true);
+    expect(receiptAuthority).toHaveBeenCalledOnce();
+  });
+
   it("blocks approval-required tools in embedded mode when no gateway approval route exists", async () => {
     setEmbeddedMode(true);
     const onResolution = vi.fn();
@@ -155,7 +169,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         agentId: undefined,
         allowedDecisions: undefined,
         description: "Test approval request",
-        pluginId: "test-plugin",
         sessionKey: undefined,
         severity: "info",
         timeoutMs: 120_000,
@@ -222,6 +235,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
         pluginId: "test-plugin",
         title: "Needs approval",
         description: "Test approval request",
+        scope: { kind: "external-post", target: "git‮hub", visibility: "public" },
         severity: "info",
         timeoutBehavior: "allow",
         onResolution,
@@ -237,6 +251,11 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     await vi.waitFor(() => {
       expect(broker.listPending()).toHaveLength(1);
+    });
+    expect(broker.listPending()[0]?.request.scope).toEqual({
+      kind: "external-post",
+      target: "git\\u{202E}hub",
+      visibility: "public",
     });
 
     broker.stop(new Error("local TUI stopped"));
@@ -447,7 +466,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     expect(result.blocked).toBe(true);
     const approvalCall = requireApprovalRequestCall("non-embedded approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(15_000);
-    expect(approvalCall.request.pluginId).toBe("test-plugin");
+    expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Needs approval");
     expect(approvalCall.request.description).toBe("Test approval request");
     expect(approvalCall.request.severity).toBe("info");
@@ -534,7 +553,7 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     const approvalCall = requireApprovalRequestCall("trusted policy approval request");
     expect(approvalCall.timeoutParams.timeoutMs).toBe(130_000);
-    expect(approvalCall.request.pluginId).toBe("trusted-policy");
+    expect(approvalCall.request.pluginId).toBeUndefined();
     expect(approvalCall.request.title).toBe("Policy approval");
     expect(approvalCall.request.description).toBe("Policy requested approval");
     expect(approvalCall.request.toolName).toBe("exec");
@@ -629,6 +648,46 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     }
   });
 
+  it("requires approval before skill_workshop restores a collection", async () => {
+    mockCallGatewayTool.mockResolvedValueOnce({
+      id: "skill-workshop-restore-approval",
+      decision: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+
+    const result = await runBeforeToolCallHook({
+      toolName: "skill_workshop",
+      params: { action: "restore_collection" },
+      toolCallId: "call-skill-restore",
+      ctx: {
+        agentId: "main",
+        sessionKey: "main",
+        config: {
+          skills: {
+            workshop: {
+              approvalPolicy: "pending",
+            },
+          },
+        },
+      },
+    });
+
+    expect(result).toEqual({
+      blocked: false,
+      params: { action: "restore_collection" },
+      approvalResolution: PluginApprovalResolutions.ALLOW_ONCE,
+    });
+    const approvalCall = requireApprovalRequestCall("skill_workshop restore approval request");
+    expect(approvalCall.request).toMatchObject({
+      title: "Restore previous skill collection",
+      description:
+        "Replace current workspace skills with the previous collection backup. Later skill changes may be removed.",
+      severity: "warning",
+      toolName: "skill_workshop",
+      toolCallId: "call-skill-restore",
+    });
+    expect(runBeforeToolCallMock).toHaveBeenCalledTimes(1);
+  });
+
   it("returns an actionable pending outcome when skill_workshop approval expires", async () => {
     mockCallGatewayTool.mockResolvedValueOnce({
       id: "skill-workshop-timeout",
@@ -709,94 +768,6 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     });
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
     expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-  });
-
-  it("runs trusted policies from the global hook registry after the active registry changes", async () => {
-    const evaluatePolicy = vi.fn(() => ({
-      block: true,
-      blockReason: "gateway registry policy blocked",
-    }));
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.trustedToolPolicies = [
-      {
-        pluginId: "gateway-policy",
-        pluginName: "Gateway Policy",
-        source: "test",
-        policy: {
-          id: "gateway-block",
-          description: "Gateway policy",
-          evaluate: evaluatePolicy,
-        },
-      },
-    ];
-    initializeGlobalHookRunner(gatewayRegistry);
-    setActivePluginRegistry(createEmptyPluginRegistry());
-    runBeforeToolCallMock.mockResolvedValue(undefined);
-
-    const result = await runBeforeToolCallHook({
-      toolName: "bash",
-      params: { command: "deploy" },
-      toolCallId: "call-gateway-policy",
-      ctx: { agentId: "main", sessionKey: "main" },
-    });
-
-    expect(result).toEqual({
-      blocked: true,
-      kind: "veto",
-      deniedReason: "plugin-before-tool-call",
-      reason: "gateway registry policy blocked",
-      params: { command: "deploy" },
-    });
-    expect(evaluatePolicy).toHaveBeenCalledTimes(1);
-    expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-  });
-
-  it("runs pinned gateway trusted policies after a later global runner initialization", async () => {
-    const evaluatePolicy = vi.fn(() => ({
-      block: true,
-      blockReason: "pinned gateway policy blocked",
-    }));
-    const gatewayRegistry = createEmptyPluginRegistry();
-    gatewayRegistry.trustedToolPolicies = [
-      {
-        pluginId: "gateway-policy",
-        pluginName: "Gateway Policy",
-        source: "test",
-        policy: {
-          id: "gateway-block",
-          description: "Gateway policy",
-          evaluate: evaluatePolicy,
-        },
-      },
-    ];
-    setActivePluginRegistry(gatewayRegistry);
-    initializeGlobalHookRunner(gatewayRegistry);
-    pinActivePluginChannelRegistry(gatewayRegistry);
-    try {
-      const laterRegistry = createEmptyPluginRegistry();
-      setActivePluginRegistry(laterRegistry);
-      initializeGlobalHookRunner(laterRegistry);
-      runBeforeToolCallMock.mockResolvedValue(undefined);
-
-      const result = await runBeforeToolCallHook({
-        toolName: "bash",
-        params: { command: "deploy" },
-        toolCallId: "call-pinned-gateway-policy",
-        ctx: { agentId: "main", sessionKey: "main" },
-      });
-
-      expect(result).toEqual({
-        blocked: true,
-        kind: "veto",
-        deniedReason: "plugin-before-tool-call",
-        reason: "pinned gateway policy blocked",
-        params: { command: "deploy" },
-      });
-      expect(evaluatePolicy).toHaveBeenCalledTimes(1);
-      expect(runBeforeToolCallMock).not.toHaveBeenCalled();
-    } finally {
-      releasePinnedPluginChannelRegistry(gatewayRegistry);
-    }
   });
 
   it("does not require skill_workshop lifecycle approval by default", async () => {
@@ -905,5 +876,83 @@ describe("runBeforeToolCallHook — embedded mode approvals", () => {
     if (!result.blocked) {
       expect(result.params).toEqual({ file: "/etc/hosts" });
     }
+  });
+});
+
+describe("before_tool_call approval snapshots", () => {
+  it("detaches deferred approval params from mutable hook and caller objects", async () => {
+    const baseParams = { command: "safe", options: { cwd: "/safe" } };
+    const overrideParams = { env: { MODE: "safe" } };
+
+    const outcome = await resolveBeforeToolCallApprovalOutcome({
+      result: {
+        requireApproval: {
+          pluginId: "policy",
+          title: "Needs approval",
+          description: "Approval needed",
+        },
+        params: overrideParams,
+      },
+      approvalMode: "defer",
+      toolName: "bash",
+      baseParams,
+    });
+
+    baseParams.options.cwd = "/unapproved";
+    overrideParams.env.MODE = "unapproved";
+
+    expect(outcome).toMatchObject({
+      blocked: false,
+      params: { command: "safe", options: { cwd: "/safe" } },
+      deferredApproval: {
+        baseParams: { command: "safe", options: { cwd: "/safe" } },
+        overrideParams: { env: { MODE: "safe" } },
+      },
+    });
+    if (!outcome || outcome.blocked || !outcome.deferredApproval) {
+      throw new Error("expected deferred approval outcome");
+    }
+    (outcome.params as typeof baseParams).options.cwd = "/outcome-mutated";
+    expect(outcome.deferredApproval.baseParams).toEqual({
+      command: "safe",
+      options: { cwd: "/safe" },
+    });
+  });
+
+  const sharedMemoryCases: Array<
+    [
+      string,
+      {
+        baseParams: Record<string, unknown>;
+        overrideParams?: Record<string, unknown>;
+      },
+    ]
+  > = [
+    ["base params", { baseParams: { shared: new Uint8Array(new SharedArrayBuffer(4)) } }],
+    [
+      "override params",
+      {
+        baseParams: { command: "safe" },
+        overrideParams: { shared: new Uint8Array(new SharedArrayBuffer(4)) },
+      },
+    ],
+  ];
+
+  it.each(sharedMemoryCases)("rejects shared memory in %s", async (_name, values) => {
+    await expect(
+      resolveBeforeToolCallApprovalOutcome({
+        result: {
+          requireApproval: {
+            pluginId: "policy",
+            title: "Needs approval",
+            description: "Approval needed",
+          },
+          params: values.overrideParams,
+        },
+        approvalMode: "defer",
+        toolName: "bash",
+        baseParams: values.baseParams,
+      }),
+    ).rejects.toThrow("before_tool_call mutable input isolation failed");
   });
 });

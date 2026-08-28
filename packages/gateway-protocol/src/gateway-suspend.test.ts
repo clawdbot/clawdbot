@@ -1,103 +1,109 @@
+import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import {
+  GatewaySuspendBlockerSchema,
+  GatewaySuspendPrepareResultSchema,
+  GatewaySuspendStatusResultSchema,
   validateGatewaySuspendPrepareParams,
-  validateGatewaySuspendPrepareResult,
-  validateGatewaySuspendResumeResult,
-  validateGatewaySuspendStatusResult,
 } from "./index.js";
 
 describe("gateway suspension protocol", () => {
   it("keeps prepare params closed and bounded", () => {
     expect(validateGatewaySuspendPrepareParams({ requestId: "host-request" })).toBe(true);
+    expect(
+      validateGatewaySuspendPrepareParams({
+        requestId: "host-request",
+        terminalPolicy: "preserve",
+      }),
+    ).toBe(true);
+    expect(
+      validateGatewaySuspendPrepareParams({
+        requestId: "host-request",
+        terminalPolicy: "terminate",
+      }),
+    ).toBe(true);
+    expect(
+      validateGatewaySuspendPrepareParams({
+        requestId: "host-request",
+        terminalPolicy: "preserve",
+        drain: true,
+      }),
+    ).toBe(true);
+    expect(validateGatewaySuspendPrepareParams({ requestId: "host-request", drain: false })).toBe(
+      true,
+    );
+    expect(validateGatewaySuspendPrepareParams({ requestId: "host-request", drain: "true" })).toBe(
+      false,
+    );
     expect(validateGatewaySuspendPrepareParams({ requestId: "   " })).toBe(false);
+    expect(
+      validateGatewaySuspendPrepareParams({ requestId: "host-request", terminalPolicy: "close" }),
+    ).toBe(false);
     expect(validateGatewaySuspendPrepareParams({ requestId: "host-request", extra: true })).toBe(
       false,
     );
   });
 
-  it("validates busy and ready prepare results", () => {
+  it("keeps the historical terminal-session blocker wire-compatible", () => {
     expect(
-      validateGatewaySuspendPrepareResult({
+      Value.Check(GatewaySuspendBlockerSchema, {
+        kind: "terminal-session",
+        count: 1,
+        message: "1 open terminal session(s)",
+      }),
+    ).toBe(true);
+  });
+
+  it("accepts closed draining prepare results without changing existing result variants", () => {
+    const draining = {
+      status: "draining",
+      suspensionId: "suspension-1",
+      expiresAtMs: 2_000,
+      retryAfterMs: 250,
+      activeCount: 1,
+      blockers: [{ kind: "terminal-session", count: 1, message: "1 open terminal session" }],
+    };
+
+    expect(Value.Check(GatewaySuspendPrepareResultSchema, draining)).toBe(true);
+    expect(Value.Check(GatewaySuspendPrepareResultSchema, { ...draining, unexpected: true })).toBe(
+      false,
+    );
+    expect(
+      Value.Check(GatewaySuspendPrepareResultSchema, {
         status: "busy",
         reason: "active-work",
-        retryAfterMs: 20_000,
-        activeCount: 2,
-        blockers: [
-          { kind: "queue", count: 1, message: "one queued operation" },
-          {
-            kind: "task",
-            count: 1,
-            message: "one active task",
-            task: { taskId: "task-1", status: "running", runtime: "subagent" },
-          },
-        ],
+        retryAfterMs: 250,
+        activeCount: 1,
+        blockers: draining.blockers,
       }),
     ).toBe(true);
     expect(
-      validateGatewaySuspendPrepareResult({
+      Value.Check(GatewaySuspendPrepareResultSchema, {
         status: "ready",
-        suspensionId: "suspension-id",
-        expiresAtMs: 123,
+        suspensionId: "suspension-1",
+        expiresAtMs: 2_000,
         activeCount: 0,
         blockers: [],
       }),
     ).toBe(true);
   });
 
-  it("keeps background exec blockers count-only", () => {
-    const result = {
-      status: "busy",
-      reason: "active-work",
-      retryAfterMs: 20_000,
+  it("accepts closed draining status results without changing existing status variants", () => {
+    const draining = {
+      status: "draining",
+      expiresAtMs: 2_000,
+      retryAfterMs: 250,
       activeCount: 1,
-      blockers: [
-        {
-          kind: "background-exec",
-          count: 1,
-          message: "1 active background exec session(s)",
-        },
-      ],
+      blockers: [{ kind: "terminal-persistence", count: 1, message: "1 pending terminal write" }],
     };
 
-    expect(validateGatewaySuspendPrepareResult(result)).toBe(true);
+    expect(Value.Check(GatewaySuspendStatusResultSchema, draining)).toBe(true);
+    expect(Value.Check(GatewaySuspendStatusResultSchema, { ...draining, suspensionId: "id" })).toBe(
+      false,
+    );
+    expect(Value.Check(GatewaySuspendStatusResultSchema, { status: "running" })).toBe(true);
     expect(
-      validateGatewaySuspendPrepareResult({
-        ...result,
-        blockers: [{ ...result.blockers[0], sessionIds: ["private-session-id"] }],
-      }),
-    ).toBe(false);
-    expect(
-      validateGatewaySuspendPrepareResult({
-        ...result,
-        blockers: [{ ...result.blockers[0], command: "private command" }],
-      }),
-    ).toBe(false);
-  });
-
-  it("validates status and resume results", () => {
-    expect(validateGatewaySuspendStatusResult({ status: "running" })).toBe(true);
-    expect(validateGatewaySuspendStatusResult({ status: "ready", expiresAtMs: 123 })).toBe(true);
-    expect(
-      validateGatewaySuspendResumeResult({ ok: true, status: "running", resumed: false }),
+      Value.Check(GatewaySuspendStatusResultSchema, { status: "ready", expiresAtMs: 2_000 }),
     ).toBe(true);
-    expect(
-      validateGatewaySuspendResumeResult({
-        ok: true,
-        status: "running",
-        resumed: false,
-        warnings: [],
-      }),
-    ).toBe(false);
-  });
-
-  it("keeps scheduler recovery on the error frame instead of success results", () => {
-    const recovering = {
-      status: "recovering",
-      reason: "scheduler-resume-failed",
-      retryAfterMs: 1_000,
-    };
-
-    expect(validateGatewaySuspendPrepareResult(recovering)).toBe(false);
-    expect(validateGatewaySuspendStatusResult(recovering)).toBe(false);
   });
 });

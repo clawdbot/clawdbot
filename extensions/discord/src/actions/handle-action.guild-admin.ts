@@ -6,6 +6,7 @@ import {
   readStringArrayParam,
   readStringParam,
 } from "openclaw/plugin-sdk/agent-runtime";
+import { readBooleanParam } from "openclaw/plugin-sdk/boolean-param";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
@@ -56,8 +57,9 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   ctx: Ctx;
   resolveChannelId: () => string;
   readPolicyOptions?: DiscordMessagingActionOptions;
+  actionOptions: DiscordMessagingActionOptions;
 }): Promise<AgentToolResult<unknown> | undefined> {
-  const { ctx, resolveChannelId, readPolicyOptions } = params;
+  const { ctx, resolveChannelId, readPolicyOptions, actionOptions } = params;
   const { action, params: actionParams, cfg } = ctx;
   const accountId = ctx.accountId ?? readStringParam(actionParams, "accountId");
   const senderUserId = readDiscordRequesterSenderId(ctx);
@@ -86,11 +88,15 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
   }
 
   if (action === "emoji-list") {
-    const guildId = readStringParam(actionParams, "guildId", {
-      required: true,
-    });
+    const guildId = readStringParam(actionParams, "guildId");
+    const limit = readPositiveIntegerParam(actionParams, "limit");
     return await handleDiscordAction(
-      { action: "emojiList", accountId: accountId ?? undefined, guildId },
+      {
+        action: "emojiList",
+        accountId: accountId ?? undefined,
+        ...(guildId ? { guildId } : { channelId: resolveChannelId() }),
+        ...(limit ? { limit } : {}),
+      },
       cfg,
       readPolicyOptions,
     );
@@ -439,9 +445,10 @@ export async function tryHandleDiscordMessageActionGuildAdmin(params: {
         content,
         mediaUrl: mediaUrl ?? undefined,
         replyTo: replyTo ?? undefined,
+        ...(readBooleanParam(actionParams, "silent") === true ? { silent: true } : {}),
       },
       cfg,
-      { mediaLocalRoots: ctx.mediaLocalRoots, mediaReadFile: ctx.mediaReadFile },
+      actionOptions,
     );
   }
 

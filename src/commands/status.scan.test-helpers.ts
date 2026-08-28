@@ -13,6 +13,7 @@ type StatusScanSharedMocks = {
   hasConfiguredChannels: UnknownMock;
   hasConfiguredChannelsForReadOnlyScope: UnknownMock;
   readBestEffortConfig: UnknownMock;
+  readBestEffortConfigSnapshot: UnknownMock;
   resolveCommandSecretRefsViaGateway: UnknownMock;
   getUpdateCheckResult: UnknownMock;
   getAgentLocalStatuses: UnknownMock;
@@ -33,6 +34,7 @@ export function createStatusScanSharedMocks(configPathLabel: string): StatusScan
     hasConfiguredChannels: vi.fn(),
     hasConfiguredChannelsForReadOnlyScope: vi.fn(),
     readBestEffortConfig: vi.fn(),
+    readBestEffortConfigSnapshot: vi.fn(),
     resolveCommandSecretRefsViaGateway: vi.fn(),
     getUpdateCheckResult: vi.fn(),
     getAgentLocalStatuses: vi.fn(),
@@ -208,16 +210,33 @@ export async function loadStatusScanModuleForTest(
 
   vi.doMock("../config/io.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
-    readBestEffortConfigSnapshot: async () => {
-      const config = await mocks.readBestEffortConfig();
-      return { config, sourceConfig: config };
-    },
+    readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
   }));
   vi.doMock("../config/config.js", () => ({
     readBestEffortConfig: mocks.readBestEffortConfig,
-    readBestEffortConfigSnapshot: async () => {
-      const config = await mocks.readBestEffortConfig();
-      return { config, sourceConfig: config };
+    readBestEffortConfigSnapshot: mocks.readBestEffortConfigSnapshot,
+    readConfigFileSnapshotWithPluginMetadata: async (readOptions: unknown) => {
+      const result = (await mocks.readBestEffortConfigSnapshot(readOptions)) as {
+        config: OpenClawConfig;
+        sourceConfig: OpenClawConfig;
+        configDiagnostics: { path: string; issues: unknown[] } | null;
+      };
+      return {
+        snapshot: {
+          path: result.configDiagnostics?.path ?? mocks.resolveConfigPath(),
+          exists: false,
+          raw: null,
+          parsed: result.sourceConfig,
+          sourceConfig: result.sourceConfig,
+          resolved: result.sourceConfig,
+          valid: result.configDiagnostics === null,
+          runtimeConfig: result.config,
+          config: result.config,
+          issues: result.configDiagnostics?.issues ?? [],
+          warnings: [],
+          legacyIssues: [],
+        },
+      };
     },
     resolveGatewayPort: mocks.resolveGatewayPort,
   }));
@@ -259,7 +278,7 @@ export async function loadStatusScanModuleForTest(
   }));
   vi.doMock("./status.update.js", () => createStatusUpdateModuleMock(mocks));
   vi.doMock("./status.agent-local.js", () => createStatusAgentLocalModuleMock(mocks));
-  vi.doMock("./status.summary.js", () => createStatusSummaryModuleMock(mocks));
+  vi.doMock("../status/summary.js", () => createStatusSummaryModuleMock(mocks));
   vi.doMock("../infra/os-summary.js", () => createStatusOsSummaryModuleMock());
   vi.doMock("./status.scan.deps.runtime.js", () => createStatusScanDepsRuntimeModuleMock(mocks));
   vi.doMock("../gateway/call.js", () => createStatusGatewayCallModuleMock(mocks));
@@ -371,13 +390,11 @@ function createStatusGatewayProbeFailure() {
 
 export function createStatusMemorySearchConfig(): OpenClawConfig {
   return createStatusScanConfig({
-    agents: {
-      defaults: {
-        memorySearch: {
-          provider: "local",
-          local: { modelPath: "/tmp/model.gguf" },
-          fallback: "none",
-        },
+    memory: {
+      search: {
+        provider: "local",
+        local: { modelPath: "/tmp/model.gguf" },
+        fallback: "none",
       },
     },
   });
@@ -426,6 +443,11 @@ export function applyStatusScanDefaults(
     );
   });
   mocks.readBestEffortConfig.mockResolvedValue(sourceConfig);
+  mocks.readBestEffortConfigSnapshot.mockResolvedValue({
+    config: sourceConfig,
+    sourceConfig,
+    configDiagnostics: null,
+  });
   mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
     resolvedConfig,
     diagnostics: [],

@@ -2,21 +2,19 @@
 import * as fs from "node:fs/promises";
 import path from "node:path";
 import { FILE_TYPE_SNIFF_MAX_BYTES } from "@openclaw/media-core/mime";
-import {
-  createPluginRegistryFixture,
-  registerTestPlugin,
-} from "openclaw/plugin-sdk/plugin-test-contracts";
+import { registerTestPlugin } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { withTempConfig } from "../../gateway/test-temp-config.js";
 import { resolvePreferredOpenClawTmpDir } from "../../infra/tmp-openclaw-dir.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { sendPluginSessionAttachment } from "../host-hook-attachments.js";
 import { clearPluginLoaderCache } from "../loader.test-fixtures.js";
 import { createEmptyPluginRegistry } from "../registry-empty.js";
 import { createPluginRegistry } from "../registry.js";
-import { setActivePluginRegistry } from "../runtime.js";
+import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../runtime.js";
 import type { PluginRuntime } from "../runtime/types.js";
 import { createPluginRecord } from "../status.test-helpers.js";
 import type { OpenClawPluginApi } from "../types.js";
@@ -36,7 +34,7 @@ type SessionAttachmentRequest = Parameters<typeof sendPluginSessionAttachment>[0
 type TestSessionEntry = {
   sessionId?: string;
   updatedAt?: number;
-  deliveryContext?: Record<string, unknown>;
+  delivery?: SessionEntry["delivery"];
 };
 
 vi.mock("../../channels/plugins/index.js", () => ({
@@ -84,7 +82,9 @@ async function withSessionStore(
 
 async function writeSessionEntry(
   storePath: string,
-  entry: TestSessionEntry = { deliveryContext: DEFAULT_TELEGRAM_ROUTE },
+  entry: TestSessionEntry = {
+    delivery: normalizeSessionDeliveryState({ context: DEFAULT_TELEGRAM_ROUTE }),
+  },
   key = MAIN_SESSION_KEY,
 ) {
   await replaceSessionEntry({ storePath, sessionKey: key }, {
@@ -136,26 +136,24 @@ describe("plugin session attachments", () => {
   afterEach(() => {
     workflowMocks.getChannelPlugin.mockReset();
     workflowMocks.sendMessage.mockReset();
-    setActivePluginRegistry(createEmptyPluginRegistry());
+    resetPluginRuntimeStateForTest();
     clearPluginLoaderCache();
     delete (globalThis as { proofAttachmentApi?: OpenClawPluginApi }).proofAttachmentApi;
     delete (globalThis as { proofAttachmentLog?: unknown[] }).proofAttachmentLog;
   });
 
-  it("sends validated files through the session delivery route with channel hints", async () => {
+  it("sends validated files through the session delivery route with portable hints", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath, {
-        deliveryContext: {
-          ...DEFAULT_TELEGRAM_ROUTE,
-          accountId: "default",
-          threadId: 42,
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { ...DEFAULT_TELEGRAM_ROUTE, accountId: "default", threadId: 42 },
+        }),
       });
       mockSuccessfulAttachmentDelivery();
 
       const result = await sendBundledSessionAttachment({
         files: [{ path: filePath }],
-        channelHints: { telegram: { disableNotification: true, parseMode: "HTML" } },
+        channelHints: { silent: true, parseMode: "HTML", threadId: "attachment-thread" },
       });
 
       expect(result).toEqual({
@@ -169,7 +167,7 @@ describe("plugin session attachments", () => {
       expect(sendParams.to).toBe("12345");
       expect(sendParams.channel).toBe("telegram");
       expect(sendParams.accountId).toBe("default");
-      expect(sendParams.threadId).toBe(42);
+      expect(sendParams.threadId).toBe("attachment-thread");
       expect(sendParams.mediaUrls).toEqual([filePath]);
       expect(sendParams.bestEffort).toBe(false);
       expect(sendParams.silent).toBe(true);
@@ -196,7 +194,7 @@ describe("plugin session attachments", () => {
     });
   });
 
-  it("escapes plain Telegram attachment captions before HTML delivery", async () => {
+  it("keeps shipped Telegram hints compatible when escaping plain captions", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath);
       mockSuccessfulAttachmentDelivery();
@@ -211,6 +209,23 @@ describe("plugin session attachments", () => {
       const sendParams = requireFirstSendMessageParams();
       expect(sendParams.content).toBe("1 &lt; 2 &amp; 3 &gt; 2");
       expect(sendParams.parseMode).toBe("HTML");
+    });
+  });
+
+  it("keeps shipped Slack thread hints compatible", async () => {
+    await withSessionStore(async ({ storePath, filePath }) => {
+      await writeSessionEntry(storePath, {
+        delivery: normalizeSessionDeliveryState({ context: { channel: "slack", to: "C123" } }),
+      });
+      mockSuccessfulAttachmentDelivery();
+
+      const result = await sendBundledSessionAttachment({
+        files: [{ path: filePath }],
+        channelHints: { slack: { threadTs: "171234.567" } },
+      });
+
+      expect(result).toMatchObject({ ok: true, channel: "slack", deliveredTo: "C123" });
+      expect(requireFirstSendMessageParams().threadId).toBe("171234.567");
     });
   });
 
@@ -229,7 +244,7 @@ describe("plugin session attachments", () => {
         config: {
           session: { store: storePath },
           agents: {
-            list: [{ id: "main", workspace: workspaceDir }],
+            list: [{ id: "main", default: true, workspace: workspaceDir }],
           },
         },
       });
@@ -333,7 +348,7 @@ describe("plugin session attachments", () => {
       await expect(
         sendBundledSessionAttachment({
           files: [{ path: filePath }],
-          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+          channelHints: { forceDocumentMime: "application/pdf" },
         }),
       ).resolves.toEqual({
         ok: false,
@@ -344,7 +359,7 @@ describe("plugin session attachments", () => {
       await expect(
         sendBundledSessionAttachment({
           files: [{ path: fakePdfPath }],
-          channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+          channelHints: { forceDocumentMime: "application/pdf" },
         }),
       ).resolves.toEqual({
         ok: false,
@@ -367,7 +382,7 @@ describe("plugin session attachments", () => {
       const result = await sendBundledSessionAttachment({
         files: [{ path: pdfPath }],
         forceDocument: false,
-        channelHints: { telegram: { forceDocumentMime: "application/pdf" } },
+        channelHints: { forceDocumentMime: "application/pdf" },
       });
       expectTelegramAttachmentResult(result, 1);
       const sendParams = requireFirstSendMessageParams();
@@ -415,10 +430,9 @@ describe("plugin session attachments", () => {
   it("rejects unloaded bundled gateway-mode channels before attachment delivery", async () => {
     await withSessionStore(async ({ storePath, filePath }) => {
       await writeSessionEntry(storePath, {
-        deliveryContext: {
-          channel: "whatsapp",
-          to: "+15551234567",
-        },
+        delivery: normalizeSessionDeliveryState({
+          context: { channel: "whatsapp", to: "+15551234567" },
+        }),
       });
       setActivePluginRegistry(createEmptyPluginRegistry());
       workflowMocks.getChannelPlugin.mockReturnValue(
@@ -458,43 +472,6 @@ describe("plugin session attachments", () => {
         error: "attachment delivery setup failed: channel registry unavailable",
       });
       expect(workflowMocks.sendMessage).not.toHaveBeenCalled();
-    });
-  });
-
-  it("wires sendSessionAttachment through the plugin API with stale-registry protection", async () => {
-    await withSessionStore(async ({ storePath, filePath }) => {
-      await writeSessionEntry(storePath);
-      mockSuccessfulAttachmentDelivery();
-
-      const { config, registry } = createPluginRegistryFixture({ session: { store: storePath } });
-      let capturedApi: OpenClawPluginApi | undefined;
-      registerTestPlugin({
-        registry,
-        config,
-        record: createPluginRecord({
-          id: "attachment-plugin",
-          name: "Attachment Plugin",
-          origin: "bundled",
-        }),
-        register(api) {
-          capturedApi = api;
-        },
-      });
-      setActivePluginRegistry(registry.registry);
-
-      const firstResult = await capturedApi?.sendSessionAttachment({
-        sessionKey: MAIN_SESSION_KEY,
-        files: [{ path: filePath }],
-      });
-      expectTelegramAttachmentResult(firstResult, 1);
-
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      await expect(
-        capturedApi?.sendSessionAttachment({
-          sessionKey: MAIN_SESSION_KEY,
-          files: [{ path: filePath }],
-        }),
-      ).resolves.toEqual({ ok: false, error: "plugin is not loaded" });
     });
   });
 

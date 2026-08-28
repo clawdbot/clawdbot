@@ -1,37 +1,32 @@
 // Agents directory tests cover agent-scoped skill directory discovery.
-import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { setTestEnvValue } from "../../test-utils/env.js";
+import { bumpSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import {
   restoreMockSkillsHomeEnv,
   setMockSkillsHomeEnv,
   type SkillsHomeEnvSnapshot,
 } from "../test-support/home-env.test-support.js";
-import { writeSkill } from "../test-support/test-helpers.js";
-import { buildWorkspaceSkillsPrompt } from "./workspace.js";
+import { buildSkillSnapshot } from "./workspace-skill-prompt.js";
 
 vi.mock("./plugin-skills.js", () => ({
-  resolvePluginSkillDirs: () => [],
+  resolvePluginSkillRoots: () => [],
 }));
 
-const tempDirs: string[] = [];
-
-async function createTempDir(prefix: string) {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), prefix));
-  tempDirs.push(dir);
-  return dir;
-}
+const tempDirs = createTempDirTracker();
 
 function buildSkillsPrompt(workspaceDir: string, managedDir: string, bundledDir: string): string {
-  return buildWorkspaceSkillsPrompt(workspaceDir, {
+  return buildSkillSnapshot(workspaceDir, {
     managedSkillsDir: managedDir,
     bundledSkillsDir: bundledDir,
-  });
+  }).prompt;
 }
 
 async function createWorkspaceSkillDirs() {
-  const workspaceDir = await createTempDir("openclaw-");
+  const workspaceDir = tempDirs.make("openclaw-");
   return {
     workspaceDir,
     managedDir: path.join(workspaceDir, ".managed"),
@@ -44,19 +39,13 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
   let envSnapshot: SkillsHomeEnvSnapshot;
 
   beforeEach(async () => {
-    fakeHome = await createTempDir("openclaw-home-");
+    fakeHome = tempDirs.make("openclaw-home-");
     envSnapshot = setMockSkillsHomeEnv(fakeHome);
   });
 
   afterEach(async () => {
     await restoreMockSkillsHomeEnv(envSnapshot, async () => {
-      await Promise.all(
-        tempDirs
-          .splice(0)
-          .map((dir) =>
-            fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 }),
-          ),
-      );
+      tempDirs.cleanup();
     });
   });
 
@@ -85,6 +74,7 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       name: "shared-skill",
       description: "Workspace version",
     });
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
 
     const prompt2 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Workspace version");
@@ -116,10 +106,26 @@ describe("buildWorkspaceSkillsPrompt — .agents/skills/ directories", () => {
       name: "shared-skill",
       description: "Project agents version",
     });
+    bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
 
     const prompt2 = buildSkillsPrompt(workspaceDir, managedDir, bundledDir);
     expect(prompt2).toContain("Project agents version");
     expect(prompt2).not.toContain("Personal agents version");
+  });
+
+  it("loads personal agent skills only for the default state directory", async () => {
+    const { workspaceDir, managedDir, bundledDir } = await createWorkspaceSkillDirs();
+    await writeSkill({
+      dir: path.join(fakeHome, ".agents", "skills", "personal-only"),
+      name: "personal-only",
+      description: "Personal only skill",
+    });
+
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(fakeHome, ".openclaw"));
+    expect(buildSkillsPrompt(workspaceDir, managedDir, bundledDir)).toContain("personal-only");
+
+    setTestEnvValue("OPENCLAW_STATE_DIR", path.join(fakeHome, "scratch-state"));
+    expect(buildSkillsPrompt(workspaceDir, managedDir, bundledDir)).not.toContain("personal-only");
   });
 
   it("loads unique skills from all .agents/skills/ sources alongside others", async () => {

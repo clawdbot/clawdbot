@@ -2,15 +2,21 @@
  * Implements sandboxed HTTP requests for Codex native tools by routing network
  * access through the active OpenClaw sandbox backend.
  */
-import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { SandboxContext } from "openclaw/plugin-sdk/sandbox";
 import { SsrFBlockedError, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
-import type { WebSocket } from "ws";
+import { sliceUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { JsonObject, JsonValue } from "../protocol.js";
 import { readHttpHeaders, requireNumber, requireObject, requireString } from "./json-rpc.js";
-import { requireBackend } from "./runtime.js";
-import type { HttpHeader, OpenClawExecServer } from "./types.js";
+import {
+  prepareSandboxChildExec,
+  spawnSandboxChild,
+  type SandboxChildOwner,
+} from "./sandbox-child.js";
+import type {
+  CodexSandboxExecSessionNotifications,
+  HttpHeader,
+  OpenClawExecServer,
+} from "./types.js";
 
 /** Maximum JSON-line size accepted from the streaming HTTP helper process. */
 const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
@@ -18,14 +24,18 @@ const SANDBOX_HTTP_STREAM_LINE_MAX_CHARS = 256 * 1024;
 /** Handles one sandbox HTTP JSON-RPC request, optionally streaming response body deltas. */
 export async function httpRequest(
   execServer: OpenClawExecServer,
-  socket: WebSocket,
+  notifications: CodexSandboxExecSessionNotifications,
   params: JsonValue | undefined,
 ): Promise<JsonObject> {
   const record = requireObject(params, "http/request params");
   const requestId = requireString(record.requestId, "requestId");
   const url = requireString(record.url, "url");
+  const redirectPolicy = record.redirectPolicy ?? "follow";
+  if (redirectPolicy !== "follow" && redirectPolicy !== "stop") {
+    throw new Error("http/request redirectPolicy must be follow or stop");
+  }
   assertSandboxHttpRequestTargetAllowed(url);
-  const request = {
+  const request: SandboxHttpRequest = {
     method: requireString(record.method, "method"),
     url,
     headers: readHttpHeaders(record.headers),
@@ -34,10 +44,11 @@ export async function httpRequest(
       typeof record.timeoutMs === "number" && record.timeoutMs > 0
         ? Math.floor(record.timeoutMs)
         : undefined,
+    redirectPolicy,
     streamResponse: record.streamResponse === true,
   };
   if (request.streamResponse) {
-    return await runStreamingSandboxHttpRequest(execServer, socket, requestId, request);
+    return await runStreamingSandboxHttpRequest(execServer, notifications, requestId, request);
   }
   const result = await runSandboxHttpRequest(execServer, {
     ...request,
@@ -52,6 +63,7 @@ type SandboxHttpRequest = {
   headers: HttpHeader[];
   bodyBase64?: string;
   timeoutMs?: number;
+  redirectPolicy: "follow" | "stop";
   streamResponse: boolean;
 };
 
@@ -78,8 +90,7 @@ async function runSandboxHttpRequest(
   execServer: OpenClawExecServer,
   params: SandboxHttpRequest,
 ): Promise<JsonObject & { status: number; headers: HttpHeader[]; bodyBase64: string }> {
-  const backend = requireBackend(execServer);
-  const result = await backend.runShellCommand({
+  const result = await execServer.backend.runShellCommand({
     script: SANDBOX_HTTP_REQUEST_SCRIPT,
     stdin: JSON.stringify(params),
     allowFailure: true,
@@ -105,47 +116,46 @@ async function runSandboxHttpRequest(
 
 async function runStreamingSandboxHttpRequest(
   execServer: OpenClawExecServer,
-  socket: WebSocket,
+  notifications: CodexSandboxExecSessionNotifications,
   requestId: string,
   params: SandboxHttpRequest,
 ): Promise<JsonObject> {
-  const backend = requireBackend(execServer);
+  const backend = execServer.backend;
+  const remoteExec = prepareSandboxChildExec(backend, {});
   const execSpec = await backend.buildExecSpec({
     command: SANDBOX_HTTP_REQUEST_SCRIPT,
     workdir: execServer.sandbox.containerWorkdir,
-    env: {},
+    env: remoteExec.env,
     usePty: false,
   });
-  let child: ChildProcessWithoutNullStreams;
-  try {
-    const [command, ...args] = execSpec.argv;
-    if (!command) {
-      throw new Error("OpenClaw sandbox HTTP exec spec did not provide a command.");
-    }
-    child = spawn(command, args, {
-      env: execSpec.env,
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-  } catch (error) {
-    try {
-      await backend.finalizeExec?.({
-        status: "failed",
-        exitCode: null,
-        timedOut: false,
-        token: execSpec.finalizeToken,
-      });
-    } catch (finalizeError) {
-      embeddedAgentLog.warn("codex sandbox http/request finalize after start failure failed", {
-        error: finalizeError,
-      });
-    }
-    throw error;
-  }
-  const abortOnSocketClose = () => child.kill("SIGTERM");
-  socket.once("close", abortOnSocketClose);
-  child.once("close", () => {
-    socket.off("close", abortOnSocketClose);
+  const lifecycle = { failed: false };
+  const owner = await spawnSandboxChild({
+    argv: execSpec.argv,
+    env: execSpec.env,
+    finalizeExec: backend.finalizeExec,
+    finalizeToken: execSpec.finalizeToken,
+    finalizeStatus: (outcome) =>
+      lifecycle.failed || outcome.exitCode !== 0 ? "failed" : "completed",
+    onFinalizeError: (error) => {
+      embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
+    },
+    owners: execServer.children,
+    terminateRemote: remoteExec.terminate,
   });
+  const child = owner.process;
+  const abortOnSessionClose = () => {
+    lifecycle.failed = true;
+    void owner.terminate().catch((error: unknown) => {
+      embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
+    });
+  };
+  notifications.signal.addEventListener("abort", abortOnSessionClose, { once: true });
+  child.once("close", () => {
+    notifications.signal.removeEventListener("abort", abortOnSessionClose);
+  });
+  if (notifications.signal.aborted) {
+    abortOnSessionClose();
+  }
   child.stdin.on("error", (error: NodeJS.ErrnoException) => {
     if (error.code === "EPIPE" || error.code === "ERR_STREAM_DESTROYED") {
       return;
@@ -155,19 +165,19 @@ async function runStreamingSandboxHttpRequest(
   child.stdin.end(JSON.stringify(params));
   return await readStreamingSandboxHttpResponse({
     child,
-    execSpec,
-    finalizeExec: backend.finalizeExec,
+    lifecycle,
+    owner,
     requestId,
-    socket,
+    notifications,
   });
 }
 
 function readStreamingSandboxHttpResponse(params: {
-  child: ChildProcessWithoutNullStreams;
-  execSpec: { finalizeToken?: unknown };
-  finalizeExec?: NonNullable<SandboxContext["backend"]>["finalizeExec"];
+  child: SandboxChildOwner["process"];
+  lifecycle: { failed: boolean };
+  owner: SandboxChildOwner;
   requestId: string;
-  socket: WebSocket;
+  notifications: CodexSandboxExecSessionNotifications;
 }): Promise<JsonObject> {
   return new Promise((resolve, reject) => {
     let headerResolved = false;
@@ -176,36 +186,32 @@ function readStreamingSandboxHttpResponse(params: {
     let lastBodySeq = 0;
     let stdoutBuffer = "";
     let stderr = "";
-    const finalize = async (status: "completed" | "failed", exitCode: number | null) => {
-      await params.finalizeExec?.({
-        status,
-        exitCode,
-        timedOut: false,
-        token: params.execSpec.finalizeToken,
-      });
-    };
-    const fail = (message: string, exitCode: number | null) => {
+    const fail = (message: string, _exitCode: number | null) => {
       if (failed) {
         return;
       }
       failed = true;
-      void finalize("failed", exitCode).catch((error: unknown) => {
-        embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
+      params.lifecycle.failed = true;
+      void params.owner.terminate().catch((error: unknown) => {
+        embeddedAgentLog.warn("codex sandbox http/request cleanup failed", { error });
       });
       if (headerResolved) {
-        sendHttpBodyDelta(params.socket, {
-          requestId: params.requestId,
-          seq: lastBodySeq + 1,
-          deltaBase64: "",
-          done: true,
-          error: message,
-        });
+        if (params.notifications.isOpen()) {
+          params.notifications.send("http/request/bodyDelta", {
+            requestId: params.requestId,
+            seq: lastBodySeq + 1,
+            deltaBase64: "",
+            done: true,
+            error: message,
+          });
+        }
         return;
       }
       reject(new Error(message));
     };
-    params.child.stdout.on("data", (chunk: Buffer) => {
-      stdoutBuffer += chunk.toString("utf8");
+    params.child.stdout.setEncoding("utf8");
+    params.child.stdout.on("data", (chunk: string) => {
+      stdoutBuffer += chunk;
       let newline = stdoutBuffer.indexOf("\n");
       while (newline >= 0) {
         const line = stdoutBuffer.slice(0, newline).trim();
@@ -224,13 +230,15 @@ function readStreamingSandboxHttpResponse(params: {
             } else if (type === "bodyDelta") {
               const seq = requireNumber(message.seq, "http body sequence");
               lastBodySeq = Math.max(lastBodySeq, seq);
-              sendHttpBodyDelta(params.socket, {
-                requestId: params.requestId,
-                seq,
-                deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
-                done: message.done === true,
-                error: typeof message.error === "string" ? message.error : null,
-              });
+              if (params.notifications.isOpen()) {
+                params.notifications.send("http/request/bodyDelta", {
+                  requestId: params.requestId,
+                  seq,
+                  deltaBase64: typeof message.deltaBase64 === "string" ? message.deltaBase64 : "",
+                  done: message.done === true,
+                  error: typeof message.error === "string" ? message.error : null,
+                });
+              }
             }
           } catch (error) {
             fail(error instanceof Error ? error.message : String(error), null);
@@ -239,20 +247,21 @@ function readStreamingSandboxHttpResponse(params: {
         newline = stdoutBuffer.indexOf("\n");
       }
       if (stdoutBuffer.length > SANDBOX_HTTP_STREAM_LINE_MAX_CHARS) {
-        params.child.kill("SIGKILL");
         fail(
           `sandbox http/request produced an unterminated stdout line longer than ${SANDBOX_HTTP_STREAM_LINE_MAX_CHARS} characters`,
           null,
         );
       }
     });
-    params.child.stderr.on("data", (chunk: Buffer) => {
-      stderr = `${stderr}${chunk.toString("utf8")}`.slice(-4096);
+    params.child.stderr.setEncoding("utf8");
+    params.child.stderr.on("data", (chunk: string) => {
+      stderr = sliceUtf16Safe(`${stderr}${chunk}`, -4096);
     });
     params.child.once("error", (error) => {
       // ChildProcess error can precede close while the helper is still alive.
       // Keep its backend lease until close provides the terminal exit state.
       childFailure ??= error.message;
+      params.lifecycle.failed = true;
     });
     params.child.once("close", (code) => {
       const exitCode = code ?? 1;
@@ -264,10 +273,8 @@ function readStreamingSandboxHttpResponse(params: {
         return;
       }
       if (exitCode === 0) {
-        void finalize("completed", exitCode).catch((error: unknown) => {
-          embeddedAgentLog.warn("codex sandbox http/request finalize failed", { error });
-        });
         if (!headerResolved) {
+          params.lifecycle.failed = true;
           reject(new Error("sandbox http/request exited before returning headers"));
         }
         return;
@@ -402,9 +409,40 @@ def assert_url_allowed(url):
     PINNED_ADDRESSES[hostname] = sorted(addresses)
 
 class GuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    def __init__(self, redirect_policy):
+        self.redirect_policy = redirect_policy
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
+        if self.redirect_policy == "stop":
+            return None
         assert_url_allowed(newurl)
-        return super().redirect_request(req, fp, code, msg, headers, newurl)
+        method = req.get_method()
+        drop_body = code == 303 or (code in (301, 302) and method == "POST")
+        next_headers = dict(req.headers)
+        if drop_body:
+            if method != "HEAD":
+                method = "GET"
+            for name in ("content-type", "content-length", "content-encoding", "transfer-encoding"):
+                next_headers.pop(name.capitalize(), None)
+        redirected = urllib.request.Request(
+            newurl,
+            data=None if drop_body else req.data,
+            headers=next_headers,
+            method=method,
+            origin_req_host=req.origin_req_host,
+            unverifiable=True,
+        )
+        previous = urllib.parse.urlsplit(req.full_url)
+        target = urllib.parse.urlsplit(newurl)
+        previous_port = previous.port or (443 if previous.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        if (previous.scheme, previous.hostname, previous_port) != (
+            target.scheme, target.hostname, target_port
+        ):
+            # Match Codex's route-aware client: cross-origin hops never inherit secrets.
+            for name in ("authorization", "cookie", "proxy-authorization", "www-authenticate", "cookie2"):
+                redirected.remove_header(name.capitalize())
+        return redirected
 
 def pinned_getaddrinfo(original_getaddrinfo):
     def getaddrinfo(host, port, family=0, type=0, proto=0, flags=0):
@@ -460,7 +498,8 @@ def main():
     timeout = None
     if isinstance(timeout_ms, (int, float)) and timeout_ms > 0:
         timeout = timeout_ms / 1000
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), GuardedRedirectHandler)
+    redirect_handler = GuardedRedirectHandler(input_data.get("redirectPolicy", "follow"))
+    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), redirect_handler)
     original_getaddrinfo = socket.getaddrinfo
     socket.getaddrinfo = pinned_getaddrinfo(original_getaddrinfo)
     try:
@@ -476,31 +515,3 @@ if __name__ == "__main__":
 PY
 python3 "$tmp"
 `.trim();
-
-function sendHttpBodyDelta(
-  socket: WebSocket,
-  params: {
-    requestId: string;
-    seq: number;
-    deltaBase64: string;
-    done: boolean;
-    error?: string | null;
-  },
-): void {
-  if (socket.readyState !== 1) {
-    return;
-  }
-  socket.send(
-    JSON.stringify({
-      jsonrpc: "2.0",
-      method: "http/request/bodyDelta",
-      params: {
-        requestId: params.requestId,
-        seq: params.seq,
-        deltaBase64: params.deltaBase64,
-        done: params.done,
-        error: params.error ?? null,
-      },
-    }),
-  );
-}

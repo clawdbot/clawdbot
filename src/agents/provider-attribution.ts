@@ -1,18 +1,16 @@
-/**
- * Provider endpoint attribution and request capability resolver.
- *
- * Classifies provider routes so transports know which attribution headers, payload features, and endpoint policies apply.
- */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
-  normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { normalizeTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
-import { listOpenClawPluginManifestMetadata } from "../plugins/manifest-metadata-scan.js";
-import { listOfficialExternalProviderEndpointManifests } from "../plugins/official-external-provider-endpoints.js";
+import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-snapshot.js";
+import type {
+  PluginManifestProviderEndpoint,
+  PluginManifestProviderRequestProvider,
+} from "../plugins/manifest.js";
+import { normalizePluginProviderBaseUrl } from "../plugins/plugin-metadata-provider-facts.js";
+import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
 import { asBoolean } from "../utils/boolean.js";
 import type { RuntimeVersionEnv } from "../version.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
@@ -60,6 +58,7 @@ export type ProviderEndpointClass =
   | "groq-native"
   | "meta-native"
   | "mistral-public"
+  | "minimax-native"
   | "moonshot-native"
   | "modelstudio-native"
   | "nvidia-native"
@@ -91,6 +90,7 @@ export type ProviderRequestPolicyInput = {
   baseUrl?: string | null;
   transport?: ProviderRequestTransport;
   capability?: ProviderRequestCapability;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 };
 
 /** Provider policy facts consumed by transports before constructing a request. */
@@ -154,59 +154,9 @@ const OPENAI_RESPONSES_APIS = new Set([
   "openai-chatgpt-responses",
 ]);
 const OPENAI_RESPONSES_PROVIDERS = new Set(["openai", "azure-openai", "azure-openai-responses"]);
-const MANIFEST_PROVIDER_ENDPOINT_CLASSES = new Set<ProviderEndpointClass>([
-  "anthropic-public",
-  "cerebras-native",
-  "chutes-native",
-  "deepseek-native",
-  "github-copilot-native",
-  "groq-native",
-  "meta-native",
-  "mistral-public",
-  "moonshot-native",
-  "modelstudio-native",
-  "nvidia-native",
-  "openai-public",
-  "openai",
-  "opencode-native",
-  "azure-openai",
-  "openrouter",
-  "xai-native",
-  "xiaomi-native",
-  "zai-native",
-  "google-generative-ai",
-  "google-vertex",
-]);
-type ManifestProviderEndpointCacheEntry = {
-  endpointClass: ProviderEndpointClass;
-  hosts: readonly string[];
-  hostSuffixes: readonly string[];
-  normalizedBaseUrls: readonly string[];
-  googleVertexRegion?: string;
-  googleVertexRegionHostSuffix?: string;
-};
-type ManifestProviderRequestCacheEntry = {
-  family?: string;
-  compatibilityFamily?: ProviderRequestCompatibilityFamily;
-  supportsOpenAICompletionsStreamingUsageCompat?: boolean;
-};
-let manifestProviderEndpointCache: ManifestProviderEndpointCacheEntry[] | null = null;
-let manifestProviderRequestCache: Map<string, ManifestProviderRequestCacheEntry> | null = null;
 
 function formatOpenClawUserAgent(version: string): string {
   return `${OPENCLAW_ATTRIBUTION_ORIGINATOR}/${version}`;
-}
-
-function tryParseHostname(value: string): string | undefined {
-  try {
-    return normalizeOptionalLowercaseString(new URL(value).hostname);
-  } catch {
-    return undefined;
-  }
-}
-
-function isSchemelessHostnameCandidate(value: string): boolean {
-  return /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(value);
 }
 
 function resolveUrlHostname(value: unknown): string | undefined {
@@ -214,165 +164,45 @@ function resolveUrlHostname(value: unknown): string | undefined {
   if (!trimmed) {
     return undefined;
   }
-  const parsedHostname = tryParseHostname(trimmed);
-  if (parsedHostname) {
-    return parsedHostname;
-  }
-  if (!isSchemelessHostnameCandidate(trimmed)) {
-    return undefined;
-  }
-  return tryParseHostname(`https://${trimmed}`);
-}
-
-function normalizeComparableBaseUrl(value: string): string | undefined {
-  const trimmed = normalizeOptionalString(value);
-  if (!trimmed) {
-    return undefined;
-  }
-
-  const parsedValue =
-    tryParseHostname(trimmed) || !isSchemelessHostnameCandidate(trimmed)
-      ? trimmed
-      : `https://${trimmed}`;
+  const candidate = /^[a-z0-9.[\]-]+(?::\d+)?(?:[/?#].*)?$/i.test(trimmed)
+    ? `https://${trimmed}`
+    : trimmed;
   try {
-    const url = new URL(parsedValue);
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return undefined;
-    }
-    url.hash = "";
-    url.search = "";
-    return normalizeOptionalLowercaseString(url.toString().replace(/\/+$/, ""));
+    return normalizeOptionalLowercaseString(new URL(candidate).hostname);
   } catch {
     return undefined;
   }
 }
 
-function isManifestProviderEndpointClass(value: string): value is ProviderEndpointClass {
-  return MANIFEST_PROVIDER_ENDPOINT_CLASSES.has(value as ProviderEndpointClass);
+type ProviderMetadataOwners = {
+  providerEndpoints: readonly PluginManifestProviderEndpoint[];
+  providerRequests: ReadonlyMap<string, PluginManifestProviderRequestProvider>;
+};
+
+function resolveProviderMetadataOwners(
+  prepared?: PluginMetadataSnapshotOwnerMaps,
+): ProviderMetadataOwners {
+  const owners =
+    prepared ??
+    getCurrentPluginMetadataSnapshot({
+      allowWorkspaceScopedSnapshot: true,
+    })?.owners ??
+    loadPluginMetadataSnapshot({ config: {} }).owners;
+  return {
+    providerEndpoints: owners.providerEndpoints ?? [],
+    providerRequests: owners.providerRequests ?? new Map(),
+  };
 }
 
-function readManifestProviderEndpoints(
-  manifest: Record<string, unknown>,
-): ManifestProviderEndpointCacheEntry[] {
-  if (!Array.isArray(manifest.providerEndpoints)) {
-    return [];
-  }
-  const entries: ManifestProviderEndpointCacheEntry[] = [];
-  for (const rawEndpoint of manifest.providerEndpoints) {
-    if (!isRecord(rawEndpoint)) {
-      continue;
-    }
-    const endpointClassRaw = normalizeOptionalString(rawEndpoint.endpointClass);
-    if (!endpointClassRaw || !isManifestProviderEndpointClass(endpointClassRaw)) {
-      continue;
-    }
-    entries.push({
-      endpointClass: endpointClassRaw,
-      hosts: normalizeTrimmedStringList(rawEndpoint.hosts).map((host) => host.toLowerCase()),
-      hostSuffixes: normalizeTrimmedStringList(rawEndpoint.hostSuffixes).map((host) =>
-        host.toLowerCase(),
-      ),
-      normalizedBaseUrls: normalizeTrimmedStringList(rawEndpoint.baseUrls)
-        .map((baseUrl) => normalizeComparableBaseUrl(baseUrl))
-        .filter((baseUrl): baseUrl is string => baseUrl !== undefined),
-      ...(normalizeOptionalString(rawEndpoint.googleVertexRegion)
-        ? { googleVertexRegion: normalizeOptionalString(rawEndpoint.googleVertexRegion) }
-        : {}),
-      ...(normalizeOptionalString(rawEndpoint.googleVertexRegionHostSuffix)
-        ? {
-            googleVertexRegionHostSuffix: normalizeOptionalString(
-              rawEndpoint.googleVertexRegionHostSuffix,
-            ),
-          }
-        : {}),
-    });
-  }
-  return entries;
-}
-
-function readManifestProviderRequests(
-  manifest: Record<string, unknown>,
-): Array<[string, ManifestProviderRequestCacheEntry]> {
-  const providerRequest = manifest.providerRequest;
-  if (!isRecord(providerRequest) || !isRecord(providerRequest.providers)) {
-    return [];
-  }
-  const entries: Array<[string, ManifestProviderRequestCacheEntry]> = [];
-  for (const [providerRaw, requestRaw] of Object.entries(providerRequest.providers)) {
-    if (!isRecord(requestRaw)) {
-      continue;
-    }
-    const provider = normalizeLowercaseStringOrEmpty(providerRaw);
-    if (!provider) {
-      continue;
-    }
-    const compatibilityFamily =
-      normalizeOptionalString(requestRaw.compatibilityFamily) === "moonshot"
-        ? "moonshot"
-        : undefined;
-    const supportsStreamingUsage = isRecord(requestRaw.openAICompletions)
-      ? requestRaw.openAICompletions.supportsStreamingUsage
-      : undefined;
-    entries.push([
-      provider,
-      {
-        ...(normalizeOptionalString(requestRaw.family)
-          ? { family: normalizeOptionalString(requestRaw.family) }
-          : {}),
-        ...(compatibilityFamily ? { compatibilityFamily } : {}),
-        ...(typeof supportsStreamingUsage === "boolean"
-          ? { supportsOpenAICompletionsStreamingUsageCompat: supportsStreamingUsage }
-          : {}),
-      },
-    ]);
-  }
-  return entries;
-}
-
-function collectManifestProviderEndpoints(): ManifestProviderEndpointCacheEntry[] {
-  const entries: ManifestProviderEndpointCacheEntry[] = [];
-  for (const { manifest } of listOpenClawPluginManifestMetadata()) {
-    entries.push(...readManifestProviderEndpoints(manifest));
-  }
-  // Externalized official provider plugins are excluded from dist builds, so
-  // their manifests are invisible unless installed. The bundled catalog keeps
-  // their endpoint classes resolvable: users can point a generic provider key
-  // at DashScope/Moonshot/... and still need native request policy. Matching
-  // is first-wins, so installed/bundled manifests stay authoritative.
-  for (const manifest of listOfficialExternalProviderEndpointManifests()) {
-    entries.push(...readManifestProviderEndpoints(manifest));
-  }
-  return entries;
-}
-
-function collectManifestProviderRequests(): Map<string, ManifestProviderRequestCacheEntry> {
-  const entries = new Map<string, ManifestProviderRequestCacheEntry>();
-  for (const { manifest } of listOpenClawPluginManifestMetadata()) {
-    for (const [provider, request] of readManifestProviderRequests(manifest)) {
-      entries.set(provider, request);
-    }
-  }
-  return entries;
-}
-
-function loadManifestProviderEndpointCache(): ManifestProviderEndpointCacheEntry[] {
-  if (!manifestProviderEndpointCache) {
-    manifestProviderEndpointCache = collectManifestProviderEndpoints();
-  }
-  return manifestProviderEndpointCache;
-}
-
-function loadManifestProviderRequestCache(): Map<string, ManifestProviderRequestCacheEntry> {
-  if (!manifestProviderRequestCache) {
-    manifestProviderRequestCache = collectManifestProviderRequests();
-  }
-  return manifestProviderRequestCache;
-}
-
-function resolveManifestProviderRequest(
-  provider: string | undefined,
-): ManifestProviderRequestCacheEntry | undefined {
-  return provider ? loadManifestProviderRequestCache().get(provider) : undefined;
+function resolveManifestProviderRequest(params: {
+  provider: string | undefined;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
+}): PluginManifestProviderRequestProvider | undefined {
+  return params.provider
+    ? resolveProviderMetadataOwners(params.providerMetadataOwners).providerRequests.get(
+        params.provider,
+      )
+    : undefined;
 }
 
 function hostMatchesSuffix(host: string, suffix: string): boolean {
@@ -385,7 +215,7 @@ function hostMatchesSuffix(host: string, suffix: string): boolean {
 }
 
 function buildManifestEndpointResolution(
-  endpoint: ManifestProviderEndpointCacheEntry,
+  endpoint: PluginManifestProviderEndpoint,
   host: string,
 ): ProviderEndpointResolution {
   const regionSuffix = endpoint.googleVertexRegionHostSuffix;
@@ -393,7 +223,7 @@ function buildManifestEndpointResolution(
     endpoint.googleVertexRegion ??
     (regionSuffix && host.endsWith(regionSuffix) ? host.slice(0, -regionSuffix.length) : undefined);
   return {
-    endpointClass: endpoint.endpointClass,
+    endpointClass: endpoint.endpointClass as ProviderEndpointClass,
     hostname: host,
     ...(googleVertexRegion ? { googleVertexRegion } : {}),
   };
@@ -402,18 +232,17 @@ function buildManifestEndpointResolution(
 function resolveManifestProviderEndpoint(params: {
   host: string;
   normalizedBaseUrl?: string;
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps;
 }): ProviderEndpointResolution | undefined {
-  for (const endpoint of loadManifestProviderEndpointCache()) {
-    if (endpoint.hosts.includes(params.host)) {
+  for (const endpoint of resolveProviderMetadataOwners(params.providerMetadataOwners)
+    .providerEndpoints) {
+    if ((endpoint.hosts ?? []).includes(params.host)) {
       return buildManifestEndpointResolution(endpoint, params.host);
     }
-    if (endpoint.hostSuffixes.some((suffix) => hostMatchesSuffix(params.host, suffix))) {
+    if ((endpoint.hostSuffixes ?? []).some((suffix) => hostMatchesSuffix(params.host, suffix))) {
       return buildManifestEndpointResolution(endpoint, params.host);
     }
-    if (
-      params.normalizedBaseUrl &&
-      endpoint.normalizedBaseUrls.includes(params.normalizedBaseUrl)
-    ) {
+    if (params.normalizedBaseUrl && (endpoint.baseUrls ?? []).includes(params.normalizedBaseUrl)) {
       return buildManifestEndpointResolution(endpoint, params.host);
     }
   }
@@ -431,6 +260,7 @@ function isLocalEndpointHost(host: string): boolean {
 
 export function resolveProviderEndpoint(
   baseUrl: string | null | undefined,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
 ): ProviderEndpointResolution {
   if (typeof baseUrl !== "string" || !baseUrl.trim()) {
     return { endpointClass: "default" };
@@ -440,8 +270,12 @@ export function resolveProviderEndpoint(
   if (!host) {
     return { endpointClass: "invalid" };
   }
-  const normalizedBaseUrl = normalizeComparableBaseUrl(baseUrl);
-  const manifestEndpoint = resolveManifestProviderEndpoint({ host, normalizedBaseUrl });
+  const normalizedBaseUrl = normalizePluginProviderBaseUrl(baseUrl);
+  const manifestEndpoint = resolveManifestProviderEndpoint({
+    host,
+    normalizedBaseUrl,
+    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
+  });
   if (manifestEndpoint) {
     return manifestEndpoint;
   }
@@ -451,8 +285,14 @@ export function resolveProviderEndpoint(
   return { endpointClass: "custom", hostname: host };
 }
 
-function resolveKnownProviderFamily(provider: string | undefined): string {
-  const manifestFamily = resolveManifestProviderRequest(provider)?.family;
+function resolveKnownProviderFamily(
+  provider: string | undefined,
+  providerMetadataOwners?: PluginMetadataSnapshotOwnerMaps,
+): string {
+  const manifestFamily = resolveManifestProviderRequest({
+    provider,
+    ...(providerMetadataOwners ? { providerMetadataOwners } : {}),
+  })?.family;
   if (manifestFamily) {
     return manifestFamily;
   }
@@ -647,7 +487,7 @@ export function resolveProviderRequestPolicy(
 ): ProviderRequestPolicyResolution {
   const provider = normalizeProviderId(input.provider ?? "");
   const policy = resolveProviderAttributionPolicy(provider, env);
-  const endpointResolution = resolveProviderEndpoint(input.baseUrl);
+  const endpointResolution = resolveProviderEndpoint(input.baseUrl, input.providerMetadataOwners);
   const endpointClass = endpointResolution.endpointClass;
   const usesConfiguredBaseUrl = endpointClass !== "default";
   const usesKnownNativeOpenAIEndpoint =
@@ -695,7 +535,10 @@ export function resolveProviderRequestPolicy(
     policy: attributionPolicy ?? policy,
     endpointClass,
     usesConfiguredBaseUrl,
-    knownProviderFamily: resolveKnownProviderFamily(provider || undefined),
+    knownProviderFamily: resolveKnownProviderFamily(
+      provider || undefined,
+      input.providerMetadataOwners,
+    ),
     attributionProvider,
     attributionHeaders,
     allowsHiddenAttribution:
@@ -728,6 +571,7 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "groq-native" ||
     endpointClass === "meta-native" ||
     endpointClass === "mistral-public" ||
+    endpointClass === "minimax-native" ||
     endpointClass === "moonshot-native" ||
     endpointClass === "modelstudio-native" ||
     endpointClass === "nvidia-native" ||
@@ -742,7 +586,12 @@ export function resolveProviderRequestCapabilities(
     endpointClass === "google-generative-ai" ||
     endpointClass === "google-vertex";
 
-  const manifestProviderRequest = resolveManifestProviderRequest(provider);
+  const manifestProviderRequest = resolveManifestProviderRequest({
+    provider,
+    ...(input.providerMetadataOwners
+      ? { providerMetadataOwners: input.providerMetadataOwners }
+      : {}),
+  });
   const compatibilityFamily = manifestProviderRequest?.compatibilityFamily;
 
   const isResponsesApi = isOpenAIResponsesApi(api);
@@ -803,7 +652,7 @@ export function resolveProviderRequestCapabilities(
     supportsNativeStreamingUsageCompat:
       endpointClass === "moonshot-native" || endpointClass === "modelstudio-native",
     supportsOpenAICompletionsStreamingUsageCompat:
-      manifestProviderRequest?.supportsOpenAICompletionsStreamingUsageCompat === true,
+      manifestProviderRequest?.openAICompletions?.supportsStreamingUsage === true,
     compatibilityFamily,
   };
 }
@@ -862,4 +711,3 @@ export function describeProviderRequestRoutingSummary(
     `policy=${routingPolicy}`,
   ].join(" ");
 }
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

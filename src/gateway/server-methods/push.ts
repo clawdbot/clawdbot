@@ -1,6 +1,9 @@
 // Push gateway methods send APNs/web-push test notifications and manage web
 // push subscriptions/VAPID public-key access for UI clients.
-import { normalizeStringifiedOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  normalizeStringifiedOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import {
   ErrorCodes,
   errorShape,
@@ -25,18 +28,13 @@ import {
   registerWebPushSubscription,
   resolveVapidKeys,
 } from "../../infra/push-web.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
-import { normalizeTrimmedString } from "./record-shared.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 export const pushHandlers: GatewayRequestHandlers = {
   "push.test": async ({ params, respond, context }) => {
-    if (!validatePushTestParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.test",
-        validator: validatePushTestParams,
-      });
+    if (!assertValidParams(params, validatePushTestParams, "push.test", respond)) {
       return;
     }
 
@@ -46,8 +44,8 @@ export const pushHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const title = normalizeTrimmedString(params.title) ?? "OpenClaw";
-    const body = normalizeTrimmedString(params.body) ?? `Push test for node ${nodeId}`;
+    const title = normalizeOptionalString(params.title) ?? "OpenClaw";
+    const body = normalizeOptionalString(params.body) ?? `Push test for node ${nodeId}`;
 
     await respondUnavailableOnThrow(respond, async () => {
       const registration = await loadApnsRegistration(nodeId);
@@ -127,12 +125,14 @@ export const pushHandlers: GatewayRequestHandlers = {
   },
 
   "push.web.vapidPublicKey": async ({ params, respond }) => {
-    if (!validateWebPushVapidPublicKeyParams(params)) {
-      respondInvalidParams({
+    if (
+      !assertValidParams(
+        params,
+        validateWebPushVapidPublicKeyParams,
+        "push.web.vapidPublicKey",
         respond,
-        method: "push.web.vapidPublicKey",
-        validator: validateWebPushVapidPublicKeyParams,
-      });
+      )
+    ) {
       return;
     }
 
@@ -143,12 +143,7 @@ export const pushHandlers: GatewayRequestHandlers = {
   },
 
   "push.web.subscribe": async ({ params, respond }) => {
-    if (!validateWebPushSubscribeParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.web.subscribe",
-        validator: validateWebPushSubscribeParams,
-      });
+    if (!assertValidParams(params, validateWebPushSubscribeParams, "push.web.subscribe", respond)) {
       return;
     }
 
@@ -162,12 +157,9 @@ export const pushHandlers: GatewayRequestHandlers = {
   },
 
   "push.web.unsubscribe": async ({ params, respond }) => {
-    if (!validateWebPushUnsubscribeParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.web.unsubscribe",
-        validator: validateWebPushUnsubscribeParams,
-      });
+    if (
+      !assertValidParams(params, validateWebPushUnsubscribeParams, "push.web.unsubscribe", respond)
+    ) {
       return;
     }
 
@@ -178,17 +170,12 @@ export const pushHandlers: GatewayRequestHandlers = {
   },
 
   "push.web.test": async ({ params, respond }) => {
-    if (!validateWebPushTestParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "push.web.test",
-        validator: validateWebPushTestParams,
-      });
+    if (!assertValidParams(params, validateWebPushTestParams, "push.web.test", respond)) {
       return;
     }
 
-    const title = normalizeTrimmedString(params.title) ?? "OpenClaw";
-    const body = normalizeTrimmedString(params.body) ?? "Web push test notification";
+    const title = normalizeOptionalString(params.title) ?? "OpenClaw";
+    const body = normalizeOptionalString(params.body) ?? "Web push test notification";
 
     await respondUnavailableOnThrow(respond, async () => {
       const results = await broadcastWebPush({ title, body });
@@ -197,6 +184,16 @@ export const pushHandlers: GatewayRequestHandlers = {
           false,
           undefined,
           errorShape(ErrorCodes.INVALID_REQUEST, "no web push subscriptions registered"),
+        );
+        return;
+      }
+      if (!results.some((result) => result.ok)) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.UNAVAILABLE, "all web push deliveries failed", {
+            details: { results },
+          }),
         );
         return;
       }

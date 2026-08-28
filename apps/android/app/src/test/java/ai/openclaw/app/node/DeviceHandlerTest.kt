@@ -3,6 +3,7 @@ package ai.openclaw.app.node
 import android.Manifest
 import android.app.Application
 import android.content.pm.ApplicationInfo
+import android.content.pm.PackageManager
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.boolean
@@ -159,6 +160,56 @@ class DeviceHandlerTest {
   }
 
   @Test
+  fun handleDevicePermissions_derivesCompositeStatesFromCanonicalSnapshot() {
+    val app = appContext()
+    shadowOf(app.packageManager).setSystemFeature(PackageManager.FEATURE_TELEPHONY, true)
+    val snapshot =
+      emptyPermissionSnapshot().copy(
+        smsSend = true,
+        contactsRead = true,
+        calendarRead = true,
+        calendarWrite = true,
+      )
+    val handler =
+      DeviceHandler.forTesting(
+        appContext = app,
+        appSource = FakeDeviceAppSource(emptyList()),
+        smsEnabled = true,
+        permissionSnapshot = { snapshot },
+      )
+
+    val payload = handler.handleDevicePermissions(null).payloadJson
+
+    assertEquals("granted", permissionStatus(payload, "sms"))
+    assertEquals("denied", permissionStatus(payload, "contacts"))
+    assertEquals("granted", permissionStatus(payload, "calendar"))
+    val smsCapabilities =
+      parsePayload(payload)
+        .getValue("permissions")
+        .jsonObject
+        .getValue("sms")
+        .jsonObject
+        .getValue("capabilities")
+        .jsonObject
+    assertEquals(
+      "granted",
+      smsCapabilities
+        .getValue("send")
+        .jsonObject
+        .getValue("status")
+        .jsonPrimitive.content,
+    )
+    assertEquals(
+      "denied",
+      smsCapabilities
+        .getValue("read")
+        .jsonObject
+        .getValue("status")
+        .jsonPrimitive.content,
+    )
+  }
+
+  @Test
   fun smsTopLevelStatusTreatsSendOnlyPartialGrantAsGranted() {
     assertTrue(
       DeviceHandler.hasAnySmsCapability(
@@ -300,6 +351,26 @@ class DeviceHandlerTest {
       assertEquals("$key read-write", "granted", permissionStatus(handler.handleDevicePermissions(null).payloadJson, key))
     }
   }
+
+  private fun emptyPermissionSnapshot(): AndroidPermissionSnapshot =
+    AndroidPermissionSnapshot(
+      camera = false,
+      microphone = false,
+      location = false,
+      locationPrecise = false,
+      locationBackground = false,
+      smsSend = false,
+      smsRead = false,
+      notificationListener = false,
+      notifications = false,
+      photos = false,
+      contactsRead = false,
+      contactsWrite = false,
+      calendarRead = false,
+      calendarWrite = false,
+      callLog = false,
+      motion = false,
+    )
 
   @Test
   fun handleDeviceHealth_returnsExpectedShape() {

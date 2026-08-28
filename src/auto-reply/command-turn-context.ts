@@ -42,10 +42,15 @@ export type CommandTurnContextInput = {
   BodyForCommands?: unknown;
   RawBody?: unknown;
   Body?: unknown;
+  commandText?: unknown;
+  rawText?: unknown;
   BotUsername?: unknown;
 };
 
-function resolveCommandBody(input: CommandTurnContextInput): string | undefined {
+export function resolveCommandBody(input: CommandTurnContextInput): string | undefined {
+  if (typeof input.commandText === "string") {
+    return input.commandText;
+  }
   return (
     normalizeOptionalString(input.CommandBody) ??
     normalizeOptionalString(input.BodyForCommands) ??
@@ -204,7 +209,7 @@ export function isExplicitCommandTurn(commandTurn: CommandTurnContext | undefine
   );
 }
 
-/** Resolves the target session override allowed only for native command invocations. */
+/** Resolves the target session override for trusted native or explicit steer command turns. */
 export function resolveCommandTurnTargetSessionKey(input: {
   CommandTurn?: CommandTurnContext;
   CommandSource?: unknown;
@@ -213,10 +218,16 @@ export function resolveCommandTurnTargetSessionKey(input: {
   BodyForCommands?: unknown;
   RawBody?: unknown;
   Body?: unknown;
+  commandText?: unknown;
   CommandTargetSessionKey?: unknown;
 }): string | undefined {
+  const commandTurn = resolveCommandTurnContext(input);
+  const isExplicitTextSteer =
+    isAuthorizedTextSlashCommandTurn(commandTurn) &&
+    (commandTurn.commandName?.toLowerCase() === "steer" ||
+      commandTurn.commandName?.toLowerCase() === "tell");
   if (
-    !isNativeCommandTurn(resolveCommandTurnContext(input)) ||
+    (!isNativeCommandTurn(commandTurn) && !isExplicitTextSteer) ||
     typeof input.CommandTargetSessionKey !== "string"
   ) {
     return undefined;

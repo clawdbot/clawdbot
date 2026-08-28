@@ -8,8 +8,76 @@ const FULL_RELEASE_WORKFLOW = "Full Release Validation";
 const FULL_RELEASE_WORKFLOW_PATH = ".github/workflows/full-release-validation.yml";
 const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const PINNED_BRANCH_PATTERN = /^release-ci\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
+const TRUSTED_RELEASE_PUBLISH_TAG_PATTERN =
+  /^refs\/tags\/release-publish\/([a-f0-9]{12})-[1-9][0-9]*$/u;
 const EXACT_TARGET_EVIDENCE_REUSE_POLICY = "exact-target-full-validation-v1";
 const CHANGELOG_ONLY_EVIDENCE_REUSE_POLICY = "changelog-only-release-v1";
+
+/** @param {unknown} value */
+function scalarString(value) {
+  if (
+    typeof value === "string" ||
+    typeof value === "number" ||
+    typeof value === "boolean" ||
+    typeof value === "bigint"
+  ) {
+    return String(value);
+  }
+  return "";
+}
+
+/** @param {unknown} value */
+function displayValue(value) {
+  if (value === null || value === undefined) {
+    return "<missing>";
+  }
+  const scalar = scalarString(value);
+  if (scalar) {
+    return scalar;
+  }
+  try {
+    return JSON.stringify(value) ?? "<unserializable>";
+  } catch {
+    return "<unserializable>";
+  }
+}
+
+/**
+ * @typedef {object} StrictReleaseEvidence
+ * @property {unknown} [schema]
+ * @property {unknown} [valid]
+ * @property {{ runId?: unknown, targetSha?: unknown }} [current]
+ * @property {{ runId?: unknown, targetSha?: unknown }} [root]
+ * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, rootRunId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
+ * @property {{ allRequiredSucceeded?: unknown }} [conclusions]
+ */
+/**
+ * @typedef {object} FullReleaseValidationManifest
+ * @property {unknown} [version]
+ * @property {unknown} [workflowName]
+ * @property {unknown} [runId]
+ * @property {unknown} [runAttempt]
+ * @property {unknown} [workflowRef]
+ * @property {unknown} [workflowSha]
+ * @property {unknown} [workflowFullRef]
+ * @property {unknown} [workflowRefType]
+ * @property {unknown} [targetRef]
+ * @property {unknown} [targetSha]
+ * @property {{ changedPaths?: unknown, evidenceSha?: unknown, policy?: unknown, runId?: unknown, selectedRunId?: unknown }} [evidenceReuse]
+ */
+/**
+ * @typedef {object} FullReleaseValidationEvidenceOptions
+ * @property {unknown} run
+ * @property {FullReleaseValidationManifest} manifest
+ * @property {string} expectedRepository
+ * @property {string | number} expectedRunId
+ * @property {string} expectedTargetSha
+ * @property {string} [expectedTrustedWorkflowFullRef]
+ * @property {string} [expectedTrustedWorkflowSha]
+ * @property {string} [expectedWorkflowBranch]
+ * @property {(sha: string) => boolean} [isTrustedMainAncestor]
+ * @property {(params: { repository: string, runId: string, targetSha: string }) => StrictReleaseEvidence} [validateEvidenceReuseStrictly]
+ */
 
 function normalizeWorkflowPathRef(ref) {
   if (!ref || ref.startsWith("refs/")) {
@@ -43,17 +111,35 @@ export function isShaPinnedReleaseValidationBranch(branch) {
   return PINNED_BRANCH_PATTERN.test(branch ?? "");
 }
 
+/** @param {FullReleaseValidationEvidenceOptions} options */
 export function validateFullReleaseValidationEvidence({
   run: rawRun,
   manifest,
   expectedRepository,
   expectedRunId,
   expectedTargetSha,
+  expectedTrustedWorkflowFullRef,
+  expectedTrustedWorkflowSha,
   expectedWorkflowBranch,
   isTrustedMainAncestor,
   validateEvidenceReuseStrictly,
 }) {
   const run = normalizeFullReleaseValidationRun(rawRun);
+  const trustedWorkflowFullRef = expectedTrustedWorkflowFullRef ?? "refs/heads/main";
+  const protectedTag = TRUSTED_RELEASE_PUBLISH_TAG_PATTERN.exec(trustedWorkflowFullRef);
+  if (protectedTag) {
+    if (!SHA_PATTERN.test(expectedTrustedWorkflowSha ?? "")) {
+      throw new Error("Protected release-publish evidence requires an exact trusted workflow SHA.");
+    }
+    if (expectedTrustedWorkflowSha.slice(0, 12) !== protectedTag[1]) {
+      throw new Error("Protected release-publish tag does not match its trusted workflow SHA.");
+    }
+  } else if (
+    !trustedWorkflowFullRef.startsWith("refs/heads/") ||
+    trustedWorkflowFullRef.startsWith("refs/heads/release-publish/")
+  ) {
+    throw new Error("Trusted release-publish workflow ref must be an exact protected tag.");
+  }
   const checks = [
     ["databaseId", String(expectedRunId)],
     ["workflowName", FULL_RELEASE_WORKFLOW],
@@ -88,7 +174,7 @@ export function validateFullReleaseValidationEvidence({
 
   if (manifest.version !== 3) {
     throw new Error(
-      `Full release validation manifest must use version 3, got ${manifest.version}.`,
+      `Full release validation manifest must use version 3, got ${displayValue(manifest.version)}.`,
     );
   }
   const manifestChecks = [
@@ -102,15 +188,20 @@ export function validateFullReleaseValidationEvidence({
     ["targetSha", expectedTargetSha],
   ];
   for (const [key, expected] of manifestChecks) {
-    if (String(manifest[key] ?? "") !== expected) {
+    if (scalarString(manifest[key]) !== expected) {
       throw new Error(
-        `Full release validation manifest ${key} mismatch: expected ${expected}, got ${manifest[key] ?? "<missing>"}.`,
+        `Full release validation manifest ${key} mismatch: expected ${expected}, got ${displayValue(manifest[key])}.`,
       );
     }
   }
 
   const pinnedMatch = PINNED_BRANCH_PATTERN.exec(run.headBranch ?? "");
   if (!pinnedMatch) {
+    if (protectedTag) {
+      throw new Error(
+        "Protected-tag release evidence must use a canonical release-ci producer branch.",
+      );
+    }
     if (run.headBranch?.startsWith("release-ci/")) {
       throw new Error(
         `Referenced full release validation run ${expectedRunId} has untrusted head branch ${run.headBranch}.`,
@@ -136,8 +227,16 @@ export function validateFullReleaseValidationEvidence({
   }
   if (manifest.targetRef !== expectedTargetSha) {
     throw new Error(
-      `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${manifest.targetRef ?? "<missing>"}.`,
+      `SHA-pinned validation target ref mismatch: expected ${expectedTargetSha}, got ${displayValue(manifest.targetRef)}.`,
     );
+  }
+  if (protectedTag) {
+    if (run.headSha !== expectedTrustedWorkflowSha) {
+      throw new Error(
+        `Protected-tag release evidence workflow SHA ${run.headSha} does not match trusted tooling ${expectedTrustedWorkflowSha}.`,
+      );
+    }
+    return { run, source: "sha-pinned-protected-tag" };
   }
   if (!isTrustedMainAncestor?.(run.headSha)) {
     throw new Error(
@@ -162,8 +261,8 @@ export function validateFullReleaseValidationEvidence({
       typeof reuse !== "object" ||
       Array.isArray(reuse) ||
       (!exactTarget && !changelogOnly) ||
-      !/^[1-9][0-9]*$/u.test(String(reuse.runId ?? "")) ||
-      !/^[1-9][0-9]*$/u.test(String(reuse.selectedRunId ?? ""))
+      !/^[1-9][0-9]*$/u.test(scalarString(reuse.runId)) ||
+      !/^[1-9][0-9]*$/u.test(scalarString(reuse.selectedRunId))
     ) {
       throw new Error("SHA-pinned validation evidence reuse is invalid.");
     }
@@ -178,15 +277,16 @@ export function validateFullReleaseValidationEvidence({
     if (
       strictEvidence?.schema !== "openclaw.release-validation-evidence/v3" ||
       strictEvidence.valid !== true ||
-      String(strictEvidence.current?.runId ?? "") !== String(expectedRunId) ||
+      scalarString(strictEvidence.current?.runId) !== String(expectedRunId) ||
       strictEvidence.current?.targetSha !== expectedTargetSha ||
       strictEvidence.root?.targetSha !== reuse.evidenceSha ||
       strictEvidence.evidenceReuse?.evidenceSha !== reuse.evidenceSha ||
       strictEvidence.evidenceReuse?.policy !== reuse.policy ||
       JSON.stringify(strictEvidence.evidenceReuse?.changedPaths) !==
         JSON.stringify(reuse.changedPaths) ||
-      String(strictEvidence.evidenceReuse?.rootRunId ?? "") !== String(reuse.runId) ||
-      String(strictEvidence.evidenceReuse?.selectedRunId ?? "") !== String(reuse.selectedRunId) ||
+      scalarString(strictEvidence.evidenceReuse?.rootRunId) !== scalarString(reuse.runId) ||
+      scalarString(strictEvidence.evidenceReuse?.selectedRunId) !==
+        scalarString(reuse.selectedRunId) ||
       strictEvidence.conclusions?.allRequiredSucceeded !== true
     ) {
       throw new Error("SHA-pinned validation evidence reuse failed strict chain validation.");
@@ -195,11 +295,25 @@ export function validateFullReleaseValidationEvidence({
   return { run, source: "sha-pinned-main" };
 }
 
+/**
+ * @param {{
+ *   repository: string;
+ *   runId: string | number;
+ *   validatorFile?: string;
+ *   verifierSourceSha?: string;
+ *   trustedWorkflowFullRef?: string;
+ *   trustedWorkflowRef?: string;
+ *   trustedWorkflowSha?: string;
+ * }} params
+ */
 export function runStrictReleaseEvidenceValidation({
   repository,
   runId,
   validatorFile = fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url)),
   verifierSourceSha,
+  trustedWorkflowFullRef = "refs/heads/main",
+  trustedWorkflowRef = "main",
+  trustedWorkflowSha,
 }) {
   const verifierSourceArgs = verifierSourceSha
     ? ["--verifier-source-sha", verifierSourceSha, "--verifier-source-file", validatorFile]
@@ -213,8 +327,11 @@ export function runStrictReleaseEvidenceValidation({
       "--repo",
       repository,
       "--trusted-workflow-ref",
-      "main",
+      trustedWorkflowRef,
+      "--trusted-workflow-full-ref",
+      trustedWorkflowFullRef,
       "--json",
+      ...(trustedWorkflowSha ? ["--trusted-workflow-sha", trustedWorkflowSha] : []),
       ...verifierSourceArgs,
     ],
     { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
@@ -262,12 +379,17 @@ function main() {
     expectedRepository: process.env.GITHUB_REPOSITORY,
     expectedRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
     expectedTargetSha: process.env.EXPECTED_SHA,
+    expectedTrustedWorkflowFullRef: process.env.TRUSTED_WORKFLOW_FULL_REF,
+    expectedTrustedWorkflowSha: process.env.TRUSTED_WORKFLOW_SHA,
     expectedWorkflowBranch: process.env.EXPECTED_WORKFLOW_BRANCH,
     isTrustedMainAncestor: (sha) => gitIsAncestor(sha, trustedMainRef),
     validateEvidenceReuseStrictly: ({ repository, runId }) =>
       runStrictReleaseEvidenceValidation({
         repository,
         runId,
+        trustedWorkflowFullRef: process.env.TRUSTED_WORKFLOW_FULL_REF,
+        trustedWorkflowRef: process.env.TRUSTED_WORKFLOW_REF,
+        trustedWorkflowSha: process.env.TRUSTED_WORKFLOW_SHA,
         validatorFile:
           process.env.STRICT_VALIDATOR_FILE ??
           fileURLToPath(new URL("./release-ci-summary.mjs", import.meta.url)),

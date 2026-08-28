@@ -1,5 +1,6 @@
 import type { FastMode } from "@openclaw/normalization-core/string-coerce";
 // Defines shared TUI state, backend, and event types.
+import type { SessionProjectionState } from "../../packages/gateway-client/src/session-projection.js";
 import type { SessionGoal } from "../config/sessions/types.js";
 import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
@@ -16,6 +17,8 @@ export type TuiOptions = {
   timeoutMs?: number;
   historyLimit?: number;
   message?: string;
+  /** Overrides timeoutMs only for the message sent automatically at startup. */
+  initialMessageTimeoutMs?: number;
   /**
    * Internal CLI guard: after the standalone TUI returns, force the child
    * process out if imported runtime handles keep the event loop alive.
@@ -30,14 +33,20 @@ export type TuiResult = {
   systemAgentMessage?: string;
 };
 
+export type TuiHistoryRunOutcome =
+  | { state: "active"; runId: string }
+  | { state: "completed" | "interrupted" }
+  | { state: "failed"; errorMessage: string };
+
 export type TuiHistoryLoadResult =
-  | { loaded: true; inFlightRunId: string | null }
+  | { loaded: true; runOutcome: TuiHistoryRunOutcome; activeRunIds?: string[] }
   | { loaded: false };
 
 export type ChatEvent = {
   runId: string;
   sessionKey: string;
   agentId?: string;
+  seq?: number;
   state: "delta" | "final" | "aborted" | "error";
   message?: unknown;
   errorMessage?: string;
@@ -61,8 +70,21 @@ export type SessionChangedEvent = {
   reason?: string;
   phase?: string;
   runId?: string;
+  clientRunId?: string;
   sessionId?: string;
   updatedAt?: number | null;
+  activeRunIds?: string[] | null;
+};
+
+export type SessionMessageEvent = {
+  sessionKey?: string;
+  agentId?: string;
+  sessionId?: string;
+  updatedAt?: number | null;
+  clientRunId?: string;
+  message?: unknown;
+  messageId?: string;
+  messageSeq?: number;
 };
 
 export type AgentEvent = {
@@ -110,6 +132,7 @@ export type SessionScope = "per-sender" | "global";
 
 export type AgentSummary = {
   id: string;
+  kind?: "agent" | "system";
   name?: string;
 };
 
@@ -168,6 +191,8 @@ export type TuiStateAccess = {
   currentAgentId: string;
   currentSessionKey: string;
   currentSessionId: string | null;
+  sessionGeneration?: number;
+  sessionProjection?: SessionProjectionState;
   activeChatRunId: string | null;
   pendingSubmit: TuiPendingSubmit | null;
   queuedMessages?: QueuedMessage[];

@@ -1,4 +1,5 @@
 /** Covers runtime loading and sorting for plugin web search providers. */
+import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 type RegistryModule = typeof import("./registry.js");
@@ -38,7 +39,6 @@ let loaderModule: typeof import("./loader.js");
 let pluginAutoEnableModule: PluginAutoEnableModule;
 let applyPluginAutoEnableSpy: ReturnType<typeof vi.fn>;
 let resetPluginRuntimeStateForTest: RuntimeModule["resetPluginRuntimeStateForTest"];
-let clearLoadPluginMetadataSnapshotMemo: typeof import("./plugin-metadata-snapshot.js").clearLoadPluginMetadataSnapshotMemo;
 
 const DEFAULT_WEB_SEARCH_WORKSPACE = "/tmp/workspace";
 const EXPECTED_BUNDLED_RUNTIME_WEB_SEARCH_PROVIDER_KEYS = [
@@ -206,12 +206,7 @@ function expectLoaderCallCount(count: number) {
   expect(loadOpenClawPluginsMock).toHaveBeenCalledTimes(count);
 }
 
-function requireRecord(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error("Expected a non-array record");
-  }
-  return value as Record<string, unknown>;
-}
+const requireRecord = createRequireRecord("record", "expected-non-array-record");
 
 function requireLastCallFirstArg(
   mock: { mock: { calls: readonly (readonly unknown[])[] } },
@@ -281,7 +276,7 @@ describe("resolvePluginWebSearchProviders", () => {
         await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
       return {
         ...actual,
-        loadPluginManifestRegistry: (
+        loadPluginManifestRegistryCore: (
           ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
         ) => loadPluginManifestRegistryMock(...args),
       };
@@ -325,12 +320,10 @@ describe("resolvePluginWebSearchProviders", () => {
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");
     ({ resetPluginRuntimeStateForTest, setActivePluginRegistry } = await import("./runtime.js"));
-    ({ clearLoadPluginMetadataSnapshotMemo } = await import("./plugin-metadata-snapshot.js"));
     ({ resolvePluginWebSearchProviders } = await import("./web-search-providers.runtime.js"));
   });
 
   beforeEach(() => {
-    clearLoadPluginMetadataSnapshotMemo();
     applyPluginAutoEnableSpy?.mockRestore();
     applyPluginAutoEnableSpy = vi
       .spyOn(pluginAutoEnableModule, "applyPluginAutoEnable")
@@ -359,7 +352,6 @@ describe("resolvePluginWebSearchProviders", () => {
 
   afterEach(() => {
     resetPluginRuntimeStateForTest();
-    clearLoadPluginMetadataSnapshotMemo();
     vi.restoreAllMocks();
   });
 
@@ -382,6 +374,46 @@ describe("resolvePluginWebSearchProviders", () => {
 
     expect(toRuntimeProviderKeys(providers)).toEqual(["brave:brave"]);
     expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("preserves Moonshot region and model setup without activating the plugin", async () => {
+    loadInstalledPluginManifestRegistryMock.mockReturnValueOnce({
+      plugins: [createWebSearchManifestRecord({ id: "moonshot", providerId: "kimi" })],
+      diagnostics: [],
+    });
+    const config = { plugins: { allow: ["moonshot"] } };
+    const providers = resolvePluginWebSearchProviders({ config, mode: "setup", activate: false });
+    const provider = providers[0];
+    if (!provider?.runSetup) {
+      throw new Error("Expected Moonshot web-search setup from the public artifact");
+    }
+    const select = vi.fn(async (params: { initialValue?: unknown }) => params.initialValue);
+
+    const next = await provider.runSetup({
+      config,
+      runtime: {} as never,
+      prompter: { select } as never,
+    });
+
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+    expect(select.mock.calls.map(([params]) => requireRecord(params).message)).toEqual([
+      "Kimi API region",
+      "Kimi web search model",
+    ]);
+    expect(next).toMatchObject({
+      plugins: {
+        entries: {
+          moonshot: {
+            config: {
+              webSearch: {
+                baseUrl: "https://api.moonshot.ai/v1",
+                model: "kimi-k2.6",
+              },
+            },
+          },
+        },
+      },
+    });
   });
 
   it("loads plugin web-search providers from the auto-enabled config snapshot", () => {

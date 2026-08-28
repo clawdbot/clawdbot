@@ -1,6 +1,8 @@
 // Control UI view renders debug screen content.
 import { html, nothing } from "lit";
+import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { EventLogEntry } from "../../api/event-log.ts";
+import { highlightJsonHtml } from "../../components/markdown-code-blocks.ts";
 import {
   renderSettingsEmpty,
   renderSettingsPage,
@@ -10,7 +12,13 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { formatTimeMs } from "../../lib/format.ts";
+import type {
+  CommandLaneDynamicSummary,
+  CommandLaneSnapshot,
+} from "../../lib/gateway-diagnostics.ts";
 import { formatEventPayload } from "../../lib/presenter.ts";
+import { DEBUG_OVERLAY_SHORTCUT_LABEL } from "./debug-overlay-contract.ts";
+import { renderCommandLaneRows } from "./lane-table.ts";
 
 type DebugProps = {
   loading: boolean;
@@ -18,6 +26,9 @@ type DebugProps = {
   health: Record<string, unknown> | null;
   models: unknown[];
   heartbeat: unknown;
+  lanes: CommandLaneSnapshot[];
+  dynamic: CommandLaneDynamicSummary | null;
+  diagnosticsError: string | null;
   eventLog: readonly EventLogEntry[];
   methods: string[];
   callMethod: string;
@@ -27,6 +38,7 @@ type DebugProps = {
   onCallMethodChange: (next: string) => void;
   onCallParamsChange: (next: string) => void;
   onRefresh: () => void;
+  onOpenOverlay: () => void;
   onCall: () => void;
 };
 
@@ -34,7 +46,8 @@ function renderJsonRow(title: unknown, value: unknown) {
   return renderSettingsRow({
     title,
     stacked: true,
-    control: html`<pre class="code-block">${JSON.stringify(value ?? {}, null, 2)}</pre>`,
+    control: html`<pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(value ?? {}, null, 2)))}</pre>`,
   });
 }
 
@@ -69,12 +82,29 @@ function renderSecurityRow(props: DebugProps) {
   });
 }
 
+function renderDiagnosticsError(error: string | null) {
+  if (!error) {
+    return nothing;
+  }
+  return html`
+    <div class="settings-row" role="alert">
+      <div class="settings-row__text">
+        <span class="settings-row__title">
+          ${renderSettingsStatus({ kind: "danger", label: t("common.failed") })}
+        </span>
+        <span class="settings-row__desc">${error}</span>
+      </div>
+    </div>
+  `;
+}
+
 function renderEventRow(evt: EventLogEntry) {
   return renderSettingsRow({
     title: evt.event,
     description: formatTimeMs(evt.ts, undefined, ""),
     stacked: true,
-    control: html`<pre class="code-block">${formatEventPayload(evt.payload)}</pre>`,
+    control: html`<pre class="code-block">
+${unsafeHTML(highlightJsonHtml(formatEventPayload(evt.payload)))}</pre>`,
   });
 }
 
@@ -90,9 +120,40 @@ export function renderDebug(props: DebugProps) {
       `,
     },
     html`
-      ${renderSecurityRow(props)} ${renderJsonRow(t("debug.status"), props.status)}
+      ${renderDiagnosticsError(props.diagnosticsError)} ${renderSecurityRow(props)}
+      ${renderJsonRow(t("debug.status"), props.status)}
       ${renderJsonRow(t("debug.health"), props.health)}
       ${renderJsonRow(t("debug.lastHeartbeat"), props.heartbeat)}
+    `,
+  );
+
+  const lanesSection = renderSettingsSection(
+    {
+      title: t("debug.lanes.title"),
+      description: t("debug.lanes.subtitle"),
+      actions: html`
+        <button class="btn" @click=${props.onOpenOverlay}>
+          ${t("debug.overlay.openWithShortcut", { shortcut: DEBUG_OVERLAY_SHORTCUT_LABEL })}
+        </button>
+      `,
+    },
+    html`
+      <div class="data-table-container command-lanes-table-wrap">
+        <table class="data-table command-lanes-table">
+          <thead>
+            <tr>
+              <th>${t("debug.lanes.lane")}</th>
+              <th>${t("debug.lanes.active")}</th>
+              <th>${t("debug.lanes.queued")}</th>
+              <th>${t("debug.lanes.group")}</th>
+              <th>${t("debug.lanes.blocked")}</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${renderCommandLaneRows({ lanes: props.lanes, dynamic: props.dynamic })}
+          </tbody>
+        </table>
+      </div>
     `,
   );
 
@@ -147,7 +208,7 @@ export function renderDebug(props: DebugProps) {
         ? html`
             <div class="settings-row settings-row--stacked">
               ${renderSettingsStatus({ kind: "ok", label: t("common.ok") })}
-              <pre class="code-block">${props.callResult}</pre>
+              <pre class="code-block">${unsafeHTML(highlightJsonHtml(props.callResult))}</pre>
             </div>
           `
         : nothing}
@@ -158,7 +219,8 @@ export function renderDebug(props: DebugProps) {
     { title: t("debug.modelsTitle"), description: t("debug.modelsSubtitle") },
     html`
       <div class="settings-row settings-row--stacked">
-        <pre class="code-block">${JSON.stringify(props.models ?? [], null, 2)}</pre>
+        <pre class="code-block">
+${unsafeHTML(highlightJsonHtml(JSON.stringify(props.models ?? [], null, 2)))}</pre>
       </div>
     `,
   );
@@ -171,7 +233,7 @@ export function renderDebug(props: DebugProps) {
   );
 
   return renderSettingsPage(
-    html`${snapshotsSection} ${rpcSection} ${modelsSection} ${eventLogSection}`,
+    html`${snapshotsSection} ${lanesSection} ${rpcSection} ${modelsSection} ${eventLogSection}`,
     { wide: true },
   );
 }

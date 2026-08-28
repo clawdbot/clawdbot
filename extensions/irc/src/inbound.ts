@@ -1,15 +1,19 @@
 // Irc plugin module implements inbound behavior.
-import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  logInboundDrop,
+  resolveChannelInboundRouteEnvelope,
+} from "openclaw/plugin-sdk/channel-inbound";
 import {
   channelIngressRoutes,
   createChannelIngressResolver,
-  defineStableChannelIngressIdentity,
 } from "openclaw/plugin-sdk/channel-ingress-runtime";
-import { resolveChannelStreamingBlockEnabled } from "openclaw/plugin-sdk/channel-outbound";
+import {
+  bindIngressLifecycleToReplyOptions,
+  resolveChannelStreamingBlockEnabled,
+} from "openclaw/plugin-sdk/channel-outbound";
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isDangerousNameMatchingEnabled } from "openclaw/plugin-sdk/dangerous-name-runtime";
-import { resolveInboundRouteEnvelopeBuilderWithRuntime } from "openclaw/plugin-sdk/inbound-envelope";
 import {
   deliverFormattedTextWithAttachments,
   type OutboundReplyPayload,
@@ -27,107 +31,43 @@ import {
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ResolvedIrcAccount } from "./accounts.js";
-import { buildIrcAllowlistCandidates, normalizeIrcAllowEntry } from "./normalize.js";
+import { createIrcIngressSubject, ircIngressIdentity } from "./ingress-identity.js";
+import type { IrcIngressDispatchResult, IrcIngressLifecycle } from "./irc-ingress.js";
+import { normalizeIrcAllowEntry } from "./normalize.js";
+import { sanitizeIrcAssistantText } from "./outbound-base.js";
 import { resolveIrcGroupMatch, resolveIrcGroupRequireMention } from "./policy.js";
 import { getIrcRuntime } from "./runtime.js";
 import { sendMessageIrc } from "./send.js";
 import type { CoreConfig, IrcInboundMessage } from "./types.js";
 
 const CHANNEL_ID = "irc" as const;
-const IRC_NICK_KIND = "plugin:irc-nick" as const;
 type IrcGroupPolicy = "open" | "allowlist" | "disabled";
 
-const ircIngressIdentity = defineStableChannelIngressIdentity({
-  key: "irc-id",
-  normalizeEntry: normalizeIrcStableEntry,
-  normalizeSubject: normalizeLowercaseStringOrEmpty,
-  sensitivity: "pii",
-  aliases: [
-    {
-      key: "irc-id-nick-user",
-      kind: "stable-id" as const,
-      normalizeEntry: normalizeIrcNickUserEntry,
-      normalizeSubject: normalizeLowercaseStringOrEmpty,
-      dangerous: true,
-      sensitivity: "pii" as const,
-    },
-    {
-      key: "irc-id-nick-host",
-      kind: "stable-id" as const,
-      normalizeEntry: () => null,
-      normalizeSubject: normalizeLowercaseStringOrEmpty,
-      sensitivity: "pii" as const,
-    },
-    {
-      key: "irc-nick",
-      kind: IRC_NICK_KIND,
-      normalizeEntry: normalizeIrcNickEntry,
-      normalizeSubject: normalizeLowercaseStringOrEmpty,
-      dangerous: true,
-      sensitivity: "pii",
-    },
-  ],
-  isWildcardEntry: (entry) => normalizeIrcAllowEntry(entry) === "*",
-  resolveEntryId: ({ entryIndex, fieldKey }) =>
-    `irc-entry-${entryIndex + 1}:${fieldKey === "irc-nick" ? "nick" : "id"}`,
-});
-
 const escapeIrcRegexLiteral = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+// IRC nicknames permit punctuation, so ASCII word boundaries lose valid leading/trailing chars.
+const IRC_NICK_CHARACTER = String.raw`[A-Za-z0-9_\-\[\]\\\x60^{}|~]`;
+const IRC_RFC1459_CASE_EQUIVALENTS = new Map([
+  ["[", "{"],
+  ["{", "["],
+  ["]", "}"],
+  ["}", "]"],
+  ["\\", "|"],
+  ["|", "\\"],
+  ["^", "~"],
+  ["~", "^"],
+]);
 
-function isBareNick(value: string): boolean {
-  return !value.includes("!") && !value.includes("@");
-}
-
-function hasVerifiedHost(value: string): boolean {
-  return value.includes("@");
-}
-
-function isHostlessNickUser(value: string): boolean {
-  return value.includes("!") && !value.includes("@");
-}
-
-function normalizeIrcStableEntry(value: string): string | null {
-  const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !hasVerifiedHost(normalized)) {
-    return null;
-  }
-  return normalized;
-}
-
-function normalizeIrcNickUserEntry(value: string): string | null {
-  const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !isHostlessNickUser(normalized)) {
-    return null;
-  }
-  return normalized;
-}
-
-function normalizeIrcNickEntry(value: string): string | null {
-  const normalized = normalizeIrcAllowEntry(value);
-  if (!normalized || normalized === "*" || !isBareNick(normalized)) {
-    return null;
-  }
-  return normalized;
+function buildIrcNickMentionPattern(value: string): string {
+  return Array.from(value, (character) => {
+    const equivalent = IRC_RFC1459_CASE_EQUIVALENTS.get(character);
+    return equivalent
+      ? `[${escapeIrcRegexLiteral(character)}${escapeIrcRegexLiteral(equivalent)}]`
+      : escapeIrcRegexLiteral(character);
+  }).join("");
 }
 
 function hasEntries(entries: Array<string | number> | undefined): boolean {
   return normalizeStringEntries(entries).some((entry) => normalizeIrcAllowEntry(entry));
-}
-
-function createIrcIngressSubject(message: IrcInboundMessage) {
-  const candidates = buildIrcAllowlistCandidates(message, { allowNameMatching: true });
-  const stableCandidates = candidates.filter((candidate) => hasVerifiedHost(candidate));
-  const nick = normalizeLowercaseStringOrEmpty(message.senderNick);
-  return {
-    stableId: stableCandidates[stableCandidates.length - 1] ?? nick,
-    aliases: {
-      "irc-id-nick-user": candidates.find((candidate) => isHostlessNickUser(candidate)),
-      "irc-id-nick-host": stableCandidates.find(
-        (candidate) => !candidate.includes("!") && candidate.includes("@"),
-      ),
-      "irc-nick": nick,
-    },
-  };
 }
 
 function routeDescriptorsForIrcGroup(params: {
@@ -173,7 +113,10 @@ async function deliverIrcReply(params: {
   statusSink?: (patch: { lastOutboundAt?: number }) => void;
 }) {
   await deliverFormattedTextWithAttachments({
-    payload: params.payload,
+    payload: {
+      ...params.payload,
+      text: sanitizeIrcAssistantText(params.payload.text ?? ""),
+    },
     send: async ({ text, replyToId }) => {
       if (params.sendReply) {
         await params.sendReply(params.target, text, replyToId);
@@ -195,10 +138,12 @@ export async function handleIrcInbound(params: {
   config: CoreConfig;
   runtime: RuntimeEnv;
   connectedNick?: string;
+  turnAdoptionLifecycle?: IrcIngressLifecycle;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;
   statusSink?: (patch: { lastInboundAt?: number; lastOutboundAt?: number }) => void;
-}): Promise<void> {
-  const { message, account, config, runtime, connectedNick, statusSink } = params;
+}): Promise<IrcIngressDispatchResult | void> {
+  const { message, account, config, runtime, connectedNick, statusSink, turnAdoptionLifecycle } =
+    params;
   const core = getIrcRuntime();
   const pairing = createChannelPairingController({
     core,
@@ -208,7 +153,13 @@ export async function handleIrcInbound(params: {
 
   const rawBody = message.text?.trim() ?? "";
   if (!rawBody) {
-    return;
+    return { kind: "completed" };
+  }
+  if (turnAdoptionLifecycle?.abortSignal.aborted) {
+    return {
+      kind: "failed-retryable",
+      error: turnAdoptionLifecycle.abortSignal.reason,
+    };
   }
 
   statusSink?.({ lastInboundAt: message.timestamp });
@@ -247,7 +198,10 @@ export async function handleIrcInbound(params: {
   const mentionRegexes = core.channel.mentions.buildMentionRegexes(config as OpenClawConfig);
   const mentionNick = connectedNick?.trim() || account.nick;
   const explicitMentionRegex = mentionNick
-    ? new RegExp(`\\b${escapeIrcRegexLiteral(mentionNick)}\\b[:,]?`, "i")
+    ? new RegExp(
+        `(?<!${IRC_NICK_CHARACTER})${buildIrcNickMentionPattern(mentionNick)}(?!${IRC_NICK_CHARACTER})[:,]?`,
+        "i",
+      )
     : null;
   const wasMentioned =
     core.channel.mentions.matchesMentionPatterns(rawBody, mentionRegexes) ||
@@ -265,6 +219,20 @@ export async function handleIrcInbound(params: {
     (hasEntries(account.config.groupAllowFrom) || hasEntries(routeGroupAllowFrom))
       ? "allowlist"
       : groupPolicy;
+  const channelTarget =
+    message.target.startsWith("#") || message.target.startsWith("&")
+      ? message.target
+      : `#${message.target}`;
+  const peerId = message.isGroup ? channelTarget : message.senderNick;
+  const { route, buildEnvelope } = resolveChannelInboundRouteEnvelope({
+    cfg: config as OpenClawConfig,
+    channel: CHANNEL_ID,
+    accountId: account.accountId,
+    peer: {
+      kind: message.isGroup ? "group" : "direct",
+      id: peerId,
+    },
+  });
   const access = await createChannelIngressResolver({
     channelId: CHANNEL_ID,
     accountId: account.accountId,
@@ -276,6 +244,12 @@ export async function handleIrcInbound(params: {
     conversation: {
       kind: message.isGroup ? "group" : "direct",
       id: message.target,
+    },
+    contextBinding: {
+      agentId: route.agentId,
+      sessionKey: route.sessionKey,
+      ...(message.messageId ? { messageId: message.messageId } : {}),
+      inboundEventKind: "user_request",
     },
     route: routeDescriptorsForIrcGroup({
       isGroup: message.isGroup,
@@ -332,11 +306,11 @@ export async function handleIrcInbound(params: {
       },
     });
     runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
-    return;
+    return { kind: "completed" };
   }
   if (access.ingress.admission === "skip") {
     runtime.log?.(`irc: drop channel ${message.target} (missing-mention)`);
-    return;
+    return { kind: "completed" };
   }
   if (access.ingress.admission !== "dispatch") {
     if (
@@ -350,7 +324,7 @@ export async function handleIrcInbound(params: {
         reason: "control command (unauthorized)",
         target: senderDisplay,
       });
-      return;
+      return { kind: "completed" };
     }
     if (message.isGroup) {
       if (access.routeAccess.reason === "channel_not_allowlisted") {
@@ -363,28 +337,18 @@ export async function handleIrcInbound(params: {
     } else {
       runtime.log?.(`irc: drop DM sender ${senderDisplay} (dmPolicy=${dmPolicy})`);
     }
-    return;
+    return { kind: "completed" };
   }
 
-  const channelTarget =
-    message.target.startsWith("#") || message.target.startsWith("&")
-      ? message.target
-      : `#${message.target}`;
-  const peerId = message.isGroup ? channelTarget : message.senderNick;
-  const { route, buildEnvelope } = resolveInboundRouteEnvelopeBuilderWithRuntime({
-    cfg: config as OpenClawConfig,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-    peer: {
-      kind: message.isGroup ? "group" : "direct",
-      id: peerId,
-    },
-    runtime: core.channel,
-    sessionStore: config.session?.store,
-  });
+  if (turnAdoptionLifecycle?.abortSignal.aborted) {
+    return {
+      kind: "failed-retryable",
+      error: turnAdoptionLifecycle.abortSignal.reason,
+    };
+  }
 
   const fromLabel = message.isGroup ? message.target : senderDisplay;
-  const { storePath, body } = buildEnvelope({
+  const body = buildEnvelope({
     channel: "IRC",
     from: fromLabel,
     timestamp: message.timestamp,
@@ -394,41 +358,67 @@ export async function handleIrcInbound(params: {
   const groupSystemPrompt = normalizeOptionalString(groupMatch.groupConfig?.systemPrompt);
   const blockStreamingEnabled = resolveChannelStreamingBlockEnabled(account.config);
 
-  const ctxPayload = core.channel.reply.finalizeInboundContext({
-    Body: body,
-    RawBody: rawBody,
-    CommandBody: rawBody,
-    From: message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`,
-    To: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
-    SessionKey: route.sessionKey,
-    AccountId: route.accountId,
-    ChatType: message.isGroup ? "group" : "direct",
-    ConversationLabel: fromLabel,
-    SenderName: message.senderNick || undefined,
-    SenderId: senderDisplay,
-    GroupSubject: message.isGroup ? message.target : undefined,
-    GroupSystemPrompt: message.isGroup ? groupSystemPrompt : undefined,
-    Provider: CHANNEL_ID,
-    Surface: CHANNEL_ID,
-    WasMentioned: message.isGroup ? wasMentioned : undefined,
-    MessageSid: message.messageId,
-    Timestamp: message.timestamp,
-    OriginatingChannel: CHANNEL_ID,
-    OriginatingTo: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
-    CommandAuthorized: commandAuthorized,
+  const ctxPayload = core.channel.inbound.buildContext({
+    channelIngress: access,
+    channel: CHANNEL_ID,
+    accountId: route.accountId,
+    messageId: message.messageId,
+    timestamp: message.timestamp,
+    from: message.isGroup ? `channel:${channelTarget}` : `irc:${senderDisplay}`,
+    sender: { id: senderDisplay, name: message.senderNick || undefined },
+    conversation: {
+      kind: message.isGroup ? "group" : "direct",
+      id: peerId,
+      label: fromLabel,
+    },
+    route: {
+      agentId: route.agentId,
+      dmScope: route.dmScope,
+      accountId: route.accountId,
+      routeSessionKey: route.sessionKey,
+    },
+    reply: {
+      to: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
+      originatingTo: message.isGroup ? `channel:${channelTarget}` : `irc:${peerId}`,
+    },
+    message: { body, bodyForAgent: rawBody, rawBody, commandBody: rawBody },
+    access: {
+      commands: { authorized: commandAuthorized },
+      mentions: { canDetectMention: message.isGroup, wasMentioned },
+    },
+    extra: {
+      GroupSubject: message.isGroup ? message.target : undefined,
+      GroupSystemPrompt: message.isGroup ? groupSystemPrompt : undefined,
+    },
   });
 
-  await core.channel.inbound.dispatchReply({
+  const ingressState: {
+    handoff: "none" | "adopted" | "deferred" | "abandoned";
+  } = { handoff: "none" };
+  const trackedIngressLifecycle = turnAdoptionLifecycle
+    ? {
+        ...turnAdoptionLifecycle,
+        onAdopted: async () => {
+          ingressState.handoff = "adopted";
+          await turnAdoptionLifecycle.onAdopted();
+        },
+        onDeferred: () => {
+          ingressState.handoff = "deferred";
+          turnAdoptionLifecycle.onDeferred();
+        },
+        onAbandoned: async () => {
+          ingressState.handoff = "abandoned";
+          await turnAdoptionLifecycle.onAbandoned();
+        },
+      }
+    : undefined;
+
+  await core.channel.inbound.dispatch({
     cfg: config as OpenClawConfig,
     channel: CHANNEL_ID,
     accountId: account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
+    route: { agentId: route.agentId, sessionKey: route.sessionKey },
     ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
     delivery: {
       deliver: async (payload) => {
         await deliverIrcReply({
@@ -446,6 +436,9 @@ export async function handleIrcInbound(params: {
     },
     replyPipeline: {},
     replyOptions: {
+      ...(trackedIngressLifecycle
+        ? bindIngressLifecycleToReplyOptions(trackedIngressLifecycle)
+        : {}),
       skillFilter: groupMatch.groupConfig?.skills,
       disableBlockStreaming:
         typeof blockStreamingEnabled === "boolean" ? !blockStreamingEnabled : undefined,
@@ -456,4 +449,20 @@ export async function handleIrcInbound(params: {
       },
     },
   });
+
+  if (turnAdoptionLifecycle?.abortSignal.aborted && ingressState.handoff === "none") {
+    return {
+      kind: "failed-retryable",
+      error: turnAdoptionLifecycle.abortSignal.reason,
+    };
+  }
+  if (turnAdoptionLifecycle && ingressState.handoff === "none") {
+    // Terminal core no-dispatch/gate: settle the claim instead of leaving it
+    // watchdog-held. Reply-lane adoption remains the normal completion path.
+    await turnAdoptionLifecycle.onAdopted();
+    ingressState.handoff = "adopted";
+  }
+  return ingressState.handoff === "deferred" || ingressState.handoff === "abandoned"
+    ? { kind: "deferred" }
+    : { kind: "completed" };
 }

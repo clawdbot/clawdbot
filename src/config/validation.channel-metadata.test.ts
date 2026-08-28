@@ -3,6 +3,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import {
   validateConfigObjectRawWithPlugins,
   validateConfigObjectWithPlugins,
@@ -93,6 +94,14 @@ function createExternalFeishuSchemaRegistry(): PluginManifestRegistry {
                 appSecret: { type: "string" },
                 replyMode: { type: "string", enum: ["thread", "direct"] },
                 footer: { type: "string" },
+                accounts: {
+                  type: "object",
+                  additionalProperties: {
+                    type: "object",
+                    properties: { appId: { type: "string" } },
+                    additionalProperties: false,
+                  },
+                },
               },
               required: ["appId", "appSecret"],
               additionalProperties: false,
@@ -103,6 +112,20 @@ function createExternalFeishuSchemaRegistry(): PluginManifestRegistry {
       }),
     ],
   };
+}
+
+function requireExternalFeishuChannelSchema(registry: PluginManifestRegistry) {
+  return expectDefined(
+    registry.plugins[0]?.channelConfigs?.feishu?.schema,
+    "external Feishu channel schema",
+  );
+}
+
+function requireExternalFeishuChannelProperties(registry: PluginManifestRegistry) {
+  return expectDefined(
+    requireExternalFeishuChannelSchema(registry).properties as Record<string, unknown> | undefined,
+    "external Feishu channel schema properties",
+  );
 }
 
 function createExternalFeishuSchemaWithCloserMetadataRegistry(): PluginManifestRegistry {
@@ -220,7 +243,7 @@ function createPluginManifestRecord(
 }
 
 vi.mock("../plugins/manifest-registry.js", () => ({
-  loadPluginManifestRegistry: () => mockLoadPluginManifestRegistry(),
+  loadPluginManifestRegistryCore: () => mockLoadPluginManifestRegistry(),
   resolveManifestContractPluginIds: () => [],
 }));
 
@@ -228,7 +251,8 @@ vi.mock("../plugins/plugin-registry.js", () => ({
   loadPluginManifestRegistryForPluginRegistry: () => mockLoadPluginManifestRegistry(),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: () => ({
     manifestRegistry: mockLoadPluginManifestRegistry(),
   }),
@@ -238,12 +262,14 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
 }));
 
 vi.mock("../plugins/doctor-contract-registry.js", () => ({
+  collectDoctorConfigRepairPluginIds: () => [],
   collectRelevantDoctorPluginIds: () => [],
   listPluginDoctorLegacyConfigRules: () => [],
   applyPluginDoctorCompatibilityMigrations: () => ({ next: null, changes: [] }),
 }));
 
 vi.mock("../secrets/target-registry-data.js", () => ({
+  buildSecretTargetRegistryFromPlugins: () => [],
   getCoreSecretTargetRegistry: () => [],
   getSecretTargetRegistry: () => [],
 }));
@@ -267,7 +293,8 @@ function setupPluginSchemaWithRequiredDefault() {
 }
 
 beforeEach(() => {
-  mockLoadPluginManifestRegistry.mockClear();
+  clearPluginMetadataLifecycleCaches();
+  mockLoadPluginManifestRegistry.mockReset().mockReturnValue({ diagnostics: [], plugins: [] });
 });
 
 describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)", () => {
@@ -420,17 +447,14 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
     );
   });
 
-  it('does not warn when dmPolicy="open" is satisfied by the legacy dm.allowFrom alias', () => {
-    // Runtime resolves allowFrom as canonical `allowFrom` ?? legacy `dm.allowFrom`, so a
-    // top-level-canonical channel (Discord) that keeps its wildcard under `dm.allowFrom`
-    // is valid and must not produce a false "all DMs dropped" warning.
+  it('does not warn when dmPolicy="open" has canonical allowFrom', () => {
     const result = validateConfigObjectWithPlugins({
       channels: {
         discord: {
           enabled: true,
           token: "test-token",
           dmPolicy: "open",
-          dm: { allowFrom: ["*"] },
+          allowFrom: ["*"],
         },
       },
     });
@@ -596,7 +620,7 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
     expect(result.ok).toBe(true);
   });
 
-  it("names the external plugin owner for unsupported channel properties", () => {
+  it("accepts core-owned heartbeat visibility in closed channel and account schemas", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
 
     const result = validateConfigObjectRawWithPlugins({
@@ -604,65 +628,256 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
         feishu: {
           appId: "app-id",
           appSecret: "secret",
-          unsupportedField: true,
+          heartbeatVisibility: { showAlerts: false, useIndicator: true },
+          accounts: {
+            work: { heartbeatVisibility: { showOk: true } },
+          },
         },
       },
     });
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.feishu",
-          message:
-            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
-        }),
-      );
+    expect(result.ok).toBe(true);
+  });
+
+  it.each([
+    { label: "a scalar", value: "enabled" },
+    { label: "a non-boolean visibility flag", value: { showAlerts: 0 } },
+    { label: "an unknown visibility field", value: { showOk: true, unexpected: true } },
+  ])("rejects $label at channel and account heartbeat visibility scopes", ({ value }) => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createExternalFeishuSchemaRegistry());
+
+    for (const config of [
+      { appId: "app-id", appSecret: "secret", heartbeatVisibility: value },
+      {
+        appId: "app-id",
+        appSecret: "secret",
+        accounts: { work: { heartbeatVisibility: value } },
+      },
+    ]) {
+      const result = validateConfigObjectRawWithPlugins({ channels: { feishu: config } });
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const hasHeartbeatVisibilityIssue = result.issues.some((issue) =>
+          issue.path.includes("heartbeatVisibility"),
+        );
+        expect(hasHeartbeatVisibilityIssue).toBe(true);
+      }
     }
   });
 
-  it("keeps unsupported property diagnostics assigned to the schema owner", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(
-      createExternalFeishuSchemaWithCloserMetadataRegistry(),
-    );
+  it.each(["anyOf", "oneOf"] as const)(
+    "accepts heartbeat visibility in %s channel branches and their accounts",
+    (composition) => {
+      const registry = createExternalFeishuSchemaRegistry();
+      const plugin = expectDefined(registry.plugins[0], "external Feishu plugin manifest");
+      const channel = expectDefined(
+        plugin.channelConfigs?.feishu,
+        "external Feishu channel config",
+      );
+      channel.schema = {
+        [composition]: [
+          {
+            type: "object",
+            properties: { appId: { type: "string" } },
+            required: ["appId"],
+            additionalProperties: false,
+          },
+          {
+            type: "object",
+            properties: {
+              accounts: {
+                type: "object",
+                additionalProperties: {
+                  type: "object",
+                  properties: { appId: { type: "string" } },
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["accounts"],
+            additionalProperties: false,
+          },
+        ],
+      } as typeof channel.schema;
+      mockLoadPluginManifestRegistry.mockReturnValue(registry);
 
-    const result = validateConfigObjectRawWithPlugins({
-      channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          unsupportedField: true,
+      for (const config of [
+        { appId: "app-id", heartbeatVisibility: { showOk: true } },
+        {
+          heartbeatVisibility: { useIndicator: false },
+          accounts: { work: { appId: "app-id", heartbeatVisibility: { showAlerts: false } } },
         },
-      },
-    });
+      ]) {
+        expect(validateConfigObjectRawWithPlugins({ channels: { feishu: config } }).ok).toBe(true);
+      }
+    },
+  );
 
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.issues).toContainEqual(
-        expect.objectContaining({
-          path: "channels.feishu",
-          message:
-            'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
-        }),
-      );
-      expect(result.issues.map((issue) => issue.message)).not.toContain(
-        'invalid config for plugin workspace-channel-labels: must not have additional properties: "unsupportedField"',
-      );
+  it.each(["dynamic", "named", "patterned", "composed"] as const)(
+    "accepts core-owned heartbeat visibility for %s accounts",
+    (shape) => {
+      const registry = createExternalFeishuSchemaRegistry();
+      const properties = requireExternalFeishuChannelProperties(registry);
+      const account = (properties.accounts as Record<string, unknown>).additionalProperties;
+      const accountsByShape = {
+        dynamic: { type: "object", additionalProperties: account },
+        named: { type: "object", properties: { work: account }, additionalProperties: false },
+        patterned: {
+          type: "object",
+          patternProperties: { "^work$": account },
+          additionalProperties: false,
+        },
+        composed: { allOf: [{ type: "object", additionalProperties: account }] },
+      };
+      properties.accounts = accountsByShape[shape];
+      mockLoadPluginManifestRegistry.mockReturnValue(registry);
+
+      const result = validateConfigObjectRawWithPlugins({
+        channels: {
+          feishu: {
+            appId: "app-id",
+            appSecret: "secret",
+            accounts: { work: { heartbeatVisibility: { showOk: true } } },
+          },
+        },
+      });
+      expect(result.ok).toBe(true);
+      expect(account).not.toHaveProperty("properties.heartbeatVisibility");
+    },
+  );
+
+  it.each(["root", "account", "composed"] as const)(
+    "normalizes %s local schema references without changing shared definitions",
+    (scope) => {
+      const registry = createExternalFeishuSchemaRegistry();
+      const channel = expectDefined(registry.plugins[0]?.channelConfigs?.feishu, "Feishu channel");
+      const schema = channel.schema;
+      const accounts = requireExternalFeishuChannelProperties(registry).accounts as Record<
+        string,
+        unknown
+      >;
+      const account = accounts.additionalProperties as Record<string, unknown>;
+      const definitions = [schema, account];
+
+      if (scope === "root") {
+        channel.schema = {
+          $id: "https://example.com/external-feishu",
+          $schema: "http://json-schema.org/draft-07/schema#",
+          $ref: "#/$defs/Channel",
+          $defs: { Channel: schema },
+        };
+      } else if (scope === "account") {
+        schema.definitions = { Account: account };
+        accounts.additionalProperties = { $ref: "#/definitions/Account" };
+      } else {
+        const root = { anyOf: [schema] };
+        accounts.additionalProperties = { $ref: "#/$defs/Account" };
+        channel.schema = { $ref: "#/$defs/Root", $defs: { Root: root, Account: account } };
+        definitions.push(root);
+      }
+      mockLoadPluginManifestRegistry.mockReturnValue(registry);
+
+      const config = {
+        appId: "app-id",
+        appSecret: "secret",
+        heartbeatVisibility: { showOk: true },
+        accounts: { work: { heartbeatVisibility: { showAlerts: false } } },
+      };
+      expect(validateConfigObjectRawWithPlugins({ channels: { feishu: config } }).ok).toBe(true);
+      expect(
+        validateConfigObjectRawWithPlugins({
+          channels: {
+            feishu: { ...config, accounts: { work: { heartbeatVisibility: { showAlerts: 0 } } } },
+          },
+        }).ok,
+      ).toBe(false);
+      for (const definition of definitions) {
+        expect(definition).not.toHaveProperty("properties.heartbeatVisibility");
+      }
+    },
+  );
+
+  it.each([{}, true])(
+    "validates open channel/account heartbeat settings without rejecting custom fields (%j)",
+    (accountSchema) => {
+      const registry = createExternalFeishuSchemaRegistry();
+      const schema = requireExternalFeishuChannelSchema(registry);
+      schema.additionalProperties = true;
+      const properties = requireExternalFeishuChannelProperties(registry);
+      properties.accounts = { type: "object", additionalProperties: accountSchema };
+      mockLoadPluginManifestRegistry.mockReturnValue(registry);
+
+      const base = {
+        appId: "app-id",
+        appSecret: "secret",
+        customChannelField: true,
+        heartbeatVisibility: { showOk: true },
+        accounts: {
+          work: { customAccountField: true, heartbeatVisibility: { showAlerts: false } },
+        },
+      };
+      expect(validateConfigObjectRawWithPlugins({ channels: { feishu: base } }).ok).toBe(true);
+
+      for (const config of [
+        { ...base, heartbeatVisibility: "enabled" },
+        { ...base, accounts: { work: { heartbeatVisibility: { showOk: "yes" } } } },
+      ]) {
+        expect(validateConfigObjectRawWithPlugins({ channels: { feishu: config } }).ok).toBe(false);
+      }
+    },
+  );
+
+  it.each([
+    { label: "an empty schema", declaration: {} },
+    { label: "a boolean schema", declaration: true },
+    { label: "an open object schema", declaration: { type: "object", additionalProperties: true } },
+    { label: "a stale disabled schema", declaration: false },
+    {
+      label: "an overly strict schema",
+      declaration: {
+        type: "object",
+        properties: { showAlerts: { const: true } },
+        additionalProperties: false,
+      },
+    },
+  ])("keeps canonical heartbeat validation when a plugin declares $label", ({ declaration }) => {
+    const registry = createExternalFeishuSchemaRegistry();
+    requireExternalFeishuChannelProperties(registry).heartbeatVisibility = declaration;
+    mockLoadPluginManifestRegistry.mockReturnValue(registry);
+
+    for (const [value, accepted] of [
+      [{ showAlerts: false }, true],
+      [{ showAlerts: 0 }, false],
+    ] as const) {
+      const result = validateConfigObjectRawWithPlugins({
+        channels: { feishu: { appId: "app-id", appSecret: "secret", heartbeatVisibility: value } },
+      });
+      expect(result.ok).toBe(accepted);
     }
   });
 
-  it("keeps schema ownership coupled when closer root metadata preserves a schema", () => {
-    mockLoadPluginManifestRegistry.mockReturnValue(
-      createExternalFeishuSchemaWithRootOnlyShadowRegistry(),
-    );
-
+  it.each([
+    {
+      name: "names the external plugin owner for unsupported channel properties",
+      createRegistry: createExternalFeishuSchemaRegistry,
+      rejectedOwner: undefined,
+    },
+    {
+      name: "keeps unsupported property diagnostics assigned to the schema owner",
+      createRegistry: createExternalFeishuSchemaWithCloserMetadataRegistry,
+      rejectedOwner: "workspace-channel-labels",
+    },
+    {
+      name: "keeps schema ownership coupled when closer root metadata preserves a schema",
+      createRegistry: createExternalFeishuSchemaWithRootOnlyShadowRegistry,
+      rejectedOwner: "other-global-feishu",
+    },
+  ] as const)("$name", ({ createRegistry, rejectedOwner }) => {
+    mockLoadPluginManifestRegistry.mockReturnValue(createRegistry());
     const result = validateConfigObjectRawWithPlugins({
       channels: {
-        feishu: {
-          appId: "app-id",
-          appSecret: "secret",
-          unsupportedField: true,
-        },
+        feishu: { appId: "app-id", appSecret: "secret", unsupportedField: true },
       },
     });
 
@@ -675,9 +890,11 @@ describe("validateConfigObjectRawWithPlugins channel metadata", () => {
             'invalid config for plugin openclaw-lark: must not have additional properties: "unsupportedField"',
         }),
       );
-      expect(result.issues.map((issue) => issue.message)).not.toContain(
-        'invalid config for plugin other-global-feishu: must not have additional properties: "unsupportedField"',
-      );
+      if (rejectedOwner) {
+        expect(result.issues.map((issue) => issue.message)).not.toContain(
+          `invalid config for plugin ${rejectedOwner}: must not have additional properties: "unsupportedField"`,
+        );
+      }
     }
   });
 
@@ -758,20 +975,6 @@ describe("validateConfigObjectRawWithPlugins plugin config defaults", () => {
 });
 
 describe("validateConfigObjectWithPlugins bundled allowlist compatibility", () => {
-  it("accepts the shipped deprecated bundledDiscovery marker", () => {
-    const result = validateConfigObjectWithPlugins({
-      plugins: {
-        allow: ["telegram"],
-        bundledDiscovery: "compat",
-      },
-    });
-
-    expect(result.ok).toBe(true);
-    if (result.ok) {
-      expect(result.config.plugins?.bundledDiscovery).toBe("compat");
-    }
-  });
-
   it("reuses the manifest registry loaded for compatibility during plugin validation", () => {
     mockLoadPluginManifestRegistry.mockReturnValue(createCompatPluginConfigSchemaRegistry());
 

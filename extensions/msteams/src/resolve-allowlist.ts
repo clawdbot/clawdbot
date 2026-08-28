@@ -12,6 +12,7 @@ import {
   type GraphGroup,
   type GraphUser,
 } from "./graph.js";
+import { normalizeMSTeamsConversationId } from "./inbound.js";
 
 type MSTeamsChannelResolution = {
   input: string;
@@ -33,6 +34,8 @@ type MSTeamsUserResolution = {
 };
 
 type StableMSTeamsTeamIdMode = "bot-framework" | "graph";
+
+const MSTEAMS_GROUP_CONVERSATION_ID = /^19:.+@thread\.(?:tacv2|skype|v2)$/i;
 
 function normalizeExactMatch(value?: string | null): string {
   return normalizeLowercaseStringOrEmpty(value ?? "");
@@ -100,6 +103,32 @@ export function projectStableMSTeamsUserAllowlist(entries?: string[]): string[] 
   return [...new Map(projected.map((entry) => [normalizeExactMatch(entry), entry])).values()];
 }
 
+export function projectStableMSTeamsGroupAllowlist(entries?: string[]): string[] | undefined {
+  if (!entries) {
+    return undefined;
+  }
+  const projected = entries
+    .map((entry) => {
+      const stableUserEntry = normalizeStaticMSTeamsAllowEntry(entry);
+      if (stableUserEntry) {
+        return stableUserEntry;
+      }
+      const conversationId = normalizeMSTeamsConversationId(normalizeMSTeamsUserInput(entry));
+      return MSTEAMS_GROUP_CONVERSATION_ID.test(conversationId) ? conversationId : undefined;
+    })
+    .filter((entry): entry is string => Boolean(entry));
+  return [
+    ...new Map(
+      projected.map((entry) => [
+        MSTEAMS_GROUP_CONVERSATION_ID.test(entry)
+          ? `conversation:${entry}`
+          : normalizeExactMatch(entry),
+        entry,
+      ]),
+    ).values(),
+  ];
+}
+
 function stripProviderPrefix(raw: string): string {
   return raw.replace(/^(msteams|teams):/i, "");
 }
@@ -142,7 +171,7 @@ export function parseMSTeamsConversationId(raw: string): string | null {
  *
  * Accepts both prefixed and bare formats:
  * - `conversation:<id>` — explicit conversation prefix
- * - `19:abc@thread.tacv2` / `19:abc@thread.skype` — channel / legacy group
+ * - `19:abc@thread.tacv2` / `19:abc@thread.skype` / `19:abc@thread.v2` — group or channel
  * - `19:{userId}_{appId}@unq.gbl.spaces` — Graph 1:1 chat thread format
  * - `a:1xxx` — Bot Framework personal (1:1) chat id
  * - `8:orgid:xxx` — Bot Framework org-scoped personal chat id
@@ -157,11 +186,11 @@ export function looksLikeMSTeamsConversationId(raw: string): boolean {
   }
   // Bare Bot Framework / Graph conversation id formats.
   // Channel / group ids always start with `19:` and include an `@thread.*`
-  // suffix (`@thread.tacv2` or the legacy `@thread.skype`). Personal chat
+  // suffix (`@thread.tacv2`, `@thread.v2`, or the legacy `@thread.skype`). Personal chat
   // ids come in three shapes: `a:1...` (Bot Framework), `8:orgid:...`
   // (org-scoped Bot Framework), and `19:{userId}_{appId}@unq.gbl.spaces`
   // (Graph API 1:1 chat thread). Bot Framework user ids use `29:...`.
-  if (/^19:.+@thread\.(tacv2|skype)$/i.test(trimmed)) {
+  if (MSTEAMS_GROUP_CONVERSATION_ID.test(trimmed)) {
     return true;
   }
   if (/^19:.+@unq\.gbl\.spaces$/i.test(trimmed)) {
@@ -183,7 +212,7 @@ export function looksLikeMSTeamsConversationId(raw: string): boolean {
  * can forward verbatim to the channel adapter.
  */
 export function looksLikeMSTeamsTargetId(raw: string): boolean {
-  const trimmed = raw.trim();
+  const trimmed = stripProviderPrefix(raw.trim()).trim();
   if (looksLikeMSTeamsConversationId(trimmed)) {
     return true;
   }
