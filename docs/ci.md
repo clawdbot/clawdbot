@@ -117,6 +117,14 @@ reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
 
+## Checkout ownership
+
+The shared Linux Node checkout (`linux_node_checkout_step`) and shared Windows/macOS/iOS checkout (`platform_checkout_step`) use one process owner for every Git command within those anchors. Linux allows five whole-checkout attempts, clearing the workspace before each attempt, with 120-second candidate and trusted workflow-harness fetch deadlines and an increasing five-second backoff. Windows, macOS, and iOS retain 90-second fetch deadlines, three candidate fetch attempts on timeout only, five-second backoff, and one harness fetch attempt. Candidate and harness revisions remain separately pinned; Linux also fetches the optional ratchet base at depth one.
+
+Timeout, cancellation, and leader exit drain the owned POSIX process group or Windows Job Object before workspace deletion, another Git command, or step completion. Cleanup has a ten-second allowance. If ownership inspection or cleanup fails, checkout exits with code 125 without retrying. The bootstrap uses the runner's Python standard library because repository helpers are unavailable before checkout. A fetch timeout alone does not explain why transport stalled.
+
+Separate bootstrap and checkout flows in preflight, security, skills-python, ClawHub, and Android still use GNU timeout and are outside these shared anchors' ownership guarantees.
+
 ## Scope and routing
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, screenshot-risk, and generated-native-locale decisions while still verifying native sources.
@@ -785,6 +793,17 @@ profile=all|agent-runtime-boundary|config-boundary|core-auth-secrets|channel-run
 ```
 
 The narrow profiles are teaching/iteration hooks for running one quality shard in isolation.
+
+On pull requests, the network runtime shard starts with a fast diff scan. Sensitive
+socket imports/calls and proxy-policy tokens, edits to its queries/config/fixtures, and
+changes to the Codex transport select full CodeQL analysis in the same PR job.
+Absent or null patches for monitored non-test sources also select full analysis;
+metadata fetch or parse failures stop shard selection rather than silently skipping it.
+Known ordinary diffs keep the fast path. The full path runs semantic query tests before
+analysis, including coverage of the configured `packages/net-policy/src` directory
+and preservation of exact owner/function allowances and test-path exclusions.
+Full analysis fails the job on any SARIF finding or missing SARIF output; a
+sensitive diff is a routing signal, not a finding.
 
 | Category                                                | Surface                                                                                                                                                           |
 | ------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |

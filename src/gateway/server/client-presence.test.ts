@@ -1,9 +1,12 @@
+import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PresenceEntrySchema } from "../../../packages/gateway-protocol/src/schema/snapshot.js";
 import {
   listSystemPresence,
   updateSystemPresence,
   upsertPresence,
 } from "../../infra/system-presence.js";
+import { buildAuthenticatedPresenceUser } from "../authenticated-presence-user.js";
 import { recordClientPresenceActivity, refreshClientPresence } from "./client-presence.js";
 import { GatewayClientRegistry } from "./client-registry.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
@@ -22,6 +25,41 @@ vi.mock("./ws-connection/message-handler.js", () => ({
 }));
 
 describe("live person presence timing", () => {
+  it("qualifies presence sender provenance only from an authenticated profile", () => {
+    const authenticatedUserId = "same-id";
+    const fallback = buildAuthenticatedPresenceUser({ authenticatedUserId });
+    expect(fallback).toEqual({ id: authenticatedUserId, email: authenticatedUserId });
+    expect(buildAuthenticatedPresenceUser({})).toBeUndefined();
+    const profile = buildAuthenticatedPresenceUser({
+      authenticatedUserId,
+      authenticatedUserProfile: {
+        profileId: authenticatedUserId,
+        displayName: "Person",
+        avatarRevision: "1",
+      },
+    });
+    expect(profile).toMatchObject({
+      id: authenticatedUserId,
+      identity: { type: "profile", id: authenticatedUserId },
+    });
+    expect(Value.Check(PresenceEntrySchema, { ts: 1, user: profile })).toBe(true);
+    expect(
+      Value.Check(PresenceEntrySchema, {
+        ts: 1,
+        user: {
+          ...fallback,
+          identity: {
+            type: "observation",
+            id: authenticatedUserId,
+            pluginId: null,
+            accountId: null,
+            senderKind: "unknown",
+          },
+        },
+      }),
+    ).toBe(false);
+  });
+
   const clients = new GatewayClientRegistry();
   const sockets: ReturnType<typeof attachGatewayWsForTest>["socket"][] = [];
 

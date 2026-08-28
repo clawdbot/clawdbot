@@ -385,6 +385,7 @@ describe("runGatewayUpdate", () => {
   function createDevGitRunner(params?: {
     targetSha?: string;
     targetRef?: string;
+    candidateShas?: string[];
     packageManager?: string;
     onCommand?: (
       key: string,
@@ -394,6 +395,7 @@ describe("runGatewayUpdate", () => {
   }) {
     const calls: string[] = [];
     const targetSha = params?.targetSha ?? "upstream123";
+    const candidateShas = params?.candidateShas ?? [targetSha];
     const targetRef = params?.targetRef;
     const targetCandidate = targetRef
       ? targetRef === targetSha
@@ -430,7 +432,7 @@ describe("runGatewayUpdate", () => {
         return toCommandResult({ stdout: targetSha });
       }
       if (!targetRef && key === `git -C ${tempDir} rev-list --max-count=10 ${targetSha}`) {
-        return toCommandResult({ stdout: `${targetSha}\n` });
+        return toCommandResult({ stdout: `${candidateShas.join("\n")}\n` });
       }
       if (targetCandidate && key === `git -C ${tempDir} rev-parse ${targetCandidate}`) {
         return toCommandResult({ stdout: `${targetSha}\n` });
@@ -1226,8 +1228,88 @@ describe("runGatewayUpdate", () => {
       PNPM_CONFIG_RESOLUTION_MODE: "highest",
       npm_config_resolution_mode: "highest",
       pnpm_config_resolution_mode: "highest",
+      PNPM_CONFIG_PREFER_OFFLINE: "true",
+      pnpm_config_prefer_offline: "true",
     });
   });
+
+  it.each([
+    ["PNPM_CONFIG_PREFER_OFFLINE", "false", undefined],
+    ["pnpm_config_prefer_offline", undefined, "false"],
+    ["conflicting pnpm preference variables", "true", "false"],
+  ] as const)(
+    "preserves explicit %s in update installs",
+    async (_caseName, upperValue, lowerValue) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      await setupUiIndex();
+      const stableTag = "v1.0.1-1";
+      const installEnvs: NodeJS.ProcessEnv[] = [];
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const { runCommand } = createGitInstallRunner({
+        stableTag,
+        installCommand: "pnpm install",
+        buildCommand: "pnpm build",
+        uiBuildCommand: "pnpm ui:build",
+        doctorCommand: `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`,
+        onCommand: (key, options) => {
+          if (key === "pnpm install") {
+            installEnvs.push(options?.env ?? {});
+          }
+          return undefined;
+        },
+      });
+
+      const result = await withEnvAsync(
+        {
+          PNPM_CONFIG_PREFER_OFFLINE: upperValue,
+          pnpm_config_prefer_offline: lowerValue,
+        },
+        () => runWithCommand(runCommand, { channel: "stable" }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(installEnvs).toHaveLength(1);
+      expect(installEnvs[0]?.PNPM_CONFIG_PREFER_OFFLINE).toBe(upperValue);
+      expect(installEnvs[0]?.pnpm_config_prefer_offline).toBe(lowerValue);
+    },
+  );
+
+  it.each([
+    ["an explicit value", { stdout: "false\n" }],
+    ["a failed query", { code: 1 }],
+  ] satisfies Array<[string, CommandResponse]>)(
+    "does not inject a pnpm prefer-offline default after %s",
+    async (_caseName, configResponse) => {
+      await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
+      await setupUiIndex();
+      const stableTag = "v1.0.1-1";
+      const installEnvs: NodeJS.ProcessEnv[] = [];
+      const doctorNodePath = await resolveStableNodePath(process.execPath);
+      const { runCommand } = createGitInstallRunner({
+        stableTag,
+        installCommand: "pnpm install",
+        buildCommand: "pnpm build",
+        uiBuildCommand: "pnpm ui:build",
+        doctorCommand: `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`,
+        onCommand: (key, options) => {
+          if (key === "pnpm config get prefer-offline") {
+            return configResponse;
+          }
+          if (key === "pnpm install") {
+            installEnvs.push(options?.env ?? {});
+          }
+          return undefined;
+        },
+      });
+
+      const result = await runWithCommand(runCommand, { channel: "stable" });
+
+      expect(result.status).toBe("ok");
+      expect(installEnvs).toHaveLength(1);
+      expect(installEnvs[0]).not.toHaveProperty("PNPM_CONFIG_PREFER_OFFLINE");
+      expect(installEnvs[0]).not.toHaveProperty("pnpm_config_prefer_offline");
+    },
+  );
 
   it("marks git update doctor passes for configured-plugin repair deferral when requested", async () => {
     await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
@@ -1308,7 +1390,7 @@ describe("runGatewayUpdate", () => {
     const installEnvs: NodeJS.ProcessEnv[] = [];
     const { runCommand } = createDevGitRunner({
       onCommand: (key, options) => {
-        if (key === "pnpm install") {
+        if (key === "pnpm install" && options?.cwd && preflightPrefixPattern.test(options.cwd)) {
           installEnvs.push(options?.env ?? {});
         }
         return undefined;
@@ -1318,14 +1400,143 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
-    expect(installEnvs).toHaveLength(2);
+    expect(installEnvs).toHaveLength(1);
     for (const env of installEnvs) {
       expect(env).toMatchObject({
         PNPM_CONFIG_RESOLUTION_MODE: "highest",
         npm_config_resolution_mode: "highest",
         pnpm_config_resolution_mode: "highest",
+        PNPM_CONFIG_PREFER_OFFLINE: "true",
+        pnpm_config_prefer_offline: "true",
       });
     }
+  });
+
+  it.each(["reset", "clean"] as const)(
+    "allows a later candidate to succeed after a preflight %s failure",
+    async (failedPreparation) => {
+      await setupGitPackageManagerFixture();
+      let preflightBuildAttempts = 0;
+      let injectedPreparationFailure = false;
+      const { calls, runCommand } = createDevGitRunner({
+        candidateShas: ["upstream123", "middle123", "older123"],
+        onCommand: (key, options) => {
+          const preflightDir = options?.cwd;
+          if (!preflightDir || !preflightPrefixPattern.test(preflightDir)) {
+            return undefined;
+          }
+          const failedSuffix = failedPreparation === "reset" ? " reset --hard" : " clean -fdx";
+          if (!injectedPreparationFailure && key.endsWith(failedSuffix)) {
+            injectedPreparationFailure = true;
+            return { stderr: `${failedPreparation} failed`, code: 1 };
+          }
+          if (key === "pnpm build") {
+            preflightBuildAttempts += 1;
+            if (preflightBuildAttempts === 1) {
+              return { stderr: "tip build failed", code: 1 };
+            }
+          }
+          return undefined;
+        },
+      });
+
+      const result = await runWithCommand(runCommand, { channel: "dev" });
+
+      expect(result.status).toBe("ok");
+      expect(injectedPreparationFailure).toBe(true);
+      expect(preflightBuildAttempts).toBe(2);
+      expect(
+        result.steps.some(
+          (step) =>
+            step.name === `preflight ${failedPreparation} (upstream)` && step.exitCode === 1,
+        ),
+      ).toBe(true);
+      expect(calls).toContain(`git -C ${tempDir} rebase older123`);
+    },
+  );
+
+  it("uses the shared prefer-offline policy for every Windows preflight candidate", async () => {
+    await setupGitPackageManagerFixture();
+    let buildAttempts = 0;
+    const preflightInstallEnvs: NodeJS.ProcessEnv[] = [];
+    const { calls, runCommand } = createDevGitRunner({
+      candidateShas: ["upstream123", "older123"],
+      onCommand: (key, options) => {
+        if (
+          key === "pnpm install --ignore-scripts" &&
+          options?.cwd &&
+          preflightPrefixPattern.test(options.cwd)
+        ) {
+          preflightInstallEnvs.push(options.env ?? {});
+        }
+        if (key === "pnpm build" && options?.cwd && preflightPrefixPattern.test(options.cwd)) {
+          buildAttempts += 1;
+          if (buildAttempts === 1) {
+            return { stderr: "tip build failed", code: 1 };
+          }
+        }
+        return undefined;
+      },
+    });
+
+    const result = await withMockedWindowsPlatform(() =>
+      runWithCommand(runCommand, { channel: "dev" }),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(buildAttempts).toBe(2);
+    expect(
+      result.steps.filter((step) => step.name.startsWith("preflight deps install")),
+    ).toMatchObject([
+      {
+        name: "preflight deps install (ignore scripts) (upstream)",
+        command: "pnpm install --ignore-scripts",
+        exitCode: 0,
+      },
+      {
+        name: "preflight deps install (ignore scripts) (older123)",
+        command: "pnpm install --ignore-scripts",
+        exitCode: 0,
+      },
+    ]);
+    expect(calls.filter((call) => call === "pnpm install --ignore-scripts")).toHaveLength(2);
+    expect(preflightInstallEnvs).toHaveLength(2);
+    for (const env of preflightInstallEnvs) {
+      expect(env).toMatchObject({
+        PNPM_CONFIG_PREFER_OFFLINE: "true",
+        pnpm_config_prefer_offline: "true",
+      });
+    }
+  });
+
+  it("preserves an explicit prefer-offline policy for Windows preflight installs", async () => {
+    await setupGitPackageManagerFixture();
+    const preflightInstallEnvs: NodeJS.ProcessEnv[] = [];
+    const { runCommand } = createDevGitRunner({
+      onCommand: (key, options) => {
+        if (
+          key === "pnpm install --ignore-scripts" &&
+          options?.cwd &&
+          preflightPrefixPattern.test(options.cwd)
+        ) {
+          preflightInstallEnvs.push(options.env ?? {});
+        }
+        return undefined;
+      },
+    });
+
+    const result = await withEnvAsync(
+      {
+        PNPM_CONFIG_PREFER_OFFLINE: "false",
+        pnpm_config_prefer_offline: undefined,
+      },
+      () => withMockedWindowsPlatform(() => runWithCommand(runCommand, { channel: "dev" })),
+    );
+
+    expect(result.status).toBe("ok");
+    expect(preflightInstallEnvs).toHaveLength(1);
+    expect(preflightInstallEnvs[0]?.PNPM_CONFIG_PREFER_OFFLINE).toBe("false");
+    expect(preflightInstallEnvs[0]).not.toHaveProperty("pnpm_config_prefer_offline");
   });
 
   it("resolves the dev preflight package manager from the checked-out candidate worktree", async () => {

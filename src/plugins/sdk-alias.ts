@@ -1663,7 +1663,7 @@ function shouldPreferNativeModuleLoad(modulePath: string): boolean {
   }
 }
 
-export function resolvePluginLoaderTryNative(
+function resolvePluginLoaderTryNative(
   modulePath: string,
   options?: {
     preferBuiltDist?: boolean;

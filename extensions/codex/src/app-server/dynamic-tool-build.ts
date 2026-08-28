@@ -19,7 +19,10 @@ import {
   type RuntimeToolSchemaDiagnostic,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
-import { runWithCronCreatorAuthorityCapabilityResolver } from "openclaw/plugin-sdk/codex-mcp-projection";
+import {
+  resolveCodexScheduledToolProjectionFactory,
+  runWithCronCreatorAuthorityCapabilityResolver,
+} from "openclaw/plugin-sdk/codex-mcp-projection";
 import { isToolAllowed } from "openclaw/plugin-sdk/sandbox";
 import {
   isCodexRemoteExecPlacementSandbox,
@@ -47,8 +50,9 @@ import {
   CODEX_GATEWAY_EXEC_DYNAMIC_TOOL_NAME,
   CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME,
   CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
-  createExecAliasDynamicTool,
-  createGatewayProcessAliasDynamicTool,
+  createGatewayExecProjection,
+  createGatewayProcessProjection,
+  createNodeExecAliasDynamicTool,
   isCodexDynamicToolExcluded,
 } from "./shell-dynamic-tools.js";
 import { filterCodexVisionTools } from "./vision-tools.js";
@@ -622,15 +626,20 @@ function addGatewayShellDynamicToolsIfAvailable(
   const processAliasAvailable = Boolean(
     processTool && !processExcluded && !existingNames.has(CODEX_GATEWAY_PROCESS_DYNAMIC_TOOL_NAME),
   );
+  const createProjection = resolveCodexScheduledToolProjectionFactory(
+    input.params.hostCapabilities,
+  );
+  if (!createProjection) {
+    return filteredTools;
+  }
   const toolsToAppend = [
-    createExecAliasDynamicTool(execTool, {
-      host: "gateway",
+    createGatewayExecProjection(createProjection, execTool, {
       processAliasAvailable,
       ...(input.sessionPermissionPolicy?.mode === "guarded" ? { ask: "always" } : {}),
     }),
   ];
   if (processAliasAvailable && processTool) {
-    toolsToAppend.push(createGatewayProcessAliasDynamicTool(processTool));
+    toolsToAppend.push(createGatewayProcessProjection(createProjection, processTool));
   }
   return [...filteredTools, ...toolsToAppend];
 }
@@ -907,10 +916,7 @@ function addNodeShellDynamicToolsIfNeeded(
       (tool) => normalizeCodexDynamicToolName(tool.name) === CODEX_NODE_EXEC_DYNAMIC_TOOL_NAME,
     )
   ) {
-    return [
-      ...filteredTools,
-      createExecAliasDynamicTool(execTool, { host: "node", node: nodePolicy.node }),
-    ];
+    return [...filteredTools, createNodeExecAliasDynamicTool(execTool, nodePolicy.node)];
   }
   return filteredTools;
 }

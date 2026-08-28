@@ -270,12 +270,19 @@ async function applyWithDisabledMedia(params: {
   body: string;
   mediaPath: string;
   mediaType?: string;
+  fileName?: string;
   cfg?: OpenClawConfig;
   selfServeLocalPaths?: boolean;
 }) {
   const ctx: MsgContext = {
     Body: params.body,
-    media: [{ path: params.mediaPath, contentType: params.mediaType }],
+    media: [
+      {
+        path: params.mediaPath,
+        contentType: params.mediaType,
+        ...(params.fileName ? { fileName: params.fileName } : {}),
+      },
+    ],
   };
   const result = await applyMediaUnderstanding({
     ctx,
@@ -2191,6 +2198,47 @@ describe("applyMediaUnderstanding", () => {
     expect(result.appliedFile).toBe(true);
     expect(ctx.Body).toContain('<file name="notes.txt" mime="text/plain">');
     expect(ctx.BodyForCommands).toBe(ctx.Body);
+  });
+
+  it("names a staged attachment by the sender's file name, not the staged copy", async () => {
+    // Channels stage a download under a generated name (LINE writes
+    // `notes---<uuid>.txt`), so the staged basename is not a name the user can
+    // refer to. Only the recorded sender name makes "what's in notes.txt?"
+    // answerable.
+    const filePath = await createTempMediaFile({
+      fileName: "notes---00e865d2-a395-4e1b-9be5-b832b8a411d8.txt",
+      content: "file content",
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:document>",
+      mediaPath: filePath,
+      mediaType: "text/plain",
+      fileName: "notes.txt",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain('<file name="notes.txt" mime="text/plain">');
+    expect(ctx.Body).not.toContain("00e865d2-a395-4e1b-9be5-b832b8a411d8");
+  });
+
+  it("keeps format detection on the staged path when a sender name disagrees", async () => {
+    // The sender controls this name, so it may not steer classification: a
+    // ".txt" claim over CSV bytes must still be typed from the staged copy.
+    const csvPath = await createTempMediaFile({
+      fileName: "records.csv",
+      content: '"a","b"\n"1","2"',
+    });
+
+    const { ctx, result } = await applyWithDisabledMedia({
+      body: "<media:file>",
+      mediaPath: csvPath,
+      fileName: "totally-not-a-spreadsheet.txt",
+    });
+
+    expect(result.appliedFile).toBe(true);
+    expect(ctx.Body).toContain('mime="text/csv"');
+    expect(ctx.Body).toContain('<file name="totally-not-a-spreadsheet.txt"');
   });
 
   it("wraps extracted file text as untrusted external content", async () => {

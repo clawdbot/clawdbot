@@ -12,6 +12,7 @@ import type {
   RequestFrame,
 } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
+import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type {
@@ -134,7 +135,7 @@ export type GatewayClient = {
     /** Host-owned role authority retained separately from an autonomous run principal. */
     operatorRoleActor?: GatewayOperatorRoleActor;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
-    senderAttribution?: { id: string; name?: string };
+    senderAttribution?: { id: string; name?: string; identity?: TranscriptSenderIdentity };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */
     sessionCreation?: TrustedSessionCreation;
     /** Trusted built-in agent tool caller; never accepted from Gateway wire params. */

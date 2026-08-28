@@ -491,6 +491,59 @@ describe("brave web search provider", () => {
     expect(fetchRequestUrl(mockFetch, 1).pathname).toBe("/proxy-two/res/v1/web/search");
   });
 
+  it.each([
+    { mode: "web", cacheTtlMinutes: 0 },
+    { mode: "web", cacheTtlMinutes: 1 },
+    { mode: "llm-context", cacheTtlMinutes: 0 },
+    { mode: "llm-context", cacheTtlMinutes: 1 },
+  ])("honors current $mode cache TTL $cacheTtlMinutes", async ({ mode, cacheTtlMinutes }) => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
+    let requestCount = 0;
+    const mockFetch = vi.fn(async () => {
+      const result = { url: `https://example.com/result-${++requestCount}` };
+      return jsonResponse(
+        mode === "web" ? { web: { results: [result] } } : { grounding: { generic: [result] } },
+      );
+    });
+    global.fetch = mockFetch as typeof global.fetch;
+    const cachedTool = createBraveTool({
+      webSearch: { apiKey: "brave-test-key", mode },
+      searchConfig: { cacheTtlMinutes: 15 },
+    });
+    const currentTool = createBraveTool({
+      webSearch: { apiKey: "brave-test-key", mode },
+      searchConfig: { cacheTtlMinutes },
+    });
+    const args = { query: `brave cache TTL ${mode} ${cacheTtlMinutes}` };
+
+    try {
+      const original = await cachedTool.execute(args);
+      expect(original).toMatchObject({ results: [{ url: "https://example.com/result-1" }] });
+      expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+      expect(mockFetch).toHaveBeenCalledTimes(1);
+
+      clock.mockReturnValue(now + 60_000);
+      const fresh = await currentTool.execute(args);
+      expect(fresh).toMatchObject({ results: [{ url: "https://example.com/result-2" }] });
+      expect(fresh).not.toHaveProperty("cached");
+      expect(mockFetch).toHaveBeenCalledTimes(2);
+
+      if (cacheTtlMinutes === 0) {
+        expect(await currentTool.execute(args)).toMatchObject({
+          results: [{ url: "https://example.com/result-3" }],
+        });
+        expect(await cachedTool.execute(args)).toEqual({ ...original, cached: true });
+        expect(mockFetch).toHaveBeenCalledTimes(3);
+      } else {
+        expect(await currentTool.execute(args)).toEqual({ ...fresh, cached: true });
+        expect(mockFetch).toHaveBeenCalledTimes(2);
+      }
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
   it("rejects invalid Brave mode values in the plugin config schema", () => {
     if (!braveManifest.configSchema) {
       throw new Error("Expected Brave manifest config schema");

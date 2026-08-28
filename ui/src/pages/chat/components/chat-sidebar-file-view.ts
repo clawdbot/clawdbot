@@ -2,6 +2,7 @@ import { html, nothing } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import { localEditorFilePath } from "../../../app/native-editor-locality.runtime.ts";
 import { icons } from "../../../components/icons.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
@@ -276,7 +277,7 @@ export function renderSidebarFile(
       <div class="file-view">
         ${keyed(controls?.mountKey ?? content, html`<div class="file-view__mount"></div>`)}
         ${controls?.loadingEditor
-          ? html`<div class="file-view__loading muted">${t("common.loading")}</div>`
+          ? renderPanelLoadingSkeleton("review", t("common.loading"), false, true)
           : nothing}
       </div>
       ${controls?.editing

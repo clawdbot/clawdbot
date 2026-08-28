@@ -78,13 +78,28 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const now = Date.now();
+    await page.route("**/api/users/*/avatar*", (route) =>
+      route.fulfill({ status: 404, body: "No avatar" }),
+    );
     await installMockGateway(page, {
       featureMethods: ["chat.metadata", "chat.startup", "sessions.rewind"],
       presenceUsers: [
-        { self: true, id: "profile-riley", name: "Riley", email: "riley@example.test" },
-        { id: "profile-colin", name: "Colin", email: "colin@example.test" },
+        {
+          self: true,
+          id: "profile-riley",
+          identity: { type: "profile", id: "profile-riley" },
+          name: "Riley",
+          email: "riley@example.test",
+        },
+        {
+          id: "profile-colin",
+          identity: { type: "profile", id: "profile-colin" },
+          name: "Colin",
+          email: "colin@example.test",
+        },
         {
           id: "profile-alexandria",
+          identity: { type: "profile", id: "profile-alexandria" },
           name: "Alexandria Montgomery-Winter",
           email: "alexandria@example.test",
         },
@@ -102,6 +117,7 @@ suite.define(() => {
           __openclaw: {
             id: "riley-message",
             senderId: "profile-riley",
+            senderIdentity: { type: "profile", id: "profile-riley" },
             senderName: "Riley",
             seq: 2,
           },
@@ -118,6 +134,7 @@ suite.define(() => {
           __openclaw: {
             id: "colin-message",
             senderId: "profile-colin",
+            senderIdentity: { type: "profile", id: "profile-colin" },
             senderName: "Colin",
             seq: 4,
           },
@@ -134,6 +151,7 @@ suite.define(() => {
           __openclaw: {
             id: "alexandria-message",
             senderId: "profile-alexandria",
+            senderIdentity: { type: "profile", id: "profile-alexandria" },
             senderName: "Alexandria Montgomery-Winter",
             seq: 6,
           },
@@ -146,8 +164,11 @@ suite.define(() => {
 
     const userGroups = page.locator(".chat-group.user");
     await expect(userGroups).toHaveCount(3);
-    await expect(page.locator(".chat-avatar.user")).toHaveCount(3);
-    await expect(page.locator(".chat-avatar.user")).toHaveText(["R", "C", "AM"]);
+    for (const [index, initials] of ["R", "C", "AM"].entries()) {
+      const avatar = userGroups.nth(index).locator(".chat-avatar:visible");
+      await expect(avatar).toHaveCount(1);
+      await expect(avatar).toHaveText(initials);
+    }
     await expect(page.locator(".sidebar-identity-card openclaw-viewer-avatar")).toContainText("R");
 
     await expect(
@@ -287,16 +308,27 @@ suite.define(() => {
         status: 200,
       });
     });
+    await page.route(`**/api/users/${peerSenderId}/avatar*`, (route) =>
+      route.fulfill({ status: 404, body: "No avatar" }),
+    );
     const gateway = await installMockGateway(page, {
       historyMessages: [
         {
-          __openclaw: { senderId: localSenderId, senderName: "Collin Johnson" },
+          __openclaw: {
+            senderId: localSenderId,
+            senderIdentity: { type: "profile", id: localSenderId },
+            senderName: "Collin Johnson",
+          },
           content: [{ text: priorPrompt, type: "text" }],
           role: "user",
           timestamp: Date.now() - 3_000,
         },
         {
-          __openclaw: { senderId: peerSenderId, senderName: "Riley Chen" },
+          __openclaw: {
+            senderId: peerSenderId,
+            senderIdentity: { type: "profile", id: peerSenderId },
+            senderName: "Riley Chen",
+          },
           content: [{ text: peerPrompt, type: "text" }],
           role: "user",
           timestamp: Date.now() - 2_000,
@@ -308,8 +340,14 @@ suite.define(() => {
         },
       ],
       presenceUsers: [
-        { self: true, id: localSenderId, name: "Collin Johnson", avatarUrl: localAvatarUrl },
-        { id: peerSenderId, name: "Riley Chen" },
+        {
+          self: true,
+          id: localSenderId,
+          identity: { type: "profile", id: localSenderId },
+          name: "Collin Johnson",
+          avatarUrl: localAvatarUrl,
+        },
+        { id: peerSenderId, identity: { type: "profile", id: peerSenderId }, name: "Riley Chen" },
       ],
     });
 
@@ -395,6 +433,7 @@ suite.define(() => {
     const sender = {
       self: true,
       id: "c3e32452-0467-47e5-aafa-233cd5dae29f",
+      identity: { type: "profile" as const, id: "c3e32452-0467-47e5-aafa-233cd5dae29f" },
       name: "Collin Johnson",
     };
     const prompt = "Keep my identity stable when delivery fails.";
@@ -506,6 +545,7 @@ suite.define(() => {
     const page = await context.newPage();
     const viewer = {
       id: "dd7c98e2-f51d-4590-b588-fa0682e165b7",
+      identity: { type: "profile" as const, id: "dd7c98e2-f51d-4590-b588-fa0682e165b7" },
       name: "Hannah",
       avatarUrl: "/api/users/dd7c98e2-f51d-4590-b588-fa0682e165b7/avatar?v=7",
     };
@@ -556,6 +596,12 @@ suite.define(() => {
           role: "user",
           content: "Please keep my fallback avatar readable.",
           timestamp: Date.now() - 60_000,
+          __openclaw: {
+            senderId: viewer.id,
+            senderIdentity: viewer.identity,
+            senderName: viewer.name,
+            senderProfileAvatarUrl: viewer.avatarUrl,
+          },
         },
       ],
     });

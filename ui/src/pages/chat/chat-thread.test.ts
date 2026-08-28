@@ -1947,6 +1947,44 @@ describe("buildCachedChatItems", () => {
     previewExtraction.mockRestore();
   });
 
+  it("sender provenance separates namespaces without splitting profile renames", () => {
+    const groups = messageGroups({
+      messages: [
+        userMessage("first", 1000, {
+          __openclaw: {
+            senderId: "shared",
+            senderName: "Same",
+            senderIdentity: { type: "profile", id: "shared" },
+          },
+        }),
+        userMessage("second", 1001, {
+          __openclaw: {
+            senderId: "shared",
+            senderName: "Renamed",
+            senderProfileAvatarUrl: "/api/users/shared/avatar?v=2",
+            senderIdentity: { type: "profile", id: "shared" },
+          },
+        }),
+        userMessage("third", 1002, {
+          __openclaw: {
+            senderId: "shared",
+            senderName: "Renamed",
+            senderProfileAvatarUrl: "/api/users/shared/avatar?v=2",
+            senderIdentity: {
+              type: "observation",
+              id: "shared",
+              pluginId: "channel",
+              accountId: null,
+              senderKind: "unknown",
+            },
+          },
+        }),
+      ],
+    });
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.messages.length)).toEqual([2, 1]);
+  });
+
   it("keeps consecutive user messages from different senders in separate groups", () => {
     const groups = messageGroups({
       messages: [
@@ -3838,12 +3876,7 @@ describe("buildCachedChatItems", () => {
       sendAttempts: 1,
     };
 
-    expect(
-      messageGroups({
-        queue: [{ ...restored, sendAttempts: 0, sendState: "waiting-reconnect" }],
-      }),
-    ).toStrictEqual([]);
-    for (const sendState of ["waiting-reconnect", "sending"] as const) {
+    for (const sendState of ["waiting-idle", "waiting-reconnect", "sending"] as const) {
       const groups = messageGroups({ queue: [{ ...restored, sendState }] });
       expect(groups).toHaveLength(1);
       expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
@@ -3852,21 +3885,68 @@ describe("buildCachedChatItems", () => {
     }
   });
 
-  it("keeps steerable queued sends out of the thread until sending starts", () => {
-    const queued = {
-      id: "pending-send-1",
-      text: "wait above the composer",
-      createdAt: 2,
-      sendSubmittedAtMs: 10,
-    };
-
-    expect(messageGroups({ queue: [{ ...queued, sendState: "waiting-idle" }] })).toStrictEqual([]);
-
-    const groups = messageGroups({ queue: [{ ...queued, sendState: "sending" }] });
-    expect(groups).toHaveLength(1);
-    expect(messageRecord(groupAt(groups, 0)).content).toStrictEqual([
-      { type: "text", text: "wait above the composer" },
+  it("keeps future queued bubbles at the tail with stable keys through extension and admission", () => {
+    const first = queuedSend("first", "First follow-up", 3_000, "waiting-idle", {
+      sendRunId: "first-run",
+      sendAttempts: 0,
+    });
+    const second = queuedSend("second", "Second follow-up", 2_000, "waiting-idle", {
+      sendRunId: "second-run",
+      sendAttempts: 0,
+    });
+    const active = userMessage("Active prompt", 1_000, {
+      __openclaw: { idempotencyKey: "active-run:user" },
+    });
+    const build = (
+      queue: ChatQueueItem[],
+      messages = [active],
+      stream: string | null = "Still working",
+    ) =>
+      buildCachedChatItems(
+        createProps({
+          paneId: "future-queue-handoff",
+          runId: "active-run",
+          messages,
+          queue,
+          stream,
+          streamStartedAt: 9_000,
+          runWorking: stream !== null,
+        }),
+      );
+    const initial = build([first, second]);
+    expect(initial.map((item) => (item.kind === "group" ? item.role : item.kind))).toEqual([
+      "user",
+      "stream",
+      "reading-indicator",
+      "user",
+      "user",
     ]);
+    const queuedGroups = initial.slice(-2) as MessageGroup[];
+    expect(queuedGroups.map((group) => messageRecord(group).content)).toEqual([
+      [{ type: "text", text: first.text }],
+      [{ type: "text", text: second.text }],
+    ]);
+    const keys = queuedGroups.map((group) => [group.key, group.messages[0]?.key]);
+    const extended = { ...first, text: first.text + "\nAdditional detail" };
+    const grown = build([extended, second]).slice(-2) as MessageGroup[];
+    expect(grown.map((group) => [group.key, group.messages[0]?.key])).toEqual(keys);
+    expect(messageRecord(grown[0]!).content).toEqual([{ type: "text", text: extended.text }]);
+    const reordered = build([second, extended]).slice(-2) as MessageGroup[];
+    expect(reordered.map((group) => [group.key, group.messages[0]?.key])).toEqual(
+      keys.toReversed(),
+    );
+    const sending = messageGroups({
+      paneId: "future-queue-handoff",
+      messages: [active],
+      queue: [{ ...extended, sendState: "sending", sendAttempts: 1 }, second],
+    });
+    expect(sending.slice(-2).map((group) => [group.key, group.messages[0]?.key])).toEqual(keys);
+    const admitted = userMessage(extended.text, 10_000, {
+      __openclaw: { id: "persisted-first", seq: 10, idempotencyKey: "first-run:user" },
+    });
+    const history = build([second], [active, admitted], null).slice(-2) as MessageGroup[];
+    expect(history.map((group) => [group.key, group.messages[0]?.key])).toEqual(keys);
+    resetChatThreadState("future-queue-handoff");
   });
 
   it("renders submitted queued attachment sends with attachment blocks before chat.send ACK", () => {
@@ -3907,10 +3987,10 @@ describe("buildCachedChatItems", () => {
       ],
     });
 
-    expect(groups).toHaveLength(1);
-    expect(groupAt(groups, 0).messages).toHaveLength(2);
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.messages.length)).toEqual([1, 1]);
     expect(messageAt(groupAt(groups, 0), 0).duplicateCount).toBeUndefined();
-    expect(messageAt(groupAt(groups, 0), 1).duplicateCount).toBeUndefined();
+    expect(messageAt(groupAt(groups, 1), 0).duplicateCount).toBeUndefined();
   });
 
   it.each(["sending", "failed", "unconfirmed"] as const)(
@@ -4710,6 +4790,72 @@ describe("user message expansion state", () => {
 });
 
 describe("thread item cache", () => {
+  it("sender provenance refreshes reply display without changing the person", () => {
+    resetChatThreadState();
+    const alice = userMessage("first", 1, {
+      __openclaw: {
+        senderId: "alice",
+        senderName: "Alice",
+        senderIdentity: { type: "profile", id: "alice" },
+      },
+    });
+    const bob = userMessage("second", 2, {
+      __openclaw: {
+        senderId: "bob",
+        senderName: "Bob",
+        senderIdentity: { type: "profile", id: "bob" },
+      },
+    });
+    const reply = assistantMessage("answer", 3);
+    const input = createProps({ messages: [alice, bob, reply] });
+    buildCachedChatItems(input);
+    const renamed = userMessage("second", 2, {
+      __openclaw: {
+        senderId: "bob",
+        senderName: "Bobby",
+        senderIdentity: { type: "profile", id: "bob" },
+        senderProfileAvatarUrl: "/api/users/bob/avatar?v=2",
+      },
+    });
+    const updated = buildCachedChatItems({ ...input, messages: [alice, renamed, reply] });
+    expect(
+      updated.find((item) => item.kind === "group" && item.role === "assistant"),
+    ).toMatchObject({
+      replyToSender: { name: "Bobby", profileAvatarUrl: "/api/users/bob/avatar?v=2" },
+    });
+  });
+
+  it("sender provenance keeps identical text from colliding authors", () => {
+    const groups = messageGroups({
+      messages: [
+        userMessage("same", 1, {
+          __openclaw: {
+            seq: 1,
+            senderId: "shared",
+            senderName: "Same",
+            senderIdentity: { type: "profile", id: "shared" },
+          },
+        }),
+        userMessage("same", 2, {
+          __openclaw: {
+            seq: 2,
+            senderId: "shared",
+            senderName: "Same",
+            senderIdentity: {
+              type: "observation",
+              id: "shared",
+              pluginId: "channel",
+              accountId: null,
+              senderKind: "unknown",
+            },
+          },
+        }),
+      ],
+    });
+    expect(groups).toHaveLength(2);
+    expect(groups.map((group) => group.messages.length)).toEqual([1, 1]);
+  });
+
   it("preserves stable transcript rows while the live stream changes", () => {
     resetChatThreadState();
     const messages = [{ role: "assistant", content: "ready" }];

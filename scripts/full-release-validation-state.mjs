@@ -574,7 +574,9 @@ function trustedWorkflowFromInputs(planInputs) {
 function candidateFromInputs(planInputs, gates) {
   const candidate = planInputs.candidateEvidence ?? null;
   const bindingRequired = gates.some(
-    (gate) => gate.name === "Prepare shared release candidate" && gate.required,
+    (gate) =>
+      ["Acquire full release candidate", "Prepare shared release candidate"].includes(gate.name) &&
+      gate.required,
   );
   if (!bindingRequired) {
     if (candidate !== null) {
@@ -582,7 +584,10 @@ function candidateFromInputs(planInputs, gates) {
     }
     return null;
   }
-  if (stringValue(planInputs.candidateBindingResult) === "success") {
+  if (
+    stringValue(planInputs.candidateAcquisitionResult ?? planInputs.candidateBindingResult) ===
+    "success"
+  ) {
     if (!candidate || typeof candidate !== "object" || Array.isArray(candidate)) {
       throw new Error("successful release candidate binding omitted producer evidence");
     }
@@ -606,7 +611,7 @@ async function planMode() {
     const restoredPayload = readArtifact(outputPath, "execution plan");
     const restored = validateReleaseExecutionPlanArtifact(restoredPayload, {
       ...expected,
-      ...(restoredPayload.attemptEvidenceVersion === 2
+      ...(restoredPayload.attemptEvidenceVersion !== undefined
         ? { candidateRequest: candidateRequestFromEnvironment() }
         : {}),
       sourceParentRunAttempt: 1,
@@ -619,13 +624,14 @@ async function planMode() {
   }
 
   const planInputs = parsePlanInputs(process.env.FULL_RELEASE_PLAN_INPUTS_JSON);
+  const attemptEvidenceVersion = Number(planInputs.childPhaseVersion) === 3 ? 3 : 2;
   const built = buildReleaseExecutionPlan(planInputs);
   const candidate = candidateFromInputs(planInputs, built.gates);
   const candidateRequest = candidateRequestFromInputs(planInputs);
   const abortController = new AbortController();
   let finished = false;
   let plan = buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 2,
+    attemptEvidenceVersion,
     candidate,
     children: built.children,
     evidenceReuse: evidenceReuseFromInputs(planInputs),
@@ -641,7 +647,7 @@ async function planMode() {
     }
     abortController.abort(new Error("execution plan collection cancelled"));
     plan = buildReleaseExecutionPlanArtifact({
-      attemptEvidenceVersion: 2,
+      attemptEvidenceVersion,
       blockers: plan.blockers,
       candidate: plan.candidate,
       children: plan.children,
@@ -676,7 +682,7 @@ async function planMode() {
     return;
   }
   plan = buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 2,
+    attemptEvidenceVersion,
     blockers: reuse.blockers,
     candidate,
     children: reuse.children,
@@ -961,18 +967,18 @@ async function validateManifestMode() {
   const rawManifest = readArtifact(manifestPath, "release validation manifest");
   const { validateParentManifest } = await import("./release-ci-summary.mjs");
   const manifest = validateParentManifest(rawManifest, {
+    candidateBinding: executionPlan.candidate ?? null,
+    repository: expected.repository,
     runAttempt: positiveInteger(process.env.GITHUB_RUN_ATTEMPT, "parent run attempt"),
     runId: executionPlan.parentRunId,
     workflowRef: executionPlan.workflowRef,
     workflowSha: executionPlan.workflowSha,
   });
   const expectedChildRunIds = Object.fromEntries(
-    ["normalCi", "npmTelegram", "pluginPrerelease", "productPerformance", "releaseChecks"].map(
-      (key) => {
-        const child = executionPlan.children.find((entry) => entry.key === key);
-        return [key, child?.selected ? stringValue(child.runId) : ""];
-      },
-    ),
+    executionPlan.children.map((child) => [
+      child.key,
+      child.selected ? stringValue(child.runId) : "",
+    ]),
   );
   const expectedEvidenceReuse = executionPlan.evidenceReuse.requested
     ? {

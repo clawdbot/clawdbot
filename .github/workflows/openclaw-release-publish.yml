@@ -674,20 +674,19 @@ jobs:
             ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
             exit 1
           fi
-          trusted_workflow_commit_ref="refs/remotes/origin/main"
+          trusted_main_ref="refs/remotes/origin/main"
           if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
-            trusted_workflow_commit_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
+            trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
             git fetch --no-tags origin \
-              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_workflow_commit_ref}"
-            if [[ "$(git rev-parse "${trusted_workflow_commit_ref}^{commit}")" != "${GITHUB_SHA}" ]]; then
+              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_publisher_ref}"
+            if [[ "$(git rev-parse "${trusted_publisher_ref}^{commit}")" != "${GITHUB_SHA}" ]]; then
               echo "Trusted release-publish tag moved after workflow dispatch." >&2
               exit 1
             fi
-          else
-            git fetch --no-tags origin \
-              +refs/heads/main:refs/remotes/origin/main
           fi
-          TRUSTED_MAIN_REF="${trusted_workflow_commit_ref}" \
+          git fetch --no-tags origin \
+            "+refs/heads/main:${trusted_main_ref}"
+          TRUSTED_MAIN_REF="${trusted_main_ref}" \
             MANIFEST_FILE="$manifest" \
             node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"
           node "$STRICT_VALIDATOR_FILE" \
@@ -1985,29 +1984,6 @@ jobs:
                 "${latest_arg}"
             fi
             echo "- GitHub release draft: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
-          }
-
-          publish_github_release() {
-            local expected_prerelease release_json
-            verify_release_tag_target
-            if is_android_release; then
-              verify_android_release_asset_contract
-            fi
-            if is_stable_release; then
-              verify_windows_release_asset_contract
-            fi
-            gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --draft=false
-            release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
-            expected_prerelease="false"
-            if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-              expected_prerelease="true"
-            fi
-            if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] ||
-              [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
-              echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
-              exit 1
-            fi
-            echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
           verify_android_release_asset_contract() {

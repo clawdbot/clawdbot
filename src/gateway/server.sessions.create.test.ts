@@ -2691,6 +2691,32 @@ test("sessions.create persists a canonical Gateway cwd without a managed worktre
   ).toMatchObject({ sessionRoot: cwd, spawnedCwd: cwd });
 });
 
+test("sessions.create rejects a regular-file Gateway cwd before creating session state", async () => {
+  const root = tempDirs.make("openclaw-session-file-cwd-");
+  const cwd = path.join(root, "workspace.txt");
+  const key = "agent:main:dashboard:file-cwd";
+  await fs.writeFile(cwd, "not a directory\n");
+  const { storePath } = await createSessionStoreDir();
+  const { ws } = await openClient({
+    scopes: ["operator.admin"],
+    deviceIdentityPath: path.join(root, "device.json"),
+  });
+  try {
+    const created = await rpcReq(ws, "sessions.create", { agentId: "main", key, cwd });
+
+    expect(created).toMatchObject({
+      ok: false,
+      error: {
+        code: "INVALID_REQUEST",
+        message: "sessions.create cwd is not a directory",
+      },
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toBeUndefined();
+  } finally {
+    ws.close();
+  }
+});
+
 test("sessions.create allows a write-scoped cwd inside the configured workspace", async () => {
   const workspace = tempDirs.make("openclaw-session-cwd-workspace-");
   const cwd = path.join(workspace, "packages", "app");

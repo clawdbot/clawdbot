@@ -188,6 +188,23 @@ suite.define(() => {
     );
   });
 
+  it("credits a verified GitHub account by default with no stored preference", async () => {
+    await suite.withPage({ viewport: { width: 1280, height: 800 } }, async ({ page }) => {
+      await openProfilePage(page, {
+        "users.self": { profile: linkedGitHubProfile },
+        "users.prefs.get": { status: "ok", entries: {} },
+      });
+
+      const coauthorRow = page.locator("#settings-profile-identity .settings-row").filter({
+        has: page.locator(".settings-row__title", { hasText: "Git co-author credit" }),
+      });
+      const toggle = coauthorRow.getByRole("switch", { name: "Git co-author credit" });
+      await expect(toggle).toBeEnabled();
+      await expect(toggle).toBeChecked();
+      await screenshot(page, "13-git-coauthor-default-on.png");
+    });
+  });
+
   it("renders the protected assistant avatar through an authenticated blob fetch", async () => {
     await suite.withPage(
       {

@@ -83,6 +83,11 @@ truncated. The caller's requested URL is preserved.
   </Step>
 </Steps>
 
+Set `tools.web.fetch.cacheTtlMinutes: 0` to bypass OpenClaw's fetch cache for both
+reads and writes. A positive value limits reuse by the current request's TTL;
+cached entries still expire at their original deadline. Provider-side caching,
+such as Firecrawl's `maxAgeMs`, is configured separately.
+
 ## Progress updates
 
 `web_fetch` emits a public progress line only when the fetch is still pending

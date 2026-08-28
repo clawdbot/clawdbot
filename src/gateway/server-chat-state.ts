@@ -101,7 +101,7 @@ type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
   buffer?: string;
-  /** Projection stays valid only while source matches rawBuffer; readers refresh it lazily. */
+  /** Projection stays valid only while source and managed-media facts match the run state. */
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
@@ -109,6 +109,7 @@ type ChatRunRecord = {
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
   assistantScope?: { itemId: string; prefix: string };
+  managedMediaUrls?: Set<string>;
   deltaLastBroadcastText?: string;
   agentText?: {
     assistant?: ChatRunAgentTextState;
@@ -232,7 +233,10 @@ export type ChatRunState = {
   registry: ChatRunRegistry;
   toolEventRecipients: ToolEventRecipientRegistry;
   getOrCreate: (runId: string) => ChatRunRecord;
-  resolveBuffer: (runId: string) => { text: string; suppress: boolean };
+  resolveBuffer: (
+    runId: string,
+    options?: { final?: boolean },
+  ) => { text: string; suppress: boolean };
   hasAbortMarker: (runId: string) => boolean;
   deleteAbortMarker: (runId: string) => void;
   recordProgressEvent: (runId: string, event: AgentEventPayload, mode?: "full" | "summary") => void;
@@ -274,6 +278,7 @@ export function createChatRunState(): ChatRunState {
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
     delete record.assistantScope;
+    delete record.managedMediaUrls;
     delete record.deltaLastBroadcastText;
     clearPendingLiveTextFlushes(record);
     delete record.agentText;
@@ -287,7 +292,7 @@ export function createChatRunState(): ChatRunState {
     store.runs.clear();
   };
 
-  const resolveBuffer = (runId: string) => {
+  const resolveBuffer = (runId: string, options?: { final?: boolean }) => {
     const record = store.runs.get(runId);
     if (!record) {
       return projectLiveAssistantBufferedText("");
@@ -296,7 +301,11 @@ export function createChatRunState(): ChatRunState {
     if (rawText === undefined) {
       return projectLiveAssistantBufferedText(record.buffer ?? "");
     }
-    if (record.bufferProjection?.source === rawText && record.buffer !== undefined) {
+    if (
+      !options?.final &&
+      record.bufferProjection?.source === rawText &&
+      record.buffer !== undefined
+    ) {
       return {
         text: record.buffer,
         suppress: record.bufferProjection.suppress,
@@ -304,10 +313,17 @@ export function createChatRunState(): ChatRunState {
     }
     // Protected blocks and directive tags can span delta frames, so the
     // projection cache belongs to the complete merged raw buffer.
-    const normalizedText = normalizeLiveAssistantBufferedText(rawText);
+    const normalizedText = normalizeLiveAssistantBufferedText(rawText, {
+      ...options,
+      managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+    });
     const projected = projectLiveAssistantBufferedText(normalizedText);
-    record.buffer = projected.text;
-    record.bufferProjection = { source: rawText, suppress: projected.suppress };
+    // A terminal read releases ambiguous directive prefixes as ordinary text;
+    // caching it would expose that prefix again if a late live reader races cleanup.
+    if (!options?.final) {
+      record.buffer = projected.text;
+      record.bufferProjection = { source: rawText, suppress: projected.suppress };
+    }
     return projected;
   };
 

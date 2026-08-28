@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("chat pane typing presence", () => {
-  it("clears only the exact structured user sender and expires remaining actors", () => {
+  it("sender provenance clears only the exact profile sender and expires remaining actors", () => {
     vi.useFakeTimers();
     const { pane, state } = createTestChatPane({
       client: { request: vi.fn() } as unknown as GatewayBrowserClient,
@@ -74,6 +74,28 @@ describe("chat pane typing presence", () => {
 
     pane.clearTypingActorForSessionMessage(
       event({ role: "user", __openclaw: { senderId: aliceId } }),
+    );
+    pane.clearTypingActorForSessionMessage(
+      event({
+        role: "user",
+        __openclaw: {
+          senderId: aliceId,
+          senderIdentity: {
+            type: "observation",
+            id: aliceId,
+            pluginId: "channel",
+            accountId: null,
+            senderKind: "unknown",
+          },
+        },
+      }),
+    );
+    expect([...pane.typingActors.keys()]).toEqual([aliceId, "bob"]);
+    pane.clearTypingActorForSessionMessage(
+      event({
+        role: "user",
+        __openclaw: { senderId: aliceId, senderIdentity: { type: "profile", id: aliceId } },
+      }),
     );
     expect([...pane.typingActors.keys()]).toEqual(["bob"]);
 

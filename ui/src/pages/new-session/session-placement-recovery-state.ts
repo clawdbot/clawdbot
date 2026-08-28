@@ -6,6 +6,7 @@ import {
   promoteSessionPlacementRecovery,
   type SessionPlacementCreateParams,
   type SessionPlacementRecovery,
+  type SessionPlacementPendingRecovery,
   type SessionPlacementTarget,
   writeSessionPlacementRecovery,
 } from "../../lib/sessions/session-placement-recovery.ts";
@@ -47,7 +48,7 @@ export class PendingSessionPlacementRecoveryState {
   agentId = "";
   gatewayUrl = "";
   recoveryScope = "";
-  phase: SessionPlacementRecovery["phase"] = "dispatching";
+  phase: SessionPlacementPendingRecovery["phase"] = "dispatching";
   createParams: SessionPlacementCreateParams | undefined;
   retryAllowed = false;
   restored = false;
@@ -55,20 +56,16 @@ export class PendingSessionPlacementRecoveryState {
 
   clear() {
     if (this.persistent) {
-      clearSessionPlacementRecovery(this.gatewayUrl, this.recoveryScope, this.sessionKey);
+      clearSessionPlacementRecovery(
+        this.gatewayUrl,
+        this.recoveryScope,
+        this.sessionKey,
+        this.messageId,
+      );
     }
     this.reset();
   }
 
-  clearFor(gatewayUrl: string, recoveryScope: string, sessionKey: string) {
-    clearSessionPlacementRecovery(gatewayUrl, recoveryScope, sessionKey);
-    if (this.owns(gatewayUrl, recoveryScope, sessionKey)) {
-      this.reset();
-    }
-  }
-
-  // Concurrent same-key replacement pages may double-clear recovery; that rare multi-tab flow is
-  // accepted in favor of ownership based only on gateway URL, recovery scope, and session key.
   owns(gatewayUrl: string, recoveryScope: string, sessionKey: string): boolean {
     return (
       this.gatewayUrl === gatewayUrl &&
@@ -97,7 +94,7 @@ export class PendingSessionPlacementRecoveryState {
     const recovery = listSessionPlacementRecoveries(gatewayUrl, recoveryScope).find(
       (candidate) => candidate.phase === "creating",
     );
-    if (!recovery) {
+    if (!recovery || recovery.phase !== "creating") {
       return null;
     }
     this.apply(recovery, true, true);
@@ -167,7 +164,7 @@ export class PendingSessionPlacementRecoveryState {
 
   private snapshot(
     sessionKey: string,
-    phase: SessionPlacementRecovery["phase"],
+    phase: SessionPlacementPendingRecovery["phase"],
   ): SessionPlacementRecovery | null {
     if (
       !this.sessionKey ||
@@ -194,7 +191,7 @@ export class PendingSessionPlacementRecoveryState {
     };
   }
 
-  private apply(recovery: SessionPlacementRecovery, restored: boolean, persistent: boolean) {
+  private apply(recovery: SessionPlacementPendingRecovery, restored: boolean, persistent: boolean) {
     this.sessionKey = recovery.sessionKey;
     this.messageId = recovery.messageId;
     this.message = recovery.message;

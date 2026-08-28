@@ -83,6 +83,32 @@ import {
   writeSessionStore,
 } from "./test-helpers.js";
 
+async function readWarmChatStartup(ws: Parameters<typeof rpcReq>[0]) {
+  // rpcReq resets the runtime config before each request. Warm startup must reuse
+  // the exact config that prepared metadata, as an ordinary client does.
+  const config = getRuntimeConfig();
+  const id = randomUUID();
+  const response = onceMessage<{
+    type: string;
+    id: string;
+    ok: boolean;
+    payload?: {
+      metadata?: {
+        commands?: Array<{ name?: string; textAliases?: string[] }>;
+        models?: Array<{ id?: string; provider?: string }>;
+      };
+      messages?: unknown[];
+      sessionInfo?: { key?: string; sessionId?: string };
+    };
+  }>(ws, (message) => message.type === "res" && message.id === id);
+  ws.send(
+    JSON.stringify({ type: "req", id, method: "chat.startup", params: makeMainSessionParams() }),
+  );
+  const result = await response;
+  expect(getRuntimeConfig()).toBe(config);
+  return result;
+}
+
 const restartRecoveryMocks = vi.hoisted(() => ({
   retryRestartAbortedMainSessionRecovery: vi.fn<
     typeof import("../agents/main-session-recovery/main-session-restart-recovery.js").retryRestartAbortedMainSessionRecovery
@@ -1487,14 +1513,7 @@ describe("gateway server chat", () => {
       const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
       expect(preparedMetadata.ok).toBe(true);
 
-      const startup = await rpcReq<{
-        metadata?: {
-          commands?: Array<{ name?: string; textAliases?: string[] }>;
-          models?: Array<{ id?: string; provider?: string }>;
-        };
-        messages?: unknown[];
-        sessionInfo?: { key?: string; sessionId?: string };
-      }>(ws, "chat.startup", makeMainSessionParams());
+      const startup = await readWarmChatStartup(ws);
       const agents = await rpcReq<{
         agents?: Array<{
           id?: string;
@@ -2520,9 +2539,7 @@ describe("gateway server chat", () => {
       const preparedMetadata = await rpcReq(ws, "chat.metadata", { agentId: "main" });
       expect(preparedMetadata.ok).toBe(true);
 
-      const startup = await rpcReq<{
-        metadata?: { models?: Array<{ id?: string; provider?: string }> };
-      }>(ws, "chat.startup", makeMainSessionParams());
+      const startup = await readWarmChatStartup(ws);
 
       expect(startup.ok).toBe(true);
       expect(startup.payload?.metadata?.models).toEqual(
@@ -2812,7 +2829,7 @@ describe("gateway server chat", () => {
     await withGatewayChatHarness(async ({ ws }) => {
       await connectOk(ws);
       const modelsListResult = await import("./server-methods/models-list-result.js");
-      vi.spyOn(modelsListResult, "buildModelsListResult").mockRejectedValue(
+      vi.spyOn(modelsListResult, "prepareModelsListResult").mockRejectedValue(
         new Error("configured model catalog unavailable"),
       );
 

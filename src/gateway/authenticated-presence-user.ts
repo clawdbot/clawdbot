@@ -23,6 +23,7 @@ export function buildAuthenticatedPresenceUser(params: {
   }
   return {
     id: params.authenticatedUserProfile.profileId,
+    identity: { type: "profile", id: params.authenticatedUserProfile.profileId },
     ...(params.authenticatedUserIsTailscaleProvider ? {} : { email: params.authenticatedUserId }),
     ...(params.authenticatedUserProfile.displayName
       ? { name: params.authenticatedUserProfile.displayName }
