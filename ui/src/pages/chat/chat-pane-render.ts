@@ -327,6 +327,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       progressCardHasActiveRun: Boolean(
         state.chatRunId || (selectedSession && isSessionRunActive(selectedSession)),
       ),
+      collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       onDismissProgressCard,
       gatewayQuestionPrompts: catalogKey || sessionParticipationBlocked ? [] : this.questionPrompts,
       onGatewayQuestionChange: () => {

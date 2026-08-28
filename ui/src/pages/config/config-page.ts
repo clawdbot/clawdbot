@@ -98,6 +98,7 @@ type ConfigPageSetting =
   | "textScale"
   | "sidebarLiveActivity"
   | "chatMessageMaxWidth"
+  | "chatCollapseTaskProgress"
   | "showAdvancedSettings"
   | "chatSendShortcut"
   | "chatFollowUpMode"
@@ -1254,6 +1255,9 @@ export class ConfigPage extends OpenClawLightDomElement {
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
       setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
+      chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
+      setChatCollapseTaskProgress: (enabled) =>
+        this.setSetting("chatCollapseTaskProgress", enabled),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
       setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
       forceShowAdvanced: this.pageId === "advanced",

@@ -1981,6 +1981,8 @@ export const en: TranslationMap = {
         "Optional CSS width for the centered transcript, such as 960px, 82%, or min(1280px, 82%).",
       messageWidthInvalid:
         "Enter a CSS width such as 960px, 82%, min(1280px, 82%), or calc(100% - 2rem).",
+      collapseTaskProgress: "Collapse task progress by default",
+      collapseTaskProgressHint: "Keep active task progress collapsed until you open it.",
     },
     sidebarPrefs: {
       title: "Sidebar",
