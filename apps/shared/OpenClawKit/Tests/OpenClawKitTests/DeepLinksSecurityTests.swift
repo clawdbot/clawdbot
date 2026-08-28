@@ -206,6 +206,25 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
         #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
     }
 
+    @Test func setupCodeRejectsExpiredPayload() {
+        let payload = #"{"url":"wss://gateway.example.com","expiresAtMs":1}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func publicInitializerRejectsMalformedTLSFingerprint() {
+        let link = GatewayConnectDeepLink(
+            host: "gateway.example.com",
+            port: 443,
+            tls: true,
+            tlsFingerprintSha256: "not-a-fingerprint",
+            bootstrapToken: nil,
+            token: nil,
+            password: nil)
+
+        #expect(!link.isValidEndpoint)
+    }
+
     @Test func setupCodeRejectsTLSFingerprintOnPlaintextEndpoint() {
         let fingerprint = String(repeating: "ab", count: 32)
         let payload = #"{"url":"ws://127.0.0.1:18789","tlsFingerprint":"\#(fingerprint)"}"#
@@ -215,12 +234,16 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
 
     @Test func fallbackEndpointDoesNotInheritPrimaryTLSFingerprint() throws {
         let fingerprint = String(repeating: "ab", count: 32)
-        let payload = #"{"url":"wss://direct.example.com","urls":["wss://direct.example.com","wss://proxy.example.com"],"tlsFingerprint":"\#(fingerprint)"}"#
+        let expiresAtMs: Int64 = 4_102_444_800_000
+        let payload = #"{"url":"wss://direct.example.com","urls":["wss://direct.example.com","wss://proxy.example.com"],"tlsFingerprint":"\#(fingerprint)","expiresAtMs":\#(expiresAtMs)}"#
         let link = try #require(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)))
         let fallback = try #require(link.fallbackEndpoints.first)
+        let selectedFallback = link.selectingEndpoint(fallback)
 
         #expect(link.tlsFingerprintSha256 == fingerprint)
-        #expect(link.selectingEndpoint(fallback).tlsFingerprintSha256 == nil)
+        #expect(link.expiresAtMs == expiresAtMs)
+        #expect(selectedFallback.tlsFingerprintSha256 == nil)
+        #expect(selectedFallback.expiresAtMs == expiresAtMs)
     }
 
     @Test func rejectedPrimaryDoesNotTransferTLSFingerprintToFallback() throws {

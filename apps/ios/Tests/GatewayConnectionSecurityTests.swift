@@ -389,7 +389,7 @@ import Testing
         #expect(GatewayTLSStore.loadFingerprint(stableID: stableID) == nil)
     }
 
-    @Test @MainActor func `setup TLS fingerprint connects without probe or prompt`() async throws {
+    @Test @MainActor func `setup TLS fingerprint connects after matching probe without prompt`() async throws {
         let fingerprint = String(repeating: "ab", count: 32)
         let link = GatewayConnectDeepLink(
             host: "gateway-\(UUID().uuidString).example.com",
@@ -413,7 +413,7 @@ import Testing
             tcpReachabilityProbe: { _, _, _, _ in true },
             tlsFingerprintProbe: { _ in
                 tlsProbeCalls.withLock { $0 += 1 }
-                return .fingerprint("unexpected")
+                return .fingerprint(fingerprint)
             },
             persistTLSFingerprint: { fingerprint, stableID in
                 persistedFingerprint.withLock { $0 = (fingerprint, stableID) }
@@ -430,7 +430,7 @@ import Testing
         }
 
         #expect(result == .accepted)
-        #expect(tlsProbeCalls.withLock { $0 } == 0)
+        #expect(tlsProbeCalls.withLock { $0 } == 1)
         #expect(controller.pendingTrustPrompt == nil)
         #expect(appModel.activeGatewayConnectConfig?.tls?.expectedFingerprint == fingerprint)
         let persisted = try #require(persistedFingerprint.withLock { $0 })
@@ -461,7 +461,7 @@ import Testing
             tcpReachabilityProbe: { _, _, _, _ in true },
             tlsFingerprintProbe: { _ in
                 tlsProbeCalls.withLock { $0 += 1 }
-                return .fingerprint("unexpected")
+                return .fingerprint(fingerprint)
             },
             persistTLSFingerprint: { _, _ in false })
 
@@ -472,8 +472,94 @@ import Testing
             authOverride: setupAuth.manualAuthOverride)
 
         #expect(result == .failed("Could not save gateway certificate"))
-        #expect(tlsProbeCalls.withLock { $0 } == 0)
+        #expect(tlsProbeCalls.withLock { $0 } == 1)
         #expect(controller.pendingTrustPrompt == nil)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor func `setup TLS fingerprint mismatch does not replace stored trust`() async {
+        let oldFingerprint = String(repeating: "ab", count: 32)
+        let setupFingerprint = String(repeating: "cd", count: 32)
+        let observedFingerprint = String(repeating: "ef", count: 32)
+        let link = GatewayConnectDeepLink(
+            host: "gateway-\(UUID().uuidString).example.com",
+            port: 443,
+            tls: true,
+            tlsFingerprintSha256: setupFingerprint,
+            bootstrapToken: "bootstrap",
+            token: nil,
+            password: nil)
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        let persistedFingerprint = OSAllocatedUnfairLock<(String, String)?>(initialState: nil)
+        defer { clearTLSFingerprint(stableID: setupAuth.targetStableID) }
+        self.clearTLSFingerprint(stableID: setupAuth.targetStableID)
+        GatewayTLSStore.saveFingerprint(oldFingerprint, stableID: setupAuth.targetStableID)
+
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in .fingerprint(observedFingerprint) },
+            persistTLSFingerprint: { fingerprint, stableID in
+                persistedFingerprint.withLock { $0 = (fingerprint, stableID) }
+                return true
+            })
+
+        let result = await controller.connectManual(
+            host: link.host,
+            port: link.port,
+            useTLS: link.tls,
+            authOverride: setupAuth.manualAuthOverride)
+
+        guard case .failed = result else {
+            Issue.record("Expected mismatched setup pin to fail before persistence")
+            return
+        }
+        #expect(persistedFingerprint.withLock { $0 } == nil)
+        #expect(appModel.activeGatewayConnectConfig == nil)
+    }
+
+    @Test @MainActor func `expired setup auth is rejected before probing or persistence`() async {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let link = GatewayConnectDeepLink(
+            host: "gateway-\(UUID().uuidString).example.com",
+            port: 443,
+            tls: true,
+            tlsFingerprintSha256: fingerprint,
+            expiresAtMs: 1,
+            bootstrapToken: "bootstrap",
+            token: nil,
+            password: nil)
+        let setupAuth = GatewayConnectionController.ManualAuthOverride.setupAuth(from: link)
+        let tlsProbeCalls = OSAllocatedUnfairLock(initialState: 0)
+        let persistenceCalls = OSAllocatedUnfairLock(initialState: 0)
+
+        let appModel = NodeAppModel()
+        defer { appModel.disconnectGateway() }
+        let controller = GatewayConnectionController(
+            appModel: appModel,
+            startDiscovery: false,
+            tcpReachabilityProbe: { _, _, _, _ in true },
+            tlsFingerprintProbe: { _ in
+                tlsProbeCalls.withLock { $0 += 1 }
+                return .fingerprint(fingerprint)
+            },
+            persistTLSFingerprint: { _, _ in
+                persistenceCalls.withLock { $0 += 1 }
+                return true
+            })
+
+        let result = await controller.connectManual(
+            host: link.host,
+            port: link.port,
+            useTLS: link.tls,
+            authOverride: setupAuth.manualAuthOverride)
+
+        #expect(result == .failed("Gateway setup code has expired."))
+        #expect(tlsProbeCalls.withLock { $0 } == 0)
+        #expect(persistenceCalls.withLock { $0 } == 0)
         #expect(appModel.activeGatewayConnectConfig == nil)
     }
 

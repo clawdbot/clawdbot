@@ -249,9 +249,11 @@ extension SettingsProTab {
         self.gatewayCredentialFieldStableID = ownsFields ? stableID : nil
         self.gatewayToken = credentials.token ?? ""
         self.gatewayPassword = credentials.password ?? ""
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.persisted(
+        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: self.pendingManualAuthOverride,
             instanceId: trimmedInstanceId,
-            targetStableID: stableID)
+            targetStableID: stableID,
+            allowManualOverride: true)
     }
 
     func refreshLocationPermissionSummary(desiredMode modeOverride: OpenClawLocationMode? = nil) {
@@ -921,9 +923,11 @@ extension SettingsProTab {
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.persisted(
+            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+                current: self.pendingManualAuthOverride,
                 instanceId: instanceId,
-                targetStableID: stableID)
+                targetStableID: stableID,
+                allowManualOverride: true)
             : nil
     }
 
@@ -939,9 +943,11 @@ extension SettingsProTab {
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.persisted(
+            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+                current: self.pendingManualAuthOverride,
                 instanceId: instanceId,
-                targetStableID: stableID)
+                targetStableID: stableID,
+                allowManualOverride: true)
             : nil
     }
 
@@ -1018,15 +1024,11 @@ extension SettingsProTab {
             self.gatewayToken = credentials.token ?? ""
             self.gatewayPassword = credentials.password ?? ""
         }
-        guard allowManualOverride else {
-            self.pendingManualAuthOverride = nil
-            return
-        }
-        // Each attempt consumes the in-memory override. Reload durable bootstrap auth even
-        // when the endpoint fields did not change so retry never erases a one-time token.
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.persisted(
+        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: self.pendingManualAuthOverride,
             instanceId: instanceId,
-            targetStableID: stableID)
+            targetStableID: stableID,
+            allowManualOverride: allowManualOverride)
     }
 
     var manualPortIsValid: Bool {

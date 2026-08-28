@@ -228,6 +228,7 @@ struct OnboardingWizardView: View {
         }
         .onDisappear {
             self.invalidateSetupAttempt()
+            self.qrCodeCompletion.cancel()
             self.discoveryRestartTask?.cancel()
             self.discoveryRestartTask = nil
             self.scannerResultHandoff.cancel()
@@ -256,6 +257,7 @@ struct OnboardingWizardView: View {
         }
         .onChange(of: self.setupCode) { _, newValue in
             guard !newValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return }
+            self.qrCodeCompletion.cancel()
             self.clearStagedGatewaySetupLink()
         }
         .onChange(of: self.appModel.lastGatewayProblem) { _, newValue in
@@ -271,7 +273,6 @@ struct OnboardingWizardView: View {
             guard newValue != nil, self.setupLinkStaging.link == nil else { return }
             let destination = self.qrCodeCompletion.destination(
                 connectedStableID: self.appModel.activeGatewayConnectConfig?.effectiveStableID)
-            guard destination != .wait else { return }
             self.showQRScanner = false
             self.statusLine = "Connected."
             if !self.didMarkCompleted, let selectedMode {
@@ -283,8 +284,6 @@ struct OnboardingWizardView: View {
                 self.onComplete()
             case .successScreen:
                 self.navigate(to: .success)
-            case .wait:
-                break
             }
         }
     }
@@ -855,6 +854,7 @@ extension OnboardingWizardView {
     }
 
     private func applySetupCodeAndConnect() async {
+        self.qrCodeCompletion.cancel()
         self.setupCodeStatus = nil
         let raw = self.setupCode.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else {
@@ -1180,6 +1180,7 @@ extension OnboardingWizardView {
     private func navigateBack() {
         guard let target = step.previous else { return }
         self.invalidateSetupAttempt()
+        self.qrCodeCompletion.cancel()
         self.localConnectionFailure = nil
         self.connectMessage = nil
         self.navigate(to: target)
@@ -1272,9 +1273,11 @@ extension OnboardingWizardView {
             self.gatewayCredentialFieldStableID = ownsFields ? stableID : nil
             self.gatewayToken = credentials.token ?? ""
             self.gatewayPassword = credentials.password ?? ""
-            self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.persisted(
+            self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+                current: self.pendingManualAuthOverride,
                 instanceId: trimmedInstanceId,
-                targetStableID: stableID)
+                targetStableID: stableID,
+                allowManualOverride: true)
         }
 
         let hasSavedGateway = GatewaySettingsStore.activeGatewayEntry() != nil
@@ -1371,9 +1374,11 @@ extension OnboardingWizardView {
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.persisted(
+            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+                current: self.pendingManualAuthOverride,
                 instanceId: instanceId,
-                targetStableID: stableID)
+                targetStableID: stableID,
+                allowManualOverride: true)
             : nil
     }
 
@@ -1388,9 +1393,11 @@ extension OnboardingWizardView {
             gatewayStableID: stableID,
             instanceId: instanceId)
         self.pendingManualAuthOverride = saved
-            ? GatewayConnectionController.ManualAuthOverride.persisted(
+            ? GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+                current: self.pendingManualAuthOverride,
                 instanceId: instanceId,
-                targetStableID: stableID)
+                targetStableID: stableID,
+                allowManualOverride: true)
             : nil
     }
 
@@ -1411,15 +1418,11 @@ extension OnboardingWizardView {
             self.gatewayToken = credentials.token ?? ""
             self.gatewayPassword = credentials.password ?? ""
         }
-        guard allowManualOverride else {
-            self.pendingManualAuthOverride = nil
-            return
-        }
-        // Each attempt consumes the in-memory override. Reload durable bootstrap auth even
-        // when the endpoint fields did not change so retry never erases a one-time token.
-        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.persisted(
+        self.pendingManualAuthOverride = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: self.pendingManualAuthOverride,
             instanceId: instanceId,
-            targetStableID: stableID)
+            targetStableID: stableID,
+            allowManualOverride: allowManualOverride)
     }
 
     private func connectDiscoveredGateway(_ gateway: GatewayDiscoveryModel.DiscoveredGateway) async {

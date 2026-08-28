@@ -10,24 +10,6 @@ typealias GatewayServiceEndpointResolver = @Sendable (NWEndpoint) async -> (host
 typealias GatewayForceReconnectReset = @MainActor (NodeAppModel) async -> Void
 typealias GatewayTLSFingerprintPersist = @Sendable (_ fingerprint: String, _ stableID: String) -> Bool
 
-private struct GatewayOperatorFleetResolvedConfig: Sendable {
-    let config: GatewayConnectConfig
-    let name: String
-}
-
-private enum GatewaySetupRouteProbeBudget {
-    static let tcpConnectTimeoutSeconds = 2.0
-}
-
-private func defaultGatewayTCPReachabilityProbe(
-    host: String,
-    port: Int,
-    timeoutSeconds: Double,
-    queueLabel: String) async -> Bool
-{
-    await TCPProbe.probe(host: host, port: port, timeoutSeconds: timeoutSeconds, queueLabel: queueLabel)
-}
-
 @MainActor
 @Observable
 final class GatewayConnectionController {
@@ -422,6 +404,11 @@ final class GatewayConnectionController {
         self.pendingConnectionStableID = stableID
         await self.waitForPendingForgetCleanup(stableID: stableID)
         guard self.connectAttemptGeneration == connectAttempt.suppressionLease.generation else { return .superseded }
+        if let expiresAtMs = authOverride?.expiresAtMs,
+           expiresAtMs <= Int64(Date().timeIntervalSince1970 * 1000)
+        {
+            return .failed(String(localized: "Gateway setup code has expired."))
+        }
         let instanceId = GatewaySettingsStore.currentInstanceID()
         let storedCredentials = GatewaySettingsStore.loadGatewayCredentials(
             instanceId: instanceId,
@@ -445,6 +432,15 @@ final class GatewayConnectionController {
             : nil
         guard resolvedUseTLS || setupFingerprint == nil else {
             return .failed(String(localized: "A TLS certificate fingerprint requires a secure gateway URL."))
+        }
+        if let setupVerificationFailure = await self.verifySetupFingerprint(
+            setupFingerprint,
+            host: host,
+            port: resolvedPort,
+            contextPath: contextPath,
+            attemptGeneration: connectAttempt.suppressionLease.generation)
+        {
+            return setupVerificationFailure
         }
         if let setupFingerprint, setupFingerprint != stored,
            !self.persistTLSFingerprint(setupFingerprint, stableID)
@@ -526,13 +522,7 @@ final class GatewayConnectionController {
             contextPath: contextPath,
             lastConnectedAtMs: nil)
         guard self.persistActiveGateway(registryEntry) else {
-            if setupFingerprint != nil, setupFingerprint != stored {
-                if let stored {
-                    _ = self.persistTLSFingerprint(stored, stableID)
-                } else {
-                    _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
-                }
-            }
+            self.restoreStoredFingerprint(stored, afterAttempting: setupFingerprint, stableID: stableID)
             return .failed(String(localized: "Could not save the paired gateway."))
         }
         self.didAutoConnect = true
@@ -547,7 +537,11 @@ final class GatewayConnectionController {
             forceReconnect: forceReconnect,
             suppressionGeneration: connectAttempt.suppressionLease.generation,
             expectedGeneration: connectAttempt.gatewayGeneration)
-        return didStart ? .accepted : .superseded
+        if !didStart {
+            self.restoreStoredFingerprint(stored, afterAttempting: setupFingerprint, stableID: stableID)
+            return .superseded
+        }
+        return .accepted
     }
 
     @discardableResult
@@ -1564,14 +1558,56 @@ extension GatewayConnectionController {
     }
 }
 
-private struct GatewayPendingTrustConnect {
-    let url: URL
-    let stableID: String
-    let isManual: Bool
-    let authOverride: GatewayConnectionController.ManualAuthOverride?
-    let allowStoredDeviceAuth: Bool
-    let suppressionLease: GatewayConnectionController.AutoConnectSuppressionLease
-    let gatewayGeneration: UInt64?
+extension GatewayConnectionController {
+    private func verifySetupFingerprint(
+        _ expectedFingerprint: String?,
+        host: String,
+        port: Int,
+        contextPath: String?,
+        attemptGeneration: UInt64) async -> ConnectionAttemptResult?
+    {
+        guard let expectedFingerprint else { return nil }
+        guard let url = self.buildGatewayURL(
+            host: host,
+            port: port,
+            useTLS: true,
+            contextPath: contextPath)
+        else { return .failed(String(localized: "Failed to build the gateway URL.")) }
+        self.appModel?.beginGatewayPreconnectVerification(statusText: "Verifying gateway TLS fingerprint…")
+        guard let probeResult = await self.probeTLSFingerprint(
+            host: host,
+            port: port,
+            url: url,
+            queueLabel: "gateway.tls.setup")
+        else { return .superseded }
+        guard self.connectAttemptGeneration == attemptGeneration else { return .superseded }
+        switch probeResult {
+        case let .systemTrusted(observedFingerprint), let .fingerprint(observedFingerprint):
+            guard observedFingerprint == expectedFingerprint else {
+                let message = String(localized: "Gateway certificate does not match setup code.")
+                self.appModel?.gatewayStatusText = message
+                return .failed(message)
+            }
+            return nil
+        case let .failure(failure):
+            let message = self.tlsProbeFailureMessage(failure, host: host, port: port)
+            self.appModel?.gatewayStatusText = message
+            return .failed(message)
+        }
+    }
+
+    private func restoreStoredFingerprint(
+        _ storedFingerprint: String?,
+        afterAttempting setupFingerprint: String?,
+        stableID: String)
+    {
+        guard setupFingerprint != nil, setupFingerprint != storedFingerprint else { return }
+        if let storedFingerprint {
+            _ = self.persistTLSFingerprint(storedFingerprint, stableID)
+        } else {
+            _ = GatewayTLSStore.clearFingerprint(stableID: stableID)
+        }
+    }
 }
 
 #if DEBUG

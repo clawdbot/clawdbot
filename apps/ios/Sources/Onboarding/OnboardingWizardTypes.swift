@@ -94,7 +94,6 @@ struct GatewaySetupLinkStaging {
 }
 
 enum OnboardingQRCodeDestination: Equatable {
-    case wait
     case mainUI
     case successScreen
 }
@@ -115,8 +114,9 @@ struct OnboardingQRCodeCompletion {
 
     mutating func destination(connectedStableID: String?) -> OnboardingQRCodeDestination {
         guard let targetStableID else { return .successScreen }
-        guard GatewayStableIdentifier.matches(targetStableID, connectedStableID) else { return .wait }
         self.targetStableID = nil
-        return .mainUI
+        return GatewayStableIdentifier.matches(targetStableID, connectedStableID)
+            ? .mainUI
+            : .successScreen
     }
 }

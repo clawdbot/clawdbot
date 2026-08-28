@@ -139,14 +139,23 @@ struct OnboardingQRCodeCompletionTests {
             connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
     }
 
-    @Test func `different gateway cannot consume scanned completion`() {
+    @Test func `different gateway falls back to success screen and consumes scanned completion`() {
         var completion = OnboardingQRCodeCompletion()
         completion.stage(Self.link)
 
         #expect(completion.destination(
-            connectedStableID: "manual|different.example.com|443") == .wait)
+            connectedStableID: "manual|different.example.com|443") == .successScreen)
         #expect(completion.destination(
-            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .mainUI)
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
+    }
+
+    @Test func `cancelled scanned completion retains success screen for same gateway`() {
+        var completion = OnboardingQRCodeCompletion()
+        completion.stage(Self.link)
+        completion.cancel()
+
+        #expect(completion.destination(
+            connectedStableID: "manual|gateway.example.com|443|/openclaw") == .successScreen)
     }
 
     @Test func `manual connection retains success screen`() {

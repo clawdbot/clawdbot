@@ -16,6 +16,12 @@ private func normalizeGatewayTLSFingerprint(_ value: String?) -> String? {
     return value.lowercased()
 }
 
+private func isGatewaySetupExpiryValid(_ expiresAtMs: Int64?) -> Bool {
+    guard let expiresAtMs else { return true }
+    let nowMs = Int64(Date().timeIntervalSince1970 * 1000)
+    return expiresAtMs > nowMs
+}
+
 private func normalizeGatewayContextPath(_ value: String?) -> String? {
     guard let value, !value.isEmpty else { return nil }
     let path = value.hasPrefix("/") ? value : "/\(value)"
@@ -81,6 +87,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         case tls
         case contextPath
         case tlsFingerprintSha256
+        case expiresAtMs
         case bootstrapToken
         case token
         case password
@@ -94,6 +101,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         let port: Int?
         let tls: Bool?
         let tlsFingerprint: String?
+        let expiresAtMs: Int64?
         let bootstrapToken: String?
         let token: String?
         let password: String?
@@ -104,10 +112,12 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     public let tls: Bool
     public let contextPath: String?
     public let tlsFingerprintSha256: String?
+    public let expiresAtMs: Int64?
     public let bootstrapToken: String?
     public let token: String?
     public let password: String?
     public let fallbackEndpoints: [GatewayConnectEndpoint]
+    private var hasInvalidTLSFingerprint = false
 
     public init(
         host: String,
@@ -115,6 +125,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         tls: Bool,
         contextPath: String? = nil,
         tlsFingerprintSha256: String? = nil,
+        expiresAtMs: Int64? = nil,
         bootstrapToken: String?,
         token: String?,
         password: String?,
@@ -124,7 +135,10 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         self.port = port
         self.tls = tls
         self.contextPath = normalizeGatewayContextPath(contextPath)
-        self.tlsFingerprintSha256 = normalizeGatewayTLSFingerprint(tlsFingerprintSha256)
+        let normalizedTLSFingerprint = normalizeGatewayTLSFingerprint(tlsFingerprintSha256)
+        self.tlsFingerprintSha256 = normalizedTLSFingerprint
+        self.hasInvalidTLSFingerprint = tlsFingerprintSha256 != nil && normalizedTLSFingerprint == nil
+        self.expiresAtMs = expiresAtMs
         self.bootstrapToken = bootstrapToken
         self.token = token
         self.password = password
@@ -153,6 +167,13 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
                 debugDescription: "A certificate fingerprint requires TLS.")
         }
         self.tlsFingerprintSha256 = tlsFingerprintSha256
+        self.expiresAtMs = try container.decodeIfPresent(Int64.self, forKey: .expiresAtMs)
+        if !isGatewaySetupExpiryValid(self.expiresAtMs) {
+            throw DecodingError.dataCorruptedError(
+                forKey: .expiresAtMs,
+                in: container,
+                debugDescription: "The gateway setup payload has expired.")
+        }
         self.bootstrapToken = try container.decodeIfPresent(String.self, forKey: .bootstrapToken)
         self.token = try container.decodeIfPresent(String.self, forKey: .token)
         self.password = try container.decodeIfPresent(String.self, forKey: .password)
@@ -166,7 +187,11 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     }
 
     public var isValidEndpoint: Bool {
-        guard (1...65535).contains(self.port), self.websocketURL?.host != nil else { return false }
+        guard !self.hasInvalidTLSFingerprint,
+              isGatewaySetupExpiryValid(self.expiresAtMs),
+              (1...65535).contains(self.port),
+              self.websocketURL?.host != nil
+        else { return false }
         return (self.tls || self.tlsFingerprintSha256 == nil) &&
             (self.tls || LoopbackHost.isLocalNetworkHost(self.host))
     }
@@ -188,6 +213,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             tls: endpoint.tls,
             contextPath: endpoint.contextPath,
             tlsFingerprintSha256: tlsFingerprintSha256,
+            expiresAtMs: self.expiresAtMs,
             bootstrapToken: self.bootstrapToken,
             token: self.token,
             password: self.password)
@@ -229,13 +255,13 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     /// - copied text/message content containing one or more extractable setup-code candidates
     ///
     /// Accepted payload shapes are:
-    /// - `{url, urls?, bootstrapToken?, token?, password?}`
-    /// - `{host, port?, tls?, bootstrapToken?, token?, password?}`
+    /// - `{url, urls?, tlsFingerprint?, expiresAtMs?, bootstrapToken?, token?, password?}`
+    /// - `{host, port?, tls?, tlsFingerprint?, expiresAtMs?, bootstrapToken?, token?, password?}`
     ///
     /// URL-based payloads provide the primary gateway WebSocket URL via `url`, with optional
     /// ordered candidates in `urls`. Host-based payloads provide `host` plus optional `port`
-    /// and `tls`. In both cases, the optional `bootstrapToken`, `token`, and `password` fields
-    /// are also supported.
+    /// and `tls`. In both cases, the optional `tlsFingerprint`, `expiresAtMs`, `bootstrapToken`,
+    /// `token`, and `password` fields are also supported.
     public static func fromSetupCode(_ code: String) -> GatewayConnectDeepLink? {
         var trimmed = code.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return nil }
@@ -265,6 +291,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
 
     private static func decodeSetupPayload(from data: Data) -> GatewayConnectDeepLink? {
         guard let payload = try? JSONDecoder().decode(SetupPayload.self, from: data) else { return nil }
+        guard isGatewaySetupExpiryValid(payload.expiresAtMs) else { return nil }
         let tlsFingerprintSha256 = normalizeGatewayTLSFingerprint(payload.tlsFingerprint)
         if payload.tlsFingerprint != nil, tlsFingerprintSha256 == nil {
             return nil
@@ -283,6 +310,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             return self.fromGatewayURLString(
                 url,
                 tlsFingerprintSha256: index == 0 ? tlsFingerprintSha256 : nil,
+                expiresAtMs: payload.expiresAtMs,
                 bootstrapToken: payload.bootstrapToken,
                 token: payload.token,
                 password: payload.password)
@@ -301,6 +329,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
                 tls: primary.tls,
                 contextPath: primary.contextPath,
                 tlsFingerprintSha256: primary.tlsFingerprintSha256,
+                expiresAtMs: primary.expiresAtMs,
                 bootstrapToken: primary.bootstrapToken,
                 token: primary.token,
                 password: primary.password,
@@ -323,6 +352,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             port: payload.port ?? defaultGatewayPort(tls: tls),
             tls: tls,
             tlsFingerprintSha256: tlsFingerprintSha256,
+            expiresAtMs: payload.expiresAtMs,
             bootstrapToken: payload.bootstrapToken,
             token: payload.token,
             password: payload.password)
@@ -331,6 +361,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
     private static func fromGatewayURLString(
         _ urlString: String,
         tlsFingerprintSha256: String?,
+        expiresAtMs: Int64? = nil,
         bootstrapToken: String?,
         token: String?,
         password: String?) -> GatewayConnectDeepLink?
@@ -360,6 +391,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             tls: tls,
             contextPath: parsed.percentEncodedPath,
             tlsFingerprintSha256: tlsFingerprintSha256,
+            expiresAtMs: expiresAtMs,
             bootstrapToken: bootstrapToken,
             token: token,
             password: password)
@@ -371,6 +403,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
         tls: Bool,
         contextPath: String? = nil,
         tlsFingerprintSha256: String? = nil,
+        expiresAtMs: Int64? = nil,
         bootstrapToken: String?,
         token: String?,
         password: String?) -> GatewayConnectDeepLink?
@@ -381,6 +414,7 @@ public struct GatewayConnectDeepLink: Codable, Sendable, Equatable {
             tls: tls,
             contextPath: contextPath,
             tlsFingerprintSha256: tlsFingerprintSha256,
+            expiresAtMs: expiresAtMs,
             bootstrapToken: bootstrapToken,
             token: token,
             password: password)

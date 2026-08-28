@@ -81,6 +81,7 @@ extension GatewayConnectionController {
             let password: String
             let targetStableID: String
             let tlsFingerprintSha256: String?
+            let expiresAtMs: Int64?
 
             var hasBootstrapToken: Bool {
                 !self.bootstrapToken.isEmpty
@@ -95,6 +96,7 @@ extension GatewayConnectionController {
                     password: self.password,
                     targetStableID: self.targetStableID,
                     tlsFingerprintSha256: self.tlsFingerprintSha256,
+                    expiresAtMs: self.expiresAtMs,
                     suppressStoredDeviceAuth: true)
             }
         }
@@ -104,6 +106,7 @@ extension GatewayConnectionController {
         let password: String?
         let targetStableID: String?
         let tlsFingerprintSha256: String?
+        let expiresAtMs: Int64?
         let suppressStoredDeviceAuth: Bool
 
         static func explicit(
@@ -112,6 +115,7 @@ extension GatewayConnectionController {
             password: String?,
             targetStableID: String? = nil,
             tlsFingerprintSha256: String? = nil,
+            expiresAtMs: Int64? = nil,
             suppressStoredDeviceAuth: Bool) -> ManualAuthOverride
         {
             let trimmedToken = token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -123,6 +127,7 @@ extension GatewayConnectionController {
                 password: trimmedPassword.isEmpty ? nil : trimmedPassword,
                 targetStableID: targetStableID,
                 tlsFingerprintSha256: tlsFingerprintSha256,
+                expiresAtMs: expiresAtMs,
                 suppressStoredDeviceAuth: suppressStoredDeviceAuth)
         }
 
@@ -159,6 +164,21 @@ extension GatewayConnectionController {
                 suppressStoredDeviceAuth: metadata.suppressStoredDeviceAuth)
         }
 
+        static func selectingCredentialTarget(
+            current: ManualAuthOverride?,
+            instanceId: String,
+            targetStableID: String,
+            allowManualOverride: Bool) -> ManualAuthOverride?
+        {
+            guard allowManualOverride else { return nil }
+            if let current,
+               GatewayStableIdentifier.matches(current.targetStableID, targetStableID)
+            {
+                return current
+            }
+            return self.persisted(instanceId: instanceId, targetStableID: targetStableID)
+        }
+
         static func currentManualInput(
             token: String?,
             pendingOverride: ManualAuthOverride?,
@@ -185,6 +205,7 @@ extension GatewayConnectionController {
                     password: normalizedInput.password == pendingOverride.password ? nil : normalizedInput.password,
                     targetStableID: targetStableID,
                     tlsFingerprintSha256: nil,
+                    expiresAtMs: nil,
                     suppressStoredDeviceAuth: true)
             }
             return ManualAuthOverride.explicit(
@@ -193,6 +214,7 @@ extension GatewayConnectionController {
                 password: password,
                 targetStableID: pendingOverride.targetStableID,
                 tlsFingerprintSha256: pendingOverride.tlsFingerprintSha256,
+                expiresAtMs: pendingOverride.expiresAtMs,
                 suppressStoredDeviceAuth: pendingOverride.suppressStoredDeviceAuth)
         }
 
@@ -215,7 +237,8 @@ extension GatewayConnectionController {
                     host: link.host,
                     port: link.port,
                     contextPath: link.contextPath),
-                tlsFingerprintSha256: link.tlsFingerprintSha256)
+                tlsFingerprintSha256: link.tlsFingerprintSha256,
+                expiresAtMs: link.expiresAtMs)
         }
     }
 }

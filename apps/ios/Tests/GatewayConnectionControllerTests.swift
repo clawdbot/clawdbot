@@ -821,6 +821,16 @@ private func waitUntil(
             pendingOverride: nil,
             password: nil,
             targetStableID: secondStableID)
+        let selectedSameTarget = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: pending,
+            instanceId: "missing-instance",
+            targetStableID: firstStableID,
+            allowManualOverride: true)
+        let selectedDifferentTarget = GatewayConnectionController.ManualAuthOverride.selectingCredentialTarget(
+            current: pending,
+            instanceId: "missing-instance",
+            targetStableID: secondStableID,
+            allowManualOverride: true)
 
         #expect(first?.token == "source-token")
         #expect(first?.bootstrapToken == "bootstrap-token")
@@ -838,6 +848,8 @@ private func waitUntil(
         #expect(edited?.password == nil)
         #expect(ordinary?.suppressStoredDeviceAuth == false)
         #expect(ordinary?.tlsFingerprintSha256 == nil)
+        #expect(selectedSameTarget?.tlsFingerprintSha256 == String(repeating: "ab", count: 32))
+        #expect(selectedDifferentTarget == nil)
     }
 
     @Test func `persisted setup auth stays scoped after view recreation`() throws {
