@@ -3843,7 +3843,7 @@ src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
 src/tui/tui-event-handlers.ts	5
-src/tui/tui-formatters.ts	5
+src/tui/tui-formatters.ts	4
 src/tui/tui-session-actions.ts	5
 src/tui/tui-session-events.ts	1
 src/tui/tui-session-projection.ts	2
