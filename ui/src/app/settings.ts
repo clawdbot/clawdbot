@@ -1,5 +1,6 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { safeParseJson } from "@openclaw/normalization-core";
+import { normalizeAgentId } from "@openclaw/normalization-core/agent-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
@@ -49,11 +50,12 @@ function currentGatewaySelectionKeyForPage(pageUrl: string): string {
 type ScopedSessionSelection = {
   sessionKey: string;
   lastActiveSessionKey: string;
+  selectedAgentId?: string;
 };
 
 type PersistedUiSettings = Omit<
   UiSettings,
-  "token" | "sessionKey" | "lastActiveSessionKey" | "navCollapsed"
+  "token" | "sessionKey" | "lastActiveSessionKey" | "selectedAgentId" | "navCollapsed"
 > & {
   token?: never;
   sessionKey?: string;
@@ -199,6 +201,7 @@ export type UiSettings = {
   token: string;
   sessionKey: string;
   lastActiveSessionKey: string;
+  selectedAgentId?: string;
   theme: ThemeName;
   themeMode: ThemeMode;
   accent?: string;
@@ -354,10 +357,14 @@ function resolveScopedSessionSelection(
   const scoped = parsed.sessionsByGateway?.[scope];
   const scopedSessionKey = normalizeOptionalString(scoped?.sessionKey);
   const scopedLastActiveSessionKey = normalizeOptionalString(scoped?.lastActiveSessionKey);
+  const scopedSelectedAgentId = normalizeOptionalString(scoped?.selectedAgentId);
   if (scopedSessionKey && scopedLastActiveSessionKey) {
     return {
       sessionKey: scopedSessionKey,
       lastActiveSessionKey: scopedLastActiveSessionKey,
+      ...(scopedSelectedAgentId
+        ? { selectedAgentId: normalizeAgentId(scopedSelectedAgentId) }
+        : {}),
     };
   }
 
@@ -509,6 +516,7 @@ export function loadSettings(): UiSettings {
       token: loadSessionToken(gatewayUrl),
       sessionKey: scopedSessionSelection.sessionKey,
       lastActiveSessionKey: scopedSessionSelection.lastActiveSessionKey,
+      selectedAgentId: scopedSessionSelection.selectedAgentId,
       theme: theme === "custom" && !customTheme ? "claw" : theme,
       themeMode: mode,
       accent: normalizeAccentColor(parsed.accent),
@@ -657,6 +665,9 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
         {
           sessionKey: next.sessionKey,
           lastActiveSessionKey: next.lastActiveSessionKey,
+          ...(normalizeOptionalString(next.selectedAgentId)
+            ? { selectedAgentId: normalizeAgentId(next.selectedAgentId) }
+            : {}),
         },
       ],
     ].slice(-MAX_SCOPED_SESSION_ENTRIES),
