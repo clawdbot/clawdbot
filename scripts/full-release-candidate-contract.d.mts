@@ -30,7 +30,7 @@ export interface FullReleaseCandidateArtifactIdentity {
   runId: string;
 }
 
-export interface FullReleaseCandidateProducer {
+export interface FullReleaseCandidateJobIdentity {
   jobId: string;
   jobName: string;
   repository: string;
@@ -39,6 +39,10 @@ export interface FullReleaseCandidateProducer {
   workflowPath: string;
   workflowSha: string;
 }
+
+export type FullReleaseCandidateProducer = FullReleaseCandidateJobIdentity;
+
+export type FullReleaseCandidatePublisher = FullReleaseCandidateJobIdentity;
 
 export interface FullReleaseCandidatePreparation {
   planSha256: string;
@@ -70,16 +74,17 @@ export interface FullReleaseCandidateManifest {
   preparation: FullReleaseCandidatePreparation;
   prepublishPluginRegistry: FullReleaseCandidatePluginRegistry;
   producer: FullReleaseCandidateProducer;
+  publisher: FullReleaseCandidatePublisher;
   request: FullReleaseCandidateRequest;
   requestSha256: string;
-  schema: "openclaw.full-release-candidate/v1";
+  schema: "openclaw.full-release-candidate/v2";
   sharedImage: FullReleaseCandidateSharedImage;
 }
 
 export interface FullReleaseCandidateBinding extends Omit<FullReleaseCandidateManifest, "schema"> {
   evidenceArtifact: FullReleaseCandidateArtifactIdentity;
   manifestSha256: string;
-  schema: "openclaw.full-release-candidate-binding/v1";
+  schema: "openclaw.full-release-candidate-binding/v2";
 }
 
 export function buildFullReleaseCandidateRequest(

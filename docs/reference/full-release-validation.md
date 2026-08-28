@@ -242,16 +242,16 @@ remain immutable GitHub artifacts. Focused runs with an explicit published
 package spec keep the existing package path instead.
 
 Preparation also emits a canonical request digest and a seven-day
-`full-release-candidate-v1-<request-sha256>` evidence artifact. Its bounded
+`full-release-candidate-v2-<request-sha256>` evidence artifact. Its bounded
 manifest binds the exact target and Tooling SHAs, release and soak policy,
 effective survivor baselines and scenarios, preparation-plan digest, sorted
-plugin package set, producer workflow/job/run attempt, and package, registry,
-and image artifact identities and expiry timestamps. The execution plan seals
-that producer evidence. Before preparing a candidate, the umbrella may reuse
+plugin package set, producer and publisher workflow/job/run identities, and
+package, registry, and image artifact identities and expiry timestamps. The
+execution plan seals that evidence. Before preparing a candidate, the umbrella may reuse
 the newest artifact with at least fourteen hours of remaining lifetime for the
 same canonical request only after it revalidates the exact workflow run,
-trusted publisher job, archive digest, manifest, producer attempt, producer
-job, and live metadata for every package, registry, and image artifact.
+publisher job identity, archive digest, manifest, producer attempt and job, and
+live metadata for every package, registry, and image artifact.
 Only a proven absence permits a fresh build. Discovery uncertainty and failures
 after selection are blocking so the run cannot silently switch candidates.
 

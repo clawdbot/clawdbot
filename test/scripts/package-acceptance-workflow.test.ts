@@ -4064,14 +4064,24 @@ describe("package artifact reuse", () => {
     expect(evidence.run).toContain('--job-name "$PRODUCER_JOB_NAME"');
     expect(evidence.run).toContain('--run-id "$PRODUCER_RUN_ID"');
     expect(evidence.run).toContain('--run-attempt "$PRODUCER_RUN_ATTEMPT"');
+    expect(evidence.run).toContain("publisher: {");
     expect(evidence.run).toContain("requiredPrepublishPluginPackages");
     expect(evidence.run).toContain('verify-upload "$label"');
     expect(binding.run).toContain("full-release-candidate-contract.mjs binding");
     expect(binding.run).toContain("for attempt in 1 2 3");
     expect(upload.with).toMatchObject({
-      name: "full-release-candidate-v1-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}",
+      name: "full-release-candidate-v2-${{ needs.prepare_docker_e2e_image.outputs.candidate_request_sha256 }}",
       "retention-days": 7,
     });
+    expect(workflowRevision.env).toMatchObject({
+      EXPECTED_WORKFLOW_PATH: ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
+      JOB_CONTEXT: "${{ toJSON(job) }}",
+      RUN_ATTEMPT: "${{ github.run_attempt }}",
+      RUN_ID: "${{ github.run_id }}",
+    });
+    expect(workflowRevision.run).toContain("job.check_run_id");
+    expect(workflowRevision.run).toContain("job.workflow_file_path");
+    expect(workflowRevision.run).toContain("actions/jobs/${jobId}");
     expect(producer.outputs).toMatchObject({
       candidate_artifact_json: "${{ steps.candidate_manifest.outputs.json }}",
       candidate_request_json: "${{ steps.candidate_request.outputs.json }}",
@@ -4115,6 +4125,13 @@ describe("package artifact reuse", () => {
       PRODUCER_WORKFLOW_REPOSITORY:
         "${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_repository }}",
       PRODUCER_WORKFLOW_SHA: "${{ needs.prepare_docker_e2e_image.outputs.producer_workflow_sha }}",
+      PUBLISHER_JOB_ID: "${{ steps.workflow.outputs.job_id }}",
+      PUBLISHER_JOB_NAME: "${{ steps.workflow.outputs.job_name }}",
+      PUBLISHER_RUN_ATTEMPT: "${{ steps.workflow.outputs.run_attempt }}",
+      PUBLISHER_RUN_ID: "${{ steps.workflow.outputs.run_id }}",
+      PUBLISHER_WORKFLOW_PATH: "${{ steps.workflow.outputs.workflow_path }}",
+      PUBLISHER_WORKFLOW_REPOSITORY: "${{ steps.workflow.outputs.repository }}",
+      PUBLISHER_WORKFLOW_SHA: "${{ steps.workflow.outputs.sha }}",
       REQUIRED_PACKAGES_JSON:
         "${{ needs.prepare_docker_e2e_image.outputs.required_prepublish_plugin_packages }}",
     });
@@ -4166,9 +4183,13 @@ describe("package artifact reuse", () => {
       producerSteps.indexOf(producerCheckouts[0]!),
     );
     expect(workflowRevision.env).toEqual({
+      EXPECTED_WORKFLOW_PATH: ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
       EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
+      GH_TOKEN: "${{ github.token }}",
       HARNESS_PATH: ".release-harness",
       JOB_CONTEXT: "${{ toJSON(job) }}",
+      RUN_ATTEMPT: "${{ github.run_attempt }}",
+      RUN_ID: "${{ github.run_id }}",
     });
     expect(workflowRevision.run).toContain('repository !== "openclaw/openclaw"');
     expect(workflowRevision.run).toContain("job.workflow_repository !== repository");
