@@ -76,10 +76,9 @@ export async function resolveInstallEnv(
   const hasExplicitPreferOffline =
     effectiveEnv.pnpm_config_prefer_offline !== undefined ||
     effectiveEnv.PNPM_CONFIG_PREFER_OFFLINE !== undefined;
-  const hasConfigPreferOffline =
-    hasExplicitPreferOffline
-      ? false
-      : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
+  const hasConfigPreferOffline = hasExplicitPreferOffline
+    ? false
+    : await hasExplicitPnpmPreferOfflineConfig({ runCommand, cwd, timeoutMs, env: effectiveEnv });
   const installEnv: NodeJS.ProcessEnv = {
     ...env,
     PNPM_CONFIG_RESOLUTION_MODE: env?.PNPM_CONFIG_RESOLUTION_MODE ?? "highest",

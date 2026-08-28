@@ -226,7 +226,7 @@ describe("install.ps1 failure handling", () => {
           "function Get-TestPnpmConfig {",
           "  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)",
           "  if ($Arguments -join ' ' -ne 'config get prefer-offline') { throw \"unexpected pnpm command: $($Arguments -join ' ')\" }",
-          "  if ((Get-Location).Path -ne $project) { throw \"unexpected pnpm cwd: $(Get-Location)\" }",
+          '  if ((Get-Location).Path -ne $project) { throw "unexpected pnpm cwd: $(Get-Location)" }',
           "  if ($script:PnpmConfigValue -eq 'failure') { $global:LASTEXITCODE = 1; return }",
           "  $global:LASTEXITCODE = 0",
           "  return $script:PnpmConfigValue",
