@@ -348,7 +348,9 @@ describe("slackApprovalNativeRuntime", () => {
     });
 
     const requestMrkdwn = findApprovalMrkdwn(payload, "*Request*");
-    expect(requestMrkdwn).toMatch(/…$/);
+    // The request body is fenced, so the truncation marker ends the code block
+    // content rather than the whole mrkdwn string.
+    expect(requestMrkdwn).toMatch(/…\n```$/);
     expect(UNPAIRED_SURROGATE_RE.test(requestMrkdwn)).toBe(false);
   });
 
@@ -430,22 +432,38 @@ describe("slackApprovalNativeRuntime", () => {
     ]);
   });
 
-  it("escapes plugin approval mrkdwn triggers at the Slack render boundary", async () => {
-    // The canonical approval record stays literal so non-Slack surfaces read
-    // correctly, which makes escaping this renderer's responsibility.
+  it("renders plugin approval request text literally inside a code block", async () => {
+    // The canonical record stays literal for non-Slack surfaces, so Slack owns
+    // presentation. A fence renders harness text exactly as stored without
+    // showing escape characters to the operator.
+    const title = "touch /tmp/SIDE_EFFECT && echo *done*";
     const payload = await buildPluginPendingPayload({
       ...SCREEN_SHARE_APPROVAL,
-      title: "touch /tmp/SIDE_EFFECT && echo *done*",
+      title,
       description: "Link bait <https://evil.test|click> for @channel",
     });
 
     const requestMrkdwn = findApprovalMrkdwn(payload, "*Request*");
-    expect(requestMrkdwn).toContain("SIDE\\_EFFECT");
-    expect(requestMrkdwn).toContain("&amp;&amp;");
-    expect(requestMrkdwn).toContain("\\*done\\*");
+    expect(requestMrkdwn).toContain("```");
+    expect(requestMrkdwn).toContain(title);
+    expect(requestMrkdwn).not.toContain("SIDE\\_EFFECT");
+    expect(requestMrkdwn).not.toContain("&amp;&amp;");
+
+    // Prose still neutralizes link and mention triggers.
     const serialized = JSON.stringify(payload.blocks);
     expect(serialized).toContain("&lt;https://evil.test|click&gt;");
     expect(serialized).not.toContain("<https://evil.test|click>");
+  });
+
+  it("extends the request fence so harness backticks cannot escape the code block", async () => {
+    const payload = await buildPluginPendingPayload({
+      ...SCREEN_SHARE_APPROVAL,
+      title: "```\n*not bold*\n```",
+    });
+
+    const requestMrkdwn = findApprovalMrkdwn(payload, "*Request*");
+    expect(requestMrkdwn).toContain("````");
+    expect(requestMrkdwn).toContain("*not bold*");
   });
 
   it("renders resolved updates without interactive blocks", async () => {
