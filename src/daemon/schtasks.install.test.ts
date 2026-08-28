@@ -175,6 +175,7 @@ describe("installScheduledTask", () => {
           OC_CARET: "a^b",
           OC_PERCENT: "%TEMP%",
           OC_BANG: "!token!",
+          OC_SOURCE_PATH: "C:\\OpenClaw source & ^ %USERPROFILE%!",
           OC_QUOTE: 'he said "hi"',
           OC_EMPTY: "",
           NODE_OPTIONS: "",
@@ -190,6 +191,7 @@ describe("installScheduledTask", () => {
       expect(script).toContain('set "OC_CARET=a^^b"');
       expect(script).toContain('set "OC_PERCENT=%%TEMP%%"');
       expect(script).toContain('set "OC_BANG=^!token^!"');
+      expect(script).toContain('set "OC_SOURCE_PATH=C:\\OpenClaw source & ^^ %%USERPROFILE%%^!"');
       expect(script).toContain('set "OC_QUOTE=he said ^"hi^""');
       expect(script).not.toContain('set "OC_EMPTY=');
       expect(script).toContain('set "NODE_OPTIONS="');
@@ -213,6 +215,7 @@ describe("installScheduledTask", () => {
           OC_CARET: "a^b",
           OC_PERCENT: "%TEMP%",
           OC_BANG: "!token!",
+          OC_SOURCE_PATH: "C:\\OpenClaw source & ^ %USERPROFILE%!",
           OC_QUOTE: 'he said "hi"',
           NODE_OPTIONS: "",
         },
@@ -221,6 +224,7 @@ describe("installScheduledTask", () => {
           OC_CARET: "inline",
           OC_PERCENT: "inline",
           OC_BANG: "inline",
+          OC_SOURCE_PATH: "inline",
           OC_QUOTE: "inline",
           NODE_OPTIONS: "inline",
         },

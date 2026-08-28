@@ -118,11 +118,17 @@ const resetRetryState = (
   sendError: entry.sendState === "failed" ? entry.sendError : undefined,
   sendRequestStartedAtMs: undefined,
   sendRunId:
-    entry.sendState === "failed" && entry.queueMode !== "steer" ? generateUUID() : entry.sendRunId,
+    entry.sendState === "failed" && entry.queueMode !== "steer" && !entry.intent
+      ? generateUUID()
+      : entry.sendRunId,
   sendState,
 });
 
 export async function steerQueuedChatMessage(host: ChatHost, id: string): Promise<void> {
+  if (readQueuedMessageById(host, id)?.intent) {
+    setChatError(host, t("chat.goals.admissionImmutable"));
+    return;
+  }
   if (isQueuedMessageBeingEdited(host, id)) {
     setChatError(host, QUEUED_MESSAGE_STEER_CONFLICT_ERROR);
     return;

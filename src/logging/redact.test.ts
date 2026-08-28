@@ -4,7 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { withEnv } from "../test-utils/env.js";
-import { DEFAULT_REDACT_PATTERNS } from "./redact-patterns.js";
+import {
+  DEFAULT_REDACT_PATTERNS,
+  TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS,
+} from "./redact-patterns.js";
+import { redactSourceInputTextWithConfig } from "./redact-source.js";
 import {
   computeSensitiveRedactionBitmap,
   getDefaultRedactPatterns,
@@ -119,6 +123,67 @@ describe("registered exact secret values", () => {
 });
 
 describe("model-visible tool payload redaction", () => {
+  it.each([
+    'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;',
+    "const API_TOKEN = 'fixture-only-not-a-real-secret'; return API_TOKEN;",
+    "const API_TOKEN = `fixture-only-not-a-real-secret`; return API_TOKEN;",
+    "const API_TOKEN = 987654321; return API_TOKEN;",
+    'const note = "API_TOKEN=fixture-only-not-a-real-secret";',
+    "// API_TOKEN=fixture-only-not-a-real-secret\nreturn 42;",
+    'return { "api_key": "fixture-only-not-a-real-secret" };',
+    'const API_TOKEN = "fixture-only-not-a-real-secret" + suffix; return API_TOKEN;',
+    "const API_TOKEN = computeToken(); /* API_TOKEN=fixture-only-not-a-real-secret */",
+    'const API_TOKEN = "fixture-only-not-a-real-secret"; @',
+  ])("retains diagnostic literal masking in input source: %s", (source) => {
+    const redacted = redactSourceInputTextWithConfig(source);
+    expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
+    expect(redacted).not.toMatch(/fixture-only-not-a-real-secret|987654321/);
+    expect(redacted).toContain("***");
+    expect(redacted).not.toBe(source);
+    expect(redactSourceInputTextWithConfig(redacted)).toBe(redacted);
+  });
+
+  it.each([
+    "const API_TOKEN = computeToken(); return API_TOKEN;",
+    "const API_TOKEN: number = computeToken(); return API_TOKEN;",
+    "const API_TOKEN = computeToken<string>(); return API_TOKEN;",
+    "const API_TOKEN = (40 + 2); return API_TOKEN;",
+    "const API_TOKEN = await computeToken(); return API_TOKEN;",
+    "const HAS_API_TOKEN = false; return HAS_API_TOKEN;",
+    "const HAS_API_TOKEN = true; return HAS_API_TOKEN;",
+    "let API_TOKEN = null; return API_TOKEN;",
+  ])("preserves input computations without changing diagnostics: %s", (source) => {
+    expect(redactSourceInputTextWithConfig(source)).toBe(source);
+    expect(redactToolPayloadTextWithConfig(source)).not.toBe(source);
+  });
+
+  it("keeps explicit custom assignment patterns authoritative over source syntax", () => {
+    const source = "const API_TOKEN = computeToken(); return API_TOKEN;";
+    const assignmentPatterns = [...TOOL_PAYLOAD_AMBIGUOUS_ASSIGNMENT_PATTERNS].filter(
+      (pattern) => redactSensitiveText(source, { patterns: [pattern] }) !== source,
+    );
+    expect(assignmentPatterns.length).toBeGreaterThan(0);
+    for (const pattern of ["computeToken", ...assignmentPatterns]) {
+      expect(redactSourceInputTextWithConfig(source, { redactPatterns: [pattern] })).not.toContain(
+        "computeToken",
+      );
+    }
+  });
+
+  it("does not substitute the weaker output policy for input source", () => {
+    const source = 'const API_TOKEN = "fixture-only-not-a-real-secret"; return API_TOKEN;';
+    expect(redactModelVisibleToolPayloadText(source)).toBe(source);
+    expect(redactSourceInputTextWithConfig(source)).toBe(
+      'const API_TOKEN = "***"; return API_TOKEN;',
+    );
+  });
+
+  it("uses bounded diagnostic masking for oversized source", () => {
+    const source = `const API_TOKEN = computeToken();\n${" ".repeat(131_072)}`;
+    expect(redactSourceInputTextWithConfig(source)).toBe(redactToolPayloadTextWithConfig(source));
+    expect(redactSourceInputTextWithConfig(source)).not.toContain("computeToken");
+  });
+
   it("preserves source assignments while masking explicit credential forms", () => {
     const registeredSecret = "registered-model-visible-secret";
     registerSecretValueForRedaction(registeredSecret);

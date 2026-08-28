@@ -43,7 +43,7 @@ dispatch.
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                                                                                                                      | Node-relevant changes                                  |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                                                                                                                                     | Node-relevant changes                                  |
 | `checks-node-*`                    | Changed-target Node tests on pull requests; compact integration shards on `main`; metadata-complete compact fallback on broad PRs; full named shards on manual and release runs                                                                                                                          | Node-relevant changes                                  |
-| `docker-seed-e2e`                  | One Docker scheduler job for the executable `mcp-channels`, `cron-mcp-cleanup`, and `mcp-code-mode-gateway` owner lanes                                                                                                                                                                                  | PR changes to their seed helpers or CI gate owners     |
+| `docker-seed-e2e`                  | One Docker scheduler job for the executable `mcp-channels`, `cron-mcp-cleanup`, `mcp-code-mode-gateway`, and `update-channel-switch` owner lanes                                                                                                                                                         | PR changes to their E2E helpers or CI gate owners      |
 | `check-*`                          | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                                                                                   | Node-relevant changes                                  |
 | `check-additional-*`               | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                  |
 | `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                                                                                                                                                                                                               | Full Release Validation and manual dispatches only     |
@@ -61,7 +61,7 @@ dispatch.
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 
 The rare path-triggered `docker-seed-e2e` job selects only the executable
-owners of changed seed helpers and runs them through one scheduler invocation.
+owners of changed E2E helpers and runs them through one scheduler invocation.
 Trusted same-repository pull requests use one 16-vCPU Blacksmith runner with
 main and tail parallelism set to 3; GitHub-hosted, fork, and retry paths run the
 same selected lanes serially. The job is part of `openclaw/ci-gate`. It adds at
@@ -92,6 +92,14 @@ GitHub may mark superseded pull-request jobs as `cancelled` when a newer head la
 Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings.mjs <run-id>` to summarize wall time, start delay, slowest jobs, failures, and the `pnpm-store-warmup` fanout barrier from GitHub Actions. Use `pnpm ci:timings:trend` for a 72-hour baseline and a latest-12-hours versus prior-12-hours comparison. Trend mode includes every main push outcome, cancellation/pass rates, and successful-run wall time, then loads a balanced latest/prior sample of at most 100 successful runs by default. Its detailed sample separates workflow admission, job dependency/gate delay (`job.created_at` minus the first job's creation), runner queue/start latency (`job.started_at` minus `job.created_at`), and execution; it also reports critical-path ownership and the actual GitHub API request count. Reruns use attempt-specific jobs and are excluded from run-level wall/admission distributions because GitHub retains the original workflow creation time. Raise or lower the detailed-run selection cap with `--detail-runs` (a run with more than 100 jobs requires multiple requests), emit JSON to stdout with `--json`, or save the same report with `--output .artifacts/ci-timings/trend.json`; missing output directories are created automatically. The baseline must cover at least two comparison windows.
 
 Run the timing helper locally; there is no in-workflow timing-summary job (a permanently disabled one was removed once the local helper became the tool everyone actually used). For build timing, check the `build-artifacts` job's `Build dist` step: `pnpm build:ci-artifacts` prints `[build-all] phase timings:` and includes `ui:build`; the job also uploads the `startup-memory` artifact.
+
+Local `pnpm build:ci-artifacts` uses the same memory admission as full and package
+builds. The orchestrator passes the resolved heap budget to every child process,
+including the SDK declaration writer, so local builds do not depend on CI's
+`NODE_OPTIONS` setting. The existing policy accounts for host and cgroup limits
+and reserves native-memory headroom. If the default budget cannot fit the build,
+it stops before build steps or cache restoration; `OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB`
+remains the explicit operator override for attempting a different budget.
 
 ## PR context and evidence
 
@@ -146,7 +154,7 @@ The slowest Node test families are split or balanced so each job stays small wit
 - The build-artifact job also persists content-fingerprinted `build-all` step outputs. CI's self-built plugin SDK declarations hash the complete repository-owned TypeScript/JSON source graph, exclude installed and generated directories, and restore both flat declarations and package bridges after `tsdown` clears `dist`. Documentation, workflow, plugin, and other changes outside that graph can reuse the declaration snapshot; source changes rebuild it before the export gate runs. The built Doctor plugin-index proof reuses that exact `dist/` output instead of invoking the E2E harness's fallback TypeScript build a second time.
 - Full declaration builds split `tsdown` into AI, workspace-package, and unified groups. Each group caches declarations only, then still rebuilds runtime JavaScript before restoring those declarations. Core or plugin changes therefore invalidate only the large unified graph, while workspace-package changes conservatively invalidate every dependent declaration group. Public full builds generally use an immutable Actions cache; coarse restore keys seed partial changes, per-group content fingerprints reject stale data, and GitHub's cache quota evicts old generations. The weekly Node 22 lane instead publishes a 14-day artifact after successful `main` runs and restores only artifacts whose immutable producer identity resolves to that workflow on `main`, avoiding quota churn without allowing PR code to write a shared cache. Private-QA declarations are never persisted in Actions caches because cache namespaces are not confidentiality boundaries.
 - `check-additional-*` stripes the supplemental boundary guard list (`scripts/run-additional-boundary-checks.mts`) into one prompt-heavy shard (`check-additional-boundaries-a`, which includes the Codex prompt snapshot drift check) and one combined shard for the remaining stripes (`check-additional-boundaries-bcd`), each running independent guards concurrently and printing per-check timings. Package-boundary compile/canary work stays together, and runtime topology architecture runs separately from the gateway watch coverage embedded in `build-artifacts`.
-- On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Both paths then run the two built TUI PTY artifact canaries alone; the pull request fallback plus manual and release full matrices own the dedicated full serial shard.
+- On the 32-vCPU self-hosted build runner, Gateway watch, channel tests, and the core support-boundary shard start together inside `build-artifacts` after `dist/` and `dist-runtime/` are already built. GitHub-hosted fallback runs keep Gateway watch serial so low-core contention cannot consume its readiness deadline. Full Node builds then verify Discord component attachment filenames through a serial public Gateway message action, checking the built revision and retaining the named-test JSON result; frozen targets that predate the case explicitly report unavailable proof. Both paths then run the two built TUI PTY artifact canaries alone; the pull request fallback plus manual and release full matrices own the dedicated full serial shard.
 
 Once admitted, canonical Linux CI permits up to 28 concurrent Node test jobs with
 the all-Blacksmith planner and 96 with the `github` or `hybrid` planner profile. The smaller
@@ -290,7 +298,7 @@ Runner choice follows contributor trust, not whether a pull request came from a 
 
 ### Runner backend modes
 
-The `macos-swift` lane runs its first Blacksmith test attempt in parallel. If that attempt fails, its two in-job retries run serially to escape process and timer contention; manual dispatches, hosted fallbacks, and workflow-level reruns remain serial from their first attempt.
+The `macos-swift` lane runs Swift tests once per job. Automatic first attempts use parallel execution; manual dispatches and rerun attempts use serial execution. A failing test fails the job without an in-job retry.
 
 The repository variable `OPENCLAW_CI_RUNNER_BACKEND` controls the runner backend for `ci.yml`:
 
@@ -879,38 +887,43 @@ quota issues, or explicit owned-capacity testing.
 For an explicitly authorized admin-only PR landing fallback, set
 `OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
 The mode does not replace the default hosted aggregate gate. After the exact
-prep head is pushed, the trusted wrapper downloads
-checksum-verified Crabbox v0.46, runs sanitized brokered AWS with `umask 022`,
-the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and a
-fail-closed PR-derived test plan. The existing changed-test owner evaluates
+prep head is pushed, the wrapper synchronously dispatches the protected-main
+publisher. That trusted workflow checksum-installs Crabbox v0.46, resolves its
+service principal through `/v1/whoami`, then runs sanitized brokered AWS with
+`umask 022`, the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and
+a fail-closed PR-derived test plan. The existing changed-test owner evaluates
 every executable changed path independently and must resolve each one to
 concrete matched test files; broad fallback, skipped paths, config targets,
 deleted executable paths, and partial plans are refused. Explicit docs and
 `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
 The exact PR base SHA, head SHA, bootstrap hash, and deterministic plan digest
 are bound into the broker command. The AWS lease uses a 90-minute idle timeout
-and 240-minute TTL before dispatching the protected-main
-`pr-crabbox-gate-publisher.yml` workflow. That workflow accepts an open draft
+and 240-minute TTL. The `pr-crabbox-gate-publisher.yml` workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
-not treated as org authority), validates the authenticated immutable broker
-run, ordered complete events, canonical command and bootstrap upload hash, and
+not treated as org authority), validates its newly created authenticated broker
+run under the same service token, ordered complete events, canonical command
+and bootstrap upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
 base/head/plan binding. The publisher also proves that the PR base is the merge
-base of its exact protected-main workflow SHA and adds that workflow SHA to the
-strict check summary. Main may therefore advance during the remote run without
-invalidating otherwise immutable proof.
+base of its immutable protected-main workflow SHA and adds that workflow SHA to
+the strict check summary. Before and after the remote run, it proves that a
+candidate live `main` is identical to or descended from that workflow SHA, then
+rereads the ref and requires the candidate to remain unchanged. A descendant
+advance during the long remote run is allowed; movement inside either
+comparison-and-reread window fails closed.
 Retained broker logs are validated when non-empty but are optional because
 released Crabbox v0.46 can report zero retained log bytes after a successful
-run. The local `.local/gates.env` provider/run/lease/URL fields are recovery
-metadata, not publication authority.
+run. Only after the publisher and exact-head check succeed does the local
+wrapper derive `.local/gates.env` provider/run/lease/URL recovery metadata from
+the trusted summary; those fields are not publication authority.
 
 The fallback never replaces or republishes `openclaw/ci-gate`. Native merge
 verification still rejects draft PRs and permits the server ruleset bypass only
 when the Crabbox check is
 completed successfully by GitHub Actions on the prepared SHA, its bound workflow
-SHA equals a final live protected-main read, the authenticated
+SHA is an ancestor of a stable final live protected-main snapshot, the authenticated
 actor is still an active organization admin, and the sole unsatisfied required
 check is the normal CI gate with a recognized hosted-runner infrastructure
 failure represented by GitHub-owned job metadata with no executed workflow
@@ -924,10 +937,11 @@ flow repeats the full bypass verification immediately before the admin squash
 request and pins the prepared head with `--match-head-commit`. GitHub exposes
 no expected-base-OID merge precondition, so the final main read minimizes but
 cannot atomically eliminate a base movement race. Landing proof must compare
-the squash parent with that last observed main SHA. The Crabbox merge path
-stores this comparison in `.local/merge-crabbox-parent-audit.json`, includes it
-in the completion comment, and reports any intervening authorized main advance
-after the already-completed merge without claiming atomic prevention.
+the squash parent with that final main snapshot, not the older workflow SHA.
+The Crabbox merge path stores this comparison in
+`.local/merge-crabbox-parent-audit.json`, includes it in the completion comment,
+and reports any intervening main movement after the already-completed merge
+without claiming atomic prevention.
 
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id

@@ -468,6 +468,22 @@ runtime-compatible schema filtering, hidden catalog execution, directory
 hydration, and catalog cleanup. Harnesses still own their SDK-specific tool
 conversion and native execution callback.
 
+### Paired-device execution
+
+Declare `cloudPlacement.devicePlacement.requiredNodeCommands` for the exact node
+commands the harness needs to execute on a paired device. Core snapshots this
+set when it creates the selected harness's host capabilities. An admitted
+**Full access** session can authorize only those commands through the node
+policy's `invokeNodeWithSessionFull` callback; other commands owned by the same
+plugin do not inherit that permission. An absent declaration or an unlisted
+command returns `undefined`, so the policy must use its ordinary approval or
+denial path. Mutating the declaration during the attempt cannot widen authority.
+
+This declaration narrows authority; it does not grant it. Pairing, command
+allowlisting, hosting consent, node-local policy, and the exact live session,
+placement, and turn remain independently enforced. Plugins remain trusted code,
+not sandboxed by this callback.
+
 ### Native MCP inventory
 
 A harness that owns MCP connections outside OpenClaw's in-process MCP runtime

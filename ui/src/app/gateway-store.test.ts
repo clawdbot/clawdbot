@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
-import { resolveAvatar, setAvatarGatewayOrigin } from "../lib/identity-avatar.ts";
+import { setAvatarGatewayOrigin } from "../lib/identity-avatar-context.ts";
+import { resolveAvatar } from "../lib/identity-avatar.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore as createStore,
@@ -334,6 +335,45 @@ describe("createApplicationGateway connection phase", () => {
     expect(current().opts.url).toBe("wss://other-gateway.example.test");
     expect(current().opts.token).toBe("other-token");
     expect(gateway.snapshot.phase).toBe("connecting");
+  });
+
+  it("restores the newly selected Gateway's saved agent", () => {
+    const otherGateway = "wss://other-gateway.example.test";
+    localStorage.setItem(
+      `openclaw.control.settings.v1:${otherGateway}`,
+      JSON.stringify({
+        gatewayUrl: otherGateway,
+        sessionsByGateway: {
+          [otherGateway]: {
+            sessionKey: "global",
+            lastActiveSessionKey: "global",
+            selectedAgentId: "research",
+          },
+        },
+      }),
+    );
+    const { gateway } = createStore({
+      settings: { ...loadSettings(), selectedAgentId: "openclaw" },
+    });
+
+    gateway.connect({ gatewayUrl: otherGateway });
+
+    expect(gateway.snapshot.sessionKey).toBe("global");
+    expect(loadSettings()).toMatchObject({
+      sessionKey: "global",
+      lastActiveSessionKey: "global",
+      selectedAgentId: "research",
+    });
+  });
+
+  it("does not carry an agent selection into an unsaved Gateway", () => {
+    const { gateway } = createStore({
+      settings: { ...loadSettings(), selectedAgentId: "openclaw" },
+    });
+
+    gateway.connect({ gatewayUrl: "wss://fresh-gateway.example.test" });
+
+    expect(loadSettings().selectedAgentId).toBeUndefined();
   });
 
   it("advances the connection revision only when credentials change", () => {

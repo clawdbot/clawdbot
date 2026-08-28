@@ -22,7 +22,7 @@ import type {
   TranscriptToolCaller,
 } from "../../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
-import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
+import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -33,6 +33,7 @@ import {
   isTranscriptSessionStarting,
   persistTranscriptSummary,
   readTranscriptStringParam,
+  readTranscriptSummary,
   resolveTranscriptSourceOwnership,
   resolveSourceProvider,
   sourceFromParams,
@@ -42,55 +43,20 @@ import {
   type TranscriptsLogger,
   type TranscriptsRuntimeContext,
 } from "./transcripts-tool-runtime.js";
+import {
+  canAccessTranscriptSession,
+  isTranscriptSelectionCurrent,
+  resolveTranscriptToolSession,
+  transcriptSelectionNoLongerActive,
+} from "./transcripts-tool-selection.js";
 const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;
 const AUTO_START_STOP_TIMEOUT_MS = 5_000;
 const AUTO_START_PROVIDER_READY_TIMEOUT_MS = 30_000;
+const STATUS_SELECTOR_LIMIT = 3;
 
 function formatAutoStopDiagnostic(value: unknown): string {
   return JSON.stringify(truncateUtf16Safe(sanitizeTerminalText(formatErrorMessage(value)), 300));
-}
-
-type TranscriptSessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
-
-function sameSessionIdentity(
-  left: TranscriptSessionIdentity,
-  right: TranscriptSessionIdentity,
-): boolean {
-  return left.sessionId === right.sessionId && left.startedAt === right.startedAt;
-}
-
-function ownsTranscriptSession(
-  ctx: TranscriptsRuntimeContext,
-  session: TranscriptSessionDescriptor,
-): boolean {
-  const ownerAgentId = session.metadata?.agentId;
-  if (typeof ownerAgentId === "string") {
-    return ownerAgentId === ctx.agentId;
-  }
-  // Shipped ownerless rows stay with main; provider access still decides whether
-  // the current caller may act on an account-bound canonical source.
-  return ctx.agentId ? ctx.agentId === "main" : ctx.caller?.kind === "operator";
-}
-
-async function canAccessTranscriptSession(
-  ctx: TranscriptsRuntimeContext,
-  session: TranscriptSessionDescriptor,
-  action: "status" | "stop" | "summarize",
-): Promise<boolean> {
-  if (!ownsTranscriptSession(ctx, session)) {
-    return false;
-  }
-  const provider = resolveSourceProvider(session.source.providerId, ctx);
-  if (!provider) {
-    return ctx.caller?.kind === "operator";
-  }
-  try {
-    await authorizeTranscriptSource({ action, ctx, provider, source: session.source });
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 const TranscriptsSchema = Type.Object(
@@ -98,7 +64,20 @@ const TranscriptsSchema = Type.Object(
     action: Type.String({
       description: "start, stop, status, import, or summarize.",
     }),
-    sessionId: Type.Optional(Type.String({ minLength: 1 })),
+    sessionId: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Raw ID for start/import. Legacy stop/summarize handle; prefer selector for an exact capture. Cannot be combined with selector.",
+      }),
+    ),
+    selector: Type.Optional(
+      Type.String({
+        minLength: 1,
+        description:
+          "Exact dated capture selector returned by start/import/status. Only for stop/summarize; supply this or sessionId, never both. No raw-ID fallback.",
+      }),
+    ),
     title: Type.Optional(Type.String({ minLength: 1 })),
     providerId: Type.Optional(Type.String({ minLength: 1 })),
     accountId: Type.Optional(Type.String({ minLength: 1 })),
@@ -141,18 +120,6 @@ async function waitForPendingAutoStartsToSettle(
 
 // Tool stop/import/summarize actions explicitly materialize artifacts, but a
 // divergent export must not turn a successful canonical summary write into failure.
-async function summarizeAndPersist(params: {
-  config: ReturnType<typeof resolveTranscriptsConfig>;
-  store: TranscriptsStore;
-  session: TranscriptSessionDescriptor;
-}) {
-  return await exportTranscriptSummary(
-    params.store,
-    params.session,
-    await persistTranscriptSummary(params),
-  );
-}
-
 async function exportTranscriptSummary(
   store: TranscriptsStore,
   session: TranscriptSessionDescriptor,
@@ -172,66 +139,47 @@ async function stopTranscripts(params: {
   rawParams: Record<string, unknown>;
   lifecycleToken?: symbol;
 }) {
-  const sessionSelector = readTranscriptStringParam(params.rawParams, "sessionId", {
-    required: true,
-    trim: true,
-  });
-  const directActive = activeSessions.get(sessionSelector);
-  if (
-    params.lifecycleToken &&
-    (!directActive || directActive.lifecycleToken !== params.lifecycleToken)
-  ) {
-    return toolText(`Transcripts session no longer active: ${sessionSelector}`, {
-      sessionId: sessionSelector,
-      skipped: true,
-    });
-  }
-  const resolvedEntry: TranscriptsSessionEntry | undefined = directActive
-    ? undefined
-    : await params.store.readSessionEntry(sessionSelector);
-  const resolvedSession = directActive?.session ?? resolvedEntry?.session;
-  const activeCandidate =
-    resolvedSession !== undefined ? activeSessions.get(resolvedSession.sessionId) : undefined;
-  const activeMatchesResolved =
-    activeCandidate !== undefined &&
-    resolvedSession !== undefined &&
-    sameSessionIdentity(activeCandidate.session, resolvedSession);
-  const selectedActive = directActive ?? (activeMatchesResolved ? activeCandidate : undefined);
-  const session = selectedActive?.session ?? resolvedSession;
-  if (
-    !session ||
-    (!params.lifecycleToken && !(await canAccessTranscriptSession(params.ctx, session, "stop")))
-  ) {
-    throw new Error(`transcripts session not found: ${sessionSelector}`);
-  }
-  const sessionId = session.sessionId;
-  if (!params.lifecycleToken) {
+  let selection: Awaited<ReturnType<typeof resolveTranscriptToolSession>>;
+  if (params.lifecycleToken) {
+    const sessionId = readTranscriptStringParam(params.rawParams, "sessionId", { required: true });
+    const active = activeSessions.get(sessionId);
+    // Service cleanup is exact lifecycle ownership, not an operator string lookup.
+    if (!active || active.lifecycleToken !== params.lifecycleToken) {
+      return toolText(`Transcripts session no longer active: ${sessionId}`, {
+        sessionId,
+        skipped: true,
+      });
+    }
+    selection = {
+      session: active.session,
+      selector: transcriptSessionSelector(active.session),
+      activeCandidate: active,
+      selectedActive: active,
+    };
+  } else {
+    selection = await resolveTranscriptToolSession({ ...params, action: "stop" });
     params.ctx.assertCallerActive?.();
   }
-  const noLongerActive = () =>
-    toolText(`Transcripts session no longer active: ${sessionId}`, {
-      sessionId,
-      skipped: true,
-    });
+  // Authorization may await native policy while the provider retires this owner.
+  if (!isTranscriptSelectionCurrent(selection)) {
+    return transcriptSelectionNoLongerActive(selection);
+  }
+  const { session, selector, selectedActive } = selection;
+  const sessionId = session.sessionId;
   if (isTranscriptSessionStarting(sessionId)) {
     return toolText(
       `Transcripts session start still in progress: ${sessionId}; retry stop after startup settles.`,
       {
         sessionId,
+        selector,
         skipped: true,
       },
     );
   }
-  // Authorization may await native policy while the provider retires this owner.
-  if (selectedActive && activeSessions.get(sessionId) !== selectedActive) {
-    return noLongerActive();
-  }
-  if (!selectedActive && activeSessions.get(sessionId) !== activeCandidate) {
-    return noLongerActive();
-  }
   if (selectedActive?.stopping) {
     return toolText(`Transcripts session stop already in progress: ${sessionId}`, {
       sessionId,
+      selector,
       skipped: true,
     });
   }
@@ -265,7 +213,7 @@ async function stopTranscripts(params: {
         }
       }
       if (activeSessions.get(sessionId) !== selectedActive) {
-        return noLongerActive();
+        return transcriptSelectionNoLongerActive(selection);
       }
       if (providerStopError && !selectedActive.session.stoppedAt) {
         selectedActive.session = {
@@ -301,6 +249,7 @@ async function stopTranscripts(params: {
       `Transcripts stopped: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
       {
         sessionId,
+        selector,
         ...(providerStopError ? { providerStopError } : {}),
         ...(summaryExportError ? { summaryExportError } : {}),
         ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
@@ -368,16 +317,18 @@ async function importTranscripts(params: {
   for (const utterance of utterances) {
     await params.store.appendUtteranceForSession(session, utterance);
   }
+  const persisted = await persistTranscriptSummary({
+    config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
+    store: params.store,
+    session,
+  });
   const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
-    await summarizeAndPersist({
-      config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
-      store: params.store,
-      session,
-    });
+    await exportTranscriptSummary(params.store, session, persisted);
   return toolText(
     `Transcript imported: ${session.sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
     {
       sessionId: session.sessionId,
+      selector: transcriptSessionSelector(session),
       utteranceCount: utterances.length,
       ...(summaryExportError ? { summaryExportError } : {}),
       ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
@@ -393,24 +344,34 @@ async function summarizeExisting(params: {
   store: TranscriptsStore;
   rawParams: Record<string, unknown>;
 }) {
-  const sessionId = readTranscriptStringParam(params.rawParams, "sessionId", {
-    required: true,
-    trim: true,
-  });
-  const entry = await params.store.readSessionEntry(sessionId);
-  if (!entry || !(await canAccessTranscriptSession(params.ctx, entry.session, "summarize"))) {
-    throw new Error(`transcripts session not found: ${sessionId}`);
+  const selection = await resolveTranscriptToolSession({ ...params, action: "summarize" });
+  params.ctx.assertCallerActive?.();
+  if (!isTranscriptSelectionCurrent(selection)) {
+    return transcriptSelectionNoLongerActive(selection);
   }
-  const { summaryPath, intendedSummaryPath, summary, summaryExportError } =
-    await summarizeAndPersist({
-      config: params.config,
-      store: params.store,
-      session: entry.session,
-    });
+  const { session, selector } = selection;
+  const sessionId = session.sessionId;
+  const summary = await readTranscriptSummary({ ...params, session });
+  // Reading yields; a retired capture cannot write into its same-tuple replacement.
+  params.ctx.assertCallerActive?.();
+  if (!isTranscriptSelectionCurrent(selection)) {
+    return transcriptSelectionNoLongerActive(selection);
+  }
+  const intendedPath = await params.store.writeSummary(summary, session);
+  params.ctx.assertCallerActive?.();
+  if (!isTranscriptSelectionCurrent(selection)) {
+    return transcriptSelectionNoLongerActive(selection);
+  }
+  const { summaryPath, intendedSummaryPath, summaryExportError } = await exportTranscriptSummary(
+    params.store,
+    session,
+    { summary, intendedSummaryPath: intendedPath },
+  );
   return toolText(
     `Transcripts summarized: ${sessionId}${summaryPath ? `\nSummary: ${summaryPath}` : `\nSummary export failed: ${summaryExportError}`}`,
     {
       sessionId,
+      selector,
       ...(summaryExportError ? { summaryExportError } : {}),
       ...(intendedSummaryPath ? { intendedSummaryPath } : {}),
       summary,
@@ -438,18 +399,35 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
   const pendingFinalization = visibleEntries
     .filter((entry) => entry.phase === "terminal")
     .map((entry) => ({
+      selector: transcriptSessionSelector(entry.session),
       sessionId: entry.session.sessionId,
       stoppedAt: entry.session.stoppedAt,
     }));
   const active = visibleEntries
     .filter((entry) => entry.phase !== "terminal")
     .map((entry) => ({
+      selector: transcriptSessionSelector(entry.session),
       sessionId: entry.session.sessionId,
       providerId: entry.providerId,
       title: entry.session.title,
       source: entry.session.source,
       cleanupPending: entry.cleanupPending === true,
     }));
+  // Three complete canonical selectors keep this model-facing section under 1 KiB.
+  // Recovery handles take priority; structured details retain the full authorized list.
+  const selectorGroups = [
+    { state: "pending", entries: pendingFinalization },
+    { state: "active", entries: active },
+  ];
+  const selectorLines = selectorGroups
+    .flatMap(({ state, entries }) =>
+      entries
+        .toSorted((left, right) => left.selector.localeCompare(right.selector))
+        .slice(0, STATUS_SELECTOR_LIMIT)
+        .map(({ selector }) => `${state}: ${selector}`),
+    )
+    .slice(0, STATUS_SELECTOR_LIMIT);
+  const omitted = visibleEntries.length - selectorLines.length;
   return toolText(
     [
       `Transcripts providers: ${uniqueProviders.length ? uniqueProviders.join(", ") : "none"}`,
@@ -458,6 +436,10 @@ async function statusTranscripts(ctx: TranscriptsRuntimeContext) {
         ? [
             `Ended captures awaiting persistence: ${pendingFinalization.length}; use transcripts stop to retry.`,
           ]
+        : []),
+      ...(selectorLines.length ? ["Selectors:", ...selectorLines] : []),
+      ...(omitted
+        ? [`${omitted} more; ask a local operator to run openclaw transcripts list.`]
         : []),
     ].join("\n"),
     { providers: uniqueProviders, active, pendingFinalization },
@@ -498,6 +480,9 @@ export function createTranscriptsTool(options?: {
       }
       const params = asOptionalRecord(rawParams) ?? {};
       const action = readTranscriptStringParam(params, "action", { required: true, trim: true });
+      if (params.selector !== undefined && action !== "stop" && action !== "summarize") {
+        throw new Error("selector is only supported for stop or summarize.");
+      }
       const store = createStore(ctx);
       switch (action) {
         case "start":

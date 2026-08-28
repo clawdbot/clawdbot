@@ -358,6 +358,7 @@ export type ControlUiMockGatewayScenario = {
   /** Operator scopes returned by the mocked connect handshake. */
   operatorScopes?: string[];
   sessionKey?: string;
+  sessionScope?: "agent" | "global";
   /** Initial gateway-owned custom group catalog (sessions.groups.*), in order. */
   sessionGroups?: string[];
   /** Optional New Session defaults keyed by custom group name. */
@@ -936,6 +937,7 @@ function normalizeScenario(
     sessionInfo: scenario.sessionInfo ?? null,
     sessionArchiveFiltering: scenario.sessionArchiveFiltering ?? false,
     sessionKey,
+    sessionScope: scenario.sessionScope ?? "agent",
     sessionGroups: scenario.sessionGroups ?? [],
     sessionGroupDefaults: scenario.sessionGroupDefaults ?? {},
     terminalEnabled: scenario.terminalEnabled ?? false,
@@ -1764,7 +1766,7 @@ function installControlUiMockGateway(
               mainKey: "main",
               mainSessionKey: scenario.sessionKey,
               modelConfigured: Boolean(scenario.agentModel),
-              scope: "agent",
+              scope: scenario.sessionScope,
             },
           },
           type: "hello-ok",

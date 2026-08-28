@@ -239,7 +239,11 @@ export type ChatProps = ChatTaskSuggestionTrayProps &
     onQueueSteer?: (id: string) => void;
     onQueueMove?: (id: string, toIndex: number) => void;
     queuedEdit?: ChatQueuedEditProps;
-    onGoalCommand?: (command: string) => void;
+    onGoalAction?: ChatComposerProps["onGoalAction"];
+    onGoalSubmit?: ChatComposerProps["onGoalSubmit"];
+    goalDraftMode?: ChatComposerProps["goalDraftMode"];
+    onGoalDraftModeChange?: ChatComposerProps["onGoalDraftModeChange"];
+    currentSessionId?: string | null;
     onHistoryIntent?: (event: Event) => void;
     onCompanionQuestion?: (question: string) => void;
     onCompanionPrefill?: (question: string) => void;
@@ -494,7 +498,11 @@ export function renderChat(props: ChatProps) {
     onQueueSteer: props.onQueueSteer,
     onQueueMove: props.onQueueMove,
     queuedEdit: props.queuedEdit,
-    onGoalCommand: props.onGoalCommand,
+    onGoalAction: props.onGoalAction,
+    onGoalSubmit: props.onGoalSubmit,
+    goalDraftMode: props.goalDraftMode,
+    onGoalDraftModeChange: props.onGoalDraftModeChange,
+    currentSessionId: props.currentSessionId,
     onGatewayQuestionChange: props.onGatewayQuestionChange,
     onGatewayQuestionSubmit: props.onGatewayQuestionSubmit,
     onGatewayQuestionSkip: props.onGatewayQuestionSkip,

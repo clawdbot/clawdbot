@@ -12,7 +12,10 @@ import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
-import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
+import {
+  chatModelUnavailableMessage,
+  resolveChatModelUnavailableReason,
+} from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
@@ -25,6 +28,7 @@ import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import { buildAgentMainSessionKey } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { generateUUID } from "../../lib/uuid.ts";
+import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
 import { requiresChatModelSetup } from "./chat-model-setup.ts";
@@ -155,7 +159,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
     const modelCatalogState = resolveChatModelCatalogState(state);
-    const modelUnavailable = isChatModelUnavailable(
+    const modelUnavailableReason = resolveChatModelUnavailableReason(
       selectedSession?.model ?? agentDefaultModel,
       selectedSession?.modelProvider,
       modelCatalogState.status === "ready" ? state.chatModelCatalog : [],
@@ -201,11 +205,12 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     // Placement progress already explains its gate in the transcript. Other
     // gates need a reason here or a sessionDisabledBanner.
-    const disabledReason = modelUnavailable
-      ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-      : sessionParticipationBlocked && !suggestionViewer
+    const modelUnavailableMessage = chatModelUnavailableMessage(modelUnavailableReason);
+    const disabledReason =
+      modelUnavailableMessage ??
+      (sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
-        : null;
+        : null);
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
@@ -383,7 +388,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&
-          !modelUnavailable &&
+          !modelUnavailableMessage &&
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
@@ -600,7 +605,17 @@ export class ChatPane extends ChatPaneLayoutRender {
         onEditSubmit: sessionParticipationBlocked ? undefined : state.submitQueuedChatMessageEdit,
         onCancel: state.cancelQueuedChatMessageEdit,
       },
-      onGoalCommand: (command) => void state.handleSendChat(command),
+      onGoalAction: (goalId, action) => void mutateChatGoal(state, { goalId, action }),
+      goalDraftMode: state.chatGoalDraftMode ?? null,
+      currentSessionId: state.currentSessionId,
+      onGoalDraftModeChange: (mode) => {
+        state.chatGoalDraftMode = mode;
+        state.handleChatDraftChange(state.chatMessage);
+      },
+      onGoalSubmit:
+        suggestionViewer || catalogKey
+          ? undefined
+          : (draft, submissionAction) => submitChatGoalDraft(state, draft, submissionAction),
       onCompanionQuestion: (question) => void this.submitSessionCompanionQuestion(question),
       onCompanionPrefill: this.prefillSessionCompanionQuestion,
       replyTarget: state.chatReplyTarget ?? null,

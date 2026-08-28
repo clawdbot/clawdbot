@@ -61,9 +61,16 @@ interface BrowserPanelInputHost extends BrowserPanelInputState {
   exitCaptureModes(): void;
 }
 
+type BrowserPanelDrawingGesture = {
+  pointerId: number;
+  captureTarget: HTMLElement;
+  stroke: AnnotationStroke;
+};
+
 /** Owns pointer, keyboard, annotation, and inspection input for the browser surface. */
 export class BrowserPanelInputController {
-  private drawingStroke: AnnotationStroke | null = null;
+  // An annotation stroke belongs to one pointer until that owner or the panel lifecycle ends.
+  private drawingGesture: BrowserPanelDrawingGesture | null = null;
   private suppressStageClick = false;
   private inspectionError: string | null = null;
 
@@ -71,7 +78,7 @@ export class BrowserPanelInputController {
 
   resetCaptureState(): void {
     this.host.pendingInput.clearInput();
-    this.drawingStroke = null;
+    this.cancelOverlayPointerGesture();
   }
 
   private stageElement(): HTMLElement | null {
@@ -166,27 +173,47 @@ export class BrowserPanelInputController {
       void this.sendAnnotation({ element: this.host.inspected });
       return;
     }
-    if (this.host.mode !== "annotate") {
+    if (this.host.mode !== "annotate" || event.button !== 0 || this.drawingGesture) {
       return;
     }
     const point = browserPanelNormalizedPoint(this.stageElement(), event);
     if (!point) {
       return;
     }
-    (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
-    this.drawingStroke = { points: [point] };
-    this.host.setState("strokes", [...this.host.strokes, this.drawingStroke]);
+    const captureTarget =
+      event.currentTarget instanceof HTMLElement
+        ? event.currentTarget
+        : event.target instanceof HTMLElement
+          ? event.target
+          : null;
+    if (!captureTarget) {
+      return;
+    }
+    event.preventDefault();
+    try {
+      captureTarget.setPointerCapture(event.pointerId);
+    } catch {
+      // Detached and synthetic targets can reject capture; owner filtering still applies.
+    }
+    const gesture = {
+      pointerId: event.pointerId,
+      captureTarget,
+      stroke: { points: [point] },
+    };
+    this.drawingGesture = gesture;
+    this.host.setState("strokes", [...this.host.strokes, gesture.stroke]);
     this.paintOverlay();
   }
 
   handleOverlayPointerMove(event: PointerEvent): void {
     if (this.host.mode === "annotate") {
-      if (!this.drawingStroke) {
+      const gesture = this.drawingGesture;
+      if (!gesture || event.pointerId !== gesture.pointerId) {
         return;
       }
       const point = browserPanelNormalizedPoint(this.stageElement(), event);
       if (point) {
-        this.drawingStroke.points.push(point);
+        gesture.stroke.points.push(point);
         this.paintOverlay();
       }
       return;
@@ -196,8 +223,25 @@ export class BrowserPanelInputController {
     }
   }
 
-  handleOverlayPointerUp(): void {
-    this.drawingStroke = null;
+  handleOverlayPointerUp(event: PointerEvent): void {
+    if (event.pointerId === this.drawingGesture?.pointerId) {
+      this.drawingGesture = null;
+    }
+  }
+
+  cancelOverlayPointerGesture(): void {
+    const gesture = this.drawingGesture;
+    this.drawingGesture = null;
+    if (!gesture) {
+      return;
+    }
+    try {
+      if (gesture.captureTarget.hasPointerCapture(gesture.pointerId)) {
+        gesture.captureTarget.releasePointerCapture(gesture.pointerId);
+      }
+    } catch {
+      // Capture may already be gone because its canvas was detached.
+    }
   }
 
   private queueInspect(event: PointerEvent): void {
@@ -247,18 +291,19 @@ export class BrowserPanelInputController {
   }
 
   undoStroke(): void {
+    this.cancelOverlayPointerGesture();
     this.host.setState("strokes", this.host.strokes.slice(0, -1));
-    this.drawingStroke = null;
     this.paintOverlay();
   }
 
   clearStrokes(): void {
+    this.cancelOverlayPointerGesture();
     this.host.setState("strokes", []);
-    this.drawingStroke = null;
     this.paintOverlay();
   }
 
   async sendAnnotation(params: { element?: BrowserInspectedNode | null }): Promise<void> {
+    this.cancelOverlayPointerGesture();
     const view = this.host.view;
     const tab = this.host.tabs.find((entry) => entry.id === this.host.activeTargetId);
     const element = params.element ?? null;

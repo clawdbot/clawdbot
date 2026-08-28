@@ -788,21 +788,6 @@ async function runFreshStateDirMigration(root: string, env = {} as NodeJS.Proces
   return runStateDirMigration(root, env);
 }
 
-async function runAutoMigrateLegacyStateWithLog(params: {
-  root: string;
-  cfg: OpenClawConfig;
-  now?: () => number;
-}) {
-  const log = { info: vi.fn(), warn: vi.fn() };
-  const result = await autoMigrateLegacyState({
-    cfg: params.cfg,
-    env: { OPENCLAW_STATE_DIR: params.root } as NodeJS.ProcessEnv,
-    log,
-    now: params.now,
-  });
-  return { result, log };
-}
-
 function getProfileWorkspaceMigrationPaths(root: string, profile = "work") {
   return {
     legacyDir: path.join(root, ".openclaw", `workspace-${profile}`),
@@ -1453,7 +1438,12 @@ describe("doctor legacy state migrations", () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     writeLegacyAgentFiles(root, { "auth.json": "{}" });
 
-    const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root },
+      log,
+    });
 
     const targetAgentDir = path.join(root, "agents", "main", "agent");
     expect(fs.existsSync(path.join(targetAgentDir, "auth.json"))).toBe(true);
@@ -1461,7 +1451,7 @@ describe("doctor legacy state migrations", () => {
     expect(log.info).toHaveBeenCalled();
   });
 
-  it("auto-migrates legacy sessions on startup", async () => {
+  it("migrates legacy sessions during explicit Doctor repair", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const legacySessionsDir = writeLegacySessionsFixture({
       root,
@@ -1473,10 +1463,13 @@ describe("doctor legacy state migrations", () => {
       },
     });
 
-    const { result, log } = await runAutoMigrateLegacyStateWithLog({
-      root,
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const result = await autoMigrateLegacyState({
       cfg,
+      env: { OPENCLAW_STATE_DIR: root },
+      log,
       now: () => 123,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(result.migrated).toBe(true);
@@ -4231,14 +4224,20 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:matrix:channel:!mixed:example.org"]).toBeUndefined();
   });
 
-  it("auto-migrates when only target sessions contain legacy keys", async () => {
+  it("repairs legacy keys in the target session store during Doctor preflight", async () => {
     const { root, cfg } = await makeRootWithEmptyCfg();
     const targetDir = path.join(root, "agents", "main", "sessions");
     writeJson5(path.join(targetDir, "sessions.json"), {
       main: { sessionId: "legacy", updatedAt: 10 },
     });
 
-    const { result, log } = await runAutoMigrateLegacyStateWithLog({ root, cfg });
+    const log = { info: vi.fn(), warn: vi.fn() };
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env: { OPENCLAW_STATE_DIR: root },
+      log,
+      doctorOnlyStateMigrations: true,
+    });
 
     const store = JSON.parse(
       fs.readFileSync(path.join(targetDir, "sessions.json"), "utf-8"),

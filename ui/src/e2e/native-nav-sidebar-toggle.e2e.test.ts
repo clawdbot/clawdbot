@@ -911,9 +911,20 @@ suite.define(() => {
     await expect.poll(() => navigation.getAttribute("class")).not.toContain("nav-drawer");
   });
 
-  it.each(["dark", "light"] as const)(
-    "keeps the toast above the mobile drawer in %s mode",
-    async (colorScheme) => {
+  it.each([
+    {
+      colorScheme: "dark",
+      finalLayout: "compact",
+      finalViewport: { height: 844, width: 390 },
+    },
+    {
+      colorScheme: "light",
+      finalLayout: "desktop",
+      finalViewport: { height: 900, width: 1280 },
+    },
+  ] as const)(
+    "keeps drawer toast actionable and handed-off toast clear of chat chrome in $finalLayout $colorScheme mode",
+    async ({ colorScheme, finalLayout, finalViewport }) => {
       const page = await openPage({
         colorScheme,
         height: 844,
@@ -937,6 +948,17 @@ suite.define(() => {
       const toast = host.locator(".app-toast");
       await toast.waitFor();
       await expect.poll(() => toast.textContent()).toContain("Codex hidden");
+      const drawerToastGeometry = await host.evaluate((node) => {
+        const toastElement = node.querySelector<HTMLElement>(".app-toast");
+        return {
+          computedTop: toastElement
+            ? Math.round(Number.parseFloat(getComputedStyle(toastElement).top))
+            : null,
+          placement: node.dataset.toastPlacement,
+        };
+      });
+      expect(drawerToastGeometry.placement).toBe("overlay");
+      expect(drawerToastGeometry.computedTop).toBe(20);
       const dismiss = toast.getByRole("button", { name: "Dismiss" });
       await dismiss.click({ trial: true });
 
@@ -944,24 +966,50 @@ suite.define(() => {
         animations: "disabled",
         path: path.join(TOAST_PROOF_DIR, `mobile-drawer-toast-${colorScheme}.png`),
       });
-      if (colorScheme === "dark") {
+      if (finalLayout === "compact") {
         await page.keyboard.press("Escape");
         await expect.poll(() => dialog.isVisible()).toBe(false);
       } else {
-        await page.setViewportSize({ width: 1280, height: 900 });
+        await page.setViewportSize(finalViewport);
         await expect.poll(() => drawer.count()).toBe(0);
       }
-      const retainedToast = page.locator(".shell > openclaw-toast-host .app-toast");
+      expect(page.viewportSize()).toEqual(finalViewport);
+      const retainedHost = page.locator(".shell > openclaw-toast-host");
+      await expect.poll(() => retainedHost.getAttribute("data-toast-placement")).toBe("shell");
+      const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      const [toastBounds, composerBounds] = await Promise.all([
-        retainedToast.boundingBox(),
-        page.locator(".agent-chat__composer-shell").boundingBox(),
-      ]);
-      if (!toastBounds || !composerBounds) {
-        throw new Error("expected the handed-off toast and chat composer to have layout boxes");
+      if (finalLayout === "compact") {
+        await expect
+          .poll(async () => {
+            const [toastBounds, headerBounds] = await Promise.all([
+              retainedToast.boundingBox(),
+              page.locator(".chat-pane__header:visible").first().boundingBox(),
+            ]);
+            return Boolean(
+              toastBounds && headerBounds && toastBounds.y >= headerBounds.y + headerBounds.height,
+            );
+          })
+          .toBe(true);
+      } else {
+        await expect
+          .poll(async () => Math.round((await retainedToast.boundingBox())?.y ?? -1))
+          .toBe(20);
       }
-      expect(Math.round(toastBounds.y)).toBe(20);
-      expect(toastBounds.y + toastBounds.height).toBeLessThan(composerBounds.y);
+      await expect
+        .poll(async () => {
+          const [toastBounds, composerBounds] = await Promise.all([
+            retainedToast.boundingBox(),
+            page.locator(".agent-chat__composer-shell").boundingBox(),
+          ]);
+          return Boolean(
+            toastBounds && composerBounds && toastBounds.y + toastBounds.height < composerBounds.y,
+          );
+        })
+        .toBe(true);
+      await page.screenshot({
+        animations: "disabled",
+        path: path.join(TOAST_PROOF_DIR, `handed-off-toast-${finalLayout}-${colorScheme}.png`),
+      });
       await retainedToast.getByRole("button", { name: "Dismiss" }).click();
       await expect.poll(() => retainedToast.isVisible()).toBe(false);
     },

@@ -486,8 +486,8 @@ describe("chat pane header", () => {
         createdActor: { type: "human", id: "profile-ada", label: "Ada" },
         owner: { actor: { type: "human", id: "profile-ada", label: "Ada" } },
         participants: [
-          { type: "human", id: "profile-bob", label: "Bob" },
-          { type: "agent", id: "research", label: "Research" },
+          { identity: { type: "profile", id: "profile-bob" }, label: "Bob" },
+          { identity: { type: "agent", id: "research" }, label: "Research" },
         ],
         participantCount: 2,
       }),
@@ -499,10 +499,11 @@ describe("chat pane header", () => {
 
     expect(mounted.container.querySelector("openclaw-session-owner-chip")).not.toBeNull();
     expect(
-      [...(facepile?.querySelectorAll("[data-viewer-id]") ?? [])].map((avatar) =>
-        avatar.getAttribute("data-viewer-id"),
+      [...(facepile?.querySelectorAll(".viewer-avatar") ?? [])].map((avatar) =>
+        avatar.getAttribute("aria-label"),
       ),
-    ).toEqual(["profile-bob", "research"]);
+    ).toEqual(["Bob", "Research"]);
+    expect(facepile?.querySelector("[data-viewer-id]")).toBeNull();
   });
 
   it.each([

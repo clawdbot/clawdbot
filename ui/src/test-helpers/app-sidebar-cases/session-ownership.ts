@@ -61,10 +61,15 @@ function visibleSessionKeys(sidebar: SidebarLifecycleState): string[] {
 
 function setEffectiveOwner(
   row: GatewaySessionRow,
-  actor: NonNullable<GatewaySessionRow["createdActor"]>,
+  actor: NonNullable<GatewaySessionRow["createdActor"]> & { id: string },
 ) {
-  row.createdActor = actor;
-  row.owner = { actor };
+  const owner: typeof actor = {
+    ...actor,
+    identity:
+      actor.type === "agent" ? { type: "agent", id: actor.id } : { type: "profile", id: actor.id },
+  };
+  row.createdActor = owner;
+  row.owner = { actor: owner };
 }
 
 describe("AppSidebar session ownership", () => {
@@ -169,7 +174,9 @@ describe("AppSidebar session ownership", () => {
     const carolChip = sidebar.querySelector(
       '[data-session-key="agent:main:carol"] .session-owner-chip',
     );
-    expect(carolChip?.querySelector("openclaw-viewer-avatar")).toBeNull();
+    expect(carolChip?.querySelector("img")?.getAttribute("src")).toBe(
+      "/api/users/profile-carol/avatar",
+    );
     expect(carolChip?.textContent?.trim()).toBe("C");
   });
 
@@ -311,7 +318,7 @@ describe("AppSidebar session ownership", () => {
       throw new Error("expected participant row");
     }
     setEffectiveOwner(collab, { type: "human", id: "profile-bob", label: "Bob" });
-    collab.participants = [{ type: "human", id: "profile-ada", label: "Ada" }];
+    collab.participants = [{ identity: { type: "profile", id: "profile-ada" }, label: "Ada" }];
     collab.participantCount = 1;
     result.owners = [{ type: "human", id: "profile-bob", label: "Bob" }];
 
@@ -493,8 +500,8 @@ describe("AppSidebar session ownership", () => {
       ...sidebar.querySelectorAll<HTMLElement>('[data-session-section^="person:"]'),
     ];
     expect(ownerSections().map((section) => section.dataset.sessionSection)).toEqual([
-      "person:profile-zoe",
-      "person:profile-ada",
+      "person:profile:profile-zoe",
+      "person:profile:profile-ada",
     ]);
     expect(
       ownerSections()[0]?.querySelector(".sidebar-recent-sessions__label-text")?.textContent,

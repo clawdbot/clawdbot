@@ -713,6 +713,73 @@ describe("install-cli.sh", () => {
   });
 
   it.each([
+    { error: "SERVICE_DEFINITION_SEALED: protected", args: "", stream: "stderr" },
+    { error: "SERVICE_DEFINITION_SEALED: protected", args: "--json", stream: "stdout" },
+    { error: "SERVICE_DEFINITION_UNKNOWN: inaccessible", args: "--json", stream: "stderr" },
+    { error: "service manager unavailable", args: "--json", stream: "stderr" },
+  ])("handles a traced $error refresh in $stream", ({ args, error, stream }) => {
+    const root = tempDirs.make("openclaw-install-cli-definition-");
+    const prefix = join(root, "prefix");
+    const openclaw = join(prefix, "bin", "openclaw");
+    const secretCanary = "installer-cli-secret-canary-never-render";
+    const commandLog = join(root, "commands.log");
+    mkdirSync(join(prefix, "bin"), { recursive: true });
+    writeFileSync(
+      openclaw,
+      [
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+        'if [[ "$1" == "--version" ]]; then printf "OpenClaw 2026.8.25\\n"; exit 0; fi',
+        'if [[ "$*" == "gateway install --force" ]]; then',
+        '  if [[ "$SERVICE_STREAM" == stdout ]]; then printf "%s\\n" "$SERVICE_ERROR"; else printf "%s\\n" "$SERVICE_ERROR" >&2; fi',
+        '  printf "%s\\n" "$SECRET_CANARY" >&2; exit 1',
+        "fi",
+      ].join("\n"),
+    );
+    chmodSync(openclaw, 0o755);
+
+    const result = runInstallCliShell(
+      [
+        "set -euo pipefail",
+        `source ${JSON.stringify(SCRIPT_PATH)}`,
+        "install_node() { :; }; ensure_git() { :; }; install_openclaw() { :; }",
+        "is_gateway_daemon_loaded() { return 0; }",
+        "set -x",
+        `main ${args} --prefix ${JSON.stringify(prefix)}`,
+      ].join("\n"),
+      {
+        COMMAND_LOG: commandLog,
+        SECRET_CANARY: secretCanary,
+        SERVICE_ERROR: error,
+        SERVICE_STREAM: stream,
+      },
+    );
+
+    const denied = error.startsWith("SERVICE_DEFINITION_");
+    expect(readFileSync(commandLog, "utf8").split("\n")).not.toContain("gateway restart");
+    expect(result.status).toBe(0);
+    expect(result.stderr).toContain("+ main");
+    expect(result.stdout + result.stderr).not.toContain(secretCanary);
+    if (denied) {
+      expect(result.stderr).toContain("gateway service definition left unchanged");
+      expect(result.stderr).toContain(
+        error.includes("SEALED")
+          ? "privileged deployment owner"
+          : "inspect service-definition access",
+      );
+      if (args) {
+        expect(result.stdout).toContain('"event":"done"');
+        expect(result.stdout).toContain('"reason":"definition-mutation-denied"');
+      } else {
+        expect(result.stdout).toContain("OpenClaw installed (OpenClaw 2026.8.25).");
+      }
+    } else {
+      expect(result.stdout).toContain('"reason":"install-failed"');
+      expect(result.stdout).toContain('"event":"done"');
+    }
+  });
+
+  it.each([
     { args: "--json", mode: "JSON" },
     { args: "", mode: "human" },
   ])(

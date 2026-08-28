@@ -535,7 +535,9 @@ export async function beginSessionWorkAdmission(params: {
           async () => {
             writerBarrierStarted = true;
             params.signal?.throwIfAborted();
-            await (params.revalidateAllowed ?? params.assertAllowed)();
+            // The lease is already registered. Revalidation must exclude that owner
+            // from competing-work checks while preserving every other active lease.
+            await lease.run(async () => await (params.revalidateAllowed ?? params.assertAllowed)());
           },
           // Writer-owned rollover callbacks can open replacement admissions.
           // Reenter that lane or the writer waits on work queued behind itself.

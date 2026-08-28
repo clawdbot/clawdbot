@@ -18,6 +18,7 @@ import {
   resolveExtensionTestConfig,
 } from "../../scripts/lib/extension-test-plan.mts";
 import {
+  buildVitestRunPlans,
   hasImportGraphImpactOnTargets,
   resolveChangedTestTargetPlan,
 } from "../../scripts/test-projects.test-support.mts";
@@ -65,6 +66,16 @@ it.each([
   [["scripts/e2e/cron-mcp-cleanup-seed.ts"], ["cron-mcp-cleanup"]],
   [["scripts/e2e/mcp-code-mode-gateway-seed.ts"], ["mcp-code-mode-gateway"]],
   [["scripts/e2e/lib/mcp-code-mode-probe-server.ts"], ["mcp-code-mode-gateway"]],
+  [["scripts/e2e/update-channel-switch-docker.sh"], ["update-channel-switch"]],
+  [["scripts/e2e/lib/update-channel-switch/assertions.mjs"], ["update-channel-switch"]],
+  [
+    [
+      "scripts/e2e/update-channel-switch-docker.sh",
+      "scripts/e2e/lib/update-channel-switch/assertions.mjs",
+      "scripts/e2e/mcp-channels-seed.ts",
+    ],
+    ["mcp-channels", "update-channel-switch"],
+  ],
   [["scripts/e2e/docker-openai-seed.ts"], allDockerSeedLanes],
   [
     [
@@ -84,6 +95,42 @@ it.each([
 });
 
 describe("CI changed Node test plan", () => {
+  it.each([
+    "extensions/copilot/index.ts",
+    "extensions/copilot/harness.ts",
+    "extensions/copilot/openclaw.plugin.json",
+  ])("keeps host discovery proof when only %s changes", (changedPath) => {
+    const hostTest = "src/agents/prepared-model-runtime.copilot.integration.test.ts";
+    const shards = createChangedNodeTestShards([changedPath]);
+    expect(shards).not.toBeNull();
+    expect(shards).toHaveLength(2);
+    expect(shards?.flatMap((shard) => shard.targets ?? [])).toEqual([hostTest]);
+    expect(shards?.flatMap((shard) => shard.configs)).toEqual([
+      "test/vitest/vitest.extensions.config.ts",
+    ]);
+    expect(buildVitestRunPlans([hostTest])).toEqual([
+      {
+        config: "test/vitest/vitest.agents-core.config.ts",
+        forwardedArgs: [],
+        includePatterns: [hostTest],
+        watchMode: false,
+      },
+    ]);
+    expect(
+      buildVitestRunPlans([
+        "extensions/copilot/index.test.ts",
+        "extensions/copilot/harness.test.ts",
+      ]),
+    ).toEqual([
+      {
+        config: "test/vitest/vitest.extensions.config.ts",
+        forwardedArgs: [],
+        includePatterns: ["extensions/copilot/index.test.ts", "extensions/copilot/harness.test.ts"],
+        watchMode: false,
+      },
+    ]);
+  });
+
   it.each([
     {
       source: "ui/src/styles/chat/layout.css",

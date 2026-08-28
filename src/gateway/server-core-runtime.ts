@@ -35,6 +35,7 @@ import {
   incrementPresenceVersion,
 } from "./server/health-state.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { resolveGrantExpiryDaysConfig } from "./standing-grant-expiry-config.js";
 
 type GatewayLifecycle = Awaited<ReturnType<typeof prepareGatewayLifecycle>>;
 type GatewayLogger = ReturnType<typeof createSubsystemLogger>;
@@ -295,6 +296,12 @@ export async function startGatewayCoreRuntime(input: {
         log,
         chatAbortControllers,
         hasRunAbortMarker: (runId) => chatRunState.hasAbortMarker(runId),
+        // Grant terms freeze at mint. This reads the live config so a policy
+        // change applies to grants minted after it, never retroactively.
+        resolveGrantDefaultExpiresAtMs: (nowMs) => {
+          const days = resolveGrantExpiryDaysConfig(getRuntimeConfig());
+          return days !== null ? nowMs + days * 86_400_000 : null;
+        },
         activateRuntimeSecrets,
         sharedGatewaySessionGenerationState,
         resolveSharedGatewaySessionGenerationForConfig,

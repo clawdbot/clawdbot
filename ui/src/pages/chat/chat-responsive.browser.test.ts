@@ -1817,28 +1817,39 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
 
   it.each([
     [1200, 800, "desktop"],
-    [390, 844, "mobile"],
+    [320, 568, "mobile-320"],
+    [375, 812, "mobile-375"],
+    [430, 932, "mobile-430"],
   ] as const)(
-    "keeps topbar and composer notices out of the %s transcript layout",
+    "keeps floating notices clear of mobile chrome without shifting the %s transcript layout",
     async (width, height, label) => {
       const page = await openBrowserPage(width, height);
       try {
         await page.setContent(`<!doctype html><html><head><style>${readUiCss()}</style></head><body style="margin:0;height:100vh;overflow:hidden">
-          <section class="card chat">
-            <div class="chat-main">
-              <div class="chat-main__conversation-column">
-                <header class="chat-pane__header">Session</header>
-                <div class="chat-topbar-notices"></div>
-                <div class="chat-main__conversation">
-                  <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
-                  <div class="agent-chat__composer-shell">
-                    <div class="agent-chat__composer-overlay"></div>
-                    <div class="agent-chat__input">Composer</div>
+          <div class="shell shell--chat ${label.startsWith("mobile") ? "shell--mobile-nav shell--merged-chat-chrome" : ""}">
+            <main class="content content--chat" style="padding:0">
+              <section class="card chat">
+                <div class="chat-main">
+                  <div class="chat-main__conversation-column">
+                    <header class="chat-pane__header">Session</header>
+                    <div class="chat-topbar-notices"></div>
+                    <div class="chat-main__conversation">
+                      <div class="chat-thread" role="log"><div class="chat-thread-inner">Transcript</div></div>
+                      <button class="btn btn--sm chat-history-available">Earlier history available</button>
+                      <div class="chat-gutter-stack"><div class="task-suggestions">Task suggestion</div></div>
+                      <div class="agent-chat__composer-shell">
+                        <div class="agent-chat__composer-overlay"></div>
+                        <div class="agent-chat__input">Composer</div>
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          </section>
+              </section>
+            </main>
+            <openclaw-toast-host data-toast-placement="shell">
+              <div class="app-toast">Connection notice</div>
+            </openclaw-toast-host>
+          </div>
         </body></html>`);
         // The card entrance animation moves every measured descendant together.
         await page.locator(".card.chat").evaluate(async (node) => {
@@ -1893,6 +1904,31 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
             .locator(".agent-chat__composer-overlay")
             .evaluate((node) => getComputedStyle(node).position),
         ).toBe("absolute");
+        const header = await getBoundingBox(page, ".chat-pane__header");
+        const overlayTops = await Promise.all(
+          [
+            ".chat-history-available",
+            ".chat-topbar-notices",
+            ".chat-gutter-stack",
+            ".app-toast",
+          ].map(async (selector) => ({ selector, top: (await getBoundingBox(page, selector)).y })),
+        );
+        if (label.startsWith("mobile")) {
+          for (const overlay of overlayTops) {
+            expect(overlay.top, overlay.selector).toBeGreaterThanOrEqual(header.y + header.height);
+          }
+        } else {
+          expect(
+            overlayTops.find((overlay) => overlay.selector === ".chat-history-available")?.top,
+          ).toBeCloseTo(header.y + header.height + 10, 0);
+          expect(
+            overlayTops.find((overlay) => overlay.selector === ".chat-topbar-notices")?.top,
+          ).toBeCloseTo(8, 0);
+          expect(overlayTops.find((overlay) => overlay.selector === ".app-toast")?.top).toBeCloseTo(
+            20,
+            0,
+          );
+        }
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
         if (artifactDir) {
           await mkdir(artifactDir, { recursive: true });

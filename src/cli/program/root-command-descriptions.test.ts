@@ -62,6 +62,7 @@ const JSON_NOT_APPLICABLE = {
       "infer embedding",
       "approvals",
       "approvals allowlist",
+      "approvals grants",
       "exec-policy",
       "nodes",
       "nodes camera",

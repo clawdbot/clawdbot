@@ -1,4 +1,5 @@
 import { normalizeTrimmedStringList } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { parse as parseToml } from "smol-toml";
 import type {
   CodexAppServerApprovalPolicySource,
   CodexAppServerCommandSource,
@@ -63,6 +64,7 @@ import {
   readNumberEnv,
   resolveArgs,
 } from "./config-utils.js";
+import { readCodexAppServerConfigOptions } from "./launch-args.js";
 import type { CodexSandboxPolicy } from "./protocol.js";
 
 /**
@@ -556,15 +558,8 @@ export function codexSandboxPolicyForTurn(
   }
   let excludeTmpdirEnvVar = false;
   let excludeSlashTmp = false;
-  for (let index = 0; index < nativeArgs.length; index += 1) {
-    const arg = nativeArgs[index];
-    const override =
-      arg === "-c" || arg === "--config"
-        ? nativeArgs[++index]
-        : arg?.startsWith("--config=")
-          ? arg.slice("--config=".length)
-          : undefined;
-    if (!override) {
+  for (const { name, value: override } of readCodexAppServerConfigOptions(nativeArgs)) {
+    if ((name !== "-c" && name !== "--config") || !override) {
       continue;
     }
     const separator = override.indexOf("=");
@@ -572,14 +567,21 @@ export function codexSandboxPolicyForTurn(
       continue;
     }
     const key = override.slice(0, separator).trim();
-    const value = override.slice(separator + 1).trim();
-    if (value !== "true" && value !== "false") {
+    let value: unknown;
+    try {
+      // Match Codex's TOML value wrapper, including comments after booleans.
+      value = parseToml(`_x_ = ${override.slice(separator + 1).trim()}`)["_x_"];
+    } catch {
+      // Native parse failures become strings, never boolean exclusions.
+      continue;
+    }
+    if (typeof value !== "boolean") {
       continue;
     }
     if (key === "sandbox_workspace_write.exclude_tmpdir_env_var") {
-      excludeTmpdirEnvVar = value === "true";
+      excludeTmpdirEnvVar = value;
     } else if (key === "sandbox_workspace_write.exclude_slash_tmp") {
-      excludeSlashTmp = value === "true";
+      excludeSlashTmp = value;
     }
   }
   // Native turn/start overrides replace the thread's sandbox. Carry explicit

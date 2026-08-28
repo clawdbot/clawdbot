@@ -5860,13 +5860,13 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it.each([
-    [".github/workflows/mantis-discord-smoke.yml"],
-    [".github/workflows/plugin-clawhub-release.yml"],
-  ])("bounds %s git fetches", (workflowPath) => {
+    [".github/workflows/mantis-discord-smoke.yml", 2],
+    [".github/workflows/plugin-clawhub-release.yml", 3],
+  ])("bounds %s git fetches", (workflowPath, expectedFetchCount) => {
     const source = readFileSync(workflowPath, "utf8");
     const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
 
-    expect(gitFetchLines, workflowPath).toHaveLength(2);
+    expect(gitFetchLines, workflowPath).toHaveLength(expectedFetchCount);
     expect(
       gitFetchLines.every((line) =>
         line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
@@ -6316,7 +6316,7 @@ server.listen(0, "127.0.0.1", () => {
     expect(run).not.toContain("git fetch");
   });
 
-  it("bounds the workflow sanity tool downloads", () => {
+  it("bounds the workflow sanity ShellCheck download", () => {
     const workflow = readWorkflowSanityWorkflow();
     const shellcheckStep = expectDefined(
       workflow.jobs.actionlint.steps.find(
@@ -6324,21 +6324,38 @@ server.listen(0, "127.0.0.1", () => {
       ),
       "ShellCheck install step",
     );
-    const actionlintStep = expectDefined(
-      workflow.jobs.actionlint.steps.find(
-        (step: WorkflowStep) => step.name === "Install actionlint",
-      ),
-      "actionlint install step",
-    );
-
     expect(shellcheckStep.run).toContain("curl --connect-timeout 10 --max-time 120");
     expect(shellcheckStep.run).toContain("--retry 5 --retry-delay 2 --retry-all-errors");
-    expect(actionlintStep.run).toContain("--connect-timeout 10");
-    expect(actionlintStep.run).toContain("--max-time 120");
-    expect(actionlintStep.run).toContain("--retry 5");
-    expect(actionlintStep.run).toContain("--retry-delay 2");
-    expect(actionlintStep.run).toContain("--retry-all-errors");
-    expect(actionlintStep.run.match(/curl "\$\{curl_args\[@\]\}"/gu)).toHaveLength(2);
+  });
+
+  it("pins workflow and pre-commit actionlint to the large-stdin deadlock fix", () => {
+    const revision = "011a6d15e749bb3f2d771eed9c7aa0e7e3e10ee7";
+    const steps: WorkflowStep[] = readWorkflowSanityWorkflow().jobs.actionlint.steps;
+    const setupGo = expectDefined(
+      steps.find((step) => step.uses === SETUP_GO_V6),
+      "Go setup",
+    );
+    const install = expectDefined(
+      steps.find((step) => step.name === "Install actionlint"),
+      "actionlint install",
+    );
+
+    expect(setupGo.with).toEqual({ "go-version": "1.25.0", cache: false });
+    expect(steps.indexOf(setupGo)).toBeLessThan(steps.indexOf(install));
+    expect(install.run).toContain(`ACTIONLINT_REVISION="${revision}"`);
+    expect(install.run).toContain('export GOBIN="$RUNNER_TEMP/actionlint-bin"');
+    expect(install.run).toContain(
+      'go install "github.com/rhysd/actionlint/cmd/actionlint@${ACTIONLINT_REVISION}"',
+    );
+    expect(install.run).toContain('"$GOBIN/actionlint" -version');
+    expect(install.run).toContain("v1.7.13-0.20260419144658-${ACTIONLINT_REVISION:0:12}");
+    expect(install.run).toContain('echo "$GOBIN" >> "$GITHUB_PATH"');
+    const preCommit = parse(readFileSync(".pre-commit-config.yaml", "utf8"));
+    expect(
+      preCommit.repos.find(
+        (repo: { repo: string }) => repo.repo === "https://github.com/rhysd/actionlint",
+      ).rev,
+    ).toBe(revision);
   });
 
   it("runs committed generated baseline drift checks in workflow sanity", () => {
@@ -6633,32 +6650,37 @@ exit 1
     const workflow = readCiWorkflow();
     const macosSwift = workflow.jobs["macos-swift"];
     const testStep = macosSwift.steps.find((step: WorkflowStep) => step.name === "Swift test");
+    const renderStep = macosSwift.steps.find(
+      (step: WorkflowStep) => step.name === "Render isolated macOS health fixtures",
+    );
 
     expect(macosSwift.env.SWIFT_TEST_EXECUTION).toBe(
       "${{ (github.event_name == 'workflow_dispatch' || github.run_attempt > 1) && 'serial' || 'parallel' }}",
     );
-    expect(testStep.run).toContain(
-      "swift_test_args=(--package-path apps/macos --enable-code-coverage)",
+    expect(testStep.id).toBe("swift-test");
+    expect(renderStep.if).toBe(
+      "${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}",
     );
-    expect(testStep.run).toContain('if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]');
-    expect(testStep.run).toContain("swift_test_args+=(--parallel)");
-    expect(testStep.run).toContain("swift_test_args+=(--no-parallel)");
-    expect(testStep.run).toContain('swift test "${swift_test_args[@]}"');
-    expect(testStep.run).not.toContain(
-      "swift test --package-path apps/macos --parallel --enable-code-coverage",
-    );
-    expect(testStep.run).not.toContain("for attempt in");
 
-    for (const execution of ["parallel", "serial"] as const) {
-      const root = tempDirs.make(`openclaw-swift-test-first-attempt-${execution}-`);
+    for (const { execution, buildExitCode } of [
+      { execution: "parallel", buildExitCode: 0 },
+      { execution: "serial", buildExitCode: 0 },
+      { execution: "parallel", buildExitCode: 23 },
+    ]) {
+      const root = tempDirs.make(`openclaw-swift-test-${execution}-${buildExitCode}-`);
       const binDir = path.join(root, "bin");
       const callsPath = path.join(root, "swift-calls");
+      const outputPath = path.join(root, "github-output");
       mkdirSync(binDir, { recursive: true });
       writeFileSync(
         path.join(binDir, "swift"),
         `#!/usr/bin/env bash
 set -euo pipefail
 printf '%s\\n' "$*" >> "$SWIFT_CALLS"
+if [[ "\${1:-}" == "build" ]]; then
+  [[ ! -s "$GITHUB_OUTPUT" ]] || exit 24
+  exit "$BUILD_EXIT_CODE"
+fi
 test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
 [[ "$test_count" -gt 1 ]]
 `,
@@ -6669,18 +6691,27 @@ test_count="$(grep -c '^test ' "$SWIFT_CALLS")"
         cwd: root,
         env: {
           ...process.env,
+          BUILD_EXIT_CODE: String(buildExitCode),
+          GITHUB_OUTPUT: outputPath,
           PATH: `${binDir}:${process.env.PATH ?? ""}`,
           SWIFT_CALLS: callsPath,
           SWIFT_TEST_EXECUTION: execution,
         },
       });
       const calls = readFileSync(callsPath, "utf8").trim().split("\n");
-      expect(result.status).toBe(1);
+      expect(result.status).toBe(buildExitCode || 1);
       expect(calls).toEqual([
-        `test --package-path apps/macos --enable-code-coverage --${
-          execution === "parallel" ? "parallel" : "no-parallel"
-        }`,
+        "build --package-path apps/macos --build-tests --enable-code-coverage",
+        ...(buildExitCode === 0
+          ? [
+              `test --package-path apps/macos --enable-code-coverage --skip-build --${
+                execution === "parallel" ? "parallel" : "no-parallel"
+              }`,
+            ]
+          : []),
       ]);
+      const output = existsSync(outputPath) ? readFileSync(outputPath, "utf8").trim() : "";
+      expect(output).toBe(buildExitCode === 0 ? "debug-tests-built=true" : "");
     }
   });
 
@@ -8514,6 +8545,20 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(verifierStep.run).toContain("scripts/ensure-cli-startup-build.mts");
     expect(verifierStep.run).toContain("scripts/check-cli-startup-memory.mjs");
     expect(verifierStep.run).toContain(".artifacts/startup-memory/summary.md");
+    expect(verifierStep.env.RUN_CHANNELS).toBe("${{ needs.preflight.outputs.run_checks }}");
+    expect(verifierStep.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+    expect(verifierStep.run).toContain(
+      'start_check "discord-component-attachments" run_discord_component_attachments',
+    );
+    expect(verifierStep.run).toContain('["discord-component-attachments"]="skipped"');
+    expect(verifierStep.run).toContain("OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_E2E_WORKERS=1");
+    expect(verifierStep.run).toContain("OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1");
+    const upload = steps.find(
+      (entry: WorkflowStep) => entry.name === "Upload Discord component attachment proof",
+    );
+    expect(upload.if).toBe("always() && needs.preflight.outputs.run_checks == 'true'");
+    expect(upload.with.path).toContain("${{ runner.temp }}/discord-component-attachments.json");
+    expect(upload.with.path).toContain("${{ runner.temp }}/discord-component-attachments.log");
     // Every verifier reports through the shared results map so a failure can
     // never be swallowed by the wave.
     for (const name of ["doctor-plugin-index", "plugin-singleton", "startup-memory"]) {
@@ -8521,8 +8566,59 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       expect(verifierStep.run).toContain(`["${name}"]="skipped"`);
     }
     expect(verifierStep.run).toContain(
-      "for name in channels core-support-boundary doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do",
+      "for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do",
     );
+  });
+
+  it.each([
+    { label: "one passing named case", state: "passed", frozen: false, expected: 0 },
+    { label: "a passing frozen case", state: "passed", frozen: true, expected: 0 },
+    { label: "a failed named case", state: "failed", frozen: false, expected: 1 },
+    { label: "a skipped current case", state: "skipped", frozen: false, expected: 1 },
+    { label: "a skipped frozen case", state: "skipped", frozen: true, expected: 1 },
+    { label: "a missing current case", state: "absent", frozen: false, expected: 1 },
+    { label: "an unavailable historical case", state: "absent", frozen: true, expected: 0 },
+    { label: "a failed suite", state: "suite-failed", frozen: false, expected: 1 },
+    { label: "malformed JSON", state: "malformed", frozen: true, expected: 1 },
+  ])("validates Discord built proof with $label", ({ state, frozen, expected }) => {
+    const steps = readCiWorkflow().jobs["build-artifacts"].steps;
+    const step = steps.find((entry: WorkflowStep) => entry.name === "Run built artifact checks");
+    const validator = expectDefined(
+      step.run.match(
+        /node --input-type=module <<'DISCORD_PROOF_REPORT'\n([\s\S]*?)\nDISCORD_PROOF_REPORT/u,
+      )?.[1],
+      "Discord proof report validator",
+    );
+    const scratch = tempDirs.make("openclaw-discord-proof-report-");
+    const fullName =
+      "Discord show_widget contextual presenter process proof preserves component attachment filenames through the public Gateway message action";
+    const report = {
+      success: true,
+      numFailedTestSuites: state === "suite-failed" ? 1 : 0,
+      numFailedTests: state === "failed" ? 1 : 0,
+      numPassedTests: state === "passed" ? 1 : 0,
+      testResults: [
+        {
+          name: path.resolve(
+            "test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts",
+          ),
+          status: "passed",
+          assertionResults: state === "absent" ? [] : [{ fullName, status: state }],
+        },
+      ],
+    };
+    writeFileSync(
+      path.join(scratch, "discord-component-attachments.json"),
+      state === "malformed" ? "{" : JSON.stringify(report),
+    );
+    const result = spawnSync(process.execPath, ["--input-type=module", "-e", validator], {
+      encoding: "utf8",
+      env: { ...process.env, RUNNER_TEMP: scratch, FROZEN_TARGET: String(frozen) },
+    });
+    expect(result.status, result.stderr).toBe(expected);
+    if (state === "absent" && frozen) {
+      expect(result.stdout).toContain("[skip] Frozen target predates the named Discord");
+    }
   });
 
   it("runs the scoped SQLite lifecycle proof against the exact built artifact", () => {
@@ -8664,11 +8760,15 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     );
     const tuiPty = run.indexOf('if [ "$RUN_TUI_PTY" = "true" ]; then');
     const hostedGatewayWait = run.indexOf("\n  wait_checks\n", hostedGatewayWatch);
+    const discordAttachments = run.indexOf('start_check "discord-component-attachments"');
+    const discordAttachmentsWait = run.indexOf("\n  wait_checks\n", discordAttachments);
     const tuiPtyWait = run.indexOf("\n  wait_checks\n", tuiPty);
     expect(firstWait).toBeGreaterThan(run.indexOf('start_check "core-support-boundary"'));
     expect(hostedGatewayWatch).toBeGreaterThan(firstWait);
     expect(hostedGatewayWait).toBeGreaterThan(hostedGatewayWatch);
-    expect(tuiPty).toBeGreaterThan(hostedGatewayWait);
+    expect(discordAttachments).toBeGreaterThan(hostedGatewayWait);
+    expect(discordAttachmentsWait).toBeGreaterThan(discordAttachments);
+    expect(tuiPty).toBeGreaterThan(discordAttachmentsWait);
     expect(tuiPtyWait).toBeGreaterThan(tuiPty);
     expect(run.slice(tuiPty, tuiPtyWait)).toContain("src/tui/tui-pty-local.e2e.test.ts");
     expect(run.slice(tuiPty, tuiPtyWait)).toContain("--testNamePattern");
@@ -8678,7 +8778,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(run).toContain("wait_checks()");
     // Startup memory is isolated before the three artifact waves; hosted
     // runners also serialize the remaining verifiers inside run_verifier.
-    expect(run.match(/wait_checks$/gmu)).toHaveLength(5);
+    expect(run.match(/wait_checks$/gmu)).toHaveLength(6);
   });
 
   it("keeps docs i18n CI on the workflow-owned Go toolchain", () => {
@@ -10356,8 +10456,12 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(sparseCheckoutPaths).toEqual([
       "scripts/full-release-validation-state.mjs",
       "scripts/full-release-validation-policy.mjs",
+      "scripts/full-release-candidate-contract.mjs",
       "scripts/release-ci-summary.mjs",
+      "scripts/lib/canonical-json.mjs",
       "scripts/lib/plain-gh.mjs",
+      "scripts/lib/record-shared.mjs",
+      "scripts/lib/upgrade-survivor-policy.mjs",
     ]);
     for (const sparsePath of sparseCheckoutPaths) {
       expect({ sparsePath, exists: existsSync(sparsePath) }).toEqual({
@@ -10700,6 +10804,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.on).toHaveProperty("workflow_dispatch");
     expect(job["runs-on"]).toBe("ubuntu-24.04");
     expect(job.environment).toBe("qa-live-shared");
+    expect(job["timeout-minutes"]).toBe(270);
     expect(job.permissions).toEqual({
       checks: "write",
       contents: "read",
@@ -10727,7 +10832,11 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
       run: "node scripts/pr-crabbox-gate-publisher.mjs",
     });
-    expect(job.steps.slice(2, 4)).toMatchObject([
+    expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
+    expect(job.steps[2].run).toContain(
+      "6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90",
+    );
+    expect(job.steps.slice(3, 5)).toMatchObject([
       {
         id: "app-token",
         uses: CREATE_GITHUB_APP_TOKEN_V3,
@@ -10744,6 +10853,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'CRABBOX_GATE_CHECK_NAME = "openclaw/crabbox-gate"',
     );
     expect(publisher).not.toContain('const CHECK_NAME = "openclaw/ci-gate"');
-    expect(workflow.on.workflow_dispatch.inputs).toHaveProperty("base_sha");
+    expect(Object.keys(workflow.on.workflow_dispatch.inputs).toSorted()).toEqual([
+      "base_sha",
+      "head_sha",
+      "pr_number",
+    ]);
   });
 });

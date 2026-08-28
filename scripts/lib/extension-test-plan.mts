@@ -406,7 +406,7 @@ export function resolveExtensionTestPlan(params: { cwd?: string; targetArg?: str
 
 type ResolvedExtensionTestPlan = ReturnType<typeof resolveExtensionTestPlan>;
 
-function mergeTestPlans(plans: ResolvedExtensionTestPlan[]): ExtensionBatchPlan {
+export function mergeExtensionTestPlans(plans: ResolvedExtensionTestPlan[]): ExtensionBatchPlan {
   const groupsByConfig = new Map<string, ExtensionTestPlanGroup>();
 
   const testPlans = plans.filter((plan) => plan.hasTests);
@@ -462,7 +462,9 @@ export function resolveExtensionBatchPlan(params: { cwd?: string; extensionIds?:
     resolveExtensionTestPlan({ cwd, targetArg: extensionId }),
   );
 
-  return mergeTestPlans(hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests));
+  return mergeExtensionTestPlans(
+    hasExplicitExtensionIds ? plans : plans.filter((plan) => plan.hasTests),
+  );
 }
 
 type PendingExtensionTestShard = {
@@ -523,7 +525,7 @@ export function createExtensionTestShards(
       Object.assign(
         {},
         { index, checkName: `checks-node-extensions-shard-${index + 1}` },
-        mergeTestPlans(shard.plans),
+        mergeExtensionTestPlans(shard.plans),
       ),
     )
     .filter((shard) => shard.hasTests);

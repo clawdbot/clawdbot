@@ -8,7 +8,6 @@ import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { resolveConfiguredModelEntries } from "../../agents/configured-model-entries.js";
 import { DEFAULT_PROVIDER } from "../../agents/defaults.js";
 import type {
-  ModelAuthAvailability,
   ModelAuthAvailabilityEvaluation,
   ModelAuthAvailabilityResolver,
 } from "../../agents/model-auth-availability.js";
@@ -80,15 +79,14 @@ function resolveModelsListView(params: Record<string, unknown>): ModelCatalogBro
 function resolveLegacyEntryAvailability(params: {
   authResolver: ModelAuthAvailabilityResolver;
   entry: ModelCatalogEntry;
-  primaryAvailability: ModelAuthAvailability;
+  evaluation: ModelAuthAvailabilityEvaluation;
   cfg: OpenClawConfig;
   agentId: string;
   metadataSnapshot: PluginMetadataSnapshot;
-}): ModelAuthAvailability {
-  if (params.primaryAvailability === true) {
-    return true;
+}): ModelAuthAvailabilityEvaluation {
+  if (params.evaluation.availability === true) {
+    return params.evaluation;
   }
-  let available = params.primaryAvailability;
   const runtimeProvider = resolveCliRuntimeExecutionProvider({
     provider: params.entry.provider,
     cfg: params.cfg,
@@ -100,15 +98,11 @@ function resolveLegacyEntryAvailability(params: {
     runtimeProvider &&
     normalizeProviderId(runtimeProvider) !== normalizeProviderId(params.entry.provider)
   ) {
-    const runtimeAvailable = params.authResolver.resolveProviderAuthAvailability(runtimeProvider);
-    if (runtimeAvailable === true) {
-      return true;
-    }
-    if (available === false && runtimeAvailable === undefined) {
-      available = undefined;
-    }
+    // The native runtime owns the remaining auth decision, including whether
+    // credentials are absent or simply have not been read yet.
+    return params.authResolver.evaluateModelAuth(runtimeProvider, { modelId: params.entry.id });
   }
-  return available;
+  return params.evaluation;
 }
 
 function createModelsListEntryEvaluator(params: {
@@ -131,7 +125,7 @@ function createModelsListEntryEvaluator(params: {
     if (cached) {
       return cached;
     }
-    const next = Promise.resolve().then(() => {
+    const next = Promise.resolve().then((): ModelAuthAvailabilityEvaluation => {
       const evaluation = params.authResolver.evaluateModelAuth(entry.provider, {
         modelId: identity?.id ?? entry.id,
         ...(params.preferredProfileId ? { preferredProfileId: params.preferredProfileId } : {}),
@@ -143,17 +137,14 @@ function createModelsListEntryEvaluator(params: {
       });
       const resolved =
         evaluation.routeResolution === null && normalizeProviderId(entry.provider) !== "openai"
-          ? {
-              ...evaluation,
-              availability: resolveLegacyEntryAvailability({
-                authResolver: params.authResolver,
-                entry,
-                primaryAvailability: evaluation.availability,
-                cfg: params.cfg,
-                agentId: params.agentId,
-                metadataSnapshot: params.metadataSnapshot,
-              }),
-            }
+          ? resolveLegacyEntryAvailability({
+              authResolver: params.authResolver,
+              entry,
+              evaluation,
+              cfg: params.cfg,
+              agentId: params.agentId,
+              metadataSnapshot: params.metadataSnapshot,
+            })
           : evaluation;
       const provider = normalizeProviderId(entry.provider);
       // Stored credentials prove presence, not acceptance. Apply the live rejection only to the
@@ -164,7 +155,12 @@ function createModelsListEntryEvaluator(params: {
           normalizeProviderId(outcome.provider) === provider &&
           (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
       )
-        ? { ...resolved, availability: false }
+        ? {
+            ...resolved,
+            availability: false,
+            unavailableReason: "auth-failed",
+            unavailableUntil: undefined,
+          }
         : resolved;
     });
     pending.set(cacheKey, next);
@@ -379,6 +375,9 @@ async function buildPublicModelsListEntries(params: {
       const available = evaluation.availability ?? (syntheticLocalAvailable ? true : undefined);
       // Legacy views keep emitting a boolean because existing clients treat
       // omission as selectable. Inventory consumers preserve unknown state.
+      const projectedAvailability = params.preserveUnknownAvailability
+        ? available
+        : (available ?? false);
       const capabilityProvider = params.apiKeyCapabilities?.resolveProvider(entry.provider);
       const agentRuntime = resolveModelChoiceAgentRuntime({
         cfg: params.cfg,
@@ -408,9 +407,15 @@ async function buildPublicModelsListEntries(params: {
             }
           : {}),
         ...(params.includeInput && entry.input?.length ? { input: entry.input } : {}),
-        ...(params.preserveUnknownAvailability && available === undefined
-          ? {}
-          : { available: available ?? false }),
+        ...(projectedAvailability === undefined ? {} : { available: projectedAvailability }),
+        ...(projectedAvailability === false && evaluation.unavailableReason
+          ? {
+              unavailableReason: evaluation.unavailableReason,
+              ...(evaluation.unavailableUntil !== undefined
+                ? { unavailableUntil: evaluation.unavailableUntil }
+                : {}),
+            }
+          : {}),
       };
     }),
   );

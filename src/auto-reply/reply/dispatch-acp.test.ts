@@ -14,16 +14,19 @@ import { configureExecutionIdentityAdmissionSink } from "../../audit/execution-i
 import { configureRuntimeActionDecisionSink } from "../../audit/runtime-action-decision.js";
 import { buildChannelInboundEventContext } from "../../channels/inbound-event/context.js";
 import { createHostChannelInboundEventContextBuilder } from "../../channels/inbound-event/host-context-builder.js";
-import {
-  configureChannelAdmissionEvidenceCollection,
-  registerChannelAdmissionEvidenceOwner,
-} from "../../channels/message-access/admission-evidence.js";
+import { configureChannelAdmissionEvidenceCollection } from "../../channels/message-access/admission-evidence.js";
+import { registerChannelIngressHostOwner } from "../../channels/message-access/ingress-host-owner.js";
 import { resolveStableChannelMessageIngress } from "../../channels/message-access/runtime.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import {
+  listSessionParticipantsReadOnly,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import type { SessionBindingRecord } from "../../infra/outbound/session-binding-service.js";
 import type { ApplyMediaUnderstandingResult } from "../../media-understanding/apply.js";
 import { isImageAttachment } from "../../media-understanding/attachments.normalize.js";
 import { withFetchPreconnect } from "../../test-utils/fetch-mock.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { FinalizedRuntimeMsgContext } from "../templating.js";
 import {
   resolveAgentTurnAttachments,
@@ -485,6 +488,25 @@ function expectRoutedPayload(callIndex: number, payload: Partial<MockTtsReply>) 
 }
 
 describe("tryDispatchAcpReplyCore", () => {
+  it("records an accepted channel input in the canonical participant store", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      await upsertSessionEntryCore(
+        { agentId: "codex-acp", env: state.env, sessionKey },
+        {
+          sessionId: "acp-participant-session",
+          updatedAt: 1,
+        },
+      );
+      setReadyAcpResolution();
+      await runDispatch({ bodyForAgent: "hello", ctxOverrides: { SenderId: "participant" } });
+      await Promise.resolve();
+      expect(
+        listSessionParticipantsReadOnly({ agentId: "codex-acp", env: state.env, sessionKey }).get(
+          sessionKey,
+        ),
+      ).toHaveLength(1);
+    });
+  });
   beforeEach(() => {
     auditMocks.emitAcpLifecycleStart.mockReset();
     auditMocks.emitAcpRuntimeEvent.mockReset();
@@ -545,7 +567,7 @@ describe("tryDispatchAcpReplyCore", () => {
       return true;
     });
     const owner = { channelId: "discord", record: {}, epoch: {}, isLive: () => true };
-    const clearOwner = registerChannelAdmissionEvidenceOwner(owner);
+    const clearOwner = registerChannelIngressHostOwner(owner);
     try {
       setReadyAcpResolution();
       const channelIngress = await resolveStableChannelMessageIngress({

@@ -99,34 +99,6 @@ export function createMeetingPluginNodeInvokePolicy(
   });
 }
 
-function createMeetingPluginCliDescriptor(name: string, description: string) {
-  return {
-    name,
-    description,
-    hasSubcommands: true,
-    machineOutput: ({ argv }: { argv: readonly string[] }) =>
-      getRootOptionAwareCommandPath(argv, 2).length === 2,
-  } as const;
-}
-
-export function createMeetingPluginCliMetadata(options: {
-  commandName: string;
-  description: string;
-  id: string;
-  name: string;
-}) {
-  const descriptor = createMeetingPluginCliDescriptor(options.commandName, options.description);
-  return {
-    id: options.id,
-    name: options.name,
-    description: `${options.name} CLI metadata`,
-    descriptor,
-    register(api: OpenClawPluginApi) {
-      api.registerCli(() => {}, { descriptors: [descriptor] });
-    },
-  };
-}
-
 export function createMeetingChromeRuntimeBindings() {
   return {
     createBindings: createMeetingRealtimeEngineBindings,
@@ -227,10 +199,13 @@ export function createMeetingPluginShellEntry<
       api.registerCli(async ({ program }) => (await loadCli())({ program, config }), {
         commands: [methodPrefix],
         descriptors: [
-          createMeetingPluginCliDescriptor(
-            methodPrefix,
-            `Join and manage ${options.browserGuestLabel} guests`,
-          ),
+          {
+            name: methodPrefix,
+            description: `Join and manage ${options.browserGuestLabel} guests`,
+            hasSubcommands: true,
+            machineOutput: ({ argv }: { argv: readonly string[] }) =>
+              getRootOptionAwareCommandPath(argv, 2).length === 2,
+          },
         ],
       });
     },

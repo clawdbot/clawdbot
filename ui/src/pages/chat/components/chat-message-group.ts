@@ -53,6 +53,7 @@ import { extractGroupMeta, renderMessageMeta } from "./chat-message-timestamp.ts
 import type { SidebarContent, SidebarFullMessageLoader } from "./chat-sidebar.ts";
 import {
   isRunningToolCard,
+  renderBrowserTabPreviews,
   resolveToolRowText,
   shouldToggleSelectableDisclosure,
   syncToolDisclosureOverflow,
@@ -67,6 +68,7 @@ type ActiveContinuation = {
 type ReplyPreview = MessageReplyTarget & { sourceMessageId: string };
 
 type RenderMessageGroupOptions = {
+  latestBrowserTabs?: ReadonlyMap<string, string>;
   onOpenSidebar?: (content: SidebarContent) => void;
   onOpenWorkspaceFile?: (target: { path: string; line?: number | null }) => void;
   sessionKey?: string;
@@ -332,6 +334,7 @@ export function renderActivityGroup(
             )
           : nothing}
       </div>
+      ${renderBrowserTabPreviews(groups, opts)}
     </div>
   `;
   return presentation === "continuation"
@@ -386,7 +389,7 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
     }
   }
   const who = resolveMessageGroupSenderLabel(group, opts);
-  return group.messages.map((item, index) => {
+  const messages = group.messages.map((item, index) => {
     const actionDetails = resolveMessageActionDetails({
       message: item.message,
       messageId: item.key,
@@ -416,6 +419,9 @@ export function renderMessageGroupContent(group: MessageGroup, opts: RenderMessa
       opts.onOpenSidebar,
     );
   });
+  return html`${messages}${opts.showToolCalls === false
+    ? nothing
+    : renderBrowserTabPreviews([group], opts)}`;
 }
 
 export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroupOptions) {
@@ -584,6 +590,9 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
               : nothing}
           `;
         })}
+        ${ownsRunFrame || opts.showToolCalls === false
+          ? nothing
+          : renderBrowserTabPreviews([group], opts)}
         ${opts.activeContinuation
           ? renderStreamGroupParts(
               opts.activeContinuation.parts,

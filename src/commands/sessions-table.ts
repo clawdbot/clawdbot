@@ -173,7 +173,9 @@ export function formatSessionFlagsCell(
 ): string {
   const owner = row.owner?.actor ?? row.createdActor;
   // Match the canonical session-row participant preview bound.
-  const participants = (row.participants ?? []).slice(0, 4).map(formatSessionActor);
+  const participants = (row.participants ?? [])
+    .slice(0, 4)
+    .map(({ identity, label }) => label?.trim() || `${identity.type}:${identity.id}`);
   const remainingParticipants = Math.max(
     0,
     (row.participantCount ?? participants.length) - participants.length,
