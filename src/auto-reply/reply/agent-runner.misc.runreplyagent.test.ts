@@ -779,6 +779,91 @@ describe("runReplyAgent auto-compaction token update", () => {
     }
   });
 
+  it("retains the legacy pending-reset marker when a followup queues behind the active run", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-queued-tombstone-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: 0,
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(true);
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun();
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: true,
+      isActive: true,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    // The queued turn's bookkeeping touch must leave the updatedAt=0
+    // pending-reset marker intact for the deferred rollover.
+    expect(result).toBeUndefined();
+    expect(enqueueFollowupRun).toHaveBeenCalledTimes(1);
+    expect(sessionEntry.updatedAt).toBe(0);
+    expect(loadSessionEntry({ storePath, sessionKey })?.updatedAt).toBe(0);
+  });
+
+  it("stamps a fresh updatedAt for ordinary entries when a followup queues behind the active run", async () => {
+    const tmp = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-queued-ordinary-"));
+    const storePath = path.join(tmp, "sessions.json");
+    const sessionKey = "main";
+    const sessionEntry = {
+      sessionId: "session",
+      updatedAt: 1_000,
+    };
+    await seedSessionStore({ storePath, sessionKey, entry: sessionEntry });
+    vi.mocked(enqueueFollowupRun).mockReturnValueOnce(true);
+
+    const { typing, sessionCtx, resolvedQueue, followupRun } = createBaseRun();
+
+    const result = await runReplyAgent({
+      commandBody: "hello",
+      followupRun,
+      queueKey: sessionKey,
+      resolvedQueue,
+      shouldSteer: false,
+      shouldFollowup: true,
+      isActive: true,
+      typing,
+      sessionCtx,
+      sessionEntry,
+      sessionStore: { [sessionKey]: sessionEntry },
+      sessionKey,
+      storePath,
+      defaultModel: "anthropic/claude-opus-4-6",
+      resolvedVerboseLevel: "off",
+      isNewSession: false,
+      blockStreamingEnabled: false,
+      resolvedBlockStreamingBreak: "message_end",
+      shouldInjectGroupIntro: false,
+      typingMode: "instant",
+    });
+
+    expect(result).toBeUndefined();
+    expect(sessionEntry.updatedAt).toBeGreaterThan(1_000);
+    expect(loadSessionEntry({ storePath, sessionKey })?.updatedAt).toBeGreaterThan(1_000);
+  });
+
   it("keeps a provided reply operation active until final delivery completes", async () => {
     const sessionKey = "main";
     const sessionEntry = {

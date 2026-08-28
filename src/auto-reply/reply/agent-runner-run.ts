@@ -229,7 +229,10 @@ export async function runReplyAgent(
     if (!activeSessionEntry || !activeSessionStore || !sessionKey) {
       return;
     }
-    const updatedAt = Date.now();
+    // Bookkeeping touches must not consume the legacy updatedAt=0 pending-reset
+    // marker while the owning run is still active (resolveMergedUpdatedAt keeps
+    // the persisted side; this keeps the in-memory entry consistent with it).
+    const updatedAt = activeSessionEntry.updatedAt === 0 ? 0 : Date.now();
     activeSessionEntry.updatedAt = updatedAt;
     activeSessionStore[sessionKey] = activeSessionEntry;
     if (storePath) {
