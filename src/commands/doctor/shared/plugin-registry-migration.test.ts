@@ -149,56 +149,50 @@ function insertStalePersistedIndexRow(stateDir: string, installRecordsJson = "{}
 }
 
 describe("plugin registry install migration", () => {
-  it.each([1, 2])(
-    "stops migration with the original error when required read %s fails",
-    async (failedRead) => {
-      const stateDir = makeTempDir();
-      const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
-      insertStalePersistedIndexRow(stateDir, JSON.stringify(records));
-      const error = Object.assign(new Error("database is locked"), {
-        code: "ERR_SQLITE_ERROR",
-        errcode: 5,
-      });
-      const read = stateDbReadOnly.withExistingOpenClawStateDatabaseReadOnly;
-      const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
-      if (failedRead === 2) {
-        readSpy.mockImplementationOnce(read);
-      }
-      readSpy.mockImplementationOnce(() => {
-        throw error;
-      });
-      const readConfig = vi.fn(() => ({}));
-      await expect
-        .soft(
-          migratePluginRegistryForInstall({
-            stateDir,
-            readConfig,
-            candidates: [],
-            env: hermeticEnv(),
-          }),
-        )
-        .rejects.toBe(error);
-      expect.soft(readConfig).not.toHaveBeenCalled();
-      readSpy.mockRestore();
-      const row = runOpenClawStateWriteTransaction(
-        ({ db }) =>
-          db
-            .prepare(
-              "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
-            )
-            .get(),
-        { env: { OPENCLAW_STATE_DIR: stateDir } },
-      );
-      expect(row).toMatchObject({ updated_at_ms: 123 });
-      const restored = await migratePluginRegistryForInstall({
-        stateDir,
-        readConfig,
-        candidates: [],
-        env: hermeticEnv(),
-      });
-      expect(requireMigratedIndex(restored).installRecords).toEqual(records);
-    },
-  );
+  it("stops migration with the original error when the shared registry read fails", async () => {
+    const stateDir = makeTempDir();
+    const records = { authoritative: { source: "npm", spec: "authoritative@1.0.0" } };
+    insertStalePersistedIndexRow(stateDir, JSON.stringify(records));
+    const error = Object.assign(new Error("database is locked"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 5,
+    });
+    const readSpy = vi.spyOn(stateDbReadOnly, "withExistingOpenClawStateDatabaseReadOnly");
+    readSpy.mockImplementationOnce(() => {
+      throw error;
+    });
+    const readConfig = vi.fn(() => ({}));
+    await expect
+      .soft(
+        migratePluginRegistryForInstall({
+          stateDir,
+          readConfig,
+          candidates: [],
+          env: hermeticEnv(),
+        }),
+      )
+      .rejects.toBe(error);
+    expect.soft(readConfig).not.toHaveBeenCalled();
+    expect(readSpy).toHaveBeenCalledOnce();
+    readSpy.mockRestore();
+    const row = runOpenClawStateWriteTransaction(
+      ({ db }) =>
+        db
+          .prepare(
+            "SELECT value_json, updated_at_ms FROM config_machine_state WHERE state_key = 'plugins.installedIndex'",
+          )
+          .get(),
+      { env: { OPENCLAW_STATE_DIR: stateDir } },
+    );
+    expect(row).toMatchObject({ updated_at_ms: 123 });
+    const restored = await migratePluginRegistryForInstall({
+      stateDir,
+      readConfig,
+      candidates: [],
+      env: hermeticEnv(),
+    });
+    expect(requireMigratedIndex(restored).installRecords).toEqual(records);
+  });
 
   it("short-circuits when a current registry file already exists", async () => {
     const stateDir = makeTempDir();
