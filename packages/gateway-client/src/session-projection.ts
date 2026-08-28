@@ -322,14 +322,43 @@ function insertEntry(
           const candidate = entry.identity?.sequence;
           return candidate !== undefined && candidate !== null && candidate > sequence;
         });
-  if (nextIndex < 0 && incoming.identity?.role === "user" && incoming.identity.runId) {
+  if (sequence !== undefined && sequence !== null && nextIndex < 0) {
+    nextIndex = entries.length;
+  }
+  if (incoming.identity?.role === "user" && incoming.identity.runId) {
     const runId = incoming.identity.runId;
     const terminalMessage = runs?.[runId]?.message;
-    nextIndex = entries.findIndex(
+    const terminalIndex = entries.findIndex(
       (entry) =>
         entry.identity?.role === "assistant" &&
         (entry.identity.runId === runId || entry.message === terminalMessage),
     );
+    const terminalEntry = entries[terminalIndex];
+    if (
+      terminalEntry &&
+      sequence !== undefined &&
+      sequence !== null &&
+      nextIndex >= 0 &&
+      terminalIndex < nextIndex
+    ) {
+      // A live final may overtake its durable prompt. Move the pair together so
+      // the causal repair cannot leapfrog older sequenced transcript rows.
+      const withoutTerminal = entries.filter((_, index) => index !== terminalIndex);
+      const sequenceIndex = withoutTerminal.findIndex((entry) => {
+        const candidate = entry.identity?.sequence;
+        return candidate !== undefined && candidate !== null && candidate > sequence;
+      });
+      const promptIndex = sequenceIndex < 0 ? withoutTerminal.length : sequenceIndex;
+      return [
+        ...withoutTerminal.slice(0, promptIndex),
+        incoming,
+        terminalEntry,
+        ...withoutTerminal.slice(promptIndex),
+      ];
+    }
+    if (terminalIndex >= 0 && (nextIndex < 0 || terminalIndex < nextIndex)) {
+      nextIndex = terminalIndex;
+    }
   }
   return nextIndex < 0
     ? [...entries, incoming]
@@ -362,7 +391,11 @@ export function projectLiveSessionMessage(
     // durable row would lose the ID every later snapshot reconciles against.
     return state;
   }
-  if (existing?.pending && incoming.identity.sequence !== null) {
+  if (
+    existing &&
+    incoming.identity.sequence !== null &&
+    (existing.pending || existing.identity?.sequence === null)
+  ) {
     const sequence = incoming.identity.sequence;
     const violatesOrder = state.entries.some(
       ({ identity }, index) =>
