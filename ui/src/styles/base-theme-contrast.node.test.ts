@@ -89,13 +89,18 @@ const DIFF_HOST_SURFACES = ["--bg", "--bg-muted", "--card"] as const;
 const CHAT_LINK_RULE = ".chat-text :where(a)";
 const CHAT_LINK_HOVER_RULE = ".chat-text :where(a:hover)";
 const USER_BUBBLE_RULE = ".chat-group.user .chat-bubble";
-const SENDER_TINT_BUBBLE_RULE = ".chat-group.user.chat-group--sender-tint .chat-bubble";
+// User and forwarded (cross-session) bubbles share one tint rule via :is().
+const SENDER_TINT_BUBBLE_RULE =
+  ".chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble";
 // Light mode resets both bubble skins back to flat surfaces, and those rules win
 // on source order (see the order contract in chat/grouped.css). Asserting the
 // dark fills against light palettes would guard a surface nothing paints.
 const LIGHT_USER_BUBBLE_RULE = ':root[data-theme-mode="light"] .chat-group.user .chat-bubble';
+// oxfmt wraps this selector in grouped.css; the reader matches raw bytes.
 const LIGHT_SENDER_TINT_BUBBLE_RULE =
-  ':root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble';
+  ':root[data-theme-mode="light"]\n' +
+  "  .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint\n" +
+  "  .chat-bubble";
 
 type TokenMap = Map<string, string>;
 type RGB = readonly [red: number, green: number, blue: number];
