@@ -555,33 +555,35 @@ function completeEmbeddedRun(
   log.debug(
     `embedded run done: runId=${input.runParams.runId} sessionId=${input.runParams.sessionId} durationMs=${Date.now() - input.startedAtMs} aborted=${terminalAborted}`,
   );
-  markEmbeddedRunAuthProfileSuccess({
-    authProfileStateMode: input.runParams.authProfileStateMode,
-    profileId: input.authProfileId,
-    profileStore: input.profileFailureStore,
-    provider: input.provider,
-    agentDir: input.runParams.agentDir,
-    runId: input.runParams.runId,
-    sessionId: input.runParams.sessionId,
-  });
-  reportEmbeddedRunSuccessfulAuthBinding({
-    profileId: input.authProfileId,
-    profileStore: input.attemptAuthProfileStore,
-    apiKeyInfo: input.apiKeyInfo,
-    attempt: input.attempt,
-    provider: input.provider,
-    agentDir: input.runParams.agentDir,
-    modelId: input.modelTransportId,
-    modelApi: input.modelTransportApi,
-    ...(input.modelTransportBaseUrl ? { modelBaseUrl: input.modelTransportBaseUrl } : {}),
-    requestTransportOverrides: input.requestTransportOverrides ?? "none",
-    config: input.runParams.config,
-    agentHarnessId: input.agentHarnessId,
-    pluginHarnessOwnsTransport: input.pluginHarnessOwnsTransport,
-    pluginHarnessOwnsAuthBootstrap: input.pluginHarnessOwnsAuthBootstrap,
-    onSuccessfulAuthBinding: input.runParams.onSuccessfulAuthBinding,
-  });
-  input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
+  if (input.terminalState.outcome.reason === "completed") {
+    markEmbeddedRunAuthProfileSuccess({
+      authProfileStateMode: input.runParams.authProfileStateMode,
+      profileId: input.authProfileId,
+      profileStore: input.profileFailureStore,
+      provider: input.provider,
+      agentDir: input.runParams.agentDir,
+      runId: input.runParams.runId,
+      sessionId: input.runParams.sessionId,
+    });
+    reportEmbeddedRunSuccessfulAuthBinding({
+      profileId: input.authProfileId,
+      profileStore: input.attemptAuthProfileStore,
+      apiKeyInfo: input.apiKeyInfo,
+      attempt: input.attempt,
+      provider: input.provider,
+      agentDir: input.runParams.agentDir,
+      modelId: input.modelTransportId,
+      modelApi: input.modelTransportApi,
+      ...(input.modelTransportBaseUrl ? { modelBaseUrl: input.modelTransportBaseUrl } : {}),
+      requestTransportOverrides: input.requestTransportOverrides ?? "none",
+      config: input.runParams.config,
+      agentHarnessId: input.agentHarnessId,
+      pluginHarnessOwnsTransport: input.pluginHarnessOwnsTransport,
+      pluginHarnessOwnsAuthBootstrap: input.pluginHarnessOwnsAuthBootstrap,
+      onSuccessfulAuthBinding: input.runParams.onSuccessfulAuthBinding,
+    });
+    input.runParams.onSuccessfulAuthProfile?.(input.authProfileId);
+  }
   const replayInvalid = input.resolveReplayInvalid(null);
   const yieldHasContinuation =
     input.attempt.yieldDetected && hasYieldContinuationEvidence(input.attempt);

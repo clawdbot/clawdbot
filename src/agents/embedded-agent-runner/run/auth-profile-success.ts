@@ -199,7 +199,7 @@ function resolveHarnessAuthMaterialization(
   if (
     !input.pluginHarnessOwnsAuthBootstrap ||
     (input.apiKeyInfo && !resolvedReferencedApiKey) ||
-    hasInlineCredentialMaterial(credential) ||
+    (hasInlineCredentialMaterial(credential) && !resolvedReferencedApiKey) ||
     !isModelApi(input.modelApi)
   ) {
     return undefined;
@@ -210,7 +210,7 @@ function resolveHarnessAuthMaterialization(
     api: input.modelApi,
     baseUrl: input.modelBaseUrl,
     config: input.config,
-    requestTransportOverrides: input.requestTransportOverrides ?? "none",
+    executedRequestTransportOverrides: input.requestTransportOverrides ?? "none",
   });
   if (resolution?.kind !== "routes") {
     return undefined;

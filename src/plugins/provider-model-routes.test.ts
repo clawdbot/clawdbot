@@ -490,6 +490,36 @@ describe("provider model route adapter", () => {
     });
   });
 
+  it("honors an explicit no-overrides execution fact over authored route metadata", () => {
+    const resolveModelRoutes = vi.fn((_context: ProviderResolveModelRoutesContext) => ({
+      kind: "indeterminate" as const,
+    }));
+    const config = {
+      models: {
+        providers: {
+          openai: {
+            api: "openai-responses",
+            baseUrl: "https://api.openai.com/v1",
+            models: [{ id: "gpt-5.5", compat: { supportsStore: false } }],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
+
+    resolveProviderModelRoutes({
+      provider: "openai",
+      modelId: "gpt-5.5",
+      config,
+      env: {},
+      executedRequestTransportOverrides: "none",
+      surface: { resolveModelRoutes },
+    });
+
+    expect(resolveModelRoutes.mock.calls[0]?.[0]).toMatchObject({
+      requestTransportOverrides: "none",
+    });
+  });
+
   it("returns null when the provider artifact has no route hook", () => {
     expect(
       resolveProviderModelRoutes({ provider: "fixture", modelId: "demo", surface: {} }),

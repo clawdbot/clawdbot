@@ -112,6 +112,7 @@ export type ModelAuthAvailabilityEvaluation = {
   selectedProfileId?: string;
   selectedAuthMode?: string;
   evidence?: ModelAuthAvailabilityEvidence;
+  runtimeRouteSucceeded?: true;
 };
 export type ModelAuthAvailabilityResolver = {
   providerDiscoveryProviderIds: readonly string[];
@@ -984,19 +985,31 @@ export function createModelAuthAvailabilityResolver(
       : undefined;
     const materialized =
       !modelLock && !bindingProfileId && !basePolicy.required && materializedModelId
-        ? params.preparedRuntimeAuthMaterializations?.find(
-            (fact) =>
+        ? params.preparedRuntimeAuthMaterializations
+            ?.flatMap((fact) => {
               // Explicit order remains authoritative: runtime success only satisfies it
               // when the producer names a profile still admitted by the current order.
-              (!orderResolution.hasExplicitOrder ||
-                (fact.authProfileId !== undefined &&
-                  orderResolution.profileIds.includes(fact.authProfileId))) &&
-              normalizeProvider(fact.provider) === provider &&
-              fact.modelId === materializedModelId &&
-              routeResolution.routes.some((route) => {
-                const configuredRequirement =
-                  resolveProviderModelRouteAuthRequirement(configuredAuthMode);
-                return (
+              if (
+                (orderResolution.hasExplicitOrder &&
+                  (fact.authProfileId === undefined ||
+                    !orderResolution.profileIds.includes(fact.authProfileId))) ||
+                normalizeProvider(fact.provider) !== provider ||
+                fact.modelId !== materializedModelId
+              ) {
+                return [];
+              }
+              // Reapply provider policy to the transport state the runtime actually executed.
+              const factResolution = resolveRoutes({
+                ...ref,
+                executedRequestTransportOverrides: fact.requestTransportOverrides,
+              });
+              if (factResolution?.kind !== "routes") {
+                return [];
+              }
+              const configuredRequirement =
+                resolveProviderModelRouteAuthRequirement(configuredAuthMode);
+              const selectedRoute = factResolution.routes.find(
+                (route) =>
                   (!configuredRequirement || configuredRequirement === route.authRequirement) &&
                   route.runtimePolicy?.compatibleIds.some(
                     (runtimeId) => runtimeId.trim().toLowerCase() === fact.runtimeOwnerId,
@@ -1018,36 +1031,23 @@ export function createModelAuthAvailabilityResolver(
                       authRequirement: route.authRequirement,
                     },
                     fact.authMode,
-                  )
-                );
-              }),
-          )
+                  ),
+              );
+              return selectedRoute ? [{ fact, resolution: factResolution, selectedRoute }] : [];
+            })
+            .at(0)
         : undefined;
     if (materialized) {
-      const selectedRoute = routeResolution.routes.find(
-        (route) =>
-          route.runtimePolicy?.compatibleIds.some(
-            (runtimeId) => runtimeId.trim().toLowerCase() === materialized.runtimeOwnerId,
-          ) === true &&
-          route.api.toLowerCase() === materialized.modelApi &&
-          route.requestTransportOverrides === materialized.requestTransportOverrides &&
-          modelMatchesProviderModelRoute({
-            provider,
-            api: materialized.modelApi,
-            baseUrl: materialized.modelBaseUrl,
-            route,
-          }),
-      );
-      if (selectedRoute) {
-        return {
-          availability: true,
-          routeResolution,
-          selectedRoute,
-          selectedAuthMode: materialized.authMode,
-          ...(materialized.authProfileId ? { selectedProfileId: materialized.authProfileId } : {}),
-          evidence: "runtime",
-        };
-      }
+      const { fact, resolution, selectedRoute } = materialized;
+      return {
+        availability: true,
+        routeResolution: resolution,
+        selectedRoute,
+        selectedAuthMode: fact.authMode,
+        ...(fact.authProfileId ? { selectedProfileId: fact.authProfileId } : {}),
+        evidence: "runtime",
+        runtimeRouteSucceeded: true,
+      };
     }
     const selectedConfiguredMode = awsSdkTerminal
       ? "aws-sdk"

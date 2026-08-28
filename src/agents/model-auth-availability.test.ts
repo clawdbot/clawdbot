@@ -203,6 +203,49 @@ describe("createModelAuthAvailabilityResolver", () => {
     });
   });
 
+  it("trusts exact successful harness auth over stale static runtime policy", () => {
+    const openClawOnlyRoute = {
+      ...platformRoute,
+      runtimePolicy: { compatibleIds: ["openclaw"] },
+    } satisfies ProviderModelRouteCandidate;
+    const materialization = {
+      provider: "openai",
+      modelId: "gpt-5.4",
+      modelApi: "openai-responses",
+      modelBaseUrl: "https://api.openai.com/v1",
+      requestTransportOverrides: "none",
+      authMode: "api-key",
+      runtimeOwnerId: "codex",
+    } as const;
+    const executedRouteResolverFactory = (() => (observed) => ({
+      kind: "routes",
+      defaultRuntimeId:
+        observed.executedRequestTransportOverrides === "none" ? "codex" : "openclaw",
+      routes:
+        observed.executedRequestTransportOverrides === "none"
+          ? [platformRoute]
+          : [openClawOnlyRoute],
+    })) as typeof createOpenAIModelRoutesResolver;
+    const resolver = createModelAuthAvailabilityResolver({
+      cfg: {},
+      authStore: authStore(),
+      env: {},
+      routeResolverFactory: executedRouteResolverFactory,
+      preparedRuntimeAuthMaterializations: [materialization],
+    });
+
+    expect(
+      resolver.evaluateModelAuth("openai", {
+        modelId: "gpt-5.4",
+      }),
+    ).toMatchObject({
+      availability: true,
+      evidence: "runtime",
+      runtimeRouteSucceeded: true,
+      selectedRoute: platformRoute,
+    });
+  });
+
   it.each([
     { label: "matching", authProfileId: "openai:default", availability: true },
     { label: "omitted", authProfileId: "openai:other", availability: false },

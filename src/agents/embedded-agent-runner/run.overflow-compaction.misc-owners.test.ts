@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { AuthProfileStore } from "../auth-profiles.js";
 import { markAuthProfileSuccess } from "../auth-profiles.js";
 import {
@@ -50,6 +51,7 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
         type: "api_key" as const,
         provider: "openai",
         keyRef: { source: "env" as const, provider: "default", id: "OPENAI_WORK_KEY" },
+        key: "resolved-key",
       },
     },
   };
@@ -78,6 +80,27 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
       modelApi: "openai-responses",
       modelBaseUrl: "https://api.openai.com/v1",
       requestTransportOverrides: "none" as const,
+      config: {
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              api: "openai-responses",
+              models: [
+                {
+                  id: "gpt-5.4",
+                  name: "GPT-5.4",
+                  reasoning: true,
+                  input: ["text"],
+                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                  maxTokens: 8_192,
+                  compat: { supportsTemperature: false },
+                },
+              ],
+            },
+          },
+        },
+      } as OpenClawConfig,
       agentHarnessId: "codex",
       pluginHarnessOwnsTransport: true,
       pluginHarnessOwnsAuthBootstrap: true,
@@ -91,6 +114,7 @@ describe("reportEmbeddedRunSuccessfulAuthBinding", () => {
         expect.objectContaining({
           authMode: "api-key",
           authProfileId: "openai:work",
+          requestTransportOverrides: "none",
           runtimeOwnerId: "codex",
         }),
       ]);
