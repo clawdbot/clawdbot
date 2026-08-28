@@ -384,22 +384,37 @@ export function authorizeClientVoiceConfirmation(params: {
   };
 }
 
-/** Bind a validated spoken grant to the one follow-up run and consume the challenge. */
+/**
+ * Bind a validated spoken grant to the one follow-up run and consume the
+ * challenge. Invalidated detached grants return false without disrupting the
+ * admitted run; final tool policy then blocks because no approval was created.
+ */
 export function bindAuthorizedClientVoiceConfirmation(params: {
   grant: ClientVoiceConfirmationGrant;
   runId: string;
-}): void {
+  now?: number;
+}): boolean {
+  const now = params.now ?? Date.now();
   const scopeKey = confirmationScopeKey(params.grant.agentId, params.grant.voiceSessionId);
-  const state = getOrCreateConfirmationScope(scopeKey);
+  const state = confirmationScopes.get(scopeKey);
+  const pending = state?.pending;
+  if (
+    !state ||
+    !pending ||
+    pending.expiresAt < now ||
+    pending.confirmationId !== params.grant.confirmationId ||
+    pending.fingerprint !== params.grant.fingerprint ||
+    pending.expiresAt !== params.grant.expiresAt
+  ) {
+    return false;
+  }
   const approved = state.approvedByRun.get(params.runId) ?? new Map<string, number>();
-  approved.set(params.grant.fingerprint, params.grant.expiresAt);
+  approved.set(pending.fingerprint, pending.expiresAt);
   state.approvedByRun.set(params.runId, approved);
   // Consume now that the run exists: one spoken affirmation authorizes one action.
-  if (state.pending?.confirmationId === params.grant.confirmationId) {
-    clearPendingConfirmation(state);
-  }
-  delete state.recentUtterance;
+  clearPendingConfirmation(state);
   cleanupConfirmationScope(scopeKey, state);
+  return true;
 }
 
 /**

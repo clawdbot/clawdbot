@@ -44,6 +44,11 @@ function registerRun(
 }
 
 function bindGrant(agentId: string, voiceSessionId: string, runId: string, message: string): void {
+  const grant = authorizeGrant(agentId, voiceSessionId, runId, message);
+  expect(bindAuthorizedClientVoiceConfirmation({ grant, runId })).toBe(true);
+}
+
+function authorizeGrant(agentId: string, voiceSessionId: string, runId: string, message: string) {
   const requestedAt = Date.now();
   const blocked = checkClientVoiceToolConfirmationPolicy({
     agentId,
@@ -72,7 +77,7 @@ function bindGrant(agentId: string, voiceSessionId: string, runId: string, messa
     confirmationId,
     now: requestedAt + 2,
   });
-  bindAuthorizedClientVoiceConfirmation({ grant, runId });
+  return grant;
 }
 
 async function completeRun(runId: string): Promise<void> {
@@ -121,6 +126,37 @@ describe("client voice confirmation lifecycle", () => {
 
     await completeRun("run-active");
     expect(resolveClientVoiceRunBinding("run-active")).toBeUndefined();
+    expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
+  });
+
+  it("keeps completion ownership after a close invalidates a detached grant", async () => {
+    const sessionKey = "agent:main:stale-bind";
+    const voiceSessionId = createOrResumeClientVoiceSession({
+      agentId: "main",
+      sessionKey,
+      origin: "client",
+    });
+    const grant = authorizeGrant("main", voiceSessionId, "run-stale-bind", "cancelled action");
+
+    await closeClientVoiceSession({
+      agentId: "main",
+      sessionKey,
+      voiceSessionId,
+      config: {},
+    });
+    registerRun("main", voiceSessionId, sessionKey, "run-stale-bind");
+
+    expect(
+      bindAuthorizedClientVoiceConfirmation({
+        grant,
+        runId: "run-stale-bind",
+      }),
+    ).toBe(false);
+    expect(resolveClientVoiceRunBinding("run-stale-bind")).toMatchObject({ voiceSessionId });
+    expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
+
+    await completeRun("run-stale-bind");
+    expect(resolveClientVoiceRunBinding("run-stale-bind")).toBeUndefined();
     expect(snapshotClientVoiceConfirmationStateForTest().approvedGrants).toBe(0);
   });
 
