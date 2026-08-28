@@ -734,7 +734,6 @@ type ToolResultBranchEntry = {
   type: string;
   message?: AgentMessage;
   aggregateEligible?: boolean;
-  deferAggregateRecovery?: boolean;
 };
 
 type ToolResultReplacement = {
@@ -866,7 +865,6 @@ function projectToolResultBranch(params: {
     messageEntries.map((entry) => entry.message),
     params.projectionState,
   );
-  const hasFrozenProjectionBaseline = params.projectionState.frozen.size > 0;
   let messageIndex = 0;
   return {
     keys,
@@ -893,10 +891,9 @@ function projectToolResultBranch(params: {
       return {
         ...entry,
         message,
-        aggregateEligible:
-          !key || !frozen || (projected !== undefined && message === entry.message),
-        // Reduce frozen history first so steering cannot make fresh output disappear.
-        deferAggregateRecovery: key !== undefined && hasFrozenProjectionBaseline && !frozen,
+        // Frozen bytes are immutable even when a stored replacement merges to the
+        // current message; eliding them would rewrite provider-sent prompt bytes.
+        aggregateEligible: !key || !frozen,
       };
     }),
   };
@@ -932,7 +929,6 @@ function buildAggregateToolResultReplacements(params: {
               spillSourceMessage: params.spillSourceBranch?.[index]?.message ?? message,
               textLength: getToolResultTextBudget(message),
               aggregateEligible: entry.aggregateEligible !== false,
-              deferredByFreshProjection: entry.deferAggregateRecovery === true,
               protectedByTrailingBatch: params.protectedEntryIds?.has(entry.id) ?? false,
             },
           ]
@@ -958,14 +954,11 @@ function buildAggregateToolResultReplacements(params: {
 
   let remainingReduction = totalChars - params.aggregateBudgetChars;
   const replacements = new Map<string, ToolResultReplacement>();
-  // Frozen projections shrink first; stable sorting preserves the original oldest-first order.
-  const recoveryCandidates = candidates
-    .filter((candidate) => !candidate.protectedByTrailingBatch)
-    .toSorted(
-      (left, right) =>
-        Number(left.deferredByFreshProjection) - Number(right.deferredByFreshProjection) ||
-        Number(right.aggregateEligible) - Number(left.aggregateEligible),
-    );
+  // Frozen prompt bytes are immutable. Recover only from unsent tail results;
+  // allow budget overflow when frozen history alone exceeds the aggregate cap.
+  const recoveryCandidates = candidates.filter(
+    (candidate) => candidate.aggregateEligible && !candidate.protectedByTrailingBatch,
+  );
 
   // Trim all older entries before clearing any, so fresh output and spill pointers stay recoverable.
   for (const clear of [false, true]) {
