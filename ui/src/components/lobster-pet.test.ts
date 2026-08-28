@@ -369,7 +369,7 @@ describe("lobster pet element", () => {
     expect(gone).toBe(true);
 
     // Dismissal outlasts later scheduled visits and even offline summons.
-    const revisited = await advanceUntil(element, () => spritePresent(element), 2_400_000);
+    const revisited = await advanceUntil(element, () => spritePresent(element), 3_700_000);
     expect(revisited).toBe(false);
     element.mode = "offline";
     await element.updateComplete;
