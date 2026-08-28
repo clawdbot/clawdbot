@@ -274,10 +274,20 @@ suite.define(() => {
       await streamingRow.waitFor();
       expect(await streamingRow.getAttribute("data-virtual-row-key")).not.toBe(workingRowKey);
       const steerBubble = page.locator(".chat-group.user", { hasText: steerText }).last();
-      const [steerBounds, streamingBounds] = await Promise.all([
-        steerBubble.boundingBox(),
-        streamingBubble.boundingBox(),
-      ]);
+      const steerElement = await steerBubble.elementHandle();
+      // Scrolling between separate protocol reads can make adjacent rows appear to overlap.
+      const [steerBounds, streamingBounds] = await streamingBubble.evaluate(
+        (streaming, steer) =>
+          [steer, streaming].map((element) => {
+            if (!element?.isConnected || element.getClientRects().length === 0) {
+              return null;
+            }
+            const { y, height } = element.getBoundingClientRect();
+            return { y, height };
+          }),
+        steerElement,
+      );
+      await steerElement?.dispose();
       expect(steerBounds).not.toBeNull();
       expect(streamingBounds).not.toBeNull();
       expect(streamingBounds!.y).toBeGreaterThanOrEqual(steerBounds!.y + steerBounds!.height - 1);
