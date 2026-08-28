@@ -139,6 +139,7 @@ export function createModelsListEntryEvaluator(params: {
       return params.providerOutcomes?.some(
         (outcome) =>
           outcome.status === "auth-rejected" &&
+          outcome.rejectionScope !== "catalog" &&
           normalizeProviderId(outcome.provider) === provider &&
           (outcome.profileId === undefined || outcome.profileId === resolved.selectedProfileId),
       )

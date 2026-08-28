@@ -73,8 +73,8 @@ describe("models.list provider catalog outcomes", () => {
       id: "gpt-5.6-sol",
       name: "GPT-5.6 Sol",
       provider: "openai",
-      api: "openai-chatgpt-responses" as const,
-      baseUrl: "https://chatgpt.com/backend-api/codex",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
     };
     const snapshot = markPreparedModelCatalogFull({
       entries: [model],
@@ -96,11 +96,9 @@ describe("models.list provider catalog outcomes", () => {
         version: 1,
         profiles: {
           "openai:chatgpt": {
-            type: "oauth",
+            type: "api_key",
             provider: "openai",
-            access: "rejected-access-token",
-            refresh: "rejected-refresh-token",
-            expires: Date.now() + 30 * 60_000,
+            key: "rejected-api-key",
           },
           "openai:other": {
             type: "oauth",

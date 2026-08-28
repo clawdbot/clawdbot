@@ -308,7 +308,7 @@ async function buildOpenAILiveProviderConfig(
     ) {
       return {
         provider: { ...fallback, models: [] },
-        outcome: { provider: PROVIDER_ID, status: "auth-rejected" },
+        outcome: { provider: PROVIDER_ID, rejectionScope: "catalog", status: "auth-rejected" },
       };
     }
     return { provider: fallback, outcome: { provider: PROVIDER_ID, status: "unavailable" } };
