@@ -825,7 +825,7 @@ describe("worker session tool topology", () => {
     expect(() => placements.releaseTurn(sourceClaim)).not.toThrow();
   });
 
-  it("delivers only across exact live parent, child, and sibling incarnations", async () => {
+  it("delivers across exact live family incarnations with the source channel", async () => {
     setEntry(SOURCE.sessionKey, SOURCE.sessionId);
     setEntry(TARGET.sessionKey, TARGET.sessionId, {
       sessionKey: SOURCE.sessionKey,
@@ -842,6 +842,12 @@ describe("worker session tool topology", () => {
 
     setEntry(PARENT.sessionKey, PARENT.sessionId);
     setEntry(SOURCE.sessionKey, SOURCE.sessionId, PARENT);
+    sessionEntries.get(SOURCE.sessionKey)!.delivery = {
+      kind: "external",
+      context: { channel: "telegram", to: "source-chat" },
+      route: { channel: "telegram", target: { to: "source-chat" } },
+      origin: { provider: "telegram" },
+    };
     setEntry(TARGET.sessionKey, TARGET.sessionId, PARENT);
     await expect(send("sibling-to-sibling")).resolves.toBeDefined();
 
@@ -857,6 +863,7 @@ describe("worker session tool topology", () => {
       expect.objectContaining({
         args: expect.objectContaining({ sessionKey: TARGET.sessionKey }),
         options: expect.objectContaining({
+          agentChannel: "telegram",
           expectedTargetSessionId: TARGET.sessionId,
           idempotencyKey: expect.stringMatching(/^worker-session-send:/u),
         }),

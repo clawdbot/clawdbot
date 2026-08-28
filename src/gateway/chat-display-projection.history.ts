@@ -459,13 +459,17 @@ function extractPromptPrefixField(text: string, field: string): string | undefin
   return normalizeOptionalString(match?.[1]);
 }
 
-function resolveSessionsSendForwardedSenderLabel(message: Record<string, unknown>): string {
+function resolveSessionsSendForwardedSenderSession(
+  message: Record<string, unknown>,
+): { sessionKey?: string; agentId?: string } | undefined {
   const provenance = normalizeInputProvenance(message.provenance);
   const text = extractProjectedText(message.content ?? message.text);
   const sourceSessionKey =
     provenance?.sourceSessionKey ?? extractPromptPrefixField(text, "sourceSession");
   const agentId = parseAgentSessionKey(sourceSessionKey)?.agentId;
-  return agentId ? `Forwarded from ${agentId}` : "Forwarded agent message";
+  return sourceSessionKey
+    ? { sessionKey: sourceSessionKey, ...(agentId ? { agentId } : {}) }
+    : undefined;
 }
 
 export function projectSessionsSendInterSessionMessages(
@@ -477,10 +481,14 @@ export function projectSessionsSendInterSessionMessages(
       return message;
     }
     changed = true;
+    const senderSession = resolveSessionsSendForwardedSenderSession(message);
     const next: Record<string, unknown> = {
       ...message,
       role: "assistant",
-      senderLabel: resolveSessionsSendForwardedSenderLabel(message),
+      senderLabel: senderSession?.agentId
+        ? `Forwarded from ${senderSession.agentId}`
+        : "Forwarded agent message",
+      ...(senderSession ? { senderSession } : {}),
     };
     if ("content" in next) {
       next.content = stripInterSessionPromptPrefixFromContent(next.content);

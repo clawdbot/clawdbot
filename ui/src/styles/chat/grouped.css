@@ -681,9 +681,15 @@ img.chat-avatar.user {
   color: var(--muted);
 }
 
-.chat-avatar.other {
+.chat-avatar.other,
+.chat-avatar--forwarded {
   background: var(--secondary);
   color: var(--muted);
+}
+
+.chat-avatar--forwarded svg {
+  width: 18px;
+  height: 18px;
 }
 
 .chat-avatar.tool {
@@ -759,8 +765,8 @@ img.chat-avatar.chat-avatar--logo {
   box-shadow: none;
 }
 
-/* Assistant replies render as a flat text stream: only user messages keep the
-   bubble card. Border collapses to 0 so the streaming border pulse and hover
+/* Assistant replies render as a flat text stream; user and forwarded messages
+   keep bubble cards. Border collapses to 0 so the streaming border pulse and hover
    outline become no-ops without extra rules. */
 .chat-group.assistant {
   --chat-message-column-max: var(--chat-message-max-width, min(980px, calc(100% - 46px)));
@@ -771,6 +777,15 @@ img.chat-avatar.chat-avatar--logo {
   border: 0;
   background: transparent;
   box-shadow: none;
+}
+
+.chat-group.assistant.chat-group--forwarded .chat-bubble {
+  width: fit-content;
+  max-width: 100%;
+  padding: 13px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--card);
 }
 
 /* Keep the working claw on the same left edge as the flat text column. */
@@ -839,7 +854,8 @@ img.chat-avatar.chat-avatar--logo {
   color: color-mix(in srgb, var(--text) 80%, var(--primary) 20%);
 }
 
-.chat-reply-attribution {
+.chat-reply-attribution,
+.chat-forwarded-attribution {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -847,8 +863,16 @@ img.chat-avatar.chat-avatar--logo {
   font-size: 12px;
 }
 
+.chat-forwarded-attribution {
+  flex-wrap: wrap;
+  max-width: 100%;
+  margin-bottom: var(--space-1);
+}
+
 .chat-reply-attribution__icon,
-.chat-reply-attribution__icon svg {
+.chat-reply-attribution__icon svg,
+.chat-forwarded-attribution__icon,
+.chat-forwarded-attribution__icon svg {
   width: 14px;
   height: 14px;
 }
@@ -1014,18 +1038,20 @@ img.chat-avatar.chat-avatar--logo {
 }
 
 :root[data-theme-mode="light"] .chat-bubble--tool-shell,
-:root[data-theme-mode="light"] .chat-group.assistant .chat-bubble {
+:root[data-theme-mode="light"]
+  .chat-group.assistant:not(:where(.chat-group--forwarded))
+  .chat-bubble {
   border-color: transparent;
   background: transparent;
   box-shadow: none;
 }
 
-/* Per-user bubble tint: --chat-sender-hue is the sender's stable identity hue
-   (same seed as their avatar initials). Only hue varies per user; saturation/
+/* Sender bubble tint: --chat-sender-hue is the user or source session's stable
+   identity hue (same seed as avatar initials). Only hue varies; saturation/
    lightness/alpha are fixed per theme mode so bubble text keeps contrast for
    every hue. Order contract: stays below the light-mode reset above — the
    dark rule outranks it by specificity, so light mode needs its own skin. */
-.chat-group.user.chat-group--sender-tint .chat-bubble {
+.chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint .chat-bubble {
   background: hsl(var(--chat-sender-hue) 48% 42% / 0.16);
 }
 
@@ -1037,9 +1063,10 @@ img.chat-avatar.chat-avatar--logo {
   color: hsl(var(--chat-sender-hue) 45% 70%);
 }
 
-:root[data-theme-mode="light"] .chat-group.user.chat-group--sender-tint .chat-bubble {
+:root[data-theme-mode="light"]
+  .chat-group:is(.user, .chat-group--forwarded).chat-group--sender-tint
+  .chat-bubble {
   background: hsl(var(--chat-sender-hue) 65% 94%);
-  border-color: transparent;
 }
 
 /* Keep tinted user turns borderless when the generic light hover skin applies. */

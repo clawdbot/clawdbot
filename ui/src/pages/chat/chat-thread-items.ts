@@ -459,6 +459,7 @@ function textOnlyMessageParts(message: unknown) {
     role: normalizeRoleForGrouping(normalized.role).toLowerCase(),
     senderLabel: (normalized.senderLabel ?? "").trim(),
     senderKey: senderIdentityKey(normalized.sender),
+    senderSession: normalized.senderSession,
     text: textParts.join("\n"),
   };
 }
@@ -493,13 +494,12 @@ function collapseDuplicateDisplaySignature(message: unknown): string | null {
   if (!parts || !parts.role || parts.role === "tool") {
     return null;
   }
-  const { role } = parts;
   const text = parts.text.trim().replace(/\s+/g, " ");
   if (!text) {
     return null;
   }
-  const senderLabel = role === "user" || role === "assistant" ? parts.senderLabel : "";
-  return `${role}:${senderLabel}:${parts.senderKey ?? ""}:${text}`;
+  const senderLabel = ["user", "assistant"].includes(parts.role) ? parts.senderLabel : "";
+  return JSON.stringify([parts.role, senderLabel, parts.senderKey ?? "", parts.senderSession, text]);
 }
 
 export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem[] {

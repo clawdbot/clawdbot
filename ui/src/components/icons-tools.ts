@@ -98,6 +98,7 @@ export const toolIcons = {
     svg`<path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />`,
   ),
   send: strokeIcon(svg`<path d="m22 2-7 20-4-9-9-4ZM22 2 11 13" />`),
+  forward: strokeIcon(svg`<path d="m15 17 5-5-5-5M4 18v-2a4 4 0 0 1 4-4h12" />`),
   stop: strokeIcon(svg`<rect width="14" height="14" x="5" y="5" rx="1" />`),
   pin: strokeIcon(svg` <line x1="12" x2="12" y1="17" y2="22" />
     <path

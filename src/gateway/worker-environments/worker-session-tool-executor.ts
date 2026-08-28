@@ -25,6 +25,7 @@ import { getRuntimeConfig } from "../../config/config.js";
 import { inheritSessionCreationPolicy } from "../../config/sessions/session-entry-provenance.js";
 import { sha256Base64Url, sha256HexPrefixCore } from "../../infra/crypto-digest.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
+import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { WORKER_TOOL_NAMES } from "../../worker/tool-authority.js";
 import type { GitHubPublicationCoordinator } from "../github-publication.js";
 import type { GatewayContextResolver } from "../server-methods/types.js";
@@ -474,6 +475,7 @@ export function createWorkerSessionToolExecutor(params: {
       assertCurrentTarget();
       const tool = createSessionsSendTool({
         agentSessionKey: operation.source.sessionKey,
+        agentChannel: sessionDeliveryChannel(operation.source.entry),
         expectedTargetSessionId: operation.target.sessionId,
         idempotencyKey: operation.idempotencyKey,
         config,

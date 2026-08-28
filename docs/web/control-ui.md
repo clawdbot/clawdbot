@@ -809,6 +809,8 @@ Absolute external `http(s)` embed URLs stay blocked by default. To let `[embed u
 
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 
+Messages forwarded by `sessions_send` render as left-aligned speech bubbles with a forward icon and a source-session chip above the message. Select the chip to open the source session; hover it to see session progress. Each source session has a stable bubble tint. Forwarded messages without a known source session show the source agent when available, or a generic forwarded-message label. The receiving agent's own replies remain flat text.
+
 ## Chat message width
 
 Wide-monitor users can override the transcript width under **Settings → Chat →
