@@ -3,11 +3,13 @@
  *
  * Searches files with ripgrep/local operations, optional context, and bounded output rendering.
  */
-import { readFileSync, statSync } from "node:fs";
+import { realpathSync, statSync } from "node:fs";
 import path from "node:path";
 import { createInterface } from "node:readline";
 import { Text } from "@earendil-works/pi-tui";
+import { FsSafeError } from "@openclaw/fs-safe/errors";
 import { Type } from "typebox";
+import { readRegularFileSync } from "../../../infra/regular-file.js";
 import { releaseChildProcessOutputAfterExit } from "../../../process/child-process.js";
 import { spawnCommand } from "../../../process/exec.js";
 import type { AgentTool } from "../../runtime/index.js";
@@ -51,6 +53,11 @@ const grepSchema = Type.Object({
 });
 const DEFAULT_LIMIT = 100;
 
+// Context rendering reads the full matched file to build surrounding lines. Cap
+// that read so a single huge file cannot OOM the gateway process; oversized
+// files still surface their match lines via rg's own output.
+const GREP_CONTEXT_MAX_BYTES = 4 * 1024 * 1024;
+
 /**
  * Pluggable operations for the grep tool.
  * Override these to delegate search to remote systems (for example SSH).
@@ -64,8 +71,20 @@ export interface GrepOperations {
 
 const defaultGrepOperations: GrepOperations = {
   isDirectory: (p) => statSync(p).isDirectory(),
-  readFile: (p) => readFileSync(p, "utf-8"),
+  readFile: (p) => {
+    // Resolve symlinks first: readRegularFileSync rejects symlink final paths,
+    // but grep context rendering must keep the legacy follow-symlink behavior.
+    const resolvedPath = realpathSync(p);
+    return readRegularFileSync({
+      filePath: resolvedPath,
+      maxBytes: GREP_CONTEXT_MAX_BYTES,
+    }).buffer.toString("utf-8");
+  },
 };
+
+function isTooLargeError(error: unknown): boolean {
+  return error instanceof FsSafeError && error.code === "too-large";
+}
 
 export interface GrepToolOptions {
   /** Custom operations for grep. Default: local filesystem plus ripgrep */
@@ -126,7 +145,7 @@ export function createGrepToolDefinition(
   return {
     name: "grep",
     label: "grep",
-    description: `Search contents; returns path:line matches. Respects .gitignore. Caps ${DEFAULT_LIMIT} matches/${DEFAULT_MAX_BYTES / 1024}KB; lines cap ${GREP_MAX_LINE_LENGTH} chars.`,
+    description: `Search contents; returns path:line matches. Respects .gitignore. Caps ${DEFAULT_LIMIT} matches and ${DEFAULT_MAX_BYTES / 1024}KB output; per-file context reads capped at ${GREP_CONTEXT_MAX_BYTES / 1024 / 1024}MiB; lines cap ${GREP_MAX_LINE_LENGTH} chars.`,
     promptSnippet: "Search file contents for patterns (respects .gitignore)",
     parameters: grepSchema,
     async execute(
@@ -237,13 +256,17 @@ export function createGrepToolDefinition(
             };
 
             const fileCache = new Map<string, string[]>();
+            const oversizedFiles = new Set<string>();
             const getFileLines = async (filePath: string): Promise<string[]> => {
               let lines = fileCache.get(filePath);
               if (!lines) {
                 try {
                   const content = await ops.readFile(filePath);
                   lines = content.replace(/\r\n/g, "\n").replace(/\r/g, "\n").split("\n");
-                } catch {
+                } catch (error) {
+                  if (isTooLargeError(error)) {
+                    oversizedFiles.add(filePath);
+                  }
                   lines = [];
                 }
                 fileCache.set(filePath, lines);
@@ -300,9 +323,28 @@ export function createGrepToolDefinition(
             spawnedChild.stdout?.on("error", (error) => onStreamError("stdout", error));
             spawnedChild.stderr?.on("error", (error) => onStreamError("stderr", error));
 
-            const formatBlock = async (filePath: string, lineNumber: number): Promise<string[]> => {
+            const formatBlock = async (
+              filePath: string,
+              lineNumber: number,
+              matchLineText?: string,
+            ): Promise<string[]> => {
               const relativePath = formatPath(filePath);
+              // Read first so getFileLines can record oversizedFiles before the
+              // fallback below decides whether to drop context.
               const lines = await getFileLines(filePath);
+              if (oversizedFiles.has(filePath)) {
+                // rg already emitted the match line; render it directly and drop
+                // context rather than silently losing the match.
+                const sanitized = (matchLineText ?? "")
+                  .replace(/\r\n/g, "\n")
+                  .replace(/\r/g, "")
+                  .replace(/\n$/, "");
+                const { text: truncatedText, wasTruncated } = truncateLine(sanitized);
+                if (wasTruncated) {
+                  linesTruncated = true;
+                }
+                return [`${relativePath}:${lineNumber}: ${truncatedText}`];
+              }
               if (!lines.length) {
                 return [`${relativePath}:${lineNumber}: (unable to read file)`];
               }
@@ -403,7 +445,11 @@ export function createGrepToolDefinition(
                     }
                     outputLines.push(`${relativePath}:${match.lineNumber}: ${truncatedText}`);
                   } else {
-                    const block = await formatBlock(match.filePath, match.lineNumber);
+                    const block = await formatBlock(
+                      match.filePath,
+                      match.lineNumber,
+                      match.lineText,
+                    );
                     if (settled) {
                       return;
                     }
@@ -433,6 +479,12 @@ export function createGrepToolDefinition(
                     `Some lines truncated to ${GREP_MAX_LINE_LENGTH} chars. Use read tool to see full lines`,
                   );
                   details.linesTruncated = true;
+                }
+                if (oversizedFiles.size > 0) {
+                  const count = oversizedFiles.size;
+                  notices.push(
+                    `context omitted for ${count} file${count === 1 ? "" : "s"} larger than ${formatSize(GREP_CONTEXT_MAX_BYTES)}`,
+                  );
                 }
                 if (notices.length > 0) {
                   output += `\n\n[${notices.join(". ")}]`;
