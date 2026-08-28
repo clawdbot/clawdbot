@@ -10,6 +10,7 @@ import type {
   McpCatalogTool,
   McpServerCatalog,
   McpToolCatalog,
+  RequesterScopedMcpRuntimeHandle,
   SessionMcpRuntime,
 } from "./agent-bundle-mcp-types.js";
 
@@ -21,6 +22,7 @@ type ManagerCreateInFlight = {
 };
 
 type AdvertisedScopedCatalogEntry = {
+  configFingerprint: string;
   servers: Map<string, McpServerCatalog>;
   toolsByServer: Map<string, McpCatalogTool[]>;
   signaturesByServer: Map<string, string>;
@@ -34,7 +36,6 @@ type SessionMcpRuntimeManagerStore = {
   requiredRetirementSessionIds: Set<string>;
   connectionMetaByRuntimeKey: Map<string, { connectionHash: string; resolvedAt: number }>;
   advertisedScopedCatalogBySessionId: Map<string, AdvertisedScopedCatalogEntry>;
-  advertisedScopedCatalogConfigFingerprints: Map<string, string>;
   requesterWorkChains: Map<string, Promise<unknown>>;
   createInFlight: Map<string, ManagerCreateInFlight>;
   createRuntime: CreateSessionMcpRuntime;
@@ -84,7 +85,6 @@ export function createSessionMcpRuntimeManagerStore(
      * Codex threads rotate (dynamicToolsFingerprint churn).
      */
     advertisedScopedCatalogBySessionId: new Map(),
-    advertisedScopedCatalogConfigFingerprints: new Map(),
     /**
      * Per-runtimeKey serialization for requester resolve+install and dispose.
      * Sections never overlap for one key, so a slow resolve cannot clobber a newer install.
@@ -120,12 +120,15 @@ export type SessionMcpRuntimeManagerLifecycle = {
     opts?: { preserveRequiredRetirement?: boolean },
   ) => Promise<void>;
   rememberAdvertisedScopedCatalog: (
-    sessionId: string,
+    handle: RequesterScopedMcpRuntimeHandle,
     catalog: McpToolCatalog,
-    configFingerprint: string,
   ) => void;
   getAdvertisedScopedCatalog: (sessionId: string) => McpToolCatalog | null;
-  reconcileAdvertisedScopedCatalogConfig: (sessionId: string, fingerprint: string) => void;
+  reconcileAdvertisedScopedCatalogConfig: (
+    sessionId: string,
+    fingerprint: string,
+    preparePublication: boolean,
+  ) => void;
 };
 
 function scopedCatalogToolsSignature(tools: readonly McpCatalogTool[]): string {
@@ -310,7 +313,6 @@ export function createSessionMcpRuntimeManagerLifecycle(
       store.requiredRetirementSessionIds.delete(sessionId);
     }
     store.advertisedScopedCatalogBySessionId.delete(sessionId);
-    store.advertisedScopedCatalogConfigFingerprints.delete(sessionId);
     const runtimeKeys = new Set(runtimeKeysForSessionId(sessionId));
     for (const runtimeKey of store.createInFlight.keys()) {
       if (parseRuntimeCacheSessionId(runtimeKey) === sessionId) {
@@ -334,23 +336,15 @@ export function createSessionMcpRuntimeManagerLifecycle(
   };
 
   const rememberAdvertisedScopedCatalog = (
-    sessionId: string,
+    handle: RequesterScopedMcpRuntimeHandle,
     catalog: McpToolCatalog,
-    configFingerprint: string,
   ): void => {
+    const { runtime, advertisedCatalogConfigFingerprint } = handle;
     // An older requester may finish after reconciliation; reject its catalog
     // instead of allowing stale tools to repopulate the session cache.
-    if (store.advertisedScopedCatalogConfigFingerprints.get(sessionId) !== configFingerprint) {
+    const entry = store.advertisedScopedCatalogBySessionId.get(runtime.sessionId);
+    if (entry?.configFingerprint !== advertisedCatalogConfigFingerprint) {
       return;
-    }
-    let entry = store.advertisedScopedCatalogBySessionId.get(sessionId);
-    if (!entry) {
-      entry = {
-        servers: new Map(),
-        toolsByServer: new Map(),
-        signaturesByServer: new Map(),
-      };
-      store.advertisedScopedCatalogBySessionId.set(sessionId, entry);
     }
     const toolsByServerName = new Map<string, McpCatalogTool[]>();
     for (const tool of catalog.tools) {
@@ -399,12 +393,21 @@ export function createSessionMcpRuntimeManagerLifecycle(
     };
   };
 
-  const reconcileAdvertisedScopedCatalogConfig = (sessionId: string, fingerprint: string): void => {
-    const previous = store.advertisedScopedCatalogConfigFingerprints.get(sessionId);
-    if (previous !== undefined && previous !== fingerprint) {
-      store.advertisedScopedCatalogBySessionId.delete(sessionId);
+  const reconcileAdvertisedScopedCatalogConfig = (
+    sessionId: string,
+    fingerprint: string,
+    preparePublication: boolean,
+  ): void => {
+    const current = store.advertisedScopedCatalogBySessionId.get(sessionId);
+    if (current?.configFingerprint === fingerprint || (!current && !preparePublication)) {
+      return;
     }
-    store.advertisedScopedCatalogConfigFingerprints.set(sessionId, fingerprint);
+    store.advertisedScopedCatalogBySessionId.set(sessionId, {
+      configFingerprint: fingerprint,
+      servers: new Map(),
+      toolsByServer: new Map(),
+      signaturesByServer: new Map(),
+    });
   };
 
   return {

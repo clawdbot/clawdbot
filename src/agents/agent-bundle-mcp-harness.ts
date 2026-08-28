@@ -265,7 +265,7 @@ export async function materializeStaticMcpToolsForScheduledHarnessRunCore(
 export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
   params: MaterializeRequesterScopedMcpToolsForHarnessRunParams,
 ): Promise<RequesterScopedHarnessMcpTools | undefined> {
-  const scopedRuntime = await getOrCreateRequesterScopedMcpRuntime({
+  const scopedRuntimeHandle = await getOrCreateRequesterScopedMcpRuntime({
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
     workspaceDir: params.workspaceDir,
@@ -277,6 +277,7 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
     agentAccountId: params.agentAccountId,
     messageChannel: params.messageChannel,
   });
+  const scopedRuntime = scopedRuntimeHandle?.runtime;
 
   let liveRuntime: Awaited<ReturnType<typeof materializeBundleMcpToolsForRun>> | undefined;
   let liveCatalog: McpToolCatalog | undefined;
@@ -288,12 +289,8 @@ export async function materializeRequesterScopedMcpToolsForHarnessRunCore(
         reservedToolNames: params.reservedToolNames,
       });
       liveCatalog = scopedRuntime.peekCatalog() ?? (await scopedRuntime.getCatalog());
-      if (liveCatalog.tools.length > 0) {
-        rememberAdvertisedScopedMcpCatalog(
-          params.sessionId,
-          liveCatalog,
-          scopedRuntime.advertisedCatalogConfigFingerprint,
-        );
+      if (liveCatalog.tools.length > 0 && scopedRuntimeHandle) {
+        rememberAdvertisedScopedMcpCatalog(scopedRuntimeHandle, liveCatalog);
       }
     }
 
