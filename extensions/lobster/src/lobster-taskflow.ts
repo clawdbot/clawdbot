@@ -17,7 +17,9 @@ export type BoundTaskFlow = ReturnType<
 >;
 
 type FlowRecord = NonNullable<ReturnType<BoundTaskFlow["tryCreateManaged"]>>;
-type MutationResult = ReturnType<BoundTaskFlow["setWaiting"]>;
+type MutationResult =
+  | ReturnType<BoundTaskFlow["setWaiting"]>
+  | Awaited<ReturnType<BoundTaskFlow["cancel"]>>;
 
 type LobsterApprovalWaitState = {
   kind: "lobster_approval";
@@ -29,6 +31,7 @@ type LobsterApprovalWaitState = {
 
 type RunManagedLobsterFlowParams = {
   taskFlow: BoundTaskFlow;
+  config: OpenClawPluginApi["config"];
   runner: LobsterRunner;
   runnerParams: LobsterRunnerParams;
   controllerId: string;
@@ -40,6 +43,7 @@ type RunManagedLobsterFlowParams = {
 
 type ResumeManagedLobsterFlowParams = {
   taskFlow: BoundTaskFlow;
+  config: OpenClawPluginApi["config"];
   runner: LobsterRunner;
   runnerParams: LobsterRunnerParams & {
     action: "resume";
@@ -117,46 +121,45 @@ function buildApprovalWaitState(envelope: Extract<LobsterEnvelope, { ok: true }>
   } satisfies LobsterApprovalWaitState;
 }
 
-function applyEnvelopeToFlow(params: {
-  taskFlow: BoundTaskFlow;
-  flow: FlowRecord;
-  envelope: LobsterEnvelope;
-  waitingStep: string;
-}): MutationResult {
-  const { taskFlow, flow, envelope, waitingStep } = params;
-  const flowMutation = { flowId: flow.flowId, expectedRevision: flow.revision };
-
-  if (!envelope.ok) {
-    return taskFlow.fail(flowMutation);
-  }
-
-  if (envelope.status === "needs_approval") {
-    return taskFlow.setWaiting({
-      ...flowMutation,
-      currentStep: waitingStep,
-      waitJson: buildApprovalWaitState(envelope),
-    });
-  }
-
-  return taskFlow.finish(flowMutation);
-}
-
 async function executeManagedLobsterFlow(
-  params: Pick<RunManagedLobsterFlowParams, "taskFlow" | "runner" | "runnerParams" | "waitingStep">,
+  params: Pick<
+    RunManagedLobsterFlowParams,
+    "taskFlow" | "config" | "runner" | "runnerParams" | "waitingStep"
+  >,
   flow: FlowRecord,
   failureFlowId = flow.flowId,
 ): Promise<ManagedLobsterFlowResult> {
   try {
     const envelope = await params.runner.run(params.runnerParams);
-    const mutation = applyEnvelopeToFlow({
-      taskFlow: params.taskFlow,
-      flow,
-      envelope,
-      waitingStep: params.waitingStep ?? "await_lobster_approval",
-    });
+    if (envelope.ok && envelope.status === "cancelled") {
+      try {
+        const mutation = await params.taskFlow.cancel({ flowId: flow.flowId, cfg: params.config });
+        return mutation.cancelled
+          ? { ok: true, envelope, flow, mutation }
+          : {
+              ok: false,
+              flow,
+              mutation,
+              error: new Error(`TaskFlow cancellation failed: ${mutation.reason ?? "unknown"}`),
+            };
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        return { ok: false, flow, error: err };
+      }
+    }
+    const flowMutation = { flowId: flow.flowId, expectedRevision: flow.revision };
     if (!envelope.ok) {
+      const mutation = params.taskFlow.fail(flowMutation);
       return { ok: false, flow, mutation, error: new Error(envelope.error.message) };
     }
+    const mutation =
+      envelope.status === "needs_approval"
+        ? params.taskFlow.setWaiting({
+            ...flowMutation,
+            currentStep: params.waitingStep ?? "await_lobster_approval",
+            waitJson: buildApprovalWaitState(envelope),
+          })
+        : params.taskFlow.finish(flowMutation);
     return { ok: true, envelope, flow, mutation };
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));

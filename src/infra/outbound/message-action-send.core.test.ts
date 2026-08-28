@@ -1,10 +1,15 @@
 // Covers core message-action send fallback, TTS application, and durable send
 // policy after plugin preparation is absent.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  GATEWAY_CLIENT_MODES,
+  GATEWAY_CLIENT_NAMES,
+} from "../../../packages/gateway-protocol/src/client-info.js";
 import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
+import { OutboundDeliveryError } from "./deliver-types.js";
 import { runMessageAction } from "./message-action-runner.js";
 
 const ttsMocks = vi.hoisted(() => ({
@@ -77,6 +82,104 @@ describe("runMessageAction core send routing", () => {
       .mockReset()
       .mockImplementation(async (params: { payload: unknown }) => params.payload);
   });
+
+  it.each([
+    {
+      label: "failed",
+      error: new Error("provider rejected the message"),
+      expectedStatus: "failed" as const,
+      expectedMessageId: undefined,
+    },
+    {
+      label: "partial_failed",
+      error: new OutboundDeliveryError("second send failed", {
+        cause: new Error("provider rejected the attachment"),
+        results: [{ channel: "testchat", messageId: "first-send-1" }],
+        stage: "platform_send",
+      }),
+      expectedStatus: "partial_failed" as const,
+      expectedMessageId: "first-send-1",
+    },
+  ])(
+    "returns structured $label core delivery outcomes to CLI callers",
+    async ({ error, expectedStatus, expectedMessageId }) => {
+      const sendText = vi.fn().mockRejectedValue(error);
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "testchat",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "testchat",
+              outbound: { deliveryMode: "direct", sendText },
+            }),
+          },
+        ]),
+      );
+
+      const result = await runMessageAction({
+        cfg: {
+          channels: { testchat: { enabled: true } },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          message: "hello",
+        },
+        gateway: {
+          clientName: GATEWAY_CLIENT_NAMES.CLI,
+          mode: GATEWAY_CLIENT_MODES.CLI,
+        },
+        conversationReadOrigin: "direct-operator",
+        dryRun: false,
+      });
+
+      expect(result).toMatchObject({
+        kind: "send",
+        handledBy: "core",
+        sendResult: {
+          deliveryStatus: expectedStatus,
+          error: expect.any(String),
+          ...(expectedMessageId ? { result: { messageId: expectedMessageId } } : {}),
+        },
+      });
+      expect(sendText).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("keeps throwing core delivery failures for non-CLI callers", async () => {
+    const sendText = vi.fn().mockRejectedValue(new Error("provider rejected the message"));
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "testchat",
+          source: "test",
+          plugin: createOutboundTestPlugin({
+            id: "testchat",
+            outbound: { deliveryMode: "direct", sendText },
+          }),
+        },
+      ]),
+    );
+
+    await expect(
+      runMessageAction({
+        cfg: {
+          channels: { testchat: { enabled: true } },
+        } as OpenClawConfig,
+        action: "send",
+        params: {
+          channel: "testchat",
+          target: "channel:abc",
+          message: "hello",
+        },
+        dryRun: false,
+      }),
+    ).rejects.toThrow("provider rejected the message");
+    expect(sendText).toHaveBeenCalledOnce();
+  });
+
   it("does not misclassify send as poll when zero-valued poll params are present", async () => {
     const sendMedia = vi.fn().mockResolvedValue({
       channel: "testchat",

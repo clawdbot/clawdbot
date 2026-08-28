@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { CliBackendAuthProfilePreparationError } from "openclaw/plugin-sdk/cli-backend";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { withTempDir } from "openclaw/plugin-sdk/test-env";
+import { captureEnv, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { buildGoogleGeminiCliBackend } from "./cli-backend.js";
 
@@ -256,24 +256,27 @@ describe("google gemini cli backend auth bridge", () => {
         'GOOGLE_GENAI_USE_VERTEXAI="true"\nGOOGLE_APPLICATION_CREDENTIALS="./credentials.json"\n',
       );
 
-      const originalGeminiCliHome = process.env.GEMINI_CLI_HOME;
+      const env = captureEnv(["GEMINI_CLI_HOME", "GOOGLE_APPLICATION_CREDENTIALS"]);
       process.env.GEMINI_CLI_HOME = ambientHome;
-      const prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
-        workspaceDir,
-        provider: "google-gemini-cli",
-        modelId: "gemini-3.1-flash-preview",
-        toolAvailability: { native: [], openClaw: [] },
-        isolatedCompletionModelId: "gemini-3.1-flash-preview",
-        isolatedCompletionSystemPrompt: "Return only JSON.",
-      } as GeminiPrepareContext);
+      // Process credentials override dotenv; this fixture exercises the file-only path.
+      delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+      let prepared: GeminiPreparedExecution | null | undefined;
       try {
+        prepared = await buildGoogleGeminiCliBackend().prepareExecution?.({
+          workspaceDir,
+          provider: "google-gemini-cli",
+          modelId: "gemini-3.1-flash-preview",
+          toolAvailability: { native: [], openClaw: [] },
+          isolatedCompletionModelId: "gemini-3.1-flash-preview",
+          isolatedCompletionSystemPrompt: "Return only JSON.",
+        } as GeminiPrepareContext);
         await stageGeminiPreparedExecution(prepared);
         expect(prepared?.env?.GOOGLE_GENAI_USE_VERTEXAI).toBe("true");
         expect(prepared?.env?.GOOGLE_APPLICATION_CREDENTIALS).toBe(
           path.join(workspaceDir, "credentials.json"),
         );
       } finally {
-        restoreEnv("GEMINI_CLI_HOME", originalGeminiCliHome);
+        env.restore();
         await prepared?.cleanup?.();
       }
     });
