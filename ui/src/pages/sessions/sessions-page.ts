@@ -158,6 +158,7 @@ class SessionsPage extends OpenClawLightDomElement {
   private searchTimer?: ReturnType<typeof setTimeout>;
   private appliedListResult: SessionsListResult | null | undefined;
   private readonly observeAgentScope = watchAgentScope(() => {
+    this.invalidatePageWork();
     this.resetTranscriptSearchState(this.transcriptSearchQuery);
     if (!this.deepLinkSessionKey) {
       this.page = 0;
