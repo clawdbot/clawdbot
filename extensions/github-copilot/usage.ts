@@ -1,6 +1,9 @@
 // Github Copilot plugin module implements usage behavior.
 import { buildCopilotIdeHeaders } from "openclaw/plugin-sdk/provider-auth";
-import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  ProviderJsonParseError,
+  readProviderJsonResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   buildUsageErrorSnapshot,
   buildUsageHttpErrorSnapshot,
@@ -52,7 +55,7 @@ export async function fetchCopilotUsage(
     payload = await readProviderJsonResponse<unknown>(res, "github-copilot-usage");
   } catch (error) {
     // Keep bounded-reader failures visible while normalizing malformed provider JSON.
-    if (error instanceof Error && error.message.endsWith(": malformed JSON response")) {
+    if (error instanceof ProviderJsonParseError) {
       return buildUsageErrorSnapshot("github-copilot", "Malformed usage response");
     }
     throw error;
