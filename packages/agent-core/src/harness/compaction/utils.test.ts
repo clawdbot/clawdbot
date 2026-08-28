@@ -132,6 +132,36 @@ describe("file operation provenance", () => {
 });
 
 describe("serializeConversation", () => {
+  it.each(["user", "toolResult"] as const)(
+    "bounds omission markers per %s message without losing mixed text or leaking metadata",
+    (role) => {
+      const toolText = `${"progress ".repeat(400)}ERROR: terminal failure`;
+      const content = [
+        { type: "text", text: "start " },
+        ...Array.from({ length: 1_000 }, () => ({
+          type: "image",
+          data: "IMAGE_PAYLOAD_SENTINEL",
+          mimeType: "PRIVATE_MIME_SENTINEL",
+        })),
+        ...Array.from({ length: 1_000 }, (_, i) => ({
+          type: `other-media-${i}`,
+          data: "OTHER_PAYLOAD_SENTINEL",
+        })),
+        { type: "text", text: toolText },
+      ];
+      const serialized = serializeConversation([{ role, content }] as unknown as Message[]);
+
+      expect(serialized.split("[image data removed - already processed by model]")).toHaveLength(2);
+      expect(serialized.split("[non-text data removed - already processed by model]")).toHaveLength(
+        2,
+      );
+      expect(serialized).toContain("start ");
+      expect(serialized).toContain("ERROR: terminal failure");
+      expect(serialized).not.toMatch(/SENTINEL|other-media-/);
+      expect(serialized.length).toBeLessThan(role === "user" ? toolText.length + 120 : 2_200);
+    },
+  );
+
   it("omits provider thinking while preserving visible assistant state", () => {
     const messages: Message[] = [
       {

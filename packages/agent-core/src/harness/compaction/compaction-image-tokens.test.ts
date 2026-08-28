@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import type { ImageContent } from "../../llm.js";
+import type { AssistantMessage, ImageContent, Model } from "../../llm.js";
 import type { AgentMessage } from "../../types.js";
+import { buildSessionContext } from "../session/session.js";
 import type { SessionTreeEntry } from "../types.js";
-import { estimateTokens, findCutPoint } from "./compaction.js";
+import { compact, estimateTokens, findCutPoint, prepareCompaction } from "./compaction.js";
 
 const IMAGE_PAYLOAD = "a".repeat(1_500_000);
 
@@ -29,7 +30,7 @@ function toolResultImage(timestamp: number): AgentMessage {
   };
 }
 
-function assistantText(text: string, timestamp: number): AgentMessage {
+function assistantText(text: string, timestamp: number): AssistantMessage {
   return {
     role: "assistant",
     content: [{ type: "text", text }],
@@ -103,4 +104,106 @@ describe("findCutPoint with image-heavy recent turns", () => {
     expect(textResult.firstKeptEntryIndex).toBeGreaterThan(0);
     expect(imageResult.firstKeptEntryIndex).toBe(textResult.firstKeptEntryIndex);
   });
+});
+
+describe.each([false, true])("image omission through compaction (split turn: %s)", (splitTurn) => {
+  it.each(["user", "toolResult"] as const)(
+    "records an image-only %s message in summary input and rebuilt context",
+    async (role) => {
+      const messages: AgentMessage[] =
+        role === "user"
+          ? [userImage(1)]
+          : [
+              userText("Inspect the screenshot", 1),
+              {
+                ...assistantText("", 2),
+                content: [{ type: "toolCall", id: "call-1", name: "screenshot", arguments: {} }],
+                stopReason: "toolUse",
+              },
+              toolResultImage(3),
+            ];
+      messages.push(assistantText("The screenshot was inspected", 4));
+      if (!splitTurn) {
+        messages.push(userText("Continue with the next task", 5));
+      }
+      const entries = messages.map(messageEntry);
+      const originalEntries = structuredClone(entries);
+      const lastEntry = entries.at(-1);
+      const preparation = prepareCompaction(entries, {
+        enabled: true,
+        reserveTokens: 1_000,
+        keepRecentTokens: 1,
+      });
+      if (!preparation.ok || !preparation.value || !lastEntry) {
+        throw new Error("expected image history to be compactable");
+      }
+      expect(preparation.value.isSplitTurn).toBe(splitTurn);
+      expect(preparation.value.firstKeptEntryId).toBe(lastEntry.id);
+
+      const model: Model = {
+        id: "summary-model",
+        name: "Summary Model",
+        api: "test-api",
+        provider: "test-provider",
+        baseUrl: "https://example.test",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 100_000,
+        maxTokens: 8_000,
+      };
+      const prompts: string[] = [];
+      const result = await compact(
+        preparation.value,
+        model,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        {
+          completeSimple: async (_model, context) => {
+            const content = context.messages[0]?.content;
+            if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text") {
+              throw new Error("expected one text-only summarization input");
+            }
+            prompts.push(content[0].text);
+            // Echo only the supplied conversation: the callback cannot invent an omission fact.
+            const conversation = content[0].text
+              .split("<conversation>\n")[1]
+              ?.split("\n</conversation>")[0];
+            return assistantText(conversation || "No conversation content", 6);
+          },
+        },
+      );
+      if (!result.ok) {
+        throw result.error;
+      }
+      const marker = "[image data removed - already processed by model]";
+      expect(prompts).toHaveLength(1);
+      expect
+        .soft(prompts[0])
+        .toContain(`${role === "user" ? "[User]" : "[Tool result]"}: ${marker}`);
+      expect(prompts[0]).not.toContain(IMAGE_PAYLOAD);
+
+      const context = buildSessionContext([
+        ...entries,
+        {
+          type: "compaction",
+          id: "compaction-1",
+          parentId: lastEntry.id,
+          timestamp: new Date(7).toISOString(),
+          ...result.value,
+        },
+      ]);
+      expect.soft(context.messages[0]).toMatchObject({
+        role: "compactionSummary",
+        summary: expect.stringContaining(marker),
+      });
+      expect(context.messages.at(-1)).toEqual(messages.at(-1));
+      expect(JSON.stringify(context.messages)).not.toContain(IMAGE_PAYLOAD);
+      expect(entries).toEqual(originalEntries);
+    },
+  );
 });

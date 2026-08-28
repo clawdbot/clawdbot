@@ -222,13 +222,34 @@ export function serializeConversation(messages: Message[]): string {
   const parts: string[] = [];
 
   for (const msg of messages) {
-    if (msg.role === "user") {
-      const content =
+    if (msg.role === "user" || msg.role === "toolResult") {
+      const omissions = new Set<string>();
+      const text =
         typeof msg.content === "string"
           ? msg.content
-          : msg.content.map(getCompactionContentBlockText).join("");
+          : msg.content
+              .map((block) => {
+                const blockText = getCompactionContentBlockText(block);
+                if (block.type !== "text" && !blockText) {
+                  // Reuse history-image-prune's vocabulary, capped at two fixed markers per message.
+                  omissions.add(
+                    block.type === "image"
+                      ? "[image data removed - already processed by model]"
+                      : "[non-text data removed - already processed by model]",
+                  );
+                }
+                return blockText;
+              })
+              .join("");
+      // Keep omission facts outside tool-text truncation and token estimation.
+      const content = [
+        ...omissions,
+        msg.role === "toolResult" ? truncateForSummary(text, TOOL_RESULT_MAX_CHARS) : text,
+      ]
+        .filter(Boolean)
+        .join("\n");
       if (content) {
-        parts.push(`[User]: ${content}`);
+        parts.push(`[${msg.role === "user" ? "User" : "Tool result"}]: ${content}`);
       }
     } else if (msg.role === "assistant") {
       const textParts: string[] = [];
@@ -250,11 +271,6 @@ export function serializeConversation(messages: Message[]): string {
       }
       if (toolCalls.length > 0) {
         parts.push(`[Assistant tool calls]: ${toolCalls.join("; ")}`);
-      }
-    } else if (msg.role === "toolResult") {
-      const content = msg.content.map(getCompactionContentBlockText).join("");
-      if (content) {
-        parts.push(`[Tool result]: ${truncateForSummary(content, TOOL_RESULT_MAX_CHARS)}`);
       }
     }
   }
