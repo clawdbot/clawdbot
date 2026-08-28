@@ -15,6 +15,7 @@ import {
   runBackendExec,
   runPreparedBackendExec,
   stressBackend,
+  verifyRemoteExecOverlap,
 } from "./backend.e2e.test-support.js";
 import {
   createOpenShellSandboxBackendFactory,
@@ -774,6 +775,9 @@ describe("openshell sandbox backend e2e", () => {
           agentWorkspaceDir: workspaceDir,
           cfg: sandboxCfg,
         });
+        if (stressMode === "remote") {
+          await verifyRemoteExecOverlap({ backend, twin: remoteTwin, bridge });
+        }
         await stressBackend(
           stressMode === "mirror"
             ? {
@@ -790,7 +794,17 @@ describe("openshell sandbox backend e2e", () => {
               },
         );
 
-        for (const candidate of [mirrorBackend, backend]) {
+        for (const [candidate, candidateBridge] of [
+          [mirrorBackend, mirrorBridge],
+          [backend, bridge],
+        ] as const) {
+          await expect(
+            runBackendExec({ backend: candidate, command: "exit 23", timeoutMs: 60_000 }),
+          ).rejects.toThrow("exit: 23");
+          await candidateBridge.writeFile({ filePath: "after-failed-exec.txt", data: "recovered" });
+          await expect(
+            runBackendExec({ backend: candidate, command: "cat after-failed-exec.txt" }),
+          ).resolves.toMatchObject({ code: 0, stdout: "recovered" });
           await expect(
             candidate.buildExecSpec({
               command: "true",
@@ -804,7 +818,6 @@ describe("openshell sandbox backend e2e", () => {
           await expect(candidate.validateWorkdir?.(candidate.workdir)).resolves.toBe(
             candidate.workdir,
           );
-          candidate.discardPreparedWorkdir?.(candidate.workdir);
           const unspawned = await candidate.buildExecSpec({
             command: "exit 99",
             env: {},

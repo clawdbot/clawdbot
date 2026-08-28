@@ -181,7 +181,7 @@ describe("LabsPage", () => {
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: false } } },
+      raw: { tools: { codeMode: { enabled: null } } },
       note: "labs: update codeMode",
     });
     expect(runtimeConfig.refresh).not.toHaveBeenCalled();
@@ -211,11 +211,11 @@ describe("LabsPage", () => {
 
   it.each([
     {
-      // The on position restores the shipped "auto" tier, never `true`: Labs
-      // offers Auto/Off, and force-on stays a config-only power-user state.
+      // The on position selects the "auto" tier, never `true`: Labs offers
+      // Auto/Off, and force-on stays a config-only power-user state.
       label: "Code Mode",
       sourceConfig: { tools: { codeMode: { enabled: false } } },
-      expectedPatch: { tools: { codeMode: { enabled: null } } },
+      expectedPatch: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
     },
     {
@@ -334,7 +334,7 @@ describe("LabsPage", () => {
 
   it("shows default provenance without reset actions", async () => {
     const inherited = await mountPage({});
-    expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Enabled");
+    expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Disabled");
     expect(labRow(inherited.page, "Swarm").textContent).toContain("Using default: Disabled");
     expect(inherited.page.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(
       0,
@@ -347,7 +347,7 @@ describe("LabsPage", () => {
         swarm: { enabled: false },
       },
     });
-    expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Enabled");
+    expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
     expect(labRow(overridden.page, "Swarm").textContent).toContain("Default: Disabled");
     expect(overridden.page.querySelectorAll("button[aria-label='Reset to default']")).toHaveLength(
       0,
@@ -425,13 +425,13 @@ describe("LabsPage", () => {
 });
 
 describe("LabsPage code mode enablement", () => {
-  // Mirrors resolveCodeModeConfig: the shipped default is "auto", so the row
-  // reads as on until an explicit `false` opts out. `true` stays a valid
-  // config-only force-on and must also read as on.
+  // Mirrors resolveCodeModeConfig: absent or empty config is off, while an
+  // options object preserves the prior auto tier and explicit values win.
   it.each([
-    { label: "unset", config: {}, expected: true },
+    { label: "unset", config: {}, expected: false },
+    { label: "empty object", config: { tools: { codeMode: {} } }, expected: false },
     {
-      label: "object without enabled",
+      label: "object with options",
       config: { tools: { codeMode: { timeoutMs: 5000 } } },
       expected: true,
     },
@@ -450,21 +450,21 @@ describe("LabsPage code mode enablement", () => {
     provider.remove();
   });
 
-  it("writes an explicit false when disabling the shipped default", async () => {
+  it("writes the auto tier when enabling the shipped default", async () => {
     const { page, runtimeConfig } = await mountPage({});
     const toggle = codeModeToggle(page);
 
-    toggle.checked = false;
+    toggle.checked = true;
     toggle.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
 
     await vi.waitFor(() => expect(runtimeConfig.patch).toHaveBeenCalledOnce());
     expect(runtimeConfig.patch).toHaveBeenCalledWith({
-      raw: { tools: { codeMode: { enabled: false } } },
+      raw: { tools: { codeMode: { enabled: "auto" } } },
       note: "labs: update codeMode",
     });
   });
 
-  it("restores the inherited auto tier instead of pinning it when re-enabled", async () => {
+  it("restores the options object's inherited auto tier when re-enabled", async () => {
     const { page, runtimeConfig } = await mountPage({
       tools: { codeMode: { enabled: false, timeoutMs: 5000 } },
     });

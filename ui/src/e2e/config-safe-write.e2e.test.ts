@@ -361,7 +361,7 @@ suite.define(() => {
         };
         const patchedConfig = {
           laboratory: initialConfig.laboratory,
-          tools: {},
+          tools: { codeMode: { enabled: "auto" } },
         };
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -376,7 +376,7 @@ suite.define(() => {
         const codeModeRow = settingsRow(page, "Code Mode");
         const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
         await codeModeSwitch.waitFor();
-        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Enabled");
+        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
 
         const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");
@@ -385,7 +385,7 @@ suite.define(() => {
         expect(patchParams.baseHash).toBe("snapshot-1");
         expect(patchParams.sessionKey).toBe("main");
         expect(JSON.parse(String(patchParams.raw))).toEqual({
-          tools: { codeMode: { enabled: null } },
+          tools: { codeMode: { enabled: "auto" } },
         });
 
         const patchedResponse = configResponse(patchedConfig, "snapshot-2", "snapshot-1");
@@ -397,7 +397,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBe(configGetsBeforePatch + 1);
-        await expect.poll(() => codeModeRow.textContent()).toContain("Using default: Enabled");
+        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
         await expect.poll(() => labsLink.getAttribute("aria-current")).toBe("page");
         await capture(page, "00-labs-canonical-refresh.png");
 

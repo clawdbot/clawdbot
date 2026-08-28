@@ -151,7 +151,7 @@
   -webkit-backdrop-filter: blur(10px);
 }
 
-.shell-chrome-controls__button:hover:not(:disabled) {
+.shell-chrome-controls__button:hover:not(:disabled, [aria-disabled="true"]) {
   background: color-mix(in srgb, var(--bg-hover) 92%, transparent);
   color: var(--text);
 }
@@ -161,7 +161,7 @@
   box-shadow: var(--focus-ring);
 }
 
-.shell-chrome-controls__button:disabled {
+.shell-chrome-controls__button:is(:disabled, [aria-disabled="true"]) {
   opacity: 0.42;
 }
 
@@ -1035,7 +1035,7 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-brand__icon:hover:not(:disabled),
+.sidebar-brand__icon:hover:not(:disabled, [aria-disabled="true"]),
 .sidebar-brand__icon:focus-visible {
   background: color-mix(in srgb, var(--bg-hover) 84%, transparent);
   color: var(--text);
@@ -1046,7 +1046,7 @@ openclaw-settings-save-indicator:empty {
   box-shadow: var(--focus-ring);
 }
 
-.sidebar-brand__icon:disabled {
+.sidebar-brand__icon:is(:disabled, [aria-disabled="true"]) {
   cursor: not-allowed;
   opacity: 0.42;
 }
@@ -1182,7 +1182,7 @@ openclaw-settings-save-indicator:empty {
     color var(--duration-fast) ease;
 }
 
-.sidebar-session-toolbar__button:first-of-type {
+.sidebar-session-toolbar__button.sidebar-session-sort {
   margin-left: auto;
 }
 
@@ -1195,7 +1195,8 @@ openclaw-settings-save-indicator:empty {
   opacity: 1;
 }
 
-.sidebar-session-toolbar__button:disabled {
+.sidebar-session-toolbar__button:is(:disabled, [aria-disabled="true"]),
+.sidebar-session-group-actions[aria-disabled="true"] {
   cursor: not-allowed;
 }
 

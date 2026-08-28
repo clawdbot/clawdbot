@@ -149,14 +149,14 @@ async function sendInitializeResult(
   harness: ReturnType<typeof createClientHarness>,
   userAgent: string,
 ): Promise<void> {
-  await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(1));
-  const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
+  const initialize = JSON.parse(await harness.waitForWrite(0)) as { id: number; method: string };
+  expect(initialize.method).toBe("initialize");
   harness.send({ id: initialize.id, result: { userAgent } });
 }
 
 async function sendEmptyModelList(harness: ReturnType<typeof createClientHarness>): Promise<void> {
-  await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
-  const modelList = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };
+  const modelList = JSON.parse(await harness.waitForWrite(2)) as { id: number; method: string };
+  expect(modelList.method).toBe("model/list");
   harness.send({ id: modelList.id, result: { data: [] } });
 }
 
@@ -411,8 +411,8 @@ describe("shared Codex app-server client", () => {
         secretFreeCacheKey: "replacement-account",
       });
       const nextAcquire = getLeasedSharedCodexAppServerClient(options);
-      await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2));
       await sendInitializeResult(replacement, "openclaw/0.149.0 (Linux; test)");
+      expect(startSpy).toHaveBeenCalledTimes(2);
       await expect(nextAcquire).resolves.toBe(replacement.client);
       releaseLeasedSharedCodexAppServerClient(replacement.client);
       expect(mocks.applyCodexAppServerAuthProfile).toHaveBeenLastCalledWith(
@@ -590,38 +590,52 @@ describe("shared Codex app-server client", () => {
     expect(harness.stdinDestroyed).toBe(true);
   });
 
-  it("does not consume a co-lease when selection replacement acquisition fails", async () => {
-    const harness = createClientHarness();
-    vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
-    const options = { timeoutMs: 1_000 };
-    const firstLease = getLeasedSharedCodexAppServerClient(options);
-    await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
-    const client = await firstLease;
-    await expect(getLeasedSharedCodexAppServerClient(options)).resolves.toBe(client);
-    const ownedLease = { client };
-    mocks.resolveManagedCodexAppServerStartOptions.mockRejectedValueOnce(
-      new Error("replacement acquisition failed"),
-    );
+  it.each(["fails", "succeeds"])(
+    "preserves a co-lease when selection replacement acquisition %s",
+    async (replacementOutcome) => {
+      const harness = createClientHarness();
+      const replacement = createClientHarness();
+      const start = vi.spyOn(CodexAppServerClient, "start").mockReturnValue(harness.client);
+      const options = { timeoutMs: 1_000 };
+      const firstLease = getLeasedSharedCodexAppServerClient(options);
+      await sendInitializeResult(harness, "openclaw/0.149.0 (Linux; test)");
+      const client = await firstLease;
+      await expect(getLeasedSharedCodexAppServerClient(options)).resolves.toBe(client);
+      const ownedLease = { client };
+      if (replacementOutcome === "fails") {
+        mocks.resolveManagedCodexAppServerStartOptions.mockRejectedValueOnce(
+          new Error("replacement acquisition failed"),
+        );
+      } else {
+        start.mockReturnValue(replacement.client);
+      }
 
-    await expect(
-      withLeasedCodexAppServerClientStartSelectionRetry({
+      const retry = withLeasedCodexAppServerClientStartSelectionRetry({
         lease: ownedLease,
         options,
-        run: async () => {
+        run: async (attemptClient) => {
+          if (attemptClient !== client) {
+            return attemptClient;
+          }
           throw Object.assign(new Error("selection changed"), {
             code: "CODEX_APP_SERVER_START_SELECTION_CHANGED",
           });
         },
-        onClientChange: () => undefined,
-      }),
-    ).rejects.toThrow("replacement acquisition failed");
-
-    expect(ownedLease.client).toBeUndefined();
-    expect(releaseCodexAppServerClientLease(ownedLease)).toBe(false);
-    expect(harness.stdinDestroyed).toBe(false);
-    expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
-    await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true));
-  });
+      });
+      if (replacementOutcome === "fails") {
+        await expect(retry).rejects.toThrow("replacement acquisition failed");
+        expect(ownedLease.client).toBeUndefined();
+      } else {
+        await sendInitializeResult(replacement, "openclaw/0.149.0 (Linux; test)");
+        await expect(retry).resolves.toBe(replacement.client);
+        expect(ownedLease.client).toBe(replacement.client);
+      }
+      expect(releaseCodexAppServerClientLease(ownedLease)).toBe(replacementOutcome === "succeeds");
+      expect(harness.stdinDestroyed).toBe(false);
+      expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+      await vi.waitFor(() => expect(harness.stdinDestroyed).toBe(true));
+    },
+  );
 
   it("falls back before starting a desktop candidate with incomplete Computer Use artifacts", async () => {
     const pluginLocal = createClientHarness();
@@ -1374,25 +1388,33 @@ describe("shared Codex app-server client", () => {
           chatgptPlanType: null,
         });
       }
+      const responseIndex = first.writes.length;
       first.send({
         id: "failed-refresh",
         method: "account/chatgptAuthTokens/refresh",
         params: { reason: "unauthorized", previousAccountId: "original-account" },
       });
-      await vi.waitFor(() =>
-        expect(first.writes.map((line) => JSON.parse(line))).toContainEqual(
-          expect.objectContaining({ id: "failed-refresh", error: expect.any(Object) }),
-        ),
-      );
+      expect(JSON.parse(await first.waitForWrite(responseIndex))).toEqual({
+        id: "failed-refresh",
+        error: {
+          code: -32603,
+          message:
+            failure === "failure"
+              ? "refresh failed"
+              : "ChatGPT workspace changed during Codex token refresh. Retry to start a client for the selected workspace.",
+        },
+      });
       expect(first.stdinDestroyed).toBe(false);
       const nextAcquire = getLeasedSharedCodexAppServerClient(options);
-      await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2));
       await sendInitializeResult(replacement, "openclaw/0.149.0 (Linux; test)");
+      expect(startSpy).toHaveBeenCalledTimes(2);
       await expect(nextAcquire).resolves.toBe(replacement.client);
       expect(releaseLeasedSharedCodexAppServerClient(first.client)).toBe(true);
       expect(first.stdinDestroyed).toBe(true);
       expect(replacement.stdinDestroyed).toBe(false);
-      releaseLeasedSharedCodexAppServerClient(replacement.client);
+      expect(releaseLeasedSharedCodexAppServerClient(replacement.client)).toBe(true);
+      expect(clearSharedCodexAppServerClientIfCurrent(replacement.client)).toBe(true);
+      expect(replacement.stdinDestroyed).toBe(true);
     },
   );
 
@@ -1543,8 +1565,8 @@ describe("shared Codex app-server client", () => {
             }
           : { authProfileId: "openai:scoped", authProfileStore: secondStore }),
       });
-      await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2));
       await sendInitializeResult(secondHarness, "openclaw/0.149.0 (macOS; test)");
+      expect(startSpy).toHaveBeenCalledTimes(2);
       await expect(secondPromise).resolves.toBe(secondHarness.client);
 
       expect(resolvedCacheKeys).toEqual(["account:sha256:first", "account:sha256:second"]);
@@ -1693,8 +1715,8 @@ describe("shared Codex app-server client", () => {
       timeoutMs: 1000,
       preparedAuth: { kind: "api-key", apiKey: "second-platform-key" },
     });
-    await vi.waitFor(() => expect(startSpy).toHaveBeenCalledTimes(2));
     await sendInitializeResult(secondHarness, "openclaw/0.149.0 (macOS; test)");
+    expect(startSpy).toHaveBeenCalledTimes(2);
     await expect(secondPromise).resolves.toBe(secondHarness.client);
 
     expect(cacheKeys).toEqual(["api_key:sha256:first", "api_key:sha256:second"]);

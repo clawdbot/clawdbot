@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { UI_APPEARANCE_PREFERENCE_KEYS } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
@@ -103,8 +104,10 @@ describe("ShellGatewayOwner profile appearance integration", () => {
 
     await vi.waitFor(() => expect(loadSettings().accent).toBe("#336699"));
     expect(request).toHaveBeenCalledOnce();
+    // Derived from the wire contract so new appearance keys extend the
+    // request without silently invalidating this expectation.
     expect(request).toHaveBeenCalledWith("users.prefs.get", {
-      keys: ["ui.theme", "ui.themeMode", "ui.accent"],
+      keys: Object.values(UI_APPEARANCE_PREFERENCE_KEYS),
     });
   });
 

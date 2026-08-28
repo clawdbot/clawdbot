@@ -857,6 +857,28 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(requiresDistShardNames).toEqual(["core-support-boundary", "core-runtime-tui-pty"]);
   });
 
+  it("preserves runtime preparation and core-only ownership in full and compact plans", () => {
+    const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
+    const runtimeTarget = "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts";
+    for (const shards of [
+      createNodeTestShards(),
+      createNodeTestShardBundles({ compact: true, compactMode: "pull-request" }),
+    ]) {
+      expect(
+        shards.flatMap((shard) =>
+          "configs" in shard ? shard.configs : shard.groups.flatMap((group) => group.configs),
+        ),
+      ).not.toContain(qaConfig);
+      expect(
+        shards.find((shard) =>
+          ("configs" in shard ? [shard] : shard.groups).some((group) =>
+            group.includePatterns?.includes(runtimeTarget),
+          ),
+        )?.pretestBuildMode,
+      ).toBe("runtime");
+    }
+  });
+
   it("splits tooling checks independently from built artifacts", () => {
     const toolingShards = createNodeTestShards().filter((shard) =>
       shard.shardName.startsWith("core-tooling"),

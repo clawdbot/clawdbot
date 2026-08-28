@@ -147,8 +147,10 @@ function buildActivationMetadataHash(params: {
     })
     .map(([channelId]) => channelId)
     .toSorted((left, right) => left.localeCompare(right));
-  const pluginEntryStates = Object.entries(params.activationSource.plugins.entries)
-    .map(([pluginId, entry]) => [pluginId, entry?.enabled ?? null] as const)
+  // Source config selects validation and defaults even when resolved values match.
+  // Object fields keep an absent config distinct from an explicit null source.
+  const pluginEntryInputs = Object.entries(params.activationSource.plugins.entries)
+    .map(([pluginId, { enabled, config }]) => [pluginId, { enabled, config }] as const)
     .toSorted(([left], [right]) => left.localeCompare(right));
   const autoEnableReasonEntries = Object.entries(params.autoEnabledReasons)
     .map(([pluginId, reasons]) => [pluginId, [...reasons]] as const)
@@ -161,7 +163,7 @@ function buildActivationMetadataHash(params: {
         allow: params.activationSource.plugins.allow,
         deny: params.activationSource.plugins.deny,
         memorySlot: params.activationSource.plugins.slots.memory,
-        entries: pluginEntryStates,
+        entries: pluginEntryInputs,
         enabledChannels: enabledSourceChannels,
         autoEnabledReasons: autoEnableReasonEntries,
       }),

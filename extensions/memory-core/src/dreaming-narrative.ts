@@ -271,11 +271,7 @@ async function startNarrativeRunOrFallback(params: {
       throw runErr;
     }
     await appendFallbackNarrativeEntry({
-      workspaceDir: params.workspaceDir,
-      data: params.data,
-      nowMs: params.nowMs,
-      timezone: params.timezone,
-      logger: params.logger,
+      ...params,
       reason: "subagent runtime is request-scoped",
     });
     return null;
@@ -893,16 +889,12 @@ async function generateAndAppendDreamNarrative(
           }
 
           const runId = await startNarrativeRunOrFallback({
-            subagent: params.subagent,
+            ...params,
             sessionKey: attemptSessionKey,
             runKey: attemptRunKey,
             message,
-            data: params.data,
-            workspaceDir: params.workspaceDir,
             nowMs,
-            timezone: params.timezone,
             model: attemptModel,
-            logger: params.logger,
           });
           if (!runId) {
             return;
@@ -941,11 +933,8 @@ async function generateAndAppendDreamNarrative(
             })} for ${params.data.phase} phase; writing fallback diary entry.`,
           );
           await appendFallbackNarrativeEntry({
-            workspaceDir: params.workspaceDir,
-            data: params.data,
+            ...params,
             nowMs,
-            timezone: params.timezone,
-            logger: params.logger,
             reason: `the narrative run ended with ${formatNarrativeTerminalStatus({
               status: result.status,
               error: result.error,
@@ -986,11 +975,8 @@ async function generateAndAppendDreamNarrative(
           `memory-core: narrative generation produced no text for ${params.data.phase} phase; writing fallback diary entry.`,
         );
         await appendFallbackNarrativeEntry({
-          workspaceDir: params.workspaceDir,
-          data: params.data,
+          ...params,
           nowMs,
-          timezone: params.timezone,
-          logger: params.logger,
           reason: "the narrative run produced no text",
         });
         return;
@@ -1023,11 +1009,8 @@ async function generateAndAppendDreamNarrative(
         `memory-core: narrative generation failed for ${params.data.phase} phase: ${formatErrorMessage(err)}`,
       );
       await appendFallbackNarrativeEntry({
-        workspaceDir: params.workspaceDir,
-        data: params.data,
+        ...params,
         nowMs,
-        timezone: params.timezone,
-        logger: params.logger,
         reason: `the narrative run failed (${formatErrorMessage(err)})`,
       });
     } finally {

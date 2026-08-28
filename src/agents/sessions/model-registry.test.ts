@@ -622,6 +622,41 @@ describe("ModelRegistry models.json auth", () => {
     });
   });
 
+  it("preserves response-model instructions compatibility from generated catalogs", () => {
+    const modelsPath = writeModelsJsonWithPluginCatalog({
+      root: { providers: {} },
+      pluginRelativePath: join("plugins", "openai", PLUGIN_MODEL_CATALOG_FILE),
+      pluginCatalog: {
+        generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+        providers: {
+          openai: {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-responses",
+            apiKey: "test-token-placeholder",
+            models: [
+              {
+                id: "custom-model",
+                name: "Custom Model",
+                compat: { supportsInstructions: false },
+              },
+            ],
+          },
+        },
+      },
+    });
+
+    const registry = ModelRegistry.create(
+      AuthStorage.inMemory({ openai: { type: "api_key", key: "test-token-placeholder" } }),
+      modelsPath,
+      { pluginMetadataSnapshot: pluginOwnerSnapshot("openai", "openai") },
+    );
+
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.find("openai", "custom-model")?.compat).toMatchObject({
+      supportsInstructions: false,
+    });
+  });
+
   it("loads richer generated catalog metadata without widening runtime inputs", () => {
     // Generated catalogs can report video/audio support. Keep those rows while
     // projecting their metadata to the runtime execution contract.

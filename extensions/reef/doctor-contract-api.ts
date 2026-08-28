@@ -126,6 +126,17 @@ function hasRetiredReefPolicyConfig(value: unknown): boolean {
   return isRecord(value) && ["dmPolicy", "allowFrom"].some((key) => Object.hasOwn(value, key));
 }
 
+// Reef reads channels.reef only. Older manifests advertised the full channel
+// schema as plugin-entry config, so a Control UI plugin form could park values
+// under plugins.entries.reef.config where the runtime never saw them.
+function strayReefPluginEntryConfig(cfg: OpenClawConfig): Record<string, unknown> | null {
+  const entries =
+    isRecord(cfg.plugins) && isRecord(cfg.plugins.entries) ? cfg.plugins.entries : null;
+  const entry = entries && isRecord(entries.reef) ? entries.reef : null;
+  const config = entry && isRecord(entry.config) ? entry.config : null;
+  return config && Object.keys(config).length > 0 ? config : null;
+}
+
 function inspectLegacyReefFriends(cfg: OpenClawConfig) {
   const reef = cfg.channels?.reef;
   if (!isRecord(reef) || !Object.hasOwn(reef, "friends")) {
@@ -158,6 +169,12 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.reef dmPolicy/allowFrom are legacy; run "openclaw doctor --fix" to remove them. Peer trust is SQLite-backed.',
     match: hasRetiredReefPolicyConfig,
   },
+  {
+    path: ["plugins", "entries", "reef", "config"],
+    message:
+      'plugins.entries.reef.config is not read by Reef; run "openclaw doctor --fix" to move its keys to channels.reef.',
+    match: (value) => isRecord(value) && Object.keys(value).length > 0,
+  },
 ];
 
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
@@ -165,25 +182,74 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   changes: string[];
 } {
   const reef = cfg.channels?.reef;
-  if (!isRecord(reef) || !hasRetiredReefPolicyConfig(reef)) {
+  const hasRetiredPolicy = isRecord(reef) && hasRetiredReefPolicyConfig(reef);
+  const strayEntryConfig = strayReefPluginEntryConfig(cfg);
+  if (!hasRetiredPolicy && !strayEntryConfig) {
     return { config: cfg, changes: [] };
   }
   const next = structuredClone(cfg);
-  const nextReef = next.channels?.reef;
-  if (!isRecord(nextReef)) {
-    return { config: cfg, changes: [] };
-  }
   const changes: string[] = [];
-  for (const key of ["dmPolicy", "allowFrom"] as const) {
-    if (Object.hasOwn(nextReef, key)) {
-      delete nextReef[key];
-      changes.push(`Removed retired Reef ${key} field.`);
+  if (hasRetiredPolicy) {
+    const nextReef = next.channels?.reef;
+    if (!isRecord(nextReef)) {
+      return { config: cfg, changes: [] };
     }
+    for (const key of ["dmPolicy", "allowFrom"] as const) {
+      if (Object.hasOwn(nextReef, key)) {
+        delete nextReef[key];
+        changes.push(`Removed retired Reef ${key} field.`);
+      }
+    }
+  }
+  if (strayEntryConfig) {
+    migrateStrayReefPluginEntryConfig(next, strayEntryConfig, changes);
   }
   return {
     config: next,
     changes,
   };
+}
+
+// Moves misplaced plugin-entry config into channels.reef. Existing channel keys
+// stay authoritative; the move only commits when the merged record parses, so a
+// doctor fix can never turn a valid channels.reef invalid — unmergeable values
+// stay in place and keep surfacing through the legacyConfigRules message.
+function migrateStrayReefPluginEntryConfig(
+  next: OpenClawConfig,
+  strayEntryConfig: Record<string, unknown>,
+  changes: string[],
+): void {
+  const channels = isRecord(next.channels) ? next.channels : {};
+  const currentReef = isRecord(channels.reef) ? channels.reef : {};
+  const staged: string[] = [];
+  const dropped: string[] = [];
+  const merged = { ...currentReef };
+  for (const [key, value] of Object.entries(strayEntryConfig)) {
+    if (Object.hasOwn(currentReef, key)) {
+      dropped.push(key);
+    } else {
+      merged[key] = value;
+      staged.push(key);
+    }
+  }
+  if (!ReefChannelConfigSchema.safeParse(merged).success) {
+    return;
+  }
+  next.channels = channels;
+  channels.reef = merged;
+  const entry =
+    isRecord(next.plugins) && isRecord(next.plugins.entries) ? next.plugins.entries.reef : null;
+  if (isRecord(entry)) {
+    delete entry.config;
+  }
+  for (const key of staged) {
+    changes.push(`Moved plugins.entries.reef.config.${key} to channels.reef.${key}.`);
+  }
+  for (const key of dropped) {
+    changes.push(
+      `Removed plugins.entries.reef.config.${key}; channels.reef.${key} is authoritative.`,
+    );
+  }
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [

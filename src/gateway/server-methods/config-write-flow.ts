@@ -20,6 +20,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
@@ -306,7 +307,7 @@ export async function commitGatewayConfigWrite(params: {
   queueFollowUp: () => void;
 }> {
   const application = params.awaitRuntimeApplication
-    ? createRuntimeConfigWriteApplication()
+    ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
     : undefined;
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,

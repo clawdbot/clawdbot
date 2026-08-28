@@ -40,6 +40,7 @@ import {
 import { renderSidebarSessionSectionHeader } from "./app-sidebar-session-section-header.ts";
 import { sidebarSessionStateId } from "./app-sidebar-session-types.ts";
 import { icons } from "./icons.ts";
+import { renderNewSessionLink } from "./new-session-link.ts";
 import { hasProviderBrandIcon, renderProviderBrandIcon } from "./provider-icon.ts";
 import { renderSessionRowBadges } from "./session-row-badges.ts";
 
@@ -308,20 +309,16 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
               ${icons.listFilter}
             </button>
             ${canCreateSession
-              ? html`<button
-                  type="button"
-                  class="sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new"
-                  title=${params.newSessionDisabledReason ??
-                  `${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  aria-label=${`${t("chat.runControls.newSession")} — ${catalog.label}`}
-                  ?disabled=${Boolean(params.newSessionDisabledReason)}
-                  @click=${() =>
-                    params.onOpenNewSession?.(params.newSessionAgentId, {
-                      catalogId: catalog.id,
-                    })}
-                >
-                  ${icons.plus}
-                </button>`
+              ? renderNewSessionLink({
+                  basePath: params.basePath,
+                  agentId: params.newSessionAgentId,
+                  target: { catalogId: catalog.id },
+                  className:
+                    "sidebar-session-group-actions sidebar-session-new sidebar-session-catalog-new",
+                  label: `${t("chat.runControls.newSession")} — ${catalog.label}`,
+                  disabledReason: params.newSessionDisabledReason,
+                  onOpen: params.onOpenNewSession,
+                })
               : nothing}
           `,
         })}
