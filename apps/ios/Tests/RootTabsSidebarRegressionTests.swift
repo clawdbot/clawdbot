@@ -168,6 +168,8 @@ struct RootTabsSidebarRegressionTests {
         #expect(agents.contains("self.appModel.setSelectedAgentId"))
         #expect(agents.contains("self.newChatButton"))
         #expect(agents.contains("RootTabs.Sidebar.AgentSelector"))
+        #expect(agents.contains("self.selectableAgents.first(where: { $0.id == self.currentAgentID })"))
+        #expect(!agents.contains("?? self.selectableAgents.first"))
         let selectorValue = try #require(
             agents.range(of: ".accessibilityValue(Self.agentDisplayName(selectedAgent))"))
         let newChat = try #require(agents.range(of: "self.newChatButton"))

@@ -173,7 +173,7 @@ struct RootSidebar: View {
     }
 
     private var selectedAgent: AgentSummary? {
-        self.selectableAgents.first(where: { $0.id == self.currentAgentID }) ?? self.selectableAgents.first
+        self.selectableAgents.first(where: { $0.id == self.currentAgentID })
     }
 
     private func agentSelectorLabel(_ agent: AgentSummary) -> some View {
