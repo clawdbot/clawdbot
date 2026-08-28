@@ -20,6 +20,7 @@ import {
   isProjectedSessionsSendForwardedMessage,
   shouldPreserveAssistantControlReplyText,
   stripAssistantMediaDirectivesForDisplay,
+  takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
 import {
@@ -491,6 +492,8 @@ export function sanitizeChatHistoryMessage(
     changed = true;
   }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  const managedMedia = takeAssistantManagedMediaUrlsForDisplay(entry, role);
+  changed ||= managedMedia.changed;
   const preserveExactToolPayload =
     role === "toolresult" ||
     role === "tool_result" ||
@@ -552,7 +555,10 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.content === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripAssistantMediaDirectivesForDisplay(stripSuppressedControlReplyToken(entry.content))
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(entry.content),
+          managedMedia.urls,
+        )
       : entry.content;
     changed ||= controlStripped !== entry.content;
     if (preserveExactToolPayload) {
@@ -583,6 +589,7 @@ export function sanitizeChatHistoryMessage(
       }
       const text = stripAssistantMediaDirectivesForDisplay(
         stripSuppressedControlReplyToken(contentBlock.text),
+        managedMedia.urls,
       );
       return text === contentBlock.text
         ? sanitized
@@ -613,7 +620,10 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.text === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripAssistantMediaDirectivesForDisplay(stripSuppressedControlReplyToken(entry.text))
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(entry.text),
+          managedMedia.urls,
+        )
       : entry.text;
     changed ||= controlStripped !== entry.text;
     if (preserveExactToolPayload) {

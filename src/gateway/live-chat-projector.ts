@@ -2,14 +2,13 @@ import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 // Gateway live chat projector.
 // Converts streaming assistant events into display-safe live chat text.
 import { stripInternalRuntimeContext } from "../agents/internal-runtime-context.js";
+import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
 import {
   SILENT_REPLY_TOKEN,
   startsWithSilentToken,
   stripLeadingSilentToken,
 } from "../auto-reply/tokens.js";
-import { splitTrailingDirective } from "../auto-reply/reply/streaming-directives.js";
-import { isRelativeAssistantMediaReference } from "../media/assistant-media-reference.js";
-import { splitMediaFromOutput } from "../media/parse.js";
+import { isRelativeAssistantMediaReference, splitMediaFromOutput } from "../media/parse.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
 import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
@@ -22,13 +21,23 @@ import {
 const MAX_LIVE_CHAT_BUFFER_CHARS = 500_000;
 
 /** Normalizes assistant event payloads that contain a snapshot, a delta, or both. */
-export function resolveAssistantLiveChatInput(
-  data: unknown,
-): { text: string; delta: string; itemId?: string } | undefined {
+export function resolveAssistantLiveChatInput(data: unknown):
+  | {
+      text: string;
+      delta: string;
+      itemId?: string;
+      managedMediaUrls?: string[];
+    }
+  | undefined {
   if (!data || typeof data !== "object") {
     return undefined;
   }
-  const record = data as { text?: unknown; delta?: unknown; itemId?: unknown };
+  const record = data as {
+    text?: unknown;
+    delta?: unknown;
+    itemId?: unknown;
+    managedMediaUrls?: unknown;
+  };
   if (typeof record.text !== "string" && typeof record.delta !== "string") {
     return undefined;
   }
@@ -36,6 +45,13 @@ export function resolveAssistantLiveChatInput(
     text: typeof record.text === "string" ? record.text : "",
     delta: typeof record.delta === "string" ? record.delta : "",
     ...(typeof record.itemId === "string" && record.itemId ? { itemId: record.itemId } : {}),
+    ...(Array.isArray(record.managedMediaUrls)
+      ? {
+          managedMediaUrls: record.managedMediaUrls.filter(
+            (url): url is string => typeof url === "string",
+          ),
+        }
+      : {}),
   };
 }
 
@@ -82,7 +98,7 @@ export function resolveMergedAssistantText(params: {
 /** Removes runtime-only context/directive tags from the merged live assistant buffer. */
 export function normalizeLiveAssistantBufferedText(
   text: string,
-  options?: { final?: boolean },
+  options?: { final?: boolean; managedMediaUrls?: readonly string[] },
 ): string {
   const normalized = stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
   const trailing = options?.final
@@ -101,7 +117,10 @@ export function normalizeLiveAssistantBufferedText(
     parsedTail.mediaUrls.every((url) => !isRelativeAssistantMediaReference(url))
       ? normalized
       : trailing.text;
-  return stripAssistantMediaDirectivesForDisplay(withoutPendingMediaTail);
+  return stripAssistantMediaDirectivesForDisplay(
+    withoutPendingMediaTail,
+    options?.managedMediaUrls ?? [],
+  );
 }
 
 /** Projects buffered assistant text into display text or a suppressed/pending state. */

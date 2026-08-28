@@ -4218,9 +4218,13 @@ describe("grouped chat rendering", () => {
     const actionSkeleton = checkingCard?.querySelector(
       ".chat-assistant-attachment-card__action-skeleton.skeleton",
     );
+    const actionReservation = checkingCard?.querySelector(
+      ".chat-assistant-attachment-card__actions--loading",
+    );
     expect(skeleton?.getAttribute("aria-hidden")).toBe("true");
     expect(skeleton?.textContent?.trim()).toBe("");
     expect(actionSkeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(actionReservation?.getAttribute("aria-hidden")).toBe("true");
     await flushAssistantAttachmentAvailabilityChecks();
 
     const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source).replaceAll("%20", "+")}&meta=1`;

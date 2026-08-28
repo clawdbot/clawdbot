@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
+import { buildAssistantStreamData } from "../agents/embedded-agent-subscribe.handlers.messages.stream.js";
 import {
   INTERNAL_RUNTIME_CONTEXT_BEGIN,
   INTERNAL_RUNTIME_CONTEXT_END,
@@ -39,9 +40,12 @@ vi.mock("./live-chat-projector.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./live-chat-projector.js")>();
   return {
     ...actual,
-    normalizeLiveAssistantBufferedText: (text: string) => {
-      normalizeLiveAssistantBufferedTextMock(text);
-      return actual.normalizeLiveAssistantBufferedText(text);
+    normalizeLiveAssistantBufferedText: (
+      text: string,
+      options?: Parameters<typeof actual.normalizeLiveAssistantBufferedText>[1],
+    ) => {
+      normalizeLiveAssistantBufferedTextMock(text, options);
+      return actual.normalizeLiveAssistantBufferedText(text, options);
     },
   };
 });
@@ -211,9 +215,13 @@ describe("agent event handler", () => {
     harness: ReturnType<typeof createHarness>,
     text: string,
     field: "text" | "delta" = "text",
+    managedMediaUrls?: string[],
   ): ReturnType<typeof createHarness> {
     registerChatRun(harness.chatRunState, "run-1", "session-1", "client-1");
-    emitAgentEvent(harness.handler, "run-1", "assistant", { [field]: text });
+    emitAgentEvent(harness.handler, "run-1", "assistant", {
+      [field]: text,
+      ...(managedMediaUrls ? { managedMediaUrls } : {}),
+    });
     return harness;
   }
 
@@ -1186,6 +1194,8 @@ describe("agent event handler", () => {
         "MEDIA:./attachment-catalog-tiny/demo.jpg",
         "MEDIA:./attachment-catalog-tiny/demo.mp3",
       ].join("\n"),
+      "text",
+      ["./attachment-catalog-tiny/demo.jpg", "./attachment-catalog-tiny/demo.mp3"],
     );
     const chatCalls = chatBroadcastCalls(broadcast);
     expect(chatCalls).toHaveLength(1);
@@ -1206,7 +1216,10 @@ describe("agent event handler", () => {
       handler,
       "run-media-only",
       "assistant",
-      { text: "MEDIA:./attachment-catalog-tiny/demo.jpg" },
+      {
+        text: "MEDIA:./attachment-catalog-tiny/demo.jpg",
+        managedMediaUrls: ["./attachment-catalog-tiny/demo.jpg"],
+      },
       { seq: 1 },
     );
     expect(chatBroadcastCalls(broadcast)).toHaveLength(0);
@@ -1226,11 +1239,20 @@ describe("agent event handler", () => {
     registerNamedChatRun(chatRunState, "split-media");
 
     for (const [index, delta] of [
-      "Prepared the batch.\nM",
+      "Prepared the batch.\n  M",
       "EDIA:./attachment-catalog-tiny/",
       "demo.jpg",
     ].entries()) {
-      emitAgentEvent(handler, "run-split-media", "assistant", { delta }, { seq: index + 1 });
+      emitAgentEvent(
+        handler,
+        "run-split-media",
+        "assistant",
+        {
+          delta,
+          ...(index === 2 ? { managedMediaUrls: ["./attachment-catalog-tiny/demo.jpg"] } : {}),
+        },
+        { seq: index + 1 },
+      );
     }
     emitLifecycleEnd(handler, "run-split-media", 4);
 
@@ -1240,12 +1262,37 @@ describe("agent event handler", () => {
     expect(payloads.length).toBeGreaterThan(0);
     for (const payload of payloads) {
       const text = payload.message?.content?.[0]?.text ?? "";
-      expect(text).not.toMatch(/(?:^|\n)(?:M|ME|MED|MEDI|MEDIA:)/u);
+      expect(text).not.toMatch(/(?:^|\n)\s*(?:M|ME|MED|MEDI|MEDIA:)/u);
       expect(text).not.toContain("attachment-catalog-tiny");
     }
     expect(payloads.at(-1)?.message?.content?.[0]?.text).toBe("Prepared the batch.");
     nowSpy?.mockRestore();
   });
+
+  it.each(["MEDIA:chart.png", "MEDIA:./image.png"])(
+    "preserves an ordinary relative reference without managed-media facts: %s",
+    (text) => {
+      const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });
+      registerNamedChatRun(chatRunState, "ordinary-relative-media");
+
+      emitAgentEvent(
+        handler,
+        "run-ordinary-relative-media",
+        "assistant",
+        buildAssistantStreamData({ text, mediaUrls: [text.slice("MEDIA:".length)] }),
+        { seq: 1 },
+      );
+      emitLifecycleEnd(handler, "run-ordinary-relative-media", 2);
+
+      const finalPayload = chatBroadcastCalls(broadcast).at(-1)?.[1] as {
+        state?: string;
+        message?: { content?: Array<{ text?: string }> };
+      };
+      expect(finalPayload.state).toBe("final");
+      expect(finalPayload.message?.content?.[0]?.text).toBe(text);
+      nowSpy?.mockRestore();
+    },
+  );
 
   it("restores an ordinary MEDIA-like prefix when the assistant run ends", () => {
     const { broadcast, chatRunState, handler, nowSpy } = createHarness({ now: 1_000 });

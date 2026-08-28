@@ -101,7 +101,7 @@ type ChatRunRecord = {
   registrations?: ChatRunEntry[];
   rawBuffer?: string;
   buffer?: string;
-  /** Projection stays valid only while source matches rawBuffer; readers refresh it lazily. */
+  /** Projection stays valid only while source and managed-media facts match the run state. */
   bufferProjection?: { source: string; suppress: boolean };
   planSnapshot?: ChatRunPlanSnapshot;
   progressSnapshot?: ChatRunProgressSnapshot;
@@ -109,6 +109,7 @@ type ChatRunRecord = {
   bufferUpdatedAt?: number;
   deltaSentAt?: number;
   assistantScope?: { itemId: string; prefix: string };
+  managedMediaUrls?: Set<string>;
   deltaLastBroadcastText?: string;
   agentText?: {
     assistant?: ChatRunAgentTextState;
@@ -277,6 +278,7 @@ export function createChatRunState(): ChatRunState {
     delete record.bufferUpdatedAt;
     delete record.deltaSentAt;
     delete record.assistantScope;
+    delete record.managedMediaUrls;
     delete record.deltaLastBroadcastText;
     clearPendingLiveTextFlushes(record);
     delete record.agentText;
@@ -311,7 +313,10 @@ export function createChatRunState(): ChatRunState {
     }
     // Protected blocks and directive tags can span delta frames, so the
     // projection cache belongs to the complete merged raw buffer.
-    const normalizedText = normalizeLiveAssistantBufferedText(rawText, options);
+    const normalizedText = normalizeLiveAssistantBufferedText(rawText, {
+      ...options,
+      managedMediaUrls: record.managedMediaUrls ? [...record.managedMediaUrls] : undefined,
+    });
     const projected = projectLiveAssistantBufferedText(normalizedText);
     // A terminal read releases ambiguous directive prefixes as ordinary text;
     // caching it would expose that prefix again if a late live reader races cleanup.

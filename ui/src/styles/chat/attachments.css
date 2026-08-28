@@ -90,14 +90,32 @@
   --skeleton-highlight: color-mix(in srgb, var(--text) 30%, transparent);
 }
 
-.chat-assistant-attachment-card__metadata-skeleton {
+.chat-assistant-attachment-card--checking .chat-assistant-attachment-card__status-meta {
   inline-size: clamp(112px, 14vw, 144px);
   max-inline-size: 100%;
 }
 
 .chat-assistant-attachment-card__action-skeleton {
+  position: absolute;
+  inset-block-start: 0;
+  inset-inline-end: 0;
   inline-size: 64px;
   block-size: 30px;
   flex: none;
   border-radius: 999px;
+}
+
+.chat-assistant-attachment-card__actions--loading {
+  position: relative;
+  padding-inline-start: 38px;
+  block-size: 30px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.chat-assistant-attachment-card__actions--loading::before {
+  content: attr(data-label);
+  visibility: hidden;
+  padding: 0 12px;
+  border: 1px solid transparent;
 }

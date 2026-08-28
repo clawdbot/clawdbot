@@ -48,28 +48,26 @@ export function renderAssistantAttachmentStatusCard(params: {
               title=${params.label}
               >${params.label}</span
             >
-            ${unavailable
-              ? html`<span
-                  class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta"
-                >
-                  <span class="chat-assistant-attachment-card__status-badge">${params.badge}</span>
-                  ${params.reason
-                    ? html`
-                        <span
-                          class="chat-assistant-attachment-card__status-separator"
-                          aria-hidden="true"
-                          >·</span
-                        >
-                        <span class="chat-assistant-attachment-card__status-reason"
-                          >${params.reason}</span
-                        >
-                      `
-                    : nothing}
-                </span>`
-              : html`<span
-                  class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta chat-assistant-attachment-card__metadata-skeleton skeleton skeleton-line"
-                  aria-hidden="true"
-                ></span>`}
+            <span
+              class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta ${unavailable
+                ? ""
+                : "skeleton skeleton-line"}"
+              aria-hidden=${unavailable ? nothing : "true"}
+            >
+              <span class="chat-assistant-attachment-card__status-badge">${params.badge}</span>
+              ${params.reason
+                ? html`
+                    <span
+                      class="chat-assistant-attachment-card__status-separator"
+                      aria-hidden="true"
+                      >·</span
+                    >
+                    <span class="chat-assistant-attachment-card__status-reason"
+                      >${params.reason}</span
+                    >
+                  `
+                : nothing}
+            </span>
           </span>
         </div>
         ${params.onRetry
@@ -83,9 +81,15 @@ export function renderAssistantAttachmentStatusCard(params: {
           : unavailable
             ? nothing
             : html`<span
-                class="chat-assistant-attachment-card__action-skeleton skeleton"
+                class="chat-assistant-attachment-card__actions chat-assistant-attachment-card__actions--loading"
                 aria-hidden="true"
-              ></span>`}
+                data-label=${t("chat.attachments.open")}
+              >
+                <span
+                  class="chat-assistant-attachment-card__action-skeleton skeleton"
+                  aria-hidden="true"
+                ></span>
+              </span>`}
       </div>
     </div>
   `;

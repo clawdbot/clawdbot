@@ -16,9 +16,8 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import {
   isRelativeAssistantMediaReference,
-  isRenderableAssistantMediaReference,
-} from "../../../../src/media/assistant-media-reference.js";
-import { splitMediaFromOutput } from "../../../../src/media/parse.js";
+  splitMediaFromOutput,
+} from "../../../../src/media/parse.js";
 import { getMediaFileExtension } from "../media-file-extension.ts";
 import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
@@ -457,10 +456,8 @@ function expandTextContent(
 
   for (const segment of segments) {
     if (segment.type === "media") {
-      if (!isRenderableAssistantMediaReference(segment.url)) {
-        if (isRelativeAssistantMediaReference(segment.url)) {
-          parts.push({ type: "text", text: `MEDIA:${segment.url}` });
-        }
+      if (isRelativeAssistantMediaReference(segment.url)) {
+        parts.push({ type: "text", text: `MEDIA:${segment.url}` });
         continue;
       }
       const inferred = inferAttachmentKind(segment.url);

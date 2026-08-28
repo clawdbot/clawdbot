@@ -227,6 +227,16 @@ export function createChatSendReplyDispatch(params: {
       return;
     }
     const payloadMetadata = getReplyPayloadMetadata(payload);
+    const sourceMediaUrls = Array.from(
+      new Set(
+        payloadMetadata?.assistantTranscriptMediaUrls?.length
+          ? payloadMetadata.assistantTranscriptMediaUrls
+          : [
+              ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
+              ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
+            ],
+      ),
+    );
     const ownedTranscriptIdempotencyKey =
       payloadMetadata?.assistantTranscriptOwned === true
         ? payloadMetadata.assistantTranscriptIdempotencyKey?.trim()
@@ -243,6 +253,7 @@ export function createChatSendReplyDispatch(params: {
       const rewritten = await rewriteAssistantTranscriptMessageByIdempotencyKey({
         content: persistedContentForAppend,
         idempotencyKey: ownedTranscriptIdempotencyKey,
+        managedMediaUrls: sourceMediaUrls,
         scope: transcriptScope,
       });
       if (rewritten) {
@@ -269,16 +280,6 @@ export function createChatSendReplyDispatch(params: {
     if (assistantMessageIndex !== undefined && transcriptScope) {
       // Embedded runtimes identify their owned turn by message index, not a persisted key.
       // Require that exact current-turn row and media set so a sibling reply cannot be rewritten.
-      const sourceMediaUrls = Array.from(
-        new Set(
-          payloadMetadata?.assistantTranscriptMediaUrls?.length
-            ? payloadMetadata.assistantTranscriptMediaUrls
-            : [
-                ...(Array.isArray(payload.mediaUrls) ? payload.mediaUrls : []),
-                ...(typeof payload.mediaUrl === "string" ? [payload.mediaUrl] : []),
-              ],
-        ),
-      );
       if (assistantTranscriptRewriteState.sessionId !== sessionId) {
         assistantTranscriptRewriteState = {
           sessionId,

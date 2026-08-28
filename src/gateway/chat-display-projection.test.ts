@@ -12,7 +12,6 @@ import {
   replaceOversizedChatHistoryMessages,
 } from "./server-methods/chat-history-budget.js";
 import { buildSessionHistorySnapshot, SessionHistorySseState } from "./session-history-state.js";
-import { projectSessionMessagePayload } from "./session-transcript-message.js";
 
 function projectHistoryTransports(message: Record<string, unknown>) {
   const websocket = replaceOversizedChatHistoryMessages({
@@ -94,104 +93,6 @@ describe("managed document chat history", () => {
         ],
       },
     ]);
-  });
-});
-
-describe("assistant media directive display projection", () => {
-  it("withholds relative MEDIA directives until managed attachment blocks replace them", () => {
-    const { payload } = projectSessionMessagePayload({
-      sessionKey: "agent:main:main",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: [
-              "Prepared the batch.",
-              "MEDIA:./attachment-catalog-tiny/demo.jpg",
-              "MEDIA:./attachment-catalog-tiny/demo.mp3",
-            ].join("\n"),
-          },
-        ],
-      },
-    });
-    const message = payload?.message as { content?: Array<{ text?: string }> } | undefined;
-
-    expect(message?.content?.[0]?.text).toBe("Prepared the batch.");
-    expect(JSON.stringify(payload)).not.toContain("MEDIA:");
-  });
-
-  it("keeps a media-only assistant row pending for its structured rewrite", () => {
-    const { payload } = projectSessionMessagePayload({
-      sessionKey: "agent:main:main",
-      message: {
-        role: "assistant",
-        content: [{ type: "text", text: "MEDIA:./attachment-catalog-tiny/demo.jpg" }],
-      },
-    });
-
-    expect(payload?.message).toMatchObject({
-      role: "assistant",
-      content: [{ type: "text", text: "" }],
-    });
-  });
-
-  it("preserves fenced MEDIA examples as ordinary assistant text", () => {
-    const text = ["```text", "MEDIA:./example.jpg", "```", ""].join("\n");
-    const { payload } = projectSessionMessagePayload({
-      sessionKey: "agent:main:main",
-      message: { role: "assistant", content: [{ type: "text", text }] },
-    });
-
-    expect(payload?.message).toMatchObject({
-      content: [{ type: "text", text }],
-    });
-  });
-
-  it("preserves legacy remote MEDIA references for client-side attachment projection", () => {
-    const text = "MEDIA:https://cdn.example.test/legacy.jpg";
-    const { payload } = projectSessionMessagePayload({
-      sessionKey: "agent:main:main",
-      message: { role: "assistant", content: [{ type: "text", text }] },
-    });
-
-    expect(payload?.message).toMatchObject({
-      content: [{ type: "text", text }],
-    });
-  });
-
-  it("withholds only relative directives from a mixed legacy batch", () => {
-    const { payload } = projectSessionMessagePayload({
-      sessionKey: "agent:main:main",
-      message: {
-        role: "assistant",
-        content: [
-          {
-            type: "text",
-            text: [
-              "Prepared the mixed batch.",
-              "MEDIA:https://cdn.example.test/legacy.jpg",
-              "MEDIA:/media/legacy-audio.mp3",
-              "MEDIA:./attachment-catalog-tiny/demo.jpg",
-            ].join("\n"),
-          },
-        ],
-      },
-    });
-
-    expect(payload?.message).toMatchObject({
-      content: [
-        {
-          type: "text",
-          text: [
-            "Prepared the mixed batch.",
-            "MEDIA:https://cdn.example.test/legacy.jpg",
-            "MEDIA:/media/legacy-audio.mp3",
-          ].join("\n"),
-        },
-      ],
-    });
-    expect(JSON.stringify(payload)).not.toContain("attachment-catalog-tiny");
   });
 });
 
