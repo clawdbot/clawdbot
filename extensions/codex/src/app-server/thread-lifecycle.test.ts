@@ -4769,7 +4769,9 @@ describe("Codex app-server supervised branch lifecycle", () => {
         dynamicTools: [],
         appServer: createThreadLifecycleAppServerOptions(),
       };
-      const error = await startOrResumeThreadImpl(common).catch((error: unknown) => error);
+      const error = await startOrResumeThreadImpl(common).catch(
+        (caughtError: unknown) => caughtError,
+      );
       expect(failed).toBe(true);
       expect(
         request.mock.calls
@@ -4904,7 +4906,7 @@ describe("Codex app-server supervised branch lifecycle", () => {
         cwd: workspaceDir,
         dynamicTools: [],
         appServer: createThreadLifecycleAppServerOptions(),
-      }).catch((error: unknown) => error);
+      }).catch((caughtError: unknown) => caughtError);
       expect(error).toMatchObject({
         name: "CodexAppServerUnsafeSubscriptionError",
         cause: { cause: storageError, errors: expect.arrayContaining([storageError]) },

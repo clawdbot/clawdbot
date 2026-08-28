@@ -15,7 +15,7 @@ import {
   buildCodexAppServerConnectionFingerprint,
   replaceCodexCatalogConnectionHomes,
 } from "./plugin-app-cache-key.js";
-import type { JsonObject } from "./protocol.js";
+import { isJsonObject } from "./protocol.js";
 import {
   createCodexAppServerBindingStore,
   sessionBindingIdentity,
@@ -90,59 +90,70 @@ describe("persistent upstream fork continuation", () => {
     const clients: ReturnType<typeof createFakeCodexAppServerClient>[] = [];
     const createClient = (home: "secondary" | "ordinary") => {
       const client = createFakeCodexAppServerClient(async (method, requestParams) => {
-        const request = requestParams as JsonObject;
         if (method === "skills/list") {
           return { data: [] };
         }
+        if (!isJsonObject(requestParams)) {
+          throw new Error(`Expected object params for ${method}`);
+        }
+        if (method === "thread/start") {
+          const response = responseFor(
+            `thread-${home}-${nextThreadId++}`,
+            typeof requestParams.model === "string" ? requestParams.model : nativeModel,
+          );
+          response.thread.turns = [];
+          nativeThreads.set(response.thread.id, response);
+          return response;
+        }
+        const { threadId } = requestParams;
+        if (typeof threadId !== "string") {
+          throw new Error(`Expected string threadId for ${method}`);
+        }
         if (method === "thread/read" || method === "thread/resume") {
-          const response = nativeThreads.get(String(request.threadId));
+          const response = nativeThreads.get(threadId);
           if (home !== "secondary" || !response) {
-            throw new Error(`Thread is not in the selected Codex home: ${request.threadId}`);
+            throw new Error(`Thread is not in the selected Codex home: ${threadId}`);
           }
           return response;
         }
-        if (method === "thread/start" || method === "thread/fork") {
-          const source =
-            method === "thread/fork" ? nativeThreads.get(String(request.threadId)) : undefined;
-          if (method === "thread/fork" && (home !== "secondary" || !source)) {
-            throw new Error(
-              `No stored fork source in the selected Codex home: ${request.threadId}`,
-            );
+        if (method === "thread/fork") {
+          const { lastTurnId } = requestParams;
+          if (lastTurnId != null && typeof lastTurnId !== "string") {
+            throw new Error("Expected string lastTurnId when provided for thread/fork");
+          }
+          const source = nativeThreads.get(threadId);
+          if (home !== "secondary" || !source) {
+            throw new Error(`No stored fork source in the selected Codex home: ${threadId}`);
           }
           const response = responseFor(
             `thread-${home}-${nextThreadId++}`,
-            typeof request.model === "string" ? request.model : nativeModel,
+            typeof requestParams.model === "string" ? requestParams.model : nativeModel,
           );
-          if (method === "thread/start") {
-            response.thread.turns = [];
-          } else {
-            const turns = source!.thread.turns;
-            const boundaryIndex = turns.findIndex((turn) => turn.id === request.lastTurnId);
-            if (request.lastTurnId && boundaryIndex < 0) {
-              throw new Error(`Unknown persisted lastTurnId: ${request.lastTurnId}`);
-            }
-            response.thread.turns = request.lastTurnId
-              ? turns.slice(0, boundaryIndex + 1)
-              : [...turns];
+          const turns = source.thread.turns;
+          const boundaryIndex = turns.findIndex((turn) => turn.id === lastTurnId);
+          if (lastTurnId != null && boundaryIndex < 0) {
+            throw new Error(`Unknown persisted lastTurnId: ${lastTurnId}`);
           }
+          response.thread.turns =
+            lastTurnId != null ? turns.slice(0, boundaryIndex + 1) : [...turns];
           nativeThreads.set(response.thread.id, response);
           return response;
         }
         if (method === "thread/archive") {
-          if (home !== "secondary" || !nativeThreads.has(String(request.threadId))) {
-            throw new Error(`Unknown archive target: ${request.threadId}`);
+          if (home !== "secondary" || !nativeThreads.has(threadId)) {
+            throw new Error(`Unknown archive target: ${threadId}`);
           }
-          nativeThreads.delete(String(request.threadId));
+          nativeThreads.delete(threadId);
           return {};
         }
         if (method === "thread/inject_items") {
           if (
             home !== "secondary" ||
-            !nativeThreads.has(String(request.threadId)) ||
-            !Array.isArray(request.items) ||
-            request.items.length === 0
+            !nativeThreads.has(threadId) ||
+            !Array.isArray(requestParams.items) ||
+            requestParams.items.length === 0
           ) {
-            throw new Error(`Invalid history injection: ${request.threadId}`);
+            throw new Error(`Invalid history injection: ${threadId}`);
           }
           // Raw ResponseItems persist without TurnStarted boundaries. Do not
           // fabricate native turns that could make a later beforeTurnId cut pass.
@@ -181,9 +192,7 @@ describe("persistent upstream fork continuation", () => {
         throughTurnId: "turn-2",
       });
       const sourceEntries = await readVisibleSessionTranscriptMessageEntries(params.source);
-      params.source.entryId = sourceEntries
-        .filter((entry) => entry.role === "user")
-        .at(-1)!.entryId;
+      params.source.entryId = sourceEntries.findLast((entry) => entry.role === "user")!.entryId;
       const secondary = forkControl(
         vi.fn(async () => responseFor("thread-forked")),
         fingerprint,
@@ -195,7 +204,7 @@ describe("persistent upstream fork continuation", () => {
       const primary = forkControl(undefined, "primary-fingerprint");
       const controlFactory = {
         ...primary.controlFactory,
-        forUpstream: secondary.controlFactory.forUpstream,
+        forUpstream: secondary.controlFactory.forUpstream.bind(secondary.controlFactory),
       };
       const ordinary = createClient("ordinary");
       const native = createClient("secondary");

@@ -40,10 +40,10 @@ async function resolveFromTurns(params: {
   const identities =
     params.localIdentities ??
     params.turns
-      .flatMap((turn) =>
-        turn.items
-          .filter((item) => item.type === "userMessage")
-          .map((item) => `${turn.id}:${item.id}`),
+      .flatMap((nativeTurn) =>
+        nativeTurn.items
+          .filter((nativeItem) => nativeItem.type === "userMessage")
+          .map((nativeItem) => `${nativeTurn.id}:${nativeItem.id}`),
       )
       .slice(-params.localPrefixTexts.length);
   const entries: SessionTranscriptMessageEntry[] = params.localPrefixTexts.map((text, index) => ({
