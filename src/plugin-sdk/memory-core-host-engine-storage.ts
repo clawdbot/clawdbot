@@ -21,6 +21,8 @@ export {
   ensureMemoryPathFtsTriggers,
   hashText,
   INVALID_PROJECT_ANNOTATION_KEY,
+  isAutomaticMemoryEntryEligible,
+  isMemoryOriginEligibleForAutomaticInjection,
   isFileMissingError,
   isTransientMemoryReadError,
   listMemoryFiles,

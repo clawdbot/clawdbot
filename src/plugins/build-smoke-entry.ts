@@ -3,3 +3,7 @@ export { clearPluginCommands, executePluginCommand, matchPluginCommand } from ".
 export { getPluginCommandSpecs } from "./command-specs.js";
 export { loadOpenClawPlugins, loadPluginRegistryHandle } from "./loader.js";
 export { getPluginModuleLoaderStats } from "./plugin-module-loader-cache.js";
+export {
+  buildPluginRuntimeLoadOptions,
+  resolvePluginRuntimeLoadContext,
+} from "./runtime/load-context.js";

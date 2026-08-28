@@ -63,6 +63,7 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
       costDaily: [],
       cacheStatus: undefined,
       providerUsage: [],
+      providerUsageStalled: false,
       providerUsageUnavailable: false,
     },
     filters: {
@@ -153,6 +154,16 @@ function createUsageProps(overrides: Partial<UsageProps> = {}): UsageProps {
     ...overrides,
   };
 }
+
+it("renders shared skeletons while initial usage is loading", () => {
+  const container = document.createElement("div");
+  const props = createUsageProps();
+  render(renderUsage(createUsageProps({ data: { ...props.data, loading: true } })), container);
+
+  const blocks = container.querySelectorAll(".usage-skeleton-block");
+  expect(blocks).toHaveLength(3);
+  expect([...blocks].every((block) => block.classList.contains("skeleton"))).toBe(true);
+});
 
 describe("renderUsage", () => {
   it("surfaces a provider-usage failure instead of hiding the panel", () => {
@@ -386,6 +397,58 @@ describe("renderUsage", () => {
       ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: option }, bubbles: true }));
 
     expect(onQueryDraftChange).toHaveBeenCalledWith(expect.stringContaining("provider:clear"));
+  });
+
+  it("reports a stalled provider refresh instead of hiding the section", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            providerUsage: [],
+            providerUsageStalled: true,
+          },
+        }),
+      ),
+      container,
+    );
+
+    const callout = container.querySelector(".usage-callout");
+    expect(callout?.textContent?.trim()).toBe(
+      "Provider usage did not finish loading. Refresh to retry.",
+    );
+  });
+
+  it("keeps available provider usage visible when refresh stalls", () => {
+    const container = document.createElement("div");
+
+    render(
+      renderUsage(
+        createUsageProps({
+          data: {
+            ...createUsageProps().data,
+            providerUsage: [
+              {
+                provider: "openai",
+                displayName: "OpenAI",
+                windows: [{ label: "Weekly", usedPercent: 25 }],
+              },
+            ],
+            providerUsageStalled: true,
+          },
+        }),
+      ),
+      container,
+    );
+
+    expect(container.querySelector(".usage-callout")?.textContent).toContain(
+      "Provider usage did not finish loading",
+    );
+    const card = container.querySelector(".provider-usage-card");
+    expect(card?.textContent).toContain("OpenAI");
+    expect(card?.textContent).toContain("Weekly");
   });
 
   it("renders provider plans, quotas, and billing independently of session usage", () => {

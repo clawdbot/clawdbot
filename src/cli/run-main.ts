@@ -851,11 +851,15 @@ async function ensureCliEnvProxyDispatcher(): Promise<void> {
   }
 }
 
-function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
-  if (
+function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
     isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
     isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
-  ) {
+  );
+}
+
+function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (isDebugProxyCaptureEnvEnabled(env)) {
     return true;
   }
   return CLI_PROXY_ENV_KEYS.some((key) => {
@@ -1032,20 +1036,25 @@ async function bootstrapCliProxyCaptureAndDispatcher(
   startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
   options: { ensureDispatcher?: boolean } = {},
 ): Promise<void> {
-  const [
-    { initializeDebugProxyCapture, finalizeDebugProxyCapture },
-    { maybeWarnAboutDebugProxyCoverage },
-  ] = await startupTrace.measure("proxy-imports", () =>
-    Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
-  );
-  initializeDebugProxyCapture("cli");
-  process.once("exit", () => {
-    finalizeDebugProxyCapture();
-  });
+  // Capture init, exit finalize, and coverage warnings all no-op unless the
+  // debug-proxy env requests capture; importing their sqlite-store graph anyway
+  // costs ~100 MB RSS on metadata-only commands such as `plugins list --json`.
+  if (isDebugProxyCaptureEnvEnabled()) {
+    const [
+      { initializeDebugProxyCapture, finalizeDebugProxyCapture },
+      { maybeWarnAboutDebugProxyCoverage },
+    ] = await startupTrace.measure("proxy-imports", () =>
+      Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
+    );
+    initializeDebugProxyCapture("cli");
+    process.once("exit", () => {
+      finalizeDebugProxyCapture();
+    });
+    maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
+  }
   if (options.ensureDispatcher !== false) {
     await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
   }
-  maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
 }
 
 export async function runCli(
@@ -1497,21 +1506,23 @@ async function runCliWithPreparedOutputMode(
       return;
     }
 
-    const { tryRouteCli } = await startupTrace.measure("route-import", () => import("./route.js"));
-    const routed = await startupTrace.measure(
-      "route",
-      () =>
-        options.builtInMachineOutput
-          ? tryRouteCli(normalizedArgv, { machineOutput: true })
-          : tryRouteCli(normalizedArgv),
-      { timeline: false },
-    );
-    if (routed) {
-      return;
+    if (!isHelpOrVersionInvocation) {
+      const route = await startupTrace.measure("route-import", () => import("./route.js"));
+      const routed = await startupTrace.measure(
+        "route",
+        () =>
+          options.builtInMachineOutput
+            ? route.tryRouteCli(normalizedArgv, { machineOutput: true })
+            : route.tryRouteCli(normalizedArgv),
+        { timeline: false },
+      );
+      if (routed) {
+        return;
+      }
     }
 
     let parseArgv = normalizeGeneratedHelpCommandArgv(normalizedArgv);
-    const suppressStartupProgress = hasJsonOutputFlag(parseArgv);
+    const suppressStartupProgress = options.builtInMachineOutput || hasJsonOutputFlag(parseArgv);
     const { createCliProgress } = await loadProgressModule();
     const startupProgress = createCliProgress({
       label: "Loading OpenClaw CLI…",

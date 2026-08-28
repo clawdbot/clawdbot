@@ -394,7 +394,12 @@ export async function promptCustomApiConfig(params: {
       // Alias validation must use the post-collision provider id, otherwise a
       // renamed endpoint could incorrectly collide with the requested id.
       const modelRef = modelKey(resolvedProvider.providerId, modelId);
-      return resolveCustomModelAliasError({ raw: value, cfg: config, modelRef });
+      return resolveCustomModelAliasError({
+        raw: value,
+        cfg: config,
+        modelRef,
+        agentId: params.target?.agentId,
+      });
     },
   });
   const imageInputInference = resolveCustomModelImageInputInference(modelId);

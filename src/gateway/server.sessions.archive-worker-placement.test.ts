@@ -197,6 +197,33 @@ test("sessions.patch rejects a mismatched reclaimed identity without archiving",
   expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
 });
 
+test("sessions.patch rejects a reclaimed return when its authoritative placement stayed active", async () => {
+  const { storePath } = await createSessionStoreDir();
+  const sessionKey = "agent:main:archive-cloud-stale-reclaim";
+  const sessionId = "session-archive-cloud-stale-reclaim";
+  await writeSessionStore({ entries: { [sessionKey]: sessionStoreEntry(sessionId) } });
+  const placement = workerPlacement({ sessionId, sessionKey, state: "active" });
+  const reclaim = vi.fn(async () => workerPlacement({ sessionId, sessionKey, state: "reclaimed" }));
+
+  const archived = await directSessionReq(
+    "sessions.patch",
+    { key: sessionKey, archived: true, expectedSessionId: sessionId },
+    {
+      context: {
+        workerSessionPlacementService: placementReader(() => placement),
+        workerPlacementDispatchService: { dispatch: vi.fn(), reclaim },
+      },
+    },
+  );
+
+  expect(archived).toMatchObject({
+    ok: false,
+    error: { code: "UNAVAILABLE", retryable: true },
+  });
+  expect(reclaim).toHaveBeenCalledOnce();
+  expect(loadSessionEntry({ storePath, sessionKey })?.archivedAt).toBeUndefined();
+});
+
 test("sessions.patch rejects a placement identity changed during the runtime drain", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:archive-cloud-fresh-placement";

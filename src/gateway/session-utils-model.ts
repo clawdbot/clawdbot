@@ -16,6 +16,7 @@ import {
   type ModelCatalogEntry,
   modelSupportsInput,
 } from "../agents/model-catalog.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import {
   findNormalizedProviderValue,
   inferUniqueProviderFromConfiguredModels,
@@ -178,34 +179,11 @@ export function resolveGatewayModelThinkingProfile(params: {
       sessionKey: params.sessionKey,
     });
   const thinkingPolicyProvider = params.thinkingPolicyProvider ?? params.provider;
-  if (!params.rowContext) {
-    return {
-      thinkingLevels: listGatewayThinkingLevelOptions({
-        provider: thinkingPolicyProvider,
-        model: params.model,
-        modelCatalog: params.modelCatalog,
-        agentRuntime,
-        configuredReasoning: params.configuredReasoning,
-        providerPolicySource: params.providerPolicySource,
-      }),
-      thinkingDefault: resolveGatewaySessionThinkingDefault({
-        cfg: params.cfg,
-        provider: params.provider,
-        thinkingPolicyProvider,
-        model: params.model,
-        agentId: params.agentId,
-        modelCatalog: params.modelCatalog,
-        agentRuntime,
-        configuredReasoning: params.configuredReasoning,
-        providerPolicySource: params.providerPolicySource,
-      }),
-    };
-  }
   const key = `${normalizeAgentId(params.agentId)}\0${agentRuntime}\0${normalizeLowercaseStringOrEmpty(thinkingPolicyProvider)}\0${String(params.configuredReasoning)}\0${params.providerPolicySource ?? "active-or-bundled"}\0${createSessionRowModelCacheKey(
     params.provider,
     params.model,
   )}`;
-  const cached = params.rowContext.thinkingMetadataByModelRef.get(key);
+  const cached = params.rowContext?.thinkingMetadataByModelRef.get(key);
   if (cached) {
     return cached;
   }
@@ -230,7 +208,7 @@ export function resolveGatewayModelThinkingProfile(params: {
       providerPolicySource: params.providerPolicySource,
     }),
   };
-  params.rowContext.thinkingMetadataByModelRef.set(key, metadata);
+  params.rowContext?.thinkingMetadataByModelRef.set(key, metadata);
   return metadata;
 }
 
@@ -341,15 +319,19 @@ export function getSessionDefaults(
         modelId: resolved.model,
       })
     : undefined;
-  const contextTokens =
+  const contextWindowProfile = resolveModelContextWindowProfile({ catalogEntry });
+  const resolvedContextTokens =
     resolveContextTokensForModel({
       cfg,
       provider: resolved.provider,
       model: resolved.model,
       modelContextTokens: catalogEntry?.contextTokens,
-      modelContextWindow: catalogEntry?.contextWindow,
+      modelContextWindow: contextWindowProfile.contextTokens,
       allowAsyncLoad: false,
     }) ?? DEFAULT_CONTEXT_TOKENS;
+  const contextTokens = contextWindowProfile.contextTokens
+    ? Math.min(resolvedContextTokens, contextWindowProfile.contextTokens)
+    : resolvedContextTokens;
   const sessionKey = resolveAgentMainSessionKey({ cfg, agentId });
   const agentRuntime = projectWorkerPlacementAgentRuntime(
     resolveModelAgentRuntimeMetadata({
@@ -373,6 +355,9 @@ export function getSessionDefaults(
     modelProvider: resolved.provider ?? null,
     model: resolved.model ?? null,
     contextTokens: contextTokens ?? null,
+    contextWindow: contextWindowProfile.contextWindow,
+    contextWindows: contextWindowProfile.contextWindows,
+    contextWindowDefault: contextWindowProfile.contextWindowDefault,
     agentRuntime,
     // Preserve the established serialized projection order for byte-stable responses.
     thinkingLevels: thinkingProfile.thinkingLevels,
@@ -683,6 +668,16 @@ export async function projectSessionPatchResult(params: {
     entry: params.entry,
     modelCatalog,
   });
+  const catalogEntry = modelCatalog
+    ? findModelCatalogEntry(modelCatalog, {
+        provider: displayModel.provider ?? resolved.provider,
+        modelId: displayModel.model ?? resolved.model,
+      })
+    : undefined;
+  const contextWindow = resolveModelContextWindowProfile({
+    catalogEntry,
+    selected: params.entry.contextWindow,
+  });
   return {
     ok: true,
     path: resolveSqliteTargetFromSessionStorePath(params.storePath, {
@@ -696,6 +691,8 @@ export async function projectSessionPatchResult(params: {
       agentRuntime: thinking.agentRuntime,
       ...(modelCatalog
         ? {
+            contextWindow: contextWindow.contextWindow,
+            contextWindows: contextWindow.contextWindows,
             thinkingLevel: thinking.effectiveThinkingLevel,
             thinkingLevels: thinking.thinkingLevels,
           }

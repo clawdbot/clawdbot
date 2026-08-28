@@ -88,7 +88,7 @@ describe("SQLite session reset content revision", () => {
         sessionId,
         updatedAt: 2,
       }),
-      resetBoundaryReason: "reset",
+      resetBoundary: { context: "preserve-tail", reason: "reset" },
       storePath,
       target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
     });

@@ -45,7 +45,7 @@ flow:
           args: [4000]
         - set: finalMessages
           value:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex)"
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').slice(outboundStartIndex).filter((message) => !message.deleted)"
         - set: joinedFinal
           value:
             expr: "finalMessages.map((message) => message.text).join('')"

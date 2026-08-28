@@ -1,4 +1,4 @@
-// Imported by dispatch-from-config.test.ts to keep its mocked suite in one Vitest module graph.
+// Imported by a dispatch-from-config entrypoint to keep its mocked suite in one Vitest module graph.
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PROVIDER_CONVERSATION_STATE_ERROR_USER_MESSAGE } from "../../agents/failover/user-copy.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -2015,6 +2015,7 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
         queuedFinal: false,
         counts: { tool: 0, block: 0, final: 0 },
         sourceReplyDeliveryMode: "message_tool_only",
+        ...(params.expectPluginReplyDelivered ? { observedReplyDelivery: true } : {}),
       });
       expect(sessionBindingMocks.touch).toHaveBeenCalledWith(params.bindingId);
       expect(hookMocks.runner.runInboundClaimForPluginOutcome).toHaveBeenCalledWith(

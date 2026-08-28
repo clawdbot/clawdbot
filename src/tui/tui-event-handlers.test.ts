@@ -1503,6 +1503,47 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(tui.requestRender).toHaveBeenCalledWith(true);
   });
 
+  it("discards a delayed local BTW result from the previous same-key session incarnation", () => {
+    const { state, btw, noteLocalBtwRunId, handleBtwEvent, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        localMode: true,
+        state: { activeChatRunId: null, currentSessionId: "private-session" },
+      });
+    noteLocalBtwRunId("private-btw-run");
+
+    handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "reset",
+      sessionId: "replacement-session",
+      updatedAt: Date.now(),
+    });
+    handleBtwEvent({
+      kind: "btw",
+      runId: "private-btw-run",
+      sessionKey: state.currentSessionKey,
+      question: "what was discussed?",
+      text: "answer from the previous session",
+    });
+
+    expect(state.currentSessionId).toBe("replacement-session");
+    expect(btw.showResult).not.toHaveBeenCalled();
+
+    noteLocalBtwRunId("replacement-btw-run");
+    handleBtwEvent({
+      kind: "btw",
+      runId: "replacement-btw-run",
+      sessionKey: state.currentSessionKey,
+      question: "what changed?",
+      text: "answer for the replacement session",
+    });
+
+    expect(btw.showResult).toHaveBeenCalledExactlyOnceWith({
+      question: "what changed?",
+      text: "answer for the replacement session",
+      isError: undefined,
+    });
+  });
+
   it("clears stale streaming for a local BTW empty final without hiding the result", () => {
     const {
       state,
@@ -1744,6 +1785,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       agentId: state.currentAgentId,
       sessionId: "session-other",
       phase: "message",
+      activeRunIds: [],
     });
 
     expect(loadHistory).not.toHaveBeenCalled();
@@ -1767,6 +1809,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       agentId: "main",
       sessionId: "session-work",
       phase: "message",
+      activeRunIds: [],
     });
 
     expect(loadHistory).not.toHaveBeenCalled();
@@ -1804,12 +1847,74 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     handleSessionsChangedEvent({
       sessionKey: "agent:other:main",
       reason: "reset",
+      activeRunIds: [],
     });
 
     expect(state.activeChatRunId).toBe("run-current");
     expect(state.activityStatus).toBe("streaming");
     expect(loadHistory).not.toHaveBeenCalled();
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it.each([
+    { name: "another agent's fixed-store session", agentId: "main" },
+    { name: "an ownerless default-agent alias", agentId: undefined },
+  ])("ignores a reset for $name colliding with the selected session", ({ agentId }) => {
+    const pendingSubmit = acceptedSubmit("run-pending");
+    const { state, loadHistory, setActivityStatus, handleSessionsChangedEvent } =
+      createHandlersHarness({
+        state: {
+          agentDefaultId: "main",
+          currentAgentId: "work",
+          currentSessionKey: "agent:work:support",
+          currentSessionId: "session-work",
+          activeChatRunId: "run-work",
+          activityStatus: "streaming",
+          pendingSubmit,
+          sessionInfo: { updatedAt: 100 },
+        },
+      });
+
+    handleSessionsChangedEvent({
+      sessionKey: "support",
+      ...(agentId ? { agentId } : {}),
+      reason: "reset",
+      sessionId: "session-main-new",
+      updatedAt: 200,
+      activeRunIds: [],
+    });
+
+    expect(state.activeChatRunId).toBe("run-work");
+    expect(state.pendingSubmit).toBe(pendingSubmit);
+    expect(state.currentSessionId).toBe("session-work");
+    expect(state.sessionInfo.updatedAt).toBe(100);
+    expect(state.activityStatus).toBe("streaming");
+    expect(loadHistory).not.toHaveBeenCalled();
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it("accepts a reset for the selected non-default agent's owned session alias", () => {
+    const { state, loadHistory, handleSessionsChangedEvent } = createHandlersHarness({
+      state: {
+        agentDefaultId: "main",
+        currentAgentId: "work",
+        currentSessionKey: "agent:work:support",
+        currentSessionId: "session-work-old",
+        activeChatRunId: "run-work",
+        activityStatus: "streaming",
+      },
+    });
+
+    handleSessionsChangedEvent({
+      sessionKey: "support",
+      agentId: "work",
+      reason: "reset",
+      sessionId: "session-work-new",
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.currentSessionId).toBe("session-work-new");
+    expect(loadHistory).toHaveBeenCalledTimes(1);
   });
 
   it("ignores selected-global sessions.changed reset events from other agents", () => {
@@ -1830,6 +1935,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       reason: "reset",
       sessionId: "session-other-agent",
       updatedAt: 300,
+      activeRunIds: [],
     });
 
     expect(state.activeChatRunId).toBe("run-current");
@@ -2293,6 +2399,119 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(setActivityStatus).toHaveBeenCalledWith("idle");
   });
 
+  it.each(["final", "aborted"] as const)(
+    "clears stale %s activity only after an authoritative idle snapshot",
+    (terminal) => {
+      const { state, chatLog, setActivityStatus, handleChatEvent, handleSessionsChangedEvent } =
+        createHandlersHarness({
+          state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+        });
+      handleChatEvent({ runId: "run-stale", seq: 1, message: { content: "complete reply" } });
+      handleChatEvent({ runId: "run-terminal", seq: 2, state: terminal });
+
+      handleSessionsChangedEvent({ reason: "chat.run.settled", activeRunIds: [] });
+
+      expect(state.activeChatRunId).toBeNull();
+      expect(state.activityStatus).toBe("idle");
+      expect(setActivityStatus).toHaveBeenCalledWith("idle");
+      expect(chatLog.dismissPendingSystem).toHaveBeenCalledWith("run-stale");
+
+      handleChatEvent({
+        runId: "run-stale",
+        seq: 3,
+        state: "final",
+        message: { content: [{ type: "text", text: "complete reply" }] },
+      });
+      expect(chatLog.finalizeAssistant).toHaveBeenCalledWith("complete reply", "run-stale");
+    },
+  );
+
+  it.each([{ activeRunIds: ["run-restored"] }, { activeRunIds: null }, {}])(
+    "preserves a history-restored active run without authoritative idle proof",
+    (event) => {
+      const { state, setActivityStatus, handleSessionsChangedEvent } = createHandlersHarness({
+        state: { activeChatRunId: "run-restored", activityStatus: "streaming" },
+      });
+
+      handleSessionsChangedEvent({ reason: "chat.run.settled", ...event });
+
+      expect(state.activeChatRunId).toBe("run-restored");
+      expect(state.activityStatus).toBe("streaming");
+      expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+    },
+  );
+
+  it("ignores settled snapshots from an older incarnation of the selected session", () => {
+    const { state, setActivityStatus, handleSessionsChangedEvent } = createHandlersHarness({
+      state: {
+        activeChatRunId: "run-current",
+        activityStatus: "streaming",
+        currentSessionId: "session-current",
+      },
+    });
+
+    handleSessionsChangedEvent({
+      reason: "chat.run.settled",
+      sessionId: "session-old",
+      activeRunIds: [],
+    });
+
+    expect(state.activeChatRunId).toBe("run-current");
+    expect(state.activityStatus).toBe("streaming");
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
+  it.each([
+    { selectedAgentId: "work", eventAgentId: "main", shouldClear: false },
+    { selectedAgentId: "work", eventAgentId: undefined, shouldClear: false },
+    { selectedAgentId: "work", eventAgentId: "work", shouldClear: true },
+    { selectedAgentId: "main", eventAgentId: undefined, shouldClear: true },
+  ])(
+    "settles an unscoped alias only for its selected or default owner ($selectedAgentId/$eventAgentId)",
+    ({ selectedAgentId, eventAgentId, shouldClear }) => {
+      const { state, setActivityStatus, handleSessionsChangedEvent } = createHandlersHarness({
+        state: {
+          currentAgentId: selectedAgentId,
+          currentSessionKey: `agent:${selectedAgentId}:main`,
+          currentSessionId: null,
+          activeChatRunId: "run-current",
+          activityStatus: "streaming",
+        },
+      });
+
+      handleSessionsChangedEvent({
+        sessionKey: "main",
+        ...(eventAgentId ? { agentId: eventAgentId } : {}),
+        reason: "chat.run.settled",
+        activeRunIds: [],
+      });
+
+      expect(state.activeChatRunId).toBe(shouldClear ? null : "run-current");
+      expect(state.activityStatus).toBe(shouldClear ? "idle" : "streaming");
+      expect(setActivityStatus.mock.calls.some(([status]) => status === "idle")).toBe(shouldClear);
+    },
+  );
+
+  it.each([
+    { pendingSubmit: sendingSubmit("run-pending"), activityStatus: "sending" },
+    { pendingSubmit: acceptedSubmit("run-pending"), activityStatus: "waiting" },
+  ])("preserves $activityStatus submit activity while retiring a stale owner", (pending) => {
+    const { state, handleChatEvent, handleSessionsChangedEvent, setActivityStatus } =
+      createHandlersHarness({
+        state: { activeChatRunId: "run-stale", activityStatus: "streaming" },
+      });
+    handleChatEvent({ runId: "run-stale", seq: 1, message: { content: "done" } });
+    Object.assign(state, pending);
+    setActivityStatus.mockClear();
+
+    handleSessionsChangedEvent({ reason: "chat.run.settled", activeRunIds: [] });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.pendingSubmit).toEqual(pending.pendingSubmit);
+    expect(state.activityStatus).toBe(pending.activityStatus);
+    expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
+  });
+
   it("clears stale streaming when a duplicate final arrives after inactive /btw terminal cleanup", () => {
     const { state, setActivityStatus, noteLocalBtwRunId, handleChatEvent } = createHandlersHarness({
       state: { activeChatRunId: null, activityStatus: "streaming" },
@@ -2543,6 +2762,73 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
 
     expect(chatLog.addSystem).toHaveBeenCalledWith(`run error: ${backendError}`);
+  });
+
+  it.each(["error", "final"] as const)(
+    "accepts an owned local %s event before its submit is acknowledged",
+    (terminalState) => {
+      const { state, chatLog, handleAgentEvent, handleChatEvent, noteLocalRunId } =
+        createHandlersHarness({
+          localMode: true,
+          state: { activeChatRunId: null, sessionInfo: { modelProvider: "xai" } },
+        });
+
+      handleAgentEvent({
+        runId: "completed-run",
+        sessionKey: state.currentSessionKey,
+        data: { phase: "start" },
+      });
+      handleChatEvent(makeFinalChatEvent(state, "completed-run"));
+      state.pendingSubmit = sendingSubmit("next-local-run");
+      noteLocalRunId("next-local-run");
+
+      handleChatEvent({
+        runId: "next-local-run",
+        state: terminalState,
+        ...(terminalState === "error"
+          ? { errorMessage: "monthly spending limit" }
+          : { message: { content: [{ type: "text", text: "early local reply" }] } }),
+      });
+
+      expect(state.pendingSubmit).toBeNull();
+      if (terminalState === "error") {
+        expect(chatLog.addSystem).toHaveBeenCalledWith("run error: monthly spending limit");
+      } else {
+        expect(chatLog.finalizeAssistant).toHaveBeenCalledWith(
+          "early local reply",
+          "next-local-run",
+        );
+      }
+    },
+  );
+
+  it.each([
+    { label: "unowned local", localMode: true, owned: false, sessionKey: "agent:main:main" },
+    { label: "remote", localMode: false, owned: true, sessionKey: "agent:main:main" },
+    { label: "foreign session", localMode: true, owned: true, sessionKey: "agent:main:other" },
+  ])("rejects an unsequenced $label provisional event", ({ localMode, owned, sessionKey }) => {
+    const { state, chatLog, handleAgentEvent, handleChatEvent, noteLocalRunId } =
+      createHandlersHarness({ localMode, state: { activeChatRunId: null } });
+    handleAgentEvent({
+      runId: "completed-run",
+      sessionKey: state.currentSessionKey,
+      data: { phase: "start" },
+    });
+    handleChatEvent(makeFinalChatEvent(state, "completed-run"));
+    state.pendingSubmit = sendingSubmit("untrusted-run");
+    if (owned) {
+      noteLocalRunId("untrusted-run");
+    }
+
+    handleChatEvent({
+      runId: "untrusted-run",
+      sessionKey,
+      state: "error",
+      errorMessage: "foreign private diagnostic",
+    });
+
+    expect(state.pendingSubmit).toEqual(sendingSubmit("untrusted-run"));
+    expect(chatLog.addSystem).not.toHaveBeenCalledWith("run error: foreign private diagnostic");
   });
 
   it("surfaces a late provider error without replaying a completed assistant reply", () => {
@@ -3149,8 +3435,12 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(tui.requestRender).not.toHaveBeenCalled();
     });
 
-    it("does not let an older transcript snapshot replace newer session metadata", () => {
-      const { state, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
+    it.each([
+      { name: "older timestamp", updatedAt: 100 },
+      { name: "equal timestamp", updatedAt: 200 },
+      { name: "missing timestamp", updatedAt: undefined },
+    ])("rejects a retired session snapshot with a $name", ({ updatedAt }) => {
+      const { state, chatLog, loadHistory, handleSessionMessageEvent } = createHandlersHarness({
         state: {
           activeChatRunId: null,
           currentSessionId: "session-current",
@@ -3160,12 +3450,19 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
       handleSessionMessageEvent({
         sessionId: "session-stale",
-        updatedAt: 100,
+        ...(updatedAt === undefined ? {} : { updatedAt }),
+        message: {
+          role: "user",
+          content: "private previous-session prompt",
+          __openclaw: { id: "previous-session-message", seq: 1 },
+        },
       });
 
       expect(state.currentSessionId).toBe("session-current");
       expect(state.sessionInfo.updatedAt).toBe(200);
-      expect(loadHistory).toHaveBeenCalledTimes(1);
+      expect(chatLog.addLiveUser).not.toHaveBeenCalled();
+      expect(state.sessionProjection?.entries ?? []).toHaveLength(0);
+      expect(loadHistory).not.toHaveBeenCalled();
     });
 
     it("reloads a global session only for its selected agent", () => {
@@ -3613,7 +3910,7 @@ describe("tui-event-handlers: streaming watchdog", () => {
     return { state, chatLog, tui, setActivityStatus, loadHistory, noteLocalRunId, handlers };
   };
 
-  it("keeps the active run busy when no stream delta arrives for the watchdog window", () => {
+  it("keeps the watchdog busy until authoritative idle ownership settles", () => {
     const { state, chatLog, setActivityStatus, handlers } = createHarness({
       streamingWatchdogMs: 5_000,
     });
@@ -3631,6 +3928,19 @@ describe("tui-event-handlers: streaming watchdog", () => {
     expect(setActivityStatus).not.toHaveBeenCalledWith("idle");
     expect(state.activeChatRunId).toBe("run-stuck");
     expect(chatLog.addPendingSystem).toHaveBeenCalledWith("run-stuck", expectedTimeoutMessage);
+
+    handlers.handleSessionsChangedEvent({
+      sessionKey: state.currentSessionKey,
+      reason: "chat.run.settled",
+      activeRunIds: [],
+    });
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(state.activityStatus).toBe("idle");
+    expect(chatLog.dismissPendingSystem).toHaveBeenCalledWith("run-stuck");
+    chatLog.addPendingSystem.mockClear();
+    vi.advanceTimersByTime(10_000);
+    expect(chatLog.addPendingSystem).not.toHaveBeenCalled();
 
     handlers.dispose?.();
   });
@@ -3749,6 +4059,38 @@ describe("tui-event-handlers: streaming watchdog", () => {
 
     expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(state.activeChatRunId).toBeNull();
+    expect(loadHistory).toHaveBeenCalledTimes(1);
+
+    handlers.dispose?.();
+  });
+
+  it.each([
+    { description: "replaces the previous run", previousRunId: "run-before-reconnect" },
+    { description: "appears after an idle disconnect", previousRunId: null },
+  ])("rearms reconnect recovery when authoritative history $description", ({ previousRunId }) => {
+    const { state, setActivityStatus, loadHistory, handlers } = createHarness({
+      streamingWatchdogMs: 5_000,
+    });
+
+    if (previousRunId) {
+      handlers.handleChatEvent({
+        runId: previousRunId,
+        message: { content: "previous reply" },
+      });
+    }
+    handlers.pauseStreamingWatchdog();
+    handlers.reconnectStreamingWatchdog();
+
+    state.activeChatRunId = "run-after-reconnect";
+    handlers.reconnectStreamingWatchdog({
+      state: "active",
+      runId: "run-after-reconnect",
+    });
+
+    vi.advanceTimersByTime(5_001);
+
+    expect(state.activeChatRunId).toBeNull();
+    expect(setActivityStatus).toHaveBeenLastCalledWith("idle");
     expect(loadHistory).toHaveBeenCalledTimes(1);
 
     handlers.dispose?.();

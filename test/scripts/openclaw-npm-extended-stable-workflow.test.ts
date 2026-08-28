@@ -273,8 +273,11 @@ describe("minimal npm extended-stable workflow", () => {
     const parsed = workflow();
     const preflight = parsed.jobs?.preflight_openclaw_npm;
     const metadata = step(preflight, "Validate release metadata");
+    const pack = step(preflight, "Pack prepared npm tarball");
     expect(metadata.run).toContain('RELEASE_BRANCH_REF="${RELEASE_SHA}"');
     expect(metadata.run).not.toContain("Validation-only SHA mode only supports");
+    expect(pack.run).toContain('if [[ "${RELEASE_REF}" =~ ^[0-9a-fA-F]{40}$ ]]');
+    expect(pack.run).toContain("export OPENCLAW_PREPACK_ALLOW_UNRELEASED_CHANGELOG=1");
 
     const plugins = step(preflight, "Exercise all extended-stable plugin npm packages");
     expect(step(preflight, "Verify release contents").env).toMatchObject({

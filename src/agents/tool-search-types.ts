@@ -102,6 +102,8 @@ export type ToolSearchToolContext = {
   abortSignal?: AbortSignal;
   executeTool?: ToolSearchCatalogToolExecutor;
   forceRestartSafeTools?: boolean;
+  /** Set when the run executes only these tools; swarm globals gate on `sessions_spawn`. */
+  toolExecutionAllow?: readonly string[];
   codeModeSkills?: readonly CodeModeSkill[];
 };
 
@@ -130,7 +132,8 @@ export type ToolSearchCatalogSession = {
 export type ToolSearchCatalogRef = {
   current?: ToolSearchCatalogSession;
   onChange?: () => void;
-  onDispose?: () => void;
+  disposeObserver?: () => void;
+  onDispose?: Set<() => void>;
 };
 
 export type CodeModeBridgeMethod = "search" | "describe" | "call";

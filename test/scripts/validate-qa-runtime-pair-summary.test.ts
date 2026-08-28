@@ -106,6 +106,11 @@ const frozenCoreGapScenarioIds = new Set<string>([
   "runtime-tool-fs-write",
   "runtime-tool-grep",
 ]);
+const frozenLegacyCoreScenarioIds = frozenCoreScenarioIds.filter(
+  (scenarioId) =>
+    scenarioId !== "codex-plugin-pinned-new" && scenarioId !== "codex-plugin-pinned-old",
+);
+const frozenLegacyTargetSha = "ee5ead24b1b46a3560f28f8d57e0afcd911acacb";
 
 function frozenCoreSummary() {
   return summary(
@@ -123,6 +128,62 @@ function frozenCoreSummary() {
       });
     }),
   );
+}
+
+function frozenLegacyStatuslessSummary() {
+  const fixture = summary(
+    frozenLegacyCoreScenarioIds.map((scenarioId) =>
+      scenario({
+        name: scenarioId,
+        status: "pass",
+      }),
+    ),
+  );
+  delete (fixture.run as { status?: string }).status;
+  return Object.assign(fixture, {
+    run: {
+      ...fixture.run,
+      startedAt: "2026-08-22T06:02:37.608Z",
+      finishedAt: "2026-08-22T06:14:49.336Z",
+    },
+  });
+}
+
+function reportFor(scenarios: ReturnType<typeof scenario>[]) {
+  return {
+    runtimePair: ["openclaw", "codex"],
+    totalScenarios: scenarios.length,
+    passedScenarios: scenarios.length,
+    failedScenarios: 0,
+    scenarios: scenarios.map((entry) => ({
+      name: entry.name,
+      status: "pass",
+      drift: entry.runtimeParity.drift,
+      driftDetails: undefined,
+      openclawStatus: "pass",
+      codexStatus: "pass",
+    })),
+    failures: [],
+    pass: true,
+  };
+}
+
+function markdownFor(scenarios: ReturnType<typeof scenario>[]) {
+  return [
+    "# OpenClaw Runtime Parity Report — openclaw vs codex",
+    "",
+    "- Verdict: pass",
+    ...scenarios.flatMap((entry) => [
+      "",
+      `### ${entry.name}`,
+      "",
+      "- status: pass",
+      `- drift: ${entry.runtimeParity.drift}`,
+      "- openclaw: pass (0 tool calls)",
+      "- codex: pass (0 tool calls)",
+    ]),
+    "",
+  ].join("\n");
 }
 
 describe("frozen QA runtime-pair summary validation", () => {
@@ -183,6 +244,148 @@ describe("frozen QA runtime-pair summary validation", () => {
       failed: 0,
       skipped: 0,
     });
+  });
+
+  it("accepts the exact statusless frozen core profile after a successful suite", () => {
+    expect(
+      validateQaRuntimePairSummary(frozenLegacyStatuslessSummary(), {
+        candidateSuiteOutcome: "success",
+        targetSha: frozenLegacyTargetSha,
+        lane: "core",
+      }),
+    ).toEqual({
+      total: 25,
+      passed: 25,
+      failed: 0,
+      skipped: 0,
+    });
+  });
+
+  it("rejects a nonterminal status even for the exact frozen profile", () => {
+    const fixture = frozenLegacyStatuslessSummary();
+    fixture.run.status = "running";
+
+    expect(() =>
+      validateQaRuntimePairSummary(fixture, {
+        candidateSuiteOutcome: "success",
+        targetSha: frozenLegacyTargetSha,
+        lane: "core",
+      }),
+    ).toThrow("runtime-pair summary is not completed");
+  });
+
+  it.each([
+    ["missing suite outcome", { targetSha: frozenLegacyTargetSha, lane: "core" }],
+    [
+      "failed suite",
+      { candidateSuiteOutcome: "failure", targetSha: frozenLegacyTargetSha, lane: "core" },
+    ],
+    [
+      "skipped suite",
+      { candidateSuiteOutcome: "skipped", targetSha: frozenLegacyTargetSha, lane: "core" },
+    ],
+    [
+      "cancelled suite",
+      { candidateSuiteOutcome: "cancelled", targetSha: frozenLegacyTargetSha, lane: "core" },
+    ],
+    [
+      "unknown suite outcome",
+      { candidateSuiteOutcome: "unknown", targetSha: frozenLegacyTargetSha, lane: "core" },
+    ],
+    ["wrong target", { candidateSuiteOutcome: "success", targetSha: "0".repeat(40), lane: "core" }],
+    [
+      "wrong lane",
+      { candidateSuiteOutcome: "success", targetSha: frozenLegacyTargetSha, lane: "soak" },
+    ],
+  ])("rejects statusless frozen evidence with %s", (_label, options) => {
+    expect(() => validateQaRuntimePairSummary(frozenLegacyStatuslessSummary(), options)).toThrow(
+      "runtime-pair summary is not completed",
+    );
+  });
+
+  it.each([
+    ["missing startedAt", undefined, "2026-08-22T06:14:49.336Z"],
+    ["missing finishedAt", "2026-08-22T06:02:37.608Z", undefined],
+    ["invalid startedAt", "not-a-date", "2026-08-22T06:14:49.336Z"],
+    ["invalid finishedAt", "2026-08-22T06:02:37.608Z", "not-a-date"],
+    ["reversed timestamps", "2026-08-22T06:14:49.336Z", "2026-08-22T06:02:37.608Z"],
+  ])("rejects statusless frozen evidence with %s", (_label, startedAt, finishedAt) => {
+    const fixture = frozenLegacyStatuslessSummary();
+    if (startedAt === undefined) {
+      delete (fixture.run as { startedAt?: string }).startedAt;
+    } else {
+      fixture.run.startedAt = startedAt;
+    }
+    if (finishedAt === undefined) {
+      delete (fixture.run as { finishedAt?: string }).finishedAt;
+    } else {
+      fixture.run.finishedAt = finishedAt;
+    }
+
+    expect(() =>
+      validateQaRuntimePairSummary(fixture, {
+        candidateSuiteOutcome: "success",
+        targetSha: frozenLegacyTargetSha,
+        lane: "core",
+      }),
+    ).toThrow("runtime-pair summary is not completed");
+  });
+
+  it("rejects manifest drift before accepting a statusless frozen profile", () => {
+    const fixture = frozenLegacyStatuslessSummary();
+    fixture.run.scenarioIds.reverse();
+    fixture.scenarios.reverse();
+
+    expect(() =>
+      validateQaRuntimePairSummary(fixture, {
+        candidateSuiteOutcome: "success",
+        targetSha: frozenLegacyTargetSha,
+        lane: "core",
+      }),
+    ).toThrow("runtime-pair summary is not completed");
+  });
+
+  it("still rejects scenario and count failures after frozen profile admission", () => {
+    const options = {
+      candidateSuiteOutcome: "success",
+      targetSha: frozenLegacyTargetSha,
+      lane: "core",
+    };
+    const failedScenario = frozenLegacyStatuslessSummary();
+    failedScenario.scenarios[0]!.status = "fail";
+    failedScenario.counts.passed -= 1;
+    failedScenario.counts.failed += 1;
+    expect(() => validateQaRuntimePairSummary(failedScenario, options)).toThrow(
+      "runtime-pair failure or unsupported skip",
+    );
+
+    const countDrift = frozenLegacyStatuslessSummary();
+    countDrift.counts.passed -= 1;
+    expect(() => validateQaRuntimePairSummary(countDrift, options)).toThrow(
+      "counts do not match validated scenario evidence",
+    );
+  });
+
+  it("applies the trusted suite outcome gate to frozen report validation", () => {
+    const fixture = frozenLegacyStatuslessSummary();
+    const reportSummary = reportFor(fixture.scenarios);
+    const markdown = markdownFor(fixture.scenarios);
+    const options = {
+      candidateSuiteOutcome: "success",
+      targetSha: frozenLegacyTargetSha,
+      lane: "core",
+    };
+
+    expect(validateQaRuntimePairReport(fixture, reportSummary, markdown, options)).toMatchObject({
+      total: 25,
+      passed: 25,
+    });
+    expect(() =>
+      validateQaRuntimePairReport(fixture, reportSummary, markdown, {
+        ...options,
+        candidateSuiteOutcome: "failure",
+      }),
+    ).toThrow("runtime-pair summary is not completed");
   });
 
   it("requires skipped count when validated evidence contains skips", () => {

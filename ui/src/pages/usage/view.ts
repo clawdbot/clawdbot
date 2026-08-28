@@ -115,9 +115,9 @@ function renderUsageLoadingState(filters: UsageFilterState) {
           </div>
         </div>
         <div class="usage-loading-grid">
-          <div class="usage-skeleton-block usage-skeleton-block--tall"></div>
-          <div class="usage-skeleton-block"></div>
-          <div class="usage-skeleton-block"></div>
+          <div class="skeleton usage-skeleton-block usage-skeleton-block--tall"></div>
+          <div class="skeleton usage-skeleton-block"></div>
+          <div class="skeleton usage-skeleton-block"></div>
         </div>
       </div>
     `,
@@ -143,9 +143,20 @@ function renderUsageEmptyState(onRefresh: () => void) {
 
 type ProviderUsageSnapshot = ProviderUsageSummary["providers"][number];
 
-function renderProviderUsage(providers: ProviderUsageSnapshot[], unavailable: boolean) {
-  if (providers.length === 0 && !unavailable) {
-    return nothing;
+function renderProviderUsage(
+  providers: ProviderUsageSnapshot[],
+  unavailable: boolean,
+  stalled: boolean,
+) {
+  const notice = stalled
+    ? html`<div class="callout warning usage-callout">${t("usage.providerUsage.stalled")}</div>`
+    : unavailable
+      ? html`<div class="callout warning usage-callout">
+          ${t("usage.providerUsage.unavailable")}
+        </div>`
+      : nothing;
+  if (providers.length === 0) {
+    return notice;
   }
   return renderSettingsSection(
     {
@@ -154,11 +165,7 @@ function renderProviderUsage(providers: ProviderUsageSnapshot[], unavailable: bo
       description: t("usage.providerUsage.subtitle"),
     },
     html`
-      ${unavailable
-        ? html`
-            <div class="callout warning usage-callout">${t("usage.providerUsage.unavailable")}</div>
-          `
-        : nothing}
+      ${notice}
       <div class="usage-panel provider-usage-section">
         <div class="provider-usage-grid">
           ${providers.map(
@@ -803,7 +810,11 @@ export function renderUsage(props: UsageProps) {
           </div>
         </section>
 
-        ${renderProviderUsage(data.providerUsage, data.providerUsageUnavailable)}
+        ${renderProviderUsage(
+          data.providerUsage,
+          data.providerUsageUnavailable,
+          data.providerUsageStalled,
+        )}
         ${isEmpty
           ? renderUsageEmptyState(filterActions.onRefresh)
           : html`

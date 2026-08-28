@@ -1016,6 +1016,19 @@ describe("server-channels auto restart", () => {
     expect(stopAccount).not.toHaveBeenCalled();
   });
 
+  it("records explicit manual stop intent for an idle account without a stop hook", async () => {
+    const startAccount = vi.fn(async () => undefined);
+    installTestRegistry(createTestPlugin({ startAccount }));
+    const manager = createManager();
+
+    await manager.stopChannel("discord", "automatic", { manual: false });
+    await manager.stopChannel("discord", "operator");
+
+    expect(manager.isManuallyStopped("discord", "automatic")).toBe(false);
+    expect(manager.isManuallyStopped("discord", "operator")).toBe(true);
+    expect(startAccount).not.toHaveBeenCalled();
+  });
+
   it("does not auto-restart after manual stop during backoff", async () => {
     const startAccount = vi.fn(async () => {});
     installTestRegistry(
@@ -3085,6 +3098,44 @@ describe("server-channels auto restart", () => {
     expect(listActiveDegradedSecretOwners().map((owner) => owner.ownerId)).toEqual([
       "discord:retained",
     ]);
+  });
+
+  it("prunes only credential owners and account state for inactive channel plugins", async () => {
+    installTestRegistry(
+      ...(["discord", "slack"] as const).map((channelId) =>
+        createTestPlugin({
+          id: channelId,
+          listAccountIds: () => ["Ops Team"],
+          startAccount: async () => {},
+          resolveAccount: (_cfg, accountId) => ({
+            enabled: true,
+            configured: true,
+            credentialDiagnostics: [
+              {
+                code: "CREDENTIAL_FILE_UNAVAILABLE" as const,
+                path: `channels.${channelId}.accounts.${accountId}.tokenFile`,
+                reason: "not-found",
+              },
+            ],
+          }),
+        }),
+      ),
+    );
+    const manager = createManager({ channelIds: ["discord", "slack"] });
+
+    await manager.startChannels();
+    expect(listActiveDegradedSecretOwners().map((owner) => owner.ownerId)).toEqual([
+      "discord:ops-team",
+      "slack:ops-team",
+    ]);
+
+    manager.pruneInactiveChannelAccountState(new Set(["slack"]));
+
+    expect(listActiveDegradedSecretOwners().map((owner) => owner.ownerId)).toEqual([
+      "slack:ops-team",
+    ]);
+    expect(manager.resolveRuntimeAccountId("discord", "ops-team")).toBeUndefined();
+    expect(manager.resolveRuntimeAccountId("slack", "ops-team")).toBe("Ops Team");
   });
 
   it("resolves only an unambiguous authoritative runtime account for a normalized owner", async () => {

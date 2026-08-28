@@ -44,6 +44,7 @@ const CODEX_APP_SERVER_STDERR_TAIL_MAX = 2_000;
 const CODEX_APP_SERVER_OVERLOADED_ERROR_CODE = -32_001;
 const CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES = 3;
 const CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS = 50;
+const CODEX_APP_SERVER_PENDING_STARTUP_WARNINGS_MAX = 32;
 const CODEX_APP_SERVER_CLIENT_INSTANCE_IDS = new WeakMap<object, string>();
 const UNPAIRED_SURROGATE_RE =
   /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
@@ -53,6 +54,12 @@ type PendingRequest = {
   resolve: (value: unknown) => void;
   reject: (error: Error) => void;
   cleanup: () => void;
+};
+
+type RequestOptions = {
+  timeoutMs?: number;
+  signal?: AbortSignal;
+  assertCurrent?: () => void;
 };
 
 /** Process-local generation fence for bindings tied to one app-server client instance. */
@@ -72,6 +79,13 @@ export function resolveCodexAppServerClientInstanceId(client: object): string {
 }
 
 export { CodexAppServerRpcError } from "./rpc-error.js";
+
+/** Codex rejects this exact code before enqueueing, including mutating requests. */
+export function isCodexAppServerOverloadError(error: unknown): error is CodexAppServerRpcError {
+  return (
+    error instanceof CodexAppServerRpcError && error.code === CODEX_APP_SERVER_OVERLOADED_ERROR_CODE
+  );
+}
 
 class CodexAppServerLocalRequestCancellationError extends Error {
   readonly code = "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED";
@@ -200,6 +214,7 @@ export class CodexAppServerClient {
   private readonly pending = new Map<number | string, PendingRequest>();
   private readonly requestHandlers = new Set<CodexServerRequestHandler>();
   private readonly notificationHandlers = new Set<CodexServerNotificationHandler>();
+  private readonly pendingStartupWarnings: CodexServerNotification[] = [];
   private readonly closeHandlers = new Set<(client: CodexAppServerClient) => void>();
   private nextId = 1;
   private initialized = false;
@@ -296,6 +311,9 @@ export class CodexAppServerClient {
         extensions: {
           "openai/standard-form-input": {},
           "openai/form": {},
+          "io.modelcontextprotocol/ui": {
+            mimeTypes: ["text/html;profile=mcp-app"],
+          },
         },
       },
     } satisfies CodexInitializeParams);
@@ -352,20 +370,19 @@ export class CodexAppServerClient {
   request<M extends CodexAppServerRequestMethod>(
     method: M,
     params: CodexAppServerRequestParams<M>,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    options?: RequestOptions,
   ): Promise<CodexAppServerRequestResult<M>>;
   request<T = JsonValue | undefined>(
     method: string,
     params?: unknown,
-    options?: { timeoutMs?: number; signal?: AbortSignal },
+    options?: RequestOptions,
   ): Promise<T>;
   request<T = JsonValue | undefined>(
     method: string,
     params?: unknown,
-    optionsInput?: { timeoutMs?: number; signal?: AbortSignal },
+    optionsInput?: RequestOptions,
   ): Promise<T> {
-    let options = optionsInput;
-    options ??= {};
+    const options = optionsInput ?? {};
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
     }
@@ -429,15 +446,15 @@ export class CodexAppServerClient {
           if (remainingTimeoutMs !== undefined && remainingTimeoutMs <= 0) {
             throw new CodexAppServerLocalRequestCancellationError(method, "timed out", false);
           }
-          return await this.requestWithoutThreadSessionGuard<T>(
+          return await this.requestWithOverloadRetry<T>(
             method,
             params,
             {
               ...options,
               ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}),
             },
-            () => {
-              requestMayHaveWritten = true;
+            (mayHaveWritten) => {
+              requestMayHaveWritten = mayHaveWritten;
             },
           );
         } catch (error) {
@@ -456,23 +473,14 @@ export class CodexAppServerClient {
         }
       })();
     }
-    return this.requestWithoutThreadSessionGuard<T>(method, params, options);
-  }
-
-  private requestWithoutThreadSessionGuard<T>(
-    method: string,
-    params: unknown,
-    options: { timeoutMs?: number; signal?: AbortSignal },
-    onWriteAttempt?: () => void,
-  ): Promise<T> {
-    return this.requestWithOverloadRetry(method, params, options, onWriteAttempt);
+    return this.requestWithOverloadRetry<T>(method, params, options);
   }
 
   private async requestWithOverloadRetry<T>(
     method: string,
     params: unknown,
-    options: { timeoutMs?: number; signal?: AbortSignal },
-    onWriteAttempt?: () => void,
+    options: RequestOptions,
+    onWriteStateChange?: (mayHaveWritten: boolean) => void,
   ): Promise<T> {
     const deadline =
       options.timeoutMs !== undefined && Number.isFinite(options.timeoutMs)
@@ -494,18 +502,20 @@ export class CodexAppServerClient {
             ...options,
             ...(remainingTimeoutMs !== undefined ? { timeoutMs: remainingTimeoutMs } : {}),
           },
-          onWriteAttempt,
+          onWriteStateChange,
         );
       } catch (error) {
         // Codex emits -32001 only when ingress rejects a request before enqueue,
         // so retrying mutating methods cannot duplicate server-side work.
         if (
-          !(error instanceof CodexAppServerRpcError) ||
-          error.code !== CODEX_APP_SERVER_OVERLOADED_ERROR_CODE ||
+          !isCodexAppServerOverloadError(error) ||
           retry >= CODEX_APP_SERVER_OVERLOAD_MAX_RETRIES
         ) {
           throw error;
         }
+        // Ingress rejected this attempt, so cancellation before the retry
+        // must not retire a shared client with no outstanding native request.
+        onWriteStateChange?.(false);
         const backoffMs = Math.round(
           CODEX_APP_SERVER_OVERLOAD_RETRY_BASE_MS * 2 ** retry * (0.75 + Math.random() * 0.5),
         );
@@ -552,8 +562,8 @@ export class CodexAppServerClient {
   private requestOnce<T>(
     method: string,
     params: unknown,
-    options: { timeoutMs?: number; signal?: AbortSignal },
-    onWriteAttempt?: () => void,
+    options: RequestOptions,
+    onWriteStateChange?: (mayHaveWritten: boolean) => void,
   ): Promise<T> {
     if (this.closed) {
       return Promise.reject(this.closeError ?? new Error("codex app-server client is closed"));
@@ -634,8 +644,11 @@ export class CodexAppServerClient {
         return;
       }
       try {
+        // Config-fence waits and overload retries can outlive the caller's
+        // ownership. Revalidate before each physical write, without an await.
+        options.assertCurrent?.();
         mayHaveWritten = true;
-        onWriteAttempt?.();
+        onWriteStateChange?.(true);
         this.writeMessage(message, (error) => rejectPending(error));
       } catch (error) {
         rejectPending(toStringifiedError(error));
@@ -657,6 +670,11 @@ export class CodexAppServerClient {
   /** Registers a notification handler and returns its disposer. */
   addNotificationHandler(handler: CodexServerNotificationHandler): () => void {
     this.notificationHandlers.add(handler);
+    // Codex sends configuration warnings immediately after initialize, before
+    // OpenClaw can reserve the first thread or install its shared turn router.
+    for (const notification of this.pendingStartupWarnings.splice(0)) {
+      this.handleNotification(notification);
+    }
     return () => this.notificationHandlers.delete(handler);
   }
 
@@ -664,6 +682,17 @@ export class CodexAppServerClient {
   addCloseHandler(handler: (client: CodexAppServerClient) => void): () => void {
     this.closeHandlers.add(handler);
     return () => this.closeHandlers.delete(handler);
+  }
+
+  /** Registers a handler for physical transport exit and returns its disposer. */
+  addTransportExitHandler(handler: (client: CodexAppServerClient) => void): () => void {
+    if (this.transportExited) {
+      handler(this);
+      return () => undefined;
+    }
+    const onExit = () => handler(this);
+    this.child.once("exit", onExit);
+    return () => this.child.off?.("exit", onExit);
   }
 
   /** Closes the transport without waiting for process/socket shutdown. */
@@ -895,6 +924,13 @@ export class CodexAppServerClient {
   }
 
   private handleNotification(notification: CodexServerNotification): void {
+    if (this.notificationHandlers.size === 0 && notification.method === "configWarning") {
+      if (this.pendingStartupWarnings.length === CODEX_APP_SERVER_PENDING_STARTUP_WARNINGS_MAX) {
+        this.pendingStartupWarnings.shift();
+      }
+      this.pendingStartupWarnings.push(notification);
+      return;
+    }
     for (const handler of this.notificationHandlers) {
       try {
         Promise.resolve(handler(notification)).catch((error: unknown) => {

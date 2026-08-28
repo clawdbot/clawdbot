@@ -21,7 +21,7 @@ import { reserveChildAdmissionSlot } from "../child-admission.js";
 import { resolveAgentIdentity } from "../identity.js";
 import { resolveSubagentSpawnModelSelection } from "../model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../sandbox/runtime-status.js";
-import { resolveSpawnedWorkspaceInheritance } from "../spawned-context.js";
+import { resolveSpawnedWorkspaceInheritance, type SpawnedToolContext } from "../spawned-context.js";
 import {
   countActiveRunsForSession,
   registerSubagentRun,
@@ -61,22 +61,22 @@ export type VisibleSessionsSpawnDeps = {
   countActiveRuns?: typeof countActiveRunsForSession;
 };
 
-type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps & {
-  agentSessionKey?: string;
-  completionOwnerKey?: string;
-  agentChannel?: string;
-  agentAccountId?: string;
-  agentTo?: string;
-  agentThreadId?: string | number;
-  currentMessagingTarget?: string;
-  currentChannelId?: string;
-  currentThreadTs?: string;
-  sandboxed?: boolean;
-  config?: OpenClawConfig;
-  requesterAgentIdOverride?: string;
-  inheritedToolAllowlist?: string[];
-  inheritedToolDenylist?: string[];
-};
+type VisibleSessionsSpawnOptions = VisibleSessionsSpawnDeps &
+  SpawnedToolContext & {
+    agentSessionKey?: string;
+    requesterTurnRunId?: string;
+    completionOwnerKey?: string;
+    agentChannel?: string;
+    agentAccountId?: string;
+    agentTo?: string;
+    agentThreadId?: string | number;
+    currentMessagingTarget?: string;
+    currentChannelId?: string;
+    currentThreadTs?: string;
+    sandboxed?: boolean;
+    config?: OpenClawConfig;
+    requesterAgentIdOverride?: string;
+  };
 
 function summarizeSessionsSpawnError(error: unknown): string {
   return error instanceof Error ? error.message : typeof error === "string" ? error : "error";
@@ -199,7 +199,7 @@ export async function maybeSpawnVisibleSession(params: {
   if (params.requestedAgentId && !isValidAgentId(params.requestedAgentId)) {
     return {
       status: "error",
-      error: `Invalid agentId "${params.requestedAgentId}". Use agents_list.`,
+      error: `Invalid agentId "${params.requestedAgentId}". Agent IDs must match [a-z0-9][a-z0-9_-]{0,63}.`,
     };
   }
   const requesterAgentId = resolveSessionAgentId({
@@ -213,7 +213,7 @@ export async function maybeSpawnVisibleSession(params: {
     cfg.agents?.defaults?.subagents?.requireAgentId ??
     false;
   if (requireAgentId && !params.requestedAgentId) {
-    return { status: "forbidden", error: "sessions_spawn requires agentId. Use agents_list." };
+    return { status: "forbidden", error: "sessions_spawn requires agentId; use an allowed agent." };
   }
   const targetAgentId = params.requestedAgentId
     ? normalizeAgentId(params.requestedAgentId)
@@ -328,6 +328,9 @@ export async function maybeSpawnVisibleSession(params: {
         // Declared spawn lineage: without it the child persists as a depth-0 root
         // and could spawn past maxSpawnDepth.
         spawnDepth: callerDepth + 1,
+        ...(params.options?.sessionPermissionPolicy
+          ? { permissionMode: params.options.sessionPermissionPolicy.mode }
+          : {}),
         ...(params.raw.context === "fork" ? { fork: true } : {}),
         ...(spawnedCwd ? { cwd: spawnedCwd } : {}),
         ...(worktree ? { worktree: true } : {}),
@@ -381,6 +384,7 @@ export async function maybeSpawnVisibleSession(params: {
     try {
       (params.options?.registerRun ?? registerSubagentRun)({
         runId,
+        requesterTurnRunId: params.options?.requesterTurnRunId,
         childSessionKey,
         controllerSessionKey: ownership.controllerSessionKey,
         requesterSessionKey: ownership.completionRequesterSessionKey,

@@ -67,12 +67,44 @@ export function buildSessionCreationStamp(params: {
   via: SessionCreatedVia;
   actor?: SessionCreatedActor;
   now?: number;
-}): { createdVia: SessionCreatedVia; createdActor?: SessionCreatedActor; createdAt: number } {
+  sandbox?: "required";
+}): {
+  createdVia: SessionCreatedVia;
+  createdActor?: SessionCreatedActor;
+  createdAt: number;
+  sandbox?: "required";
+} {
   return {
     createdVia: params.via,
     ...(params.actor ? { createdActor: params.actor } : {}),
     createdAt: params.now ?? Date.now(),
+    ...(params.sandbox === "required" ? { sandbox: "required" as const } : {}),
   };
+}
+
+/** A required node keeps its original isolation identity across every write and rollover. */
+export function preserveCreationStamp<
+  T extends Partial<ReturnType<typeof buildSessionCreationStamp>>,
+>(entry: T, authoritative: Partial<ReturnType<typeof buildSessionCreationStamp>> | undefined): T {
+  return authoritative?.sandbox === "required"
+    ? {
+        ...entry,
+        createdVia: authoritative.createdVia,
+        createdActor: authoritative.createdActor,
+        createdAt: authoritative.createdAt,
+        sandbox: authoritative.sandbox,
+      }
+    : entry;
+}
+
+/** Delegation keeps a required parent's human isolation identity, regardless of current roles. */
+export function inheritSessionCreationPolicy(
+  source: { createdActor?: SessionCreatedActor; sandbox?: "required" } | undefined,
+  actor?: SessionCreatedActor,
+): { actor?: SessionCreatedActor; sandbox?: "required" } {
+  return source?.sandbox === "required"
+    ? { actor: source.createdActor, sandbox: "required" }
+    : { actor };
 }
 
 export type SessionEntryProvenance = {

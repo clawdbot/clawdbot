@@ -44,8 +44,20 @@ import {
   maybeMigrateAuthProfileJsonStoresToSqlite,
   maybeRepairOpenAICodexAuthConfig,
 } from "./doctor-auth-flat-profiles.js";
+import {
+  createAuthProfileMigrationSourceReceipt,
+  type AuthProfileMigrationSourceReceipt,
+} from "./doctor-auth-migration-receipts.js";
 import type { DoctorPrompter } from "./doctor-prompter.js";
 import { maybeRepairCodexSessionRoutes } from "./doctor/shared/codex-route-session-repair.js";
+
+type MigrationReceiptTestApi = {
+  recordAuthProfileMigrationImported: (receipt: AuthProfileMigrationSourceReceipt) => void;
+};
+
+const { recordAuthProfileMigrationImported } = (globalThis as Record<PropertyKey, unknown>)[
+  Symbol.for("openclaw.authProfileMigrationReceiptsTestApi")
+] as MigrationReceiptTestApi;
 
 const states: OpenClawTestState[] = [];
 
@@ -578,6 +590,38 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
     expect(fs.existsSync(oauthPath)).toBe(true);
     expectNoMigratedArchive(oauthPath);
     expect(readPersistedAuthProfileStoreRaw(state.agentDir())).toEqual(unreadableStore);
+  });
+
+  it("surfaces the resume failure cause instead of a generic warning", async () => {
+    const state = await makeTestState();
+    const sourcePath = await state.writeText(
+      "credentials/oauth.json",
+      `${JSON.stringify({ openai: { access: "fake", refresh: "fake", expires: 42 } })}\n`,
+    );
+    const receipt = createAuthProfileMigrationSourceReceipt({
+      sourcePath,
+      sourceBytes: fs.readFileSync(sourcePath),
+      sourceRecordCount: 1,
+      targetDatabasePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
+      // An out-of-union target table makes resumePendingAuthProfileMigrationArchives throw
+      // "invalid pending auth profile migration receipt" — the cheapest way to reproduce one of
+      // its 5 distinct throw causes without corrupting on-disk state.
+      targetTable: "bogus_table" as AuthProfileMigrationSourceReceipt["targetTable"],
+      env: state.env,
+    });
+    recordAuthProfileMigrationImported(receipt);
+
+    const result = await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg: {},
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    expect(result.warnings).toContainEqual(
+      expect.stringMatching(
+        /^Could not finalize an interrupted auth profile archive; legacy sources were left for recovery: .*invalid pending auth profile migration receipt.*/,
+      ),
+    );
   });
 
   it.each(["legacy-main", "state-db"] as const)(
@@ -2492,6 +2536,38 @@ describe("legacy OpenAI auth profiles through the canonical migration owner", ()
         },
       },
     });
+  });
+
+  it("does not read a canonical session database as JSON during route preview or repair", async () => {
+    const state = await makeTestState();
+    const storePath = path.join(state.agentDir(), "openclaw-agent.sqlite");
+    const sessionKey = "agent:main:main";
+    await replaceSessionEntry(
+      { storePath, sessionKey, env: state.env },
+      { sessionId: "canonical-route-session", updatedAt: Date.now() },
+    );
+    const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+    try {
+      for (const shouldRepair of [false, true]) {
+        const result = await maybeRepairCodexSessionRoutes({
+          cfg: { session: { store: storePath } },
+          env: state.env,
+          shouldRepair,
+        });
+        expect(result).toMatchObject({
+          scannedStores: 1,
+          repairedSessions: 0,
+          warnings: [],
+          changes: [],
+        });
+      }
+      expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
+    } finally {
+      readFileSyncSpy.mockRestore();
+    }
+    expect(loadSessionEntry({ storePath, sessionKey, env: state.env })?.sessionId).toBe(
+      "canonical-route-session",
+    );
   });
 
   it("previews noncanonical SQLite sessions without mutating or requiring canonical migration", async () => {

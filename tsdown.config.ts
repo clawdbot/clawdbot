@@ -273,28 +273,40 @@ const bundledHookEntries = buildBundledHookEntries();
 const bundledPluginRoot = (pluginId: string) => ["extensions", pluginId].join("/");
 const bundledPluginFile = (pluginId: string, relativePath: string) =>
   `${bundledPluginRoot(pluginId)}/${relativePath}`;
-const explicitNeverBundleDependencies = [
-  "@anthropic-ai/vertex-sdk",
-  "@slack/bolt",
-  "@slack/web-api",
-  "@discordjs/voice",
-  "@lancedb/lancedb",
-  "@larksuiteoapi/node-sdk",
-  "@matrix-org/matrix-sdk-crypto-nodejs",
-  "@openclaw/ai",
-  "@vitest/expect",
-  "jimp",
-  "matrix-js-sdk",
-  "prism-media",
-  "sharp",
-  "typescript",
-  "vitest",
-].toSorted((left, right) => left.localeCompare(right));
+function withExternalPackageSubpaths(options: { neverBundle: string[] }) {
+  return {
+    neverBundle: options.neverBundle.flatMap((dependency) => [
+      dependency,
+      new RegExp(`^${dependency.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&")}/`, "u"),
+    ]),
+  } satisfies NonNullable<UserConfig["deps"]>;
+}
+
+const rootDependencyOptions = withExternalPackageSubpaths({
+  neverBundle: [
+    // The root runtime loads the SDK as its own package; never inline a transitive
+    // copy and relocate its package identity or package-relative assets into dist.
+    "@anthropic-ai/claude-agent-sdk",
+    "@anthropic-ai/vertex-sdk",
+    "@discordjs/voice",
+    "@lancedb/lancedb",
+    "@larksuiteoapi/node-sdk",
+    "@matrix-org/matrix-sdk-crypto-nodejs",
+    "@openclaw/ai",
+    "@slack/bolt",
+    "@slack/web-api",
+    "@vitest/expect",
+    "jimp",
+    "matrix-js-sdk",
+    "prism-media",
+    "sharp",
+    "typescript",
+    "vitest",
+  ],
+});
 
 function shouldNeverBundleDependency(id: string): boolean {
-  return explicitNeverBundleDependencies.some((dependency) => {
-    return id === dependency || id.startsWith(`${dependency}/`);
-  });
+  return matchesExternalOption(rootDependencyOptions.neverBundle, id, undefined, false);
 }
 
 function shouldNeverBundleDeclarationDependency(id: string): boolean {
@@ -346,6 +358,7 @@ function buildCoreDistEntries(): Record<string, string> {
   return {
     index: "src/index.ts",
     entry: "src/entry.ts",
+    "crabbox-wrapper": "scripts/crabbox-wrapper.mts",
     "docker-healthcheck": "src/docker-healthcheck.ts",
     // Ensure this module is bundled as an entry so legacy CLI shims can resolve its exports.
     "cli/daemon-cli": "src/cli/daemon-cli.ts",
@@ -362,6 +375,7 @@ function buildCoreDistEntries(): Record<string, string> {
       "src/config/sessions/session-accessor.sqlite-archive.worker.ts",
     "config/sessions/session-transcript-reconcile.worker":
       "src/config/sessions/session-transcript-reconcile.worker.ts",
+    "infra/sqlite-readonly-location.worker": "src/infra/sqlite-readonly-location.worker.ts",
     "state/openclaw-database-verify.worker": "src/state/openclaw-database-verify.worker.ts",
     "infra/tailscale-route-owner.worker": "src/infra/tailscale-route-owner.worker.ts",
     "system-agent/setup-inference-detection.worker":
@@ -394,6 +408,8 @@ function buildCoreDistEntries(): Record<string, string> {
     "process/supervisor/service-child-relay": "src/process/supervisor/service-child-relay.ts",
     "process/supervisor/service-child-group-anchor":
       "src/process/supervisor/service-child-group-anchor.ts",
+    "process/supervisor/service-child-windows-job-anchor":
+      "src/process/supervisor/service-child-windows-job-anchor.ts",
     "telegram-ingress-worker.runtime": bundledPluginFile(
       "telegram",
       "src/telegram-ingress-worker.runtime.ts",
@@ -592,6 +608,8 @@ function buildUnifiedDistEntries(): Record<string, string> {
           "plugin-sdk/qa-runtime": "src/plugin-sdk/qa-runtime.ts",
         }
       : {}),
+    "extensions/memory-core/memory-search-knn.child":
+      "extensions/memory-core/src/memory/manager-search-knn.child.ts",
     ...listBundledPluginEntrySources(rootBundledPluginBuildEntries),
     "extensions/browser/native-host-entry": "extensions/browser/native-host-entry.ts",
     ...bundledHookEntries,
@@ -682,8 +700,8 @@ function buildUnifiedDeclarationPartitions(
 
 const unifiedDistEntries = buildUnifiedDistEntries();
 const unifiedDeps = {
+  ...rootDependencyOptions,
   alwaysBundle: shouldAlwaysBundleDependency,
-  neverBundle: shouldNeverBundleDependency,
   // Keep dependency-owned types canonical across independently emitted declaration graphs.
   dts: { neverBundle: shouldNeverBundleDeclarationDependency },
 };

@@ -1,7 +1,7 @@
 /**
  * Lazy channel registry value loader.
  *
- * Resolves plugin sub-surfaces from the process-root registry.
+ * Resolves plugin sub-surfaces from the request-scoped or process-root registry.
  */
 import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import { getActivePluginRegistry } from "../../plugins/runtime.js";
@@ -13,7 +13,7 @@ type ChannelRegistryValueResolver<TValue> = (
 ) => TValue | undefined;
 
 /**
- * Creates a lazy loader that resolves one value from the active channel registry.
+ * Creates a lazy loader that resolves one value from the authoritative channel registry.
  */
 export function createChannelRegistryLoader<TValue>(
   resolveValue: ChannelRegistryValueResolver<TValue>,

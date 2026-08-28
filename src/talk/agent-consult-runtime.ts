@@ -4,7 +4,10 @@ import { resolveSessionAgentId } from "../agents/agent-scope.js";
 import type { RunEmbeddedAgentParams } from "../agents/embedded-agent-runner/run/params.js";
 import { forkSessionEntryFromParent } from "../auto-reply/reply/session-fork.js";
 import { resolveSessionWorkStartError } from "../config/sessions/lifecycle.js";
-import { buildSessionCreationStamp } from "../config/sessions/session-entry-provenance.js";
+import {
+  buildSessionCreationStamp,
+  inheritSessionCreationPolicy,
+} from "../config/sessions/session-entry-provenance.js";
 import { parseSessionThreadInfoFast } from "../config/sessions/thread-info.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -176,11 +179,26 @@ async function resolveRealtimeVoiceAgentConsultSessionEntry(params: {
   const now = Date.now();
   const deliveryFields = resolveDeliverySessionFields(params.deliveryContext);
   const requesterSessionKey = params.spawnedBy?.trim();
+  const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
+  const requesterEntry = requesterSessionKey
+    ? params.agentRuntime.session.getSessionEntry({
+        storePath:
+          requesterAgentId && requesterAgentId !== params.agentId
+            ? params.agentRuntime.session.resolveStorePath(params.cfg.session?.store, {
+                agentId: requesterAgentId,
+              })
+            : params.storePath,
+        sessionKey: requesterSessionKey,
+        readConsistency: "latest",
+      })
+    : undefined;
   const creationStamp = buildSessionCreationStamp({
     via: "talk",
-    ...(requesterSessionKey ? { actor: { type: "agent" as const, id: requesterSessionKey } } : {}),
+    ...inheritSessionCreationPolicy(
+      requesterEntry,
+      requesterSessionKey ? { type: "agent", id: requesterSessionKey } : undefined,
+    ),
   });
-  const requesterAgentId = parseAgentSessionKey(requesterSessionKey)?.agentId;
   const shouldFork =
     params.contextMode === "fork" &&
     requesterSessionKey &&

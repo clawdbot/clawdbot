@@ -26,6 +26,14 @@ export type OpenClawPluginNodeHostCommandContext = {
   sessionKey?: string;
   /** Aborts when the Gateway cancels this specific node-host invocation. */
   signal?: AbortSignal;
+  /** Protect one exact node-owned placement workspace for this invocation's lifetime. */
+  acquireManagedWorkspace?: (request: {
+    workspaceDir: string;
+    environmentId: string;
+    sessionId: string;
+    ownerEpoch: number;
+    sessionKey: string;
+  }) => { workspaceDir: string; release: () => void };
 };
 
 type OpenClawPluginNodeHostCommandBase = {

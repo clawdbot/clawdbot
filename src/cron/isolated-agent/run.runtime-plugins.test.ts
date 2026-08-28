@@ -48,4 +48,27 @@ describe("runCronIsolatedAgentTurn runtime plugin owner", () => {
       ],
     });
   });
+
+  it("reuses the published owner metadata snapshot for the run registry load", async () => {
+    const metadataSnapshot = { plugins: [], index: { plugins: [] } };
+    loadModelCatalogOwnerMock.mockImplementation(
+      async (params: { agentId?: string; config: object }) => ({
+        agentId: params.agentId ?? "default",
+        agentDir: "/tmp/agent-dir",
+        workspaceDir: "/tmp/workspace",
+        config: params.config,
+        metadataSnapshot,
+        modelCatalog: { entries: [], routeVariants: [] },
+      }),
+    );
+
+    await expect(runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture())).resolves.toMatchObject(
+      { status: "ok" },
+    );
+    expect(loadAgentRuntimePluginRegistryHandleMock).toHaveBeenCalledOnce();
+    // Exact snapshot identity: a rebuilt copy would still re-hash every installed plugin.
+    expect(loadAgentRuntimePluginRegistryHandleMock.mock.calls[0]?.[0].metadataSnapshot).toBe(
+      metadataSnapshot,
+    );
+  });
 });

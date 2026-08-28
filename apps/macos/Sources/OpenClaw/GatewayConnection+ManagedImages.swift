@@ -3,8 +3,6 @@ import OpenClawChatUI
 import OpenClawKit
 import OpenClawProtocol
 
-private let gatewayManagedMediaPathPrefix = "/api/chat/media/outgoing/"
-
 extension GatewayConnection {
     func loadMediaArtifact(
         sessionKey: String,
@@ -43,10 +41,10 @@ extension GatewayConnection {
             return .data(OpenClawChatMediaData(data: data, mimeType: declaredMIME))
         }
         guard let ticketedPath = response.url?.trimmingCharacters(in: .whitespacesAndNewlines),
-              let sourceURL = Self.managedMediaURL(
+              let url = OpenClawChatMediaURL.resolve(
                   gatewayURL: lease.route.url,
-                  ticketedPath: ticketedPath),
-              let url = Self.playbackURL(sourceURL, mode: playback)
+                  ticketedPath: ticketedPath,
+                  playback: playback)
         else { return nil }
 
         let canStreamDirectly = kind == .video &&
@@ -106,38 +104,5 @@ extension GatewayConnection {
         case .image: 12 * 1024 * 1024
         case .audio, .video: 16 * 1024 * 1024
         }
-    }
-
-    private static func managedMediaURL(gatewayURL: URL, ticketedPath: String) -> URL? {
-        guard ticketedPath.hasPrefix(gatewayManagedMediaPathPrefix),
-              let relative = URLComponents(string: ticketedPath),
-              relative.scheme == nil,
-              relative.host == nil,
-              relative.fragment == nil,
-              relative.queryItems?.contains(where: {
-                  $0.name == "mediaTicket" && $0.value?.isEmpty == false
-              }) == true,
-              var base = URLComponents(url: gatewayURL, resolvingAgainstBaseURL: false),
-              base.host != nil
-        else { return nil }
-        switch base.scheme?.lowercased() {
-        case "wss", "https": base.scheme = "https"
-        case "ws", "http": base.scheme = "http"
-        default: return nil
-        }
-        base.percentEncodedPath = relative.percentEncodedPath
-        base.percentEncodedQuery = relative.percentEncodedQuery
-        base.fragment = nil
-        return base.url
-    }
-
-    private static func playbackURL(_ url: URL, mode: OpenClawChatPlaybackMode?) -> URL? {
-        guard mode == .transcode else { return url }
-        guard var components = URLComponents(url: url, resolvingAgainstBaseURL: false) else { return nil }
-        var queryItems = components.queryItems ?? []
-        queryItems.removeAll { $0.name == "playback" }
-        queryItems.append(URLQueryItem(name: "playback", value: "1"))
-        components.queryItems = queryItems
-        return components.url
     }
 }

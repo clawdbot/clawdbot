@@ -57,7 +57,9 @@ describe("chat pane composer prefill attention", () => {
 
     expect(document.activeElement).toBe(textarea);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(1_200);
+    vi.advanceTimersByTime(599);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    vi.advanceTimersByTime(1);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
@@ -67,12 +69,12 @@ describe("chat pane composer prefill attention", () => {
     const { input, lifecycle } = createComposerAttentionFixture();
 
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(300);
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(599);
 
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(1);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
@@ -915,7 +917,6 @@ describe("chat pane connection lifecycle", () => {
     const cancelCommit = vi.fn();
     const initialScrollGeneration = state.chatScrollGeneration;
     state.chatScrollCommitCleanup = cancelCommit;
-    state.chatIsProgrammaticScroll = true;
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -927,7 +928,6 @@ describe("chat pane connection lifecycle", () => {
     expect(cancelCommit).toHaveBeenCalledOnce();
     expect(state.chatScrollCommitCleanup).toBeNull();
     expect(state.chatScrollGeneration).toBe(initialScrollGeneration + 1);
-    expect(state.chatIsProgrammaticScroll).toBe(false);
   });
 
   it("retires pending model selection state when the Gateway owner changes", () => {
@@ -949,6 +949,29 @@ describe("chat pane connection lifecycle", () => {
 
     expect(state.chatModelSwitchPromises).toEqual({});
     expect(retireModelOverride).toHaveBeenCalledWith("global");
+  });
+
+  it("discards Guardian and system notices when Gateway ownership changes", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.guardianNotices = [
+      {
+        key: "guardian:old-run:review:denied",
+        runId: "old-run",
+        timestamp: 1,
+        kind: "denied",
+        command: "private command",
+      },
+    ];
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(state.guardianNotices).toEqual([]);
   });
 
   it("releases sending state when the Gateway owner changes", () => {

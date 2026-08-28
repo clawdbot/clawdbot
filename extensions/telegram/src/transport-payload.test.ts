@@ -7,7 +7,7 @@ import {
   createPluginStateSyncKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTelegramCallbackMessageActions } from "./bot-handlers.callback-actions.js";
 import { buildTelegramMessageContextForTest } from "./bot-message-context.test-harness.js";
 import { telegramPlugin } from "./channel.js";
@@ -22,6 +22,21 @@ import type { TelegramRuntime } from "./runtime.types.js";
 import { sendTypingTelegram } from "./send-actions.js";
 import { sendMessageTelegram } from "./send-message.js";
 import { sendPollTelegram } from "./send-special.js";
+
+const richMarkdownProjection = vi.hoisted(() => ({ count: 0 }));
+
+vi.mock("./rich-blocks.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./rich-blocks.js")>();
+  return {
+    ...actual,
+    markdownToTelegramRichBlocks: (
+      ...args: Parameters<typeof actual.markdownToTelegramRichBlocks>
+    ) => {
+      richMarkdownProjection.count += 1;
+      return actual.markdownToTelegramRichBlocks(...args);
+    },
+  };
+});
 
 type CapturedRequest = {
   body: Buffer;
@@ -151,6 +166,7 @@ describe("Telegram topic transport payloads", () => {
 
   beforeEach(() => {
     requests.length = 0;
+    richMarkdownProjection.count = 0;
     resetPluginStateStoreForTests();
     resetTelegramMessageCacheForTest();
     installTelegramStateRuntimeForTest();
@@ -259,6 +275,7 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
+    expect(richMarkdownProjection.count).toBe(1);
   });
 
   it("rejects poll and typing for channel Direct Messages without transport", async () => {
@@ -297,5 +314,75 @@ describe("Telegram topic transport payloads", () => {
       direct_messages_topic_id: DIRECT_TOPIC_ID,
     });
     expect(request && parseJsonBody(request)).not.toHaveProperty("message_thread_id");
+  });
+
+  it.each([
+    {
+      name: "ordinary callbacks",
+      businessConnectionId: undefined,
+      expectedMethod: "deleteMessage",
+      expectedPayload: { chat_id: DIRECT_CHAT_ID, message_id: 41 },
+    },
+    {
+      name: "business callbacks",
+      businessConnectionId: "business-delete-1",
+      expectedMethod: "deleteBusinessMessages",
+      expectedPayload: { business_connection_id: "business-delete-1", message_ids: [41] },
+    },
+  ])("deletes $name through their owning Bot API endpoint", async (testCase) => {
+    const callbackMessage = directMessagesMessage(
+      testCase.businessConnectionId
+        ? { business_connection_id: testCase.businessConnectionId }
+        : {},
+    ) as unknown as Message;
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
+    });
+
+    await actions.deleteCallbackMessage();
+
+    expect(requests).toHaveLength(1);
+    expect(requests[0]?.method).toBe(testCase.expectedMethod);
+    expect(requests[0] && parseJsonBody(requests[0])).toEqual(testCase.expectedPayload);
+  });
+
+  it("removes business media callbacks before sending their text replacement", async () => {
+    const callbackMessage = directMessagesMessage({
+      business_connection_id: "business-media-1",
+      text: undefined,
+      caption: "Choose an action",
+    }) as unknown as Message;
+    const actions = createTelegramCallbackMessageActions({
+      bot,
+      callbackMessage,
+      threadSpec: { id: DIRECT_TOPIC_ID, scope: "direct-messages" },
+    });
+    const editMessage = vi
+      .spyOn(bot.api, "editMessageText")
+      .mockRejectedValueOnce(
+        new Error("400: Bad Request: there is no text in the message to edit"),
+      );
+
+    try {
+      await actions.editCallbackMessageWithButtons("Replacement", []);
+    } finally {
+      editMessage.mockRestore();
+    }
+
+    expect(requests.map((request) => request.method)).toEqual([
+      "deleteBusinessMessages",
+      "sendMessage",
+    ]);
+    expect(requests[0] && parseJsonBody(requests[0])).toEqual({
+      business_connection_id: "business-media-1",
+      message_ids: [41],
+    });
+    expect(requests[1] && parseJsonBody(requests[1])).toMatchObject({
+      business_connection_id: "business-media-1",
+      direct_messages_topic_id: DIRECT_TOPIC_ID,
+      text: "Replacement",
+    });
   });
 });

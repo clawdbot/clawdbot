@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => {
     applyAuthProfile: vi.fn(async () => undefined),
     authProfileId: vi.fn((params?: { authProfileId?: string }) => params?.authProfileId),
     fallbackApiKeyCacheKey: vi.fn(() => undefined),
+    reconcileComputerUseArtifacts: vi.fn(async () => undefined),
     startOptions: vi.fn(async ({ startOptions }) => startOptions),
   };
   const managedBinary = {
@@ -23,12 +24,15 @@ const mocks = vi.hoisted(() => {
 vi.mock("./auth-bridge.js", () => ({
   applyCodexAppServerAuthProfile: mocks.authBridge.applyAuthProfile,
   bridgeCodexAppServerStartOptions: mocks.authBridge.startOptions,
+  reconcileCodexComputerUseStartArtifacts: mocks.authBridge.reconcileComputerUseArtifacts,
   resolveCodexAppServerFallbackApiKeyCacheKey: mocks.authBridge.fallbackApiKeyCacheKey,
   resolveCodexAppServerAuthProfileIdForAgent: mocks.authBridge.authProfileId,
+  resolveCodexAppServerAuthProfileStore: () => ({ version: 1, profiles: {} }),
   resolveCodexAppServerHomeDir: (agentDir: string) => `${agentDir}/codex-home`,
 }));
 
-vi.mock("./managed-binary.js", () => ({
+vi.mock("./managed-binary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./managed-binary.js")>()),
   resolveManagedCodexAppServerStartOptions: mocks.managedBinary.startOptions,
   resolveManagedCodexNativeCommand: mocks.managedBinary.nativeCommand,
 }));
@@ -50,6 +54,7 @@ const validModelListEntry = {
   hidden: false,
   isDefault: false,
   defaultReasoningEffort: "medium",
+  multiAgentVersion: "v2",
   supportedReasoningEfforts: [],
 };
 
@@ -123,10 +128,29 @@ describe("listCodexAppServerModels", () => {
           inputModalities: ["text", "image"],
           supportedReasoningEfforts: [],
           defaultReasoningEffort: "medium",
+          multiAgentVersion: "v2",
         },
       ],
       nextCursor: "page-2",
     });
+  });
+
+  it("preserves explicit null while omitting an absent multi-agent version", () => {
+    expect(
+      readModelListResult({
+        data: [{ ...validModelListEntry, multiAgentVersion: null }],
+      }).models[0],
+    ).toHaveProperty("multiAgentVersion", null);
+    expect(
+      readModelListResult({
+        data: [
+          {
+            ...validModelListEntry,
+            multiAgentVersion: undefined,
+          },
+        ],
+      }).models[0],
+    ).not.toHaveProperty("multiAgentVersion");
   });
 
   it.each([
@@ -149,7 +173,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.148.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -170,7 +194,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.148.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const list = JSON.parse(harness.writes[2] ?? "{}") as { id?: number; method?: string };
@@ -222,6 +246,7 @@ describe("listCodexAppServerModels", () => {
           inputModalities: ["text", "image"],
           supportedReasoningEfforts: ["low", "xhigh"],
           defaultReasoningEffort: "medium",
+          multiAgentVersion: "v2",
           isDefault: true,
         },
       ],
@@ -239,7 +264,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.148.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as {
@@ -319,7 +344,7 @@ describe("listCodexAppServerModels", () => {
     const initialize = JSON.parse(harness.writes[0] ?? "{}") as { id?: number };
     harness.send({
       id: initialize.id,
-      result: { userAgent: "openclaw/0.148.0 (macOS; test)" },
+      result: { userAgent: "openclaw/0.149.0 (macOS; test)" },
     });
     await vi.waitFor(() => expect(harness.writes.length).toBeGreaterThanOrEqual(3));
     const firstList = JSON.parse(harness.writes[2] ?? "{}") as { id?: number };

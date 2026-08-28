@@ -2,7 +2,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
-import { verifyAgentRuntimeIdentityToken } from "../../gateway/agent-runtime-identity-token.js";
+import {
+  createAgentRuntimeApprovalAuthorityValidator,
+  verifyAgentRuntimeIdentityToken,
+} from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
 import type { CallGatewayOptions } from "../../gateway/call.js";
 import {
@@ -361,6 +364,44 @@ describe("gateway tool runtime identity", () => {
     ).rejects.toThrow("terminal source reply requires trusted agent runtime identity");
   });
 
+  it("invalidates message action identity when its turn capability closes", async () => {
+    const operationalRunInstance = createOperationalRunInstanceRef("run-capability-close");
+    const sessionKey = "agent:ops:telegram:group:room-close";
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "ops",
+      runId: operationalRunInstance.runId,
+      sessionKey,
+      sessionId: "session-capability-close",
+    });
+    mintedTurnCapabilities.push(turnCapability);
+
+    await withActiveGatewayToolCallerIdentity(
+      { agentId: "ops", sessionKey, operationalRunInstance },
+      async () => {
+        const token = await resolveMessageActionAgentRuntimeIdentityToken({
+          opts: {},
+          target: "local",
+          turnCapability,
+          runId: operationalRunInstance.runId,
+          sessionId: "session-capability-close",
+        });
+        const identity = await verifyAgentRuntimeIdentityToken(token);
+        expect(identity).toMatchObject({
+          messageActionContext: { turnCapability },
+        });
+        expect(identity).toBeDefined();
+        if (!identity) {
+          return;
+        }
+        const validate = createAgentRuntimeApprovalAuthorityValidator();
+        expect(validate(identity)).toBe(true);
+
+        expect(revokeMessageActionTurnCapability(turnCapability)).toBe(true);
+        expect(validate(identity)).toBe(false);
+      },
+    );
+  });
+
   it("mints split-session message action identity and rejects policy-session substitution", async () => {
     const policySessionKey = "agent:ops:telegram:default:direct:alice";
     const runSessionKey = "agent:ops:main";
@@ -427,6 +468,7 @@ describe("gateway tool runtime identity", () => {
   it.each([
     ["exec.approval.request", undefined, false],
     ["plugin.approval.request", "codex", false],
+    ["secrets.store.delete", undefined, false],
     ["exec.approval.request", undefined, true],
     ["plugin.approval.request", "codex", true],
   ] as const)(

@@ -4,6 +4,10 @@ import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
+  GATEWAY_CLIENT_CAPS,
+  hasGatewayClientCap,
+} from "../../../packages/gateway-protocol/src/client-info.js";
+import {
   ErrorCodes,
   errorShape,
   validateSessionsUsageParams,
@@ -21,6 +25,7 @@ import {
   resolveTimezone,
   resolveTimeZoneDayStartMs,
 } from "../../infra/format-time/format-datetime.js";
+import { mergeSessionCostSummaryInto } from "../../infra/session-cost-usage-rollup.js";
 import {
   addCostUsageTotals,
   createEmptyCostUsageTotals,
@@ -48,6 +53,8 @@ import {
   buildUsageAggregateTail,
   mergeUsageDailyLatency,
   mergeUsageLatency,
+  usageDailyModelIdentity,
+  usageModelIdentity,
 } from "../../shared/usage-aggregates.js";
 import type {
   SessionUsageEntry,
@@ -60,7 +67,9 @@ import {
 } from "../../utils/delivery-context.shared.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
+import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import {
   resolveSessionStoreAgentId,
   resolveStoredSessionKeyForAgentStore,
@@ -69,6 +78,7 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
+import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -249,6 +259,7 @@ function usageDayBucketCacheKey(dayBucket: UsageDailyBucket | undefined): string
 
 type SessionsUsageCacheKeyParams = {
   configRef: object;
+  visibilityIdentity?: string;
   agentId?: string;
   agentScope?: "all";
   startMs: number;
@@ -274,6 +285,7 @@ function sessionsUsageCacheKey(params: SessionsUsageCacheKeyParams): string {
     params.groupingMode,
     params.specificKey,
     params.includeContextWeight,
+    ...(params.visibilityIdentity ? [params.visibilityIdentity] : []),
   ]);
 }
 
@@ -728,7 +740,7 @@ function filterSessionStoreByAgent(params: {
   const scopedAgentId = normalizeAgentId(params.agentId);
   const scopedStore: Record<string, SessionEntry> = {};
   for (const [key, entry] of Object.entries(params.store)) {
-    if (params.config.session?.scope === "global" && key.trim().toLowerCase() === "global") {
+    if (key.trim().toLowerCase() === "global") {
       scopedStore[key] = entry;
       continue;
     }
@@ -802,210 +814,6 @@ function maybeMergeFamilyEntry(params: {
     currentSessionId: params.base.sessionId,
     includedSessionIds,
   });
-}
-
-function mergeSessionUsageInto(target: SessionCostSummary, source: SessionCostSummary): void {
-  addCostUsageTotals(target, source);
-  target.firstActivity =
-    target.firstActivity === undefined
-      ? source.firstActivity
-      : source.firstActivity === undefined
-        ? target.firstActivity
-        : Math.min(target.firstActivity, source.firstActivity);
-  target.lastActivity =
-    target.lastActivity === undefined
-      ? source.lastActivity
-      : source.lastActivity === undefined
-        ? target.lastActivity
-        : Math.max(target.lastActivity, source.lastActivity);
-  if (target.firstActivity !== undefined && target.lastActivity !== undefined) {
-    target.durationMs = Math.max(0, target.lastActivity - target.firstActivity);
-  }
-
-  const activityDates = new Set([...(target.activityDates ?? []), ...(source.activityDates ?? [])]);
-  if (activityDates.size > 0) {
-    target.activityDates = Array.from(activityDates).toSorted();
-  }
-
-  target.dailyBreakdown = mergeUsageRows(target.dailyBreakdown, source.dailyBreakdown, [
-    "tokens",
-    "cost",
-  ]);
-  target.dailyMessageCounts = mergeUsageRows(target.dailyMessageCounts, source.dailyMessageCounts, [
-    "total",
-    "user",
-    "assistant",
-    "toolCalls",
-    "toolResults",
-    "errors",
-  ]);
-  target.utcQuarterHourMessageCounts = mergeUsageRows(
-    target.utcQuarterHourMessageCounts,
-    source.utcQuarterHourMessageCounts,
-    ["total", "user", "assistant", "toolCalls", "toolResults", "errors"],
-  );
-  target.utcQuarterHourTokenUsage = mergeUsageRows(
-    target.utcQuarterHourTokenUsage,
-    source.utcQuarterHourTokenUsage,
-    ["input", "output", "cacheRead", "cacheWrite", "totalTokens", "totalCost"],
-  );
-  target.dailyLatency = mergeDailyLatencyRows(target.dailyLatency, source.dailyLatency);
-  target.dailyModelUsage = mergeDailyModelRows(target.dailyModelUsage, source.dailyModelUsage);
-  target.messageCounts = mergeMessageCounts(target.messageCounts, source.messageCounts);
-  target.toolUsage = mergeToolUsage(target.toolUsage, source.toolUsage);
-  target.modelUsage = mergeModelUsage(target.modelUsage, source.modelUsage);
-  target.latency = mergeLatency(target.latency, source.latency);
-}
-
-function mergeUsageRows<T extends { date: string; quarterIndex?: number }>(
-  left: T[] | undefined,
-  right: T[] | undefined,
-  fields: Array<keyof T>,
-): T[] | undefined {
-  const map = new Map<string, T>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const key = row.quarterIndex === undefined ? row.date : `${row.date}:${row.quarterIndex}`;
-    const existing = map.get(key);
-    if (!existing) {
-      map.set(key, { ...row });
-      continue;
-    }
-    for (const field of fields) {
-      existing[field] = (((existing[field] as number | undefined) ?? 0) +
-        ((row[field] as number | undefined) ?? 0)) as T[keyof T];
-    }
-  }
-  return map.size > 0
-    ? Array.from(map.values()).toSorted(
-        (a, b) => a.date.localeCompare(b.date) || (a.quarterIndex ?? 0) - (b.quarterIndex ?? 0),
-      )
-    : undefined;
-}
-
-function mergeMessageCounts(
-  left: SessionMessageCounts | undefined,
-  right: SessionMessageCounts | undefined,
-): SessionMessageCounts | undefined {
-  if (!left && !right) {
-    return undefined;
-  }
-  return {
-    total: (left?.total ?? 0) + (right?.total ?? 0),
-    user: (left?.user ?? 0) + (right?.user ?? 0),
-    assistant: (left?.assistant ?? 0) + (right?.assistant ?? 0),
-    toolCalls: (left?.toolCalls ?? 0) + (right?.toolCalls ?? 0),
-    toolResults: (left?.toolResults ?? 0) + (right?.toolResults ?? 0),
-    errors: (left?.errors ?? 0) + (right?.errors ?? 0),
-  };
-}
-
-function mergeToolUsage(
-  left: SessionCostSummary["toolUsage"],
-  right: SessionCostSummary["toolUsage"],
-): SessionCostSummary["toolUsage"] {
-  const map = new Map<string, number>();
-  for (const tool of [...(left?.tools ?? []), ...(right?.tools ?? [])]) {
-    map.set(tool.name, (map.get(tool.name) ?? 0) + tool.count);
-  }
-  return map.size > 0
-    ? {
-        totalCalls: Array.from(map.values()).reduce((sum, count) => sum + count, 0),
-        uniqueTools: map.size,
-        tools: Array.from(map.entries())
-          .map(([name, count]) => ({ name, count }))
-          .toSorted((a, b) => b.count - a.count),
-      }
-    : undefined;
-}
-
-function mergeModelUsage(
-  left: SessionCostSummary["modelUsage"],
-  right: SessionCostSummary["modelUsage"],
-): SessionCostSummary["modelUsage"] {
-  const map = new Map<string, SessionModelUsage>();
-  for (const entry of [...(left ?? []), ...(right ?? [])]) {
-    const key = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
-    const existing =
-      map.get(key) ??
-      ({
-        provider: entry.provider,
-        model: entry.model,
-        count: 0,
-        totals: createEmptyCostUsageTotals(),
-      } as SessionModelUsage);
-    existing.count += entry.count;
-    addCostUsageTotals(existing.totals, entry.totals);
-    map.set(key, existing);
-  }
-  return map.size > 0 ? Array.from(map.values()) : undefined;
-}
-
-function mergeLatency(
-  left: SessionCostSummary["latency"],
-  right: SessionCostSummary["latency"],
-): SessionCostSummary["latency"] {
-  if (!left && !right) {
-    return undefined;
-  }
-  const leftCount = left?.count ?? 0;
-  const rightCount = right?.count ?? 0;
-  const count = leftCount + rightCount;
-  return {
-    count,
-    avgMs:
-      count > 0 ? ((left?.avgMs ?? 0) * leftCount + (right?.avgMs ?? 0) * rightCount) / count : 0,
-    p95Ms: Math.max(left?.p95Ms ?? 0, right?.p95Ms ?? 0),
-    minMs: Math.min(
-      left?.minMs ?? Number.POSITIVE_INFINITY,
-      right?.minMs ?? Number.POSITIVE_INFINITY,
-    ),
-    maxMs: Math.max(left?.maxMs ?? 0, right?.maxMs ?? 0),
-  };
-}
-
-function mergeDailyLatencyRows(
-  left: SessionCostSummary["dailyLatency"],
-  right: SessionCostSummary["dailyLatency"],
-): SessionCostSummary["dailyLatency"] {
-  const map = new Map<string, NonNullable<SessionCostSummary["dailyLatency"]>[number]>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const existing = map.get(row.date);
-    if (!existing) {
-      map.set(row.date, { ...row });
-      continue;
-    }
-    const count = existing.count + row.count;
-    existing.avgMs =
-      count > 0 ? (existing.avgMs * existing.count + row.avgMs * row.count) / count : 0;
-    existing.count = count;
-    existing.p95Ms = Math.max(existing.p95Ms, row.p95Ms);
-    existing.minMs = Math.min(existing.minMs, row.minMs);
-    existing.maxMs = Math.max(existing.maxMs, row.maxMs);
-  }
-  return map.size > 0
-    ? Array.from(map.values()).toSorted((a, b) => a.date.localeCompare(b.date))
-    : undefined;
-}
-
-function mergeDailyModelRows(
-  left: SessionCostSummary["dailyModelUsage"],
-  right: SessionCostSummary["dailyModelUsage"],
-): SessionCostSummary["dailyModelUsage"] {
-  const map = new Map<string, NonNullable<SessionCostSummary["dailyModelUsage"]>[number]>();
-  for (const row of [...(left ?? []), ...(right ?? [])]) {
-    const key = `${row.date}:${row.provider ?? "unknown"}:${row.model ?? "unknown"}`;
-    const existing = map.get(key);
-    if (!existing) {
-      map.set(key, { ...row });
-      continue;
-    }
-    existing.tokens += row.tokens;
-    existing.cost += row.cost;
-    existing.count += row.count;
-  }
-  return map.size > 0
-    ? Array.from(map.values()).toSorted((a, b) => a.date.localeCompare(b.date))
-    : undefined;
 }
 
 async function loadCostUsageSummaryCached(params: {
@@ -1133,19 +941,42 @@ export const testApi = {
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
-  "usage.status": async ({ respond, context }) => {
+  "usage.status": async ({ respond, context, client }) => {
+    // Only clients with bounded retry machinery may receive an incomplete cold result.
+    // In-process dispatch reuses the originating request's client, capabilities
+    // included, so a plugin proxying this method inside a capable UI request
+    // would inherit the marker without any way to converge it. Such a caller
+    // must pass a capless client, the way board bindings force `client: null`.
+    const coldRead = hasGatewayClientCap(
+      client?.connect?.caps,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
+    )
+      ? ("refresh-marker" as const)
+      : undefined;
     const summary = await loadUsageStatusStaleWhileRevalidate({
       config: context.getRuntimeConfig(),
+      coldRead,
     });
     respond(true, summary, undefined);
   },
-  "usage.cost": async ({ respond, params, context }) => {
+  "usage.cost": async ({ respond, params, context, client }) => {
     const dateRange = resolveUsageDateRangeOrRespond(params ?? {}, respond);
     if (!dateRange) {
       return;
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
+    if (!isGatewayAdmin(client ?? null) && operatorSessionCap(client ?? null, config) === "none") {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.FORBIDDEN,
+          "Aggregate usage includes sessions hidden by your operator role; ask an administrator to review Gateway-wide usage.",
+        ),
+      );
+      return;
+    }
     const { startMs, endMs } = range;
     const agentId = normalizeOptionalString(params?.agentId);
     const agentScope = params?.agentScope === "all" && !agentId ? "all" : undefined;
@@ -1168,7 +999,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     });
     respond(true, summary, undefined);
   },
-  "sessions.usage": async ({ respond, params, context }) => {
+  "sessions.usage": async ({ respond, params, context, client }) => {
     if (!assertValidParams(params, validateSessionsUsageParams, "sessions.usage", respond)) {
       return;
     }
@@ -1180,6 +1011,13 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
+    const sessionCap = operatorSessionCap(client ?? null, config);
+    const visibilityFilter =
+      sessionCap === "none"
+        ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
+        : undefined;
+    const profileId = gatewayClientSessionCreator(client ?? null)?.id;
+    const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
     const { startMs, endMs, includeUntimestamped } = range;
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
@@ -1234,17 +1072,23 @@ export const usageHandlers: GatewayRequestHandlers = {
         groupingMode,
         specificKey,
         includeContextWeight,
+        ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           // Load session store for named sessions only on a result-cache miss.
           const sessionStoreOpts = effectiveAgentId ? { agentId: effectiveAgentId } : {};
           const { store } = loadCombinedSessionStoreForGatewayCore(config, sessionStoreOpts);
-          const scopedStore = effectiveAgentId
+          const agentStore = effectiveAgentId
             ? filterSessionStoreByAgent({
                 config,
                 store,
                 agentId: effectiveAgentId,
               })
             : store;
+          const scopedStore = visibilityFilter
+            ? Object.fromEntries(
+                Object.entries(agentStore).filter(([key, entry]) => visibilityFilter(key, entry)),
+              )
+            : agentStore;
           const now = Date.now();
 
           const mergedEntries: MergedEntry[] = [];
@@ -1280,6 +1124,11 @@ export const usageHandlers: GatewayRequestHandlers = {
               null;
             const resolvedStoreKey = storeMatch?.key ?? storeByIdMatch?.key ?? scopedSpecificKey;
             const storeEntry = storeMatch?.entry ?? storeByIdMatch?.entry;
+            if (visibilityFilter && !storeEntry) {
+              throw new SessionsUsageInvalidRequestError(
+                `Invalid session reference: ${specificKey}`,
+              );
+            }
             const sessionId = storeEntry?.sessionId ?? keyRest;
 
             // Stored sessions are canonical SQLite targets. JSONL discovery remains only for
@@ -1351,6 +1200,9 @@ export const usageHandlers: GatewayRequestHandlers = {
 
             for (const discovered of discoveredSessions) {
               const storeMatch = storeBySessionId.get(discovered.sessionId);
+              if (visibilityFilter && !storeMatch) {
+                continue;
+              }
               if (storeMatch) {
                 // Named session from store
                 maybeMergeFamilyEntry({
@@ -1494,7 +1346,7 @@ export const usageHandlers: GatewayRequestHandlers = {
                 usageByEntryIndex[session.entryIndex] ?? createEmptyCostUsageTotals();
               usage.sessionId = merged.sessionId;
               usage.sessionFile = merged.sessionFile;
-              mergeSessionUsageInto(usage, summary);
+              mergeSessionCostSummaryInto(usage, summary);
               usageByEntryIndex[session.entryIndex] = usage;
             }
           }
@@ -1544,7 +1396,7 @@ export const usageHandlers: GatewayRequestHandlers = {
 
               if (usage.modelUsage) {
                 for (const entry of usage.modelUsage) {
-                  const modelKey = `${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+                  const modelKey = usageModelIdentity(entry.provider, entry.model);
                   const modelExisting =
                     byModelMap.get(modelKey) ??
                     ({
@@ -1577,7 +1429,7 @@ export const usageHandlers: GatewayRequestHandlers = {
 
               if (usage.dailyModelUsage) {
                 for (const entry of usage.dailyModelUsage) {
-                  const key = `${entry.date}::${entry.provider ?? "unknown"}::${entry.model ?? "unknown"}`;
+                  const key = usageDailyModelIdentity(entry.date, entry.provider, entry.model);
                   const existing =
                     modelDailyMap.get(key) ??
                     ({

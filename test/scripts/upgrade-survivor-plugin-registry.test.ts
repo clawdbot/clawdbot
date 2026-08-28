@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -6,6 +7,18 @@ import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/e2e/upgrade-survivor-docker.sh");
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const SOURCE_SHA = "a".repeat(40);
+const VERSION = "2026.8.1";
+
+function registryManifest(): string {
+  return `${JSON.stringify({
+    candidateVersion: VERSION,
+    packages: [],
+    schema: "openclaw.prepublish-plugin-registry/v1",
+    schemaVersion: 1,
+    sourceSha: SOURCE_SHA,
+  })}\n`;
+}
 
 function writeExecutable(path: string, source: string): void {
   writeFileSync(path, source);
@@ -30,10 +43,10 @@ fi
 printf '%s\n' "$*" >>"$CAPTURE_DIR/node-args"
 printf '%s|%s|%s\n' \
   "$OPENCLAW_DOCKER_ALL_LANES" \
-  "$OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS" \
+  "\${OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPECS:-}" \
   "$OPENCLAW_UPGRADE_SURVIVOR_SCENARIOS" >>"$CAPTURE_DIR/node-env"
 mkdir -p "$OPENCLAW_DOCKER_ALL_LOG_DIR/prepublish-plugin-registry"
-printf '{"packages":[]}\n' \
+printf '%s' "$REGISTRY_MANIFEST" \
   >"$OPENCLAW_DOCKER_ALL_LOG_DIR/prepublish-plugin-registry/prepublish-plugin-registry.json"
 printf '{"dir":"%s"}\n' "$OPENCLAW_DOCKER_ALL_LOG_DIR/prepublish-plugin-registry"
 `,
@@ -58,7 +71,9 @@ done
     env: {
       ...process.env,
       CAPTURE_DIR: captureDir,
+      OPENCLAW_DOCKER_E2E_SELECTED_SHA: SOURCE_SHA,
       REAL_NODE: process.execPath,
+      REGISTRY_MANIFEST: registryManifest(),
       OPENCLAW_CURRENT_PACKAGE_TGZ: packageTarball,
       OPENCLAW_DOCKER_E2E_DISABLE_RESOURCE_LIMITS: "1",
       OPENCLAW_SKIP_CHANNELS: "1",
@@ -77,6 +92,36 @@ done
 }
 
 describe("standalone upgrade survivor plugin registry", () => {
+  it("prepares and mounts the direct auto-auth planner registry", () => {
+    const { captureDir, result } = runSurvivor({
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: undefined,
+      OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "0",
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(readFileSync(join(captureDir, "node-env"), "utf8")).toBe("update-restart-auth||base\n");
+  });
+
+  it("preserves an explicitly supplied direct registry", () => {
+    const registryDir = tempDirs.make("openclaw-direct-plugin-registry-");
+    const manifestPath = join(registryDir, "prepublish-plugin-registry.json");
+    writeFileSync(manifestPath, registryManifest());
+
+    const { captureDir, result } = runSurvivor({
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registryDir,
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: createHash("sha256")
+        .update(readFileSync(manifestPath))
+        .digest("hex"),
+      OPENCLAW_UPGRADE_SURVIVOR_BASELINE_SPEC: undefined,
+      OPENCLAW_UPGRADE_SURVIVOR_PUBLISHED_BASELINE: "0",
+      OPENCLAW_UPGRADE_SURVIVOR_UPDATE_RESTART_MODE: "auto-auth",
+    });
+
+    expect(result.status, result.stderr).toBe(0);
+    expect(existsSync(join(captureDir, "node-args"))).toBe(false);
+  });
+
   it("prepares and mounts a planner-owned registry for the current candidate", () => {
     const { captureDir, result } = runSurvivor({
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "configured-plugin-installs",
@@ -96,10 +141,14 @@ describe("standalone upgrade survivor plugin registry", () => {
 
   it("preserves an explicitly supplied registry without preparing another", () => {
     const registryDir = tempDirs.make("openclaw-external-plugin-registry-");
-    writeFileSync(join(registryDir, "prepublish-plugin-registry.json"), '{"external":true}\n');
+    const manifestPath = join(registryDir, "prepublish-plugin-registry.json");
+    writeFileSync(manifestPath, registryManifest());
 
     const { captureDir, result } = runSurvivor({
       OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR: registryDir,
+      OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_MANIFEST_SHA256: createHash("sha256")
+        .update(readFileSync(manifestPath))
+        .digest("hex"),
       OPENCLAW_UPGRADE_SURVIVOR_SCENARIO: "external-only-scenario",
     });
 

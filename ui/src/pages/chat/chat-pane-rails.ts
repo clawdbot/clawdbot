@@ -1,33 +1,35 @@
-import { isDesktopPanelAvailable } from "../../app/app-shell-chrome.ts";
+import { isDesktopPanelAvailable } from "../../app/panel-availability.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
 import { openTaskDetailId } from "./components/chat-detail-slot.ts";
 import { createSessionWorkspaceProps } from "./components/chat-session-workspace.ts";
-import {
-  SIDEBAR_NARROW_BREAKPOINT_PX,
-  closeSlot,
-  isSidebarSlotVisible,
-  openSlot,
-  type SidebarSlotId,
-} from "./sidebar-layout.ts";
+import { closeSlot, isSidebarSlotVisible, openSlot, type SidebarSlotId } from "./sidebar-layout.ts";
 
 type ChatPaneSidebarLayout = Parameters<typeof isSidebarSlotVisible>[0];
 type ChatPaneGatewaySnapshot = Parameters<typeof isDesktopPanelAvailable>[0];
+
+export function releaseAttachmentWorkspaceOwner(state: ChatPageHost, slot: SidebarSlotId): void {
+  // Attachment views temporarily own Files content. Release that owner
+  // with the slot so reopening Files restores the session workspace.
+  if (slot === "workspace") {
+    state.attachmentSidebarContent = null;
+  }
+}
 
 /** Builds the two rail models and their shared sidebar slot controls. */
 export function createChatPaneRails(params: {
   state: ChatPageHost;
   sidebarLayout: ChatPaneSidebarLayout;
-  paneWidth: number;
   presentationId: string;
+  presented: boolean;
   gatewaySnapshot: ChatPaneGatewaySnapshot;
   setObserverVisibility: (visible: boolean) => void;
+  updateSidebarLayout: ChatPageHost["updateSidebarLayout"];
 }) {
   const { state, sidebarLayout } = params;
-  const hasPanelSlot = (slot: SidebarSlotId) =>
-    sidebarLayout.columns[0]?.panels.some((panel) => panel.slot === slot) === true;
+  const isPanelVisible = (slot: SidebarSlotId) => isSidebarSlotVisible(sidebarLayout, slot);
   const openPanelSlot = (slot: SidebarSlotId) => {
-    state.updateSidebarLayout(openSlot(state.sidebarLayout, slot));
+    params.updateSidebarLayout(openSlot(sidebarLayout, slot));
     if (slot === "companion") {
       params.setObserverVisibility(true);
     }
@@ -36,18 +38,20 @@ export function createChatPaneRails(params: {
     if (slot === "companion") {
       params.setObserverVisibility(false);
     }
-    state.updateSidebarLayout(closeSlot(state.sidebarLayout, slot));
+    releaseAttachmentWorkspaceOwner(state, slot);
+    params.updateSidebarLayout(closeSlot(sidebarLayout, slot));
   };
   const togglePanelSlot = (slot: SidebarSlotId) =>
-    hasPanelSlot(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
+    isPanelVisible(slot) ? closePanelSlot(slot) : openPanelSlot(slot);
   const sessionWorkspaceBase = createSessionWorkspaceProps(state, {
     draftScope: params.presentationId,
-    expanded: hasPanelSlot("workspace"),
+    expanded: isSidebarSlotVisible(sidebarLayout, "workspace"),
     narrowLayout: false,
+    presented: params.presented,
   });
   const sessionWorkspace = {
     ...sessionWorkspaceBase,
-    collapsed: !hasPanelSlot("workspace"),
+    collapsed: !isPanelVisible("workspace"),
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("workspace"),
     onToggleTerminal: state.terminalAvailable ? () => togglePanelSlot("terminal") : undefined,
@@ -60,21 +64,18 @@ export function createChatPaneRails(params: {
     narrowLayout: false,
     openTaskId: openTaskDetailId(state.sidebarContent, sidebarLayout),
     onOpenTaskDetail: (task) => state.handleOpenSidebar({ kind: "task", taskId: task.id }),
+    presented: params.presented,
   });
   const backgroundTasks = {
     ...backgroundTasksBase,
-    collapsed: !hasPanelSlot("tasks"),
+    collapsed: !isPanelVisible("tasks"),
     narrowLayout: false,
     onToggleCollapsed: () => togglePanelSlot("tasks"),
   };
-  const progressCardInRail =
-    params.paneWidth >= SIDEBAR_NARROW_BREAKPOINT_PX &&
-    isSidebarSlotVisible(sidebarLayout, "companion");
   return {
     backgroundTasks,
     closePanelSlot,
     openPanelSlot,
-    progressCardInRail,
     sessionWorkspace,
   };
 }

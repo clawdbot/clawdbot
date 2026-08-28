@@ -16,6 +16,7 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { AgentSelectionRequiredError, resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
 import { buildAgentMainSessionKey } from "../../routing/session-key.js";
+import { assertSecretOwnerAvailable } from "../../secrets/runtime-degraded-state.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL,
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
@@ -51,6 +52,10 @@ import {
   resolveConfiguredRealtimeVoiceProvider,
   resolveRealtimeVoiceProviderCapabilities,
 } from "../../talk/provider-resolver.js";
+import {
+  authorizeGatewaySessionCreation,
+  resolveSandboxedSessionCreation,
+} from "../operator-role-policy.js";
 import { readSessionPreviewItemsFromTranscript } from "../session-transcript-readers.js";
 import { startTalkRealtimeAgentConsult } from "../talk-agent-consult.js";
 import {
@@ -65,6 +70,11 @@ import {
   flushTalkRealtimeRelayVoiceWrites,
 } from "../talk-realtime-relay.js";
 import { formatForLog } from "../ws-log.js";
+import {
+  forgetLegacyVoiceBinding,
+  readLegacyVoiceBinding,
+  rememberLegacyVoiceBinding,
+} from "./talk-client-legacy-voice-bindings.js";
 import { hasOwnedActiveTalkClientRun } from "./talk-client-run-ownership.js";
 import {
   buildRealtimeInstructions,
@@ -73,25 +83,18 @@ import {
   isUnsupportedBrowserWebRtcSession,
   resolveTalkRealtimeProviderInstructions,
 } from "./talk-shared.js";
-import type { GatewayRequestHandlers } from "./types.js";
+import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
-const LEGACY_VOICE_BINDING_TTL_MS = 6 * 60 * 60_000;
 const REALTIME_VOICE_CONTEXT_MAX_ITEMS = 16;
 const REALTIME_VOICE_CONTEXT_MAX_ITEM_CHARS = 800;
 const REALTIME_VOICE_CLIENT_SESSION_MIN_TTL_MS = 5_000;
-const legacyVoiceSessionByClient = new Map<string, { voiceSessionId: string; expiresAt: number }>();
-
-function legacyVoiceBindingKey(connId: string, sessionKey: string): string {
-  return `${connId}\0${sessionKey}`;
-}
-
-function pruneLegacyVoiceBindings(now = Date.now()): void {
-  for (const [key, binding] of legacyVoiceSessionByClient) {
-    if (binding.expiresAt <= now) {
-      legacyVoiceSessionByClient.delete(key);
-    }
-  }
+function rejectTalkClientRequest(
+  respond: RespondFn,
+  code: Parameters<typeof errorShape>[0],
+  message: string,
+): void {
+  respond(false, undefined, errorShape(code, message));
 }
 
 /**
@@ -126,13 +129,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       const mode =
         normalizeOptionalLowercaseString(typedParams.mode) ?? realtimeConfig.mode ?? "realtime";
       if (mode !== "realtime") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `talk.client.create only supports mode="realtime"; use talk.catalog for ${mode} provider discovery`,
-          ),
+        rejectTalkClientRequest(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `talk.client.create only supports mode="realtime"; use talk.catalog for ${mode} provider discovery`,
         );
         return;
       }
@@ -141,13 +141,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         realtimeConfig.brain ??
         "agent-consult";
       if (brain !== "agent-consult") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `talk.client.create only supports brain="agent-consult"`,
-          ),
+        rejectTalkClientRequest(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `talk.client.create only supports brain="agent-consult"`,
         );
         return;
       }
@@ -156,37 +153,28 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       const wantsCameraFrames = typedParams.capabilities?.includes("camera-frame") === true;
       const wantsGatewayControl = typedParams.capabilities?.includes("gateway-control-v1") === true;
       if (wantsGatewayControl && wantsCameraFrames) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            "gateway-control-v1 supports audio-only WebRTC sessions",
-          ),
+        rejectTalkClientRequest(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          "gateway-control-v1 supports audio-only WebRTC sessions",
         );
         return;
       }
       if (transport === "managed-room") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            "managed-room realtime Talk sessions are not available in the browser UI yet",
-          ),
+        rejectTalkClientRequest(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          "managed-room realtime Talk sessions are not available in the browser UI yet",
         );
         return;
       }
       if (transport === "gateway-relay") {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            wantsCameraFrames
-              ? "gateway-relay does not support browser video frames"
-              : `talk.client.create is client-owned; use talk.session.create for gateway-relay`,
-          ),
+        rejectTalkClientRequest(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          wantsCameraFrames
+            ? "gateway-relay does not support browser video frames"
+            : `talk.client.create is client-owned; use talk.session.create for gateway-relay`,
         );
         return;
       }
@@ -195,16 +183,15 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         defaults: realtimeConfig,
       });
       const requestedAgentId = resolveTalkSessionAgentId(runtimeConfig, typedParams.sessionKey);
+      assertSecretOwnerAvailable("capability", "talk:realtime");
       const resolution = resolveConfiguredRealtimeVoiceProvider({
         configuredProviderId: realtimeConfig.provider,
         providerConfigs: realtimeConfig.providers,
         ...(launchOptions.model ? { providerConfigOverrides: { model: launchOptions.model } } : {}),
         cfg: runtimeConfig,
-        cfgForResolve: runtimeConfig,
         agentId: requestedAgentId,
         defaultModel: realtimeConfig.model,
         surface: "browser-session",
-        noRegisteredProviderMessage: "No realtime voice provider registered",
       });
       const providerCapabilities = resolveRealtimeVoiceProviderCapabilities({
         provider: resolution.provider,
@@ -215,24 +202,18 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         surface: "browser-session",
       });
       if (wantsGatewayControl && providerCapabilities?.supportsGatewayControl !== true) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.UNAVAILABLE,
-            `Realtime provider "${resolution.provider.id}" does not support gateway-control-v1 with its configured authentication`,
-          ),
+        rejectTalkClientRequest(
+          respond,
+          ErrorCodes.UNAVAILABLE,
+          `Realtime provider "${resolution.provider.id}" does not support gateway-control-v1 with its configured authentication`,
         );
         return;
       }
       if (wantsCameraFrames && providerCapabilities?.supportsVideoFrames !== true) {
-        respond(
-          false,
-          undefined,
-          errorShape(
-            ErrorCodes.INVALID_REQUEST,
-            `Realtime provider ${resolution.provider.id} does not support browser video frames`,
-          ),
+        rejectTalkClientRequest(
+          respond,
+          ErrorCodes.INVALID_REQUEST,
+          `Realtime provider ${resolution.provider.id} does not support browser video frames`,
         );
         return;
       }
@@ -248,6 +229,15 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       });
       const { agentId, requestedSessionKey } = realtimeContext;
       const sessionKey = requestedSessionKey ?? buildAgentMainSessionKey({ agentId });
+      const creationError = authorizeGatewaySessionCreation({
+        cfg: runtimeConfig,
+        client,
+        agentId,
+      });
+      if (creationError) {
+        respond(false, undefined, creationError);
+        return;
+      }
       if (resolution.provider.createBrowserSession && transport !== "gateway-relay") {
         const agentSessionId = resolveClientVoiceAgentSessionId({ agentId, sessionKey });
         const initialItems = agentSessionId
@@ -376,9 +366,8 @@ export const talkClientHandlers: GatewayRequestHandlers = {
             await ensureClientVoiceAgentSessionEntry({
               agentId,
               sessionKey,
-              ...(sessionEntryDeadlineAt !== undefined
-                ? { deadlineAt: sessionEntryDeadlineAt }
-                : {}),
+              creation: resolveSandboxedSessionCreation(client, runtimeConfig),
+              deadlineAt: sessionEntryDeadlineAt,
             });
           } catch (error) {
             try {
@@ -420,12 +409,11 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           activeVoiceSessionId = voiceSessionId;
           const connId = ownerConnId;
           if (connId) {
-            const now = Date.now();
-            pruneLegacyVoiceBindings(now);
-            legacyVoiceSessionByClient.set(
-              legacyVoiceBindingKey(connId, typedParams.sessionKey?.trim() || sessionKey),
-              { voiceSessionId, expiresAt: now + LEGACY_VOICE_BINDING_TTL_MS },
-            );
+            rememberLegacyVoiceBinding({
+              connId,
+              sessionKey: typedParams.sessionKey?.trim() || sessionKey,
+              voiceSessionId,
+            });
           }
           gatewayControlOwner?.activate(() =>
             cancelInternalRealtimeVoiceBrowserSession({
@@ -457,24 +445,18 @@ export const talkClientHandlers: GatewayRequestHandlers = {
           );
         }
         if (transport) {
-          respond(
-            false,
-            undefined,
-            errorShape(
-              ErrorCodes.UNAVAILABLE,
-              `Realtime provider "${resolution.provider.id}" does not support requested browser transport "${transport}"`,
-            ),
+          rejectTalkClientRequest(
+            respond,
+            ErrorCodes.UNAVAILABLE,
+            `Realtime provider "${resolution.provider.id}" does not support requested browser transport "${transport}"`,
           );
           return;
         }
       }
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.UNAVAILABLE,
-          `Realtime provider "${resolution.provider.id}" does not support client-owned realtime sessions`,
-        ),
+      rejectTalkClientRequest(
+        respond,
+        ErrorCodes.UNAVAILABLE,
+        `Realtime provider "${resolution.provider.id}" does not support client-owned realtime sessions`,
       );
     } catch (err) {
       respond(
@@ -497,19 +479,27 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       return;
     }
     if (params.name !== REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME) {
-      respond(
-        false,
-        undefined,
-        errorShape(ErrorCodes.INVALID_REQUEST, `unsupported realtime Talk tool: ${params.name}`),
+      rejectTalkClientRequest(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        `unsupported realtime Talk tool: ${params.name}`,
       );
       return;
     }
 
     const config = request.context.getRuntimeConfig();
     const agentId = resolveTalkSessionAgentId(config, params.sessionKey);
+    const creationError = authorizeGatewaySessionCreation({
+      cfg: config,
+      client: request.client,
+      agentId,
+    });
+    if (creationError) {
+      respond(false, undefined, creationError);
+      return;
+    }
     const relaySessionId = normalizeOptionalString(params.relaySessionId);
     const connId = normalizeOptionalString(request.client?.connId);
-    pruneLegacyVoiceBindings();
     const explicitVoiceSessionId = normalizeOptionalString(params.voiceSessionId);
     if (relaySessionId && explicitVoiceSessionId && explicitVoiceSessionId !== relaySessionId) {
       respond(
@@ -528,10 +518,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       voiceSessionId =
         explicitVoiceSessionId ??
         relaySessionId ??
-        (connId
-          ? legacyVoiceSessionByClient.get(legacyVoiceBindingKey(connId, params.sessionKey))
-              ?.voiceSessionId
-          : undefined) ??
+        (connId ? readLegacyVoiceBinding(connId, params.sessionKey) : undefined) ??
         resolveOpenClientVoiceSessionId({ agentId, sessionKey: params.sessionKey }) ??
         createOrResumeClientVoiceSession({
           agentId,
@@ -541,17 +528,16 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       // Pin the resolved id to this connection so a legacy client's later consults
       // reuse one record instead of forking a new never-closed session each time.
       if (connId && !relaySessionId) {
-        const now = Date.now();
-        pruneLegacyVoiceBindings(now);
-        legacyVoiceSessionByClient.set(legacyVoiceBindingKey(connId, params.sessionKey), {
-          voiceSessionId,
-          expiresAt: now + LEGACY_VOICE_BINDING_TTL_MS,
-        });
+        rememberLegacyVoiceBinding({ connId, sessionKey: params.sessionKey, voiceSessionId });
       }
       if (relaySessionId && connId) {
         // Initialize the canonical session row BEFORE binding: the bind drains the
         // relay's buffered finals into transcript appends, which fail without it.
-        await ensureClientVoiceAgentSessionEntry({ agentId, sessionKey: params.sessionKey });
+        await ensureClientVoiceAgentSessionEntry({
+          agentId,
+          sessionKey: params.sessionKey,
+          creation: resolveSandboxedSessionCreation(request.client, config),
+        });
         ensureTalkRealtimeRelayVoiceSession({
           relaySessionId,
           connId,
@@ -679,10 +665,7 @@ export const talkClientHandlers: GatewayRequestHandlers = {
       });
       const connId = normalizeOptionalString(client?.connId);
       if (connId) {
-        const key = legacyVoiceBindingKey(connId, params.sessionKey);
-        if (legacyVoiceSessionByClient.get(key)?.voiceSessionId === params.voiceSessionId) {
-          legacyVoiceSessionByClient.delete(key);
-        }
+        forgetLegacyVoiceBinding(connId, params.sessionKey, params.voiceSessionId);
       }
       respond(true, { ok: true }, undefined);
     } catch (err) {
@@ -700,13 +683,10 @@ export const talkClientHandlers: GatewayRequestHandlers = {
         sessionKey: params.sessionKey,
       })
     ) {
-      respond(
-        false,
-        undefined,
-        errorShape(
-          ErrorCodes.INVALID_REQUEST,
-          "talk.client.steer requires an active browser-owned Talk run",
-        ),
+      rejectTalkClientRequest(
+        respond,
+        ErrorCodes.INVALID_REQUEST,
+        "talk.client.steer requires an active browser-owned Talk run",
       );
       return;
     }

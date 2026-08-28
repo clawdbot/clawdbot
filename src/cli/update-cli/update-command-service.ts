@@ -24,11 +24,15 @@ import {
   suspendScheduledTaskAutoStartForUpdate,
 } from "../../daemon/schtasks.js";
 import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
-import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
+import {
+  resolveManagedGatewayServiceCommand,
+  type GatewayServiceCommandConfig,
+} from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { assertGatewayServiceMutationAllowed } from "../../infra/gateway-supervision.js";
 import { getSelfAndAncestorPidsSync } from "../../infra/restart-stale-pids.js";
 import { nodeVersionSatisfiesEngine } from "../../infra/runtime-guard.js";
+import type { UpdateChannel } from "../../infra/update-channels.js";
 import { fetchNpmPackageTargetStatus } from "../../infra/update-check-package-target.js";
 import { canResolveRegistryVersionForPackageTarget } from "../../infra/update-global.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
@@ -565,7 +569,8 @@ export async function maybeStopManagedServiceBeforeMutableUpdate(params: {
     running: serviceState.running,
     ...serviceOwnership,
     serviceEnv: serviceState.env,
-    serviceDefinitionEnv: serviceState.command?.environment,
+    serviceDefinitionEnv:
+      resolveManagedGatewayServiceCommand(serviceState.command)?.environment ?? {},
     ...(windowsTaskAutoStartRecovery ? { windowsTaskAutoStartRecovery } : {}),
   };
 }
@@ -797,8 +802,7 @@ async function refreshGatewayServiceEnv(params: {
       {
         cwd: params.result.root,
         env: resolveUpdatedInstallCommandEnv({
-          processEnv: process.env,
-          serviceEnv: params.env,
+          processEnv: params.env ?? process.env,
           invocationCwd: params.invocationCwd,
         }),
         timeoutMs: SERVICE_REFRESH_TIMEOUT_MS,
@@ -1049,9 +1053,11 @@ export async function gatewayServiceCommandUsesRoot(params: {
 export async function maybeRestartService(params: {
   shouldRestart: boolean;
   result: UpdateRunResult;
+  channel: UpdateChannel;
   opts: UpdateCommandOptions;
   refreshServiceEnv: boolean;
   serviceEnv?: NodeJS.ProcessEnv;
+  serviceInstallEnv?: NodeJS.ProcessEnv | null;
   gatewayPort: number;
   restartScriptPath?: string | null;
   invocationCwd?: string;
@@ -1074,12 +1080,14 @@ export async function maybeRestartService(params: {
     }
     return false;
   }
+  const canRestartUpdatedInstall = params.refreshServiceEnv || params.serviceInstallEnv === null;
   const verifyRestartedGateway = async (
     expectedGatewayVersion: string | undefined,
+    expectedGatewayBuildId: string | undefined,
     opts: { requireRunningService?: boolean } = {},
   ) => {
     const restartAfterStaleCleanup = async () => {
-      if (params.refreshServiceEnv && isPackageManagerUpdateMode(params.result.mode)) {
+      if (canRestartUpdatedInstall && isPackageManagerUpdateMode(params.result.mode)) {
         await runUpdatedInstallGatewayRestart({
           result: params.result,
           jsonMode: Boolean(params.opts.json),
@@ -1103,6 +1111,7 @@ export async function maybeRestartService(params: {
       service,
       port: params.gatewayPort,
       expectedVersion: expectedGatewayVersion,
+      ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
       env: params.serviceEnv,
       requireRunningService: opts.requireRunningService,
       supervisorKeepsAlive,
@@ -1125,6 +1134,7 @@ export async function maybeRestartService(params: {
         service,
         port: params.gatewayPort,
         expectedVersion: expectedGatewayVersion,
+        ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
         env: params.serviceEnv,
         requireRunningService: opts.requireRunningService,
         supervisorKeepsAlive,
@@ -1136,6 +1146,7 @@ export async function maybeRestartService(params: {
       service,
       port: params.gatewayPort,
       expectedVersion: expectedGatewayVersion,
+      ...(expectedGatewayBuildId ? { expectedBuildId: expectedGatewayBuildId } : {}),
       env: params.serviceEnv,
     });
     health = recoveryVerification.health;
@@ -1193,7 +1204,11 @@ export async function maybeRestartService(params: {
       return false;
     }
 
-    return !(health.versionMismatch || health.activatedPluginErrors?.length);
+    return !(
+      health.versionMismatch ||
+      health.buildIdMismatch ||
+      health.activatedPluginErrors?.length
+    );
   };
 
   if (params.shouldRestart) {
@@ -1206,6 +1221,10 @@ export async function maybeRestartService(params: {
       const expectedGatewayVersion = isPackageManagerUpdateMode(params.result.mode)
         ? normalizeOptionalString(params.result.after?.version)
         : undefined;
+      const expectedGatewayBuildId =
+        params.channel === "dev" && params.result.mode === "git"
+          ? normalizeOptionalString(params.result.after?.buildId)
+          : undefined;
       const isPackageUpdate = isPackageManagerUpdateMode(params.result.mode);
       const canVerifyUpdatedGatewayByVersion =
         expectedGatewayVersion !== undefined &&
@@ -1215,13 +1234,13 @@ export async function maybeRestartService(params: {
       let refreshedGatewayAlreadyHealthy = false;
       let updatedInstallRestartNeedsServiceRootProof = false;
       let restartScriptPath = params.restartScriptPath;
-      if (params.refreshServiceEnv) {
+      if (params.refreshServiceEnv && params.serviceInstallEnv !== null) {
         try {
           await refreshGatewayServiceEnv({
             result: params.result,
             jsonMode: Boolean(params.opts.json),
             invocationCwd: params.invocationCwd,
-            env: params.serviceEnv,
+            env: params.serviceInstallEnv,
             nodeRunner: params.nodeRunner,
           });
           if (isPackageUpdate && expectedGatewayVersion) {
@@ -1265,7 +1284,7 @@ export async function maybeRestartService(params: {
         await createUpdateConfigSnapshot();
         await runRestartScript(restartScriptPath);
         restartInitiated = true;
-      } else if (!refreshedGatewayAlreadyHealthy && params.refreshServiceEnv && isPackageUpdate) {
+      } else if (!refreshedGatewayAlreadyHealthy && canRestartUpdatedInstall && isPackageUpdate) {
         await createUpdateConfigSnapshot();
         restarted = await runUpdatedInstallGatewayRestart({
           result: params.result,
@@ -1303,13 +1322,20 @@ export async function maybeRestartService(params: {
       const shouldVerifyRestart =
         refreshedGatewayAlreadyHealthy ||
         restartInitiated ||
-        (restarted && expectedGatewayVersion !== undefined);
+        (restarted &&
+          (expectedGatewayVersion !== undefined ||
+            expectedGatewayBuildId !== undefined ||
+            params.result.mode === "git"));
       if (shouldVerifyRestart) {
         const requireRunningService =
           updatedInstallRestartNeedsServiceRootProof || params.requireRunningServiceAfterRestart;
-        const restartHealthy = await verifyRestartedGateway(expectedGatewayVersion, {
-          requireRunningService,
-        });
+        const restartHealthy = await verifyRestartedGateway(
+          expectedGatewayVersion,
+          expectedGatewayBuildId,
+          {
+            requireRunningService,
+          },
+        );
         if (!restartHealthy) {
           if (!params.opts.json) {
             defaultRuntime.log("");

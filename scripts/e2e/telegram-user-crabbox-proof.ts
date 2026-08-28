@@ -951,7 +951,7 @@ export async function startLocalSut(
   let mock: ReturnType<typeof spawnLogged> | undefined;
   try {
     const drained = await drainUpdates(params.sutToken);
-    const config = writeConfig(params);
+    const config = writeConfig({ ...params, mockHost: "127.0.0.1" });
     const requestLog = path.join(params.outputDir, "mock-openai-requests.ndjson");
     mock = spawnLoggedCommand(
       params.nodeBin ?? process.execPath,
@@ -1154,7 +1154,7 @@ async function startLocalSutDaemon(params: {
     };
   }
   const drained = await drainSutUpdates(params.sutToken);
-  const config = writeSutConfig(params);
+  const config = writeSutConfig({ ...params, mockHost: "127.0.0.1" });
   const gatewayPassword = params.mcpAppFixture ? randomUUID() : undefined;
   const runtimeLogRoot = params.sutContainer ? config.tempRoot : params.outputDir;
   const requestLog = path.join(runtimeLogRoot, "mock-openai-requests.ndjson");

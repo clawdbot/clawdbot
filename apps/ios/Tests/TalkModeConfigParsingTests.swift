@@ -9,6 +9,23 @@ import Testing
 struct TalkModeManagerTests {
     private struct CloseError: Error {}
 
+    @Test func `recording sessions preserve system keyboard feedback`() throws {
+        let session = AVAudioSession.sharedInstance()
+        let previousSetting = session.allowHapticsAndSystemSoundsDuringRecording
+        defer {
+            try? session.setAllowHapticsAndSystemSoundsDuringRecording(previousSetting)
+            try? session.setActive(false, options: [.notifyOthersOnDeactivation])
+        }
+
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(false)
+        try TalkModeManager.configureAudioSession()
+        #expect(session.allowHapticsAndSystemSoundsDuringRecording)
+
+        try session.setAllowHapticsAndSystemSoundsDuringRecording(false)
+        try TalkModeManager.configureRealtimeAudioSession()
+        #expect(session.allowHapticsAndSystemSoundsDuringRecording)
+    }
+
     private static func parse(_ config: [String: Any]) -> TalkModeGatewayConfigState {
         TalkModeGatewayConfigParser.parse(
             config: config,
@@ -403,6 +420,16 @@ struct TalkModeManagerTests {
         #expect(issue.technicalDetails.contains("code: realtime_unavailable"))
     }
 
+    @Test func `relay issue preserves known code and falls back for unknown code`() {
+        let codes = ["audio_input_unavailable", "realtime_output_cancel_failed", "future_code"].map { rawCode in
+            TalkModeManager.runtimeIssue(from: RealtimeTalkRelayIssue(
+                code: rawCode,
+                message: "failed")).code
+        }
+
+        #expect(codes == [.audioInputUnavailable, .realtimeOutputCancelFailed, .realtimeUnavailable])
+    }
+
     @Test func `native fallback keeps realtime issue visible`() {
         let manager = TalkModeManager(allowSimulatorCapture: true)
         let issue = TalkRuntimeIssue(
@@ -480,6 +507,7 @@ struct TalkModeManagerTests {
         #expect(manager._test_gatewayTalkActiveModeTitle() != "Not active")
 
         manager._test_handleRealtimeRelayStatus("Ready")
+        manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Ready")
         #expect(manager._test_gatewayTalkActiveModeTitle() == "Not active")
@@ -524,6 +552,7 @@ struct TalkModeManagerTests {
 
         manager._test_handleRealtimeRelayStatus("Listening (Realtime)")
         manager._test_handleRealtimeRelayStatus("Ready")
+        manager._test_handleRealtimeRelayTermination()
 
         #expect(manager.statusText == "Reconnecting")
         #expect(manager._test_rapidRealtimeRestartCount() == 1)

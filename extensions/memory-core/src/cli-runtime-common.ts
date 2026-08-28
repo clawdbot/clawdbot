@@ -128,7 +128,7 @@ export function formatAuditCounts(audit: ShortTermAuditSummary): string {
   const suffix = scriptCoverage ? ` · scripts=${scriptCoverage}` : "";
   return `${audit.entryCount} entries · ${audit.promotedCount} promoted · ${audit.conceptTaggedEntryCount} concept-tagged · ${audit.spacedEntryCount} spaced${suffix}`;
 }
-function resolveAgent(cfg: OpenClawConfig, agent?: string) {
+export function resolveMemoryAgent(cfg: OpenClawConfig, agent?: string) {
   const trimmed = agent?.trim();
   if (agent !== undefined && !trimmed) {
     throw new Error("--agent must not be blank");
@@ -213,7 +213,7 @@ export async function withMemoryCommand(params: {
   emitMemorySecretResolveDiagnostics(diagnostics, { json: params.diagnosticsToStderr });
   const agentIds = params.allAgents
     ? resolveAgentIds(cfg, params.agent)
-    : [resolveAgent(cfg, params.agent)];
+    : [resolveMemoryAgent(cfg, params.agent)];
   for (const agentId of agentIds) {
     await withMemoryManagerForAgent({
       commandName: params.commandName,

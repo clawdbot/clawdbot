@@ -3,9 +3,8 @@ import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import copilotPluginPackage from "../package.json" with { type: "json" };
 import { loadCopilotSdk } from "./sdk-loader.js";
-
-const COPILOT_SDK_SPEC = "@github/copilot-sdk@1.0.5";
 
 const FAKE_SDK = {
   CopilotClient: class FakeCopilotClient {
@@ -153,7 +152,9 @@ describe("sdk-loader", () => {
     const message = captured?.message ?? "";
     expect(message).toContain("primary boom");
     expect(message).toContain(path.join(fallbackDir, "node_modules", "@github", "copilot-sdk"));
-    expect(message).toContain(COPILOT_SDK_SPEC);
+    expect(message).toContain(
+      `@github/copilot-sdk@${copilotPluginPackage.dependencies["@github/copilot-sdk"]}`,
+    );
     expect(message).toContain("openclaw plugins install @openclaw/copilot");
   });
 

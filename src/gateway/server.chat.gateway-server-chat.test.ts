@@ -6,10 +6,16 @@ import path from "node:path";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
+import { replyRunRegistry } from "../auto-reply/reply/reply-run-registry.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { registerAgentRunContext } from "../infra/agent-run-registry.js";
+import {
+  claimAgentRunContext,
+  registerAgentRunContext,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import { createSafeGatewayRestartPreflight } from "../infra/restart-coordinator.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -18,7 +24,10 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionWorkAdmission,
+  getActiveSessionWorkAdmissionCount,
+} from "../sessions/session-lifecycle-admission.js";
 import { extractFirstTextBlock } from "../shared/chat-message-content.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
@@ -30,6 +39,7 @@ import {
   installGatewayTestHooks,
   mockGetReplyFromConfigOnce,
   onceMessage,
+  prepareGatewayReplyRuntimeForTest,
   rpcReq,
   testState,
   trackConnectChallengeNonce,
@@ -321,13 +331,67 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("delivers a queued WebChat reply over the live Gateway WebSocket after its source ends", async () => {
+    await withMainSessionStore(async () => {
+      let options: InternalGetReplyOptions | undefined;
+      const releaseDispatch = createDeferred();
+      dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
+        options = (args as { replyOptions?: InternalGetReplyOptions }).replyOptions;
+        options?.turnAdoptionLifecycle?.onDeferred?.();
+        await releaseDispatch.promise;
+        return {};
+      });
+
+      const sourceRunId = "idem-live-webchat-late-source";
+      const sourceFinal = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat" &&
+          event.payload?.state === "final" &&
+          event.payload?.runId === sourceRunId,
+        CHAT_RESPONSE_TIMEOUT_MS,
+      );
+      const response = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "queue a reply while the previous run is active",
+        idempotencyKey: sourceRunId,
+      });
+      expect(response.ok).toBe(true);
+      await waitForFast(() => expect(options?.onQueuedFollowupReplyBatch).toBeTypeOf("function"));
+      releaseDispatch.resolve();
+      await sourceFinal;
+
+      const followupRunId = "idem-live-webchat-late-followup";
+      const queuedFinal = onceMessage(
+        ws,
+        (event) =>
+          event.type === "event" &&
+          event.event === "chat" &&
+          event.payload?.state === "final" &&
+          event.payload?.runId === followupRunId,
+        CHAT_RESPONSE_TIMEOUT_MS,
+      );
+      await options?.onQueuedFollowupReplyBatch?.({
+        kind: "queued-followup",
+        runId: followupRunId,
+        originatingChannel: "webchat",
+        payloads: [{ text: "late answer arrived over the live WebSocket" }],
+      });
+      expect((await queuedFinal).payload?.message).toMatchObject({
+        content: [{ type: "text", text: "late answer arrived over the live WebSocket" }],
+      });
+      options?.turnAdoptionLifecycle?.onSettled?.();
+    });
+  });
+
   const waitForAgentRunOk = async (runId: string, timeoutMs = 1_000) => {
     const res = await rpcReq(ws, "agent.wait", {
       runId,
       timeoutMs,
     });
     expect(res.ok).toBe(true);
-    expect(res.payload?.status).toBe("ok");
+    expect(res.payload?.status, JSON.stringify(res.payload)).toBe("ok");
     return res;
   };
   const waitForAgentRunDrained = async (runId: string) => {
@@ -436,6 +500,87 @@ describe("gateway server chat", () => {
     });
   });
 
+  test("chat.send interrupt releases its admission when backend cancellation throws", async () => {
+    await withMainSessionStore(async () => {
+      const activeRunStarted = createDeferred();
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        activeRunStarted.resolve(undefined);
+        if (!opts?.abortSignal?.aborted) {
+          await new Promise<void>((resolve) => {
+            opts?.abortSignal?.addEventListener("abort", () => resolve(), { once: true });
+          });
+        }
+        return undefined;
+      });
+      const active = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "captured active turn",
+        idempotencyKey: "idem-chat-interrupt-throw-old",
+      });
+      expect(active.ok).toBe(true);
+      await activeRunStarted.promise;
+
+      const operation = replyRunRegistry.get("agent:main:main");
+      expect(operation).toBeDefined();
+      operation?.attachBackend({
+        kind: "embedded",
+        cancel: () => {
+          throw new Error("cancel failed");
+        },
+        isStreaming: () => true,
+      });
+
+      const res = await rpcReq(ws, "chat.send", {
+        sessionKey: "main",
+        message: "replace the captured turn",
+        queueMode: "interrupt",
+        idempotencyKey: "idem-chat-interrupt-throw-new",
+      });
+      expect(res.ok).toBe(false);
+      await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+      await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+      const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
+      expect(reset.ok).toBe(true);
+    });
+  });
+
+  test("chat.send interrupt releases its admission when session interruption throws", async () => {
+    await withMainSessionStore(async () => {
+      const storePath = testState.sessionStorePath;
+      if (!storePath) {
+        throw new Error("session store path was not initialized");
+      }
+      const activeAdmission = await beginSessionWorkAdmission({
+        scope: storePath,
+        identities: ["agent:main:main", "sess-main"],
+        assertAllowed: () => {},
+        onInterrupt: () => {
+          activeAdmission.release();
+          throw new Error("session interruption failed");
+        },
+      });
+
+      try {
+        const res = await rpcReq(ws, "chat.send", {
+          sessionKey: "main",
+          message: "replace non-reply session work",
+          queueMode: "interrupt",
+          idempotencyKey: "idem-chat-interrupt-non-reply-throw",
+        });
+
+        expect(res.ok).toBe(false);
+        await waitForFast(() => expect(getActiveSessionWorkAdmissionCount()).toBe(0));
+        await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+
+        const reset = await rpcReq(ws, "sessions.reset", { key: "main", reason: "new" });
+        expect(reset.ok).toBe(true);
+      } finally {
+        activeAdmission.release();
+      }
+    });
+  });
+
   test("chat.send interrupt drains a non-reply session admission before dispatching", async () => {
     await withMainSessionStore(async () => {
       const storePath = testState.sessionStorePath;
@@ -508,6 +653,7 @@ describe("gateway server chat", () => {
     };
     try {
       await writeSessionStore({ entries: {} });
+      await prepareGatewayReplyRuntimeForTest({ force: true });
 
       const res = await rpcReq(ws, "sessions.send", {
         key: "agent:orion:main",
@@ -1106,6 +1252,7 @@ describe("gateway server chat", () => {
       expectRecordFields(sessionChanged.payload, {
         sessionId: "sess-main",
         status: "failed",
+        lastRunId: "idem-dispatch-error-1",
         hasActiveRun: false,
       });
 
@@ -1119,6 +1266,7 @@ describe("gateway server chat", () => {
       );
       const actualSession = expectRecordFields(session, {
         status: "failed",
+        lastRunId: "idem-dispatch-error-1",
         hasActiveRun: false,
       });
       expect(typeof actualSession.startedAt).toBe("number");
@@ -1368,6 +1516,185 @@ describe("gateway server chat", () => {
     expect(historyMessages.some(hasGatewayHistoryMessageToolMirror)).toBe(true);
     expect(historyMessages).not.toContainEqual(
       expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history carries managed images from a message-tool delivery mirror", async () => {
+    const replyText = "Two visible attachments.";
+    const imageBlocks = ["first", "second"].map((name) => ({
+      type: "image",
+      artifactId: `artifact_managed_image_${name}`,
+      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
+      openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
+      alt: `${name}.png`,
+      mimeType: "image/png",
+    }));
+    const historyMessages = await loadChatHistoryWithMessages([
+      createGatewayHistoryMessageToolCall(
+        "call-message-images",
+        {
+          action: "send",
+          message: replyText,
+          mediaUrls: ["/tmp/first.png", "/tmp/second.png"],
+        },
+        1,
+      ),
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }, ...imageBlocks],
+        timestamp: 2,
+      },
+      {
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: "call-message-images",
+        content: [{ type: "text", text: "Sent visible reply via internal-ui." }],
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+        },
+        timestamp: 3,
+      },
+    ]);
+
+    expect(historyMessages).toContainEqual(
+      expect.objectContaining({
+        role: "assistant",
+        content: [{ type: "text", text: replyText }, ...imageBlocks],
+        openclawMessageToolMirror: expect.objectContaining({
+          toolCallId: "call-message-images",
+          sourceReplySink: "internal-ui",
+        }),
+      }),
+    );
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history binds equal-text delivery mirrors to their message tool calls", async () => {
+    const replyText = "Repeated attachment caption.";
+    const imageBlocks = ["first", "second"].map((name) => ({
+      type: "image",
+      artifactId: `artifact_managed_image_${name}`,
+      url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
+      openUrl: `/api/chat/media/outgoing/agent%3Amain%3Amain/${name}/full`,
+      alt: `${name}.png`,
+      mimeType: "image/png",
+    }));
+    const historyMessages = await loadChatHistoryWithMessages([
+      {
+        role: "assistant",
+        content: ["first", "second"].map((name) => ({
+          type: "toolCall",
+          id: `call-message-${name}`,
+          name: "message",
+          arguments: {
+            action: "send",
+            message: replyText,
+            media: `/tmp/${name}.png`,
+          },
+        })),
+        timestamp: 1,
+      },
+      ...["first", "second"].map((name, index) => ({
+        role: "toolResult",
+        toolName: "message",
+        toolCallId: `call-message-${name}`,
+        content: [{ type: "text", text: "Sent visible reply via internal-ui." }],
+        details: {
+          status: "ok",
+          deliveryStatus: "sent",
+          sourceReplySink: "internal-ui",
+        },
+        timestamp: index + 2,
+      })),
+      ...["first", "second"].map((name, index) => ({
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }, imageBlocks[index]],
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          toolCallId: `call-message-${name}`,
+        },
+        timestamp: index + 4,
+      })),
+    ]);
+
+    const mirrors = historyMessages.filter(hasGatewayHistoryMessageToolMirror);
+    expect(mirrors).toHaveLength(2);
+    expect(mirrors).toEqual([
+      expect.objectContaining({
+        content: [{ type: "text", text: replyText }, imageBlocks[0]],
+        openclawMessageToolMirror: expect.objectContaining({
+          toolCallId: "call-message-first",
+        }),
+      }),
+      expect.objectContaining({
+        content: [{ type: "text", text: replyText }, imageBlocks[1]],
+        openclawMessageToolMirror: expect.objectContaining({
+          toolCallId: "call-message-second",
+        }),
+      }),
+    ]);
+    expect(historyMessages).not.toContainEqual(
+      expect.objectContaining({ provider: "openclaw", model: "delivery-mirror" }),
+    );
+  });
+
+  test("chat.history does not caption-match a populated unmatched delivery ID", async () => {
+    const replyText = "Repeated attachment caption.";
+    const wrongImage = {
+      type: "image",
+      artifactId: "artifact_managed_image_wrong",
+      url: "/api/chat/media/outgoing/agent%3Amain%3Amain/wrong/full",
+      openUrl: "/api/chat/media/outgoing/agent%3Amain%3Amain/wrong/full",
+      alt: "wrong.png",
+      mimeType: "image/png",
+    };
+    const historyMessages = await loadChatHistoryWithMessages([
+      createGatewayHistoryMessageToolCall(
+        "call-message-expected",
+        { action: "send", message: replyText, media: "/tmp/expected.png" },
+        1,
+      ),
+      createGatewayHistoryMessageToolResult(
+        "call-message-expected",
+        { ok: true, messageId: "24276", chatId: "current-run" },
+        2,
+      ),
+      {
+        role: "assistant",
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }, wrongImage],
+        openclawDeliveryMirror: {
+          kind: "message-tool-source-reply",
+          toolCallId: "call-message-other",
+        },
+        timestamp: 3,
+      },
+      createGatewayHistoryText("assistant", "NO_REPLY", 4),
+    ]);
+
+    expect(historyMessages).toContainEqual(
+      expect.objectContaining({
+        content: [{ type: "text", text: replyText }],
+        openclawMessageToolMirror: expect.objectContaining({
+          toolCallId: "call-message-expected",
+        }),
+      }),
+    );
+    expect(historyMessages).toContainEqual(
+      expect.objectContaining({
+        provider: "openclaw",
+        model: "delivery-mirror",
+        content: [{ type: "text", text: replyText }, wrongImage],
+      }),
     );
   });
 
@@ -2099,6 +2426,9 @@ describe("gateway server chat", () => {
           },
         },
       });
+      agentDiscoveryMock.enabled = true;
+      agentDiscoveryMock.models = [{ id: "gpt-5", provider: "openai", reasoning: true }];
+      await prepareGatewayReplyRuntimeForTest({ force: true });
 
       const historyRes = await rpcReq<{
         thinkingLevel?: string;
@@ -2109,6 +2439,7 @@ describe("gateway server chat", () => {
       expect(historyRes.payload?.thinkingLevel).toBe("minimal");
       expect(historyRes.payload?.sessionInfo?.thinkingLevel).toBeUndefined();
     } finally {
+      Object.assign(agentDiscoveryMock, { enabled: false, models: [] });
       testState.agentConfig = undefined;
       testState.agentsConfig = undefined;
       testState.sessionStorePath = undefined;
@@ -2332,11 +2663,45 @@ describe("gateway server chat", () => {
   test("agent.wait ignores lifecycle completion while same-runId chat.send is active", async () => {
     await withMainSessionStore(async () => {
       const runId = "idem-wait-chat-active-with-agent-lifecycle";
-      const releaseBlockedReply = mockBlockedChatReply();
+      const blockedReply = createDeferred();
+      const runtimeStarted = createDeferred();
+      mockGetReplyFromConfigOnce(async (_ctx, opts) => {
+        opts?.onAgentRunStart?.(runId);
+        const runtimeOwner = claimAgentRunContext(
+          runId,
+          {
+            agentId: "main",
+            projectSessionActive: true,
+            sessionId: "sess-main",
+            sessionKey: "agent:main:main",
+          },
+          { ownsContext: true, trackOwner: true },
+        );
+        expect(runtimeOwner).toBeDefined();
+        runtimeStarted.resolve();
+        try {
+          await blockedReply.promise;
+        } finally {
+          releaseAgentRunContext(runId, runtimeOwner);
+        }
+      });
 
       try {
+        const subscribeRes = await rpcReq(ws, "sessions.subscribe", {});
+        expect(subscribeRes.ok).toBe(true);
         await sendChatAndExpectStarted(runId, "hold chat run open");
+        // The ACK precedes dispatch; emit lifecycle only after the runtime owns this run.
+        await runtimeStarted.promise;
 
+        const terminalSessionChange = onceMessage(
+          ws,
+          (event) =>
+            event.type === "event" &&
+            event.event === "sessions.changed" &&
+            event.payload?.phase === "end" &&
+            event.payload?.runId === runId,
+          8_000,
+        );
         emitAgentEvent({
           runId,
           stream: "lifecycle",
@@ -2348,16 +2713,41 @@ describe("gateway server chat", () => {
           data: { phase: "end", startedAt: 1, endedAt: 2 },
         });
 
+        expect((await terminalSessionChange).payload?.activeRunIds).toBeNull();
         const waitWhileChatActive = await rpcReq(ws, "agent.wait", {
           runId,
           timeoutMs: 40,
         });
         expectAgentWaitTimeout(waitWhileChatActive);
 
-        releaseBlockedReply();
+        // Match the published ownership fact, not the `reason` label: sessions.changed
+        // coalesces bursts per session key and keeps only the newest payload, so any
+        // same-key mutation inside that window legitimately replaces the label while
+        // the row (activeRunIds/lastRunId) is still rebuilt at broadcast time.
+        const settledSessionChange = onceMessage(
+          ws,
+          (event) =>
+            event.type === "event" &&
+            event.event === "sessions.changed" &&
+            event.payload?.sessionKey === "agent:main:main" &&
+            event.payload?.hasActiveRun === false &&
+            Array.isArray(event.payload?.activeRunIds) &&
+            event.payload.activeRunIds.length === 0 &&
+            event.payload?.lastRunId === runId,
+          8_000,
+        );
+        blockedReply.resolve();
+        const settledEvent = await settledSessionChange.catch(() => {
+          throw new Error("Gateway did not publish settled run ownership after chat.send cleanup");
+        });
         await waitForAgentRunOk(runId);
+        expectRecordFields(settledEvent.payload, {
+          activeRunIds: [],
+          hasActiveRun: false,
+          lastRunId: runId,
+        });
       } finally {
-        releaseBlockedReply();
+        blockedReply.resolve();
       }
     });
   });

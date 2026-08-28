@@ -36,6 +36,7 @@ import {
   mergeExecApprovalsSocketDefaults,
   normalizeExecApprovals,
   readExecApprovalsSnapshot,
+  redactExecApprovals,
   updateExecApprovals,
   type ExecApprovalsAgent,
   type ExecApprovalsDefaults,
@@ -368,7 +369,7 @@ async function saveSnapshotTargeted(params: SaveSnapshotTargetedParams): Promise
     next = await saveSnapshot(params.opts, params.nodeId, params.file, params.baseHash);
   }
   if (params.opts.json) {
-    defaultRuntime.writeJson(next, 0);
+    defaultRuntime.writeJson(isFileApprovalsSnapshot(next) ? redactExecApprovals(next) : next, 0);
     return;
   }
   defaultRuntime.log(theme.muted(`Target: ${params.targetLabel}`));
@@ -1188,7 +1189,8 @@ export function registerExecApprovalsCli(program: Command) {
           nativePolicy,
         });
         if (opts.json) {
-          defaultRuntime.writeJson({ ...snapshot, effectivePolicy }, 0);
+          const outputSnapshot = fileSnapshot ? redactExecApprovals(fileSnapshot) : snapshot;
+          defaultRuntime.writeJson({ ...outputSnapshot, effectivePolicy }, 0);
           return;
         }
 

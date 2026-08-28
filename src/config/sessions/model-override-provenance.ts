@@ -2,6 +2,15 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { SessionEntry } from "./types.js";
 
+type ModelOverrideProvenanceEntry = Pick<
+  SessionEntry,
+  | "providerOverride"
+  | "modelOverride"
+  | "modelOverrideSource"
+  | "modelOverrideFallbackOriginProvider"
+  | "modelOverrideFallbackOriginModel"
+>;
+
 /** Detects model overrides created by automatic fallback provenance. */
 export function hasSessionAutoModelFallbackProvenance(
   entry:
@@ -25,6 +34,35 @@ export function hasSessionAutoModelFallbackProvenance(
   );
 }
 
+/** Detects a model selection explicitly pinned by the user. */
+export function hasUserPinnedModelSelection(
+  entry: ModelOverrideProvenanceEntry | undefined,
+): boolean {
+  if (!entry?.modelOverride) {
+    return false;
+  }
+  if (entry.modelOverrideSource === "user") {
+    return true;
+  }
+  if (entry.modelOverrideSource === "auto") {
+    return false;
+  }
+  return !hasSessionAutoModelFallbackProvenance(entry);
+}
+
+/** Resolves override source while normalizing entries written before source tracking. */
+export function resolveSessionModelOverrideSource(
+  entry: ModelOverrideProvenanceEntry | undefined,
+): "auto" | "user" | null {
+  if (!normalizeOptionalString(entry?.modelOverride)) {
+    return null;
+  }
+  if (entry?.modelOverrideSource) {
+    return entry.modelOverrideSource;
+  }
+  return hasUserPinnedModelSelection(entry) ? "user" : "auto";
+}
+
 /** Resolves persisted route provenance, including fallback pins from before the marker existed. */
 export function resolveSessionModelOverrideRouteResolution(
   entry:
@@ -46,16 +84,7 @@ export function resolveSessionModelOverrideRouteResolution(
 
 /** Detects an active automatic fallback rather than a self-origin configured selection. */
 export function hasSessionActiveAutoModelFallback(
-  entry:
-    | Pick<
-        SessionEntry,
-        | "providerOverride"
-        | "modelOverride"
-        | "modelOverrideSource"
-        | "modelOverrideFallbackOriginProvider"
-        | "modelOverrideFallbackOriginModel"
-      >
-    | undefined,
+  entry: ModelOverrideProvenanceEntry | undefined,
 ): boolean {
   if (!entry) {
     return false;

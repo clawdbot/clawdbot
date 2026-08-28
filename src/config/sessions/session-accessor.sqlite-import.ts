@@ -7,9 +7,10 @@ import {
   type OpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
-import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
+import type { SessionAccessScope, TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { publishSessionEntryCacheInvalidation } from "./session-accessor.sqlite-entry-cache.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { replaceSessionOwnerInTransaction } from "./session-accessor.sqlite-owner.js";
 import { readTranscriptEventJsonSetInTransaction } from "./session-accessor.sqlite-read.js";
 import {
   formatSqliteSessionReferenceForScope,
@@ -29,17 +30,16 @@ import { reconcileSessionTranscriptIndexInTransaction } from "./session-transcri
 import type { SessionEntry } from "./types.js";
 
 /** Internal doctor/migration import target for one legacy session row. */
-type SqliteSessionImportRowsParams = {
+type SqliteSessionImportRowsParams = Pick<
+  SessionAccessScope,
+  "agentId" | "defaultAgentId" | "env" | "sessionKey" | "storePath"
+> & {
   allowMalformedRowRepair?: boolean;
-  agentId?: string;
-  env?: NodeJS.ProcessEnv;
   preserveExactStoredKey?: boolean;
   readExactTranscriptRows?: (
     append: (row: { createdAt: number; eventJson: string }) => void,
   ) => void;
   skipIfExists?: boolean;
-  storePath?: string;
-  sessionKey: string;
   entry: SessionEntry;
   readTranscriptEvents?: (append: (event: TranscriptEvent) => void) => void;
   transcriptMtimeMs?: number;
@@ -57,12 +57,7 @@ function prepareSqliteSessionImport(params: SqliteSessionImportRowsParams) {
   if (params.readExactTranscriptRows && params.readTranscriptEvents) {
     throw new Error("SQLite session import accepts only one transcript row source");
   }
-  const resolvedScope = resolveSqliteScope({
-    ...(params.agentId ? { agentId: params.agentId } : {}),
-    ...(params.env ? { env: params.env } : {}),
-    sessionKey: params.sessionKey,
-    ...(params.storePath ? { storePath: params.storePath } : {}),
-  });
+  const resolvedScope = resolveSqliteScope(params);
   // Doctor can stage the exact legacy key so canonical repair compares every alias candidate.
   const resolved = params.preserveExactStoredKey
     ? { ...resolvedScope, sessionKey: params.sessionKey }
@@ -116,10 +111,11 @@ function importSqliteSessionRowsInTransaction(
     allowStoredAliases: true,
     previousEntry: currentEntry ?? null,
   });
-  // The legacy-main handoff hashes raw ordered rows. Parsing or deduping here would make the
-  // destination proof differ and strand a partially imported canonical claim.
+  // Only trusted SQLite handoffs can transfer ownership and hash exact ordered rows;
+  // parsing, deduping, or trusting JSON ownership would break the migration boundary.
   const exactTranscriptRows = prepared.exactTranscriptRows;
   if (exactTranscriptRows) {
+    replaceSessionOwnerInTransaction(database, resolved.sessionKey, params.entry.owner);
     const transcriptScope = {
       ...resolved,
       sessionId: params.entry.sessionId,
@@ -150,6 +146,7 @@ function importSqliteSessionRowsInTransaction(
         );
       }
       transcriptEvents = exactTranscriptRows.length;
+      // Doctor imports run outside gateway requests and must finish with a complete projection.
       reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
       publishSessionEntryCacheInvalidation(database);
     }
@@ -178,6 +175,7 @@ function importSqliteSessionRowsInTransaction(
         transcriptEvents += 1;
       }
     }
+    // Doctor imports run outside gateway requests and must finish with a complete projection.
     reconcileSessionTranscriptIndexInTransaction(database.db, params.entry.sessionId);
     publishSessionEntryCacheInvalidation(database);
   }

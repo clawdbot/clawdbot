@@ -9,12 +9,12 @@ import type {
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorAdminAccess } from "../../app/operator-access.ts";
-import { renderDocsLink } from "../../components/settings-ui.ts";
+import { renderLearnMoreLink } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
-import { t } from "../../i18n/index.ts";
 import { listSelectableAgents } from "../../lib/agents/display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import {
@@ -39,15 +39,6 @@ type PendingMemoryImport = {
 
 function toErrorMessage(error: unknown): string {
   return formatUiError(error, "request failed");
-}
-
-function createIdempotencyKey(): string {
-  if (typeof globalThis.crypto.randomUUID === "function") {
-    return globalThis.crypto.randomUUID();
-  }
-  return [...globalThis.crypto.getRandomValues(new Uint32Array(4))]
-    .map((value) => value.toString(16).padStart(8, "0"))
-    .join("");
 }
 
 export class MemoryImportPage extends OpenClawLightDomElement {
@@ -275,7 +266,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
       planFingerprint,
       itemIds: [...itemIds],
       overwrite: this.replaceExisting,
-      idempotencyKey: createIdempotencyKey(),
+      idempotencyKey: generateUUID(),
       attempted: false,
     };
   }
@@ -592,8 +583,7 @@ export class MemoryImportPage extends OpenClawLightDomElement {
         <div>
           <div class="page-title">${titleForRoute("memory-import")}</div>
           <div class="page-subtitle">
-            ${subtitleForRoute("memory-import")}
-            ${renderDocsLink(MEMORY_IMPORT_DOCS_URL, t("common.learnMore"))}
+            ${subtitleForRoute("memory-import")} ${renderLearnMoreLink(MEMORY_IMPORT_DOCS_URL)}
           </div>
         </div>
       </section>

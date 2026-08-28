@@ -1116,23 +1116,67 @@ test("sessions.changed mutation events include session management metadata", asy
     key: "discord:group:dev",
     unread: true,
   });
-  expectChangedBroadcast(unread.broadcastToConnIds, {
+  const unreadPayload = expectChangedBroadcast(unread.broadcastToConnIds, {
     sessionKey: "agent:main:discord:group:dev",
     reason: "patch",
     unread: true,
     lastReadAt: 20,
+    markedUnreadAt: expect.any(Number),
     lastActivityAt: 5,
   });
+
+  const marker = expectDefined(
+    unreadPayload.markedUnreadAt as number | undefined,
+    "manual unread marker",
+  );
+  expect(marker).toEqual(expect.any(Number));
+
+  const staleRead = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+    expectedMarkedUnreadAt: null,
+  });
+  expectFields(staleRead.responsePayload, { ok: true, key: "agent:main:discord:group:dev" });
+  expect(staleRead.broadcastToConnIds).not.toHaveBeenCalled();
+  expect(requireRecord(staleRead.responsePayload.entry, "stale read entry").markedUnreadAt).toBe(
+    marker,
+  );
 
   const read = await invokeSessionsPatch({
     key: "discord:group:dev",
     unread: false,
+    expectedMarkedUnreadAt: marker,
   });
   expectChangedBroadcast(read.broadcastToConnIds, {
     sessionKey: "agent:main:discord:group:dev",
     reason: "patch",
     unread: false,
     lastReadAt: expect.any(Number),
+    markedUnreadAt: null,
+    lastActivityAt: 5,
+  });
+
+  const remarked = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: true,
+  });
+  expectChangedBroadcast(remarked.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: true,
+    markedUnreadAt: expect.any(Number),
+  });
+
+  const legacyRead = await invokeSessionsPatch({
+    key: "discord:group:dev",
+    unread: false,
+  });
+  expectChangedBroadcast(legacyRead.broadcastToConnIds, {
+    sessionKey: "agent:main:discord:group:dev",
+    reason: "patch",
+    unread: false,
+    lastReadAt: expect.any(Number),
+    markedUnreadAt: null,
     lastActivityAt: 5,
   });
 });

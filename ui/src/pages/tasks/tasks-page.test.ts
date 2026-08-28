@@ -10,8 +10,10 @@ type TasksPageTestElement = HTMLElement & {
   context: ApplicationContext;
   tasks: TaskSummary[];
   error: string | null;
+  copyResultError: string | null;
   cancellingTaskIds: Set<string>;
   cancelTask: (taskId: string) => Promise<void>;
+  copyTaskResult: (taskId: string) => Promise<void>;
   recoverTask: (taskId: string, action: "retry" | "dismiss") => Promise<void>;
   refreshTasks: () => Promise<void>;
 };
@@ -162,6 +164,7 @@ function createContext(
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("TasksPage concurrent refresh events", () => {
@@ -447,6 +450,49 @@ describe("TasksPage active pagination", () => {
 });
 
 describe("TasksPage cancellation lifecycle", () => {
+  it("does not clear an unrelated task error when a result copy succeeds", async () => {
+    const blocked = createTask("task-copy-independent-error", "completed", {
+      deliveryStatus: "failed",
+      terminalOutcome: "blocked",
+    });
+    const clipboardWrite = deferred<void>();
+    const writeText = vi.fn(() => clipboardWrite.promise);
+    const request = vi.fn((method: string) => {
+      if (method === "tasks.get") {
+        return Promise.resolve({ task: { ...blocked, result: "Retained result" } });
+      }
+      if (method === "tasks.retry") {
+        return Promise.resolve({
+          results: [
+            {
+              taskId: blocked.taskId,
+              ok: false,
+              reason: "Independent recovery failed",
+            },
+          ],
+        });
+      }
+      return Promise.resolve({ tasks: [blocked] });
+    });
+    const source = createGateway({ request } as unknown as GatewayBrowserClient);
+    const page = document.createElement("openclaw-tasks-page") as TasksPageTestElement;
+    page.context = createContext(source.gateway);
+    document.body.append(page);
+    await waitForFast(() => expect(page.tasks).toHaveLength(1));
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+
+    const copying = page.copyTaskResult(blocked.taskId);
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalledWith("Retained result"));
+    await page.recoverTask(blocked.taskId, "retry");
+    expect(page.error).toBe("Independent recovery failed");
+
+    clipboardWrite.resolve(undefined);
+    await copying;
+
+    expect(page.error).toBe("Independent recovery failed");
+    expect(page.copyResultError).toBeNull();
+  });
+
   it("lets a read-only operator copy a retained result without mutation controls", async () => {
     const retained = createTask("task-read-only-retained", "completed", {
       deliveryStatus: "failed",

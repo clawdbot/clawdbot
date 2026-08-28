@@ -324,6 +324,12 @@ describe("markdownToMatrixHtml", () => {
       html: '<p>hello <a href="https://matrix.to/#/%40alice%3A%5B2001%3Adb8%3A%3A1%5D%3A8448">@alice:[2001:db8::1]:8448</a>.</p>',
       userId: "@alice:[2001:db8::1]:8448",
     },
+    {
+      name: "preserves private-use characters alongside escaped and real mentions",
+      markdown: "\\@room \uE000tag @alice:example.org",
+      html: '<p>@room \uE000tag <a href="https://matrix.to/#/%40alice%3Aexample.org">@alice:example.org</a></p>',
+      userId: "@alice:example.org",
+    },
   ])("$name", async ({ markdown, html, userId }) => {
     const result = await renderMarkdownToMatrixHtmlWithMentions({
       markdown,
@@ -385,6 +391,81 @@ describe("markdownToMatrixHtml", () => {
       name: "leaves bare localpart text unmentioned",
       markdown: "hello @alice",
       html: "<p>hello @alice</p>",
+    },
+    {
+      name: "preserves literal private-use characters in visible text",
+      markdown: "literal \uE000alice:example.org",
+      html: "<p>literal \uE000alice:example.org</p>",
+    },
+    {
+      name: "preserves decimal-encoded private-use characters",
+      markdown: "&#57344;alice:example.org",
+      html: "<p>\uE000alice:example.org</p>",
+    },
+    {
+      name: "preserves hexadecimal-encoded private-use characters",
+      markdown: "&#xE000;room",
+      html: "<p>\uE000room</p>",
+    },
+    {
+      name: "keeps escaped mentions distinct from literal private-use characters",
+      markdown: "\\@room plus \uE000tag",
+      html: "<p>@room plus \uE000tag</p>",
+    },
+    {
+      name: "keeps escaped mentions distinct from encoded private-use characters",
+      markdown: "\\@room plus &#xE000;tag",
+      html: "<p>@room plus \uE000tag</p>",
+    },
+    {
+      name: "preserves private-use characters in link labels",
+      markdown: "[\uE000room](https://example.com)",
+      html: '<p><a href="https://example.com">\uE000room</a></p>',
+    },
+    {
+      name: "preserves private-use characters in fenced code blocks",
+      markdown: "~~~\n\uE000room\n~~~",
+      html: "<pre><code>\uE000room\n</code></pre>",
+    },
+    {
+      name: "preserves private-use characters in indented code blocks",
+      markdown: "    \uE000room",
+      html: "<pre><code>\uE000room\n</code></pre>",
+    },
+    {
+      name: "keeps private-use characters distinct from spoiler markers",
+      markdown: "\\@room \uE000tag ||hidden||",
+      html: "<p>@room \uE000tag <span data-mx-spoiler>hidden</span></p>",
+    },
+    {
+      name: "restores escaped mentions inside image fallback labels",
+      markdown: "![\\@room](https://example.com/image.png)",
+      html: "<p>@room</p>",
+    },
+    {
+      name: "preserves decimal character entities inside image fallback labels",
+      markdown: "![&#65;](https://example.com/image.png)",
+      html: "<p>A</p>",
+    },
+    {
+      name: "preserves private-use entities inside image fallback labels",
+      markdown: "![&#xE000;](https://example.com/image.png)",
+      html: "<p>\uE000</p>",
+    },
+    {
+      name: "preserves escaped punctuation inside image fallback labels",
+      markdown: "![\\*literal](https://example.com/image.png)",
+      html: "<p>*literal</p>",
+    },
+    {
+      name: "preserves escaped mentions in Markdown link destinations",
+      markdown: "[link](https://example.com/\\@alice)",
+      html: '<p><a href="https://example.com/@alice">link</a></p>',
+    },
+    {
+      name: "independently restores escaped mentions in link labels and destinations",
+      markdown: "[\\@room](https://example.com/\\@alice)",
+      html: '<p><a href="https://example.com/@alice">@room</a></p>',
     },
     {
       name: "does not convert escaped qualified mentions",

@@ -6,10 +6,13 @@ import os from "node:os";
 import path from "node:path";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
-import { createReadToolDefinition } from "./read.js";
+import { withFileMutationQueue } from "./file-mutation-queue.js";
+import { createReadTool, createReadToolDefinition } from "./read.js";
 import { DEFAULT_MAX_BYTES, DEFAULT_MAX_LINES } from "./truncate.js";
+import { createWriteToolDefinition } from "./write.js";
 
 const decodeWindowsTextFileBufferMock = vi.hoisted(() =>
   vi.fn(({ buffer }: { buffer: Buffer }) => buffer.toString("utf8")),
@@ -38,9 +41,7 @@ function createTinyBmp(): Buffer {
   return buffer;
 }
 
-function textContent(
-  result: Awaited<ReturnType<ReturnType<typeof createReadToolDefinition>["execute"]>>,
-): string {
+function textContent(result: { content: Array<{ type: string; text?: string }> }): string {
   const first = result.content[0];
   return first?.type === "text" ? (first.text ?? "") : "";
 }
@@ -104,6 +105,46 @@ describe("read tool", () => {
       });
     } finally {
       await fs.rm(stateDir, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    { source: "extension", modelHasVision: false },
+    { source: "extension", modelHasVision: true },
+    { source: "embedded", modelHasVision: false },
+    { source: "embedded", modelHasVision: true },
+    { source: "embedded", modelHasVision: undefined },
+  ])("matches image attachments to $source vision capability $modelHasVision", async (testCase) => {
+    const stateDir = tempDirs.make("openclaw-read-vision-");
+    const imagePath = path.join(stateDir, "pixel.png");
+    await fs.writeFile(imagePath, Buffer.from(ONE_PIXEL_PNG_BASE64, "base64"));
+
+    const result =
+      testCase.source === "embedded"
+        ? await createReadTool(stateDir, {
+            autoResizeImages: false,
+            modelHasVision: testCase.modelHasVision,
+          }).execute("embedded-read", { path: imagePath })
+        : await createReadToolDefinition(stateDir, { autoResizeImages: false }).execute(
+            "extension-read",
+            { path: imagePath },
+            undefined,
+            undefined,
+            {
+              model: { input: testCase.modelHasVision ? ["text", "image"] : ["text"] },
+            } as never,
+          );
+    const imageParts = result.content.filter((part) => part.type === "image");
+    const omitted = testCase.modelHasVision === false;
+
+    expect(imageParts).toHaveLength(omitted ? 0 : 1);
+    expect(textContent(result).includes("does not support images")).toBe(omitted);
+    if (!omitted) {
+      expect(imageParts[0]).toStrictEqual({
+        type: "image",
+        data: ONE_PIXEL_PNG_BASE64,
+        mimeType: "image/png",
+      });
     }
   });
 
@@ -742,5 +783,86 @@ describe("read tool", () => {
 
     expect(decodeWindowsTextFileBufferMock).not.toHaveBeenCalled();
     expect(textContent(result)).toBe(`${path.resolve("/workspace", "legacy.txt")}:c4e3bac3`);
+  });
+
+  it("waits for an aliased queued write before reading the same new file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-write-order-");
+    const realDir = path.join(tempDir, "real");
+    const aliasDir = path.join(tempDir, "alias");
+    await fs.mkdir(realDir);
+    await fs.symlink(realDir, aliasDir, process.platform === "win32" ? "junction" : "dir");
+    const writePath = path.join(aliasDir, "race-target.txt");
+    const readPath = path.join(realDir, "race-target.txt");
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
+    const blocker = withFileMutationQueue(writePath, async () => {
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+    const writeResult = createWriteToolDefinition(tempDir).execute(
+      "write",
+      { path: writePath, content: "first snapshot" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const readResult = createReadToolDefinition(tempDir, {
+      operations: {
+        access: readAccess,
+        readFile: async (absolutePath) => await fs.readFile(absolutePath),
+      },
+    }).execute("read", { path: readPath }, undefined, undefined, {} as never);
+    void readResult.catch(() => {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(readAccess).not.toHaveBeenCalled();
+
+    releaseBlocker.resolve();
+    await blocker;
+    const [, result] = await Promise.all([writeResult, readResult]);
+    expect(readAccess).toHaveBeenCalledOnce();
+    expect(textContent(result)).toBe("first snapshot");
+  });
+
+  it("queues every accepted Unicode spelling before reading a new file", async () => {
+    const tempDir = tempDirs.make("openclaw-read-unicode-order-");
+    const writePath = path.join(tempDir, "caf\u00e9.txt");
+    const readPath = path.join(tempDir, "cafe\u0301.txt");
+    const blockerStarted = createDeferred();
+    const releaseBlocker = createDeferred();
+    const blocker = withFileMutationQueue(writePath, async () => {
+      blockerStarted.resolve();
+      await releaseBlocker.promise;
+    });
+    await blockerStarted.promise;
+
+    const writeResult = createWriteToolDefinition(tempDir).execute(
+      "write",
+      { path: writePath, content: "normalized snapshot" },
+      undefined,
+      undefined,
+      {} as never,
+    );
+    const readAccess = vi.fn(async (absolutePath: string) => await fs.access(absolutePath));
+    const readResult = createReadToolDefinition(tempDir, {
+      operations: {
+        access: readAccess,
+        readFile: async (absolutePath) => await fs.readFile(absolutePath),
+      },
+    }).execute("read", { path: readPath }, undefined, undefined, {} as never);
+    void readResult.catch(() => {});
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+    expect(readAccess).not.toHaveBeenCalled();
+
+    releaseBlocker.resolve();
+    await blocker;
+    const [, result] = await Promise.all([writeResult, readResult]);
+    expect(readAccess).toHaveBeenCalled();
+    expect(textContent(result)).toContain("normalized snapshot");
   });
 });

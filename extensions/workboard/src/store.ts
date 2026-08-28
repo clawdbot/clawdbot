@@ -11,17 +11,10 @@ import type {
   WorkboardStaleState,
   WorkboardStatus,
 } from "@openclaw/workboard-contract";
-import type {
-  PersistedWorkboardAttachment,
-  PersistedWorkboardBoard,
-  PersistedWorkboardNotificationSubscription,
-  WorkboardKeyedStore,
-} from "./persistence-types.js";
 import { createWorkboardSqliteStores } from "./sqlite-store.js";
 import {
   buildWorkerContext,
   assertCanMutateClaimedCard,
-  capText,
   cardBoardId,
   cardRunId,
   cardSessionKey,
@@ -36,8 +29,6 @@ import {
 } from "./store-card-helpers.js";
 import {
   isWorkboardClaimReclaimable,
-  MAX_ATTACHMENT_ENTRIES,
-  MAX_CARDS,
   MAX_CARD_NOTIFICATIONS,
   secondsToDurationMs,
 } from "./store-constants.js";
@@ -49,7 +40,7 @@ import type {
   WorkboardDispatchResult,
   WorkboardMutationScope,
 } from "./store-inputs.js";
-import { normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
+import { capText, normalizeBoardId, normalizeTimestamp } from "./store-normalizers.js";
 import { WorkboardNotificationStore } from "./store-notifications.js";
 
 export type { WorkboardDispatchResult } from "./store-inputs.js";
@@ -644,34 +635,6 @@ export class WorkboardStore extends WorkboardNotificationStore {
       throw new Error(`card not found: ${id}`);
     }
     return buildWorkerContext(card, await this.list());
-  }
-
-  static open(
-    openKeyedStore: (options: {
-      namespace: string;
-      maxEntries: number;
-    }) => WorkboardKeyedStore<unknown>,
-  ) {
-    return new WorkboardStore(
-      openKeyedStore({
-        namespace: "workboard.cards",
-        maxEntries: MAX_CARDS,
-      }) as WorkboardKeyedStore,
-      {
-        boards: openKeyedStore({
-          namespace: "workboard.boards",
-          maxEntries: 200,
-        }) as WorkboardKeyedStore<PersistedWorkboardBoard>,
-        subscriptions: openKeyedStore({
-          namespace: "workboard.notify",
-          maxEntries: 2000,
-        }) as WorkboardKeyedStore<PersistedWorkboardNotificationSubscription>,
-        attachments: openKeyedStore({
-          namespace: "workboard.attachments",
-          maxEntries: MAX_ATTACHMENT_ENTRIES,
-        }) as WorkboardKeyedStore<PersistedWorkboardAttachment>,
-      },
-    );
   }
 
   static openSqlite() {

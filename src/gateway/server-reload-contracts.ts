@@ -132,6 +132,18 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function assertReloadPublicationCurrent(
+  publicationCurrent: boolean,
+  restartStopped: boolean,
+): void {
+  if (!publicationCurrent) {
+    throw new GatewayConfigReloadSupersededError();
+  }
+  if (restartStopped) {
+    throw new GatewayHotReloadCancelledError();
+  }
+}
+
 export type GatewayPluginReloadResult = {
   restartChannels: ReadonlySet<ChannelKind>;
   activeChannels: ReadonlySet<ChannelKind>;
@@ -151,6 +163,7 @@ export type GatewayReloadHandlerParams = {
   getPluginMetadataSnapshot?: () => PluginMetadataSnapshot | undefined;
   startChannel: GatewayChannelManager["startChannel"];
   stopChannel: GatewayChannelManager["stopChannel"];
+  pruneInactiveChannelAccountState: (activeChannelIds: ReadonlySet<ChannelKind>) => void;
   getChannelAutostartSuppression?: GatewayChannelManager["getAutostartSuppression"];
   stopPostReadySidecars?: () => Promise<void> | void;
   reloadPlugins: (params: {
@@ -187,7 +200,7 @@ export type GatewayReloadHandlerParams = {
 
 export type ManagedGatewayConfigReloaderParams = Omit<
   GatewayReloadHandlerParams,
-  "assertRestartReady" | "createHealthMonitor" | "logReload"
+  "assertRestartReady" | "createHealthMonitor" | "logReload" | "pruneInactiveChannelAccountState"
 > & {
   configRevisionProjector: import("./config-revision-token.js").GatewayConfigRevisionProjector;
   minimalTestGateway: boolean;
@@ -204,7 +217,9 @@ export type ManagedGatewayConfigReloaderParams = Omit<
   promoteSnapshot: typeof import("../config/config.js").promoteConfigSnapshotToLastKnownGood;
   subscribeToWrites: typeof import("../config/config.js").registerConfigWriteListener;
   logReload: GatewayReloadLog & { error: (msg: string) => void };
-  channelManager: GatewayChannelManager;
+  channelManager: GatewayChannelManager & {
+    pruneInactiveChannelAccountState: GatewayReloadHandlerParams["pruneInactiveChannelAccountState"];
+  };
   activateRuntimeSecrets: ActivateRuntimeSecrets;
   /** Applies one immutable effective config/compare snapshot before reload planning. */
   prepareConfigCandidate?: (params: {

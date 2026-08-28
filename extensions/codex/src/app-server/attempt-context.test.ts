@@ -141,6 +141,7 @@ describe("Codex app-server attempt context", () => {
       sessionKey: "agent:main:session-1",
       sessionAgentId: "main",
       memoryToolNames: ["memory_search", "memory_get"],
+      ringZeroActive: false,
     });
 
     expect(context.memoryReferenceFiles).toEqual([]);
@@ -181,6 +182,7 @@ describe("Codex app-server attempt context", () => {
         sessionKey: "agent:marketing-agent:session-1",
         sessionAgentId: "marketing-agent",
         memoryToolNames: ["memory_search", "memory_get"],
+        ringZeroActive: false,
         sandboxed: true,
       });
 
@@ -219,6 +221,7 @@ describe("Codex app-server attempt context", () => {
         sessionKey: "agent:main:session-1",
         sessionAgentId: "main",
         memoryToolNames: ["memory_search", "memory_get"],
+        ringZeroActive: false,
       });
 
       expect(context.threadDeveloperInstructions).toContain("Canonical agent instructions");
@@ -235,6 +238,37 @@ describe("Codex app-server attempt context", () => {
       expect(context.turnScopedDeveloperInstructions).not.toContain("Canonical agent instructions");
       expect(context.memoryToolRouted).toBe(true);
       expect(context.promptContext).toBeUndefined();
+    } finally {
+      await fs.rm(workspaceDir, { recursive: true, force: true });
+      await fs.rm(executionDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps ambient workspace instructions out of overlapping ring-zero restrictions", async () => {
+    const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ring-zero-workspace-"));
+    const executionDir = await fs.mkdtemp(path.join(os.tmpdir(), "codex-ring-zero-execution-"));
+    await fs.writeFile(path.join(workspaceDir, "AGENTS.md"), "Ambient workspace instructions");
+
+    try {
+      const context = await buildCodexWorkspaceBootstrapContext({
+        params: {
+          sessionId: "session-1",
+          sessionKey: "agent:openclaw:session-1",
+          toolsAllow: ["openclaw"],
+          pluginHarnessToolPolicyRestricted: true,
+          config: { agents: { defaults: { workspace: workspaceDir } } },
+        } as EmbeddedRunAttemptParams,
+        resolvedWorkspace: workspaceDir,
+        executionWorkspace: executionDir,
+        effectiveWorkspace: executionDir,
+        sessionKey: "agent:openclaw:session-1",
+        sessionAgentId: "openclaw",
+        memoryToolNames: [],
+        ringZeroActive: true,
+      });
+
+      expect(context.threadDeveloperInstructions).toBeUndefined();
+      expect(context.threadDeveloperInstructionFiles).toEqual([]);
     } finally {
       await fs.rm(workspaceDir, { recursive: true, force: true });
       await fs.rm(executionDir, { recursive: true, force: true });

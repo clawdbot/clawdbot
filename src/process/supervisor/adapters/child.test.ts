@@ -958,14 +958,16 @@ describe("createChildAdapter", () => {
     });
     const first = vi.fn();
     const second = vi.fn();
+    const raw = vi.fn();
 
-    adapter.onStdout(first);
+    adapter.onStdout(first, raw);
     adapter.onStdout(second);
     child.stdout?.emit("data", Buffer.from([0xb2]));
 
     expect(createWindowsOutputDecoderMock).toHaveBeenCalledTimes(2);
     expect(first).toHaveBeenCalledWith("first");
     expect(second).toHaveBeenCalledWith("second");
+    expect(raw).toHaveBeenCalledWith(Buffer.from([0xb2]));
   });
 
   it("guards stream errors before output listeners are registered", async () => {

@@ -23,7 +23,6 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { createClackPrompter } from "../wizard/clack-prompter.js";
 import { WizardCancelledError } from "../wizard/prompts.js";
-import { resolveSetupSecretInputString } from "../wizard/setup.secret-input.js";
 import { writeWizardConfigFile } from "../wizard/setup.shared.js";
 import { removeChannelConfigWizard } from "./configure.channels.js";
 import { maybeInstallDaemon, type DaemonSetupOutcome } from "./configure.daemon.js";
@@ -42,6 +41,7 @@ import {
   select,
   text,
 } from "./configure.shared.js";
+import { resolveGatewayStartupTiming } from "./gateway-startup-timing.js";
 import { formatHealthCheckFailure } from "./health-format.js";
 import { healthCommandNonExiting } from "./health.js";
 import {
@@ -85,27 +85,11 @@ function loadSetupPluginConfigModule(): Promise<SetupPluginConfigModule> {
   return setupPluginConfigModuleLoader.load();
 }
 
-async function resolveGatewaySecretInputForWizard(params: {
-  cfg: OpenClawConfig;
-  value: unknown;
-  path: string;
-}): Promise<string | undefined> {
-  try {
-    return await resolveSetupSecretInputString({
-      config: params.cfg,
-      value: params.value,
-      path: params.path,
-      env: process.env,
-    });
-  } catch {
-    return undefined;
-  }
-}
-
 async function runGatewayHealthCheck(params: {
   cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   port: number;
+  daemonSetupOutcome?: DaemonSetupOutcome;
 }): Promise<GatewayHealthCheckOutcome> {
   const localLinks = resolveLocalControlUiProbeLinks({
     bind: params.cfg.gateway?.bind ?? "loopback",
@@ -153,20 +137,25 @@ async function runGatewayHealthCheck(params: {
     }
     ({ token, password } = remoteProbeAuth.auth);
   } else {
-    const [configuredToken, configuredPassword] = await Promise.all([
-      resolveGatewaySecretInputForWizard({
-        cfg: params.cfg,
-        value: params.cfg.gateway?.auth?.token,
-        path: "gateway.auth.token",
-      }),
-      resolveGatewaySecretInputForWizard({
-        cfg: params.cfg,
-        value: params.cfg.gateway?.auth?.password,
-        path: "gateway.auth.password",
-      }),
-    ]);
-    token = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? configuredToken;
-    password = normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ?? configuredPassword;
+    const localProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: params.cfg,
+      env: process.env,
+      mode: "local",
+      localPrecedence: "env-first",
+    });
+    if (localProbeAuth.warning) {
+      note(
+        [
+          "Could not resolve local gateway SecretRef for health check.",
+          localProbeAuth.warning,
+          "Health check skipped to avoid falling back to ambient credentials.",
+          `Fix the SecretRef, then run \`${formatCliCommand("openclaw health")}\` again.`,
+        ].join("\n"),
+        "Gateway auth",
+      );
+      return "skipped";
+    }
+    ({ token, password } = localProbeAuth.auth);
   }
 
   try {
@@ -174,7 +163,9 @@ async function runGatewayHealthCheck(params: {
       url: wsUrl,
       token,
       password,
-      deadlineMs: 15_000,
+      ...(params.daemonSetupOutcome === "succeeded"
+        ? resolveGatewayStartupTiming()
+        : { deadlineMs: 15_000 }),
     });
     if (!gatewayProbe.ok) {
       throw new Error(gatewayProbe.detail ?? `gateway did not become reachable at ${wsUrl}`);
@@ -502,24 +493,19 @@ export async function runConfigureWizard(
       const localUrl = `ws://127.0.0.1:${resolveGatewayPort(baseConfig)}`;
       const remoteUrl = normalizeOptionalString(baseConfig.gateway?.remote?.url) ?? "";
       const localProbePromise = (async () => {
-        const [baseLocalProbeToken, baseLocalProbePassword] = await Promise.all([
-          resolveGatewaySecretInputForWizard({
-            cfg: baseConfig,
-            value: baseConfig.gateway?.auth?.token,
-            path: "gateway.auth.token",
-          }),
-          resolveGatewaySecretInputForWizard({
-            cfg: baseConfig,
-            value: baseConfig.gateway?.auth?.password,
-            path: "gateway.auth.password",
-          }),
-        ]);
+        const localProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
+          cfg: baseConfig,
+          env: process.env,
+          mode: "local",
+          localPrecedence: "env-first",
+        });
+        if (localProbeAuth.warning) {
+          return { ok: false, authUnavailable: true as const };
+        }
         return probeGatewayReachable({
           url: localUrl,
-          token: normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ?? baseLocalProbeToken,
-          password:
-            normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
-            baseLocalProbePassword,
+          token: localProbeAuth.auth.token,
+          password: localProbeAuth.auth.password,
           timeoutMs: GATEWAY_HINT_PROBE_TIMEOUT_MS,
         });
       })();
@@ -549,7 +535,9 @@ export async function runConfigureWizard(
               label: "Local (this machine)",
               hint: localProbe.ok
                 ? `Gateway reachable (${localUrl})`
-                : `No gateway detected (${localUrl})`,
+                : "authUnavailable" in localProbe
+                  ? `Gateway auth unavailable; probe skipped (${localUrl})`
+                  : `No gateway detected (${localUrl})`,
             },
             {
               value: "remote",
@@ -806,6 +794,7 @@ export async function runConfigureWizard(
           cfg: nextConfig,
           runtime,
           port: gatewayPort,
+          daemonSetupOutcome,
         });
       },
     } satisfies Record<WizardSection, () => Promise<void>>;
@@ -915,43 +904,48 @@ export async function runConfigureWizard(
       basePath: nextConfig.gateway?.controlUi?.basePath,
       tlsEnabled: nextConfig.gateway?.tls?.enabled === true,
     });
-    const newPassword =
-      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
-      (await resolveGatewaySecretInputForWizard({
-        cfg: nextConfig,
-        value: nextConfig.gateway?.auth?.password,
-        path: "gateway.auth.password",
-      }));
-    const oldPassword =
-      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_PASSWORD) ??
-      (await resolveGatewaySecretInputForWizard({
-        cfg: baseConfig,
-        value: baseConfig.gateway?.auth?.password,
-        path: "gateway.auth.password",
-      }));
-    const token =
-      normalizeOptionalString(process.env.OPENCLAW_GATEWAY_TOKEN) ??
-      (await resolveGatewaySecretInputForWizard({
-        cfg: nextConfig,
-        value: nextConfig.gateway?.auth?.token,
-        path: "gateway.auth.token",
-      }));
-
-    let gatewayProbe = await probeGatewayReachable({
-      url: probeLinks.wsUrl,
-      token,
-      password: newPassword,
+    const probeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
+      cfg: nextConfig,
+      env: process.env,
+      mode: "local",
+      localPrecedence: "env-first",
     });
-    if (!gatewayProbe.ok && newPassword !== oldPassword && oldPassword) {
-      gatewayProbe = await probeGatewayReachable({
-        url: probeLinks.wsUrl,
-        token,
-        password: oldPassword,
+    // Service activation can precede the listener; only a successful daemon action
+    // earns the startup grace period, not failed/skipped or config-only work.
+    const probe =
+      daemonSetupOutcome === "succeeded" ? waitForGatewayReachable : probeGatewayReachable;
+    let gatewayProbe = probeAuth.warning
+      ? { ok: false, detail: "auth unavailable; probe skipped" }
+      : await probe({
+          ...(daemonSetupOutcome === "succeeded" ? resolveGatewayStartupTiming() : {}),
+          url: probeLinks.wsUrl,
+          token: probeAuth.auth.token,
+          password: probeAuth.auth.password,
+        });
+    if (!gatewayProbe.ok && !probeAuth.warning && baseConfig.gateway?.auth?.password) {
+      const oldProbeAuth = await resolveGatewayProbeAuthSafeWithSecretInputs({
+        cfg: baseConfig,
+        env: process.env,
+        mode: "local",
+        localPrecedence: "env-first",
       });
+      if (
+        !oldProbeAuth.warning &&
+        oldProbeAuth.auth.password &&
+        probeAuth.auth.password !== oldProbeAuth.auth.password
+      ) {
+        gatewayProbe = await probeGatewayReachable({
+          url: probeLinks.wsUrl,
+          token: probeAuth.auth.token,
+          password: oldProbeAuth.auth.password,
+        });
+      }
     }
-    const gatewayStatusLine = gatewayProbe.ok
-      ? "Gateway: reachable"
-      : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
+    const gatewayStatusLine = probeAuth.warning
+      ? "Gateway: auth unavailable (probe skipped)"
+      : gatewayProbe.ok
+        ? "Gateway: reachable"
+        : `Gateway: not detected${gatewayProbe.detail ? ` (${gatewayProbe.detail})` : ""}`;
     const windowsFirewallLines = formatWindowsGatewayFirewallGuidance({ bind });
 
     note(

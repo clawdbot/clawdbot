@@ -53,6 +53,7 @@ import {
   mainSessionRecoveryLog,
   MAX_RECOVERY_RETRIES,
   normalizeStringSet,
+  resolveRestartRecoveryTerminalClientRunId,
 } from "./main-session-restart-recovery-shared.js";
 
 function pendingFinalRecoveryAction(
@@ -112,6 +113,7 @@ async function completePendingFinalRecoveryWithNotice(
         abortedLastRun: false,
         endedAt,
         lifecycleRunId: undefined,
+        lastRunId: resolveRestartRecoveryTerminalClientRunId(current),
         pendingFinalDelivery: undefined,
         ...(pending?.context &&
         pending.intentId &&
@@ -220,7 +222,7 @@ export async function recoverStore(params: {
   onExhaustedTarget?: (target: ExhaustedRestartRecoveryTarget) => void;
   storePath: string;
   stateDir?: string;
-  resumedSessionKeys: Set<string>;
+  handledSessionKeys: Set<string>;
   expectedClaim?: ExpectedRestartRecoveryClaim;
   expectedTarget?: ExpectedRestartRecoveryTarget;
   sessionWorkAdmissionHandoffId?: string;
@@ -229,8 +231,8 @@ export async function recoverStore(params: {
   lifecycleGeneration?: string;
   shouldContinue?: () => boolean;
   gatewayRuntime: GatewayRecoveryRuntime;
-}): Promise<{ recovered: number; failed: number; skipped: number }> {
-  const result = { recovered: 0, failed: 0, skipped: 0 };
+}): Promise<{ started: number; settled: number; failed: number; skipped: number }> {
+  const result = { started: 0, settled: 0, failed: 0, skipped: 0 };
   const shouldContinue = () => params.shouldContinue?.() !== false;
   const stopped = () => {
     if (shouldContinue()) {
@@ -329,7 +331,7 @@ export async function recoverStore(params: {
       continue;
     }
     const resumeDedupeKey = sessionKey;
-    if (params.resumedSessionKeys.has(resumeDedupeKey)) {
+    if (params.handledSessionKeys.has(resumeDedupeKey)) {
       result.skipped++;
       continue;
     }
@@ -391,9 +393,12 @@ export async function recoverStore(params: {
       continue;
     }
     const recordResumeResult = (resumeResult: Awaited<ReturnType<typeof resumeMainSession>>) => {
-      if (resumeResult === "resumed") {
-        params.resumedSessionKeys.add(resumeDedupeKey);
-        result.recovered++;
+      if (resumeResult === "started") {
+        params.handledSessionKeys.add(resumeDedupeKey);
+        result.started++;
+      } else if (resumeResult === "settled") {
+        params.handledSessionKeys.add(resumeDedupeKey);
+        result.settled++;
       } else if (resumeResult === "skipped") {
         result.skipped++;
       } else {
@@ -486,8 +491,8 @@ export async function recoverStore(params: {
         storePath: params.storePath,
       });
       if (completion.outcome === "completed") {
-        params.resumedSessionKeys.add(resumeDedupeKey);
-        result.recovered++;
+        params.handledSessionKeys.add(resumeDedupeKey);
+        result.settled++;
       } else {
         result.skipped++;
       }
@@ -499,7 +504,7 @@ export async function recoverStore(params: {
         sessionKey,
         params.storePath,
       );
-      result[completed ? "recovered" : "skipped"]++;
+      result[completed ? "settled" : "skipped"]++;
       continue;
     }
     if (pendingAction === "fail") {
@@ -588,7 +593,7 @@ export async function recoverStore(params: {
         sessionKey,
       });
       if (reconciliation.outcome === "reconciled") {
-        params.resumedSessionKeys.add(resumeDedupeKey);
+        params.handledSessionKeys.add(resumeDedupeKey);
         result.skipped++;
       } else if (
         reconciliation.entry?.status === "running" &&
@@ -628,8 +633,8 @@ export async function recoverStore(params: {
             }),
       });
       if (completion.outcome === "completed") {
-        params.resumedSessionKeys.add(resumeDedupeKey);
-        result.recovered++;
+        params.handledSessionKeys.add(resumeDedupeKey);
+        result.settled++;
       } else if (completion.outcome === "changed") {
         result.skipped++;
       } else {

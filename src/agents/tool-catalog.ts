@@ -119,6 +119,14 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
     includeInOpenClawGroup: true,
   },
   {
+    id: "secrets",
+    label: "secrets",
+    description: "Request and manage write-only credentials",
+    sectionId: "runtime",
+    profiles: ["coding", "messaging"],
+    includeInOpenClawGroup: true,
+  },
+  {
     id: "web_search",
     label: "web_search",
     description: "Search the web",
@@ -321,7 +329,7 @@ const CORE_TOOL_DEFINITIONS: CoreToolDefinition[] = [
   {
     id: "terminal",
     label: "terminal",
-    description: "Own visible gateway terminal",
+    description: "Use shared operator terminals with policy-governed input",
     sectionId: "ui",
     profiles: ["coding"],
     includeInOpenClawGroup: true,

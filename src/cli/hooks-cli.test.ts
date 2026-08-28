@@ -3,12 +3,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { HookStatusReport } from "../hooks/hooks-status.js";
-import {
-  formatHookInfo,
-  formatHooksCheck,
-  formatHooksList,
-  registerHooksCli,
-} from "./hooks-cli.js";
+import { formatHookInfo, formatHooksCheck, formatHooksList } from "./hooks-cli.format.js";
+import { registerHooksCli } from "./hooks-cli.js";
 import { createEmptyInstallChecks } from "./requirements-test-fixtures.js";
 
 const runPluginInstallCommandMock = vi.hoisted(() => vi.fn());
@@ -168,7 +164,7 @@ describe("hooks cli formatting", () => {
   );
 
   it("shows eventless hooks as blocked by their event declaration in info output", () => {
-    const output = formatHookInfo(createEventlessHookReport(), "session-memory", {});
+    const output = formatHookInfo(createEventlessHookReport().hooks[0], "session-memory", {});
 
     expect(output).toContain("No events defined");
     expect(output).toContain("Blocked reason: no events defined");
@@ -176,7 +172,11 @@ describe("hooks cli formatting", () => {
   });
 
   it("keeps missing requirement hooks labeled as missing requirements in info output", () => {
-    const output = formatHookInfo(createMissingRequirementHookReport(), "session-memory", {});
+    const output = formatHookInfo(
+      createMissingRequirementHookReport().hooks[0],
+      "session-memory",
+      {},
+    );
 
     expect(output).toContain("Missing requirements");
     expect(output).toContain("DEMO_HOOK_TOKEN");
@@ -235,14 +235,14 @@ describe("hooks cli formatting", () => {
       ],
     };
 
-    const output = formatHookInfo(typoReport, "typo-hook", {});
+    const output = formatHookInfo(typoReport.hooks[0], "typo-hook", {});
     expect(output).toContain("Event not emitted by core (likely typo): command:nwe");
   });
 
   it("shows plugin-managed details in hook info", () => {
     const pluginReport = createPluginManagedHookReport();
 
-    const output = formatHookInfo(pluginReport, "plugin-hook", {});
+    const output = formatHookInfo(pluginReport.hooks[0], "plugin-hook", {});
     expect(output).toContain("voice-call");
     expect(output).toContain("Managed by plugin");
   });

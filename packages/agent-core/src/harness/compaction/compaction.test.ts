@@ -283,24 +283,44 @@ describe("calculateContextTokens", () => {
 });
 
 describe("session-entry compaction budgeting", () => {
-  it("counts visible shell output while ignoring private output after provider usage", () => {
-    const hidden = createBashMessage("x".repeat(80_000), 2, true);
-    const visible = createBashMessage("x".repeat(80_000), 2, false);
-    const assistant = createAssistant("done", createUsage(42), 1);
-    const latest: AgentMessage = { role: "user", content: "continue", timestamp: 3 };
+  it.each([
+    {
+      kind: "shell",
+      createMessage: (excludeFromContext: boolean) =>
+        createBashMessage("x".repeat(80_000), 2, excludeFromContext),
+    },
+    {
+      kind: "custom",
+      createMessage: (excludeFromContext: boolean): AgentMessage => ({
+        role: "custom",
+        customType: "openclaw.operator-activity",
+        content: "x".repeat(80_004),
+        display: excludeFromContext,
+        excludeFromContext,
+        timestamp: 2,
+      }),
+    },
+  ])(
+    "counts visible $kind activity while ignoring excluded activity after provider usage",
+    ({ createMessage }) => {
+      const hidden = createMessage(true);
+      const visible = createMessage(false);
+      const assistant = createAssistant("done", createUsage(42), 1);
+      const latest: AgentMessage = { role: "user", content: "continue", timestamp: 3 };
 
-    expect(estimateTokens(hidden)).toBe(0);
-    expect(estimateTokens(visible)).toBeGreaterThan(20_000);
-    expect(estimateContextTokens([assistant, hidden, latest])).toMatchObject({
-      tokens: 44,
-      usageTokens: 42,
-      trailingTokens: 2,
-      lastUsageIndex: 0,
-    });
-    expect(estimateContextTokens([assistant, visible, latest]).trailingTokens).toBeGreaterThan(
-      20_000,
-    );
-  });
+      expect(estimateTokens(hidden)).toBe(0);
+      expect(estimateTokens(visible)).toBeGreaterThan(20_000);
+      expect(estimateContextTokens([assistant, hidden, latest])).toMatchObject({
+        tokens: 44,
+        usageTokens: 42,
+        trailingTokens: 2,
+        lastUsageIndex: 0,
+      });
+      expect(estimateContextTokens([assistant, visible, latest]).trailingTokens).toBeGreaterThan(
+        20_000,
+      );
+    },
+  );
 
   it("never rewinds a retained visible turn onto an excluded shell-history row", () => {
     const entries: SessionTreeEntry[] = [
@@ -345,11 +365,36 @@ describe("session-entry compaction budgeting", () => {
     expect(preparation.value).toMatchObject({
       firstKeptEntryId: "entry-3",
       isSplitTurn: true,
+      splitTurnCompleted: true,
       tokensBefore: 10,
       turnPrefixMessages: [{ role: "user" }, { role: "assistant" }],
     });
     expect(JSON.stringify(preparation.value)).not.toContain("private output");
     expect(JSON.stringify(entries)).toContain("private output");
+  });
+
+  it("binds split-turn completion to the cut turn instead of a newer retained turn", () => {
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "boundary request", timestamp: 1 }, 0),
+      createMessageEntry(createAssistant("boundary complete", createUsage(10), 2), 1),
+      createMessageEntry({ role: "user", content: "newer unresolved request", timestamp: 3 }, 2),
+    ];
+
+    const preparation = prepareCompaction(entries, {
+      enabled: true,
+      reserveTokens: 0,
+      keepRecentTokens: 8,
+    });
+
+    expect(preparation.ok).toBe(true);
+    if (!preparation.ok || !preparation.value) {
+      throw new Error("expected the boundary turn to be split");
+    }
+    expect(preparation.value).toMatchObject({
+      firstKeptEntryId: "entry-1",
+      isSplitTurn: true,
+      splitTurnCompleted: true,
+    });
   });
 
   it("applies the shared common-CJK budget heuristic", () => {
@@ -646,6 +691,121 @@ describe("session-entry compaction budgeting", () => {
   });
 });
 
+describe("prepareCompaction when the last entry is a compaction record", () => {
+  const settings = {
+    enabled: true,
+    reserveTokens: 0,
+    keepRecentTokens: 1,
+  };
+  it.each([
+    { name: "ordinary", fromHook: false, compactable: true },
+    { name: "safeguard", fromHook: true, compactable: false },
+  ])("handles a $name trailing compaction boundary", ({ fromHook, compactable }) => {
+    const largeContent = "x".repeat(200_000);
+    const entries: SessionTreeEntry[] = [
+      createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
+      {
+        type: "compaction",
+        id: "compaction-1",
+        parentId: "entry-0",
+        timestamp: new Date(2).toISOString(),
+        summary: "earlier summary",
+        firstKeptEntryId: "entry-0",
+        tokensBefore: 200_000,
+      },
+      createMessageEntry({ role: "user", content: largeContent, timestamp: 3 }, 2),
+      createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
+      createMessageEntry({ role: "user", content: largeContent, timestamp: 5 }, 4),
+      createMessageEntry(createAssistant("recent reply tail", createUsage(10), 6), 5),
+      {
+        type: "compaction",
+        id: "compaction-2",
+        parentId: "entry-5",
+        timestamp: new Date(7).toISOString(),
+        summary: "later summary",
+        firstKeptEntryId: "entry-2",
+        tokensBefore: 200_000,
+        fromHook,
+      },
+    ];
+
+    const result = prepareCompaction(entries, settings);
+
+    expect(result.ok).toBe(true);
+    expect(Boolean(result.ok && result.value)).toBe(compactable);
+    if (!compactable) {
+      return;
+    }
+    if (!result.ok || !result.value) {
+      throw new Error("expected a trailing compaction record with new turns to remain compactable");
+    }
+    expect(result.value.messagesToSummarize.length).toBeGreaterThan(0);
+    expect(result.value.previousSummary).toBe("later summary");
+    expect(result.value.firstKeptEntryId).not.toBe("entry-2");
+
+    const nextResult = prepareCompaction(
+      [
+        ...entries,
+        {
+          type: "compaction",
+          id: "compaction-3",
+          parentId: "compaction-2",
+          timestamp: new Date(8).toISOString(),
+          summary: "final summary",
+          firstKeptEntryId: result.value.firstKeptEntryId,
+          tokensBefore: result.value.tokensBefore,
+        },
+      ],
+      settings,
+    );
+
+    expect(nextResult.ok).toBe(true);
+    expect(nextResult.ok ? nextResult.value : undefined).toBeUndefined();
+  });
+
+  it.each([
+    { name: "non-record", details: "invalid" },
+    { name: "missing fields", details: { readFiles: ["src/read.ts"] } },
+    { name: "wrong field types", details: { readFiles: "src/read.ts", modifiedFiles: [] } },
+    {
+      name: "mixed element types",
+      details: { readFiles: ["src/read.ts", 1], modifiedFiles: ["src/write.ts"] },
+    },
+  ] satisfies Array<{ name: string; details: unknown }>)(
+    "ignores $name persisted compaction details",
+    ({ details }) => {
+      const largeContent = "x".repeat(200_000);
+      const entries: SessionTreeEntry[] = [
+        createMessageEntry({ role: "user", content: "original request", timestamp: 1 }, 0),
+        {
+          type: "compaction",
+          id: "entry-1",
+          parentId: "entry-0",
+          timestamp: new Date(2).toISOString(),
+          summary: "earlier summary",
+          firstKeptEntryId: "entry-0",
+          tokensBefore: 200_000,
+          details,
+        },
+        createMessageEntry({ role: "user", content: largeContent, timestamp: 3 }, 2),
+        createMessageEntry(createAssistant(largeContent, createUsage(10), 4), 3),
+        createMessageEntry({ role: "user", content: "recent tail", timestamp: 5 }, 4),
+      ];
+
+      const result = prepareCompaction(entries, settings);
+
+      expect(result.ok).toBe(true);
+      if (!result.ok || !result.value) {
+        throw new Error("expected malformed persisted details to be ignored");
+      }
+      expect(result.value.previousSummaryDetails).toBeUndefined();
+      expect([...result.value.fileOps.read]).toEqual([]);
+      expect([...result.value.fileOps.written]).toEqual([]);
+      expect([...result.value.fileOps.edited]).toEqual([]);
+    },
+  );
+});
+
 describe("generateSummary thinking options", () => {
   it("consumes the decorated stream before reading its result", async () => {
     const model: Model = {
@@ -860,7 +1020,6 @@ describe("split-turn compaction", () => {
       }, 5);
       return stream;
     });
-
     const result = await compact(
       {
         firstKeptEntryId: "kept-entry",

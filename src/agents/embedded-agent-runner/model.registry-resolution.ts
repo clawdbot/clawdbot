@@ -2,6 +2,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { ModelRegistry as CoreModelRegistry } from "../../llm/model-registry.js";
 import type { Model } from "../../llm/types.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../../plugins/plugin-metadata-snapshot.types.js";
+import type { ProviderRuntimeModel } from "../../plugins/provider-runtime-model.types.js";
 import { ensureAuthProfileStore, resolveAuthProfileOrder } from "../auth-profiles.js";
 import type { AuthProfileCredential } from "../auth-profiles/types.js";
 import { resolveAgentHarnessPolicy } from "../harness/policy.js";
@@ -252,21 +253,9 @@ export function resolveDynamicModelAuthProfile(params: {
   };
 }
 
-function resolvePluginDynamicModelWithRegistry(params: {
-  provider: string;
-  modelId: string;
-  modelRegistry: CoreModelRegistry;
-  cfg?: OpenClawConfig;
-  agentDir?: string;
-  agentRuntimeId?: string;
-  manifestAlias: ManifestModelCatalogProviderAliasMetadata;
-  workspaceDir?: string;
-  authProfileId?: string;
-  authProfileMode?: AuthProfileCredential["type"] | "aws-sdk";
-  preferredProfile?: string;
-  runtimeHooks?: ProviderRuntimeHooks;
-  getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
-}): Model | undefined {
+function resolvePluginDynamicModelWithRegistry(
+  params: ResolveModelWithPreparedRegistryParams,
+): Model | undefined {
   const { provider, modelId, modelRegistry, cfg, agentDir, workspaceDir } = params;
   const runtimeHooks = params.runtimeHooks ?? DEFAULT_PROVIDER_RUNTIME_HOOKS;
   const providerConfig = resolveConfiguredProviderConfig(cfg, provider);
@@ -294,22 +283,24 @@ function resolvePluginDynamicModelWithRegistry(params: {
     workspaceDir,
     runtimeHooks,
   });
-  const pluginDynamicModel = runtimeHooks.runProviderDynamicModel({
-    provider,
-    config: cfg,
-    workspaceDir,
-    context: {
-      config: cfg,
-      agentDir,
-      workspaceDir,
-      ...(agentRuntimeId ? { agentRuntimeId } : {}),
+  const pluginDynamicModel =
+    params.preparedDynamicModel ??
+    (runtimeHooks.runProviderDynamicModel({
       provider,
-      modelId,
-      modelRegistry,
-      providerConfig,
-      ...authProfile,
-    },
-  }) as Model | undefined;
+      config: cfg,
+      workspaceDir,
+      context: {
+        config: cfg,
+        agentDir,
+        workspaceDir,
+        ...(agentRuntimeId ? { agentRuntimeId } : {}),
+        provider,
+        modelId,
+        modelRegistry,
+        providerConfig,
+        ...authProfile,
+      },
+    }) as ProviderRuntimeModel | undefined);
   if (!pluginDynamicModel) {
     return undefined;
   }
@@ -425,6 +416,7 @@ type ResolveModelWithRegistryParams = {
 
 type ResolveModelWithPreparedRegistryParams = ResolveModelWithRegistryParams & {
   manifestAlias: ManifestModelCatalogProviderAliasMetadata;
+  preparedDynamicModel?: ProviderRuntimeModel;
   getStaticCatalogModel?: () => StaticCatalogFallbackModel | undefined;
 };
 

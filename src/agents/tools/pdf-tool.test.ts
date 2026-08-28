@@ -18,6 +18,7 @@ import {
   createPdfToolInfraStub,
   FAKE_PDF_MEDIA,
   resetPdfToolAuthEnv,
+  withPreparedRuntimeFacts,
   withTempPdfAgentDir,
 } from "./pdf-tool.test-support.js";
 
@@ -603,11 +604,11 @@ describe("createPdfTool", () => {
       );
       vi.spyOn(pdfNativeProviders, "anthropicAnalyzePdf").mockResolvedValue("parent summary");
       const cfg = withPdfModel(ANTHROPIC_PDF_MODEL);
-      const parentPreparedModelRuntime = {
+      const parentPreparedModelRuntime = withPreparedRuntimeFacts({
         agentDir,
         config: cfg,
         createStores: () => ({ authStorage, modelRegistry }),
-      } as never;
+      }) as never;
       const tool = requirePdfTool(
         (await loadCreatePdfTool())({
           config: cfg,
@@ -642,12 +643,12 @@ describe("createPdfTool", () => {
       const modelRegistry = createPdfModelRegistry(find);
       const release = vi.fn();
       vi.mocked(preparedModelRuntime.acquireAgentRunPreparedModelRuntime).mockResolvedValueOnce({
-        snapshot: {
+        snapshot: withPreparedRuntimeFacts({
           agentDir: "/tmp/committed-pdf-agent",
           workspaceDir: committedWorkspace,
           config: withPdfModel(GOOGLE_PDF_MODEL),
           createStores: () => ({ authStorage, modelRegistry }),
-        },
+        }),
         release,
       } as never);
       const geminiSpy = vi

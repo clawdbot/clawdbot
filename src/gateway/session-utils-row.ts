@@ -12,6 +12,7 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { resolveFastModeState } from "../agents/fast-mode.js";
 import { resolveAgentIdentity } from "../agents/identity.js";
 import { findModelCatalogEntry, type ModelCatalogEntry } from "../agents/model-catalog.js";
+import { resolveModelContextWindowProfile } from "../agents/model-context-window.js";
 import { resolveSessionModelIdentityRef } from "../agents/session-model-ref.js";
 import {
   countActiveDescendantRuns,
@@ -33,6 +34,7 @@ import {
   type InternalSessionEntry,
   type SessionEntry,
 } from "../config/sessions.js";
+import { resolveSessionModelOverrideSource } from "../config/sessions/model-override-provenance.js";
 import { sessionEntryForkedFromParent } from "../config/sessions/session-entry-lineage.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { projectPluginSessionExtensionsSync } from "../plugins/host-hook-state.js";
@@ -208,7 +210,7 @@ export function buildGatewaySessionRow(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
   key: string;
-  entry?: SessionEntry;
+  entry?: InternalSessionEntry;
   modelCatalog?: SessionListModelCatalog | ModelCatalogEntry[];
   now?: number;
   includeDerivedTitles?: boolean;
@@ -485,16 +487,26 @@ export function buildGatewaySessionRow(params: {
           modelId: rowModel,
         })
       : undefined;
-  const resolvedCurrentContextTokens = resolvePositiveNumber(
+  const contextWindowProfile = resolveModelContextWindowProfile({
+    catalogEntry,
+    selected: entry?.contextWindow,
+  });
+  const resolvedModelContextTokens = resolvePositiveNumber(
     resolveContextTokensForModel({
       cfg,
       provider: rowModelProvider,
       model: rowModel,
       modelContextTokens: catalogEntry?.contextTokens,
-      modelContextWindow: catalogEntry?.contextWindow,
+      modelContextWindow: contextWindowProfile.contextTokens,
       allowAsyncLoad: false,
     }),
   );
+  const resolvedCurrentContextTokens = contextWindowProfile.contextTokens
+    ? Math.min(
+        resolvedModelContextTokens ?? contextWindowProfile.contextTokens,
+        contextWindowProfile.contextTokens,
+      )
+    : resolvedModelContextTokens;
   const authoredContextTokens = resolvePositiveNumber(
     resolveAuthoredModelContextTokens({
       cfg,
@@ -587,6 +599,7 @@ export function buildGatewaySessionRow(params: {
     pinnedAt: entry?.pinnedAt,
     unread: deriveSessionUnread(entry),
     lastReadAt: entry?.lastReadAt,
+    markedUnreadAt: entry?.markedUnreadAt,
     agentStatus,
     observerDigest: observerDigest
       ? {
@@ -608,6 +621,9 @@ export function buildGatewaySessionRow(params: {
       ? "tombstoned"
       : undefined,
     thinkingLevel: thinkingProjection.thinkingLevel,
+    contextWindow: contextWindowProfile.contextWindow,
+    contextWindows: contextWindowProfile.contextWindows,
+    contextWindowDefault: contextWindowProfile.contextWindowDefault,
     thinkingLevels: thinkingProjection.thinkingLevels,
     thinkingOptions: thinkingProjection.thinkingOptions,
     thinkingDefault: thinkingProjection.thinkingDefault,
@@ -629,6 +645,7 @@ export function buildGatewaySessionRow(params: {
     estimatedCostUsd,
     status: subagentRun ? subagentStatus : entry?.status,
     lastRunError: entry?.lastRunError,
+    lastRunId: entry?.lastRunId,
     hasAutomation: sessionHasAutomation(key, cfg, sessionAgentId) ? true : undefined,
     subagentRunState,
     hasActiveSubagentRun: subagentRun || hasActiveSubagentRun ? hasActiveSubagentRun : undefined,
@@ -652,6 +669,7 @@ export function buildGatewaySessionRow(params: {
     }).mode,
     modelProvider: rowModelProvider,
     model: rowModel,
+    modelOverrideSource: resolveSessionModelOverrideSource(entry),
     modelSelectionLocked: entry?.modelSelectionLocked,
     agentRuntime: projectWorkerPlacementAgentRuntime(thinkingProjection.agentRuntime),
     contextTokens,

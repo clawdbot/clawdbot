@@ -17,6 +17,7 @@ export {
   type ErrorCode,
   type GatewayErrorDetails,
   type McpAppViewExpiredErrorDetails,
+  type OutboundDeliveryQueuedErrorDetails,
   type MissingScopeErrorDetails,
   type SkillProposalRevisionChangedErrorDetails,
   type UserPrefsLimitExceededErrorDetails,
@@ -46,6 +47,10 @@ export const MissingScopeErrorDetailsSchema = closedObject({
 
 export const McpAppViewExpiredErrorDetailsSchema = closedObject({
   code: Type.Literal(GatewayErrorDetailCodes.MCP_APP_VIEW_EXPIRED),
+});
+
+export const OutboundDeliveryQueuedErrorDetailsSchema = closedObject({
+  code: Type.Literal(GatewayErrorDetailCodes.OUTBOUND_DELIVERY_QUEUED),
 });
 
 export const UserPrefsLimitExceededErrorDetailsSchema = closedObject({
@@ -83,6 +88,7 @@ export const GatewayErrorDetailsSchema = Type.Union([
   CronJobNotFoundErrorDetailsSchema,
   MissingScopeErrorDetailsSchema,
   McpAppViewExpiredErrorDetailsSchema,
+  OutboundDeliveryQueuedErrorDetailsSchema,
   UserPrefsLimitExceededErrorDetailsSchema,
   SkillProposalRevisionChangedErrorDetailsSchema,
   ProjectCloneErrorDetailsSchema,

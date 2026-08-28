@@ -795,16 +795,10 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
     const rateLimitKey = `${accountInfo.accountId}:${conversationKey}`;
 
     if (decision.kind === "drop") {
-      // Record echo/reflection drops so the rate limiter can detect sustained loops.
-      // Only loop-related drop reasons feed the counter; policy/mention/empty drops
-      // are normal and should not escalate. "from me" is excluded: every own-send
-      // (agent replies, multi-chunk sends, operator phone traffic) produces a
-      // from-me row, so counting it lets a normal outbound burst trip the limiter
-      // and silently suppress the next legitimate inbound message.
+      // Count reflected agent content, not ordinary own-send or self-chat dedupe
+      // rows: counting those benign drops mutes legitimate conversation bursts.
       const isLoopDrop =
-        decision.reason === "echo" ||
-        decision.reason === "self-chat echo" ||
-        decision.reason === "reflected assistant content";
+        decision.reason === "echo" || decision.reason === "reflected assistant content";
       if (isLoopDrop) {
         loopRateLimiter.record(rateLimitKey);
       }
@@ -1059,8 +1053,11 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             logVerbose,
           })
         : undefined;
+    // SAFETY: Gateway startup supplies the full plugin channel runtime; the surface type is the minimal external view.
+    const pluginChannelRuntime = opts.channelRuntime as PluginRuntime["channel"] | undefined;
     const { ctxPayload, chatTarget, imessageTo } = await buildIMessageInboundContext({
       cfg,
+      accountService: imessageCfg.service,
       decision: contextDecision,
       message,
       previousTimestamp,
@@ -1068,8 +1065,7 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
       historyLimit,
       groupHistories,
       dmHistory,
-      buildContext: (opts.channelRuntime as PluginRuntime["channel"] | undefined)?.inbound
-        .buildContext,
+      buildContext: pluginChannelRuntime?.inbound.buildContext,
       media: {
         facts: mediaAttachments,
       },
@@ -1268,6 +1264,8 @@ export async function monitorIMessageProvider(opts: MonitorIMessageOpts = {}): P
             sessionKey: decision.route.sessionKey,
           },
           ctxPayload,
+          // Forward the owning runtime's bound dispatcher into the turn plan; never invoked here.
+          dispatchReplyFromConfig: pluginChannelRuntime?.reply?.dispatchReplyFromConfig,
           record: {
             updateLastRoute:
               !decision.isGroup && updateTarget

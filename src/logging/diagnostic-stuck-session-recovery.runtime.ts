@@ -4,12 +4,13 @@ import {
   abortAndDrainEmbeddedAgentRun,
   isEmbeddedAgentRunActive,
   isEmbeddedAgentRunHandleActive,
-  resolveEmbeddedAgentReplyRunPhase,
+  resolveEmbeddedReplyActivity,
   resolveActiveEmbeddedRunSessionId,
   resolveActiveEmbeddedRunSessionIdBySessionFile,
   resolveActiveEmbeddedRunHandleSessionId,
   resolveActiveEmbeddedRunHandleSessionIdBySessionFile,
 } from "../agents/embedded-agent-runner/runs.js";
+import { recoverTerminalSessionPlacementTurn } from "../agents/session-placement-admission.js";
 import {
   getCommandLaneActiveTaskIds,
   getCommandLaneSnapshot,
@@ -148,6 +149,24 @@ export async function recoverStuckDiagnosticSession(
         sessionKey: params.sessionKey,
       };
     }
+    const terminalWorkerError = params.sessionId
+      ? recoverTerminalSessionPlacementTurn({
+          sessionId: params.sessionId,
+          sessionKey: params.sessionKey,
+        })
+      : undefined;
+    if (terminalWorkerError !== undefined) {
+      // The placement owner already recorded failure and released its cleanup wait.
+      // Let ordinary turn completion unwind the reply and lane instead of resetting them.
+      return reportRecoveryOutcome({
+        status: "failed",
+        action: "fail_worker_turn",
+        reason: "terminal_worker",
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        error: terminalWorkerError,
+      });
+    }
     const fallbackActiveSessionId =
       params.sessionId && isEmbeddedAgentRunHandleActive(params.sessionId)
         ? params.sessionId
@@ -177,17 +196,29 @@ export async function recoverStuckDiagnosticSession(
     let forceCleared = false;
     const staleActiveProgressAbortMs = resolveStaleActiveProgressAbortMs(params);
     const staleActiveLaneTaskReleaseMs = resolveStaleActiveLaneTaskReleaseMs(params);
-    const activeReplyPhase = activeWorkSessionId
-      ? resolveEmbeddedAgentReplyRunPhase(activeWorkSessionId)
+    const activeReplyActivity = activeWorkSessionId
+      ? resolveEmbeddedReplyActivity(activeWorkSessionId)
       : undefined;
+    const activeReplyPhase = activeReplyActivity?.phase;
+    // Phase changes refresh the reply operation's activity clock. Session
+    // attention age may predate maintenance, so it cannot own this timeout.
+    const activeReplyAgeMs = activeReplyActivity
+      ? Math.max(0, Date.now() - activeReplyActivity.lastActivityAtMs)
+      : undefined;
+    const maintenancePhase =
+      activeReplyPhase === "preflight_compacting" || activeReplyPhase === "memory_flushing";
+    const activeMaintenanceProtected =
+      maintenancePhase &&
+      activeReplyAgeMs !== undefined &&
+      activeReplyAgeMs < staleActiveLaneTaskReleaseMs;
 
-    if (activeReplyPhase === "waiting_for_global_lane") {
-      // A global-lane queue owner is healthy pending work. Reclaiming it here
-      // reintroduces the silent reply drop that the wait phase prevents.
+    if (activeReplyPhase === "waiting_for_global_lane" || activeMaintenanceProtected) {
+      // Queued replies and configured maintenance own their lane until their
+      // producer finishes or the existing compaction safety window expires.
       return reportRecoveryOutcome({
         status: "skipped",
         action: "keep_lane",
-        reason: "global_lane_wait",
+        reason: activeMaintenanceProtected ? "active_reply_work" : "global_lane_wait",
         sessionId: params.sessionId,
         sessionKey: params.sessionKey,
         activeSessionId: activeWorkSessionId,
@@ -257,18 +288,9 @@ export async function recoverStuckDiagnosticSession(
           sessionKey: params.sessionKey,
           queueDepth: params.queueDepth,
           staleAbortMs: staleActiveProgressAbortMs,
-          // Reply-only ownership must expire when proven stale even with zero
-          // queued backlog; the queue gate exists to protect run handles that
-          // are actively draining queued turns, and there is no such backlog
-          // here to protect. Recognized maintenance phases are the exception:
-          // preflight compaction and memory flush are explicitly allowed to
-          // run longer than the stale threshold (they honor a configured
-          // compaction timeout), so they keep the queue-backlog guard and are
-          // never force-cleared early by this reclaim path.
-          requireQueueBacklog:
-            activeReplyPhase === "preflight_compacting" || activeReplyPhase === "memory_flushing"
-              ? undefined
-              : false,
+          // Maintenance retains its backlog gate after the safety window;
+          // other abandoned reply ownership must expire even without a queue.
+          requireQueueBacklog: maintenancePhase ? undefined : false,
         });
       if (params.allowActiveAbort === true || reclaimStaleReplyWork) {
         if (reclaimStaleReplyWork) {

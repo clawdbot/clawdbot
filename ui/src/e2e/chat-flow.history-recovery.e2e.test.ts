@@ -254,7 +254,7 @@ suite.define(() => {
       await activeThread.getByText("User history question 68").waitFor({
         timeout: 10_000,
       });
-      await activeThread.getByText("Assistant history answer 69").waitFor({
+      await activeThread.locator(".chat-bubble").getByText("Assistant history answer 69").waitFor({
         timeout: 10_000,
       });
       await expect
@@ -271,10 +271,6 @@ suite.define(() => {
         .toBe(true);
 
       await waitForChatScrollIdle(page);
-      await scrollChatThreadToTop(page);
-      await activeThread.getByText("User history question 10").waitFor({
-        timeout: 10_000,
-      });
       await scrollChatThreadToTop(page);
       await activeThread.getByText("User history question 0").waitFor({
         timeout: 10_000,
@@ -297,7 +293,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps retained paginated history stable when returning to a session", async () => {
+  it("keeps evicted paginated history stable when returning to a session", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -308,6 +304,17 @@ suite.define(() => {
       viewport: { height: 900, width: 1280 },
     });
     const page = await context.newPage();
+    const captureEvictionStep = async (name: string) => {
+      if (!artifactDir) {
+        return;
+      }
+      await page.screenshot({
+        path: path.join(artifactDir, `${name}.png`),
+        fullPage: true,
+      });
+      // Keep post-assertion route states legible in the optional proof recording.
+      await page.waitForTimeout(300);
+    };
     const historyMessage = (seq: number, label: string) => ({
       __openclaw: { id: `history-${seq}`, seq },
       content: [
@@ -320,6 +327,41 @@ suite.define(() => {
       timestamp: 1_800_000_000_000 + seq,
     });
     const shortMessages = [historyMessage(1, "short session"), historyMessage(2, "short session")];
+    const sessionCMessages = [historyMessage(201, "session c"), historyMessage(202, "session c")];
+    const sessionDMessages = [historyMessage(301, "session d"), historyMessage(302, "session d")];
+    const shortSessions = [
+      {
+        key: "agent:main:session-a",
+        label: "Session A",
+        messages: shortMessages,
+        sessionId: "short-history-session",
+        updatedAt: 4,
+      },
+      {
+        key: "agent:main:session-c",
+        label: "Session C",
+        messages: sessionCMessages,
+        sessionId: "short-history-session-c",
+        updatedAt: 2,
+      },
+      {
+        key: "agent:main:session-d",
+        label: "Session D",
+        messages: sessionDMessages,
+        sessionId: "short-history-session-d",
+        updatedAt: 1,
+      },
+    ];
+    const shortSessionHistoryCases = shortSessions.map(({ key, messages, sessionId }) => ({
+      match: { sessionKey: key },
+      response: {
+        hasMore: false,
+        messages,
+        sessionId,
+        thinkingLevel: null,
+        totalMessages: 2,
+      },
+    }));
     const recentMessages = Array.from({ length: 100 }, (_, index) =>
       historyMessage(index + 41, "recent retained message"),
     );
@@ -352,16 +394,7 @@ suite.define(() => {
                 totalMessages: 140,
               },
             },
-            {
-              match: { sessionKey: "agent:main:session-a" },
-              response: {
-                hasMore: false,
-                messages: shortMessages,
-                sessionId: "short-history-session",
-                thinkingLevel: null,
-                totalMessages: 2,
-              },
-            },
+            ...shortSessionHistoryCases,
           ],
         },
         "chat.startup": {
@@ -377,19 +410,23 @@ suite.define(() => {
                 totalMessages: 140,
               },
             },
-            {
-              match: {},
-              response: {
-                hasMore: false,
-                messages: shortMessages,
-                sessionId: "short-history-session",
-                thinkingLevel: null,
-                totalMessages: 2,
-              },
-            },
+            ...shortSessionHistoryCases,
           ],
         },
-        "sessions.list": chatSessionListResponse(),
+        "sessions.list": chatSessionListResponse([
+          ...shortSessions.map(({ key, label, updatedAt }) => ({
+            key,
+            kind: "direct",
+            label,
+            updatedAt,
+          })),
+          {
+            key: "agent:main:session-b",
+            kind: "direct",
+            label: "Session B",
+            updatedAt: 3,
+          },
+        ]),
       },
       sessionKey: "agent:main:session-a",
     });
@@ -403,6 +440,12 @@ suite.define(() => {
       );
       const sessionA = page.locator(
         '.sidebar-recent-session[data-session-key="agent:main:session-a"] a.sidebar-recent-session__link',
+      );
+      const sessionC = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-c"] a.sidebar-recent-session__link',
+      );
+      const sessionD = page.locator(
+        '.sidebar-recent-session[data-session-key="agent:main:session-d"] a.sidebar-recent-session__link',
       );
       await sessionB.click();
       await page.getByText(/^recent retained message 140\n/).waitFor({ timeout: 10_000 });
@@ -426,6 +469,13 @@ suite.define(() => {
 
       await sessionA.click();
       await page.getByText(/^short session 2\n/).waitFor({ timeout: 10_000 });
+      await captureEvictionStep("eviction-session-a");
+      await sessionC.click();
+      await page.getByText(/^session c 202\n/).waitFor({ timeout: 10_000 });
+      await captureEvictionStep("eviction-session-c");
+      await sessionD.click();
+      await page.getByText(/^session d 302\n/).waitFor({ timeout: 10_000 });
+      await captureEvictionStep("eviction-session-d");
       const historyRequestsBeforeReturn = (await gateway.getRequests("chat.history")).length;
       await page.evaluate(() => {
         type FrameSample = {
@@ -510,38 +560,6 @@ suite.define(() => {
     }
   });
 
-  it("keeps rejected pre-ACK sends visible and restores the draft", async () => {
-    const context = await suite.newBrowserContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
-    });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page);
-
-    try {
-      await page.goto(`${suite.server.baseUrl}chat`);
-      await gateway.deferNext("chat.send");
-
-      const prompt = "policy should not eat this";
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill(prompt);
-      await page.getByRole("button", { name: "Send message" }).click();
-      await gateway.waitForRequest("chat.send");
-
-      await gateway.rejectDeferred("chat.send", {
-        code: "INVALID_REQUEST",
-        message: "send blocked by session policy",
-      });
-
-      await page.locator(".chat-queue").getByText("Failed").waitFor({ timeout: 10_000 });
-      await page.locator(".chat-queue").getByText(prompt).waitFor({ timeout: 10_000 });
-      expect(await composer.inputValue()).toBe(prompt);
-    } finally {
-      await suite.closeBrowserContext(context);
-    }
-  });
-
   it("parks an ACK-lost send for review before a same-key manual retry", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -574,22 +592,24 @@ suite.define(() => {
 
       await gateway.closeLatest(1006, "lost ack");
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-queue").count()).toBe(0);
+      await page.locator(".chat-group.user").getByText(prompt, { exact: true }).waitFor();
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-      await queue.locator(".chat-queue__retry").click();
+      await deliveryStatus.getByRole("button", { name: "Retry queued message" }).click();
 
       const sends = await waitForRequests(gateway, "chat.send", 2);
       const secondParams = requireRecord(sends[1]?.params);
       expect(secondParams.idempotencyKey).toBe(runId);
       expect(secondParams.message).toBe(prompt);
-      await queue.waitFor({ state: "detached", timeout: 10_000 });
+      await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
     } finally {
       await suite.closeBrowserContext(context);
     }
   });
 
-  it("dismisses an ACK-lost banner after exact authoritative history proof", async () => {
+  it("clears inline delivery uncertainty after exact authoritative history proof", async () => {
     const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
       locale: "en-US",
@@ -626,8 +646,11 @@ suite.define(() => {
       );
       await gateway.closeLatest(1006, "lost ack");
 
-      const queue = page.locator(".chat-queue");
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      const deliveryStatus = page.locator('.chat-send-status[data-send-state="unconfirmed"]');
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
+      expect(await page.locator(".chat-queue").count()).toBe(0);
+      const userBubble = page.locator(".chat-group.user").getByText(prompt, { exact: true });
+      await userBubble.waitFor();
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/01-delivery-uncertain.png`, fullPage: true });
       }
@@ -647,7 +670,7 @@ suite.define(() => {
         sessionKey: "main",
         status: "done",
       });
-      await queue.getByText("Delivery uncertain").waitFor({ timeout: 10_000 });
+      await deliveryStatus.getByText("Delivery unconfirmed").waitFor({ timeout: 10_000 });
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({
@@ -673,8 +696,9 @@ suite.define(() => {
         status: "running",
       });
 
-      await queue.waitFor({ state: "detached", timeout: 10_000 });
-      await page.locator(".chat-group.user").getByText(prompt).waitFor({ timeout: 10_000 });
+      await deliveryStatus.waitFor({ state: "detached", timeout: 10_000 });
+      await userBubble.waitFor({ timeout: 10_000 });
+      expect(await userBubble.count()).toBe(1);
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-delivery-proven.png`, fullPage: true });
@@ -712,7 +736,11 @@ suite.define(() => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
       await gateway.setOnline(false);
-      await page.locator(".agent-chat__offline-hint").waitFor({ timeout: 10_000 });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ timeout: 10_000 });
 
       const prompt = "send this when the Gateway returns";
       const attachmentName = "offline-proof.txt";
@@ -856,7 +884,11 @@ suite.define(() => {
           return proof.attachment || proof.prompt || proof.runId === runId;
         })
         .toBe(false);
-      await page.locator(".agent-chat__offline-hint").waitFor({ state: "detached" });
+      await page
+        .locator(
+          '.agent-chat__composer-underlaps[data-tone="warn"] .agent-chat__composer-status-band',
+        )
+        .waitFor({ state: "detached" });
       await expectRequestCountStable(gateway, "chat.send", 1);
       if (artifactDir) {
         await page.screenshot({ path: `${artifactDir}/03-online-delivered.png`, fullPage: true });

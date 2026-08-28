@@ -47,6 +47,7 @@ import type { InboundEventKind } from "../channels/inbound-event/kind.js";
 import type { ConversationReadInvocationOrigin } from "../channels/plugins/conversation-read-origin.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveEventSessionRoutingPolicy } from "../infra/event-session-routing.js";
+import type { ExecMode } from "../infra/exec-approvals.js";
 import { logWarn } from "../logger.js";
 import type { PluginHookChannelContext } from "../plugins/hook-types.js";
 import { getPluginToolMeta } from "../plugins/tools.js";
@@ -105,7 +106,7 @@ export function resolveGatewayScopedTools(params: {
   /** Add the CLI-only, node-forced exec tool before applying the shared policy pipeline. */
   includeNodeExecTool?: boolean;
   execSession?: ExecSessionDefaults;
-  execOverrides?: ExecPolicyOverrides;
+  execOverrides?: ExecPolicyOverrides & { mode?: ExecMode };
   bashElevated?: ExecElevatedDefaults;
   trigger?: string;
   approvalReviewerDeviceId?: string;
@@ -286,6 +287,11 @@ export function resolveGatewayScopedTools(params: {
   const openClawTools = createOpenClawTools({
     agentSessionKey: params.sessionKey,
     runId: params.runId,
+    execSession: params.execSession,
+    execOverrides: params.execOverrides,
+    approvalReviewerDeviceIds: params.approvalReviewerDeviceId
+      ? [params.approvalReviewerDeviceId]
+      : undefined,
     requesterAgentIdOverride: sessionAgentId,
     agentChannel: params.messageProvider ?? undefined,
     agentAccountId: params.accountId,
@@ -314,6 +320,7 @@ export function resolveGatewayScopedTools(params: {
     disablePluginTools: params.disablePluginTools,
     wrapBeforeToolCallHook: false,
     config: params.cfg,
+    sessionConfigSource: "runtime",
     agentDir: params.agentDir,
     authProfileStore: params.authProfileStore,
     modelProvider: params.modelProvider,
@@ -368,6 +375,7 @@ export function resolveGatewayScopedTools(params: {
     surface === "loopback" && (includeMediatedBaseCodingTools || includeMediatedShellTools)
       ? createOpenClawCodingTools({
           config: params.cfg,
+          sessionConfigSource: "runtime",
           agentId: policyAgentId,
           sessionKey: runtimePolicySessionKey,
           runSessionKey: params.sessionKey,

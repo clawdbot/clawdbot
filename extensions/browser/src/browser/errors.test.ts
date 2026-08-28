@@ -1,12 +1,32 @@
 // Browser tests cover errors plugin behavior.
 import { describe, expect, it } from "vitest";
 import {
+  BROWSER_ACT_ERROR_CODES,
   BROWSER_ERROR_REASONS,
   BrowserProfileUnavailableError,
   BrowserTabNotFoundError,
   parseBrowserErrorPayload,
   toBrowserErrorResponse,
 } from "./errors.js";
+
+describe("browser action errors", () => {
+  it("preserves known codes and drops unknown route metadata", () => {
+    expect(
+      parseBrowserErrorPayload({
+        error: "evaluation disabled",
+        code: BROWSER_ACT_ERROR_CODES.evaluateDisabled,
+        untrusted: "drop me",
+      }),
+    ).toEqual({
+      error: "evaluation disabled",
+      code: BROWSER_ACT_ERROR_CODES.evaluateDisabled,
+    });
+    expect(parseBrowserErrorPayload({ error: "failure", code: "UNTRUSTED_CODE" })).toEqual({
+      error: "failure",
+      unrecognizedCode: true,
+    });
+  });
+});
 
 describe("BrowserTabNotFoundError", () => {
   it("teaches agents that bare numbers are not stable tab targets", () => {

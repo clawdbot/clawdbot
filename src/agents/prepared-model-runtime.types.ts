@@ -26,6 +26,8 @@ export type PreparedModelRuntimePluginGeneration = Readonly<{
   configuredCatalogEntries: readonly ModelCatalogEntry[];
   pluginRegistry?: PluginRegistry;
   inboundPluginRegistry?: PluginRegistry;
+  /** Immutable artifact choice for every registry reuse in this generation. */
+  preferBuiltPluginArtifacts?: boolean;
 }>;
 
 export type PreparedModelRuntimeSnapshot = Readonly<{
@@ -114,6 +116,9 @@ export type PreparedModelRuntimeRefreshOptions = {
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
   allowGatewaySubagentBinding?: boolean;
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
+  isPublicationCurrent?: () => boolean;
+  /** Restricts replacement to configured owners whose normalized agent id is present. */
+  agentIds?: ReadonlySet<string>;
 };
 
 export type PreparedModelRuntimeBuildStats = Readonly<{

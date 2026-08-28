@@ -13,7 +13,9 @@ import {
   QA_TEST_RUNNER_DEFAULTS,
   createScenarioRunnerTestHarness,
   makeDockerE2eScenario,
+  makeTestFileScenario,
   writeDockerCandidateManifest,
+  writeScriptProducerEvidence,
 } from "./test-file-scenario-runner.test-support.js";
 
 const harness = createScenarioRunnerTestHarness();
@@ -230,6 +232,102 @@ describe("qa test file scenario runner", () => {
       status: "pass",
     });
     expect(result.evidence.entries[0]?.result.status).toBe("pass");
+  });
+
+  it("prioritizes serial native work while preserving catalog-ordered mixed evidence", async () => {
+    const repoRoot = await makeTempRepo("qa-script-docker-priority-");
+    const outputDir = path.join(repoRoot, ".artifacts", "qa-e2e", "native-priority");
+    const makeScriptScenario = (id: string, timeoutMs: number) => {
+      const scenario = makeTestFileScenario("script", `scripts/${id}.ts`);
+      if (scenario.execution.kind !== "script") {
+        throw new Error("expected script scenario");
+      }
+      return { ...scenario, id, execution: { ...scenario.execution, timeoutMs } };
+    };
+    const dockerScenario = makeDockerE2eScenario("long-docker", "gateway-network");
+    if (dockerScenario.execution.kind !== "script") {
+      throw new Error("expected Docker script scenario");
+    }
+    const scenarios = [
+      makeScriptScenario("short-script", 1_000),
+      { ...dockerScenario, execution: { ...dockerScenario.execution, timeoutMs: 3_000 } },
+      makeScriptScenario("long-script-a", 3_000),
+      makeScriptScenario("long-script-b", 3_000),
+    ];
+    const executionOrder: string[] = [];
+    const output: string[] = [];
+    const progress: string[] = [];
+    let activeCommands = 0;
+    let maximumActiveCommands = 0;
+
+    const result = await runQaTestFileScenarios({
+      repoRoot,
+      outputDir,
+      ...QA_TEST_RUNNER_DEFAULTS,
+      scenarios,
+      onCommandOutput: (stream, chunk) => output.push(`${stream}:${chunk.toString("utf8")}`),
+      progress: (message) => progress.push(message),
+      runCommand: async (command) => {
+        const isDocker = command.args[0] === "scripts/test-docker-all.mjs";
+        let scenarioId = "long-docker";
+        if (!isDocker) {
+          const scriptPath = command.args[2];
+          if (!scriptPath) {
+            throw new Error("missing script scenario path");
+          }
+          scenarioId = path.basename(scriptPath, ".ts");
+        }
+        executionOrder.push(scenarioId);
+        activeCommands += 1;
+        maximumActiveCommands = Math.max(maximumActiveCommands, activeCommands);
+        try {
+          command.onOutput?.("stdout", Buffer.from(scenarioId));
+          if (isDocker) {
+            const logDir = command.env.OPENCLAW_DOCKER_ALL_LOG_DIR;
+            if (!logDir) {
+              throw new Error("missing Docker scheduler log dir");
+            }
+            await fs.mkdir(logDir, { recursive: true });
+            await fs.writeFile(
+              path.join(logDir, "summary.json"),
+              JSON.stringify({
+                failures: [],
+                lanes: [{ elapsedSeconds: 1, name: "gateway-network", status: 0 }],
+                selectedLanes: ["gateway-network"],
+              }),
+            );
+          } else {
+            await writeScriptProducerEvidence({
+              outputDir,
+              producerId: scenarioId,
+              scenarioId,
+              status: "pass",
+            });
+          }
+          return { exitCode: 0, stdout: `${scenarioId} passed\n`, stderr: "" };
+        } finally {
+          activeCommands -= 1;
+        }
+      },
+    });
+
+    expect(executionOrder).toEqual([
+      "long-docker",
+      "long-script-a",
+      "long-script-b",
+      "short-script",
+    ]);
+    expect(maximumActiveCommands).toBe(1);
+    expect(output).toEqual(executionOrder.map((scenarioId) => `stdout:${scenarioId}`));
+    expect(progress.filter((message) => message.includes(" start "))).toEqual([
+      "native docker-batch start scenarios=1 timeoutMs=3000",
+      "native script start scenario=long-script-a timeoutMs=3000",
+      "native script start scenario=long-script-b timeoutMs=3000",
+      "native script start scenario=short-script timeoutMs=1000",
+    ]);
+    const catalogOrder = scenarios.map((scenario) => scenario.id);
+    expect(result.results.map((entry) => entry.scenario.id)).toEqual(catalogOrder);
+    expect(result.evidence.entries.map((entry) => entry.test.id)).toEqual(catalogOrder);
   });
 
   it("runs Docker script scenarios through one aggregate scheduler invocation", async () => {

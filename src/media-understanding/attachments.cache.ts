@@ -15,6 +15,7 @@ import { MediaUnderstandingSkipError } from "../../packages/media-understanding-
 import { resolveStateDir } from "../config/paths.js";
 import { logVerbose, shouldLogVerbose } from "../globals.js";
 import { isAbortError } from "../infra/abort-signal.js";
+import { readFileHandleBounded } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, openLocalFileSafely } from "../infra/fs-safe.js";
 import type { SsrFPolicy } from "../infra/net/ssrf.js";
 import {
@@ -328,14 +329,14 @@ export class MediaAttachmentCache {
   /** Returns a local path for providers that cannot accept buffers, creating a temp file if needed. */
   async getPath(params: {
     attachmentIndex: number;
-    maxBytes?: number;
+    maxBytes: number;
     timeoutMs: number;
   }): Promise<MediaPathResult> {
     const entry = await this.ensureEntry(params.attachmentIndex);
     if (entry.resolvedPath) {
       try {
         const size = await this.ensureLocalStat(entry);
-        if (entry.resolvedPath && params.maxBytes && size !== undefined && size > params.maxBytes) {
+        if (entry.resolvedPath && size !== undefined && size > params.maxBytes) {
           throw new MediaUnderstandingSkipError(
             "maxBytes",
             `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
@@ -355,7 +356,7 @@ export class MediaAttachmentCache {
       try {
         const size = await this.ensureLocalStat(entry);
         if (entry.resolvedPath) {
-          if (params.maxBytes && size !== undefined && size > params.maxBytes) {
+          if (size !== undefined && size > params.maxBytes) {
             throw new MediaUnderstandingSkipError(
               "maxBytes",
               `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
@@ -371,7 +372,7 @@ export class MediaAttachmentCache {
     }
 
     if (entry.tempPath) {
-      if (params.maxBytes && entry.bufferResult && entry.bufferResult.size > params.maxBytes) {
+      if (entry.bufferResult && entry.bufferResult.size > params.maxBytes) {
         throw new MediaUnderstandingSkipError(
           "maxBytes",
           `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
@@ -380,12 +381,7 @@ export class MediaAttachmentCache {
       return { path: entry.tempPath, cleanup: entry.tempCleanup };
     }
 
-    const maxBytes = params.maxBytes ?? Number.POSITIVE_INFINITY;
-    const bufferResult = await this.getBuffer({
-      attachmentIndex: params.attachmentIndex,
-      maxBytes,
-      timeoutMs: params.timeoutMs,
-    });
+    const bufferResult = await this.getBuffer(params);
     const extension = path.extname(bufferResult.fileName || "") || "";
     const tmpPath = buildRandomTempFilePath({
       prefix: "openclaw-media",
@@ -394,6 +390,10 @@ export class MediaAttachmentCache {
     // Keep failed staging owned when model fallback retries the same attachment.
     const previousCleanup = entry.tempCleanup;
     entry.tempCleanup = async () => {
+      // Returned cleanup callbacks may outlive a restaged file; invalidate only their path.
+      if (entry.tempPath === tmpPath) {
+        entry.tempPath = undefined;
+      }
       await previousCleanup?.();
       await fs.unlink(tmpPath).catch(() => {});
     };
@@ -584,13 +584,7 @@ export class MediaAttachmentCache {
           `Attachment ${params.attachmentIndex + 1} path is outside allowed roots.`,
         );
       }
-      const buffer = await opened.handle.readFile();
-      if (buffer.length > params.maxBytes) {
-        throw new MediaUnderstandingSkipError(
-          "maxBytes",
-          `Attachment ${params.attachmentIndex + 1} exceeds maxBytes ${params.maxBytes}`,
-        );
-      }
+      const buffer = await readFileHandleBounded(opened.handle, params.maxBytes);
       return { buffer, filePath: opened.realPath };
     } catch (err) {
       if (err instanceof FsSafeError) {

@@ -15,7 +15,7 @@ import type {
 import { resolveUserPath, shortenHomePath } from "../utils.js";
 import { t } from "../wizard/i18n/index.js";
 import type { WizardPrompter } from "../wizard/prompts.js";
-import { requireRiskAcknowledgement } from "../wizard/setup.shared.js";
+import { requestTelemetryConsent, requireRiskAcknowledgement } from "../wizard/setup.shared.js";
 import type { runBrowserHatchHandoff } from "./onboard-browser-handoff.js";
 import { promptFirstOnboardingAgent, showSessionMigrationWarnings } from "./onboard-first-agent.js";
 import {
@@ -67,11 +67,10 @@ export type GuidedOnboardingDeps = {
 
 export type GuidedAccessMode = "full" | "guarded";
 
-type GuidedOnboardingHandoff = {
-  workspace: string;
-  next: "browser" | "hatch" | "chat";
-  agentName?: string;
-};
+type GuidedOnboardingHandoff =
+  | { workspace: string; next: "browser" }
+  | { workspace: string; next: "hatch"; local: boolean }
+  | { workspace: string; next: "chat"; agentName?: string };
 
 async function openSystemAgentChat(
   deps: GuidedOnboardingDeps,
@@ -109,10 +108,12 @@ async function persistRiskAcknowledgement(config: OpenClawConfig): Promise<strin
   const { mutateConfigFileWithRetry } = await import("../config/config.js");
   const committed = await mutateConfigFileWithRetry({
     mutate: (draft) => {
-      if (draft.wizard?.securityAcknowledgedAt) {
-        return;
+      if (!draft.wizard?.securityAcknowledgedAt) {
+        draft.wizard = { ...draft.wizard, securityAcknowledgedAt };
       }
-      draft.wizard = { ...draft.wizard, securityAcknowledgedAt };
+      if (config.telemetry?.consentedAt && !draft.telemetry?.consentedAt) {
+        draft.telemetry = config.telemetry;
+      }
     },
   });
   return committed.nextConfig.wizard?.securityAcknowledgedAt;
@@ -167,8 +168,16 @@ async function runGuidedOnboardingFlow(
     prompter,
     config: existingConfig,
   });
+  acknowledgedConfig = await requestTelemetryConsent({
+    opts,
+    prompter,
+    config: acknowledgedConfig,
+  });
   let securityAcknowledgedAt = acknowledgedConfig.wizard?.securityAcknowledgedAt;
-  if (!existingConfig.wizard?.securityAcknowledgedAt) {
+  if (
+    !existingConfig.wizard?.securityAcknowledgedAt ||
+    (!existingConfig.telemetry?.consentedAt && acknowledgedConfig.telemetry?.consentedAt)
+  ) {
     const persistedAcknowledgement = await (
       deps.persistRiskAcknowledgement ?? persistRiskAcknowledgement
     )(acknowledgedConfig);
@@ -681,7 +690,7 @@ async function runGuidedOnboardingFlow(
   await prompter.outro(t("wizard.guided.hatchingNow"));
   // The TUI opens the configured default agent/workspace; on a configured
   // rerun that is the persisted default, not the --workspace probe context.
-  return { workspace: hatchWorkspace, next: "hatch" };
+  return { workspace: hatchWorkspace, next: "hatch", local: alreadyConfigured };
 }
 
 async function persistAccessMode(mode: GuidedAccessMode): Promise<void> {
@@ -696,7 +705,7 @@ async function persistAccessMode(mode: GuidedAccessMode): Promise<void> {
   });
 }
 
-async function launchHatchTui(workspace: string): Promise<void> {
+async function launchHatchTui(workspace: string, local: boolean): Promise<void> {
   const [{ launchTuiCli }, { DEFAULT_BOOTSTRAP_FILENAME }, { restoreTerminalState }, fs, path] =
     await Promise.all([
       import("../tui/tui-launch.js"),
@@ -708,10 +717,11 @@ async function launchHatchTui(workspace: string): Promise<void> {
   const hasBootstrap = fs.existsSync(path.join(workspace, DEFAULT_BOOTSTRAP_FILENAME));
   restoreTerminalState("guided hatch tui", { resumeStdinIfPaused: false });
   try {
+    // Fresh setup already started the Gateway; local mode would contend for its state lock.
     // No timeoutMs: the run-level TUI timeout overrides the configured agent
     // timeout for every turn in the session, not just the hatch message.
     await launchTuiCli({
-      local: true,
+      ...(local ? { local: true } : {}),
       deliver: false,
       // Seed the first-run hatch only when the workspace bootstrap exists;
       // re-runs against an established agent open a plain chat instead.
@@ -743,7 +753,11 @@ export async function runGuidedOnboarding(
   // Interactive surfaces start only after the wizard lifecycle restores stdin
   // so the TUI (or recovery chat) receives a clean TTY.
   if (handoff.next === "hatch") {
-    await (deps.launchHatchTui ?? launchHatchTui)(handoff.workspace);
+    if (deps.launchHatchTui) {
+      await deps.launchHatchTui(handoff.workspace);
+    } else {
+      await launchHatchTui(handoff.workspace, handoff.local);
+    }
     return;
   }
   if (handoff.next === "browser") {

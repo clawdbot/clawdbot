@@ -30,6 +30,8 @@ import {
 } from "./code-mode-runtime.js";
 import {
   cancelPendingBridgeStates,
+  cancelPendingBridgeStatesById,
+  createCodeModeBridgeDispatchState,
   createPendingBridgeStates,
   pendingBridgeStatesForSettlement,
   settledBridgeRequestsInCompletionOrder,
@@ -85,7 +87,7 @@ function headlessFailure(params: {
 }
 
 function remainingHeadlessMs(deadline: number): number {
-  const remaining = deadline - Date.now();
+  const remaining = Math.ceil(deadline - performance.now());
   if (remaining <= 0) {
     throw new CodeModeHeadlessTimeoutError();
   }
@@ -208,7 +210,7 @@ export async function runCodeModeScriptHeadless(params: {
     1,
     MAX_HEADLESS_TOOL_CALLS,
   );
-  const deadline = Date.now() + wallClockMs;
+  const deadline = performance.now() + wallClockMs;
   const abortScope = createHeadlessAbortScope(params.signal, wallClockMs);
   const output: unknown[] = [];
   let pending: PendingBridgeState[] = [];
@@ -217,12 +219,16 @@ export async function runCodeModeScriptHeadless(params: {
     // Headless runs publish no resumable snapshot/handle, so collector globals stay unavailable.
     const swarmEnabled = false;
     const codeModeRunId = `cm_headless_${randomUUID()}`;
-    const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config));
+    const runtime = new ToolSearchRuntime(params.ctx, toToolSearchConfig(config), {
+      prepareInput: true,
+      validateInput: true,
+    });
+    const bridgeDispatch = createCodeModeBridgeDispatchState();
     const namespaceCatalog = runtime.namespaceEntries();
     const namespaceRuntime = createCodeModeNamespaceRuntime(namespaceCatalog);
     const preparedSource = await awaitCodeModeDeadline({
       operation: () => prepareSource({ code: params.code, language: params.language, config }),
-      deadlineMs: deadline,
+      remainingMs: remainingHeadlessMs(deadline),
       signal: abortScope.signal,
       createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
       createAbortError: headlessAbortError,
@@ -278,6 +284,7 @@ export async function runCodeModeScriptHeadless(params: {
       }
 
       enforceSnapshotPayloadLimits({ snapshotBytes: result.snapshotBytes, config });
+      cancelPendingBridgeStatesById(pending, result.canceledRequestIds);
       const pendingIds = new Set(pending.map((entry) => entry.id));
       const newRequests = result.pendingRequests.filter((request) => !pendingIds.has(request.id));
       // Node discovery invokes the generic nodes tool for live status too;
@@ -307,8 +314,10 @@ export async function runCodeModeScriptHeadless(params: {
           namespaceRuntime,
           parentToolCallId,
           codeModeRunId,
+          remainingMs: remainingHeadlessMs(deadline),
           ctx: params.ctx,
           signal: abortScope.signal,
+          bridgeDispatch,
         }),
       );
       // Preserve the waiting frontier before the lazy deadline callback;
@@ -325,7 +334,7 @@ export async function runCodeModeScriptHeadless(params: {
       }
       await awaitCodeModeDeadline({
         operation: () => waitForPendingBridgeSettlement(pending, settlementMode),
-        deadlineMs: deadline,
+        remainingMs: remainingHeadlessMs(deadline),
         signal: abortScope.signal,
         createTimeoutError: () => new CodeModeHeadlessTimeoutError(),
         createAbortError: headlessAbortError,

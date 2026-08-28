@@ -205,7 +205,7 @@ type ConnectFrame = {
   };
 };
 
-const REQUEST_FRAME_ID = "00000000-0000-4000-8000-000000000000";
+const REQUEST_FRAME_ID = "2:00000000-0000-4000-8000-000000000000";
 
 function requestFrameBytes(method: string, params?: unknown): number {
   const frame =
@@ -502,6 +502,7 @@ describe("GatewayBrowserClient", () => {
       GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
       GATEWAY_CLIENT_CAPS.INLINE_WIDGETS,
       GATEWAY_CLIENT_CAPS.UI_COMMANDS,
+      GATEWAY_CLIENT_CAPS.USAGE_REFRESHING,
     ]);
     expect(connectFrame.params?.scopes).toEqual([...CONTROL_UI_OPERATOR_SCOPES]);
   });
@@ -1679,7 +1680,7 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.id).toBe("1:req-insecure");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: "shared-auth-token",
@@ -1699,7 +1700,7 @@ describe("GatewayBrowserClient", () => {
 
     const { connectFrame } = await startConnect(client);
 
-    expect(connectFrame.id).toBe("req-insecure");
+    expect(connectFrame.id).toBe("1:req-insecure");
     expect(connectFrame.method).toBe("connect");
     expect(connectFrame.params?.auth).toEqual({
       token: undefined,

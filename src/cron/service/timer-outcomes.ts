@@ -130,12 +130,15 @@ export function applyJobResult(
     resolveDeliveryState({
       job,
       runStatus: result.status,
+      delivery: result.delivery,
       delivered: result.delivered,
       deliveryAttempted: result.deliveryAttempted,
       error: result.deliveryError ?? result.error,
+      deliverySuppressionReason: result.deliverySuppressionReason,
     });
   job.state.lastDelivered = deliveryState.delivered;
   job.state.lastDeliveryStatus = deliveryState.status;
+  job.state.deliverySuppressionReason = deliveryState.deliverySuppressionReason;
   job.state.lastDeliveryError =
     deliveryState.status === "not-delivered" && deliveryState.error
       ? deliveryState.error

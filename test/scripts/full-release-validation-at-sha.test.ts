@@ -2,7 +2,7 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { parse as parseYaml } from "yaml";
 import {
   assertTrustedWorkflowHarness,
@@ -10,10 +10,13 @@ import {
   FULL_RELEASE_WAIT_TIMEOUT_MINUTES,
   parseArgs,
   releaseProfileForTarget,
+  releaseDecisionStopsForeground,
   releaseEvidenceVerificationArgs,
   releaseEvidenceVerifierPath,
   resolveRemoteTargetRefSha,
   shouldDeleteTemporaryWorkflowRef,
+  tryReadReleaseDecision,
+  validateReleaseDecisionPayload,
   verifyTargetRef,
   verifyTrustedWorkflowRef,
 } from "../../scripts/full-release-validation-at-sha.mts";
@@ -50,18 +53,30 @@ function runGit(cwd: string, args: string[]): string {
   }).trim();
 }
 
-function createDispatchFixture(options: { workflowSource?: string } = {}) {
+function createDispatchFixture(
+  options: {
+    parentRunStates?: Array<{ conclusion: string | null; status: string }>;
+    workflowSource?: string;
+  } = {},
+) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-release-dispatch-"));
   const origin = join(root, "origin.git");
   const checkout = join(root, "checkout");
   const binDir = join(root, "bin");
   const gitCallsPath = join(root, "git-calls.jsonl");
   const ghCallsPath = join(root, "gh-calls.jsonl");
+  const parentRunIndexPath = join(root, "parent-run-index.txt");
+  const preloadPath = join(root, "immediate-poll.mjs");
   const releaseRef = "release/2026.8.1";
   mkdirSync(checkout);
   mkdirSync(binDir);
   writeFileSync(gitCallsPath, "");
   writeFileSync(ghCallsPath, "");
+  writeFileSync(parentRunIndexPath, "0");
+  writeFileSync(
+    preloadPath,
+    'const wait = Atomics.wait; Atomics.wait = (array, index, value, timeout) => timeout === undefined ? wait(array, index, value) : "timed-out";\n',
+  );
 
   execFileSync("git", ["init", "--bare", origin], { stdio: "ignore" });
   execFileSync("git", ["init", "-b", "main"], { cwd: checkout, stdio: "ignore" });
@@ -146,6 +161,8 @@ process.exit(result.status ?? 1);
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(process.env.MOCK_GH_CALLS, JSON.stringify(args) + "\\n");
+const parentRunStates = ${JSON.stringify(options.parentRunStates ?? [{ conclusion: "success", status: "completed" }])};
+const parentRunIndexPath = ${JSON.stringify(parentRunIndexPath)};
 if (args[0] === "workflow" && args[1] === "run") {
   const declaredInputs = new Set(JSON.parse(process.env.MOCK_WORKFLOW_INPUTS));
   for (let index = 0; index < args.length; index += 1) {
@@ -160,7 +177,14 @@ if (args[0] === "workflow" && args[1] === "run") {
   }
   console.log("https://github.com/openclaw/openclaw/actions/runs/123");
 } else if (args[0] === "api" && args.at(-1).endsWith("/actions/runs/123")) {
-  console.log(JSON.stringify({ status: "completed", conclusion: "success", head_sha: process.env.MOCK_WORKFLOW_SHA }));
+  const index = Number(fs.readFileSync(parentRunIndexPath, "utf8"));
+  const state = parentRunStates[Math.min(index, parentRunStates.length - 1)];
+  fs.writeFileSync(parentRunIndexPath, String(index + 1));
+  console.log(JSON.stringify({ ...state, head_sha: process.env.MOCK_WORKFLOW_SHA, run_attempt: 1 }));
+} else if (args[0] === "run" && args[1] === "download") {
+  const index = Number(fs.readFileSync(parentRunIndexPath, "utf8")) - 1;
+  console.error(parentRunStates[index]?.status === "queued" ? "no artifact matches any of the names or patterns provided" : "no valid artifacts found");
+  process.exit(1);
 } else {
   console.error("unexpected gh call: " + args.join(" "));
   process.exit(2);
@@ -183,6 +207,13 @@ if (args[0] === "workflow" && args[1] === "run") {
         encoding: "utf8",
         env: {
           ...process.env,
+          ...(options.parentRunStates
+            ? {
+                NODE_OPTIONS: [process.env.NODE_OPTIONS, "--import", preloadPath]
+                  .filter(Boolean)
+                  .join(" "),
+              }
+            : {}),
           MOCK_GH_CALLS: ghCallsPath,
           MOCK_GIT_CALLS: gitCallsPath,
           MOCK_REAL_PATH: process.env.PATH,
@@ -560,10 +591,82 @@ describe("full-release-validation-at-sha", () => {
     expect(source).toContain("const remainingMs = deadline - Date.now();");
     expect(source).toContain("Math.min(FULL_RELEASE_WAIT_POLL_INTERVAL_MS, remainingMs)");
     expect(source).toContain("Parent run progress after ${elapsedMinutes}m");
+    expect(source).toContain("formatReleaseStateOutcome(releaseDecision)");
     expect(source).toContain(
       "Timed out after ${FULL_RELEASE_WAIT_TIMEOUT_MINUTES} minutes waiting for Full Release Validation",
     );
     expect(source).not.toContain("attempt < 480");
+  });
+
+  it("binds release decisions to the exact parent attempt and tooling SHA", () => {
+    const payload = {
+      kind: "openclaw.full-release-decision",
+      mode: "decision",
+      parentRunAttempt: 2,
+      sourceParentRunAttempt: 1,
+      parentRunId: "123",
+      activeRunIds: ["101"],
+      blockers: [{ child: "normalCi", job: "test", runId: "101" }],
+      cancellation: { cancelledRunIds: [], requested: false },
+      children: {},
+      errors: [],
+      executionPlanSha256: "c".repeat(64),
+      releaseProfile: "stable",
+      rerunGroup: "ci",
+      state: "blocked_diagnostics_running",
+      targetSha: "b".repeat(40),
+      version: 2,
+      workflowRef: "main",
+      workflowSha: "a".repeat(40),
+    };
+    expect(
+      validateReleaseDecisionPayload(payload, {
+        parentRunAttempt: 2,
+        parentRunId: "123",
+        workflowSha: "a".repeat(40),
+      }),
+    ).toMatchObject(payload);
+    expect(releaseDecisionStopsForeground("blocked_diagnostics_running")).toBe(true);
+    expect(releaseDecisionStopsForeground("passed")).toBe(false);
+    expect(() =>
+      validateReleaseDecisionPayload(
+        { ...payload, parentRunAttempt: 3 },
+        {
+          parentRunAttempt: 2,
+          parentRunId: "123",
+          workflowSha: "a".repeat(40),
+        },
+      ),
+    ).toThrow("binding is invalid");
+  });
+
+  it("treats only transient Release Decision download failures as unavailable this poll", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(
+        tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+          error: undefined,
+          signal: null,
+          status: 1,
+          stderr: "HTTP 503: Server Error",
+          stdout: "",
+        })),
+      ).toBeUndefined();
+      expect(warn).toHaveBeenCalledWith(
+        expect.stringContaining("Release Decision artifact unavailable this poll"),
+      );
+      expect(() =>
+        tryReadReleaseDecision("123", 1, "a".repeat(40), () => ({
+          error: undefined,
+          signal: null,
+          status: 1,
+          stderr: "HTTP 403: Bad credentials",
+          stdout: "",
+        })),
+      ).toThrow("Release Decision artifact download failed");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("bounds GitHub reads without applying a timeout to workflow dispatch", () => {
@@ -744,6 +847,61 @@ describe("full-release-validation-at-sha", () => {
       expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
         "refs/heads/main\nrefs/heads/release/2026.8.1",
       );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("retries an absent decision artifact through a parent status regression", () => {
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        { conclusion: null, status: "in_progress" },
+        { conclusion: null, status: "queued" },
+        { conclusion: null, status: "in_progress" },
+        { conclusion: "success", status: "completed" },
+      ],
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(0);
+      const calls = fixture.readCalls(fixture.ghCallsPath);
+      const parentPolls = calls
+        .map((args, index) => ({ args, index }))
+        .filter(({ args }) => args[0] === "api" && args[1]?.endsWith("/actions/runs/123"));
+      const artifactDownloads = calls
+        .map((args, index) => ({ args, index }))
+        .filter(({ args }) => args[0] === "run" && args[1] === "download");
+      expect(parentPolls).toHaveLength(4);
+      expect(artifactDownloads).toHaveLength(4);
+      expect(artifactDownloads[1]?.index).toBeGreaterThan(parentPolls[1]?.index ?? Infinity);
+      expect(artifactDownloads[1]?.index).toBeLessThan(parentPolls[2]?.index ?? -Infinity);
+      expect(result.stdout).toContain("Parent run status: queued/pending");
+      expect(runGit(fixture.origin, ["for-each-ref", "--format=%(refname)", "refs/heads"])).toBe(
+        "refs/heads/main\nrefs/heads/release/2026.8.1",
+      );
+    } finally {
+      fixture.cleanup();
+    }
+  });
+
+  it("waits for a terminal conclusion across every nonterminal parent state", () => {
+    const fixture = createDispatchFixture({
+      parentRunStates: [
+        { conclusion: null, status: "requested" },
+        { conclusion: null, status: "waiting" },
+        { conclusion: null, status: "pending" },
+        { conclusion: null, status: "completed" },
+        { conclusion: "success", status: "completed" },
+      ],
+    });
+    try {
+      const result = fixture.run(["--workflow-sha", fixture.workflowSha]);
+      expect(result.status, result.stderr).toBe(0);
+      const calls = fixture.readCalls(fixture.ghCallsPath);
+      expect(
+        calls.filter((args) => args[0] === "api" && args[1]?.endsWith("/actions/runs/123")),
+      ).toHaveLength(5);
+      expect(calls.filter((args) => args[0] === "run" && args[1] === "download")).toHaveLength(5);
     } finally {
       fixture.cleanup();
     }

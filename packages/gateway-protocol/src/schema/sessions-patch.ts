@@ -8,6 +8,13 @@ import { SessionPermissionModeSchema, SessionToolOverridesSchema } from "./sessi
 
 export const SESSIONS_PATCH_MANY_MAX_TARGETS = 100;
 
+const ExpectedMarkedUnreadAt = Type.Optional(
+  Type.Union([Type.Number({ minimum: 0 }), Type.Null()], {
+    description:
+      "Apply an automatic unread=false acknowledgement only if the explicit unread marker still matches; null asserts no marker.",
+  }),
+);
+
 const SessionsPatchMutationProperties = {
   label: Type.Optional(Type.Union([SessionLabelString, Type.Null()])),
   icon: Type.Optional(Type.Union([Type.String(), Type.Null()])),
@@ -28,6 +35,7 @@ const SessionsPatchMutationProperties = {
   unread: Type.Optional(
     Type.Boolean({ description: "Set true to mark unread; false records the session as read." }),
   ),
+  contextWindow: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   thinkingLevel: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   fastMode: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("auto"), Type.Null()])),
   toolOverrides: Type.Optional(Type.Union([SessionToolOverridesSchema, Type.Null()])),
@@ -68,6 +76,7 @@ export const SessionsPatchParamsSchema = closedObject({
   /** Reject the mutation if the session was reset or replaced before it commits. */
   expectedSessionId: Type.Optional(NonEmptyString),
   expectedLifecycleRevision: Type.Optional(NonEmptyString),
+  expectedMarkedUnreadAt: ExpectedMarkedUnreadAt,
   ...SessionsPatchMutationProperties,
 });
 

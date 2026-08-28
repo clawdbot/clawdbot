@@ -397,7 +397,7 @@ candidate contains a redacted secret placeholder such as `***` or `[redacted]`.
     }
     ```
 
-    - `every`: duration string (`30m`, `2h`). Set `0m` to disable. Default: `30m`.
+    - `every`: duration string (`30m`, `2h`). Set `0m` to disable recurring cadence; targeted event-driven wakes can still run one agent turn. Default: `30m`.
     - `target`: `owner` (default operator DM) | `last` (latest conversation, including groups) | `none` (internal only) | `<channel-id>`
     - `directPolicy`: `allow` (default) or `block` for DM-style heartbeat targets
     - See [Heartbeat](/gateway/heartbeat) for the full guide.

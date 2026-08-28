@@ -3,8 +3,10 @@ import {
   resolveSendableOutboundReplyParts,
 } from "openclaw/plugin-sdk/reply-payload";
 import { replaceGenericExternalRunFailureText } from "../agents/failover/user-copy.js";
+import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import { copyReplyPayloadMetadata, getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import { buildRecoverablePendingFinalDeliveryText } from "../auto-reply/reply/pending-final-delivery.js";
+import { isSilentReplyPayloadText } from "../auto-reply/tokens.js";
 import { sendDurableMessageBatchCore } from "../channels/message/runtime.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -25,7 +27,11 @@ import type {
 } from "./heartbeat-runner-execution.js";
 import { truncateHeartbeatPreview } from "./heartbeat-runner-prompt.js";
 import { restoreHeartbeatUpdatedAt } from "./heartbeat-runner-session.js";
-import type { HeartbeatRunResult } from "./heartbeat-wake.js";
+import {
+  HEARTBEAT_IDLE_RETRY_GRACE_MS,
+  HEARTBEAT_SKIP_CHANNEL_NOT_READY,
+  type HeartbeatRunResult,
+} from "./heartbeat-wake.js";
 import type { resolveAgentOutboundIdentity } from "./outbound/identity.js";
 import type { buildOutboundSessionContext } from "./outbound/session-context.js";
 import { consumeSelectedSystemEventEntries } from "./system-events.js";
@@ -149,10 +155,15 @@ export function classifyHeartbeatAgentOutcome(params: {
     } as const;
   }
   if (shouldSkipMain) {
-    return { kind: "ack", eventStatus: "ok-token", silent: normalized.silent } as const;
+    // A heartbeat's canonical quiet reply still honors explicit showOk; event
+    // relays and message-tool privacy retain their unconditional silence.
+    const silent =
+      normalized.silent && !(mode === "heartbeat" && isSilentReplyPayloadText(replyPayload?.text));
+    return { kind: "ack", eventStatus: "ok-token", silent } as const;
   }
   return {
     kind: "delivery",
+    response: heartbeatToolResponse,
     normalized,
     hasStructuredReplyContent,
     replyPayload: heartbeatToolResponse ? undefined : replyPayload,
@@ -178,6 +189,33 @@ export async function finalizeHeartbeatOutcome(params: {
   const { delivery, entry, previousUpdatedAt } = params.prepared;
   const { runSessionKey, sessionKey, storePath, visibility } = params.prepared;
   const outcome = params.outcome;
+  const recordOutcome = (response: HeartbeatToolResponse) =>
+    persistHeartbeatOutcome({
+      agentId,
+      sessionKey,
+      storePath,
+      runSessionKey,
+      response,
+      taskNames: scheduledTasks.map((task) => task.name),
+      wakeSource,
+      wakeReason: params.opts.reason,
+      occurredAt: startedAt,
+    });
+  const recordUnconfirmedAlert = (reason: string) => {
+    if (outcome.kind !== "delivery" || !outcome.response) {
+      return;
+    }
+    const response = outcome.response;
+    // This is the delivery owner's non-outcome, not a model decision to stay
+    // quiet. The existing bounded context store is not an alert replay queue.
+    recordOutcome({
+      ...response,
+      outcome: "blocked",
+      notify: false,
+      summary: `Alert delivery was not confirmed for this attempt.\n${response.notificationText ?? response.summary}${response.notificationText ? `\nModel summary: ${response.summary}` : ""}`,
+      reason: `notify:true; delivery=${reason}; model outcome=${response.outcome}; ${response.reason ?? response.summary}`,
+    });
+  };
   if (outcome.kind === "failure") {
     const failureReplyPayload = outcome.replyPayload;
     const failureChannel = delivery.channel;
@@ -268,17 +306,7 @@ export async function finalizeHeartbeatOutcome(params: {
   }
   if (outcome.kind === "ack") {
     if ("response" in outcome && outcome.response) {
-      persistHeartbeatOutcome({
-        agentId,
-        sessionKey,
-        storePath,
-        runSessionKey,
-        response: outcome.response,
-        taskNames: scheduledTasks.map((task) => task.name),
-        wakeSource,
-        wakeReason: params.opts.reason,
-        occurredAt: startedAt,
-      });
+      recordOutcome(outcome.response);
     }
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
     const okSent =
@@ -337,6 +365,7 @@ export async function finalizeHeartbeatOutcome(params: {
       : normalized.text;
   const previewText = deliveryText;
   if (delivery.channel === "none" || !delivery.to) {
+    recordUnconfirmedAlert(delivery.reason ?? "no-target");
     emitHeartbeatEvent({
       status: "skipped",
       reason: delivery.reason ?? "no-target",
@@ -349,6 +378,7 @@ export async function finalizeHeartbeatOutcome(params: {
     return { status: "ran", durationMs: Date.now() - startedAt };
   }
   if (!visibility.showAlerts) {
+    recordUnconfirmedAlert("alerts-disabled");
     await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
     emitHeartbeatEvent({
       status: "skipped",
@@ -367,12 +397,12 @@ export async function finalizeHeartbeatOutcome(params: {
   const deliveryAccountId = delivery.accountId;
   const heartbeatPlugin = resolveHeartbeatChannelPlugin(delivery.channel);
   if (heartbeatPlugin?.heartbeat?.checkReady) {
-    const readiness = await heartbeatPlugin.heartbeat.checkReady({
-      cfg,
-      accountId: deliveryAccountId,
-      deps: params.opts.deps,
-    });
+    const readiness = await heartbeatPlugin.heartbeat
+      .checkReady({ cfg, accountId: deliveryAccountId, deps: params.opts.deps })
+      .catch((error: unknown) => ({ ok: false, reason: formatErrorMessage(error) }));
     if (!readiness.ok) {
+      recordUnconfirmedAlert(readiness.reason);
+      await restoreHeartbeatUpdatedAt({ storePath, sessionKey, updatedAt: previousUpdatedAt });
       emitHeartbeatEvent({
         status: "skipped",
         reason: readiness.reason,
@@ -386,7 +416,11 @@ export async function finalizeHeartbeatOutcome(params: {
         channel: delivery.channel,
         reason: readiness.reason,
       });
-      return { status: "skipped", reason: readiness.reason };
+      return {
+        status: "skipped",
+        reason: HEARTBEAT_SKIP_CHANNEL_NOT_READY,
+        retryAtMs: Date.now() + HEARTBEAT_IDLE_RETRY_GRACE_MS,
+      };
     }
   }
 
@@ -407,7 +441,13 @@ export async function finalizeHeartbeatOutcome(params: {
     ],
     deps: params.opts.deps,
     silent: normalized.silent,
+  }).catch((error: unknown) => {
+    recordUnconfirmedAlert(formatErrorMessage(error));
+    throw error;
   });
+  if (send.status !== "sent") {
+    recordUnconfirmedAlert("reason" in send ? send.reason : formatErrorMessage(send.error));
+  }
   if (send.status === "failed" || send.status === "partial_failed") {
     throw send.error;
   }

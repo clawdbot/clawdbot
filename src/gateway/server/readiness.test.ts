@@ -498,6 +498,24 @@ describe("createReadinessChecker", () => {
     });
   });
 
+  it("refreshes stopped channels when the clock moves behind cached readiness", () => {
+    withReadinessClock(() => {
+      const { manager, readiness } = createReadinessHarness({
+        accounts: { discord: managedAccount({ lifecycle: "ready" }) },
+        cacheTtlMs: 1_000,
+      });
+
+      expect(readiness()).toEqual(readySnapshot());
+      vi.mocked(manager.getRuntimeSnapshot).mockReturnValue(
+        snapshotWith({ discord: stoppedAccount({ connected: false, lifecycle: "stopped" }) }),
+      );
+      vi.setSystemTime(Date.now() - 60_000);
+
+      expect(readiness()).toEqual(failingSnapshot(["discord"], FIVE_MIN_MS - 60_000));
+      expect(manager.getRuntimeSnapshot).toHaveBeenCalledTimes(2);
+    });
+  });
+
   it("adds event-loop health to detailed readiness without changing readiness state", () => {
     withReadinessClock(() => {
       const { readiness } = createReadinessHarness({

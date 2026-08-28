@@ -16,6 +16,7 @@ export type OutboundMessageGatewayOptionsInput = {
   clientName?: GatewayClientName;
   clientDisplayName?: string;
   mode?: GatewayClientMode;
+  resolveAgentRuntimeIdentityToken?: () => Promise<string | undefined>;
 };
 
 /** Normalizes outbound gateway options and fills CLI defaults. */

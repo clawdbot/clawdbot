@@ -92,7 +92,7 @@ clawdock-approve <request-id>
 ClawDock reads two separate `.env` files, matching the split described in [Docker](/install/docker):
 
 - The project `.env` next to `docker-compose.yml`: Docker-specific values like image name, ports, and `OPENCLAW_GATEWAY_TOKEN`. `clawdock-token` reads the token from here.
-- `~/.openclaw/.env` (mounted into the container): env-backed secrets OpenClaw itself manages, alongside `openclaw.json` and `agents/<agentId>/agent/auth-profiles.json`.
+- `~/.openclaw/.env` (mounted into the container): env-backed secrets OpenClaw itself manages, alongside `openclaw.json` and the shared and per-agent SQLite auth stores.
 
 `clawdock-fix-token` copies the token from the project `.env` into the container's `gateway.remote.token` and `gateway.auth.token` config values and restarts the gateway.
 

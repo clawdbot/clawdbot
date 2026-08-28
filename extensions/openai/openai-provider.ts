@@ -91,13 +91,11 @@ function classifyOpenAiFailoverCode(code: string | undefined) {
 const OPENAI_MODELS_ENDPOINT = "https://api.openai.com/v1/models";
 // Keep synchronized with extensions/codex's exact @openai/codex dependency;
 // the provider contract test fails when that managed-runtime pin changes.
-const OPENAI_CODEX_CLIENT_VERSION = "0.148.0";
+const OPENAI_CODEX_CLIENT_VERSION = "0.150.1";
 const OPENAI_CODEX_MODELS_ENDPOINT = `${OPENAI_CODEX_RESPONSES_BASE_URL}/models?client_version=${OPENAI_CODEX_CLIENT_VERSION}`;
 const OPENAI_MODELS_CACHE_TTL_MS = 60_000;
 const OPENAI_CODEX_MODELS_CACHE_TTL_MS = 60_000;
-const OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW = 1_050_000;
 const OPENAI_CODEX_GPT_56_CONTEXT_WINDOW = 372_000;
-const OPENAI_GPT_55_CONTEXT_WINDOW = 1_050_000;
 const OPENAI_GPT_55_PRO_CONTEXT_WINDOW = 1_050_000;
 const OPENAI_GPT_54_CONTEXT_TOKENS = 1_050_000;
 const OPENAI_GPT_54_PRO_CONTEXT_TOKENS = 1_050_000;
@@ -105,26 +103,6 @@ const OPENAI_GPT_54_MINI_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_NANO_CONTEXT_TOKENS = 400_000;
 const OPENAI_GPT_54_MAX_TOKENS = 128_000;
 const OPENAI_CHAT_LATEST_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
-const OPENAI_GPT_56_SOL_COST = {
-  input: 5,
-  output: 30,
-  cacheRead: 0.5,
-  cacheWrite: 6.25,
-} as const;
-const OPENAI_GPT_56_TERRA_COST = {
-  input: 2.5,
-  output: 15,
-  cacheRead: 0.25,
-  cacheWrite: 3.125,
-} as const;
-const OPENAI_GPT_56_LUNA_COST = {
-  input: 1,
-  output: 6,
-  cacheRead: 0.1,
-  cacheWrite: 1.25,
-} as const;
-const OPENAI_GPT_55_COST = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 0 } as const;
-const OPENAI_GPT_55_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 } as const;
 const OPENAI_GPT_54_COST = { input: 2.5, output: 15, cacheRead: 0.25, cacheWrite: 0 } as const;
 const OPENAI_GPT_54_PRO_COST = { input: 30, output: 180, cacheRead: 0, cacheWrite: 0 } as const;
 const OPENAI_GPT_54_MINI_COST = {
@@ -143,9 +121,6 @@ const OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS = [
   OPENAI_GPT_54_PRO_MODEL_ID,
   OPENAI_GPT_54_MODEL_ID,
 ] as const;
-const OPENAI_GPT_55_MEDIA_INPUT = {
-  image: { maxSidePx: 6000, preferredSidePx: 2048, tokenMode: "detail" },
-} as const satisfies ProviderRuntimeModel["mediaInput"];
 // Repair an already-authorized model before borrowing an older family template;
 // remote discovery must not be needed to restore its native image capability.
 const OPENAI_GPT_54_TEMPLATE_MODEL_IDS = [OPENAI_GPT_54_MODEL_ID, OPENAI_GPT_55_MODEL_ID] as const;
@@ -164,11 +139,6 @@ const OPENAI_CHAT_LATEST_TEMPLATE_MODEL_IDS = [
   OPENAI_GPT_54_MODEL_ID,
 ] as const;
 const OPENAI_GPT_56_TEMPLATE_MODEL_IDS = [OPENAI_GPT_55_MODEL_ID] as const;
-const OPENAI_GPT_56_THINKING_LEVEL_MAP = {
-  off: "none",
-  xhigh: "xhigh",
-  max: "max",
-} as const;
 const OPENAI_UNKNOWN_MODEL_COST = {
   input: 0,
   output: 0,
@@ -820,83 +790,70 @@ const OPENAI_GPT_FORWARD_COMPAT_CASES = [
       OPENAI_GPT_56_LUNA_MODEL_ID,
     ],
     templateIds: OPENAI_GPT_56_TEMPLATE_MODEL_IDS,
-    patch: ({ normalizedModelId: id }) =>
-      ({
-        cost:
-          id === OPENAI_GPT_56_MODEL_ID || id === OPENAI_GPT_56_SOL_MODEL_ID
-            ? OPENAI_GPT_56_SOL_COST
-            : id === OPENAI_GPT_56_TERRA_MODEL_ID
-              ? OPENAI_GPT_56_TERRA_COST
-              : OPENAI_GPT_56_LUNA_COST,
-        contextWindow: OPENAI_GPT_56_DIRECT_CONTEXT_WINDOW,
-        contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-        thinkingLevelMap: OPENAI_GPT_56_THINKING_LEVEL_MAP,
-      }) satisfies Partial<ProviderRuntimeModel>,
   },
   {
     match: [OPENAI_GPT_55_MODEL_ID],
     templateIds: [OPENAI_GPT_55_MODEL_ID, OPENAI_GPT_54_MODEL_ID],
-    patch: {
-      mediaInput: OPENAI_GPT_55_MEDIA_INPUT,
-      cost: OPENAI_GPT_55_COST,
-      contextWindow: OPENAI_GPT_55_CONTEXT_WINDOW,
-      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-    },
   },
   {
     match: [OPENAI_GPT_55_PRO_MODEL_ID],
     templateIds: OPENAI_GPT_55_PRO_TEMPLATE_MODEL_IDS,
-    patch: {
-      cost: OPENAI_GPT_55_PRO_COST,
-      contextWindow: OPENAI_GPT_55_PRO_CONTEXT_WINDOW,
-      contextTokens: OPENAI_DEFAULT_RUNTIME_CONTEXT_TOKENS,
-    },
   },
   {
     match: [OPENAI_GPT_54_MODEL_ID],
     templateIds: OPENAI_GPT_54_TEMPLATE_MODEL_IDS,
-    patch: { cost: OPENAI_GPT_54_COST, contextWindow: OPENAI_GPT_54_CONTEXT_TOKENS },
   },
   {
     match: [OPENAI_GPT_54_PRO_MODEL_ID],
     templateIds: OPENAI_GPT_54_PRO_TEMPLATE_MODEL_IDS,
-    patch: { cost: OPENAI_GPT_54_PRO_COST, contextWindow: OPENAI_GPT_54_PRO_CONTEXT_TOKENS },
   },
   {
     match: [OPENAI_GPT_54_MINI_MODEL_ID],
     templateIds: OPENAI_GPT_54_MINI_TEMPLATE_MODEL_IDS,
-    patch: { cost: OPENAI_GPT_54_MINI_COST, contextWindow: OPENAI_GPT_54_MINI_CONTEXT_TOKENS },
   },
   {
     match: [OPENAI_GPT_54_NANO_MODEL_ID],
     templateIds: OPENAI_GPT_54_NANO_TEMPLATE_MODEL_IDS,
-    patch: { cost: OPENAI_GPT_54_NANO_COST, contextWindow: OPENAI_GPT_54_NANO_CONTEXT_TOKENS },
   },
 ] satisfies Parameters<typeof resolveFamilyForwardCompatModel>[0]["cases"];
 
 function resolveOpenAIGptForwardCompatModel(ctx: ProviderResolveDynamicModelContext) {
-  const modelId = normalizeLowercaseStringOrEmpty(ctx.modelId);
+  const trimmedModelId = ctx.modelId.trim();
+  const modelId = normalizeLowercaseStringOrEmpty(trimmedModelId);
+  const exactModel = ctx.modelRegistry.find(PROVIDER_ID, trimmedModelId);
   if (
     modelId === OPENAI_GPT_56_SOL_MODEL_ID ||
     modelId === OPENAI_GPT_56_TERRA_MODEL_ID ||
     modelId === OPENAI_GPT_56_LUNA_MODEL_ID
   ) {
-    const exactModel = ctx.modelRegistry.find(PROVIDER_ID, ctx.modelId);
     if (exactModel) {
       return exactModel;
     }
   }
+  // Known rows own capability metadata even before discovery. Only an exact registry row
+  // may override compat; an older family template cannot choose this model's Code Mode tier.
+  const catalogModel = OPENAI_MANIFEST_PROVIDER.models.find(
+    ({ id }) => id === (modelId === OPENAI_GPT_56_MODEL_ID ? OPENAI_GPT_56_SOL_MODEL_ID : modelId),
+  );
   return resolveFamilyForwardCompatModel({
     providerId: PROVIDER_ID,
     ctx,
     cases: OPENAI_GPT_FORWARD_COMPAT_CASES,
     patch: {
+      reasoning: true,
+      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+      ...catalogModel,
+      id: trimmedModelId,
+      name: trimmedModelId,
       api: "openai-responses",
       provider: PROVIDER_ID,
       baseUrl: resolveOpenAIDefaultBaseUrl(),
-      reasoning: true,
-      input: ["text", "image"],
-      maxTokens: OPENAI_GPT_54_MAX_TOKENS,
+      input: catalogModel
+        ? catalogModel.input.filter(
+            (item): item is "text" | "image" => item === "text" || item === "image",
+          )
+        : ["text", "image"],
+      compat: exactModel ? exactModel.compat : catalogModel?.compat,
     },
     synthesize: true,
   });
@@ -946,6 +903,9 @@ export function buildOpenAIProvider(): ProviderPlugin {
     catalog: {
       order: "simple",
       run: async (ctx) => {
+        if (ctx.providerIds && !ctx.providerIds.includes(PROVIDER_ID)) {
+          return null;
+        }
         const auth = ctx.resolveProviderAuth(PROVIDER_ID);
         try {
           const { resolveApiKeyForProvider, resolveProviderAuthProfileMetadata } =

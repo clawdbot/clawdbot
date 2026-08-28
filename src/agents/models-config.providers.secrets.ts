@@ -361,17 +361,10 @@ function resolveConfigBackedProviderAuth(params: {
     }
     return undefined;
   }
-  return isNonSecretApiKeyMarker(configuredApiKey)
-    ? {
-        apiKey: configuredApiKey,
-        discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
-        mode: "api_key",
-        source: "config",
-      }
-    : {
-        apiKey: configuredApiKey,
-        discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
-        mode: "api_key",
-        source: "config",
-      };
+  return {
+    apiKey: configuredApiKey,
+    discoveryApiKey: toDiscoveryApiKey(configuredApiKey),
+    mode: "api_key",
+    source: "config",
+  };
 }

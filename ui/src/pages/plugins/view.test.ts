@@ -5,6 +5,7 @@ import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import type { PluginCatalogItem, PluginListResult } from "../../lib/plugins/index.ts";
+import { createInspectResult } from "./plugins-page.test-support.ts";
 import { CONNECTOR_SUGGESTIONS } from "./presentation.ts";
 import { pluginRowKey, renderPlugins } from "./view.ts";
 
@@ -49,6 +50,12 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     messages: {},
     pendingRemoval: {},
     detailPluginId: null,
+    detailInspection: null,
+    detailInspectionError: null,
+    consent: null,
+    consentInspection: null,
+    consentInspectionLoading: false,
+    consentInspectionError: null,
     iconUrls: {},
     canMutate: true,
     mutationBlockedReason: null,
@@ -65,6 +72,9 @@ function createProps(overrides: Partial<PluginsViewProps> = {}): PluginsViewProp
     onShowDetails: () => undefined,
     onSetEnabled: () => undefined,
     onInstall: () => undefined,
+    onCancelConsent: () => undefined,
+    onConfirmConsent: () => undefined,
+    onRetryConsentInspection: () => undefined,
     onDismissMessage: () => undefined,
     onRequestUninstall: () => undefined,
     onCancelUninstall: () => undefined,
@@ -368,6 +378,50 @@ describe("renderPlugins", () => {
     expect(onShowDetails).toHaveBeenCalledWith(null);
   });
 
+  it("keeps declared capabilities and effective grants visible in installed plugin details", () => {
+    const inspection = createInspectResult({
+      declared: {
+        ...createInspectResult().declared,
+        tools: ["workboard_create"],
+      },
+    });
+    const container = mount(
+      createProps({ detailPluginId: "workboard", detailInspection: inspection }),
+    );
+
+    const details = container.querySelector(".plugins-detail__capabilities");
+    expect(normalizedText(details)).toContain("Declared capabilities");
+    expect(normalizedText(details)).toContain("workboard_create");
+    expect(normalizedText(details)).toContain("Prompt injection Allowed (default)");
+    expect(normalizedText(details)).toContain("Conversation access Off (default)");
+  });
+
+  it("shows the inspection loading state in installed plugin details", () => {
+    const container = mount(createProps({ detailPluginId: "workboard" }));
+
+    expect(normalizedText(container.querySelector(".plugins-detail__capabilities"))).toContain(
+      "Loading capability details…",
+    );
+  });
+
+  it("shows an inspection error and retries from installed plugin details", () => {
+    const onShowDetails = vi.fn();
+    const container = mount(
+      createProps({
+        detailPluginId: "workboard",
+        detailInspectionError: "Inspection unavailable",
+        onShowDetails,
+      }),
+    );
+
+    const details = container.querySelector(".plugins-detail__capabilities");
+    expect(normalizedText(details?.querySelector('[role="alert"]') ?? null)).toContain(
+      "Inspection unavailable",
+    );
+    details?.querySelector<HTMLButtonElement>('[role="alert"] button')?.click();
+    expect(onShowDetails).toHaveBeenCalledWith("workboard");
+  });
+
   it("lists MCP servers with direct toggle and remove plus the add form", () => {
     const onMcpToggle = vi.fn();
     const onMcpRemove = vi.fn();
@@ -622,7 +676,7 @@ describe("renderPlugins", () => {
     expect(onSetEnabled).not.toHaveBeenCalled();
   });
 
-  it("renders row-local risk acknowledgement and busy state", () => {
+  it("renders a row-local ClawHub install error without a risk retry action", () => {
     const packageName = "@openclaw/calendar-plus";
     const key = clawHubKey(packageName);
     const onInstall = vi.fn();
@@ -647,7 +701,6 @@ describe("renderPlugins", () => {
           [key]: {
             kind: "error",
             text: "Review required.",
-            acknowledge: { packageName, version: "2.0.0" },
           },
         },
         onInstall,
@@ -657,16 +710,8 @@ describe("renderPlugins", () => {
     const row = container.querySelector<HTMLElement>(`[data-package-name="${packageName}"]`);
     expect(row?.getAttribute("aria-busy")).toBe("false");
     expect(row?.querySelector('[role="alert"]')?.textContent).toContain("Review required.");
-    row?.querySelector<HTMLButtonElement>(".plugins-row-message button")?.click();
-    expect(onInstall).toHaveBeenCalledWith(
-      {
-        source: "clawhub",
-        packageName,
-        version: "2.0.0",
-        acknowledgeClawHubRisk: true,
-      },
-      key,
-    );
+    expect(row?.querySelector(".plugins-row-message button")).toBeNull();
+    expect(onInstall).not.toHaveBeenCalled();
   });
 
   it("renders install policy findings with cancel and acknowledged retry actions", () => {

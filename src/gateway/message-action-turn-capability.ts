@@ -24,6 +24,8 @@ type MessageActionRequesterIdentity = {
 
 type AgentRuntimeMessageActionContextBase = MessageActionRequesterIdentity & {
   expiresAtMs: number;
+  /** Process-local owner reference revalidated before privileged Gateway use. */
+  turnCapability?: string;
   sessionId?: string;
   /** Durable session entry that owns restart-recovery receipt state. */
   sourceReplySessionKey?: string;

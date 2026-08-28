@@ -56,6 +56,7 @@ import {
 } from "./channel-api.js";
 import { resolveSlackChannelType, resolveSlackConversationInfo } from "./channel-type.js";
 import { getSlackWriteClient } from "./client.js";
+import { inspectSlackConversationRouteOwner } from "./conversation-route-owner.js";
 import { assertSlackDetachedTargetAllowed } from "./detached-target-admission.js";
 import { formatSlackError } from "./errors.js";
 import { shouldSuppressLocalSlackExecApprovalPrompt } from "./exec-approvals.js";
@@ -667,6 +668,7 @@ export const slackPlugin: ChannelPlugin<ResolvedSlackAccount, SlackProbe> = crea
         isSlackWorkspaceInstallation(accountId),
     },
     messaging: {
+      resolveConversationRouteOwner: inspectSlackConversationRouteOwner,
       targetPrefixes: ["slack"],
       directTargetStyle: "user-prefixed",
       targetIdComparison: "lowercase",

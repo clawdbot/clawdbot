@@ -32,14 +32,6 @@ function normalizeRole(node: ChromeMcpSnapshotNode): string {
   return role || "generic";
 }
 
-function escapeQuoted(value: string): string {
-  return value
-    .replaceAll("\\", "\\\\")
-    .replaceAll('"', '\\"')
-    .replaceAll("\r", "\\r")
-    .replaceAll("\n", "\\n");
-}
-
 function shouldIncludeNode(params: {
   role: string;
   name?: string;
@@ -166,7 +158,7 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
     if (includeNode) {
       let line = `${"  ".repeat(depth)}- ${role}`;
       if (name) {
-        line += ` "${escapeQuoted(name)}"`;
+        line += ` ${JSON.stringify(name)}`;
       }
       const ref = normalizeSnapshotString(node.id);
       if (ref && shouldCreateRef(role, name)) {
@@ -175,10 +167,10 @@ export function buildAiSnapshotFromChromeMcpSnapshot(params: {
         line += ` [ref=${ref}]`;
       }
       if (value) {
-        line += ` value="${escapeQuoted(value)}"`;
+        line += ` value=${JSON.stringify(value)}`;
       }
       if (description) {
-        line += ` description="${escapeQuoted(description)}"`;
+        line += ` description=${JSON.stringify(description)}`;
       }
       lines.push(line);
     }

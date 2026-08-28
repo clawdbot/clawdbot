@@ -766,7 +766,7 @@ export class SessionOrganizerController {
     }
     this.host.sessionsStatusFilter = statusFilter;
     this.host.clearSessionSelection();
-    this.host.sessionData.resetForStatusFilter(statusFilter);
+    this.host.sessionData.resetSessionList();
     try {
       storeSidebarSessionStatusFilter(statusFilter);
     } catch {

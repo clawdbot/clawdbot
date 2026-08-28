@@ -6,6 +6,7 @@ import { isSensitiveEnvName } from "../../../../src/secrets/secret-env-name.js";
 import { titleForRoute } from "../../app-navigation.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
+import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
 import { renderSettingsWorkspace } from "../../components/settings-workspace.ts";
 import { t } from "../../i18n/index.ts";
 import { canCallGatewayMethod, isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
@@ -160,21 +161,21 @@ class SecretsPage extends OpenClawLightDomElement {
     });
   }
 
+  private validateValue(value: string, kind: SecretsStoreDraft["kind"]): string | null {
+    if (kind === "secret" && value.length === 0) {
+      return t("secretsStore.required");
+    }
+    if (new TextEncoder().encode(value).byteLength > MAX_VALUE_BYTES) {
+      return t("secretsStore.tooLarge");
+    }
+    return null;
+  }
+
   private validateDraft(): string | null {
     if (!ENV_SECRET_REF_ID_RE.test(this.draft.name)) {
       return t("secretsStore.badName");
     }
-    if (
-      this.dialogMode === "edit" &&
-      this.draft.kind === "secret" &&
-      this.draft.value.length === 0
-    ) {
-      return t("secretsStore.required");
-    }
-    if (new TextEncoder().encode(this.draft.value).byteLength > MAX_VALUE_BYTES) {
-      return t("secretsStore.tooLarge");
-    }
-    return null;
+    return this.validateValue(this.draft.value, this.draft.kind);
   }
 
   private submitDraft() {
@@ -243,12 +244,12 @@ class SecretsPage extends OpenClawLightDomElement {
       this.formError = t("secretsStore.required");
       return;
     }
-    const oversized = parsed.entries.find(
-      (entry) => new TextEncoder().encode(entry.value).byteLength > MAX_VALUE_BYTES,
-    );
-    if (oversized) {
-      this.formError = `${oversized.name}: ${t("secretsStore.tooLarge")}`;
-      return;
+    for (const entry of parsed.entries) {
+      const error = this.validateValue(entry.value, entry.kind);
+      if (error) {
+        this.formError = `${entry.name}: ${error}`;
+        return;
+      }
     }
     void this.runStoreTask(async (store) => {
       const result = await bulkSetSecretsStoreEntries(store, parsed.entries);
@@ -339,9 +340,10 @@ class SecretsPage extends OpenClawLightDomElement {
       onDelete: (entry) => void this.removeEntry(entry),
     });
     return html`
-      <section class="content-header">
-        <div><div class="page-title">${titleForRoute("secrets")}</div></div>
-      </section>
+      ${renderSettingsPageHeader({
+        title: titleForRoute("secrets"),
+        subtitle: t("secretsStore.hint"),
+      })}
       ${renderSettingsWorkspace(body)}
     `;
   }

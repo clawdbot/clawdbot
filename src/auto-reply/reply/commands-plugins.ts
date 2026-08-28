@@ -1,5 +1,6 @@
 // Implements plugin command listing and configuration helpers.
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import { resolvePluginCapabilityConsentCliOptions } from "../../cli/plugin-capability-consent.js";
 import { readConfigFileSnapshot, readConfigFileSnapshotForWrite } from "../../config/config.js";
 import { assertConfigWriteAllowedInCurrentMode } from "../../config/nix-mode-write-guard.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -29,7 +30,10 @@ import {
   requireCommandFlagEnabled,
   requireGatewayClientScope,
 } from "./command-gates.js";
-import { installPluginFromPluginsCommand } from "./commands-plugins-install.js";
+import {
+  formatPluginCommandCapabilityConsentError,
+  installPluginFromPluginsCommand,
+} from "./commands-plugins-install.js";
 import type { CommandHandler } from "./commands-types.js";
 import { AutoReplyConfigMutationError, setPluginEnabledFromCommand } from "./config-mutations.js";
 import { parsePluginsCommand } from "./plugins-commands.js";
@@ -226,6 +230,7 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
         }
         const installed = await installPluginFromPluginsCommand({
           raw: pluginsCommand.spec,
+          acceptCapabilities: pluginsCommand.acceptCapabilities,
           force: pluginsCommand.force,
           snapshot: loadedConfig.snapshot,
         });
@@ -293,6 +298,12 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           pluginId: plugin.id,
           enabled: pluginsCommand.action === "enable",
           action: pluginsCommand.action,
+          ...resolvePluginCapabilityConsentCliOptions({
+            acceptCapabilities:
+              pluginsCommand.action === "enable" && pluginsCommand.acceptCapabilities,
+            action: "enable",
+            allowPrompt: false,
+          }),
         });
         await refreshPluginRegistryAfterConfigMutation({
           config: committedConfig,
@@ -304,6 +315,13 @@ export const handlePluginsCommand: CommandHandler = defineAuthorizedTextCommand(
           },
         });
       } catch (error) {
+        const consentError = formatPluginCommandCapabilityConsentError(
+          error,
+          `/plugins enable ${plugin.id}`,
+        );
+        if (consentError) {
+          return commandReply(`⚠️ ${consentError}`);
+        }
         if (error instanceof AutoReplyConfigMutationError) {
           return commandReply(`⚠️ ${error.message}`);
         }

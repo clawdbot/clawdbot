@@ -7,7 +7,11 @@ import type { OpenClawConfig } from "../config/config.js";
 import { pickSandboxToolPolicy } from "./sandbox-tool-policy.js";
 import { isToolAllowed, resolveSandboxToolPolicyForAgent } from "./sandbox/tool-policy.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
-import { isToolAllowedByPolicyName } from "./tool-policy-match.js";
+import {
+  isRuntimeToolAllowed,
+  isRuntimeToolAllowedForConstruction,
+  isToolAllowedByPolicyName,
+} from "./tool-policy-match.js";
 import {
   collectExplicitAllowlist,
   DEFAULT_PLUGIN_TOOLS_ALLOWLIST_ENTRY,
@@ -210,5 +214,13 @@ describe("isToolAllowedByPolicyName — apply_patch / write deny decoupling (#76
     expect(isToolAllowedByPolicyName("apply_patch", { deny: ["write", "apply_patch"] })).toBe(
       false,
     );
+  });
+
+  it("keeps runtime write compatibility out of construction planning", () => {
+    expect(isRuntimeToolAllowed("apply_patch", ["write"])).toBe(true);
+    expect(isRuntimeToolAllowedForConstruction("apply_patch", ["write"])).toBe(false);
+    expect(isRuntimeToolAllowed("apply_patch", ["apply-patch"])).toBe(true);
+    expect(isRuntimeToolAllowed("apply_patch", ["apply_*"])).toBe(true);
+    expect(isRuntimeToolAllowed("apply_patch", ["group:fs"])).toBe(true);
   });
 });

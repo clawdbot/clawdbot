@@ -94,7 +94,6 @@ const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
   /forbidden: bot was kicked/i,
   /chat_id is empty/i,
   /recipient is not a valid/i,
-  /outbound not configured for channel/i,
   /ambiguous .* recipient/i,
   /User .* not in room/i,
 ];
@@ -285,6 +284,8 @@ function buildRecoveryDeliverParams(
   stateDir?: string,
   producerClaimId?: string,
 ) {
+  const conversationCompletion =
+    entry.deliveryCompletion?.kind === "conversation" ? entry.deliveryCompletion : undefined;
   return {
     cfg,
     channel: entry.channel,
@@ -311,6 +312,20 @@ function buildRecoveryDeliverParams(
     preparedMessageId: entry.preparedMessageId,
     // Recovery owns terminal completion because nested delivery only reports
     // process-local evidence that cannot survive another restart.
+    ...(conversationCompletion
+      ? {
+          conversationDeliveryAttemptAuthority: {
+            agentId: conversationCompletion.agentId,
+            operationId: conversationCompletion.operationId,
+            ...(conversationCompletion.storePath
+              ? { storePath: conversationCompletion.storePath }
+              : {}),
+            ...(conversationCompletion.routeFingerprint
+              ? { routeFingerprint: conversationCompletion.routeFingerprint }
+              : {}),
+          },
+        }
+      : {}),
     deliveryQueueId: entry.id,
     deliveryQueueStateDir: stateDir,
     ...(producerClaimId ? { deliveryProducerClaimId: producerClaimId } : {}),

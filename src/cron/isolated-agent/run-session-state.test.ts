@@ -268,6 +268,7 @@ describe("createPersistCronSessionEntry", () => {
     const continuation = createCronRunContinuationSession({
       cronSession,
       runSessionKey,
+      createdActor: { type: "human", id: "profile-ada" },
       thinkingLevel: "high",
       toolsAllow: ["image_generate", "write"],
       toolsAllowIsDefault: true,
@@ -301,7 +302,7 @@ describe("createPersistCronSessionEntry", () => {
     });
     expect(store[runSessionKey]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
       sessionId: "run-session-id",
       modelProvider: "claude-cli",
@@ -368,6 +369,31 @@ describe("createPersistCronSessionEntry", () => {
     );
   });
 
+  it("retains the required base creator when a continuation is created after job ownership changes", async () => {
+    const creator = { type: "human", id: "profile-original-creator" } as const;
+    const lifecycleRevision = crypto.randomUUID();
+    const cronSession = makeCronSession(
+      makeSessionEntry({
+        createdVia: "cron",
+        createdActor: creator,
+        sandbox: "required",
+        lifecycleRevision,
+      }),
+    );
+    cronSession.lifecycleRevision = lifecycleRevision;
+    const runSessionKey = "agent:main:cron:job:run:required";
+    const store: Record<string, SessionEntry> = {};
+    const continuation = createCronRunContinuationSession({
+      cronSession,
+      runSessionKey,
+      createdActor: { type: "human", id: "profile-current-job-owner" },
+      persistSessionEntry: makeGuardedPersistSessionEntry(store),
+    });
+    await continuation.initialize();
+    await continuation.sync();
+    expect(store[runSessionKey]).toMatchObject({ createdActor: creator, sandbox: "required" });
+  });
+
   it("persists isolated cron state only under the stable cron session key", async () => {
     const cronSession = makeCronSession(
       makeSessionEntry({
@@ -385,6 +411,7 @@ describe("createPersistCronSessionEntry", () => {
     const persist = createPersistCronSessionEntry({
       cronSession,
       agentSessionKey: "agent:main:cron:job",
+      createdActor: { type: "human", id: "profile-ada" },
       persistSessionEntry,
     });
 
@@ -392,12 +419,12 @@ describe("createPersistCronSessionEntry", () => {
 
     expect(cronSession.store["agent:main:cron:job"]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
     expect(persistedStore["agent:main:cron:job"]).toMatchObject({
       createdVia: "cron",
-      createdActor: { type: "system" },
+      createdActor: { type: "human", id: "profile-ada" },
       createdAt: expect.any(Number),
     });
     expect(cronSession.store["agent:main:cron:job:run:run-session-id"]).toBeUndefined();

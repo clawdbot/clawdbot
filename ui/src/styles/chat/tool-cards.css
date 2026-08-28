@@ -12,7 +12,6 @@
   width: fit-content;
   max-width: 100%;
   min-width: 0;
-  box-sizing: border-box;
   padding: 4px 0;
   border: 0;
   border-radius: var(--radius-sm);
@@ -74,7 +73,6 @@
 .chat-activity-group__summary {
   --chat-tool-activity-color: color-mix(in srgb, var(--muted) 88%, transparent);
 
-  font-family: var(--font-body);
   font-size: calc(var(--control-ui-text-sm) + 1px);
   font-weight: 400;
   line-height: 1.5;
@@ -519,32 +517,6 @@
   color: inherit;
 }
 
-/* ── Command token colors (display-only highlighting) ── */
-.chat-cmd--name {
-  color: inherit;
-  font: inherit;
-}
-
-.chat-cmd--str {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--num {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--flag {
-  font: inherit;
-  color: inherit;
-}
-
-.chat-cmd--op {
-  font: inherit;
-  color: inherit;
-}
-
 /* ── Key-value args (generic tools) ── */
 .chat-tool-kv {
   display: flex;
@@ -579,7 +551,6 @@
 
 /* ── Expanded tool row body ── */
 .chat-tool-msg-body {
-  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
   margin-top: 5px;
@@ -621,7 +592,6 @@
 }
 
 .chat-tool-card {
-  box-sizing: border-box;
   min-width: 0;
   max-width: 100%;
 }
@@ -719,7 +689,8 @@
   margin-inline-start: auto;
 }
 
-.chat-tool-card__action-btn {
+.chat-tool-card__action-btn,
+.chat-tool-card__actions :where(.chat-copy-btn) {
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -737,7 +708,8 @@
 }
 
 .chat-tool-card__action-btn:hover,
-.chat-tool-card__action-btn:focus-visible {
+.chat-tool-card__action-btn:focus-visible,
+.chat-tool-card__actions :where(.chat-copy-btn:hover, .chat-copy-btn:focus-visible) {
   color: var(--text);
   background: color-mix(in srgb, var(--bg-hover) 70%, transparent);
 }
@@ -822,7 +794,6 @@
 }
 
 .chat-tool-card__block-content {
-  box-sizing: border-box;
   max-width: 100%;
   min-width: 0;
   margin: 0;
@@ -914,6 +885,12 @@
 .chat-tool-card__widget-actions {
   position: relative;
   flex-shrink: 0;
+}
+
+/* Chromium can retain a skipped row's pre-menu geometry. Fully lay out the
+   active widget row so closing its top-layer menu cannot move the disclosure. */
+.chat-virtual-row:has(.chat-tool-card__widget-actions[open]) {
+  content-visibility: visible;
 }
 
 .chat-tool-card__widget-actions::part(menu) {
@@ -1113,16 +1090,10 @@
 }
 
 /* ── Activity group (a turn's run of tool rows) ── */
-/* Keep the activity summary, call bubbles, and flat result rows on one width.
-   Include the role classes so this wins over the generic tool-group rule. */
-.chat-group.tool.chat-group--activity .chat-group-messages {
-  max-width: var(--chat-message-max-width, min(760px, 100%));
-}
-
 .chat-activity-group {
   width: 100%;
   min-width: 0;
-  max-width: 100%;
+  max-width: var(--chat-message-max-width, min(760px, 100%));
 }
 
 .chat-activity-group__summary {
@@ -2041,13 +2012,34 @@
    only a slow opacity breath; tabular digits keep the ticking elapsed label
    from nudging the row sideways. */
 .chat-tasks-status {
-  display: flex;
+  display: inline-flex;
   align-items: center;
   gap: 8px;
   margin: 4px 0 2px;
+  min-height: 34px;
+  padding: 0 12px;
   color: var(--muted);
+  background: var(--chat-composer-surface, var(--card));
+  border: 1px solid
+    var(--chat-composer-hairline, color-mix(in srgb, var(--text-strong) 11%, transparent));
+  border-radius: var(--radius-full);
   font-size: var(--control-ui-text-xs);
   font-variant-numeric: tabular-nums;
+  box-shadow:
+    0 1px 2px rgb(0 0 0 / 8%),
+    0 6px 18px rgb(0 0 0 / 10%);
+}
+
+/* The recap is a quiet postscript under the reply, not a floating status pill.
+   This follows the shared tasks-status rule so its surface geometry cannot win
+   later in the cascade. */
+.chat-tasks-status.chat-turn-recap {
+  min-height: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
 }
 
 .chat-tasks-status__claw {
@@ -2086,34 +2078,55 @@
   color: var(--muted);
   font: inherit;
   cursor: var(--cursor-action);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, var(--muted) 45%, transparent);
-  text-underline-offset: 2px;
+  text-decoration: none;
 }
 
 .chat-tasks-status__link:hover,
 .chat-tasks-status__link:focus-visible {
-  color: var(--accent);
-  text-decoration-color: currentColor;
+  color: var(--text);
 }
 
 /* Hover preview on the status row: the latest tasks in a read-only card. The
    tooltip body is content-sized (width: max-content up to --max-width), so a
    single task stays one compact line instead of a fixed-size panel. */
 openclaw-tooltip.chat-tasks-status__preview {
-  --openclaw-tooltip-max-width: min(360px, calc(100vw - 24px));
+  --openclaw-tooltip-max-width: min(352px, calc(100vw - 24px));
+  --openclaw-tooltip-background-color: var(--chat-composer-surface, var(--popover));
+  --openclaw-tooltip-border-color: color-mix(in srgb, var(--text-strong) 11%, transparent);
+  --openclaw-tooltip-border-radius: calc(16px * var(--openclaw-corner-radius-scale));
+  --openclaw-tooltip-padding: 11px;
+  --openclaw-tooltip-shadow: 0 1px 2px rgb(0 0 0 / 8%), 0 12px 32px rgb(0 0 0 / 14%);
 }
 
 .chat-tasks-preview {
   display: flex;
+  width: min(330px, calc(100vw - 46px));
   flex-direction: column;
-  gap: 6px;
+  gap: 7px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  line-height: 1.4;
+  text-align: left;
+}
+
+.chat-tasks-preview__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  margin-bottom: 1px;
+  color: var(--muted);
+  font-size: var(--control-ui-text-xs);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .chat-tasks-preview__row {
-  display: flex;
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 
 .chat-tasks-preview__title {
@@ -2122,8 +2135,8 @@ openclaw-tooltip.chat-tasks-status__preview {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  color: var(--text);
-  font-weight: 550;
+  color: var(--muted);
+  font-weight: 400;
 }
 
 .chat-tasks-preview__meta {
@@ -2132,6 +2145,7 @@ openclaw-tooltip.chat-tasks-status__preview {
   align-items: baseline;
   gap: 5px;
   color: var(--muted);
+  font-size: inherit;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2254,7 +2268,6 @@ openclaw-tooltip.chat-tasks-status__preview {
 }
 
 @media (pointer: coarse) {
-  .chat-tool-msg-summary,
   .chat-activity-group__summary {
     padding-top: 8px;
     padding-bottom: 8px;

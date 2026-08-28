@@ -76,6 +76,7 @@ import {
 } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
 import { resolveCodexDynamicToolDirectNames } from "./run-attempt-tools.js";
+import { readMirrorIdentity } from "./upstream-prompt-provenance.js";
 import * as userInputBridge from "./user-input-bridge.js";
 
 type CodexAppServerToolTelemetry = Parameters<CodexAppServerEventProjector["buildResult"]>[0];
@@ -429,6 +430,7 @@ async function buildCodexTurnContextForTest(
     sessionKey: params.sessionKey ?? params.sessionId,
     sessionAgentId,
     memoryToolNames,
+    ringZeroActive: false,
   });
   const threadDeveloperInstructions = testing.buildDeveloperInstructions(params, { dynamicTools });
   const openClawPromptContext = buildCodexOpenClawPromptContext({
@@ -2415,6 +2417,10 @@ describe("runCodexAppServerAttempt", () => {
       deny: ["exec", "process", "write", "edit"],
     };
     params.pluginHarnessToolPolicyRestricted = true;
+    const agentsGuidance = "Restricted turns keep workspace AGENTS guidance.";
+    await fs.mkdir(params.workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(params.workspaceDir, "AGENTS.md"), agentsGuidance);
+    setAgentWorkspaceForTest(params, params.workspaceDir);
     const onAgentEvent = vi.fn();
     params.onAgentEvent = onAgentEvent;
     const harness = createStartedThreadHarness(async (method) => {
@@ -2437,6 +2443,7 @@ describe("runCodexAppServerAttempt", () => {
       | {
           dynamicTools?: CodexDynamicToolSpec[];
           environments?: unknown[];
+          developerInstructions?: string;
           config?: Record<string, unknown>;
         }
       | undefined;
@@ -2445,6 +2452,8 @@ describe("runCodexAppServerAttempt", () => {
     );
 
     expect(startParams?.environments).toEqual([]);
+    expect(startParams?.config?.project_doc_max_bytes).toBe(131_072);
+    expect(startParams?.developerInstructions?.split(agentsGuidance)).toHaveLength(2);
     expect(startParams?.config?.["tools.update_plan.enabled"]).toBe(false);
     expect(dynamicToolNames.toSorted()).toEqual(["apply_patch", "progress_card", "read"]);
     const progressCardSpec = flattenSpecsWithNamespace(startParams?.dynamicTools ?? []).find(
@@ -2605,7 +2614,19 @@ describe("runCodexAppServerAttempt", () => {
     ).toHaveLength(2);
 
     await harness.completeTurn({ threadId: "thread-1", turnId: "turn-1" });
-    await run;
+    const result = await run;
+    expect(persistedProgressCardInputs[0]).toEqual({ markdown: "Plan restored", plan });
+    expect(result.messagesSnapshot).toContainEqual(
+      expect.objectContaining({
+        role: "toolResult",
+        toolName: "progress_card",
+        isError: false,
+      }),
+    );
+    expect(
+      result.messagesSnapshot.some((message) => readMirrorIdentity(message) === "turn-1:plan"),
+    ).toBe(false);
+    expect(JSON.stringify(result.messagesSnapshot)).not.toContain("Codex plan:");
   });
 
   it("does not inject plan state after compaction when the turn has no plan", async () => {
@@ -4371,7 +4392,7 @@ describe("runCodexAppServerAttempt", () => {
     };
     const collaborationInstructions =
       turnStartParams.collaborationMode?.settings?.developer_instructions ?? "";
-    expect(collaborationInstructions).toContain("This is an OpenClaw heartbeat turn");
+    expect(collaborationInstructions).not.toContain("This is an OpenClaw heartbeat turn");
     expect(collaborationInstructions).not.toContain("HEARTBEAT.md exists");
     expect(collaborationInstructions).not.toContain(heartbeatPath);
     const legacyContent = contents.trim();
@@ -5520,6 +5541,9 @@ describe("runCodexAppServerAttempt", () => {
       buildCodexPluginAppCacheKey({
         appServer,
         agentDir,
+        envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
+          startOptions: appServer.start,
+        }),
         runtimeIdentity: getMockRuntimeIdentity(),
       }),
       true,
@@ -5625,6 +5649,9 @@ describe("runCodexAppServerAttempt", () => {
         buildCodexPluginAppCacheKey({
           appServer,
           agentDir,
+          envApiKeyFingerprint: resolveCodexAppServerFallbackApiKeyCacheKey({
+            startOptions: appServer.start,
+          }),
           runtimeIdentity: getMockRuntimeIdentity(),
         }),
       appInventory: (method: "app/installed" | "app/read") =>
@@ -6557,6 +6584,9 @@ describe("runCodexAppServerAttempt", () => {
     nativeResponse.modelProvider = "openai";
     nativeResponse.thread.modelProvider = "openai";
     const harness = createAppServerHarness(async (method) => {
+      if (method === "config/read") {
+        return { config: { model_provider: "openai" }, origins: {} };
+      }
       if (method === "thread/read") {
         return { thread: nativeResponse.thread };
       }

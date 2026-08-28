@@ -5,7 +5,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { hasErrnoCode, toErrorObject } from "../../../infra/errors.js";
 import { readRegularFile } from "../../../infra/regular-file.js";
 import { decodeWindowsTextFileBuffer } from "../../../infra/windows-encoding.js";
-import type { ImageContent, Model, TextContent } from "../../../llm/types.js";
+import type { ImageContent, TextContent } from "../../../llm/types.js";
 import {
   classifyMediaReferenceSource,
   normalizeMediaReferenceSource,
@@ -31,8 +31,12 @@ import { processImage } from "../../utils/image-resize.js";
 import { detectSupportedImageMimeType } from "../../utils/mime.js";
 import { formatPathRelativeToCwdOrAbsolute } from "../../utils/paths.js";
 import type { ToolDefinition, ToolRenderResultOptions } from "../extensions/types.js";
+import {
+  resolveFileMutationQueueKey,
+  withFileMutationQueueKeysResolution,
+} from "./file-mutation-queue.js";
 import { normalizePositiveLimit } from "./limits.js";
-import { getReadPathVariants, resolveToCwd } from "./path-utils.js";
+import { getReadPathVariants, getReadQueuePaths, resolveToCwd } from "./path-utils.js";
 import {
   createReadToolDetails,
   readToolInputSchema,
@@ -101,6 +105,8 @@ const COMPACT_RESOURCE_FILE_NAMES = new Set(["AGENTS.md", "AGENTS.MD", "CLAUDE.m
  * Override these to delegate file reading to remote systems (for example SSH).
  */
 export interface ReadOperations {
+  /** Resolve the physical identity used to order this backend's file operations. */
+  resolveQueueKey?: (absolutePath: string, signal?: AbortSignal) => string | Promise<string>;
   /** Resolve a user-supplied path for this read backend. */
   resolvePath?: (filePath: string, cwd: string) => string | Promise<string>;
   /** Decode text bytes for this backend. Custom backends default to UTF-8. */
@@ -141,6 +147,8 @@ export interface ReadToolOptions {
   operations?: ReadOperations;
   /** Complete model-visible call budget; individual pages never exceed the session ceiling. */
   maxBytes?: number;
+  /** Prepared capability for embedded calls, which carry no extension model context. */
+  modelHasVision?: boolean;
 }
 
 type ReadRenderArgs = {
@@ -177,13 +185,6 @@ function trimTrailingEmptyLines(lines: string[]): string[] {
     end--;
   }
   return lines.slice(0, end);
-}
-
-function getNonVisionImageNote(model: Model | undefined): string | undefined {
-  if (!model || model.input.includes("image")) {
-    return undefined;
-  }
-  return "[Current model does not support images. The image will be omitted from this request.]";
 }
 
 function getOpenClawDocsClassification(
@@ -242,12 +243,18 @@ async function resolveLocalReadPath(filePath: string, cwd: string): Promise<stri
   return resolveToCwd(filePath, cwd);
 }
 
-async function resolveReadToolPath(
+async function resolveReadToolInputPath(
   ops: ReadOperations,
   filePath: string,
   cwd: string,
+): Promise<string> {
+  return await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
+}
+
+async function resolveReadToolPathFromAbsolute(
+  ops: ReadOperations,
+  absolutePath: string,
 ): Promise<{ absolutePath: string; note?: string }> {
-  const absolutePath = await (ops.resolvePath?.(filePath, cwd) ?? resolveToCwd(filePath, cwd));
   try {
     await ops.access(absolutePath);
     return { absolutePath };
@@ -523,11 +530,36 @@ export function createReadToolDefinition(
             let note: string | undefined;
             let buffer: Buffer;
             try {
-              ({ absolutePath, note } = await resolveReadToolPath(ops, path, cwd));
-              if (aborted) {
+              // Share write/edit ordering through byte capture only. Decode the
+              // immutable snapshot below after releasing the path queue.
+              const inputPathResolution = resolveReadToolInputPath(ops, path, cwd);
+              const queueKeysResolution = inputPathResolution.then(
+                async (absoluteInputPath) =>
+                  await Promise.all(
+                    getReadQueuePaths(absoluteInputPath).map(
+                      async (candidate) =>
+                        await resolveFileMutationQueueKey(candidate, ops.resolveQueueKey, signal),
+                    ),
+                  ),
+              );
+              const snapshot = await withFileMutationQueueKeysResolution(
+                queueKeysResolution,
+                async () => {
+                  const absoluteInputPath = await inputPathResolution;
+                  const resolved = await resolveReadToolPathFromAbsolute(ops, absoluteInputPath);
+                  if (aborted) {
+                    return undefined;
+                  }
+                  return {
+                    ...resolved,
+                    buffer: await ops.readFile(resolved.absolutePath),
+                  };
+                },
+              );
+              if (!snapshot) {
                 return;
               }
-              buffer = await ops.readFile(absolutePath);
+              ({ absolutePath, note, buffer } = snapshot);
             } catch (error) {
               if (aborted) {
                 return;
@@ -553,7 +585,11 @@ export function createReadToolDefinition(
             const mimeType = await detectReadImageMimeType(ops, buffer, absolutePath);
             let content: (TextContent | ImageContent)[];
             let truncated: Parameters<typeof createReadToolDetails>[1];
-            const nonVisionImageNote = getNonVisionImageNote(ctx?.model);
+            const modelHasVision = options?.modelHasVision ?? ctx?.model?.input.includes("image");
+            const nonVisionImageNote =
+              modelHasVision === false
+                ? "[Current model does not support images. The image will be omitted from this request.]"
+                : undefined;
             if (mimeType) {
               const base64 = buffer.toString("base64");
               const processed = await processImage(
@@ -574,7 +610,10 @@ export function createReadToolDefinition(
                 if (nonVisionImageNote) {
                   textNote += `\n${nonVisionImageNote}`;
                 }
-                content = [{ type: "text", text: textNote }, processed.image];
+                content = [{ type: "text", text: textNote }];
+                if (!nonVisionImageNote) {
+                  content.push(processed.image);
+                }
               }
             } else {
               const decodedText =

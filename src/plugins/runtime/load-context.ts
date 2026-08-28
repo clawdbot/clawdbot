@@ -21,6 +21,7 @@ import {
   resolvePluginMetadataSnapshot,
 } from "../plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../registry-types.js";
 import type { PluginLogger } from "../types.js";
 
 const log = createSubsystemLogger("plugins");
@@ -137,7 +138,29 @@ export type PluginRuntimeLoadContext = {
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
   installRecords?: Record<string, PluginInstallRecord>;
+  preferBuiltPluginArtifacts?: boolean;
 };
+
+// Source and built consumers must read the same facts from the owning registry.
+const pluginRuntimeLoadContext = Symbol.for("openclaw.pluginRuntimeLoadContext");
+type RuntimeContextRegistry = PluginRegistry & {
+  [pluginRuntimeLoadContext]?: PluginRuntimeLoadContext;
+};
+
+export function setPluginRuntimeLoadContext(
+  registry: PluginRegistry,
+  context: PluginRuntimeLoadContext,
+): void {
+  // SAFETY: Internal registries are extensible; this module owns the optional symbol slot.
+  (registry as RuntimeContextRegistry)[pluginRuntimeLoadContext] = context;
+}
+
+/** Reads load facts carried by an exact lifecycle-owned registry. */
+export const getPluginRuntimeLoadContext = (
+  registry: PluginRegistry | undefined,
+): PluginRuntimeLoadContext | undefined =>
+  // SAFETY: Only the setter above writes this optional registry-owned symbol slot.
+  (registry as RuntimeContextRegistry | undefined)?.[pluginRuntimeLoadContext];
 
 /** Runtime load option values that can be passed directly to plugin loading. */
 type PluginRuntimeResolvedLoadValues = Pick<
@@ -150,6 +173,7 @@ type PluginRuntimeResolvedLoadValues = Pick<
   | "logger"
   | "manifestRegistry"
   | "installRecords"
+  | "preferBuiltPluginArtifacts"
 >;
 
 /** Options accepted while resolving plugin runtime load context. */
@@ -162,6 +186,7 @@ type PluginRuntimeLoadContextOptions = {
   logger?: PluginLogger;
   manifestRegistry?: PluginManifestRegistry;
   metadataSnapshot?: PluginMetadataSnapshot;
+  preferBuiltPluginArtifacts?: boolean;
 };
 
 /** Creates the default plugin runtime loader logger. */
@@ -262,6 +287,7 @@ export function resolvePluginRuntimeLoadContext(
     ...(finalManifestRegistry ? { manifestRegistry: finalManifestRegistry } : {}),
     ...(metadataSnapshot ? { metadataSnapshot } : {}),
     installRecords,
+    preferBuiltPluginArtifacts: options?.preferBuiltPluginArtifacts === true,
   };
 }
 
@@ -287,6 +313,7 @@ export function buildPluginRuntimeLoadOptionsFromValues(
     logger: values.logger,
     manifestRegistry: values.manifestRegistry,
     installRecords: values.installRecords,
+    preferBuiltPluginArtifacts: values.preferBuiltPluginArtifacts,
     ...overrides,
   };
 }

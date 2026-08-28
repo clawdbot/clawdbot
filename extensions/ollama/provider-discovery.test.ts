@@ -65,6 +65,7 @@ describe("Ollama provider", () => {
   async function runOllamaCatalog(params: {
     config?: OpenClawConfig;
     env?: NodeJS.ProcessEnv;
+    providerIds?: readonly string[];
     resolveProviderApiKey?: () => { apiKey: string | undefined; discoveryApiKey?: string };
   }) {
     const env: NodeJS.ProcessEnv = {
@@ -77,6 +78,7 @@ describe("Ollama provider", () => {
       config: params.config ?? {},
       agentDir: createAgentDir(),
       env,
+      ...(params.providerIds !== undefined ? { providerIds: params.providerIds } : {}),
       resolveProviderApiKey:
         params.resolveProviderApiKey ??
         (() => ({
@@ -90,6 +92,17 @@ describe("Ollama provider", () => {
     });
     return result && "provider" in result ? result.provider : undefined;
   }
+
+  it("skips local discovery for an Ollama Cloud-only scope before auth", async () => {
+    const resolveProviderApiKey = vi.fn(() => {
+      throw new Error("local auth must stay untouched");
+    });
+
+    await expect(
+      runOllamaCatalog({ providerIds: ["ollama-cloud"], resolveProviderApiKey }),
+    ).resolves.toBeUndefined();
+    expect(resolveProviderApiKey).not.toHaveBeenCalled();
+  });
 
   async function withoutAmbientOllamaEnv<T>(run: () => Promise<T>): Promise<T> {
     const previous = process.env.OLLAMA_API_KEY;

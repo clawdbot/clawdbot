@@ -73,6 +73,22 @@
             "type": "integer",
             "minimum": 100,
             "maximum": 120000
+          },
+          "rules": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "outbound": {
+                "type": "string",
+                "maxLength": 2000,
+                "pattern": "\\S"
+              },
+              "inbound": {
+                "type": "string",
+                "maxLength": 2000,
+                "pattern": "\\S"
+              }
+            }
           }
         }
       },
@@ -147,6 +163,22 @@
                 "type": "integer",
                 "minimum": 100,
                 "maximum": 120000
+              },
+              "rules": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "outbound": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "pattern": "\\S"
+                  },
+                  "inbound": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "pattern": "\\S"
+                  }
+                }
               }
             }
           },

@@ -35,6 +35,7 @@ import {
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
+import { parseWorkerRuntimeResult } from "../../worker/worker-process-protocol.js";
 import type { WorkerRuntimeResult } from "../../worker/worker.runtime.js";
 import {
   measureAgentRuntimeIdentityTokenBytes,
@@ -43,7 +44,10 @@ import {
 } from "../agent-runtime-identity-token.js";
 import type { WorkerSessionTurnClaim } from "./placement-record.js";
 import type { WorkerSessionPlacementStore } from "./placement-store.js";
-import { bindWorkerTurnExecutionIdentity } from "./placement-turn-claim-events.js";
+import {
+  bindWorkerTurnAdmissionContinuation,
+  bindWorkerTurnExecutionIdentity,
+} from "./placement-turn-claim-events.js";
 
 type WorkerInitialMessagePlan =
   | { kind: "complete"; messages: WorkerTranscriptMessage[] }
@@ -114,6 +118,11 @@ export async function prepareWorkerAgentRuntimeIdentity(
       { agentId: params.agentId, sessionKey: params.sessionKey },
     );
   }
+  bindWorkerTurnAdmissionContinuation(
+    params.placements,
+    params.turnClaim,
+    admittedRunContext.operationalRunInstance,
+  );
   return {
     operationalRunInstance: admittedRunContext.operationalRunInstance,
     runtimeIdentity,
@@ -230,50 +239,23 @@ function fitLaunchDescriptor(
   }
 }
 
-export function parseRuntimeResult(stdout: string): WorkerRuntimeResult {
+type StartedWorkerRuntimeResult = Exclude<WorkerRuntimeResult, { status: "not-started" }>;
+
+export function parseRuntimeResult(stdout: string): StartedWorkerRuntimeResult {
   let value: unknown;
   try {
     value = JSON.parse(stdout.trim()) as unknown;
   } catch (error) {
     throw new Error("Worker process returned invalid output", { cause: error });
   }
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
+  const result = parseWorkerRuntimeResult(value);
+  if (!result) {
     throw new Error("Worker process returned invalid output");
   }
-  const result = value as Record<string, unknown>;
-  if (
-    result.status === "failed" &&
-    result.reason === "turn-failed" &&
-    (result.transcriptLeafId === null || typeof result.transcriptLeafId === "string") &&
-    typeof result.transcriptNextSeq === "number" &&
-    Number.isSafeInteger(result.transcriptNextSeq) &&
-    result.transcriptNextSeq >= 1 &&
-    Object.keys(result).every((key) =>
-      ["status", "reason", "transcriptLeafId", "transcriptNextSeq"].includes(key),
-    )
-  ) {
-    return result as WorkerRuntimeResult;
+  if (result.status === "not-started") {
+    throw new Error(result.errorText);
   }
-  if (
-    result.status === "completed" &&
-    (result.transcriptLeafId === null || typeof result.transcriptLeafId === "string") &&
-    typeof result.transcriptNextSeq === "number" &&
-    Number.isSafeInteger(result.transcriptNextSeq) &&
-    result.transcriptNextSeq >= 1 &&
-    Object.keys(result).every((key) =>
-      ["status", "transcriptLeafId", "transcriptNextSeq"].includes(key),
-    )
-  ) {
-    return result as WorkerRuntimeResult;
-  }
-  if (
-    result.status === "fenced" &&
-    (result.reason === "credential-replaced" || result.reason === "owner-epoch-mismatch") &&
-    Object.keys(result).every((key) => ["status", "reason"].includes(key))
-  ) {
-    return result as WorkerRuntimeResult;
-  }
-  throw new Error("Worker process returned invalid output");
+  return result;
 }
 
 export function assistantText(message: AgentMessage): string {

@@ -6,11 +6,6 @@ import path from "node:path";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
-import {
-  executeGitCommand as runGit,
-  requireGitCommand as requireGit,
-  requireGitCommandBuffer as requireGitBuffer,
-} from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
@@ -23,6 +18,9 @@ import {
   listGitWorktrees,
   worktreePathExists,
   removeEmptyParents,
+  requireGit,
+  requireGitBuffer,
+  runGit,
   type GitResult,
 } from "./git.js";
 import { worktreeNameAllocationFamily } from "./name.js";
@@ -392,30 +390,6 @@ async function directorySizeBytes(root: string): Promise<number> {
   return total;
 }
 
-async function containsGitMarker(root: string, checkoutRoot = false): Promise<boolean> {
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch (error) {
-    if (isMissingPathError(error)) {
-      return false;
-    }
-    throw error;
-  }
-  for (const entry of entries) {
-    if (entry.name === ".git") {
-      if (!checkoutRoot) {
-        return true;
-      }
-      continue;
-    }
-    if (entry.isDirectory() && (await containsGitMarker(path.join(root, entry.name), false))) {
-      return true;
-    }
-  }
-  return false;
-}
-
 function splitNullBuffer(input: Buffer): Buffer[] {
   const fields: Buffer[] = [];
   let start = 0;
@@ -457,6 +431,48 @@ async function rawPathExists(target: string | Buffer): Promise<boolean> {
   }
 }
 
+async function containsSnapshotGitMarker(
+  checkoutRoot: string,
+  snapshotPaths?: Iterable<Buffer>,
+): Promise<boolean> {
+  const visiblePaths = snapshotPaths ? [...snapshotPaths] : [];
+  if (!snapshotPaths) {
+    const indexEntries = splitNullBuffer(
+      await requireGitBuffer(checkoutRoot, ["ls-files", "--stage", "-z"]),
+    );
+    if (indexEntries.some((entry) => entry.subarray(0, 7).toString() === "160000 ")) {
+      return true;
+    }
+    const visibleGitPaths = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"];
+    visiblePaths.push(...splitNullBuffer(await requireGitBuffer(checkoutRoot, visibleGitPaths)));
+  }
+  const checked = new Set<string>();
+  const ignoredPaths = splitNullBuffer(
+    await requireGitBuffer(checkoutRoot, [
+      "ls-files",
+      "-z",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+    ]),
+  );
+  for (const gitPath of [...visiblePaths, ...ignoredPaths]) {
+    for (let end = gitPath.indexOf(47); end !== -1; end = gitPath.indexOf(47, end + 1)) {
+      const directory = gitPath.subarray(0, end);
+      const key = gitPathKey(directory);
+      if (checked.has(key)) {
+        continue;
+      }
+      checked.add(key);
+      const marker = Buffer.concat([directory, Buffer.from("/.git")]);
+      if (await rawPathExists(checkoutPathFromGitBytes(checkoutRoot, marker))) {
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
 async function snapshotWorktree(
   record: ManagedWorktreeRecord,
   reason: string,
@@ -465,24 +481,15 @@ async function snapshotWorktree(
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-worktree-index-"));
   const indexPath = path.join(tempDir, "index");
   const snapshotRef = `${SNAPSHOT_REF_PREFIX}/${record.id}`;
+  const filemodeArgs = process.platform === "win32" ? [] : ["-c", "core.filemode=true"];
   const env: NodeJS.ProcessEnv = {
     GIT_INDEX_FILE: indexPath,
     GIT_AUTHOR_NAME: "OpenClaw",
     GIT_AUTHOR_EMAIL: "openclaw@localhost",
     GIT_COMMITTER_NAME: "OpenClaw",
     GIT_COMMITTER_EMAIL: "openclaw@localhost",
-    ...(process.platform === "win32"
-      ? {}
-      : {
-          GIT_CONFIG_COUNT: "1",
-          GIT_CONFIG_KEY_0: "core.filemode",
-          GIT_CONFIG_VALUE_0: "true",
-        }),
   };
   try {
-    if (await containsGitMarker(record.path, true)) {
-      throw new Error("nested git repositories cannot be snapshotted losslessly");
-    }
     const provisioned = new Set(provisionedPaths.map((entry) => gitPathKey(Buffer.from(entry))));
     const snapshotPaths = new Map<string, Buffer>();
     const addSnapshotPath = (entry: Buffer) => {
@@ -537,17 +544,26 @@ async function snapshotWorktree(
         addSnapshotPath(entry);
       }
     }
-    await requireGit(record.path, ["read-tree", "HEAD"], { env });
+    if (await containsSnapshotGitMarker(record.path, snapshotPaths.values())) {
+      throw new Error("nested git repositories cannot be snapshotted losslessly");
+    }
+    await requireGit(record.path, [...filemodeArgs, "read-tree", "HEAD"], { env });
     // This index came from a tree, so it has no checkout-local skip-worktree
     // bits and update-index is independent of the source worktree's sparse cone.
-    await requireGit(record.path, ["update-index", "--add", "--remove", "-z", "--stdin"], {
-      env,
-      input:
-        snapshotPaths.size > 0
-          ? Buffer.concat([...snapshotPaths.values()].flatMap((entry) => [entry, Buffer.from([0])]))
-          : Buffer.alloc(0),
-    });
-    const tree = await requireGit(record.path, ["write-tree"], { env });
+    await requireGit(
+      record.path,
+      [...filemodeArgs, "update-index", "--add", "--remove", "-z", "--stdin"],
+      {
+        env,
+        input:
+          snapshotPaths.size > 0
+            ? Buffer.concat(
+                [...snapshotPaths.values()].flatMap((entry) => [entry, Buffer.from([0])]),
+              )
+            : Buffer.alloc(0),
+      },
+    );
+    const tree = await requireGit(record.path, [...filemodeArgs, "write-tree"], { env });
     for (const provisionedPath of provisionedPaths) {
       const overlap = await requireGit(record.path, [
         "--literal-pathspecs",
@@ -570,7 +586,15 @@ async function snapshotWorktree(
     const parent = await requireGit(record.path, ["rev-parse", "HEAD"]);
     const commit = await requireGit(
       record.path,
-      ["commit-tree", tree, "-p", parent, "-m", `OpenClaw worktree snapshot: ${reason}`],
+      [
+        ...filemodeArgs,
+        "commit-tree",
+        tree,
+        "-p",
+        parent,
+        "-m",
+        `OpenClaw worktree snapshot: ${reason}`,
+      ],
       { env },
     );
     await requireGit(record.repoRoot, ["update-ref", snapshotRef, commit]);
@@ -714,16 +738,7 @@ export class ManagedWorktreeService {
     let gitBase = base.gitOperand;
     let recordBase = base.recordRef;
     const runRepositorySetup = params.runSetupScript !== false;
-    const worktreeAddArgs = () => [
-      ...(runRepositorySetup ? [] : ["-c", `core.hooksPath=${os.devNull}`]),
-      "worktree",
-      "add",
-      "-b",
-      branch,
-      "--",
-      worktreePath,
-      gitBase,
-    ];
+    const worktreeAddArgs = () => ["worktree", "add", "-b", branch, "--", worktreePath, gitBase];
     let added = await runGit(repository.repoRoot, worktreeAddArgs());
     if (added.code !== 0 && base.remote) {
       if (!(await canResetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch, added))) {
@@ -1174,7 +1189,9 @@ export class ManagedWorktreeService {
           ? "retained-unpushed"
           : ignoredDrift
             ? "retained-provisioned-drift"
-            : undefined;
+            : (await containsSnapshotGitMarker(record.path))
+              ? "retained-dirty"
+              : undefined;
       if (retainedOutcome) {
         abortWorktreeRemoval(this.env, id, claimToken);
         recordOutcome(retainedOutcome);
@@ -1267,8 +1284,8 @@ export class ManagedWorktreeService {
   }
 
   /**
-   * Shared auto-removal guard for idle and limit cleanup: owner protection, live
-   * run leases, and live/foreign git locks veto removal; a dead lock is cleared.
+   * Shared auto-removal guard: owners, leases, nested repositories, and live or
+   * foreign Git locks veto removal; a dead lock is cleared.
    */
   private async isProtectedFromAutoRemoval(
     record: ManagedWorktreeRecord,
@@ -1298,7 +1315,7 @@ export class ManagedWorktreeService {
     if (state.kind === "dead") {
       await requireGit(record.repoRoot, ["worktree", "unlock", record.path]);
     }
-    return false;
+    return await containsSnapshotGitMarker(record.path);
   }
 
   /**

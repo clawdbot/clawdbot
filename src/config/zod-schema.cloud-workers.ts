@@ -1,5 +1,6 @@
 // Defines cloud-worker provider profile config parsing.
 import { z } from "zod";
+import { parseDurationMs } from "../cli/parse-duration.js";
 import { isPluginJsonValue } from "../plugins/host-hook-json.js";
 import { isValidSecretRef } from "../secrets/ref-contract.js";
 import { normalizeCloudRepo } from "./cloud-worker-project-profiles.js";
@@ -66,6 +67,20 @@ const CloudWorkerProfileShape = {
     label: "Cloud Worker Install Method",
     help: 'Worker installation method: "bundle" (default) transfers the gateway\'s content-hashed installed build and supports released, development, and unreleased versions; "npm" installs the exact gateway version and is available only when that version is released.',
   }),
+  suspendAfter: z
+    .string()
+    .refine((value) => {
+      try {
+        return /(?:ms|s|m|h|d)$/i.test(value) && parseDurationMs(value) >= 60_000;
+      } catch {
+        return false;
+      }
+    }, "Worker profile suspendAfter must be a duration of at least 1m")
+    .optional()
+    .register(configUiMetadata, {
+      label: "Cloud Worker Idle Suspend Duration",
+      help: "Automatically reclaims an idle cloud worker after this duration, such as 45m or 2h; the next message provisions a replacement. Minimum: 1m. Leave unset to keep workers running.",
+    }),
   settings: CloudWorkerSettingsSchema.optional().register(configUiMetadata, {
     label: "Cloud Worker Provider Settings",
     help: "Provider-owned settings validated by the selected plugin. Use SecretRef objects for secret-bearing values; opaque settings do not gain automatic secret resolution.",
@@ -129,6 +144,7 @@ const CLOUD_WORKER_FIELD_SCHEMAS = {
   "cloudWorkers.profiles.*": CloudWorkerProfileSchema,
   "cloudWorkers.profiles.*.provider": CloudWorkerProfileShape.provider,
   "cloudWorkers.profiles.*.install": CloudWorkerProfileShape.install,
+  "cloudWorkers.profiles.*.suspendAfter": CloudWorkerProfileShape.suspendAfter,
   "cloudWorkers.profiles.*.settings": CloudWorkerProfileShape.settings,
 };
 

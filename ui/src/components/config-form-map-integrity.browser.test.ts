@@ -1,5 +1,5 @@
 import { render } from "lit";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ConfigFormCollectionDraft } from "./config-form-collection-draft.ts";
 import { analyzeConfigSchema, renderConfigForm } from "./config-form.ts";
 
@@ -12,6 +12,75 @@ function expectElement<T extends Element>(element: T | null | undefined, label: 
 }
 
 describe("config form map integrity", () => {
+  it("keeps plain-string record keys editable through nested maps", () => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        values: {
+          type: "object",
+          propertyNames: { type: "string" },
+          additionalProperties: {
+            type: "object",
+            propertyNames: { type: "string" },
+            additionalProperties: { type: "string" },
+          },
+        },
+      },
+    });
+
+    expect(analysis.unsupportedPaths).toEqual([]);
+
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    render(
+      renderConfigForm({
+        schema: analysis.schema,
+        uiHints: {},
+        unsupportedPaths: analysis.unsupportedPaths,
+        value: { values: { primary: { region: "west" } } },
+        showAdvanced: true,
+        onShowAdvanced: () => {},
+        onPatch,
+      }),
+      container,
+    );
+
+    expect(container.querySelectorAll(".cfg-map")).toHaveLength(2);
+    expect(container.textContent).not.toContain("Unsupported schema node");
+
+    const nestedKey = expectElement(
+      container.querySelector<HTMLInputElement>('[aria-label="Key: region"]'),
+      "nested map key",
+    );
+    nestedKey.value = "zone";
+    nestedKey.dispatchEvent(new Event("change", { bubbles: true }));
+    expect(onPatch).toHaveBeenCalledWith(["values", "primary"], { zone: "west" });
+  });
+
+  it.each([
+    ["pattern", { type: "string", pattern: "^[a-z]+$" }],
+    ["minimum length", { type: "string", minLength: 1 }],
+    ["enumeration", { enum: ["primary"] }],
+    ["boolean", true],
+    ["null", null],
+    ["array", [{ type: "string" }]],
+    ["wrong type", { type: "number" }],
+    ["inherited type", Object.assign(Object.create({ type: "string" }), { unknown: true })],
+  ])("keeps %s property-name constraints fail-closed", (_label, propertyNames) => {
+    const analysis = analyzeConfigSchema({
+      type: "object",
+      properties: {
+        values: {
+          type: "object",
+          propertyNames,
+          additionalProperties: { type: "string" },
+        },
+      },
+    });
+
+    expect(analysis.unsupportedPaths).toEqual(["values"]);
+  });
+
   it("retains unset map drafts until the collection source changes", async () => {
     const container = document.createElement("div");
     document.body.append(container);

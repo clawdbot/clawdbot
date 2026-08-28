@@ -26,7 +26,7 @@ describe("cron view saved descriptions", () => {
       );
 
       expect(description).toBeInstanceOf(HTMLSpanElement);
-      expect(description?.textContent?.trim()).toBe("· Summarize overnight deployment activity");
+      expect(description?.textContent?.trim()).toBe("Summarize overnight deployment activity");
       expect(description?.title).toBe("Description: Summarize overnight deployment activity");
       description?.click();
       expect(onSelectJob).toHaveBeenCalledWith(job);

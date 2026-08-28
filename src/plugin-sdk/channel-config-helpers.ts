@@ -18,8 +18,11 @@ import {
 } from "../channels/plugins/config-write-policy-shared.js";
 import { buildAccountScopedDmSecurityPolicy } from "../channels/plugins/helpers.js";
 import type { ChannelConfigAdapter } from "../channels/plugins/types.adapters.js";
+import type { ChannelSecurityDmPolicy } from "../channels/plugins/types.core.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { DEFAULT_ACCOUNT_ID, normalizeAccountId } from "../routing/session-key.js";
+
+export { clearAccountFieldsFromConfigSection } from "../channels/plugins/config-helpers.js";
 
 export {
   ensureOpenDmPolicyAllowFromWildcard,
@@ -231,46 +234,6 @@ function createNamedAccountConfigBase<
   };
 }
 
-function resolveAccessorAccountWithFallback<
-  AccessorAccount,
-  Config extends OpenClawConfig = OpenClawConfig,
->(
-  resolveAccessorAccount:
-    | ((params: ChannelConfigAccessorParams<Config>) => AccessorAccount)
-    | undefined,
-  fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount,
-): (params: ChannelConfigAccessorParams<Config>) => AccessorAccount {
-  // Read-only accessors can use a lighter account projection than runtime setup;
-  // fall back to the runtime resolver only when the channel has no projection hook.
-  return resolveAccessorAccount ?? fallbackResolveAccessorAccount;
-}
-
-function createChannelConfigAdapterWithAccessors<
-  ResolvedAccount,
-  AccessorAccount,
-  Config extends OpenClawConfig = OpenClawConfig,
->(params: {
-  base: ChannelCrudConfigAdapter<ResolvedAccount>;
-  resolveAccessorAccount?: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
-  fallbackResolveAccessorAccount: (params: ChannelConfigAccessorParams<Config>) => AccessorAccount;
-  resolveAllowFrom: (account: AccessorAccount) => Array<string | number> | null | undefined;
-  formatAllowFrom: (allowFrom: Array<string | number>) => string[];
-  resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
-}): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
-  return {
-    ...params.base,
-    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
-      resolveAccount: resolveAccessorAccountWithFallback(
-        params.resolveAccessorAccount,
-        params.fallbackResolveAccessorAccount,
-      ),
-      resolveAllowFrom: params.resolveAllowFrom,
-      formatAllowFrom: params.formatAllowFrom,
-      resolveDefaultTo: params.resolveDefaultTo,
-    }),
-  };
-}
-
 function createChannelConfigAdapterFromBase<
   ResolvedAccount,
   AccessorAccount,
@@ -283,14 +246,16 @@ function createChannelConfigAdapterFromBase<
   formatAllowFrom: (allowFrom: Array<string | number>) => string[];
   resolveDefaultTo?: (account: AccessorAccount) => string | number | null | undefined;
 }): ChannelConfigAdapterWithAccessors<ResolvedAccount> {
-  return createChannelConfigAdapterWithAccessors<ResolvedAccount, AccessorAccount, Config>({
-    base: params.base,
-    resolveAccessorAccount: params.resolveAccessorAccount,
-    fallbackResolveAccessorAccount: params.resolveAccountForAccessors,
-    resolveAllowFrom: params.resolveAllowFrom,
-    formatAllowFrom: params.formatAllowFrom,
-    resolveDefaultTo: params.resolveDefaultTo,
-  });
+  return {
+    ...params.base,
+    ...createScopedAccountConfigAccessors<AccessorAccount, Config>({
+      // Read-only accessors prefer a lighter projection over runtime account setup.
+      resolveAccount: params.resolveAccessorAccount ?? params.resolveAccountForAccessors,
+      resolveAllowFrom: params.resolveAllowFrom,
+      formatAllowFrom: params.formatAllowFrom,
+      resolveDefaultTo: params.resolveDefaultTo,
+    }),
+  };
 }
 
 /** Build the common CRUD/config helpers for channels that store multiple named accounts. */
@@ -536,20 +501,15 @@ export function createHybridChannelConfigBase<
       });
     },
     deleteAccount({ cfg, accountId }) {
-      if (normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID) {
-        if (params.preserveSectionOnDefaultDelete) {
-          // Some hybrid channels keep non-account config at the root, so deleting
-          // default account credentials must clear only account-owned fields.
-          return clearTopLevelChannelConfigFields({
-            cfg,
-            sectionKey: params.sectionKey,
-            clearBaseFields: params.clearBaseFields,
-          });
-        }
-        return deleteAccountFromConfigSectionInSection({
+      if (
+        normalizeAccountId(accountId) === DEFAULT_ACCOUNT_ID &&
+        params.preserveSectionOnDefaultDelete
+      ) {
+        // Some hybrid channels keep non-account config at the root, so deleting
+        // default account credentials must clear only account-owned fields.
+        return clearTopLevelChannelConfigFields({
           cfg,
           sectionKey: params.sectionKey,
-          accountId,
           clearBaseFields: params.clearBaseFields,
         });
       }
@@ -615,6 +575,7 @@ export function createScopedDmSecurityResolver<
   approveChannelId?: string;
   approveHint?: string;
   normalizeEntry?: (raw: string) => string;
+  classifyEntryAuthentication?: ChannelSecurityDmPolicy["classifyEntryAuthentication"];
   inheritSharedDefaultsFromDefaultAccount?: boolean;
 }) {
   return ({
@@ -640,6 +601,7 @@ export function createScopedDmSecurityResolver<
       approveChannelId: params.approveChannelId,
       approveHint: params.approveHint,
       normalizeEntry: params.normalizeEntry,
+      classifyEntryAuthentication: params.classifyEntryAuthentication,
       inheritSharedDefaultsFromDefaultAccount: params.inheritSharedDefaultsFromDefaultAccount,
     });
   };

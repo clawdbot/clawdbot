@@ -283,38 +283,41 @@ describe("runHeartbeatOnce ack handling", () => {
     });
   });
 
-  it("sends HEARTBEAT_OK when visibility.showOk is true", async () => {
-    await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
-      const cfg = createWhatsAppHeartbeatConfig({
-        tmpDir,
-        storePath,
-        visibility: { showOk: true },
-      });
+  it.each(["HEARTBEAT_OK", "NO_REPLY"])(
+    "sends HEARTBEAT_OK for %s when visibility.showOk is true",
+    async (replyText) => {
+      await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
+        const cfg = createWhatsAppHeartbeatConfig({
+          tmpDir,
+          storePath,
+          visibility: { showOk: true },
+        });
 
-      await seedMainSessionStore(storePath, cfg, {
-        lastChannel: "whatsapp",
-        lastProvider: "whatsapp",
-        lastTo: WHATSAPP_GROUP,
-      });
+        await seedMainSessionStore(storePath, cfg, {
+          lastChannel: "whatsapp",
+          lastProvider: "whatsapp",
+          lastTo: WHATSAPP_GROUP,
+        });
 
-      replySpy.mockResolvedValue({ text: "HEARTBEAT_OK" });
-      const sendWhatsApp = createMessageSendSpy();
+        replySpy.mockResolvedValue({ text: replyText });
+        const sendWhatsApp = createMessageSendSpy();
 
-      await runHeartbeatOnce({
-        cfg,
-        deps: {
-          ...makeWhatsAppDeps({ sendWhatsApp }),
-          getReplyFromConfig: replySpy,
-        },
-      });
+        await runHeartbeatOnce({
+          cfg,
+          deps: {
+            ...makeWhatsAppDeps({ sendWhatsApp }),
+            getReplyFromConfig: replySpy,
+          },
+        });
 
-      expectWhatsAppMessageSend(sendWhatsApp, {
-        to: WHATSAPP_GROUP,
-        text: "HEARTBEAT_OK",
-        cfg,
+        expectWhatsAppMessageSend(sendWhatsApp, {
+          to: WHATSAPP_GROUP,
+          text: "HEARTBEAT_OK",
+          cfg,
+        });
       });
-    });
-  });
+    },
+  );
 
   it("reports a hook-suppressed HEARTBEAT_OK as silent", async () => {
     await withTempHeartbeatSandbox(async ({ tmpDir, storePath, replySpy }) => {
@@ -676,7 +679,8 @@ describe("runHeartbeatOnce ack handling", () => {
       if (!("reason" in res)) {
         throw new Error("expected skipped heartbeat result reason");
       }
-      expect(res.reason).toBe("whatsapp-not-linked");
+      expect(res.reason).toBe("channel-not-ready");
+      expect(getLastHeartbeatEvent()).toMatchObject({ reason: "whatsapp-not-linked" });
       expect(sendWhatsApp).not.toHaveBeenCalled();
     });
   });

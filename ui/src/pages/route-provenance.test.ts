@@ -6,8 +6,10 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../app/cont
 import { page as agentsPage, type AgentsRouteData } from "./agents/route.ts";
 import type { DevicesRouteData } from "./devices/devices-page.ts";
 import { page as devicesPage } from "./devices/route.ts";
-import type { ModelProvidersRouteData } from "./model-providers/model-providers-page.ts";
-import { page as modelProvidersPage } from "./model-providers/route.ts";
+import {
+  page as modelProvidersPage,
+  type ModelProvidersRouteData,
+} from "./model-providers/route.ts";
 import type { PluginsRouteData } from "./plugins/plugins-page.ts";
 import { page as pluginsPage } from "./plugins/route.ts";
 import { page as sessionsPage, type SessionsRouteData } from "./sessions/route.ts";
@@ -148,7 +150,8 @@ describe("route preload gateway provenance", () => {
     const replacementClient = {
       request: replacementRequest,
     } as unknown as GatewayBrowserClient;
-    const mutable = mutableGateway(snapshot(originalClient, true));
+    const originalSnapshot = snapshot(originalClient, true);
+    const mutable = mutableGateway(originalSnapshot);
     const request = loadRoute<ModelProvidersRouteData>(modelProvidersPage, {
       gateway: mutable.gateway,
       agents: {
@@ -166,6 +169,8 @@ describe("route preload gateway provenance", () => {
     mutable.replaceSnapshot(snapshot(replacementClient, true));
     const data = await request;
 
+    expect(data.gateway).toBe(mutable.gateway);
+    expect(data.gatewaySnapshot).toBe(originalSnapshot);
     expect(data.client).toBe(originalClient);
     expect(originalRequest).toHaveBeenCalled();
     expect(replacementRequest).not.toHaveBeenCalled();

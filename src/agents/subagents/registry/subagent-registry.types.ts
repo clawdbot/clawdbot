@@ -172,6 +172,7 @@ export type SubagentCompletionDeliveryState = {
     | "queue_cap"
     | "parent_run_ended"
     | "sink_unavailable"
+    | "steer_dropped"
     | "dedupe"
     | "waiting_for_requester_turn";
 };
@@ -193,6 +194,8 @@ export type RequesterSettleWakeState = {
   afterRequesterYield?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
+  /** Number of times this batch has been deferred due to unsettled descendants. */
+  deferralCount?: number;
   lastError?: string | null;
   /** Cleanup wanted to retire this row; defer deletion until the outbox resolves. */
   retireAfterSettle?: boolean;
@@ -259,7 +262,7 @@ export type SubagentRunRecord = {
   killReconciliation?: SubagentKillReconciliationState;
   /** Durable operator cancellation ownership before runtime side effects complete. */
   killIntent?: SubagentKillIntent;
-  /** Durable requester-stop policy until silent completion cleanup finishes. */
+  /** Durable requester-delivery closure until silent completion cleanup finishes. */
   suppressCompletionDelivery?: boolean;
   expectsCompletionMessage?: boolean;
   endedReason?: SubagentLifecycleEndedReason;

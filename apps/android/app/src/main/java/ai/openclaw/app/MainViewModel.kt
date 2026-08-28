@@ -8,6 +8,7 @@ import ai.openclaw.app.chat.ChatMessage
 import ai.openclaw.app.chat.ChatOutboxItem
 import ai.openclaw.app.chat.ChatPendingToolCall
 import ai.openclaw.app.chat.ChatProgressCard
+import ai.openclaw.app.chat.ChatQuestionDraft
 import ai.openclaw.app.chat.ChatQuestionPrompt
 import ai.openclaw.app.chat.ChatSessionEntry
 import ai.openclaw.app.chat.ChatSwarmGroup
@@ -590,7 +591,7 @@ class MainViewModel private constructor(
   val healthLogsRefreshing: StateFlow<Boolean> = runtimeState(initial = false) { it.healthLogsRefreshing }
   val healthLogsErrorText: StateFlow<String?> = runtimeState(initial = null) { it.healthLogsErrorText }
   val pendingGatewayTrust: StateFlow<NodeRuntime.GatewayTrustPrompt?> = runtimeState(initial = null) { it.pendingGatewayTrust }
-  val seamColorArgb: StateFlow<Long> = runtimeState(initial = 0xFF0EA5E9) { it.seamColorArgb }
+  val gatewayAccentArgb: StateFlow<Long?> = runtimeState(initial = null) { it.gatewayAccentArgb }
   val mainSessionKey: StateFlow<String> = runtimeState(initial = "main") { it.mainSessionKey }
 
   val cameraHud: StateFlow<CameraHudState?> = runtimeState(initial = null) { it.cameraHud }
@@ -1858,15 +1859,20 @@ class MainViewModel private constructor(
     ensureRuntime().deleteChatOutboxCommand(id)
   }
 
+  fun updateChatQuestionDraft(
+    prompt: ChatQuestionPrompt,
+    update: (ChatQuestionDraft) -> ChatQuestionDraft,
+  ) = ensureRuntime().updateChatQuestionDraft(prompt, update)
+
   fun resolveChatQuestion(
-    id: String,
+    prompt: ChatQuestionPrompt,
     answers: Map<String, List<String>>,
   ) {
-    ensureRuntime().resolveChatQuestion(id, answers)
+    ensureRuntime().resolveChatQuestion(prompt, answers)
   }
 
-  fun skipChatQuestion(id: String) {
-    ensureRuntime().skipChatQuestion(id)
+  fun skipChatQuestion(prompt: ChatQuestionPrompt) {
+    ensureRuntime().skipChatQuestion(prompt)
   }
 
   suspend fun listBackgroundTasks(agentId: String): List<BackgroundTask> = ensureRuntime().listBackgroundTasks(agentId)

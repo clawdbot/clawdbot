@@ -77,6 +77,12 @@ function createAcpCommandSessionBindingService() {
   return {
     bind: (input: unknown) => hoisted.sessionBindingBindMock(input),
     getCapabilities: forward((params: unknown) => hoisted.sessionBindingCapabilitiesMock(params)),
+    inspectByConversation: (
+      ref: unknown,
+    ): { status: "available"; binding: SessionBindingRecord | null } => ({
+      status: "available",
+      binding: hoisted.sessionBindingResolveByConversationMock(ref),
+    }),
     listBySession: (targetSessionKey: string) =>
       hoisted.sessionBindingListBySessionMock(targetSessionKey),
     resolveByConversation: (ref: unknown) => hoisted.sessionBindingResolveByConversationMock(ref),

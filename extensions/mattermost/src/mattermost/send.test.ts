@@ -847,25 +847,6 @@ describe("sendMessageMattermost user-first resolution", () => {
     expect(res.channelId).toBe("dm-channel-id");
   });
 
-  it("observes cache-miss DM resolution but not cached sends", async () => {
-    const userId = "iiiiii9999999999iiiiii9999"; // 26 chars
-    const onDmChannelResolution = vi.fn();
-    mockState.resolveMattermostAccount.mockReturnValue(makeAccount("token-dm-observer-t9"));
-
-    await sendMessageMattermost(`user:${userId}`, "first", {
-      cfg: TEST_CFG,
-      onDmChannelResolution,
-    });
-    await sendMessageMattermost(`user:${userId}`, "second", {
-      cfg: TEST_CFG,
-      onDmChannelResolution,
-    });
-
-    expect(onDmChannelResolution).toHaveBeenCalledTimes(1);
-    expect(onDmChannelResolution).toHaveBeenCalledWith(expect.any(Promise));
-    expect(mockState.createMattermostDirectChannelWithRetry).toHaveBeenCalledTimes(1);
-  });
-
   it("does not apply user-first resolution for explicit channel: prefix", async () => {
     // Unique token + id — explicit channel: prefix, no probe, no DM
     const chanId = "eeeeee5555555555eeeeee5555"; // 26 chars

@@ -59,7 +59,6 @@ export const DEFAULT_SOUL_FILENAME = "SOUL.md";
 export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
 export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
 export const DEFAULT_USER_FILENAME = "USER.md";
-export const DEFAULT_HEARTBEAT_FILENAME = "HEARTBEAT.md";
 export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
 export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
 export const GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES = [
@@ -96,14 +95,16 @@ type WorkspaceFileSourceIdentity = readonly [
 const workspaceFileSourceIdentities = new WeakMap<object, WorkspaceFileSourceIdentity>();
 
 /**
- * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime identity.
+ * Read workspace files via boundary-safe open and cache by inode/dev/size/mtime/ctime identity.
  */
 type WorkspaceGuardedReadResult =
   | { ok: true; content: string; sourceIdentity: WorkspaceFileSourceIdentity }
   | { ok: false; reason: "path" | "validation" | "io"; error?: unknown };
 
 function workspaceFileIdentity(stat: syncFs.Stats, canonicalPath: string): string {
-  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}`;
+  // ctimeMs catches in-place edits that restore mtime (sync/restore/editor tooling);
+  // matches the freshness pattern in assistant-avatar-cache.ts and plugin-registry-snapshot.ts.
+  return `${canonicalPath}|${stat.dev}:${stat.ino}:${stat.size}:${stat.mtimeMs}:${stat.ctimeMs}`;
 }
 
 function setWorkspaceFileSourceIdentity(

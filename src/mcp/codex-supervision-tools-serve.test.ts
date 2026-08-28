@@ -1,9 +1,8 @@
 // Codex supervision MCP tests cover the retired Supervisor command bridge.
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { AnyAgentTool } from "../agents/tools/common.js";
-import { loggingState } from "../logging/state.js";
 import {
   createCodexSupervisionToolsMcpServer,
   serveCodexSupervisionToolsMcp,
@@ -49,7 +48,6 @@ const TOOL_NAMES = [
   "codex_session_send",
   "codex_session_interrupt",
 ] as const;
-let originalForceConsoleToStderr = false;
 
 function createTools(): AnyAgentTool[] {
   return TOOL_NAMES.map(
@@ -66,16 +64,11 @@ function createTools(): AnyAgentTool[] {
 
 describe("createCodexSupervisionToolsMcpServer", () => {
   beforeEach(() => {
-    originalForceConsoleToStderr = loggingState.forceConsoleToStderr;
     ensureStandalonePluginToolRegistryLoadedMock.mockClear();
     resolvePluginToolsMock.mockReset();
     resolvePluginToolsMock.mockReturnValue([]);
     connectToolsMcpServerToStdioMock.mockClear();
     disposeRegisteredAgentHarnessesMock.mockClear();
-  });
-
-  afterEach(() => {
-    loggingState.forceConsoleToStderr = originalForceConsoleToStderr;
   });
 
   it("fails closed when the external Codex plugin tools are unavailable", () => {

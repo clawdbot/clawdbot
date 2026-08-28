@@ -3,9 +3,11 @@
  * namespaced tool scopes here; code mode receives descriptors, virtual API
  * files, and a guarded invocation runtime.
  */
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { tokTypes } from "acorn";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.js";
 import type { PluginToolMcpMeta } from "../plugins/tools.js";
+import { sanitizeNodeIdFragment } from "./agent-bundle-mcp-names.js";
 import { toCodeModeJsonSafe } from "./code-mode-json.js";
 import {
   buildMcpApiResponse,
@@ -294,19 +296,6 @@ function mcpNamespaceServerKey(mcp: NonNullable<CodeModeNamespaceCatalogEntry["m
     : JSON.stringify(["gateway", mcp.safeServerName]);
 }
 
-function sanitizeNodeFragment(value: string): string {
-  const fragment = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_]+/g, "_")
-    .replace(/^_+|_+$/g, "")
-    .slice(0, 32);
-  if (!fragment) {
-    return "node";
-  }
-  return /^[a-z]/.test(fragment) ? fragment : `node_${fragment}`.slice(0, 32);
-}
-
 function assignMcpNamespaceServerNames(
   servers: readonly McpNamespaceServer[],
 ): Map<string, string> {
@@ -332,7 +321,7 @@ function assignMcpNamespaceServerNames(
     if (!server.node || assignments.has(server.key)) {
       continue;
     }
-    const base = `${sanitizeNodeFragment(server.node.id)}_${server.safeServerName}`;
+    const base = `${sanitizeNodeIdFragment(server.node.id)}_${server.safeServerName}`;
     let candidate = base;
     let index = 2;
     while (used.has(candidate.toLowerCase())) {
@@ -346,7 +335,7 @@ function assignMcpNamespaceServerNames(
 }
 
 function mcpNodeLabel(node: NonNullable<McpNamespaceServer["node"]>): string {
-  return (node.displayName?.trim() || node.id).replace(/\s+/gu, " ").slice(0, 128);
+  return truncateUtf16Safe((node.displayName?.trim() || node.id).replace(/\s+/gu, " "), 128);
 }
 
 function createMcpNamespaceModel(

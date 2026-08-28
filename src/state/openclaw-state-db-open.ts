@@ -56,6 +56,7 @@ export function openUnpublishedStateDatabase(params: {
   busyTimeoutMs: number;
   lockFailureReporting: SqliteLockFailureReporting;
   ensureSchema: (database: DatabaseSync) => void;
+  onWalSplitBrain: () => void;
   recordOpenFailure: (pathname: string, error: Error) => void;
 }): OpenClawStateDatabase {
   const { busyTimeoutMs, lockFailureReporting } = params;
@@ -77,6 +78,7 @@ export function openUnpublishedStateDatabase(params: {
           databaseLabel: "openclaw-state",
           databasePath: params.pathname,
           foreignKeys: true,
+          onWalSplitBrain: params.onWalSplitBrain,
           synchronous: "NORMAL",
         });
         params.ensureSchema(db);

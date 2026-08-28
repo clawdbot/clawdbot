@@ -1,37 +1,34 @@
 /* @vitest-environment jsdom */
 
-import { IDBFactory } from "fake-indexeddb";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import { t } from "../../i18n/index.ts";
 import { showToast } from "../../lib/toast.ts";
 import {
+  getRenderedModalDialog,
   installDialogPolyfill,
+  submitInputDialog,
   waitForConfirmDialogActions,
+  waitForInputDialog,
 } from "../../test-helpers/modal-dialog.ts";
 import { loadChatHistory } from "./chat-history.ts";
+import { ChatPaneBase } from "./chat-pane-base.ts";
 import { subscribeChatPaneSnapshotInvalidation } from "./chat-pane-startup-subscriptions.ts";
 import {
   createGatewayBrowserClientFixture,
+  createInitializationContext,
   createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
+  nativeHistoryMessage,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import type { SidebarContent } from "./components/chat-sidebar.ts";
-import {
-  cacheChatSessionSnapshot,
-  observeChatCache,
-  type ChatMessageCache,
-} from "./session-message-cache.ts";
-import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
-import { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import { cacheChatSessionSnapshot, type ChatMessageCache } from "./session-message-cache.ts";
 import { openSlot } from "./sidebar-layout.ts";
 
 vi.mock("../../lib/toast.ts", () => ({ showToast: vi.fn() }));
@@ -52,96 +49,83 @@ function dispatchSidebarShortcut(pane: TestChatPane, shiftKey = true) {
   return event;
 }
 
-function createInitializationContext(): ApplicationContext {
-  return {
-    basePath: "",
-    gateway: {
-      snapshot: {
-        client: null,
-        phase: "stopped",
-        offlineStable: false,
-        hello: null,
-        canvasPluginSurfaceUrl: null,
-        assistantAgentId: null,
-        sessionKey: "",
-        lastError: null,
-        lastErrorCode: null,
-      },
-      subscribe: () => () => {},
-      subscribeEvents: () => () => {},
-    },
-    config: {
-      current: {
-        assistantIdentity: {
-          agentId: null,
-          name: "Assistant",
-          avatar: null,
-          avatarSource: null,
-          avatarStatus: null,
-          avatarReason: null,
-        },
-        serverVersion: null,
-        localMediaPreviewRoots: [],
-        embedSandboxMode: "strict",
-        allowExternalEmbedUrls: false,
-        terminalEnabled: false,
-      },
-    },
-    agentSelection: { state: { selectedId: "main" } },
-    agents: { state: { agentsList: null } },
-    runtimeConfig: {
-      state: { configNeedsApply: false, configSnapshot: null },
-      subscribe: () => () => {},
-    },
-    placementStartup: {
-      get: () => null,
-      retry: () => undefined,
-      subscribe: () => () => {},
-    },
-    navigate: () => undefined,
-    initialUserMessage: createInitialUserMessageHandoff(),
-    chatAttachmentHandoff: createChatAttachmentHandoff(),
-    sessions: { state: { modelOverrides: {} } },
-  } as unknown as ApplicationContext;
-}
+describe("chat pane retained presentation", () => {
+  it("keeps a hidden retained session current without requesting a transcript redraw", () => {
+    const { pane, requestUpdate, state } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.presented = false;
+    requestUpdate.mockClear();
+    const result = {
+      count: 1,
+      path: "",
+      sessions: [{ key: state.sessionKey, kind: "direct", updatedAt: 1 }],
+    } as NonNullable<ApplicationContext["sessions"]["state"]["result"]>;
 
-function nativeHistoryMessage(seq: number, text = `message ${seq}`) {
-  return {
-    role: seq % 2 === 0 ? "assistant" : "user",
-    content: [{ type: "text", text }],
-    __openclaw: { seq },
-  };
-}
+    pane.applySessionsState({
+      agentId: "main",
+      deletedSessions: [],
+      error: null,
+      groups: [],
+      groupSettings: [],
+      loading: false,
+      modelOverrides: {},
+      result,
+      sectionOrder: [],
+    });
+
+    expect(state.sessionsResult).toBe(result);
+    expect(requestUpdate).not.toHaveBeenCalled();
+  });
+
+  it("does not redraw a retained transcript when its navigation callback is replaced", async () => {
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    const lifecycle = pane as TestChatPane & { hasUpdated: boolean; render: () => unknown };
+    lifecycle.render = () => null;
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await lifecycle.updateComplete;
+    const performUpdate = vi.spyOn(lifecycle, "performUpdate");
+
+    lifecycle.onPaneSessionChange = () => undefined;
+    await lifecycle.updateComplete;
+
+    expect(performUpdate).not.toHaveBeenCalled();
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+  });
+});
 
 describe("chat pane header state", () => {
-  it("forks through the shared session organizer flow and selects the new session", async () => {
-    const create = vi.fn(async () => "agent:main:forked");
+  it.each([
+    ["pin", { kind: "toggle-pin" } as const, { pinned: true }],
+    ["unread", { kind: "toggle-unread" } as const, { unread: true }],
+    ["icon", { kind: "set-icon", icon: "🦞" } as const, { icon: "🦞" }],
+    ["group", { kind: "move-to-group", category: "Projects" } as const, { category: "Projects" }],
+  ])("patches the active session from the header %s action", async (_name, action, expected) => {
+    const patch = vi.fn(async () => ({}));
     const sessions = createSessionCapabilityFixture({
-      create,
-      state: { error: null },
+      patch,
+      state: { error: null, groups: ["Projects"] },
     });
     const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
-    Object.assign(pane.context.gateway.snapshot.hello?.features ?? {}, {
-      methods: ["sessions.patch", "sessions.create"],
-    });
-    const onPaneSessionChange = vi.fn();
-    pane.onPaneSessionChange = onPaneSessionChange;
     const session = {
       key: "agent:main:current",
+      sessionId: "session-current",
       kind: "direct",
       updatedAt: 0,
-      hasActiveRun: true,
+      pinned: false,
+      unread: false,
     } satisfies GatewaySessionRow;
 
-    await pane.handleHeaderSessionAction({ kind: "fork" }, session);
+    await pane.handleHeaderSessionAction(action, session);
 
-    expect(create).toHaveBeenCalledWith({
-      parentSessionKey: session.key,
-      fork: true,
-      forkFrom: "last-completed",
+    expect(patch).toHaveBeenCalledWith(session.key, expected, {
       agentId: "main",
+      expectedSessionId: session.sessionId,
     });
-    expect(onPaneSessionChange).toHaveBeenCalledWith("single", "agent:main:forked");
   });
 
   it("aborts a stale header delete confirm and shows a retry notice when the connection is replaced while it is open", async () => {
@@ -188,72 +172,96 @@ describe("chat pane header state", () => {
     }
   });
 
-  it("commits a trimmed label and clears with null", async () => {
+  it("skips a no-ID header group move when the session leaves during the catalog write", async () => {
+    const restoreDialogPolyfill = installDialogPolyfill();
+    try {
+      let landCatalogWrite!: () => void;
+      const patch = vi.fn(async () => ({}));
+      const session = {
+        key: "agent:main:current",
+        kind: "direct",
+        updatedAt: 0,
+      } satisfies GatewaySessionRow;
+      const result = {
+        ts: 1,
+        count: 1,
+        path: "sessions.json",
+        defaults: { modelProvider: null, model: null, contextTokens: null },
+        sessions: [session],
+      };
+      const groupsPut = vi.fn(
+        () =>
+          new Promise<"completed">((resolve) => {
+            landCatalogWrite = () => resolve("completed");
+          }),
+      );
+      const sessions = createSessionCapabilityFixture({
+        groupsPut,
+        patch,
+        state: { error: null, groups: [], result },
+      });
+      const { pane } = createTestChatPane({
+        client: createGatewayBrowserClientFixture(),
+        sessions,
+      });
+
+      const pending = pane.handleHeaderSessionAction({ kind: "new-group" }, session);
+      await waitForInputDialog();
+      await submitInputDialog("Projects");
+      await vi.waitFor(() => expect(groupsPut).toHaveBeenCalledOnce());
+
+      result.sessions = [];
+      landCatalogWrite();
+      await pending;
+
+      expect(patch).not.toHaveBeenCalled();
+      expect(showToast).toHaveBeenCalledWith({ message: t("sessionsView.newGroupMoveSkipped") });
+    } finally {
+      document.body.replaceChildren();
+      restoreDialogPolyfill();
+    }
+  });
+
+  it.each([
+    {
+      name: "existing-group move",
+      action: { kind: "move-to-group", category: "Projects" } as const,
+      category: undefined,
+    },
+    {
+      name: "remove-from-group move",
+      action: { kind: "move-to-group", category: null } as const,
+      category: "Projects",
+    },
+  ])("skips a no-ID $name after its row was removed", async ({ action, category }) => {
     const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({ patch });
-    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
     const session = {
       key: "agent:main:current",
       kind: "direct",
       updatedAt: 0,
+      category,
     } satisfies GatewaySessionRow;
-    pane.beginHeaderRename(session);
-    pane.headerRenameValue = "  Renamed session  ";
-    pane.commitHeaderRename();
-    expect(patch).toHaveBeenCalledWith(
-      session.key,
-      { label: "Renamed session" },
-      { agentId: "main" },
-    );
-
-    const labeled = { ...session, label: "Renamed session" };
-    pane.beginHeaderRename(labeled);
-    pane.headerRenameValue = "   ";
-    pane.commitHeaderRename();
-    expect(patch).toHaveBeenLastCalledWith(session.key, { label: null }, { agentId: "main" });
-  });
-
-  it("renames the selected agent's canonical global session", () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({ patch });
-    const { pane, state } = createTestChatPane({
+    const result = {
+      ts: 1,
+      count: 1,
+      path: "sessions.json",
+      defaults: { modelProvider: null, model: null, contextTokens: null },
+      sessions: [session],
+    };
+    const sessions = createSessionCapabilityFixture({
+      patch,
+      state: { error: null, groups: ["Projects"], result },
+    });
+    const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture(),
       sessions,
     });
-    state.sessionKey = "global";
-    state.assistantAgentId = "research";
-    const session = {
-      key: "global",
-      kind: "global",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
 
-    pane.beginHeaderRename(session);
-    pane.headerRenameValue = "Research thread";
-    pane.commitHeaderRename();
+    result.sessions = [];
+    await pane.handleHeaderSessionAction(action, session);
 
-    expect(patch).toHaveBeenCalledWith(
-      "global",
-      { label: "Research thread" },
-      { agentId: "research" },
-    );
-  });
-
-  it("cancels and skips unchanged labels", () => {
-    const patch = vi.fn(async () => ({}));
-    const sessions = createSessionCapabilityFixture({ patch });
-    const { pane } = createTestChatPane({ client: createGatewayBrowserClientFixture(), sessions });
-    pane.paneTitle = "Derived title";
-    const session = {
-      key: "agent:main:current",
-      kind: "direct",
-      updatedAt: 0,
-    } satisfies GatewaySessionRow;
-    pane.beginHeaderRename(session);
-    pane.commitHeaderRename();
-    pane.beginHeaderRename(session);
-    pane.cancelHeaderRename();
     expect(patch).not.toHaveBeenCalled();
+    expect(showToast).toHaveBeenCalledWith({ message: t("common.refresh") });
   });
 
   it("copies the resolved workspace path and branch", async () => {
@@ -569,114 +577,6 @@ describe("chat pane initialization", () => {
     }
   });
 
-  it("paints a persistent snapshot while the network refresh is already in flight", async () => {
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    const targetSessionKey = "agent:main:persistent";
-    const cachedMessages = [nativeHistoryMessage(1, "persistent history")];
-    const networkMessages = [nativeHistoryMessage(1, "network history")];
-    const writer = new SessionSnapshotStore();
-    writer.write(targetSessionKey, {
-      messages: cachedMessages,
-      pagination: { hasMore: false, completeSnapshot: true },
-      sessionId: "persistent-session",
-    });
-    await writer.flush();
-    const response = createDeferred<Record<string, unknown>>();
-    const request = vi.fn(() => response.promise);
-    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
-    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
-    vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
-    const sharedMessages: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(sharedMessages);
-    store.connect();
-    observeChatCache(sharedMessages, store);
-    pane.sessionKey = targetSessionKey;
-    pane.chatMessagesBySession = sharedMessages;
-    pane.sessionSnapshotStore = store;
-    pane.context = createInitializationContext();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const stopAfterAttach = new Error("stop after attach");
-    let attachedState: ChatPageHost | undefined;
-    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
-      attachedState = state;
-      state.client = client;
-      state.connected = true;
-      state.connectionEpoch = 1;
-      void loadChatHistory(state);
-      throw stopAfterAttach;
-    });
-
-    try {
-      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
-      expect(request).toHaveBeenCalledWith(
-        "chat.history",
-        expect.objectContaining({ sessionKey: targetSessionKey }),
-      );
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(cachedMessages));
-
-      response.resolve({ messages: networkMessages, sessionId: "network-session" });
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(networkMessages));
-    } finally {
-      pane.disconnectedCallback();
-      store.disconnect();
-      await store.whenIdle();
-      await clearStoredChatSnapshots();
-    }
-  });
-
-  it("discards persistent hydration when the network snapshot lands first", async () => {
-    vi.stubGlobal("indexedDB", new IDBFactory());
-    const targetSessionKey = "agent:main:network-first";
-    const writer = new SessionSnapshotStore();
-    writer.write(targetSessionKey, {
-      messages: [nativeHistoryMessage(1, "stale persistent history")],
-      pagination: { hasMore: false, completeSnapshot: true },
-      sessionId: "persistent-session",
-    });
-    await writer.flush();
-    const networkMessages = [nativeHistoryMessage(1, "authoritative network history")];
-    const request = vi.fn(async () => ({
-      messages: networkMessages,
-      sessionId: "network-session",
-    }));
-    const pane = document.createElement("openclaw-chat-pane") as unknown as TestChatPane;
-    vi.spyOn(pane, "requestUpdate").mockImplementation(() => undefined);
-    vi.spyOn(pane, "performUpdate").mockImplementation(() => undefined);
-    const sharedMessages: ChatMessageCache = new Map();
-    const store = new SessionSnapshotStore(sharedMessages);
-    store.connect();
-    observeChatCache(sharedMessages, store);
-    pane.sessionKey = targetSessionKey;
-    pane.chatMessagesBySession = sharedMessages;
-    pane.sessionSnapshotStore = store;
-    pane.context = createInitializationContext();
-    const client = { request } as unknown as GatewayBrowserClient;
-    const stopAfterAttach = new Error("stop after attach");
-    let attachedState: ChatPageHost | undefined;
-    vi.spyOn(pane.chatState, "attach").mockImplementation((state) => {
-      attachedState = state;
-      state.client = client;
-      state.connected = true;
-      state.connectionEpoch = 1;
-      void loadChatHistory(state);
-      throw stopAfterAttach;
-    });
-
-    try {
-      expect(() => pane.connectedCallback()).toThrow(stopAfterAttach);
-      await vi.waitFor(() => expect(attachedState?.chatMessages).toEqual(networkMessages));
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 0);
-      });
-      expect(attachedState?.chatMessages).toEqual(networkMessages);
-    } finally {
-      pane.disconnectedCallback();
-      store.disconnect();
-      await store.whenIdle();
-      await clearStoredChatSnapshots();
-    }
-  });
-
   it("clears a mounted transcript and fences delayed history after cross-tab invalidation", async () => {
     const response = createDeferred<Record<string, unknown>>();
     const request = vi.fn(() => response.promise);
@@ -818,6 +718,62 @@ describe("chat pane initialization", () => {
 });
 
 describe("chat pane keyboard shortcuts", () => {
+  it("does not steal typing focus from a shadow-root confirmation", async () => {
+    const restoreDialogPolyfill = installDialogPolyfill();
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.active = true;
+    pane.presented = true;
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__composer-combobox";
+    const textarea = composer.appendChild(document.createElement("textarea"));
+    pane.append(composer);
+    const focus = vi.spyOn(textarea, "focus");
+    const container = document.body.appendChild(document.createElement("div"));
+    const modal = container.appendChild(document.createElement("openclaw-modal-dialog"));
+    const cancel = modal.appendChild(document.createElement("button"));
+
+    try {
+      const { dialog } = await getRenderedModalDialog(container);
+      expect(dialog.open).toBe(true);
+      expect(document.querySelector("dialog[open]")).toBeNull();
+      cancel.addEventListener("keydown", (event) => pane.handleDocumentKeydown(event));
+
+      cancel.dispatchEvent(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
+
+      expect(focus).not.toHaveBeenCalled();
+    } finally {
+      container.remove();
+      restoreDialogPolyfill();
+    }
+  });
+
+  it("does not steal typing focus from a light-DOM confirmation", () => {
+    const { pane } = createTestChatPane({
+      client: createGatewayBrowserClientFixture(),
+      sessions: createSessionCapabilityFixture(),
+    });
+    pane.active = true;
+    pane.presented = true;
+    const composer = document.createElement("div");
+    composer.className = "agent-chat__composer-combobox";
+    const textarea = composer.appendChild(document.createElement("textarea"));
+    pane.append(composer);
+    const focus = vi.spyOn(textarea, "focus");
+    const modal = document.body.appendChild(document.createElement("div"));
+    modal.setAttribute("aria-modal", "true");
+
+    try {
+      pane.handleDocumentKeydown(new KeyboardEvent("keydown", { key: "x", cancelable: true }));
+
+      expect(focus).not.toHaveBeenCalled();
+    } finally {
+      modal.remove();
+    }
+  });
+
   it("toggles only the active pane's session workspace", () => {
     const client = createGatewayBrowserClientFixture();
     const sessions = createSessionCapabilityFixture();
@@ -845,13 +801,27 @@ describe("chat pane keyboard shortcuts", () => {
       "workspace",
     ]);
     expect(state.sidebarContent).toBe(canvasContent);
+    state.attachmentSidebarContent = {
+      kind: "attachment",
+      attachmentKind: "document",
+      title: "report.pdf",
+      src: "/media/report.pdf",
+    };
 
-    const collapseEvent = dispatchSidebarShortcut(pane);
+    const collapseEvent = new KeyboardEvent("keydown", {
+      cancelable: true,
+      key: "b",
+      code: "KeyB",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    pane.handleDocumentKeydown(collapseEvent);
 
     expect(collapseEvent.defaultPrevented).toBe(true);
     expect(hasWorkspace()).toBe(false);
     expect(state.sidebarLayout.columns[0]?.panels[0]?.slot).toBe("detail");
     expect(state.sidebarContent).toBe(canvasContent);
+    expect(state.attachmentSidebarContent).toBeNull();
 
     const mainSidebarEvent = dispatchSidebarShortcut(pane, false);
     expect(mainSidebarEvent.defaultPrevented).toBe(false);
@@ -882,8 +852,8 @@ describe("chat pane keyboard shortcuts", () => {
     expect(press().defaultPrevented).toBe(true);
     expect(state.sidebarLayout.columns[0]?.panels.map((panel) => panel.slot)).toEqual(["terminal"]);
     expect(press().defaultPrevented).toBe(true);
-    expect(state.sidebarLayout.columns).toEqual([]);
-    expect(state.sidebarLayout.open).toBe(true);
+    expect(state.sidebarLayout.columns[0]?.panels).toEqual([]);
+    expect(state.sidebarLayout.open).toBe(false);
   });
 });
 

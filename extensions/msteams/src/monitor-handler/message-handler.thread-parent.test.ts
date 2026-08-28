@@ -224,14 +224,14 @@ describe("msteams thread parent context injection", () => {
     expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledTimes(1);
   });
 
-  it("does not fetch parent for DM replyToId", async () => {
+  it("keeps inbound DM reply targets flat under threaded reply configuration", async () => {
     fetchChannelMessageMock.mockResolvedValue({
       id: "x",
       from: { user: { displayName: "Alice" } },
       body: { content: "should-not-happen", contentType: "text" },
     });
-    const { deps, enqueueSystemEvent } = createMessageHandlerDeps({
-      channels: { msteams: { allowFrom: ["*"] } },
+    const { conversationStore, deps, enqueueSystemEvent } = createMessageHandlerDeps({
+      channels: { msteams: { allowFrom: ["*"], replyStyle: "thread" } },
     } as OpenClawConfig);
     const handler = createMSTeamsMessageHandler(deps);
 
@@ -248,6 +248,26 @@ describe("msteams thread parent context injection", () => {
 
     expect(fetchChannelMessageMock).not.toHaveBeenCalled();
     expect(findParentSystemEventCall(enqueueSystemEvent)).toBeUndefined();
+    expect(conversationStore.upsert).toHaveBeenCalledWith(
+      "a:dm-conversation",
+      expect.objectContaining({
+        conversation: expect.objectContaining({
+          id: "a:dm-conversation",
+          conversationType: "personal",
+        }),
+      }),
+    );
+    expect(conversationStore.upsert).not.toHaveBeenCalledWith(
+      "a:dm-conversation",
+      expect.objectContaining({ threadId: expect.any(String) }),
+    );
+    const dispatchContext =
+      runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher.mock.calls[0]?.[0].ctx;
+    expect(dispatchContext).toMatchObject({
+      To: "user:user-aad",
+      OriginatingTo: "conversation:a:dm-conversation",
+    });
+    expect(dispatchContext?.MessageThreadId).toBeUndefined();
   });
 
   it("does not fetch parent for top-level channel messages without replyToId", async () => {

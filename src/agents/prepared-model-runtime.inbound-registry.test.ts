@@ -2,6 +2,7 @@
 // oxfmt-ignore
 import {
   getPreparedModelRuntimeMocks,
+  getPreparedModelRuntimeTestApi,
   resetPreparedModelRuntimeHarness,
 } from "./prepared-model-runtime.test-harness.js";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,6 +10,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-scope.js";
+import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
 import {
   acquireAgentRunPreparedModelRuntime,
   getPreparedModelRuntimeSnapshot,
@@ -195,6 +197,9 @@ describe("prepared reply dispatch runtime", () => {
       pluginGeneration: configuredRuntimeBefore.pluginGeneration,
     });
     const dynamicSelectedBefore = dynamicLease.snapshot.pluginRegistry;
+    expect(getPluginRuntimeLoadContext(dynamicSelectedBefore)).toMatchObject({
+      preferBuiltPluginArtifacts: true,
+    });
     dynamicLease.release();
     expect(mocks.loadAgentRuntimePluginRegistryHandle).toHaveBeenCalledTimes(2);
     expect(dynamicPreparationRegistries.every(Boolean)).toBe(true);
@@ -236,7 +241,7 @@ describe("prepared reply dispatch runtime", () => {
     expect(configuredSelectedBefore).not.toBe(configuredRuntimeBefore?.inboundPluginRegistry);
   });
 
-  it("removes only the affected configured projection during an auth refresh", async () => {
+  it("waits only the affected configured projection during an auth refresh", async () => {
     mocks.configuredAgentIds = ["default", "worker"];
     const config = { agents: { defaults: { model: "openai/gpt-5.5" } } };
     await refreshPreparedModelRuntimeSnapshots(config, {
@@ -260,9 +265,7 @@ describe("prepared reply dispatch runtime", () => {
     const defaultRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
     const workerRead = loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" });
     await expect(defaultRead).resolves.toBe(defaultRuntime);
-    await expect(workerRead).rejects.toThrow(
-      "prepared reply dispatch runtime owner was not published for worker",
-    );
+    await expect(workerRead).resolves.not.toBe(workerRuntime);
 
     await published.promise;
     unregister();
@@ -274,5 +277,82 @@ describe("prepared reply dispatch runtime", () => {
       workspaceDir: "/tmp/workspace-worker",
     });
     expect(refreshedWorker).not.toBe(workerRuntime);
+  });
+
+  it("keeps a rejected auth refresh projection unavailable without affecting siblings", async () => {
+    mocks.configuredAgentIds = ["default", "worker"];
+    await refreshPreparedModelRuntimeSnapshots(
+      {},
+      {
+        gatewayLifecycle: true,
+        catalogMode: "static",
+      },
+    );
+    const defaultRuntime = await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    const refreshFailed = createDeferred();
+    const unregister = registerPreparedModelRuntimePublicationListener((event) => {
+      if (event.phase === "failed") {
+        refreshFailed.resolve();
+      }
+    });
+    mocks.discoverAuthStorage.mockImplementationOnce(() => {
+      throw new Error("auth refresh rejected");
+    });
+
+    mocks.mutationListener?.({
+      agentDir: "/tmp/configured-worker",
+      affectsInheritedStores: false,
+    });
+    await refreshFailed.promise;
+    unregister();
+
+    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "worker" })).rejects.toThrow(
+      "prepared reply dispatch runtime owner was not published for worker",
+    );
+    await expect(loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" })).resolves.toBe(
+      defaultRuntime,
+    );
+  });
+
+  it("aborts run admission without retaining an owner after auth publication", async () => {
+    mocks.configuredAgentIds = ["default"];
+    const config = {};
+    const input = {
+      agentId: "default",
+      agentDir: "/tmp/unused-agent",
+      config,
+      workspaceDir: "/tmp/dynamic-workspace",
+    };
+    await refreshPreparedModelRuntimeSnapshots(config, { gatewayLifecycle: true });
+    const testApi = getPreparedModelRuntimeTestApi();
+    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+    let finishAuthRefresh: (() => void) | undefined;
+    mocks.ensureOpenClawModelsJson.mockImplementationOnce(
+      async () =>
+        await new Promise<{ agentDir: string; wrote: false }>((resolve) => {
+          finishAuthRefresh = () => resolve({ agentDir: input.agentDir, wrote: false });
+        }),
+    );
+
+    mocks.mutationListener?.({ agentDir: input.agentDir, affectsInheritedStores: false });
+    await vi.waitFor(() => expect(finishAuthRefresh).toBeDefined());
+    const abort = new AbortController();
+    const admission = acquireAgentRunPreparedModelRuntime(input, { abortSignal: abort.signal });
+    const observed = admission.then(
+      () => "resolved",
+      () => "rejected",
+    );
+    await expect(Promise.race([observed, Promise.resolve("pending")])).resolves.toBe("pending");
+    abort.abort(new Error("request cancelled"));
+    await expect(admission).rejects.toMatchObject({ name: "AbortError" });
+    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+
+    finishAuthRefresh?.();
+    await loadPublishedGatewayReplyDispatchRuntime({ agentId: "default" });
+    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(1);
+    const lease = await acquireAgentRunPreparedModelRuntime(input);
+    expect(lease.snapshot).toMatchObject({ agentId: "default", agentDir: input.agentDir });
+    expect(testApi.getPreparedModelRuntimeOwnerCountForTest()).toBe(2);
+    lease.release();
   });
 });

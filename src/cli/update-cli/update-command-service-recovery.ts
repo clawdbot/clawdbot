@@ -36,6 +36,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
   service: GatewayService;
   port: number;
   expectedVersion?: string;
+  expectedBuildId?: string;
   env?: NodeJS.ProcessEnv;
   deps?: PostUpdateGatewayHealthRecoveryDeps;
 }): Promise<{
@@ -61,6 +62,7 @@ export async function recoverLaunchAgentAndRecheckGatewayHealth(params: {
     service: params.service,
     port: params.port,
     expectedVersion: params.expectedVersion,
+    ...(params.expectedBuildId ? { expectedBuildId: params.expectedBuildId } : {}),
     env: params.env,
     supervisorKeepsAlive: true,
   });

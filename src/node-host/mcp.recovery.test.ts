@@ -83,7 +83,8 @@ describe("node host MCP live lifecycle", () => {
           notifyToolsChanged = options.onToolsChanged;
           return client;
         },
-        resolveTransport: () => stdioTransport,
+        // This test deliberately holds both list calls; request timeout is not its contract.
+        resolveTransport: () => ({ ...stdioTransport, requestTimeoutMs: 5_000 }),
         warn: vi.fn(),
       },
     );
@@ -273,6 +274,7 @@ describe("node host MCP live lifecycle", () => {
     let maxActiveLists = 0;
     let listCount = 0;
     const pending: Array<(value: { tools: Tool[] }) => void> = [];
+    const refreshStarted = [createDeferred(), createDeferred()] as const;
     const client = createClient({
       list: async () => {
         listCount += 1;
@@ -284,6 +286,7 @@ describe("node host MCP live lifecycle", () => {
         try {
           return await new Promise<{ tools: Tool[] }>((resolve) => {
             pending.push(resolve);
+            refreshStarted[listCount - 2]?.resolve();
           });
         } finally {
           activeLists -= 1;
@@ -303,13 +306,15 @@ describe("node host MCP live lifecycle", () => {
     );
 
     notifyToolsChanged?.();
-    await vi.waitFor(() => expect(activeLists).toBe(1));
+    await refreshStarted[0].promise;
+    expect(activeLists).toBe(1);
     for (let index = 0; index < 20; index += 1) {
       notifyToolsChanged?.();
     }
     expect(client.request).toHaveBeenCalledTimes(2);
     pending.shift()?.({ tools: [tool("middle")] });
-    await vi.waitFor(() => expect(client.request).toHaveBeenCalledTimes(3));
+    await refreshStarted[1].promise;
+    expect(client.request).toHaveBeenCalledTimes(3);
     expect(maxActiveLists).toBe(1);
     pending.shift()?.({ tools: [tool("final")] });
     await vi.waitFor(() =>
@@ -598,6 +603,55 @@ describe("node host MCP live lifecycle", () => {
     const attemptsAtClose = attempts;
     await vi.advanceTimersByTimeAsync(30_000);
     expect(attempts).toBe(attemptsAtClose);
+  });
+
+  it("bounds reconnect fan-out and retires admission-queued attempts on close", async () => {
+    vi.useFakeTimers();
+    let active = 0;
+    let maxActive = 0;
+    const attemptsByServer = new Map<string, number>();
+    const retryReleases: Array<() => void> = [];
+    const servers = Object.fromEntries(
+      Array.from({ length: 7 }, (_, index) => [`server-${index}`, { command: "server" }]),
+    );
+    const createClientMock = vi.fn((serverName: string) =>
+      createClient({
+        connect: async () => {
+          const attempts = (attemptsByServer.get(serverName) ?? 0) + 1;
+          attemptsByServer.set(serverName, attempts);
+          if (attempts === 1) {
+            throw new Error("offline");
+          }
+          active += 1;
+          maxActive = Math.max(maxActive, active);
+          await new Promise<void>((resolve) => {
+            retryReleases.push(() => {
+              active -= 1;
+              resolve();
+            });
+          });
+        },
+      }),
+    );
+    const manager = await startNodeHostMcpManager(servers, {
+      createClient: createClientMock,
+      resolveTransport: () => stdioTransport,
+      warn: vi.fn(),
+    });
+    expect(createClientMock).toHaveBeenCalledTimes(7);
+
+    await vi.advanceTimersByTimeAsync(250);
+    expect(active).toBe(6);
+    expect(maxActive).toBe(6);
+    expect(createClientMock).toHaveBeenCalledTimes(13);
+
+    await manager.close();
+    expect(createClientMock).toHaveBeenCalledTimes(13);
+    for (const release of retryReleases.splice(0)) {
+      release();
+    }
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(createClientMock).toHaveBeenCalledTimes(13);
   });
 
   it("keeps global ordering and descriptor caps after refresh", async () => {

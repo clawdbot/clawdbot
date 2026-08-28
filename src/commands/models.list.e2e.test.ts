@@ -26,7 +26,6 @@ const loadModelCatalog = vi.fn<(_params?: unknown) => Promise<Array<Record<strin
   async () => [],
 );
 const shouldSuppressBuiltInModelCore = vi.fn().mockReturnValue(false);
-const shouldSuppressBuiltInModelFromManifest = vi.fn().mockReturnValue(false);
 const normalizeProviderResolvedModelWithPlugin = vi.hoisted(() =>
   vi.fn(({ context }) => {
     if (context?.provider === "anthropic" && context?.modelId === "claude-sonnet-5") {
@@ -53,6 +52,7 @@ const modelRegistryState = {
   available: [] as Array<Record<string, unknown>>,
   getAllError: undefined as unknown,
   getAvailableError: undefined as unknown,
+  availableOverride: undefined as { value: unknown } | undefined,
   findError: undefined as unknown,
 };
 
@@ -83,7 +83,9 @@ function createMockModelRegistry() {
       if (modelRegistryState.getAvailableError !== undefined) {
         throw toLintErrorObject(modelRegistryState.getAvailableError, "Non-Error thrown");
       }
-      return modelRegistryState.available;
+      return modelRegistryState.availableOverride
+        ? modelRegistryState.availableOverride.value
+        : modelRegistryState.available;
     }
 
     getProviderMetadataOwners() {
@@ -98,7 +100,6 @@ function createMockModelRegistry() {
   })();
 }
 
-let previousExitCode: typeof process.exitCode;
 let previousOpenAiApiKey: string | undefined;
 
 vi.mock("./models/load-config.js", () => ({
@@ -190,7 +191,6 @@ vi.mock("../agents/agent-model-discovery.js", () => ({
 }));
 
 vi.mock("../plugins/provider-runtime.js", () => ({
-  applyProviderNativeStreamingUsageCompatWithPlugin: vi.fn(() => undefined),
   buildProviderMissingAuthMessageWithPlugin: vi.fn(() => undefined),
   normalizeProviderConfigWithPlugin: vi.fn(() => undefined),
   normalizeProviderResolvedModelWithPlugin,
@@ -206,7 +206,6 @@ vi.mock("../plugins/synthetic-auth.runtime.js", () => ({
 vi.mock("../agents/model-suppression.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/model-suppression.js")>()),
   shouldSuppressBuiltInModelCore,
-  shouldSuppressBuiltInModelFromManifest,
 }));
 
 function makeRuntime() {
@@ -233,26 +232,6 @@ function runtimeLogText(runtime: ReturnType<typeof makeRuntime>): string {
   return value;
 }
 
-function runtimeErrorText(runtime: ReturnType<typeof makeRuntime>): string {
-  const value = firstMockArg(runtime.error, "runtime.error");
-  if (typeof value !== "string") {
-    throw new Error("Expected runtime.error text");
-  }
-  return value;
-}
-
-function expectModelRegistryUnavailable(
-  runtime: ReturnType<typeof makeRuntime>,
-  expectedDetail: string,
-) {
-  expect(runtime.error).toHaveBeenCalledTimes(1);
-  const errorText = runtimeErrorText(runtime);
-  expect(errorText).toContain("Model registry unavailable:");
-  expect(errorText).toContain(expectedDetail);
-  expect(runtime.log).not.toHaveBeenCalled();
-  expect(process.exitCode).toBe(1);
-}
-
 async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unknown> {
   try {
     const { snapshot } = await readConfigFileSnapshotForWrite();
@@ -266,14 +245,13 @@ async function loadSourceConfigSnapshotForTest(fallback: unknown): Promise<unkno
 }
 
 beforeEach(() => {
-  previousExitCode = process.exitCode;
-  process.exitCode = undefined;
   previousOpenAiApiKey = process.env.OPENAI_API_KEY;
   delete process.env.OPENAI_API_KEY;
   modelRegistryState.models = [];
   modelRegistryState.available = [];
   modelRegistryState.getAllError = undefined;
   modelRegistryState.getAvailableError = undefined;
+  modelRegistryState.availableOverride = undefined;
   modelRegistryState.findError = undefined;
   getRuntimeConfig.mockReset();
   getRuntimeConfig.mockReturnValue({});
@@ -292,7 +270,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  process.exitCode = previousExitCode;
   if (previousOpenAiApiKey === undefined) {
     delete process.env.OPENAI_API_KEY;
   } else {
@@ -704,15 +681,21 @@ describe("models list/status", () => {
   it("models list rejects provider display labels", async () => {
     setDefaultZaiRegistry({ available: false });
     const runtime = makeRuntime();
+    const message =
+      'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.';
 
-    await modelsListCommand({ all: true, provider: "Moonshot AI", json: true }, runtime);
+    await expect(
+      modelsListCommand({ all: true, provider: "Moonshot AI", json: true }, runtime),
+    ).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message,
+      humanOutput: message,
+      machineOutput: message,
+    });
 
-    expect(runtime.error).toHaveBeenCalledWith(
-      'Invalid provider filter "Moonshot AI". Use a provider id such as "moonshot", not a display label.',
-    );
+    expect(runtime.error).not.toHaveBeenCalled();
     expect(runtime.log).not.toHaveBeenCalled();
     expect(loadModelCatalog).not.toHaveBeenCalled();
-    expect(process.exitCode).toBe(1);
   });
 
   it("models list all local skips unauthenticated provider catalog rows", async () => {
@@ -755,9 +738,17 @@ describe("models list/status", () => {
 
     modelRegistryState.models = [];
     modelRegistryState.available = [];
-    await modelsListCommand({ local: true, json: true }, runtime);
+    await expect(modelsListCommand({ local: true, json: true }, runtime)).rejects.toMatchObject({
+      name: "ExpectedCliError",
+      message: "Model registry unavailable: model discovery unavailable",
+      humanOutput: expect.stringContaining(
+        "Model registry unavailable:\nError: model discovery unavailable",
+      ),
+      machineOutput: "Model registry unavailable: model discovery unavailable",
+    });
 
-    expectModelRegistryUnavailable(runtime, "model discovery unavailable");
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.log).not.toHaveBeenCalled();
   });
 
   it("loadModelRegistry throws when model discovery is unavailable", async () => {
@@ -770,6 +761,68 @@ describe("models list/status", () => {
 
     await expect(loadModelRegistry({})).rejects.toThrow("model discovery unavailable");
   });
+
+  it.each([
+    {
+      name: "a thrown lookup",
+      error: new Error("availability backend unavailable"),
+      result: [],
+      warning:
+        "Model availability unavailable: getAvailable() failed.\nError: availability backend unavailable",
+    },
+    {
+      name: "a non-array result",
+      error: undefined,
+      result: null,
+      warning: "getAvailable() returned a non-array value.",
+    },
+    {
+      name: "an invalid model entry",
+      error: undefined,
+      result: [{ provider: "zai" }],
+      warning: "getAvailable() returned invalid model entries.",
+    },
+    {
+      name: "an authoritative empty result",
+      error: undefined,
+      result: [],
+      warning: undefined,
+    },
+  ])(
+    "models list handles $name without losing discovered rows",
+    async ({ error, result, warning }) => {
+      getRuntimeConfig.mockReturnValue({
+        agents: { defaults: { model: "zai/glm-4.7" } },
+        models: { providers: { zai: { apiKey: "test-key" } } },
+      });
+      modelRegistryState.models = [ZAI_MODEL];
+      modelRegistryState.getAvailableError = error;
+      modelRegistryState.availableOverride = { value: result };
+      const runtime = makeRuntime();
+
+      await modelsListCommand({ all: true, json: true }, runtime);
+
+      const payload = parseJsonLog(runtime);
+      expect(payload.models).toEqual([
+        expect.objectContaining({
+          key: "zai/glm-4.7",
+          name: "GLM-4.7",
+          available: warning !== undefined,
+          missing: false,
+        }),
+      ]);
+      if (warning) {
+        expect(runtime.error).toHaveBeenCalledExactlyOnceWith(
+          expect.stringContaining(
+            "Model availability lookup failed; falling back to auth heuristics for discovered models:",
+          ),
+        );
+        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(warning));
+      } else {
+        expect(runtime.error).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("loadModelRegistry does not persist models.json as a side effect", async () => {
     modelRegistryState.models = [OPENAI_MODEL];
@@ -786,9 +839,8 @@ describe("models list/status", () => {
   it("filters stale spark rows from models list and registry views", async () => {
     const suppressSpark = ({ provider, id }: { provider?: string | null; id?: string | null }) =>
       id === "gpt-5.3-codex-spark" &&
-      (provider === "openai" || provider === "azure-openai-responses" || provider === "openai");
+      (provider === "openai" || provider === "azure-openai-responses");
     shouldSuppressBuiltInModelCore.mockImplementation(suppressSpark);
-    shouldSuppressBuiltInModelFromManifest.mockImplementation(suppressSpark);
     setDefaultModel("openai/gpt-5.5");
     modelRegistryState.models = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];
     modelRegistryState.available = [OPENAI_MODEL, OPENAI_SPARK_MODEL, AZURE_OPENAI_SPARK_MODEL];

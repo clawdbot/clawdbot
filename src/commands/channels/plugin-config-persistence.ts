@@ -4,24 +4,14 @@ import { commitConfigWithPendingPluginInstalls } from "../../plugins/install-rec
 import { refreshPluginRegistryAfterConfigMutation } from "../../plugins/registry-refresh.js";
 import type { RuntimeEnv } from "../../runtime.js";
 
-export async function persistResolvedChannelPluginConfig(params: {
-  resolved: {
-    cfg: OpenClawConfig;
-    configChanged: boolean;
-    pluginInstalled: boolean;
-  };
+export async function persistChannelPluginConfig(params: {
+  cfg: OpenClawConfig;
+  pluginInstalled: boolean;
   baseHash?: string;
   runtime: RuntimeEnv;
-}): Promise<OpenClawConfig> {
-  if (!params.resolved.configChanged) {
-    return params.resolved.cfg;
-  }
-
-  const cfg = params.resolved.cfg;
-  const shouldMovePluginInstalls = Boolean(
-    cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0,
-  );
-  if (shouldMovePluginInstalls) {
+}): Promise<void> {
+  const cfg = params.cfg;
+  if (cfg.plugins?.installs && Object.keys(cfg.plugins.installs).length > 0) {
     const committed = await commitConfigWithPendingPluginInstalls({
       nextConfig: cfg,
       baseHash: params.baseHash,
@@ -32,19 +22,18 @@ export async function persistResolvedChannelPluginConfig(params: {
       installRecords: committed.installRecords,
       logger: { warn: (message) => params.runtime.log(message) },
     });
-    return committed.config;
+    return;
   }
 
   await replaceConfigFile({
     nextConfig: cfg,
     baseHash: params.baseHash,
   });
-  if (params.resolved.pluginInstalled) {
+  if (params.pluginInstalled) {
     await refreshPluginRegistryAfterConfigMutation({
       config: cfg,
       reason: "source-changed",
       logger: { warn: (message) => params.runtime.log(message) },
     });
   }
-  return cfg;
 }
