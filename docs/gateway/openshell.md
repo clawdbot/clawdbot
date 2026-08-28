@@ -132,6 +132,11 @@ canonical**:
   its synchronization; separate backend handles share the same lock.
 - File tools go through the sandbox bridge, but local stays source of truth
   between turns.
+- Working-directory checks inspect the host directories that will be uploaded
+  and release their lock before returning. Execution owns its own complete
+  upload-to-download operation; an abandoned check cannot block later tools.
+  Remote permissions and image-specific restrictions are checked when execution
+  starts.
 
 Best for development workflows: local edits outside OpenClaw show up on the
 next exec, and the sandbox behaves close to the Docker backend.
@@ -153,6 +158,13 @@ its download can replace those external edits.
 - After that, `exec`, `read`, `write`, `edit`, and `apply_patch` operate
   directly on the remote workspace. OpenClaw does **not** sync remote changes
   back to local.
+- Initialization is serialized per remote runtime, but commands and file tools
+  can overlap after initialization, including across agent turns. A background
+  command can therefore wait for a file written by a later turn. Concurrent
+  writes to the same file follow normal remote filesystem semantics.
+- Materialized skills refresh when a backend initializes for a turn, rather
+  than before every filesystem operation. As with other sandbox backends, a
+  later turn can refresh skills while older background commands are running.
 - Prompt-time media reads still work (file/media tools read through the
   sandbox bridge).
 - Outbound images and other attachments can use paths under the configured
