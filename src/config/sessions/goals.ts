@@ -38,6 +38,9 @@ export const MODEL_UPDATABLE_SESSION_GOAL_STATUSES = ["complete", "blocked"] as 
 
 const TERMINAL_GOAL_STATUSES = new Set<SessionGoalStatus>(["complete"]);
 
+const INFRASTRUCTURE_FAILURE_BLOCK_THRESHOLD = 3;
+const MAX_HARD_CONTINUATION_TURNS = 50;
+
 function nowMs(value: number | undefined): number {
   return typeof value === "number" && Number.isFinite(value) ? value : Date.now();
 }
@@ -355,4 +358,94 @@ export async function clearSessionGoal(options: SessionGoalStoreOptions): Promis
     recordGoalChange(options, result, "goal cleared");
   }
   return Boolean(result && removed);
+}
+
+export async function recordGoalInfrastructureFailure(options: SessionGoalStoreOptions): Promise<{
+  blocked: boolean;
+  goal?: SessionGoal;
+}> {
+  const now = nowMs(options.now);
+  let blocked = false;
+  let goal: SessionGoal | undefined;
+  const result = await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      const accounted = accountGoalUsage(entry, now);
+      if (!accounted || accounted.status !== "active") {
+        return null;
+      }
+      const next: SessionGoal = {
+        ...accounted,
+        consecutiveInfrastructureFailures:
+          (accounted.consecutiveInfrastructureFailures ?? 0) + 1,
+        updatedAt: now,
+      };
+      if (
+        next.consecutiveInfrastructureFailures >= INFRASTRUCTURE_FAILURE_BLOCK_THRESHOLD ||
+        next.continuationTurns >= MAX_HARD_CONTINUATION_TURNS
+      ) {
+        next.status = "blocked";
+        next.blockedAt = now;
+        next.lastStatusNote =
+          next.continuationTurns >= MAX_HARD_CONTINUATION_TURNS
+            ? `goal blocked: exceeded ${MAX_HARD_CONTINUATION_TURNS} continuation turns`
+            : `goal blocked: ${next.consecutiveInfrastructureFailures} consecutive turns with no tool progress`;
+        blocked = true;
+      }
+      goal = next;
+      return { goal: next };
+    },
+    { fallbackEntry: options.fallbackEntry },
+  );
+  if (result && blocked) {
+    recordGoalChange(options, result, `goal blocked by circuit breaker`);
+  }
+  return { blocked, goal: goal ? cloneGoal(goal) : undefined };
+}
+
+export function shouldBlockGoalContinuation(
+  goal: SessionGoal | undefined,
+): { block: boolean; reason?: string } {
+  if (!goal || goal.status !== "active") {
+    return { block: false };
+  }
+  if (goal.continuationTurns >= MAX_HARD_CONTINUATION_TURNS) {
+    return {
+      block: true,
+      reason: `goal exceeded ${MAX_HARD_CONTINUATION_TURNS} continuation turns`,
+    };
+  }
+  if (
+    (goal.consecutiveInfrastructureFailures ?? 0) >= INFRASTRUCTURE_FAILURE_BLOCK_THRESHOLD
+  ) {
+    return {
+      block: true,
+      reason: `${goal.consecutiveInfrastructureFailures} consecutive turns with no tool progress`,
+    };
+  }
+  return { block: false };
+}
+
+export async function incrementGoalContinuationTurns(
+  options: SessionGoalStoreOptions,
+): Promise<SessionGoal | undefined> {
+  const now = nowMs(options.now);
+  let updated: SessionGoal | undefined;
+  await patchSessionEntry(
+    { sessionKey: options.sessionKey, storePath: options.storePath },
+    (entry) => {
+      const accounted = accountGoalUsage(entry, now);
+      if (!accounted || accounted.status !== "active") {
+        return null;
+      }
+      updated = {
+        ...accounted,
+        continuationTurns: (accounted.continuationTurns ?? 0) + 1,
+        updatedAt: now,
+      };
+      return { goal: updated };
+    },
+    { fallbackEntry: options.fallbackEntry },
+  );
+  return updated ? cloneGoal(updated) : undefined;
 }

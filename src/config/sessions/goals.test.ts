@@ -5,7 +5,10 @@ import {
   createSessionGoal,
   formatSessionGoalStatus,
   getSessionGoal,
+  incrementGoalContinuationTurns,
+  recordGoalInfrastructureFailure,
   resolveSessionGoalDisplayState,
+  shouldBlockGoalContinuation,
   updateSessionGoalObjective,
   updateSessionGoalStatus,
 } from "./goals.js";
@@ -513,5 +516,161 @@ describe("session goals", () => {
       true,
     );
     expect(getSessionEntry({ storePath: fixture.storePath(), sessionKey })?.goal).toBeUndefined();
+  });
+
+  it("increments continuation turns for active goals", async () => {
+    await writeSession(0);
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "ship",
+      now: 10,
+    });
+
+    const updated = await incrementGoalContinuationTurns({
+      storePath: fixture.storePath(),
+      sessionKey,
+      now: 20,
+    });
+
+    expect(updated?.continuationTurns).toBe(1);
+    expect(updated?.status).toBe("active");
+
+    const updated2 = await incrementGoalContinuationTurns({
+      storePath: fixture.storePath(),
+      sessionKey,
+      now: 30,
+    });
+
+    expect(updated2?.continuationTurns).toBe(2);
+  });
+
+  it("does not increment continuation turns for non-active goals", async () => {
+    await writeSession(0);
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "ship",
+      now: 10,
+    });
+    await updateSessionGoalStatus({
+      storePath: fixture.storePath(),
+      sessionKey,
+      status: "complete",
+      now: 20,
+    });
+
+    const updated = await incrementGoalContinuationTurns({
+      storePath: fixture.storePath(),
+      sessionKey,
+      now: 30,
+    });
+
+    expect(updated).toBeUndefined();
+  });
+
+  it("blocks goal continuation when continuationTurns exceeds hard limit", () => {
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "goal-1",
+      objective: "ship",
+      status: "active" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 50,
+    };
+
+    const check = shouldBlockGoalContinuation(goal);
+    expect(check.block).toBe(true);
+    expect(check.reason).toContain("50");
+  });
+
+  it("allows goal continuation when continuationTurns is below limit", () => {
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "goal-1",
+      objective: "ship",
+      status: "active" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 30,
+    };
+
+    const check = shouldBlockGoalContinuation(goal);
+    expect(check.block).toBe(false);
+  });
+
+  it("allows continuation for non-active goals regardless of counters", () => {
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "goal-1",
+      objective: "ship",
+      status: "blocked" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 100,
+      consecutiveInfrastructureFailures: 10,
+    };
+
+    const check = shouldBlockGoalContinuation(goal);
+    expect(check.block).toBe(false);
+  });
+
+  it("blocks goal continuation when consecutiveInfrastructureFailures exceeds threshold", () => {
+    const goal = {
+      schemaVersion: 1 as const,
+      id: "goal-1",
+      objective: "ship",
+      status: "active" as const,
+      createdAt: 1,
+      updatedAt: 1,
+      tokenStart: 0,
+      tokensUsed: 0,
+      continuationTurns: 0,
+      consecutiveInfrastructureFailures: 3,
+    };
+
+    const check = shouldBlockGoalContinuation(goal);
+    expect(check.block).toBe(true);
+  });
+
+  it("null/undefined goal returns no block", () => {
+    expect(shouldBlockGoalContinuation(undefined).block).toBe(false);
+  });
+
+  it("recordGoalInfrastructureFailure blocks goal after threshold consecutive failures", async () => {
+    await writeSession(0);
+    await createSessionGoal({
+      storePath: fixture.storePath(),
+      sessionKey,
+      objective: "ship",
+      now: 10,
+    });
+
+    await recordGoalInfrastructureFailure({
+      storePath: fixture.storePath(),
+      sessionKey,
+      now: 20,
+    });
+    await recordGoalInfrastructureFailure({
+      storePath: fixture.storePath(),
+      sessionKey,
+      now: 30,
+    });
+    const result = await recordGoalInfrastructureFailure({
+      storePath: fixture.storePath(),
+      sessionKey,
+      now: 40,
+    });
+
+    expect(result.blocked).toBe(true);
+    expect(result.goal?.status).toBe("blocked");
+    expect(result.goal?.consecutiveInfrastructureFailures).toBe(3);
   });
 });
