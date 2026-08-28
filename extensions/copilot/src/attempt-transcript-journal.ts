@@ -4,6 +4,7 @@ import {
   projectAgentHarnessTranscriptMessageForDisplay,
   runAgentHarnessBeforeMessageWriteHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import {
   appendSessionTranscriptMessageByIdentityStrict,
   appendSessionTranscriptMessagesByIdentity,
@@ -15,7 +16,10 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { AttemptParamsLike } from "./attempt-types.js";
 
-type TranscriptMessage = Extract<AgentMessage, { role: "user" | "assistant" | "toolResult" }>;
+type TranscriptRecorder = NonNullable<AttemptParamsLike["userTurnTranscriptRecorder"]>;
+type TranscriptMessage =
+  | NonNullable<TranscriptRecorder["message"]>
+  | Extract<AgentMessage, { role: "assistant" | "toolResult" }>;
 type AppendResult =
   | {
       anchor: TranscriptEntryAnchor;
@@ -24,18 +28,18 @@ type AppendResult =
       messageId: string;
     }
   | undefined;
-type PendingWrite = { eventId?: string; message: TranscriptMessage };
+type PendingWrite = {
+  eventId?: string;
+  message: TranscriptMessage;
+  recorder?: TranscriptRecorder;
+};
 type ToolGroup = {
   assistant: PendingWrite;
   assistantKey: string;
   order: string[];
   results: Map<string, PendingWrite>;
 };
-type PersistenceReceipt = {
-  promise: Promise<void>;
-  reject: (error: Error) => void;
-  resolve: () => void;
-};
+type PersistenceReceipt = ReturnType<typeof createDeferred<void>>;
 
 type TurnTaintMetadata = { resultContentSource?: "network"; turnTainted?: true };
 
@@ -127,6 +131,7 @@ export function createAttemptTranscriptJournal(params: {
   let queue = Promise.resolve();
   let firstFailure: Error | undefined;
   const sdkUserPersistenceReceipts = new Map<string, PersistenceReceipt>();
+  const sdkUserRecorders = new Map<string, TranscriptRecorder>();
   let abortPromise: Promise<void> | undefined;
   let replayInvalid = false;
   let initialSdkUserObserved = false;
@@ -152,7 +157,9 @@ export function createAttemptTranscriptJournal(params: {
   const sdkUserPersistenceReceipt = (eventId: string) => {
     let receipt = sdkUserPersistenceReceipts.get(eventId);
     if (!receipt) {
-      receipt = createPersistenceReceipt();
+      receipt = createDeferred<void>();
+      // Unclaimed SDK events still need observable failures without unhandled rejections.
+      void receipt.promise.catch(() => undefined);
       sdkUserPersistenceReceipts.set(eventId, receipt);
       if (firstFailure) {
         receipt.reject(firstFailure);
@@ -209,6 +216,7 @@ export function createAttemptTranscriptJournal(params: {
         ? { __openclaw: { ...readTurnTaintMetadata(hooked), ...taintMetadata } }
         : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
+      ...(message.role === "user" && message.provenance ? { provenance: message.provenance } : {}),
       ...((message as { display?: boolean }).display === false ? { display: false } : {}),
     }) as TranscriptMessage;
     return options.singleton && !isCompatibleSingletonRewrite(message, prepared)
@@ -226,6 +234,7 @@ export function createAttemptTranscriptJournal(params: {
       prepareMessageAfterIdempotencyCheck: () => prepare(write, { singleton: true }),
     });
     if (outcome.kind === "suppressed") {
+      write.recorder?.markBlocked();
       return undefined;
     }
     if (outcome.kind === "rejected") {
@@ -238,6 +247,9 @@ export function createAttemptTranscriptJournal(params: {
       )
     ) {
       replayInvalid = true;
+    }
+    if (outcome.result.message.role === "user") {
+      write.recorder?.markRuntimePersisted(outcome.result.message, outcome.result.anchor);
     }
     return outcome.result as AppendResult;
   };
@@ -372,6 +384,24 @@ export function createAttemptTranscriptJournal(params: {
   };
 
   return {
+    async sendSdkUser(send: () => Promise<string>, recorder?: TranscriptRecorder) {
+      if (!recorder) {
+        return await send();
+      }
+      const registration = createDeferred<void>();
+      // SDK events can precede the send response. Queue the gate before dispatch,
+      // then bind the returned id before releasing it; concurrent sends need no FIFO guessing.
+      schedule(() => registration.promise);
+      try {
+        const messageId = await send();
+        sdkUserRecorders.set(messageId, recorder);
+        recorder.markSentToProvider?.();
+        recorder.markRuntimePersistencePending(sdkUserPersistenceReceipt(messageId).promise);
+        return messageId;
+      } finally {
+        registration.resolve();
+      }
+    },
     markReplayIncomplete() {
       replayInvalid = true;
     },
@@ -449,7 +479,14 @@ export function createAttemptTranscriptJournal(params: {
       }
       initialSdkUserObserved = true;
       schedule(async () => {
-        const write = { eventId: input.eventId, message: input.message };
+        const recorder = sdkUserRecorders.get(input.eventId);
+        sdkUserRecorders.delete(input.eventId);
+        const provenance = (await recorder?.resolveMessage())?.provenance;
+        const write: PendingWrite = {
+          eventId: input.eventId,
+          message: provenance ? { ...input.message, provenance } : input.message,
+          recorder,
+        };
         if (pendingTools) {
           deferredUserWrites.push(write);
           return;
@@ -537,8 +574,7 @@ export function createAttemptTranscriptJournal(params: {
           ownAssistant(group.assistantKey, false);
         } else {
           for (const result of results) {
-            const didAppend = accept(result as AppendResult);
-            appended ||= didAppend;
+            appended = accept(result as AppendResult) || appended;
           }
           ownAssistant(group.assistantKey, true, results.at(-1)?.anchor);
         }
@@ -555,8 +591,7 @@ export function createAttemptTranscriptJournal(params: {
             }
             continue;
           }
-          const didAppend = accept(outcome);
-          appended ||= didAppend;
+          appended = accept(outcome) || appended;
           if (write.eventId) {
             deferredReceipts.push(sdkUserPersistenceReceipt(write.eventId));
           }
@@ -580,34 +615,6 @@ export function createAttemptTranscriptJournal(params: {
       messagesSnapshot: [...messagesSnapshot],
       replayInvalid,
     }),
-  };
-}
-
-function createPersistenceReceipt(): PersistenceReceipt {
-  let settled = false;
-  let rejectPromise: ((error: Error) => void) | undefined;
-  let resolvePromise: (() => void) | undefined;
-  const promise = new Promise<void>((resolve, reject) => {
-    resolvePromise = resolve;
-    rejectPromise = reject;
-  });
-  // Some SDK user events are not steering receipts. Keep their later journal
-  // failure observable without creating an unhandled rejection.
-  void promise.catch(() => undefined);
-  return {
-    promise,
-    reject(error) {
-      if (!settled) {
-        settled = true;
-        rejectPromise?.(error);
-      }
-    },
-    resolve() {
-      if (!settled) {
-        settled = true;
-        resolvePromise?.();
-      }
-    },
   };
 }
 
