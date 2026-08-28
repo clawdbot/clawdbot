@@ -6,12 +6,17 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createSolidPngBuffer } from "../../test/helpers/image-fixtures.js";
 import type { ChannelPlugin } from "../channels/plugins/types.plugin.js";
 import {
+  assignSessionOwner,
   captureSessionRecipientAuthority,
+  deleteSessionEntryLifecycle,
   loadTranscriptEvents,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
+import { isSessionRecipientAuthorityCurrent as isActualSessionRecipientAuthorityCurrent } from "../config/sessions/session-accessor.sqlite-recipient-authority.js";
+import { addSessionMember, removeSessionMember } from "../config/sessions/session-sharing-store.js";
 import type { RestartSentinelPayload } from "../infra/restart-sentinel.js";
 import { resolveSystemEventOptionsOwnerAgentId } from "../infra/system-event-ownership.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -64,7 +69,9 @@ const mocks = vi.hoisted(() => {
 
   return {
     resolveSessionAgentId: vi.fn(() => "agent-from-key"),
-    isSessionRecipientAuthorityCurrent: vi.fn(() => true),
+    isSessionRecipientAuthorityCurrent: vi.fn<typeof isActualSessionRecipientAuthorityCurrent>(
+      () => true,
+    ),
     markDelegateArtifactDeliveryUnavailable: vi.fn(),
     prepareDelegateArtifactDelivery: vi.fn(),
     recordDelegateArtifactDeliveryBinding: vi.fn(),
@@ -2787,46 +2794,100 @@ describe("scheduleRestartSentinelWake", () => {
     });
   });
 
-  it("does not replay a stale bound recipient after authority replacement", async () => {
-    const authorityScope = {
-      agentId: "main",
-      env: testState.env,
-      sessionKey: "agent:main:main",
-    };
-    const recipientAuthority = captureSessionRecipientAuthority(authorityScope);
-    mocks.isSessionRecipientAuthorityCurrent.mockReturnValue(false);
-    mocks.loadSessionEntry.mockReturnValue({
-      cfg: {},
-      agentId: "main",
-      entry: {
-        sessionId: "replacement-session",
-        updatedAt: 2,
-      },
-      store: {},
-      storePath: "/tmp/sessions.json",
-      canonicalKey: "agent:main:main",
-      storeKeys: ["agent:main:main"],
-      legacyKey: undefined,
-    });
+  it.each(["owner reassignment", "member access removal", "explicit revocation"] as const)(
+    "rejects a stale recipient after %s before prompt eligibility or wake",
+    async (invalidation) => {
+      const invalidationSlug = invalidation.replaceAll(" ", "-");
+      const sessionKey = `agent:main:revoked-${invalidationSlug}`;
+      const ownerA = { type: "human" as const, id: "owner-a" };
+      const authorityScope = {
+        agentId: "main",
+        env: testState.env,
+        sessionKey,
+      };
+      await upsertSessionEntryCore(authorityScope, {
+        sessionId: "recipient-before-revocation",
+        updatedAt: 1,
+        createdActor: ownerA,
+      });
+      const storePath = openOpenClawAgentDatabase({
+        agentId: "main",
+        env: testState.env,
+      }).path;
+      if (invalidation === "member access removal") {
+        expect(
+          addSessionMember(authorityScope, {
+            identityId: "member-a",
+            addedBy: ownerA.id,
+            addedAt: 2,
+          }).inserted,
+        ).toBe(true);
+      }
+      const recipientAuthority = captureSessionRecipientAuthority(authorityScope);
 
-    await deliverQueuedSessionDelivery({
-      deps: {} as never,
-      stateDir: testState.stateDir,
-      entry: {
-        id: "delivery-stale-authority",
-        kind: "systemEvent",
-        sessionKey: "agent:main:main",
-        text: "stale delegate result",
-        enqueuedAt: 1,
-        retryCount: 0,
+      if (invalidation === "owner reassignment") {
+        expect(
+          assignSessionOwner(authorityScope, {
+            owner: { type: "human", id: "owner-b" },
+            assignedBy: ownerA,
+            assignedAt: 3,
+          }),
+        ).not.toBeNull();
+      } else if (invalidation === "member access removal") {
+        expect(removeSessionMember(authorityScope, "member-a")).not.toBeNull();
+      } else {
+        const deletion = await deleteSessionEntryLifecycle({
+          agentId: "main",
+          archiveTranscript: false,
+          storePath,
+          target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
+        });
+        expect(deletion.deleted).toBe(true);
+      }
+
+      expect(isActualSessionRecipientAuthorityCurrent(authorityScope, recipientAuthority)).toBe(
+        false,
+      );
+      mocks.isSessionRecipientAuthorityCurrent.mockImplementation((scope, authority) =>
+        isActualSessionRecipientAuthorityCurrent(scope, authority),
+      );
+      mocks.loadSessionEntry.mockReturnValue({
+        cfg: {},
+        agentId: "main",
+        entry: {
+          sessionId: "replacement-session",
+          updatedAt: 4,
+        },
+        store: {},
+        storePath,
+        canonicalKey: sessionKey,
+        storeKeys: [sessionKey],
+        legacyKey: undefined,
+      });
+
+      await deliverQueuedSessionDelivery({
+        deps: {} as never,
+        stateDir: testState.stateDir,
+        entry: {
+          id: `delivery-stale-${invalidationSlug}`,
+          kind: "systemEvent",
+          sessionKey,
+          text: "stale delegate result",
+          enqueuedAt: 1,
+          retryCount: 0,
+          recipientAuthority,
+          awaitPromptAdoption: true,
+        },
+      });
+
+      expect(mocks.isSessionRecipientAuthorityCurrent).toHaveBeenCalledWith(
+        { agentId: "main", sessionKey, storePath },
         recipientAuthority,
-        awaitPromptAdoption: true,
-      },
-    });
-
-    expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
-    expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
-  });
+      );
+      expect(mocks.enqueueSystemEvent).not.toHaveBeenCalled();
+      expect(mocks.requestHeartbeat).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves distinct durable identities for identical recovered system events", async () => {
     const createEntry = (id: string) =>

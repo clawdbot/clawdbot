@@ -34,6 +34,47 @@ function readSessionEntryJson(database: DatabaseSync, key: string): string {
 }
 
 describe("participant identity migration", () => {
+  it("creates the exact fresh-install v19 schema", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+
+      expect(db.prepare("PRAGMA user_version").get()?.user_version).toBe(
+        OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
+      expect(
+        db.prepare("SELECT schema_version FROM schema_meta WHERE meta_key = 'primary'").get()
+          ?.schema_version,
+      ).toBe(OPENCLAW_AGENT_SCHEMA_VERSION);
+      expect(normalizeSqliteSchemaShapeSql(collectSqliteSchemaShape(db))).toEqual(
+        normalizeSqliteSchemaShapeSql(
+          createSqliteSchemaShapeFromSql(new URL("./openclaw-agent-schema.sql", import.meta.url)),
+        ),
+      );
+      expect(
+        db.prepare("SELECT name FROM pragma_table_info('session_participants') ORDER BY cid").all(),
+      ).toEqual([
+        { name: "session_key" },
+        { name: "identity_namespace" },
+        { name: "actor_id" },
+        { name: "contribution_count" },
+        { name: "first_prompted_at" },
+        { name: "last_prompted_at" },
+      ]);
+      expect(
+        db
+          .prepare("SELECT name FROM pragma_table_info('session_recipient_authority') ORDER BY cid")
+          .all(),
+      ).toEqual([
+        { name: "session_key" },
+        { name: "epoch" },
+        { name: "created_at" },
+        { name: "updated_at" },
+      ]);
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      expect(db.prepare("PRAGMA integrity_check").get()?.integrity_check).toBe("ok");
+    });
+  });
+
   it("rejects a missing aggregate count in the current schema", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const options = { agentId: "main", env: state.env };
