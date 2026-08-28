@@ -475,7 +475,11 @@ describe("subagent registry persistence", () => {
 
   it("uses isolated temp state when OPENCLAW_STATE_DIR is unset in tests", () => {
     deleteTestEnvValue("OPENCLAW_STATE_DIR");
+    const isolatedHome = process.env.OPENCLAW_TEST_HOME;
+    if (!isolatedHome) {
+      throw new Error("OPENCLAW_TEST_HOME is not configured");
+    }
     const sqlitePath = resolveOpenClawStateSqlitePath();
-    expect(sqlitePath).toContain(path.join(os.tmpdir(), "openclaw-test-state"));
+    expect(sqlitePath).toBe(path.join(isolatedHome, ".openclaw", "state", "openclaw.sqlite"));
   });
 });
