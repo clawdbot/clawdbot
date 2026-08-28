@@ -441,6 +441,7 @@ type RunCliAgentWithLifecycleParams = {
   preserveProgressCallbackStartOrder?: boolean;
   onAssistantText?: (text: string) => Promise<boolean | void>;
   onReasoningText?: (payload: ReasoningTextPayload) => Promise<void>;
+  onReasoningEnd?: GetReplyOptions["onReasoningEnd"];
   onReasoningProgress?: (payload: ReasoningProgressPayload) => Promise<void>;
   onToolEvent?: (payload: CliToolEventPayload) => Promise<void>;
   onCommentaryText?: (payload: CommentaryTextPayload) => Promise<void>;
@@ -625,6 +626,9 @@ async function runCliAgentWithLifecycleInternal(
     }
     const result = params.transformResult?.(rawResult) ?? rawResult;
     await stopAgentEventBridges(bridges);
+    if (finalReasoningText) {
+      await params.onReasoningEnd?.();
+    }
 
     const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
     const durableReasoningText = normalizeOptionalString(finalReasoningText);

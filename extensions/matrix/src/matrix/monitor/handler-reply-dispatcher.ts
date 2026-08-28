@@ -111,7 +111,7 @@ export function createMatrixReplyDispatcher(config: {
     ...prefixOptions,
     humanDelay,
     deliver: async (payload: ReplyPayload, info: { kind: string }) => {
-      if (info.kind === "final") {
+      if (payload.isReasoning !== true) {
         await reasoningNoticeDeliveryQueue;
       }
       if (payload.isReasoning === true && reasoningLevel !== "on") {
