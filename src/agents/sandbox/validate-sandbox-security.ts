@@ -9,6 +9,7 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import { resolveRequiredHomeDir, resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
+import { SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT } from "../subagents/subagent-attachment-paths.js";
 import { splitSandboxBindSpec } from "./bind-spec.js";
 import { SANDBOX_AGENT_WORKSPACE_MOUNT } from "./constants.js";
 import {
@@ -50,7 +51,11 @@ const BLOCKED_HOME_SUBPATHS = [
 
 const BLOCKED_SECCOMP_PROFILES = new Set(["unconfined"]);
 const BLOCKED_APPARMOR_PROFILES = new Set(["unconfined"]);
-const RESERVED_CONTAINER_TARGET_PATHS = ["/workspace", SANDBOX_AGENT_WORKSPACE_MOUNT];
+const RESERVED_CONTAINER_TARGET_PATHS = [
+  "/workspace",
+  SANDBOX_AGENT_WORKSPACE_MOUNT,
+  SANDBOX_SUBAGENT_ATTACHMENTS_MOUNT,
+];
 let blockedHostPathsCache:
   | {
       key: string;

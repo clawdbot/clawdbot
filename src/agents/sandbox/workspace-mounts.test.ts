@@ -3,10 +3,11 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   appendWorkspaceMountArgs,
   filterBindsConflictingWithProtectedMounts,
+  resolveReadOnlyWorkspaceSkillMounts,
   resolveProtectedSkillMountContainerPaths,
   type ReadOnlyWorkspaceSkillMount,
 } from "./workspace-mounts.js";
@@ -23,6 +24,7 @@ afterEach(() => {
   for (const dir of tmpDirs.splice(0)) {
     fs.rmSync(dir, { recursive: true, force: true });
   }
+  vi.unstubAllEnvs();
 });
 
 describe("appendWorkspaceMountArgs", () => {
@@ -257,6 +259,30 @@ describe("appendWorkspaceMountArgs", () => {
 });
 
 describe("resolveProtectedSkillMountContainerPaths", () => {
+  it.each(["rw", "ro", "none"] as const)(
+    "includes the host-owned attachment root for workspaceAccess=%s",
+    (workspaceAccess) => {
+      const stateDir = makeTempWorkspace();
+      vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
+      const attachmentRoot = path.join(stateDir, "attachments", "subagents", "main");
+      fs.mkdirSync(attachmentRoot, { recursive: true });
+
+      const mounts = resolveReadOnlyWorkspaceSkillMounts({
+        workspaceDir: "/tmp/workspace",
+        agentWorkspaceDir: "/tmp/agent-workspace",
+        workdir: "/workspace",
+        workspaceAccess,
+        agentId: "main",
+      });
+
+      expect(mounts).toContainEqual({
+        hostPath: attachmentRoot,
+        containerPath: "/openclaw/attachments",
+      });
+      expect(resolveProtectedSkillMountContainerPaths(mounts)).toContain("/openclaw/attachments");
+    },
+  );
+
   it("returns an empty set for empty mounts", () => {
     const paths = resolveProtectedSkillMountContainerPaths([]);
     expect(paths.size).toBe(0);

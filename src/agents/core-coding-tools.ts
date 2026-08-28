@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import path from "node:path";
 import type { SkillSnapshot } from "../skills/types.js";
 import { bindAgentToolActionDescriptor } from "./agent-tool-metadata.js";
@@ -30,6 +31,7 @@ import type {
   createWriteTool,
 } from "./sessions/tools/index.js";
 import { createReadTool } from "./sessions/tools/read.js";
+import { resolveSubagentAttachmentRootDir } from "./subagents/subagent-attachment-paths.js";
 
 function sandboxReadMounts(
   sandbox: SandboxContext,
@@ -80,6 +82,7 @@ type CoreCodingToolsOptions = {
   modelHasVision?: boolean;
   memoryWriteProvenance?: MemoryWriteProvenanceObserver;
   baseToolNames?: readonly string[];
+  agentId?: string;
   baseToolFactories?: {
     createEditTool: typeof createEditTool;
     createReadTool: typeof CreateReadTool;
@@ -107,6 +110,12 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
   }
 
   const skillReadRoots = sandboxRoot ? undefined : resolveSkillReadRoots(options.skillsSnapshot);
+  const attachmentReadRoot =
+    !sandboxRoot && options.agentId ? resolveSubagentAttachmentRootDir(options.agentId) : undefined;
+  const hostReadRoots = [
+    ...(skillReadRoots ?? []),
+    ...(attachmentReadRoot && fs.existsSync(attachmentReadRoot) ? [attachmentReadRoot] : []),
+  ];
   const needsReadOnlyWorkspaceSkillMounts =
     options.includeShellTools || (options.includeBaseCodingTools && options.workspaceOnly);
   const readOnlyWorkspaceSkillMounts =
@@ -117,6 +126,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
           skillsWorkspaceDir: sandbox.skillsWorkspaceDir,
           workdir: sandbox.containerWorkdir,
           workspaceAccess: sandbox.workspaceAccess,
+          agentId: sandbox.agentId,
         })
       : [];
 
@@ -148,7 +158,7 @@ export function createCoreCodingTools(options: CoreCodingToolsOptions): AnyAgent
                   bridge: sandboxFsBridge,
                 }
               : {
-                  additionalRoots: skillReadRoots,
+                  additionalRoots: hostReadRoots.length > 0 ? hostReadRoots : undefined,
                   resolutionCwd: options.codingRoot,
                   normalizeGuardedPathParams: true,
                 },

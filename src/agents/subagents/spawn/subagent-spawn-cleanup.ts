@@ -84,27 +84,21 @@ async function waitForProvisionalSessionDeletion(
 
 export async function cleanupFailedSpawnBeforeAgentStart(params: {
   childSessionKey: string;
-  attachmentWorkspaceDir?: string;
-  attachmentRelDir?: string;
+  attachmentId?: string;
   emitLifecycleHooks?: boolean;
   deleteTranscript?: boolean;
   waitForSessionDeletion?: boolean;
   expectedSessionId?: string;
   expectedLifecycleRevision?: string;
 }): Promise<{ attachmentsRemoved: boolean; sessionDeleted: boolean }> {
-  const {
-    childSessionKey,
-    attachmentWorkspaceDir,
-    attachmentRelDir,
-    waitForSessionDeletion,
-    ...sessionCleanupOptions
-  } = params;
+  const { childSessionKey, attachmentId, waitForSessionDeletion, ...sessionCleanupOptions } =
+    params;
   let attachmentsRemoved = true;
-  if (attachmentWorkspaceDir && attachmentRelDir) {
+  if (attachmentId) {
     try {
       await cleanupMaterializedSubagentAttachments({
-        workspaceDir: attachmentWorkspaceDir,
-        relDir: attachmentRelDir,
+        childSessionKey,
+        attachmentId,
       });
     } catch {
       attachmentsRemoved = false;

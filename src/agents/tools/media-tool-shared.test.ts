@@ -72,6 +72,23 @@ describe("resolveGenerateAction", () => {
 });
 
 describe("resolveMediaToolLocalRoots", () => {
+  it("adds host-owned attachment roots only to workspace-scoped reads", async () => {
+    const workspaceDir = path.join("/tmp", "openclaw-media-workspace");
+    const attachmentRoot = path.join("/tmp", "openclaw-subagent-attachments");
+
+    const { localRoots } = await resolveMediaToolReferenceAccess({
+      input: path.join(attachmentRoot, "receipt.png"),
+      isDataUrl: false,
+      workspaceDir,
+      rootOptions: { workspaceOnly: true, additionalRoots: [attachmentRoot] },
+    });
+
+    expect(localRoots.map(normalizeHostPath)).toEqual([
+      normalizeHostPath(workspaceDir),
+      normalizeHostPath(attachmentRoot),
+    ]);
+  });
+
   it("does not widen default local roots from media sources", async () => {
     const stateDir = path.join("/tmp", "openclaw-media-tool-roots-state");
     const picturesDir =

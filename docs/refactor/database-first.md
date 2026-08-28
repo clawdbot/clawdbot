@@ -1224,9 +1224,10 @@ sessionId})`; create, branch, continue, list, and fork flows live in their
   rows. The installer only receives a temporary materialized archive path while
   an install is running. Doctor discards the retired one-hour filesystem
   staging tree instead of importing transient uploads.
-- Subagent inline attachments materialize under the child workspace's
-  `.openclaw/attachments/<attachmentId>/` directory. The subagent registry keeps
-  the attachment and root directories so lifecycle cleanup can remove them.
+- Subagent inline attachments are named user artifacts under the host-owned
+  state attachment root. The registry persists only their generated identity;
+  sandboxed children see a per-agent read-only projection outside the writable
+  workspace, and lifecycle cleanup derives the path from trusted state.
 - CLI image hydration no longer maintains stable `openclaw-cli-images` cache
   files. External CLI backends still receive file paths, but those paths are
   per-run temp materializations with cleanup.

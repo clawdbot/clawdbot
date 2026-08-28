@@ -90,6 +90,7 @@ type TaskRunDetailHandle = {
 
 type MediaToolLocalRootOptions = {
   workspaceOnly?: boolean;
+  additionalRoots?: readonly string[];
   cfg?: OpenClawConfig;
   channelId?: string | null;
   accountId?: string | null;
@@ -562,7 +563,10 @@ function resolveMediaToolLocalRoots(
 ): string[] {
   const workspaceDir = normalizeWorkspaceDir(workspaceDirRaw);
   if (options?.workspaceOnly) {
-    return workspaceDir ? [workspaceDir] : [];
+    return uniqueStrings([
+      ...(workspaceDir ? [workspaceDir] : []),
+      ...(options.additionalRoots ?? []),
+    ]);
   }
   // Channel inbound attachment roots stay separate: those paths are scoped to inbound media
   // access, not broad host-local file reads.

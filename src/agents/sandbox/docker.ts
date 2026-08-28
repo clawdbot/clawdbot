@@ -33,7 +33,7 @@ import {
   resolveDockerEnvPolicyEpoch,
   sanitizeExplicitSandboxEnvVars,
 } from "./sanitize-env-vars.js";
-import { buildSandboxContainerName, slugifySessionKey } from "./shared.js";
+import { buildSandboxContainerName, resolveSandboxAgentId, slugifySessionKey } from "./shared.js";
 import type { SandboxConfig, SandboxDockerConfig, SandboxWorkspaceAccess } from "./types.js";
 import { validateSandboxSecurity } from "./validate-sandbox-security.js";
 import {
@@ -614,6 +614,7 @@ async function ensureSandboxContainerLifecycle(
     skillsWorkspaceDir: params.skillsWorkspaceDir,
     workdir: params.cfg.docker.workdir,
     workspaceAccess: params.cfg.workspaceAccess,
+    agentId: resolveSandboxAgentId(params.scopeKey),
   });
   const genericConfigHash = computeSandboxConfigHash({
     docker: params.cfg.docker,

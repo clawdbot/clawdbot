@@ -306,13 +306,12 @@ export async function spawnSubagentDirect(
           relDir: string;
         }
       | undefined;
-    let attachmentWorkspaceDir: string | undefined;
-    let attachmentRelDir: string | undefined;
+    let attachmentId: string | undefined;
 
     const materializedAttachments = await materializeSubagentAttachments({
       config: cfg,
       targetAgentId,
-      workspaceDir: spawnedCwd ?? spawnedWorkspaceDir,
+      sandboxed: childRuntimeSandboxed,
       attachments: params.attachments,
       mountPathHint,
     });
@@ -326,8 +325,7 @@ export async function spawnSubagentDirect(
     if (materializedAttachments?.status === "ok") {
       retainOnSessionKeep = materializedAttachments.retainOnSessionKeep;
       attachmentsReceipt = materializedAttachments.receipt;
-      attachmentWorkspaceDir = materializedAttachments.workspaceDir;
-      attachmentRelDir = materializedAttachments.receipt.relDir;
+      attachmentId = materializedAttachments.attachmentId;
       childSystemPrompt = `${childSystemPrompt}\n\n${materializedAttachments.systemPromptSuffix}`;
     }
 
@@ -418,8 +416,7 @@ export async function spawnSubagentDirect(
     const cleanupFailedSpawn = (waitForSessionDeletion?: boolean) =>
       cleanupFailedSpawnBeforeAgentStart({
         childSessionKey,
-        attachmentWorkspaceDir,
-        attachmentRelDir,
+        attachmentId,
         emitLifecycleHooks: threadBindingReady,
         deleteTranscript: true,
         ...provisionalSessionIdentity,
@@ -480,11 +477,11 @@ export async function spawnSubagentDirect(
           });
         }
         await rollbackPreparedContextEngine(state?.contextEnginePreparation);
-        if (attachmentWorkspaceDir && attachmentRelDir) {
+        if (attachmentId) {
           try {
             await cleanupMaterializedSubagentAttachments({
-              workspaceDir: attachmentWorkspaceDir,
-              relDir: attachmentRelDir,
+              childSessionKey,
+              attachmentId,
             });
           } catch {
             // Best-effort cleanup only.
@@ -570,8 +567,7 @@ export async function spawnSubagentDirect(
           queued: params.collect === true,
           taskRowOwnership,
           ...(gatewayContextResolver ? { gatewayContextResolver } : {}),
-          attachmentWorkspaceDir,
-          attachmentRelDir,
+          attachmentId,
           retainAttachmentsOnKeep: retainOnSessionKeep,
         };
       },

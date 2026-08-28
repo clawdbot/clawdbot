@@ -280,9 +280,8 @@ export type SubagentRunRecord = {
   delivery?: SubagentCompletionDeliveryState;
   /** Durable top-level requester wake obligation, replayed after restart. */
   requesterSettleWake?: RequesterSettleWakeState;
-  /** Canonical workspace root and generated relative attachment directory for safe cleanup. */
-  attachmentWorkspaceDir?: string;
-  attachmentRelDir?: string;
+  /** Generated identity under the host-owned per-agent attachment root. */
+  attachmentId?: string;
   /** Legacy persisted absolute paths are never used for cleanup. */
   attachmentsDir?: string;
   attachmentsRootDir?: string;

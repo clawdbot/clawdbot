@@ -474,12 +474,13 @@ Controls inline attachment support for `sessions_spawn`.
 <AccordionGroup>
   <Accordion title="Attachment notes">
     - Attachments require `enabled: true`.
-    - Subagent attachments are materialized into the child workspace at `.openclaw/attachments/<uuid>/` with a `.manifest.json`.
+    - Subagent attachments are materialized under OpenClaw's host-owned state directory with a `.manifest.json`. Sandboxed children receive read-only paths under `/openclaw/attachments/<uuid>/`; unsandboxed children receive host paths.
     - ACP attachments are image-only and forwarded inline to the ACP runtime after the same file count, per-file byte, and total byte limits pass.
     - Attachment content is automatically redacted from transcript persistence.
     - Base64 inputs are validated with strict alphabet/padding checks and a pre-decode size guard.
     - Subagent attachment file permissions are `0700` for directories and `0600` for files.
-    - Subagent cleanup follows the `cleanup` policy: `delete` always removes attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+    - Subagent cleanup follows the `cleanup` policy: `delete` always removes host-owned attachments; `keep` retains them only when `retainOnSessionKeep: true`.
+    - SSH and shared-scope sandboxes reject inline attachments because they cannot provide an isolated read-only attachment projection.
 
   </Accordion>
 </AccordionGroup>

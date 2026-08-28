@@ -15,7 +15,10 @@ import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { computeBackoff } from "../../../infra/backoff.js";
 import { defaultRuntime } from "../../../runtime.js";
 import { truncateUtf8Prefix } from "../../../utils/utf8-truncate.js";
-import { cleanupMaterializedSubagentAttachments } from "../subagent-attachment-cleanup.js";
+import {
+  cleanupMaterializedSubagentAttachments,
+  cleanupMaterializedSubagentAttachmentsSync,
+} from "../subagent-attachment-cleanup.js";
 import {
   getDeliveryAttemptCount,
   getDeliveryLastError,
@@ -189,14 +192,16 @@ export async function persistSubagentSessionTiming(
 
 /** Best-effort async removal for a subagent attachment directory. */
 export async function safeRemoveAttachmentsDir(entry: SubagentRunRecord): Promise<boolean> {
-  if (!entry.attachmentWorkspaceDir || !entry.attachmentRelDir) {
-    return false;
+  if (!entry.attachmentId) {
+    // Shipped legacy rows contain workspace-controlled absolute paths. They are
+    // intentionally ignored; absence of a new owned identity is not retryable.
+    return true;
   }
 
   try {
     await cleanupMaterializedSubagentAttachments({
-      workspaceDir: entry.attachmentWorkspaceDir,
-      relDir: entry.attachmentRelDir,
+      childSessionKey: entry.childSessionKey,
+      attachmentId: entry.attachmentId,
     });
     return true;
   } catch {
@@ -219,9 +224,16 @@ export function reconcileOrphanedRun(params: {
   const shouldDeleteAttachments =
     params.entry.cleanup === "delete" || !params.entry.retainAttachmentsOnKeep;
   if (shouldDeleteAttachments) {
-    // Restore/resume reconciliation is synchronous. Keep cleanup on the same
-    // root-relative remover; legacy records without canonical facts fail closed.
-    void safeRemoveAttachmentsDir(params.entry);
+    if (params.entry.attachmentId) {
+      try {
+        cleanupMaterializedSubagentAttachmentsSync({
+          childSessionKey: params.entry.childSessionKey,
+          attachmentId: params.entry.attachmentId,
+        });
+      } catch {
+        // Best effort during synchronous restore reconciliation.
+      }
+    }
   }
   const removed = params.runs.delete(params.runId);
   params.resumedRuns.delete(params.runId);
