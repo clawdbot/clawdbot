@@ -227,6 +227,71 @@ merge_verify() {
   echo "merge-verify passed for PR #$pr"
 }
 
+prepare_squash_merge_body() {
+  local pr="$1" source_head="${LOCAL_PREP_HEAD_SHA:-$PREP_HEAD_SHA}"
+  local main_sha source_trailers
+  main_sha=$(git rev-parse --verify refs/remotes/origin/main) || return 1
+  # GraphQL publication can collapse local fixups. Preserve their reviewed
+  # trailers, excluding main's ancestry, rather than inspecting current HEAD.
+  source_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by log --reverse \
+    --no-show-signature --no-notes --no-color --no-decorate --encoding=UTF-8 \
+    --format='%(trailers:key=Co-authored-by,only,unfold)' "$main_sha..$source_head") || return 1
+  [ -n "$source_trailers" ] || return 0
+
+  local repo_nwo preview
+  repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner) || return 1
+  preview=$(gh_plain api graphql \
+    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid isMergeQueueEnabled viewerMergeBodyText(mergeType:SQUASH)}}}' \
+    -f owner="${repo_nwo%/*}" -f name="${repo_nwo#*/}" -F number="$pr") || return 1
+  if ! printf '%s\n' "$preview" | jq -e --arg head "$PREP_HEAD_SHA" '
+    .data.repository.pullRequest | .headRefOid == $head and
+      (.viewerMergeBodyText | type == "string") and .isMergeQueueEnabled == false
+  ' >/dev/null; then
+    echo "Cannot preserve squash credit: require a current-head message from a non-queue PR. Refresh prepare evidence and check the merge queue policy." >&2
+    return 1
+  fi
+
+  local body_file envelope original_trailers final_trailers message trailer
+  body_file=$(mktemp .local/merge-body.XXXXXX) || return 1
+  # Git parses complete commit messages; a body containing only trailers needs
+  # a temporary subject. Keep all authors in one terminal trailer block.
+  envelope=$'OpenClaw merge message\n\n'
+  printf '%s' "$envelope" > "$body_file" || return 1
+  printf '%s\n' "$preview" | jq -r '.data.repository.pullRequest.viewerMergeBodyText' >> "$body_file" || return 1
+  original_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by interpret-trailers \
+    --parse --no-divider "$body_file") || return 1
+  # Mutating interpret-trailers runs configured trailer commands. Parse only,
+  # then append missing values without rewriting the server's existing text.
+  message=$(printf '%s\n' "$preview" | jq -r '.data.repository.pullRequest.viewerMergeBodyText') || return 1
+  while [[ "$message" == *$'\n'* ]] && [[ "${message##*$'\n'}" != *[!$' \t\r']* ]]; do
+    message="${message%$'\n'*}"
+  done
+  local known_trailers="$original_trailers" separator=$'\n\n'
+  [ -z "$original_trailers" ] || separator=$'\n'
+  while IFS= read -r trailer; do
+    [ -n "$trailer" ] || continue
+    if ! printf '%s\n' "$known_trailers" | grep -Fxq -- "$trailer"; then
+      [ -z "$message" ] || message+="$separator"
+      message+="$trailer"
+      known_trailers+=$'\n'"$trailer"
+      separator=$'\n'
+    fi
+  done <<< "$source_trailers"
+  printf '%s%s\n' "$envelope" "$message" > "$body_file" || return 1
+  final_trailers=$(git -c trailer.separators=: -c trailer.co-authored-by.key=Co-authored-by interpret-trailers \
+    --parse --no-divider "$body_file") || return 1
+  while IFS= read -r trailer; do
+    [ -n "$trailer" ] || continue
+    if ! printf '%s\n' "$final_trailers" | grep -Fxq -- "$trailer"; then
+      echo "Cannot preserve squash credit: the final message lost a source or preview trailer." >&2
+      return 1
+    fi
+  done <<< "$original_trailers
+$source_trailers"
+  printf '%s\n' "$message" > "$body_file" || return 1
+  printf '%s\n' "$body_file"
+}
+
 merge_run() {
   local pr="$1"
   local auto_merge_requested="${2:-false}"
@@ -335,6 +400,13 @@ merge_run() {
     exit 2
   fi
 
+  local merge_args=(--match-head-commit "$PREP_HEAD_SHA")
+  if [ "$merge_method" = "squash" ]; then
+    local merge_body_file
+    merge_body_file=$(prepare_squash_merge_body "$pr") || return 1
+    [ -z "$merge_body_file" ] || merge_args+=(--body-file "$merge_body_file")
+  fi
+
   local merge_submitted=false
   local state=""
   # Auto-merge is only a post-verification landing strategy. Keep every
@@ -391,7 +463,7 @@ merge_run() {
       if gh_plain pr merge "$pr" \
         --auto \
         --squash \
-        --match-head-commit "$PREP_HEAD_SHA" \
+        "${merge_args[@]}" \
         >.local/merge-output.log 2>&1
       then
         auto_meta=$(read_pr_view_json "$pr" "state,headRefOid,mergeable,mergeStateStatus,autoMergeRequest") || exit 1
@@ -453,7 +525,7 @@ merge_run() {
       if ! gh_plain pr merge "$pr" \
         --admin \
         "$merge_flag" \
-        --match-head-commit "$PREP_HEAD_SHA" \
+        "${merge_args[@]}" \
         >.local/merge-output.log 2>&1
       then
         print_relevant_log_excerpt .local/merge-output.log
@@ -462,7 +534,7 @@ merge_run() {
     else
       if ! gh_plain pr merge "$pr" \
         "$merge_flag" \
-        --match-head-commit "$PREP_HEAD_SHA" \
+        "${merge_args[@]}" \
         >.local/merge-output.log 2>&1
       then
         print_relevant_log_excerpt .local/merge-output.log
