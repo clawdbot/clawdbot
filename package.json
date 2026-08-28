@@ -56,6 +56,7 @@
     "!dist/plugin-sdk/approval-reaction-runtime.d.ts",
     "!dist/plugin-sdk/approval-reference-runtime.d.ts",
     "!dist/plugin-sdk/async-lock-runtime.d.ts",
+    "!dist/plugin-sdk/browser-cdp.d.ts",
     "!dist/plugin-sdk/browser-config.d.ts",
     "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
     "!dist/plugin-sdk/channel-activity-runtime.d.ts",
@@ -908,6 +909,9 @@
     "./plugin-sdk/allowlist-config-edit": {
       "types": "./dist/plugin-sdk/allowlist-config-edit.d.ts",
       "default": "./dist/plugin-sdk/allowlist-config-edit.js"
+    },
+    "./plugin-sdk/browser-cdp": {
+      "default": "./dist/plugin-sdk/browser-cdp.js"
     },
     "./plugin-sdk/browser-config": {
       "default": "./dist/plugin-sdk/browser-config.js"

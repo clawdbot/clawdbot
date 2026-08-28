@@ -1,11 +1,8 @@
 // Browser tests cover CDP URL and error contracts.
+import { parseBrowserHttpUrl } from "openclaw/plugin-sdk/browser-cdp";
 import { describe, expect, it } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import {
-  isDirectCdpWebSocketEndpoint,
-  isWebSocketUrl,
-  parseBrowserHttpUrl,
-} from "./cdp.helpers.js";
+import { isDirectCdpWebSocketEndpoint, isWebSocketUrl } from "./cdp.helpers.js";
 import {
   BrowserCdpEndpointBlockedError,
   BrowserValidationError,

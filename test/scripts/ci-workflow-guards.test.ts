@@ -109,6 +109,7 @@ function evaluateWorkflowExpression(
     dispatchId?: string;
     eventName: "pull_request" | "push" | "workflow_dispatch";
     frozenTarget?: boolean;
+    fileHashes?: Record<string, string>;
     headRepository?: string;
     hostedRunnerProfileContract?: boolean;
     matrix?: Record<string, unknown>;
@@ -139,6 +140,7 @@ function evaluateWorkflowExpression(
         ? haystack.includes(needle)
         : String(haystack).includes(String(needle)),
     fromJSON: (value: string) => JSON.parse(value) as unknown,
+    hashFiles: (file: string) => context.fileHashes?.[file] ?? "",
     startsWith: (value: unknown, prefix: unknown) => String(value).startsWith(String(prefix)),
     github: {
       event_name: context.eventName,
@@ -8650,6 +8652,119 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(result.status, result.stderr).toBe(expected);
     if (state === "absent" && frozen) {
       expect(result.stdout).toContain("[skip] Frozen target predates the named Discord");
+    }
+  });
+
+  it.each([
+    { frozen: false, present: true, expected: true },
+    { frozen: false, present: false, expected: true },
+    { frozen: true, present: true, expected: true },
+    { frozen: true, present: false, expected: false },
+  ])(
+    "gates browser native-host proof (frozen=$frozen, present=$present)",
+    ({ frozen, present, expected }) => {
+      const step = readCiWorkflow().jobs["build-artifacts"].steps.find(
+        (entry: WorkflowStep) => entry.name === "Verify built browser native host",
+      );
+      const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
+      expect(
+        step.if === undefined ||
+          evaluateWorkflowExpression(step.if, {
+            eventName: "workflow_dispatch",
+            repository: "openclaw/openclaw",
+            runAttempt: 1,
+            frozenTarget: frozen,
+            fileHashes: present ? { [file]: "fixture-hash" } : {},
+          }),
+      ).toBe(expected);
+    },
+  );
+
+  it.each([
+    "passed",
+    "skipped",
+    "pending",
+    "todo",
+    "absent",
+    "wrong-name",
+    "wrong-file",
+    "failed",
+    "suite-failed",
+    "duplicate",
+    "malformed",
+    "missing-report",
+  ])("validates browser native-host proof report: %s", (state) => {
+    const steps = readCiWorkflow().jobs["build-artifacts"].steps;
+    const step = steps.find(
+      (entry: WorkflowStep) => entry.name === "Verify built browser native host",
+    );
+    expect(steps.indexOf(step)).toBeGreaterThan(
+      steps.findIndex((entry: WorkflowStep) => entry.name === "Build dist"),
+    );
+    expect(step["continue-on-error"]).not.toBe(true);
+    const root = tempDirs.make("openclaw-browser-proof-report-");
+    const file = "extensions/browser/src/browser/extension-install.native-host.e2e.test.ts";
+    const fullName =
+      "native host registration launches with the exact custom installation context when Chrome has no selectors";
+    const assertion = {
+      fullName: state === "wrong-name" ? "another test" : fullName,
+      status: ["skipped", "pending", "todo", "failed"].includes(state) ? state : "passed",
+    };
+    const assertions =
+      state === "absent" ? [] : state === "duplicate" ? [assertion, assertion] : [assertion];
+    const report = {
+      success: state !== "failed" && state !== "suite-failed",
+      numFailedTestSuites: state === "suite-failed" ? 1 : 0,
+      numPendingTestSuites: 0,
+      numTotalTests: assertions.length,
+      numPassedTests: assertions.filter((entry) => entry.status === "passed").length,
+      numFailedTests: state === "failed" ? 1 : 0,
+      numPendingTests: ["skipped", "pending"].includes(state) ? 1 : 0,
+      numTodoTests: state === "todo" ? 1 : 0,
+      testResults: [
+        {
+          name: path.join(root, state === "wrong-file" ? "other.test.ts" : file),
+          status: state === "suite-failed" ? "failed" : "passed",
+          assertionResults: assertions,
+        },
+      ],
+    };
+    mkdirSync(path.join(root, "scripts"));
+    // A previous successful report must not satisfy a run that emits no report.
+    writeFileSync(path.join(root, "browser-native-host.json"), JSON.stringify(report));
+    // Execute the workflow's shell and validator; replace only the expensive
+    // Vitest process with a controlled reporter at its external boundary.
+    writeFileSync(
+      path.join(root, "scripts/run-vitest.mjs"),
+      `
+      import fs from 'node:fs';
+      const args = process.argv.slice(2);
+      fs.writeFileSync('invocation.json', JSON.stringify({ args, prebuilt: process.env.OPENCLAW_E2E_USE_PREBUILT_DIST }));
+      const outputIndex = args.indexOf('--outputFile.json');
+      if (outputIndex >= 0 && ${JSON.stringify(state)} !== 'missing-report') {
+        fs.writeFileSync(args[outputIndex + 1], ${JSON.stringify(state === "malformed" ? "{" : JSON.stringify(report))});
+      }
+    `,
+    );
+    const result = runWorkflowShellScript(step.run, {
+      cwd: root,
+      env: { ...process.env, ...step.env, RUNNER_TEMP: root },
+    });
+    expect(result.status, result.stderr).toBe(state === "passed" ? 0 : 1);
+    if (state === "passed") {
+      expect(JSON.parse(readFileSync(path.join(root, "invocation.json"), "utf8"))).toEqual({
+        prebuilt: "1",
+        args: [
+          "run",
+          "--config",
+          "test/vitest/vitest.e2e.config.ts",
+          file,
+          "--reporter=default",
+          "--reporter=json",
+          "--outputFile.json",
+          path.join(root, "browser-native-host.json"),
+        ],
+      });
     }
   });
 

@@ -865,7 +865,7 @@ jobs:
             }
           }
           // Heavy packaging lanes run only when the diff touches surfaces they
-          // exist to prove: test-only diffs cannot change dist bytes, and QA
+          // exist to prove: built-artifact tests need dist even on test-only diffs, and QA
           // smoke only sees changes on its scenario surface or inside the
           // packaged CLI's import graph. QA gating is diff-based, so it also
           // applies when test targeting fell back to the full compact suite.
@@ -1496,6 +1496,43 @@ jobs:
         run: |
           bun openclaw.mjs --help
           bun openclaw.mjs status --json --timeout 1
+
+      - name: Verify built browser native host
+        # Frozen candidates may predate this source proof; a skipped step is
+        # unavailable historical coverage, never a successful native-host test.
+        if: ${{ needs.preflight.outputs.frozen_target != 'true' || hashFiles('extensions/browser/src/browser/extension-install.native-host.e2e.test.ts') != '' }}
+        env:
+          OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
+          OPENCLAW_VITEST_MAX_WORKERS: "1"
+        run: |
+          set -euo pipefail
+          rm -f "${RUNNER_TEMP}/browser-native-host.json"
+          node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
+            extensions/browser/src/browser/extension-install.native-host.e2e.test.ts \
+            --reporter=default --reporter=json \
+            --outputFile.json "${RUNNER_TEMP}/browser-native-host.json"
+          node --input-type=module <<'BROWSER_PROOF_REPORT'
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+          import path from "node:path";
+
+          const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, "browser-native-host.json"), "utf8"));
+          assert.equal(report.success, true);
+          assert.equal(report.numTotalTests, 1);
+          assert.equal(report.numPassedTests, 1);
+          for (const key of ["numFailedTestSuites", "numPendingTestSuites", "numFailedTests", "numPendingTests", "numTodoTests"]) {
+            assert.equal(report[key], 0, key);
+          }
+          assert.equal(report.testResults.length, 1);
+          const file = report.testResults[0];
+          assert.equal(file.name, path.resolve("extensions/browser/src/browser/extension-install.native-host.e2e.test.ts"));
+          assert.equal(file.status, "passed");
+          assert.equal(file.assertionResults.length, 1);
+          const fullName = "native host registration launches with the exact custom installation context when Chrome has no selectors";
+          assert.equal(file.assertionResults[0].fullName, fullName);
+          assert.equal(file.assertionResults[0].status, "passed");
+          console.log(JSON.stringify({ proof: "browser-native-host", fullName, passed: 1, failed: 0, pending: 0 }));
+          BROWSER_PROOF_REPORT
 
       # Startup RSS is measured alone on every runner before independent dist
       # readers share the artifact-check wave. The step is unconditional because
