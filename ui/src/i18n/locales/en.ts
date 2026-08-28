@@ -6257,6 +6257,11 @@ export const en: TranslationMap = {
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
       checking: "Checking...",
+      failureDeliveryFailed: "Delivery failed. Try sending this file again.",
+      failureFileNotFound: "File not found. Check the path and try again.",
+      failureUnsupportedFormat:
+        "Rejected by the local attachment allowlist. Send a supported file type.",
+      notSent: "Not sent",
       video: "Video",
     },
     voice: {

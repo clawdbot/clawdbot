@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LocalMediaAccessError } from "../../media/local-media-access.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
 import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 
@@ -241,9 +242,7 @@ describe("createReplyMediaPathNormalizer", () => {
       path.join("/tmp/sandboxes/session-1", "out", "photo.png"),
       5 * 1024 * 1024,
     );
-    expect(result.text).toBe(
-      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
-    );
+    expect(result.text).toBe("⚠️ photo.png: Delivery failed. Try sending this file again.");
   });
 
   it.each([
@@ -466,8 +465,10 @@ describe("createReplyMediaPathNormalizer", () => {
     expectNoMedia(result);
   });
 
-  it("keeps reply text and appends a warning when all reply media is dropped", async () => {
-    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+  it("keeps reply text and appends a named receipt when all reply media is dropped", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
+      new LocalMediaAccessError("not-found", "missing test fixture"),
+    );
     const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
@@ -476,13 +477,15 @@ describe("createReplyMediaPathNormalizer", () => {
     });
 
     expect(result.text).toBe(
-      "WA_MEDIA_DM_07\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      "WA_MEDIA_DM_07\n⚠️ missing.png: File not found. Check the path and try again.",
     );
     expectNoMedia(result);
   });
 
-  it("keeps surviving media and appends a warning when some reply media is dropped", async () => {
-    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+  it("keeps surviving media and appends a named receipt for each dropped item", async () => {
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
+      new LocalMediaAccessError("not-found", "missing test fixture"),
+    );
     const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
@@ -491,24 +494,31 @@ describe("createReplyMediaPathNormalizer", () => {
     });
 
     expect(result.text).toBe(
-      "Here is the surviving attachment\n⚠️ Media failed. Try sending a smaller supported file or a different format.",
+      "Here is the surviving attachment\n⚠️ missing.png: File not found. Check the path and try again.",
     );
     expectMedia(result, "https://example.com/ok.png", ["https://example.com/ok.png"]);
   });
 
   it("returns a warning-only text reply when media-only output is dropped upstream", async () => {
-    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(new Error("file not found"));
+    resolveOutboundAttachmentFromUrl.mockRejectedValueOnce(
+      new LocalMediaAccessError("not-found", "missing test fixture"),
+    );
     const normalize = createTestReplyMediaNormalizer();
 
     const result = await normalize({
       mediaUrls: ["./out/missing.png"],
     });
 
-    expect(result.text).toBe(
-      "⚠️ Media failed. Try sending a smaller supported file or a different format.",
-    );
+    expect(result.text).toBe("⚠️ missing.png: File not found. Check the path and try again.");
     expectNoMedia(result);
-    expect(getReplyPayloadMetadata(result)?.assistantMediaNormalizationFailed).toBe(true);
+    expect(getReplyPayloadMetadata(result)?.assistantMediaFailures).toEqual([
+      {
+        code: "file-not-found",
+        kind: "image",
+        label: "missing.png",
+        mimeType: "image/png",
+      },
+    ]);
   });
 
   it("threads requester context into shared outbound media access", async () => {

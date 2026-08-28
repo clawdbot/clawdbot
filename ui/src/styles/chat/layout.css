@@ -1442,6 +1442,45 @@ openclaw-chat-video-player {
   white-space: nowrap;
 }
 
+.chat-assistant-attachment-card__status-meta {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5em;
+  min-width: 0;
+}
+
+.chat-assistant-attachment-card__status-badge,
+.chat-assistant-attachment-card__status-separator {
+  flex: none;
+}
+
+.chat-assistant-attachment-card__status-reason {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 560px) {
+  .chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-meta {
+    display: grid;
+    gap: 2px;
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+
+  .chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-separator {
+    display: none;
+  }
+
+  .chat-assistant-attachment-card--blocked .chat-assistant-attachment-card__status-reason {
+    overflow: visible;
+    text-overflow: clip;
+    white-space: normal;
+  }
+}
+
 .chat-assistant-attachment-card__actions {
   display: inline-flex;
   align-items: center;

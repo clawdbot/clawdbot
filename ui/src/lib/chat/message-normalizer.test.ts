@@ -827,6 +827,71 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("preserves named attachment failures beside successful attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "https://files.example/deploy.yaml",
+              kind: "document",
+              label: "deploy.yaml",
+              mimeType: "application/yaml",
+            },
+          },
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "unsupported-format",
+              kind: "document",
+              label: "settings.toml",
+              mimeType: "application/toml",
+            },
+          },
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "delivery-failed",
+              kind: "document",
+              label: "bundle.7z",
+              mimeType: "application/x-7z-compressed",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://files.example/deploy.yaml",
+            kind: "document",
+            label: "deploy.yaml",
+            mimeType: "application/yaml",
+          },
+        },
+        {
+          type: "attachment_error",
+          attachment: {
+            code: "unsupported-format",
+            kind: "document",
+            label: "settings.toml",
+            mimeType: "application/toml",
+          },
+        },
+        {
+          type: "attachment_error",
+          attachment: {
+            code: "delivery-failed",
+            kind: "document",
+            label: "bundle.7z",
+            mimeType: "application/x-7z-compressed",
+          },
+        },
+      ]);
+    });
+
     it("detects tool result by toolCallId", () => {
       const result = normalizeMessage({
         role: "assistant",

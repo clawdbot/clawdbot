@@ -16,6 +16,7 @@ export type LocalMediaAccessErrorCode =
   | "invalid-file-url"
   | "network-path-not-allowed"
   | "unsafe-bypass"
+  | "unsupported-media-type"
   | "not-found"
   | "invalid-path"
   | "not-file";

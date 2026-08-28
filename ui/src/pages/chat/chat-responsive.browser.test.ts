@@ -54,6 +54,7 @@ const SHARED_APP_CONTEXT_TEXT = "Context hover regression fixture.";
 const SHARED_APP_SLASH_TEXT = "Short landscape slash command keyboard regression fixture.";
 const SHARED_APP_IMAGE_URL = "https://cdn.example/render%2Epng?download=1";
 const SHARED_APP_VIDEO_URL = "https://cdn.example/clip%252Emp4?download=1";
+const SHARED_APP_ATTACHMENT_OUTCOME_TEXT = "Mixed attachment outcome fixture.";
 
 function installResponsiveChatGateway(page: Page, scenario: ControlUiMockGatewayScenario = {}) {
   return installMockGateway(page, {
@@ -102,6 +103,41 @@ async function createSharedAppPage(): Promise<Page> {
           content: [{ text: SHARED_APP_SLASH_TEXT, type: "text" }],
           role: "assistant",
           timestamp: Date.UTC(2026, 6, 9, 10, 2),
+        },
+        {
+          content: [
+            { text: SHARED_APP_ATTACHMENT_OUTCOME_TEXT, type: "text" },
+            {
+              type: "attachment",
+              attachment: {
+                url: "https://files.example/deploy.yaml",
+                kind: "document",
+                label: "deploy.yaml",
+                mimeType: "application/yaml",
+              },
+            },
+            ...["settings.toml", "schema.sql", "events.ndjson", "font.ttf", "font.woff2"].map(
+              (label) => ({
+                type: "attachment_error",
+                attachment: {
+                  code: "unsupported-format",
+                  kind: "document",
+                  label,
+                },
+              }),
+            ),
+            {
+              type: "attachment_error",
+              attachment: {
+                code: "delivery-failed",
+                kind: "document",
+                label: "bundle.7z",
+                mimeType: "application/x-7z-compressed",
+              },
+            },
+          ],
+          role: "assistant",
+          timestamp: Date.UTC(2026, 6, 9, 10, 3),
         },
       ],
     });
@@ -2542,6 +2578,115 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         (await videoCard.locator(".chat-assistant-attachment-card__title").textContent())?.trim(),
       ).toBe("clip%2Emp4");
       expect(await videoCard.locator("video").count()).toBe(0);
+    },
+  );
+
+  it(
+    "renders one named card for every success and failure in a mixed attachment batch",
+    FULL_APP_TEST_OPTIONS,
+    async () => {
+      const page = await getSharedAppPage();
+      const bubble = page
+        .locator(".chat-bubble")
+        .filter({ hasText: SHARED_APP_ATTACHMENT_OUTCOME_TEXT });
+      const cards = bubble.locator(".chat-assistant-attachment-card");
+      await expect.poll(() => cards.count()).toBe(7);
+      expect(
+        await cards.locator(".chat-assistant-attachment-card__title").allTextContents(),
+      ).toEqual([
+        "deploy.yaml",
+        "settings.toml",
+        "schema.sql",
+        "events.ndjson",
+        "font.ttf",
+        "font.woff2",
+        "bundle.7z",
+      ]);
+      expect(await bubble.locator(".chat-assistant-attachment-card--compact").count()).toBe(1);
+      expect(await bubble.locator(".chat-assistant-attachment-card--definitive").count()).toBe(6);
+      expect(
+        await bubble
+          .getByText(
+            "Not sent · Rejected by the local attachment allowlist. Send a supported file type.",
+          )
+          .count(),
+      ).toBe(5);
+      expect(
+        await bubble.getByText("Not sent · Delivery failed. Try sending this file again.").count(),
+      ).toBe(1);
+      expect(await bubble.getByText("Media failed").count()).toBe(0);
+
+      try {
+        const desktopStatusSpacing = await cards
+          .filter({ hasText: "settings.toml" })
+          .evaluate((card) => {
+            const badge = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-badge",
+            )!;
+            const reason = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-reason",
+            )!;
+            const separator = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-separator",
+            )!;
+            const badgeRect = badge.getBoundingClientRect();
+            const reasonRect = reason.getBoundingClientRect();
+            const separatorRect = separator.getBoundingClientRect();
+            return {
+              leftGap: separatorRect.left - badgeRect.right,
+              rightGap: reasonRect.left - separatorRect.right,
+            };
+          });
+        expect(desktopStatusSpacing.leftGap).toBeGreaterThan(4);
+        expect(desktopStatusSpacing.rightGap).toBeGreaterThan(4);
+        expect(Math.abs(desktopStatusSpacing.leftGap - desktopStatusSpacing.rightGap)).toBeLessThan(
+          0.25,
+        );
+
+        for (const width of [320, 560]) {
+          await page.setViewportSize({ width, height: 852 });
+          const failedCard = cards.filter({ hasText: "settings.toml" });
+          const mobileStatusLayout = await failedCard.evaluate((card) => {
+            const badge = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-badge",
+            )!;
+            const reason = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-reason",
+            )!;
+            const separator = card.querySelector<HTMLElement>(
+              ".chat-assistant-attachment-card__status-separator",
+            )!;
+            const cardRect = card.getBoundingClientRect();
+            const reasonRect = reason.getBoundingClientRect();
+            return {
+              badgeBottom: badge.getBoundingClientRect().bottom,
+              cardBottom: cardRect.bottom,
+              cardClientWidth: card.clientWidth,
+              cardScrollWidth: card.scrollWidth,
+              reasonBottom: reasonRect.bottom,
+              reasonRight: reasonRect.right,
+              reasonTop: reasonRect.top,
+              separatorDisplay: getComputedStyle(separator).display,
+              reasonWhiteSpace: getComputedStyle(reason).whiteSpace,
+            };
+          });
+          expect(mobileStatusLayout.separatorDisplay).toBe("none");
+          expect(mobileStatusLayout.reasonWhiteSpace).toBe("normal");
+          expect(mobileStatusLayout.reasonTop).toBeGreaterThanOrEqual(
+            mobileStatusLayout.badgeBottom,
+          );
+          expect(mobileStatusLayout.reasonBottom).toBeLessThanOrEqual(
+            mobileStatusLayout.cardBottom,
+          );
+          expect(mobileStatusLayout.reasonRight).toBeLessThanOrEqual(width);
+          expect(mobileStatusLayout.cardScrollWidth).toBeLessThanOrEqual(
+            mobileStatusLayout.cardClientWidth,
+          );
+          await expectNoHorizontalOverflow(page);
+        }
+      } finally {
+        await page.setViewportSize({ width: 1366, height: 900 });
+      }
     },
   );
 
