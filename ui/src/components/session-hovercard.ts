@@ -390,10 +390,24 @@ function renderSessionContext({
   </div>`;
 }
 
+function renderPullRequestAuthor(author: ControlUiSessionPullRequest["author"]) {
+  if (!author) {
+    return nothing;
+  }
+  return html`<span
+    class="session-hovercard__pr-author"
+    title=${t("sessionHovercard.pullRequestAuthorLabel", { login: author.login })}
+    >${author.login}</span
+  >`;
+}
+
 function renderPullRequestRow(pullRequest: ControlUiSessionPullRequest) {
   const state = pullRequestStateLabel(pullRequest.state);
   const checks = pullRequest.checks ? checksLabel(pullRequest.checks) : null;
   const details = [
+    pullRequest.author
+      ? t("sessionHovercard.pullRequestAuthorLabel", { login: pullRequest.author.login })
+      : null,
     checks,
     pullRequest.changedFiles === undefined ? null : changedFilesLabel(pullRequest.changedFiles),
     pullRequest.additions === undefined ? null : `+${pullRequest.additions.toLocaleString()}`,
@@ -419,7 +433,7 @@ function renderPullRequestRow(pullRequest: ControlUiSessionPullRequest) {
       >${pullRequestStateIcon(pullRequest.state)}</span
     >
     <span class="session-hovercard__pr-number">#${pullRequest.number}</span>
-    ${renderDiffStats(pullRequest)}
+    ${renderPullRequestAuthor(pullRequest.author)}${renderDiffStats(pullRequest)}
   </a>`;
 }
 

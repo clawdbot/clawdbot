@@ -56,6 +56,7 @@ type PullListItem = {
   owner: string;
   repo: string;
   state: ControlUiSessionPullRequest["state"];
+  author?: ControlUiSessionPullRequest["author"];
   headSha?: string;
   baseRef?: string;
   mergeCommitSha?: string;
@@ -351,6 +352,8 @@ function parsePullListItem(value: unknown): PullListItem | null {
   if (!number || !Number.isSafeInteger(number) || number < 1 || !title || !url || !owner || !repo) {
     return null;
   }
+  const user = isRecord(value.user) ? value.user : {};
+  const authorLogin = readOptionalGitHubString(user, "login");
   return {
     number,
     title,
@@ -358,6 +361,7 @@ function parsePullListItem(value: unknown): PullListItem | null {
     owner,
     repo,
     state: derivePullState(value),
+    ...(authorLogin ? { author: { login: authorLogin } } : {}),
     headSha: readOptionalGitHubString(head, "sha"),
     baseRef: readOptionalGitHubString(base, "ref"),
     mergeCommitSha: readOptionalGitHubString(value, "merge_commit_sha"),
@@ -490,6 +494,7 @@ async function finishPullRequest(
     title: item.title,
     url: item.url,
     state: item.state,
+    ...(item.author ? { author: item.author } : {}),
   };
   // Merged/closed chips render state only; diff counts and CI rollup are
   // live-work signals, so spend GitHub quota on open PRs alone.

@@ -97,6 +97,46 @@ describe("loadControlUiSessionPullRequests", () => {
     });
   });
 
+  it("carries the PR author from the list payload without another GitHub call", async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValueOnce(
+      githubJson([
+        pullListItem({
+          merged_at: "2026-07-09T10:00:00Z",
+          user: {
+            login: "octocat",
+            avatar_url: "https://avatars.githubusercontent.com/u/583231?v=4",
+          },
+        }),
+      ]),
+    );
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    // Login only: avatar_url is deliberately dropped so the browser never hotlinks GitHub.
+    expect(result.pullRequests[0]?.author).toEqual({ login: "octocat" });
+    // Merged PRs skip the diff/checks calls, so the author must have come from the list.
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("omits the author when GitHub returns no user for the PR", async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValueOnce(
+        githubJson([pullListItem({ merged_at: "2026-07-09T10:00:00Z", user: null })]),
+      );
+
+    const result = await loadControlUiSessionPullRequests(
+      { sessionKey: "agent:main:main" },
+      { fetchImpl, resolveGitContext },
+    );
+
+    expect(result.pullRequests).toHaveLength(1);
+    expect(result.pullRequests[0]?.author).toBeUndefined();
+  });
+
   it("retries stale optional authentication anonymously for session PRs", async () => {
     vi.stubEnv("GH_TOKEN", "stale-github-token");
     const fetchImpl = vi

@@ -138,6 +138,47 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector("openclaw-viewer-avatar")).toBeNull();
   });
 
+  it("shows the PR author beside the number and omits it for a ghosted account", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        pullRequests: snapshot({
+          pullRequests: [
+            {
+              number: 201,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "Authored",
+              url: "https://github.com/openclaw/openclaw/pull/201",
+              state: "open",
+              author: { login: "octocat" },
+            },
+            {
+              number: 202,
+              owner: "openclaw",
+              repo: "openclaw",
+              branch: "feature",
+              title: "Ghosted",
+              url: "https://github.com/openclaw/openclaw/pull/202",
+              state: "merged",
+            },
+          ],
+        }),
+      }),
+      container,
+    );
+
+    const links = [...container.querySelectorAll<HTMLAnchorElement>(".session-hovercard__pr-row")];
+    expect(links[0]?.querySelector(".session-hovercard__pr-author")?.textContent?.trim()).toBe(
+      "octocat",
+    );
+    expect(links[0]?.getAttribute("aria-label")).toContain("Opened by octocat");
+    // A deleted or ghosted GitHub account leaves the row exactly as it was before.
+    expect(links[1]?.querySelector(".session-hovercard__pr-author")).toBeNull();
+    expect(links[1]?.getAttribute("aria-label")).not.toContain("Opened by");
+  });
+
   it("renders bounded flat PR rows with accessible state, CI, and diff facts", () => {
     const container = document.createElement("div");
     render(
