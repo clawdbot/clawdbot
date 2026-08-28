@@ -178,27 +178,27 @@ describe("resolveExecTarget", () => {
   });
 
   it.each([
-    { configuredTarget: "auto" as const, sandboxAvailable: true, effectiveHost: "sandbox" },
-    { configuredTarget: "sandbox" as const, sandboxAvailable: true, effectiveHost: "sandbox" },
-    { configuredTarget: "gateway" as const, sandboxAvailable: true, effectiveHost: "gateway" },
-    { configuredTarget: "node" as const, sandboxAvailable: false, effectiveHost: "node" },
-  ])(
-    "treats requested auto as no override of configured host=$configuredTarget",
-    ({ configuredTarget, sandboxAvailable, effectiveHost }) => {
-      expectExecTarget(
-        resolveExecTarget({
-          configuredTarget,
-          requestedTarget: "auto",
-          elevatedRequested: false,
-          sandboxAvailable,
-        }),
-        {
-          configuredTarget,
-          requestedTarget: null,
-          selectedTarget: configuredTarget,
-          effectiveHost,
-        },
+    ["auto", true, false, "sandbox"],
+    ["auto", false, false, "gateway"],
+    ["sandbox", true, false, "sandbox"],
+    ["gateway", true, false, "gateway"],
+    ["gateway", false, false, "gateway"],
+    ["node", false, false, "node"],
+    ["sandbox", true, true, "gateway"],
+    ["node", true, true, "node"],
+  ] as const)(
+    "inherits configured host=%s for auto (sandbox=%s, elevated=%s)",
+    (configuredTarget, sandboxAvailable, elevatedRequested, effectiveHost) => {
+      const result = resolveExecTarget({
+        configuredTarget,
+        requestedTarget: "auto",
+        elevatedRequested,
+        sandboxAvailable,
+      });
+      expect(result).toEqual(
+        resolveExecTarget({ configuredTarget, elevatedRequested, sandboxAvailable }),
       );
+      expect(result.effectiveHost).toBe(effectiveHost);
     },
   );
 
@@ -315,12 +315,18 @@ describe("resolveExecTarget", () => {
       },
     );
 
-    it.each(["gateway", "node"] as const)(
-      "keeps an implicit request sandboxed despite configured host=%s",
-      (host) => {
+    it.each([
+      { host: "gateway", requestedTarget: undefined },
+      { host: "gateway", requestedTarget: "auto" },
+      { host: "node", requestedTarget: undefined },
+      { host: "node", requestedTarget: "auto" },
+    ] as const)(
+      "keeps requested=$requestedTarget sandboxed despite configured host=$host",
+      ({ host, requestedTarget }) => {
         expect(
           resolveExecTarget({
             configuredTarget: host,
+            requestedTarget,
             elevatedRequested: false,
             sandboxAvailable: true,
             sandboxRequired: true,
@@ -343,15 +349,19 @@ describe("resolveExecTarget", () => {
       ).toThrow(/sandbox|required|elevated/i);
     });
 
-    it("fails closed when the required sandbox runtime is unavailable", () => {
-      expect(() =>
-        resolveExecTarget({
-          configuredTarget: "auto",
-          elevatedRequested: false,
-          sandboxAvailable: false,
-          sandboxRequired: true,
-        }),
-      ).toThrow(/sandbox|required|unavailable/i);
-    });
+    it.each([undefined, "auto"] as const)(
+      "fails closed with requested=%s when the required sandbox is unavailable",
+      (requestedTarget) => {
+        expect(() =>
+          resolveExecTarget({
+            configuredTarget: "auto",
+            elevatedRequested: false,
+            sandboxAvailable: false,
+            sandboxRequired: true,
+            requestedTarget,
+          }),
+        ).toThrow(/sandbox|required|unavailable/i);
+      },
+    );
   });
 });
