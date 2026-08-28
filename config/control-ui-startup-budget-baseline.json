@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 346461,
-  "reason": "standing-grant scope line + grants ledger (#131602); recorded at the CI e2e-lane build (346461 B) — checks-ui and local builds of the same tree measure ~600 B less, beyond the 64 B variance allowance",
+  "startupJsGzipBytes": 347274,
+  "reason": "main UI fixes #131958, #132024, #131831, and #132028 landed after the prior ratchet; recorded from the highest exact-merge CI build (347274 B) across five independent build jobs",
   "updatedAt": "2026-08-28"
 }
