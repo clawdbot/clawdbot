@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   WORKSPACE,
@@ -200,7 +201,7 @@ suite.define(() => {
         const local = place.locator('[data-value="gateway"]');
         if (late === "recovery scope") {
           await trigger.click();
-          await expect.poll(() => local.getAttribute("title")).toBe("Gateway · QA-Gateway");
+          await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
           const catalogRequests = (await gateway.getRequests("environments.list")).length;
           await page.evaluate(() => window.dispatchEvent(new Event("test-release-recovery-scope")));
           await gateway.waitForRequest("environments.list", { after: catalogRequests });
@@ -216,7 +217,7 @@ suite.define(() => {
         if (late === "system info") {
           await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · local");
           await gateway.resolveDeferred("system.info", systemInfo);
-          await expect.poll(() => local.getAttribute("title")).toBe("Gateway · QA-Gateway");
+          await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
         }
         await expect.poll(() => pathInput.getAttribute("placeholder")).toBe("Gateway · QA-Gateway");
         await captureProjectUiProof(page, `gateway-name-${late.replaceAll(" ", "-")}.png`);
@@ -225,7 +226,7 @@ suite.define(() => {
         await replaceGatewayClient(page);
         await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("Local");
         await trigger.click();
-        await expect.poll(() => local.getAttribute("title")).toBe("Gateway · QA-Gateway");
+        await expect.poll(() => tooltipTitleText(local)).toBe("Gateway · QA-Gateway");
       } finally {
         try {
           await captureProjectUiProof(page, `gateway-name-${late.replaceAll(" ", "-")}-final.png`);
@@ -351,7 +352,7 @@ suite.define(() => {
       await where.getByText("Cloud", { exact: true }).waitFor();
       const cloud = where.getByRole("button", { name: "Cloud · aws" });
       expect(await cloud.isDisabled()).toBe(true);
-      expect(await cloud.getAttribute("title")).toBe("Cloud needs a Git checkout");
+      await expect.poll(() => tooltipTitleText(cloud)).toBe("Cloud needs a Git checkout");
       await page.keyboard.press("Escape");
 
       await page.locator(".new-session-page__message").fill("clone and inspect this project");

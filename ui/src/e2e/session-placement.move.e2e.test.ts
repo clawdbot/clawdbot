@@ -8,6 +8,7 @@ import {
   installMockGateway,
   requireString,
 } from "./chat-flow.test-support.ts";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const captureProof = process.env.OPENCLAW_CAPTURE_UI_PROOF === "1";
@@ -215,7 +216,7 @@ suite.define(() => {
       const reclaimItem = page.locator(".chat-pane__placement-reclaim");
       expect(await moveItem.isDisabled()).toBe(false);
       expect(await reclaimItem.isDisabled()).toBe(true);
-      expect(await reclaimItem.getAttribute("title")).toContain("Reconnect the device");
+      await expect.poll(() => tooltipTitleText(reclaimItem)).toContain("Reconnect the device");
       await captureRunnerOffline(page);
       await gateway.deferNext("sessions.move");
       await continueAction.click();

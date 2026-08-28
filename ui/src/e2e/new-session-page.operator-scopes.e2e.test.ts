@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
   createNewSessionPageE2eSuite,
@@ -151,9 +152,9 @@ suite.define(() => {
       await permission.click();
       const fullAccess = page.locator('[data-chat-permission-option="full"]');
       await expect.poll(() => fullAccess.getAttribute("disabled")).not.toBeNull();
-      expect(await fullAccess.getAttribute("title")).toBe(
-        "Full access requires operator.admin access.",
-      );
+      await expect
+        .poll(() => tooltipTitleText(fullAccess))
+        .toBe("Full access requires operator.admin access.");
       await page.keyboard.press("Escape");
       await page.locator(".new-session-page__message").press("Enter");
 

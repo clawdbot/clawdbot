@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   WORKSPACE,
   createNewSessionPageE2eSuite,
@@ -153,9 +154,11 @@ suite.define(() => {
 
       await profile.waitFor();
       await expect.poll(() => profile.isDisabled()).toBe(true);
-      expect(await profile.getAttribute("title")).toBe(
-        "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
-      );
+      await expect
+        .poll(() => tooltipTitleText(profile))
+        .toBe(
+          "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+        );
       await page.keyboard.press("Escape");
 
       await model.click();

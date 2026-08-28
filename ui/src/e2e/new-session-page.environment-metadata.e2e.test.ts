@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   WORKSPACE,
   captureDeviceRuntimeUiProof,
@@ -121,7 +122,7 @@ suite.define(() => {
       await whereTrigger.click();
       await expect.poll(() => device.isEnabled()).toBe(true);
       await expect.poll(() => restrictedDevice.isDisabled()).toBe(true);
-      expect(await restrictedDevice.getAttribute("title")).toMatch(/enable|approv/i);
+      await expect.poll(() => tooltipTitleText(restrictedDevice)).toMatch(/enable|approv/i);
       await captureDeviceRuntimeUiProof(
         page,
         "02-codex-zero-slot-enabled-denied-command-disabled.png",
@@ -136,9 +137,9 @@ suite.define(() => {
       await expect
         .poll(() => device.locator(".new-session-page__menu-fact").allTextContents())
         .toEqual(["This runtime does not support paired devices"]);
-      expect(await device.getAttribute("title")).toBe(
-        "This runtime does not support paired devices",
-      );
+      await expect
+        .poll(() => tooltipTitleText(device))
+        .toBe("This runtime does not support paired devices");
       await captureDeviceRuntimeUiProof(page, "03-cloud-only-device-disabled.png");
       await page.keyboard.press("Escape");
 

@@ -1,4 +1,4 @@
-import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -33,6 +33,33 @@ type ControlUiE2eSuite = {
     run: (fixture: ControlUiE2ePage) => Promise<T>,
   ) => Promise<T>;
 };
+
+/* The shared title tooltip (components/tooltip-title.ts) lifts a hovered or
+   focused element's `title` into its overlay and blanks the attribute until
+   pointer-leave/focusout, so elements that can sit under the pointer or hold
+   focus race a raw getAttribute("title") read. Read the lifted overlay
+   description when the attribute is blank. */
+export function tooltipTitleText(item: Locator) {
+  return item.evaluate((element) => {
+    const title = element.getAttribute("title");
+    if (title) {
+      return title;
+    }
+    // The overlay describes the first interactive descendant when the titled
+    // row itself is not describable (tooltip.ts resolveDescribedElement), so
+    // link rows carry the description on their nested anchor.
+    const described = element.hasAttribute("aria-describedby")
+      ? element
+      : (element.querySelector("[aria-describedby]") ?? element);
+    const root = described.getRootNode();
+    const scope = root instanceof ShadowRoot ? root : described.ownerDocument;
+    return (described.getAttribute("aria-describedby") ?? "")
+      .split(/\s+/u)
+      .map((id) => scope.getElementById(id)?.textContent?.trim() ?? "")
+      .filter(Boolean)
+      .join(" ");
+  });
+}
 
 export async function holdModuleResponse(page: Page, module: RegExp) {
   let release!: () => void;

@@ -3,6 +3,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -797,12 +798,12 @@ suite.define(() => {
       const failedStatus = failedGroup.locator(".chat-send-status");
       await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
       expect(await failedStatus.textContent()).toContain("Not sent");
-      expect(await failedStatus.getAttribute("title")).toBe(runError);
+      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
 
       await page.reload();
       await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
       expect(await failedStatus.textContent()).toContain("Not sent");
-      expect(await failedStatus.getAttribute("title")).toBe(runError);
+      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
 
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
@@ -859,7 +860,7 @@ suite.define(() => {
       const failedStatus = failedGroup.locator(".chat-send-status");
       await failedGroup.waitFor({ state: "visible", timeout: 30_000 });
       expect(await failedStatus.textContent()).toContain("Not sent");
-      expect(await failedStatus.getAttribute("title")).toBe(runError);
+      await expect.poll(() => tooltipTitleText(failedStatus)).toBe(runError);
       await page.getByRole("button", { name: "Retry queued message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
       expect(retry.params).toMatchObject({
