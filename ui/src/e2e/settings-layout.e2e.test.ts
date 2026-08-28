@@ -245,45 +245,7 @@ suite.define(() => {
     }
   });
 
-  it("binds every settings row subtitle directly to its title", async () => {
-    await suite.withPage(
-      { colorScheme: "dark", locale: "en-US", viewport: { height: 900, width: 1440 } },
-      async ({ page }) => {
-        await installMockGateway(page);
-        let auditedPairCount = 0;
-
-        for (const route of settingsRowRoutes) {
-          const pathname = pathForRoute(route);
-          await page.goto(new URL(pathname, suite.server.baseUrl).toString());
-          await waitForControlUiRoute(page, {
-            pathname,
-            routeId: route,
-          });
-
-          const titleDescriptionPairs = page.locator(
-            ".settings-row__text > .settings-row__title + .settings-row__desc",
-          );
-          const gaps = await titleDescriptionPairs.evaluateAll((descriptions) =>
-            descriptions.map((description) => {
-              const title = description.previousElementSibling;
-              if (!(title instanceof HTMLElement)) {
-                throw new Error("settings row description is missing its title");
-              }
-              const titleBox = title.getBoundingClientRect();
-              const descriptionBox = description.getBoundingClientRect();
-              return Math.round(descriptionBox.y - titleBox.y - titleBox.height);
-            }),
-          );
-          auditedPairCount += gaps.length;
-          expect(gaps, `${route} title/subtitle gaps`).toEqual(gaps.map(() => 0));
-        }
-
-        expect(auditedPairCount).toBeGreaterThan(0);
-      },
-    );
-  });
-
-  it("keeps settings introductions, section headings, and Learn more links on one layout system", async () => {
+  it("keeps settings rows, introductions, section headings, and Learn more links on one layout system", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -298,13 +260,33 @@ suite.define(() => {
         await mkdir(proofDir, { recursive: true });
       }
 
-      const routes = new Set([...introRoutes, ...learnMoreRoutes, ...sectionAlignmentRoutes]);
-      for (const route of routes) {
-        await page.goto(`${suite.server.baseUrl}settings/${route}`);
+      let auditedPairCount = 0;
+      for (const route of settingsRowRoutes) {
+        const pathname = pathForRoute(route);
+        // Reload each route so earlier lazy styles cannot hide missing or misordered CSS.
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
         await waitForControlUiRoute(page, {
-          pathname: `/settings/${route}`,
+          pathname,
           routeId: route,
         });
+
+        const titleDescriptionPairs = page.locator(
+          ".settings-row__text > .settings-row__title + .settings-row__desc",
+        );
+        const gaps = await titleDescriptionPairs.evaluateAll((descriptions) =>
+          descriptions.map((description) => {
+            const title = description.previousElementSibling;
+            if (!(title instanceof HTMLElement)) {
+              throw new Error("settings row description is missing its title");
+            }
+            const titleBox = title.getBoundingClientRect();
+            const descriptionBox = description.getBoundingClientRect();
+            return Math.round(descriptionBox.y - titleBox.y - titleBox.height);
+          }),
+        );
+        auditedPairCount += gaps.length;
+        expect(gaps, `${route} title/subtitle gaps`).toEqual(gaps.map(() => 0));
+
         if ((introRoutes as readonly string[]).includes(route)) {
           const title = page.locator(".page-title");
           const subtitle = page.locator(".page-subtitle");
@@ -355,6 +337,8 @@ suite.define(() => {
           ).toBe("none");
         }
       }
+
+      expect(auditedPairCount).toBeGreaterThan(0);
 
       for (const guidanceLink of settingsGuidanceLinks) {
         await page.goto(`${suite.server.baseUrl}settings/${guidanceLink.route}`);
