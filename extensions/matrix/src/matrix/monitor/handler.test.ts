@@ -3182,7 +3182,10 @@ describe("matrix monitor handler draft streaming", () => {
             markComplete: () => {},
             waitForIdle: async () => {},
           },
-          replyOptions: {},
+          replyOptions: {
+            onReasoningStream: params?.onReasoningStream,
+            onReasoningEnd: params?.onReasoningEnd,
+          },
           markDispatchIdle: () => {},
           markRunComplete: () => {},
         };
