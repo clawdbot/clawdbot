@@ -495,14 +495,12 @@ export function writeConfig(params) {
   return { root, stateDir, workspace, configPath };
 }
 
-async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
+export async function fetchWithLease(url, init, lease, fetchImpl = fetch) {
   lease.assertHealthy();
   const controller = new AbortController();
   const outcome = await Promise.race([
-    fetchImpl(`https://api.telegram.org/bot${token}/test/${method}`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify(body),
+    fetchImpl(url, {
+      ...init,
       signal: controller.signal,
     }).then((response) => ({ type: "response", response })),
     lease.whenUnhealthy,
@@ -512,7 +510,20 @@ async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
     throw outcome.error;
   }
   lease.assertHealthy();
-  const response = outcome.response;
+  return outcome.response;
+}
+
+async function telegram(token, method, body = {}, lease, fetchImpl = fetch) {
+  const response = await fetchWithLease(
+    `https://api.telegram.org/bot${token}/test/${method}`,
+    {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify(body),
+    },
+    lease,
+    fetchImpl,
+  );
   const payload = await response.json();
   lease.assertHealthy();
   if (!response.ok || !payload.ok) {
