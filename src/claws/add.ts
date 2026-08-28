@@ -424,6 +424,34 @@ export async function applyClawAddPlan(
   }
 
   try {
+    await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
+      ...options,
+      ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
+    });
+  } catch (error) {
+    markInstallStatus(
+      plan.agent.finalId,
+      "workspace_ready",
+      ["workspace_ready", "config_committed"],
+      options,
+    );
+    return partialResult({
+      plan,
+      installRecord,
+      workspaceCreated,
+      configCommitted: false,
+      packages,
+      installStatus: "workspace_ready",
+      error: {
+        code: error instanceof ClawBootstrapWriteError ? error.code : "bootstrap_write_failed",
+        message: coerceErrorMessage(error),
+      },
+      nowMs: options.nowMs,
+    });
+  }
+
+  let workspaceFiles: PersistedClawWorkspaceFile[] = [];
+  try {
     const configCommit = await commitClawAgentConfig({
       plan,
       workspace,
@@ -473,6 +501,7 @@ export async function applyClawAddPlan(
       installRecord,
       workspaceCreated,
       configCommitted,
+      workspaceFiles,
       packages,
       installStatus,
       error: {
@@ -483,39 +512,7 @@ export async function applyClawAddPlan(
     });
   }
 
-  try {
-    await (options.seedPackageBootstrap ?? seedClawPackageBootstrap)(plan, {
-      ...options,
-      ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
-    });
-  } catch (error) {
-    await rollbackAgentConfigReservation();
-    const installStatus: ClawInstallStatus = configCommitted
-      ? "config_committed"
-      : "workspace_ready";
-    markInstallStatus(
-      plan.agent.finalId,
-      installStatus,
-      configCommitted ? ["config_committed"] : ["workspace_ready", "config_committed"],
-      options,
-    );
-    return partialResult({
-      plan,
-      installRecord,
-      workspaceCreated,
-      configCommitted,
-      packages,
-      installStatus,
-      error: {
-        code: error instanceof ClawBootstrapWriteError ? error.code : "bootstrap_write_failed",
-        message: coerceErrorMessage(error),
-      },
-      nowMs: options.nowMs,
-    });
-  }
-
   const createFiles = options.createWorkspaceFiles ?? createClawWorkspaceFiles;
-  let workspaceFiles: PersistedClawWorkspaceFile[] = [];
   try {
     workspaceFiles = await createFiles(plan, options);
   } catch (error) {

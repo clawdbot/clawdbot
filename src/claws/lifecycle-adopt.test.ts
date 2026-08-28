@@ -251,8 +251,11 @@ describe("applyClawAddPlan workspace adoption", () => {
       status: "partial",
     });
 
+    expect(seedPackageBootstrap).toHaveBeenCalledOnce();
     expect(commitConfig).toHaveBeenCalledOnce();
-    expect(seedPackageBootstrap).not.toHaveBeenCalled();
+    expect(seedPackageBootstrap.mock.invocationCallOrder[0]).toBeLessThan(
+      commitConfig.mock.invocationCallOrder[0] ?? 0,
+    );
     expect(createWorkspaceFiles).not.toHaveBeenCalled();
   });
 });
