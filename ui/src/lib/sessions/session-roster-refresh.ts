@@ -256,6 +256,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         }
         const queued = entry.queued;
         entry.queued = null;
+        if (queued && pageActive) {
+          entry.coordinator.absorb();
+        }
         next = pageActive ? queued : null;
       }
     };
@@ -404,8 +407,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     if (!pageActive) {
       return null;
     }
-    eventRefreshQueued = false;
-    return { ...lastListOptions, force: true };
+    const options = { ...lastListOptions, force: true };
+    absorbPendingEventRefresh();
+    return options;
   };
 
   const prepareRefreshOptions = (options: SessionRefreshOptions): SessionRefreshOptions => {

@@ -294,18 +294,29 @@ class ControlModelImpl implements ControlModel {
 
   async #drainRefreshes(): Promise<void> {
     let firstError: unknown;
+    let hasError = false;
+    let initialRefresh = true;
     while (this.#refreshRequested && this.#snapshot.lifecycle !== "disposed") {
+      if (!initialRefresh) {
+        this.#eventRefreshCoordinator.absorb();
+      }
+      initialRefresh = false;
       this.#refreshRequested = false;
       const options = this.#refreshOptions;
       this.#refreshOptions = undefined;
       try {
         await this.#refreshOnce(options);
       } catch (error) {
-        firstError ??= error;
+        if (!hasError) {
+          firstError = error;
+          hasError = true;
+        }
       }
     }
-    if (firstError !== undefined) {
-      throw firstError;
+    if (hasError) {
+      throw firstError instanceof Error
+        ? firstError
+        : new Error("Session catalog refresh failed", { cause: firstError });
     }
   }
 
@@ -439,7 +450,7 @@ class ControlModelImpl implements ControlModel {
       if (this.#snapshot.lifecycle === "disposed") {
         return;
       }
-      for (const subscriber of [...this.#subscribers]) {
+      for (const subscriber of Array.from(this.#subscribers)) {
         if (this.#snapshot.lifecycle === "disposed") {
           break;
         }
