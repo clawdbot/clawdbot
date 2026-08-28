@@ -88,16 +88,9 @@ export async function persistAbortedPartials(params: {
     const sessionId = entry?.sessionId ?? snapshot.sessionId;
     // A run that committed its final assistant row keeps the same text in its
     // live buffer until the lifecycle end clears it. Appending the abort
-    // partial then would duplicate the committed reply in the transcript.
-    const committedText = await readLastCommittedAssistantText({
-      sessionKey: params.sessionKey,
-      sessionId,
-      storePath,
-      ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
-    });
-    if (committedText === snapshot.text) {
-      continue;
-    }
+    // partial then would duplicate the committed reply in the transcript. The
+    // committed-row read runs inside the session writer queue, so the decision
+    // is atomic with the append against a racing final commit.
     const appended = await appendAssistantTranscriptMessage({
       sessionKey: params.sessionKey,
       message: snapshot.text,
@@ -106,6 +99,15 @@ export async function persistAbortedPartials(params: {
       ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
       createIfMissing: true,
       idempotencyKey: `${snapshot.runId}:assistant`,
+      shouldAppend: async (writerContext) => {
+        const committedText = await readLastCommittedAssistantText({
+          sessionKey: params.sessionKey,
+          sessionId: writerContext.sessionId ?? sessionId,
+          storePath: writerContext.storePath ?? storePath,
+          ...(snapshot.agentId ? { agentId: snapshot.agentId } : {}),
+        });
+        return committedText !== snapshot.text;
+      },
       cfg,
       abortMeta: {
         aborted: true,
@@ -113,6 +115,9 @@ export async function persistAbortedPartials(params: {
         runId: snapshot.runId,
       },
     });
+    if (appended.skipped) {
+      continue;
+    }
     if (!appended.ok) {
       const error = `chat.abort transcript append failed: ${appended.error ?? "unknown error"}`;
       params.context.logGateway.warn(error);

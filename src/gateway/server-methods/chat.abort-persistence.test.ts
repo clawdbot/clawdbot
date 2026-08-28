@@ -490,6 +490,46 @@ describe("chat abort transcript persistence", () => {
     expect(committedRows[0]?.openclawAbort).toBeUndefined();
   });
 
+  it("treats a declined committed-reply skip as a decision, not a placement-abandon failure", async () => {
+    const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
+      "openclaw-chat-abort-skip-decision-",
+    );
+    appendTranscriptMessageSync(
+      { agentId: "main", sessionId, sessionKey: "main", storePath },
+      {
+        idempotencyLookup: "caller-checked",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Completed reply" }],
+          timestamp: Date.now(),
+          stopReason: "stop",
+        },
+        now: 1,
+      },
+    );
+
+    // The skip happens inside the writer queue after the append decision was
+    // handed off, so it must not surface as a failed placement abandonment.
+    await persistAbortedPartials({
+      context: { logGateway: { warn: vi.fn() } },
+      sessionKey: "main",
+      snapshots: [
+        {
+          runId: "stalled-placement-run",
+          sessionId,
+          agentId: "main",
+          text: "Completed reply",
+          abortOrigin: "placement-abandon",
+        },
+      ],
+    });
+
+    const lines = await readTranscriptLines(transcriptPath);
+    const committedRows = collectAssistantRowsWithText(lines, "Completed reply");
+    expect(committedRows).toHaveLength(1);
+    expect(committedRows[0]?.openclawAbort).toBeUndefined();
+  });
+
   it("does not let non-assistant idempotency collisions suppress abort partial persistence", async () => {
     const { transcriptPath, sessionId, storePath } = await createTranscriptFixture(
       "openclaw-chat-abort-idempotency-collision-",

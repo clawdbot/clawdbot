@@ -30,6 +30,8 @@ type TranscriptAppendResult = {
   ok: boolean;
   messageId?: string;
   message?: Record<string, unknown>;
+  /** Set when the writer-queue predicate declined the append; not an error. */
+  skipped?: boolean;
   error?: string;
 };
 
@@ -283,6 +285,13 @@ export async function appendAssistantTranscriptMessage(params: {
   agentId?: string;
   createIfMissing?: boolean;
   idempotencyKey?: string;
+  /** Writer-queue predicate: false skips the append atomically with the write. */
+  shouldAppend?: (context: {
+    agentId?: string;
+    sessionId?: string;
+    sessionKey?: string;
+    storePath?: string;
+  }) => Promise<boolean> | boolean;
   abortMeta?: {
     aborted: true;
     origin: "rpc" | "stop-command" | "placement-abandon";
@@ -308,6 +317,7 @@ export async function appendAssistantTranscriptMessage(params: {
     label: params.label,
     content: params.content,
     idempotencyKey: params.idempotencyKey,
+    ...(params.shouldAppend ? { shouldAppend: params.shouldAppend } : {}),
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
     config: params.cfg,
