@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "@openclaw/normalization-core";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildReleaseExecutionPlanArtifact,
   releaseCompositeJobsSha256,
@@ -39,10 +39,12 @@ import {
   validateRequestedEvidenceReuse,
   validateTrustedProducerIdentity,
 } from "../../scripts/release-ci-summary.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = "scripts/release-ci-summary.mjs";
 const MANIFEST_ARTIFACT_ENTRY = "full-release-validation-manifest.json";
 const hasUnzip = spawnSync("unzip", ["-v"], { stdio: "ignore" }).status === 0;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("GitHub API commands", () => {
   it("delegates authentication to gh for REST and artifact requests", () => {
@@ -340,7 +342,7 @@ describe("runReleaseCiGh", () => {
 
 describe("Release execution plan artifact reads", () => {
   it("treats GitHub CLI 2.93 missing named artifacts as unavailable", () => {
-    const root = mkdtempSync(join(tmpdir(), "release-plan-missing-artifact-"));
+    const root = tempDirs.make("release-plan-missing-artifact-");
     const ghPath = join(root, "gh");
     writeFileSync(
       ghPath,
@@ -362,7 +364,6 @@ process.exit(1);
       } else {
         process.env.PATH = previousPath;
       }
-      rmSync(root, { force: true, recursive: true });
     }
   });
 });
@@ -1302,17 +1303,42 @@ describe("release CI summary child correlation", () => {
     };
     manifest.executionPlanSha256 = String(executionPlan.sha256);
     manifest.sourceParentRunAttempt = 1;
+    manifest.runAttempt = "2";
     manifest.childEvidence = {
       releaseChecks: releaseChecksEvidence,
     };
+    fixture.parentRun.run_attempt = 2;
+    fixture.parentView.attempt = 2;
+    fixture.artifact.name = `full-release-validation-${fixture.runId}-2`;
+    const skippedParentJob = {
+      completed_at: "2026-08-22T00:02:00Z",
+      conclusion: "skipped",
+      id: fixture.parentJob.id + 1,
+      name: fixture.parentJob.name,
+      run_attempt: 2,
+      started_at: "2026-08-22T00:02:00Z",
+      status: "completed",
+      steps: [],
+    };
     client.loadExecutionPlan = () => executionPlan;
+    client.loadManifest = (requestedRunId: string, requestedRunAttempt: number) => {
+      expect(requestedRunId).toBe(fixture.runId);
+      expect(requestedRunAttempt).toBe(2);
+      return { artifact: fixture.artifact, manifest };
+    };
+    client.getParentJobs = (requestedRunId: string) => {
+      expect(requestedRunId).toBe(fixture.runId);
+      return [fixture.parentJob, skippedParentJob];
+    };
     client.getRunAttemptJobs = (_runId: string, attempt: number) =>
       attempt === 1 ? [firstAttemptJob] : [secondAttemptJob];
-    fixture.client.getJobLog = () =>
-      [
+    fixture.client.getJobLog = (jobId: number) => {
+      expect(jobId).toBe(fixture.parentJob.id);
+      return [
         `TARGET_SHA: ${fixture.targetSha}`,
         `Dispatched openclaw-release-checks.yml: ${fixture.childRun.html_url} (attempt 1)`,
       ].join("\n");
+    };
 
     const evidence = validateReleaseRunEvidence(
       {
@@ -1357,6 +1383,44 @@ describe("release CI summary child correlation", () => {
         fixture.client,
       ),
     ).toThrow("execution plan child dispatch tuple mismatch");
+  });
+
+  it("rejects a parent recovery that reruns a sealed child dispatch slot", () => {
+    const child = expectedChildDispatches("28717729503", 2, "main").find(
+      (entry) => entry.manifestKey === "releaseChecks",
+    );
+    if (!child) {
+      throw new Error("missing release checks fixture");
+    }
+    const parentManifest = { runAttempt: 2, runId: "28717729503" };
+    const parentJobs = [
+      {
+        completed_at: "2026-08-22T00:01:00Z",
+        conclusion: "success",
+        id: 900,
+        name: child.parentJobName,
+        run_attempt: 1,
+        started_at: "2026-08-22T00:00:00Z",
+        status: "completed",
+        steps: [],
+      },
+      {
+        completed_at: "2026-08-22T00:02:00Z",
+        conclusion: "success",
+        id: 901,
+        name: child.parentJobName,
+        run_attempt: 2,
+        started_at: "2026-08-22T00:01:00Z",
+        status: "completed",
+        steps: [],
+      },
+    ];
+
+    expect(() =>
+      selectManifestParentJob(parentJobs, child, parentManifest, 1, {
+        requireSkippedCarryForward: true,
+      }),
+    ).toThrow("manifest parent job was redispatched during recovery");
   });
 
   it("accepts beta advisory release-check failures through canonical policy", () => {

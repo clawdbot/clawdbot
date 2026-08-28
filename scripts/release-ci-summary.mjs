@@ -996,11 +996,7 @@ function selectedAttemptParentJob(parentJobs, child, parentManifest) {
   if (currentJobs.length !== 1) {
     throw new Error(`manifest parent job is not unique at the selected attempt: ${child.name}`);
   }
-  const currentJob = currentJobs[0];
-  if (currentJob.status !== "completed" || currentJob.conclusion !== "success") {
-    throw new Error(`manifest parent job is not completed/success: ${child.name}`);
-  }
-  return { currentJob, slotJobs };
+  return { currentJob: currentJobs[0], slotJobs };
 }
 
 export function resolveManifestChildOriginAttempt(run, child, parentManifest, parentJobs) {
@@ -1018,6 +1014,9 @@ export function resolveManifestChildOriginAttempt(run, child, parentManifest, pa
   }
 
   const { currentJob, slotJobs } = selectedAttemptParentJob(parentJobs, child, parentManifest);
+  if (currentJob.status !== "completed" || currentJob.conclusion !== "success") {
+    throw new Error(`manifest parent job is not completed/success: ${child.name}`);
+  }
   const currentFingerprint = JSON.stringify(parentJobExecutionFingerprint(currentJob));
   const carriedOriginAttempts = slotJobs
     .filter(
@@ -1033,12 +1032,14 @@ export function resolveManifestChildOriginAttempt(run, child, parentManifest, pa
     : parentManifest.runAttempt;
 }
 
-export function selectManifestParentJob(parentJobs, child, parentManifest, originAttempt) {
+export function selectManifestParentJob(
+  parentJobs,
+  child,
+  parentManifest,
+  originAttempt,
+  options = {},
+) {
   const { currentJob, slotJobs } = selectedAttemptParentJob(parentJobs, child, parentManifest);
-  if (originAttempt === parentManifest.runAttempt) {
-    return currentJob;
-  }
-
   const originJobs = slotJobs.filter((job) => Number(job.run_attempt) === originAttempt);
   if (originJobs.length !== 1) {
     throw new Error(`manifest parent job origin is not unique: ${child.name}`);
@@ -1046,6 +1047,28 @@ export function selectManifestParentJob(parentJobs, child, parentManifest, origi
   const originJob = originJobs[0];
   if (originJob.status !== "completed" || originJob.conclusion !== "success") {
     throw new Error(`manifest parent job origin is not completed/success: ${child.name}`);
+  }
+  if (originAttempt === parentManifest.runAttempt) {
+    return originJob;
+  }
+  if (originAttempt > parentManifest.runAttempt) {
+    throw new Error(`manifest parent job origin attempt is invalid: ${child.name}`);
+  }
+  if (options.requireSkippedCarryForward === true) {
+    for (let attempt = originAttempt + 1; attempt <= parentManifest.runAttempt; attempt += 1) {
+      const carriedJobs = slotJobs.filter((job) => Number(job.run_attempt) === attempt);
+      if (carriedJobs.length !== 1) {
+        throw new Error(`manifest parent job carry-forward is not unique: ${child.name}`);
+      }
+      const carriedJob = carriedJobs[0];
+      if (carriedJob.status !== "completed" || carriedJob.conclusion !== "skipped") {
+        throw new Error(`manifest parent job was redispatched during recovery: ${child.name}`);
+      }
+    }
+    return originJob;
+  }
+  if (currentJob.status !== "completed" || currentJob.conclusion !== "success") {
+    throw new Error(`manifest parent job is not completed/success: ${child.name}`);
   }
   if (
     JSON.stringify(parentJobExecutionFingerprint(currentJob)) !==
@@ -1065,6 +1088,7 @@ export function validateManifestChildRun(
   selectedParentJobLog,
   repository,
   plannedRunAttempt,
+  requireSkippedCarryForward = false,
 ) {
   const targetRepository = repository ?? DEFAULT_REPO;
   if (String(run.id) !== String(runId)) {
@@ -1101,7 +1125,9 @@ export function validateManifestChildRun(
   if (childWorkflowPath !== `.github/workflows/${child.workflow}`) {
     throw new Error(`manifest child workflow mismatch: ${child.name}`);
   }
-  selectManifestParentJob(parentJobs, child, parentManifest, originAttempt);
+  selectManifestParentJob(parentJobs, child, parentManifest, originAttempt, {
+    requireSkippedCarryForward,
+  });
   validateReleaseChildDispatchBinding({
     child: {
       key: child.manifestKey,
@@ -1697,6 +1723,7 @@ function validateStrictChildRun({
     child,
     parentEvidence.manifest,
     originAttempt,
+    { requireSkippedCarryForward: plannedChild !== undefined },
   );
   validateManifestChildRun(
     run,
@@ -1707,6 +1734,7 @@ function validateStrictChildRun({
     client.getJobLog(parentJob.id),
     repository,
     plannedChild?.runAttempt,
+    plannedChild !== undefined,
   );
   let jobs;
   let composite;
