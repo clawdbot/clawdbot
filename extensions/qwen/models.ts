@@ -26,6 +26,7 @@ export const QWEN_36_FLASH_MODEL_ID = "qwen3.6-flash";
 export const QWEN_36_PLUS_MODEL_ID = "qwen3.6-plus";
 export const QWEN_37_MAX_MODEL_ID = "qwen3.7-max";
 export const QWEN_37_PLUS_MODEL_ID = "qwen3.7-plus";
+const QWEN_38_MAX_MODEL_ID = "qwen3.8-max";
 export const QWEN_DEFAULT_COST = {
   input: 0,
   output: 0,
@@ -39,6 +40,13 @@ export const QWEN_TOKEN_PLAN_DEFAULT_MODEL_REF = `${QWEN_TOKEN_PLAN_PROVIDER_ID}
 export function isQwenTokenPlanThinkingOnlyModelId(modelId: string): boolean {
   const normalized = modelId.trim().toLowerCase();
   return normalized === "minimax-m2.5" || normalized.startsWith("kimi-k2.7-code");
+}
+
+// Hybrid thinking that also honours `reasoning_effort`. The generic branch drops
+// `reasoning_effort`, which would strand this model at the service default of xhigh,
+// so it gets its own contract keeping the effort enum alongside the on/off switch.
+export function isQwenTokenPlanEffortThinkingModelId(modelId: string): boolean {
+  return modelId.trim().toLowerCase() === QWEN_38_MAX_MODEL_ID;
 }
 
 export function isQwenTokenPlanDeepSeekV4ModelId(modelId: string): boolean {
@@ -92,6 +100,7 @@ function buildQwenCatalogModels(rows: readonly QwenCatalogModelRow[]): ModelDefi
 // This curated picker catalog keeps current recommendations plus one selectable compatibility row.
 export const QWEN_TOKEN_PLAN_MODEL_CATALOG: ReadonlyArray<ModelDefinitionConfig> =
   buildQwenCatalogModels([
+    [QWEN_38_MAX_MODEL_ID, true, ["text", "image"], 1_000_000, 131_072],
     [QWEN_37_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
     [QWEN_36_PLUS_MODEL_ID, true, ["text", "image"], 1_000_000, 65_536],
     ["qwen3-coder-next", true, ["text"], 262_144, 65_536],

@@ -107,6 +107,7 @@ describe("qwen token plan provider catalog", () => {
     expect(provider.baseUrl).toBe(QWEN_TOKEN_PLAN_GLOBAL_BASE_URL);
     expect(provider.api).toBe("openai-completions");
     expect(modelIds).toEqual([
+      "qwen3.8-max",
       QWEN_TOKEN_PLAN_DEFAULT_MODEL_ID,
       "qwen3.6-plus",
       "qwen3-coder-next",
@@ -158,7 +159,7 @@ describe("qwen token plan provider catalog", () => {
     "opts Token Plan endpoint %s into native streaming usage",
     (baseUrl) => {
       const provider = applyQwenNativeStreamingUsageCompat(buildQwenTokenPlanProvider({ baseUrl }));
-      expect(provider.models).toHaveLength(6);
+      expect(provider.models).toHaveLength(7);
       expect(
         provider.models.every((model) => model.compat?.supportsUsageInStreaming === true),
       ).toBe(true);

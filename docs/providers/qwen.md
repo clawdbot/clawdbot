@@ -235,6 +235,7 @@ included here because they use different APIs.
 
 | Model ref                          | Input       | Context   | Picker status |
 | ---------------------------------- | ----------- | --------- | ------------- |
+| `qwen-token-plan/qwen3.8-max`      | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3.7-plus`     | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3.6-plus`     | text, image | 1,000,000 | visible       |
 | `qwen-token-plan/qwen3-coder-next` | text        | 262,144   | hidden        |
@@ -254,7 +255,11 @@ alternate chat-template thinking payload by setting
 
 Token Plan models are also marked reasoning-capable. `kimi-k2.7-code` and
 `MiniMax-M2.5` are thinking-only, so OpenClaw keeps thinking enabled even when
-the session requests `/think off`. DeepSeek V4 maps `minimal` through `high` to
+the session requests `/think off`. `qwen3.8-max` is hybrid: thinking can be
+switched off, and when it is on it honours an effort setting, so it exposes
+`off`, `low`, `medium`, `high`, and `xhigh` levels and defaults to `xhigh`,
+matching the service default. OpenClaw maps `minimal` down to `low` and `max`
+to `xhigh`; the other levels pass through unchanged. DeepSeek V4 maps `minimal` through `high` to
 the service's `high` effort and maps `xhigh` or `max` to `max`. GLM 5.2 accepts
 the full `minimal` through `max` range; GLM 5.1 and GLM 5 accept through
 `xhigh`, and all three default to `high`. Other hybrid models follow the
