@@ -51,6 +51,13 @@ function isBundleMcpAllowlistName(normalized: string): boolean {
   return normalized === "bundle-mcp" || normalized.includes(TOOL_NAME_SEPARATOR);
 }
 
+// A `__`-separated allowlist entry is ambiguous: bundle MCP tools use that
+// shape, but so does a plugin's own registered tool name. Only the
+// unambiguous "bundle-mcp" group name can be excluded from plugin construction.
+function isBundleMcpConstructionGroupName(normalized: string): boolean {
+  return normalized === "bundle-mcp";
+}
+
 function hasWildcardToolAllowlist(toolsAllow: string[]): boolean {
   return toolsAllow.some((entry) => normalizeToolPolicyName(entry) === "*");
 }
@@ -160,8 +167,10 @@ function resolveCodingToolConstructionPlanForAllowlist(
     if (family) {
       continue;
     }
-    // Plugin ids/tool names are not known to the local factory catalog.
-    if (!isBundleMcpAllowlistName(name)) {
+    // Plugin ids/tool names are not known to the local factory catalog. Only the
+    // unambiguous bundle-mcp group name is excluded: a `__` entry may still be a
+    // plugin tool, and skipping construction for it would drop the tool.
+    if (!isBundleMcpConstructionGroupName(name)) {
       includePluginTools = true;
     }
   }

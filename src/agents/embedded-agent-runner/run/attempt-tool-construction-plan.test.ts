@@ -623,14 +623,34 @@ describe("resolveEmbeddedAttemptToolConstructionPlan", () => {
     );
   });
 
-  it("skips local construction when only bundled tool runtimes can match", () => {
+  it("skips local construction for the unambiguous bundle-mcp group name", () => {
     expectConstructionPlan(
-      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["strict__strict_probe"] }),
+      resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: ["bundle-mcp"] }),
       {
         constructTools: false,
         includeCoreTools: false,
       },
     );
+  });
+
+  it("builds plugin tools for a namespaced allowlist entry a plugin may own", () => {
+    // `<prefix>__<tool>` is the shape bundle MCP uses AND the shape plugins use
+    // for their own registered tools, so it cannot be classified statically.
+    // Treating every `__` entry as bundle-MCP-only used to skip plugin
+    // construction outright, leaving an allowlisted plugin tool absent.
+    for (const toolName of [
+      "strict__strict_probe",
+      "mail-connector__send_message",
+      "calendar-connector__create_event",
+    ]) {
+      expectConstructionPlan(
+        resolveEmbeddedAttemptToolConstructionPlan({ toolsAllow: [toolName] }),
+        {
+          constructTools: true,
+          coding: { includePluginTools: true },
+        },
+      );
+    }
   });
 });
 
