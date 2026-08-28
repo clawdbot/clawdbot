@@ -35,13 +35,13 @@ import {
   claimDeliveryPlatformSendAttempt,
   enqueueDelivery,
   enqueueDeliveryOnce,
-  loadPendingDeliveries,
   markDeliveryPlatformOutcomeUnknown,
   markDeliveryPlatformSendDispatched,
   markDeliveryPlatformSendAttemptStarted,
   reserveDeliveryAttempt,
 } from "./delivery-queue-storage.js";
 import {
+  loadPendingDeliveries,
   asDeliverFn,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,

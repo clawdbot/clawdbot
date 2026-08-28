@@ -535,11 +535,6 @@ export const loadPendingDelivery = async (
 ): Promise<QueuedDelivery | null> =>
   loadDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir) as QueuedDelivery | null;
 
-/** Load all pending delivery entries from the queue. */
-export async function loadPendingDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
-  return loadDeliveryQueueEntries(OUTBOUND_DELIVERY_QUEUE_NAME, stateDir) as QueuedDelivery[];
-}
-
 /** Failed settlement retains owner metadata, but is never eligible for sending. */
 export async function loadUnfinishedDeliveries(stateDir?: string): Promise<QueuedDelivery[]> {
   return loadDeliveryQueueEntries(

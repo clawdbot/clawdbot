@@ -30,7 +30,7 @@ const BOUNDED_DELIVERY_RECEIPTS_SQL = `
     AND typeof(max_entries) = 'integer' AND max_entries BETWEEN 1 AND 9007199254740991`;
 
 export type DeliveryQueueDatabase = Pick<OpenClawStateKyselyDatabase, "delivery_queue_entries">;
-export const deliveryQueueRowColumns = [
+const deliveryQueueRowColumns = [
   "id",
   "entry_json",
   "enqueued_at",
