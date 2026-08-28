@@ -1,4 +1,4 @@
-// Operator scope compatibility tests cover legacy operator scope normalization.
+// Role scope checks preserve operator implications and role-prefix boundaries.
 import { describe, expect, it } from "vitest";
 import {
   resolveMissingRequestedScope,
@@ -7,15 +7,18 @@ import {
 } from "./operator-scope-compat.js";
 
 describe("roleScopesAllow", () => {
-  it("allows empty requested scope lists regardless of granted scopes", () => {
-    expect(
-      roleScopesAllow({
-        role: "operator",
-        requestedScopes: [],
-        allowedScopes: [],
-      }),
-    ).toBe(true);
-  });
+  it.each([
+    { requestedScopes: [], allowedScopes: [] },
+    { requestedScopes: ["", " \t"], allowedScopes: [] },
+    { requestedScopes: ["", " \t"], allowedScopes: ["operator.admin"] },
+  ])(
+    "ignores empty and blank requests: $requestedScopes with grants $allowedScopes",
+    ({ requestedScopes, allowedScopes }) => {
+      const params = { role: "operator", requestedScopes, allowedScopes };
+      expect(roleScopesAllow(params)).toBe(true);
+      expect(resolveMissingRequestedScope(params)).toBeNull();
+    },
+  );
 
   it("treats operator.read as satisfied by read/write/admin scopes", () => {
     expect(
@@ -162,14 +165,28 @@ describe("roleScopesAllow", () => {
     ).toBe(false);
   });
 
-  it("returns the first missing requested scope with operator compatibility", () => {
-    expect(
-      resolveMissingRequestedScope({
-        role: "operator",
-        requestedScopes: ["operator.read", "operator.write", "operator.approvals"],
-        allowedScopes: ["operator.write"],
-      }),
-    ).toBe("operator.approvals");
+  it.each([
+    {
+      role: " operator ",
+      requestedScopes: [
+        "",
+        " operator.read ",
+        "operator.read",
+        " operator.approvals \t",
+        "operator.admin",
+      ],
+      allowedScopes: [" operator.write ", "operator.write", ""],
+      missingScope: " operator.approvals \t",
+    },
+    {
+      role: " node ",
+      requestedScopes: [" \t", " node.exec ", "node.exec", " node.read \t", "operator.read"],
+      allowedScopes: [" node.exec ", "node.exec", ""],
+      missingScope: " node.read \t",
+    },
+  ])("returns the original first missing scope for $role", ({ missingScope, ...params }) => {
+    expect(resolveMissingRequestedScope(params)).toBe(missingScope);
+    expect(roleScopesAllow(params)).toBe(false);
   });
 
   it("returns null when all requested scopes are satisfied", () => {
@@ -186,7 +203,7 @@ describe("roleScopesAllow", () => {
     expect(
       resolveScopeOutsideRequestedRoles({
         requestedRoles: ["node", "operator"],
-        requestedScopes: ["node.exec", "operator.read"],
+        requestedScopes: ["", " \t", "node.exec", "operator.read"],
       }),
     ).toBeNull();
   });
@@ -195,8 +212,21 @@ describe("roleScopesAllow", () => {
     expect(
       resolveScopeOutsideRequestedRoles({
         requestedRoles: ["node", "operator"],
-        requestedScopes: ["node.exec", "vault.admin", "operator.read"],
+        requestedScopes: ["node.exec", " vault.admin \t", "operator.read"],
       }),
-    ).toBe("vault.admin");
+    ).toBe(" vault.admin \t");
   });
+
+  it.each([
+    { requestedScopes: [], outsideScope: null },
+    { requestedScopes: ["", "node.exec"], outsideScope: "" },
+    { requestedScopes: [" \t", "node.exec"], outsideScope: " \t" },
+  ])(
+    "returns the first scope with no requested roles: $requestedScopes",
+    ({ requestedScopes, outsideScope }) => {
+      expect(resolveScopeOutsideRequestedRoles({ requestedRoles: [], requestedScopes })).toBe(
+        outsideScope,
+      );
+    },
+  );
 });
