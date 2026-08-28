@@ -23,7 +23,8 @@ export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_r
 // which is the routing sentinel controlling non-delivery dispatch. This value only
 // labels sourceChannel provenance for genuinely internal completions (background
 // media generation, ACP harness tasks, subagent announce/wake handoffs) so they are
-// never diagnosed as originating from the nonexistent "webchat" browser surface.
+// never diagnosed as originating from the real webchat browser surface, which these
+// completions never touch.
 export const INTERNAL_PROVENANCE_SOURCE_CHANNEL = "internal" as const;
 
 export const INTER_SESSION_PROMPT_PREFIX_BASE = "[Inter-session message]";
