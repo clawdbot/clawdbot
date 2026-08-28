@@ -17,7 +17,10 @@ import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
 } from "../session-utils.js";
-import { discoverAllSessionsForUsage } from "./usage-session-loading.js";
+import {
+  discoverAllSessionsForUsage,
+  type UsageSessionSummaryTarget,
+} from "./usage-session-loading.js";
 
 export class UsageSessionInvalidRequestError extends Error {}
 
@@ -66,12 +69,8 @@ export function resolveSessionUsageTarget(
 
 export type UsageGroupingMode = "instance" | "family";
 
-export type UsageSessionSelection = {
+export type UsageSessionSelection = UsageSessionSummaryTarget & {
   key: string;
-  agentId: string;
-  sessionId: string;
-  sessionFile: string;
-  instances: Array<{ sessionId: string; sessionFile: string }>;
   label?: string;
   updatedAt: number;
   storeEntry?: SessionEntry;

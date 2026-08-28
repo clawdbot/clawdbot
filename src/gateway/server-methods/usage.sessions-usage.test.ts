@@ -724,7 +724,6 @@ describe("sessions.usage", () => {
     const storeKey = "agent:opus:main";
 
     await withUsageState(async (writeSessionFile) => {
-      writeSessionFile("current.jsonl");
       const oldSessionFile = writeSessionFile("old.jsonl.reset.2026-02-01T00-00-00.000Z");
       mockStoredSession(storeKey, "current");
       vi.mocked(discoverAllSessions).mockResolvedValueOnce([
@@ -738,7 +737,6 @@ describe("sessions.usage", () => {
         store: {
           [storeKey]: {
             sessionId: "current",
-            sessionFile: "current.jsonl",
             updatedAt: 1_000,
             usageFamilyKey: storeKey,
             usageFamilySessionIds: ["old", "current"],

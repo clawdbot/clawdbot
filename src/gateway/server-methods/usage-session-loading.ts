@@ -14,9 +14,15 @@ import {
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { listGatewayAgentsBasic } from "../agent-list.js";
-import type { UsageSessionSelection } from "./usage-session-selection.js";
 
 type DiscoveredSessionWithAgent = DiscoveredSession & { agentId: string };
+
+export type UsageSessionSummaryTarget = {
+  agentId: string;
+  sessionId: string;
+  sessionFile: string;
+  instances: Array<Pick<DiscoveredSession, "sessionId" | "sessionFile">>;
+};
 
 const USAGE_AGENT_LOAD_CONCURRENCY = 12;
 
@@ -82,7 +88,7 @@ export function mergeUsageCacheStatus(
 }
 
 export async function loadUsageSessionSummaries(params: {
-  entries: UsageSessionSelection[];
+  entries: UsageSessionSummaryTarget[];
   config: OpenClawConfig;
   startMs: number;
   endMs: number;
