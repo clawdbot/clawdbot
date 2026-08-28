@@ -2,9 +2,14 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  runOpenClawStateWriteTransaction,
+} from "../state/openclaw-state-db.js";
 import { setGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-snapshot.js";
 import { getGatewayPluginMetadataSnapshot } from "./current-plugin-metadata-state.js";
+import { writePersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
+import { loadInstalledPluginIndex } from "./installed-plugin-index.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import {
@@ -29,7 +34,8 @@ vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   }),
 }));
 
-const { listManagedPlugins, setManagedPluginEnabled } = await import("./management-service.js");
+const { listManagedPlugins, refreshManagedPluginMetadata, setManagedPluginEnabled } =
+  await import("./management-service.js");
 const roots: string[] = [];
 
 afterEach(() => {
@@ -37,6 +43,50 @@ afterEach(() => {
   closeOpenClawStateDatabaseForTest();
   cleanupTrackedTempDirs(roots);
   vi.unstubAllEnvs();
+});
+
+it("refreshes an externally changed install ledger before publishing management inventory", async () => {
+  const root = makeTrackedTempDir("managed-external-ledger", roots);
+  const pluginRoot = path.join(root, "external-install");
+  const loadPath = path.join(root, "configured-plugins");
+  mkdirSafeDir(pluginRoot);
+  mkdirSafeDir(loadPath);
+  const fixture = createColdPluginFixture({ rootDir: pluginRoot, pluginId: "external-candidate" });
+  vi.stubEnv("OPENCLAW_HOME", path.join(root, "home"));
+  vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "state"));
+  vi.stubEnv("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+  const config: OpenClawConfig = { plugins: { load: { paths: [loadPath] } } };
+  await writePersistedInstalledPluginIndex(
+    loadInstalledPluginIndex({ config, env: process.env, candidates: [], installRecords: {} }),
+  );
+  const boot = resolveConfigWidePluginMetadataSnapshot({
+    config,
+    env: process.env,
+    allowCurrent: false,
+  });
+  setGatewayPluginMetadataSnapshot(boot, { config, env: process.env });
+  expect(
+    (await listManagedPlugins({ config })).plugins.some((plugin) => plugin.id === fixture.pluginId),
+  ).toBe(false);
+
+  // Simulate a separate CLI process committing without this process's cache notifications.
+  runOpenClawStateWriteTransaction(({ db }) => {
+    db.prepare(
+      "UPDATE config_machine_state SET value_json = json_set(value_json, '$.index.installRecords', json(?)) WHERE state_key = 'plugins.installedIndex'",
+    ).run(
+      JSON.stringify({
+        [fixture.pluginId]: { source: "path", installPath: pluginRoot, sourcePath: pluginRoot },
+      }),
+    );
+  });
+
+  refreshManagedPluginMetadata({ config });
+
+  expect((await listManagedPlugins({ config })).plugins).toContainEqual(
+    expect.objectContaining({ id: fixture.pluginId, installed: true }),
+  );
+  expect(getGatewayPluginMetadataSnapshot()).toBe(boot);
+  expect(boot.byPluginId.has(fixture.pluginId)).toBe(false);
 });
 
 it.each([undefined, "main"])(

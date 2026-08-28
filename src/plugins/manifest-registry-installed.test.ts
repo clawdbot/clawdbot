@@ -19,6 +19,7 @@ import {
   loadPluginManifestRegistryForInstalledIndex,
   resolveInstalledManifestRegistryIndexFingerprint,
 } from "./manifest-registry-installed.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -272,7 +273,7 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     expect(second).toBe(first);
   });
 
-  it("reconstructs installed-index manifest registries when manifest files change", () => {
+  it("reconstructs installed-index manifests in a fresh operation after files change", () => {
     const rootDir = makeTempDir();
     const manifestPath = path.join(rootDir, "openclaw.plugin.json");
     writePlugin(rootDir, "installed", "installed-");
@@ -295,11 +296,13 @@ describe("loadPluginManifestRegistryForInstalledIndex", () => {
     const nextMtime = new Date(Date.now() + 5000);
     fs.utimesSync(manifestPath, nextMtime, nextMtime);
 
-    const second = loadPluginManifestRegistryForInstalledIndex({
-      index,
-      env,
-      includeDisabled: true,
-    });
+    const second = withPluginCache(createPluginCache(), () =>
+      loadPluginManifestRegistryForInstalledIndex({
+        index,
+        env,
+        includeDisabled: true,
+      }),
+    );
 
     expect(second).not.toBe(first);
     expect(second.plugins[0]?.modelSupport).toEqual({

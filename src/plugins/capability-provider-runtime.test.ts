@@ -1597,42 +1597,38 @@ describe("resolvePluginCapabilityProviders", () => {
     });
   });
 
-  it("reloads unprepared manifest metadata while applying bundled compat", () => {
-    const { cfg, enablementCompat } = createCompatChainConfig();
-    setBundledCapabilityFixture("mediaUnderstandingProviders");
-    mocks.withBundledPluginEnablementCompat.mockReturnValue(enablementCompat);
+  it.each(["same", "equivalent"] as const)(
+    "reuses manifest metadata while applying bundled compat to each %s config",
+    (configIdentity) => {
+      const first = createCompatChainConfig();
+      const second = configIdentity === "same" ? first : createCompatChainConfig();
+      setBundledCapabilityFixture("mediaUnderstandingProviders");
+      mocks.withBundledPluginEnablementCompat.mockReturnValue(first.enablementCompat);
 
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
-    );
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({ key: "mediaUnderstandingProviders", cfg }),
-    );
+      expectNoResolvedCapabilityProviders(
+        resolvePluginCapabilityProviders({
+          key: "mediaUnderstandingProviders",
+          cfg: first.cfg,
+        }),
+      );
+      expectNoResolvedCapabilityProviders(
+        resolvePluginCapabilityProviders({
+          key: "mediaUnderstandingProviders",
+          cfg: second.cfg,
+        }),
+      );
 
-    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledTimes(2);
-  });
-
-  it("reloads equivalent unprepared manifest metadata while applying bundled compat", () => {
-    const first = createCompatChainConfig();
-    const second = createCompatChainConfig();
-    setBundledCapabilityFixture("mediaUnderstandingProviders");
-    mocks.withBundledPluginEnablementCompat.mockReturnValue(first.enablementCompat);
-
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({
-        key: "mediaUnderstandingProviders",
-        cfg: first.cfg,
-      }),
-    );
-    expectNoResolvedCapabilityProviders(
-      resolvePluginCapabilityProviders({
-        key: "mediaUnderstandingProviders",
-        cfg: second.cfg,
-      }),
-    );
-
-    expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledTimes(2);
-  });
+      expect(mocks.loadPluginManifestRegistryCore).toHaveBeenCalledOnce();
+      expect(mocks.withBundledPluginEnablementCompat).toHaveBeenNthCalledWith(1, {
+        config: first.cfg,
+        pluginIds: ["openai"],
+      });
+      expect(mocks.withBundledPluginEnablementCompat).toHaveBeenNthCalledWith(2, {
+        config: second.cfg,
+        pluginIds: ["openai"],
+      });
+    },
+  );
 
   it("reuses a compatible active registry even when the capability list is empty", () => {
     const active = createEmptyPluginRegistry();

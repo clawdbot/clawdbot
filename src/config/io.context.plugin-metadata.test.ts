@@ -4,6 +4,7 @@ import {
   resolvePluginCandidateInstallOwner,
 } from "../plugins/candidate-install-owner.js";
 import type { PluginManifestRecord } from "../plugins/manifest-registry.js";
+import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { restorePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 
 const mocks = vi.hoisted(() => ({
@@ -17,7 +18,8 @@ vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
 
 const { resolveReadOnlyChannelPluginsForConfig } = await import("../channels/plugins/read-only.js");
 const { createConfigIoContext } = await import("./io.context.js");
-const { resolveConfigWidePluginMetadataSnapshot } = await import("./io.plugin-metadata.js");
+const { resolveConfigWidePluginMetadataSnapshot, resolveConfigWidePluginManifestRegistry } =
+  await import("./io.plugin-metadata.js");
 
 const agents = {
   ownership: "explicit" as const,
@@ -122,7 +124,43 @@ function workspaceSnapshot(
 
 describe("config IO plugin metadata snapshots", () => {
   beforeEach(() => {
+    clearPluginMetadataLifecycleCaches();
     mocks.resolvePluginMetadataSnapshot.mockReset();
+  });
+
+  it("shares first-access inventory across config reads and alternating plugin selections", () => {
+    const primary = manifestRecord({ id: "primary", source: "/srv/ops/primary" });
+    const secondary = manifestRecord({ id: "secondary", source: "/srv/research/secondary" });
+    const snapshots = new Map([
+      ["/srv/ops", workspaceSnapshot("/srv/ops", [primary])],
+      ["/srv/research", workspaceSnapshot("/srv/research", [secondary])],
+    ]);
+    mocks.resolvePluginMetadataSnapshot.mockImplementation(
+      ({ workspaceDir }: { workspaceDir: string }) => snapshots.get(workspaceDir),
+    );
+    const config = { agents };
+    for (let read = 0; read < 2; read++) {
+      const context = createConfigIoContext({ env: {}, observe: false });
+      const loader = context.createValidationPluginMetadataSnapshotLoader({
+        effectiveConfigRaw: config,
+        env: {},
+      });
+      loader.load(config);
+      expect(loader.getSnapshot()?.plugins.map((plugin) => plugin.id)).toEqual([
+        "primary",
+        "secondary",
+      ]);
+    }
+    for (const pluginId of ["primary", "secondary", "primary"]) {
+      expect(
+        resolveConfigWidePluginManifestRegistry({
+          config,
+          env: {},
+          pluginIds: [pluginId],
+        }).plugins.map((plugin) => plugin.id),
+      ).toEqual([pluginId]);
+    }
+    expect(mocks.resolvePluginMetadataSnapshot).toHaveBeenCalledTimes(2);
   });
 
   it("feeds merged workspace plugins to snapshot-backed read-only discovery", () => {

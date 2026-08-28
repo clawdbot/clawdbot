@@ -1,14 +1,23 @@
 /** Caches plugin module loaders and native-load stats for runtime/source module imports. */
+import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import type { createJiti } from "jiti";
+import { openRootFileSync } from "../infra/boundary-file-read.js";
+import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import {
   clearNativeRequireJavaScriptModuleCache,
   tryNativeRequireJavaScriptModule,
 } from "./native-module-require.js";
-import { PluginLruCache } from "./plugin-cache-primitives.js";
+import {
+  bindPluginCacheRoot,
+  getPluginCache,
+  getPluginCacheRoot,
+  getPluginCacheSource,
+  withPluginCache,
+} from "./plugin-cache.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
 import {
   buildPluginLoaderJitiOptions,
@@ -20,12 +29,9 @@ import {
 /** Jiti-based module loader used for plugin source/runtime imports. */
 type PluginModuleLoader = (target: string) => unknown;
 export type PluginModuleLoaderFactory = typeof createJiti;
-export type PluginModuleLoaderCache = Pick<
-  PluginLruCache<PluginModuleLoader>,
-  "clear" | "get" | "set" | "size"
->;
 type ResolvePluginModuleLoaderCacheEntryParams = {
   modulePath: string;
+  rootDir?: string;
   importerUrl: string;
   argvEntry?: string;
   preferBuiltDist?: boolean;
@@ -55,7 +61,6 @@ type PluginModuleLoaderStatsSnapshot = {
   topSourceTransformTargets: Array<{ target: string; count: number }>;
 };
 
-const DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES = 128;
 const MAX_TRACKED_SOURCE_TRANSFORM_TARGETS = 24;
 const requireForJiti = createRequire(import.meta.url);
 let createJitiLoaderFactory: PluginModuleLoaderFactory | undefined;
@@ -114,28 +119,30 @@ function loadCreateJitiLoaderFactory(): PluginModuleLoaderFactory {
   return createJitiLoaderFactory;
 }
 
-export function createPluginModuleLoaderCache(
-  maxEntries = DEFAULT_PLUGIN_MODULE_LOADER_CACHE_ENTRIES,
-): PluginModuleLoaderCache {
-  return new PluginLruCache<PluginModuleLoader>(maxEntries);
+function retainModuleLifecycle(cache: ReturnType<typeof getPluginCache>): void {
+  cache.disposeModules ??= () => {
+    for (const [modulePath, source] of cache.sources) {
+      const rootDir = source.boundaryRoot;
+      if (!rootDir) {
+        continue;
+      }
+      const extensionsDir =
+        path.basename(rootDir) === "extensions" ? rootDir : path.dirname(rootDir);
+      const distDir = path.dirname(extensionsDir);
+      const dependencyRoot =
+        path.basename(extensionsDir) === "extensions" && path.basename(distDir) === "dist"
+          ? distDir
+          : rootDir;
+      clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot });
+    }
+  };
 }
 
-/** Evicts loader closures and native modules, including bundled chunks hoisted into dist. */
-export function clearPluginModuleLoaderLifecycleCache(params: {
-  moduleLoaders: PluginModuleLoaderCache;
-  moduleRoots: Map<string, string>;
-}): void {
-  params.moduleLoaders.clear();
-  for (const [modulePath, rootDir] of params.moduleRoots) {
-    const extensionsDir = path.basename(rootDir) === "extensions" ? rootDir : path.dirname(rootDir);
-    const distDir = path.dirname(extensionsDir);
-    const dependencyRoot =
-      path.basename(extensionsDir) === "extensions" && path.basename(distDir) === "dist"
-        ? distDir
-        : rootDir;
-    clearNativeRequireJavaScriptModuleCache(modulePath, { dependencyRoot });
-  }
-  params.moduleRoots.clear();
+/** Direct native imports share the generation's dependency cleanup with transformed modules. */
+export function recordPluginModuleRoot(modulePath: string, rootDir: string): void {
+  const cache = getPluginCache();
+  getPluginCacheSource(modulePath, cache).boundaryRoot = rootDir;
+  retainModuleLifecycle(cache);
 }
 
 function toSourceTransformImportPath(specifier: string): string {
@@ -237,19 +244,29 @@ function createPluginModuleLoader(params: {
   tryNative: boolean;
   transformOpenClawDependencies: boolean;
   createLoader?: PluginModuleLoaderFactory;
+  cache: ReturnType<typeof getPluginCache>;
+  cacheKey: string;
+  rootDir?: string;
 }): PluginModuleLoader {
   // A declined native require can leave an ESM dependency in flight. The
   // fallback must transform both the entry and OpenClaw SDK dependencies.
   const getLoadWithSourceTransform = createLazySourceTransformLoader({
     ...params,
   });
-  const loadedTargetExports = new Map<string, unknown>();
   const loadCachedTarget = (target: string, load: () => unknown): unknown => {
-    if (loadedTargetExports.has(target)) {
-      return loadedTargetExports.get(target);
+    const source = getPluginCacheSource(target, params.cache);
+    const cached = source.variants.get(params.cacheKey)?.exports;
+    if (cached) {
+      return cached.value;
     }
-    const loaded = load();
-    loadedTargetExports.set(target, loaded);
+    source.boundaryRoot =
+      params.rootDir ??
+      source.boundaryRoot ??
+      path.dirname(target.startsWith("file:") ? fileURLToPath(target) : target);
+    // Lazy transforms and nested imports must read the creating generation,
+    // even when a retained loader is invoked from a newer operation scope.
+    const loaded = withPluginCache(params.cache, load);
+    source.variants.set(params.cacheKey, { exports: { value: loaded } });
     return loaded;
   };
   // When the caller has explicitly opted out of native loading, route every
@@ -291,27 +308,127 @@ function createPluginModuleLoader(params: {
 
 export function getCachedPluginModuleLoader(
   params: ResolvePluginModuleLoaderCacheEntryParams & {
-    cache: PluginModuleLoaderCache;
     createLoader?: PluginModuleLoaderFactory;
   },
 ): PluginModuleLoader {
   const cacheEntry = resolvePluginModuleLoaderCacheEntry(params);
-  const cached = params.cache.get(cacheEntry.scopedCacheKey);
+  const cache = getPluginCache();
+  const cached = cache.moduleLoaders.get(cacheEntry.scopedCacheKey);
   if (cached) {
     return cached;
   }
   // Exact-key hits already own the native aliases installed with their loader;
   // reinstallation would rescan the host package on every cached request.
   installOpenClawInternalCorePackageNativeResolver({ moduleUrl: params.importerUrl });
+  retainModuleLifecycle(cache);
   const loader = createPluginModuleLoader({
+    cache,
+    cacheKey: cacheEntry.scopedCacheKey,
+    rootDir: params.rootDir,
     loaderFilename: cacheEntry.loaderFilename,
     aliasMap: cacheEntry.aliasMap,
     tryNative: cacheEntry.tryNative,
     transformOpenClawDependencies: cacheEntry.transformOpenClawDependencies,
     ...(params.createLoader ? { createLoader: params.createLoader } : {}),
   });
-  params.cache.set(cacheEntry.scopedCacheKey, loader);
+  cache.moduleLoaders.set(cacheEntry.scopedCacheKey, loader);
   return loader;
+}
+
+type PublicSurfaceModuleLoadParams = {
+  modulePath: string;
+  boundaryRoot: string;
+  boundaryLabel: string;
+  rejectHardlinks: boolean;
+  surfaceLabel: string;
+};
+
+function preparePublicSurfaceModule(params: PublicSurfaceModuleLoadParams) {
+  const cache = getPluginCache();
+  let source = getPluginCacheSource(params.modulePath, cache);
+  const boundaryKey = `${getPluginCacheRoot(params.boundaryRoot).rootDir}\0${params.rejectHardlinks}`;
+  if (source.validatedBoundaries.has(boundaryKey)) {
+    return { source, modulePath: source.modulePath ?? params.modulePath };
+  }
+  const opened = openRootFileSync({
+    absolutePath: params.modulePath,
+    rootPath: params.boundaryRoot,
+    boundaryLabel: params.boundaryLabel,
+    rejectHardlinks: params.rejectHardlinks,
+  });
+  if (!opened.ok) {
+    throw new Error(`Unable to open ${params.surfaceLabel}`, { cause: opened.error });
+  }
+  fs.closeSync(opened.fd);
+  if (!sameFileIdentity(opened.stat, fs.statSync(opened.path))) {
+    throw new Error(`${params.surfaceLabel} changed after validation`);
+  }
+  const root = bindPluginCacheRoot(params.boundaryRoot, opened.rootRealPath);
+  // Facades reuse the first checked root classification. Explicit stricter
+  // callers still validate their own policy through validatedBoundaries above.
+  root.publicSurfaceBoundary ??= {
+    boundaryLabel: params.boundaryLabel,
+    rejectHardlinks: params.rejectHardlinks,
+  };
+  cache.sourceAliases.set(path.resolve(params.modulePath), opened.path);
+  source = getPluginCacheSource(opened.path, cache);
+  source.modulePath = opened.path;
+  source.validatedBoundaries.add(`${opened.rootRealPath}\0${params.rejectHardlinks}`);
+  retainModuleLifecycle(cache);
+  return { source, modulePath: opened.path };
+}
+
+/** Public artifacts and SDK facades share one validated module, including circular imports. */
+export function loadPluginPublicSurfaceModuleSync(
+  params: PublicSurfaceModuleLoadParams & {
+    loadModule: (modulePath: string) => unknown;
+  },
+): object {
+  const { source, modulePath } = preparePublicSurfaceModule(params);
+  const cached = source.publicSurface?.exports;
+  if (cached) {
+    return cached;
+  }
+  const sentinel: Record<string, unknown> = {};
+  source.publicSurface = { exports: sentinel };
+  source.boundaryRoot = params.boundaryRoot;
+  try {
+    Object.assign(sentinel, params.loadModule(modulePath));
+    return sentinel;
+  } catch (error) {
+    delete source.publicSurface;
+    source.validatedBoundaries.clear();
+    throw error;
+  }
+}
+
+export async function loadPluginPublicSurfaceModule(
+  params: PublicSurfaceModuleLoadParams & {
+    loadModule: (modulePath: string) => Promise<object>;
+  },
+): Promise<object> {
+  const { source, modulePath } = preparePublicSurfaceModule(params);
+  const cached = source.publicSurface;
+  if (cached?.exports) {
+    return cached.exports;
+  }
+  if (cached?.pending) {
+    return cached.pending;
+  }
+  source.boundaryRoot = params.boundaryRoot;
+  const pending = params.loadModule(modulePath).then(
+    (loaded) => {
+      source.publicSurface = { exports: loaded };
+      return loaded;
+    },
+    (error: unknown) => {
+      delete source.publicSurface;
+      source.validatedBoundaries.clear();
+      throw error;
+    },
+  );
+  source.publicSurface = { pending };
+  return pending;
 }
 
 export function getCachedPluginSourceModuleLoader(

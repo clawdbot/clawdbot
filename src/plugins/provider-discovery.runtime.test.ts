@@ -7,16 +7,12 @@ const mocks = vi.hoisted(() => {
   // Bind provider discovery to this file's mocks in non-isolated plugin workers.
   vi.resetModules();
   const loadSource = vi.fn();
-  const loaderCache = { kind: "provider-discovery-loader-cache", clear: vi.fn() };
   return {
     loadPluginMetadataSnapshot: vi.fn(),
     resolvePluginMetadataSnapshot: vi.fn(),
     resolveDiscoveredProviderPluginIds: vi.fn(),
     resolvePluginProvidersCore: vi.fn(),
     loadSource,
-    loaderCache,
-    clearNativeRequireJavaScriptModuleCache: vi.fn(),
-    createPluginModuleLoaderCache: vi.fn(() => loaderCache),
     getCachedPluginModuleLoader: vi.fn(() => loadSource),
   };
 });
@@ -40,16 +36,9 @@ vi.mock("./providers.runtime.js", () => ({
 
 vi.mock("./plugin-module-loader-cache.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./plugin-module-loader-cache.js")>()),
-  createPluginModuleLoaderCache: mocks.createPluginModuleLoaderCache,
   getCachedPluginModuleLoader: mocks.getCachedPluginModuleLoader,
 }));
 
-vi.mock("./native-module-require.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./native-module-require.js")>()),
-  clearNativeRequireJavaScriptModuleCache: mocks.clearNativeRequireJavaScriptModuleCache,
-}));
-
-import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
 import { resolvePluginDiscoveryProvidersRuntime } from "./provider-discovery.runtime.js";
 
 function createManifestPlugin(id: string): PluginManifestRecord {
@@ -448,7 +437,6 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
     const calls = mocks.getCachedPluginModuleLoader.mock.calls as unknown[][];
     const params = calls[0]?.[0] as
       | {
-          cache?: unknown;
           modulePath?: string;
           importerUrl?: string;
           loaderFilename?: string;
@@ -458,7 +446,6 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       | undefined;
     expect(params).toEqual(
       expect.objectContaining({
-        cache: mocks.loaderCache,
         modulePath: "/tmp/deepseek/provider-discovery.ts",
         importerUrl: expect.stringContaining("provider-discovery.runtime"),
         loaderFilename: expect.stringContaining("provider-discovery.runtime"),
@@ -466,47 +453,6 @@ describe("resolvePluginDiscoveryProvidersRuntime", () => {
       }),
     );
     expect(params?.tryNative).toBeUndefined();
-  });
-
-  it("clears the discovery module loader cache with plugin metadata lifecycle caches", () => {
-    const staticProvider = createProvider({ id: "deepseek", mode: "static" });
-    mocks.loadSource.mockReturnValue(staticProvider);
-
-    resolvePluginDiscoveryProvidersRuntime({});
-    clearPluginMetadataLifecycleCaches();
-
-    expect(mocks.loaderCache.clear).toHaveBeenCalledOnce();
-    expect(mocks.clearNativeRequireJavaScriptModuleCache).toHaveBeenCalledWith(
-      "/tmp/deepseek/provider-discovery.ts",
-      { dependencyRoot: "/tmp/deepseek" },
-    );
-  });
-
-  it("clears bundled dist discovery chunks from the dist root", () => {
-    const staticProvider = createProvider({ id: "deepseek", mode: "static" });
-    mocks.loadSource.mockReturnValue(staticProvider);
-    mocks.loadPluginMetadataSnapshot.mockReturnValue({
-      index: { plugins: [] },
-      manifestRegistry: {
-        plugins: [
-          {
-            ...createManifestPlugin("deepseek"),
-            rootDir: "/tmp/openclaw/dist/extensions/deepseek",
-            manifestPath: "/tmp/openclaw/dist/extensions/deepseek/openclaw.plugin.json",
-            providerDiscoverySource: "/tmp/openclaw/dist/extensions/deepseek/provider-discovery.js",
-          },
-        ],
-        diagnostics: [],
-      },
-    });
-
-    resolvePluginDiscoveryProvidersRuntime({});
-    clearPluginMetadataLifecycleCaches();
-
-    expect(mocks.clearNativeRequireJavaScriptModuleCache).toHaveBeenCalledWith(
-      "/tmp/openclaw/dist/extensions/deepseek/provider-discovery.js",
-      { dependencyRoot: "/tmp/openclaw/dist" },
-    );
   });
 
   it("keeps unscoped discovery bounded for mixed live and static-only entries", () => {

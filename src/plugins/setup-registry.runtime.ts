@@ -2,10 +2,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
-import {
-  resolvePluginMetadataSnapshot,
-  type PluginMetadataSnapshot,
-} from "./plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "./runtime-state.js";
 
 type SetupCliBackendDescriptorEntry = {
@@ -22,18 +19,9 @@ type SetupCliBackendDescriptorLookupParams = {
   env?: NodeJS.ProcessEnv;
 };
 
-type SetupCliBackendDescriptorCache = {
-  configFingerprint: string;
-  entries: SetupCliBackendDescriptorEntry[];
-};
-
-let cachedSetupCliBackendDescriptors: SetupCliBackendDescriptorCache | undefined;
-function resolveMetadataSnapshotForSetupCliBackends(
+function resolveSetupCliBackendDescriptors(
   params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
-): {
-  snapshot: PluginMetadataSnapshot;
-  cacheable: boolean;
-} {
+): SetupCliBackendDescriptorEntry[] {
   const env = params.env ?? process.env;
   const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
   const snapshot = resolvePluginMetadataSnapshot({
@@ -42,26 +30,8 @@ function resolveMetadataSnapshotForSetupCliBackends(
     ...(workspaceDir ? { workspaceDir } : {}),
     allowWorkspaceScopedCurrent: true,
   });
-  return {
-    snapshot,
-    cacheable: true,
-  };
-}
-
-function resolveSetupCliBackendDescriptors(
-  params: Omit<SetupCliBackendDescriptorLookupParams, "backend"> = {},
-): SetupCliBackendDescriptorEntry[] {
-  const { snapshot, cacheable } = resolveMetadataSnapshotForSetupCliBackends(params);
-  const configFingerprint = snapshot.configFingerprint;
-  if (
-    cacheable &&
-    configFingerprint &&
-    cachedSetupCliBackendDescriptors?.configFingerprint === configFingerprint
-  ) {
-    return cachedSetupCliBackendDescriptors.entries;
-  }
-  const entries = snapshot.plugins.flatMap((plugin) => {
-    if (!isInstalledPluginEnabled(snapshot.index, plugin.id)) {
+  return snapshot.plugins.flatMap((plugin) => {
+    if (!isInstalledPluginEnabled(snapshot.index, plugin.id, params.config)) {
       return [];
     }
     return [...plugin.cliBackends, ...(plugin.setup?.cliBackends ?? [])].map(
@@ -72,10 +42,6 @@ function resolveSetupCliBackendDescriptors(
         }) satisfies SetupCliBackendDescriptorEntry,
     );
   });
-  if (cacheable && configFingerprint) {
-    cachedSetupCliBackendDescriptors = { configFingerprint, entries };
-  }
-  return entries;
 }
 
 export function resolvePluginSetupCliBackendDescriptor(

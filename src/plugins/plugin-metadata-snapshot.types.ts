@@ -1,12 +1,12 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginDiscoveryResult } from "./discovery.js";
+import type { PluginDiscoveryResult } from "./discovery.types.js";
 import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.js";
-import type { PluginDiagnostic } from "./manifest-types.js";
+import type { PluginManifestRecord, PluginManifestRegistry } from "./manifest-registry.types.js";
 import type {
+  PluginDiagnostic,
   PluginManifestProviderEndpoint,
   PluginManifestProviderRequestProvider,
-} from "./manifest.js";
+} from "./manifest-types.js";
 import type { PluginRegistrySnapshotSource } from "./plugin-registry-snapshot.types.js";
 
 export type PluginMetadataSnapshotPluginIdScope = {

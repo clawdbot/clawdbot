@@ -1,9 +1,9 @@
 /**
  * Shared resolver for bundled plugin facade module paths and registry fallbacks.
  */
-import fs from "node:fs";
 import path from "node:path";
 import { areBundledPluginsDisabled } from "../plugins/bundled-dir.js";
+import { pluginCacheExistsSync } from "../plugins/plugin-cache-files.js";
 import {
   PUBLIC_SURFACE_SOURCE_EXTENSIONS,
   normalizeBundledPluginArtifactSubpath,
@@ -120,13 +120,13 @@ export function resolveRegistryPluginModuleLocationFromRecords(params: {
         path.join(rootDir, artifactBasename),
         path.join(rootDir, "dist", artifactBasename),
       ]) {
-        if (fs.existsSync(builtCandidate)) {
+        if (pluginCacheExistsSync(builtCandidate)) {
           return { modulePath: builtCandidate, boundaryRoot: rootDir };
         }
       }
       for (const ext of PUBLIC_SURFACE_SOURCE_EXTENSIONS) {
         const sourceCandidate = path.join(rootDir, `${sourceBaseName}${ext}`);
-        if (fs.existsSync(sourceCandidate)) {
+        if (pluginCacheExistsSync(sourceCandidate)) {
           return { modulePath: sourceCandidate, boundaryRoot: rootDir };
         }
       }

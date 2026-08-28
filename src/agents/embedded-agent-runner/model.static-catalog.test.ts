@@ -49,6 +49,7 @@ vi.mock("../../plugins/provider-discovery.js", async (importOriginal) => ({
   runProviderStaticCatalog: providerMocks.runProviderStaticCatalog,
 }));
 
+import { createPluginCache, withPluginCache } from "../../plugins/plugin-cache.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { getModelProviderRequestTransport } from "../provider-request-config.js";
 import {
@@ -146,6 +147,25 @@ beforeEach(() => {
 });
 
 describe("resolveBundledStaticCatalogModel", () => {
+  it("keeps static catalog plans inside their metadata owner for the same env and config", () => {
+    const plugin = createMistralManifestPlugin();
+    setManifestPlugins([plugin]);
+    const env = {};
+    const cfg = {};
+    const lookup = { provider: "mistral", modelId: "mistral-medium-3-5", cfg, env };
+    expect(resolveBundledStaticCatalogModel(lookup)?.contextWindow).toBe(262144);
+    const updated = createMistralManifestPlugin();
+    updated.modelCatalog.providers.mistral.models[0]!.contextWindow = 524288;
+    setManifestPlugins([updated]);
+
+    expect(resolveBundledStaticCatalogModel(lookup)?.contextWindow).toBe(262144);
+    expect(
+      withPluginCache(createPluginCache(), () => resolveBundledStaticCatalogModel(lookup))
+        ?.contextWindow,
+    ).toBe(524288);
+    expect(resolveBundledStaticCatalogModel(lookup)?.contextWindow).toBe(262144);
+  });
+
   it("reuses one manifest scan across prepared lookups", () => {
     setManifestPlugins([createMistralManifestPlugin()]);
 

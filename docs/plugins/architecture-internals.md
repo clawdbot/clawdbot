@@ -114,8 +114,9 @@ metadata-only while the setup module contributes other setup hooks.
 
 ### Plugin cache boundary
 
-Gateway owns one immutable plugin metadata inventory from startup until
-shutdown. It combines the installed index, manifests, owner maps, and available
+One `PluginCache` owns plugin facts from first access until Gateway shutdown.
+CLI preflight and startup progressively fill the same cache; later access fills
+only facts not yet acquired. Its immutable metadata snapshot combines the installed index, manifests, owner maps, and available
 discovery facts from every configured agent workspace. Disabled plugins remain
 in the inventory so later enablement does not require discovery. Conflicting
 plugin IDs from different workspace sources remain rejected.
@@ -128,28 +129,33 @@ hashing. Activation and runtime service generations can change while their
 package metadata stays fixed. Account health and authentication state are not
 part of the immutable package inventory.
 
-Explicit install, update, registry refresh, and doctor operations own separate
-candidate metadata. They may inspect changed files and rebuild the persisted
+Explicit install, update, registry refresh, and doctor operations use isolated
+generations of the same cache type, acquired after their lifecycle lease. They may inspect changed files and rebuild the persisted
 installed index, but cannot clear or replace the running Gateway's inventory.
 The new inventory takes effect after restart. The `plugins.refresh` RPC reports
 `restartRequired: true`; with reload disabled, it leaves the running inventory
 in place until a manual restart.
 
-Cold metadata reads retain discovery safety checks and the bounded manifest
-parser cache keyed by file signature. Runtime imports remain lazy and may reuse
-loader state after code or installed artifacts are loaded, such as:
+The shared cache owns checked file contents, parsed package and manifest data,
+bundle MCP/LSP/settings files, plugin skill paths, discovery paths, installed-index
+projections, compiled model policies, SDK aliases, artifact locations, and lazy
+module exports. Missing files and artifacts are facts too: they remain
+missing until a new generation. Discovery, registry assembly, and index hashing
+reuse the same checked bytes rather than reopening a file at each stage.
 
-- `PluginLoaderCacheState` and compatible active runtime registries
-- jiti/module caches and public-surface loader caches used to avoid importing
-  the same runtime surface repeatedly
-- filesystem caches for installed plugin artifacts
-- short-lived per-call maps for path normalization or duplicate resolution
+Actual code imports retain their boundary and file-identity checks before first
+execution. Consent checks use a fresh inspection after an awaited approval so
+changed artifacts cannot inherit approval for older capabilities. Failed module
+evaluation remains retryable; a successful import is shared across consumers.
 
-Those caches own execution details. Manifest-derived questions such as
-"which plugin owns this provider?" come from the startup inventory, without
-loading runtime modules. Do not add independently expiring caches or cold
-fallbacks for those facts. The persisted installed index belongs to management
-and startup; it is not a freshness signal for runtime readers.
+Registered services, hooks, tools, session MCP overlays, generated skill-link
+publication, and activation state remain runtime-owned.
+An active registry pins its chosen artifact binding so source and built modules
+cannot split its registrations. Native ESM module lifetime still follows Node's
+module loader. Manifest-derived questions such as "which plugin owns this
+provider?" use the metadata snapshot without executing plugin code. The persisted
+installed index belongs to management and startup; it is not a freshness signal
+for runtime readers.
 
 ## Registry model
 

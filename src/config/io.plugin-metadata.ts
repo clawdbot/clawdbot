@@ -1,11 +1,13 @@
 import { listAgentWorkspaceDirs } from "../agents/workspace-dirs.js";
 import { getGatewayPluginMetadataSnapshot } from "../plugins/current-plugin-metadata-state.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginCache, getPluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { resolvePluginControlPlaneFingerprint } from "../plugins/plugin-control-plane-context.js";
 import {
   projectPluginMetadataSnapshot,
   rebasePluginMetadataSnapshotManifestRegistry,
   resolvePluginMetadataSnapshot,
+  resolvePluginMetadataSnapshotCacheKey,
   restorePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
@@ -53,6 +55,11 @@ type ResolveConfigWidePluginMetadataParams = {
 export function resolveConfigWidePluginMetadataSnapshot(
   params: ResolveConfigWidePluginMetadataParams,
 ): PluginMetadataSnapshot {
+  if (params.allowCurrent === false && getPluginCache().kind !== "operation") {
+    return withPluginCache(createPluginCache(), () =>
+      resolveConfigWidePluginMetadataSnapshot(params),
+    );
+  }
   if (params.allowCurrent !== false && params.stateDir === undefined) {
     const gatewaySnapshot = getGatewayPluginMetadataSnapshot();
     if (gatewaySnapshot) {
@@ -62,6 +69,26 @@ export function resolveConfigWidePluginMetadataSnapshot(
   const env = params.env ?? process.env;
   const dirs = listAgentWorkspaceDirs(params.config, env);
   const workspaceDirs: Array<string | undefined> = dirs.length ? dirs : [undefined];
+  const cache = getPluginCache();
+  const key = JSON.stringify([
+    "config-wide",
+    resolvePluginMetadataSnapshotCacheKey(params),
+    workspaceDirs,
+  ]);
+  const cached = cache.metadata.snapshots.get(key);
+  if (cached) {
+    return cached;
+  }
+  const snapshot = resolveConfigWidePluginMetadataSnapshotImpl(params, workspaceDirs);
+  cache.metadata.snapshots.set(key, snapshot);
+  return snapshot;
+}
+
+function resolveConfigWidePluginMetadataSnapshotImpl(
+  params: ResolveConfigWidePluginMetadataParams,
+  workspaceDirs: Array<string | undefined>,
+): PluginMetadataSnapshot {
+  const env = params.env ?? process.env;
   const resolveSnapshot = (workspaceDir: string | undefined) =>
     resolvePluginMetadataSnapshot({
       config: params.config,

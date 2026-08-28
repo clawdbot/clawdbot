@@ -11,6 +11,7 @@ import {
   type TempPlugin,
   writePlugin,
 } from "./loader.test-fixtures.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   completePluginMetadataSnapshot,
   loadPluginMetadataSnapshot,
@@ -116,14 +117,28 @@ describe("loadBundledCapabilityRuntimeRegistry", () => {
     const registry = loadBundledCapabilityRuntimeRegistry({ pluginIds: [target.id], config, env });
     expect(registry.providers.map((entry) => entry.provider.id)).toEqual(["bundled-capability"]);
     expect(registry.plugins.find((plugin) => plugin.id === target.id)?.origin).toBe("bundled");
-    expect(
+    const loadExplicitDiscovery = () =>
       loadBundledCapabilityRuntimeRegistry({
         pluginIds: [target.id],
         config,
         env,
         discovery: discoveryFor(target),
-      }).providers,
-    ).toEqual([]);
+      });
+    expect(loadExplicitDiscovery().providers.map((entry) => entry.provider.id)).toEqual([
+      "bundled-capability",
+    ]);
+    const freshRegistry = withPluginCache(createPluginCache(), loadExplicitDiscovery);
+    expect(freshRegistry.providers).toEqual([]);
+    expect(freshRegistry.diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ pluginId: target.id, message: "plugin manifest requires id" }),
+      ]),
+    );
+    expect(
+      loadBundledCapabilityRuntimeRegistry({ pluginIds: [target.id], config, env }).providers.map(
+        (entry) => entry.provider.id,
+      ),
+    ).toEqual(["bundled-capability"]);
   });
 
   it("loads only the requested bundled plugin without replacing the active registry", () => {

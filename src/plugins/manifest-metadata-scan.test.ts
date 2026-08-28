@@ -209,7 +209,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
         (record) => record.manifest.id === "lifecycle-catalog",
       )?.manifest.generation,
     ).toBe("second");
-    expect(statSpy).toHaveBeenCalledTimes(firstStatCalls);
+    expect(statSpy.mock.calls.length).toBeGreaterThan(firstStatCalls);
     expect(readdirSpy.mock.calls.length).toBeGreaterThan(firstReaddirCalls);
   });
 
@@ -404,12 +404,14 @@ describe("listOpenClawPluginManifestMetadata", () => {
     {
       name: "malformed JSON and JSON5",
       contents: "{invalid",
+      error: "failed to parse plugin manifest: JSON5: invalid end of input at 1:9",
     },
     {
       name: "valid non-object JSON",
       contents: "[]",
+      error: "plugin manifest must be an object",
     },
-  ])("skips $name and warns once across cache hits", ({ contents }) => {
+  ])("skips $name and warns once across cache hits", ({ contents, error }) => {
     const { pluginDir, manifestPath, env } = createGlobalPluginFixture("invalid-plugin");
     fs.writeFileSync(manifestPath, contents, "utf8");
 
@@ -418,7 +420,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
 
     expectPluginAbsentAcrossTwoScans(pluginDir, env);
     expect(warningMessagesForPath(manifestPath)).toEqual([
-      `Ignoring invalid plugin manifest at ${manifestPath}: ${canonicalResult.error}`,
+      `Ignoring invalid plugin manifest at ${manifestPath}: ${error}`,
     ]);
   });
 
@@ -428,7 +430,7 @@ describe("listOpenClawPluginManifestMetadata", () => {
 
     expectPluginAbsentAcrossTwoScans(pluginDir, env);
     expect(warningMessagesForPath(manifestPath)).toEqual([
-      `Ignoring unreadable plugin manifest at ${manifestPath}: Error: path must be a regular file`,
+      `Ignoring unreadable plugin manifest at ${manifestPath}: path does not have the required file type`,
     ]);
   });
 

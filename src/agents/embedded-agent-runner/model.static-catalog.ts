@@ -13,7 +13,7 @@ import { listOpenClawPluginManifestMetadata } from "../../plugins/manifest-metad
 import { passesManifestOwnerBasePolicy } from "../../plugins/manifest-owner-policy.js";
 import { loadPluginManifestRegistryCore } from "../../plugins/manifest-registry.js";
 import { loadPluginManifest } from "../../plugins/manifest.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../../plugins/plugin-metadata-lifecycle.js";
+import { getPluginCache, getPluginMetadataSnapshotCache } from "../../plugins/plugin-cache.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import {
   normalizePluginDiscoveryResult,
@@ -29,6 +29,7 @@ import {
 } from "../../plugins/providers.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../defaults.js";
 import { buildInlineProviderModels, type InlineModelEntry } from "./model.inline-provider.js";
+import type { BundledStaticCatalogState } from "./model.static-catalog.types.js";
 import {
   createStaticModelIdMatcher,
   staticModelIdMatches,
@@ -128,24 +129,7 @@ type BundledStaticCatalogParams = {
   workspaceDir?: string;
 };
 
-type BundledStaticCatalogState = {
-  plugins: StaticCatalogPlugin[];
-  plans: Map<string, ReturnType<typeof planEffectiveModelCatalogRows>>;
-};
-
-let bundledStaticCatalogStatesByOwner = new WeakMap<
-  object,
-  WeakMap<OpenClawConfig, BundledStaticCatalogState>
->();
 const defaultBundledStaticCatalogConfig: OpenClawConfig = {};
-
-function clearBundledStaticCatalogStates(): void {
-  bundledStaticCatalogStatesByOwner = new WeakMap();
-}
-
-// Snapshot or environment identity pins one plugin generation; install/reload
-// owners replace this map so retained resolvers cannot keep stale provider plans.
-registerPluginMetadataProcessMemoLifecycleClear(clearBundledStaticCatalogStates);
 
 function resolveBundledStaticCatalogMetadataSnapshot(
   params: BundledStaticCatalogParams,
@@ -205,6 +189,10 @@ function resolveBundledStaticCatalogState(
   params: BundledStaticCatalogParams,
   metadataSnapshot?: PluginMetadataSnapshot,
 ): BundledStaticCatalogState {
+  const cache = metadataSnapshot
+    ? getPluginMetadataSnapshotCache(metadataSnapshot)
+    : getPluginCache();
+  const bundledStaticCatalogStatesByOwner = cache.metadata.staticCatalogStates;
   const owner = metadataSnapshot ?? params.env;
   let states = bundledStaticCatalogStatesByOwner.get(owner);
   if (!states) {

@@ -19,7 +19,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("./current-plugin-metadata-state.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./current-plugin-metadata-state.js")>()),
-  getGatewayPluginMetadataSnapshot: () => mocks.gatewayMetadata(),
+  getProcessGatewayPluginMetadataSnapshot: () => mocks.gatewayMetadata(),
 }));
 
 vi.mock("../config/config.js", () => ({
@@ -47,7 +47,8 @@ vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
   loadInstalledPluginIndexInstallRecords: async () => ({}),
 }));
 
-vi.mock("./plugin-metadata-snapshot.js", () => ({
+vi.mock("./plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
   resolvePluginMetadataSnapshot: (...args: unknown[]) => mocks.metadata(...args),
 }));

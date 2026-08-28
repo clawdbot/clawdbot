@@ -8,13 +8,8 @@ import { planEffectiveModelCatalogRows } from "../model-catalog/index.js";
 import { loadManifestMetadataSnapshot } from "./manifest-contract-eligibility.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import { withProfile } from "./plugin-load-profile.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import type { PluginMetadataRegistryView } from "./plugin-metadata-snapshot.types.js";
-import {
-  clearPluginModuleLoaderLifecycleCache,
-  createPluginModuleLoaderCache,
-  getCachedPluginModuleLoader,
-} from "./plugin-module-loader-cache.js";
+import { getCachedPluginModuleLoader } from "./plugin-module-loader-cache.js";
 import { resolveDiscoveredProviderPluginIds } from "./providers.js";
 import { resolvePluginProvidersCore } from "./providers.runtime.js";
 import type { ProviderPlugin } from "./types.js";
@@ -36,16 +31,6 @@ type ProviderDiscoveryEntryResult = {
   manifestEntryPluginIds: Set<string>;
   runtimeManifestCatalogPluginIds: Set<string>;
 };
-
-const providerDiscoveryModuleLoaders = createPluginModuleLoaderCache();
-const providerDiscoveryModuleRoots = new Map<string, string>();
-
-registerPluginMetadataProcessMemoLifecycleClear(() => {
-  clearPluginModuleLoaderLifecycleCache({
-    moduleLoaders: providerDiscoveryModuleLoaders,
-    moduleRoots: providerDiscoveryModuleRoots,
-  });
-});
 
 function normalizeDiscoveryModule(value: ProviderDiscoveryModule): ProviderPlugin[] {
   const resolved =
@@ -75,10 +60,9 @@ function loadProviderDiscoveryModule(params: {
   modulePath: string;
   rootDir: string;
 }): ProviderDiscoveryModule {
-  providerDiscoveryModuleRoots.set(params.modulePath, params.rootDir);
   const moduleLoader = getCachedPluginModuleLoader({
-    cache: providerDiscoveryModuleLoaders,
     modulePath: params.modulePath,
+    rootDir: params.rootDir,
     importerUrl: import.meta.url,
     loaderFilename: import.meta.url,
     preferBuiltDist: true,

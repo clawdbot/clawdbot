@@ -90,6 +90,7 @@ function buildInstalledPluginIndex(
     candidates: discovery.candidates,
     registry,
     config: params.config,
+    env,
     diagnostics,
     installRecords,
   });

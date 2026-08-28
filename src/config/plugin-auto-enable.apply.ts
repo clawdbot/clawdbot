@@ -90,7 +90,7 @@ function stableFingerprintValue(value: unknown): string {
 }
 
 /** Fingerprints config snapshots used by plugin auto-enable detection. */
-export function fingerprintPluginAutoEnableConfig(config: OpenClawConfig): string {
+function fingerprintPluginAutoEnableConfig(config: OpenClawConfig): string {
   const cached = configFingerprintMemo.get(config);
   if (cached !== undefined) {
     return cached;
@@ -101,7 +101,7 @@ export function fingerprintPluginAutoEnableConfig(config: OpenClawConfig): strin
 }
 
 /** Fingerprints environment snapshots used by plugin auto-enable detection. */
-export function fingerprintPluginAutoEnableEnv(env: NodeJS.ProcessEnv): string {
+function fingerprintPluginAutoEnableEnv(env: NodeJS.ProcessEnv): string {
   return stableFingerprintValue(env);
 }
 

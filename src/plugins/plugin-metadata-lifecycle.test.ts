@@ -3,6 +3,7 @@ import {
   getCurrentPluginMetadataSnapshotState,
   setCurrentPluginMetadataSnapshotState,
 } from "./current-plugin-metadata-state.js";
+import { getPluginCache } from "./plugin-cache.js";
 import {
   clearPluginMetadataLifecycleCaches,
   registerPluginMetadataProcessMemoLifecycleClear,
@@ -13,6 +14,7 @@ const clearMemo = vi.fn();
 registerPluginMetadataProcessMemoLifecycleClear(clearMemo);
 
 it("keeps boot metadata and process memos until the final Gateway releases them", () => {
+  const firstAccessCache = getPluginCache();
   const releaseFirst = retainGatewayPluginMetadata();
   const releaseSecond = retainGatewayPluginMetadata();
   try {
@@ -33,10 +35,12 @@ it("keeps boot metadata and process memos until the final Gateway releases them"
 
     expect(getCurrentPluginMetadataSnapshotState().snapshot).toBe(snapshot);
     expect(clearMemo).not.toHaveBeenCalled();
+    expect(getPluginCache()).toBe(firstAccessCache);
 
     releaseFirst();
     expect(getCurrentPluginMetadataSnapshotState().snapshot).toBeUndefined();
     expect(clearMemo).toHaveBeenCalledOnce();
+    expect(getPluginCache()).not.toBe(firstAccessCache);
     releaseFirst();
     expect(clearMemo).toHaveBeenCalledOnce();
   } finally {

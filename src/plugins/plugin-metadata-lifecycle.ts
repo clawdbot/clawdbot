@@ -4,6 +4,7 @@ import {
   clearCurrentPluginMetadataSnapshot,
   isGatewayPluginMetadataSnapshotActive,
 } from "./current-plugin-metadata-state.js";
+import { resetPluginCache } from "./plugin-cache.js";
 
 const pluginMetadataProcessMemoClears = new Set<() => void>();
 const gatewayMetadataOwners = resolveGlobalSingleton<Set<symbol>>(
@@ -37,6 +38,7 @@ export function clearPluginMetadataLifecycleCaches(): void {
     return;
   }
   clearCurrentPluginMetadataSnapshot();
+  resetPluginCache();
   for (const clearProcessMemo of pluginMetadataProcessMemoClears) {
     clearProcessMemo();
   }

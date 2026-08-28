@@ -570,7 +570,7 @@ describe("plugin sdk alias helpers", () => {
     fs.writeFileSync(sourceQaRunnerPath, "export const qaRunnerRuntime = true;\n", "utf-8");
     fs.writeFileSync(sourcePrivateQaRuntimePath, "export const qaRuntime = true;\n", "utf-8");
     const sourcePluginEntry = writePluginEntry(
-      fixture.root,
+      fs.realpathSync(fixture.root),
       bundledPluginFile("demo", "src/index.ts"),
     );
 
@@ -587,6 +587,16 @@ describe("plugin sdk alias helpers", () => {
       fs.realpathSync(sourceQaRunnerPath),
     );
     expect(aliases["openclaw/plugin-sdk/qa-runtime"]).toBeUndefined();
+
+    const { pluginEntry: externalEntry } = writeInstalledPluginEntry({
+      installRoot: makeTempDir(),
+      packageName: "@example/external",
+    });
+    const externalAliases = withEnv(
+      { OPENCLAW_ENABLE_PRIVATE_QA_CLI: undefined, NODE_ENV: undefined },
+      () => buildPluginLoaderAliasMap(externalEntry, path.join(fixture.root, "openclaw.mjs")),
+    );
+    expect(externalAliases["openclaw/plugin-sdk/qa-runner-runtime"]).toBeUndefined();
   });
 
   it("adds the non-QA private Codex helper subpath only for trusted Codex plugins", () => {
@@ -2035,10 +2045,23 @@ describe("buildPluginLoaderAliasMap memoization", () => {
       bundledPluginFile("memo-demo", "src/index.ts"),
     );
 
-    const first = buildPluginLoaderAliasMap(sourcePluginEntry);
-    const second = buildPluginLoaderAliasMap(sourcePluginEntry);
-
-    expect(second).toBe(first);
+    withEnv({ OPENCLAW_DEV_SOURCE_ROOT: fixture.root }, () => {
+      const first = buildPluginLoaderAliasMap(sourcePluginEntry);
+      const reads = [
+        vi.spyOn(fs, "readFileSync"),
+        vi.spyOn(fs, "statSync"),
+        vi.spyOn(fs, "existsSync"),
+        vi.spyOn(fs, "realpathSync"),
+      ];
+      try {
+        expect(buildPluginLoaderAliasMap(sourcePluginEntry)).toBe(first);
+        for (const read of reads) {
+          expect(read).not.toHaveBeenCalled();
+        }
+      } finally {
+        reads.forEach((read) => read.mockRestore());
+      }
+    });
   });
 
   it("returns different references for different modulePath inputs", () => {
@@ -2181,6 +2204,21 @@ describe("buildPluginLoaderJitiOptions", () => {
 
     expect(options.fsCache).toContain(path.join(cacheRoot, "openclaw", "jiti", "2.0.0"));
     expect(options.fsCache).not.toContain(tmpDir);
+    const stat = vi.spyOn(fs, "statSync");
+    try {
+      const repeated = withEnv({ TMPDIR: tmpDir, XDG_CACHE_HOME: `  ${cacheRoot}  ` }, () =>
+        buildPluginLoaderJitiOptions(
+          {},
+          {
+            modulePath: path.join(root, "dist", "plugins", "loader.js"),
+          },
+        ),
+      );
+      expect(repeated.fsCache).toBe(options.fsCache);
+      expect(stat).not.toHaveBeenCalled();
+    } finally {
+      stat.mockRestore();
+    }
   });
 
   it.each(["", "   ", "relative/cache"])(

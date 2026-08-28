@@ -1,5 +1,6 @@
 /** Tests fast-path secret collection for channel contract API credentials. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const { loadPluginMetadataSnapshotMock } = vi.hoisted(() => ({
   loadPluginMetadataSnapshotMock: vi.fn((_params: unknown) => ({ plugins: [] })),
@@ -26,14 +27,13 @@ const { loadBundledPluginPublicArtifactModuleSyncMock } = vi.hoisted(() => ({
   ),
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
-  loadPluginMetadataSnapshot: loadPluginMetadataSnapshotMock,
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
+  loadPluginMetadataSnapshot: (params: unknown) =>
+    createPluginMetadataSnapshotFixture(loadPluginMetadataSnapshotMock(params)),
   resolvePluginMetadataSnapshot: (params: unknown) => {
     const snapshot = loadPluginMetadataSnapshotMock(params);
-    return {
-      ...snapshot,
-      manifestRegistry: { plugins: snapshot.plugins, diagnostics: [] },
-    };
+    return createPluginMetadataSnapshotFixture({ plugins: snapshot.plugins });
   },
 }));
 

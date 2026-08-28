@@ -307,7 +307,7 @@ describe("loadPluginLookUpTable", () => {
     ).toEqual(["telegram"]);
   });
 
-  it("scopes metadata manifest reconstruction for restrictive startup allowlists", async () => {
+  it("projects restrictive startup allowlists from one complete inventory", async () => {
     const plugins = [
       createManifestRecord({
         id: "openai",
@@ -340,7 +340,7 @@ describe("loadPluginLookUpTable", () => {
     );
     const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
 
-    const table = loadPluginLookUpTable({
+    const params = {
       config: {
         plugins: {
           allow: ["openai"],
@@ -349,7 +349,10 @@ describe("loadPluginLookUpTable", () => {
       } as OpenClawConfig,
       env: {},
       index,
-    });
+    };
+    const table = loadPluginLookUpTable(params);
+    const repeated = loadPluginLookUpTable(params);
+    expect(repeated.manifestRegistry).toBe(table.manifestRegistry);
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
     expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
@@ -362,8 +365,10 @@ describe("loadPluginLookUpTable", () => {
       },
       env: {},
       includeDisabled: true,
-      pluginIds: ["openai"],
     });
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).not.toHaveProperty(
+      "pluginIds",
+    );
     expect(table.pluginIds).toEqual(["openai"]);
     expect(table.metrics.indexPluginCount).toBe(3);
     expect(table.metrics.manifestPluginCount).toBe(1);
@@ -371,7 +376,7 @@ describe("loadPluginLookUpTable", () => {
     expect(table.startup.pluginIds).toEqual(["openai"]);
   });
 
-  it("keeps config-path startup activation owners in scoped manifest reconstruction", async () => {
+  it("keeps config-path activation owners when projecting one complete inventory", async () => {
     const plugins = [
       createManifestRecord({
         id: "openai",
@@ -408,7 +413,7 @@ describe("loadPluginLookUpTable", () => {
     );
     const { loadPluginLookUpTable } = await import("./plugin-lookup-table.js");
 
-    const table = loadPluginLookUpTable({
+    const params = {
       config: {
         browser: {
           enabled: true,
@@ -420,12 +425,21 @@ describe("loadPluginLookUpTable", () => {
       } as OpenClawConfig,
       env: {},
       index,
-    });
+    };
+    const table = loadPluginLookUpTable(params);
+    const repeated = loadPluginLookUpTable(params);
+    expect(repeated.manifestRegistry).toBe(table.manifestRegistry);
 
     expect(loadPluginManifestRegistryForInstalledIndex).toHaveBeenCalledOnce();
     expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).toMatchObject({
-      pluginIds: ["browser", "openai"],
+      index,
+      config: params.config,
+      env: {},
+      includeDisabled: true,
     });
+    expect(loadPluginManifestRegistryForInstalledIndex.mock.calls[0]?.[0]).not.toHaveProperty(
+      "pluginIds",
+    );
     expect(table.pluginIds).toEqual(["browser", "openai"]);
     expect(table.metrics.indexPluginCount).toBe(3);
     expect(table.metrics.manifestPluginCount).toBe(2);

@@ -90,7 +90,11 @@ function createMistralManifestPlugin() {
 }
 
 function setCurrentManifestPlugins(plugins: unknown[]) {
-  const snapshot = { plugins, manifestRegistry: { plugins } };
+  const snapshot = {
+    plugins,
+    manifestRegistry: { plugins },
+    owners: { providerEndpoints: [], providerRequests: new Map() },
+  };
   manifestMocks.getCurrentPluginMetadataSnapshot.mockReturnValue(snapshot);
   return snapshot;
 }

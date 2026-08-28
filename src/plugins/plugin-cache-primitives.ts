@@ -1,4 +1,4 @@
-// Defines lifecycle-owned cache primitives for plugin metadata.
+// Defines bounded caches for plugin runtime results and schema validation.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
@@ -6,7 +6,7 @@ import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metada
 /** Result shape for cache lookups that need to distinguish a miss from cached `undefined`. */
 type PluginLruCacheResult<T> = { hit: true; value: T } | { hit: false };
 
-/** Small process-local LRU cache used for stable plugin metadata and loader artifacts. */
+/** Small process-local LRU cache for runtime registries and compiled validators. */
 export class PluginLruCache<T> {
   readonly #maxEntries: number;
   readonly #entries = new Map<string, T>();

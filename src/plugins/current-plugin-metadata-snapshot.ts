@@ -11,6 +11,13 @@ import {
 } from "./current-plugin-metadata-state.js";
 import { resolveInstalledPluginIndexPolicyHash } from "./installed-plugin-index-policy.js";
 import {
+  adoptProcessPluginCache,
+  getPluginMetadataSnapshotCache,
+  getProcessPluginCache,
+  getScopedPluginCache,
+  withPluginCache,
+} from "./plugin-cache.js";
+import {
   resolvePluginControlPlaneFingerprint,
   type ResolvePluginControlPlaneContextParams,
 } from "./plugin-control-plane-context.js";
@@ -182,6 +189,10 @@ export function setGatewayPluginMetadataSnapshot(
   if (snapshot.pluginIds !== undefined) {
     throw new Error("Gateway plugin metadata must include the complete startup inventory");
   }
+  if (getCurrentPluginMetadataSnapshotState().owner === "gateway") {
+    throw new Error("Gateway plugin metadata can only be replaced after shutdown");
+  }
+  adoptProcessPluginCache(getPluginMetadataSnapshotCache(snapshot));
   activeTemporaryPluginMetadataSnapshotLease = undefined;
   publishCurrentPluginMetadataSnapshot(snapshot, options, "gateway");
 }
@@ -191,11 +202,23 @@ export function adoptCurrentPluginMetadataSnapshotIfAbsent(
   snapshot: PluginMetadataSnapshot,
   options: CurrentPluginMetadataSnapshotOptions = {},
 ): void {
-  if (getCurrentPluginMetadataSnapshotState().snapshot !== undefined) {
+  if (
+    getScopedPluginCache()?.kind === "operation" ||
+    getCurrentPluginMetadataSnapshotState().snapshot !== undefined
+  ) {
     return;
   }
   activeTemporaryPluginMetadataSnapshotLease = undefined;
   publishCurrentPluginMetadataSnapshot(snapshot, options);
+}
+
+function isScopedSnapshotInCurrentCache(scoped: ScopedPluginMetadataSnapshot): boolean {
+  const cache = getScopedPluginCache();
+  return (
+    cache?.kind !== "operation" ||
+    !scoped.snapshot ||
+    getPluginMetadataSnapshotCache(scoped.snapshot) === cache
+  );
 }
 
 function captureCurrentPluginMetadataSnapshotState(): CurrentPluginMetadataSnapshotState {
@@ -318,17 +341,19 @@ export function withPluginMetadataSnapshotScope<T>(
   for (const config of options.compatibleConfigs ?? []) {
     configIdentities.add(config);
   }
-  return scopedPluginMetadataSnapshot.run(
-    {
-      snapshot,
-      configFingerprint,
-      compatiblePolicyHashes,
-      compatibleConfigFingerprints,
-      hasConfigIdentity: (config) => configIdentities.has(config),
-      immutableRuntimeGeneration: options.trustConfigIdentity === true,
-      parent: scopedPluginMetadataSnapshot.getStore(),
-    },
-    run,
+  return withPluginCache(getPluginMetadataSnapshotCache(snapshot), () =>
+    scopedPluginMetadataSnapshot.run(
+      {
+        snapshot,
+        configFingerprint,
+        compatiblePolicyHashes,
+        compatibleConfigFingerprints,
+        hasConfigIdentity: (config) => configIdentities.has(config),
+        immutableRuntimeGeneration: options.trustConfigIdentity === true,
+        parent: scopedPluginMetadataSnapshot.getStore(),
+      },
+      run,
+    ),
   );
 }
 
@@ -437,6 +462,9 @@ export function isCurrentPluginMetadataSnapshotRuntimeGeneration(
     return true;
   }
   for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+    if (!isScopedSnapshotInCurrentCache(scoped)) {
+      continue;
+    }
     if (scoped.snapshot?.index === snapshot.index && scoped.immutableRuntimeGeneration === true) {
       return true;
     }
@@ -448,6 +476,9 @@ export function getCurrentPluginMetadataSnapshot(
   params: CurrentPluginMetadataSnapshotParams = {},
 ): PluginMetadataSnapshot | undefined {
   for (let scoped = scopedPluginMetadataSnapshot.getStore(); scoped; scoped = scoped.parent) {
+    if (!isScopedSnapshotInCurrentCache(scoped)) {
+      continue;
+    }
     // An explicit async owner scope is the discovery context for nested configless readers.
     // Global snapshots still require proof that they match the default discovery context.
     const compatibleScoped = resolveCompatiblePluginMetadataSnapshot(scoped, params, {
@@ -456,6 +487,11 @@ export function getCurrentPluginMetadataSnapshot(
     if (compatibleScoped) {
       return compatibleScoped;
     }
+  }
+
+  const scopedCache = getScopedPluginCache();
+  if (scopedCache && scopedCache !== getProcessPluginCache()) {
+    return undefined;
   }
 
   const {

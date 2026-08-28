@@ -10,19 +10,13 @@ import { normalizePluginsConfig } from "./config-state.js";
 import { isInstalledPluginEnabled } from "./installed-plugin-index.js";
 import { resolveManifestOwnerBasePolicyBlock } from "./manifest-owner-policy.js";
 import type { PluginManifestContractListKey, PluginManifestRecord } from "./manifest-registry.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
+import { getPluginCache } from "./plugin-cache.js";
 import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 import type {
   PluginMetadataManifestView,
   PluginMetadataRegistryView,
   PluginMetadataSnapshot,
 } from "./plugin-metadata-snapshot.types.js";
-
-let bundledDiscoveryMode: { value: ReturnType<typeof readBundledDiscoveryMode> } | undefined;
-
-registerPluginMetadataProcessMemoLifecycleClear(() => {
-  bundledDiscoveryMode = undefined;
-});
 
 /** Enforces owner-specific policy while preserving bundled speech/global compatibility. */
 export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
@@ -60,8 +54,9 @@ export function isManifestPluginOwnerAllowedByControlPlanePolicy(params: {
   ) {
     return true;
   }
-  bundledDiscoveryMode ??= { value: readBundledDiscoveryMode() };
-  return bundledDiscoveryMode.value === "compat";
+  const metadata = getPluginCache().metadata;
+  metadata.bundledDiscoveryMode ??= { value: readBundledDiscoveryMode() };
+  return metadata.bundledDiscoveryMode.value === "compat";
 }
 
 export function isManifestPluginAvailableForControlPlane(params: {

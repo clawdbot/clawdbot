@@ -2,7 +2,6 @@
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.js";
-import { registerPluginMetadataProcessMemoLifecycleClear } from "../plugins/plugin-metadata-lifecycle.js";
 import { loadBundledPluginPublicArtifactModuleSync } from "../plugins/public-surface-loader.js";
 
 type ChannelMediaContractApi = {
@@ -17,28 +16,16 @@ type ChannelMediaContractApi = {
 };
 type ChannelMediaRootResolver = keyof ChannelMediaContractApi;
 
-const mediaContractApiByChannel = new Map<string, ChannelMediaContractApi | null>();
-
-registerPluginMetadataProcessMemoLifecycleClear(() => {
-  mediaContractApiByChannel.clear();
-});
-
 function loadChannelMediaContractApi(
   channelId: string,
   resolver: ChannelMediaRootResolver,
 ): ChannelMediaContractApi | undefined {
-  if (mediaContractApiByChannel.has(channelId)) {
-    const cached = mediaContractApiByChannel.get(channelId);
-    return cached && typeof cached[resolver] === "function" ? cached : undefined;
-  }
-
   try {
     // Media-root resolution must stay a narrow artifact load, not full channel bootstrap.
     const loaded = loadBundledPluginPublicArtifactModuleSync<ChannelMediaContractApi>({
       dirName: channelId,
       artifactBasename: "media-contract-api.js",
     });
-    mediaContractApiByChannel.set(channelId, loaded);
     if (typeof loaded[resolver] === "function") {
       return loaded;
     }
@@ -54,7 +41,6 @@ function loadChannelMediaContractApi(
     }
   }
 
-  mediaContractApiByChannel.set(channelId, null);
   return undefined;
 }
 

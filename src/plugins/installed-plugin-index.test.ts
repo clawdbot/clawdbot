@@ -21,6 +21,7 @@ import {
 import { recordPluginInstall } from "./installs.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 vi.unmock("../version.js");
@@ -432,18 +433,20 @@ describe("installed plugin index", () => {
     });
 
     writeManifestlessClaudeBundle(rootDir, ["commands"]);
-    const second = loadInstalledPluginIndex({
-      candidates: [
-        createPluginCandidate({
-          rootDir,
-          idHint: "workspace",
-          format: "bundle",
-          bundleFormat: "claude",
-          origin: "config",
-        }),
-      ],
-      env: hermeticEnv(),
-    });
+    const second = withPluginCache(createPluginCache(), () =>
+      loadInstalledPluginIndex({
+        candidates: [
+          createPluginCandidate({
+            rootDir,
+            idHint: "workspace",
+            format: "bundle",
+            bundleFormat: "claude",
+            origin: "config",
+          }),
+        ],
+        env: hermeticEnv(),
+      }),
+    );
 
     expect(second.plugins[0]?.manifestHash).not.toBe(first.plugins[0]?.manifestHash);
   });
@@ -1135,21 +1138,23 @@ describe("installed plugin index", () => {
       providers: ["demo", "demo-next"],
     });
     const current = {
-      ...loadInstalledPluginIndex({
-        candidates: [
-          {
-            ...fixture.candidate,
-            packageVersion: "1.2.4",
+      ...withPluginCache(createPluginCache(), () =>
+        loadInstalledPluginIndex({
+          candidates: [
+            {
+              ...fixture.candidate,
+              packageVersion: "1.2.4",
+            },
+          ],
+          installRecords: {
+            demo: {
+              source: "npm",
+              resolvedVersion: "1.2.4",
+            },
           },
-        ],
-        installRecords: {
-          demo: {
-            source: "npm",
-            resolvedVersion: "1.2.4",
-          },
-        },
-        env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
-      }),
+          env: hermeticEnv({ OPENCLAW_VERSION: "2026.4.26" }),
+        }),
+      ),
       compatRegistryVersion: "different-compat-registry",
     };
 
@@ -1181,10 +1186,12 @@ describe("installed plugin index", () => {
     });
 
     fs.writeFileSync(contractPath, "export const stateMigrations = [{ id: 'changed' }];\n", "utf8");
-    const current = loadInstalledPluginIndex({
-      candidates: [fixture.candidate],
-      env: hermeticEnv(),
-    });
+    const current = withPluginCache(createPluginCache(), () =>
+      loadInstalledPluginIndex({
+        candidates: [fixture.candidate],
+        env: hermeticEnv(),
+      }),
+    );
 
     expect(current.plugins[0]?.manifestHash).toBe(previous.plugins[0]?.manifestHash);
     expect(current.plugins[0]?.packageJson?.hash).toBe(previous.plugins[0]?.packageJson?.hash);

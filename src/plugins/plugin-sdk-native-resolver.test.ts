@@ -166,6 +166,12 @@ describe("installOpenClawInternalCorePackageNativeResolver", () => {
 
       expect(aliases).toContain("@openclaw/markdown-core/code-spans");
       expect(existsSync).not.toHaveBeenCalled();
+
+      installOpenClawPluginSdkNativeResolver({
+        modulePath: fixture.loaderModulePath,
+        pluginModulePath: externalPluginEntry,
+      });
+      expect(existsSync).not.toHaveBeenCalled();
     } finally {
       existsSync.mockRestore();
     }
@@ -194,10 +200,7 @@ describe("installOpenClawInternalCorePackageNativeResolver", () => {
 
       expect(aliases).toContain("@openclaw/markdown-core/code-spans");
       expect(existsSync).not.toHaveBeenCalledWith(fixture.sourcePath);
-      expect(readFileSync).toHaveBeenCalledExactlyOnceWith(
-        path.join(fixture.root, "package.json"),
-        "utf8",
-      );
+      expect(readFileSync).not.toHaveBeenCalled();
 
       existsSync.mockClear();
       readFileSync.mockClear();

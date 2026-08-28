@@ -7,8 +7,10 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.js";
-import type { PluginManifestRecord, PluginManifestRegistry } from "../plugins/manifest-registry.js";
-import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
+import {
+  createPluginManifestRecordFixture as createPluginManifestRecord,
+  createPluginMetadataSnapshotFixture as createPluginMetadataSnapshot,
+} from "../plugins/plugin-metadata.test-support.js";
 import type { ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { applyCliProfileEnv } from "./profile.js";
 import { createCliRuntimeCapture, mockRuntimeModule } from "./test-runtime-capture.js";
@@ -197,7 +199,8 @@ vi.mock("../gateway/config-reload-plan.js", () => ({
   },
 }));
 
-vi.mock("../plugins/plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/plugin-metadata-snapshot.js")>()),
   loadPluginMetadataSnapshot: (config: unknown) => mockLoadPluginMetadataSnapshot(config),
   resolvePluginMetadataSnapshot: (params: { config?: unknown }) =>
     mockLoadPluginMetadataSnapshot(params.config),
@@ -294,67 +297,6 @@ function withRuntimeDefaults(resolved: OpenClawConfig): OpenClawConfig {
         model: "gpt-5.4",
       } as never,
     } as never,
-  };
-}
-
-function createPluginManifestRecord(
-  overrides: Partial<PluginManifestRecord> & Pick<PluginManifestRecord, "id">,
-): PluginManifestRecord {
-  return {
-    channels: [],
-    cliBackends: [],
-    hooks: [],
-    manifestPath: `/tmp/${overrides.id}/openclaw.plugin.json`,
-    origin: "bundled",
-    providers: [],
-    rootDir: `/tmp/${overrides.id}`,
-    skills: [],
-    source: `/tmp/${overrides.id}/index.js`,
-    ...overrides,
-  };
-}
-
-function createPluginMetadataSnapshot(
-  manifestRegistry: PluginManifestRegistry = { diagnostics: [], plugins: [] },
-): PluginMetadataSnapshot {
-  const plugins = manifestRegistry.plugins;
-  return {
-    policyHash: "test-policy",
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "test-policy",
-      generatedAtMs: 0,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
-    registryDiagnostics: [],
-    manifestRegistry,
-    plugins,
-    diagnostics: manifestRegistry.diagnostics,
-    byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
-    normalizePluginId: (pluginId: string) => pluginId.trim().toLowerCase(),
-    owners: {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-    },
-    metrics: {
-      registrySnapshotMs: 0,
-      manifestRegistryMs: 0,
-      ownerMapsMs: 0,
-      totalMs: 0,
-      indexPluginCount: 0,
-      manifestPluginCount: plugins.length,
-    },
   };
 }
 

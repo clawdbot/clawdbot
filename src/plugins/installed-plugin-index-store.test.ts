@@ -757,12 +757,11 @@ describe("installed plugin index persistence", () => {
     expect(row).toEqual({ value_json: persistedValueJson, updated_at_ms: 123 });
   });
 
-  it("returns null for missing or invalid persisted indexes", async () => {
+  it.each(["missing", "invalid"])("returns null for %s persisted indexes", async (condition) => {
     const stateDir = makeTempDir();
-    await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
-
-    insertPersistedIndexRow(stateDir, { version: 999 });
-
+    if (condition === "invalid") {
+      insertPersistedIndexRow(stateDir, { version: 999 });
+    }
     await expect(readPersistedInstalledPluginIndex({ stateDir })).resolves.toBeNull();
   });
 

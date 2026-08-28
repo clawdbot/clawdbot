@@ -1,10 +1,10 @@
 /** Loads bundled channel plugin runtime entries and setup metadata. */
-import fs from "node:fs";
 import path from "node:path";
 import { isVitestRuntimeEnv } from "../infra/env.js";
 import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-metadata.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { pluginCacheExistsSync } from "./plugin-cache-files.js";
 import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
 
 type BundledChannelEntryPathPair = {
@@ -42,7 +42,7 @@ function resolveBundledMetadataScope(params?: {
   if (!overrideDir) {
     return params?.rootDir ? { kind: "empty" } : { kind: "default" };
   }
-  if (!fs.existsSync(overrideDir)) {
+  if (!pluginCacheExistsSync(overrideDir)) {
     return { kind: "empty" };
   }
   return {
@@ -61,7 +61,7 @@ function resolveBundledPluginsDirForRoot(rootDir: string): string | undefined {
     path.join(rootDir, "dist-runtime", "extensions"),
     path.join(rootDir, "dist", "extensions"),
   ];
-  return candidates.find((candidate) => fs.existsSync(candidate));
+  return candidates.find((candidate) => pluginCacheExistsSync(candidate));
 }
 
 function toBundledChannelEntryPair(source: string | undefined): BundledChannelEntryPathPair | null {
