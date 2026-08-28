@@ -6,7 +6,7 @@ read_when:
 title: "Security"
 ---
 
-OpenClaw ships with conservative defaults: the Gateway binds to loopback, unknown DM senders only ever receive a pairing code, and groups are allowlisted and mention-gated. If you run OpenClaw for yourself or with your team and keep those defaults, you are already in good shape - and one command tells you if you have drifted:
+OpenClaw ships with conservative defaults. On a regular host install the Gateway binds to loopback; most chat channels answer an unknown DM sender with a pairing code instead of processing the message; and group access is allowlisted, usually behind a mention gate. The exceptions are deliberate and documented: container images default to an exposed bind (pair that with auth - see the [exposure runbook](/gateway/security/exposure-runbook)), and a few workspace channels such as ClickClack trust workspace membership by default - each channel page states its exact defaults. Run on those defaults and you are in good shape, and one command tells you if you have drifted:
 
 ```bash
 openclaw security audit
