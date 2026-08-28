@@ -1,4 +1,7 @@
-import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeLowercaseStringOrEmpty,
+  normalizeOptionalString,
+} from "@openclaw/normalization-core/string-coerce";
 import { resolveCommandAuthorization } from "../../auto-reply/command-auth.js";
 import { emitInboundMessageAuditTerminal } from "../../auto-reply/reply/dispatch-from-config.audit.js";
 import { finalizeInboundContext } from "../../auto-reply/reply/inbound-context.js";
@@ -14,7 +17,8 @@ import {
 } from "../../auto-reply/reply/reply-run-registry.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "../../auto-reply/reply/reply-tool-authority.js";
 import type { RuntimeMsgContext } from "../../auto-reply/templating.js";
-import { updateSessionEntry } from "../../config/sessions/session-accessor.js";
+import { isRestartRecoveryTerminalDeliveryFailClosed } from "../../config/sessions/restart-recovery-receipt.js";
+import { loadSessionEntry, updateSessionEntry } from "../../config/sessions/session-accessor.js";
 import { isDiagnosticsEnabled } from "../../infra/diagnostic-events.js";
 import { logMessageProcessed, logMessageReceived } from "../../logging/diagnostic.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
@@ -30,18 +34,71 @@ import type { GatewayRequestContext } from "./types.js";
 export function createChatSendMessageInjectionStarter(params: {
   target: ReplyMessageInjectionTarget | undefined;
   request: Pick<NormalizedChatSendRequest, "p" | "rawMessage" | "supportsTaskSuggestions">;
-  session: Pick<PreparedChatSendSession, "cfg" | "entry">;
+  session: Pick<
+    PreparedChatSendSession,
+    "cfg" | "entry" | "sessionKey" | "storePath" | "clientRunId"
+  >;
   turn: ReturnType<typeof prepareChatSendUserTurn>;
   imageOrder: ReplyBackendQueueMessageOptions["imageOrder"];
   userTurnTranscriptRecorder: NonNullable<
     ReplyBackendQueueMessageOptions["userTurnTranscriptRecorder"]
   >;
+  logGateway: GatewayRequestContext["logGateway"];
 }) {
   const { p, rawMessage, supportsTaskSuggestions } = params.request;
-  const { cfg, entry } = params.session;
+  const { cfg, entry, sessionKey, storePath, clientRunId } = params.session;
   const { ctx, isInternalTextSlashCommandTurn, replyOptionImages, replyOptionMedia } = params.turn;
   return (): ReplyMessageInjectionAttempt | undefined => {
     if (!params.target || isInternalTextSlashCommandTurn) {
+      return undefined;
+    }
+    // Admission fence at the injection-start boundary (#128971): a steer
+    // injection may only be queued into a run that can still own a terminal
+    // source-reply send. Once the session entry fail-closes terminal
+    // delivery (delivery receipt, unresolved terminal tool-call id, terminal
+    // tombstone, or stale claim) the steer would reuse the fail-closed claim
+    // and lose the inbound's reply. Reject here — before
+    // beginReplyMessageInjectionTarget synchronously queues the message with
+    // the target runtime — so the inbound falls back to follow-up dispatch
+    // without ever enqueueing a doomed steer. The captured `entry` predates
+    // asynchronous dispatch, so revalidate against the latest persisted
+    // entry; only fall back to the captured entry when the reload fails or
+    // nothing is persisted yet.
+    let fenceEntry = entry;
+    if (sessionKey) {
+      try {
+        fenceEntry =
+          loadSessionEntry({
+            sessionKey,
+            storePath,
+            readConsistency: "latest",
+          }) ?? entry;
+      } catch (error: unknown) {
+        params.logGateway.warn(
+          `failed to reload session entry before steering fence on ${sessionKey}: ${String(error)}`,
+        );
+      }
+    }
+    // Terminal run ids are accumulated session history; compare the fence
+    // against the active source-turn identity (carried on the injection target
+    // by the owning registry, falling back to the entry's own claim source) so
+    // an unrelated earlier tombstone does not force a safe steer into
+    // follow-up mode.
+    const activeSourceTurnId =
+      normalizeOptionalString(params.target?.sourceTurnId) ??
+      normalizeOptionalString(fenceEntry?.restartRecoveryDeliverySourceRunId) ??
+      "";
+    if (
+      fenceEntry &&
+      isRestartRecoveryTerminalDeliveryFailClosed(
+        fenceEntry,
+        fenceEntry.sessionId,
+        activeSourceTurnId,
+      )
+    ) {
+      params.logGateway.warn(
+        `active run ${clientRunId} cannot own another terminal source-reply send on session ${sessionKey}; rejecting steer injection before queueing`,
+      );
       return undefined;
     }
     const { debounceMs } = resolveQueueSettings({
@@ -124,6 +181,11 @@ export async function finalizeAcceptedChatSendMessageInjection(params: {
 }): Promise<boolean> {
   const { context, ctx, session } = params;
   const { agentId, cfg, clientRunId, entry, sessionKey, storePath } = session;
+  // Terminal-receipt admission is fenced at the injection-start boundary
+  // (createChatSendMessageInjectionStarter), before the steer is queued, so
+  // no attempt ever exists for a fail-closed session. The only rejection
+  // left here is the runtime refusing the queued steer, which also means
+  // nothing was enqueued — the fallback to follow-up dispatch is safe.
   const finalizedCtx = finalizeInboundContext(ctx);
   const finalization = await finalizeReplyMessageInjectionAttempt({
     attempt: params.attempt,

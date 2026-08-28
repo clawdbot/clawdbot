@@ -109,17 +109,39 @@ export const replyRunRegistry: ReplyRunRegistry = {
     }
     return replyRunState.activeRunsByKey.has(normalizedSessionKey);
   },
+  /**
+   * Records the channel source-turn identity of the run owning `sessionKey`.
+   * Terminal run ids are accumulated session history, so admission fences must
+   * scope tombstones to this exact identity rather than any retained entry.
+   */
+  bindSourceTurnId(sessionKey, sourceTurnId) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
+    if (!normalizedSessionKey || !sourceTurnId) {
+      return;
+    }
+    replyRunState.sourceTurnByKey.set(normalizedSessionKey, sourceTurnId);
+  },
+  getSourceTurnId(sessionKey) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
+    if (!normalizedSessionKey) {
+      return undefined;
+    }
+    return replyRunState.sourceTurnByKey.get(normalizedSessionKey);
+  },
   resolveCurrentMessageInjectionTarget(sessionKey) {
+    const normalizedSessionKey = normalizeOptionalString(sessionKey);
     const operation = this.get(sessionKey);
     const resolved = resolveReplyMessageInjectionRejection({
       operation,
     });
-    if (!operation || !("injection" in resolved)) {
+    if (!operation || !("injection" in resolved) || !normalizedSessionKey) {
       return undefined;
     }
+    const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
       [replyMessageInjectionTargetOperation]: operation,
       ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
+      ...(sourceTurnId ? { sourceTurnId } : {}),
     };
   },
   resolveCurrentInterruptTarget(sessionKey) {
@@ -487,6 +509,7 @@ const replyRunRegistryTestApi = {
     replyRunState.activeSessionIdsByKey.clear();
     replyRunState.activeKeysBySessionId.clear();
     replyRunState.waitKeysBySessionId.clear();
+    replyRunState.sourceTurnByKey.clear();
     replyRunSettle.resetReplyRunSettleTimersForTesting();
     for (const waiters of replyRunState.waitersByKey.values()) {
       for (const waiter of waiters) {

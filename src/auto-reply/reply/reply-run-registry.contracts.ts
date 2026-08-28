@@ -146,6 +146,8 @@ export const replyMessageInjectionTargetOperation = Symbol("replyMessageInjectio
 export type ReplyMessageInjectionTarget = {
   readonly [replyMessageInjectionTargetOperation]: ReplyOperation;
   readonly runId?: string;
+  /** Channel source-turn identity of the owning run (see the registry's `sourceTurnByKey`). */
+  readonly sourceTurnId?: string;
 };
 
 export const replyRunInterruptTargetOperation = Symbol("replyRunInterruptTargetOperation");
@@ -326,6 +328,9 @@ export type ReplyRunRegistry = {
   }): ReplyOperation;
   get(sessionKey: string): ReplyOperation | undefined;
   isActive(sessionKey: string): boolean;
+  /** Records the channel source-turn identity of the run owning `sessionKey`. */
+  bindSourceTurnId(sessionKey: string, sourceTurnId: string | undefined): void;
+  getSourceTurnId(sessionKey: string): string | undefined;
   /** Captures the current direct owner without requiring client-supplied run identity. */
   resolveCurrentMessageInjectionTarget(sessionKey: string): ReplyMessageInjectionTarget | undefined;
   /** Captures the current direct owner for exact-instance interruption. */

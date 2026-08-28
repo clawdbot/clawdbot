@@ -33,6 +33,7 @@ import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
 import { recordReplyOperationAgentTurn } from "./reply-operation-agent-turn-state.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
+import { replyRunRegistry } from "./reply-run-registry.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 import { createReplyRestartRecoveryClaimController } from "./restart-recovery-claim.js";
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
@@ -574,8 +575,19 @@ export function createReplyAgentRestartRecoveryController(
       : opts?.sourceReplyDeliveryMode,
     ...(storePath ? { storePath } : {}),
   });
+  const admitUserTurnWithSourceBinding: typeof admitUserTurn = async (...args) => {
+    const result = await admitUserTurn(...args);
+    // The owning runner just admitted its delivery claim; record the active
+    // source-turn identity so the gateway and steer admission paths can scope
+    // terminal-tombstone fences to this exact source instead of any retained
+    // historical tombstone.
+    if (result === "admitted" && restartRecoverySourceTurnId && sessionKey) {
+      replyRunRegistry.bindSourceTurnId(sessionKey, restartRecoverySourceTurnId);
+    }
+    return result;
+  };
   return {
-    admitUserTurn,
+    admitUserTurn: admitUserTurnWithSourceBinding,
     beginBeforeAgentReply,
     checkpointBeforeAgentReply,
     clear: clearRestartRecoveryDeliveryClaim,

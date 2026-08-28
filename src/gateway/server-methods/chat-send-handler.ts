@@ -202,6 +202,7 @@ async function handleChatSendWithOptions(
       turn: preparedUserTurn,
       imageOrder,
       userTurnTranscriptRecorder: userTurnRecorder,
+      logGateway: context.logGateway,
     });
     const preAckReplyContextPromise =
       messageInjectionTarget && !isInternalTextSlashCommandTurn
