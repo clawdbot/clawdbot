@@ -270,6 +270,7 @@ function terminalRecoveryStillOwned(
     state.client === client &&
     state.connectionEpoch === connectionEpoch &&
     areUiSessionKeysEquivalent(state.sessionKey, sessionKey) &&
+    (state.chatRunId === null || state.chatRunId === runId) &&
     !hasRecoveredTerminalReply(state, runId)
   );
 }

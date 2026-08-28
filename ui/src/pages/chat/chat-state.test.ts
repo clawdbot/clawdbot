@@ -731,6 +731,50 @@ describe("canonical session message recovery", () => {
     }
   });
 
+  it("does not retry terminal recovery after a replacement foreground run starts", async () => {
+    vi.useFakeTimers();
+    try {
+      const runId = "run-before-replacement";
+      const prompt = {
+        role: "user",
+        content: [{ type: "text", text: "Finish before the next run starts" }],
+        __openclaw: { id: "prompt-1", idempotencyKey: `${runId}:user`, seq: 1 },
+      };
+      const request = vi.fn().mockResolvedValue({
+        messages: [prompt],
+        sessionId: "selected-session",
+        sessionInfo: {
+          key: "agent:main:main",
+          kind: "direct",
+          updatedAt: 2,
+          hasActiveRun: false,
+          activeRunIds: [],
+          status: "done",
+        },
+      });
+      const { state } = createSessionEventState({
+        chatMessages: [prompt],
+        chatHistoryPagination: { hasMore: false },
+        chatRunId: runId,
+        client: { request } as unknown as GatewayBrowserClient,
+      });
+
+      handlePageGatewayEvent(state, {
+        type: "event",
+        event: "chat",
+        payload: { sessionKey: state.sessionKey, runId, state: "final" },
+      });
+
+      await vi.advanceTimersByTimeAsync(0);
+      expect(request).toHaveBeenCalledTimes(1);
+      state.chatRunId = "replacement-run";
+      await vi.advanceTimersByTimeAsync(100);
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     { name: "without a pending session-message reload", pendingReload: false },
     { name: "after a pending session-message reload", pendingReload: true },
