@@ -40,7 +40,9 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
           },
           {
@@ -57,7 +59,9 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
           },
           {
@@ -74,7 +78,9 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
           },
           {
@@ -126,7 +132,9 @@
               "cacheWrite": 0
             },
             "compat": {
-              "requiresStringContent": true
+              "requiresStringContent": true,
+              "supportsReasoningEffort": true,
+              "supportedReasoningEfforts": ["none", "minimal", "low", "medium", "high", "xhigh", "max"]
             }
           },
           {
