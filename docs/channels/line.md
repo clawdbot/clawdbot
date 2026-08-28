@@ -88,16 +88,17 @@ LINE-specific settings:
   (`invalid-event`), deliveries that already committed side effects
   (`delivery-side-effects-committed`), and LINE API authentication failures
   (`authentication-failed`, HTTP 401/403).
-- **Stall watchdog.** A claimed delivery that never reaches agent-turn adoption
-  is aborted after 5 minutes and released back to its lane through the same retry
-  policy as any other failure: the event returns to pending with its attempt count
-  incremented and `handler-timeout` recorded as its last error, and it keeps its
-  place at the head of its lane. A stall is not itself a dead letter — only the
-  retry limit above ends the event, as `retry-limit-exceeded`. The watchdog only
-  covers the window between claim and adoption: adoption clears it, so a long
-  agent turn is never interrupted by it. Adoption that arrives after the watchdog
-  fires is fenced off, so a late turn cannot claim an event that has already been
-  handed back.
+- **Stall watchdog.** A claimed delivery that neither reaches agent-turn adoption
+  nor reports continued deferred progress for 5 minutes is aborted and released
+  back to its lane through the same retry policy as any other failure: the event
+  returns to pending with its attempt count incremented and `handler-timeout`
+  recorded as its last error, and it keeps its place at the head of its lane. A
+  stall is not itself a dead letter — only the retry limit above ends the event,
+  as `retry-limit-exceeded`. The watchdog only covers the window between claim
+  and adoption: deferred progress re-arms it and adoption clears it, so a long
+  agent turn is never interrupted by it. Adoption that arrives after the
+  watchdog fires is fenced off, so a late turn cannot claim an event that has
+  already been handed back.
 - **Crash recovery.** Every drain pass opens with a recovery sweep that reclaims
   any claim whose owning Gateway process is no longer running, so a delivery lost
   to a hard crash is retried on the next sweep rather than after a timeout. The
@@ -370,7 +371,8 @@ Generic media sends without LINE-specific options use the image route.
   `openclaw health` reports dead-letter counts and `openclaw doctor` names
   affected accounts.
 - **`handler-timeout` retries:** the delivery was claimed but never reached
-  agent-turn adoption within 5 minutes. This is a stall _before_ the turn starts —
+  agent-turn adoption or report deferred progress for 5 minutes. This is a stall
+  _before_ the turn starts —
   adoption clears the watchdog, so a turn that is already running is never the
   cause and is never cut off by it. Look at the dispatch path instead: the
   delivery preparation that runs between claim and adoption, such as inbound
