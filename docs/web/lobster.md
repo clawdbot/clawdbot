@@ -22,7 +22,7 @@ Hover over a visitor and it will tell you its name.
 
 Sometimes. That is the point.
 
-The lobster is a guest, not furniture. Half of session/page-load rolls skip scheduled visits entirely. Otherwise, the first visit starts after 2–10 minutes, with 30–60-minute gaps between visits. Familiarity adjusts those timings: new visitors arrive later, while familiar ones arrive sooner and return a little more often.
+The lobster is a guest, not furniture. Half of session/page-load rolls skip scheduled visits entirely. Otherwise, the base first-arrival delay is 2–10 minutes, with 30–60-minute gaps between visits. Familiarity adjusts those timings: new visitors arrive after 2.6–13 minutes, while familiar ones arrive after 1.4–7 minutes and return after 24–48 minutes.
 
 Status visits keep their own schedule: **when your Gateway disconnects**, the lobster comes out and paces, visibly worried, until the connection is back. During runs lasting more than ten minutes, it settles in for a quiet vigil. The visits toggle and dismissals still take precedence.
 
