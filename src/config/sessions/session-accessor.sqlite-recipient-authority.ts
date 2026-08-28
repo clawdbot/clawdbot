@@ -39,8 +39,22 @@ export function reconcileSessionRecipientAuthorityForCanonicalRepair(params: {
   ownerChanged: boolean;
   sources: readonly CanonicalRepairAuthoritySource[];
 }): void {
-  const rows = params.sources.flatMap((source) => {
-    const sessionKeys = [...new Set(source.sessionKeys)];
+  const hasForeignSource = params.sources.some(
+    (source) => source.database.db !== params.destination.db,
+  );
+  const destinationSource = params.sources.find(
+    (source) => source.database.db === params.destination.db,
+  );
+  const sources = destinationSource
+    ? params.sources
+    : [...params.sources, { database: params.destination, sessionKeys: [params.canonicalKey] }];
+  const rows = sources.flatMap((source) => {
+    const sessionKeys = [
+      ...new Set([
+        ...source.sessionKeys,
+        ...(source.database.db === params.destination.db ? [params.canonicalKey] : []),
+      ]),
+    ];
     if (sessionKeys.length === 0) {
       return [];
     }
@@ -62,6 +76,7 @@ export function reconcileSessionRecipientAuthorityForCanonicalRepair(params: {
   const winnerEpoch = winner?.epoch;
   const malformed = rows.some((row) => row.epoch.state === "malformed");
   const needsFreshEpoch =
+    hasForeignSource ||
     params.ownerChanged ||
     malformed ||
     epochs.size > 1 ||

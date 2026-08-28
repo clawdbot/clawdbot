@@ -320,7 +320,19 @@ export function migrateSessionRecipientAuthority(db: DatabaseSync, previousVersi
      FROM session_nodes
      WHERE CASE
        WHEN json_valid(entry_json)
-       THEN COALESCE(json_type(entry_json, '$.recipientAuthorityEpoch') <> 'null', 0)
+       THEN
+         json_type(entry_json, '$.recipientAuthorityEpoch') = 'text'
+         AND length(json_extract(entry_json, '$.recipientAuthorityEpoch')) = 36
+         AND substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 9, 1) = '-'
+         AND substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 14, 1) = '-'
+         AND substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 19, 1) = '-'
+         AND substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 24, 1) = '-'
+         AND lower(substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 15, 1)) = '4'
+         AND lower(substr(json_extract(entry_json, '$.recipientAuthorityEpoch'), 20, 1))
+           GLOB '[89ab]'
+         AND length(replace(json_extract(entry_json, '$.recipientAuthorityEpoch'), '-', '')) = 32
+         AND lower(replace(json_extract(entry_json, '$.recipientAuthorityEpoch'), '-', ''))
+           NOT GLOB '*[^0-9a-f]*'
        ELSE 0
      END`,
   ).run(Date.now(), Date.now());

@@ -283,7 +283,7 @@ function canonicalRepairChangesEffectiveOwner(
     return false;
   }
   const previous = canonical.entry.owner?.actor ?? canonical.entry.createdActor;
-  const next = selected.entry.owner?.actor ?? selected.entry.createdActor;
+  const next = selected.winner.entry.owner?.actor ?? selected.winner.entry.createdActor;
   return previous?.type !== next?.type || previous?.id !== next?.id;
 }
 

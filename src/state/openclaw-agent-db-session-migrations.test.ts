@@ -84,7 +84,7 @@ describe("agent DB conversation migration", () => {
     ).toEqual({ route_context_json: null, last_seen_at: 1 });
   });
 
-  it("moves valid and malformed entry-local recipient epochs into the durable owner", () => {
+  it("moves only valid entry-local recipient epochs and strips malformed fields", () => {
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(":memory:");
     databases.push(database);
@@ -101,7 +101,10 @@ describe("agent DB conversation migration", () => {
       ) STRICT;
       INSERT INTO session_nodes (session_key, entry_json) VALUES
         ('agent:main:valid', '{"recipientAuthorityEpoch":"11111111-1111-4111-8111-111111111111","label":"valid"}'),
-        ('agent:main:malformed', '{"recipientAuthorityEpoch":{"bad":true},"label":"malformed"}'),
+        ('agent:main:malformed-object', '{"recipientAuthorityEpoch":{"bad":true},"label":"malformed-object"}'),
+        ('agent:main:malformed-scalar', '{"recipientAuthorityEpoch":42,"label":"malformed-scalar"}'),
+        ('agent:main:malformed-text', '{"recipientAuthorityEpoch":"not-a-uuid","label":"malformed-text"}'),
+        ('agent:main:malformed-uuid', '{"recipientAuthorityEpoch":"11111111-1111-4111-7111-111111111111","label":"malformed-uuid"}'),
         ('agent:main:missing', '{"label":"missing"}');
     `);
 
@@ -112,7 +115,6 @@ describe("agent DB conversation migration", () => {
         .prepare("SELECT session_key, epoch FROM session_recipient_authority ORDER BY session_key")
         .all(),
     ).toEqual([
-      { session_key: "agent:main:malformed", epoch: '{"bad":true}' },
       {
         session_key: "agent:main:valid",
         epoch: "11111111-1111-4111-8111-111111111111",
@@ -123,7 +125,22 @@ describe("agent DB conversation migration", () => {
         .prepare("SELECT session_key, entry_json FROM session_nodes ORDER BY session_key")
         .all(),
     ).toEqual([
-      { session_key: "agent:main:malformed", entry_json: '{"label":"malformed"}' },
+      {
+        session_key: "agent:main:malformed-object",
+        entry_json: '{"label":"malformed-object"}',
+      },
+      {
+        session_key: "agent:main:malformed-scalar",
+        entry_json: '{"label":"malformed-scalar"}',
+      },
+      {
+        session_key: "agent:main:malformed-text",
+        entry_json: '{"label":"malformed-text"}',
+      },
+      {
+        session_key: "agent:main:malformed-uuid",
+        entry_json: '{"label":"malformed-uuid"}',
+      },
       { session_key: "agent:main:missing", entry_json: '{"label":"missing"}' },
       { session_key: "agent:main:valid", entry_json: '{"label":"valid"}' },
     ]);
