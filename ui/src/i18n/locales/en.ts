@@ -1526,7 +1526,8 @@ export const en: TranslationMap = {
   configForm: {
     redactedPlaceholder: "[redacted - click reveal to view]",
     sectionHelp: "Help for {section}",
-    advancedDivider: "Advanced settings",
+    advancedDivider: "Advanced",
+    advancedSettings: "Advanced settings",
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",

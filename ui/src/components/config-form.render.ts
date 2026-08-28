@@ -98,7 +98,7 @@ export function renderConfigTierGroups(params: {
             }}
           >
             <summary class="settings-section__heading config-advanced-disclosure__summary">
-              ${t("configForm.advancedDivider")}
+              ${t("configForm.advancedSettings")}
             </summary>
             ${params.revealAdvanced
               ? html`<div class="settings-group">${params.renderTier(split.advanced)}</div>`
