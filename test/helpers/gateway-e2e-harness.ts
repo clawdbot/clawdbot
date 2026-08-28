@@ -159,6 +159,8 @@ export async function connectGatewayStatusClient(
         clearTimeout(timer);
       }
       if (err) {
+        // A failed handshake never returns the client to the caller, so the helper owns teardown.
+        client.stop();
         reject(err);
         return;
       }
