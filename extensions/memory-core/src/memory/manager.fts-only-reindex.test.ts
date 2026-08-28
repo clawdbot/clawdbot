@@ -641,6 +641,28 @@ describe("memory manager FTS-only reindex", () => {
     expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
   });
 
+  it("ignores persisted vector rebuild debt after reopening an FTS-only index", async () => {
+    const memoryManager = await createManager({ provider: "none" });
+    const db = Reflect.get(memoryManager, "db") as DatabaseSync;
+    db.prepare(
+      `INSERT INTO memory_index_meta (key, value) VALUES ('memory_vector_rebuild_v1', '1')`,
+    ).run();
+
+    await memoryManager.sync({ force: true });
+    await memoryManager.close();
+    manager = null;
+    await closeAllMemorySearchManagers();
+    await closeAllMemoryIndexManagers();
+
+    const reopened = await createManager({ provider: "none", purpose: "status" });
+    expect(reopened.status()).toMatchObject({
+      dirty: false,
+      vector: { enabled: false, index: { state: "empty" } },
+      custom: { indexIdentity: { status: "valid" } },
+    });
+    expect(countChunksContaining("Alpha topic")).toBeGreaterThan(0);
+  });
+
   it("still initializes configured providers when vector storage is disabled", async () => {
     const memoryManager = await createManager({ provider: "auto", vectorEnabled: false });
 
