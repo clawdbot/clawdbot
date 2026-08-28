@@ -20,6 +20,7 @@ import type {
   CronMessageChannel,
 } from "../types.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
+import { persist } from "./store.js";
 import { enqueueCronNotification } from "./wake.js";
 
 const DEFAULT_FAILURE_ALERT_AFTER = 2;
@@ -192,6 +193,36 @@ export function resolveFailureAlert(
   };
 }
 
+/**
+ * Writes the settled failure-alert send outcome back onto the live stored job.
+ * The alert path clones the job before dispatch, so the async send can only
+ * reach persisted state by looking the job up in the store again.
+ */
+function recordFailureNotificationDeliveryOutcome(
+  state: CronServiceState,
+  params: {
+    jobId: string;
+    delivered: boolean;
+    error?: string;
+  },
+): void {
+  const liveJob = state.store?.jobs.find((job) => job.id === params.jobId);
+  if (!liveJob) {
+    return;
+  }
+  liveJob.state.lastFailureNotificationDelivered = params.delivered;
+  liveJob.state.lastFailureNotificationDeliveryStatus = params.delivered
+    ? "delivered"
+    : "not-delivered";
+  liveJob.state.lastFailureNotificationDeliveryError = params.error;
+  void persist(state).catch((err: unknown) => {
+    state.deps.log.warn(
+      { jobId: params.jobId, err: String(err) },
+      "cron: failure alert delivery outcome persist failed",
+    );
+  });
+}
+
 function transportFailureAlert(
   state: CronServiceState,
   params: {
@@ -202,14 +233,19 @@ function transportFailureAlert(
   },
 ): void {
   let pendingFallback = true;
-  const fallback = (reachedRecipient = false) => {
-    if (pendingFallback && !reachedRecipient) {
+  let reachedRecipient = false;
+  const fallback = (reached = false) => {
+    if (pendingFallback && !reached) {
       enqueueCronNotification(state, params.job, params.payload.text ?? "", "failure-alert");
     }
     pendingFallback = false;
   };
   if (!state.deps.sendCronFailureAlert) {
     fallback();
+    recordFailureNotificationDeliveryOutcome(state, {
+      jobId: params.job.id,
+      delivered: false,
+    });
     return;
   }
   void state.deps
@@ -223,7 +259,18 @@ function transportFailureAlert(
       accountId: params.route.accountId,
       threadId: params.route.threadId,
       ...(params.route.alternateRoute ? { inheritSessionThread: false as const } : {}),
-      onDeliveryAttempt: fallback,
+      onDeliveryAttempt: (reached) => {
+        if (reached) {
+          reachedRecipient = true;
+        }
+        fallback(reached);
+      },
+    })
+    .then(() => {
+      recordFailureNotificationDeliveryOutcome(state, {
+        jobId: params.job.id,
+        delivered: reachedRecipient,
+      });
     })
     .catch((err: unknown) => {
       state.deps.log.warn(
@@ -231,6 +278,11 @@ function transportFailureAlert(
         "cron: failure alert delivery failed",
       );
       fallback();
+      recordFailureNotificationDeliveryOutcome(state, {
+        jobId: params.job.id,
+        delivered: false,
+        error: err instanceof Error ? err.message : String(err),
+      });
     });
 }
 
