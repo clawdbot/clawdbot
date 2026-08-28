@@ -288,30 +288,20 @@ describe("isDeliveredMessagingToolResult", () => {
     ).toBe(true);
   });
 
-  it("rejects suppressed and dry-run deliveryStatus in plugin send envelopes", () => {
-    // deliveryStatus is the canonical marker emitted by core send results; a
-    // plugin-native tool echoing it must not be treated as delivered.
+  it.each([
+    ["suppressed", false],
+    ["dry_run", false],
+    ["failed", false],
+    ["sent", true],
+    ["partial_failed", true],
+  ] as const)("maps plugin deliveryStatus %s to delivered=%s", (deliveryStatus, delivered) => {
     expect(
       isDeliveredMessagingToolResult({
         toolName: "message",
         args: { action: "send", to: "channel-1" },
-        result: { ok: true, deliveryStatus: "suppressed" },
+        result: { ok: true, deliveryStatus },
       }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessagingToolResult({
-        toolName: "message",
-        args: { action: "send", to: "channel-1" },
-        result: { ok: true, deliveryStatus: "dry_run" },
-      }),
-    ).toBe(false);
-    expect(
-      isDeliveredMessagingToolResult({
-        toolName: "message",
-        args: { action: "send", to: "channel-1" },
-        result: { ok: true, deliveryStatus: "sent" },
-      }),
-    ).toBe(true);
+    ).toBe(delivered);
   });
 
   it("rejects successful plugin broadcast wrappers around suppressed sends", () => {

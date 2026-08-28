@@ -13,6 +13,7 @@ type EmbeddedMessageDeliveryFact = {
 };
 
 const NON_DELIVERY_IDS = new Set(["skipped", "suppressed"]);
+const NON_DELIVERY_STATUSES = new Set(["failed", ...NON_DELIVERY_IDS]);
 const STATUSES = new Set(["settled", "suppressed", "dryRun", "failed"]);
 const PLUGIN_ENVELOPE_KEYS = ["details", "payload", "result", "results", "toolResult"];
 
@@ -37,9 +38,14 @@ function normalizeStatus(value: unknown): string | undefined {
   return typeof value === "string" ? value.trim().toLowerCase() : undefined;
 }
 
+type PluginEnvelopePredicate = (
+  record: Record<string, unknown>,
+  status: string | undefined,
+) => boolean;
+
 function visitPluginEnvelope(
   value: unknown,
-  predicate: (record: Record<string, unknown>) => boolean,
+  predicate: PluginEnvelopePredicate,
   depth = 0,
 ): boolean {
   if (!value || typeof value !== "object" || depth > 4) {
@@ -52,7 +58,8 @@ function visitPluginEnvelope(
   if (!record) {
     return false;
   }
-  if (predicate(record)) {
+  const status = normalizeStatus(record.deliveryStatus) ?? normalizeStatus(record.status);
+  if (predicate(record, status)) {
     return true;
   }
   if (typeof record.text === "string") {
@@ -71,15 +78,12 @@ function visitPluginEnvelope(
 }
 
 const PLUGIN_SIGNALS = {
-  dryRun: (record: Record<string, unknown>) =>
-    record.dryRun === true ||
-    normalizeStatus(record.deliveryStatus) === "dry_run" ||
-    normalizeStatus(record.status) === "dry_run",
-  partial: (record: Record<string, unknown>) =>
+  dryRun: (record: Record<string, unknown>, status: string | undefined) =>
+    record.dryRun === true || status === "dry_run",
+  partial: (record: Record<string, unknown>, status: string | undefined) =>
     record.sentBeforeError === true ||
     record.visibleReplySent === true ||
-    normalizeStatus(record.deliveryStatus) === "partial_failed" ||
-    normalizeStatus(record.status) === "partial_failed",
+    status === "partial_failed",
   conversation: (record: Record<string, unknown>) =>
     [
       record.topicId,
@@ -87,17 +91,15 @@ const PLUGIN_SIGNALS = {
       record.messageThreadId,
       asOptionalRecord(record.thread)?.id,
     ].some((id) => hasNonEmptyString(id) || (typeof id === "number" && Number.isFinite(id))),
-  nonDelivery: (record: Record<string, unknown>) => {
+  nonDelivery: (record: Record<string, unknown>, status: string | undefined) => {
     const id = normalizeStatus(record.messageId);
     return (
       (id !== undefined && NON_DELIVERY_IDS.has(id)) ||
-      normalizeStatus(record.deliveryStatus) === "suppressed" ||
-      normalizeStatus(record.status) === "suppressed"
+      (status !== undefined && NON_DELIVERY_STATUSES.has(status))
     );
   },
-  noOp: (record: Record<string, unknown>) => {
+  noOp: (record: Record<string, unknown>, status: string | undefined) => {
     const removed = record.removed;
-    const status = normalizeStatus(record.status);
     return (
       removed === null ||
       removed === false ||
@@ -114,15 +116,14 @@ const PLUGIN_SIGNALS = {
       status === "not_found"
     );
   },
-  delivery: (record: Record<string, unknown>) => {
+  delivery: (record: Record<string, unknown>, status: string | undefined) => {
     const message = asOptionalRecord(record.message);
     const ids = [record.messageId, record.pollId, message?.id]
       .map(normalizeStatus)
       .filter((id): id is string => Boolean(id));
     return (
       ids.some((id) => !NON_DELIVERY_IDS.has(id)) ||
-      normalizeStatus(record.deliveryStatus) === "sent" ||
-      normalizeStatus(record.status) === "sent" ||
+      status === "sent" ||
       normalizeStatus(record.text) === "sent"
     );
   },
@@ -132,7 +133,7 @@ const PLUGIN_SIGNALS = {
       .some((id) => Boolean(id && !NON_DELIVERY_IDS.has(id))),
   ok: (record: Record<string, unknown>) =>
     record.ok === true || normalizeStatus(record.text) === "ok",
-} satisfies Record<string, (record: Record<string, unknown>) => boolean>;
+} satisfies Record<string, PluginEnvelopePredicate>;
 
 export function pluginEnvelopeHas(value: unknown, signal: keyof typeof PLUGIN_SIGNALS): boolean {
   return visitPluginEnvelope(value, PLUGIN_SIGNALS[signal]);
