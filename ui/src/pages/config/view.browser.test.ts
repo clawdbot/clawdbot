@@ -599,19 +599,14 @@ describe("config view", () => {
   }
 
   function sectionTabLabels(container: HTMLElement): Array<string | undefined> {
-    return Array.from(container.querySelectorAll(".config-toolbar wa-radio")).map((tab) =>
+    return Array.from(container.querySelectorAll(".config-toolbar .hub-tab")).map((tab) =>
       tab.textContent?.trim(),
     );
   }
 
   function selectConfigTab(container: HTMLElement, name: string) {
-    const group = queryRequired(
-      container,
-      ".config-toolbar wa-radio-group",
-      HTMLElement,
-    ) as HTMLElement & { value: string };
-    group.value = name;
-    group.dispatchEvent(new Event("change", { bubbles: true }));
+    const tab = queryRequired(container, `#config-sections-tab-${name}`, HTMLElement);
+    tab.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
   }
 
   function queryRequired<T extends Element>(
@@ -822,19 +817,37 @@ describe("config view", () => {
     );
 
     expect(sectionTabLabels(container)).toEqual(["Settings", "Agents", "Gateway", "Theme"]);
-    // Segmented pills replaced the old tab strip and the inner panel chrome.
-    expect(container.querySelector("wa-tab-group")).toBeNull();
+    expect(container.querySelector("wa-tab-group.hub-tabs")).not.toBeNull();
     expect(container.querySelector(".config-layout")).toBeNull();
+    expect(container.querySelector("#config-section-panel")?.getAttribute("role")).toBe("tabpanel");
+    expect(container.querySelector("#config-section-panel")?.getAttribute("aria-labelledby")).toBe(
+      "config-sections-tab-root",
+    );
 
     selectConfigTab(container, "gateway");
     expect(onSectionChange).toHaveBeenCalledWith("gateway");
 
     onSectionChange.mockClear();
-    const active = container.querySelector(".config-toolbar .settings-segmented__btn--active");
+    const active = container.querySelector(".config-toolbar .hub-tab[active]");
     expect(active?.textContent?.trim()).toBe("Settings");
     selectConfigTab(container, "agents");
     expect(onSectionChange).toHaveBeenCalledWith("agents");
 
+    render(
+      renderConfig({
+        ...baseProps(),
+        activeSection: "agents",
+        onSectionChange,
+        schema: {
+          type: "object",
+          properties: {
+            gateway: { type: "object", properties: {} },
+            agents: { type: "object", properties: {} },
+          },
+        },
+      }),
+      container,
+    );
     onSectionChange.mockClear();
     selectConfigTab(container, "root");
     expect(onSectionChange).toHaveBeenCalledWith(null);
@@ -1086,22 +1099,27 @@ describe("config view", () => {
         messages: { inbox: "smart" },
       },
     });
+    document.body.append(container);
 
-    const content = queryRequired(container, ".config-content", HTMLElement);
-    content.scrollTop = 280;
-    content.scrollLeft = 24;
-    content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
-      content.scrollTop = top ?? content.scrollTop;
-      content.scrollLeft = left ?? content.scrollLeft;
-    }) as typeof content.scrollTo;
+    try {
+      const content = queryRequired(container, ".config-content", HTMLElement);
+      content.scrollTop = 280;
+      content.scrollLeft = 24;
+      content.scrollTo = vi.fn(({ top, left }: { top?: number; left?: number }) => {
+        content.scrollTop = top ?? content.scrollTop;
+        content.scrollLeft = left ?? content.scrollLeft;
+      }) as typeof content.scrollTo;
 
-    selectConfigTab(container, "messages");
-    await Promise.resolve();
+      selectConfigTab(container, "messages");
+      await Promise.resolve();
 
-    expect(content["scrollTo"]).toHaveBeenCalledOnce();
-    expect(content["scrollTo"]).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
-    expect(content.scrollTop).toBe(0);
-    expect(content.scrollLeft).toBe(0);
+      expect(content["scrollTo"]).toHaveBeenCalledOnce();
+      expect(content["scrollTo"]).toHaveBeenCalledWith({ top: 0, left: 0, behavior: "auto" });
+      expect(content.scrollTop).toBe(0);
+      expect(content.scrollLeft).toBe(0);
+    } finally {
+      container.remove();
+    }
   });
 
   it("resets config content scroll when switching from form to raw mode", async () => {

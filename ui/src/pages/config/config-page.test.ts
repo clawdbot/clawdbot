@@ -352,6 +352,27 @@ describe("ConfigPage synced preference provenance", () => {
   });
 });
 
+describe("ConfigPage header", () => {
+  it("renders the route subtitle for Communications", () => {
+    const page = new ConfigPage();
+    const state = page as unknown as {
+      context: ApplicationContext;
+      pageId: "communications";
+      renderAdvancedConfig: () => undefined;
+    };
+    state.context = { runtimeConfig: { state: {} } } as unknown as ApplicationContext;
+    state.pageId = "communications";
+    state.renderAdvancedConfig = () => undefined;
+    const container = document.createElement("div");
+
+    render(page.render(), container);
+
+    expect(container.querySelector(".page-subtitle")?.textContent?.trim()).toBe(
+      "Messages and text-to-speech settings.",
+    );
+  });
+});
+
 describe("ConfigPage moved section routes", () => {
   it.each([
     ["channels", "channels", ""],

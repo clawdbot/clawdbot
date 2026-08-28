@@ -21,6 +21,7 @@ type HubTabsProps<T extends string> = {
   className?: string;
   variant?: "primary" | "sub";
   onSelect: (tab: T) => void;
+  onActivate?: (element: HTMLElement) => void;
 };
 
 // Keyboard activation unmounts a route-owned strip, so the destination strip
@@ -95,6 +96,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
                 tab.value !== props.active
               ) {
                 props.onSelect(tab.value);
+                props.onActivate?.(event.currentTarget as HTMLElement);
               }
             }}
             @keydown=${(event: KeyboardEvent) => {
@@ -112,6 +114,7 @@ export function renderHubTabs<T extends string>(props: HubTabsProps<T>): Templat
                   source: event.currentTarget as Element,
                 };
                 props.onSelect(tab.value);
+                props.onActivate?.(event.currentTarget as HTMLElement);
               }
             }}
             ${selected ? ref((element) => reclaimFocus(props.id, tab.value, element)) : nothing}
