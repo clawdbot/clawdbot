@@ -24,6 +24,7 @@ import {
   assertMemoryWikiSourceSyncStateCapacity,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
+  scopeImportedSourceSyncKey,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -114,12 +115,18 @@ async function collectBridgeArtifacts(
     if (!shouldImportArtifact(artifact, bridgeConfig)) {
       continue;
     }
-    const syncKey = await resolveArtifactKey(artifact.absolutePath);
-    if (isPathInside(vaultRootKey, syncKey)) {
+    const artifactKey = await resolveArtifactKey(artifact.absolutePath);
+    if (isPathInside(vaultRootKey, artifactKey)) {
       continue;
     }
     collected.push({
-      syncKey,
+      // The binding mirrors page identity (workspaceDir + relativePath), not
+      // the physical file: aliased workspaces import one file into distinct
+      // pages, and each page needs its own ownership row (#118370).
+      syncKey: scopeImportedSourceSyncKey(
+        "bridge",
+        `${path.resolve(artifact.workspaceDir)}\0${artifact.relativePath}`,
+      ),
       artifactType: artifact.kind === "event-log" ? "memory-events" : "markdown",
       workspaceDir: artifact.workspaceDir,
       relativePath: artifact.relativePath,

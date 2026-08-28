@@ -1,9 +1,11 @@
 // Memory Wiki helper module supports test helpers behavior.
 import type {
+  OpenKeyedStoreOptions,
   PluginBlobEntry,
   PluginBlobEntryInfo,
   PluginBlobStore,
   PluginStateEntry,
+  PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import {
@@ -141,6 +143,63 @@ function createMemoryBlobStore<T>() {
     },
     async clear() {
       values.clear();
+    },
+  };
+}
+
+// A reject-new store capped at `cap` rows: mirrors the real store's
+// PLUGIN_STATE_LIMIT_EXCEEDED contract without seeding 20,000 rows.
+export function createCapacityCappedKeyedStore(cap: number) {
+  const limit = { cap };
+  const values = new Map<string, unknown>();
+  const openKeyedStore = <T>(_options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> => ({
+    async register(key, value) {
+      if (!values.has(key) && values.size >= limit.cap) {
+        throw Object.assign(new Error("namespace row limit reached"), {
+          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+        });
+      }
+      values.set(key, value);
+    },
+    async registerIfAbsent(key, value) {
+      if (values.has(key)) {
+        return false;
+      }
+      if (values.size >= cap) {
+        throw Object.assign(new Error("namespace row limit reached"), {
+          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
+        });
+      }
+      values.set(key, value);
+      return true;
+    },
+    async lookup(key) {
+      return values.get(key) as T | undefined;
+    },
+    async consume(key) {
+      const value = values.get(key) as T | undefined;
+      values.delete(key);
+      return value;
+    },
+    async delete(key) {
+      return values.delete(key);
+    },
+    async entries() {
+      return [...values.entries()].map(([key, value]) => ({
+        key,
+        value: value as T,
+        createdAt: 0,
+      }));
+    },
+    async clear() {
+      values.clear();
+    },
+  });
+  return {
+    openKeyedStore,
+    values,
+    setCap(next: number) {
+      limit.cap = next;
     },
   };
 }

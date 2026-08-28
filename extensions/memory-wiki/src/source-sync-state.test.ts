@@ -26,10 +26,13 @@ import { createMemoryWikiTestHarness } from "./test-helpers.js";
 
 const tempDirs = createMemoryWikiTestHarness();
 
+function openKeyedStoreForEnv(env: NodeJS.ProcessEnv) {
+  return <T>(options: OpenKeyedStoreOptions) =>
+    createPluginStateKeyedStoreForTests<T>("memory-wiki", { ...options, env });
+}
+
 function openStore(env: NodeJS.ProcessEnv) {
-  return createMemoryWikiSourceSyncStateStore(<T>(options: OpenKeyedStoreOptions) =>
-    createPluginStateKeyedStoreForTests<T>("memory-wiki", { ...options, env }),
-  );
+  return createMemoryWikiSourceSyncStateStore(openKeyedStoreForEnv(env));
 }
 
 function createImportedSourceState(pagePath: string, group: "bridge" | "unsafe-local" = "bridge") {
@@ -132,7 +135,7 @@ describe("memory wiki source sync state", () => {
       {
         version: 1,
         entries: {
-          alpha: {
+          "bridge:alpha": {
             group: "bridge",
             pagePath: "sources/alpha.md",
             sourcePath: "/tmp/source.md",
@@ -148,7 +151,7 @@ describe("memory wiki source sync state", () => {
     await expect(readMemoryWikiSourceSyncState(vaultRoot, store)).resolves.toEqual({
       version: 1,
       entries: {
-        alpha: {
+        "bridge:alpha": {
           group: "bridge",
           pagePath: "sources/alpha.md",
           sourcePath: "/tmp/source.md",
@@ -168,7 +171,7 @@ describe("memory wiki source sync state", () => {
     const counting = createCountingStore();
     const entries = Object.fromEntries(
       Array.from({ length: 1_914 }, (_, index) => [
-        `source-${index}`,
+        `bridge:source-${index}`,
         {
           group: "bridge" as const,
           pagePath: `sources/source-${index}.md`,
@@ -187,11 +190,11 @@ describe("memory wiki source sync state", () => {
     await writeMemoryWikiSourceSyncState(vaultRoot, state, counting.store);
     expect(counting.calls).toEqual({ register: 0, delete: 0, entries: 0 });
 
-    const changed = state.entries["source-0"];
+    const changed = state.entries["bridge:source-0"];
     expect(changed).toBeDefined();
     setImportedSourceEntry({
       state,
-      syncKey: "source-0",
+      syncKey: "bridge:source-0",
       entry: { ...changed!, sourceSize: changed!.sourceSize + 1 },
     });
     await writeMemoryWikiSourceSyncState(vaultRoot, state, counting.store);
@@ -201,15 +204,15 @@ describe("memory wiki source sync state", () => {
     await pruneImportedSourceEntries({
       vaultRoot,
       group: "bridge",
-      activeKeys: new Set(Object.keys(state.entries).filter((key) => key !== "source-1")),
+      activeKeys: new Set(Object.keys(state.entries).filter((key) => key !== "bridge:source-1")),
       state,
     });
     await writeMemoryWikiSourceSyncState(vaultRoot, state, counting.store);
     expect(counting.calls).toEqual({ register: 0, delete: 1, entries: 0 });
 
     const persisted = await readMemoryWikiSourceSyncState(vaultRoot, counting.store);
-    expect(persisted.entries["source-0"]?.sourceSize).toBe(1);
-    expect(persisted.entries["source-1"]).toBeUndefined();
+    expect(persisted.entries["bridge:source-0"]?.sourceSize).toBe(1);
+    expect(persisted.entries["bridge:source-1"]).toBeUndefined();
     expect(Object.keys(persisted.entries)).toHaveLength(1_913);
   });
 
@@ -228,7 +231,7 @@ describe("memory wiki source sync state", () => {
       vaultRoot,
       {
         version: 1,
-        entries: { "source-0": makeEntry(0), "source-1": makeEntry(1) },
+        entries: { "bridge:source-0": makeEntry(0), "bridge:source-1": makeEntry(1) },
       },
       counting.store,
     );
@@ -237,29 +240,29 @@ describe("memory wiki source sync state", () => {
     await pruneImportedSourceEntries({
       vaultRoot,
       group: "bridge",
-      activeKeys: new Set(["source-0"]),
+      activeKeys: new Set(["bridge:source-0"]),
       state: tracked,
     });
     setImportedSourceEntry({
       state: tracked,
-      syncKey: "source-2",
+      syncKey: "bridge:source-2",
       entry: makeEntry(2),
     });
     await writeMemoryWikiSourceSyncState(vaultRoot, tracked, counting.store);
     await expect(readMemoryWikiSourceSyncState(vaultRoot, counting.store)).resolves.toMatchObject({
-      entries: { "source-0": makeEntry(0), "source-2": makeEntry(2) },
+      entries: { "bridge:source-0": makeEntry(0), "bridge:source-2": makeEntry(2) },
     });
 
     await writeMemoryWikiSourceSyncState(
       vaultRoot,
       {
         version: 1,
-        entries: { "source-0": makeEntry(0), "source-3": makeEntry(3) },
+        entries: { "bridge:source-0": makeEntry(0), "bridge:source-3": makeEntry(3) },
       },
       counting.store,
     );
     await expect(readMemoryWikiSourceSyncState(vaultRoot, counting.store)).resolves.toMatchObject({
-      entries: { "source-0": makeEntry(0), "source-3": makeEntry(3) },
+      entries: { "bridge:source-0": makeEntry(0), "bridge:source-3": makeEntry(3) },
     });
   });
 
@@ -309,7 +312,7 @@ describe("memory wiki source sync state", () => {
     const store = openStore({ ...process.env, OPENCLAW_STATE_DIR: stateDir });
     const entries = Object.fromEntries(
       Array.from({ length: MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES + 1 }, (_, index) => [
-        `source-${index}`,
+        `bridge:source-${index}`,
         {
           group: "bridge" as const,
           pagePath: `sources/source-${index}.md`,
@@ -830,7 +833,7 @@ describe("memory wiki source sync state", () => {
       {
         version: 1 as const,
         entries: {
-          "sync-key": {
+          "bridge:sync-key": {
             group: "bridge" as const,
             pagePath: "sources/missing-vault.md",
             sourcePath: "/tmp/source.md",

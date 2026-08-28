@@ -9,18 +9,14 @@ import { walkMemoryWikiDirectory } from "./bounded-walk.js";
 import type { BridgeMemoryWikiResult } from "./bridge.js";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 import { appendMemoryWikiLog } from "./log.js";
-import {
-  createWikiPageFilename,
-  renderMarkdownFence,
-  renderWikiMarkdown,
-  slugifyWikiSegment,
-} from "./markdown.js";
+import { renderMarkdownFence, renderWikiMarkdown } from "./markdown.js";
 import { writeImportedSourcePage } from "./source-page-shared.js";
-import { resolveArtifactKey } from "./source-path-shared.js";
+import { resolveUnsafeLocalPagePath } from "./source-path-shared.js";
 import {
   assertMemoryWikiSourceSyncStateCapacity,
   pruneImportedSourceEntries,
   readMemoryWikiSourceSyncState,
+  scopeImportedSourceSyncKey,
   writeMemoryWikiSourceSyncState,
 } from "./source-sync-state.js";
 import { initializeMemoryWikiVault } from "./vault.js";
@@ -85,7 +81,12 @@ async function collectUnsafeLocalArtifacts(
         const files = await listAllowedFilesRecursive(absoluteConfiguredPath);
         for (const absolutePath of files) {
           scopedArtifacts.push({
-            syncKey: await resolveArtifactKey(absolutePath),
+            // The binding mirrors page identity (configured root + raw source
+            // path) so every generated page keeps exactly one ownership row.
+            syncKey: scopeImportedSourceSyncKey(
+              "unsafe-local",
+              `${absoluteConfiguredPath}\0${absolutePath}`,
+            ),
             configuredPath: absoluteConfiguredPath,
             absolutePath,
             relativePath: path.relative(absoluteConfiguredPath, absolutePath).replace(/\\/g, "/"),
@@ -93,7 +94,10 @@ async function collectUnsafeLocalArtifacts(
         }
       } else if (stat.isFile()) {
         scopedArtifacts.push({
-          syncKey: await resolveArtifactKey(absoluteConfiguredPath),
+          syncKey: scopeImportedSourceSyncKey(
+            "unsafe-local",
+            `${absoluteConfiguredPath}\0${absoluteConfiguredPath}`,
+          ),
           configuredPath: absoluteConfiguredPath,
           absolutePath: absoluteConfiguredPath,
           relativePath: path.basename(absoluteConfiguredPath),
@@ -111,29 +115,6 @@ async function collectUnsafeLocalArtifacts(
     deduped.set(artifact.syncKey, artifact);
   }
   return { artifacts: [...deduped.values()], unavailableConfiguredPaths };
-}
-
-function resolveUnsafeLocalPagePath(params: { configuredPath: string; absolutePath: string }): {
-  pageId: string;
-  pagePath: string;
-} {
-  const configuredBaseSlug = slugifyWikiSegment(path.basename(params.configuredPath));
-  const configuredHash = createHash("sha1")
-    .update(path.resolve(params.configuredPath))
-    .digest("hex")
-    .slice(0, 8);
-  const artifactBaseSlug = slugifyWikiSegment(path.basename(params.absolutePath));
-  const artifactHash = createHash("sha1")
-    .update(path.resolve(params.absolutePath))
-    .digest("hex")
-    .slice(0, 8);
-  const pageSlug = `${configuredBaseSlug}-${configuredHash}-${artifactBaseSlug}-${artifactHash}`;
-  return {
-    pageId: `source.unsafe-local.${pageSlug}`,
-    pagePath: path
-      .join("sources", createWikiPageFilename(`unsafe-local-${pageSlug}`))
-      .replace(/\\/g, "/"),
-  };
 }
 
 function resolveUnsafeLocalTitle(artifact: UnsafeLocalArtifact): string {

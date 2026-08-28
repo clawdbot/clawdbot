@@ -8,11 +8,12 @@ import type {
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { FsSafeError, root as fsRoot } from "openclaw/plugin-sdk/security-runtime";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { createWikiPageFilename, extractHumanNotesBlock } from "./markdown.js";
 
 export type MemoryWikiImportedSourceGroup = "bridge" | "unsafe-local";
 
-type MemoryWikiImportedSourceStateEntry = {
+export type MemoryWikiImportedSourceStateEntry = {
   group: MemoryWikiImportedSourceGroup;
   pagePath: string;
   sourcePath: string;
@@ -45,13 +46,37 @@ type MemoryWikiSourceSyncStateStore = {
   ) => Promise<void>;
 };
 
-type MemoryWikiSourceSyncStateRecord = MemoryWikiImportedSourceStateEntry & {
+export type MemoryWikiSourceSyncStateRecord = MemoryWikiImportedSourceStateEntry & {
   vaultRootKey: string;
   syncKey: string;
 };
 
 export const MEMORY_WIKI_SOURCE_SYNC_STATE_NAMESPACE = "source-sync";
 export const MEMORY_WIKI_SOURCE_SYNC_STATE_MAX_ENTRIES = 20_000;
+
+// Ownership rows shipped in v2026.7.1 keyed only by canonical source path, so
+// bridge and unsafe-local imports of one physical file overwrote each other's
+// row and orphaned the losing page (#118370). Group-scoped keys keep both
+// bindings owned, and each group binds the inputs that own its page identity:
+// bridge binds workspaceDir + relativePath so aliased workspaces keep distinct
+// pages; unsafe-local binds the configured root so moving a root re-keys
+// instead of orphaning the previous page.
+export function scopeImportedSourceSyncKey(
+  group: MemoryWikiImportedSourceGroup,
+  bindingKey: string,
+): string {
+  return `${group}:${bindingKey}`;
+}
+
+export function isScopedImportedSourceSyncKey(syncKey: string): boolean {
+  return syncKey.startsWith("bridge:") || syncKey.startsWith("unsafe-local:");
+}
+
+// The plugin SDK does not expose PluginStateStoreError; match the documented
+// reject-new capacity contract structurally instead of widening SDK surface.
+export function isPluginStateLimitExceeded(error: unknown): boolean {
+  return isRecord(error) && error.code === "PLUGIN_STATE_LIMIT_EXCEEDED";
+}
 const MAX_MEMORY_WIKI_NOTES_RECOVERY_BYTES = 16 * 1024 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_HEADER_BYTES = 64 * 1024;
 const MAX_MEMORY_WIKI_SOURCE_PAGE_SCAN_BYTES = 32 * 1024 * 1024;
@@ -81,7 +106,7 @@ function cloneSourceSyncState(state: MemoryWikiImportedSourceState): MemoryWikiI
   };
 }
 
-function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
+export function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return EMPTY_STATE;
   }
@@ -116,11 +141,11 @@ function normalizeSourceSyncState(value: unknown): MemoryWikiImportedSourceState
   return { version: 1, entries };
 }
 
-function resolveVaultRootKey(vaultRoot: string): string {
+export function resolveVaultRootKey(vaultRoot: string): string {
   return createHash("sha256").update(path.resolve(vaultRoot), "utf8").digest("hex").slice(0, 32);
 }
 
-function resolveStateEntryKey(vaultRootKey: string, syncKey: string): string {
+export function resolveStateEntryKey(vaultRootKey: string, syncKey: string): string {
   return createHash("sha256").update(`${vaultRootKey}\0${syncKey}`, "utf8").digest("hex");
 }
 
@@ -179,7 +204,15 @@ export function createMemoryWikiSourceSyncStateStore(
       const entries: MemoryWikiImportedSourceState["entries"] = {};
       for (const row of await openStore().entries()) {
         const value = row.value;
-        if (value.vaultRootKey !== vaultRootKey || typeof value.syncKey !== "string") {
+        // Legacy unscoped rows stay invisible to runtime: the doctor migration
+        // memory-wiki-source-sync-group-scoped-keys owns their translation, and
+        // reading them here would let pruning delete pages that group-scoped
+        // rows already own.
+        if (
+          value.vaultRootKey !== vaultRootKey ||
+          typeof value.syncKey !== "string" ||
+          !isScopedImportedSourceSyncKey(value.syncKey)
+        ) {
           continue;
         }
         const normalized = normalizeSourceSyncState({
@@ -222,6 +255,14 @@ export function createMemoryWikiSourceSyncStateStore(
       );
       for (const row of await store.entries()) {
         if (row.value.vaultRootKey === vaultRootKey && !nextKeys.has(row.key)) {
+          // Legacy unscoped rows are owned by the group-scoped-keys doctor
+          // migration; a full write must never delete them out from under it.
+          if (
+            typeof row.value.syncKey === "string" &&
+            !isScopedImportedSourceSyncKey(row.value.syncKey)
+          ) {
+            continue;
+          }
           await store.delete(row.key);
         }
       }
@@ -438,8 +479,20 @@ export async function pruneImportedSourceEntries(params: {
 }): Promise<number> {
   let removedCount = 0;
   let vault: Awaited<ReturnType<typeof fsRoot>> | undefined;
+  // Page paths shared with another live row must survive pruning: during key
+  // format transitions two rows can transiently own one page, and deleting it
+  // would destroy the page the surviving row still tracks.
+  const pageRefCounts = new Map<string, number>();
+  for (const entry of Object.values(params.state.entries)) {
+    pageRefCounts.set(entry.pagePath, (pageRefCounts.get(entry.pagePath) ?? 0) + 1);
+  }
   for (const [syncKey, entry] of Object.entries(params.state.entries)) {
     if (entry.group !== params.group || params.activeKeys.has(syncKey)) {
+      continue;
+    }
+    if ((pageRefCounts.get(entry.pagePath) ?? 0) > 1) {
+      removeImportedSourceStateEntry(params.state, syncKey);
+      removedCount += 1;
       continue;
     }
     try {
