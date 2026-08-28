@@ -2635,14 +2635,16 @@ describe("cli json stdout contract", () => {
       explicitGateway: true,
     })),
     {
-      name: "curator mutation",
+      name: "retired curator mutation",
       args: ["skills", "curator", "pin", "missing-skill", "--json"],
-      message: "Curated skill not found: missing-skill",
+      message:
+        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
     },
     {
-      name: "curator mutation with parent JSON",
+      name: "retired curator mutation with parent JSON",
       args: ["skills", "curator", "--json", "pin", "missing-skill"],
-      message: "Curated skill not found: missing-skill",
+      message:
+        "Skill lifecycle curation is retired. The weekly collection review manages the skill collection; pin, unpin, and restore no longer exist.",
     },
     {
       name: "workshop workspace validation with parent JSON",
