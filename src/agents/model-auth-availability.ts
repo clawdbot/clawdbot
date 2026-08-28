@@ -37,8 +37,13 @@ import {
 import { getRuntimeExternalCliProfileIds } from "./auth-profiles/runtime-external-profile-references.js";
 import type { RuntimeAuthMaterialization } from "./auth-profiles/runtime-materializations.js";
 import { getRuntimeAuthProfileStoreSnapshotCore } from "./auth-profiles/runtime-snapshots.js";
-import type { AuthProfileCredential, AuthProfileStore } from "./auth-profiles/types.js";
+import type {
+  AuthProfileCredential,
+  AuthProfileStore,
+  ProfileUsageStats,
+} from "./auth-profiles/types.js";
 import {
+  isActiveUnusableWindow,
   isAuthCooldownBypassedForProvider,
   isProfileInCooldown,
   resolveProfileUnusableUntil,
@@ -441,6 +446,8 @@ export function createModelAuthAvailabilityResolver(
       : undefined;
     return isProfileInCooldown(store, profileId, now, cooldownModel);
   };
+  const hasPermanentAuthFailure = (stats: ProfileUsageStats | undefined) =>
+    stats?.disabledReason === "auth_permanent" && isActiveUnusableWindow(stats.disabledUntil, now);
   const profileAvailability = (
     provider: string,
     profileId: string,
@@ -557,8 +564,9 @@ export function createModelAuthAvailabilityResolver(
       return {
         availability: false,
         evidence: "provider-config",
-        unavailableReason: "cooldown",
-        unavailableUntil: inlineKeyUnusableUntil,
+        ...(hasPermanentAuthFailure(inlineUsageStats)
+          ? { unavailableReason: "auth-failed" as const }
+          : { unavailableReason: "cooldown" as const, unavailableUntil: inlineKeyUnusableUntil }),
       };
     }
     if (binding.kind === "literal") {
@@ -713,19 +721,20 @@ export function createModelAuthAvailabilityResolver(
     target: AuthTarget,
   ): AuthSourceEvaluation => {
     // Selection rejects the entire cooling tier. Its first/preferred profile
-    // need not recover first, and invalid credentials cannot supply a retry time.
+    // need not recover first; invalid or permanently rejected credentials cannot supply a retry time.
     const model = target.modelId ? splitTrailingAuthProfile(target.modelId).model : undefined;
     const retryTimes = profiles.flatMap((profile) => {
       if (profile.readiness === "unavailable" || profile.cooldown !== "active") {
         return [];
       }
       const stats = store.usageStats?.[profile.profileId];
-      const until = stats ? resolveProfileUnusableUntil(stats, model) : null;
+      const until =
+        stats && !hasPermanentAuthFailure(stats) ? resolveProfileUnusableUntil(stats, model) : null;
       return until !== null && until > now ? [until] : [];
     });
     return {
       availability: false,
-      unavailableReason: "cooldown",
+      unavailableReason: retryTimes.length ? "cooldown" : "auth-failed",
       ...(retryTimes.length ? { unavailableUntil: Math.min(...retryTimes) } : {}),
     };
   };
