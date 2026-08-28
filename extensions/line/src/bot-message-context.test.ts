@@ -167,6 +167,44 @@ describe("buildLineMessageContext", () => {
     expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: Thank you, Thanks, Grateful]");
   });
 
+  it("projects a sticker webhook LINE actually sent", async () => {
+    // Observed payload from a real LINE sticker message (tokens redacted).
+    // Its package id is one the deleted table claimed to know, and LINE's own
+    // keywords identify the sticker as a different character than that entry
+    // named — so the shipped shape, not a hand-made one, pins this projection.
+    const context = await buildLineMessageContext({
+      event: stickerEvent({
+        id: "629316390784598646",
+        stickerId: "52002734",
+        packageId: "11537",
+        stickerResourceType: "ANIMATION",
+        keywords: [
+          "amaze",
+          "Congratulations",
+          ":o",
+          "!!",
+          "brown",
+          "Celebrate",
+          "Wow",
+          "Shock",
+          "jolt",
+          "astonish",
+          "OMG",
+          "Yay",
+          "bewildered",
+          "ohyeah",
+          "Surprised",
+        ],
+      }),
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.RawBody).toBe("[Sent a sticker: amaze, Congratulations, :o]");
+  });
+
   it("falls back to the sender's own text for a message sticker", async () => {
     const context = await buildLineMessageContext({
       event: stickerEvent({ text: "See you tomorrow" }),
