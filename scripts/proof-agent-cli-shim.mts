@@ -70,7 +70,7 @@ try {
   }
   const invocation = {
     ...sourceInvocation,
-    args: sourceInvocation.args.map((arg) => (arg === sourceEntry ? entryPath : arg)),
+    args: sourceInvocation.args.map((arg: string) => (arg === sourceEntry ? entryPath : arg)),
   };
   await prepareGatewayAgentCliShim({ env: {}, invocation, stateDir });
 
