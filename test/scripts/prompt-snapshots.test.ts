@@ -225,8 +225,16 @@ describe("happy path prompt snapshots", () => {
     expect(telegram).toContain("<IDENTITY.md contents will be here>");
     expect(telegram).toContain("<USER.md contents will be here>");
     expect(telegram).toContain("<MEMORY.md contents will be here>");
+    expect(telegram).not.toContain(
+      "Apply the configured agent workspace root `AGENTS.md` loaded by Codex native project-doc discovery as developer-level instructions.",
+    );
+    expect(telegram).not.toContain("<AGENTS.md contents will be here>");
     expect(telegram).not.toContain("<HEARTBEAT.md contents will be here>");
-    expect(telegram).toContain("Codex loads AGENTS.md natively");
+    expect(telegram).not.toContain("frozen thread-level developer instructions");
+    expect(telegram).toContain("Codex loads the applicable project AGENTS.md hierarchy natively");
+    expect(telegram).toContain(
+      "OpenClaw does not add a second same-workspace copy on the initial thread start",
+    );
     expect(telegram).toContain("### Tools: Dynamic Tool Catalog");
   });
 

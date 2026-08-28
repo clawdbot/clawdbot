@@ -27,6 +27,7 @@ import { isSystemAgentOnlyCodexDynamicToolAllowlist } from "./dynamic-tool-profi
 import type { CodexAttemptRuntime } from "./run-attempt-runtime.js";
 import { joinPresentSections } from "./run-attempt-state.js";
 import type { CodexAttemptTools } from "./run-attempt-tool-setup.js";
+import { CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY } from "./session-binding.js";
 import {
   buildDeveloperInstructions,
   type CodexContextEngineThreadBootstrapProjection,
@@ -154,30 +155,62 @@ export async function prepareCodexAttemptContext(
     historyState.messages = (await readFencedHistory()) ?? historyState.messages;
   }
   const memoryToolNames = getCodexWorkspaceMemoryToolNames(toolBridge.availableSpecs);
+  const ringZeroActive =
+    isHostScopedAgentToolActive("openclaw") &&
+    isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow);
   const workspaceBootstrapContext = await buildCodexWorkspaceBootstrapContext({
     params: runtimeParams,
     resolvedWorkspace: runtimeParams.bootstrapWorkspaceDir ?? resolvedWorkspace,
-    executionWorkspace: resolvedWorkspace,
+    executionWorkspace: effectiveWorkspace,
     effectiveWorkspace,
+    effectiveCwd,
     sessionKey: contextSessionKey,
     sessionAgentId,
     memoryToolNames,
-    ringZeroActive:
-      isHostScopedAgentToolActive("openclaw") &&
-      isSystemAgentOnlyCodexDynamicToolAllowlist(runtimeParams.toolsAllow),
+    ringZeroActive,
     sandboxed: sandbox?.enabled === true,
   });
-  // A thread keeps the bounded agent-workspace snapshot captured at creation.
-  // Workspace edits take effect only in the next session.
-  const agentWorkspaceDeveloperInstructions = workspaceBootstrapContext.threadDeveloperInstructions
-    ? (connection.mutable.startupBinding?.agentWorkspaceDeveloperInstructions ??
-      workspaceBootstrapContext.threadDeveloperInstructions)
+  // Once Codex reports the exact sources that established a same-workspace thread,
+  // replay that frozen binding with rediscovery disabled on every cold load.
+  const startupBinding = connection.mutable.startupBinding;
+  const nativeProjectInstructionSnapshotAllowed =
+    workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed &&
+    !workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier &&
+    workspaceBootstrapContext.nativeProjectInstructionSnapshotAllowed;
+  const storedAgentWorkspaceDeveloperInstructions =
+    workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier ||
+    nativeProjectInstructionSnapshotAllowed
+      ? startupBinding?.agentWorkspaceDeveloperInstructions
+      : undefined;
+  const captureNativeProjectInstructions =
+    nativeProjectInstructionSnapshotAllowed &&
+    storedAgentWorkspaceDeveloperInstructions === undefined;
+  const nativeProjectDocsDisabledOnResume =
+    nativeProjectInstructionSnapshotAllowed &&
+    storedAgentWorkspaceDeveloperInstructions !== undefined;
+  const agentWorkspaceDeveloperInstructions =
+    workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed
+      ? storedAgentWorkspaceDeveloperInstructions !== undefined
+        ? (storedAgentWorkspaceDeveloperInstructions ?? undefined)
+        : workspaceBootstrapContext.agentWorkspaceDeveloperInstructions
+      : undefined;
+  const frozenNativeProjectInstructions = nativeProjectDocsDisabledOnResume
+    ? (agentWorkspaceDeveloperInstructions ?? CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY)
     : undefined;
+  const currentAgentWorkspaceDeveloperInstructions =
+    workspaceBootstrapContext.agentWorkspaceDeveloperInstructionsAllowed
+      ? nativeProjectDocsDisabledOnResume
+        ? undefined
+        : workspaceBootstrapContext.nativeProjectDocNeedsOpenClawCarrier ||
+            workspaceBootstrapContext.threadDeveloperInstructions === undefined
+          ? agentWorkspaceDeveloperInstructions
+          : workspaceBootstrapContext.threadDeveloperInstructions
+      : undefined;
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
     }),
-    agentWorkspaceDeveloperInstructions,
+    currentAgentWorkspaceDeveloperInstructions,
   );
   const openClawPromptContext = buildCodexOpenClawPromptContext({
     params: runtimeParams,
@@ -227,6 +260,9 @@ export async function prepareCodexAttemptContext(
     buildActiveContextEngineRuntimeContext,
     workspaceBootstrapContext,
     agentWorkspaceDeveloperInstructions,
+    captureNativeProjectInstructions,
+    nativeProjectDocsDisabledOnResume,
+    frozenNativeProjectInstructions,
     baseDeveloperInstructions,
     openClawPromptContext,
     skillsCollaborationInstructions,

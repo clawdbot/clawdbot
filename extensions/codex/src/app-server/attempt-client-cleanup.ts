@@ -1,9 +1,19 @@
 /**
  * Best-effort cleanup helpers for Codex app-server startup attempts and turns.
  */
-import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  embeddedAgentLog,
+  type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isCodexAppServerStartupError } from "./attempt-timeouts.js";
 import { unsubscribeCodexAppServerLiveThread } from "./client-runtime.js";
-import { CodexAppServerRpcError, type CodexAppServerClient } from "./client.js";
+import {
+  CodexAppServerRpcError,
+  isCodexAppServerBrokenPipeError,
+  isCodexAppServerOverloadError,
+  isCodexAppServerRequestTimeoutError,
+  type CodexAppServerClient,
+} from "./client.js";
 import { retireSharedCodexAppServerClientIfCurrent } from "./shared-client.js";
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
@@ -13,6 +23,26 @@ export const CODEX_APP_SERVER_INTERRUPT_TIMEOUT_MS = 5_000;
 export const CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS = 5_000;
 const CODEX_NO_ACTIVE_TURN_ERROR_CODE = -32_600;
 const CODEX_NO_ACTIVE_TURN_ERROR_MESSAGE = "no active turn to interrupt";
+
+function shouldClearSharedClientAfterStartupAbandon(error: unknown): boolean {
+  return isCodexAppServerStartupError(error);
+}
+
+export function shouldClearSharedClientAfterStartupRace(error: unknown): boolean {
+  return (
+    shouldClearSharedClientAfterStartupAbandon(error) || isCodexAppServerRequestTimeoutError(error)
+  );
+}
+
+export function shouldClearSharedClientAfterStartupFailure(params: {
+  error: unknown;
+  spawnedBy: EmbeddedRunAttemptParams["spawnedBy"];
+}): boolean {
+  if (isCodexAppServerOverloadError(params.error)) {
+    return false;
+  }
+  return isCodexAppServerBrokenPipeError(params.error) || !params.spawnedBy;
+}
 
 /** Identifies Codex's exact proof that an interrupt target already finished. */
 export function isCodexAlreadyTerminalInterruptError(

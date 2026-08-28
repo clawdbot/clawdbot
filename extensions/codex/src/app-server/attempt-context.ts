@@ -68,6 +68,10 @@ export type CodexSystemPromptReport = NonNullable<EmbeddedRunAttemptResult["syst
 type CodexToolReportEntry = CodexSystemPromptReport["tools"]["entries"][number];
 type CodexWorkspaceBootstrapContext = CodexBootstrapContext & {
   inheritsAgentWorkspace: boolean;
+  agentWorkspaceDeveloperInstructionsAllowed: boolean;
+  nativeProjectDocNeedsOpenClawCarrier: boolean;
+  nativeProjectInstructionSnapshotAllowed: boolean;
+  agentWorkspaceDeveloperInstructions?: string;
   promptContextFiles?: EmbeddedContextFile[];
   threadDeveloperInstructionFiles?: EmbeddedContextFile[];
   turnScopedDeveloperInstructionFiles?: EmbeddedContextFile[];
@@ -205,6 +209,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
   resolvedWorkspace: string;
   executionWorkspace?: string;
   effectiveWorkspace: string;
+  effectiveCwd?: string;
   sessionKey: string;
   sessionAgentId: string;
   memoryToolNames: readonly string[];
@@ -277,17 +282,36 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryWorkspaceDir: params.effectiveWorkspace,
     });
     const injectOpenClawContext = shouldInjectCodexOpenClawPromptContext(params.params);
-    const restrictedProjectDocNeedsOpenClawCarrier =
-      params.params.pluginHarnessToolPolicyRestricted === true &&
-      !params.params.disableTools &&
-      !isMessageOnlyCodexSourceReply(params.params) &&
-      params.params.bootstrapContextMode !== "lightweight";
-    const threadDeveloperInstructionFiles =
+    const agentWorkspaceDeveloperInstructionsAllowed =
       injectOpenClawContext &&
       !params.ringZeroActive &&
-      (inheritsAgentWorkspace || restrictedProjectDocNeedsOpenClawCarrier)
-        ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, params.resolvedWorkspace)
+      params.params.bootstrapContextMode !== "lightweight" &&
+      !params.params.disableTools &&
+      !isMessageOnlyCodexSourceReply(params.params);
+    const agentRootProjectInstructionFiles = agentWorkspaceDeveloperInstructionsAllowed
+      ? selectCodexWorkspaceAgentProjectInstructionFiles(contextFiles, promptWorkspace)
+      : [];
+    // Native discovery owns same-workspace content. OpenClaw carries only the configured root
+    // when that root is outside Codex's native project hierarchy.
+    const nativeProjectDocNeedsOpenClawCarrier =
+      inheritsAgentWorkspace ||
+      !isPathWithin(params.effectiveCwd ?? params.effectiveWorkspace, params.effectiveWorkspace) ||
+      params.params.pluginHarnessToolPolicyRestricted === true;
+    // Selected-environment paths belong to that environment, not necessarily the Gateway host.
+    // Keep native discovery authoritative when an OpenClaw sandbox owns the filesystem.
+    const nativeProjectInstructionSnapshotAllowed = params.sandboxed !== true;
+    const agentProjectInstructionFiles =
+      agentWorkspaceDeveloperInstructionsAllowed && nativeProjectDocNeedsOpenClawCarrier
+        ? agentRootProjectInstructionFiles
         : [];
+    const threadDeveloperInstructionFiles = nativeProjectDocNeedsOpenClawCarrier
+      ? agentProjectInstructionFiles
+      : [];
+    const agentWorkspaceDeveloperInstructions = renderCodexWorkspaceDeveloperInstructions({
+      files: agentProjectInstructionFiles,
+      header: "## OpenClaw Agent Workspace Instructions",
+      preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
+    });
     const turnScopedDeveloperInstructionFiles = injectOpenClawContext
       ? selectCodexWorkspaceTurnScopedDeveloperInstructionFiles(contextFiles)
       : [];
@@ -295,6 +319,10 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       bootstrapFiles,
       contextFiles,
       inheritsAgentWorkspace,
+      agentWorkspaceDeveloperInstructionsAllowed,
+      nativeProjectDocNeedsOpenClawCarrier,
+      nativeProjectInstructionSnapshotAllowed,
+      agentWorkspaceDeveloperInstructions,
       promptContextFiles,
       threadDeveloperInstructionFiles,
       turnScopedDeveloperInstructionFiles,
@@ -303,11 +331,7 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
       memoryToolNames: [...params.memoryToolNames],
       memoryToolRouted: memoryToolsAvailable,
       promptContext: renderCodexWorkspaceBootstrapPromptContext(promptContextFiles),
-      threadDeveloperInstructions: renderCodexWorkspaceDeveloperInstructions({
-        files: threadDeveloperInstructionFiles,
-        header: "## OpenClaw Agent Workspace Instructions",
-        preamble: "OpenClaw loaded this bounded snapshot from the configured agent workspace.",
-      }),
+      threadDeveloperInstructions: agentWorkspaceDeveloperInstructions,
       turnScopedDeveloperInstructions: renderCodexWorkspaceCollaborationDeveloperInstructions(
         turnScopedDeveloperInstructionFiles,
       ),
@@ -325,7 +349,14 @@ export async function buildCodexWorkspaceBootstrapContext(params: {
     };
   } catch (error) {
     embeddedAgentLog.warn("failed to load codex workspace bootstrap instructions", { error });
-    return { bootstrapFiles: [], contextFiles: [], inheritsAgentWorkspace: false };
+    return {
+      bootstrapFiles: [],
+      contextFiles: [],
+      inheritsAgentWorkspace: false,
+      agentWorkspaceDeveloperInstructionsAllowed: false,
+      nativeProjectDocNeedsOpenClawCarrier: false,
+      nativeProjectInstructionSnapshotAllowed: false,
+    };
   }
 }
 
@@ -629,7 +660,7 @@ export function buildCodexWatchedSessionsContext(params: {
 
 function shouldInjectCodexOpenClawPromptContext(params: EmbeddedRunAttemptParams): boolean {
   // Lightweight cron runs are commonly exact commands. Keep the user input byte-for-byte
-  // to avoid changing command intent while Codex keeps its native project-doc loader.
+  // and leave the persistent workspace snapshot uncaptured for a later ordinary turn.
   return !(
     params.bootstrapContextMode === "lightweight" && params.bootstrapContextRunKind === "cron"
   );
@@ -747,7 +778,7 @@ function renderCodexWorkspaceBootstrapPromptContext(
     return undefined;
   }
   const lines = [
-    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads project-local AGENTS.md natively. When execution uses another folder, OpenClaw supplies the agent workspace AGENTS.md as thread-level developer instructions. SOUL.md, IDENTITY.md, and USER.md remain turn-scoped collaboration instructions. Those files are not repeated here.",
+    "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads the applicable project AGENTS.md hierarchy natively for same-workspace threads; OpenClaw freezes Codex-reported local sources only for cold replay and carries bounded configured-root contents when native discovery cannot represent that root. SOUL.md, IDENTITY.md, and USER.md remain turn-scoped collaboration instructions. Those files are not repeated here.",
     "",
     "# Project Context",
     "",
@@ -801,6 +832,14 @@ function selectCodexWorkspaceAgentProjectInstructionFiles(
     contextFiles,
     CODEX_NATIVE_PROJECT_DOC_BASENAMES,
   ).filter((file) => path.resolve(file.path) === agentProjectDocPath);
+}
+
+function isPathWithin(candidate: string, parent: string): boolean {
+  const relative = path.relative(path.resolve(parent), path.resolve(candidate));
+  return (
+    relative === "" ||
+    (relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))
+  );
 }
 
 function selectCodexWorkspaceDeveloperInstructionFiles(

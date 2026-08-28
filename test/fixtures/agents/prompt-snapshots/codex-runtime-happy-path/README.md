@@ -10,7 +10,7 @@ These fixtures capture the default OpenAI/Codex happy path for prompt review:
 
 The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.
 
-The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.
+The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see Codex's native project-doc path for the root `AGENTS.md` without an OpenClaw same-workspace duplicate, stable profile files in turn-scoped collaboration instructions, and `MEMORY.md` in turn input.
 
 The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.
 
@@ -32,7 +32,7 @@ The Codex model prompt fixture is generated from the same Codex model catalog/ca
 pnpm prompt:snapshots:sync-codex-model
 ```
 
-These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.
+These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native project `AGENTS.md` hierarchy, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.
 
 Regenerate with:
 

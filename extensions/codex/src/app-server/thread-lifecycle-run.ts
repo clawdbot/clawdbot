@@ -40,6 +40,7 @@ import {
   prepareCodexThreadLifecyclePreflight,
   resolveCodexThreadAgentDir,
 } from "./thread-lifecycle-preflight.js";
+import { captureAgentInstructions } from "./thread-lifecycle-result.js";
 import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
@@ -193,7 +194,7 @@ export async function startOrResumeThread(
           // Supervised threads stay on the native user-home connection. Never
           // persist an outer OpenClaw auth profile onto that private ownership.
           authProfileId: undefined,
-          agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+          ...captureAgentInstructions(params),
           preserveNativeModel: true,
           dynamicToolsFingerprint,
           dynamicToolsContainDeferred,

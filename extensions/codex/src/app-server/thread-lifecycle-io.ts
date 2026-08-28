@@ -1,4 +1,5 @@
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { embeddedAgentLog } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { codexCatalogHomeId } from "../session-catalog-home-id.js";
 import {
@@ -22,13 +23,17 @@ import {
   discardUnattestedCodexPluginThread,
 } from "./plugin-thread-attestation.js";
 import { mergeCodexThreadConfigs } from "./plugin-thread-config.js";
+import { captureCodexNativeProjectInstructions } from "./project-doc-thread-config.js";
 import {
   assertCodexThreadAcceptsDirectInput,
   assertCodexThreadStartResponse,
 } from "./protocol-validators.js";
 import type { CodexThread } from "./protocol.js";
 import { isCodexThreadReadMissingError } from "./rpc-error.js";
-import type { CodexAppServerThreadBinding } from "./session-binding.js";
+import {
+  CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY,
+  type CodexAppServerThreadBinding,
+} from "./session-binding.js";
 import {
   fingerprintCodexThreadConfig,
   readActiveCodexTurnIdsFromResume,
@@ -61,6 +66,25 @@ function resolveCodexThreadRolloutPath(thread: CodexThread): string | undefined 
     return undefined;
   }
   return rolloutPath;
+}
+
+/** Persists one snapshot for eligible turns while leaving isolated runs eligible to upgrade. */
+function captureAgentInstructions(
+  params: Pick<
+    CodexStartOrResumeThreadParams,
+    "params" | "agentWorkspaceDeveloperInstructions" | "agentWorkspaceDeveloperInstructionsAllowed"
+  >,
+  fallbackInstructions?: string | null,
+) {
+  return params.agentWorkspaceDeveloperInstructionsAllowed === false ||
+    params.params.bootstrapContextMode === "lightweight"
+    ? {}
+    : {
+        agentWorkspaceDeveloperInstructions:
+          params.agentWorkspaceDeveloperInstructions !== undefined
+            ? params.agentWorkspaceDeveloperInstructions
+            : (fallbackInstructions ?? CODEX_FROZEN_EMPTY_PROJECT_DOCS_AUTHORITY),
+      };
 }
 
 export async function resumeExistingCodexThread(
@@ -216,6 +240,11 @@ export async function resumeExistingCodexThread(
     });
     policyOutcome = "acknowledged";
     assertHandoffCurrent();
+    const resumedAgentInstructions =
+      resumeBinding.agentWorkspaceDeveloperInstructions !== undefined ||
+      params.agentWorkspaceDeveloperInstructions !== undefined
+        ? captureAgentInstructions(params, resumeBinding.agentWorkspaceDeveloperInstructions)
+        : {};
     const resumePatch = {
       // Resume moves native subscription ownership to this physical client.
       // Keeping its previous client id disables warm reuse after every restart.
@@ -224,6 +253,7 @@ export async function resumeExistingCodexThread(
       cwd: params.cwd,
       rolloutPath: resolveCodexThreadRolloutPath(response.thread) ?? resumeBinding.rolloutPath,
       authProfileId,
+      ...resumedAgentInstructions,
       model: response.model ?? resumeParams.model ?? params.params.modelId,
       preserveNativeModel: resumeBinding.preserveNativeModel === true ? true : undefined,
       modelProvider: normalizeBindingModelProvider(
@@ -481,6 +511,11 @@ export async function startFreshCodexThread(
     params.params.hostCapabilities.assertActive();
     params.assertCurrent?.();
   };
+  const shouldCaptureNativeProjectInstructions =
+    params.captureNativeProjectInstructions === true && !preserveExistingBinding;
+  const instructionCaptureNotModifiedSinceMs = shouldCaptureNativeProjectInstructions
+    ? performance.timeOrigin + performance.now()
+    : undefined;
   const threadStartResponse = await lifecycleTiming.measure("thread-start-request", async () => {
     try {
       assertCurrent();
@@ -529,6 +564,23 @@ export async function startFreshCodexThread(
     return await rejectUncommittedThread(error);
   }
   const rolloutPath = resolveCodexThreadRolloutPath(response.thread);
+  let capturedAgentWorkspaceDeveloperInstructions: string | null | undefined;
+  if (shouldCaptureNativeProjectInstructions) {
+    try {
+      capturedAgentWorkspaceDeveloperInstructions =
+        (await lifecycleTiming.measure("project-instructions-capture", () =>
+          captureCodexNativeProjectInstructions({
+            cwd: params.cwd,
+            instructionSources: response.instructionSources,
+            config: startParams.config,
+            notModifiedSinceMs: instructionCaptureNotModifiedSinceMs,
+          }),
+        )) ?? null;
+      assertCurrent();
+    } catch (error) {
+      return await rejectUncommittedThread(error);
+    }
+  }
   const modelProvider = resolveCodexAppServerModelProvider({
     provider: params.params.provider,
     authProfileId: params.params.authProfileId,
@@ -548,7 +600,7 @@ export async function startFreshCodexThread(
     cwd: params.cwd,
     ...(rolloutPath ? { rolloutPath } : {}),
     authProfileId: params.params.authProfileId,
-    agentWorkspaceDeveloperInstructions: params.agentWorkspaceDeveloperInstructions,
+    ...captureAgentInstructions(params, capturedAgentWorkspaceDeveloperInstructions),
     model: response.model ?? startParams.model ?? params.params.modelId,
     modelProvider: bindingModelProvider,
     dynamicToolsFingerprint,

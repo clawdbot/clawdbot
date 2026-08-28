@@ -677,6 +677,9 @@ vi.mock("./stage-sandbox-media.runtime.js", () => ({
 vi.mock("../../agents/runtime-plugins.js", () => ({
   loadAgentRuntimePluginRegistryHandle: runtimePluginMocks.loadAgentRuntimePluginRegistryHandle,
 }));
+vi.mock("../../agents/provider-model-normalization.runtime.js", () => ({
+  normalizeProviderModelIdWithRuntime: () => undefined,
+}));
 vi.mock("./conversation-binding-input.js", () => ({
   resolveConversationBindingAccountIdFromMessage:
     conversationBindingMocks.resolveConversationBindingAccountIdFromMessage,

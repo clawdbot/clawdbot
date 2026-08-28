@@ -19,7 +19,11 @@ export function mockClientRuntimeMethods() {
   };
 }
 
-export function threadStartResult(threadId = "thread-1", cwd = "/tmp/openclaw-codex-test") {
+export function threadStartResult(
+  threadId = "thread-1",
+  cwd = "/tmp/openclaw-codex-test",
+  instructionSources: string[] = [],
+) {
   return {
     thread: {
       id: threadId,
@@ -46,7 +50,7 @@ export function threadStartResult(threadId = "thread-1", cwd = "/tmp/openclaw-co
     modelProvider: "openai",
     serviceTier: null,
     cwd,
-    instructionSources: [],
+    instructionSources,
     approvalPolicy: "never",
     approvalsReviewer: "user",
     sandbox: { type: "dangerFullAccess" },

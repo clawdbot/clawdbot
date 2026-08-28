@@ -128,8 +128,10 @@ const threadBindingSchema = z
     connectionScope: z.literal("supervision").optional(),
     supervisionSourceThreadId: z.string().trim().min(1).optional(),
     authProfileId: optionalStringSchema,
-    // Freeze OpenClaw-carried AGENTS.md at thread creation; bootstrap refreshes
-    // must not mutate the inherited policy of a resumed native session.
+    // Freeze the established project-doc hierarchy at thread creation (or the
+    // configured root carrier when native discovery is unavailable). The explicit
+    // empty snapshot is a nonblank no-op authority string so prior readers retain
+    // rollback readability; undefined identifies a legacy binding.
     agentWorkspaceDeveloperInstructions: optionalNonBlankStringSchema,
     model: optionalStringSchema,
     // Codex App Server owns selection for supervised and adopted threads. Keep

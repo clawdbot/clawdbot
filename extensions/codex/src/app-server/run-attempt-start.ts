@@ -237,6 +237,7 @@ export async function startCodexAttemptRuntime(resources: CodexAttemptResources)
       developerInstructions: joinPresentSections(
         buildRenderedCodexDeveloperInstructions(),
         attemptTools.configuredMcp?.diagnosticNotice,
+        state.thread.liveThreadOwnership ? undefined : context.frozenNativeProjectInstructions,
       ),
       prompt: turnState.codexTurnPromptText,
       tools: toolBridge.availableSpecs,

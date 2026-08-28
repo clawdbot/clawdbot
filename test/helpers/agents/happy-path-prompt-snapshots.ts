@@ -233,6 +233,10 @@ function withScenarioChannelRegistry<T>(fixture: ScenarioChannelPluginFixture, b
   }
 }
 
+const CODEX_AGENT_WORKSPACE_PROJECT_CONTEXT_FILE = {
+  path: path.join(WORKSPACE_DIR, "AGENTS.md"),
+} as const;
+
 const CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES = [
   {
     path: path.join(WORKSPACE_DIR, "MEMORY.md"),
@@ -256,7 +260,7 @@ const CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES = [
 ] as const;
 
 const CODEX_WORKSPACE_BOOTSTRAP_PROMPT_CONTEXT = [
-  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads AGENTS.md natively. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.",
+  "OpenClaw loaded these user-editable workspace files for the current turn. Codex loads the applicable project AGENTS.md hierarchy natively; OpenClaw does not add a second same-workspace copy on the initial thread start. SOUL.md, IDENTITY.md, and USER.md are provided as turn-scoped collaboration instructions so native Codex subagents do not inherit them. Those files are not repeated here.",
   "",
   "# Project Context",
   "",
@@ -739,7 +743,7 @@ function renderModelBoundPromptLayers(params: {
   return [
     "## Reconstructed Model-Bound Prompt Layers",
     "",
-    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as native workspace `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
+    "This is the deterministic model-bound layer stack OpenClaw can snapshot for the Codex happy path. It uses a pinned Codex `gpt-5.5` prompt fixture generated from Codex's model catalog/cache shape, then adds the Codex permission developer text, Codex thread config instructions when present, OpenClaw developer instructions when present, turn-scoped collaboration-mode instructions when OpenClaw provides them, turn input with OpenClaw runtime context, and the OpenClaw dynamic tool catalog. Codex can still add runtime-owned context such as the native project `AGENTS.md` hierarchy, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions inside the Codex runtime.",
     "",
     "### Layer Metadata",
     "",
@@ -768,7 +772,7 @@ function renderModelBoundPromptLayers(params: {
         },
         limitations: [
           "This is a reconstructed prompt-layer snapshot, not a byte-for-byte raw OpenAI request captured from Codex core.",
-          "Codex-owned workspace AGENTS.md, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API.",
+          "Codex-owned native project AGENTS.md hierarchy, environment context, memories, app/plugin instructions, built-in Default collaboration-mode instructions, and provider tool serialization are still runtime-owned gaps until Codex exposes a rendered-prompt inspection API.",
         ],
       }),
     ),
@@ -893,7 +897,7 @@ function renderScenarioSnapshot(
     "",
     ...scenario.notes.map((note) => `- ${note}`),
     "- This captures the OpenClaw-owned Codex app-server inputs and reconstructs the stable Codex model/permission layers from committed Codex prompt fixtures.",
-    "- This also simulates Codex workspace bootstrap routing: `AGENTS.md` through native project-doc discovery, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, and `MEMORY.md` in turn input.",
+    "- This also simulates Codex workspace bootstrap routing: the agent-workspace root `AGENTS.md` through native project-doc discovery without an OpenClaw same-workspace duplicate, `SOUL.md`, `IDENTITY.md`, and `USER.md` as turn-scoped collaboration instructions, and `MEMORY.md` in turn input.",
     "",
     "## Scenario Metadata",
     "",
@@ -913,6 +917,8 @@ function renderScenarioSnapshot(
         simulatedWorkspaceBootstrapFiles: CODEX_WORKSPACE_BOOTSTRAP_CONTEXT_FILES.map(
           (file) => file.path,
         ),
+        simulatedNativeAgentWorkspaceProjectInstructionFile:
+          CODEX_AGENT_WORKSPACE_PROJECT_CONTEXT_FILE.path,
         simulatedWorkspaceTurnScopedDeveloperInstructionFiles:
           CODEX_WORKSPACE_TURN_SCOPED_DEVELOPER_CONTEXT_FILES.map((file) => file.path),
       }),
@@ -972,7 +978,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     "The materialized Markdown snapshots show selected app-server thread/turn params plus a reconstructed model-bound prompt layer stack: Codex `gpt-5.5` model instructions from a pinned Codex model catalog fixture, Codex permission developer instructions for the happy-path yolo profile, OpenClaw developer instructions, turn input with simulated OpenClaw workspace bootstrap runtime context, and references to the complete dynamic tool catalog.",
     "",
-    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see how OpenClaw routes stable profile files into Codex developer instructions and keeps `MEMORY.md` in turn input. `AGENTS.md` is intentionally not repeated here because Codex loads it natively.",
+    "The workspace bootstrap simulation includes dummy workspace contents so prompt reviewers can see Codex's native project-doc path for the root `AGENTS.md` without an OpenClaw same-workspace duplicate, stable profile files in turn-scoped collaboration instructions, and `MEMORY.md` in turn input.",
     "",
     "The tool catalog is pinned to the canonical happy-path OpenClaw tools so optional locally installed plugin tools do not create fixture churn.",
     "",
@@ -993,7 +999,7 @@ function renderReadme(scenarios: PromptScenario[]): string {
     "",
     markdownFence("sh", "pnpm prompt:snapshots:sync-codex-model"),
     "",
-    "These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native `AGENTS.md`, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.",
+    "These snapshots are still not a byte-for-byte raw OpenAI request capture. Codex-owned native project `AGENTS.md` hierarchy, environment context, memories, app/plugin instructions, and built-in collaboration-mode instructions can be added inside the Codex runtime after OpenClaw sends thread and turn params.",
     "",
     "Regenerate with:",
     "",
