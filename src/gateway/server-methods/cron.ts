@@ -217,6 +217,7 @@ function cronJobReadView(job: CronJob) {
     lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
     lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
     lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
+    lastFailureNotificationAttemptId: job.state.lastFailureNotificationAttemptId,
   };
 }
 
@@ -254,6 +255,9 @@ function compactCronListJob(job: CronJob) {
       : {}),
     ...(job.state.lastFailureNotificationDeliveryError !== undefined
       ? { lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError }
+      : {}),
+    ...(job.state.lastFailureNotificationAttemptId !== undefined
+      ? { lastFailureNotificationAttemptId: job.state.lastFailureNotificationAttemptId }
       : {}),
   };
 }

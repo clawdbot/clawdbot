@@ -121,6 +121,12 @@ describe("cron failure alert delivery outcome persistence", () => {
         lastFailureNotificationDeliveryError: "send failed",
       });
     });
+    expect(enqueueCronNotification).toHaveBeenCalledWith(
+      state,
+      expect.objectContaining({ id: job.id }),
+      expect.any(String),
+      "failure-alert",
+    );
   });
 
   it("retains delivery when the recipient was reached and the transport then rejects", async () => {

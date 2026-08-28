@@ -393,6 +393,7 @@ function toPluginCronJob(job: CronJob): PluginHookGatewayCronJob {
       lastFailureNotificationDelivered: job.state.lastFailureNotificationDelivered,
       lastFailureNotificationDeliveryStatus: job.state.lastFailureNotificationDeliveryStatus,
       lastFailureNotificationDeliveryError: job.state.lastFailureNotificationDeliveryError,
+      lastFailureNotificationAttemptId: job.state.lastFailureNotificationAttemptId,
       streamStatus: job.state.streamStatus,
       streamError: job.state.streamError,
       streamConsecutiveFailures: job.state.streamConsecutiveFailures,
