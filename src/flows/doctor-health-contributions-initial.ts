@@ -123,6 +123,26 @@ export function resolveInitialDoctorHealthContributions(params: {
       run: params.runLegacyStateHealth,
     }),
     createDoctorHealthContribution({
+      id: "doctor:subagent-completion-bindings",
+      label: "Subagent completion bindings",
+      healthChecks: {
+        description: "Retained legacy subagent completions have unambiguous task run bindings.",
+        async detect(ctx) {
+          const { collectSubagentCompletionBindingFindings } =
+            await import("../commands/doctor-subagent-completion-migration.js");
+          return collectSubagentCompletionBindingFindings(ctx.env);
+        },
+      },
+      async run(ctx) {
+        const { maybeMigrateSubagentCompletionBindings } =
+          await import("../commands/doctor-subagent-completion-migration.js");
+        await maybeMigrateSubagentCompletionBindings({
+          shouldRepair: ctx.prompter.shouldRepair,
+          env: ctx.env,
+        });
+      },
+    }),
+    createDoctorHealthContribution({
       id: "doctor:session-transcripts",
       label: "Session transcripts",
       healthChecks: {

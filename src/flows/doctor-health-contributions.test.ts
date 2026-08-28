@@ -96,6 +96,8 @@ const mocks = vi.hoisted(() => ({
   noteChromeMcpBrowserReadiness: vi.fn(),
   detectLegacyStateMigrations: vi.fn(),
   runLegacyStateMigrations: vi.fn(),
+  maybeMigrateSubagentCompletionBindings: vi.fn(),
+  collectSubagentCompletionBindingFindings: vi.fn(() => []),
   collectLegacyPluginManifestContractMigrations: vi.fn(() => [] as unknown[]),
   legacyPluginManifestContractMigrationToHealthFinding: vi.fn(
     (migration: { pluginId: string }) => ({
@@ -500,6 +502,11 @@ vi.mock("../commands/doctor-workspace.js", () => ({
 vi.mock("../commands/doctor-disk-space.js", () => ({
   noteDiskSpace: vi.fn(),
   collectDiskSpaceHealthFindings: mocks.collectDiskSpaceHealthFindings,
+}));
+
+vi.mock("../commands/doctor-subagent-completion-migration.js", () => ({
+  maybeMigrateSubagentCompletionBindings: mocks.maybeMigrateSubagentCompletionBindings,
+  collectSubagentCompletionBindingFindings: mocks.collectSubagentCompletionBindingFindings,
 }));
 
 vi.mock("../commands/doctor-heartbeat-cadence-migration.js", () => ({
@@ -1782,6 +1789,29 @@ describe("doctor health contributions", () => {
       providerDiscoveryProviderIds: [],
     });
   });
+
+  it.each([false, true])(
+    "routes completion binding migration after legacy state (repair=%s)",
+    async (shouldRepair) => {
+      const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
+      expect(ids.indexOf("doctor:subagent-completion-bindings")).toBeGreaterThan(
+        ids.indexOf("doctor:legacy-state"),
+      );
+      const env = { OPENCLAW_STATE_DIR: "/tmp/openclaw-binding-state" };
+      await requireDoctorContribution("doctor:subagent-completion-bindings").run(
+        createDoctorHealthFlowContext({ env, prompter: buildDoctorPrompter(shouldRepair) }),
+      );
+      expect(mocks.maybeMigrateSubagentCompletionBindings).toHaveBeenCalledWith({
+        shouldRepair,
+        env,
+      });
+      const check = (await resolveDoctorContributionHealthChecks()).find(
+        (candidate) => candidate.id === "core/doctor/subagent-completion-bindings",
+      );
+      await check!.detect(createDoctorLintFixture({}, { env }));
+      expect(mocks.collectSubagentCompletionBindingFindings).toHaveBeenCalledWith(env);
+    },
+  );
 
   it("materializes heartbeat cadence before scratch migration and final config writes", async () => {
     const ids = resolveDoctorHealthContributions().map((entry) => entry.id);
