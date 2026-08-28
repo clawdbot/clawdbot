@@ -1,9 +1,18 @@
-import { isNativeApprovalChannel, normalizeMessageChannel } from "../utils/message-channel.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveApprovalCommandAuthorization } from "../infra/channel-approval-auth.js";
+import {
+  isInternalMessageChannel,
+  isNativeApprovalChannel,
+  normalizeMessageChannel,
+} from "../utils/message-channel.js";
 
 export function shouldAwaitExecApprovalInline(params: {
   turnSourceChannel?: string;
+  turnSourceAccountId?: string;
+  turnSourceSenderId?: string;
   approvalFollowupMode?: "agent" | "direct";
   trigger?: string;
+  config?: OpenClawConfig;
 }): boolean {
   if (params.approvalFollowupMode !== undefined) {
     return false;
@@ -17,11 +26,23 @@ export function shouldAwaitExecApprovalInline(params: {
   if (params.trigger === "cron") {
     return true;
   }
-  // Native chat approval clients (Telegram /approve, Discord buttons,
-  // etc.) resolve the approval back into the same session, so the agent can
-  // wait inline and return the real exec output as the tool result. This
-  // mirrors the webchat path that PR #85239 fixed; without it the agent run
-  // terminates on the "approval-pending" tool result and the operator must
-  // send a follow-up chat message to recover the turn (issue #93918).
-  return isNativeApprovalChannel(normalizeMessageChannel(params.turnSourceChannel));
+  // Keep interactive operators inline, but let other senders finish their turn
+  // through the existing pending result and approval follow-up path.
+  const channel = normalizeMessageChannel(params.turnSourceChannel);
+  if (!isNativeApprovalChannel(channel)) {
+    return false;
+  }
+  if (isInternalMessageChannel(channel)) {
+    return true;
+  }
+  if (!params.turnSourceSenderId || !params.config) {
+    return false;
+  }
+  return resolveApprovalCommandAuthorization({
+    cfg: params.config,
+    channel,
+    accountId: params.turnSourceAccountId,
+    senderId: params.turnSourceSenderId,
+    kind: "exec",
+  }).authorized;
 }

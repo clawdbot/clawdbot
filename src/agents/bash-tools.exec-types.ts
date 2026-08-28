@@ -67,6 +67,11 @@ export type ExecToolDefaults = {
   runId?: string;
   /** Exact admitted execution instance that owns secret-egress proxy access. */
   operationalRunInstance?: OperationalRunInstanceRef;
+  /** In-flight async approval work keeps its admitted authority until it settles. */
+  detachedApproval?: {
+    signal?: AbortSignal;
+    retainAuthority: () => { assertActive: () => void; release: () => void } | undefined;
+  };
   /** Durable session that receives detached exec completion events and approval followups. */
   notifySessionKey?: string;
   /** Ephemeral session UUID active when this exec tool was built. Regenerated
@@ -93,6 +98,8 @@ export type ExecToolDefaults = {
   /** Channel-owned sender/chat metadata. Exec subprocesses receive only sender/chat IDs. */
   channelContext?: PluginHookChannelContext;
   accountId?: string;
+  /** Real sender of the turn, distinct from its channel or group delivery target. */
+  senderId?: string;
   approvalReviewerDeviceId?: string;
   /** Deny approval-requiring commands without creating operator approval events. */
   nonInteractiveApproval?: boolean;

@@ -74,6 +74,8 @@ type BuildExecApprovalFollowupTarget =
   typeof import("./bash-tools.exec-host-shared.js").buildExecApprovalFollowupTarget;
 type ExecApprovalFollowupTarget = Parameters<BuildExecApprovalFollowupTarget>[0];
 type ExecAutoReviewer = typeof import("../infra/exec-auto-review.js").defaultExecAutoReviewer;
+type ResolveApprovalCommandAuthorization =
+  typeof import("../infra/channel-approval-auth.js").resolveApprovalCommandAuthorization;
 type BuildExecApprovalFollowupTargetMock = (
   value: ExecApprovalFollowupTarget,
 ) => ExecApprovalFollowupTarget | null;
@@ -390,6 +392,9 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
     } | null => null,
   ),
 );
+const resolveApprovalCommandAuthorizationMock = vi.hoisted(() =>
+  vi.fn<ResolveApprovalCommandAuthorization>(() => ({ authorized: true, explicit: true })),
+);
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
@@ -451,6 +456,10 @@ vi.mock("../infra/command-analysis/inline-eval.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/command-analysis/inline-eval.js")>()),
   describeInterpreterInlineEval: vi.fn(() => "python -c"),
   detectInterpreterInlineEvalArgv: detectInterpreterInlineEvalArgvMock,
+}));
+
+vi.mock("../infra/channel-approval-auth.js", () => ({
+  resolveApprovalCommandAuthorization: resolveApprovalCommandAuthorizationMock,
 }));
 
 let processGatewayAllowlist: typeof import("./bash-tools.exec-host-gateway.js").processGatewayAllowlist;
@@ -587,6 +596,8 @@ describe("processGatewayAllowlist", () => {
     }));
     detectInterpreterInlineEvalArgvMock.mockReset();
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
+    resolveApprovalCommandAuthorizationMock.mockReset();
+    resolveApprovalCommandAuthorizationMock.mockReturnValue({ authorized: true, explicit: true });
     resolveExecApprovalUnavailableDecisionsMock.mockClear();
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
@@ -2874,6 +2885,8 @@ EOF`,
       const result = await runGatewayAllowlist({
         command: "find . -maxdepth 1",
         turnSourceChannel,
+        turnSourceSenderId: "approver-1",
+        config: {},
       });
 
       expect(result.pendingResult).toBeUndefined();
@@ -2908,6 +2921,8 @@ EOF`,
       const result = await runGatewayAllowlist({
         command: "find . -maxdepth 1",
         turnSourceChannel,
+        turnSourceSenderId: "approver-1",
+        config: {},
       });
 
       expect(result.pendingResult).toBeUndefined();
@@ -2921,6 +2936,56 @@ EOF`,
       expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
     },
   );
+
+  it("returns approval-pending when a Telegram turn sender cannot approve", async () => {
+    const config = {};
+    resolveApprovalCommandAuthorizationMock.mockReturnValue({
+      authorized: false,
+      reason: "not an approver",
+      explicit: true,
+    });
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "telegram",
+      turnSourceAccountId: "default",
+      turnSourceSenderId: "counterpart-1",
+      config,
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(resolveApprovalCommandAuthorizationMock).toHaveBeenCalledWith({
+      cfg: config,
+      channel: "telegram",
+      accountId: "default",
+      senderId: "counterpart-1",
+      kind: "exec",
+    });
+  });
+
+  it("returns approval-pending for a senderless native-channel turn", async () => {
+    resolveApprovalDecisionOrUndefinedMock.mockResolvedValue("allow-once");
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "telegram",
+      config: {},
+    });
+
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    expect(resolveApprovalCommandAuthorizationMock).not.toHaveBeenCalled();
+  });
 
   it("waits outside admission, then atomically hands an approved process to the registry", async () => {
     let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};
@@ -3354,6 +3419,51 @@ EOF`,
     expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
     expect(runExecProcessMock).not.toHaveBeenCalled();
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects detached execution when its exact authority is replaced after approval", async () => {
+    let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};
+    resolveApprovalDecisionOrUndefinedMock.mockReturnValue(
+      new Promise<ExecApprovalDecision>((resolve) => {
+        resolveApproval = resolve;
+      }),
+    );
+    createExecApprovalDecisionStateMock.mockReturnValue({
+      baseDecision: { timedOut: false },
+      approvedByAsk: true,
+      deniedReason: null,
+    });
+    buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
+    let authorityActive = true;
+    const assertActive = vi.fn(() => {
+      if (!authorityActive) {
+        throw new Error("retained admitted run authority is no longer active");
+      }
+    });
+    const release = vi.fn();
+
+    const result = await runGatewayAllowlist({
+      command: "find . -maxdepth 1",
+      turnSourceChannel: "feishu",
+      runId: "run-replaced-after-approval",
+      toolCallId: "tool-replaced-after-approval",
+      detachedApproval: {
+        retainAuthority: () => ({ assertActive, release }),
+      },
+    });
+    expect(result.pendingResult?.details.status).toBe("approval-pending");
+    await vi.waitFor(() => {
+      expect(resolveApprovalDecisionOrUndefinedMock).toHaveBeenCalledOnce();
+    });
+
+    resolveApproval("allow-once");
+    authorityActive = false;
+    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+
+    expect(assertActive).toHaveBeenCalled();
+    expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
+    expect(runExecProcessMock).not.toHaveBeenCalled();
+    expect(markBackgroundedMock).not.toHaveBeenCalled();
   });
 
   it("keeps the fire-and-forget path for headless cron approval followups", async () => {

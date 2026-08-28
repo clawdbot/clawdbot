@@ -122,6 +122,26 @@ describe("createOpenClawCodingTools exec notification routing", () => {
     expect(approvalScope?.aborted).toBe(true);
   });
 
+  it("carries the turn sender and selected config into exec approval routing", () => {
+    const config = {};
+
+    createOpenClawCodingTools({
+      config,
+      senderId: "telegram-user-1",
+      toolConstructionPlan: {
+        includeBaseCodingTools: false,
+        includeShellTools: true,
+        includeChannelTools: false,
+        includeOpenClawTools: false,
+        includePluginTools: false,
+      },
+    });
+
+    expect(createLazyExecToolMock).toHaveBeenCalledWith(
+      expect.objectContaining({ config, senderId: "telegram-user-1" }),
+    );
+  });
+
   it("routes detached completions to the live session without changing process scope", () => {
     const liveSessionKey = "agent:main:channel:group:example:thread:25";
     const policySessionKey = "agent:main:runtime-policy";

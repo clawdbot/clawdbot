@@ -681,6 +681,7 @@ function createOpenClawCodingToolsInternal(options?: OpenClawCodingToolsOptions)
       currentThreadTs: options?.currentThreadTs,
       channelContext: options?.channelContext,
       accountId: options?.agentAccountId,
+      senderId: options?.senderId ?? undefined,
       approvalReviewerDeviceId: options?.approvalReviewerDeviceId,
       nonInteractiveApproval: options?.swarmCollector,
       backgroundMs: options?.exec?.backgroundMs ?? execConfig.backgroundMs,

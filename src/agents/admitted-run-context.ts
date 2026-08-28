@@ -43,6 +43,7 @@ export type PreparedAgentRunAdmission = Readonly<{
 type DelegatedAuthorityLease = {
   authority: AgentRunDelegatedAuthority;
   foregroundClosed: boolean;
+  retainedWork: number;
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
@@ -51,7 +52,7 @@ const activeNativeHookRecoveryLeases = new Map<string, DelegatedAuthorityLease>(
 function bindAdmittedRunDelegatedAuthority(context: AdmittedRunContext): void {
   activeNativeHookRecoveryLeases.delete(context.operationalRunInstance.runId);
   const authority = claimAgentRunDelegatedAuthority(context.operationalRunInstance);
-  const lease = { authority, foregroundClosed: false };
+  const lease = { authority, foregroundClosed: false, retainedWork: 0 };
   delegatedAuthorityLeases.set(context, lease);
 }
 
@@ -93,8 +94,49 @@ export function closeAdmittedRunDelegatedAuthority(context: AdmittedRunContext):
     return false;
   }
   lease.foregroundClosed = true;
-  releaseAgentRunDelegatedAuthority(lease.authority);
+  if (lease.retainedWork === 0) {
+    releaseAgentRunDelegatedAuthority(lease.authority);
+  }
   return true;
+}
+
+export type RetainedAdmittedRunDelegatedAuthority = Readonly<{
+  assertActive: () => void;
+  release: () => void;
+}>;
+
+/** Keeps one already-started detached operation inside its admitted run authority. */
+export function retainAdmittedRunDelegatedAuthority(
+  context: AdmittedRunContext,
+): RetainedAdmittedRunDelegatedAuthority | undefined {
+  const lease = delegatedAuthorityLeases.get(context);
+  if (!lease || lease.foregroundClosed || !validateAgentRunDelegatedAuthority(lease.authority)) {
+    return undefined;
+  }
+  lease.retainedWork += 1;
+  let released = false;
+  const release = () => {
+    if (released) {
+      return;
+    }
+    released = true;
+    lease.retainedWork = Math.max(0, lease.retainedWork - 1);
+    if (lease.foregroundClosed && lease.retainedWork === 0) {
+      releaseAgentRunDelegatedAuthority(lease.authority);
+    }
+  };
+  return Object.freeze({
+    assertActive: () => {
+      if (
+        released ||
+        delegatedAuthorityLeases.get(context) !== lease ||
+        !validateAgentRunDelegatedAuthority(lease.authority)
+      ) {
+        throw new Error("retained admitted run authority is no longer active");
+      }
+    },
+    release,
+  });
 }
 
 type AdmittedRunBeforeToolCallRecovery = Readonly<{

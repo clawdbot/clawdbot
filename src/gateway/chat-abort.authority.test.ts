@@ -1,5 +1,11 @@
 import { beforeEach, expect, it, vi } from "vitest";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  closeAdmittedRunDelegatedAuthority,
+  createOperationalRunInstanceRef,
+  getAdmittedRunDelegatedAuthority,
+  prepareAgentRunAdmission,
+  retainAdmittedRunDelegatedAuthority,
+} from "../agents/admitted-run-context.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -89,6 +95,74 @@ it("leaves sessionless authority with the outer admission owner", () => {
   expect(validateAgentRunDelegatedAuthority(unrelatedAuthority)).toBe(true);
   expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
   expect(releaseAgentRunDelegatedAuthority(unrelatedAuthority)).toBe(true);
+});
+
+it("keeps retained approval authority after normal turn settlement", async () => {
+  const runId = "run-retained-approval";
+  const operationalRunInstance = createOperationalRunInstanceRef(runId);
+  const prepared = prepareAgentRunAdmission({
+    cfg: {},
+    facts: {
+      runId,
+      agentId: "main",
+      ingress: { kind: "system", boundary: "test", state: "present" },
+    },
+    operationalRunInstance,
+  });
+  const admitted = await prepared.admit("embedded");
+  const authority = getAdmittedRunDelegatedAuthority(admitted)!;
+  const retained = retainAdmittedRunDelegatedAuthority(admitted)!;
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionId: `session-${runId}`,
+    sessionKey: "agent:main:retained-approval",
+    timeoutMs: 60_000,
+    operationalRunInstance,
+  });
+  registration.bindAgentRunDelegatedAuthority(authority, () => {
+    closeAdmittedRunDelegatedAuthority(admitted);
+  });
+
+  registration.cleanup();
+  expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
+
+  retained.release();
+  expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+});
+
+it("revokes retained approval authority during forced cleanup", async () => {
+  const runId = "run-forced-retained-approval";
+  const operationalRunInstance = createOperationalRunInstanceRef(runId);
+  const prepared = prepareAgentRunAdmission({
+    cfg: {},
+    facts: {
+      runId,
+      agentId: "main",
+      ingress: { kind: "system", boundary: "test", state: "present" },
+    },
+    operationalRunInstance,
+  });
+  const admitted = await prepared.admit("embedded");
+  const authority = getAdmittedRunDelegatedAuthority(admitted)!;
+  const retained = retainAdmittedRunDelegatedAuthority(admitted)!;
+  const chatAbortControllers = new Map<string, ChatAbortControllerEntry>();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionId: `session-${runId}`,
+    sessionKey: "agent:main:forced-retained-approval",
+    timeoutMs: 60_000,
+    operationalRunInstance,
+  });
+  registration.bindAgentRunDelegatedAuthority(authority, () => {
+    closeAdmittedRunDelegatedAuthority(admitted);
+  });
+
+  registration.cleanup({ force: true });
+  expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
+  retained.release();
 });
 
 it("revokes exact delegated authority before abort callbacks and controller listeners", () => {

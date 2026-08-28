@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { buildChannelInboundEventContext } from "../../../channels/inbound-event/context.js";
 import {
   cleanupTempPaths,
   createContextEngineAttemptRunner,
@@ -150,6 +151,41 @@ describe("runEmbeddedAttempt cwd/workspace split", () => {
       currentMessagingTarget: "user:U123",
       nativeChannelId: "oc_native_chat",
     });
+  });
+
+  it("carries the real inbound sender through attempt tool construction", async () => {
+    const inbound = buildChannelInboundEventContext({
+      channel: "telegram",
+      accountId: "default",
+      messageId: "message-1",
+      from: "telegram:user:requester-1",
+      sender: { id: "requester-1" },
+      conversation: { kind: "direct", id: "requester-1" },
+      route: {
+        agentId: "main",
+        routeSessionKey: "agent:main:telegram:direct:requester-1",
+      },
+      reply: { to: "telegram:user:requester-1" },
+      message: { rawBody: "run the command" },
+    });
+
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey: "agent:main:telegram:direct:requester-1",
+      tempPaths,
+      attemptOverrides: {
+        disableTools: false,
+        messageChannel: inbound.OriginatingChannel,
+        senderId: inbound.SenderId,
+      },
+    });
+
+    expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        messageChannel: "telegram",
+        senderId: "requester-1",
+      }),
+    );
   });
 
   it("skips runtime tool construction when the selected model does not support tools", async () => {
