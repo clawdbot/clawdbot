@@ -44,9 +44,34 @@ test("termination joins credential-bearing children before lease release", async
   assert.equal(released, true);
 });
 
-test("lease loss cancels and joins active cron and restart work", async () => {
-  const probe = startOwnedChild();
-  const cron = startOwnedChild();
+test("lease loss signals active Telegram process groups before waiting", async (context) => {
+  const temp = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-concurrent-lease-fence-"));
+  const cronSideEffect = path.join(temp, "cron-delivered");
+  context.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+  const probe = ownChild(
+    spawn(
+      process.execPath,
+      [
+        "-e",
+        'process.on("SIGTERM",()=>setTimeout(()=>process.exit(0),300)); setInterval(()=>{},1000);',
+      ],
+      { detached: true, stdio: "ignore" },
+    ),
+  );
+  const cron = ownChild(
+    spawn(
+      process.execPath,
+      [
+        "-e",
+        'const fs=require("node:fs"); setTimeout(()=>fs.writeFileSync(process.env.CRON_SIDE_EFFECT,"delivered"),150); setInterval(()=>{},1000);',
+      ],
+      {
+        detached: true,
+        env: { ...process.env, CRON_SIDE_EFFECT: cronSideEffect },
+        stdio: "ignore",
+      },
+    ),
+  );
   const restartedGateway = startOwnedChild();
   let controlsCancelled = false;
   let logsPersisted = false;
@@ -68,6 +93,8 @@ test("lease loss cancels and joins active cron and restart work", async () => {
     }),
     (error) => error === leaseError,
   );
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(fs.existsSync(cronSideEffect), false);
   assert.equal(logsPersisted, true);
 });
 

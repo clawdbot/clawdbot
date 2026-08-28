@@ -117,8 +117,8 @@ export async function fenceLeaseFailure({
   persistLogs,
 }) {
   cancelControls();
-  await stopChild(probe);
-  await stopOwnedChildren();
+  const children = new Set([...ownedChildren, probe].filter(Boolean));
+  await Promise.allSettled([...children].map((child) => stopChild(child)));
   await Promise.allSettled(controlWork);
   persistLogs();
   throw error;
