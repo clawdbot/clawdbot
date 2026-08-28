@@ -5,6 +5,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
+const systemAccountHome = os.userInfo().homedir;
+
 const mocks = vi.hoisted(() => ({
   completePluginUpdate: vi.fn(),
   leaseActive: false,
@@ -412,10 +414,10 @@ describe("successful update finalization ordering", () => {
     vi.stubEnv("OPENAI_API_KEY", effectiveEnvironment.OPENAI_API_KEY);
     vi.stubEnv("UNSET_PROVIDER_KEY", "removed-by-drop-in");
     vi.stubEnv("GEMINI_API_KEY", "allowed-runtime-credential");
-    vi.stubEnv("HOME", os.homedir());
+    vi.stubEnv("HOME", systemAccountHome);
     vi.stubEnv("OPENCLAW_HOME", "");
     vi.stubEnv("OPENCLAW_PROFILE", "caller-only-profile");
-    const callerStateDir = path.join(os.homedir(), ".openclaw-caller-only-profile");
+    const callerStateDir = path.join(systemAccountHome, ".openclaw-caller-only-profile");
     vi.stubEnv("OPENCLAW_STATE_DIR", callerStateDir);
     vi.stubEnv("OPENCLAW_CONFIG_PATH", path.join(callerStateDir, "openclaw.json"));
     try {
@@ -460,7 +462,7 @@ describe("successful update finalization ordering", () => {
       },
     });
 
-    vi.stubEnv("HOME", os.homedir());
+    vi.stubEnv("HOME", systemAccountHome);
     vi.stubEnv("OPENCLAW_PROFILE", "default");
     for (const key of ["OPENCLAW_HOME", "OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]) {
       vi.stubEnv(key, "");
