@@ -13,7 +13,13 @@ const ARTIFACT_DIGEST_RE = /^sha256:[0-9a-f]{64}$/u;
 const ARTIFACT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_.-]*$/u;
 const COMMIT_SHA_RE = /^[0-9a-f]{40}$/u;
 const REPOSITORY_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/u;
-const ACTIVE_SAME_RUN_STATUSES = new Set(["in_progress", "waiting"]);
+const ACTIVE_SAME_RUN_STATUSES = new Set([
+  "in_progress",
+  "pending",
+  "queued",
+  "requested",
+  "waiting",
+]);
 const SUPPORTED_ZIP_FLAGS = 0x0808;
 const ZIP_DATA_DESCRIPTOR_FLAG = 0x0008;
 const ZIP_UTF8_FLAG = 0x0800;
@@ -737,9 +743,8 @@ export function validateActionsArtifactBinding(params) {
       throw new Error("Actions workflow run does not match the immutable publication tuple.");
     }
   } else if (expected.runAttempt === expected.consumerRunAttempt) {
-    // Environment protection reports the active workflow as waiting until the
-    // approval transition propagates. A failed attempt remains usable only
-    // because same-run policy separately requires its exact producer job to succeed.
+    // Environment protection can expose any nonterminal Actions transition
+    // while approval propagates. Exact producer-job success remains mandatory.
     const active = ACTIVE_SAME_RUN_STATUSES.has(run.status) && run.conclusion === null;
     const failed = run.status === "completed" && run.conclusion === "failure";
     if (!active && !failed) {
