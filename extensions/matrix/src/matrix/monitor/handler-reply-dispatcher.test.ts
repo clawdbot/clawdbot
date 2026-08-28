@@ -50,11 +50,9 @@ function createDispatcher(
     client: {} as MatrixClient,
     roomId: "!room:example.org",
     runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-    textLimit: 4000,
     replyToMode: "off",
     accountId: "default",
     mediaLocalRoots: [],
-    tableMode: "code",
     logVerboseMessage: vi.fn(),
   });
 }

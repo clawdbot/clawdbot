@@ -394,7 +394,6 @@ describe("deliverMatrixReplies", () => {
       roomId: "room:reasoning",
       client: {} as MatrixClient,
       runtime: runtimeEnv,
-      textLimit: 4000,
       replyToMode: "off",
     });
 
