@@ -180,7 +180,7 @@ export function renderSidebarRegion(params: {
       : ""} ${panelOpen && sidebarDock(params.layout) === "bottom" ? "sidebar-region--bottom" : ""}"
   >
     ${regionError !== undefined
-      ? (regionError ?? regionLoading ?? null)
+      ? (regionError === null ? (regionLoading ?? null) : null)
       : html`<openclaw-chat-sidebar-region
           .layout=${params.layout}
           .panelDefinitions=${panelDefinitions}

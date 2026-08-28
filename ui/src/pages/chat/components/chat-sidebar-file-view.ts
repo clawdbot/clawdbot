@@ -277,7 +277,7 @@ export function renderSidebarFile(
       <div class="file-view">
         ${keyed(controls?.mountKey ?? content, html`<div class="file-view__mount"></div>`)}
         ${controls?.loadingEditor
-          ? renderPanelLoadingSkeleton("review", t("common.loading"))
+          ? renderPanelLoadingSkeleton("review", t("common.loading"), false, true)
           : nothing}
       </div>
       ${controls?.editing
