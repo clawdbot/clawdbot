@@ -20,6 +20,7 @@ type ProgressBoundaryCallback = GetReplyOptions[
   | "onBlockReplyQueued"
   | "onCompactionStart"
   | "onCompactionEnd"];
+type ResolvedReasoningCallback = Exclude<GetReplyOptions["onReasoningLevelResolved"], undefined>;
 
 describe("reply runtime public progress contracts", () => {
   it("exports acceptance-aware progress callback results", () => {
@@ -44,6 +45,13 @@ describe("reply runtime public progress contracts", () => {
     expectTypeOf<
       Exclude<GetReplyOptions["shouldDeliverCommentaryPayloads"], undefined>
     >().returns.toEqualTypeOf<boolean>();
+  });
+
+  it("exports the resolved reasoning delivery gate", () => {
+    expectTypeOf<Parameters<ResolvedReasoningCallback>>().toEqualTypeOf<
+      [level: "off" | "on" | "stream"]
+    >();
+    expectTypeOf<ReturnType<ResolvedReasoningCallback>>().toEqualTypeOf<boolean>();
   });
 });
 

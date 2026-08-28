@@ -110,6 +110,10 @@ during a send in the next throttle window. Explicit `flush()` still bypasses
 the delay for attention and finalization. Cancel pending updates and await
 in-flight work before closing or rotating a stream.
 
+For mode-dependent durable reasoning, provide `onReasoningLevelResolved`. Core calls it
+synchronously after inline and stored mode resolution and before the agent run; return `true` only
+when durable reasoning should enter block and final accounting. Stream callbacks stay separate.
+
 ### Commentary delivery ownership
 
 Set `commentaryPayloadsEnabled: true` when the channel supports durable commentary messages.
