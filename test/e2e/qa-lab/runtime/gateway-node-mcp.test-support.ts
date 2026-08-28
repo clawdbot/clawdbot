@@ -6,7 +6,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, vi } from "vitest";
-import type { startQaGatewayChild } from "../../../../extensions/qa-lab/api.js";
+import type { QaGatewayChild } from "../../../../extensions/qa-lab/api.js";
 import type { NodePluginToolDescriptor } from "../../../../packages/gateway-protocol/src/schema/nodes.js";
 import type { McpServerConfig } from "../../../../src/config/types.mcp.js";
 import { signalProcessTree } from "../../../../src/process/kill-tree.js";
@@ -21,7 +21,7 @@ export const MCP_SERVERS = ["sse", "stdio", "streamableHttp"] as const;
 const MCP_LABELS = { sse: "sse", stdio: "stdio", streamableHttp: "streamable-http" } as const;
 type McpServerName = keyof typeof MCP_LABELS;
 
-export type GatewayHandle = Awaited<ReturnType<typeof startQaGatewayChild>>;
+export type GatewayHandle = QaGatewayChild;
 export type CapturedChild = {
   child: ChildProcess;
   exited: Promise<void>;

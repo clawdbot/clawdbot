@@ -15,6 +15,7 @@ mkdir -p /tmp/openclaw-bin
 cp scripts/e2e/lib/doctor-install-switch/shims/systemctl /tmp/openclaw-bin/systemctl
 cp scripts/e2e/lib/doctor-install-switch/shims/loginctl /tmp/openclaw-bin/loginctl
 cp scripts/e2e/lib/doctor-install-switch/shims/busctl /tmp/openclaw-bin/busctl
+cp scripts/e2e/lib/doctor-install-switch/shims/systemd-exec-start.mjs /tmp/openclaw-bin/systemd-exec-start.mjs
 chmod +x /tmp/openclaw-bin/systemctl /tmp/openclaw-bin/loginctl /tmp/openclaw-bin/busctl
 
 package_tgz="${OPENCLAW_CURRENT_PACKAGE_TGZ:?missing OPENCLAW_CURRENT_PACKAGE_TGZ}"
@@ -90,18 +91,8 @@ is_legacy_package_acceptance_compat() {
 assert_entrypoint() {
   local unit_path="$1"
   local expected="$2"
-  local exec_line=""
-  exec_line=$(grep -m1 "^ExecStart=" "$unit_path" || true)
-  if [ -z "$exec_line" ]; then
-    echo "Missing ExecStart in $unit_path"
-    exit 1
-  fi
-  exec_line="${exec_line#ExecStart=}"
-  entrypoint=$(echo "$exec_line" | awk "{print \$2}")
-  entrypoint="${entrypoint%\"}"
-  entrypoint="${entrypoint#\"}"
-  if [ "$entrypoint" != "$expected" ]; then
-    echo "Expected entrypoint $expected, got $entrypoint"
+  if ! node scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs \
+    entrypoint "$unit_path" "$expected"; then
     if [ -n "${doctor_log:-}" ] && [ -f "$doctor_log" ]; then
       grep -E "Gateway service entrypoint|operator-owned systemd drop-in|managed externally" "$doctor_log" || true
     fi
@@ -113,19 +104,8 @@ assert_exec_arg() {
   local unit_path="$1"
   local index="$2"
   local expected="$3"
-  local exec_line=""
-  local actual=""
-  exec_line=$(grep -m1 "^ExecStart=" "$unit_path" || true)
-  if [ -z "$exec_line" ]; then
-    echo "Missing ExecStart in $unit_path"
-    exit 1
-  fi
-  exec_line="${exec_line#ExecStart=}"
-  actual=$(echo "$exec_line" | awk -v field="$index" "{print \$field}")
-  actual="${actual%\"}"
-  actual="${actual#\"}"
-  if [ "$actual" != "$expected" ]; then
-    echo "Expected ExecStart arg $index to be $expected, got $actual"
+  if ! node scripts/e2e/lib/doctor-install-switch/assert-exec-start.mjs \
+    argument "$unit_path" "$expected" "$index"; then
     cat "$unit_path"
     exit 1
   fi

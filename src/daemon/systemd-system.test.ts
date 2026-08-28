@@ -203,28 +203,12 @@ describe("system systemd ownership", () => {
     }
   });
 
-  it("fails closed when the system manager cannot be queried", async () => {
-    state.systemctl = {
-      stdout: "",
-      stderr: "Failed to connect to bus: Permission denied",
-      code: 1,
-      termination: "exit",
-    };
-
-    await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
-      ownership: {
-        status: "unverifiable",
-        unitName: "openclaw-gateway.service",
-        operation: "systemctl",
-        detail: "Failed to connect to bus: Permission denied",
-      },
-    });
-  });
-
   it.each([
+    "Failed to connect to bus: Permission denied",
     "spawn systemctl ENOENT",
     "systemctl not available",
     "System has not been booted with systemd as init system",
+    "Failed to connect to bus: No such file or directory",
   ])("fails closed when manager absence cannot be proven: %s", async (detail) => {
     state.systemctl = { stdout: "", stderr: detail, code: 1, termination: "exit" };
 
@@ -237,23 +221,6 @@ describe("system systemd ownership", () => {
       },
     });
     expect(fs.lstat).not.toHaveBeenCalled();
-  });
-
-  it("does not mistake a missing system bus for a missing unit", async () => {
-    state.systemctl = {
-      stdout: "",
-      stderr: "Failed to connect to bus: No such file or directory",
-      code: 1,
-      termination: "exit",
-    };
-
-    await expect(assertNoSystemSystemdOwnership("openclaw-gateway.service")).rejects.toMatchObject({
-      ownership: {
-        status: "unverifiable",
-        operation: "systemctl",
-        detail: "Failed to connect to bus: No such file or directory",
-      },
-    });
   });
 
   it.each(["exit", "timeout", "signal"] as const)(

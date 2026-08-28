@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-preflight-plugin-index.js";
 
 const writePersistedInstalledPluginIndexWithLeaseSync = vi.hoisted(() => vi.fn());
@@ -13,7 +14,10 @@ vi.mock("../plugins/installed-plugin-index-store-write.js", () => ({
 const { persistRefreshedPluginIndex } = await import("./doctor-config-preflight-plugin-index.js");
 
 function snapshotRead(
-  metadata: Pick<PluginMetadataSnapshot, "index" | "registryDiagnostics" | "registrySource">,
+  metadata: Pick<
+    PluginMetadataSnapshot,
+    "index" | "registryIndex" | "registryDiagnostics" | "registrySource"
+  >,
 ): DoctorConfigPreflightPluginSnapshotRead {
   return {
     snapshot: {} as ConfigFileSnapshot,
@@ -30,7 +34,8 @@ describe("persistRefreshedPluginIndex", () => {
   });
 
   it("reports selector diagnostics when the durable reread is rejected", async () => {
-    const index = {} as PluginMetadataSnapshot["index"];
+    const index = createPluginMetadataSnapshotFixture({ plugins: [{ id: "secondary" }] }).index;
+    const registryIndex = createPluginMetadataSnapshotFixture().index;
     const lease = {} as StartupMigrationLease;
     const env = { OPENCLAW_STATE_DIR: "test-state" };
 
@@ -42,6 +47,7 @@ describe("persistRefreshedPluginIndex", () => {
         readPersistedSnapshot: async () =>
           snapshotRead({
             index,
+            registryIndex,
             registryDiagnostics: [
               {
                 level: "warn",
@@ -53,13 +59,14 @@ describe("persistRefreshedPluginIndex", () => {
           }),
         snapshotRead: snapshotRead({
           index,
+          registryIndex,
           registryDiagnostics: [],
           registrySource: "derived",
         }),
       }),
     ).rejects.toThrow("reread source was derived; diagnostics: persisted-registry-stale-source");
 
-    expect(writePersistedInstalledPluginIndexWithLeaseSync).toHaveBeenCalledWith(index, {
+    expect(writePersistedInstalledPluginIndexWithLeaseSync).toHaveBeenCalledWith(registryIndex, {
       env,
       lease,
     });

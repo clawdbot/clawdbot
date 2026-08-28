@@ -41,6 +41,7 @@ suite.define(() => {
           tabs: [{ tabId: "main", title: "Nightly Disk Cleanup", position: 0, chatDock: "right" }],
           widgets: [],
         },
+        "sessions.resolve": { ok: true, key: sessionKey, boardFace: "dashboard" },
         "sessions.list": {
           count: 1,
           defaults: { contextTokens: null, model: "gpt-5.6-sol", modelProvider: "openai" },

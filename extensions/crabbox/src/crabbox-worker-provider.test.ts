@@ -35,11 +35,14 @@ const WORKER_WALLPAPER_PATH = fileURLToPath(
   new URL("../assets/openclaw-worker-wallpaper.png", import.meta.url),
 );
 const INSPECT_FAILURE_PREFIX = "Crabbox inspect failed with exit code 2: ";
+// Capture is on by default; these lifecycle cases assert warmup/inspect/heartbeat command
+// sequences, so they opt out to stay focused. Capture and fork are owned by the warm-image suite.
 const PROFILE = {
   provider: "aws",
   class: "standard",
   ttl: "24h",
   idleTimeout: "60m",
+  warmImage: false,
 };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.unstubAllEnvs());

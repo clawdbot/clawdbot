@@ -99,31 +99,64 @@ describe("WizardSession", () => {
     expect(done.done).toBe(true);
   });
 
-  test("returns the exact prepared model only on the terminal result", async () => {
-    const session = new WizardSession(async (_prompter, _signal, owner) => {
-      owner.setPreparedModelRef("ollama/qwen3:0.6b");
-    });
+  test.each(["prepared", "activated"] as const)(
+    "returns the exact %s model only on the successful terminal result",
+    async (kind) => {
+      const modelRef = "ollama/qwen3:0.6b";
+      const session = new WizardSession(async (prompter, _signal, owner) => {
+        if (kind === "prepared") {
+          owner.setPreparedModelRef(modelRef);
+        } else {
+          owner.setModelActivation({ modelRef });
+        }
+        await prompter.note("Finishing setup");
+      });
+      const first = await session.next();
+      expect(first).not.toHaveProperty("modelActivation");
+      expect(first).not.toHaveProperty("preparedModelRef");
+      if (!first.step) {
+        throw new Error("expected setup step");
+      }
+      await session.answer(first.step.id, null);
+      await expect(session.next()).resolves.toEqual({
+        done: true,
+        status: "done",
+        ...(kind === "prepared"
+          ? { preparedModelRef: modelRef }
+          : { modelActivation: { modelRef } }),
+      });
+    },
+  );
 
-    await expect(session.next()).resolves.toEqual({
-      done: true,
-      status: "done",
-      preparedModelRef: "ollama/qwen3:0.6b",
-    });
-  });
-
-  test("does not expose a prepared model when the wizard fails", async () => {
-    const session = new WizardSession(async (_prompter, _signal, owner) => {
-      owner.setPreparedModelRef("ollama/qwen3:0.6b");
-      throw new Error("activation setup failed");
-    });
-
-    await expect(session.next()).resolves.toMatchObject({
-      done: true,
-      status: "error",
-      error: "Error: activation setup failed",
-    });
-    expect(await session.next()).not.toHaveProperty("preparedModelRef");
-  });
+  test.each(["error", "cancelled"] as const)(
+    "withholds model outcomes after %s, even on late completion",
+    async (status) => {
+      let finish!: () => void;
+      const gate = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const session = new WizardSession(async (_prompter, _signal, owner) => {
+        await gate;
+        owner.setPreparedModelRef("ollama/qwen3:0.6b");
+        owner.setModelActivation({ modelRef: "ollama/qwen3:0.6b", gatewayRestartRequired: true });
+        if (status === "error") {
+          throw new Error("activation setup failed");
+        }
+      });
+      if (status === "cancelled") {
+        session.cancel();
+      }
+      finish();
+      await session.whenSettled();
+      const result = await session.next();
+      expect(result).toMatchObject({
+        done: true,
+        status,
+      });
+      expect(result).not.toHaveProperty("modelActivation");
+      expect(result).not.toHaveProperty("preparedModelRef");
+    },
+  );
 
   test("attaches an explicit browser destination to the next client step", async () => {
     const session = new WizardSession(async (prompter) => {

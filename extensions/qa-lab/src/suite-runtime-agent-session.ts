@@ -7,6 +7,7 @@ import {
   listSessionEntries,
   loadTranscriptEventsSync,
   resolveStorePath,
+  type SessionEntry,
   upsertSessionEntry,
 } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
@@ -40,6 +41,12 @@ type QaSessionTranscriptSeedParams = {
   sessionId: string;
   sessionKey: string;
   updatedAt: number;
+};
+
+type QaSessionEntrySeed = {
+  agentId: string;
+  entry: SessionEntry;
+  sessionKey: string;
 };
 
 const SESSION_STORE_FTS_SETTLE_RETRY_DELAYS_MS = [100, 250, 500, 1_000, 2_000] as const;
@@ -369,6 +376,27 @@ function qaSessionRuntimeEnv(tempRoot: string): NodeJS.ProcessEnv {
   };
 }
 
+async function seedQaSessionEntries(
+  env: Pick<QaSuiteRuntimeEnv, "gateway">,
+  entries: readonly QaSessionEntrySeed[],
+): Promise<void> {
+  const runtimeEnv = qaSessionRuntimeEnv(env.gateway.tempRoot);
+  for (const seed of entries) {
+    const agentId = seed.agentId.trim();
+    const sessionKey = seed.sessionKey.trim();
+    if (!agentId || !sessionKey) {
+      throw new Error("seedQaSessionEntries requires agentId and sessionKey");
+    }
+    await upsertSessionEntry({
+      agentId,
+      env: runtimeEnv,
+      sessionKey,
+      storePath: resolveStorePath(undefined, { agentId, env: runtimeEnv }),
+      entry: seed.entry,
+    });
+  }
+}
+
 async function seedQaSessionTranscript(
   env: Pick<QaSuiteRuntimeEnv, "gateway">,
   params: QaSessionTranscriptSeedParams,
@@ -527,5 +555,6 @@ export {
   readRawQaSessionStore,
   readSessionTranscriptSummary,
   readSkillStatus,
+  seedQaSessionEntries,
   seedQaSessionTranscript,
 };

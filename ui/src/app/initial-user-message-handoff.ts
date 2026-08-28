@@ -1,6 +1,6 @@
 import { areUiSessionKeysEquivalent } from "../lib/sessions/session-key.ts";
 
-export type ApplicationInitialUserMessage = {
+type ApplicationInitialUserMessage = {
   role: "user";
   content: unknown[];
   timestamp: number;

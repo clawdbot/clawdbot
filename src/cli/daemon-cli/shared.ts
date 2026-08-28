@@ -71,11 +71,6 @@ export function resolveRuntimeStatusColor(status: string | undefined): (value: s
         : theme.warn;
 }
 
-/** Extract `--port` from service ProgramArguments. */
-export function parsePortFromArgs(programArguments: string[] | undefined): number | null {
-  return parseTcpPortFromArgs(programArguments);
-}
-
 /** Pick the best local probe host for a configured Gateway bind mode. */
 export function pickProbeHostForBind(
   bindMode: string,
@@ -88,12 +83,9 @@ export function pickProbeHostForBind(
   if (bindMode === "tailnet") {
     return tailnetIPv4 ?? "127.0.0.1";
   }
-  if (bindMode === "lan") {
-    // Same as call.ts: self-connections should always target loopback.
-    // bind=lan controls which interfaces the server listens on (0.0.0.0),
-    // but co-located CLI probes should connect via 127.0.0.1.
-    return "127.0.0.1";
-  }
+  // Same as call.ts: self-connections should always target loopback.
+  // bind=lan controls which interfaces the server listens on (0.0.0.0),
+  // but co-located CLI probes should connect via 127.0.0.1.
   return "127.0.0.1";
 }
 
@@ -255,7 +247,7 @@ export async function resolveGatewayLifecycleContext(
   })
     .readBestEffortConfig()
     .catch(() => undefined);
-  const port = parsePortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
+  const port = parseTcpPortFromArgs(command?.programArguments) ?? resolveGatewayPort(config, env);
   return { port, env, command };
 }
 

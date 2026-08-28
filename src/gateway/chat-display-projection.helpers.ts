@@ -1,5 +1,7 @@
+import { asOptionalRecord as readRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { isRelativeAssistantMediaReference, splitMediaFromOutput } from "../media/parse.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
@@ -9,6 +11,58 @@ export type RoleContentMessage = {
 };
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+
+export function takeAssistantManagedMediaUrlsForDisplay(
+  entry: Record<string, unknown>,
+  role: string,
+): { changed: boolean; urls: string[] } {
+  const delivery = role === "assistant" ? readRecord(entry.openclawDelivery) : undefined;
+  const urls = Array.isArray(delivery?.mediaUrls)
+    ? delivery.mediaUrls.filter((url): url is string => typeof url === "string")
+    : [];
+  if (!delivery || !Object.hasOwn(delivery, "mediaUrls")) {
+    return { changed: false, urls };
+  }
+  const projectedDelivery = { ...delivery };
+  delete projectedDelivery.mediaUrls;
+  if (Object.keys(projectedDelivery).length > 0) {
+    entry.openclawDelivery = projectedDelivery;
+  } else {
+    delete entry.openclawDelivery;
+  }
+  return { changed: true, urls };
+}
+
+/** Keeps managed attachment commands in the raw transcript while removing them from display text. */
+export function stripAssistantMediaDirectivesForDisplay(
+  text: string,
+  managedMediaUrls: readonly string[],
+): string {
+  if (!/(?:^|\n)\s*MEDIA:/iu.test(text) || managedMediaUrls.length === 0) {
+    return text;
+  }
+  const managed = new Set(managedMediaUrls.map((url) => url.trim()).filter(Boolean));
+  const parsed = splitMediaFromOutput(text, {
+    extractAudioDirectives: false,
+    extractMarkdownImages: false,
+  });
+  if (
+    !parsed.mediaUrls?.some(
+      (url) => isRelativeAssistantMediaReference(url) && managed.has(url.trim()),
+    )
+  ) {
+    return text;
+  }
+  return (parsed.segments ?? [])
+    .filter(
+      (segment) =>
+        segment.type !== "media" ||
+        !isRelativeAssistantMediaReference(segment.url) ||
+        !managed.has(segment.url.trim()),
+    )
+    .map((segment) => (segment.type === "media" ? `MEDIA:${segment.url}` : segment.text))
+    .join("\n");
+}
 
 /** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {

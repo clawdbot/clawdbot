@@ -29,8 +29,8 @@ import {
 } from "../../../lib/chat/tool-display.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import { renderAttachmentCardHeader } from "./chat-attachment-card.ts";
-import { safeAttachmentHref, safeAudioAttachmentHref } from "./chat-attachment-href.ts";
+import { renderCompactAttachmentCard } from "./chat-attachment-card.ts";
+import { safeAttachmentHref, safeMediaAttachmentHref } from "./chat-attachment-href.ts";
 import { openInlineChatImage } from "./chat-image-lightbox.ts";
 import "./chat-audio-player.ts";
 import "./chat-video-player.ts";
@@ -62,8 +62,11 @@ function renderSidebarAttachment(
   const source = content.resolveSource ? liveSource : content;
   const sourceHref = source?.src ?? "";
   const src =
-    content.attachmentKind === "audio" || content.mimeType?.toLowerCase().startsWith("audio/")
-      ? safeAudioAttachmentHref(sourceHref)
+    content.attachmentKind === "audio" ||
+    content.attachmentKind === "video" ||
+    content.mimeType?.toLowerCase().startsWith("audio/") ||
+    content.mimeType?.toLowerCase().startsWith("video/")
+      ? safeMediaAttachmentHref(sourceHref)
       : safeAttachmentHref(sourceHref);
   const authToken = content.resolveSource
     ? (liveSource?.authToken ?? null)
@@ -114,16 +117,13 @@ function renderSidebarAttachment(
   ) {
     return html`<img class="sidebar-attachment-preview__image" src=${src} alt=${content.title} />`;
   }
-  return html`<div class="chat-assistant-attachment-card chat-assistant-attachment-card--compact">
-    ${renderAttachmentCardHeader({
-      kind: content.attachmentKind ?? "document",
-      label: content.title,
-      mimeType: content.mimeType ?? undefined,
-      sizeBytes: source?.sizeBytes ?? content.sizeBytes,
-      downloadHref: src,
-      visualMode: "large-placeholder",
-    })}
-  </div> `;
+  return renderCompactAttachmentCard({
+    kind: content.attachmentKind ?? "document",
+    label: content.title,
+    mimeType: content.mimeType ?? undefined,
+    sizeBytes: source?.sizeBytes ?? content.sizeBytes,
+    downloadHref: src,
+  });
 }
 function toPlainTextCodeFence(value: string, language = ""): string {
   const fenceHeader = language ? `\`\`\`${language}` : "```";

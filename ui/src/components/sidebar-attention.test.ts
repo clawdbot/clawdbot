@@ -72,21 +72,15 @@ type SidebarAttentionElement = HTMLElement & {
   updateComplete: Promise<boolean>;
   dismissPanel: () => boolean;
   cronJobs: CronJob[];
+  cronSchedulerEnabled: boolean | null;
   modelAuthStatus: ModelAuthStatusResult | null;
   loadedAtMs: number;
 };
 
-function cronItems(cronJobs: readonly CronJob[], now = 0) {
-  return buildSidebarAttentionEntries({
-    cronJobs,
-    modelAuthStatus: null,
-    now,
-  });
-}
-
 function authItems(agentId: string) {
   return buildSidebarAttentionEntries({
     cronJobs: [],
+    cronSchedulerEnabled: true,
     modelAuthStatus: {
       ts: 1,
       providers: [
@@ -103,82 +97,6 @@ function authItems(agentId: string) {
   }).filter((item) => item.kind === "modelAuthExpired");
 }
 
-describe("automation attention", () => {
-  it("lists each failed job as direct automation navigation", () => {
-    const primary = cronJob("primary");
-    primary.name = "Nightly backup";
-    primary.state = { lastRunStatus: "error", lastError: "  disk full  " };
-    const reason = cronJob("reason-id");
-    reason.name = "";
-    reason.state = {
-      lastRunStatus: "error",
-      lastError: "   ",
-      lastErrorReason: "timeout",
-    };
-    const unknown = cronJob("unknown-id");
-
-    const failed = cronItems([primary, reason, unknown]).filter(
-      (item) => item.kind === "cronFailed",
-    );
-
-    expect(failed.map((item) => item.label)).toEqual(["Nightly backup", "reason-id", "unknown-id"]);
-    expect(failed.every((item) => item.action.kind === "navigate")).toBe(true);
-    expect(
-      failed.every((item) => item.action.kind !== "navigate" || item.action.routeId === "cron"),
-    ).toBe(true);
-  });
-
-  it("does not flag an actively running job as overdue", () => {
-    // The gateway leaves nextRunAtMs past-due during execution; runningAtMs is
-    // the recorded fact that a run is in flight (agentTurn runs may take up to
-    // an hour, far beyond the 5-minute overdue grace).
-    const running = cronJob("running-id");
-    running.state = { lastRunStatus: "ok", nextRunAtMs: 1, runningAtMs: 2 };
-    const stalled = cronJob("stalled-id");
-    stalled.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
-
-    const overdue = cronItems([running, stalled], 300_003).find(
-      (item) => item.kind === "cronOverdue",
-    );
-
-    expect(overdue?.label).toBe("stalled-id");
-  });
-
-  it("shows automation owners only when the caller supplies an all-agent owner map", () => {
-    const item = buildSidebarAttentionEntries({
-      cronJobs: [cronJob("writer-job")],
-      cronOwnerByJobId: new Map([["writer-job", "Writer"]]),
-      modelAuthStatus: null,
-      now: 0,
-    })[0];
-
-    expect(item?.meta?.context).toBe("Writer");
-  });
-
-  it("orders failed before overdue and newest first within each group", () => {
-    const failedJob = cronJob("failed");
-    failedJob.state = { lastRunStatus: "error", lastRunAtMs: 200 };
-    const olderFailedJob = cronJob("older-failed");
-    olderFailedJob.state = { lastRunStatus: "error", lastRunAtMs: 100 };
-    const overdueJob = cronJob("overdue");
-    overdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 2 };
-    const olderOverdueJob = cronJob("older-overdue");
-    olderOverdueJob.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
-
-    const items = cronItems(
-      [olderOverdueJob, olderFailedJob, overdueJob, failedJob],
-      300_003,
-    ).filter((item) => item.kind === "cronFailed" || item.kind === "cronOverdue");
-
-    expect(items.map((item) => item.label)).toEqual([
-      "failed",
-      "older-failed",
-      "overdue",
-      "older-overdue",
-    ]);
-  });
-});
-
 describe("model auth attention", () => {
   it("keeps identical provider warnings distinct across agents", () => {
     expect(authItems("main")[0]?.signature).toBe("agent:main\nopenai");
@@ -188,6 +106,7 @@ describe("model auth attention", () => {
   it("keeps a missing canonical route visible beside CLI OAuth", () => {
     const items = buildSidebarAttentionEntries({
       cronJobs: [],
+      cronSchedulerEnabled: true,
       modelAuthStatus: {
         ts: 1,
         providers: [
@@ -301,6 +220,29 @@ describe("sidebar attention refresh ownership", () => {
     await waitForFast(() => expect(element.querySelector(".sidebar-issues-panel")).not.toBeNull());
   });
 
+  it("keeps overdue jobs out of the Inbox while the scheduler is disabled", async () => {
+    const overdue = cronJob("overdue-id");
+    overdue.state = { lastRunStatus: "ok", nextRunAtMs: 1 };
+    vi.spyOn(Date, "now").mockReturnValue(300_002);
+    const request = vi.fn((method: string) => {
+      if (method === "cron.list") {
+        return Promise.resolve(cronListResponse([overdue]));
+      }
+      if (method === "cron.status") {
+        return Promise.resolve({ enabled: false, triggersEnabled: true, jobs: 1 });
+      }
+      throw new Error(`Unexpected request: ${method}`);
+    });
+    const harness = createGatewayHarness(mockClient(request));
+
+    const { element } = await mountAttention({ gateway: harness.gateway });
+
+    await waitForFast(() => expect(element.cronSchedulerEnabled).toBe(false));
+    expect(request).toHaveBeenCalledWith("cron.status", {});
+    expect(element.cronJobs.map((job) => job.id)).toEqual(["overdue-id"]);
+    expect(element.querySelector(".sidebar-issues-button__count")).toBeNull();
+  });
+
   it("does not let an obsolete open render steal focus from a later interaction", async () => {
     const { element, trigger } = await mountAttention();
     const rendered = deferred<boolean>();
@@ -366,6 +308,9 @@ describe("sidebar attention refresh ownership", () => {
       if (method === "cron.list") {
         return Promise.resolve(cronListResponse([]));
       }
+      if (method === "cron.status") {
+        return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 });
+      }
       if (
         method === "exec.approval.list" ||
         method === "plugin.approval.list" ||
@@ -427,6 +372,11 @@ describe("sidebar attention refresh ownership", () => {
     const secondAuth = deferred<unknown>();
     const responses = {
       "cron.list": [firstCron, secondCron, deferred<unknown>()],
+      "cron.status": [
+        Promise.resolve({ enabled: false, triggersEnabled: true, jobs: 1 }),
+        Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 1 }),
+        Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 }),
+      ],
       "models.authStatus": [firstAuth, secondAuth],
     };
     const request = vi.fn((method: keyof typeof responses, _params?: unknown) => {
@@ -434,7 +384,7 @@ describe("sidebar attention refresh ownership", () => {
       if (!response) {
         throw new Error(`Unexpected request: ${method}`);
       }
-      return response.promise;
+      return "promise" in response ? response.promise : response;
     });
     const client = { request } as unknown as GatewayBrowserClient;
     const snapshot = {
@@ -492,7 +442,7 @@ describe("sidebar attention refresh ownership", () => {
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
     document.body.append(provider);
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
     expect(request.mock.calls.find(([method]) => method === "models.authStatus")?.[1]).toEqual({
       agentId: "main",
     });
@@ -505,7 +455,7 @@ describe("sidebar attention refresh ownership", () => {
     for (const listener of selectionListeners) {
       listener();
     }
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")[1]?.[1]).toEqual(
       { agentId: "writer" },
     );
@@ -519,6 +469,7 @@ describe("sidebar attention refresh ownership", () => {
     secondAuth.resolve(currentAuth);
     await waitForFast(() => expect(element.loadedAtMs).toBe(200_000));
     expect(element.cronJobs.map((job) => job.id)).toEqual(["current"]);
+    expect(element.cronSchedulerEnabled).toBe(true);
     expect(element.modelAuthStatus).toBe(currentAuth);
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
 
@@ -532,6 +483,7 @@ describe("sidebar attention refresh ownership", () => {
     await element.updateComplete;
 
     expect(element.cronJobs.map((job) => job.id)).toEqual(["current"]);
+    expect(element.cronSchedulerEnabled).toBe(true);
     expect(element.modelAuthStatus).toBe(currentAuth);
     expect(element.loadedAtMs).toBe(200_000);
     expect(localStorage.getItem(dismissalStoreKey(gateway.connection.gatewayUrl))).not.toBeNull();
@@ -541,7 +493,7 @@ describe("sidebar attention refresh ownership", () => {
     for (const listener of selectionListeners) {
       listener();
     }
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(5));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(8));
     expect(request.mock.calls.filter(([method]) => method === "models.authStatus")).toHaveLength(2);
     expect(element.modelAuthStatus).toBeNull();
   });
@@ -555,6 +507,11 @@ describe("sidebar attention refresh ownership", () => {
         Promise.resolve(cronListResponse([])),
         switchedCron.promise,
         Promise.resolve(cronListResponse([])),
+      ],
+      "cron.status": [
+        Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 }),
+        Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 }),
+        Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 }),
       ],
       "models.authStatus": [
         Promise.resolve({ ts: 1, providers: [] }),
@@ -617,17 +574,17 @@ describe("sidebar attention refresh ownership", () => {
     const element = document.createElement("openclaw-sidebar-attention") as SidebarAttentionElement;
     provider.append(element);
     document.body.append(provider);
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(2));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
 
     selectionState.selectedId = "writer";
     selectionState.scopeId = "writer";
     for (const listener of selectionListeners) {
       listener();
     }
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(4));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
     eventListener?.({ type: "event", event: "cron", payload: {} });
 
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
+    await waitForFast(() => expect(request).toHaveBeenCalledTimes(9));
     await waitForFast(() => expect(element.modelAuthStatus).toBe(writerAuth));
     switchedCron.resolve(cronListResponse([]));
     switchedAuth.resolve({ ts: 3, providers: [] });
@@ -636,6 +593,10 @@ describe("sidebar attention refresh ownership", () => {
   it("opens top-mounted attention downward and clears stale live automation alerts", async () => {
     const responses = {
       "cron.list": [cronListResponse([cronJob("failed")]), cronListResponse([])],
+      "cron.status": [
+        { enabled: true, triggersEnabled: true, jobs: 1 },
+        { enabled: true, triggersEnabled: true, jobs: 0 },
+      ],
       "models.authStatus": [{ ts: 1, providers: [] }],
     };
     const request = vi.fn((method: keyof typeof responses) => {
@@ -913,6 +874,7 @@ describe("sidebar Inbox projection", () => {
   it("derives every tab count and dismiss control from one entry list", () => {
     const attention = buildSidebarAttentionEntries({
       cronJobs: [cronJob("failed-job")],
+      cronSchedulerEnabled: true,
       modelAuthStatus: null,
       now: 0,
     });

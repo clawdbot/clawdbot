@@ -2110,6 +2110,8 @@ const pluginSdkEntryOwners = [
 // Keep only genuinely ambiguous paths explicit; conventional discovery owns
 // unambiguous scripts and direct imports without a second inventory.
 const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
+  [".github/workflows/ci.yml", ["ci-platform-checkout"]],
+  ["test/scripts/fixtures/ci-platform-checkout.mjs", ["ci-platform-checkout"]],
   [
     ".github/workflows/mantis-telegram-live.yml",
     ["mantis-telegram-desktop-proof-workflow", packageAcceptance, workflowGuards],
@@ -2303,6 +2305,7 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       "src/dockerfile.test.ts",
       "full-release-validation-state",
       "full-release-validation-at-sha",
+      "full-release-candidate-reuse",
       "find-reusable-release-validation",
       "openclaw-npm-extended-stable-full-validation-workflow",
       "release-no-push-workflow",
@@ -2311,6 +2314,10 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
       pluginPrerelease,
       "check-workflows",
     ],
+  ],
+  [
+    /^\.github\/workflows\/full-release-candidate\.yml$/u,
+    ["full-release-candidate-reuse", packageAcceptance, "check-workflows", workflowGuards],
   ],
   [
     /^\.github\/workflows\/openclaw-release-checks\.yml$/u,
@@ -2583,7 +2590,14 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     ],
   ],
   [/^scripts\/lib\/npm-pack-budget\.mts$/u, [releaseCheck, installDocker]],
-  [/^scripts\/lib\/actions-artifact-archive\.mjs$/u, ["plugin-publication-artifact"]],
+  [
+    /^scripts\/lib\/actions-artifact-archive\.mjs$/u,
+    ["full-release-candidate-reuse", "plugin-publication-artifact"],
+  ],
+  [
+    /^scripts\/(?:lib\/)?full-release-candidate-reuse\.(?:mjs|d\.mts)$/u,
+    ["full-release-candidate-reuse"],
+  ],
   [
     /^scripts\/lib\/static-extension-assets\.(?:mjs|mts)$/u,
     ["bundled-plugin-assets", "runtime-postbuild", runNode, "plugin-npm-runtime-build-args"],

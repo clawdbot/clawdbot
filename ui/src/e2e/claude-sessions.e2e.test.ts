@@ -365,7 +365,7 @@ suite.define(() => {
             },
           }),
         );
-      const connecting = page.getByRole("status").filter({ hasText: "Connecting to session" });
+      const connecting = page.getByRole("status", { name: "Connecting to session…" });
       await connecting.waitFor();
       expect(await page.locator(".tabstrip-tab.is-connecting").count()).toBe(1);
 
@@ -434,7 +434,7 @@ suite.define(() => {
         .toContainEqual(
           expect.objectContaining({ catalog: expect.objectContaining({ catalogId: "claude" }) }),
         );
-      await page.getByRole("status").filter({ hasText: "Connecting to session" }).waitFor();
+      await page.getByRole("status", { name: "Connecting to session…" }).waitFor();
       await page
         .locator("openclaw-terminal-panel .tabstrip-tab", {
           hasText: "claude --resume claude-termi…",
@@ -589,7 +589,7 @@ suite.define(() => {
     await expect
       .poll(() => gateway.getRequests("sessions.catalog.read").then((requests) => requests.length))
       .toBe(initialReadCount + 1);
-    await catalogPane.locator(".chat-history-loading").waitFor();
+    await catalogPane.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").waitFor();
     const showEarlier = catalogPane.getByRole("button", { name: "Show earlier" });
     await showEarlier.waitFor();
     expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
@@ -657,7 +657,9 @@ suite.define(() => {
     await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
     await expect.poll(() => page.getByText("older question", { exact: true }).count()).toBe(1);
     await page.clock.runFor(500);
-    expect(await catalogPane.locator(".chat-history-loading").count()).toBe(0);
+    expect(
+      await catalogPane.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").count(),
+    ).toBe(0);
     expect(await catalogPane.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(exhaustedReadCount);
     await page.close();
@@ -754,7 +756,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2]);
-      await pane.locator(".chat-history-loading").waitFor();
+      await pane.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").waitFor();
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -774,7 +776,7 @@ suite.define(() => {
           ),
         )
         .toEqual([2, 6]);
-      await pane.locator(".chat-history-loading").waitFor();
+      await pane.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").waitFor();
       expect(await thread.evaluate((element) => element.scrollHeight <= element.clientHeight)).toBe(
         true,
       );
@@ -789,7 +791,9 @@ suite.define(() => {
       await expect
         .poll(() => thread.evaluate((element) => element.scrollHeight > element.clientHeight))
         .toBe(true);
-      await expect.poll(() => pane.locator(".chat-history-loading").count()).toBe(0);
+      await expect
+        .poll(() => pane.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").count())
+        .toBe(0);
       expect(await pane.locator(".chat-history-sentinel").count()).toBe(1);
       if (artifactDir) {
         await page.screenshot({
@@ -897,7 +901,7 @@ suite.define(() => {
     // Pin each wait past the earlier chat.history traffic so a slow runner
     // can't return a stale load-time or prior-page request.
     await gateway.waitForRequest("chat.history", { after: initialRequestCount });
-    await page.locator(".chat-history-loading").waitFor();
+    await page.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").waitFor();
     expect(await showEarlier.getAttribute("aria-busy")).toBe("true");
     if (artifactDir) {
       await page.screenshot({
@@ -910,13 +914,15 @@ suite.define(() => {
       message: "history unavailable",
       retryable: true,
     });
-    await expect.poll(() => page.locator(".chat-history-loading").count()).toBe(0);
+    await expect
+      .poll(() => page.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").count())
+      .toBe(0);
     expect(await showEarlier.getAttribute("aria-busy")).toBe("false");
     const failedRequestCount = (await gateway.getRequests("chat.history")).length;
     await gateway.deferNext("chat.history");
     await showEarlier.click();
     await gateway.waitForRequest("chat.history", { after: failedRequestCount });
-    await page.locator(".chat-history-loading").waitFor();
+    await page.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").waitFor();
     expect(await gateway.getRequests("chat.history")).toHaveLength(failedRequestCount + 1);
     await gateway.resolveDeferred("chat.history", {
       messages: older,
@@ -974,7 +980,9 @@ suite.define(() => {
     });
     await expect.poll(() => page.locator(".chat-history-sentinel").count()).toBe(0);
     expect(await page.getByRole("button", { name: "Show earlier" }).count()).toBe(0);
-    expect(await page.locator(".chat-history-loading").count()).toBe(0);
+    expect(
+      await page.locator(".chat-history-sentinel openclaw-panel-loading-skeleton").count(),
+    ).toBe(0);
     expect(await gateway.getRequests("chat.history")).toHaveLength(firstPageRequestCount + 1);
     await page.close();
   });

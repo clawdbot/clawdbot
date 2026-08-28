@@ -156,15 +156,23 @@ describe("buildCliAgentSystemPrompt", () => {
   it("includes session identity in runtime when provided", () => {
     const prompt = buildCliAgentSystemPrompt({
       workspaceDir: "/tmp/openclaw",
+      config: {
+        agents: {
+          entries: {
+            "Team Ops": { identity: { name: "Ops Navigator" } },
+          },
+        },
+      },
       tools: [],
       modelDisplay: "test/model",
-      agentId: "main",
-      sessionKey: "agent:main:telegram:direct:peer",
+      agentId: "team-ops",
+      sessionKey: "agent:team-ops:telegram:direct:peer",
       sessionId: "session-123",
     });
 
-    expect(prompt).toContain("agent=main");
-    expect(prompt).toContain("session=agent:main:telegram:direct:peer");
+    expect(prompt).toContain(
+      "Runtime: name=Ops Navigator | agent=team-ops | session=agent:team-ops:telegram:direct:peer",
+    );
     expect(prompt).toContain("sessionId=session-123");
   });
 

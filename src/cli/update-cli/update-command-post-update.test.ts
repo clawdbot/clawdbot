@@ -2,11 +2,15 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const mocks = vi.hoisted(() => ({
+  checkCompletionStatus: vi.fn(),
   completePluginUpdate: vi.fn(),
+  ensureCompletionCache: vi.fn(),
   leaseActive: false,
   loadPluginRecords: vi.fn(),
   markSentinelFailure: vi.fn(async () => undefined),
@@ -24,8 +28,6 @@ const mocks = vi.hoisted(() => ({
       typeof import("./update-command-service.js").revalidateManagedGatewayServiceAfterUpdate
     >(),
   restoreWindowsAutoStart: vi.fn(async () => true),
-  tryInstallCompletion: vi.fn(async () => undefined),
-  tryWriteCompletionCache: vi.fn(async () => undefined),
   updatePlugins: vi.fn(),
   writeSentinel: vi.fn(async () => undefined),
 }));
@@ -42,6 +44,11 @@ vi.mock("../../config/io.js", async (importOriginal) => ({
 vi.mock("../../daemon/service.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../daemon/service.js")>()),
   readGatewayServiceState: mocks.readServiceState,
+}));
+vi.mock("../../commands/doctor-completion.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../commands/doctor-completion.js")>()),
+  checkShellCompletionStatus: mocks.checkCompletionStatus,
+  ensureCompletionCacheExists: mocks.ensureCompletionCache,
 }));
 vi.mock("../../plugins/plugin-lifecycle-lease.js", () => ({
   withPluginLifecycleLease: async (_params: unknown, callback: () => unknown) => {
@@ -72,10 +79,6 @@ vi.mock("./update-command-fresh-doctor.js", () => ({
 vi.mock("./update-command-plugins.js", () => ({
   updatePluginsAfterCoreUpdate: mocks.updatePlugins,
 }));
-vi.mock("./shared.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./shared.js")>()),
-  tryWriteCompletionCache: mocks.tryWriteCompletionCache,
-}));
 vi.mock("./restart-helper.js", () => ({
   prepareRestartScript: mocks.prepareRestartScript,
 }));
@@ -85,7 +88,6 @@ vi.mock("./update-command-service.js", async (importOriginal) => ({
   maybeRestartServiceAfterFailedMutableUpdate: mocks.restart,
   revalidateManagedGatewayServiceAfterUpdate: mocks.revalidateService,
   restoreWindowsTaskAutoStartOrExit: mocks.restoreWindowsAutoStart,
-  tryInstallShellCompletion: mocks.tryInstallCompletion,
 }));
 vi.mock("./update-command-post-core.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./update-command-post-core.js")>()),
@@ -98,6 +100,15 @@ import { finishUpdate } from "./update-command-post-update.js";
 import { resolveUpdatedGatewayRestartPort } from "./update-command-service.js";
 
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
+const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
+
+afterEach(() => {
+  if (stdinIsTTYDescriptor) {
+    Object.defineProperty(process.stdin, "isTTY", stdinIsTTYDescriptor);
+  } else {
+    Reflect.deleteProperty(process.stdin, "isTTY");
+  }
+});
 
 const validConfigSnapshot = {
   valid: true,
@@ -129,6 +140,7 @@ async function finishSuccessfulPackageSwitch(params: {
   previousRoot: string;
   packageRoot: string;
   restartEnvironment?: NodeJS.ProcessEnv;
+  json?: boolean;
   sealed?: boolean;
   updateMode?: UpdateRunResult["mode"];
   stoppedForUpdate?: boolean;
@@ -157,7 +169,7 @@ async function finishSuccessfulPackageSwitch(params: {
     channel: params.updateMode === "git" ? "dev" : "stable",
     downgradeRisk: true,
     shouldRestart: Boolean(params.restartEnvironment),
-    opts: {},
+    opts: { json: params.json },
     showProgress: false,
     controlPlaneUpdateSentinelMeta: {},
     preUpdatePluginInstallRecords: {},
@@ -290,6 +302,135 @@ describe("successful update finalization ordering", () => {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => undefined as never);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+  });
+
+  it("restarts after completion status inspection fails", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    mocks.checkCompletionStatus.mockRejectedValueOnce(
+      Object.assign(new Error("EACCES: completion profile read denied"), { code: "EACCES" }),
+    );
+
+    let failure: unknown;
+    try {
+      await finishSuccessfulPackageSwitch({
+        previousRoot: "/tmp/openclaw-update",
+        packageRoot: "/tmp/openclaw-update",
+        restartEnvironment: process.env,
+      });
+    } catch (err) {
+      failure = err;
+    }
+
+    const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
+    expect.soft(failure).toBeUndefined();
+    expect.soft(output).toContain("Shell completion refresh failed");
+    expect.soft(mocks.restartService).toHaveBeenCalledOnce();
+    expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.checkCompletionStatus.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("restarts when completion cache refresh reports failure", async () => {
+    const root = tempDirs.make("openclaw-completion-failure-");
+    await fs.writeFile(
+      path.join(root, "openclaw.mjs"),
+      'process.stderr.write("injected completion cache failure"); process.exit(1);',
+    );
+
+    await finishSuccessfulPackageSwitch({
+      previousRoot: root,
+      packageRoot: root,
+      restartEnvironment: process.env,
+    });
+
+    const logCalls = vi.mocked(defaultRuntime.log).mock.calls;
+    const warningIndex = logCalls.findIndex((call) =>
+      call.some((value) => String(value).includes("Completion cache update failed")),
+    );
+    expect(warningIndex).toBeGreaterThanOrEqual(0);
+    expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(defaultRuntime.log).mock.invocationCallOrder[warningIndex] ??
+        Number.POSITIVE_INFINITY,
+    );
+    expect(logCalls[warningIndex]?.join(" ")).toContain("openclaw completion --write-state");
+  });
+
+  it("restarts when shell completion cache generation returns false", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    mocks.checkCompletionStatus.mockResolvedValueOnce({
+      shell: "zsh",
+      profileInstalled: true,
+      cacheExists: true,
+      cachePath: "/tmp/openclaw-completion.zsh",
+      usesSlowPattern: true,
+    });
+    mocks.ensureCompletionCache.mockResolvedValueOnce(false);
+
+    await finishSuccessfulPackageSwitch({
+      previousRoot: "/tmp/openclaw-update",
+      packageRoot: "/tmp/openclaw-update",
+      restartEnvironment: process.env,
+    });
+
+    const output = vi.mocked(defaultRuntime.log).mock.calls.flat().map(String).join("\n");
+    expect(output).toContain("completion cache generation failed");
+    expect(output).toContain("openclaw completion --write-state --install");
+    expect(mocks.restartService).toHaveBeenCalledOnce();
+    expect(mocks.restartService.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.ensureCompletionCache.mock.invocationCallOrder[0] ?? Number.POSITIVE_INFINITY,
+    );
+  });
+
+  it("keeps JSON completion cache failures silent and restarts", async () => {
+    const root = tempDirs.make("openclaw-json-completion-failure-");
+    await fs.writeFile(path.join(root, "openclaw.mjs"), "process.exit(1);");
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+
+    await finishSuccessfulPackageSwitch({
+      previousRoot: root,
+      packageRoot: root,
+      restartEnvironment: process.env,
+      json: true,
+    });
+
+    expect(defaultRuntime.error).not.toHaveBeenCalled();
+    expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
+    expect(mocks.ensureCompletionCache).not.toHaveBeenCalled();
+    expect(mocks.restartService).toHaveBeenCalledOnce();
+  });
+
+  it("skips interactive completion in non-TTY mode", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: false });
+
+    await finishSuccessfulPackageSwitch({
+      previousRoot: "/tmp/openclaw-update",
+      packageRoot: "/tmp/openclaw-update",
+      restartEnvironment: process.env,
+    });
+
+    expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
+    expect(mocks.ensureCompletionCache).not.toHaveBeenCalled();
+    expect(mocks.restartService).toHaveBeenCalledOnce();
+  });
+
+  it("keeps an unhealthy restart blocking before completion refresh", async () => {
+    Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
+    mocks.restartService.mockResolvedValueOnce(false);
+    mocks.checkCompletionStatus.mockRejectedValueOnce(
+      new Error("completion status should not run after failed restart health"),
+    );
+
+    await finishSuccessfulPackageSwitch({
+      previousRoot: "/tmp/openclaw-update",
+      packageRoot: "/tmp/openclaw-update",
+      restartEnvironment: process.env,
+    });
+
+    expect(mocks.markSentinelFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ reason: "restart-unhealthy" }),
+    );
+    expect(defaultRuntime.exit).toHaveBeenCalledWith(1);
+    expect(mocks.checkCompletionStatus).not.toHaveBeenCalled();
   });
 
   it("retires the wrapper before persisting and printing success", async () => {

@@ -43,6 +43,8 @@ export type AgentSessionEvent =
       assistantEntryId?: string;
     }
   | { type: "queue_update"; steering: readonly string[]; followUp: readonly string[] }
+  | { type: "agent_settled" }
+  | { type: "agent_handoff" }
   | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
   | { type: "session_info_changed"; name: string | undefined }
   | { type: "thinking_level_changed"; level: ThinkingLevel }

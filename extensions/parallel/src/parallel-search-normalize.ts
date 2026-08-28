@@ -111,7 +111,8 @@ export async function executeParallelSearchRequest(params: {
     return request.error;
   }
   const cacheKey = buildParallelCacheKey({ endpoint: params.endpoint, ...request });
-  const cached = readCachedSearchPayload(cacheKey);
+  const cacheTtlMs = resolveSearchCacheTtlMs(params.searchConfig);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
     return cached;
   }
@@ -128,7 +129,7 @@ export async function executeParallelSearchRequest(params: {
     start,
   });
   const cachePayload = request.sessionId ? payload : stripParallelGeneratedSessionId(payload);
-  writeCachedSearchPayload(cacheKey, cachePayload, resolveSearchCacheTtlMs(params.searchConfig));
+  writeCachedSearchPayload(cacheKey, cachePayload, cacheTtlMs);
   return payload;
 }
 
