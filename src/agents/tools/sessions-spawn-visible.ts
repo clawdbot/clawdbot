@@ -108,14 +108,14 @@ export async function maybeSpawnVisibleSession(params: {
   sandbox: "inherit" | "require";
   options?: VisibleSessionsSpawnOptions;
 }): Promise<Record<string, unknown> | undefined> {
+  const promptedAt = Date.now();
   const worktree = params.raw.worktree === true;
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
-  const categoryProvided = Object.hasOwn(params.raw, "category");
-  const requestedCategory = readToolStringParam(params.raw, "category", { allowEmpty: true });
+  const category = readToolStringParam(params.raw, "category");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
-      ["category", categoryProvided ? requestedCategory : undefined],
+      ["category", category],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -125,7 +125,8 @@ export async function maybeSpawnVisibleSession(params: {
       .map(([name]) => name);
     if (providedVisibleOnlyParams.length > 0) {
       throw new ToolInputError(
-        `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}`,
+        `Parameters require visible=true: ${providedVisibleOnlyParams.join(", ")}. ` +
+          'Omit these options for hidden subagent or ACP runs. For a visible session, use visible=true with runtime="subagent"; omit mode, thread, thinking, lightContext, attachments, attachAs, swarm options, and ACP-only streamTo/resumeSessionId. Worktree names/base refs also require worktree=true.',
       );
     }
     return undefined;
@@ -207,7 +208,6 @@ export async function maybeSpawnVisibleSession(params: {
     sessionKey: requesterKey,
     agentId: params.options?.requesterAgentIdOverride,
   });
-  const category = normalizeOptionalString(requestedCategory);
   const requireAgentId =
     resolveAgentConfig(cfg, requesterAgentId)?.subagents?.requireAgentId ??
     cfg.agents?.defaults?.subagents?.requireAgentId ??
@@ -441,10 +441,10 @@ export async function maybeSpawnVisibleSession(params: {
       };
     }
     recordSessionParticipantBestEffort({
-      actor: { type: "agent", id: requesterAgentId },
+      promptedAt,
+      identity: { type: "agent", id: requesterAgentId },
       agentId: targetAgentId,
       sessionKey: childSessionKey,
-      source: "agent",
       storePath: resolveSessionStorePathCore(cfg.session?.store, { agentId: targetAgentId }),
     });
     const ownerLabel = normalizeOptionalString(resolveAgentIdentity(cfg, requesterAgentId)?.name);

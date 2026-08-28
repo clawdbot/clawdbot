@@ -324,16 +324,9 @@ describe("sessionsCommand", () => {
       assignedBy: { type: "human", id: "profile-admin", label: "Admin" },
       assignedAt: Date.now() - 30_000,
     });
-    for (const [id, label] of [
-      ["profile-ada", "Ada"],
-      ["profile-ben", "Ben"],
-      ["profile-cam", "Cam"],
-      ["profile-dee", "Dee"],
-      ["profile-eli", "Eli"],
-    ] as const) {
+    for (const id of ["profile-ada", "profile-ben", "profile-cam", "profile-dee", "profile-eli"]) {
       recordSessionParticipant(scope, {
-        actor: { type: "human", id, label },
-        source: "profile",
+        identity: { type: "profile", id },
       });
     }
 
@@ -341,7 +334,7 @@ describe("sessionsCommand", () => {
     await sessionsCommand({ store }, runtime);
     const row = logs.find((line) => line.includes(sessionKey)) ?? "";
     expect(row).toContain(
-      "visibility:suggest owner:profile-owner participants:profile-ada,profile-ben,profile-cam,profile-dee,+1",
+      "visibility:suggest owner:profile-owner participants:profile:profile-ada,profile:profile-ben,profile:profile-cam,profile:profile-dee,+1",
     );
 
     const payload = await runSessionsJson<{
@@ -366,11 +359,11 @@ describe("sessionsCommand", () => {
       },
       participantCount: 5,
       participants: [
-        { type: "human", id: "profile-ada", source: "profile" },
-        { type: "human", id: "profile-ben", source: "profile" },
-        { type: "human", id: "profile-cam", source: "profile" },
-        { type: "human", id: "profile-dee", source: "profile" },
-        { type: "human", id: "profile-eli", source: "profile" },
+        { identity: { type: "profile", id: "profile-ada" } },
+        { identity: { type: "profile", id: "profile-ben" } },
+        { identity: { type: "profile", id: "profile-cam" } },
+        { identity: { type: "profile", id: "profile-dee" } },
+        { identity: { type: "profile", id: "profile-eli" } },
       ],
     });
     expect(shared).not.toHaveProperty("sharingRole");

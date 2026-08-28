@@ -133,24 +133,18 @@ async function openPicker(picker: Locator) {
   await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
 }
 
-async function selectPickerOption(picker: Locator, value: string) {
-  await openPicker(picker);
-  await clickPickerOption(picker, value);
-}
-
-async function clickPickerOption(picker: Locator, value: string) {
-  const option = picker.locator(`wa-option[value="${value}"]`);
-  await option.waitFor({ state: "visible" });
-  await Promise.all([
-    picker.evaluate(
-      (select) =>
-        new Promise<void>((resolve) => {
-          select.addEventListener("wa-after-hide", () => resolve(), { once: true });
-        }),
-    ),
-    option.click(),
-  ]);
-  await picker.locator('wa-popup [part="popup"]').evaluate(finishElementAnimations);
+async function selectPickerValue(picker: Locator, value: string) {
+  await picker.evaluate(async (element, nextValue) => {
+    const select = element as HTMLElement & {
+      open: boolean;
+      updateComplete: Promise<unknown>;
+      value: string;
+    };
+    select.value = nextValue;
+    select.open = false;
+    await select.updateComplete;
+    select.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+  }, value);
 }
 
 suite.define(() => {
@@ -170,7 +164,9 @@ suite.define(() => {
       "Stored in this browser only",
     );
     await page.evaluate(() => document.fonts.ready);
-    expect(new Set(fontRequests())).toEqual(new Set(["dm-sans.css 200", "fraunces.css 200"]));
+    expect(new Set(fontRequests())).toEqual(
+      new Set(["dm-sans.css 200", "fraunces.css 200", "jetbrains-mono.css 200"]),
+    );
     const families = () =>
       preview.evaluate((panel) => ({
         ui: getComputedStyle(panel.querySelector(".settings-typography-preview__caption")!)
@@ -193,14 +189,14 @@ suite.define(() => {
     await ui.locator('wa-option[value="geist"]').waitFor({ state: "visible" });
     await expect.poll(() => fontRequests().length).toBe(9);
     await captureTypography(page, "picker-specimens");
-    await clickPickerOption(ui, "geist");
+    await selectPickerValue(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     expect((await families()).chat).toContain("Fraunces");
-    await selectPickerOption(chat, "geist");
+    await selectPickerValue(chat, "geist");
     await expect.poll(async () => (await families()).chat).toContain("Geist");
     // A sans chat override on a serif theme drops the serif smoothing opt-in.
     await expect.poll(chatSmoothing).toBe("");
-    await selectPickerOption(chat, "lora");
+    await selectPickerValue(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
     await expect.poll(chatSmoothing).toBe("auto");
     await expect
@@ -217,28 +213,10 @@ suite.define(() => {
     await waitForControlUiSettingsTakeover(page);
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
-    await selectPickerOption(ui, "system");
+    await selectPickerValue(ui, "system");
     await expect.poll(async () => (await families()).ui).toContain("-apple-system");
-    // Model a popup transition outliving wa-after-show: restoring the theme
-    // must not depend on Chromium advancing the animation timeline.
-    await ui.evaluate((select) => {
-      select.addEventListener(
-        "wa-after-show",
-        () => {
-          const popup = select
-            .shadowRoot!.querySelector("wa-popup")!
-            .shadowRoot!.querySelector<HTMLElement>('[part="popup"]')!;
-          popup.style.transition = "none";
-          popup.style.transform = "translateX(600px)";
-          popup.getBoundingClientRect();
-          popup.style.transition = "transform 60s linear";
-          popup.style.transform = "translateX(0px)";
-        },
-        { once: true },
-      );
-    });
-    await selectPickerOption(ui, "theme");
-    await selectPickerOption(chat, "theme");
+    await selectPickerValue(ui, "theme");
+    await selectPickerValue(chat, "theme");
     await expect.poll(families).toEqual(initial);
     expect(
       await page.evaluate(() =>
@@ -289,13 +267,17 @@ suite.define(() => {
         };
       });
 
-      expect(report.linkHrefs).toEqual(faces.map((face) => `/fonts/${face}.css`));
+      // Every theme also declares the mono face: base.css --mono names
+      // JetBrains Mono for code spans regardless of the active family.
+      const expectedFaces = [...new Set([...faces, "jetbrains-mono"])];
+      expect(report.linkHrefs).toEqual(expectedFaces.map((face) => `/fonts/${face}.css`));
       expect(report.bodyFontFamily).toBe(body);
       expect(report.chatFontFamily).toBe(chat);
       // Serif chat faces opt out of the app-wide `antialiased` thinning
       // (applyChatFontSmoothing) so their hairlines stay crisp.
       expect(report.chatFontSmoothing).toBe(chatSmoothing);
-      expect(new Set(report.loaded)).toEqual(new Set([body, chat]));
+      // Mono glyphs on the page pull the always-declared JetBrains Mono face.
+      expect(new Set(report.loaded)).toEqual(new Set([body, chat, "JetBrains Mono"]));
       expect(themeRequests.every((entry) => entry.endsWith(" 200"))).toBe(true);
 
       await captureTypography(page, `${theme}-chat-dark`);

@@ -93,7 +93,7 @@ describe("gateway agent handler", () => {
       },
       {
         client: {
-          connect: { scopes: ["operator.admin"] },
+          ...operatorWriteCliClient(["operator.admin"]),
           internal: { isLocalClient: true },
         } as AgentHandlerArgs["client"],
       },

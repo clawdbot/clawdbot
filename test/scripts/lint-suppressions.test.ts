@@ -187,6 +187,7 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
       filterExpectedSuppressionsForPresentFiles([
+        "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
         "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
         "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
@@ -201,6 +202,8 @@ describe("production lint suppressions", () => {
         "src/agents/agent-bundle-mcp-runtime.ts|unicorn/prefer-add-event-listener|1",
         "src/agents/agent-tools.abort.ts|typescript/prefer-promise-reject-errors|1",
         "src/agents/mcp-http-transport.ts|unicorn/prefer-add-event-listener|6",
+        // JSON parser causes can quote reflected credentials from authenticated provider responses.
+        "src/agents/provider-http-errors.ts|preserve-caught-error|1",
         "src/agents/sessions/session-manager-entries.ts|unicorn/prefer-structured-clone|1",
         "src/channels/plugins/channel-runtime-surface.types.ts|typescript/no-unnecessary-type-parameters|1",
         "src/channels/plugins/contracts/test-helpers.ts|typescript/no-unnecessary-type-parameters|1",

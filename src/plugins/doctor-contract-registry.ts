@@ -74,10 +74,9 @@ function loadPluginDoctorContractModule(params: {
   modulePath: string;
   rootDir: string;
 }): PluginDoctorContractModule {
-  pluginDoctorContractRegistryLoaderState.moduleRoots.set(params.modulePath, params.rootDir);
   return getCachedPluginModuleLoader({
-    cache: pluginDoctorContractRegistryLoaderState.moduleLoaders,
     modulePath: params.modulePath,
+    rootDir: params.rootDir,
     importerUrl: import.meta.url,
     ...(pluginDoctorContractRegistryLoaderState.moduleLoaderFactory
       ? { createLoader: pluginDoctorContractRegistryLoaderState.moduleLoaderFactory }

@@ -156,27 +156,39 @@ describe("doctor transcript and heartbeat session repairs", () => {
     );
   });
 
-  it("does not require JSONL files for canonical SQLite session rows", async () => {
-    const cfg: OpenClawConfig = {};
-    setupSessionState(cfg, process.env, process.env.HOME ?? "");
-    const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:main", storePath },
-      { sessionId: "sqlite-main-session", updatedAt: Date.now() },
-    );
-    await upsertSessionEntryCore(
-      { agentId: "main", sessionKey: "agent:main:sqlite-only", storePath },
-      { sessionId: "sqlite-only-session", updatedAt: Date.now() },
-    );
+  it.each(["default", "explicit"] as const)(
+    "does not require JSONL files for %s SQLite session stores",
+    async (location) => {
+      const cfg: OpenClawConfig =
+        location === "explicit"
+          ? { session: { store: path.join(fs.realpathSync(tempHome), "sessions.sqlite") } }
+          : {};
+      setupSessionState(cfg, process.env, process.env.HOME ?? "");
+      const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:main", storePath },
+        { sessionId: "sqlite-main-session", updatedAt: Date.now() },
+      );
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: "agent:main:sqlite-only", storePath },
+        { sessionId: "sqlite-only-session", updatedAt: Date.now() },
+      );
 
-    await noteStateIntegrity(cfg, {
-      confirmRuntimeRepair: vi.fn(async () => false),
-      note: noteMock,
-    });
+      const readFileSyncSpy = vi.spyOn(fs, "readFileSync");
+      try {
+        await noteStateIntegrity(cfg, {
+          confirmRuntimeRepair: vi.fn(async () => false),
+          note: noteMock,
+        });
+        expect(readFileSyncSpy.mock.calls.map(([file]) => file)).not.toContain(storePath);
+      } finally {
+        readFileSyncSpy.mockRestore();
+      }
 
-    expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
-    expect(stateIntegrityText()).not.toContain("Main session transcript missing");
-  });
+      expect(stateIntegrityText()).not.toContain("recent sessions are missing transcripts");
+      expect(stateIntegrityText()).not.toContain("Main session transcript missing");
+    },
+  );
 
   it("does not auto-archive orphan transcripts from non-interactive repair mode", async () => {
     const cfg: OpenClawConfig = {};

@@ -314,6 +314,142 @@ describe("gateway chat metadata runtime", () => {
     );
   });
 
+  test("ready reads never prepare or await a cold or pending exact profile", async () => {
+    const harness = createHarness(undefined, { refreshOnRead: true });
+    const sessionEntry = {
+      authProfileOverride: "test:session",
+      authProfileOverrideSource: "user" as const,
+    };
+    const params = { agentId: "MAIN", sessionEntry, readPolicy: "ready" as const };
+    await expect(harness.runtime.readStartup(params)).resolves.toBeUndefined();
+    expect(harness.buildProjection).not.toHaveBeenCalled();
+    await harness.runtime.refresh();
+    await expect(harness.runtime.readStartup(params)).resolves.toBeUndefined();
+    expect(harness.buildProjection).toHaveBeenCalledTimes(1);
+
+    const release = createDeferred();
+    const profileCatalog = [{ id: "profile-model", name: "Profile model", provider: "test" }];
+    harness.buildProjection.mockImplementationOnce(async () => {
+      await release.promise;
+      return { modelCatalog: profileCatalog, models: profileCatalog };
+    });
+    const canonical = harness.runtime.readStartup({ agentId: "main", sessionEntry });
+    await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(2));
+    let settled = false;
+    const optional = harness.runtime.readStartup(params).then((value) => {
+      expect(value).toBeUndefined();
+      settled = true;
+    });
+    try {
+      await vi.waitFor(() => expect(settled).toBe(true));
+      expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+    } finally {
+      release.resolve();
+      await Promise.all([canonical, optional]);
+    }
+    const ready = await harness.runtime.readStartup(params);
+    expect(ready).toEqual(await canonical);
+    expect(ready?.sessionModelCatalog).toBe(profileCatalog);
+    expect(ready?.defaultModelCatalog).toEqual([expect.objectContaining({ id: "first" })]);
+    for (const other of [
+      { ...params, agentId: "other" },
+      { ...params, sessionEntry: { ...sessionEntry, authProfileOverride: "test:other" } },
+      { ...params, sessionEntry: { ...sessionEntry, authProfileOverrideSource: "auto" as const } },
+    ]) {
+      await expect(harness.runtime.readStartup(other)).resolves.toBeUndefined();
+    }
+    expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+  });
+
+  test.each(["invalidate", "pending refresh", "failed", "stale facts"] as const)(
+    "ready reads omit projections after %s without starting replacement work",
+    async (state) => {
+      const harness = createHarness(undefined, { refreshOnRead: true });
+      const sessionEntry = { authProfileOverride: "test:session" };
+      await harness.runtime.refresh();
+      await harness.runtime.readStartup({ agentId: "main", sessionEntry });
+      const release = createDeferred();
+      let refresh: Promise<void> | undefined;
+      if (state === "invalidate") {
+        harness.runtime.invalidate();
+      } else if (state === "failed") {
+        harness.runtime.fail(new Error("owner unavailable"));
+      } else {
+        harness.setSkillsVersion(2);
+        if (state === "pending refresh") {
+          harness.buildCommands.mockImplementationOnce(async () => {
+            await release.promise;
+            return { commands: [] };
+          });
+          refresh = harness.runtime.refresh();
+          await vi.waitFor(() => expect(harness.buildCommands).toHaveBeenCalledTimes(2));
+        }
+      }
+      try {
+        for (const entry of [undefined, sessionEntry]) {
+          await expect(
+            harness.runtime.readStartup({
+              agentId: "main",
+              sessionEntry: entry,
+              readPolicy: "ready",
+            }),
+          ).resolves.toBeUndefined();
+        }
+        expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+      } finally {
+        release.resolve();
+        await refresh;
+      }
+    },
+  );
+
+  test.each(["resolve", "reject"] as const)(
+    "an evicted profile's late %s cannot replace or delete its newer ready entry",
+    async (settlement) => {
+      const harness = createHarness();
+      await harness.runtime.refresh();
+      const sessionEntry = { authProfileOverride: "test:evicted" };
+      const release = createDeferred();
+      harness.buildProjection.mockImplementationOnce(async () => {
+        await release.promise;
+        if (settlement === "reject") {
+          throw new Error("evicted projection failed");
+        }
+        return { modelCatalog: [], models: [] };
+      });
+      const oldRead = harness.runtime
+        .readStartup({ agentId: "main", sessionEntry })
+        .catch((error: unknown) => error);
+      try {
+        await vi.waitFor(() => expect(harness.buildProjection).toHaveBeenCalledTimes(2));
+        // Fill the bounded profile cache so the still-pending first entry is evicted.
+        for (let index = 0; index < 64; index += 1) {
+          await harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry: { authProfileOverride: `test:${index}` },
+          });
+        }
+        const newer = await harness.runtime.readStartup({ agentId: "main", sessionEntry });
+        release.resolve();
+        await oldRead;
+        await expect(
+          harness.runtime.readStartup({
+            agentId: "main",
+            sessionEntry,
+            readPolicy: "ready",
+          }),
+        ).resolves.toEqual(newer);
+        await expect(
+          harness.runtime.readStartup({ agentId: "main", sessionEntry }),
+        ).resolves.toEqual(newer);
+        expect(harness.buildProjection).toHaveBeenCalledTimes(67);
+      } finally {
+        release.resolve();
+        await oldRead;
+      }
+    },
+  );
+
   test.each([
     {
       name: "legacy source-less user",

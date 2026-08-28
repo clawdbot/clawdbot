@@ -333,32 +333,48 @@ describe("plugin index SQLite E2E helpers", () => {
   it.each([
     {
       mode: "current",
+      schemaVersion: 0,
       options: {},
       expectedTable: "config_machine_state",
       absentTable: "installed_plugin_index",
     },
     {
       mode: "pre-v13",
+      schemaVersion: 0,
       options: { storageMode: "pre-v13" },
       expectedTable: "installed_plugin_index",
       absentTable: "config_machine_state",
     },
-  ])("writes only the $mode storage contract", async ({ absentTable, expectedTable, options }) => {
-    const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
-    try {
-      const { writePluginInstallIndexForE2E } = await loadPluginIndex();
+    ...[0, 12, 13].map((schemaVersion) => ({
+      mode: `existing schema v${schemaVersion}`,
+      schemaVersion,
+      options: { storageMode: "existing-schema" },
+      expectedTable: schemaVersion >= 13 ? "config_machine_state" : "installed_plugin_index",
+      absentTable: schemaVersion >= 13 ? "installed_plugin_index" : "config_machine_state",
+    })),
+  ])(
+    "writes only the $mode storage contract",
+    async ({ absentTable, expectedTable, options, schemaVersion }) => {
+      const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));
+      try {
+        const db = openSqlite(root);
+        db.exec(`PRAGMA user_version = ${schemaVersion}`);
+        db.close();
+        const { readPluginInstallRecords, writePluginInstallIndexForE2E } = await loadPluginIndex();
 
-      writePluginInstallIndexForE2E(
-        { installRecords: { demo: { source: "npm" } } },
-        { stateDir: root, ...options },
-      );
+        writePluginInstallIndexForE2E(
+          { installRecords: { demo: { source: "npm" } } },
+          { stateDir: root, ...options },
+        );
 
-      expect(readTableNames(root)).toContain(expectedTable);
-      expect(readTableNames(root)).not.toContain(absentTable);
-    } finally {
-      rmSync(root, { force: true, recursive: true });
-    }
-  });
+        expect(readTableNames(root)).toContain(expectedTable);
+        expect(readTableNames(root)).not.toContain(absentTable);
+        expect(readPluginInstallRecords({ stateDir: root })).toEqual({ demo: { source: "npm" } });
+      } finally {
+        rmSync(root, { force: true, recursive: true });
+      }
+    },
+  );
 
   it("rejects unknown writer storage modes", async () => {
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-index-"));

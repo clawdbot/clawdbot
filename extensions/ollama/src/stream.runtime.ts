@@ -18,6 +18,7 @@ import type {
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import type { ProviderRuntimeModel } from "openclaw/plugin-sdk/plugin-entry";
 import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { readProviderResponseErrorText } from "openclaw/plugin-sdk/provider-http";
 import { createPlainTextToolCallCompatWrapper } from "openclaw/plugin-sdk/provider-stream-shared";
 import {
   describeUnsupportedToolResultMedia,
@@ -39,7 +40,6 @@ import { estimateStringChars } from "openclaw/plugin-sdk/text-utility-runtime";
 import { OLLAMA_CLOUD_BASE_URL, OLLAMA_DEFAULT_BASE_URL } from "./defaults.js";
 import { normalizeOllamaWireModelId } from "./model-id.js";
 import { buildOllamaBaseUrlSsrFPolicy, isOllamaCloudModel } from "./provider-models.js";
-import { readOllamaResponseErrorText } from "./request-header-redaction.js";
 import {
   createOllamaVisibleContentSanitizer,
   sanitizeOllamaFinalVisibleContent,
@@ -1076,7 +1076,7 @@ function createRawOllamaStreamFn(
         try {
           await notifyProviderHttpResponse({ options, response, model });
           if (!response.ok) {
-            const errorText = await readOllamaResponseErrorText(
+            const errorText = await readProviderResponseErrorText(
               response,
               OLLAMA_STREAM_ERROR_BODY_LIMIT_BYTES,
               headers,

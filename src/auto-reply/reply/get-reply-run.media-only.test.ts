@@ -1369,47 +1369,55 @@ describe("runPreparedReply media-only handling", () => {
     },
   );
 
-  it("keeps explicitly suppressed command-shaped Gateway text in the model prompt", async () => {
-    const body = "/model openai/gpt-5.5";
-    const onDeliberateSilentTerminalReply = vi.fn();
-    vi.mocked(hasControlCommand).mockReturnValue(true);
+  it.each([
+    "/model openai/gpt-5.5",
+    "/think high",
+    "Keep  /thinking:high as text",
+    "/new",
+    "/reset",
+  ])(
+    "keeps explicitly suppressed command-shaped Gateway text in the model prompt: %s",
+    async (body) => {
+      const onDeliberateSilentTerminalReply = vi.fn();
+      vi.mocked(hasControlCommand).mockReturnValue(true);
 
-    const result = await runPreparedReply(
-      baseParams({
-        ctx: {
-          ...createInboundTurn(body, "webchat", "direct"),
-          CommandAuthorized: false,
-          CommandInterpretationSuppressed: true,
-          CommandTurn: {
-            kind: "normal",
-            source: "message",
-            authorized: false,
-            body,
+      const result = await runPreparedReply(
+        baseParams({
+          ctx: {
+            ...createInboundTurn(body, "webchat", "direct"),
+            CommandAuthorized: false,
+            CommandInterpretationSuppressed: true,
+            CommandTurn: {
+              kind: "normal",
+              source: "message",
+              authorized: false,
+              body,
+            },
           },
-        },
-        sessionCtx: {
-          ...createSessionTurn(body, "webchat", "direct"),
-        },
-        commandAuthorized: false,
-        command: {
-          surface: "webchat",
-          channel: "webchat",
-          isAuthorizedSender: false,
-          abortKey: "session-key",
-          ownerList: [],
-          senderIsOwner: false,
-          rawBodyNormalized: body,
-          commandBodyNormalized: body,
-        } as never,
-        isNewSession: false,
-        opts: { onDeliberateSilentTerminalReply },
-      }),
-    );
+          sessionCtx: {
+            ...createSessionTurn(body, "webchat", "direct"),
+          },
+          commandAuthorized: false,
+          command: {
+            surface: "webchat",
+            channel: "webchat",
+            isAuthorizedSender: false,
+            abortKey: "session-key",
+            ownerList: [],
+            senderIsOwner: false,
+            rawBodyNormalized: body,
+            commandBodyNormalized: body,
+          } as never,
+          isNewSession: body === "/new" || body === "/reset",
+          opts: { onDeliberateSilentTerminalReply },
+        }),
+      );
 
-    expect(result).toEqual({ text: "ok" });
-    expect(requireRunReplyAgentCall().followupRun.prompt).toBe(body);
-    expect(onDeliberateSilentTerminalReply).not.toHaveBeenCalled();
-  });
+      expect(result).toEqual({ text: "ok" });
+      expect(requireRunReplyAgentCall().followupRun.prompt).toBe(body);
+      expect(onDeliberateSilentTerminalReply).not.toHaveBeenCalled();
+    },
+  );
 
   it("silently drops an explicit unauthorized whole-message text slash command", async () => {
     const body = "/model openai/gpt-5.5";

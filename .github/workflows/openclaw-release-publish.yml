@@ -529,6 +529,12 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/validate-full-release-validation-evidence.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/release-ci-summary.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/release-ci-summary.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/full-release-validation-policy.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/full-release-validation-policy.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/full-release-candidate-contract.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/full-release-candidate-contract.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/canonical-json.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/lib/canonical-json.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/plain-gh.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/lib/plain-gh.mjs"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/plugin-sdk-api-release-evidence.mjs?ref=${WORKFLOW_SHA}" \
@@ -541,6 +547,8 @@ jobs:
             --jq .content | base64 --decode > "${tooling_dir}/authorized-beta-focused-policy.json"
           gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/record-shared.mjs?ref=${WORKFLOW_SHA}" \
             --jq .content | base64 --decode > "${tooling_dir}/lib/record-shared.mjs"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/scripts/lib/upgrade-survivor-policy.mjs?ref=${WORKFLOW_SHA}" \
+            --jq .content | base64 --decode > "${tooling_dir}/lib/upgrade-survivor-policy.mjs"
 
       - name: Checkout release tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -995,31 +1003,87 @@ jobs:
         id: clawhub_plan
         env:
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
-          BOOTSTRAP_WORKFLOW_REF: ${{ startsWith(github.ref, 'refs/tags/release-publish/') && github.ref_name || 'main' }}
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
+          WORKFLOW_FULL_REF: ${{ github.ref }}
         run: |
           set -euo pipefail
-          plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
-          if [[ "${BOOTSTRAP_WORKFLOW_REF}" == "main" ]]; then
+
+          resolve_child_workflow_ref() {
+            local workflow_full_ref="$1"
+            local workflow_sha="$2"
+            local workflow_prefix="${workflow_sha:0:12}"
+            local child_workflow_ref matching_ref_prefix matching_refs
+
+            if [[ "${workflow_full_ref}" =~ ^refs/tags/(release-publish/[a-f0-9]{12}-[1-9][0-9]*)$ ]]; then
+              # Request validation already proves this is the exact live
+              # lightweight tag; dispatch revalidates it immediately before use.
+              printf '%s\n' "${BASH_REMATCH[1]}"
+              return 0
+            fi
+
+            if [[ "${workflow_full_ref}" =~ ^refs/heads/(tideclaw/alpha/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$ ]]; then
+              printf '%s\n' "${BASH_REMATCH[1]}"
+              return 0
+            fi
+
+            if [[ "${workflow_full_ref}" != "refs/heads/main" ]]; then
+              echo "Publish children require trusted main, a protected release-publish tag, or a validated Tideclaw alpha branch." >&2
+              return 1
+            fi
+
+            matching_ref_prefix="$(
+              jq -rn --arg value "tags/release-publish/${workflow_prefix}-" '$value | @uri'
+            )"
+            matching_refs="$(
+              gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/${matching_ref_prefix}"
+            )"
+            if ! child_workflow_ref="$(
+              jq -er \
+                --arg prefix "${workflow_prefix}" \
+                --arg sha "${workflow_sha}" \
+                '[.[] |
+                  select(.ref | test("^refs/tags/release-publish/" + $prefix + "-[1-9][0-9]*$")) |
+                  select(.object.type == "commit" and .object.sha == $sha) |
+                  .ref | sub("^refs/tags/"; "")
+                ] | sort | last | select(type == "string" and length > 0)' \
+                <<<"${matching_refs}"
+            )"; then
+              echo "Trusted main publication requires a direct protected release-publish tag for ${workflow_sha}." >&2
+              return 1
+            fi
+            printf '%s\n' "${child_workflow_ref}"
+          }
+
+          # Regular publication binds every child to the exact parent revision.
+          # Tideclaw retains its validated branch child and main bootstrap split.
+          CHILD_WORKFLOW_REF="$(
+            resolve_child_workflow_ref "${WORKFLOW_FULL_REF}" "${GITHUB_SHA}"
+          )"
+          if [[ "${WORKFLOW_FULL_REF}" == refs/heads/tideclaw/alpha/* ]]; then
+            BOOTSTRAP_WORKFLOW_REF="main"
             bootstrap_workflow_sha="$(
               gh api "repos/${GITHUB_REPOSITORY}/git/ref/heads/main" \
                 --jq '.object.sha | select(test("^[a-f0-9]{40}$"))'
             )"
           else
-            # Protected release-publish tags bind every child to this exact
-            # parent revision, so unrelated main movement cannot change tooling.
+            BOOTSTRAP_WORKFLOW_REF="${CHILD_WORKFLOW_REF}"
             bootstrap_workflow_sha="${GITHUB_SHA}"
           fi
+          echo "child_workflow_ref=${CHILD_WORKFLOW_REF}" >> "${GITHUB_OUTPUT}"
+
+          plan_path="${RUNNER_TEMP}/openclaw-release-clawhub-plan.json"
           plan_args=(
             --bootstrap-workflow-ref "${BOOTSTRAP_WORKFLOW_REF}"
             --bootstrap-workflow-sha "${bootstrap_workflow_sha}"
             --release-tag "${RELEASE_TAG}"
             --release-sha "${TARGET_SHA}"
             --release-publish-branch "${PARENT_WORKFLOW_BRANCH}"
+            --release-publish-full-ref "${PARENT_WORKFLOW_FULL_REF}"
             --release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"
             --release-publish-run-id "${GITHUB_RUN_ID}"
             --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
@@ -1169,9 +1233,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
-          CHILD_WORKFLOW_REF: ${{ github.ref_name }}
+          CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -2490,7 +2555,7 @@ jobs:
             if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
               echo "- Workflow completion waits for ClawHub"
             else
-              echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
+              echo "- Workflow does not wait for ClawHub; monitor its run separately"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -2512,7 +2577,7 @@ jobs:
             bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"
           fi
 
-          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}")
+          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}")
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
           fi
@@ -2524,7 +2589,7 @@ jobs:
             append_clawhub_dispatch_args normal
             plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
               "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
-              "${TARGET_SHA}" \
+              "${PARENT_WORKFLOW_SHA}" \
               "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
               "${clawhub_dispatch_args[@]}")"
           else
@@ -2599,6 +2664,8 @@ jobs:
                 -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
                 -f release_publish_run_id="${GITHUB_RUN_ID}" \
                 -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
+                -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" \
+                -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}" \
                 -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
                 -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}" \
                 "${evidence_args[@]}")"
@@ -2616,7 +2683,7 @@ jobs:
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
               clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
               wait_run_pid=""
-              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}" "${clawhub_result}"
+              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${PARENT_WORKFLOW_SHA}" "${clawhub_result}"
               clawhub_pid="${wait_run_pid}"
             fi
             if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then

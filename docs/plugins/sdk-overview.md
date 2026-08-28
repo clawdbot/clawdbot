@@ -258,6 +258,38 @@ advertised node command.
 
 Gateway methods default to `profileAccess: "required"`, so authenticated-profile verification fails closed before plugin dispatch. Set `profileAccess: "independent"` only for an audited method that neither reads nor mutates durable user or session state. Operator scope remains a separate authorization requirement.
 
+#### Webhook body rejection
+
+Use `readWebhookBodyOrReject` or `readJsonWebhookBodyOrReject` from
+`openclaw/plugin-sdk/webhook-request-guards` for bounded body reads. Return when
+the result is `{ ok: false }`; the helper owns the error response and connection
+cleanup. Body byte limits and read timeouts remain separate from transport cleanup.
+
+For a custom error representation after a response-first body read, await
+`sendHttpRequestRejection(req, res, statusCode, body, contentType?)` instead of
+calling `res.end()` and destroying the request. It preserves security headers,
+frames the complete error, then on Node closes the write side while keeping application
+body readers paused. Node's request backpressure bounds residual input buffering;
+cleanup allows at most one second, not another body-read timeout. A disconnected peer, malformed HTTP, or an
+exhausted cleanup budget can prevent delivery. Committed responses are closed
+without appending a replacement error or completing a partial successful body.
+
+On Node, transport-owned rejections emit response `close` without `finish`.
+Use `close` for terminal cleanup or selected-error diagnostics; it does not prove
+delivery. Keep successful-response activity on `finish`, with the caller's
+success-status check, so an aborted request cannot report healthy activity.
+
+Bun uses its native HTTP response completion because its raw socket operations
+do not flush the HTTP response. Bun can still report client connection resets
+during large outstanding uploads, even after delivering the complete error.
+
+Gateway HTTP requests run in order on each connection, including their response
+lifetimes. A closing connection cannot admit later requests or upgrades. Queued
+requests apply input backpressure until earlier responses finish; finite pipelines
+drain in order. Use separate connections for concurrent requests. Keep the release hook returned by
+`beginWebhookRequestPipelineOrReject` in `finally`; it retains any selected
+rejection cleanup before releasing the in-flight slot.
+
 #### Post-ack webhook work
 
 Webhook routes that acknowledge a request before processing finishes must move
@@ -678,10 +710,10 @@ For an end-to-end authoring guide, see
 
 ### Exclusive slots
 
-| Method                                     | What it registers                                                                                                                                                          |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields; undeclared engines receive all current host fields. |
-| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                  |
+| Method                                     | What it registers                                                                                                                                                                                                        |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `api.registerContextEngine(id, factory)`   | Context engine (one active at a time). Use `info.acceptedHostParams` to restrict accepted host-added lifecycle fields, including optional `maintain()` cancellation; undeclared engines receive all current host fields. |
+| `api.registerMemoryCapability(capability)` | Unified memory capability                                                                                                                                                                                                |
 
 To participate in durable admitted turns, context engines must declare
 `currentTurnFence: "before-current-turn-entry-v1"` and

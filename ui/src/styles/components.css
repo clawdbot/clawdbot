@@ -762,6 +762,15 @@ openclaw-session-owner-chip {
 /* A corner toast degenerates at phone widths, where it would span nearly the
  * whole viewport anyway. Use the full-width top idiom instead. */
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
+  /* The unanchored chat toast shares the viewport with shell and pane chrome.
+     Anchored permission toasts already carry a measured pane-header offset. */
+  .shell--chat > openclaw-toast-host .app-toast:not(.app-toast--anchored) {
+    top: calc(
+      var(--safe-area-top) + var(--shell-topbar-height) + var(--chat-mobile-pane-header-height) +
+        20px
+    );
+  }
+
   .app-toast {
     left: max(12px, var(--safe-area-left));
     right: max(12px, var(--safe-area-right));
@@ -979,6 +988,14 @@ openclaw-session-progress-hovercard-provider {
 
 .person-activity-card__header > div {
   min-width: 0;
+}
+
+.person-activity-card__header .viewer-avatar--footer {
+  width: 32px;
+  height: 32px;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  /* The base ring color assumes the sidebar surface; blend with the popover. */
+  border-color: var(--session-hovercard-surface);
 }
 
 .person-activity-card h2,
@@ -3282,6 +3299,12 @@ td.data-table-key-col {
   padding: 0 2px;
   background: color-mix(in srgb, var(--exec-highlight) 34%, transparent);
   color: var(--text);
+}
+
+.exec-approval-scope {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--muted);
 }
 
 .exec-approval-meta {

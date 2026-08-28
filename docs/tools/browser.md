@@ -824,7 +824,7 @@ Compared to the managed `openclaw` profile, existing-session drivers are more co
 - **Actions** - `click`, `type`, `hover`, `scrollIntoView`, `drag`, and `select` require snapshot refs (no CSS selectors). `click-coords` clicks visible viewport coordinates and does not require a snapshot ref. `click` is left-button only (no button overrides or modifiers). `type` does not support `slowly=true`; use `fill` or `press`. `press` does not support `delayMs`. `type`, `hover`, `scrollIntoView`, `drag`, `select`, and `fill` do not support per-call `timeoutMs` overrides; `evaluate` does. `select` accepts a single value. `batch` is not supported; send actions individually.
 - **Wait / upload / dialog** - `wait --url` supports exact, substring, and glob patterns (same as managed); `wait --load networkidle` is not supported on existing-session profiles (it works on managed and raw/remote CDP profiles). Upload hooks require `ref` or `inputRef`, one file at a time, no CSS `element`. Dialog hooks do not support timeout overrides or `dialogId`.
 - **Dialog visibility** - Managed browser action responses include `blockedByDialog` and `browserState.dialogs.pending` when an action opens a modal dialog; snapshots also include pending dialog state. Respond with `browser dialog --accept/--dismiss --dialog-id <id>` while a dialog is pending. Dialogs handled outside OpenClaw appear under `browserState.dialogs.recent`.
-- **Managed-only features** - PDF export, download interception, and `responsebody` still require the managed browser path.
+- **Playwright-only features** - PDF export, download interception, `responsebody`, and the agent actions `requests`, `text`, and `emulate` require a Playwright-backed profile, such as the managed `openclaw` profile. Use `snapshot` to inspect an existing-session page.
 
 </Accordion>
 
@@ -921,11 +921,15 @@ Security guidance:
 
 The agent gets **one tool** for browser automation:
 
-- `browser` - doctor/status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act
+- `browser` - doctor/status/start/stop/tabs/open/focus/close/snapshot/screenshot/navigate/act/requests/text/emulate
 
 How it maps:
 
 - `browser snapshot` returns a stable UI tree (AI or ARIA).
+- Snapshot `query` keeps lines containing **all** whitespace-separated query tokens, ignoring case. Matching lines retain element refs; the result reports the match count and respects `maxChars`. It searches the returned snapshot, so increase the snapshot scope if the source was truncated.
+- `browser requests` reads the collected network log. Optional `filter` matches a substring in the URL or resource type; `limit` keeps the most recent entries (default 50). Results report `total` matching collected requests and `returned` entries; the output budget may reduce that count further. `clear=true` clears the entire collected log after reading, including entries omitted by filtering or limits.
+- `browser text` extracts visible prose using the first explicit `selector` match, otherwise the first `article`, `main`, or `body`. `maxChars` must be positive; it defaults to and cannot exceed 40,000 characters. The tool's output budget may truncate further. Page text remains untrusted external content.
+- `browser emulate` applies one or more of `device` (a Playwright device name), `colorScheme` (`dark`, `light`, `no-preference`, or `none` to clear), `timezoneId`, and `locale`. Settings apply in that order and return an `applied` list; they are not atomic. These three actions support local and node targets but not Chrome MCP existing-session profiles.
 - `browser navigate` also returns the loaded page's snapshot inline (efficient
   interactive tier, so the payload stays compact and bounded), so the agent
   does not need a follow-up snapshot call. Batch `act` results that report a
@@ -942,6 +946,31 @@ How it maps:
   - If a browser-capable node is connected, the tool may auto-route to it unless you pin `target="host"` or `target="node"`.
 
 This keeps the agent deterministic and avoids brittle selectors.
+
+Example agent tool arguments (reuse a `targetId` from `tabs` or `open`):
+
+```json
+{ "action": "requests", "targetId": "t1", "filter": "fetch", "limit": 20, "clear": true }
+```
+
+```json
+{ "action": "text", "targetId": "t1", "selector": "article", "maxChars": 6000 }
+```
+
+```json
+{ "action": "snapshot", "targetId": "t1", "query": "sign in", "maxChars": 4000 }
+```
+
+```json
+{
+  "action": "emulate",
+  "targetId": "t1",
+  "device": "iPhone 15",
+  "colorScheme": "dark",
+  "timezoneId": "America/New_York",
+  "locale": "en-US"
+}
+```
 
 ## Related
 

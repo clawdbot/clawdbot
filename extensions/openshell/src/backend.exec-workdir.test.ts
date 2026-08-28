@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 // Openshell tests cover backend-owned exec workdir validation behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -338,12 +339,14 @@ describe("openshell backend exec workdir validation", () => {
       name: "missing materialized child",
       target: "/sandbox/.openclaw/sandbox-skills/skills/missing",
       expected: null,
+      workspaceFallback: true,
     },
     {
       name: "symlinked materialized source",
       target: "/sandbox/.openclaw/sandbox-skills/nested",
       expected: null,
       sourceLink: true,
+      workspaceFallback: true,
     },
   ])("validates the uploaded host directory for $name", async (scenario) => {
     const workspaceDir = await createWorkspace();
@@ -358,6 +361,11 @@ describe("openshell backend exec workdir validation", () => {
     }
     await fs.symlink(workspaceDir, path.join(workspaceDir, "link"), "junction");
     await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
+    if (scenario.workspaceFallback) {
+      await fs.mkdir(path.join(workspaceDir, path.posix.relative("/sandbox", scenario.target)), {
+        recursive: true,
+      });
+    }
     if (scenario.sourceLink) {
       await fs.rm(skillsWorkspaceDir, { recursive: true });
       await fs.symlink(workspaceDir, skillsWorkspaceDir, "junction");
@@ -380,7 +388,7 @@ describe("openshell backend exec workdir validation", () => {
       workspace: "/sandbox/primary",
       agent: "/sandbox",
       target: "/sandbox/primary/host-only",
-      exists: false,
+      exists: true,
     },
     {
       workspace: "/sandbox",
@@ -404,6 +412,248 @@ describe("openshell backend exec workdir validation", () => {
       scenario.exists ? scenario.target : null,
     );
   });
+
+  it.runIf(process.platform !== "win32")(
+    "rejects a workdir omitted from the authoritative overlapping root",
+    async () => {
+      const workspaceDir = await createWorkspace();
+      const agentWorkspaceDir = await createWorkspace("agent");
+      await fs.mkdir(path.join(workspaceDir, "preserved"));
+      execFileSync("mkfifo", [path.join(agentWorkspaceDir, "preserved")]);
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir,
+        agentWorkspaceDir,
+        scopeKey: "agent:overlap-special-file",
+        remoteWorkspaceDir: "/sandbox",
+        remoteAgentWorkspaceDir: "/sandbox",
+      });
+
+      await expect(backend.validateWorkdir?.("/sandbox/preserved")).resolves.toBeNull();
+    },
+  );
+
+  it.each([
+    {
+      name: "a later nested directory replaces an earlier file",
+      workspace: "/sandbox",
+      agent: "/sandbox/collision",
+      setup: async (workspaceDir: string) => {
+        await fs.writeFile(path.join(workspaceDir, "collision"), "file");
+      },
+      uploads: [
+        ["collision", "/sandbox/"],
+        ["primary-only", "/sandbox/"],
+        ["agent-only", "/sandbox/collision/"],
+      ],
+    },
+    {
+      name: "a deeper nested root replaces a blocking ancestor file",
+      workspace: "/sandbox",
+      agent: "/sandbox/collision/agent",
+      setup: async (workspaceDir: string) => {
+        await fs.writeFile(path.join(workspaceDir, "collision"), "file");
+      },
+      uploads: [
+        ["collision", "/sandbox/"],
+        ["primary-only", "/sandbox/"],
+        ["agent-only", "/sandbox/collision/agent/"],
+      ],
+    },
+    {
+      name: "a later file replaces an earlier nested directory",
+      workspace: "/sandbox/collision",
+      agent: "/sandbox",
+      setup: async (_workspaceDir: string, agentWorkspaceDir: string) => {
+        await fs.writeFile(path.join(agentWorkspaceDir, "collision"), "file");
+      },
+      uploads: [
+        ["agent-only", "/sandbox/"],
+        ["collision", "/sandbox/"],
+        ["primary-only", "/sandbox/collision/"],
+      ],
+    },
+  ])("composes overlapping roots when $name", async (scenario) => {
+    const workspaceDir = await createWorkspace();
+    const agentWorkspaceDir = await createWorkspace("agent");
+    await fs.writeFile(path.join(workspaceDir, "primary-only"), "primary");
+    await fs.writeFile(path.join(agentWorkspaceDir, "agent-only"), "agent");
+    await scenario.setup(workspaceDir, agentWorkspaceDir);
+    const backend = await createOpenShellBackendFixture({
+      workspaceDir,
+      agentWorkspaceDir,
+      scopeKey: `agent:overlap-cross-type:${scenario.name}`,
+      remoteWorkspaceDir: scenario.workspace,
+      remoteAgentWorkspaceDir: scenario.agent,
+    });
+
+    const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+    try {
+      const uploads = cliMocks.runOpenShellCli.mock.calls.flatMap(([params]) =>
+        params.args[0] === "sandbox" && params.args[1] === "upload"
+          ? [[path.basename(params.args.at(-2) ?? ""), params.args.at(-1)]]
+          : [],
+      );
+      expect(uploads).toEqual(scenario.uploads);
+    } finally {
+      await finalize(backend, exec.finalizeToken);
+    }
+  });
+
+  it.each([
+    {
+      workspace: "/sandbox/primary",
+      agent: "/sandbox",
+      uploads: [
+        ["agent-only", "/sandbox/"],
+        ["host-only", "/sandbox/primary/"],
+      ],
+    },
+    {
+      workspace: "/sandbox",
+      agent: "/sandbox/nested/agent",
+      uploads: [
+        ["host-only", "/sandbox/"],
+        ["agent-only", "/sandbox/nested/agent/"],
+      ],
+    },
+    {
+      workspace: "/sandbox",
+      agent: "/sandbox",
+      uploads: [
+        ["host-only", "/sandbox/"],
+        ["agent-only", "/sandbox/"],
+      ],
+    },
+    {
+      workspace: "/sandbox",
+      agent: "/sandbox/hooks",
+      uploads: [
+        ["host-only", "/sandbox/"],
+        ["agent-only", "/sandbox/hooks/"],
+      ],
+    },
+  ])(
+    "clears each overlapping root immediately before upload: $workspace -> $agent",
+    async (scenario) => {
+      const workspaceDir = await createWorkspace();
+      const agentWorkspaceDir = await createWorkspace("agent");
+      await fs.mkdir(path.join(workspaceDir, "host-only"));
+      await fs.mkdir(path.join(agentWorkspaceDir, "agent-only"));
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir,
+        agentWorkspaceDir,
+        scopeKey: `agent:overlap-publication:${scenario.workspace}:${scenario.agent}`,
+        remoteWorkspaceDir: scenario.workspace,
+        remoteAgentWorkspaceDir: scenario.agent,
+      });
+
+      const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      try {
+        const clearCallOrders = sdkMocks.runSshSandboxCommand.mock.calls.flatMap(
+          ([params], index) =>
+            String(params.remoteCommand).includes("find")
+              ? [sdkMocks.runSshSandboxCommand.mock.invocationCallOrder[index]!]
+              : [],
+        );
+        const uploadCalls = cliMocks.runOpenShellCli.mock.calls.flatMap(([params], index) =>
+          params.args[0] === "sandbox" && params.args[1] === "upload"
+            ? [{ params, order: cliMocks.runOpenShellCli.mock.invocationCallOrder[index]! }]
+            : [],
+        );
+        expect(clearCallOrders).toHaveLength(2);
+        expect(
+          [
+            ...clearCallOrders.map((order) => ({ label: "clear", order })),
+            ...uploadCalls.map(({ order }) => ({ label: "upload", order })),
+          ]
+            .toSorted((a, b) => a.order - b.order)
+            .map(({ label }) => label),
+        ).toEqual(["clear", "upload", "clear", "upload"]);
+        expect(
+          uploadCalls.map(({ params }) => [
+            path.basename(params.args.at(-2) ?? ""),
+            params.args.at(-1),
+          ]),
+        ).toEqual(scenario.uploads);
+      } finally {
+        await finalize(backend, exec.finalizeToken);
+      }
+    },
+  );
+
+  it.each([
+    {
+      name: "read-only containing agent root",
+      workspaceAccess: "ro" as const,
+      remoteWorkspaceDir: "/sandbox/agent/project",
+      remoteAgentWorkspaceDir: "/sandbox/agent",
+    },
+    {
+      name: "writable containing agent root",
+      workspaceAccess: "rw" as const,
+      remoteWorkspaceDir: "/sandbox/agent/project",
+      remoteAgentWorkspaceDir: "/sandbox/agent",
+    },
+    {
+      name: "equal read-only roots",
+      workspaceAccess: "ro" as const,
+      remoteWorkspaceDir: "/sandbox/shared",
+      remoteAgentWorkspaceDir: "/sandbox/shared",
+    },
+  ])(
+    "downloads the primary root without reconciling the $name",
+    async ({ name, workspaceAccess, remoteWorkspaceDir, remoteAgentWorkspaceDir }) => {
+      const workspaceDir = await createWorkspace();
+      const agentWorkspaceDir = await createWorkspace("agent");
+      await fs.writeFile(path.join(workspaceDir, "primary-only"), "local-primary");
+      await fs.writeFile(path.join(agentWorkspaceDir, "agent-only"), "local-agent");
+      await fs.mkdir(path.join(agentWorkspaceDir, "project"));
+      await fs.writeFile(
+        path.join(agentWorkspaceDir, "project", "agent-shadow.txt"),
+        "preserved-shadow",
+      );
+      cliMocks.runOpenShellCli.mockImplementation(async ({ args }) => {
+        if (args[1] === "download") {
+          const remote = args.at(-2);
+          const target = args.at(-1);
+          if (!target) {
+            throw new Error("Expected download target");
+          }
+          await fs.writeFile(
+            path.join(target, remote === remoteWorkspaceDir ? "primary-only" : "agent-only"),
+            remote === remoteWorkspaceDir ? "remote-primary" : "remote-agent",
+          );
+        }
+        return { code: 0, stdout: "", stderr: "" };
+      });
+      const backend = await createOpenShellBackendFixture({
+        workspaceDir,
+        agentWorkspaceDir,
+        scopeKey: `agent:overlap-download:${name}`,
+        workspaceAccess,
+        remoteWorkspaceDir,
+        remoteAgentWorkspaceDir,
+      });
+
+      const exec = await backend.buildExecSpec({ command: "true", env: {}, usePty: false });
+      await finalize(backend, exec.finalizeToken);
+
+      await expect(fs.readFile(path.join(agentWorkspaceDir, "agent-only"), "utf8")).resolves.toBe(
+        "local-agent",
+      );
+      await expect(fs.readFile(path.join(workspaceDir, "primary-only"), "utf8")).resolves.toBe(
+        "remote-primary",
+      );
+      await expect(
+        fs.readFile(path.join(agentWorkspaceDir, "project", "agent-shadow.txt"), "utf8"),
+      ).resolves.toBe("preserved-shadow");
+      expect(
+        cliMocks.runOpenShellCli.mock.calls.flatMap(([params]) =>
+          params.args[1] === "download" ? [params.args.at(-2)] : [],
+        ),
+      ).toEqual([remoteWorkspaceDir]);
+    },
+  );
 
   it("rejects an aborted file write after waiting for mirror publication", async () => {
     const workspaceDir = await createWorkspace();

@@ -43,18 +43,23 @@ independent failures together. In that mode, the parent makes no child
 cancellation calls. Pass `-f fail_fast=true` only when the shorter
 first-failure path is preferable; Release Decision then cancels only the exact
 still-active child that owns the blocking failure.
+Same-parent continuation requires the original root to have been dispatched
+with `fail_fast=false`. The controller verifies that exact logged input before
+any rerun mutation.
 
 After dispatch, the parent writes one immutable
 `full-release-execution-plan-<run-id>` artifact and preserves the same bytes in
 an exact run-ID Actions cache. It records selected and
 required coverage, gate results, reuse identity, the original parent attempt,
-and every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
+the fresh candidate request and producer evidence when preparation ran, and
+every exact child run ID, attempt, title, workflow ref, and Tooling SHA.
 Decision, Drain, manifest generation, evidence verification, and the final
 verifier consume the artifact for their current attempt. Collector retries
-restore the immutable cached copy, validate it, and upload the artifact again
-for the retry; they never rebuild the plan or redispatch tests. A missing or
-evicted cache fails closed, so start a new validation instead of retrying that
-stale parent.
+use the exact run-ID cache as an acceleration. If that cache is unavailable,
+they restore the same immutable plan from the parent-run artifact, validate it,
+and upload the artifact again for the retry; they never rebuild the plan or
+redispatch tests. A missing or invalid artifact fails closed, so start a new
+validation instead of retrying that stale parent.
 Release Decision also repeats canonical reuse-chain validation before a reused
 run can pass. The sealed target SHA, evidence SHA, policy, changed-path set,
 selected run, root run, source manifest, trusted tooling identity, and child
@@ -65,14 +70,54 @@ Decision and Diagnostic Drain artifacts independently. Both must bind the same
 immutable plan and exact child tuple; their source attempts remain recorded in
 the artifacts and may differ when only one collector needed a retry.
 
+## Continue failed child jobs
+
+Full Release Validation can adopt monotonically newer attempts of the exact
+child runs recorded in its immutable plan. A newer attempt is accepted only
+when the run ID, workflow path, workflow ref, Tooling SHA, dispatch title, and
+event are unchanged. For each logical job, the newest observed attempt wins,
+including a newer failure; a job absent from a newer attempt carries forward
+from the last attempt that included it. Duplicate job names within one attempt,
+missing attempts, or provenance drift fail closed.
+
+Inspect or continue an existing parent:
+
+```bash
+pnpm frv status --run <parent-run-id>
+pnpm frv continue --failed --run <parent-run-id>
+pnpm frv verify --run <successful-parent-run-id>
+```
+
+`continue --failed` waits for active child attempts instead of starting a
+duplicate. Once every active attempt is terminal, it reruns failed child jobs
+in parallel, leaves green child workflows untouched, and reruns the parent
+once. The parent restores its immutable execution plan, observes the effective
+child attempts, and writes the final all-group manifest. The manifest records
+the planned and effective attempt, accepted attempt for every logical job, and
+a digest of the composite job evidence.
+
+The command stores no continuation ledger or local journal. GitHub run
+attempts, the immutable execution plan, Decision/Drain artifacts, and the final
+manifest are the complete state model. It never tags, publishes, changes a
+registry, or prepares a new candidate.
+
+Parents whose immutable plan predates attempt-aware evidence cannot be
+continued. Start a fresh all-group Full Release Validation instead; the
+controller never reconstructs old state or dispatches a replacement parent.
+
 The helper creates a temporary `release-ci/*` ref pinned to the Tooling SHA,
 passes the Validation SHA as both the candidate ref and `expected_sha`, and
 deletes the temporary ref after successful validation and strict evidence
 verification. The helper reads Release Decision artifacts while the parent is
-active so blockers can surface while Diagnostic Drain collects failures. A
-not-yet-created artifact remains an unavailable polling result; terminal
-handling and temporary-ref cleanup wait for the parent to complete with a
-conclusion. Failed validations retain both refs for reruns and diagnosis. The
+active so blockers can surface while Diagnostic Drain collects failures. It
+waits 15 minutes between run-discovery attempts and between parent polling
+iterations. One parent iteration may perform status, decision-artifact, and
+progress-job reads together; the delay limits repeated polling cycles rather
+than spacing every GitHub call. Run discovery makes one immediate check and one
+delayed retry before failing. A not-yet-created artifact remains an unavailable
+polling result; terminal handling and temporary-ref cleanup wait for the parent
+to complete with a conclusion. Failed validations retain both refs for reruns
+and diagnosis. The
 Validation SHA equals the Code SHA for product validation or the Release SHA
 for changelog-only validation; it is not a third release identity. The workflow
 rejects malformed or mismatched expected SHAs before child dispatch. Every
@@ -83,6 +128,22 @@ from current `origin/main`. The helper rejects a pinned Tooling SHA that does
 not declare the current release-isolation contract or the `expected_sha`
 dispatch input; it never silently substitutes newer tooling. The workflow never
 creates or updates repository refs itself.
+
+### Post-merge continuation proof
+
+Use the non-release `FRV Proof Broker` and `FRV Proof Fixture` workflows only
+after the reviewed SHA lands on protected `main`. The fixture contains one
+fixed no-op job that intentionally fails on attempt one and passes on attempt
+two. The broker validates the exact maintainer, pull request head, protected
+main SHA, fixture workflow, and run tuple before rerunning only that failed job.
+
+Accept the hosted mutation proof only when the exact fixture run advances to
+attempt two and passes. The broker emits a receipt and must create no release
+candidate, release artifact, publication, repository ref, replacement parent,
+or other workflow mutation. This proves the GitHub failed-job rerun boundary;
+the focused controller tests prove plan eligibility, green-attempt
+preservation, same-parent collection, and strict-verifier invocation. Do not
+use a real Full Release Validation run for this proof.
 
 The main-lineage requirement above applies to the initial validation tooling
 selection. Once release publication binds that Tooling SHA to an exact protected
@@ -180,6 +241,15 @@ bare Docker layer uses a content-addressed GHCR cache; candidate-specific images
 remain immutable GitHub artifacts. Focused runs with an explicit published
 package spec keep the existing package path instead.
 
+Preparation also emits a canonical request digest and a seven-day
+`full-release-candidate-v1-<request-sha256>` evidence artifact. Its bounded
+manifest binds the exact target and Tooling SHAs, release and soak policy,
+effective survivor baselines and scenarios, preparation-plan digest, sorted
+plugin package set, producer workflow/job/run attempt, and package, registry,
+and image artifact identities and expiry timestamps. The execution plan seals
+that producer evidence. This producer contract does not discover or select
+older candidates; a missing candidate still follows the normal fresh build.
+
 Also for `rerun_group=all`, a `Verify Docker runtime image assets` job builds
 the `runtime-assets` Docker target with
 `OPENCLAW_EXTENSIONS=diagnostics-otel,codex`. It runs in parallel with the
@@ -189,7 +259,7 @@ it before dispatching. A narrower `rerun_group` skips this preflight.
 | Stage                   | Details                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
 | ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Target resolution       | **Job:** `Resolve target ref`<br />**Child workflow:** none<br />**Proves:** resolves the release branch, tag, or full commit SHA and records selected inputs.<br />**Rerun:** rerun the umbrella if this fails.                                                                                                                                                                                                                                                                                                                                                                                                           |
-| Shared candidate        | **Job:** `Prepare shared release candidate`<br />**Child workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, and records immutable package and image artifact tuples for both package-facing child workflows.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group.                                                                                                                                                                                                                |
+| Shared candidate        | **Job:** `Prepare shared release candidate`<br />**Child workflow:** `OpenClaw Live And E2E Checks (Reusable)`<br />**Proves:** packs and validates one exact-SHA package, builds one functional Docker image, preserves the existing package/image tuple, and emits content-addressed producer evidence for the package, plugin registry, image, and preparation plan.<br />**Rerun:** rerun the affected package, plugin-prerelease, cross-OS, or live/E2E group.                                                                                                                                                        |
 | Docker assets preflight | **Job:** `Verify Docker runtime image assets`<br />**Child workflow:** none<br />**Proves:** the `runtime-assets` Docker build target still succeeds before any other stage dispatches. Runs only for `rerun_group=all`.<br />**Rerun:** rerun the umbrella with `rerun_group=all`.                                                                                                                                                                                                                                                                                                                                        |
 | Vitest and normal CI    | **Job:** `Run normal full CI`<br />**Child workflow:** `CI`<br />**Proves:** manual full CI graph against the target ref, including Linux Node lanes, bundled plugin shards, plugin and channel contract shards, Node 22 compatibility, `check-*`, `check-additional-*`, built-artifact smoke checks, docs checks, Python skills, Windows, macOS, Control UI i18n, and Android via the umbrella.<br />**Rerun:** `rerun_group=ci`.                                                                                                                                                                                         |
 | Plugin prerelease       | **Job:** `Run plugin prerelease validation`<br />**Child workflow:** `Plugin Prerelease`<br />**Proves:** release-only plugin static checks, agentic plugin coverage, full plugin batch shards, plugin prerelease Docker lanes, and a non-blocking `plugin-inspector-advisory` artifact for compatibility triage.<br />**Rerun:** `rerun_group=plugin-prerelease`.                                                                                                                                                                                                                                                         |
@@ -198,7 +268,7 @@ it before dispatching. A narrower `rerun_group` skips this preflight.
 | Product performance     | **Job:** `Run product performance evidence`<br />**Child workflow:** `OpenClaw Performance`<br />**Proves:** release-profile performance run (`profile=release`, `repeat=3`, `fail_on_regression=true`, `publish_reports=false`) against the target SHA. Kova output stays in workflow artifacts and the child must prove its report publisher was skipped. Required (blocking) only for `rerun_group=all` or `rerun_group=performance`; not required for narrower rerun groups.<br />**Rerun:** `rerun_group=performance`.                                                                                                |
 | Release decision        | **Job:** `Release Decision`<br />**Child workflow:** none<br />**Proves:** polls the exact recorded child run IDs and attempts, enforces release policy, and publishes an attempt-bound decision artifact. A decisive failure becomes `blocked_diagnostics_running` while unrelated child diagnostics continue.<br />**Rerun:** fix or rerun only the blocking surface.                                                                                                                                                                                                                                                    |
 | Diagnostic drain        | **Job:** `Diagnostic Drain`<br />**Child workflow:** none<br />**Proves:** with `fail_fast=false`, follows every selected exact child to terminal without cancellation and writes timing, failed-job, run-attempt, and Tooling-SHA evidence. Collector cancellation instead writes an immediate `cancelled_with_children` handoff containing active child identities.<br />**Rerun:** recover collection only for `orchestration_error`; product failures do not invalidate the drain.                                                                                                                                     |
-| Execution plan          | **Job:** `Seal release execution plan`<br />**Child workflow:** none<br />**Proves:** persists the original parent attempt, exact child identities and titles, required coverage, gates, and reuse identity in a stable run-bound artifact. Attempt-two collector recovery restores this artifact instead of redispatching.<br />**Rerun:** restore the existing plan only; a missing plan is an orchestration error.                                                                                                                                                                                                      |
+| Execution plan          | **Job:** `Seal release execution plan`<br />**Child workflow:** none<br />**Proves:** persists the original parent attempt, exact child identities and titles, required coverage, gates, reuse identity, and fresh candidate request/producer binding in a stable run-bound artifact. Attempt-two collector recovery restores this artifact instead of redispatching.<br />**Rerun:** restore the existing plan only; a missing plan is an orchestration error.                                                                                                                                                            |
 | Umbrella verifier       | **Job:** `Verify full validation`<br />**Child workflow:** none<br />**Proves:** downloads the immutable execution plan plus the exact attempt-bound Release Decision and Diagnostic Drain artifacts, verifies their common digest and parent tuple, and accepts only a strict green decision plus terminal drain.<br />**Rerun:** recover the existing collectors or rerun only the failed product surface; the verifier never reclassifies or redispatches children.                                                                                                                                                     |
 
 The five child-dispatch jobs own dispatch and exact identity capture only. They
@@ -208,8 +278,9 @@ immutable execution plan owns child identity across collector attempts. The
 decision state is one of `qualifying`, `blocked_diagnostics_running`, `passed`,
 `blocked_complete`, `orchestration_error`, or `cancelled_with_children`.
 Persistent GitHub API failures are orchestration errors. A child whose workflow
-path, display title, ref, Tooling SHA, run ID, or attempt changes is a distinct
-provenance mismatch.
+path, display title, ref, Tooling SHA, or run ID changes is a distinct
+provenance mismatch. A monotonically newer attempt is accepted only through the
+composite-attempt rules above.
 
 `blocked_diagnostics_running` is safe for immediate diagnosis but not for a
 retry until Diagnostic Drain is terminal. `orchestration_error` authorizes

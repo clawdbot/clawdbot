@@ -227,6 +227,7 @@ export function createPageState(
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
     chatSubmitGuards: new Map<string, Promise<void>>(),
+    chatGoalDraftMode: null,
     chatSendTimingsByRun: new Map(),
     chatQueue: [],
     chatComposerFallbackByScope: {},

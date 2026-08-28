@@ -480,6 +480,28 @@ describe("prepareEmbeddedRunTerminal run stats", () => {
     });
   });
 
+  it("reports the terminal physical attempt's redacted credential source", async () => {
+    const prepared = await prepareStats({
+      attempt: {
+        modelAttempt: {
+          provider: "openai",
+          model: "gpt-5.6-luna",
+          credentialSource: {
+            kind: "direct",
+            evidence: "environment",
+            authorization: "declared",
+          },
+        },
+      },
+    });
+
+    expect(prepared.agentMeta.credentialSource).toEqual({
+      kind: "direct",
+      evidence: "environment",
+      authorization: "declared",
+    });
+  });
+
   it("stamps assistantTurns from the run accumulator and omits zero", async () => {
     const counted = await prepareStats({ assistantTurns: 3 });
     expect(counted.agentMeta.assistantTurns).toBe(3);

@@ -4,9 +4,9 @@ import { isLikelyContextOverflowError } from "../../agents/failover/classify.js"
 import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { resolveProfileParticipantIdFromSessionCreation } from "../../config/sessions/session-entry-provenance.js";
 import { logVerbose } from "../../globals.js";
 import { withBeforeAgentReplyObserver } from "../../plugins/before-agent-reply.js";
+import { readSessionInputProfileId } from "../../sessions/session-participant-input.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { OriginatingChannelType } from "../templating.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
@@ -364,9 +364,7 @@ export async function executePreparedReplyAgentRun(
       const gitCoauthorAttribution = prepareGitCoauthorAttribution({
         agentId: followupRun.run.agentId,
         config: cfg,
-        currentProfileId: resolveProfileParticipantIdFromSessionCreation(
-          sessionCtx.SessionCreation,
-        ),
+        currentProfileId: readSessionInputProfileId(sessionCtx),
         sessionKey,
         storePath,
       });

@@ -8,6 +8,7 @@ import {
   readPluginInstallRecords,
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
+import { runConsentScenario } from "./consent-scenario.mjs";
 
 const home = os.homedir();
 const OUTPUT_TAIL_BYTES = 64 * 1024;
@@ -116,7 +117,9 @@ function seedInstallState() {
     ],
     diagnostics: [],
   };
-  writePluginInstallIndexForE2E(index, { storageMode: "pre-v13" });
+  // Package installation may already initialize current state. Unversioned
+  // fixtures retain the pre-v13 bootstrap path for frozen older candidates.
+  writePluginInstallIndexForE2E(index, { storageMode: "existing-schema" });
 }
 
 async function waitRegistry() {
@@ -264,14 +267,17 @@ function assertCorruptPluginDetails(plugins, pluginId) {
   const evidence = collectPluginEvidence(plugins, pluginId);
   const outcome = evidence.outcome;
   const disabledAfterFailure = isCorruptPluginDisabledAfterUpdate(evidence, pluginId);
-  if (!outcome || (outcome.status !== "error" && !disabledAfterFailure)) {
+  const quarantinedAfterFailure = outcome?.status === "error";
+  if (!disabledAfterFailure && !quarantinedAfterFailure) {
     throw new Error(
-      `expected error or disabled-after-failure outcome for ${pluginId}, got ${JSON.stringify({
-        outcomes: plugins.npm?.outcomes ?? [],
-        warnings: plugins.warnings ?? [],
-        sync: plugins.sync,
-        integrityDrifts: plugins.integrityDrifts ?? [],
-      })}`,
+      `expected quarantined or disabled-after-failure outcome for ${pluginId}, got ${JSON.stringify(
+        {
+          outcomes: plugins.npm?.outcomes ?? [],
+          warnings: plugins.warnings ?? [],
+          sync: plugins.sync,
+          integrityDrifts: plugins.integrityDrifts ?? [],
+        },
+      )}`,
     );
   }
   const warning = evidence.warning;
@@ -332,19 +338,17 @@ function assertLegacyPostUpdatePluginFailure(updateJsonPath) {
   }
 }
 
-function assertDisabledPluginPolicyPreserved(configPath, pluginId) {
+function assertCorruptPluginPolicyPreserved(configPath, pluginId) {
   const config = readJson(configPath);
   const allow = config.plugins?.allow;
   if (JSON.stringify(allow) !== JSON.stringify([pluginId])) {
     throw new Error(`expected plugins.allow to preserve ${pluginId}, got ${JSON.stringify(allow)}`);
   }
-  if (config.plugins?.entries?.[pluginId]?.enabled !== false) {
-    throw new Error(`expected ${pluginId} to be disabled after update failure`);
-  }
 }
 
 const [command, arg, arg2] = process.argv.slice(2);
 const commands = {
+  consent: () => runConsentScenario(arg, arg2),
   "legacy-compat": () => console.log(legacyPackageAcceptanceCompat(arg || "") ? "1" : "0"),
   seed: seedInstallState,
   "wait-registry": waitRegistry,
@@ -354,7 +358,7 @@ const commands = {
   "assert-corrupt-update": () => assertCorruptUpdate(arg, arg2),
   "assert-corrupt-plugin-result": () => assertCorruptPluginResult(arg, arg2),
   "assert-legacy-post-update-plugin-failure": () => assertLegacyPostUpdatePluginFailure(arg),
-  "assert-disabled-policy-preserved": () => assertDisabledPluginPolicyPreserved(arg, arg2),
+  "assert-corrupt-policy-preserved": () => assertCorruptPluginPolicyPreserved(arg, arg2),
 };
 const run = commands[command];
 await (

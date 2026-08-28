@@ -288,6 +288,7 @@ Custom providers configured under `models.providers` are written into `models.js
     - SecretRef-managed `apiKey` values refresh from source markers instead of persisting resolved secrets: the env variable name for env refs, `secretref-managed` for file/exec/store refs.
     - SecretRef-managed header values refresh the same way, using `secretref-env:ENV_VAR_NAME` for env refs.
     - Empty or missing `apiKey`/`baseUrl` in `models.json` fall back to config `models.providers`.
+    - Explicit model lists control membership. For matching rows, an explicit `input` wins; when the source row omits `input`, plugin discovery can fill that capability metadata.
     - Other provider fields refresh from config and normalized catalog data.
 
   </Accordion>

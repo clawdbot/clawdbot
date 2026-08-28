@@ -36,6 +36,11 @@ import {
 } from "./prepared-model-runtime-auth.js";
 import { startSerializedSnapshotBuild } from "./prepared-model-runtime.build.js";
 import type { PreparedModelRuntimeAgentFacts } from "./prepared-model-runtime.catalog-contract.js";
+import {
+  getPreparedModelRuntimeSnapshot,
+  refreshPreparedModelRuntimeSnapshots,
+} from "./prepared-model-runtime.js";
+import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
 
 const PROVIDER_ID = "worker-catalog-fixture";
@@ -55,6 +60,7 @@ const EXTERNAL_AUTH_PROFILE_ID = `${PROVIDER_ID}:external`;
 const EXTERNAL_AUTH_PATH_ENV = "OPENCLAW_WORKER_EXTERNAL_AUTH_PATH";
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
   afterEach(() => {
+    resetPreparedModelRuntimeSnapshotsForTest();
     clearRuntimeAuthProfileStoreSnapshots();
     closeOpenClawAgentDatabasesForTest();
     cleanup();
@@ -160,12 +166,21 @@ module.exports = {
           } };
         },
       },
-      augmentModelCatalog(context) {
+      async augmentModelCatalog(context) {
         const marker = process.env.OPENCLAW_WORKER_CATALOG_MARKER;
         const invocation = fs.existsSync(marker)
           ? fs.readFileSync(marker, "utf8").split("start\\n").length
           : 1;
         fs.appendFileSync(process.env.OPENCLAW_WORKER_CATALOG_MARKER, "start\\n");
+        const barrier = marker + ".hold";
+        if (fs.existsSync(barrier)) {
+          await new Promise((resolve) => {
+            const watcher = fs.watch(require("node:path").dirname(barrier), () => {
+              if (!fs.existsSync(barrier)) { watcher.close(); resolve(); }
+            });
+            if (!fs.existsSync(barrier)) { watcher.close(); resolve(); }
+          });
+        }
         const until = Date.now() + ${params.spinMs};
         while (Date.now() < until) {}
         const hasSqlite = context.entries.some((entry) =>
@@ -199,12 +214,11 @@ module.exports = {
   return pluginFile;
 }
 
-async function createStaticSnapshot(
+function createCatalogFixture(
   spinMs: number,
   envOverride: NodeJS.ProcessEnv = {},
   options?: {
     hydrateExternalCliProviderIds?: readonly string[];
-    metadataWorkspace?: "gateway" | "none" | "activation";
   },
 ) {
   const root = tempDirs.make("openclaw-model-catalog-worker-");
@@ -290,6 +304,19 @@ async function createStaticSnapshot(
       }),
     },
   });
+  return { agentDir, config, env, marker, externalAuthPath, hydratedAuthStore, root, workspaceDir };
+}
+
+async function createStaticSnapshot(
+  spinMs: number,
+  envOverride: NodeJS.ProcessEnv = {},
+  options?: {
+    hydrateExternalCliProviderIds?: readonly string[];
+    metadataWorkspace?: "gateway" | "none" | "activation";
+  },
+) {
+  const fixture = createCatalogFixture(spinMs, envOverride, options);
+  const { agentDir, workspaceDir, config, env, root } = fixture;
   let current = true;
   const build = await startSerializedSnapshotBuild(
     { agentId: "main", agentDir, inheritedAuthDir: agentDir, workspaceDir, config, env },
@@ -313,18 +340,20 @@ async function createStaticSnapshot(
       : undefined,
   ).pending;
   return {
-    agentDir,
-    config,
-    env,
-    marker,
-    externalAuthPath,
-    hydratedAuthStore,
+    ...fixture,
     pluginMetadataSnapshot: build.pluginGeneration.pluginMetadataSnapshot,
     snapshot: build.snapshot,
-    root,
     supersede: () => (current = false),
-    workspaceDir,
   };
+}
+
+async function createReadyWorkerFixture(spinMs: number) {
+  const fixture = await createStaticSnapshot(spinMs);
+  // Ordering tests begin at discovery, not cold worker/module startup. The normal
+  // auth request prepares the same worker without running catalog hooks.
+  await loadPreparedModelRuntimeAuth(fixture.snapshot, { providerIds: [] });
+  expect(fs.existsSync(fixture.marker)).toBe(false);
+  return fixture;
 }
 
 async function waitForMarker(marker: string): Promise<void> {
@@ -332,6 +361,111 @@ async function waitForMarker(marker: string): Promise<void> {
 }
 
 describe("prepared model catalog worker boundary", () => {
+  it("keeps an unaffected configured worker live across a scoped sibling reload", async () => {
+    const fixture = createCatalogFixture(0);
+    // Configured publication reads the process environment; keep both the parent and worker
+    // inside the same synthetic plugin/state fixture, without a supplied liveness predicate.
+    for (const name of [
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_WORKER_CATALOG_MARKER",
+      EXTERNAL_AUTH_PATH_ENV,
+      REF_ONLY_API_ENV,
+      REF_ONLY_TOKEN_ENV,
+    ] as const) {
+      vi.stubEnv(name, fixture.env[name]);
+    }
+    const siblingDir = path.join(fixture.root, "sibling-agent");
+    const initialConfig = {
+      ...fixture.config,
+      agents: {
+        ...fixture.config.agents,
+        entries: {
+          main: { default: true, agentDir: fixture.agentDir, workspace: fixture.workspaceDir },
+          sibling: {
+            agentDir: siblingDir,
+            workspace: fixture.workspaceDir,
+            tools: { exec: { security: "full", ask: "off" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const buildCounts: number[] = [];
+    const options = {
+      gatewayLifecycle: true,
+      catalogMode: "static" as const,
+      onBuildStats: (stats: { agentCount: number }) => buildCounts.push(stats.agentCount),
+    };
+    const mainInput = { agentId: "main", agentDir: fixture.agentDir, config: initialConfig };
+    const siblingInput = { agentId: "sibling", agentDir: siblingDir, config: initialConfig };
+    await refreshPreparedModelRuntimeSnapshots(initialConfig, options);
+    const main = getPreparedModelRuntimeSnapshot(mainInput)!;
+    const sibling = getPreparedModelRuntimeSnapshot(siblingInput)!;
+    const catalog = await main.loadFullModelCatalog!();
+    expect(catalog.entries).toContainEqual(
+      expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+    );
+    const authScope = { providerIds: [PROVIDER_ID] };
+    await expect(loadPreparedModelRuntimeAuth(sibling, authScope)).resolves.toMatchObject({
+      authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:A" } } },
+    });
+
+    fs.writeFileSync(`${fixture.marker}.hold`, "", "utf8");
+    const inFlight = main.loadFullModelCatalog!({ refresh: true });
+    void inFlight.catch(() => undefined);
+    try {
+      await expect.poll(() => fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\n");
+      const nextConfig = {
+        ...initialConfig,
+        agents: {
+          ...initialConfig.agents,
+          entries: {
+            ...initialConfig.agents.entries,
+            sibling: {
+              ...initialConfig.agents.entries.sibling,
+              tools: { exec: { security: "full", ask: "always" } },
+            },
+          },
+        },
+      } satisfies OpenClawConfig;
+      await refreshPreparedModelRuntimeSnapshots(nextConfig, {
+        ...options,
+        agentIds: new Set(["sibling"]),
+      });
+      const retained = getPreparedModelRuntimeSnapshot({ ...mainInput, config: nextConfig })!;
+      expect(buildCounts).toEqual([2, 1]);
+      expect(retained.modelCatalog).toBe(main.modelCatalog);
+      expect(retained.metadataSnapshot).toBe(main.metadataSnapshot);
+      expect(retained.readFullModelCatalog!()).toBe(catalog);
+      await expect(loadPreparedModelRuntimeAuth(sibling, authScope)).rejects.toThrow("superseded");
+      await expect(sibling.loadFullModelCatalog!()).rejects.toThrow("superseded");
+
+      fs.rmSync(`${fixture.marker}.hold`);
+      const refreshed = await inFlight;
+      expect(refreshed).not.toBe(catalog);
+      expect(retained.readFullModelCatalog!()).toBe(refreshed);
+      expect(refreshed.entries).toContainEqual(
+        expect.objectContaining({ id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true" }),
+      );
+      fs.writeFileSync(fixture.externalAuthPath, "B", "utf8");
+      await expect(loadPreparedModelRuntimeAuth(retained, authScope)).resolves.toMatchObject({
+        authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:B" } } },
+      });
+      await expect(retained.loadFullModelCatalog!({ refresh: true })).resolves.toMatchObject({
+        entries: expect.arrayContaining([
+          expect.objectContaining({ id: "proof-refresh-3-sqlite-true-shared-true-unrelated-true" }),
+        ]),
+      });
+      const replaced = getPreparedModelRuntimeSnapshot({ ...siblingInput, config: nextConfig })!;
+      await expect(loadPreparedModelRuntimeAuth(replaced, authScope)).resolves.toMatchObject({
+        authStore: { profiles: { [EXTERNAL_AUTH_PROFILE_ID]: { access: "v1:B" } } },
+      });
+    } finally {
+      fs.rmSync(`${fixture.marker}.hold`, { force: true });
+      await Promise.allSettled([inFlight]);
+    }
+  });
+
   it.each([
     ["gateway", "catalog"],
     ["gateway", "auth-refresh"],
@@ -763,48 +897,61 @@ describe("prepared model catalog worker boundary", () => {
   });
 
   it("shares in-flight discovery, caches completion, and explicitly refreshes prepared facts", async () => {
-    const fixture = await createStaticSnapshot(750);
+    const fixture = await createReadyWorkerFixture(750);
     let settled = false;
     const first = fixture.snapshot.loadFullModelCatalog?.().finally(() => {
       settled = true;
     });
     const second = fixture.snapshot.loadFullModelCatalog?.();
-    await waitForMarker(fixture.marker);
+    const completion = Promise.all([first, second]);
+    void completion.catch(() => {});
+    try {
+      await waitForMarker(fixture.marker);
 
-    expect(settled).toBe(false);
-    const [catalog, sharedCatalog] = await Promise.all([first, second]);
-    expect(sharedCatalog).toBe(catalog);
-    expect(catalog?.entries).toContainEqual(
-      expect.objectContaining({
-        provider: PROVIDER_ID,
-        id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
-      }),
-    );
-    await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
-    await expect(fixture.snapshot.loadFullModelCatalog?.({ refresh: true })).resolves.toEqual(
-      expect.objectContaining({
-        entries: expect.arrayContaining([
-          expect.objectContaining({
-            provider: PROVIDER_ID,
-            id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
-          }),
-        ]),
-      }),
-    );
-    expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");
+      expect(settled).toBe(false);
+      const [catalog, sharedCatalog] = await completion;
+      expect(sharedCatalog).toBe(catalog);
+      expect(catalog?.entries).toContainEqual(
+        expect.objectContaining({
+          provider: PROVIDER_ID,
+          id: "proof-refresh-1-sqlite-true-shared-true-unrelated-true",
+        }),
+      );
+      await expect(fixture.snapshot.loadFullModelCatalog?.()).resolves.toBe(catalog);
+      await expect(fixture.snapshot.loadFullModelCatalog?.({ refresh: true })).resolves.toEqual(
+        expect.objectContaining({
+          entries: expect.arrayContaining([
+            expect.objectContaining({
+              provider: PROVIDER_ID,
+              id: "proof-refresh-2-sqlite-true-shared-true-unrelated-true",
+            }),
+          ]),
+        }),
+      );
+      expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\ndone\nstart\ndone\n");
+    } finally {
+      fixture.supersede();
+      await Promise.allSettled([completion]);
+    }
   });
 
   it("terminates discovery when its owning generation is superseded", async () => {
-    const fixture = await createStaticSnapshot(10_000);
+    const fixture = await createReadyWorkerFixture(10_000);
     const catalog = fixture.snapshot.loadFullModelCatalog?.();
-    await waitForMarker(fixture.marker);
-    fixture.supersede();
+    void catalog?.catch(() => {});
+    try {
+      await waitForMarker(fixture.marker);
+      fixture.supersede();
 
-    await expect(catalog).rejects.toThrow("superseded");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
-    });
-    expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\n");
+      await expect(catalog).rejects.toThrow("superseded");
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 100);
+      });
+      expect(fs.readFileSync(fixture.marker, "utf8")).toBe("start\n");
+    } finally {
+      fixture.supersede();
+      await Promise.allSettled([catalog]);
+    }
   });
 
   it("preserves ref-only api-key and token profiles through the real worker", async () => {

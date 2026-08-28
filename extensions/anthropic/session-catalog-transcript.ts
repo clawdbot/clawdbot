@@ -66,7 +66,7 @@ export function parseTranscriptLine(
   } catch {
     return undefined;
   }
-  if (!isRecord(raw) || raw.isSidechain === true || !isRecord(raw.message)) {
+  if (!isRecord(raw) || raw.isSidechain === true || raw.isMeta === true || !isRecord(raw.message)) {
     return undefined;
   }
   const role = raw.message.role;

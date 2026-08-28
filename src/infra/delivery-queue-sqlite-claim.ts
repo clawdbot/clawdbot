@@ -4,6 +4,7 @@ import {
   upsertDeliveryQueueEntry,
   type DeliveryQueueEntryState,
 } from "./delivery-queue-sqlite.js";
+import { hasLiveDeliveryQueueClaim } from "./delivery-queue-sqlite.types.js";
 import { generateSecureUuid } from "./secure-random.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 
@@ -161,18 +162,10 @@ export function renewDeliveryQueueEntryPlatformSendLease(
     () => {
       const entry = loadDeliveryQueueEntry(params.queueName, params.id, params.stateDir);
       const now = Date.now();
-      const exactOwner =
-        entry?.recoveryState === "producer_claimed"
-          ? entry.producerClaimId === params.claimId
-          : (entry?.recoveryState === "send_attempt_started" ||
-              entry?.recoveryState === "unknown_after_send") &&
-            entry.platformSendAttemptId === params.claimId;
       if (
         !entry ||
         entry.requiresProducerClaim !== true ||
-        !exactOwner ||
-        typeof entry.availableAt !== "number" ||
-        entry.availableAt <= now
+        !hasLiveDeliveryQueueClaim(entry, params.claimId, now)
       ) {
         return undefined;
       }
@@ -202,9 +195,7 @@ export function promoteDeliveryQueueEntryPlatformSend(
 ): boolean {
   return transitionDeliveryQueueEntryPlatformSend(params, "promote", (entry, now) =>
     entry.recoveryState === "producer_claimed" &&
-    entry.producerClaimId === params.claimId &&
-    typeof entry.availableAt === "number" &&
-    entry.availableAt > now
+    hasLiveDeliveryQueueClaim(entry, params.claimId, now)
       ? {
           ...entry,
           // Only an explicitly leased owner keeps its cross-process fence;
@@ -231,18 +222,7 @@ export function dispatchDeliveryQueueEntryPlatformSend(
   },
 ): boolean {
   return transitionDeliveryQueueEntryPlatformSend(params, "dispatch", (entry, now) => {
-    const producerOwned =
-      entry.recoveryState === "producer_claimed" &&
-      entry.producerClaimId === params.claimId &&
-      typeof entry.availableAt === "number" &&
-      entry.availableAt > now;
-    const attemptOwned =
-      (entry.recoveryState === "send_attempt_started" ||
-        entry.recoveryState === "unknown_after_send") &&
-      entry.platformSendAttemptId === params.claimId &&
-      (entry.requiresProducerClaim !== true ||
-        (typeof entry.availableAt === "number" && entry.availableAt > now));
-    if (!producerOwned && !attemptOwned) {
+    if (!hasLiveDeliveryQueueClaim(entry, params.claimId, now)) {
       return undefined;
     }
     return {
@@ -251,7 +231,7 @@ export function dispatchDeliveryQueueEntryPlatformSend(
       // atomically; later batch dispatches retain stronger unknown-after-send evidence.
       availableAt:
         entry.requiresProducerClaim === true
-          ? producerOwned
+          ? entry.recoveryState === "producer_claimed"
             ? now + PLATFORM_SEND_OWNER_LEASE_MS
             : entry.availableAt
           : undefined,

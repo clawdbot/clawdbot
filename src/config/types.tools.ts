@@ -182,7 +182,7 @@ export type CodeModeConfig =
   | boolean
   | "auto"
   | {
-      /** Enable generic OpenClaw code mode. Default: false when Code Mode is otherwise unconfigured; an options object without this field preserves the "auto" tier. */
+      /** Enable generic OpenClaw code mode. Default: false. "auto" engages only models whose catalog flags `codeMode: "preferred"`. */
       enabled?: boolean | "auto";
       /** Guest runtime. Only quickjs-wasi is supported. */
       runtime?: "quickjs-wasi";
@@ -306,6 +306,13 @@ export type ExecToolConfig = {
   strictInlineEval?: boolean;
   /** Render parser-derived command highlights in exec approval prompts (default: false). */
   commandHighlighting?: boolean;
+  /**
+   * Default lifetime, in days, stamped onto standing grants minted by
+   * allow-always on automation approvals. Unset means grants live until
+   * revoked or the owning job changes. Terms freeze at mint; changing this
+   * affects only future grants.
+   */
+  grantExpiryDays?: number;
   /** Extra explicit directories trusted for safeBins path checks (never derived from PATH). */
   safeBinTrustedDirs?: string[];
   /** Optional custom safe-bin profiles for entries in tools.exec.safeBins. */

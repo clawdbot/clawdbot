@@ -350,6 +350,8 @@ private func configuredModelResponse(id: String) -> Data {
         """.utf8)
 }
 
+/// Poll on the progress owner's executor; do not exhaust the wait while its work is queued.
+@MainActor
 private func waitForAISetupRequests(
     _ recorder: AISetupRequestRecorder,
     count: Int) async -> (methods: [String], apiKeys: [String], authChoices: [String])

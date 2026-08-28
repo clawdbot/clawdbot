@@ -22,8 +22,82 @@ function projectHistoryTransports(message: Record<string, unknown>) {
   return [websocket, sse];
 }
 
+describe("managed document chat history", () => {
+  it("keeps the attachment envelope while stripping URL capabilities", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "attachment",
+          attachment: {
+            artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+            kind: "document",
+            label: "report.csv",
+            mimeType: "text/csv",
+            sizeBytes: 12,
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full?mediaTicket=secret",
+          },
+        },
+      ],
+    };
+
+    expect(sanitizeChatHistoryMessages([message])).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              artifactId: "artifact_managed_media_11111111-1111-4111-8111-111111111111",
+              kind: "document",
+              label: "report.csv",
+              mimeType: "text/csv",
+              sizeBytes: 12,
+              url: "/api/chat/media/outgoing/agent%3Amain%3Amain/11111111-1111-4111-8111-111111111111/full",
+            },
+          },
+        ],
+      },
+    ]);
+  });
+
+  it("sanitizes attachment capabilities after another field already changed", () => {
+    const message = {
+      role: "assistant",
+      content: [
+        {
+          type: "attachment",
+          thinkingSignature: "private-reasoning-signature",
+          attachment: {
+            kind: "document",
+            label: "report.csv",
+            path: "/tmp/private-report.csv",
+            url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full?mediaTicket=secret",
+          },
+        },
+      ],
+    };
+
+    expect(sanitizeChatHistoryMessages([message])).toEqual([
+      {
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              kind: "document",
+              label: "report.csv",
+              url: "/api/chat/media/outgoing/agent%3Amain%3Amain/id/full",
+            },
+          },
+        ],
+      },
+    ]);
+  });
+});
+
 describe("oversized multimodal chat history", () => {
-  it("projects one mixed-media message through every history boundary", async () => {
+  it("keeps legacy image, audio, and video transcript blocks through every history boundary", async () => {
     const inlineImage = Buffer.from("inline image").toString("base64");
     const inlineAudio = Buffer.from("inline audio").toString("base64");
     const inlineVideo = Buffer.from("inline video").toString("base64");
@@ -89,6 +163,12 @@ describe("oversized multimodal chat history", () => {
         role: "user",
         content: expected[0]?.content,
       });
+      expect((messages[0] as { content?: unknown[] }).content).toEqual([
+        expect.objectContaining({ type: "text" }),
+        expect.objectContaining({ type: "image", mimeType: "image/png" }),
+        expect.objectContaining({ type: "audio", mimeType: "audio/wav" }),
+        expect.objectContaining({ type: "video", mimeType: "video/mp4" }),
+      ]);
       const serialized = JSON.stringify(messages);
       for (const secret of [
         inlineImage,
@@ -796,6 +876,38 @@ describe("chat display message-tool projection", () => {
 });
 
 describe("chat display tool-result detail projection", () => {
+  it.each([
+    [
+      { targetId: "tab-1", url: "https://example.com", title: "Example", extra: "drop" },
+      { targetId: "tab-1", url: "https://example.com", title: "Example" },
+    ],
+    [
+      {
+        targetId: "x".repeat(127) + "😀",
+        url: "u".repeat(2047) + "😀",
+        title: "t".repeat(511) + "😀",
+      },
+      { targetId: "x".repeat(127), url: "u".repeat(2047), title: "t".repeat(511) },
+    ],
+    [{ targetId: "tab-1", url: 42, title: [] }, { targetId: "tab-1" }],
+    [null, undefined],
+    [[], undefined],
+    ["tab-1", undefined],
+    [{}, undefined],
+    [{ targetId: 1 }, undefined],
+    [{ targetId: "  " }, undefined],
+  ])("projects only bounded browser tab descriptor fields (%j)", (browserTab, expected) => {
+    const result = { type: "toolResult", toolName: "browser", details: { browserTab } };
+    const [standalone, nested] = sanitizeChatHistoryMessages([
+      { role: "toolResult", ...result },
+      { role: "assistant", content: [result] },
+    ]) as Array<Record<string, unknown>>;
+    const block = (nested?.content as Array<Record<string, unknown>> | undefined)?.[0];
+    for (const projected of [standalone, block]) {
+      expect(projected?.details).toEqual(expected ? { browserTab: expected } : undefined);
+    }
+  });
+
   it("omits opaque provider replay state from display history", () => {
     const [message] = sanitizeChatHistoryMessages([
       {

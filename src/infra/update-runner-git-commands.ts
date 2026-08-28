@@ -27,17 +27,13 @@ function resolveBuildNodeOptions(baseOptions: string | undefined): string {
 }
 
 export function resolveBuildEnv(
-  env?: NodeJS.ProcessEnv,
+  env: NodeJS.ProcessEnv = process.env,
   buildCacheRoot?: string,
-): NodeJS.ProcessEnv | undefined {
-  const currentNodeOptions = env?.NODE_OPTIONS ?? process.env.NODE_OPTIONS;
-  const nextNodeOptions = resolveBuildNodeOptions(currentNodeOptions);
-  if (nextNodeOptions === currentNodeOptions && !buildCacheRoot) {
-    return env;
-  }
+): NodeJS.ProcessEnv {
   return {
     ...env,
-    NODE_OPTIONS: nextNodeOptions,
+    OPENCLAW_UPDATE_IN_PROGRESS: "1",
+    NODE_OPTIONS: resolveBuildNodeOptions(env.NODE_OPTIONS ?? process.env.NODE_OPTIONS),
     ...(buildCacheRoot ? { BUILD_ALL_CACHE_ROOT: buildCacheRoot } : {}),
   };
 }

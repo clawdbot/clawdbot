@@ -4,8 +4,8 @@ export {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
   readChannelContextAdmissionEvidence,
-  registerChannelAdmissionEvidenceOwner,
 } from "../channels/message-access/admission-evidence.js";
+export { registerChannelIngressHostOwner } from "../channels/message-access/ingress-host-owner.js";
 export {
   createChannelIngressQueue as createChannelIngressQueueForTests,
   listChannelIngressQueueAccountIds as listChannelIngressQueueAccountIdsForTests,

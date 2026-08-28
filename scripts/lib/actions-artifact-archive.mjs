@@ -738,9 +738,12 @@ export function validateActionsArtifactBinding(params) {
     }
   } else if (expected.runAttempt === expected.consumerRunAttempt) {
     // Environment protection reports the active workflow as waiting until the
-    // approval transition propagates, even while the approved consumer runs.
-    if (!ACTIVE_SAME_RUN_STATUSES.has(run.status) || run.conclusion !== null) {
-      throw new Error("Current producer workflow attempt must still be active.");
+    // approval transition propagates. A failed attempt remains usable only
+    // because same-run policy separately requires its exact producer job to succeed.
+    const active = ACTIVE_SAME_RUN_STATUSES.has(run.status) && run.conclusion === null;
+    const failed = run.status === "completed" && run.conclusion === "failure";
+    if (!active && !failed) {
+      throw new Error("Current producer workflow attempt must still be active or failed.");
     }
   } else if (
     run.status !== "completed" ||

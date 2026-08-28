@@ -32,12 +32,14 @@ describe("typeface presentation", () => {
     ["beacon", ["atkinson-hyperlegible", "atkinson-hyperlegible"]],
     ["phosphor", ["jetbrains-mono", "jetbrains-mono"]],
     ["custom", ["system", "system"]],
-  ] as const)("loads only %s's default faces", (theme, [ui, chat]) => {
+  ] as const)("loads %s's default faces plus the shared mono face", (theme, [ui, chat]) => {
     const faces = resolveTypefaces(theme);
     expect(faces).toEqual({ ui, chat });
     syncTypefaceStylesheets(faces);
+    // The mono face is always declared: base.css --mono promises JetBrains
+    // Mono for code spans on every theme; its woff2 still downloads lazily.
     expect(hrefs()).toEqual(
-      [...new Set([ui, chat])]
+      [...new Set([ui, chat, "jetbrains-mono"])]
         .filter((face) => face !== "system")
         .map((face) => `/fonts/${face}.css`),
     );
@@ -45,11 +47,11 @@ describe("typeface presentation", () => {
 
   it("loads overrides once, retaining them without fetching for system or custom defaults", () => {
     syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
-    expect(hrefs()).toEqual([]);
+    expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css"]);
     const faces = resolveTypefaces("dash", "geist", "lora");
     expect(faces).toEqual({ ui: "geist", chat: "lora" });
     syncTypefaceStylesheets(faces);
-    expect(hrefs()).toEqual(["/fonts/geist.css", "/fonts/lora.css"]);
+    expect(hrefs()).toEqual(["/fonts/jetbrains-mono.css", "/fonts/geist.css", "/fonts/lora.css"]);
     expect(resolveTypefaces("custom", "lora")).toEqual({ ui: "lora", chat: "system" });
     const loaded = fontLinks();
     for (const next of [

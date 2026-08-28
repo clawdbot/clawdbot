@@ -36,10 +36,13 @@ vi.mock("../config/plugin-auto-enable.js", () => ({
 
 vi.mock("../config/io.plugin-metadata.js", () => ({
   resolveConfigWidePluginManifestRegistry: () => ({ plugins: [], diagnostics: [] }),
+  resolveConfigWidePluginMetadataSnapshot: (...args: unknown[]) =>
+    mocks.resolvePluginMetadataSnapshot(...args),
 }));
 
 vi.mock("./plugin-metadata-snapshot.js", () => ({
   isPluginMetadataSnapshotCompatible: () => true,
+  projectPluginMetadataSnapshot: (snapshot: unknown) => snapshot,
   rebasePluginMetadataSnapshotManifestRegistry: <T>(snapshot: T) => snapshot,
   resolvePluginMetadataSnapshot: (...args: unknown[]) =>
     mocks.resolvePluginMetadataSnapshot(...args),

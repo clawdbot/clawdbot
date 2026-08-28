@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { FailoverError } from "../../agents/failover-error.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
+import type { SessionParticipantIdentity } from "../../config/sessions/session-participant-identity.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
+import { prepareSessionParticipantInput } from "../../sessions/session-participant-input.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { getReplyPayloadMetadata } from "../reply-payload.js";
@@ -358,68 +360,69 @@ describe("runReplyAgent runtime config", () => {
     expect(memoryCall.runtimePolicySessionKey).toBe(runtimePolicySessionKey);
   });
 
-  it("forwards co-author context only for trusted profile-backed session creation", async () => {
-    const attribution =
-      "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
-    prepareGitCoauthorAttributionMock.mockImplementation((params: { currentProfileId?: string }) =>
-      params.currentProfileId === "profile-ada" ? attribution : undefined,
-    );
-    runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
-    await withTestDir({ prefix: "openclaw-coauthor-owner-" }, async (tempDir) => {
-      const storePath = join(tempDir, "sessions.json");
-      const runCase = async (
-        suffix: string,
-        creation: NonNullable<TemplateContext["SessionCreation"]>,
-      ) => {
+  it.each([
+    { identity: { type: "profile", id: "profile-ada" }, expectedProfileId: "profile-ada" },
+    {
+      identity: {
+        type: "remote",
+        pluginId: "slack",
+        domain: "workspace",
+        idKind: "user",
+        id: "profile-ada",
+      },
+      expectedProfileId: undefined,
+    },
+    { identity: undefined, expectedProfileId: undefined },
+  ] satisfies Array<{
+    identity: SessionParticipantIdentity | undefined;
+    expectedProfileId: string | undefined;
+  }>)(
+    "takes co-author context from accepted input $identity, not the session creator",
+    async ({ identity, expectedProfileId }) => {
+      const attribution =
+        "Git commit attribution for this turn:\nCo-authored-by: octocat <583231+octocat@users.noreply.github.com>";
+      prepareGitCoauthorAttributionMock.mockImplementation(
+        (params: { currentProfileId?: string }) =>
+          params.currentProfileId === "profile-ada" ? attribution : undefined,
+      );
+      runSessionCompactionIfNeededMock.mockResolvedValue(undefined);
+      await withTestDir({ prefix: "openclaw-coauthor-input-" }, async (tempDir) => {
+        const storePath = join(tempDir, "sessions.json");
+        const sessionKey = "agent:main:chat:attribution";
+        const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
         const { replyParams } = createDirectRuntimeReplyParams({
           shouldFollowup: false,
           isActive: false,
         });
-        const sessionKey = `agent:main:chat:${suffix}`;
-        const sessionEntry: SessionEntry = { sessionId: "session-1", updatedAt: 1 };
-        Object.assign(replyParams, {
-          sessionKey,
-          storePath,
-          sessionEntry,
-          sessionStore: { [sessionKey]: sessionEntry },
-          sessionCtx: { ...createTelegramSessionCtx(), SessionCreation: creation },
-        });
+        replyParams.sessionKey = sessionKey;
+        replyParams.storePath = storePath;
+        replyParams.sessionEntry = sessionEntry;
+        replyParams.sessionStore = { [sessionKey]: sessionEntry };
+        replyParams.sessionCtx.SessionCreation = {
+          via: "operator",
+          actor: { type: "human", id: "profile-creator" },
+        };
+        if (identity) {
+          prepareSessionParticipantInput(replyParams.sessionCtx, identity, 1);
+        }
         await replaceSessionEntry({ storePath, sessionKey }, sessionEntry);
         await runReplyAgent(replyParams);
-        return executeAgentTurnMock.mock.calls.at(-1)?.[0];
-      };
-
-      const profileCall = await runCase("profile", {
-        via: "operator",
-        actor: { type: "human", id: "profile-ada" },
+        expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
+          agentId: "main",
+          config: freshCfg,
+          currentProfileId: expectedProfileId,
+          sessionKey,
+          storePath,
+        });
+        const call = executeAgentTurnMock.mock.calls.at(-1)?.[0];
+        if (expectedProfileId) {
+          expect(call).toMatchObject({ opts: { gitCoauthorAttribution: attribution } });
+        } else {
+          expect(call).not.toHaveProperty("opts.gitCoauthorAttribution");
+        }
       });
-
-      expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
-        agentId: "main",
-        config: freshCfg,
-        currentProfileId: "profile-ada",
-        sessionKey: "agent:main:chat:profile",
-        storePath,
-      });
-      expect(profileCall).toMatchObject({
-        opts: { gitCoauthorAttribution: attribution },
-      });
-
-      const channelCall = await runCase("channel", {
-        via: "channel",
-        actor: { type: "human", id: "channel-user" },
-      });
-
-      expect(prepareGitCoauthorAttributionMock).toHaveBeenLastCalledWith({
-        agentId: "main",
-        config: freshCfg,
-        currentProfileId: undefined,
-        sessionKey: "agent:main:chat:channel",
-        storePath,
-      });
-      expect(channelCall).not.toHaveProperty("opts.gitCoauthorAttribution");
-    });
-  });
+    },
+  );
 
   it("continues the main reply after a recorded memory-flush failure", async () => {
     const { replyParams } = createDirectRuntimeReplyParams({

@@ -224,7 +224,7 @@ function createStartOptions(
   };
 }
 
-const EPHEMERAL_AUTH_ARGS = ["app-server", "-c", 'cli_auth_credentials_store="ephemeral"'];
+const EPHEMERAL_AUTH_ARGS = ["-c", 'cli_auth_credentials_store="ephemeral"', "app-server"];
 
 async function expectPathMissing(filePath: string): Promise<void> {
   try {
@@ -777,9 +777,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
       expect(bridged.args).toEqual([
         "-c",
         'cli_auth_credentials_store="keyring"',
-        "app-server",
         "-c",
         'cli_auth_credentials_store="ephemeral"',
+        "app-server",
       ]);
     });
   });
@@ -795,9 +795,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
       expect(bridged.args).toEqual([
         "--profile",
         "app-server",
-        "app-server",
         "-c",
         'cli_auth_credentials_store="ephemeral"',
+        "app-server",
       ]);
     });
   });

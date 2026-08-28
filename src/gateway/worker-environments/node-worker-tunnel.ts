@@ -209,6 +209,7 @@ export function createNodeWorkerTunnelManager(options: NodeWorkerTunnelManagerOp
       timeoutMs: commandTimeoutMs,
       ...(command.resetWorkspace === undefined ? {} : { resetWorkspace: command.resetWorkspace }),
       ...(command.transfer === undefined ? {} : { transfer: command.transfer }),
+      ...(command.seed === undefined ? {} : { seed: command.seed }),
     };
     while (true) {
       if (!isEnvironmentOwner(entry)) {
