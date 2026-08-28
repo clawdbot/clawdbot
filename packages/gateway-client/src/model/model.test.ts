@@ -268,7 +268,7 @@ describe("Control Model session catalog", () => {
     harness.requests[1]?.resolve({ sessions: [] });
     await refresh;
     await flushMicrotasks();
-    harness.requests[2]?.resolve({ sessions: [] });
+    expect(harness.requests).toHaveLength(2);
   });
 
   it("publishes structured request failures", async () => {
@@ -290,6 +290,16 @@ describe("Control Model session catalog", () => {
       message: "temporarily unavailable",
       retryable: true,
     });
+  });
+
+  it("rejects refreshes even when the gateway rejects without a reason", async () => {
+    const harness = createGatewayHarness();
+    const model = createControlModel({ gateway: harness.gateway });
+    const refresh = model.refreshSessions();
+    harness.requests[0]?.reject(undefined);
+
+    await expect(refresh).rejects.toThrow("Session catalog refresh failed");
+    expect(model.getSnapshot().sessionCatalog.status).toBe("error");
   });
 
   it("isolates throwing and slow subscribers from event delivery", async () => {

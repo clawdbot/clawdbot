@@ -276,6 +276,9 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         }
         const queued = entry.queued;
         entry.queued = null;
+        if (queued && pageActive) {
+          entry.coordinator.absorb();
+        }
         next = pageActive ? queued : null;
       }
     };
