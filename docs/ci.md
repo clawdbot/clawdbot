@@ -93,6 +93,14 @@ Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings
 
 Run the timing helper locally; there is no in-workflow timing-summary job (a permanently disabled one was removed once the local helper became the tool everyone actually used). For build timing, check the `build-artifacts` job's `Build dist` step: `pnpm build:ci-artifacts` prints `[build-all] phase timings:` and includes `ui:build`; the job also uploads the `startup-memory` artifact.
 
+Local `pnpm build:ci-artifacts` uses the same memory admission as full and package
+builds. The orchestrator passes the resolved heap budget to every child process,
+including the SDK declaration writer, so local builds do not depend on CI's
+`NODE_OPTIONS` setting. The existing policy accounts for host and cgroup limits
+and reserves native-memory headroom. If the default budget cannot fit the build,
+it stops before build steps or cache restoration; `OPENCLAW_TSDOWN_MAX_OLD_SPACE_MB`
+remains the explicit operator override for attempting a different budget.
+
 ## PR context and evidence
 
 External contributor PRs run a PR context and evidence gate from

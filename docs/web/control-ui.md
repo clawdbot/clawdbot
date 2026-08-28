@@ -388,8 +388,8 @@ select it to open the owning Approvals page.
     - Selecting a row opens a full-page detail view with an Active/Paused switch and Run now in the header (run-if-due, clone, and remove in its menu); the Settings tab edits the automation inline (prompt, details, frequency, advanced overrides) and the Run history tab shows that automation's runs.
     - Both Run history views show a recorded delivery-suppression reason alongside the delivery status when available. Intentional suppression remains separate from delivery errors; the history does not infer a reason from a successful run.
     - Starter automations under the table prefill the create form with an editable prompt and schedule.
-    - For isolated tasks, delivery defaults to announce summary; switch to none for internal-only runs.
-    - Channel/target fields appear when announce is selected.
+    - New isolated tasks default to internal-only delivery. Select announce explicitly to send a summary to a channel.
+    - Channel/target fields appear when announce is selected; provide an explicit destination when the channel requires one.
     - Webhook mode uses `delivery.mode = "webhook"` with `delivery.to` set to a valid HTTP(S) webhook URL.
     - For main-session tasks, webhook and none delivery modes are available.
     - Advanced edit controls include delete-after-run, clear agent override, cron exact/stagger options, agent model/thinking overrides, and best-effort delivery toggles.

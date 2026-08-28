@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import {
   needsStateMigrationCheckpoint,
@@ -24,6 +24,10 @@ import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fi
 import { writeManagedNpmPlugin } from "./test-helpers/managed-npm-plugin.js";
 
 const tempDirs: string[] = [];
+
+beforeEach(() => {
+  clearPluginMetadataLifecycleCaches();
+});
 
 afterEach(() => {
   clearPluginDoctorContractRegistryCache();
@@ -131,6 +135,7 @@ module.exports = {
 `,
       "utf8",
     );
+    clearPluginMetadataLifecycleCaches();
 
     const refreshed = loadPluginMetadataSnapshot({ config: {}, env, stateDir });
     const refreshedPlugin = requirePlugin(refreshed, pluginId);
