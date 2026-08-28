@@ -92,18 +92,20 @@ function toJsonLike(value: unknown, seen = new WeakSet<object>()): JsonLike {
     return "[Circular]";
   }
   seen.add(value);
-  const jsonValue: JsonLike = Array.isArray(value)
-    ? value.map((item) => toJsonLike(item, seen))
-    : Object.fromEntries(
-        Object.entries(value)
-          .filter(
-            ([, entry]) =>
-              entry !== undefined && typeof entry !== "function" && typeof entry !== "symbol",
-          )
-          .map(([key, entry]) => [key, toJsonLike(entry, seen)] as const),
-      );
+  if (Array.isArray(value)) {
+    const jsonArray = value.map((item) => toJsonLike(item, seen));
+    seen.delete(value);
+    return jsonArray;
+  }
+  const jsonObject: Record<string, JsonLike> = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (entry === undefined || typeof entry === "function" || typeof entry === "symbol") {
+      continue;
+    }
+    jsonObject[key] = toJsonLike(entry, seen);
+  }
   seen.delete(value);
-  return jsonValue;
+  return jsonObject;
 }
 
 function buildApprovalWaitState(envelope: Extract<LobsterEnvelope, { ok: true }>): JsonLike {

@@ -93,6 +93,9 @@ describe("runManagedLobsterFlow", () => {
     const objectArrayCycle: Record<string, unknown> = {};
     objectArrayCycle.items = [objectArrayCycle];
     const shared = { id: "shared" };
+    const protoEntry: Record<string, unknown> = JSON.parse(
+      '{"__proto__":{"polluted":true},"kept":"value"}',
+    );
     const runner = createRunner({
       ok: true,
       status: "needs_approval",
@@ -114,6 +117,7 @@ describe("runManagedLobsterFlow", () => {
               function: () => true,
               symbol: Symbol("skip"),
             },
+            protoEntry,
             arrayValues: [undefined, () => true, Symbol("skip"), Number.NaN],
           },
         ],
@@ -140,6 +144,7 @@ describe("runManagedLobsterFlow", () => {
             infinity: "Infinity",
             count: "2",
             omitted: { kept: true },
+            protoEntry: { kept: "value" },
             arrayValues: [null, null, null, "NaN"],
           },
         ],
