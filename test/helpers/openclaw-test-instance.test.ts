@@ -18,7 +18,17 @@ const RESTART_MARKER =
 const fakeInstances: Awaited<ReturnType<typeof createOpenClawTestInstance>>[] = [];
 const fakeRoots: string[] = [];
 const fakeOperations: Promise<unknown>[] = [];
-const fakeControls: Awaited<ReturnType<typeof createGatewayControl>>[] = [];
+const fakeControls: FakeGatewayControl[] = [];
+
+type FakeGatewayControl = {
+  url: string;
+  reached: Promise<void>;
+  launches: number[];
+  observers: { beforeRelease: () => void; onLaunch: () => void };
+  unblock: () => void;
+  release: () => Promise<void>;
+  close: () => Promise<void>;
+};
 
 type FakeGatewayAttempt = {
   argv: string[];
@@ -71,7 +81,7 @@ function trackOperation<T>(operation: Promise<T>): Promise<T> {
   return operation;
 }
 
-async function createGatewayControl() {
+async function createGatewayControl(): Promise<FakeGatewayControl> {
   const reached = createDeferred<void>();
   const released = createDeferred<void>();
   const launches: number[] = [];
