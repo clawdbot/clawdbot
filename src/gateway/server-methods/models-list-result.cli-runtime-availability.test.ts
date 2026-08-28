@@ -51,15 +51,18 @@ describe("models.list CLI runtime availability", () => {
   });
 
   it.each([
-    { authenticated: true, pluginDisabled: false, available: true },
-    { authenticated: false, pluginDisabled: false, available: false },
-    { authenticated: true, pluginDisabled: true, available: false },
+    { authenticated: true, pluginDisabled: false, available: true, reason: undefined },
+    { authenticated: false, pluginDisabled: false, available: false, reason: undefined },
+    { authenticated: true, pluginDisabled: true, available: false, reason: "missing-auth" },
   ])(
     "reports native login=$authenticated and plugin disabled=$pluginDisabled",
     async (scenario) => {
-      await expect(listClaudeCliModel(scenario)).resolves.toEqual({
+      const result = await listClaudeCliModel(scenario);
+      expect(result).toEqual({
         models: [expect.objectContaining({ id: "claude-opus-5", available: scenario.available })],
       });
+      expect(result.models[0]?.unavailableReason).toBe(scenario.reason);
+      expect(result.models[0]?.unavailableUntil).toBeUndefined();
     },
   );
   it("does not use synthetic auth when plugins are globally disabled", async () => {
