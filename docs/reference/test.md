@@ -230,6 +230,10 @@ If `pnpm test` flakes on a loaded host, rerun once before treating it as a regre
 - `pnpm test:perf:groups --full-suite --allow-failures --output .artifacts/test-perf/baseline-before.json`: runs every full-suite Vitest leaf config serially and writes grouped duration data plus per-config JSON/log artifacts. Full-suite reports isolate files by default so retained module graphs and GC pauses from earlier files are not charged to later assertions; pass `-- --no-isolate` only when intentionally profiling shared-worker accumulation. `pnpm test:perf:groups:compare .artifacts/test-perf/baseline-before.json .artifacts/test-perf/after-agent.json` compares grouped reports after a performance-focused change.
 - Full, extension, and include-pattern shard runs update local timing data in `.artifacts/vitest-shard-timings.json`; later whole-config runs use those timings to balance slow and fast shards. Include-pattern CI shards append the shard name to the timing key, which keeps filtered shard timings visible without replacing whole-config timing data. Set `OPENCLAW_TEST_PROJECTS_TIMINGS=0` to ignore the local timing artifact.
 
+`pnpm test:extensions:memory` profiles built plugin index entries from `dist/extensions` (including nested `dist` output) and package-local `extensions/<id>/dist` output; TypeScript source entries are excluded. Root artifacts take precedence when both builds exist. Selecting an already-built plugin with `--extension <id>` reuses its output without requiring unrelated plugin builds; build the plugin package first if its output is not supplied by `pnpm build`.
+
+Native imports also need the plugin's declared dependencies and a resolvable `openclaw` host package. The profiler does not install or link dependencies: missing dependencies remain import failures in the JSON report and cause a nonzero exit.
+
 ## Benchmarks
 
 <Accordion title="Model latency (scripts/bench-model.ts)">
