@@ -12,8 +12,11 @@ import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { createChannelReplayGuard } from "openclaw/plugin-sdk/persistent-dedupe";
 import { killProcessTree } from "openclaw/plugin-sdk/process-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
-import { WEBHOOK_BODY_READ_DEFAULTS } from "openclaw/plugin-sdk/webhook-request-guards";
-import { readJsonWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
+import {
+  readJsonBodyWithLimit,
+  sendHttpRequestRejection,
+  WEBHOOK_BODY_READ_DEFAULTS,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { RAFT_CHANNEL_ID, type ResolvedRaftAccount } from "./accounts.js";
 import { dispatchRaftWake } from "./inbound.js";
 
@@ -80,6 +83,8 @@ class WakeRequestError extends Error {
   constructor(
     readonly statusCode: number,
     message: string,
+    /** Body-limit rejections own the connection, so their answer goes through the transport. */
+    readonly closeAfterResponse = false,
   ) {
     super(message);
   }
@@ -128,20 +133,17 @@ function hasMatchingToken(request: IncomingMessage, expected: string): boolean {
   return safeEqualSecret(value, expected);
 }
 
-async function readWakePayload(
-  request: IncomingMessage,
-  response: ServerResponse,
-): Promise<Record<string, unknown>> {
-  const body = await readJsonWebhookBodyForResponse(request, response, {
+async function readWakePayload(request: IncomingMessage): Promise<Record<string, unknown>> {
+  const body = await readJsonBodyWithLimit(request, {
     ...WEBHOOK_BODY_READ_DEFAULTS.postAuthResponseFirst,
     maxBytes: MAX_WAKE_BODY_BYTES,
   });
   if (!body.ok) {
     if (body.code === "PAYLOAD_TOO_LARGE") {
-      throw new WakeRequestError(413, "Wake payload exceeds the 16 KiB limit.");
+      throw new WakeRequestError(413, "Wake payload exceeds the 16 KiB limit.", true);
     }
     if (body.code === "REQUEST_BODY_TIMEOUT") {
-      throw new WakeRequestError(408, body.error);
+      throw new WakeRequestError(408, body.error, true);
     }
     throw new WakeRequestError(
       400,
@@ -294,7 +296,7 @@ export async function startRaftGatewayAccount(
         return;
       }
 
-      const payload = await readWakePayload(request, response);
+      const payload = await readWakePayload(request);
       if (containsMessageContent(payload)) {
         throw new WakeRequestError(400, "Wake payload must not include message content.");
       }
@@ -337,15 +339,26 @@ export async function startRaftGatewayAccount(
         runtimeSession,
         ...(dispatched ? {} : { duplicate: true }),
       });
-    })().catch((error: unknown) => {
+    })().catch(async (error: unknown) => {
       const statusCode = error instanceof WakeRequestError ? error.statusCode : 500;
       const message = error instanceof WakeRequestError ? error.message : "Internal server error.";
       ctx.log?.warn?.(`Raft wake request rejected: ${message}`);
-      if (!response.headersSent) {
-        sendJson(response, statusCode, { error: message });
-      } else {
+      if (response.headersSent) {
         response.destroy();
+        return;
       }
+      if (error instanceof WakeRequestError && error.closeAfterResponse) {
+        response.setHeader("cache-control", "no-store");
+        await sendHttpRequestRejection(
+          request,
+          response,
+          statusCode,
+          JSON.stringify({ error: message }),
+          "application/json; charset=utf-8",
+        );
+        return;
+      }
+      sendJson(response, statusCode, { error: message });
     });
   });
   server.on("connection", (socket) => {

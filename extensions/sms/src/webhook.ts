@@ -6,6 +6,7 @@ import {
   isRequestBodyLimitError,
   resolveRequestClientIp,
 } from "openclaw/plugin-sdk/webhook-ingress";
+import { sendHttpRequestRejection } from "openclaw/plugin-sdk/webhook-request-guards";
 import {
   createSmsDeliveryRecorder,
   isTwilioDeliveryStatusForm,
@@ -17,6 +18,7 @@ import {
   resolveTwilioInboundSender,
   resolveTwilioMessageSid,
   resolveTwilioWebhookSignatureUrl,
+  TWIML_CONTENT_TYPE,
   verifyTwilioSignature,
 } from "./twilio.js";
 import type { ResolvedSmsAccount } from "./types.js";
@@ -124,10 +126,14 @@ export function createSmsWebhookHandler(params: SmsWebhookHandlerParams) {
 
     let form: Record<string, string>;
     try {
-      form = await readTwilioWebhookForm(req, res);
+      form = await readTwilioWebhookForm(req);
     } catch (error) {
       if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
-        respondTwiml(res, 413, "Payload too large");
+        await sendHttpRequestRejection(req, res, 413, "Payload too large", TWIML_CONTENT_TYPE);
+        return true;
+      }
+      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+        await sendHttpRequestRejection(req, res, 408, "Request body timeout", TWIML_CONTENT_TYPE);
         return true;
       }
       throw error;

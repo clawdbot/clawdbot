@@ -20,8 +20,9 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import {
   isRequestBodyLimitError,
-  readWebhookBodyForResponse,
+  readRequestBodyWithLimit,
   requestBodyErrorToText,
+  sendHttpRequestRejection,
 } from "../api.js";
 import type { OpenClawPluginApi } from "../api.js";
 import { isAllowlistedCaller, normalizePhoneNumber } from "./allowlist.js";
@@ -644,14 +645,17 @@ export class VoiceCallWebhookServer {
     webhookPath: string,
   ): Promise<void> {
     const payload = await this.runWebhookPipeline(req, webhookPath, res);
-    this.writeWebhookResponse(res, payload);
+    // A body-limit rejection already wrote its answer through the transport owner.
+    if (payload) {
+      this.writeWebhookResponse(res, payload);
+    }
   }
 
   private async runWebhookPipeline(
     req: http.IncomingMessage,
     webhookPath: string,
     res: http.ServerResponse,
-  ): Promise<WebhookResponsePayload> {
+  ): Promise<WebhookResponsePayload | null> {
     const url = buildRequestUrl(req.url);
 
     if (url.pathname === "/voice/hold-music") {
@@ -698,13 +702,20 @@ export class VoiceCallWebhookServer {
     try {
       let body = "";
       try {
-        body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS, res);
+        body = await this.readBody(req, MAX_WEBHOOK_BODY_BYTES, WEBHOOK_BODY_TIMEOUT_MS);
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-          return { statusCode: 413, body: "Payload Too Large" };
+          await sendHttpRequestRejection(req, res, 413, "Payload Too Large");
+          return null;
         }
         if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-          return { statusCode: 408, body: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") };
+          await sendHttpRequestRejection(
+            req,
+            res,
+            408,
+            requestBodyErrorToText("REQUEST_BODY_TIMEOUT"),
+          );
+          return null;
         }
         throw err;
       }
@@ -1020,9 +1031,9 @@ export class VoiceCallWebhookServer {
     req: http.IncomingMessage,
     maxBytes: number,
     timeoutMs: number,
-    res: http.ServerResponse,
   ): Promise<string> {
-    return readWebhookBodyForResponse(req, res, { maxBytes, timeoutMs });
+    // Defer destruction so a limit rejection can be answered before the close.
+    return readRequestBodyWithLimit(req, { maxBytes, timeoutMs, destroyOnLimit: false });
   }
 
   /**

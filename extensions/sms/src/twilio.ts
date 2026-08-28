@@ -8,7 +8,7 @@ import {
 } from "openclaw/plugin-sdk/response-limit-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
+import { readRequestBodyWithLimit } from "openclaw/plugin-sdk/webhook-request-guards";
 import { looksLikeSmsPhoneNumber, normalizeSmsPhoneNumber } from "./phone.js";
 import { resolveTwilioStatusCallbackUrl } from "./public-webhook-url.js";
 import type { ResolvedSmsAccount, SmsInboundMessage, SmsSendResult } from "./types.js";
@@ -296,20 +296,21 @@ export function resolveTwilioMessageSid(form: Record<string, string>): string {
   );
 }
 
-export async function readTwilioWebhookForm(
-  req: IncomingMessage,
-  res: ServerResponse,
-): Promise<Record<string, string>> {
-  const body = await readWebhookBodyForResponse(req, res, {
+export async function readTwilioWebhookForm(req: IncomingMessage): Promise<Record<string, string>> {
+  const body = await readRequestBodyWithLimit(req, {
     maxBytes: WEBHOOK_BODY_LIMIT_BYTES,
     timeoutMs: WEBHOOK_BODY_TIMEOUT_MS,
+    // Defer destruction so the webhook can answer 413 before the connection closes.
+    destroyOnLimit: false,
   });
   return parseTwilioFormBody(body);
 }
 
+export const TWIML_CONTENT_TYPE = "text/xml; charset=utf-8";
+
 export function respondTwiml(res: ServerResponse, statusCode: number, body = ""): void {
   res.statusCode = statusCode;
-  res.setHeader("content-type", "text/xml; charset=utf-8");
+  res.setHeader("content-type", TWIML_CONTENT_TYPE);
   res.end(body || "<Response></Response>");
 }
 

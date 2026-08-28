@@ -13,8 +13,13 @@ import type {
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceProviderCapabilities,
 } from "openclaw/plugin-sdk/realtime-voice";
-import { resolveAcceptedBrowserOrigin } from "openclaw/plugin-sdk/webhook-request-guards";
-import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
+import {
+  isRequestBodyLimitError,
+  readRequestBodyWithLimit,
+  resolveAcceptedBrowserOrigin,
+  requestBodyErrorToText,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import WebSocket, { type RawData } from "ws";
 import { OpenAIQuicksilverDelegationController } from "./realtime-quicksilver-delegation-controller.js";
 import {
@@ -445,9 +450,11 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
     };
     try {
       const offerStartedAt = Date.now();
-      const sdp = await readWebhookBodyForResponse(req, res, {
+      const sdp = await readRequestBodyWithLimit(req, {
         maxBytes: OPENAI_QUICKSILVER_MAX_SDP_BYTES,
         timeoutMs: 15_000,
+        // Defer destruction so the rejection below reaches the browser before the close.
+        destroyOnLimit: false,
       });
       if (!sdp.trim()) {
         respondText(res, 400, "SDP offer is required");
@@ -656,6 +663,19 @@ export function createOpenAIQuicksilverBrowserSessionBroker(params: {
         await activeSessionLease.close(session);
       }
       if (browserDisconnected) {
+        return true;
+      }
+      if (isRequestBodyLimitError(error, "PAYLOAD_TOO_LARGE")) {
+        await sendHttpRequestRejection(req, res, 413, requestBodyErrorToText("PAYLOAD_TOO_LARGE"));
+        return true;
+      }
+      if (isRequestBodyLimitError(error, "REQUEST_BODY_TIMEOUT")) {
+        await sendHttpRequestRejection(
+          req,
+          res,
+          408,
+          requestBodyErrorToText("REQUEST_BODY_TIMEOUT"),
+        );
         return true;
       }
       respondText(

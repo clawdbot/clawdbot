@@ -85,8 +85,12 @@ export type {
   QaLabServerStartParams,
 } from "./lab-server.types.js";
 
-function writeQaLabServerError(res: Parameters<typeof writeError>[0], error: unknown): void {
-  if (writeQaRequestBodyLimitError(res, error)) {
+async function writeQaLabServerError(
+  req: IncomingMessage,
+  res: Parameters<typeof writeError>[0],
+  error: unknown,
+): Promise<void> {
+  if (await writeQaRequestBodyLimitError(req, res, error)) {
     return;
   }
   if (isQaMalformedJsonBodyError(error)) {
@@ -669,7 +673,7 @@ export async function startQaLabServer(
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/capture/delete-sessions") {
-          const body = (await readQaJsonBody(req, res)) as { sessionIds?: unknown };
+          const body = (await readQaJsonBody(req)) as { sessionIds?: unknown };
           const sessionIds = Array.isArray(body.sessionIds)
             ? body.sessionIds.filter((value): value is string => typeof value === "string")
             : [];
@@ -704,7 +708,7 @@ export async function startQaLabServer(
           return;
         }
         if (req.method === "POST" && url.pathname === "/api/inbound/message") {
-          const body = await readQaJsonBody(req, res);
+          const body = await readQaJsonBody(req);
           writeJson(res, 200, {
             message: state.addInboundMessage(
               body as Parameters<QaBusState["addInboundMessage"]>[0],
@@ -741,7 +745,7 @@ export async function startQaLabServer(
           let adapterFactories: readonly QaTransportAdapterFactory[] | undefined;
           try {
             selection = normalizeQaRunSelection(
-              await readQaJsonBody(req, res),
+              await readQaJsonBody(req),
               scenarioCatalog.scenarios,
               scorecardReport.profiles,
             );
@@ -928,7 +932,7 @@ export async function startQaLabServer(
         }
         res.end(body);
       } catch (error) {
-        writeQaLabServerError(res, error);
+        await writeQaLabServerError(req, res, error);
       }
     });
   });

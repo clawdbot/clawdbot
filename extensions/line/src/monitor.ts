@@ -24,8 +24,9 @@ import {
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
+  readRequestBodyWithLimit,
+  sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
-import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 import { resolveDefaultLineAccountId } from "./accounts.js";
 import { deliverLineAutoReply } from "./auto-reply-delivery.js";
 import { createLineBot } from "./bot.js";
@@ -368,9 +369,11 @@ export async function monitorLineProvider(
             return;
           }
 
-          const rawBody = await readWebhookBodyForResponse(req, res, {
+          const rawBody = await readRequestBodyWithLimit(req, {
             maxBytes: LINE_WEBHOOK_PREAUTH_MAX_BODY_BYTES,
             timeoutMs: LINE_WEBHOOK_PREAUTH_BODY_TIMEOUT_MS,
+            // Defer destruction so the rejection below reaches LINE before the close.
+            destroyOnLimit: false,
           });
           const match = resolveSingleWebhookTarget(targets, (target) =>
             validateLineSignature(rawBody, signature, target.channelSecret),
@@ -409,15 +412,23 @@ export async function monitorLineProvider(
           res.end(JSON.stringify({ status: "ok" }));
         } catch (err) {
           if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-            res.statusCode = 413;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: "Payload too large" }));
+            await sendHttpRequestRejection(
+              req,
+              res,
+              413,
+              JSON.stringify({ error: "Payload too large" }),
+              "application/json",
+            );
             return;
           }
           if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-            res.statusCode = 408;
-            res.setHeader("Content-Type", "application/json");
-            res.end(JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }));
+            await sendHttpRequestRejection(
+              req,
+              res,
+              408,
+              JSON.stringify({ error: requestBodyErrorToText("REQUEST_BODY_TIMEOUT") }),
+              "application/json",
+            );
             return;
           }
           runtime.error?.(danger(`line webhook error: ${formatErrorMessage(err)}`));

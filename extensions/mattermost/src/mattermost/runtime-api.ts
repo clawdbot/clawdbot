@@ -33,5 +33,8 @@ export {
 } from "openclaw/plugin-sdk/reply-history";
 export { registerPluginHttpRoute } from "openclaw/plugin-sdk/webhook-targets";
 export { isRequestBodyLimitError } from "openclaw/plugin-sdk/webhook-ingress";
-export { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
+export {
+  readRequestBodyWithLimit,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 export { isTrustedProxyAddress, resolveClientIp } from "openclaw/plugin-sdk/core";

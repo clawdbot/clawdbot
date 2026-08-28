@@ -334,7 +334,6 @@
   "webhook-ingress",
   "webhook-targets",
   "webhook-request-guards",
-  "webhook-request-release",
   "web-media",
   "agent-core",
   "agent-sessions",

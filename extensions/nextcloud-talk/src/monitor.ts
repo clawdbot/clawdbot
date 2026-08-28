@@ -8,7 +8,10 @@ import {
   resolveRequestClientIp,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
+import {
+  readRequestBodyWithLimit,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { extractNextcloudTalkHeaders, verifyNextcloudTalkSignature } from "./signature.js";
 import type { NextcloudTalkWebhookHeaders, NextcloudTalkWebhookServerOptions } from "./types.js";
 import { NextcloudTalkWebhookPayloadError } from "./webhook-spool-state.js";
@@ -92,17 +95,27 @@ function verifyWebhookSignature(params: {
   return true;
 }
 
-function readNextcloudTalkWebhookBody(
-  req: IncomingMessage,
-  maxBodyBytes: number,
-  res: ServerResponse,
-): Promise<string> {
-  return readWebhookBodyForResponse(req, res, {
+function readNextcloudTalkWebhookBody(req: IncomingMessage, maxBodyBytes: number): Promise<string> {
+  return readRequestBodyWithLimit(req, {
     // This read happens before signature verification, so keep the unauthenticated
     // body budget bounded even if the operator-configured post-parse limit is larger.
     maxBytes: Math.min(maxBodyBytes, PREAUTH_WEBHOOK_MAX_BODY_BYTES),
     timeoutMs: PREAUTH_WEBHOOK_BODY_TIMEOUT_MS,
+    // Defer destruction so the rejections below reach the backend before the close.
+    destroyOnLimit: false,
   });
+}
+
+async function rejectWebhookRequest(
+  req: IncomingMessage,
+  res: ServerResponse,
+  status: number,
+  error: string,
+): Promise<void> {
+  if (res.headersSent) {
+    return;
+  }
+  await sendHttpRequestRejection(req, res, status, JSON.stringify({ error }), "application/json");
 }
 
 export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServerOptions): {
@@ -169,7 +182,7 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
           return;
         }
 
-        const body = await readBody(req, maxBodyBytes, res);
+        const body = await readBody(req, maxBodyBytes);
 
         const hasValidSignature = verifyWebhookSignature({
           headers,
@@ -197,11 +210,11 @@ export function createNextcloudTalkWebhookServer(opts: NextcloudTalkWebhookServe
         writeJsonResponse(res, 200);
       } catch (err) {
         if (isRequestBodyLimitError(err, "PAYLOAD_TOO_LARGE")) {
-          writeWebhookError(res, 413, WEBHOOK_ERRORS.payloadTooLarge);
+          await rejectWebhookRequest(req, res, 413, WEBHOOK_ERRORS.payloadTooLarge);
           return;
         }
         if (isRequestBodyLimitError(err, "REQUEST_BODY_TIMEOUT")) {
-          writeWebhookError(res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
+          await rejectWebhookRequest(req, res, 408, requestBodyErrorToText("REQUEST_BODY_TIMEOUT"));
           return;
         }
         if (err instanceof NextcloudTalkWebhookPayloadError) {

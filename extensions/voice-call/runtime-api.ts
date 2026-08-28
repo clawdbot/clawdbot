@@ -6,9 +6,10 @@ export type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 export type { GatewayRequestHandlerOptions } from "openclaw/plugin-sdk/gateway-runtime";
 export {
   isRequestBodyLimitError,
+  readRequestBodyWithLimit,
   requestBodyErrorToText,
+  sendHttpRequestRejection,
 } from "openclaw/plugin-sdk/webhook-request-guards";
-export { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
 export { fetchWithSsrFGuard, isBlockedHostnameOrIp } from "openclaw/plugin-sdk/ssrf-runtime";
 export type { SessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 export {

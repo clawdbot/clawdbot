@@ -5,7 +5,10 @@ import {
   isRequestBodyLimitError,
   requestBodyErrorToText,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { readWebhookBodyForResponse } from "openclaw/plugin-sdk/webhook-request-release";
+import {
+  readRequestBodyWithLimit,
+  sendHttpRequestRejection,
+} from "openclaw/plugin-sdk/webhook-request-guards";
 import { z } from "zod";
 import { normalizeAccountId, resolveQaBusPollStartCursor } from "./bus-queries.js";
 import type { QaBusState } from "./bus-state.js";
@@ -181,13 +184,14 @@ export function isQaMalformedJsonBodyError(error: unknown): error is Error {
 
 export async function readQaJsonBody(
   req: IncomingMessage,
-  res: ServerResponse,
   maxBytes = QA_HTTP_JSON_MAX_BODY_BYTES,
 ): Promise<unknown> {
   const text = (
-    await readWebhookBodyForResponse(req, res, {
+    await readRequestBodyWithLimit(req, {
       maxBytes,
       timeoutMs: QA_HTTP_JSON_BODY_TIMEOUT_MS,
+      // Defer destruction so writeQaRequestBodyLimitError can answer before the close.
+      destroyOnLimit: false,
     })
   ).trim();
   if (!text) {
@@ -227,11 +231,21 @@ export function dispatchQaHttpRequest(res: ServerResponse, task: () => Promise<v
   });
 }
 
-export function writeQaRequestBodyLimitError(res: ServerResponse, error: unknown): boolean {
+export async function writeQaRequestBodyLimitError(
+  req: IncomingMessage,
+  res: ServerResponse,
+  error: unknown,
+): Promise<boolean> {
   if (!isRequestBodyLimitError(error)) {
     return false;
   }
-  writeError(res, error.statusCode, requestBodyErrorToText(error.code));
+  await sendHttpRequestRejection(
+    req,
+    res,
+    error.statusCode,
+    JSON.stringify({ error: requestBodyErrorToText(error.code) }),
+    "application/json; charset=utf-8",
+  );
   return true;
 }
 
@@ -354,10 +368,7 @@ export async function handleQaBusRequest(params: {
       url.pathname === "/v1/inbound/message" || url.pathname === "/v1/outbound/message"
         ? QA_HTTP_MEDIA_JSON_MAX_BODY_BYTES
         : QA_HTTP_JSON_MAX_BODY_BYTES;
-    const body = (await readQaJsonBody(params.req, params.res, maxBytes)) as Record<
-      string,
-      unknown
-    >;
+    const body = (await readQaJsonBody(params.req, maxBytes)) as Record<string, unknown>;
     switch (url.pathname) {
       case "/v1/reset":
         params.state.reset();
@@ -456,7 +467,7 @@ export async function handleQaBusRequest(params: {
         return true;
     }
   } catch (error) {
-    if (writeQaRequestBodyLimitError(params.res, error)) {
+    if (await writeQaRequestBodyLimitError(params.req, params.res, error)) {
       return true;
     }
     writeError(params.res, 400, error);

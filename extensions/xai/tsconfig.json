@@ -545,9 +545,6 @@
       "openclaw/plugin-sdk/tool-payload": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/tool-payload.d.ts"
       ],
-      "openclaw/plugin-sdk/webhook-request-release": [
-        "../../packages/plugin-sdk/dist/src/plugin-sdk/webhook-request-release.d.ts"
-      ],
       "openclaw/plugin-sdk/webhook-targets": [
         "../../packages/plugin-sdk/dist/src/plugin-sdk/webhook-targets.d.ts"
       ],
