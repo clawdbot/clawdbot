@@ -1,4 +1,3 @@
-import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
@@ -73,24 +72,10 @@ export async function readBranchName(
   return branch || null;
 }
 
-async function listGitTags(
-  runCommand: CommandRunner,
-  root: string,
-  timeoutMs: number,
-): Promise<string[]> {
-  const result = await runCommand(["git", "-C", root, "tag", "--list", "v*", "--sort=-v:refname"], {
-    timeoutMs,
-  }).catch(() => null);
-  return result?.code === 0 ? normalizeStringEntries(result.stdout.split("\n")) : [];
-}
-
-export async function resolveChannelTag(
-  runCommand: CommandRunner,
-  root: string,
-  timeoutMs: number,
+export function resolveChannelTag(
+  tags: string[],
   channel: Exclude<UpdateChannel, "dev">,
-): Promise<string | null> {
-  const tags = await listGitTags(runCommand, root, timeoutMs);
+): string | null {
   if (channel === "beta") {
     const betaTag = tags.find((tag) => isBetaTag(tag)) ?? null;
     const stableTag = tags.find((tag) => isStableTag(tag)) ?? null;

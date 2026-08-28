@@ -137,8 +137,16 @@ describe("runGatewayUpdate", () => {
       if (key === `git -C ${tempDir} config --get branch.main.remote`) {
         return { stdout: "origin\n", stderr: "", code: 0 };
       }
+      if (key === `git -C ${tempDir} ls-remote --tags --refs --sort=-v:refname -- origin v*`) {
+        return {
+          stdout: `${"a".repeat(40)}\trefs/tags/${params.stableTag}\n`,
+          stderr: "",
+          code: 0,
+        };
+      }
       if (
-        key === `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/*:refs/tags/*`
+        key ===
+        `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/${params.stableTag}:refs/tags/${params.stableTag}`
       ) {
         return { stdout: "", stderr: "", code: 0 };
       }
@@ -147,6 +155,12 @@ describe("runGatewayUpdate", () => {
       }
       if (key === "pnpm --version") {
         return { stdout: PNPM_VERSION, stderr: "", code: 0 };
+      }
+      if (key === `git -C ${tempDir} checkout --detach ${params.stableTag}`) {
+        return { stdout: "", stderr: "", code: 0 };
+      }
+      if (key === "pnpm install") {
+        return { stdout: "", stderr: "", code: 0 };
       }
       if (key === "pnpm build") {
         await params.onBuild?.();
@@ -343,7 +357,14 @@ describe("runGatewayUpdate", () => {
     stableTag: string,
     options?: { additionalTags?: string[] },
   ): Record<string, CommandResponse> {
-    const tagOutput = [stableTag, ...(options?.additionalTags ?? [])].join("\n");
+    const tags = [stableTag, ...(options?.additionalTags ?? [])];
+    const tagOutput = tags.map((tag) => `${"a".repeat(40)}\trefs/tags/${tag}`).join("\n");
+    const tagFetchResponses = Object.fromEntries(
+      tags.map((tag) => [
+        `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/${tag}:refs/tags/${tag}`,
+        { stdout: "" },
+      ]),
+    ) satisfies Record<string, CommandResponse>;
     return {
       "pnpm --version": { stdout: PNPM_VERSION },
       [`git -C ${tempDir} rev-parse --show-toplevel`]: { stdout: tempDir },
@@ -352,10 +373,10 @@ describe("runGatewayUpdate", () => {
       [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
       [`git -C ${tempDir} config --get branch.main.remote`]: { stdout: "origin\n" },
-      [`git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/*:refs/tags/*`]: {
-        stdout: "",
+      [`git -C ${tempDir} ls-remote --tags --refs --sort=-v:refname -- origin v*`]: {
+        stdout: `${tagOutput}\n`,
       },
-      [`git -C ${tempDir} tag --list v* --sort=-v:refname`]: { stdout: `${tagOutput}\n` },
+      ...tagFetchResponses,
       [`git -C ${tempDir} checkout --detach ${stableTag}`]: { stdout: "" },
     };
   }
@@ -612,6 +633,36 @@ describe("runGatewayUpdate", () => {
       releaseSha,
     );
     await expect(runRealGit(localRoot, "rev-parse", localOnlyTag)).resolves.toBeTruthy();
+  });
+
+  it("selects stable releases from the main remote instead of local release-shaped tags", async () => {
+    const { localRoot, baseSha, releaseSha, releaseTag } = await createRecreatedReleaseTagFixture();
+    const localTag = "v9999.1.0";
+    await runRealGit(localRoot, "tag", localTag, baseSha);
+    const calls: string[] = [];
+    const realRunner = createRealGitUpdateRunner();
+    const reachedMutation = new Error("reached release mutation");
+
+    await expect(
+      runWithCommand(
+        async (argv, options) => {
+          calls.push(argv.join(" "));
+          return await realRunner(argv, options);
+        },
+        {
+          cwd: localRoot,
+          channel: "stable",
+          beforeGitMutation: async () => {
+            throw reachedMutation;
+          },
+        },
+      ),
+    ).rejects.toBe(reachedMutation);
+
+    expect(calls).toContain(`git -C ${localRoot} show ${releaseTag}:package.json`);
+    expect(calls).not.toContain(`git -C ${localRoot} show ${localTag}:package.json`);
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+    await expect(runRealGit(localRoot, "rev-parse", localTag)).resolves.toBe(baseSha);
   });
 
   it("keeps release tags scoped to the main remote when another remote disagrees", async () => {
@@ -3746,13 +3797,16 @@ describe("runGatewayUpdate", () => {
         if (key === `git -C ${tempDir} config --get branch.main.remote`) {
           return toCommandResult({ stdout: "origin\n" });
         }
+        if (key === `git -C ${tempDir} ls-remote --tags --refs --sort=-v:refname -- origin v*`) {
+          return toCommandResult({
+            stdout: `${"a".repeat(40)}\trefs/tags/${stableTag}\n`,
+          });
+        }
         if (
-          key === `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/*:refs/tags/*`
+          key ===
+          `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/${stableTag}:refs/tags/${stableTag}`
         ) {
           return toCommandResult();
-        }
-        if (key === `git -C ${tempDir} tag --list v* --sort=-v:refname`) {
-          return toCommandResult({ stdout: `${stableTag}\n` });
         }
         if (key === `git -C ${tempDir} checkout --detach ${stableTag}`) {
           currentHead = targetSha;

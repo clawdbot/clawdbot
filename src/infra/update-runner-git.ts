@@ -52,6 +52,15 @@ async function readBuiltGatewayBuildId(gitRoot: string): Promise<string | null> 
   }
 }
 
+function parseRemoteTagNames(stdout: string): string[] {
+  return normalizeStringEntries(
+    stdout.split("\n").map((line) => {
+      const ref = line.trim().split(/\s+/u).at(1) ?? "";
+      return ref.startsWith("refs/tags/v") ? ref.slice("refs/tags/".length) : "";
+    }),
+  );
+}
+
 export async function updateGitCheckout(params: {
   opts: UpdateRunnerOptions;
   gitRoot: string;
@@ -411,10 +420,32 @@ export async function updateGitCheckout(params: {
     if (!releaseRemote) {
       return buildError("fetch-failed");
     }
-    // Only the main branch's source remote may force-update shared release tags.
+    const remoteTagsResult = await runCommand(
+      [
+        "git",
+        "-C",
+        gitRoot,
+        "ls-remote",
+        "--tags",
+        "--refs",
+        "--sort=-v:refname",
+        "--",
+        releaseRemote,
+        "v*",
+      ],
+      { cwd: gitRoot, timeoutMs },
+    );
+    if (remoteTagsResult.code !== 0) {
+      return buildError("fetch-failed");
+    }
+    const tag = resolveChannelTag(parseRemoteTagNames(remoteTagsResult.stdout), channel);
+    if (!tag) {
+      return buildError("no-release-tag");
+    }
+    // Only the selected release from the main branch's source remote may update the shared tag.
     // Configured pruning must not delete unrelated operator-local tags.
     const tagFetchFailure = await runRequiredStep(
-      `git fetch ${releaseRemote} tags`,
+      `git fetch ${releaseRemote} ${tag}`,
       [
         "git",
         "-C",
@@ -424,16 +455,12 @@ export async function updateGitCheckout(params: {
         "--no-tags",
         "--",
         releaseRemote,
-        "+refs/tags/*:refs/tags/*",
+        `+refs/tags/${tag}:refs/tags/${tag}`,
       ],
       "fetch-failed",
     );
     if (tagFetchFailure) {
       return tagFetchFailure;
-    }
-    const tag = await resolveChannelTag(runCommand, gitRoot, timeoutMs, channel);
-    if (!tag) {
-      return buildError("no-release-tag");
     }
     await prepareMutation(tag);
     const failure = await runRequiredStep(
