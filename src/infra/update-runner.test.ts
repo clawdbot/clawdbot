@@ -13,8 +13,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
-import { prepareStableGitFetch } from "./update-runner-git-fetch.js";
-import type { UpdateStepProgress, UpdateStepResult } from "./update-runner-types.js";
+import type { UpdateStepProgress } from "./update-runner-types.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -668,35 +667,46 @@ describe("runGatewayUpdate", () => {
     await expect(runRealGit(localRoot, "rev-parse", localOnlyTag)).resolves.toBeTruthy();
   });
 
-  it("excludes Git tag shorthand from the preliminary branch refresh", async () => {
+  it("refreshes recreated release tags when Git tag shorthand is reported", async () => {
+    const { localRoot, releaseSha, releaseTag, localOnlyTag } =
+      await createRecreatedReleaseTagFixture();
     const calls: string[] = [];
-    const steps: UpdateStepResult[] = [];
-    const runCommand = async (argv: string[]): Promise<CommandResult> => {
+    const realRunner = createRealGitUpdateRunner();
+    const runCommand = async (argv: string[], options?: { cwd?: string; timeoutMs?: number }) => {
       const key = argv.join(" ");
       calls.push(key);
       if (argv[3] === "config" && argv.at(-1) === "^remote\\..*\\.fetch$") {
-        return { stdout: "remote.origin.fetch tag v1.0.0\n", stderr: "", code: 0 };
+        // Git 2.27 rejects `tag <name>` when stored as one remote.*.fetch value;
+        // synthesize the config report while keeping all subsequent Git work real.
+        return toCommandResult({
+          stdout: `remote.origin.fetch +refs/heads/*:refs/remotes/origin/*\nremote.origin.fetch tag ${releaseTag}\n`,
+        });
       }
-      if (argv[3] === "remote") {
-        return { stdout: "origin\n", stderr: "", code: 0 };
+      if (argv[3] === "fetch" && argv[4] === "--all") {
+        return toCommandResult({ code: 1, stderr: "would clobber configured tag" });
       }
-      if (argv[3] === "config" && argv.at(-1)?.includes("skipfetchall")) {
-        return { stdout: "", stderr: "", code: 1 };
-      }
-      throw new Error(`unexpected command: ${key}`);
+      return await realRunner(argv, options);
     };
+    const reachedMutation = new Error("reached release mutation");
 
     await expect(
-      prepareStableGitFetch({
-        gitRoot: tempDir,
-        timeoutMs: 1000,
-        runCommand,
-        steps,
-        fetchAllArgv: ["git", "-C", tempDir, "fetch", "--all"],
+      runWithCommand(runCommand, {
+        cwd: localRoot,
+        channel: "stable",
+        beforeGitMutation: async () => {
+          throw reachedMutation;
+        },
       }),
-    ).resolves.toEqual({ remotes: ["origin"] });
-    expect(calls).not.toContain(`git -C ${tempDir} fetch --all`);
-    expect(calls).not.toContain(`git -C ${tempDir} fetch origin`);
+    ).rejects.toBe(reachedMutation);
+
+    expect(calls).not.toContain(
+      `git -C ${localRoot} fetch --all --prune --no-prune-tags --no-tags`,
+    );
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+    await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
+      releaseSha,
+    );
+    await expect(runRealGit(localRoot, "rev-parse", localOnlyTag)).resolves.toBeTruthy();
   });
 
   it("selects stable releases from the main remote instead of local release-shaped tags", async () => {
