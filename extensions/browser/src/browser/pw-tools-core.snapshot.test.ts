@@ -218,9 +218,9 @@ describe("pw-tools-core aria snapshot storage", () => {
     expect(storeRoleRefsForTarget).not.toHaveBeenCalled();
   });
 
-  it("returns an empty snapshot immediately when a selector matches no elements", async () => {
+  it("returns selector no-match snapshots without collecting URLs", async () => {
     const ariaSnapshot = vi.fn(async () => {
-      throw new Error("ariaSnapshot should not wait for a selector with no matches");
+      throw new Error("ariaSnapshot should not run for a selector with no matches");
     });
     const locator = {
       count: vi.fn(async () => 0),
@@ -231,6 +231,7 @@ describe("pw-tools-core aria snapshot storage", () => {
       mainFrame: vi.fn(() => ({ id: "main-frame" })),
       on: vi.fn(),
       off: vi.fn(),
+      evaluate: vi.fn(async () => [{ text: "link", url: "https://example.test" }]),
     };
     getPageForTargetId.mockResolvedValue(page);
 
@@ -239,12 +240,14 @@ describe("pw-tools-core aria snapshot storage", () => {
       cdpUrl: "http://127.0.0.1:9222",
       targetId: "tab-1",
       selector: "#missing",
+      urls: true,
     });
 
     expect(result.snapshot).toBe("(empty)");
-    expect(result.refs).toEqual({});
+    expect(result.snapshot).not.toContain("Links:");
     expect(locator.count).toHaveBeenCalledOnce();
     expect(ariaSnapshot).not.toHaveBeenCalled();
+    expect(page.evaluate).not.toHaveBeenCalled();
   });
 
   it("stores frame-scoped refs with the exact captured frame", async () => {

@@ -345,9 +345,10 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   stats: { lines: number; chars: number; refs: number; interactive: number };
   newElements?: number;
 }> {
-  const snapshot = params.urls
-    ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
-    : params.built.snapshot;
+  const snapshot =
+    params.urls && Object.keys(params.built.refs).length > 0
+      ? appendSnapshotUrls(params.built.snapshot, await collectSnapshotUrls(params.page))
+      : params.built.snapshot;
   if (params.isFrameCurrent) {
     assertSnapshotFrameCurrent(params.isFrameCurrent);
   }
