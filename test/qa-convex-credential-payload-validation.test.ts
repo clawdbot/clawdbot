@@ -166,6 +166,58 @@ describe("QA Convex credential payload validation", () => {
     expect(normalizeCredentialPayloadForKind("future-kind", payload)).toBe(payload);
   });
 
+  it("normalizes Telegram Test Server userbot credentials", () => {
+    expect(
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        schemaVersion: 1,
+        environment: "test",
+        groupId: " -100123 ",
+        sutToken: " test-token ",
+        sutUsername: " @test_bot ",
+        sutBotId: " 123 ",
+        testerUserId: " 456 ",
+        tdlibArchiveBase64: "dGVzdA==",
+        tdlibArchiveSha256: "A".repeat(64),
+        tdlibVersion: " 1.8.67 ",
+        ignored: true,
+      }),
+    ).toEqual({
+      schemaVersion: 1,
+      environment: "test",
+      groupId: "-100123",
+      sutToken: "test-token",
+      sutUsername: "test_bot",
+      sutBotId: "123",
+      testerUserId: "456",
+      tdlibArchiveBase64: "dGVzdA==",
+      tdlibArchiveSha256: "a".repeat(64),
+      tdlibVersion: "1.8.67",
+    });
+  });
+
+  it.each([
+    ["environment", { environment: "production" }],
+    ["bot identity", { sutBotId: "bot" }],
+    ["archive encoding", { tdlibArchiveBase64: "not-base64" }],
+    ["archive hash", { tdlibArchiveSha256: "not-a-hash" }],
+  ])("rejects malformed Telegram Test Server userbot %s", (_label, patch) => {
+    expect(() =>
+      normalizeCredentialPayloadForKind("telegram-test-userbot", {
+        schemaVersion: 1,
+        environment: "test",
+        groupId: "-100123",
+        sutToken: "test-token",
+        sutUsername: "test_bot",
+        sutBotId: "123",
+        testerUserId: "456",
+        tdlibArchiveBase64: "dGVzdA==",
+        tdlibArchiveSha256: "a".repeat(64),
+        tdlibVersion: "1.8.67",
+        ...patch,
+      }),
+    ).toThrow(/telegram-test-userbot/u);
+  });
+
   it("normalizes WhatsApp credential payloads", () => {
     expect(
       normalizeCredentialPayloadForKind("whatsapp", {
