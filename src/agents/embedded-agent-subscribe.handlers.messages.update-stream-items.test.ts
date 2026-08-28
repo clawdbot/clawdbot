@@ -427,3 +427,72 @@ describe("handleMessageUpdate text signatures", () => {
     expect(context.state.deltaBuffer).toBe("Working now");
   });
 });
+// #122476: a streamed lone `N` may still grow into `NO_REPLY`, so it is held
+// silent mid-stream and only released as ordinary text at terminal completion.
+// An exact `NO_REPLY` stays silent through both delta and text_end. Drives the
+// real handleMessageUpdate -> streaming accumulator path (agent->gateway event
+// boundary), not just the pure classifier.
+describe("lone N silent-reply lead fragment", () => {
+  const createDelta = (delta: string) =>
+    ({
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_delta", delta },
+    }) as never;
+
+  const createContext = () => {
+    const onAgentEvent = vi.fn();
+    const accumulator = createStreamingDirectiveAccumulator();
+    const context = createMessageUpdateContext({
+      onAgentEvent,
+      consumePartialReplyDirectives: vi.fn((text: string, options?: { final?: boolean }) =>
+        accumulator.consume(text, options),
+      ),
+    });
+    return { onAgentEvent, context };
+  };
+
+  it("holds a streamed N without emitting it, then releases it at text_end", () => {
+    const { onAgentEvent, context } = createContext();
+
+    // `N` is not a directive tail (unlike `M`), so it reaches the silent-prefix
+    // check: held pending, no assistant visible-text event carries it mid-stream.
+    updateMessage(context, createDelta("N"));
+    expect(onAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "assistant",
+        data: expect.objectContaining({ text: "N" }),
+      }),
+    );
+
+    // Terminal completion with a lone non-exact N: released as ordinary text,
+    // not dropped as a silent token.
+    updateMessage(context, {
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_end", content: "N" },
+    });
+    expect(onAgentEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "assistant",
+        data: expect.objectContaining({ text: "N" }),
+      }),
+    );
+  });
+
+  it("keeps an exact NO_REPLY silent across delta and text_end", () => {
+    const { onAgentEvent, context } = createContext();
+
+    updateMessage(context, createDelta("NO_REPLY"));
+    updateMessage(context, {
+      message: { role: "assistant", content: [] },
+      assistantMessageEvent: { type: "text_end", content: "NO_REPLY" },
+    });
+    // An exact silent token is suppressed at every stage, so no assistant
+    // visible-text event carries it.
+    expect(onAgentEvent).not.toHaveBeenCalledWith(
+      expect.objectContaining({
+        stream: "assistant",
+        data: expect.objectContaining({ text: "NO_REPLY" }),
+      }),
+    );
+  });
+});

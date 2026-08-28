@@ -331,6 +331,9 @@ describe("startsWithSilentToken", () => {
 
 describe("isSilentReplyPrefixText", () => {
   it("matches uppercase token lead fragments", () => {
+    // A lone uppercase N is the first streamed delta of NO_REPLY; hold it as a
+    // pending lead fragment until the next delta disambiguates the token (#122476).
+    expect(isSilentReplyPrefixText("N")).toBe(true);
     expect(isSilentReplyPrefixText("NO")).toBe(true);
     expect(isSilentReplyPrefixText("NO_")).toBe(true);
     expect(isSilentReplyPrefixText("NO_RE")).toBe(true);
@@ -339,7 +342,6 @@ describe("isSilentReplyPrefixText", () => {
   });
 
   it("rejects ambiguous natural-language prefixes", () => {
-    expect(isSilentReplyPrefixText("N")).toBe(false);
     expect(isSilentReplyPrefixText("No")).toBe(false);
     expect(isSilentReplyPrefixText("no")).toBe(false);
     expect(isSilentReplyPrefixText("Hello")).toBe(false);

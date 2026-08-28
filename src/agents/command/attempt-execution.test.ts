@@ -1156,7 +1156,16 @@ describe("createAcpVisibleTextAccumulator", () => {
     },
     { name: "exact silence", chunks: ["NO_REPLY"], expected: { disposition: "silent" } },
     { name: "clean empty output", chunks: [], expected: { disposition: "empty" } },
-    { name: "partial control prefix", chunks: ["NO_RE"], expected: { disposition: "empty" } },
+    {
+      name: "partial control prefix released as visible",
+      chunks: ["NO_RE"],
+      expected: { disposition: "visible", text: "NO_RE" },
+    },
+    {
+      name: "lone N lead released as visible terminal text (#122476)",
+      chunks: ["N"],
+      expected: { disposition: "visible", text: "N" },
+    },
     {
       name: "punctuation-wrapped silence",
       chunks: ["NO_REPLY:"],

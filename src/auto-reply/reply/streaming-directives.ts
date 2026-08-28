@@ -81,7 +81,10 @@ export const splitTrailingDirective = (text: string): { text: string; tail: stri
   };
 };
 
-const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChunk => {
+const parseChunk = (
+  raw: string,
+  options?: { silentToken?: string; final?: boolean },
+): ParsedChunk => {
   let text = raw ?? "";
   const replyParsed = parseInlineDirectives(text, {
     stripAudioTag: true,
@@ -92,8 +95,13 @@ const parseChunk = (raw: string, options?: { silentToken?: string }): ParsedChun
   }
 
   const silentToken = options?.silentToken ?? SILENT_REPLY_TOKEN;
+  // A prefix-only fragment (e.g. a streamed `N`) is held silent while more text
+  // may still arrive, but at terminal completion a non-exact fragment is ordinary
+  // output the model emitted and must not be dropped. Only an exact token stays
+  // silent at finalization.
   const isSilent =
-    isSilentReplyText(text, silentToken) || isSilentReplyPrefixText(text, silentToken);
+    isSilentReplyText(text, silentToken) ||
+    (!options?.final && isSilentReplyPrefixText(text, silentToken));
   if (isSilent) {
     text = "";
   } else if (startsWithSilentToken(text, silentToken)) {
@@ -154,7 +162,10 @@ export function createStreamingDirectiveAccumulator() {
       return null;
     }
 
-    const parsed = parseChunk(combined, { silentToken: options.silentToken });
+    const parsed = parseChunk(combined, {
+      silentToken: options.silentToken,
+      final: options.final,
+    });
     if (hadPendingTail && heldSeparator && parsed.text.startsWith("[")) {
       parsed.text = `${heldSeparator}${parsed.text}`;
     }

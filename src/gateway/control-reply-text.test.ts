@@ -107,4 +107,37 @@ describe("control reply display projection", () => {
       ]),
     ).toEqual([]);
   });
+
+  it("holds a lone uppercase N as a pending NO_REPLY lead fragment (#122476)", () => {
+    // A single streamed N is the first delta of NO_REPLY; hold it pending until
+    // the next delta disambiguates, so it never flashes on a delta-rendering
+    // channel (Matrix, generic streaming) before the full token resolves.
+    expect(projectLiveAssistantBufferedText("N")).toEqual({
+      text: "N",
+      suppress: true,
+      pendingLeadFragment: true,
+    });
+    expect(projectLiveAssistantBufferedText("NO")).toEqual({
+      text: "NO",
+      suppress: true,
+      pendingLeadFragment: true,
+    });
+  });
+
+  it("holds a mixed-case No lead pending, but not text with spaces (#122476)", () => {
+    // A streamed "No" may still grow into NO_REPLY, so it is held pending
+    // (matching the embedded TUI backend) rather than flashed; the final
+    // payload renders "No" if the turn resolves to natural language. Text
+    // containing a space already disambiguates from the token and is not held.
+    expect(projectLiveAssistantBufferedText("No")).toEqual({
+      text: "No",
+      suppress: true,
+      pendingLeadFragment: true,
+    });
+    expect(projectLiveAssistantBufferedText("Not sure")).toEqual({
+      text: "Not sure",
+      suppress: false,
+      pendingLeadFragment: false,
+    });
+  });
 });

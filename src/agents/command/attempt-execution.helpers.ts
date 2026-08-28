@@ -537,18 +537,35 @@ export function createAcpVisibleTextAccumulator() {
       return { text: visibleText, delta: nextVisible.delta };
     },
     finalize(): string {
-      return visibleText.trim();
+      return resolveTerminalVisibleText().trim();
     },
     finalizeRaw(): string {
-      return visibleText;
+      return resolveTerminalVisibleText();
     },
     finalizeReplySnapshot(): AgentRunTerminalReplySnapshot {
+      // A pending prefix that never grew into an exact silent token is ordinary
+      // terminal text (e.g. a lone streamed `N`); release it at finalization so
+      // a completed turn is never silently dropped. An exact NO_REPLY is kept as
+      // rawText so buildAgentRunTerminalReplySnapshot classifies it silent.
       return buildAgentRunTerminalReplySnapshot({
-        visibleText,
+        visibleText: resolveTerminalVisibleText(),
         rawText: pendingSilentPrefix,
       });
     },
   };
+
+  // At terminal completion, a held prefix that is not an exact silent token is
+  // visible text the model actually emitted, not a suppressed control reply.
+  function resolveTerminalVisibleText(): string {
+    if (
+      pendingSilentPrefix &&
+      !isSilentReplyText(pendingSilentPrefix, SILENT_REPLY_TOKEN) &&
+      !visibleText
+    ) {
+      return pendingSilentPrefix;
+    }
+    return visibleText;
+  }
 }
 
 if (process.env.VITEST || process.env.NODE_ENV === "test") {
