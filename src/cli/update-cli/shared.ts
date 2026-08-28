@@ -57,6 +57,7 @@ export type UpdateFinalizeOptions = {
 };
 
 export type UpdateWizardOptions = {
+  acceptCapabilities?: boolean;
   timeout?: string;
 };
 

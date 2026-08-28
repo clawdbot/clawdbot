@@ -123,11 +123,17 @@ With `--json`, stdout contains one JSON document. Doctor panels and other
 diagnostics go to stderr, so stdout can be parsed directly. Failed doctor or
 plugin finalization steps still exit non-zero.
 
-Without an interactive terminal, widened plugin capabilities stop update
-finalization unless `--accept-capabilities` is explicit. `--yes` alone does not
-accept capability changes. If the core package has already changed, rerun
-`openclaw update repair --accept-capabilities` after reviewing the reported
-capabilities.
+Plugin artifacts that require capability consent are not installed without an
+interactive review or explicit `--accept-capabilities`. `--yes` alone does not
+accept capability changes, and JSON mode does not prompt. A denied update can
+preserve the previous usable plugin and finish with a warning; an unresolved
+missing or invalid active payload can still fail finalization.
+
+If the core package has already changed, run `openclaw update repair` in an
+interactive terminal to review plugin capabilities. After reviewing the changes,
+automation can use `openclaw update repair --accept-capabilities`. Acceptance
+applies to each artifact's recomputed declared surface during this invocation;
+it does not approve future capability additions.
 
 ## `update wizard`
 
@@ -135,9 +141,10 @@ Interactive flow to pick an update channel and confirm whether to restart the
 Gateway afterward (defaults to restart). Selecting `dev` without a git
 checkout offers to create one.
 
-| Flag                  | Default | Description                   |
-| --------------------- | ------- | ----------------------------- |
-| `--timeout <seconds>` | `1800`  | Timeout for each update step. |
+| Flag                    | Default | Description                                                  |
+| ----------------------- | ------- | ------------------------------------------------------------ |
+| `--timeout <seconds>`   | `1800`  | Timeout for each update step.                                |
+| `--accept-capabilities` | `false` | Accept reviewed plugin capability changes during the update. |
 
 ## What it does
 

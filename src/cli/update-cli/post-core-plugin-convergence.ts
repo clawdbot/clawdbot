@@ -191,7 +191,7 @@ export async function runPostCorePluginConvergence(params: {
     cfg: params.cfg,
     env,
     ...(prunedBaseline ? { baselineRecords: prunedBaseline.records } : {}),
-    ...(params.onCapabilityConsent ? { onCapabilityConsent: params.onCapabilityConsent } : {}),
+    onCapabilityConsent: params.onCapabilityConsent,
   });
 
   const warnings: PostCoreConvergenceWarning[] = repair.warnings.map((message) => ({
@@ -282,18 +282,6 @@ export async function runPostCorePluginConvergence(params: {
   };
 }
 
-/**
- * Drop install records that the gateway would never activate: disabled
- * plugin entries, plugins listed in `plugins.deny`, etc. Records that
- * resolve as a trusted-source-linked official install (npm or ClawHub)
- * are retained even when the entry is disabled, mirroring the existing
- * `collectMissingPluginInstallPayloads({ skipDisabledPlugins: true,
- * syncOfficialPluginInstalls: true })` policy at
- * `update-command.ts:~218`. We do NOT collapse to the configured plugin
- * id set here — that would over-filter and miss e.g. providers/runtimes
- * that are enabled implicitly via auth profiles or model refs. Effective
- * enable state is the right precision boundary.
- */
 /**
  * Pure helper used by `updatePluginsAfterCoreUpdate` to fold a convergence
  * result into the existing `PluginUpdateOutcome[]` / warning shape that the

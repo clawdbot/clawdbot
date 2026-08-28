@@ -215,6 +215,7 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
   update
     .command("wizard")
     .description("Interactive update wizard")
+    .option("--accept-capabilities", "Accept widened plugin capabilities", false)
     .option("--timeout <seconds>", "Timeout for each update step in seconds (default: 1800)")
     .addHelpText(
       "after",
@@ -228,6 +229,9 @@ ${theme.muted("Docs:")} ${formatDocsLink("/cli/update", "docs.openclaw.ai/cli/up
 
         await updateWizardCommand({
           timeout: inheritedUpdateTimeout(opts, command),
+          acceptCapabilities:
+            Boolean(opts.acceptCapabilities) ||
+            Boolean(inheritOptionFromParent<boolean>(command, "acceptCapabilities")),
         });
       } catch (err) {
         handleUpdateCommandError(err);
