@@ -7,8 +7,10 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import { Type } from "typebox";
+import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   type ResolvedTranscriptsAutoStartConfig,
   resolveTranscriptsConfig,
@@ -22,6 +24,7 @@ import type {
 import { sanitizeTranscriptSourceLocator } from "../../transcripts/source-locator.js";
 import { TranscriptsStore, type TranscriptsSessionEntry } from "../../transcripts/store.js";
 import { summarizeTranscripts } from "../../transcripts/summary.js";
+import { truncateUtf16Safe } from "../../utils.js";
 import type { AnyAgentTool } from "./common.js";
 import {
   activeSessions,
@@ -41,6 +44,10 @@ const AUTO_START_RETRY_ATTEMPTS = 12;
 const AUTO_START_RETRY_MS = 5_000;
 const AUTO_START_STOP_TIMEOUT_MS = 5_000;
 const AUTO_START_PROVIDER_READY_TIMEOUT_MS = 30_000;
+
+function formatAutoStopDiagnostic(value: unknown): string {
+  return JSON.stringify(truncateUtf16Safe(sanitizeTerminalText(formatErrorMessage(value)), 300));
+}
 
 type TranscriptSessionIdentity = Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">;
 
@@ -582,20 +589,36 @@ export function createTranscriptsAutoStartService(ctx: TranscriptsRuntimeContext
       }
       const store = createStore(ctx);
       for (const [sessionId, lifecycleToken] of startedSessions) {
-        await stopTranscripts({
-          ctx,
-          store,
-          rawParams: { action: "stop", sessionId },
-          // Bypass authorization only while the exact capture created by this
-          // service is still active; a reused id may belong to another owner.
-          lifecycleToken,
-        }).catch((err: unknown) =>
+        const warnings: string[] = [];
+        try {
+          const { details } = await stopTranscripts({
+            ctx,
+            store,
+            rawParams: { action: "stop", sessionId },
+            // Bypass authorization only while the exact capture created by this
+            // service is still active; a reused id may belong to another owner.
+            lifecycleToken,
+          });
+          // Fulfillment can include partial success; only diagnostics belong in logs,
+          // never the tool content or summary. Skipped captures have no warnings.
+          if (typeof details.summaryExportError === "string") {
+            warnings.push(
+              `summary saved; export failed intendedSummaryPath=${formatAutoStopDiagnostic(details.intendedSummaryPath)}: ${formatAutoStopDiagnostic(details.summaryExportError)}. Correct the export destination, then run openclaw transcripts path <session> or openclaw transcripts show <session>.`,
+            );
+          }
+          if (typeof details.providerStopError === "string") {
+            warnings.push(
+              `provider stop failed: ${formatAutoStopDiagnostic(details.providerStopError)}. Check the provider capture status and connection.`,
+            );
+          }
+        } catch (error) {
+          warnings.push(`stop failed: ${formatAutoStopDiagnostic(error)}`);
+        }
+        for (const warning of warnings) {
           ctx.logger.warn(
-            `transcripts autoStart stop failed session=${sessionId}: ${
-              err instanceof Error ? err.message : String(err)
-            }`,
-          ),
-        );
+            `transcripts autoStart session=${formatAutoStopDiagnostic(sessionId)}: ${warning}`,
+          );
+        }
       }
       startedSessions.clear();
     },

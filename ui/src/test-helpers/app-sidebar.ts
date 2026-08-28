@@ -52,6 +52,7 @@ const sidebarSessionGatewayBindings = new WeakMap<
 >();
 
 export type SidebarLifecycleState = HTMLElement & {
+  basePath: string;
   hiddenSessionCatalogIds: ReadonlySet<string>;
   activeRouteId?: string;
   activeWorkboardBoardId: string;

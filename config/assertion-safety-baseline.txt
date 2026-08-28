@@ -788,7 +788,6 @@ extensions/memory-core/src/session-ingestion.ts	2
 extensions/memory-core/src/session-reset-recall-metadata.ts	3
 extensions/memory-core/src/session-search-visibility.ts	2
 extensions/memory-core/src/short-term-promotion-apply.ts	4
-extensions/memory-core/src/short-term-promotion-artifacts.ts	2
 extensions/memory-core/src/short-term-promotion-memory-write.ts	4
 extensions/memory-core/src/short-term-promotion-record.ts	1
 extensions/memory-core/src/short-term-promotion-rehydrate.ts	1
@@ -1106,7 +1105,7 @@ extensions/qa-lab/web/src/ui-render-capture-controls.ts	1
 extensions/qa-lab/web/src/ui-render-utils.ts	1
 extensions/qianfan/onboard.ts	2
 extensions/qwen/models.ts	1
-extensions/qwen/stream.ts	4
+extensions/qwen/stream.ts	3
 extensions/raft/src/accounts.ts	1
 extensions/raft/src/gateway.ts	2
 extensions/raft/src/inbound.ts	1
@@ -1563,7 +1562,6 @@ packages/gateway-client/src/gateway-origin-scope.ts	1
 packages/gateway-client/src/pending-request.ts	2
 packages/gateway-client/src/protocol-client.ts	1
 packages/gateway-client/src/scope-upgrade.ts	4
-packages/gateway-client/src/websocket-transport.ts	3
 packages/gateway-protocol/src/clawhub-trust-error-details.ts	1
 packages/gateway-protocol/src/client-info.ts	4
 packages/gateway-protocol/src/connect-error-details.ts	12
@@ -2987,7 +2985,6 @@ src/gateway/server-methods/skills-workspace-handler.ts	1
 src/gateway/server-methods/skills.ts	8
 src/gateway/server-methods/system-agent-chat-params.ts	2
 src/gateway/server-methods/system-changes.ts	9
-src/gateway/server-methods/talk-client.ts	1
 src/gateway/server-methods/talk-shared.ts	6
 src/gateway/server-methods/talk.ts	7
 src/gateway/server-methods/task-suggestions.ts	7
@@ -3618,7 +3615,7 @@ src/plugins/runtime/runtime-llm-isolated.ts	4
 src/plugins/runtime/runtime-llm.runtime.ts	5
 src/plugins/runtime/runtime-plugin-boundary.ts	2
 src/plugins/runtime/runtime-web-channel-plugin.ts	4
-src/plugins/schema-validator.ts	7
+src/plugins/schema-validator.ts	6
 src/plugins/sdk-alias.ts	3
 src/plugins/services.ts	1
 src/plugins/session-catalog-history-import.ts	2
@@ -3905,7 +3902,6 @@ ui/src/app-navigation.ts	2
 ui/src/app-route-paths.ts	1
 ui/src/app-routes.ts	1
 ui/src/app/app-host-route-state.ts	1
-ui/src/app/app-host.ts	1
 ui/src/app/app-shell-chrome.ts	2
 ui/src/app/app-shell-gateway.ts	1
 ui/src/app/assistant-identity.ts	2

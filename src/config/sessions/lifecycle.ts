@@ -4,7 +4,7 @@ import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { canonicalizeMainSessionAlias } from "./main-session.js";
 import { loadTranscriptHeaderSync, readTranscriptStatsSync } from "./session-accessor.js";
 import { isTerminalSessionStatus } from "./session-entry-runtime.js";
-import type { SessionEntry, SessionScope } from "./types.js";
+import type { InternalSessionEntry, SessionEntry, SessionScope } from "./types.js";
 
 type SessionLifecycleEntry = Pick<
   SessionEntry,
@@ -12,17 +12,29 @@ type SessionLifecycleEntry = Pick<
 >;
 
 type SessionWorkStartEntry = Pick<
-  SessionEntry,
-  "archivedAt" | "initializationPending" | "sessionId"
+  InternalSessionEntry,
+  | "archivedAt"
+  | "initializationPending"
+  | "mainRestartRecovery"
+  | "modelSelectionLocked"
+  | "sessionId"
 >;
 
 type SessionWorkStartOptions = {
+  allowRestartTombstoneReplacement?: boolean;
   expectedSessionId?: string;
 };
+
+export function isRestartRecoveryTombstone(
+  entry: SessionWorkStartEntry | null | undefined,
+): boolean {
+  return entry?.mainRestartRecovery?.tombstone !== undefined;
+}
 
 /** Stable Gateway error detail for stale session lifecycle requests. */
 export const SESSION_LIFECYCLE_CHANGED_ERROR_REASON = "session-changed";
 const SESSION_WORK_START_INVALIDATED_ERROR_CODE = "SESSION_WORK_START_INVALIDATED";
+export const SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE = "SESSION_RESTART_RECOVERY_TOMBSTONE";
 
 export class SessionWorkStartInvalidatedError extends Error {
   readonly code = SESSION_WORK_START_INVALIDATED_ERROR_CODE;
@@ -45,7 +57,16 @@ export function isSessionWorkStartInvalidatedError(
   );
 }
 
-/** Lifecycle-owned initializing and archived sessions reject new work. */
+export class SessionRestartRecoveryTombstoneError extends Error {
+  readonly code = SESSION_RESTART_RECOVERY_TOMBSTONE_ERROR_CODE;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "SessionRestartRecoveryTombstoneError";
+  }
+}
+
+/** Lifecycle-owned initializing, restart-tombstoned, and archived sessions reject new work. */
 export function resolveSessionWorkStartError(
   sessionKey: string,
   entry: SessionWorkStartEntry | null | undefined,
@@ -59,6 +80,15 @@ export function resolveSessionWorkStartError(
   }
   if (entry?.initializationPending === true) {
     return `Session "${sessionKey}" is still initializing. Retry after initialization completes.`;
+  }
+  const restartRecoveryTombstone = isRestartRecoveryTombstone(entry);
+  if (restartRecoveryTombstone) {
+    if (options?.allowRestartTombstoneReplacement === true) {
+      return undefined;
+    }
+    return entry?.modelSelectionLocked === true
+      ? `Session "${sessionKey}" ended during restart recovery and cannot be replaced while model selection is locked. Open it in WebChat and use Resume in new session.`
+      : `Session "${sessionKey}" ended during restart recovery. Use /new or /reset to start a replacement session.`;
   }
   return entry?.archivedAt === undefined
     ? undefined

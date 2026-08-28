@@ -170,6 +170,8 @@ describe("AppSidebar viewer presence", () => {
     });
     await sidebar.updateComplete;
     sidebar.querySelector<HTMLButtonElement>(".sidebar-online__details")!.click();
+    // The click loads its interaction owner before the card can render.
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
@@ -234,6 +236,7 @@ describe("AppSidebar viewer presence", () => {
     const aliceLink = sidebar.querySelector<HTMLAnchorElement>('[data-online-user-id="alice"]')!;
     const button = aliceLink.parentElement!.querySelector<HTMLButtonElement>("button")!;
     button.click();
+    await vi.dynamicImportSettled();
     await vi.waitFor(() =>
       expect(document.querySelector(".person-activity-hovercard")).not.toBeNull(),
     );
@@ -288,6 +291,7 @@ describe("AppSidebar viewer presence", () => {
       await sidebar.updateComplete;
       vi.useFakeTimers();
       sidebar.querySelector<HTMLButtonElement>(".sidebar-online__details")!.click();
+      await vi.dynamicImportSettled();
       await vi.waitFor(() =>
         expect(document.querySelector("openclaw-elapsed-time")?.textContent).toBeTruthy(),
       );

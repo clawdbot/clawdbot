@@ -534,7 +534,7 @@ suite.define(() => {
 
     const newThread = currentPage
       .locator(".sidebar-session-toolbar")
-      .getByRole("button", { name: "New session" });
+      .getByRole("link", { name: "New session" });
     await newThread.focus();
     await currentPage.keyboard.press("Enter");
     await expect.poll(() => new URL(currentPage.url()).pathname).toBe("/new");

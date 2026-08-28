@@ -98,6 +98,29 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 | `pnpm changed:lanes`                              | Shows the architectural lanes triggered by the diff against `origin/main`.                                                                                                                                                                                                                                                                            |
 | `pnpm check:changed`                              | Classifies and runs the local changed formatting/typecheck/lint/guard plan. Does not run Vitest; use `pnpm test:changed` or `pnpm test <target>` for test proof.                                                                                                                                                                                      |
 
+## Linux shell integrations
+
+The Mantis Telegram lease-fence integration tests require Linux, Bash,
+util-linux `setsid`, and coreutils (`sleep`, `cat`, and `true`). On Ubuntu,
+install the prerequisites with `sudo apt-get install bash util-linux coreutils`.
+With repository dependencies ready, run the focused proof on Linux:
+
+```bash
+node scripts/run-vitest.mjs test/scripts/run-with-lease-fence.test.ts
+```
+
+All three tests must pass: lease loss removes the command's process group,
+clean exit propagates, and stdin reaches the fenced command. Missing `setsid`
+fails the Linux suite with prerequisite guidance; it does not skip the tests.
+macOS and Windows skip this Linux workflow integration. Use Linux CI or an
+isolated Linux environment for that proof. See [Mantis](/concepts/mantis).
+
+Remote filesystem fixtures that execute GNU `stat` and `readlink` run locally
+only on Linux. The shared leading-`@` file-tool scenario
+also runs against a portable remote-only bridge on every platform. Native
+Python helper coverage remains separate, including macOS; these fixture gates
+do not restrict the [SSH backend's Gateway host](/gateway/sandboxing#ssh-backend).
+
 ## Shared test state and process helpers
 
 - `src/test-utils/openclaw-test-state.ts`: use from Vitest when a test needs an isolated `HOME`, `OPENCLAW_STATE_DIR`, `OPENCLAW_CONFIG_PATH`, config fixture, workspace, agent dir, or auth-profile store.
@@ -120,7 +143,7 @@ Test wrapper runs end with a short `[test] passed|failed|skipped ... in ...` sum
 ## Gateway and E2E
 
 - Gateway tests are included in the untargeted `pnpm test` full suite; run them alone with `pnpm test:gateway`.
-- `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:ui:e2e`.
+- `pnpm test:e2e`: repo E2E aggregate = `pnpm test:e2e:gateway && pnpm test:e2e:agent-plugin-gateway && pnpm test:ui:e2e`.
 - `pnpm test:e2e:gateway`: gateway end-to-end smoke tests (multi-instance WS/HTTP/node pairing). Defaults to `threads` + `isolate: false` with one worker in `vitest.e2e.config.ts`; opt into parallelism with `OPENCLAW_E2E_WORKERS=<n>` (capped at 16), and enable verbose logs with `OPENCLAW_E2E_VERBOSE=1`.
 - `pnpm test:live`: provider live tests (Claude/Minimax/DeepSeek/z.ai/etc, gated by `*.live.test.ts`). Requires API keys and `LIVE=1` (or `OPENCLAW_LIVE_TEST=1`) to unskip; verbose output with `OPENCLAW_LIVE_TEST_QUIET=0`.
 

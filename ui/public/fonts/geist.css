@@ -1,15 +1,9 @@
 /*
- * Self-hosted webfaces for the Knot theme.
- *
- * Geist for the Knot theme: a sharp Swiss grotesque for the crimson-on-black family.
- *
- * SIL Open Font License 1.1, shipped unmodified with its upstream license
- * text beside the files. Served from the gateway rather than a font CDN so
- * font-src 'self' holds, no third-party request happens on load, and an
- * offline or LAN-only gateway still renders correctly. Latin and latin-ext
- * subsets only; unicode-range values come from the upstream subset
- * definitions. The url() references are relative to this stylesheet so they
- * follow a configured Control UI mount.
+ * Self-hosted webfaces for Geist.
+ * SIL Open Font License 1.1; unmodified, with upstream license text beside the files.
+ * Gateway-hosted for font-src 'self', offline/LAN use, and no third-party requests.
+ * Linked on demand at a stable public path. Relative url() sources follow the
+ * configured Control UI mount. Latin/latin-ext unicode ranges are upstream subsets.
  */
 
 @font-face {

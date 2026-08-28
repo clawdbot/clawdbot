@@ -3621,6 +3621,41 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
+  it("does not mirror a direct delivery into a restart tombstone missing archive metadata", async () => {
+    mockResolvedOutboundRoute({
+      sessionKey: "agent:main:whatsapp:direct:+15551234567",
+      baseSessionKey: "agent:main:whatsapp:direct:+15551234567",
+      peer: { kind: "direct", id: "+15551234567" },
+      from: "whatsapp:+15551234567",
+      to: "+15551234567",
+    });
+    loadCronSessionEntryLatestMock.mockReturnValue({
+      sessionId: "restart-tombstone-session",
+      lifecycleRevision: "failed-generation",
+      mainRestartRecovery: {
+        cycleId: "cycle-1",
+        revision: 5,
+        chargedAttempts: 3,
+        tombstone: {
+          reason: "automatic recovery exhausted",
+          recoveredSessionId: "dashboard-successor",
+          recoveredSessionKey: "agent:main:dashboard:successor",
+        },
+      },
+    });
+
+    const params = makeBaseParams({ synthesizedText: "Delivered outside OpenClaw" });
+    params.resolvedDelivery = makeResolvedDelivery({
+      channel: "whatsapp",
+      to: "+15551234567",
+    });
+
+    const state = await dispatchCronDelivery(params);
+
+    expect(state.delivered).toBe(true);
+    expect(appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+  });
+
   it("keeps successful direct delivery delivered when the transcript mirror append fails", async () => {
     mockResolvedOutboundRoute({
       sessionKey: "agent:main:whatsapp:direct:+15551234567",

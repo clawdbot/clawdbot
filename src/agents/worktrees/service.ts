@@ -7,6 +7,7 @@ import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveStateDir } from "../../config/paths.js";
 import { isMissingPathError, formatErrorMessage } from "../../infra/errors.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { createCommandError } from "../../process/command-error.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
 import { withOpenClawStateLease } from "../../state/openclaw-state-lease.js";
 import { createCrustaceanSlug } from "../session-slug.js";
@@ -133,10 +134,6 @@ type ManagedWorktreeGcParams = {
 /** Returns the default no-limit policy for age-based managed-worktree cleanup. */
 export function resolveWorktreeCleanupLimits(): WorktreeCleanupLimits {
   return {};
-}
-
-function resultMessage(result: GitResult): string {
-  return (result.stderr || result.stdout).trim().split("\n").slice(-12).join("\n");
 }
 
 function validateName(name: string): string {
@@ -275,9 +272,11 @@ async function cleanupFailedCreate(repoRoot: string, worktreePath: string, branc
   const deletedBranch = await runGit(repoRoot, ["branch", "-D", branch]);
   await runGit(repoRoot, ["worktree", "prune"]);
   if (removed.code !== 0 || deletedBranch.code !== 0) {
-    throw new Error(
-      `failed to clean up worktree creation: ${resultMessage(removed) || resultMessage(deletedBranch)}`,
-    );
+    const failure =
+      removed.code !== 0
+        ? commandError("git worktree remove", removed)
+        : commandError("git branch -D", deletedBranch);
+    throw new Error(`failed to clean up worktree creation: ${failure.message}`);
   }
 }
 
@@ -316,7 +315,9 @@ async function canResetFailedWorktreeAdd(
   branch: string,
   failure: GitResult,
 ): Promise<boolean> {
-  const message = resultMessage(failure);
+  // Keep retry evidence unchanged: diagnostic rendering/truncation must never
+  // grant cleanup or retry authority.
+  const message = (failure.stderr || failure.stdout).trim().split("\n").slice(-12).join("\n");
   const createdBranch = message.includes(`Preparing worktree (new branch '${branch}')`);
   if (message.includes("unable to checkout working tree") || createdBranch) {
     return true;
@@ -342,8 +343,9 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
   if (!stat?.isFile() || (stat.mode & 0o111) === 0) {
     return;
   }
+  const timeoutMs = 120_000;
   const result = await runCommandWithTimeout([setupScript], {
-    timeoutMs: 120_000,
+    timeoutMs,
     cwd: worktreePath,
     env: {
       OPENCLAW_SOURCE_TREE_PATH: repoRoot,
@@ -351,9 +353,7 @@ async function runSetupScript(repoRoot: string, worktreePath: string): Promise<v
     },
   });
   if (result.code !== 0) {
-    throw new Error(
-      `worktree setup failed${resultMessage(result) ? `:\n${resultMessage(result)}` : ""}`,
-    );
+    throw createCommandError("worktree setup", result, { timeoutMs });
   }
 }
 
@@ -1092,10 +1092,13 @@ export class ManagedWorktreeService {
         ? await runGit(record.repoRoot, ["branch", "-D", record.branch])
         : undefined;
       if (removed.code !== 0 || (branchDeleted && branchDeleted.code !== 0)) {
-        throw new Error(
-          `${String(error)}\nrestore cleanup failed: ${resultMessage(removed) || (branchDeleted ? resultMessage(branchDeleted) : "")}`,
-          { cause: error },
-        );
+        const failure =
+          branchDeleted && removed.code === 0
+            ? commandError("git branch -D", branchDeleted)
+            : commandError("git worktree remove", removed);
+        throw new Error(`${String(error)}\nrestore cleanup failed: ${failure.message}`, {
+          cause: error,
+        });
       }
       throw error;
     }

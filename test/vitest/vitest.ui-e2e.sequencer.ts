@@ -5,13 +5,20 @@ import { basename } from "node:path";
 import { BaseSequencer, type TestSpecification } from "vitest/node";
 
 // Measured wall seconds per file, medianed over the checks-ui-e2e job logs of
-// CI runs 33063115103 and 33055390669 (2026-08-27). The suite grew from 247 to
-// 281 files and from 1430s to 2422s of body since the previous fit, and every
-// prior hint had drifted 1.5-1.9x low, so the table is regenerated rather than
-// patched. The 80 slowest files are listed because they carry the tallest
-// shard; the ~4s median file is interchangeable and rides the byte proxy below.
-// Source bytes alone correlate at r=0.79 with duration and mispredict by up to
-// 3.6x, so proxying everything leaves the widest shard well above ideal.
+// CI runs 33063115103 and 33055390669 (2026-08-27). Only the slowest files are
+// listed, and deliberately so: they carry the tallest shard, while the ~4s
+// median file is interchangeable and rides the byte proxy below.
+//
+// Listing every file does not pay. Cross-validated over runs 33116963478,
+// 33117411412, and 33117811987 (weights fit on two runs, shards scored on the
+// held-out third), a full 286-file table beat this one by ~13s on the tallest
+// shard at 11 shards and by ~0-7s at 13-14, because per-file run-to-run noise
+// (p50 16%, p90 40%) swamps the remaining prediction error. Dropping the hints
+// entirely does cost real time -- bytes alone correlate at r=0.79, mispredict
+// by up to 3.6x, and push the tallest shard from ~222s to ~259s at 11 shards --
+// so keep this table sized to the slow tail and re-measure it when that tail
+// shifts. The tallest shard is bounded by shard count and the ~116s per-shard
+// job floor, not by this map; see the `checks-ui-e2e` note in docs/ci.md.
 // Refresh by summing `<file> (n tests) <ms>` per file across two runs' logs.
 const UI_E2E_FILE_SECONDS_HINTS = new Map<string, number>([
   ["activity-run-inspector.e2e.test.ts", 23],

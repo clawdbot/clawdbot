@@ -1564,77 +1564,35 @@ export async function runDreamingSweepPhases(params: {
   const admissionPolicy = resolveAdmissionPolicy(params.pluginConfig);
   let degradedPhases = 0;
   let pendingNarratives = 0;
-  const recordNarrativeOutcome = (outcome: DreamNarrativeOutcome): void => {
-    if (outcome.status === "degraded") {
-      degradedPhases += 1;
-    } else if (outcome.status === "pending") {
-      pendingNarratives += 1;
+  async function runPhase<TConfig extends LightDreamingConfig | RemDreamingConfig>(
+    phase: "light" | "rem",
+    config: TConfig,
+    run: (params: DreamingPhaseRunParams<TConfig>) => Promise<DreamNarrativeOutcome>,
+  ): Promise<void> {
+    if (!config.enabled || config.limit <= 0) {
+      return;
     }
-  };
-
-  const light = resolveMemoryLightDreamingConfig({
-    pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
-  });
-  if (light.enabled && light.limit > 0) {
     try {
-      recordNarrativeOutcome(
-        await runLightDreaming({
-          agentId: params.agentId,
-          workspaceDir: params.workspaceDir,
-          cfg: params.cfg,
-          config: light,
-          logger: params.logger,
-          subagent: params.subagent,
-          nowMs: sweepNowMs,
-          detachNarratives: params.detachNarratives,
-          admissionPolicy,
-        }),
-      );
+      const outcome = await run({ ...params, config, nowMs: sweepNowMs, admissionPolicy });
+      if (outcome.status === "degraded") {
+        degradedPhases += 1;
+      } else if (outcome.status === "pending") {
+        pendingNarratives += 1;
+      }
     } catch (err) {
       await appendFailedDreamingEvent({
         workspaceDir: params.workspaceDir,
-        phase: "light",
+        phase,
         error: formatErrorMessage(err),
-        storageMode: light.storage.mode,
+        storageMode: config.storage.mode,
         nowMs: sweepNowMs,
         logger: params.logger,
       });
       throw err;
     }
   }
-
-  const rem = resolveMemoryRemDreamingConfig({
-    pluginConfig: params.pluginConfig,
-    cfg: params.cfg,
-  });
-  if (rem.enabled && rem.limit > 0) {
-    try {
-      recordNarrativeOutcome(
-        await runRemDreaming({
-          agentId: params.agentId,
-          workspaceDir: params.workspaceDir,
-          cfg: params.cfg,
-          config: rem,
-          logger: params.logger,
-          subagent: params.subagent,
-          nowMs: sweepNowMs,
-          detachNarratives: params.detachNarratives,
-          admissionPolicy,
-        }),
-      );
-    } catch (err) {
-      await appendFailedDreamingEvent({
-        workspaceDir: params.workspaceDir,
-        phase: "rem",
-        error: formatErrorMessage(err),
-        storageMode: rem.storage.mode,
-        nowMs: sweepNowMs,
-        logger: params.logger,
-      });
-      throw err;
-    }
-  }
+  await runPhase("light", resolveMemoryLightDreamingConfig(params), runLightDreaming);
+  await runPhase("rem", resolveMemoryRemDreamingConfig(params), runRemDreaming);
   return { degradedPhases, pendingNarratives };
 }
 

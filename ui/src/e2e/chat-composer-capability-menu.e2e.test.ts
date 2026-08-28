@@ -528,7 +528,8 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
-        deferredMethods: ["sessions.list", "tools.effective"],
+        deferredMethods: ["tools.effective"],
+        heldMethods: ["sessions.list"],
         methodResponses: {
           "config.get": configResponse({
             github: { url: "https://mcp.example.test", enabled: true },

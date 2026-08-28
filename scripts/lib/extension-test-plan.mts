@@ -161,37 +161,37 @@ function isSkippedTrackedTestFile(relativePath: string) {
 let trackedRepoTestFiles: string[] | null | undefined;
 // Large checkouts exceed Node's 1 MiB spawnSync default. Preserve the Git inventory path;
 // ENOBUFS would otherwise trigger expensive extension-directory walks.
-const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
+export const GIT_LS_FILES_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 
-function loadTrackedRepoTestFiles() {
-  if (trackedRepoTestFiles !== undefined) {
-    return trackedRepoTestFiles;
-  }
-
+export function listTrackedTestPlanFiles(cwd: string, pathspecs: readonly string[]) {
   // Query only the planner-owned tree: a full-repo inventory can overflow
   // spawnSync's buffer and either truncate the plan or force directory walks.
-  const result = spawnSync("git", ["ls-files", "--", ...TRACKED_EXTENSION_TEST_PATHSPECS], {
-    cwd: repoRoot,
+  const result = spawnSync("git", ["ls-files", "--", ...pathspecs], {
+    cwd,
     encoding: "utf8",
     maxBuffer: GIT_LS_FILES_MAX_BUFFER_BYTES,
     stdio: ["ignore", "pipe", "ignore"],
   });
   if (result.status !== 0 || result.error) {
-    trackedRepoTestFiles = null;
-    return trackedRepoTestFiles;
+    return null;
   }
-
-  // Tracked repository metadata is immutable during one planner invocation.
-  // Reuse one inventory so broad extension plans do not fork Git per plugin.
-  trackedRepoTestFiles = result.stdout
+  return result.stdout
     .split("\n")
     .map((line) => line.trim().replaceAll("\\", "/"))
-    .filter(
-      (line) =>
-        line.length > 0 &&
-        !isSkippedTrackedTestFile(line) &&
-        (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
-    );
+    .filter(Boolean);
+}
+
+function loadTrackedRepoTestFiles() {
+  // Tracked repository metadata is immutable during one planner invocation.
+  // Reuse one inventory so broad extension plans do not fork Git per plugin.
+  if (trackedRepoTestFiles === undefined) {
+    trackedRepoTestFiles =
+      listTrackedTestPlanFiles(repoRoot, TRACKED_EXTENSION_TEST_PATHSPECS)?.filter(
+        (line) =>
+          !isSkippedTrackedTestFile(line) &&
+          (line.endsWith(".test.ts") || line.endsWith(".test.tsx")),
+      ) ?? null;
+  }
   return trackedRepoTestFiles;
 }
 

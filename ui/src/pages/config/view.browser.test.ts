@@ -56,6 +56,12 @@ describe("config view", () => {
     themeModeOverridden: false,
     themeModeProvenance: "default" as const,
     themeModeResetValue: "system" as ThemeMode,
+    fontUi: undefined,
+    fontChat: undefined,
+    fontUiProvenance: "default" as const,
+    fontChatProvenance: "default" as const,
+    setFontUi: vi.fn(),
+    setFontChat: vi.fn(),
     accent: undefined,
     accentOverridden: false,
     accentProvenance: "default" as const,
@@ -222,6 +228,39 @@ describe("config view", () => {
   function normalizedText(container: HTMLElement): string {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
+
+  it("names the theme's chat face and maps typography sentinels back to unset overrides", () => {
+    const { container, props } = renderConfigView({
+      theme: "dash",
+      fontUi: "geist",
+      fontChat: "system",
+      fontUiProvenance: "profile",
+      activeSection: "__appearance__",
+      includeSections: ["__appearance__"],
+    });
+    const ui = queryRequired(container, "#settings-font-ui", HTMLElement) as HTMLElement & {
+      value: string;
+    };
+    const chat = queryRequired(container, "#settings-font-chat", HTMLElement) as HTMLElement & {
+      value: string;
+    };
+    expect(ui.querySelector('wa-option[value="theme"]')?.textContent).toContain("Dash · DM Sans");
+    expect(chat.querySelector('wa-option[value="theme"]')?.textContent).toContain(
+      "Dash · Fraunces",
+    );
+    expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
+    expect(ui.querySelectorAll("wa-option")).toHaveLength(11);
+    expect(chat.querySelectorAll("wa-option")).toHaveLength(11);
+    Object.defineProperty(ui, "value", { configurable: true, value: "lora" });
+    ui.dispatchEvent(new Event("change"));
+    expect(props.setFontUi).toHaveBeenLastCalledWith("lora");
+    Object.defineProperty(ui, "value", { configurable: true, value: "theme" });
+    ui.dispatchEvent(new Event("change"));
+    expect(props.setFontUi).toHaveBeenLastCalledWith(undefined);
+    Object.defineProperty(chat, "value", { configurable: true, value: "theme" });
+    chat.dispatchEvent(new Event("change"));
+    expect(props.setFontChat).toHaveBeenLastCalledWith(undefined);
+  });
 
   it("describes the custom accent source and selected state through the native input", () => {
     const inherited = renderConfigView({
