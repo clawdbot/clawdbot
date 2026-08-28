@@ -310,6 +310,7 @@ describe("release validation no-push transport", () => {
       "plugin-prerelease",
       "install-smoke",
       "cross-os",
+      "windows-node",
       "live-e2e",
       "package",
       "qa-parity",
@@ -321,6 +322,7 @@ describe("release validation no-push transport", () => {
     expect(umbrellaGroups).not.toContain("qa");
     expect(releaseGroups).not.toContain("release-checks");
     expect(releaseGroups).toContain("qa");
+    expect(releaseGroups).toContain("windows-node");
     expect(parentFilters.env?.RELEASE_FILTER_VALIDATOR).toBe(
       "workflow/scripts/github/validate-release-suite-filters.sh",
     );
@@ -332,7 +334,7 @@ describe("release validation no-push transport", () => {
     const candidate = job(full, "prepare_release_candidate");
     expect(candidate.if).not.toContain('"release-checks"');
     expect(candidate.if).toContain(
-      'contains(fromJSON(\'["all","plugin-prerelease","cross-os","package"]\'), inputs.rerun_group)',
+      'contains(fromJSON(\'["all","plugin-prerelease","cross-os","windows-node","package"]\'), inputs.rerun_group)',
     );
     expect(candidate.if).toContain(
       "(inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",

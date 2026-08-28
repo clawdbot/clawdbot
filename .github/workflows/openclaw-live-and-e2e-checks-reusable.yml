@@ -2485,6 +2485,24 @@ jobs:
                 }
             fi
           fi
+          metadata=".artifacts/docker-e2e-package/package-candidate.json"
+          if [[ ! -f "$metadata" ]]; then
+            jq -n \
+              --arg name "$name" \
+              --arg packageSourceSha "$package_source_sha" \
+              --arg sha256 "$digest" \
+              --arg version "$version" \
+              '{
+                name: $name,
+                packageSourceSha: $packageSourceSha,
+                sha256: $sha256,
+                version: $version
+              }' > "$metadata"
+          fi
+          [[ -s "$metadata" ]] || {
+            echo "Docker E2E package metadata was not created." >&2
+            exit 1
+          }
           tag="pkg-${digest:0:32}"
           echo "sha256=$digest" >> "$GITHUB_OUTPUT"
           echo "version=$version" >> "$GITHUB_OUTPUT"
@@ -2502,7 +2520,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: docker-e2e-package-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .artifacts/docker-e2e-package/openclaw-current.tgz
+          path: |
+            .artifacts/docker-e2e-package/openclaw-current.tgz
+            .artifacts/docker-e2e-package/package-candidate.json
           if-no-files-found: error
 
       - name: Validate prerelease plugin registry artifact identity

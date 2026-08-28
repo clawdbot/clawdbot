@@ -2218,6 +2218,26 @@ describe("release CI summary child correlation", () => {
     ).toThrow("selected child is missing from manifest: NPM Telegram Beta E2E");
   });
 
+  it("maps focused Windows-node validation to the release checks child", () => {
+    const manifest = validateParentManifest(rawManifest({ rerunGroup: "windows-node" }), {
+      runAttempt: 2,
+      runId: "29090000000",
+    });
+    const selected = requiredChildKeysForRerunGroup(manifest.rerunGroup);
+    const children = expectedSelectedChildDispatches(
+      manifest.runId,
+      manifest.runAttempt,
+      manifest.workflowRef,
+      selected,
+    );
+
+    expect([...selected]).toEqual(["releaseChecks"]);
+    expect(children.map((child) => child.manifestKey)).toEqual(["releaseChecks"]);
+    expect(manifestChildEntries(manifest, children, selected).map((entry) => entry.runId)).toEqual([
+      "404",
+    ]);
+  });
+
   it("keeps historical non-reuse v2 manifests readable without validation inputs", () => {
     const legacy = rawManifest({});
     delete (legacy as { validationInputs?: unknown }).validationInputs;
