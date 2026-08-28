@@ -182,17 +182,17 @@ function webSearchItem(menu: import("playwright").Locator) {
   return menu.locator('wa-dropdown-item[value="toggle-web-search"]');
 }
 
-/* The shared title tooltip (components/tooltip-title.ts) lifts a hovered or
-   focused element's `title` into its overlay and blanks the attribute until
-   the pointer leaves, so dropdown rows race a raw getAttribute("title") read.
-   Read the lifted description when the attribute is blank. */
+// The shared tooltip moves active title hints onto the row or its nested link.
+// Read the reason from the element that owns that accessible description.
 function disabledReason(item: import("playwright").Locator) {
   return item.evaluate((element) => {
     const title = element.getAttribute("title");
     if (title) {
       return title;
     }
-    const describedBy = element.getAttribute("aria-describedby");
+    const describedBy =
+      element.getAttribute("aria-describedby") ??
+      element.querySelector("[aria-describedby]")?.getAttribute("aria-describedby");
     const description = describedBy ? element.ownerDocument.getElementById(describedBy) : null;
     return description?.textContent?.trim() ?? "";
   });
@@ -621,6 +621,7 @@ suite.define(() => {
         .toBe(true);
       const browse = menu.getByRole("menuitem", { name: "Browse connectors" });
       await expect.poll(() => browse.isDisabled()).toBe(true);
+      await browse.hover();
       await expect.poll(() => disabledReason(browse)).toContain("Admin access");
       const addServer = menu.getByRole("menuitem", { name: /Add MCP server/ });
       await expect.poll(() => addServer.isDisabled()).toBe(true);
