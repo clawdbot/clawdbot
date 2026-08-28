@@ -321,6 +321,8 @@ describe("resolveMSTeamsSendContext", () => {
     );
 
     expect(sendContextMockState.store.remove).toHaveBeenCalledWith("19:channel@thread.tacv2");
+    expect(sendContextMockState.loadMSTeamsSdkWithAuth).not.toHaveBeenCalled();
+    expect(sendContextMockState.createActivity).not.toHaveBeenCalled();
   });
 
   it("does not query Graph while resolving an opaque Bot Framework conversation", async () => {

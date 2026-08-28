@@ -838,7 +838,7 @@ extensions/moonshot/index.ts	2
 extensions/moonshot/native-video.ts	2
 extensions/moonshot/provider-policy-api.ts	1
 extensions/moonshot/src/kimi-web-search-provider.runtime.ts	3
-extensions/msteams/doctor-contract-api.ts	7
+extensions/msteams/doctor-contract-api.ts	6
 extensions/msteams/src/attachments/graph.ts	1
 extensions/msteams/src/attachments/shared.ts	2
 extensions/msteams/src/channel.ts	4
