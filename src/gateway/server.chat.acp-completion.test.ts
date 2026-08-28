@@ -209,14 +209,17 @@ describe("Gateway ACP completion ownership", () => {
     );
     dispatchInboundMessageMock.mockImplementation(async (input: unknown) => {
       // SAFETY: The Gateway mock adapter forwards the real dispatchInboundMessage parameters.
-      const { ctx, cfg, dispatcher, replyOptions } = input as Parameters<
-        typeof dispatchInboundMessage
-      >[0];
+      const {
+        ctx,
+        cfg,
+        dispatcher,
+        replyOptions: inboundReplyOptions,
+      } = input as Parameters<typeof dispatchInboundMessage>[0];
       return actualDispatch.dispatchInboundMessage({
         ctx,
         cfg,
         dispatcher,
-        replyOptions,
+        replyOptions: inboundReplyOptions,
         dispatchReplyFromConfig: async ({ ctx: finalized, replyOptions }) => {
           if (scenario.media) {
             dispatcher.appendBeforeDeliver?.((payload) => ({
