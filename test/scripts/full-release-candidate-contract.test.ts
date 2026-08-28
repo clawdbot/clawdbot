@@ -294,7 +294,8 @@ describe("full release candidate contract", () => {
     ["producer job name", (binding) => void (binding.producer.jobName = "different producer job")],
     [
       "producer workflow path",
-      (binding) => void (binding.producer.workflowPath = ".github/workflows/ci.yml"),
+      (binding) =>
+        void (binding.producer.workflowPath = ".github/workflows/candidate-evidence-test.yml"),
     ],
     [
       "producer run id tuple",
