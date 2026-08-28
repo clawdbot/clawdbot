@@ -14,7 +14,7 @@ import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.
 import { danger, info } from "../globals.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
-import { writeRuntimeJson } from "../runtime.js";
+import { ExitError, writeRuntimeJson } from "../runtime.js";
 import { toDotPath } from "../shared/dot-path.js";
 import {
   formatPluginInstallConfigSetError,
@@ -47,6 +47,7 @@ import {
   printConfigDryRunResult,
   type ConfigSetDryRunResult,
 } from "./config-set-dryrun.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 const GATEWAY_AUTH_MODE_PATH: PathSegment[] = ["gateway", "auth", "mode"];
 const PLUGIN_INSTALL_RECORD_PATH_PREFIX: PathSegment[] = ["plugins", "installs"];
@@ -426,6 +427,9 @@ export function handleConfigMutationError(params: {
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
 }) {
+  if (params.err instanceof ExitError) {
+    throw params.err;
+  }
   const isConflict = params.err instanceof ConfigMutationConflictError;
   const detail = formatErrorMessage(params.err);
   const message = isConflict
@@ -434,8 +438,7 @@ export function handleConfigMutationError(params: {
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
-      params.runtime.exit(1);
-      return;
+      exitCliAfterOutput(params.runtime, 1);
     }
     const result: ConfigSetDryRunResult = {
       ok: false,
@@ -449,9 +452,8 @@ export function handleConfigMutationError(params: {
     };
     writeRuntimeJson(params.runtime, result);
     params.runtime.error(danger(message));
-    params.runtime.exit(1);
-    return;
+    exitCliAfterOutput(params.runtime, 1);
   }
   params.runtime.error(danger(message));
-  params.runtime.exit(1);
+  exitCliAfterOutput(params.runtime, 1);
 }

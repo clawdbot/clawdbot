@@ -285,9 +285,10 @@ describe("config cli secrets integration", () => {
         expect(snapshot.valid).toBe(true);
         expect(snapshot.issues).toStrictEqual([]);
 
-        await expect(runRegisteredConfigCommand(["config", "validate"])).rejects.toThrow(
-          "__exit__:1",
-        );
+        await expect(runRegisteredConfigCommand(["config", "validate"])).rejects.toMatchObject({
+          name: "ExitError",
+          code: 1,
+        });
 
         expect(registeredRuntimeErrors.join("\n")).toContain(
           'Secret provider "shared" has source "file" but ref requests "exec"',

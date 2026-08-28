@@ -43,7 +43,7 @@ describe("config cli roster integration", () => {
               "--dry-run",
               "--json",
             ]),
-          ).rejects.toThrow("__exit__:1");
+          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
 
           expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
           expect(JSON.parse(registeredRuntimeLogs.join("\n"))).toMatchObject({
@@ -371,7 +371,7 @@ describe("config cli roster integration", () => {
               modelPath,
               "missing-roster-provider/missing-model",
             ]),
-          ).rejects.toThrow("__exit__:1");
+          ).rejects.toMatchObject({ name: "ExitError", code: 1 });
           expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
           expect(registeredRuntimeErrors.join("\n")).toContain(
             'Cannot set model reference "<configured model reference>" at agents.entries.main.model',
@@ -404,7 +404,7 @@ describe("config cli roster integration", () => {
             "--replace",
             "--strict-json",
           ]),
-        ).rejects.toThrow("__exit__:1");
+        ).rejects.toMatchObject({ name: "ExitError", code: 1 });
         expect(fs.readFileSync(configPath, "utf8")).toBe(raw);
         expect(registeredRuntimeErrors.join("\n")).toContain(error);
         expect(registeredRuntimeLogs.join("\n")).not.toContain("Updated");

@@ -41,6 +41,7 @@ import { checkTouchedTextModelRefs } from "./config-model-validation.js";
 import { formatPluginPackagingRuntimeOutputRecoveryHint } from "./config-recovery-hints.js";
 import type { ConfigSetDryRunError, ConfigSetDryRunResult } from "./config-set-dryrun.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 
 function formatInvalidConfigRepairHint(
   snapshot: Pick<ConfigFileSnapshot, "valid" | "issues" | "warnings" | "legacyIssues">,
@@ -64,16 +65,14 @@ export function ensureValidConfigSnapshotForCli(
       ...formatCliJsonFailure(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`),
       issues: normalizeConfigIssues(snapshot.issues),
     });
-    runtime.exit(1);
-    return false;
+    exitCliAfterOutput(runtime, 1);
   }
   runtime.error(`OpenClaw config is invalid: ${shortenHomePath(snapshot.path)}`);
   for (const line of renderConfigValidationIssueLines(snapshot)) {
     runtime.error(line);
   }
   runtime.error(formatInvalidConfigRepairHint(snapshot, "to repair, then retry."));
-  runtime.exit(1);
-  return false;
+  exitCliAfterOutput(runtime, 1);
 }
 
 export async function loadValidConfigForWrite(runtime: RuntimeEnv = defaultRuntime) {

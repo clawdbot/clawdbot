@@ -41,6 +41,7 @@ import {
 import { isConfigMachineOutput, isConfigSetJsonParseOnly } from "./config-output-mode.js";
 import type { ConfigSetOptions } from "./config-set-input.js";
 import { formatCliJsonFailure } from "./failure-output.js";
+import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { setCommandJsonMode } from "./program/json-mode.js";
 import { quoteCliArg } from "./quote-cli-arg.js";
 
@@ -135,12 +136,10 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
         : `Unknown config path: ${opts.path}. Run ${formatCliCommand("openclaw config schema")} to inspect valid paths.`;
       if (opts.json) {
         writeRuntimeJson(runtime, formatCliJsonFailure(message));
-        runtime.exit(1);
-        return;
+        exitCliAfterOutput(runtime, 1);
       }
       runtime.error(danger(message));
-      runtime.exit(1);
-      return;
+      exitCliAfterOutput(runtime, 1);
     }
     if (opts.json) {
       writeRuntimeJson(runtime, res.value ?? null);
@@ -159,11 +158,10 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     }
     if (opts.json) {
       writeRuntimeJson(runtime, formatCliJsonFailure(err));
-      runtime.exit(1);
-      return;
+      exitCliAfterOutput(runtime, 1);
     }
     runtime.error(danger(formatErrorMessage(err)));
-    runtime.exit(1);
+    exitCliAfterOutput(runtime, 1);
   }
 }
 
@@ -204,7 +202,7 @@ async function runConfigFile(opts: { json?: boolean; runtime?: RuntimeEnv }) {
     writeRuntimeStdout(runtime, `${path}\n`);
   } catch (err) {
     runtime.error(danger(formatErrorMessage(err)));
-    runtime.exit(1);
+    exitCliAfterOutput(runtime, 1);
   }
 }
 
@@ -218,7 +216,7 @@ async function runConfigSchema(opts: { runtime?: RuntimeEnv } = {}) {
     writeRuntimeJson(runtime, schema);
   } catch (err) {
     runtime.error(danger(`Config schema error: ${formatErrorMessage(err)}`));
-    runtime.exit(1);
+    exitCliAfterOutput(runtime, 1);
   }
 }
 
@@ -246,8 +244,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
           `Create one with ${formatCliCommand("openclaw onboard")} or run ${formatCliCommand("openclaw doctor --fix")}.`,
         );
       }
-      runtime.exit(1);
-      return;
+      exitCliAfterOutput(runtime, 1);
     }
     if (!snapshot.valid) {
       const issues = normalizeConfigIssues(snapshot.issues);
@@ -269,8 +266,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
         );
         runtime.error(`Inspect with ${formatCliCommand("openclaw config validate")}.`);
       }
-      runtime.exit(1);
-      return;
+      exitCliAfterOutput(runtime, 1);
     }
     const warnings = normalizeConfigIssues(snapshot.warnings);
     if (opts.json) {
@@ -285,6 +281,9 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
       }
     }
   } catch (err) {
+    if (err instanceof ExitError) {
+      throw err;
+    }
     if (opts.json) {
       writeRuntimeJson(
         runtime,
@@ -294,7 +293,7 @@ async function runConfigValidate(opts: { json?: boolean; runtime?: RuntimeEnv } 
     } else {
       runtime.error(danger(`Config validation error: ${formatErrorMessage(err)}`));
     }
-    runtime.exit(1);
+    exitCliAfterOutput(runtime, 1);
   }
 }
 
