@@ -41,7 +41,7 @@ on:
         required: false
         type: string
       windows_node_tag:
-        description: Exact openclaw-windows-node release tag, required for stable OpenClaw publish
+        description: Exact openclaw-windows-node release tag, required for regular stable OpenClaw publish
         required: false
         type: string
       windows_node_installer_digests:
@@ -57,7 +57,7 @@ on:
         required: false
         type: string
       npm_dist_tag:
-        description: npm dist-tag for the OpenClaw package
+        description: npm dist-tag passed to the plugin and core publishers; extended-stable leaves npm latest unchanged
         required: true
         default: beta
         type: choice
@@ -79,7 +79,7 @@ on:
         required: false
         type: string
       publish_openclaw_npm:
-        description: Publish the OpenClaw npm package after plugin npm succeeds; ClawHub may still run
+        description: Publish the OpenClaw npm package under npm_dist_tag after plugin npm succeeds; ClawHub may still run
         required: true
         default: true
         type: boolean
@@ -124,6 +124,7 @@ jobs:
     timeout-minutes: 20
     outputs:
       sha: ${{ steps.manifest.outputs.sha || steps.ref.outputs.sha }}
+      expected_validation_branch: ${{ steps.inputs.outputs.expected_validation_branch }}
       preflight_artifact_name: ${{ steps.preflight_artifact.outputs.name }}
       preflight_tarball_sha256: ${{ steps.manifest.outputs.tarball_sha256 }}
       full_release_validation_run_attempt: ${{ steps.full_run.outputs.attempt }}
@@ -133,6 +134,7 @@ jobs:
       windows_node_installer_digests: ${{ steps.windows_source.outputs.installer_digests }}
     steps:
       - name: Validate inputs
+        id: inputs
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
@@ -244,24 +246,24 @@ jobs:
               exit 1
             fi
           fi
-          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" && "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
-            echo "Extended-stable core npm publication stays on the canonical extended-stable release flow; use publish_docker_only=true only after its registry readback." >&2
-            exit 1
-          fi
           stable_release=true
           if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
             stable_release=false
+          fi
+          regular_stable_release="${stable_release}"
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+            regular_stable_release=false
           fi
           if [[ -n "${WINDOWS_NODE_TAG}" && ! "${WINDOWS_NODE_TAG}" =~ ^v[0-9]+\.[0-9]+\.[0-9]+([-.][0-9A-Za-z]+([.-][0-9A-Za-z]+)*)?$ ]]; then
             echo "windows_node_tag must be an explicit openclaw-windows-node release tag, not latest: ${WINDOWS_NODE_TAG}" >&2
             exit 1
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${stable_release}" == "true" && -z "${WINDOWS_NODE_TAG}" ]]; then
-            echo "Stable OpenClaw publish requires an explicit windows_node_tag." >&2
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${regular_stable_release}" == "true" && -z "${WINDOWS_NODE_TAG}" ]]; then
+            echo "Regular stable OpenClaw publish requires an explicit windows_node_tag." >&2
             exit 1
           fi
-          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${stable_release}" == "true" && -z "${WINDOWS_NODE_INSTALLER_DIGESTS}" ]]; then
-            echo "Stable OpenClaw publish requires candidate-approved windows_node_installer_digests." >&2
+          if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" && "${regular_stable_release}" == "true" && -z "${WINDOWS_NODE_INSTALLER_DIGESTS}" ]]; then
+            echo "Regular stable OpenClaw publish requires candidate-approved windows_node_installer_digests." >&2
             exit 1
           fi
           tideclaw_alpha_publish=false
@@ -308,10 +310,20 @@ jobs:
               exit 1
               ;;
           esac
+          expected_validation_branch="${WORKFLOW_REF#refs/heads/}"
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+            if [[ ! "${RELEASE_TAG}" =~ ^v([0-9]{4})\.([1-9][0-9]*)\.([1-9][0-9]*)$ ]] || \
+              (( 10#${BASH_REMATCH[3]:-0} < 33 )); then
+              echo "Extended-stable publication requires a final .33+ release tag." >&2
+              exit 1
+            fi
+            expected_validation_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"
+          fi
+          echo "expected_validation_branch=${expected_validation_branch}" >> "$GITHUB_OUTPUT"
 
       - name: Validate stable Windows source release
         id: windows_source
-        if: ${{ inputs.publish_openclaw_npm }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' }}
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.tag }}
@@ -331,11 +343,11 @@ jobs:
             exit 1
           fi
           if [[ "$(printf '%s' "${source_json}" | jq -r '.isDraft')" == "true" ]]; then
-            echo "Stable OpenClaw publish requires a published Windows source release." >&2
+            echo "Regular stable OpenClaw publish requires a published Windows source release." >&2
             exit 1
           fi
           if [[ "$(printf '%s' "${source_json}" | jq -r '.isPrerelease')" == "true" ]]; then
-            echo "Stable OpenClaw publish requires a non-prerelease Windows source release." >&2
+            echo "Regular stable OpenClaw publish requires a non-prerelease Windows source release." >&2
             exit 1
           fi
 
@@ -659,7 +671,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag }}
           EXPECTED_SHA: ${{ steps.ref.outputs.sha }}
           EXPECTED_RELEASE_PROFILE: ${{ inputs.release_profile }}
-          EXPECTED_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          EXPECTED_WORKFLOW_BRANCH: ${{ steps.inputs.outputs.expected_validation_branch }}
           TRUSTED_WORKFLOW_FULL_REF: ${{ github.ref }}
           TRUSTED_WORKFLOW_REF: ${{ github.ref_name }}
           TRUSTED_WORKFLOW_SHA: ${{ github.workflow_sha }}
@@ -837,6 +849,8 @@ jobs:
 
       - name: Validate release tag is reachable from a trusted release branch
         env:
+          EXPECTED_VALIDATION_BRANCH: ${{ steps.inputs.outputs.expected_validation_branch }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
           WORKFLOW_REF_NAME: ${{ github.ref_name }}
         run: |
@@ -845,6 +859,15 @@ jobs:
             +refs/heads/main:refs/remotes/origin/main \
             '+refs/heads/release/*:refs/remotes/origin/release/*' \
             '+refs/heads/extended-stable/*:refs/remotes/origin/extended-stable/*'
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+            expected_ref="refs/remotes/origin/${EXPECTED_VALIDATION_BRANCH}"
+            if git show-ref --verify --quiet "${expected_ref}" && \
+              git merge-base --is-ancestor HEAD "${expected_ref}"; then
+              exit 0
+            fi
+            echo "Extended-stable tag ${RELEASE_TAG} must be reachable from ${EXPECTED_VALIDATION_BRANCH}." >&2
+            exit 1
+          fi
           if git merge-base --is-ancestor HEAD origin/main; then
             exit 0
           fi
@@ -1006,6 +1029,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
           RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
           WORKFLOW_FULL_REF: ${{ github.ref }}
@@ -1088,6 +1112,9 @@ jobs:
           )
           if [[ -n "${PLUGINS// }" ]]; then
             plan_args+=(--plugins "${PLUGINS}")
+          fi
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+            plan_args+=(--skip-clawhub)
           fi
 
           CLAWHUB_REGISTRY="${CLAWHUB_REGISTRY:-https://clawhub.ai}" \
@@ -1183,7 +1210,7 @@ jobs:
             --output "${notes_file}"
 
       - name: Write Android release approval
-        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         env:
           RELEASE_PUBLISH_BRANCH: ${{ github.ref_name }}
           RELEASE_PUBLISH_RUN_ID: ${{ github.run_id }}
@@ -1213,13 +1240,13 @@ jobs:
           NODE
 
       - name: Attest Android release approval
-        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
         with:
           subject-path: ${{ runner.temp }}/android-release-approval/approval.json
 
       - name: Upload Android release approval
-        if: ${{ inputs.publish_openclaw_npm && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
+        if: ${{ inputs.publish_openclaw_npm && inputs.npm_dist_tag != 'extended-stable' && !contains(inputs.tag, '-alpha.') && !contains(inputs.tag, '-beta.') }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: android-release-approval-${{ github.run_id }}
@@ -1263,11 +1290,11 @@ jobs:
           openclaw_npm_expected_workflow_sha="${PARENT_WORKFLOW_SHA}"
 
           is_stable_release() {
-            [[ "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
+            [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" != *"-alpha."* && "${RELEASE_TAG}" != *"-beta."* ]]
           }
 
           is_android_release() {
-            [[ "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
+            [[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" =~ ^v[0-9]{4}\.[1-9][0-9]*\.[1-9][0-9]*(-[1-9][0-9]*)?$ ]]
           }
 
           verify_child_run_sha() {
@@ -2318,7 +2345,7 @@ jobs:
             local validation_file workflow_ref
             local -a verify_args
 
-            skip_clawhub="${1:-false}"
+            skip_clawhub="$1"
 
             release_version="${RELEASE_TAG#v}"
             evidence_path="${POSTPUBLISH_EVIDENCE_DIR}/release-postpublish-evidence.json"
@@ -2443,7 +2470,7 @@ jobs:
               telegram_line="- npm Telegram beta E2E: not supplied"
             fi
             clawhub_runtime_state_path="${RUNNER_TEMP}/openclaw-release-clawhub-runtime-state-proof.json"
-            write_clawhub_runtime_state false "${clawhub_runtime_state_path}"
+            write_clawhub_runtime_state "${force_skip_clawhub}" "${clawhub_runtime_state_path}"
             clawhub_line="$(jq -r '.proofLines.normal' "${clawhub_runtime_state_path}")"
             clawhub_bootstrap_line="$(jq -r '.proofLines.bootstrap' "${clawhub_runtime_state_path}")"
             windows_line=""
@@ -2526,18 +2553,22 @@ jobs:
             fi
           }
 
-          bootstrap_summary_ref="$(jq -er '.bootstrap.ref | select(type == "string" and length > 0)' "${CLAWHUB_PLAN_PATH}")"
-          bootstrap_summary_sha="$(jq -er '.bootstrapWorkflowSha | select(test("^[a-f0-9]{40}$"))' "${CLAWHUB_PLAN_PATH}")"
+          force_skip_clawhub=false
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+            force_skip_clawhub=true
+          fi
           {
-            echo "### Publish sequence"
+            echo "### Publish"
             echo
             echo "- Workflow ref: \`${CHILD_WORKFLOW_REF}\`"
-            echo "- Normal ClawHub workflow ref: release tag \`${RELEASE_TAG}\`"
-            echo "- ClawHub bootstrap workflow ref: \`${bootstrap_summary_ref}\` at \`${bootstrap_summary_sha}\`"
             echo "- Release tag: \`${RELEASE_TAG}\`"
             echo "- Release SHA: \`${TARGET_SHA}\`"
             echo "- Release approval: this workflow job"
-            echo "- Plugin npm and ClawHub publish: dispatched in parallel"
+            if [[ "${force_skip_clawhub}" == "true" ]]; then
+              echo "- ClawHub: skipped by release track"
+            else
+              echo "- ClawHub: dispatched in parallel"
+            fi
             if [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
               echo "- OpenClaw npm publish: starts after plugin npm succeeds"
             else
@@ -2548,11 +2579,6 @@ jobs:
             fi
             if is_stable_release && [[ "${PUBLISH_OPENCLAW_NPM}" == "true" ]]; then
               echo "- Windows Hub promotion: promoted concurrently with the OpenClaw npm publish; required before the GitHub release can be published"
-            fi
-            if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
-              echo "- Workflow completion waits for ClawHub"
-            else
-              echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -2577,6 +2603,12 @@ jobs:
           npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}")
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
+          fi
+          if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+            npm_args+=(
+              -f npm_dist_tag=extended-stable
+              -f release_candidate_branch="${{ needs.resolve_release_target.outputs.expected_validation_branch }}"
+            )
           fi
 
           plugin_npm_run_id="$(dispatch_workflow plugin-npm-release.yml "${npm_args[@]}")"
@@ -2655,15 +2687,23 @@ jobs:
                   -f full_release_validation_run_attempt="${FULL_RELEASE_VALIDATION_RUN_ATTEMPT}"
                 )
               fi
-              openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml \
-                -f tag="${RELEASE_TAG}" \
-                -f preflight_only=false \
-                -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
-                -f release_publish_run_id="${GITHUB_RUN_ID}" \
-                -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
-                -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
-                -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}" \
-                "${evidence_args[@]}")"
+              openclaw_npm_args=(
+                -f tag="${RELEASE_TAG}"
+                -f preflight_only=false
+                -f preflight_run_id="${PREFLIGHT_RUN_ID}"
+                -f release_publish_run_id="${GITHUB_RUN_ID}"
+                -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}"
+                -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}"
+                -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}"
+                "${evidence_args[@]}"
+              )
+              if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then
+                openclaw_npm_args+=(
+                  -f release_candidate_branch="${{ needs.resolve_release_target.outputs.expected_validation_branch }}"
+                  -f plugin_npm_run_id="${plugin_npm_run_id}"
+                )
+              fi
+              openclaw_npm_run_id="$(dispatch_workflow openclaw-npm-release.yml "${openclaw_npm_args[@]}")"
               echo "- OpenClaw npm run ID: \`${openclaw_npm_run_id}\`" >> "$GITHUB_STEP_SUMMARY"
             fi
           else
@@ -2890,7 +2930,7 @@ jobs:
 
   finalize_github_release:
     name: Finalize GitHub release
-    needs: [publish, publish_docker]
+    needs: [resolve_release_target, publish, publish_docker]
     if: ${{ always() && inputs.publish_openclaw_npm && needs.publish.result == 'success' && needs.publish_docker.result == 'success' }}
     runs-on: ubuntu-latest
     environment: npm-release
@@ -2900,17 +2940,31 @@ jobs:
       - name: Publish the verified draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           RELEASE_TAG: ${{ inputs.tag }}
         run: |
           set -euo pipefail
           expected_prerelease=false
+          expected_latest=false
+          latest_arg="--latest=false"
           if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
             expected_prerelease=true
+          elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then
+            expected_latest=true
+            latest_arg="--latest"
           fi
-          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false
-          release_json="$(gh release view "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --json isDraft,isPrerelease)"
+          gh release edit "${RELEASE_TAG}" --repo "${GITHUB_REPOSITORY}" --draft=false "${latest_arg}"
+          release_owner="${GITHUB_REPOSITORY%%/*}"
+          release_repo="${GITHUB_REPOSITORY#*/}"
+          release_json="$(gh api graphql \
+            -f query='query($owner:String!,$name:String!,$tag:String!){repository(owner:$owner,name:$name){release(tagName:$tag){isDraft isLatest isPrerelease}}}' \
+            -f owner="${release_owner}" \
+            -f name="${release_repo}" \
+            -f tag="${RELEASE_TAG}" \
+            --jq '.data.repository.release')"
           if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] || \
-            [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
-            echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
+            [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]] || \
+            [[ "$(printf '%s' "${release_json}" | jq -r '.isLatest')" != "${expected_latest}" ]]; then
+            echo "Published GitHub release state does not match the requested draft/prerelease/latest classification." >&2
             exit 1
           fi

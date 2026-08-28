@@ -32,6 +32,7 @@ type OpenClawReleaseClawHubPlanArgs = {
   releasePublishRunId: string;
   pluginPublishScope: PluginReleaseSelectionMode;
   plugins: string[];
+  skipClawHub?: boolean;
 };
 
 type OpenClawReleaseClawHubPlan = {
@@ -244,6 +245,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
   let pluginPublishScope: PluginReleaseSelectionMode | undefined;
   let plugins: string[] = [];
   let pluginsFlagProvided = false;
+  let skipClawHub = false;
 
   for (let index = 0; index < values.length; index += 1) {
     const arg = values[index];
@@ -285,6 +287,9 @@ export function parseOpenClawReleaseClawHubPlanArgs(
         plugins = parsePluginReleaseSelection(next());
         pluginsFlagProvided = true;
         break;
+      case "--skip-clawhub":
+        skipClawHub = true;
+        break;
       default:
         throw new Error(`Unknown argument: ${arg}`);
     }
@@ -314,6 +319,7 @@ export function parseOpenClawReleaseClawHubPlanArgs(
     releasePublishRunId: requireArg(releasePublishRunId, "--release-publish-run-id"),
     pluginPublishScope: resolvedPluginPublishScope,
     plugins,
+    skipClawHub,
   };
 }
 
@@ -335,6 +341,38 @@ export async function buildOpenClawReleaseClawHubPlan(
     "releasePublishRunAttempt",
   );
   const releasePublishRunId = requireArg(args.releasePublishRunId, "releasePublishRunId");
+  if (args.skipClawHub) {
+    return {
+      bootstrapWorkflowSha,
+      clawHubWorkflowRef: releaseTag,
+      releasePublishBranch,
+      normal: createDispatchTarget({
+        workflow: "plugin-clawhub-release.yml",
+        ref: releaseTag,
+        packages: [],
+        releasePublishRunId,
+        releasePublishBranch,
+        includePublishScope: true,
+      }),
+      bootstrap: createDispatchTarget({
+        workflow: "plugin-clawhub-new.yml",
+        ref: bootstrapWorkflowRef,
+        packages: [],
+        releasePublishRunId,
+        releasePublishBranch,
+        includePublishScope: false,
+      }),
+      summary: {
+        normalCount: 0,
+        bootstrapCount: 0,
+        missingTrustedPublisherCount: 0,
+        normalPlugins: "",
+        bootstrapPlugins: "",
+        missingTrustedPlugins: "",
+      },
+      verifier: { clawHubWorkflowRef: releaseTag },
+    };
+  }
   const plan = await collectPluginClawHubReleasePlan({
     rootDir: options.rootDir ?? resolve("."),
     selection: args.plugins,

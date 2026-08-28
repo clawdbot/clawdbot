@@ -367,6 +367,47 @@ describe("extended-stable npm run identity", () => {
     }
   });
 
+  it("accepts a plugin run dispatched by the trusted main orchestrator for the exact target", () => {
+    const workflowSha = "c".repeat(40);
+    const pluginRun = {
+      workflowName: "Plugin NPM Release",
+      displayTitle: `Plugin NPM Release [extended-stable] ${sha}`,
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      headBranch: "main",
+      headSha: workflowSha,
+    };
+    expect(() =>
+      validateExtendedStableRunIdentity({
+        run: pluginRun,
+        kind: "plugin",
+        npmDistTag: "extended-stable",
+        expectedBranch: branch,
+        expectedSha: sha,
+        expectedOrchestratorBranch: "main",
+        expectedOrchestratorSha: workflowSha,
+      }),
+    ).not.toThrow();
+    for (const changes of [
+      { headBranch: "release/2026.6.35" },
+      { headSha: "not-a-sha" },
+      { displayTitle: `Plugin NPM Release [extended-stable] ${"b".repeat(40)}` },
+    ]) {
+      expect(() =>
+        validateExtendedStableRunIdentity({
+          run: { ...pluginRun, ...changes },
+          kind: "plugin",
+          npmDistTag: "extended-stable",
+          expectedBranch: branch,
+          expectedSha: sha,
+          expectedOrchestratorBranch: "main",
+          expectedOrchestratorSha: workflowSha,
+        }),
+      ).toThrow();
+    }
+  });
+
   it.each([
     ["wrong branch", { headBranch: "main" }],
     ["missing branch", { headBranch: undefined }],

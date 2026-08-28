@@ -1037,11 +1037,13 @@ function runReleasePublishInputValidation(overrides: Record<string, string>) {
   if (!script) {
     throw new Error("Expected release publish input validation script");
   }
+  const githubOutput = resolve(tempDirs.make("release-publish-inputs-"), "github-output");
   return spawnSync("bash", ["-c", script], {
     encoding: "utf8",
     env: {
       FULL_RELEASE_VALIDATION_RUN_ATTEMPT: "1",
       FULL_RELEASE_VALIDATION_RUN_ID: "222",
+      GITHUB_OUTPUT: githubOutput,
       OPENCLAW_NPM_RESUME_RUN_ID: "",
       PATH: process.env.PATH,
       PLUGINS: "",
@@ -1700,7 +1702,7 @@ describe("package acceptance workflow", () => {
     expect(verifyStep.run).not.toContain("npm view openclaw@extended-stable version");
   });
 
-  it("accepts only exact protected SHA-pinned release publish tags", () => {
+  it("accepts only main-reachable protected SHA-pinned release publish tags", () => {
     const workflowSha = "a".repeat(40);
     const binDir = tempDirs.make("release-publish-gh-");
     const ghPath = `${binDir}/gh`;
@@ -1879,8 +1881,8 @@ describe("package acceptance workflow", () => {
     expect(identity.run).toContain(
       "node .release-tooling/scripts/release-tooling-identity.mjs verify",
     );
-    expect(target.run).not.toContain('WORKFLOW_REF}" != "refs/heads/main');
-    expect(target.run).not.toContain('git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main');
+    expect(target.run).toContain('if [[ -n "${RELEASE_CANDIDATE_BRANCH// }" ]]; then');
+    expect(target.run).toContain('git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main');
   });
 
   it("accepts only the live exact lightweight protected tag for plugin npm preflight", () => {
@@ -2354,6 +2356,9 @@ describe("package acceptance workflow", () => {
     expect(workflow).toContain("main_ref: ${{ steps.inputs.outputs.main_ref }}");
     expect(workflow).toContain("TRIGGER_SHA: ${{ github.sha }}");
     expect(workflow).toContain('main_ref="$TRIGGER_SHA"');
+    expect(workflow).toContain('classifyReleaseTrain(parsed) === "stable"');
+    expect(workflow).toContain('classifyReleaseTrain(parsed) !== "stable"');
+    expect(workflow).toContain("below the extended-stable .33 boundary");
     expect(workflow).toContain("ref: ${{ needs.resolve.outputs.main_ref }}");
     expect(workflow).toContain(
       "Stable closeout skipped: $evidence_source_tag predates immutable postpublish evidence.",
@@ -7275,6 +7280,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       expect(trustedTooling.run).toContain(source);
     }
     expect(validateManifest.env).toMatchObject({
+      EXPECTED_WORKFLOW_BRANCH: "${{ steps.inputs.outputs.expected_validation_branch }}",
       RUN_JSON_FILE: "${{ runner.temp }}/full-release-validation-run.json",
       TRUSTED_WORKFLOW_FULL_REF: "${{ github.ref }}",
       TRUSTED_WORKFLOW_REF: "${{ github.ref_name }}",
@@ -7333,7 +7339,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     expect(createReleaseIndex).toBeGreaterThanOrEqual(0);
     expect(verifyReleaseIndex).toBeGreaterThan(createReleaseIndex);
     expect(appendProofIndex).toBeGreaterThan(verifyReleaseIndex);
-    expect(finalizeJob.needs).toEqual(["publish", "publish_docker"]);
+    expect(finalizeJob.needs).toEqual(["resolve_release_target", "publish", "publish_docker"]);
     expect(finalizeJob.if).toContain("needs.publish_docker.result == 'success'");
     expect(finalizeRelease.run).toContain('gh release edit "${RELEASE_TAG}"');
   });
@@ -7383,10 +7389,10 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
     const releaseSkill = readFileSync(RELEASE_MAINTAINER_SKILL, "utf8");
 
     expect(releaseWorkflow).toContain(
-      "Stable OpenClaw publish requires an explicit windows_node_tag.",
+      "Regular stable OpenClaw publish requires an explicit windows_node_tag.",
     );
     expect(releaseWorkflow).toContain(
-      "Stable OpenClaw publish requires candidate-approved windows_node_installer_digests.",
+      "Regular stable OpenClaw publish requires candidate-approved windows_node_installer_digests.",
     );
     expect(releaseWorkflow).toContain("promote_windows_release_assets()");
     expect(releaseWorkflow).toContain("dispatch_workflow windows-node-release.yml");
@@ -7472,7 +7478,7 @@ printf '%s\\n' "$DEEPSEEK_API_KEY" "$DEEPINFRA_API_KEY"`,
       "the selected `windows_node_tag`, its saved `windows_node_installer_digests`,",
     );
     expect(releaseDocs).toContain(
-      "candidate-approved `windows_node_installer_digests`, and verify the canonical",
+      "candidate-approved `windows_node_installer_digests` map. Before dispatching",
     );
     expect(releaseSkill).toContain(
       "candidate-approved installer digest map as `windows_node_installer_digests`.",

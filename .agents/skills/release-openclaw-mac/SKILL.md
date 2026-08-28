@@ -8,8 +8,8 @@ description: "Run or recover OpenClaw macOS release signing, notarization, appca
 Use with `$release-openclaw-maintainer`, `$release-openclaw-ci`, `$one-password`, and `$release-private` if it exists when stable macOS assets, release-ops mac preflight, notarization, appcast promotion, or mac release recovery is involved.
 
 This is a regular stable-release skill. Do not invoke it for extended-stable;
-that track does not inherit macOS assets, appcast promotion, or a GitHub Release
-unless the current extended-stable release policy explicitly adds them.
+that track's GitHub Release carries shared validation evidence but does not
+inherit macOS assets or appcast promotion.
 
 ## Credentials
 

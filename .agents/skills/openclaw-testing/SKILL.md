@@ -318,11 +318,12 @@ node scripts/full-release-validation-at-sha.mjs \
   --workflow-sha "$TOOLING_SHA"
 ```
 
-That helper is for regular releases. Extended-stable dispatches Full Release
-Validation directly from and against `extended-stable/YYYY.M.33` with
-`release_profile=stable`; its exact branch-tip evidence is fresh and cannot be
-replaced by a `release-ci/*` run. Use `$release-openclaw-ci` for its failure
-classification and run-identity rules.
+Extended-stable may use the helper's trusted main-pinned `release-ci/*` harness
+or a direct run from `extended-stable/YYYY.M.33` with
+`release_profile=stable`. In either case, require a complete Full Release
+Validation evidence manifest using schema version 3. It must bind the exact
+canonical branch tip, workflow SHA, and run attempt. Use
+`$release-openclaw-ci` for failure classification and identity rules.
 
 The helper verifies and pins the recorded Tooling SHA on trusted `main`, passes
 the resolved Code SHA as `expected_sha`, and records the canonical release

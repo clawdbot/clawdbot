@@ -1462,6 +1462,58 @@ describe("buildOpenClawReleaseClawHubPlan", () => {
     });
   });
 
+  it("returns a zero-dispatch plan without reading ClawHub when the release track excludes it", async () => {
+    const plan = await buildOpenClawReleaseClawHubPlan(
+      {
+        bootstrapWorkflowRef: "main",
+        bootstrapWorkflowSha: "d".repeat(40),
+        releaseTag: "v2026.6.35",
+        releaseSha: "a".repeat(40),
+        releasePublishBranch: "main",
+        releasePublishRunAttempt: "1",
+        releasePublishRunId: "12345",
+        pluginPublishScope: "all-publishable",
+        plugins: [],
+        skipClawHub: true,
+      },
+      {
+        fetchImpl: () => {
+          throw new Error("ClawHub must not be queried for an excluded release track.");
+        },
+      },
+    );
+
+    expect(plan.normal).toMatchObject({ shouldDispatch: false, packages: [] });
+    expect(plan.bootstrap).toMatchObject({ shouldDispatch: false, packages: [] });
+    expect(plan.summary).toEqual({
+      normalCount: 0,
+      bootstrapCount: 0,
+      missingTrustedPublisherCount: 0,
+      normalPlugins: "",
+      bootstrapPlugins: "",
+      missingTrustedPlugins: "",
+    });
+    expect(
+      parseOpenClawReleaseClawHubPlanArgs([
+        "--bootstrap-workflow-ref",
+        "main",
+        "--bootstrap-workflow-sha",
+        "d".repeat(40),
+        "--release-tag",
+        "v2026.6.35",
+        "--release-sha",
+        "a".repeat(40),
+        "--release-publish-branch",
+        "main",
+        "--release-publish-run-attempt",
+        "1",
+        "--release-publish-run-id",
+        "12345",
+        "--skip-clawhub",
+      ]).skipClawHub,
+    ).toBe(true);
+  });
+
   it("rejects incompatible all-publishable plugin selection args", () => {
     expect(() =>
       parseOpenClawReleaseClawHubPlanArgs([

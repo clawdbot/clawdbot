@@ -73,8 +73,7 @@ jobs:
           }
           BASH
 
-      - name: Checkout pushed main
-        if: ${{ github.event_name == 'push' }}
+      - name: Checkout trusted release tooling
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
@@ -98,9 +97,25 @@ jobs:
           . "$RUNNER_TEMP/github-api-backoff.sh"
           if [[ "$EVENT_NAME" == "push" ]]; then
             main_ref="$TRIGGER_SHA"
-            tag="$(gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
-              --json tagName,isPrerelease,publishedAt \
-              --jq '[.[] | select(.isPrerelease | not) | select(.tagName | test("^v[0-9]{4}\\.[0-9]+\\.[0-9]+(-[0-9]+)?$"))] | sort_by(.publishedAt) | last | .tagName // empty')"
+            releases_file="$RUNNER_TEMP/published-releases.json"
+            gh_with_retry release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 \
+              --json tagName,isPrerelease,publishedAt > "$releases_file"
+            tag="$(RELEASES_FILE="$releases_file" node --input-type=module <<'NODE'
+          import { readFileSync } from "node:fs";
+          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+
+          const releases = JSON.parse(readFileSync(process.env.RELEASES_FILE, "utf8"));
+          const candidates = releases
+            .filter((release) => release?.isPrerelease === false)
+            .filter((release) => {
+              const tag = typeof release?.tagName === "string" ? release.tagName : "";
+              const parsed = tag.startsWith("v") ? parseReleaseVersion(tag.slice(1)) : null;
+              return parsed !== null && classifyReleaseTrain(parsed) === "stable";
+            })
+            .toSorted((left, right) => String(left.publishedAt).localeCompare(String(right.publishedAt)));
+          process.stdout.write(candidates.at(-1)?.tagName ?? "");
+          NODE
+            )"
             if [[ -z "$tag" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
@@ -108,12 +123,21 @@ jobs:
           else
             tag="$MANUAL_TAG"
           fi
-          if [[ ! "$tag" =~ ^v[0-9]{4}\.[0-9]+\.[0-9]+(-[0-9]+)?$ ]]; then
+          if ! RELEASE_TAG="$tag" node --input-type=module <<'NODE'
+          import { classifyReleaseTrain, parseReleaseVersion } from "./scripts/lib/release-version.mjs";
+
+          const tag = process.env.RELEASE_TAG ?? "";
+          const parsed = tag.startsWith("v") ? parseReleaseVersion(tag.slice(1)) : null;
+          if (parsed === null || classifyReleaseTrain(parsed) !== "stable") {
+            process.exitCode = 1;
+          }
+          NODE
+          then
             if [[ "$EVENT_NAME" == "push" ]]; then
               echo "should_closeout=false" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "Stable main closeout accepts only a stable vYYYY.M.PATCH or vYYYY.M.PATCH-N tag, got $tag." >&2
+            echo "Stable main closeout accepts only a regular stable vYYYY.M.PATCH or vYYYY.M.PATCH-N tag below the extended-stable .33 boundary, got $tag." >&2
             exit 1
           fi
           release_asset_version="${tag#v}"

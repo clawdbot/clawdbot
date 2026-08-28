@@ -13,7 +13,8 @@ user.
 
 Before drafting focus areas, read real release evidence:
 
-1. GitHub release body, or the immutable tag and publish run for extended-stable.
+1. GitHub release body and immutable tag; for extended-stable, also confirm the
+   npm/container-only scope and non-Latest classification.
 2. `CHANGELOG.md` section for the released base version.
 3. Commits since the previous shipped version or the operator-specified base.
 4. Registry/package metadata for the exact version and current dist-tag.
@@ -79,8 +80,8 @@ openclaw --version
 
 Do not add `--yes`: users moving from newer regular stable must see the downgrade
 warning because older versions may not understand newer configuration. Link the
-tag or changelog; do not imply a GitHub Release or inherit regular stable
-macOS, Windows, ClawHub, `latest`, or website claims.
+GitHub Release, but do not inherit regular stable macOS, Windows, ClawHub,
+`latest`, or website claims.
 
 ## Style
 

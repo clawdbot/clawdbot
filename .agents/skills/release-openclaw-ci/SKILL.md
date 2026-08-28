@@ -295,9 +295,9 @@ publish workflow reads the effective profile from the full-validation manifest.
 
 ### Extended-stable validation
 
-For `.33+`, dispatch from and target the canonical branch. This direct route is
-intentional: downstream extended-stable evidence requires the canonical branch
-identity, while Telegram still authenticates the exact branch SHA:
+For `.33+`, prefer the trusted main-pinned helper so current workflow tooling
+targets the immutable canonical branch tip. A direct canonical-branch run is
+also valid:
 
 ```bash
 RELEASE_SHA="$(git rev-parse HEAD)"
@@ -308,10 +308,12 @@ gh workflow run full-release-validation.yml \
   -f release_profile=stable
 ```
 
-Accept only a complete `rerun_group=all` run whose branch, head/target SHAs,
-manifest `workflowRef`, and package versions identify the same commit. Save its
-successful `run_attempt` and require the final tag to resolve there. Reject
-`release-ci/*`, current-main, narrow, and earlier-attempt evidence.
+Accept only a complete `rerun_group=all` run from the canonical branch, from
+current `main` whose workflow SHA remains reachable from `main`, or from the
+trusted main-pinned `release-ci/*` harness with a v3 exact-target manifest.
+Require the head/target SHA, manifest identity, package versions, saved
+`run_attempt`, and final tag to identify the same commit. Reject narrow,
+untrusted-main, mismatched-target, and earlier-attempt evidence.
 
 Product failures need an approved backport. Frozen-target tooling failures need
 the smallest behavior-preserving repair. Provider, approval, runner, or log

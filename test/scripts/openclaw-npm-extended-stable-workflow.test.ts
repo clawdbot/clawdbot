@@ -263,10 +263,11 @@ describe("minimal npm extended-stable workflow", () => {
     const recheck = step(parsed.jobs?.publish_openclaw_npm, "Recheck npm release request");
     expect(recheck.env?.NPM_WORKFLOW_REF).toBe(validate.env?.NPM_WORKFLOW_REF);
     expect(releaseDocs).toContain("--ref main");
-    expect(releaseDocs).toContain("-f release_candidate_branch=extended-stable/YYYY.M.33");
-    expect(releaseDocs).toContain("canonical candidate branch directly");
-    expect(releaseDocs).toContain("workflow SHA is reachable from current `main`");
-    expect(releaseDocs).toContain("trusted main-pinned harness");
+    expect(releaseDocs).toContain(
+      "The parent derives the canonical `extended-stable/YYYY.M.33` branch",
+    );
+    expect(releaseDocs).toContain("workflow SHA remains reachable from `main`");
+    expect(releaseDocs).toContain("trusted main-pinned `release-ci/*` harness");
   });
 
   it("accepts arbitrary SHA preflight targets and exercises every publishable plugin package", () => {
@@ -393,10 +394,18 @@ describe("minimal npm extended-stable workflow", () => {
       "Verify plugin npm release run metadata",
     );
     expect(verify.env?.RUN_KIND).toBe("plugin");
+    expect(verify.env?.EXPECTED_ORCHESTRATOR_BRANCH).toBe(
+      "${{ inputs.release_candidate_branch != '' && github.ref_name || '' }}",
+    );
+    expect(verify.env?.EXPECTED_ORCHESTRATOR_SHA).toBe(
+      "${{ inputs.release_candidate_branch != '' && github.workflow_sha || '' }}",
+    );
     expect(verify.run).toContain(
       "--json workflowName,displayTitle,headBranch,headSha,event,status,conclusion,url",
     );
-    expect(verify.run).toContain("openclaw-npm-extended-stable-release.mjs verify-run");
+    expect(verify.run).toContain(
+      "trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run",
+    );
   });
 
   it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {

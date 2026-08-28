@@ -47,6 +47,7 @@ type WorkflowStep = {
 };
 
 type WorkflowJob = {
+  environment?: string;
   env?: Record<string, string>;
   if?: string;
   needs?: string | string[];
@@ -1460,6 +1461,17 @@ describe("release validation no-push transport", () => {
     const releasePublishPath = ".github/workflows/openclaw-release-publish.yml";
     const releasePublish = readWorkflow(releasePublishPath);
     const dockerCall = job(releasePublish, "publish_docker");
+    const resolveTarget = job(releasePublish, "resolve_release_target");
+    const validateInputs = step(resolveTarget, "Validate inputs");
+    const validateEvidence = step(resolveTarget, "Validate full release validation manifest");
+    const validateReleaseBranch = step(
+      resolveTarget,
+      "Validate release tag is reachable from a trusted release branch",
+    );
+    const publishJob = job(releasePublish, "publish");
+    const resolveClawHubPlan = step(publishJob, "Resolve ClawHub release plan");
+    const dispatchPublish = step(publishJob, "Dispatch publish workflows");
+    const dispatchRun = dispatchPublish.run ?? "";
 
     expect(dockerRelease.on?.push).toBeUndefined();
     expect(dockerRelease.on?.workflow_dispatch).toBeUndefined();
@@ -1485,12 +1497,35 @@ describe("release validation no-push transport", () => {
     // approval; its own guard test covers those safety properties.
     expect(callers).toEqual(["docker-image-refresh.yml", "openclaw-release-publish.yml"]);
 
+    expect(validateInputs.id).toBe("inputs");
+    expect(validateInputs.run).toContain(
+      'expected_validation_branch="extended-stable/${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.33"',
+    );
+    expect(validateInputs.run).not.toContain(
+      "Extended-stable core npm publication stays on the canonical extended-stable release flow",
+    );
+    expect(validateInputs.run).toContain(
+      'if [[ "${RELEASE_NPM_DIST_TAG}" == "extended-stable" ]]; then',
+    );
+    expect(publishJob.if).toBe("${{ !inputs.publish_docker_only }}");
+    expect(validateEvidence.env?.EXPECTED_WORKFLOW_BRANCH).toBe(
+      "${{ steps.inputs.outputs.expected_validation_branch }}",
+    );
+    expect(validateReleaseBranch.run).toContain(
+      'expected_ref="refs/remotes/origin/${EXPECTED_VALIDATION_BRANCH}"',
+    );
+    expect(validateReleaseBranch.run).toContain(
+      "must be reachable from ${EXPECTED_VALIDATION_BRANCH}",
+    );
+
     expect(dockerCall.needs).toEqual([
       "resolve_release_target",
       "publish",
       "verify_core_npm_registry",
     ]);
+    expect(dockerCall.if).toContain("inputs.publish_openclaw_npm");
     expect(dockerCall.if).toContain("needs.publish.result == 'success'");
+    expect(dockerCall.if).toContain("inputs.publish_docker_only");
     expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
     expect(dockerCall.with).toEqual({
       tag: "${{ inputs.tag }}",
@@ -1523,10 +1558,62 @@ describe("release validation no-push transport", () => {
     expect(readFileSync(releasePublishPath, "utf8")).toContain(
       "kept draft until Docker publication succeeds",
     );
+    expect(resolveClawHubPlan.run).toContain("plan_args+=(--skip-clawhub)");
+    expect(dispatchRun).toContain("force_skip_clawhub=true");
+    expect(dispatchRun).toContain('elif [[ "${RELEASE_NPM_DIST_TAG}" == "latest" ]]; then');
+    expect(dispatchRun).toContain('latest_arg="--latest=false"');
+    expect(dispatchRun).toContain("-f npm_dist_tag=extended-stable");
+    expect(dispatchRun).toContain(
+      '-f release_candidate_branch="${{ needs.resolve_release_target.outputs.expected_validation_branch }}"',
+    );
+    expect(dispatchRun).toContain('-f plugin_npm_run_id="${plugin_npm_run_id}"');
+    expect(dispatchRun).toContain("upload_dependency_evidence_release_asset");
+    expect(dispatchRun).toContain("upload_release_evidence_assets");
+    expect(dispatchRun).toContain(
+      '[[ "${RELEASE_NPM_DIST_TAG}" != "extended-stable" && "${RELEASE_TAG}" != *"-alpha."*',
+    );
+    expect(step(resolveTarget, "Validate stable Windows source release").if).toContain(
+      "inputs.npm_dist_tag != 'extended-stable'",
+    );
+    expect(step(publishJob, "Attest Android release approval").if).toContain(
+      "inputs.npm_dist_tag != 'extended-stable'",
+    );
     expect(job(releasePublish, "finalize_github_release").needs).toEqual([
+      "resolve_release_target",
       "publish",
       "publish_docker",
     ]);
+
+    const finalizeRelease = job(releasePublish, "finalize_github_release");
+    const finalizeSteps = finalizeRelease.steps ?? [];
+    const publishRelease = step(finalizeRelease, "Publish the verified draft release");
+
+    expect(finalizeRelease.needs).toEqual(["resolve_release_target", "publish", "publish_docker"]);
+    expect(finalizeRelease.if).toContain("inputs.publish_openclaw_npm");
+    expect(finalizeRelease.if).toContain("needs.publish.result == 'success'");
+    expect(finalizeRelease.if).toContain("needs.publish_docker.result == 'success'");
+    expect(finalizeRelease.environment).toBe("npm-release");
+    expect(finalizeRelease.permissions).toEqual({ contents: "write" });
+    expect(finalizeSteps).toHaveLength(1);
+    expect(publishRelease.if).toBeUndefined();
+    expect(publishRelease.run).toContain('gh release edit "${RELEASE_TAG}"');
+    expect(publishRelease.run).toContain("--draft=false");
+    expect(publishRelease.run).toContain('latest_arg="--latest=false"');
+    expect(publishRelease.run).toContain('latest_arg="--latest"');
+    expect(publishRelease.run).toContain("release(tagName:$tag){isDraft isLatest isPrerelease}");
+    expect(publishRelease.run).toContain("'.data.repository.release'");
+    expect(publishRelease.run).toContain("'.isLatest'");
+    expect(publishRelease.run).toContain('!= "${expected_latest}"');
+
+    const releasePublishText = readFileSync(releasePublishPath, "utf8");
+    expect(releasePublishText).toContain("publish_docker_only");
+    expect(releasePublishText).toContain("verify_core_npm_registry");
+    expect(releasePublishText).not.toContain("prepare_extended_stable_release");
+    expect(releasePublishText).not.toContain("finalize_extended_stable_github_release");
+    expect(releasePublishText).not.toContain("extended-stable-release-notes-${{ inputs.tag }}");
+    expect(releasePublishText).not.toContain("verify_extended_stable_docker_completion");
+    expect(releasePublishText).not.toContain("Docker completion status");
+    expect(JSON.stringify(dockerRelease)).not.toContain("statuses");
 
     const identity = step(
       job(dockerRelease, "validate_release_identity"),

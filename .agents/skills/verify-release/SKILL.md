@@ -13,9 +13,10 @@ publish skill; use `$release-openclaw-maintainer` before changing release state.
 
 - Resolve short suffixes like `.27` to the concrete CalVer version from the
   current date/context, then say the resolved version.
-- Resolve the track first. Regular beta/stable uses a GitHub Release and the
-  platform graph; extended-stable uses its canonical branch, npm selector, and
-  Gateway surfaces. Do not require one track's artifacts from the other.
+- Resolve the track first. Both tracks use the shared GitHub Release evidence
+  ledger. Regular beta/stable also uses the platform graph; extended-stable
+  uses its canonical branch, npm selector, and Gateway surfaces. Do not require
+  one track's native or ClawHub artifacts from the other.
 - Verify live state. Do not trust local checkout state, release notes, or old
   memory as current truth.
 - If the checkout is dirty or divergent, use it only for scripts/reference.
@@ -76,15 +77,20 @@ Use these checks only for the regular orchestrated release track.
 
 ## Extended-stable checks
 
-Extended-stable has no GitHub Release ledger. Verify live tag, workflow,
-registry, provenance, and image state directly.
+Extended-stable has a GitHub Release with shared release evidence but no native
+or ClawHub artifacts. Verify it alongside
+the live tag, workflow, registry, provenance, and image state.
 
 1. **Identity:** require final `v<VERSION>` at patch `33+`, with no suffix,
    contained in `extended-stable/YYYY.M.33`. Only an active candidate must equal
    the tip. Root and every publishable official plugin must declare `<VERSION>`.
-   Require the Git tag and no GitHub Release.
-2. **Workflow chain:** find successful preflight, complete validation, plugin
-   npm, and core publish runs on the canonical branch and SHA. Validation must
+   Require the Git tag and a public, non-prerelease GitHub Release whose title
+   and canonical body match the tag. Require `isLatest=false`, the dependency
+   evidence, immutable Full Release Validation manifest, postpublish evidence,
+   and their checksums. Require no native or ClawHub assets.
+2. **Workflow chain:** find the successful parent release run plus its
+   preflight, complete validation, plugin npm, and core publish children.
+   Validation must
    use `rerun_group=all`, `release_profile=stable`, blocking soak/performance,
    and the saved attempt. Core publish must reference all three run IDs and bind
    its manifest, workflow ref, and tarball digest to the release SHA.
@@ -98,12 +104,15 @@ registry, provenance, and image state directly.
    digest binding to the release SHA. Preserve output and workflow URLs.
 5. **Docker:** verify exact default, slim, browser, and architecture images and
    attestations in both registries. Only the three `extended-stable*` aliases may
-   resolve to those digests. Repair aliases through current-main `Docker Channel
-Promotion` for the exact tag, without rebuilding.
+   resolve to those digests. Require the successful `OpenClaw Release Publish`
+   parent run whose Docker job precedes GitHub Release publication. Repair
+   aliases through current-main `Docker Channel Promotion` for the exact tag,
+   without rebuilding.
 6. **Recovery:** never republish. Use the generated command only for the root
    selector and approved credential-isolated tooling for others, then repeat
    complete readback. Do not require ClawHub, native/mobile apps, website,
-   private dist-tags, regular `latest`, or a GitHub Release.
+   private dist-tags, or regular `latest`. Require shared release evidence, but
+   do not require regular native or ClawHub assets.
 
 ## Shared live smoke
 

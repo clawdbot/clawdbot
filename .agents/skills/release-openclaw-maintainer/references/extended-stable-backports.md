@@ -24,8 +24,9 @@ extended-stable package and publication constraints.
 - Carry the complete current-main Docker release-channel unit in the tagged
   tree: workflow, promoter, policy, shared release-version classifier, tests,
   and workflow validation. GitHub evaluates tag-push workflows from that tree.
-- Exclude ClawHub publication, GitHub Releases, the macOS app, Windows Hub,
-  mobile apps, website downloads, and private-repository dist-tags.
+- Exclude ClawHub publication, native-app artifacts, website downloads, npm
+  `latest`, and private-repository dist-tags. The shared release pipeline
+  attaches dependency and validation evidence to the non-Latest GitHub Release.
 - Review the complete mainline delta using the shared evidence-driven audit.
   Do not stop after the first obvious fixes or consider public PRs, titles, or
   dependency bumps the complete source set.
@@ -161,7 +162,8 @@ fi
 ```
 
 Do not use GitHub's latest nonprerelease Release as the source of truth. The
-extended-stable lane intentionally creates no GitHub Release. In bootstrap
+npm `extended-stable` selector remains authoritative for the active line; its
+evidence-bearing GitHub Release is always created with `latest=false`. In bootstrap
 mode, record the approving maintainer and approved base commit. Stop before
 discovery or mutation if npm, the canonical branch, tags, package versions,
 approved base, or protected `main` disagree.
@@ -238,6 +240,8 @@ path alone.
   out of scope.
 - Treat macOS-app-only, Windows-Hub-only, mobile-only, website-only, and GitHub
   Release-only fixes as `skip` for this Gateway extended-stable line.
+- Keep GitHub Release automation repairs in trusted current-main release
+  tooling; they are not product backports for the maintenance branch.
 - Treat cross-repository or package-topology uncertainty as `blocked` until the
   shipped npm surface and release owner are proven.
 
@@ -369,8 +373,8 @@ Report:
   harness compatibility repair, and superseded validation runs;
 - remaining security, release, or maintainer approvals;
 - the coordinated PR URL or why no PR was opened;
-- exact intended Docker images and aliases, plus explicit confirmation that no
-  other non-npm publication is planned.
+- exact intended Docker images and aliases, GitHub Release evidence assets, and
+  explicit confirmation that no native or ClawHub artifacts are planned.
 
 Then follow the parent skill's publish and recovery sequence. Keep exact
 branch/tag/package/run identity, never republish for selector repair, and move

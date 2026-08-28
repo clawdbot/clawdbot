@@ -226,6 +226,25 @@ describe("full release validation evidence", () => {
     }
   });
 
+  it("accepts direct evidence from the derived canonical extended-stable branch", () => {
+    const branch = "extended-stable/2026.6.33";
+    const result = validateFullReleaseValidationEvidence({
+      run: releaseRun({ head_branch: branch }),
+      manifest: releaseManifest({
+        workflowRef: branch,
+        workflowFullRef: `refs/heads/${branch}`,
+        targetRef: "v2026.6.35",
+      }),
+      expectedRepository: "openclaw/openclaw",
+      expectedRunId: "123",
+      expectedTargetSha: targetSha,
+      expectedWorkflowBranch: branch,
+      isTrustedMainAncestor: () => false,
+    });
+
+    expect(result.source).toBe("direct");
+  });
+
   it("rejects direct main evidence outside current main", () => {
     expect(() =>
       validate(

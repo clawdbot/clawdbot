@@ -1257,13 +1257,15 @@ jobs:
           PLUGIN_NPM_RUN_ID: ${{ inputs.plugin_npm_run_id }}
           RELEASE_NPM_DIST_TAG: ${{ inputs.npm_dist_tag }}
           EXPECTED_EXTENDED_STABLE_BRANCH: ${{ inputs.release_candidate_branch || github.ref_name }}
+          EXPECTED_ORCHESTRATOR_BRANCH: ${{ inputs.release_candidate_branch != '' && github.ref_name || '' }}
+          EXPECTED_ORCHESTRATOR_SHA: ${{ inputs.release_candidate_branch != '' && github.workflow_sha || '' }}
           RUN_KIND: plugin
         run: |
           set -euo pipefail
           EXPECTED_RELEASE_SHA="$(git rev-parse HEAD)"
           export EXPECTED_RELEASE_SHA
           RUN_JSON="$(gh run view "$PLUGIN_NPM_RUN_ID" --repo "$GITHUB_REPOSITORY" --json workflowName,displayTitle,headBranch,headSha,event,status,conclusion,url)"
-          printf '%s' "$RUN_JSON" | node scripts/openclaw-npm-extended-stable-release.mjs verify-run
+          printf '%s' "$RUN_JSON" | node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run
 
       - name: Download prepared npm tarball
         env:

@@ -63,8 +63,9 @@
 /docs/reference/secretref-credential-surface.md @openclaw/openclaw-secops
 /docs/reference/secretref-user-supplied-credentials-matrix.json @openclaw/openclaw-secops
 
-# Release workflow and its supporting release-path checks.
+# Release workflows and their supporting release-path checks.
 /.github/workflows/openclaw-npm-release.yml @openclaw/openclaw-release-managers
+/.github/workflows/openclaw-release-publish.yml @openclaw/openclaw-release-managers
 /docs/reference/RELEASING.md @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-publish.sh @openclaw/openclaw-release-managers
 /scripts/openclaw-npm-release-check.ts @openclaw/openclaw-release-managers

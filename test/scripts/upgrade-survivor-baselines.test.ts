@@ -164,6 +164,32 @@ describe("scripts/resolve-upgrade-survivor-baselines", () => {
     });
   });
 
+  it("excludes extended-stable GitHub releases from regular stable baselines", () => {
+    const releases = [
+      {
+        isPrerelease: false,
+        publishedAt: "2026-08-02T00:00:00Z",
+        tagName: "v2026.6.34",
+      },
+      {
+        isPrerelease: false,
+        publishedAt: "2026-08-01T00:00:00Z",
+        tagName: "v2026.7.12",
+      },
+    ];
+
+    withReleaseFixture(releases, (file) => {
+      expect(
+        resolveBaselines(
+          new Map([
+            ["requested", "last-stable-1"],
+            ["releases-json", file],
+          ]),
+        ),
+      ).toEqual(["openclaw@2026.7.12"]);
+    });
+  });
+
   it("rejects loose release-history count values", () => {
     withReleaseFixture([], (file) => {
       expect(() =>

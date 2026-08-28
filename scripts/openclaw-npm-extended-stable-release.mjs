@@ -175,6 +175,8 @@ export function validateExtendedStableRunIdentity({
   npmDistTag,
   expectedBranch,
   expectedSha,
+  expectedOrchestratorBranch = "",
+  expectedOrchestratorSha = "",
 }) {
   const expectedWorkflowName =
     kind === "preflight"
@@ -198,10 +200,16 @@ export function validateExtendedStableRunIdentity({
       );
     }
   }
-  if (
-    npmDistTag === "extended-stable" &&
-    (run.headBranch !== expectedBranch || run.headSha !== expectedSha)
-  ) {
+  const directTargetIdentity = run.headBranch === expectedBranch && run.headSha === expectedSha;
+  const orchestratedPluginIdentity =
+    kind === "plugin" &&
+    typeof expectedOrchestratorBranch === "string" &&
+    expectedOrchestratorBranch.length > 0 &&
+    typeof expectedOrchestratorSha === "string" &&
+    expectedOrchestratorSha.length > 0 &&
+    run.headBranch === expectedOrchestratorBranch &&
+    run.headSha === expectedOrchestratorSha;
+  if (npmDistTag === "extended-stable" && !directTargetIdentity && !orchestratedPluginIdentity) {
     throw new Error(
       `Referenced extended-stable ${kind} run must have headBranch=${expectedBranch} and headSha=${expectedSha}; got ${run.headBranch ?? "<missing>"} and ${run.headSha ?? "<missing>"}.`,
     );
@@ -490,6 +498,8 @@ async function main() {
       npmDistTag: process.env.RELEASE_NPM_DIST_TAG,
       expectedBranch: process.env.EXPECTED_EXTENDED_STABLE_BRANCH,
       expectedSha: process.env.EXPECTED_RELEASE_SHA,
+      expectedOrchestratorBranch: process.env.EXPECTED_ORCHESTRATOR_BRANCH,
+      expectedOrchestratorSha: process.env.EXPECTED_ORCHESTRATOR_SHA,
     });
     console.log(`Verified referenced ${process.env.RUN_KIND} run.`);
     return;

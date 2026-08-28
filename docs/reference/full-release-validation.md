@@ -156,10 +156,11 @@ wrong-SHA tag, parent mismatch, or disallowed parent state fails closed. Other
 privileged writers require their dependent enforcement changes before the
 protected-tag publication route is globally complete.
 
-## Extended-stable exception
+## Extended-stable validation
 
-Extended-stable publish requires a run whose workflow and target are both the
-canonical branch:
+Extended-stable publish accepts a complete exact-target run from the canonical
+branch, a direct current-main run whose workflow SHA remains reachable from
+current `main`, or the trusted main-pinned helper:
 
 ```bash
 RELEASE_SHA="$(git rev-parse HEAD)"
@@ -170,9 +171,16 @@ gh workflow run full-release-validation.yml \
   -f release_profile=stable
 ```
 
-Do not use `pnpm ci:full-release` or `release-ci/*`. Publish binds the run's
-branch, head/target SHA, manifest `workflowRef`, ID, and attempt to the canonical
-branch and release commit.
+The extended-stable closeout derives `extended-stable/YYYY.M.33` from the final
+`.33+` tag, requires the tag commit to be reachable from that exact branch, and
+passes that branch to the validation-evidence verifier. It does not substitute
+the closeout workflow's `main` ref for the candidate branch.
+
+The helper's temporary `release-ci/*` ref is valid only when every child uses
+the pinned trusted workflow SHA and the Full Release Validation evidence
+manifest uses schema `openclaw.release-validation-evidence/v3` to bind the canonical branch,
+exact release commit, run ID, and attempt. Reject narrow runs, stale attempts,
+untrusted workflow SHAs, and mismatched targets.
 
 Backport product failures; make the smallest behavior-preserving repair for
 frozen-target tooling; retry provider, approval, or runner failures without a
@@ -473,8 +481,8 @@ Narrow evidence is not publish authorization by itself.
 For a regular release, record both Code SHA and Release SHA, the reuse policy
 and changed-path set, the green Code SHA parent run, and the lightweight Release
 SHA parent run. For extended-stable, record the canonical branch, exact release
-SHA, fresh parent run id and attempt, workflow ref, every child run, and any
-frozen-target compatibility repair or intentional omission.
+SHA, accepted producer identity, parent run id and attempt, workflow ref, every
+child run, and any frozen-target compatibility repair or intentional omission.
 
 Useful artifacts:
 

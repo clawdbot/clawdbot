@@ -3,7 +3,11 @@
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { normalizeUpgradeSurvivorBaselineSpec } from "./lib/docker-e2e-plan.mts";
-import { compareReleaseVersions, parseReleaseVersion } from "./lib/release-version.mjs";
+import {
+  classifyReleaseTrain,
+  compareReleaseVersions,
+  parseReleaseVersion,
+} from "./lib/release-version.mjs";
 
 type ReleaseRecord = Partial<Record<"isPrerelease" | "publishedAt" | "tagName", unknown>>;
 
@@ -73,7 +77,7 @@ function stableVersionFromTag(tagName: unknown) {
 
 function parseStableVersion(version: unknown) {
   const parsed = parseReleaseVersion(typeof version === "string" ? version : "");
-  return parsed?.channel === "stable" ? parsed : undefined;
+  return parsed && classifyReleaseTrain(parsed) === "stable" ? parsed : undefined;
 }
 
 function compareStableVersions(left: string, right: string) {

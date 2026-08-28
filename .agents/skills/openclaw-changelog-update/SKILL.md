@@ -235,9 +235,9 @@ every human `Thanks @...` attribution.
     --release-tag v<YYYY.M.PATCH> \
     --check-github
   ```
-- add one `--release-tag` for every beta and stable page in the train; a
-  `### Release verification` tail is permitted, but any other body drift
-  fails the check
+- add one `--release-tag` for every beta, stable, and extended-stable page in
+  the train; a `### Release verification` tail is permitted, but any other
+  body drift fails the check
 - `scripts/render-github-release-notes.mts` is the canonical release-body
   renderer used by candidate validation, publish, and verification. When the
   complete `## YYYY.M.PATCH` section fits GitHub's 125,000-character limit and
@@ -269,11 +269,14 @@ every human `Thanks @...` attribution.
 
 ## Extended-Stable Variant
 
-Extended-stable has one release commit and no GitHub Release body. After version
-prep and approved backports, regenerate `## YYYY.M.P` with the regular manifest
-and original-main-PR provenance rules. Land it by PR, then validate the final
-branch tip before tagging. Re-audit after a product backport; a tooling-only
-repair needs no changelog entry. Never rewrite a published tag or changelog.
+Extended-stable has one release commit and one canonical GitHub Release body.
+After version prep and approved backports, regenerate `## YYYY.M.P` with the
+regular manifest and original-main-PR provenance rules. Land it by PR, then
+validate the final branch tip before tagging. The release closeout renders that
+tag-owned section into the shared draft before the parent pipeline publishes
+the non-Latest release page. Re-audit after a product
+backport; a tooling-only repair needs no changelog entry. Never rewrite a
+published tag or changelog.
 
 ## Quota / API Outage Rule
 

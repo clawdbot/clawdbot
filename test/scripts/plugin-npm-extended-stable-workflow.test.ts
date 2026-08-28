@@ -110,6 +110,12 @@ describe("plugin npm extended-stable workflow", () => {
     expect(inputs?.ref?.description).toBe(
       "Exact commit SHA; preflight accepts main/release ancestry, while publish mode also supports canonical extended-stable or matching Tideclaw alpha branches",
     );
+    expect(inputs?.release_candidate_branch).toEqual({
+      description:
+        "Canonical extended-stable branch when trusted main release tooling publishes its immutable target",
+      required: false,
+      type: "string",
+    });
   });
 
   it("uses one override for check, plan, preview, pack, and publish", () => {
@@ -160,7 +166,7 @@ describe("plugin npm extended-stable workflow", () => {
     expect(publish["working-directory"]).toBeUndefined();
   });
 
-  it("trusts only the canonical monthly branch at the exact checked-out SHA", () => {
+  it("accepts canonical monthly targets from the branch or trusted main orchestrator", () => {
     const trusted = step(
       workflow().jobs?.preview_plugins_npm,
       "Validate ref is on a trusted publish branch",
@@ -173,6 +179,16 @@ describe("plugin npm extended-stable workflow", () => {
     expect(trusted.run).toContain(
       '[[ "$(git rev-parse HEAD)" == "$(git rev-parse "refs/remotes/origin/${extended_stable_branch}")" ]]',
     );
+    expect(trusted.env?.RELEASE_CANDIDATE_BRANCH).toBe(
+      "${{ github.event_name == 'workflow_dispatch' && inputs.release_candidate_branch || '' }}",
+    );
+    expect(trusted.run).toContain(
+      '[[ "${RELEASE_CANDIDATE_BRANCH}" != "${extended_stable_branch}" || "${WORKFLOW_REF}" != "refs/heads/main" ]]',
+    );
+    expect(trusted.run).toContain(
+      'git merge-base --is-ancestor HEAD "refs/remotes/origin/${extended_stable_branch}"',
+    );
+    expect(trusted.run).toContain('git merge-base --is-ancestor "${WORKFLOW_SHA}" origin/main');
   });
 
   it("binds preflight to an exact source SHA without release-publish approval", () => {
@@ -230,6 +246,7 @@ describe("plugin npm extended-stable workflow", () => {
     expect(trusted.run).toContain(
       "Plugin npm preflight must not include a release publish parent run tuple.",
     );
+    expect(trusted.run).toContain("preflight must not include release_candidate_branch");
     const preflightBranchRejection = trusted.run?.indexOf(
       "Plugin npm preflight target must be reachable from main or release/*.",
     );
@@ -454,7 +471,7 @@ describe("plugin npm extended-stable workflow", () => {
       .split("\n")
       .filter((line) => line.includes('npm publish "$TARBALL_PATH"'));
 
-    expect(gitFetchLines).toHaveLength(5);
+    expect(gitFetchLines).toHaveLength(6);
     expect(
       gitFetchLines.every((line) => line.includes("timeout --signal=TERM --kill-after=10s 120s")),
     ).toBe(true);

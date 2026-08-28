@@ -265,11 +265,14 @@ gh workflow run full-release-validation.yml --ref main \
 
 Gateway extended-stable runs npm preflight, Full Release Validation, and plugin
 npm release from `extended-stable/YYYY.M.33`; core publish consumes those three
-run IDs plus the validation attempt. `release-ci/*` evidence is invalid because
-publish binds every run to the canonical branch and release SHA. The tag
-publishes Gateway images and only the `extended-stable*` aliases; the path skips
-the regular orchestrator and its ClawHub, native-app, GitHub Release, website,
-and private dist-tag surfaces. See [Monthly Gateway extended-stable
+run IDs plus the validation attempt. Complete evidence may come from the
+canonical branch, reachable current-main tooling, or the trusted main-pinned
+`release-ci/*` harness when its Full Release Validation evidence manifest uses
+schema `openclaw.release-validation-evidence/v3` and binds the exact target and
+attempt. `OpenClaw Release Publish` then runs the shared draft, plugin npm, core
+npm, evidence, Docker, and finalization stages with
+`npm_dist_tag=extended-stable`. That selection leaves npm `latest` unchanged;
+the track skips ClawHub, native-app, website, and private dist-tag surfaces. See [Monthly Gateway extended-stable
 publication](/reference/RELEASING#monthly-gateway-extended-stable-publication)
 for commands and recovery.
 
@@ -458,6 +461,14 @@ and checksum contract before publishing the GitHub release draft.
 Focused plugin-only repairs use `plugin_publish_scope=selected` with a nonempty
 package list. Plugin-only `all-publishable` runs require the same immutable npm
 preflight and Full Release Validation evidence as a core publish.
+
+Extended-stable uses the same workflow with `publish_openclaw_npm=true` and
+`npm_dist_tag=extended-stable`. The parent publishes all official npm plugins
+and core under that selector, creates the draft and attaches immutable release
+evidence, skips ClawHub/native publication, publishes Docker, and finalizes the
+non-Latest GitHub Release. If core npm already published, rerun this same path
+with `openclaw_npm_resume_run_id` set to the successful original core publish;
+the parent verifies the immutable registry bytes before resuming.
 
 ```bash
 gh workflow run openclaw-release-publish.yml \
