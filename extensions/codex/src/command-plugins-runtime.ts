@@ -4,6 +4,7 @@ import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   resolveCodexAppServerAuthAccountCacheKey,
   resolveCodexAppServerFallbackApiKeyCacheKey,
+  resolveCodexAppServerPreparedApiKeyCacheKey,
 } from "./app-server/auth-bridge.js";
 import { resolveCodexAppServerRuntimeOptions } from "./app-server/config.js";
 import { buildCodexPluginAppCacheKey } from "./app-server/plugin-app-cache-key.js";
@@ -15,6 +16,7 @@ import {
 import type { CodexCommandDeps } from "./command-handler-deps.js";
 import { resolveCommandAppServerContext, resolveControlTarget } from "./command-handler-scope.js";
 import type { CodexPluginsConfigBlock } from "./command-plugin-config.js";
+import { prepareCodexControlSessionAuth } from "./command-rpc.js";
 import { readCodexConversationBindingData } from "./conversation-binding-data.js";
 
 /** One account and physical connection for an operator's plugin inspection or recheck. */
@@ -46,21 +48,35 @@ export async function withCodexPluginCommandContext<T>(
   const appServer = scope.startOptions
     ? { ...configuredRuntime, start: scope.startOptions }
     : configuredRuntime;
+  const auth = await prepareCodexControlSessionAuth(
+    { ...scope, config: ctx.config },
+    appServer.start,
+  );
+  const preparedAuth =
+    "preparedAuth" in auth.clientOptions ? auth.clientOptions.preparedAuth : undefined;
+  const usesNativeAuth = scope.authProfileId === null || appServer.start.homeScope === "user";
+  const profileId = usesNativeAuth ? undefined : auth.authProfileId;
   const readAccountKey = () =>
-    scope.authProfileId === null
+    usesNativeAuth
       ? Promise.resolve(undefined)
-      : resolveCodexAppServerAuthAccountCacheKey({
-          authProfileId: scope.authProfileId,
-          agentDir: scope.agentDir,
-          config: ctx.config,
-        });
-  const accountId = await readAccountKey();
+      : preparedAuth?.kind === "api-key"
+        ? Promise.resolve(resolveCodexAppServerPreparedApiKeyCacheKey(preparedAuth.apiKey))
+        : resolveCodexAppServerAuthAccountCacheKey({
+            authProfileId: profileId,
+            agentDir: scope.agentDir,
+            config: ctx.config,
+          });
+  // The live account guard and prepared cache identity have different contracts
+  // for profiles without a stable account id; compare the same reader across awaits.
+  const accountGuardKey = await readAccountKey();
+  const accountId =
+    preparedAuth?.kind === "profile" ? preparedAuth.snapshot.secretFreeCacheKey : accountGuardKey;
   const client = await getLeasedSharedCodexAppServerClient({
     startOptions: appServer.start,
     pluginConfig,
-    authProfileId: scope.authProfileId,
     agentDir: scope.agentDir,
     config: ctx.config,
+    ...auth.clientOptions,
   });
   let accountChanged = false;
   let unsubscribe: (() => void) | undefined;
@@ -91,7 +107,7 @@ export async function withCodexPluginCommandContext<T>(
       currentBinding?.conversationStartId !== binding?.conversationStartId ||
       currentBinding?.pluginAppsFingerprint !== binding?.pluginAppsFingerprint ||
       currentPolicy !== initialPolicy ||
-      currentAccount !== accountId
+      currentAccount !== accountGuardKey
     ) {
       throw new Error(
         "Codex account, conversation, or plugin policy changed. Run the command again.",
@@ -125,17 +141,18 @@ export async function withCodexPluginCommandContext<T>(
       workspaceDir,
       agentId: scope.agentId,
       current,
-      ...(scope.authProfileId ? { profileId: scope.authProfileId } : {}),
+      ...(profileId ? { profileId } : {}),
       // Persisted thread ids alone cannot attest a different physical client.
       ...(binding?.clientId === client.getInstanceId() ? { threadId: binding.threadId } : {}),
       appCacheKey: buildCodexPluginAppCacheKey({
         appServer,
         agentDir: scope.agentDir,
-        authProfileId: scope.authProfileId ?? undefined,
+        authProfileId: profileId,
         accountId,
-        envApiKeyFingerprint: scope.authProfileId
-          ? undefined
-          : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
+        envApiKeyFingerprint:
+          usesNativeAuth || preparedAuth || profileId
+            ? undefined
+            : resolveCodexAppServerFallbackApiKeyCacheKey({ startOptions: appServer.start }),
         appServerVersion: client.getServerVersion(),
         runtimeIdentity: client.getRuntimeIdentity(),
       }),

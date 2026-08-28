@@ -65,12 +65,12 @@ export type CodexControlRequestOptions = {
   ) => Promise<void>;
 };
 
-async function prepareControlAuth(
+/** Selects the same prepared auth partition as an admitted session turn. */
+export async function prepareCodexControlSessionAuth(
   options: CodexControlRequestOptions,
   startOptions: CodexAppServerStartOptions,
 ) {
   if (
-    !options.onResponse ||
     !options.config ||
     !options.sessionKey ||
     options.authProfileId === null ||
@@ -210,7 +210,12 @@ export async function codexControlRequest(
     ? resolveCodexSupervisionAppServerRuntimeOptions({ pluginConfig })
     : resolveCodexAppServerRuntimeOptions({ pluginConfig });
   const startOptions = options.startOptions ?? runtime.start;
-  const auth = await prepareControlAuth(options, startOptions);
+  const auth = options.onResponse
+    ? await prepareCodexControlSessionAuth(options, startOptions)
+    : {
+        authProfileId: options.authProfileId ?? undefined,
+        clientOptions: { authProfileId: options.authProfileId },
+      };
   const controlRequestOptions = {
     timeoutMs: options.timeoutMs ?? runtime.requestTimeoutMs,
     startOptions,

@@ -7,6 +7,12 @@ import {
 } from "openclaw/plugin-sdk/agent-runtime";
 import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
+  createEmptyPluginRegistry,
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
   clearSessionStoreCacheForTest,
   resolveStorePath,
   upsertSessionEntry,
@@ -20,14 +26,30 @@ import { resolveCodexCommandDeps } from "./command-handler-deps.js";
 import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
 
 let root: string;
+let previousPluginRegistry: ReturnType<typeof getActivePluginRegistry>;
 const clients: ReturnType<typeof createClientHarness>[] = [];
 
 beforeEach(async () => {
+  previousPluginRegistry = getActivePluginRegistry();
+  const registry = createEmptyPluginRegistry();
+  registry.providers.push({
+    pluginId: "openai",
+    provider: { id: "openai", label: "OpenAI", auth: [] },
+    source: "test",
+  });
+  setActivePluginRegistry(registry);
   root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-plugin-status-")));
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  vi.stubEnv("OPENAI_API_KEY", undefined);
+  vi.stubEnv("CODEX_API_KEY", undefined);
 });
 
 afterEach(async () => {
+  if (previousPluginRegistry) {
+    setActivePluginRegistry(previousPluginRegistry);
+  } else {
+    resetPluginRuntimeStateForTest();
+  }
   for (const harness of clients.splice(0)) {
     harness.client.close();
   }
@@ -38,7 +60,7 @@ afterEach(async () => {
   await fs.rm(root, { recursive: true, force: true });
 });
 
-function fixture() {
+function fixture(stableAccount = true) {
   const agentDir = path.join(root, "agents", "second", "agent");
   const workspaceDir = path.join(root, "second-workspace");
   replaceRuntimeAuthProfileStoreSnapshots([
@@ -50,10 +72,16 @@ function fixture() {
           "openai:second": {
             type: "oauth",
             provider: "openai",
-            access: "test-access-token",
+            access: stableAccount
+              ? "test-access-token"
+              : `e30.${Buffer.from(
+                  JSON.stringify({
+                    "https://api.openai.com/auth": { chatgpt_account_id: "test-second-account" },
+                  }),
+                ).toString("base64url")}.test-signature`,
             refresh: "test-refresh-token",
             expires: Date.now() + 24 * 60 * 60_000,
-            accountId: "test-second-account",
+            ...(stableAccount ? { accountId: "test-second-account" } : {}),
           },
         },
         order: { openai: ["openai:second"] },
@@ -73,7 +101,12 @@ function fixture() {
     },
   });
   const ctx: PluginCommandContext = {
-    config: { agents: { list: [{ id: "second", agentDir, workspace: workspaceDir }] } },
+    config: {
+      agents: {
+        defaults: { model: { primary: "openai/gpt-5.5" } },
+        list: [{ id: "second", agentDir, workspace: workspaceDir }],
+      },
+    },
     agentId: "second",
     sessionId: "session-original",
     sessionKey: "agent:second:chat",
@@ -149,21 +182,35 @@ describe("Codex plugin command context", () => {
     expect(test.release).toHaveBeenCalledOnce();
   });
 
-  it("uses the selected agent profile and workspace in one physical-client lease", async () => {
-    const test = fixture();
-    await withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
-      expect(context.agentId).toBe("second");
-      expect(context.profileId).toBe("openai:second");
-      expect(context.workspaceDir).toBe(test.workspaceDir);
-      expect(context.threadId).toBeUndefined();
-      await context.request("app/installed", { forceRefresh: false });
-    });
-    expect(test.acquire).toHaveBeenCalledOnce();
-    expect(test.acquire).toHaveBeenCalledWith(
-      expect.objectContaining({ agentDir: test.agentDir, authProfileId: "openai:second" }),
-    );
-    expect(test.release).toHaveBeenCalledOnce();
-  });
+  it.each([true, false])(
+    "uses the selected profile partition with stable account %s",
+    async (stableAccount) => {
+      const test = fixture(stableAccount);
+      await withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
+        expect(context.agentId).toBe("second");
+        expect(context.profileId).toBe("openai:second");
+        expect(context.workspaceDir).toBe(test.workspaceDir);
+        expect(context.threadId).toBeUndefined();
+        const prepared = test.acquire.mock.calls[0]?.[0]?.preparedAuth;
+        expect(prepared?.kind).toBe("profile");
+        expect(JSON.parse(context.appCacheKey)).toMatchObject({
+          authProfileId: "openai:second",
+          accountId: prepared?.kind === "profile" ? prepared.snapshot?.secretFreeCacheKey : null,
+        });
+        await context.request("app/installed", { forceRefresh: false });
+      });
+      expect(test.acquire).toHaveBeenCalledOnce();
+      expect(test.acquire).toHaveBeenCalledWith(
+        expect.objectContaining({
+          agentDir: test.agentDir,
+          preparedAuth: expect.objectContaining({ kind: "profile", profileId: "openai:second" }),
+          authRequirement: "subscription",
+          authBindingFingerprint: expect.any(String),
+        }),
+      );
+      expect(test.release).toHaveBeenCalledOnce();
+    },
+  );
 
   it.each([true, false])(
     "only exposes a thread owned by this physical client (%s)",
