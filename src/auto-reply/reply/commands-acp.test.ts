@@ -98,6 +98,7 @@ vi.mock("../../gateway/call.js", () => ({
 vi.mock("../../acp/runtime/registry.js", () => ({
   requireAcpRuntimeBackend: (id?: string) => hoisted.requireAcpRuntimeBackendMock(id),
   getAcpRuntimeBackend: (id?: string) => hoisted.getAcpRuntimeBackendMock(id),
+  resolveAcpRuntimeApprovalOwnerPluginId: (backendId?: string) => backendId ?? "acpx",
 }));
 
 vi.mock("../../acp/runtime/session-meta.js", () => ({

@@ -162,7 +162,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       group.shard_name.startsWith("cache-warm:auto-reply-reply-commands-3:"),
     );
     expect(autoReplyGroups).toHaveLength(1);
-    expect(autoReplyGroups[0]?.includePatterns).toHaveLength(18);
+    // 18 upstream + commands-acp/lifecycle.steer-permissions.test.ts.
+    expect(autoReplyGroups[0]?.includePatterns).toHaveLength(19);
     expect(autoReplyGroups[0]?.env).toBeUndefined();
   });
 
