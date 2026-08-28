@@ -160,9 +160,32 @@ function guardIngressQueueMutations<TPayload, TMetadata, TCompletedMetadata>(
       assertCurrent();
       return queue.delete(...args);
     },
-    recoverStaleClaims: (...args) => {
+    // Recovery predicates may await, so asserting once at call time is not enough: a
+    // migration could start recovery, return, release the section, and only then let a
+    // predicate resolve into the tombstone or claim-release write. Re-assert after every
+    // predicate settles, immediately before the write it authorizes.
+    recoverStaleClaims: (recoverOptions) => {
       assertCurrent();
-      return queue.recoverStaleClaims(...args);
+      if (!recoverOptions) {
+        return queue.recoverStaleClaims();
+      }
+      const { shouldRecover, shouldRecoverCorrupt, ...rest } = recoverOptions;
+      const guardedRecovery: typeof recoverOptions = { ...rest };
+      if (shouldRecover) {
+        guardedRecovery.shouldRecover = async (claim) => {
+          const decision = await shouldRecover(claim);
+          assertCurrent();
+          return decision;
+        };
+      }
+      if (shouldRecoverCorrupt) {
+        guardedRecovery.shouldRecoverCorrupt = async (claim) => {
+          const decision = await shouldRecoverCorrupt(claim);
+          assertCurrent();
+          return decision;
+        };
+      }
+      return queue.recoverStaleClaims(guardedRecovery);
     },
     prune: (...args) => {
       assertCurrent();

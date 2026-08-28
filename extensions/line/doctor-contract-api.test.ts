@@ -126,7 +126,7 @@ describe("LINE doctor state migration", () => {
 
       const result = await migration.migrateLegacyState(migrationParams(stateDir, {}));
       expect(result.changes).toEqual([
-        'Migrated LINE pre-drain spool rows (account "default"): 1 delivered to the canonical queue, 0 dead-lettered at the identity fence',
+        'Migrated LINE pre-drain spool rows (account "default"): 1 queued under the canonical contract, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
       ]);
       expect(result.warnings).toEqual([]);
 
@@ -154,7 +154,7 @@ describe("LINE doctor state migration", () => {
 
       const result = await migration.migrateLegacyState(migrationParams(stateDir, config));
       expect(result.changes).toEqual([
-        'Migrated LINE pre-drain spool rows (account "work"): 1 delivered to the canonical queue, 0 dead-lettered at the identity fence',
+        'Migrated LINE pre-drain spool rows (account "work"): 1 queued under the canonical contract, 0 dead-lettered at the identity fence',
       ]);
       expect(result.warnings).toEqual([]);
 
@@ -184,8 +184,8 @@ describe("LINE doctor state migration", () => {
 
       const result = await migration.migrateLegacyState(migrationParams(stateDir, {}));
       expect(result.changes).toEqual([
-        'Migrated LINE pre-drain spool rows (account "default"): 1 delivered to the canonical queue, 0 dead-lettered at the identity fence',
-        'Migrated LINE pre-drain spool rows (account "retired"): 1 delivered to the canonical queue, 0 dead-lettered at the identity fence',
+        'Migrated LINE pre-drain spool rows (account "default"): 1 queued under the canonical contract, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
+        'Migrated LINE pre-drain spool rows (account "retired"): 1 queued under the canonical contract, 0 dead-lettered at the identity fence (account not currently configured, so these stay queued until it is restored)',
       ]);
       expect(result.warnings).toEqual([]);
 

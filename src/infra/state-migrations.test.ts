@@ -1453,6 +1453,90 @@ describe("state migrations", () => {
     expect(await readPendingIds()).toStrictEqual(beforeIds);
   });
 
+  it("rejects a recovery predicate that resolves after the repair section returns", async () => {
+    const root = await createTempDir();
+    const stateDir = path.join(root, ".openclaw");
+    const env = createEnv(stateDir);
+    // The latch keeps the predicate pending until the migration has returned and the
+    // section has closed, which is the exact window the guard has to cover.
+    let releasePredicate!: () => void;
+    const predicateGate = new Promise<void>((resolve) => {
+      releasePredicate = resolve;
+    });
+    let recoveryOutcome: string | undefined;
+    let recoverySettled!: () => void;
+    const recoveryDone = new Promise<void>((resolve) => {
+      recoverySettled = resolve;
+    });
+
+    const seeded = createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    });
+    await seeded.enqueue("latch-evt", { note: "seeded" });
+    const claimed = await seeded.claimNext({ ownerId: "retired-owner" });
+    expect(claimed?.id).toBe("latch-evt");
+
+    pluginDoctorStateMigrationEntries.entries = [
+      {
+        pluginId: "line",
+        channelIds: ["line"],
+        migration: {
+          id: "line-ingress-latch-test",
+          label: "LINE ingress latch test",
+          detectLegacyState: () => ({ preview: ["ingress latch preview"] }),
+          migrateLegacyState({ context }) {
+            const line = (context.channelIngressQueues ?? []).find(
+              (entry) => entry.channelId === "line",
+            );
+            const open = line?.openChannelIngressQueue;
+            if (open) {
+              const queue = open<{ note: string }>({ accountId: "default" });
+              // Started but deliberately not awaited: the migration returns first.
+              void queue
+                .recoverStaleClaims({
+                  staleMs: 0,
+                  shouldRecover: async () => {
+                    await predicateGate;
+                    return true;
+                  },
+                })
+                .then(() => {
+                  recoveryOutcome = "completed";
+                })
+                .catch((error: unknown) => {
+                  recoveryOutcome = String(error);
+                })
+                .finally(() => recoverySettled());
+            }
+            return { changes: ["ingress latch test migrated"], warnings: [] };
+          },
+        },
+      },
+    ];
+
+    const detected = await detectLegacyStateMigrations({
+      cfg: createConfig(),
+      env,
+      homedir: () => root,
+    });
+    await runLegacyStateMigrations({ detected, config: createConfig(), env });
+
+    // Only now, with the section closed, does the predicate resolve.
+    releasePredicate();
+    await recoveryDone;
+
+    expect(recoveryOutcome).toMatch(/ingress queue access has expired/i);
+    // The claim is still held: the post-await write never reached SQLite.
+    const claims = await createChannelIngressQueue<{ note: string }>({
+      channelId: "line",
+      accountId: "default",
+      stateDir,
+    }).listClaims();
+    expect(claims.map((claim) => claim.id)).toStrictEqual(["latch-evt"]);
+  });
+
   it("runs doctor-only plugin file imports only during explicit Doctor repair", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");

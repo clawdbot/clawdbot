@@ -46,6 +46,11 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
     async migrateLegacyState(params) {
       const spool = lineSpoolQueueAccess(params.context);
+      const lineConfig = params.config.channels?.line;
+      const configuredAccountIds = new Set<string>([
+        ...Object.keys(lineConfig?.accounts ?? {}),
+        ...(lineConfig ? ["default"] : []),
+      ]);
       // The mutable lane exists only inside the host's exclusive repair section. A host
       // that reaches this phase without it must fail visibly rather than report success
       // over rows it never rewrote.
@@ -75,8 +80,16 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
             result.reconciled > 0
               ? `, ${result.reconciled} already settled under the canonical id`
               : "";
+          // "queued", not "delivered": the migration admits rows to the canonical
+          // queue, and the drain dispatches them. For an account the operator has
+          // since removed there is no provider to drain it, so the row waits rather
+          // than being delivered - say so instead of implying it already went out.
+          const configured = configuredAccountIds.has(accountId);
+          const dispatchNote = configured
+            ? ""
+            : ` (account not currently configured, so these stay queued until it is restored)`;
           changes.push(
-            `Migrated LINE pre-drain spool rows (account "${accountId}"): ${result.migrated} delivered to the canonical queue, ${result.deadLettered} dead-lettered at the identity fence${reconciled}${recovered}`,
+            `Migrated LINE pre-drain spool rows (account "${accountId}"): ${result.migrated} queued under the canonical contract, ${result.deadLettered} dead-lettered at the identity fence${reconciled}${recovered}${dispatchNote}`,
           );
         }
         for (const failure of result.failures) {
