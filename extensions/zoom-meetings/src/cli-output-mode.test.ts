@@ -35,7 +35,9 @@ describe("Zoom meetings CLI output mode", () => {
       ],
     });
     const program = new Command();
-    await registerCli.mock.calls[0][0]({ program, parentPath: [], config: {}, logger: api.logger });
+    for (const [register] of registerCli.mock.calls) {
+      await register({ program, parentPath: [], config: {}, logger: api.logger });
+    }
     expect(program.commands).toEqual([]);
 
     const isMachineOutput = metadata.descriptor.machineOutput;
