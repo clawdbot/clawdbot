@@ -29,13 +29,6 @@ import { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { createSessionScopedOperations } from "./session-scoped-operations.ts";
 import { SwarmActivityTracker } from "./swarm-activity.ts";
 
-export {
-  buildSessionUsageDateParams,
-  requestSessionUsage,
-  requestSessionUsageContextWeight,
-  requestSessionUsageLogs,
-  requestSessionUsageTimeSeries,
-} from "./usage.ts";
 export type { SessionArchivedFilter } from "./navigation.ts";
 export type {
   SessionCapability,
