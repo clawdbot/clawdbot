@@ -42,6 +42,7 @@ function threadStartResult(params) {
       status: { type: "idle" },
       path: null,
       cwd,
+      projectId: params?.projectId ?? null,
       cliVersion: "0.150.1",
       source: "unknown",
       agentNickname: null,

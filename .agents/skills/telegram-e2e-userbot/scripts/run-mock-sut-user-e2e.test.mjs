@@ -128,6 +128,7 @@ test("generated Codex fixture config clears Telegram lease state before initiali
   const integrationScript = `
     import fs from "node:fs";
     import { CodexAppServerClient } from "./extensions/codex/src/app-server/client.ts";
+    import { assertCodexThreadStartResponse } from "./extensions/codex/src/app-server/protocol-validators.ts";
     import { CODEX_APP_SERVER_VERSION } from "./extensions/codex/src/app-server/version.ts";
     const config = JSON.parse(fs.readFileSync(process.env.OPENCLAW_E2E_CODEX_CONFIG_PATH, "utf8"));
     const appServer = config.plugins.entries.codex.config.appServer;
@@ -149,7 +150,9 @@ test("generated Codex fixture config clears Telegram lease state before initiali
     try {
       await client.initialize();
       if (client.getServerVersion() !== CODEX_APP_SERVER_VERSION) throw new Error("version mismatch");
-      const started = await client.request("thread/start", {}, { timeoutMs: 2_000 });
+      const started = assertCodexThreadStartResponse(
+        await client.request("thread/start", {}, { timeoutMs: 2_000 }),
+      );
       if (started.thread.id !== "thread-telegram-request-user-input") throw new Error("thread mismatch");
     } finally {
       await client.closeAndWait();
