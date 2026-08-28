@@ -3,6 +3,7 @@ import { convertMessages, hasToolCallHistory } from "../openai-completions-messa
 import type { OpenAICompletionsOptions } from "../provider-options.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import {
+  declaresOpenAIReasoningEfforts,
   isOpenAIGpt54MiniModel,
   isOpenAIGpt55Model,
   isOpenAIGpt56Model,
@@ -235,13 +236,14 @@ function applyTogetherOpenAICompletionsThinkingParams(params: {
   modelReasoning: boolean;
   payload: Record<string, unknown>;
   requestedEffort: OpenAIReasoningEffort;
-}): void {
+}): boolean {
   if (!params.modelReasoning || params.compatThinkingFormat !== "together") {
-    return;
+    return false;
   }
   params.payload.reasoning = {
     enabled: isOpenAICompletionsThinkingEnabled(params.requestedEffort),
   };
+  return true;
 }
 
 function convertTools(
@@ -447,6 +449,7 @@ export function buildOpenAICompletionsParams(
       }
     }
   }
+  const requestedCompletionsReasoning = options?.reasoningEffort ?? options?.reasoning;
   const completionsReasoningEffort = resolveOpenAICompletionsReasoningEffort(options);
   const resolvedCompletionsReasoningEffort = completionsReasoningEffort
     ? resolveOpenAIReasoningEffortForModel({
@@ -471,12 +474,27 @@ export function buildOpenAICompletionsParams(
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
-  applyTogetherOpenAICompletionsThinkingParams({
+  const handledTogetherThinkingFormat = applyTogetherOpenAICompletionsThinkingParams({
     compatThinkingFormat: compat.thinkingFormat,
     modelReasoning: model.reasoning,
     payload: params,
     requestedEffort: completionsReasoningEffort,
   });
+  // `off` is an OpenClaw session level, not a wire value, and the effort resolver drops it
+  // when a model declares no effort vocabulary. Fall back to the canonical `none` spelling so
+  // a disabled level still reaches the endpoint. Models that declare their vocabulary, a null
+  // off mapping, or a dialect that already carries its own disable signal are left alone.
+  const offCompletionsReasoningEffort =
+    compat.reasoningEffortMap?.off ?? model.thinkingLevelMap?.off;
+  const needsCanonicalDisabledEffort =
+    !isOpenAICompletionsThinkingEnabled(completionsReasoningEffort) &&
+    !declaresOpenAIReasoningEfforts(model) &&
+    !handledTogetherThinkingFormat &&
+    offCompletionsReasoningEffort !== null;
+  const completionsReasoningEffortToSend =
+    resolvedCompletionsReasoningEffort ??
+    (needsCanonicalDisabledEffort ? (offCompletionsReasoningEffort ?? "none") : undefined);
+
   if (disableChatCompletionsToolReasoning) {
     // GPT-5.6 Chat Completions defaults reasoning on, but rejects function
     // tools unless reasoning is explicitly disabled.
@@ -484,19 +502,22 @@ export function buildOpenAICompletionsParams(
   } else if (
     compat.thinkingFormat === "openrouter" &&
     model.reasoning &&
-    resolvedCompletionsReasoningEffort
+    completionsReasoningEffortToSend
   ) {
     params.reasoning = {
-      effort: resolvedCompletionsReasoningEffort,
+      effort: completionsReasoningEffortToSend,
     };
   } else if (
-    resolvedCompletionsReasoningEffort &&
+    completionsReasoningEffortToSend &&
     model.reasoning &&
     compat.supportsReasoningEffort &&
     !handledQwenThinkingFormat &&
-    !omitChatCompletionsToolReasoningEffort
+    !omitChatCompletionsToolReasoningEffort &&
+    // A null off mapping declares the endpoint cannot disable reasoning. Substituting the
+    // unset default for a caller that named no level would request more thinking, not less.
+    (requestedCompletionsReasoning !== undefined || offCompletionsReasoningEffort !== null)
   ) {
-    params.reasoning_effort = resolvedCompletionsReasoningEffort;
+    params.reasoning_effort = completionsReasoningEffortToSend;
   }
   return params;
 }
