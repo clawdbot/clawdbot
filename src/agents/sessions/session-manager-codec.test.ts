@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  buildSessionContext,
   isIndexedSessionEntry,
   parseOpaqueLeafEntry,
   parseParentLinkedOpaqueEntry,
@@ -79,6 +80,35 @@ describe("session manager codec compatibility", () => {
     expect(context).not.toContain("before");
     expect(context).toContain("after");
   });
+
+  it("returns instead of looping when the parent chain forms a cycle", () => {
+    // buildSessionContext walks parentId links directly off the map it is given, so a
+    // caller that hands it a cycle drives the walk forever. Every other parent-chain walk
+    // in this directory already guards against that -- getBranch
+    // (session-manager-entries.ts), resolveCanonicalParentId (session-manager-core.ts),
+    // and the branch walk in session-manager-branching.ts all carry a visited set.
+    const entries = [
+      {
+        type: "message",
+        id: "cyc-a",
+        parentId: "cyc-b",
+        message: { role: "user", content: "first" },
+      },
+      {
+        type: "message",
+        id: "cyc-b",
+        parentId: "cyc-a",
+        message: { role: "user", content: "second" },
+      },
+    ] as unknown as Parameters<typeof buildSessionContext>[0];
+    const byId = new Map(entries.map((entry) => [entry.id, entry]));
+
+    const context = buildSessionContext(entries, "cyc-a", byId);
+
+    // Terminating at all is the assertion. Each entry is visited at most once, so the
+    // walk yields the cycle members and stops rather than growing the path forever.
+    expect(context.messages.length).toBeLessThanOrEqual(2);
+  }, 5_000);
 
   it("parses opaque tree links without widening their variants", () => {
     expect(parseParentLinkedOpaqueEntry({ type: "future", id: "f1", parentId: null })).toEqual({
