@@ -3083,14 +3083,15 @@ jobs:
             runner: blacksmith-8vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
+      # The report is dispatch-only; fetching its inputs can otherwise fail skipped PR work.
       - name: Ensure Plugin SDK API diff base commit
-        if: matrix.group == 'plugin-sdk-api-diff'
+        if: matrix.group == 'plugin-sdk-api-diff' && github.event_name == 'workflow_dispatch'
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Ensure Plugin SDK API diff head commit
-        if: matrix.group == 'plugin-sdk-api-diff'
+        if: matrix.group == 'plugin-sdk-api-diff' && github.event_name == 'workflow_dispatch'
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_head_revision }}

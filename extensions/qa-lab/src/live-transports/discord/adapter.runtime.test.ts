@@ -1,5 +1,5 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../../test/helpers/promise.js";
 import * as credentialLease from "../shared/credential-lease.runtime.js";
 import { createDiscordQaTransportAdapter } from "./adapter.runtime.js";
 import { discordQaScenarioSupport } from "./discord-live.runtime.js";
