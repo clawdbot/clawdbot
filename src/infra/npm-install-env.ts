@@ -244,7 +244,7 @@ function hasNpmrcConfigKey(filePath: string, key: string): boolean {
   }
 }
 
-export function hasRawNpmConfigKey(
+function hasRawNpmConfigKey(
   env: NodeJS.ProcessEnv,
   key: string,
   scope: NpmConfigScope = {},

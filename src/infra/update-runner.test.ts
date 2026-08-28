@@ -1334,9 +1334,13 @@ describe("runGatewayUpdate", () => {
     });
   });
 
-  it.each(["PNPM_CONFIG_PREFER_OFFLINE", "pnpm_config_prefer_offline"])(
+  it.each([
+    ["PNPM_CONFIG_PREFER_OFFLINE", "false", undefined],
+    ["pnpm_config_prefer_offline", undefined, "false"],
+    ["conflicting pnpm preference variables", "true", "false"],
+  ] as const)(
     "preserves explicit %s in update installs",
-    async (envKey) => {
+    async (_caseName, upperValue, lowerValue) => {
       await setupGitCheckout({ packageManager: "pnpm@8.0.0" });
       await setupUiIndex();
       const stableTag = "v1.0.1-1";
@@ -1358,18 +1362,16 @@ describe("runGatewayUpdate", () => {
 
       const result = await withEnvAsync(
         {
-          PNPM_CONFIG_PREFER_OFFLINE: envKey === "PNPM_CONFIG_PREFER_OFFLINE" ? "false" : undefined,
-          pnpm_config_prefer_offline: envKey === "pnpm_config_prefer_offline" ? "false" : undefined,
+          PNPM_CONFIG_PREFER_OFFLINE: upperValue,
+          pnpm_config_prefer_offline: lowerValue,
         },
         () => runWithCommand(runCommand, { channel: "stable" }),
       );
 
       expect(result.status).toBe("ok");
       expect(installEnvs).toHaveLength(1);
-      expect(installEnvs[0]).toMatchObject({
-        PNPM_CONFIG_PREFER_OFFLINE: "false",
-        pnpm_config_prefer_offline: "false",
-      });
+      expect(installEnvs[0]?.PNPM_CONFIG_PREFER_OFFLINE).toBe(upperValue);
+      expect(installEnvs[0]?.pnpm_config_prefer_offline).toBe(lowerValue);
     },
   );
 
