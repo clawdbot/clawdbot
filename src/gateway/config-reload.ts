@@ -49,6 +49,7 @@ import type {
   GatewayHotReloadApplicationStatus,
   GatewayHotReloadStatus,
 } from "./config-reload-status.types.js";
+import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 
 export type { GatewayReloadPlan } from "./config-reload-plan.js";
 const MISSING_CONFIG_RETRY_DELAY_MS = 150;
@@ -133,17 +134,6 @@ type PreparedGatewayConfigCandidate = {
   reapplyRuntimeOverlays?: (config: OpenClawConfig) => OpenClawConfig;
   reapplyCompareOverlays?: (config: OpenClawConfig) => OpenClawConfig;
 };
-
-class GatewayConfigReloadSupersededError extends Error {
-  constructor() {
-    super("config reload superseded by a newer config write");
-    this.name = "GatewayConfigReloadSupersededError";
-  }
-}
-
-function isGatewayConfigReloadSupersededError(error: unknown): boolean {
-  return error instanceof Error && error.name === "GatewayConfigReloadSupersededError";
-}
 
 function asPluginInstallConfig(records: PluginInstallRecords): OpenClawConfig {
   return {
@@ -426,7 +416,7 @@ export function startGatewayConfigReloader(opts: {
       // transaction. Only downstream signal delivery may coalesce.
       await opts.onRestart(plan, nextConfig, ownership, sourceConfig);
     } catch (err) {
-      if (isGatewayConfigReloadSupersededError(err)) {
+      if (err instanceof GatewayConfigReloadSupersededError) {
         opts.log.info(`config restart superseded: ${String(err)}`);
       } else {
         opts.log.error(`config restart failed: ${String(err)}`);
@@ -1106,7 +1096,7 @@ export function startGatewayConfigReloader(opts: {
       });
       await acceptWatchedPaths(snapshot.includedPaths ?? []);
     } catch (err) {
-      const superseded = isGatewayConfigReloadSupersededError(err);
+      const superseded = err instanceof GatewayConfigReloadSupersededError;
       const transferredToWatcher =
         superseded && attemptedCandidate !== null && watcherIntentCandidate === attemptedCandidate;
       if (!transferredToWatcher) {

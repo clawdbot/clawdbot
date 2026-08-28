@@ -623,6 +623,13 @@ Both `config.apply` and `config.patch` accept `raw`, `baseHash`, `sessionKey`,
 `note`, and `restartDelayMs`. `baseHash` is required for both methods once a
 config file already exists (a first write with no existing config skips the check).
 
+For hot-applied changes, these RPCs wait until the active Gateway applies the
+exact write. Channel or plugin reloads may defer for unrelated active work. If
+the file watcher takes over the same unapplied write during that wait, the RPC stays pending
+through replay; persistence alone is not an application acknowledgment. Shutdown,
+supersession by different content, or failed application returns `UNAVAILABLE`
+with recovery guidance. `config.set` acknowledges persistence only.
+
 `config.patch` also accepts `replacePaths`, an array of config paths whose array
 replacement is intentional. If a patch would replace or delete an existing array
 with fewer entries, the Gateway rejects the write unless that exact path appears

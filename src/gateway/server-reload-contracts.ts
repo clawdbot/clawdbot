@@ -132,15 +132,18 @@ export class GatewayConfigReloadSupersededError extends Error {
   }
 }
 
+export function createReloadCancellationError(superseded: boolean) {
+  return superseded
+    ? new GatewayConfigReloadSupersededError()
+    : new GatewayHotReloadCancelledError();
+}
+
 export function assertReloadPublicationCurrent(
   publicationCurrent: boolean,
   restartStopped: boolean,
 ): void {
-  if (!publicationCurrent) {
-    throw new GatewayConfigReloadSupersededError();
-  }
-  if (restartStopped) {
-    throw new GatewayHotReloadCancelledError();
+  if (!publicationCurrent || restartStopped) {
+    throw createReloadCancellationError(!publicationCurrent);
   }
 }
 
