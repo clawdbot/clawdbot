@@ -37,9 +37,6 @@ const RATE_LIMIT_PATTERN =
 const SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN =
   /^(?:(?:CronSessionLifecycleClaimError|Error): )?Session "[^"\n]+" (?:changed|was deleted) while starting work\. Retry\.$/;
 
-// Cron isolated agent setup timeout during startup is transient infrastructure
-const CRON_SETUP_TIMEOUT_PATTERN = /^cron: isolated agent setup timed out before runner start/;
-
 const TRANSIENT_PATTERNS: Record<CronRetryOn, RegExp> = {
   rate_limit: RATE_LIMIT_PATTERN,
   overloaded:
@@ -58,9 +55,6 @@ export function resolveCronExecutionRetryHint(input: CronRetryHintInput): CronRe
   }
   if (SESSION_LIFECYCLE_CLAIM_ERROR_PATTERN.test(error)) {
     return { retryable: executionStarted !== true };
-  }
-  if (CRON_SETUP_TIMEOUT_PATTERN.test(error)) {
-    return { retryable: true, category: "timeout" };
   }
   const keys = retryOn?.length ? retryOn : (Object.keys(TRANSIENT_PATTERNS) as CronRetryOn[]);
   const classified = classifiedReason ?? undefined;
