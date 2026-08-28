@@ -208,7 +208,9 @@ export function validateReleaseToolingIdentity({
 
 export function validateReleasePublishParentRun({
   identity,
+  releasePublishFullRef,
   releasePublishParentStatePolicy,
+  releasePublishRef,
   releasePublishRunAttempt,
   releasePublishRunId,
   repository,
@@ -226,11 +228,22 @@ export function validateReleasePublishParentRun({
   if (!RELEASE_PUBLISH_PARENT_STATE_POLICIES.has(parentStatePolicy)) {
     fail(`release publish parent state policy ${parentStatePolicy} is not supported.`);
   }
+  const parentRef = requiredString(releasePublishRef, "release publish ref");
+  const parentFullRef = requiredString(releasePublishFullRef, "release publish full ref");
+  const parentProtectedMatch = RELEASE_PUBLISH_REF_PATTERN.exec(parentRef);
+  const parentDirectRoute =
+    parentFullRef === `refs/heads/${parentRef}` && DIRECT_WORKFLOW_REF_PATTERN.test(parentRef);
+  const parentProtectedRoute =
+    parentFullRef === `refs/tags/${parentRef}` &&
+    parentProtectedMatch?.[1] === identity.sha.slice(0, 12);
+  if (!parentDirectRoute && !parentProtectedRoute) {
+    fail("release publish parent ref is not a trusted direct or exact protected-tag route.");
+  }
   const normalizedRepository = requireRepository(repository);
   const [workflowPath, workflowFullRef] = String(run?.path ?? "").split("@", 2);
   const expected = {
     event: "workflow_dispatch",
-    headBranch: identity.ref,
+    headBranch: parentRef,
     headSha: identity.sha,
     repository: normalizedRepository,
     runAttempt: Number(runAttempt),
@@ -251,7 +264,7 @@ export function validateReleasePublishParentRun({
       fail(`release publish parent run ${key} does not match the trusted tooling identity.`);
     }
   }
-  if (workflowFullRef && workflowFullRef !== identity.fullRef) {
+  if (workflowFullRef && workflowFullRef !== parentFullRef) {
     fail("release publish parent run workflow full ref does not match trusted tooling.");
   }
   const active = run?.status === "in_progress" && !run?.conclusion;
@@ -288,7 +301,9 @@ function runReleaseToolingGh(args) {
 
 export function verifyReleaseToolingIdentity({
   allowPrevalidatedRef = false,
+  releasePublishFullRef,
   releasePublishParentStatePolicy,
+  releasePublishRef,
   releasePublishRunAttempt,
   releasePublishRunId,
   repository,
@@ -329,7 +344,9 @@ export function verifyReleaseToolingIdentity({
     });
     validateParentRunIfRequested({
       identity: validated,
+      releasePublishFullRef,
       releasePublishParentStatePolicy,
+      releasePublishRef,
       releasePublishRunAttempt,
       releasePublishRunId,
       repository: normalizedRepository,
@@ -362,7 +379,9 @@ export function verifyReleaseToolingIdentity({
     });
     validateParentRunIfRequested({
       identity: validated,
+      releasePublishFullRef,
       releasePublishParentStatePolicy,
+      releasePublishRef,
       releasePublishRunAttempt,
       releasePublishRunId,
       repository: normalizedRepository,
@@ -396,7 +415,9 @@ export function verifyReleaseToolingIdentity({
   });
   validateParentRunIfRequested({
     identity: validated,
+    releasePublishFullRef,
     releasePublishParentStatePolicy,
+    releasePublishRef,
     releasePublishRunAttempt,
     releasePublishRunId,
     repository: normalizedRepository,
@@ -407,17 +428,33 @@ export function verifyReleaseToolingIdentity({
 
 function validateParentRunIfRequested({
   identity,
+  releasePublishFullRef,
   releasePublishParentStatePolicy,
+  releasePublishRef,
   releasePublishRunAttempt,
   releasePublishRunId,
   repository,
   runGh,
 }) {
-  if (!releasePublishRunId && !releasePublishRunAttempt && !releasePublishParentStatePolicy) {
+  if (
+    !releasePublishRunId &&
+    !releasePublishRunAttempt &&
+    !releasePublishParentStatePolicy &&
+    !releasePublishRef &&
+    !releasePublishFullRef
+  ) {
     return;
   }
-  if (!releasePublishRunId || !releasePublishRunAttempt || !releasePublishParentStatePolicy) {
-    fail("release publish run id, attempt, and parent state policy must be provided together.");
+  if (
+    !releasePublishRunId ||
+    !releasePublishRunAttempt ||
+    !releasePublishParentStatePolicy ||
+    !releasePublishRef ||
+    !releasePublishFullRef
+  ) {
+    fail(
+      "release publish run id, attempt, ref, full ref, and parent state policy must be provided together.",
+    );
   }
   let run;
   try {
@@ -430,7 +467,9 @@ function validateParentRunIfRequested({
   }
   validateReleasePublishParentRun({
     identity,
+    releasePublishFullRef,
     releasePublishParentStatePolicy,
+    releasePublishRef,
     releasePublishRunAttempt,
     releasePublishRunId,
     repository,
@@ -444,6 +483,8 @@ function parseArgs(argv) {
     command: "",
     releasePublishRunAttempt: "",
     releasePublishRunId: "",
+    releasePublishRef: "",
+    releasePublishFullRef: "",
     releasePublishParentStatePolicy: "",
     repository: "",
     requestedIdentityJson: "",
@@ -467,6 +508,10 @@ function parseArgs(argv) {
       options.releasePublishRunId = value;
     } else if (arg === "--release-publish-run-attempt") {
       options.releasePublishRunAttempt = value;
+    } else if (arg === "--release-publish-ref") {
+      options.releasePublishRef = value;
+    } else if (arg === "--release-publish-full-ref") {
+      options.releasePublishFullRef = value;
     } else if (arg === "--release-publish-parent-state-policy") {
       options.releasePublishParentStatePolicy = value;
     } else if (arg === "--repository") {
@@ -496,7 +541,9 @@ function main(argv = process.argv.slice(2)) {
     const protectedMatch = RELEASE_PUBLISH_REF_PATTERN.exec(identity.ref);
     verifyReleaseToolingIdentity({
       allowPrevalidatedRef: identity.ref !== "main" && !protectedMatch,
+      releasePublishFullRef: options.releasePublishFullRef,
       releasePublishParentStatePolicy: options.releasePublishParentStatePolicy,
+      releasePublishRef: options.releasePublishRef,
       releasePublishRunAttempt: options.releasePublishRunAttempt,
       releasePublishRunId: options.releasePublishRunId,
       repository: options.repository,

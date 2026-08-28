@@ -1005,6 +1005,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
@@ -1082,6 +1083,7 @@ jobs:
             --release-tag "${RELEASE_TAG}"
             --release-sha "${TARGET_SHA}"
             --release-publish-branch "${PARENT_WORKFLOW_BRANCH}"
+            --release-publish-full-ref "${PARENT_WORKFLOW_FULL_REF}"
             --release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"
             --release-publish-run-id "${GITHUB_RUN_ID}"
             --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
@@ -1234,6 +1236,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -2552,7 +2555,7 @@ jobs:
             if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
               echo "- Workflow completion waits for ClawHub"
             else
-              echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
+              echo "- Workflow does not wait for ClawHub; monitor its run separately"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -2574,7 +2577,7 @@ jobs:
             bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"
           fi
 
-          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}")
+          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}")
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
           fi
@@ -2586,7 +2589,7 @@ jobs:
             append_clawhub_dispatch_args normal
             plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
               "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
-              "${TARGET_SHA}" \
+              "${PARENT_WORKFLOW_SHA}" \
               "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
               "${clawhub_dispatch_args[@]}")"
           else
@@ -2662,6 +2665,7 @@ jobs:
                 -f release_publish_run_id="${GITHUB_RUN_ID}" \
                 -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
                 -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" \
+                -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}" \
                 -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
                 -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}" \
                 "${evidence_args[@]}")"
@@ -2679,7 +2683,7 @@ jobs:
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
               clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
               wait_run_pid=""
-              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}" "${clawhub_result}"
+              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${PARENT_WORKFLOW_SHA}" "${clawhub_result}"
               clawhub_pid="${wait_run_pid}"
             fi
             if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then

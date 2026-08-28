@@ -276,9 +276,9 @@ describe("release tooling identity", () => {
         id: Number(PARENT_RUN_ID),
         run_attempt: Number(PARENT_RUN_ATTEMPT),
         repository: { full_name: "openclaw/openclaw" },
-        path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+        path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
         event: "workflow_dispatch",
-        head_branch: REF,
+        head_branch: "main",
         head_sha: SHA,
         status: "in_progress",
         conclusion: null,
@@ -288,7 +288,9 @@ describe("release tooling identity", () => {
     expect(
       verifyReleaseToolingIdentity({
         ...protectedIdentity(),
+        releasePublishFullRef: "refs/heads/main",
         releasePublishParentStatePolicy: "active",
+        releasePublishRef: "main",
         releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
         releasePublishRunId: PARENT_RUN_ID,
         runGh,
@@ -319,7 +321,9 @@ describe("release tooling identity", () => {
       const validate = () =>
         validateReleasePublishParentRun({
           identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+          releasePublishFullRef: "refs/heads/main",
           releasePublishParentStatePolicy,
+          releasePublishRef: "main",
           releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
           releasePublishRunId: PARENT_RUN_ID,
           repository: "openclaw/openclaw",
@@ -327,9 +331,9 @@ describe("release tooling identity", () => {
             id: Number(PARENT_RUN_ID),
             run_attempt: Number(PARENT_RUN_ATTEMPT),
             repository: { full_name: "openclaw/openclaw" },
-            path: `.github/workflows/openclaw-release-publish.yml@${FULL_REF}`,
+            path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
             event: "workflow_dispatch",
-            head_branch: REF,
+            head_branch: "main",
             head_sha: SHA,
             status,
             conclusion,
@@ -356,6 +360,35 @@ describe("release tooling identity", () => {
             object: { sha: SHA, type: "commit" },
           }),
       }),
-    ).toThrow("run id, attempt, and parent state policy must be provided together");
+    ).toThrow("run id, attempt, ref, full ref, and parent state policy must be provided together");
+  });
+
+  it.each([
+    ["wrong parent branch", "release/2026.8.1", "refs/heads/main"],
+    ["wrong parent full ref", "main", "refs/heads/release/2026.8.1"],
+    ["untrusted parent ref", "feature/release", "refs/heads/feature/release"],
+  ])("rejects %s independently of protected child identity", (_label, parentRef, parentFullRef) => {
+    expect(() =>
+      validateReleasePublishParentRun({
+        identity: { ref: REF, fullRef: FULL_REF, sha: SHA },
+        releasePublishFullRef: parentFullRef,
+        releasePublishParentStatePolicy: "active",
+        releasePublishRef: parentRef,
+        releasePublishRunAttempt: PARENT_RUN_ATTEMPT,
+        releasePublishRunId: PARENT_RUN_ID,
+        repository: "openclaw/openclaw",
+        run: {
+          id: Number(PARENT_RUN_ID),
+          run_attempt: Number(PARENT_RUN_ATTEMPT),
+          repository: { full_name: "openclaw/openclaw" },
+          path: ".github/workflows/openclaw-release-publish.yml@refs/heads/main",
+          event: "workflow_dispatch",
+          head_branch: "main",
+          head_sha: SHA,
+          status: "in_progress",
+          conclusion: null,
+        },
+      }),
+    ).toThrow();
   });
 });
