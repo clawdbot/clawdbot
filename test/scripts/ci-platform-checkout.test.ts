@@ -1,4 +1,4 @@
-import { fork } from "node:child_process";
+import { fork, spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -21,6 +21,20 @@ type Report = {
 };
 
 const fixture = fileURLToPath(new URL("./fixtures/ci-platform-checkout.mjs", import.meta.url));
+
+function readCheckoutRun(linux: boolean): string {
+  const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
+    jobs: Record<string, { steps: { name?: string; run?: string }[] }>;
+  };
+  const run = workflow.jobs[linux ? "checks-fast-core" : "checks-windows"]?.steps.find(
+    (step) => step.name === "Checkout",
+  )?.run;
+  expect(run).toBeTypeOf("string");
+  if (!run) {
+    throw new Error("Missing shared platform checkout shell");
+  }
+  return run;
+}
 
 // Execute both workflow policies against the same owned tree fixture. A leader's
 // exit must not authorize workspace deletion, Git reuse, or final success.
@@ -65,16 +79,7 @@ it.each([
   "preserves checkout ownership and fixture isolation (Linux=$linux, $scenario)",
   async ({ scenario, attempts, code, checkout, linux, deletions }) => {
     const setupFailure = scenario.startsWith("non-executable-");
-    const workflow = parse(readFileSync(".github/workflows/ci.yml", "utf8")) as {
-      jobs: Record<string, { steps: { name?: string; run?: string }[] }>;
-    };
-    const run = workflow.jobs[linux ? "checks-fast-core" : "checks-windows"]?.steps.find(
-      (step) => step.name === "Checkout",
-    )?.run;
-    expect(run).toBeTypeOf("string");
-    if (!run) {
-      throw new Error("Missing shared platform checkout shell");
-    }
+    const run = readCheckoutRun(linux);
 
     const root = realpathSync(mkdtempSync(path.join(tmpdir(), "ci platform checkout ")));
     const workspace = path.join(root, "workspace");
@@ -82,15 +87,37 @@ it.each([
     if (linux) {
       writeFileSync(path.join(workspace, ".previous-checkout"), "stale\n");
     }
-    // Advance the test clock, not the real OS teardown budget: a subsecond
-    // cleanup deadline races process scheduling instead of testing ownership.
+    if (scenario === "recovery") {
+      // Reproduce startup beyond the old wall-clock budget without delaying other consumers.
+      writeFileSync(path.join(root, "tree-start-delay-3.json"), "2100");
+    }
+    for (const anchor of [
+      "def run_git(",
+      "deadline = time.monotonic() + timeout",
+      "deadline is not None and time.monotonic() >= deadline",
+    ]) {
+      expect(run, `Missing fetch clock source anchor: ${anchor}`).toContain(anchor);
+    }
+    // Only a ready, deliberately stalled tree advances the fetch clock. Real
+    // process startup and teardown retain their independent wall-clock watchdogs.
     const accelerated = run
       .replace(/fetch_timeout_seconds = [^\n]+/u, "fetch_timeout_seconds = 2")
+      .replace(
+        "def run_git(",
+        `def fetch_clock():
+    return 2 * sum(name.startswith("fetch-tick-") and name.endswith(".json")
+                   for name in os.listdir(os.environ["TMPDIR"]))
+
+
+def run_git(`,
+      )
+      .replace("deadline = time.monotonic() + timeout", "deadline = fetch_clock() + timeout")
+      .replace(
+        "deadline is not None and time.monotonic() >= deadline",
+        "deadline is not None and fetch_clock() >= deadline",
+      )
       .replace("kill_at = deadline - cleanup_seconds / 2", "kill_at = time.monotonic()")
-      .replace(/retry_at = time\.monotonic\(\) \+ [^\n]+/u, "retry_at = time.monotonic() + 0.05")
-      // Keep the original GNU timeout path executable for the pre-fix regression.
-      .replace("120s git", "2s git")
-      .replace("sleep $((attempt * 5))", "sleep 0.05");
+      .replace(/retry_at = time\.monotonic\(\) \+ [^\n]+/u, "retry_at = time.monotonic() + 0.05");
     expect(accelerated).not.toBe(run);
     // A broken preflight must never let these negative fixture tests run real Git.
     writeFileSync(
@@ -201,4 +228,84 @@ it.each([
     }
   },
   55_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "recognizes terminated POSIX groups without accepting live signal denials",
+  () => {
+    const owner = expectDefined(
+      readCheckoutRun(false).split("<<'PYTHON'\n")[1]?.split("\nPYTHON")[0],
+      "checkout Python owner",
+    );
+    const result = spawnSync(
+      "python3",
+      [
+        "-I",
+        "-S",
+        "-c",
+        String.raw`
+import ast, errno, json, os, pathlib, signal, subprocess, sys, tempfile, time
+
+# Load only the actual boundary functions; never execute checkout or real Git.
+functions = [node for node in ast.parse(sys.stdin.read()).body
+             if isinstance(node, ast.FunctionDef) and node.name in ("group_alive", "group_signal")]
+assert len(functions) == 2
+exec(compile(ast.Module(body=functions, type_ignores=[]), "checkout-owner.py", "exec"))
+
+# Retain the Popen handle without polling, so the owned zombie cannot be reaped or reused.
+with subprocess.Popen([sys.executable, "-I", "-S", "-c", "pass"], start_new_session=True) as child:
+    deadline = time.monotonic() + 10
+    while True:
+        state = subprocess.run(["ps", "-o", "stat=", "-p", str(child.pid)],
+                               check=True, capture_output=True, text=True).stdout.strip()
+        if state.startswith("Z"):
+            break
+        assert time.monotonic() < deadline, "owned child did not terminate"
+        time.sleep(0.01)
+    assert not group_alive(child.pid, deadline), "zombies are terminated, not checkout writers"
+    group_signal(child.pid, signal.SIGTERM, deadline)
+    group_signal(child.pid, signal.SIGKILL, deadline)
+    with tempfile.TemporaryDirectory(prefix="checkout-zombie-") as directory:
+        root = pathlib.Path(directory)
+        (root / "workspace").mkdir()
+        (root / "pids").mkdir()
+        (root / "lease").write_text("owned")
+        for pid, role, attempt in [(child.pid, "grandchild", 1), (os.getpid(), "sentinel", 0)]:
+            (root / "pids" / f"{pid}.json").write_text(json.dumps(dict(pid=pid, role=role, attempt=attempt)))
+        subprocess.run([sys.argv[1], sys.argv[2], "git", directory, "early-leader-exit",
+                        "-C", str(root / "workspace"), "checkout"], check=True)
+        observed = json.loads((root / "events.jsonl").read_text())
+        assert observed["alive"] == [], "fixture counted a terminated zombie as a live writer"
+        assert observed["sentinelAlive"]
+
+# A denied signal is safe to normalize only if the same census proves extinction.
+with subprocess.Popen([sys.executable, "-I", "-S", "-c",
+                       "import sys; print('ready', flush=True); sys.stdin.read()"],
+                      start_new_session=True, stdin=subprocess.PIPE,
+                      stdout=subprocess.PIPE, text=True) as child:
+    assert child.stdout.readline().strip() == "ready"
+    actual_killpg = os.killpg
+    def denied(pgid, signum):
+        assert pgid == child.pid and signum in (0, signal.SIGTERM)
+        raise PermissionError(errno.EPERM, "test-owned signal denial")
+    os.killpg = denied
+    try:
+        try:
+            group_signal(child.pid, signal.SIGTERM, time.monotonic() + 10)
+        except PermissionError:
+            pass
+        else:
+            raise AssertionError("live denied group was accepted as terminated")
+    finally:
+        os.killpg = actual_killpg
+print("group contract passed")
+`,
+        process.execPath,
+        fixture,
+      ],
+      { input: owner, encoding: "utf8", timeout: 15_000, killSignal: "SIGKILL" },
+    );
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toContain("group contract passed");
+  },
 );

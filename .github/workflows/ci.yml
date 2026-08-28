@@ -1426,11 +1426,16 @@ jobs:
           '''
 
 
-          def group_signal(pgid, signum):
+          def group_signal(pgid, signum, deadline):
               try:
                   os.killpg(pgid, signum)
               except ProcessLookupError:
                   pass
+              except PermissionError:
+                  # Darwin can report EPERM for a zombie-only group. Only a checked
+                  # census proving no live members can authorize continuing.
+                  if group_alive(pgid, deadline):
+                      raise
 
 
           def group_alive(pgid, deadline):
@@ -1438,8 +1443,10 @@ jobs:
                   os.killpg(pgid, 0)
               except ProcessLookupError:
                   return False
-              # Linux containers may not reap orphan zombies. They are terminated, not writers.
-              # A failed/ambiguous inspection never authorizes checkout reuse.
+              except PermissionError:
+                  pass  # EPERM can mean zombie-only; the census must still prove extinction.
+              # Zombies are terminated, not writers. A failed/ambiguous inspection
+              # never authorizes checkout reuse, including after a denied signal probe.
               result = subprocess.run(
                   ["ps", "-axo", "pgid=,stat="], stdin=subprocess.DEVNULL,
                   stdout=subprocess.PIPE, text=True, check=True,
@@ -1469,7 +1476,7 @@ jobs:
                   # The group remains ours after leader exit. Reserve half the existing
                   # cleanup allowance for KILL and extinction verification after TERM.
                   try:
-                      group_signal(child.pid, signal.SIGTERM)
+                      group_signal(child.pid, signal.SIGTERM, deadline)
                       kill_at = deadline - cleanup_seconds / 2
                       while True:
                           child.poll()
@@ -1477,12 +1484,12 @@ jobs:
                               child.wait(timeout=max(0.001, deadline - time.monotonic()))
                               return
                           if time.monotonic() >= kill_at:
-                              group_signal(child.pid, signal.SIGKILL)
+                              group_signal(child.pid, signal.SIGKILL, deadline)
                           if time.monotonic() >= deadline:
                               raise RuntimeError("Process group cleanup did not complete")
                           time.sleep(0.05)
                   except Exception:
-                      group_signal(child.pid, signal.SIGKILL)
+                      group_signal(child.pid, signal.SIGKILL, deadline)
                       child.wait(timeout=max(0.001, deadline - time.monotonic()))
                       raise
 
