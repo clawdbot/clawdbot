@@ -10,6 +10,7 @@ import {
   jsdomOptimizedDeps,
   nonIsolatedRunnerPath,
   resolveDefaultVitestPool,
+  sharedVitestConfig,
 } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import { controlUiLocaleModulesPlugin } from "./config/control-ui-locales.ts";
@@ -152,6 +153,7 @@ export default defineConfig({
   },
   test: {
     ...sharedUiTestConfig,
+    reporters: sharedVitestConfig.test.reporters,
     projects: [
       defineProject({
         plugins: [controlUiLocaleModulesPlugin()],
