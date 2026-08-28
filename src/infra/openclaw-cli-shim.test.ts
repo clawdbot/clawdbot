@@ -72,6 +72,39 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
       });
     });
   });
+
+  it("runs the generated CLI from the invocation cwd", async () => {
+    await withTempDir("openclaw-agent-cli-shim-cwd-", async (root) => {
+      const outsideCwd = path.join(root, "outside");
+      const entryPath = path.join(root, "gateway-entry.mjs");
+      const stateDir = path.join(root, "state");
+      const invocationCwd = await fs.realpath(root);
+      await fs.mkdir(outsideCwd);
+      await fs.writeFile(entryPath, "console.log(JSON.stringify({ cwd: process.cwd() }));\n");
+
+      await prepareGatewayAgentCliShim({
+        invocation: { command: process.execPath, args: [entryPath], cwd: invocationCwd },
+        stateDir,
+      });
+
+      process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
+      const execConfig = resolveExecToolConfig({ cfg: {} });
+      const tool = createExecTool({
+        ...execConfig,
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        cwd: outsideCwd,
+        notifyOnExit: false,
+      });
+      const result = await tool.execute("gateway-cli-cwd-probe", {
+        command: "openclaw",
+        yieldMs: 120_000,
+      });
+
+      expect(JSON.parse(readExecText(result))).toEqual({ cwd: invocationCwd });
+    });
+  });
 });
 
 it("renders a Windows PATH launcher for the running CLI", async () => {
@@ -89,7 +122,7 @@ it("renders a Windows PATH launcher for the running CLI", async () => {
 
     const executablePath = path.join(root, "tmp", "agent-cli", "openclaw.cmd");
     expect(await fs.readFile(executablePath, "utf8")).toBe(
-      '@echo off\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
+      '@echo off\r\ncd /d C:\\OpenClaw\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
     );
   });
 });
