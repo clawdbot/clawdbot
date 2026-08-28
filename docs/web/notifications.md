@@ -37,6 +37,25 @@ Behind the scenes, enabling creates a push subscription in this browser and regi
 
 Approval notifications use generic lock-screen text; command, working-directory, prompt, and plugin details stay out of the push payload. Selecting the notification opens the authenticated `/approve/<approvalId>` page. Before each send, the Gateway rechecks the paired device's current approval scopes, operator role, user profile, and approval visibility. A revoked or downgraded browser stops receiving approval pushes without needing to unsubscribe first.
 
+### Choose what reaches each device
+
+After subscribing, **Settings → Notifications** exposes two preference layers:
+
+- **Account defaults** follow a durable authenticated user profile across devices. They control approval requests and updates, agent completion, agent questions, scheduled-task failures, background-task failures, lock-screen detail, quiet hours, timezone, and an optional agent allowlist.
+- **This browser or app** can mute one browser profile or installed Home Screen app, add a source label, or override individual categories without changing the account defaults. Native OpenClaw app notifications are configured separately.
+
+Owner-style Gateways without a durable user profile keep the same controls, but store them only with the current browser subscription. Preferences never grant access: every delivery still rechecks the paired device, current role and scopes, authenticated profile, and session visibility. Multi-user events without an authoritative session owner are suppressed instead of being broadcast to every operator.
+
+The default preserves the original behavior: approval request and resolution notifications are enabled, while newly added attention categories are opt-in. Quiet hours suppress matching sends rather than queueing stale alerts for later delivery.
+
+The detail levels are:
+
+- **Private** — generic attention text only.
+- **Names only** — may include a sanitized device, agent, task, or automation label.
+- **Detailed** — currently uses the same bounded, sanitized producer-owned labels; raw prompts, command arguments, output, environment values, and errors never enter the push payload.
+
+On iPhone and iPad, Web Push is available only after installing the Control UI with **Share → Add to Home Screen** and opening that installed app. A normal Safari tab remains usable for the Control UI, but the Notifications page reports the install requirement and does not attempt to dereference an unavailable `PushManager`.
+
 **Send test** asks the Gateway to push a test message to every registered browser subscription. Tests intentionally verify transport only; approval requests are targeted to authorized device bindings. **Unsubscribe** removes the current browser's endpoint from the Gateway, then unsubscribes locally.
 
 The Gateway sends Web Push directly to the browser vendor's push service. This works with a self-hosted Gateway and does not use the OpenClaw-hosted iOS relay.

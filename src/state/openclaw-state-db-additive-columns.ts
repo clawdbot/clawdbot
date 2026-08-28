@@ -40,6 +40,7 @@ export const CLAW_LAZY_ADDITIVE_STATE_COLUMN_DEFINITIONS = [
   { columnName: "allowed_hosts", dataType: "TEXT", tableName: "secret_store_entries" },
   { columnName: "device_id", dataType: "TEXT", tableName: "web_push_subscriptions" },
   { columnName: "user_profile_id", dataType: "TEXT", tableName: "web_push_subscriptions" },
+  { columnName: "preferences_json", dataType: "TEXT", tableName: "web_push_subscriptions" },
   {
     columnName: "claim_released_time",
     dataType: "INTEGER",
@@ -58,7 +59,9 @@ function isFirstUseAdditiveStateColumn({
       (columnName === "abandon_source" || columnName === "target_machine_class")) ||
     (tableName === "session_groups" && (columnName === "cwd" || columnName === "worktree")) ||
     (tableName === "web_push_subscriptions" &&
-      (columnName === "device_id" || columnName === "user_profile_id"))
+      (columnName === "device_id" ||
+        columnName === "user_profile_id" ||
+        columnName === "preferences_json"))
   );
 }
 

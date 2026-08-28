@@ -43,6 +43,15 @@ describe("node and environment request validation", () => {
     ],
     ["push.web.unsubscribe", { endpoint: "http://push.example.test/1" }],
     ["push.web.test", { title: 1 }],
+    ["push.web.preferences.get", { endpoint: "http://push.example.test/1" }],
+    [
+      "push.web.preferences.set",
+      {
+        endpoint: "https://push.example.test/1",
+        scope: "user",
+        preferences: { enabled: true, label: "phone" },
+      },
+    ],
     ["environments.list", { unexpected: true }],
     ["environments.status", { environmentId: 1 }],
     ["environments.create", { profileId: "profile-1", idempotencyKey: 1 }],

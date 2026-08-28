@@ -81,7 +81,7 @@ describe("OpenClaw database maintenance schema validation", () => {
 
   it("keeps Web Push binding columns compatible with the previous schema", () => {
     const previousSchema = OPENCLAW_STATE_SCHEMA_SQL.replace(
-      "  auth TEXT NOT NULL,\n  device_id TEXT,\n  user_profile_id TEXT,\n",
+      "  auth TEXT NOT NULL,\n  device_id TEXT,\n  user_profile_id TEXT,\n  preferences_json TEXT,\n",
       "  auth TEXT NOT NULL,\n",
     );
     const database = createGlobalDatabase();
@@ -269,6 +269,7 @@ CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
       "secret_store_entries.allowed_hosts TEXT",
       "web_push_subscriptions.device_id TEXT",
       "web_push_subscriptions.user_profile_id TEXT",
+      "web_push_subscriptions.preferences_json TEXT",
       "skill_workshop_proposals.claim_released_time INTEGER",
     ]);
 

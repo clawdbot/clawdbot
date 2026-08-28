@@ -806,6 +806,7 @@ CREATE TABLE IF NOT EXISTS web_push_subscriptions (
   auth TEXT NOT NULL,
   device_id TEXT,
   user_profile_id TEXT,
+  preferences_json TEXT,
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL
 ) STRICT;
@@ -826,6 +827,7 @@ CREATE TABLE IF NOT EXISTS web_push_approval_deliveries (
 
 CREATE INDEX IF NOT EXISTS idx_web_push_approval_deliveries_subscription
   ON web_push_approval_deliveries(subscription_id, approval_id);
+
 CREATE TABLE IF NOT EXISTS apns_registrations (
   node_id TEXT NOT NULL PRIMARY KEY,
   transport TEXT NOT NULL,

@@ -10,6 +10,25 @@ const originalServiceWorkerDescriptor = Object.getOwnPropertyDescriptor(
   Navigator.prototype,
   "serviceWorker",
 );
+const originalUserAgentDescriptor = Object.getOwnPropertyDescriptor(navigator, "userAgent");
+const originalMaxTouchPointsDescriptor = Object.getOwnPropertyDescriptor(
+  navigator,
+  "maxTouchPoints",
+);
+const originalStandaloneDescriptor = Object.getOwnPropertyDescriptor(navigator, "standalone");
+const originalPlatformDescriptor = Object.getOwnPropertyDescriptor(navigator, "platform");
+
+function setNavigatorValue(key: string, value: unknown): void {
+  Object.defineProperty(navigator, key, { configurable: true, value });
+}
+
+function restoreNavigatorValue(key: string, descriptor: PropertyDescriptor | undefined): void {
+  if (descriptor) {
+    Object.defineProperty(navigator, key, descriptor);
+  } else {
+    Reflect.deleteProperty(navigator, key);
+  }
+}
 
 function encodedVapidKey(bytes: number[]): string {
   return Buffer.from(bytes).toString("base64url");
@@ -85,11 +104,79 @@ describe("web push Gateway reconciliation", () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    restoreNavigatorValue("userAgent", originalUserAgentDescriptor);
+    restoreNavigatorValue("maxTouchPoints", originalMaxTouchPointsDescriptor);
+    restoreNavigatorValue("standalone", originalStandaloneDescriptor);
+    restoreNavigatorValue("platform", originalPlatformDescriptor);
     if (originalServiceWorkerDescriptor) {
       Object.defineProperty(navigator, "serviceWorker", originalServiceWorkerDescriptor);
     } else {
       Reflect.deleteProperty(navigator, "serviceWorker");
     }
+  });
+
+  it.each([
+    ["iPhone", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)", 1, ""],
+    ["iPad", "Mozilla/5.0 (iPad; CPU OS 18_0 like Mac OS X)", 5, ""],
+    [
+      "desktop-mode iPad",
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15) Version/18.0 Safari/605.1.15",
+      5,
+      "MacIntel",
+    ],
+  ])(
+    "requires Home Screen installation on %s Safari",
+    async (_label, userAgent, maxTouchPoints, platform) => {
+      setNavigatorValue("userAgent", userAgent);
+      setNavigatorValue("maxTouchPoints", maxTouchPoints);
+      setNavigatorValue("standalone", false);
+      setNavigatorValue("platform", platform);
+
+      const capability = createWebPushCapability(gatewayHarness().gateway);
+
+      await vi.waitFor(() =>
+        expect(capability.snapshot).toMatchObject({
+          supported: false,
+          permission: "install-required",
+        }),
+      );
+      capability.dispose();
+    },
+  );
+
+  it("requires Home Screen installation before Web Push APIs are exposed", async () => {
+    setNavigatorValue("userAgent", "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X)");
+    setNavigatorValue("standalone", false);
+    Reflect.deleteProperty(navigator, "serviceWorker");
+    Reflect.deleteProperty(globalThis, "PushManager");
+    Reflect.deleteProperty(globalThis, "Notification");
+
+    const capability = createWebPushCapability(gatewayHarness().gateway);
+
+    await vi.waitFor(() =>
+      expect(capability.snapshot).toMatchObject({
+        supported: false,
+        permission: "install-required",
+      }),
+    );
+    capability.dispose();
+  });
+
+  it("enables Web Push for an installed iOS PWA", async () => {
+    setNavigatorValue("userAgent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15)");
+    setNavigatorValue("maxTouchPoints", 5);
+    setNavigatorValue("standalone", true);
+    setNavigatorValue("platform", "MacIntel");
+
+    const capability = createWebPushCapability(gatewayHarness().gateway);
+
+    await vi.waitFor(() =>
+      expect(capability.snapshot).toMatchObject({
+        supported: true,
+        permission: "granted",
+      }),
+    );
+    capability.dispose();
   });
 
   it("ignores stale reconciliation after switching Gateways", async () => {
@@ -101,9 +188,11 @@ describe("web push Gateway reconciliation", () => {
     const capability = createWebPushCapability(harness.gateway);
 
     harness.connect(first.client);
-    harness.connect(second.client);
     await vi.waitFor(() => {
       expect(first.request).toHaveBeenCalledWith("push.web.vapidPublicKey", {});
+    });
+    harness.connect(second.client);
+    await vi.waitFor(() => {
       expect(second.request).toHaveBeenCalledWith("push.web.vapidPublicKey", {});
     });
 

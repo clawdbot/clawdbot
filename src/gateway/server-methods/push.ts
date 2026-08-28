@@ -9,6 +9,8 @@ import {
   errorShape,
   validatePushTestParams,
   validateWebPushSubscribeParams,
+  validateWebPushPreferencesGetParams,
+  validateWebPushPreferencesSetParams,
   validateWebPushTestParams,
   validateWebPushUnsubscribeParams,
   validateWebPushVapidPublicKeyParams,
@@ -23,11 +25,21 @@ import {
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
 import {
+  WEB_PUSH_USER_PREFERENCES_KEY,
+  normalizeWebPushDevicePreferences,
+  normalizeWebPushNotificationPreferences,
+  resolveEffectiveWebPushPreferences,
+} from "../../infra/push-web-preferences.js";
+import {
   broadcastWebPush,
   clearWebPushSubscriptionByEndpoint,
+  findBoundWebPushSubscriptionByEndpoint,
   registerWebPushSubscription,
   resolveVapidKeys,
+  setWebPushSubscriptionPreferences,
 } from "../../infra/push-web.js";
+import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
+import { resolveUserProfileId } from "../../state/user-profiles.js";
 import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
@@ -190,6 +202,151 @@ export const pushHandlers: GatewayRequestHandlers = {
       const removed = await clearWebPushSubscriptionByEndpoint(params.endpoint);
       respond(true, { removed }, undefined);
     });
+  },
+
+  "push.web.preferences.get": async ({ params, respond, client }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateWebPushPreferencesGetParams,
+        "push.web.preferences.get",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const deviceId = normalizeOptionalString(client?.connect.device?.id);
+    const subscription = findBoundWebPushSubscriptionByEndpoint({ endpoint: params.endpoint });
+    if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this device"),
+      );
+      return;
+    }
+    const currentProfileId = client?.authenticatedUserProfile?.profileId
+      ? resolveUserProfileId(client.authenticatedUserProfile.profileId)
+      : undefined;
+    const subscriptionProfileId = subscription.userProfileId
+      ? resolveUserProfileId(subscription.userProfileId)
+      : undefined;
+    if ((subscriptionProfileId ?? null) !== (currentProfileId ?? null)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this user"),
+      );
+      return;
+    }
+    const storedUser = currentProfileId
+      ? getUserPreferences(currentProfileId, [WEB_PUSH_USER_PREFERENCES_KEY])[
+          WEB_PUSH_USER_PREFERENCES_KEY
+        ]
+      : undefined;
+    const user = normalizeWebPushNotificationPreferences(storedUser);
+    respond(
+      true,
+      {
+        durableIdentity: Boolean(currentProfileId),
+        user,
+        device: subscription.devicePreferences,
+        effective: resolveEffectiveWebPushPreferences({
+          user,
+          device: subscription.devicePreferences,
+        }),
+      },
+      undefined,
+    );
+  },
+
+  "push.web.preferences.set": async ({ params, respond, client, context }) => {
+    if (
+      !assertValidParams(
+        params,
+        validateWebPushPreferencesSetParams,
+        "push.web.preferences.set",
+        respond,
+      )
+    ) {
+      return;
+    }
+    const deviceId = normalizeOptionalString(client?.connect.device?.id);
+    const subscription = findBoundWebPushSubscriptionByEndpoint({ endpoint: params.endpoint });
+    if (!deviceId || !subscription || subscription.deviceId !== deviceId) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this device"),
+      );
+      return;
+    }
+    const currentProfileId = client?.authenticatedUserProfile?.profileId
+      ? resolveUserProfileId(client.authenticatedUserProfile.profileId)
+      : undefined;
+    const subscriptionProfileId = subscription.userProfileId
+      ? resolveUserProfileId(subscription.userProfileId)
+      : undefined;
+    if ((subscriptionProfileId ?? null) !== (currentProfileId ?? null)) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.FORBIDDEN, "subscription is not bound to this user"),
+      );
+      return;
+    }
+    if (params.scope === "user") {
+      if (!currentProfileId) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "user defaults require a durable authenticated profile",
+          ),
+        );
+        return;
+      }
+      const preferences = normalizeWebPushNotificationPreferences(params.preferences);
+      const result = setUserPreferences(currentProfileId, {
+        [WEB_PUSH_USER_PREFERENCES_KEY]: preferences,
+      });
+      if (!result.ok) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "could not save notification preferences"),
+        );
+        return;
+      }
+      respond(true, { scope: "user", preferences }, undefined);
+      const connIds = context.getClientConnIds?.((connectedClient) => {
+        const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
+        return Boolean(
+          connectedProfileId && resolveUserProfileId(connectedProfileId) === currentProfileId,
+        );
+      });
+      if (connIds?.size) {
+        context.broadcastToConnIds(
+          "users.prefs.changed",
+          { profileId: currentProfileId, keys: [WEB_PUSH_USER_PREFERENCES_KEY] },
+          connIds,
+        );
+      }
+      return;
+    }
+    const preferences = normalizeWebPushDevicePreferences(params.preferences);
+    const updated = setWebPushSubscriptionPreferences({
+      endpoint: params.endpoint,
+      preferences,
+      expectedDeviceId: deviceId,
+      expectedUserProfileId: subscription.userProfileId,
+    });
+    if (!updated) {
+      respond(false, undefined, errorShape(ErrorCodes.FORBIDDEN, "subscription binding changed"));
+      return;
+    }
+    respond(true, { scope: "device", preferences }, undefined);
   },
 
   "push.web.test": async ({ params, respond }) => {

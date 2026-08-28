@@ -137,6 +137,8 @@ export {
   WebPushSubscribeParamsSchema,
   WebPushUnsubscribeParamsSchema,
   WebPushTestParamsSchema,
+  WebPushPreferencesGetParamsSchema,
+  WebPushPreferencesSetParamsSchema,
   NodePairListParamsSchema,
   NodePairApproveParamsSchema,
   NodePairRejectParamsSchema,

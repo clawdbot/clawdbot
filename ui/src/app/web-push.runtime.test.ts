@@ -58,6 +58,11 @@ afterEach(() => {
 });
 
 describe("web push service worker readiness", () => {
+  it("treats a registration without PushManager as unsupported instead of throwing", async () => {
+    installServiceWorkerReady(Promise.resolve({} as ServiceWorkerRegistration));
+    await expect(getExistingSubscription()).resolves.toBeNull();
+  });
+
   it("clears the readiness timeout when the service worker is already ready", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     const registration = {

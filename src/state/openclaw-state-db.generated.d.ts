@@ -1288,6 +1288,7 @@ export interface WebPushSubscriptions {
   endpoint: string;
   endpoint_hash: string;
   p256dh: string;
+  preferences_json: string | null;
   subscription_id: string;
   updated_at_ms: number;
   user_profile_id: string | null;

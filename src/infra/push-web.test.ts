@@ -18,6 +18,7 @@ import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
   createWebPushVapidKeyPair,
   deleteWebPushApprovalDeliveryTargets,
+  findBoundWebPushSubscriptionByEndpoint,
   hashWebPushEndpoint,
   listBoundWebPushSubscriptions,
   listTerminalWebPushApprovalDeliveryIds,
@@ -26,6 +27,7 @@ import {
   prepareWebPushApprovalDeliveries,
   readPersistedVapidKeyPair,
   retainSuccessfulWebPushApprovalDeliveries,
+  setWebPushSubscriptionPreferences,
 } from "./push-web-store.js";
 import {
   broadcastWebPush,
@@ -36,6 +38,7 @@ import {
 } from "./push-web.js";
 
 let tmpDir: string;
+const defaultDevicePreferences = { enabled: true, label: "" };
 
 function insertPendingApproval(id: string): void {
   const inserted = insertOperatorApproval({
@@ -239,8 +242,10 @@ describe("subscription CRUD", () => {
     const database = openOpenClawStateDatabase({ env: environment });
     database.db.exec("ALTER TABLE web_push_subscriptions DROP COLUMN device_id;");
     database.db.exec("ALTER TABLE web_push_subscriptions DROP COLUMN user_profile_id;");
+    database.db.exec("ALTER TABLE web_push_subscriptions DROP COLUMN preferences_json;");
     expect(tableHasColumn(database.db, "web_push_subscriptions", "device_id")).toBe(false);
     expect(tableHasColumn(database.db, "web_push_subscriptions", "user_profile_id")).toBe(false);
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "preferences_json")).toBe(false);
 
     const subscription = await registerWebPushSubscription({
       endpoint,
@@ -251,8 +256,14 @@ describe("subscription CRUD", () => {
 
     expect(tableHasColumn(database.db, "web_push_subscriptions", "device_id")).toBe(true);
     expect(tableHasColumn(database.db, "web_push_subscriptions", "user_profile_id")).toBe(true);
+    expect(tableHasColumn(database.db, "web_push_subscriptions", "preferences_json")).toBe(true);
     expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([
-      { ...subscription, deviceId: "browser-device", userProfileId: "profile-1" },
+      {
+        ...subscription,
+        deviceId: "browser-device",
+        userProfileId: "profile-1",
+        devicePreferences: defaultDevicePreferences,
+      },
     ]);
   });
 
@@ -267,7 +278,12 @@ describe("subscription CRUD", () => {
       baseDir: tmpDir,
     });
     expect(listBoundWebPushSubscriptions(tmpDir)).toEqual([
-      { ...rebound, deviceId: "browser-device", userProfileId: null },
+      {
+        ...rebound,
+        deviceId: "browser-device",
+        userProfileId: null,
+        devicePreferences: defaultDevicePreferences,
+      },
     ]);
   });
 
@@ -295,8 +311,49 @@ describe("subscription CRUD", () => {
         updatedAtMs: subscription.updatedAtMs + 1,
         deviceId: "browser-device",
         userProfileId: "profile-1",
+        devicePreferences: defaultDevicePreferences,
       },
     ]);
+  });
+
+  it("persists preferences only while the authenticated subscription binding still matches", async () => {
+    await registerWebPushSubscription({
+      endpoint,
+      keys,
+      binding: { deviceId: "browser-device", userProfileId: "profile-1" },
+      baseDir: tmpDir,
+    });
+    expect(
+      setWebPushSubscriptionPreferences({
+        endpoint,
+        expectedDeviceId: "different-device",
+        expectedUserProfileId: "profile-1",
+        preferences: { enabled: false, label: "Wrong" },
+        stateDir: tmpDir,
+      }),
+    ).toBe(false);
+    expect(
+      setWebPushSubscriptionPreferences({
+        endpoint,
+        expectedDeviceId: "browser-device",
+        expectedUserProfileId: "profile-1",
+        preferences: {
+          enabled: true,
+          label: "Slot 1",
+          categories: { agentQuestion: true },
+        },
+        stateDir: tmpDir,
+      }),
+    ).toBe(true);
+    expect(findBoundWebPushSubscriptionByEndpoint({ endpoint, stateDir: tmpDir })).toMatchObject({
+      deviceId: "browser-device",
+      userProfileId: "profile-1",
+      devicePreferences: {
+        enabled: true,
+        label: "Slot 1",
+        categories: { agentQuestion: true },
+      },
+    });
   });
 
   it("preserves unrelated concurrent registrations", async () => {
@@ -412,8 +469,14 @@ describe("approval delivery target persistence", () => {
       ...first,
       deviceId: "device-first",
       userProfileId: "profile-first",
+      devicePreferences: defaultDevicePreferences,
     };
-    const secondBound = { ...second, deviceId: "device-second", userProfileId: null };
+    const secondBound = {
+      ...second,
+      deviceId: "device-second",
+      userProfileId: null,
+      devicePreferences: defaultDevicePreferences,
+    };
     const database = openOpenClawStateDatabase({
       env: { ...process.env, OPENCLAW_STATE_DIR: tmpDir },
     });
@@ -430,11 +493,16 @@ describe("approval delivery target persistence", () => {
     expect(tableExists(database.db, "web_push_approval_deliveries")).toBe(true);
     closeOpenClawStateDatabase();
 
+    const expectedSubscriptionIds = [first, second]
+      .toSorted(
+        (a, b) => a.createdAtMs - b.createdAtMs || a.subscriptionId.localeCompare(b.subscriptionId),
+      )
+      .map((subscription) => subscription.subscriptionId);
     expect(
       listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir }).map(
         (subscription) => subscription.subscriptionId,
       ),
-    ).toEqual([first.subscriptionId, second.subscriptionId]);
+    ).toEqual(expectedSubscriptionIds);
 
     retainSuccessfulWebPushApprovalDeliveries({
       approvalId,
@@ -442,7 +510,9 @@ describe("approval delivery target persistence", () => {
       stateDir: tmpDir,
     });
     closeOpenClawStateDatabase();
-    expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([first]);
+    expect(listWebPushApprovalDeliveryTargets({ approvalId, stateDir: tmpDir })).toEqual([
+      firstBound,
+    ]);
 
     expect(
       resolveOperatorApproval({
@@ -483,6 +553,7 @@ describe("approval delivery target persistence", () => {
             ...subscription,
             deviceId: "device-removed",
             userProfileId: "profile-removed",
+            devicePreferences: defaultDevicePreferences,
           },
         ],
         preparedAtMs: 2_000,
@@ -513,6 +584,7 @@ describe("approval delivery target persistence", () => {
             ...original,
             deviceId: "device-original",
             userProfileId: "profile-original",
+            devicePreferences: defaultDevicePreferences,
           },
         ],
         preparedAtMs: 2_000,

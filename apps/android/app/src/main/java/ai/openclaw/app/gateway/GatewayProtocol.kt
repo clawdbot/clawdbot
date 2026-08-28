@@ -679,6 +679,8 @@ enum class GatewayMethod(
   PushWebSubscribe("push.web.subscribe"),
   PushWebUnsubscribe("push.web.unsubscribe"),
   PushWebTest("push.web.test"),
+  PushWebPreferencesGet("push.web.preferences.get"),
+  PushWebPreferencesSet("push.web.preferences.set"),
   ConfigOpenFile("config.openFile"),
   Connect("connect"),
   ChatInject("chat.inject"),

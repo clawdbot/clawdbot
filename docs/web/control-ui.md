@@ -678,12 +678,12 @@ See [Notifications](/web/notifications) for the browser and macOS setup steps.
 
 If the page shows **Protocol mismatch** right after an OpenClaw update, first reopen the dashboard with `openclaw dashboard` and hard-refresh. If it still fails, clear site data for the dashboard origin or test in a private browser window; an old tab or browser service-worker cache can keep running a pre-update Control UI bundle against the newer Gateway.
 
-| Surface                                                                | What it does                                                                 |
-| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------- |
-| `ui/public/manifest.webmanifest`                                       | PWA manifest. Browsers offer "Install app" once it is reachable.             |
-| `ui/public/sw.js`                                                      | Service worker that handles `push` events and notification clicks.           |
-| `state/openclaw.sqlite` → `config_machine_state` (`webPush.vapidKeys`) | Auto-generated VAPID keypair used to sign Web Push payloads.                 |
-| `state/openclaw.sqlite` → `web_push_subscriptions`                     | Persisted browser endpoints, keys, device/profile bindings, and timestamps.  |
+| Surface                                                                | What it does                                                                |
+| ---------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `ui/public/manifest.webmanifest`                                       | PWA manifest. Browsers offer "Install app" once it is reachable.            |
+| `ui/public/sw.js`                                                      | Service worker that handles `push` events and notification clicks.          |
+| `state/openclaw.sqlite` → `config_machine_state` (`webPush.vapidKeys`) | Auto-generated VAPID keypair used to sign Web Push payloads.                |
+| `state/openclaw.sqlite` → `web_push_subscriptions`                     | Persisted browser endpoints, keys, device/profile bindings, and timestamps. |
 
 Upgrades from the retired `push/vapid-keys.json` and `push/web-push-subscriptions.json` stores are imported by `openclaw doctor --fix`. Stop the Gateway before running that repair so an older process cannot recreate retired state during import. Run the repair before using Web Push after an upgrade; registration, delivery, deletion, and key resolution refuse to proceed while either retired source or an interrupted Doctor claim remains. The Gateway runtime reads and writes SQLite only.
 

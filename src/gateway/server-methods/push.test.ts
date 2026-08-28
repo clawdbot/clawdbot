@@ -27,8 +27,19 @@ vi.mock("../../infra/push-apns.js", () => ({
 vi.mock("../../infra/push-web.js", () => ({
   broadcastWebPush: vi.fn(),
   clearWebPushSubscriptionByEndpoint: vi.fn(),
+  findBoundWebPushSubscriptionByEndpoint: vi.fn(),
   registerWebPushSubscription: vi.fn(),
   resolveVapidKeys: vi.fn(),
+  setWebPushSubscriptionPreferences: vi.fn(),
+}));
+
+vi.mock("../../state/user-preferences.js", () => ({
+  getUserPreferences: vi.fn(() => ({})),
+  setUserPreferences: vi.fn(() => ({ ok: true })),
+}));
+
+vi.mock("../../state/user-profiles.js", () => ({
+  resolveUserProfileId: vi.fn((profileId: string) => profileId),
 }));
 
 import {
@@ -41,7 +52,12 @@ import {
   sendApnsAlert,
   shouldClearStoredApnsRegistration,
 } from "../../infra/push-apns.js";
-import { broadcastWebPush, registerWebPushSubscription } from "../../infra/push-web.js";
+import {
+  broadcastWebPush,
+  findBoundWebPushSubscriptionByEndpoint,
+  registerWebPushSubscription,
+  setWebPushSubscriptionPreferences,
+} from "../../infra/push-web.js";
 
 type ApnsPushResult = Awaited<ReturnType<typeof sendApnsAlert>>;
 type WebPushResults = Awaited<ReturnType<typeof broadcastWebPush>>;
@@ -175,6 +191,28 @@ function createWebPushSubscribeInvokeParams(options?: {
             : {}),
         } as never,
         req: { type: "req", id: "req-1", method: "push.web.subscribe" },
+        isWebchatConnect: () => false,
+      }),
+  };
+}
+
+function createWebPushPreferencesInvokeParams(
+  method: "push.web.preferences.get" | "push.web.preferences.set",
+  params: Record<string, unknown>,
+) {
+  const respond = vi.fn();
+  return {
+    respond,
+    invoke: async () =>
+      await expectDefined(
+        pushHandlers[method],
+        `${method} test invariant`,
+      )({
+        params,
+        respond: respond as never,
+        context: { broadcastToConnIds: vi.fn() } as never,
+        client: { connect: { device: { id: "browser-device" } } } as never,
+        req: { type: "req", id: "req-1", method },
         isWebchatConnect: () => false,
       }),
   };
@@ -517,5 +555,56 @@ describe("push.web.subscribe handler", () => {
 
     expectInvalidRequestResponse(respond, "authenticated user profile");
     expect(registerWebPushSubscription).not.toHaveBeenCalled();
+  });
+});
+
+describe("push.web.preferences handlers", () => {
+  beforeEach(() => {
+    vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReset();
+    vi.mocked(setWebPushSubscriptionPreferences).mockReset();
+    vi.mocked(findBoundWebPushSubscriptionByEndpoint).mockReturnValue({
+      subscriptionId: "subscription-1",
+      endpoint: "https://push.example.test/subscription",
+      keys: { p256dh: "p256dh", auth: "auth" },
+      createdAtMs: 1,
+      updatedAtMs: 1,
+      deviceId: "browser-device",
+      userProfileId: null,
+      devicePreferences: { enabled: true, label: "" },
+    });
+    vi.mocked(setWebPushSubscriptionPreferences).mockReturnValue(true);
+  });
+
+  it("updates device preferences only while the subscription binding matches", async () => {
+    const preferences = { enabled: false, label: "phone" };
+    const { respond, invoke } = createWebPushPreferencesInvokeParams("push.web.preferences.set", {
+      endpoint: "https://push.example.test/subscription",
+      scope: "device",
+      preferences,
+    });
+
+    await invoke();
+
+    expect(setWebPushSubscriptionPreferences).toHaveBeenCalledWith({
+      endpoint: "https://push.example.test/subscription",
+      preferences,
+      expectedDeviceId: "browser-device",
+      expectedUserProfileId: null,
+    });
+    expect(firstRespondCall(respond)).toEqual([true, { scope: "device", preferences }, undefined]);
+  });
+
+  it("fails closed when the subscription binding changes during the update", async () => {
+    vi.mocked(setWebPushSubscriptionPreferences).mockReturnValue(false);
+    const { respond, invoke } = createWebPushPreferencesInvokeParams("push.web.preferences.set", {
+      endpoint: "https://push.example.test/subscription",
+      scope: "device",
+      preferences: { enabled: true, label: "" },
+    });
+
+    await invoke();
+
+    expect(firstRespondCall(respond)?.[0]).toBe(false);
+    expect(firstRespondCall(respond)?.[2]?.code).toBe(ErrorCodes.FORBIDDEN);
   });
 });

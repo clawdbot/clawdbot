@@ -1,6 +1,10 @@
 import type { TemplateResult } from "lit";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  WebPushDevicePreferences,
+  WebPushNotificationPreferences,
+} from "../../../../packages/gateway-protocol/src/schema/push.js";
 import type { ConfigUiHints, ModelCatalogEntry } from "../../api/types.ts";
 import type {
   NativeNotificationsPermission,
@@ -209,4 +213,6 @@ export type ConfigProps = {
   onWebPushSubscribe?: () => void;
   onWebPushUnsubscribe?: () => void;
   onWebPushTest?: () => void;
+  onWebPushSetUserPreferences?: (preferences: WebPushNotificationPreferences) => void;
+  onWebPushSetDevicePreferences?: (preferences: WebPushDevicePreferences) => void;
 };

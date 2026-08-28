@@ -1510,7 +1510,7 @@ plugin_state_entries(plugin_id, namespace, entry_key, value_json, created_at, ex
 plugin_blob_entries(plugin_id, namespace, entry_key, metadata_json, blob, created_at, expires_at)
 skill_uploads(upload_id, kind, slug, force, size_bytes, sha256, actual_sha256, received_bytes, archive_blob, created_at, expires_at, committed, committed_at, idempotency_key_hash)
 skill_upload_chunks(upload_id, byte_offset, size_bytes, chunk_blob)
-web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, device_id, user_profile_id, created_at_ms, updated_at_ms)
+web_push_subscriptions(endpoint_hash, subscription_id, endpoint, p256dh, auth, device_id, user_profile_id, preferences_json, created_at_ms, updated_at_ms)
 web_push_approval_deliveries(approval_id, subscription_id, device_id, user_profile_id, prepared_at_ms)
 apns_registrations(node_id, transport, token, relay_handle, send_grant, installation_id, relay_origin, topic, environment, distribution, token_debug_suffix, updated_at_ms)
 apns_registration_tombstones(node_id, deleted_at_ms)

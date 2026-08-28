@@ -14,9 +14,11 @@ import {
   isValidWebPushEndpoint,
   isValidWebPushKey,
   listBoundWebPushSubscriptions,
+  findBoundWebPushSubscriptionByEndpoint,
   listWebPushSubscriptions,
   readPersistedVapidKeyPair,
   upsertWebPushSubscription,
+  setWebPushSubscriptionPreferences,
   DEFAULT_WEB_PUSH_VAPID_SUBJECT,
   type VapidKeyPair,
   type WebPushSubscription,
@@ -42,7 +44,11 @@ type WebPushDeliveryOptions = Pick<
   "TTL" | "timeout" | "topic" | "urgency"
 >;
 
-export { listBoundWebPushSubscriptions };
+export {
+  findBoundWebPushSubscriptionByEndpoint,
+  listBoundWebPushSubscriptions,
+  setWebPushSubscriptionPreferences,
+};
 export type { BoundWebPushSubscription } from "./push-web-store.js";
 export {
   deleteWebPushApprovalDeliveryTargets,
