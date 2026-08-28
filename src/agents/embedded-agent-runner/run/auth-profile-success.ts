@@ -20,6 +20,7 @@ import {
 import type { ResolvedProviderAuth } from "../../model-auth.js";
 import { modelMatchesProviderModelRoute } from "../../provider-model-route.js";
 import { log } from "../logger.js";
+import type { EmbeddedRunTerminalState } from "./terminal-outcome.js";
 import type { EmbeddedRunAttemptResult } from "./types.js";
 
 const POST_RUN_AUTH_PROFILE_SUCCESS_SLOW_MS = 1_000;
@@ -180,6 +181,22 @@ export function reportEmbeddedRunSuccessfulAuthBinding(input: {
         }
       : {}),
   });
+}
+
+type EmbeddedRunAuthSuccessInput = Parameters<typeof markEmbeddedRunAuthProfileSuccess>[0] &
+  Omit<Parameters<typeof reportEmbeddedRunSuccessfulAuthBinding>[0], "profileStore"> & {
+    terminalReason: EmbeddedRunTerminalState["outcome"]["reason"];
+    bindingProfileStore: AuthProfileStore;
+    onSuccessfulAuthProfile?: (profileId: string | undefined) => void;
+  };
+
+export function reportEmbeddedRunAuthSuccess(input: EmbeddedRunAuthSuccessInput): void {
+  if (input.terminalReason !== "completed") {
+    return;
+  }
+  markEmbeddedRunAuthProfileSuccess(input);
+  reportEmbeddedRunSuccessfulAuthBinding({ ...input, profileStore: input.bindingProfileStore });
+  input.onSuccessfulAuthProfile?.(input.profileId);
 }
 
 function resolveHarnessAuthMaterialization(
