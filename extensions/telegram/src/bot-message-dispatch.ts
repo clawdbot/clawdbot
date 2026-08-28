@@ -496,10 +496,10 @@ export const dispatchTelegramMessage = async (
   if (retryableDispatchFailure && shouldReturnRetryableDispatchFailure) {
     return { kind: "failed-retryable", error: retryableDispatchFailure };
   }
-  if (!hasVisibleResponse) {
-    return { kind: "completed" };
-  }
-
+  // The topic name is generated from the inbound message, not from the answer, so it
+  // must not depend on the reply landing. A first turn that is aborted or whose delivery
+  // is skipped still returns below, and because the rename is gated on
+  // `isFirstTurnInSession` that topic would keep Telegram's default name forever.
   scheduleDmTopicLabel({
     bot,
     cfg,
@@ -507,6 +507,10 @@ export const dispatchTelegramMessage = async (
     isFirstTurnInSession,
     telegramCfg,
   });
+  if (!hasVisibleResponse) {
+    return { kind: "completed" };
+  }
+
   if (status.controller) {
     status.finalizeInBackground(
       {

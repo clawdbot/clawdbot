@@ -150,6 +150,36 @@ describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
     expect(deliverReplies).not.toHaveBeenCalled();
   });
 
+  it("labels a DM topic whose first turn produced no visible response", async () => {
+    const sessionKey = "agent:test:telegram:direct:123";
+    loadSessionStore.mockReturnValue({ [sessionKey]: { sessionId: "s1", updatedAt: 1 } });
+    // An aborted or superseded run leaves the turn with nothing delivered.
+    dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
+      queuedFinal: false,
+      counts: { block: 0, final: 0, tool: 0 },
+    });
+    generateTopicLabel.mockResolvedValue("Dentist appointment");
+    const bot = createBot();
+
+    await dispatchWithContext({
+      bot,
+      context: createContext({
+        ctxPayload: {
+          ...createDirectSessionPayload(),
+          RawBody: "book me a dentist appointment",
+        } as TelegramMessageContext["ctxPayload"],
+      }),
+      streamMode: "off",
+      telegramCfg: { autoTopicLabel: true },
+    });
+
+    await vi.waitFor(() => {
+      expect(bot.api["editForumTopic"]).toHaveBeenCalledWith(123, 777, {
+        name: "Dentist appointment",
+      });
+    });
+  });
+
   it("does not emit a silent-reply fallback for no-response DM turns", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: false,
