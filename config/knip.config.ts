@@ -63,8 +63,13 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
+  // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
+  "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
+  "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
+  // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
+  "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   "scripts/ios-release-cut.ts!",

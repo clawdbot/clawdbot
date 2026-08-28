@@ -3574,7 +3574,7 @@ try {
 }
 
 refresh_gateway_service_if_loaded() {
-    local claw="${OPENCLAW_BIN:-}"
+    local claw="${OPENCLAW_BIN:-}" refresh_output
     if [[ -z "$claw" ]]; then
         claw="$(resolve_openclaw_bin || true)"
     fi
@@ -3587,11 +3587,17 @@ refresh_gateway_service_if_loaded() {
     fi
 
     ui_info "Refreshing loaded gateway service"
-    if run_quiet_step "Refreshing gateway service" "$claw" gateway install --force; then
-        ui_success "Gateway service metadata refreshed"
+    if ! refresh_output="$({ set +x; "$claw" gateway install --force; } 2>&1 | sed -n -e 's/.*SERVICE_DEFINITION_SEALED:.*/ask the privileged deployment owner to manually repair it/p' -e 's/.*SERVICE_DEFINITION_UNKNOWN:.*/inspect service-definition access and manually repair it/p')"; then
+        if [[ -n "$refresh_output" ]]; then
+            ui_warn "Code installed; gateway service definition left unchanged; ${refresh_output}"
+            ui_info "Run openclaw gateway status --deep, verify the installation owner, and restart it manually if needed."
+            return 0
+        else
+            ui_warn "Gateway service refresh failed; continuing"
+            return 0
+        fi
     else
-        ui_warn "Gateway service refresh failed; continuing"
-        return 0
+        ui_success "Gateway service metadata refreshed"
     fi
 
     # `gateway install --force` activates the replacement service. Keep the

@@ -3576,6 +3576,71 @@ EOF
     }
   });
 
+  it.each([
+    { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stderr" },
+    { error: "SERVICE_DEFINITION_SEALED: protected", stream: "stdout" },
+    { error: "SERVICE_DEFINITION_UNKNOWN: inaccessible", stream: "stderr" },
+    { error: "service manager unavailable", stream: "stderr" },
+  ])("handles a traced $error refresh in $stream", ({ error, stream }) => {
+    const root = mkdtempSync(join(tmpdir(), "openclaw-install-definition-"));
+    const openclaw = join(root, "openclaw");
+    const secretCanary = "installer-sh-secret-canary-never-render";
+    const commandLog = join(root, "commands.log");
+    writeFileSync(
+      openclaw,
+      [
+        "#!/bin/bash",
+        'printf "%s\\n" "$*" >> "$COMMAND_LOG"',
+        'if [[ "$*" == "gateway install --force" ]]; then',
+        '  if [[ "$SERVICE_STREAM" == stdout ]]; then printf "%s\\n" "$SERVICE_ERROR"; else printf "%s\\n" "$SERVICE_ERROR" >&2; fi',
+        '  printf "%s\\n" "$SECRET_CANARY" >&2; exit 1',
+        "fi",
+      ].join("\n"),
+    );
+    chmodSync(openclaw, 0o755);
+
+    try {
+      const result = runInstallShell(
+        [
+          "set -euo pipefail",
+          `source ${JSON.stringify(SCRIPT_PATH)}`,
+          `OPENCLAW_BIN=${JSON.stringify(openclaw)}`,
+          "is_gateway_daemon_loaded() { return 0; }",
+          "set -x",
+          "refresh_gateway_service_if_loaded",
+          "printf 'INSTALL_COMPLETE\\n'",
+        ].join("\n"),
+        {
+          COMMAND_LOG: commandLog,
+          SECRET_CANARY: secretCanary,
+          SERVICE_ERROR: error,
+          SERVICE_STREAM: stream,
+          TERM: "dumb",
+        },
+      );
+
+      const denied = error.startsWith("SERVICE_DEFINITION_");
+      expect(readFileSync(commandLog, "utf8").split("\n")).not.toContain("gateway restart");
+      expect(result.status).toBe(0);
+      expect(result.stderr).toContain("+ refresh_gateway_service_if_loaded");
+      expect(result.stdout + result.stderr).not.toContain(secretCanary);
+      if (denied) {
+        expect(result.stdout).toContain("gateway service definition left unchanged");
+        expect(result.stdout).toContain(
+          error.includes("SEALED")
+            ? "privileged deployment owner"
+            : "inspect service-definition access",
+        );
+        expect(result.stdout).toContain("INSTALL_COMPLETE");
+      } else {
+        expect(result.stdout).toContain("Gateway service refresh failed; continuing");
+        expect(result.stdout).toContain("INSTALL_COMPLETE");
+      }
+    } finally {
+      rmSync(root, { force: true, recursive: true });
+    }
+  });
+
   it("refreshes the shell command cache after loading a persisted PATH update", () => {
     const result = runInstallShell(`
       set -euo pipefail

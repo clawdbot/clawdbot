@@ -396,18 +396,18 @@ export async function continuePostCoreUpdateInFreshProcess(params: {
         settled = true;
         clearInterval(resultPoll);
         resolve(result);
+        if (result.kind === "plugin-update") {
+          // Only the winning result stops the child. Claim completion first so its
+          // signal cannot reject committed work and roll the plugin index back.
+          stopPostCoreUpdateChild(child);
+        }
       };
       const resultPoll = setInterval(() => {
         void readPostCorePluginUpdateResultFile(resultPath)
           .then((pluginUpdate) => {
-            if (!pluginUpdate) {
-              return;
+            if (pluginUpdate) {
+              finish({ kind: "plugin-update", pluginUpdate });
             }
-            // Claim the settle before stopping: the stop delivers a signal, and the exit
-            // handler below rejects on any signal it still owns. Stopping first would fail
-            // an update this child already committed and roll its plugin index back.
-            finish({ kind: "plugin-update", pluginUpdate });
-            stopPostCoreUpdateChild(child);
           })
           .catch(() => undefined);
       }, POST_CORE_UPDATE_RESULT_POLL_MS);
