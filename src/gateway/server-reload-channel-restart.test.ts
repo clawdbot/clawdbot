@@ -1,11 +1,11 @@
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
-import { startGatewayChannelFromActiveRegistry } from "./server-reload-channel-restart.js";
+import { rollbackStoppedGatewayChannels } from "./server-reload-channel-restart.js";
 
 let manager: ChannelManager | undefined;
 afterEach(async () => {
@@ -16,7 +16,7 @@ afterEach(async () => {
 });
 
 it.each(["idle", "stopped", "racing"] as const)(
-  "automatic reload preserves %s manual stops while explicit starts resume",
+  "automatic rollback preserves %s manual stops while explicit starts resume",
   async (state) => {
     const starts: string[] = [];
     const configuring = createDeferred();
@@ -59,14 +59,19 @@ it.each(["idle", "stopped", "racing"] as const)(
     if (state !== "racing") {
       await manager.stopChannel("discord", "manual");
     }
-    const reload = startGatewayChannelFromActiveRegistry(manager, "discord");
+    const rollback = rollbackStoppedGatewayChannels(
+      { startChannel: manager.startChannel, logChannels: { info: vi.fn(), error: vi.fn() } },
+      new Set(["discord"]),
+      new Map(),
+      "cancelled plugin reload",
+    );
     if (state === "racing") {
       await configuring.promise;
       await manager.stopChannel("discord", "manual");
       blockConfiguration = false;
       releaseConfiguration.resolve();
     }
-    await reload;
+    await expect(rollback).resolves.toEqual([]);
     expect(manager.isManuallyStopped("discord", "manual")).toBe(true);
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.manual?.running).toBe(false);
     expect(starts).toEqual(state === "stopped" ? ["manual", "running"] : ["running"]);
