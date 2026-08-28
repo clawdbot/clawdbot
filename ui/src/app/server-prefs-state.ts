@@ -49,6 +49,16 @@ type SyncedPrefSpec<T> = {
 
 const prefSpec = <T>(specification: SyncedPrefSpec<T>) => specification;
 
+const fontPrefSpec = (key: "fontUi" | "fontChat") =>
+  prefSpec<TypefaceId>({
+    configSync: false,
+    extract: normalizeTypefaceOverride,
+    local: (settings) => normalizeTypefaceOverride(settings[key]),
+    write: (value) => ({ [key]: value }),
+    clearable: true,
+    reset: () => ({ [key]: undefined }),
+  });
+
 /**
  * One descriptor per synced pref, including its profile-only storage boundary.
  * Each key owns server validation, local normalization, and applicability.
@@ -78,22 +88,8 @@ export const SYNCED_PREFS = {
     clearable: true,
     reset: () => ({ accent: undefined }),
   }),
-  fontUi: prefSpec<TypefaceId>({
-    configSync: false,
-    extract: normalizeTypefaceOverride,
-    local: (settings) => normalizeTypefaceOverride(settings.fontUi),
-    write: (value) => ({ fontUi: value }),
-    clearable: true,
-    reset: () => ({ fontUi: undefined }),
-  }),
-  fontChat: prefSpec<TypefaceId>({
-    configSync: false,
-    extract: normalizeTypefaceOverride,
-    local: (settings) => normalizeTypefaceOverride(settings.fontChat),
-    write: (value) => ({ fontChat: value }),
-    clearable: true,
-    reset: () => ({ fontChat: undefined }),
-  }),
+  fontUi: fontPrefSpec("fontUi"),
+  fontChat: fontPrefSpec("fontChat"),
   locale: prefSpec<string>({
     extract: (value) => (typeof value === "string" && isSupportedLocale(value) ? value : undefined),
     local: (settings) => settings.locale,

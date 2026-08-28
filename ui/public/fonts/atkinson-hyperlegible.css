@@ -1,15 +1,9 @@
 /*
  * Self-hosted webfaces for Atkinson Hyperlegible Next.
- *
- * Atkinson Hyperlegible Next (SIL Open Font License 1.1, shipped unmodified
- * with its upstream license text) was drawn by the Braille Institute for low
- * vision: its letterforms disambiguate the pairs that blur first at low acuity
- * (I/l/1, O/0, rn/m).
- *
- * Served from the gateway rather than a font CDN so font-src 'self' holds, no
- * third-party request happens on load, and an offline or LAN-only gateway still
- * renders correctly. Latin and latin-ext only. The url() references are relative
- * to this stylesheet so they follow a configured Control UI mount.
+ * SIL Open Font License 1.1; unmodified, with upstream license text beside the files.
+ * Gateway-hosted for font-src 'self', offline/LAN use, and no third-party requests.
+ * Linked on demand at a stable public path. Relative url() sources follow the
+ * configured Control UI mount. Latin/latin-ext unicode ranges are upstream subsets.
  */
 
 @font-face {

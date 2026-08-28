@@ -9,9 +9,7 @@ import {
 } from "./typography.ts";
 
 const fontLinks = () => [
-  ...document.querySelectorAll<HTMLLinkElement>(
-    'link[id^="openclaw-font-"], link[id^="openclaw-typeface-"]',
-  ),
+  ...document.querySelectorAll<HTMLLinkElement>('link[id^="openclaw-typeface-"]'),
 ];
 const hrefs = () => fontLinks().map((link) => link.getAttribute("href"));
 
@@ -43,31 +41,33 @@ describe("typeface presentation", () => {
     );
   });
 
-  it("lets overrides win, reuses slots, and removes duplicate or system faces", () => {
-    syncTypefaceStylesheets(resolveTypefaces("dash"));
-    const first = fontLinks()[0];
+  it("loads overrides once, retaining them without fetching for system or custom defaults", () => {
+    syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
+    expect(hrefs()).toEqual([]);
     const faces = resolveTypefaces("dash", "geist", "lora");
     expect(faces).toEqual({ ui: "geist", chat: "lora" });
     syncTypefaceStylesheets(faces);
-    expect(fontLinks()[0]).toBe(first);
     expect(hrefs()).toEqual(["/fonts/geist.css", "/fonts/lora.css"]);
-    syncTypefaceStylesheets(resolveTypefaces("dash", "geist", "geist"));
-    expect(hrefs()).toEqual(["/fonts/geist.css"]);
-    syncTypefaceStylesheets(resolveTypefaces("dash", "system", "system"));
-    expect(hrefs()).toEqual([]);
-    syncTypefaceStylesheets(resolveTypefaces("custom", "lora"));
-    expect(hrefs()).toEqual(["/fonts/lora.css"]);
-    syncTypefaceStylesheets(resolveTypefaces("custom"));
-    expect(hrefs()).toEqual([]);
+    expect(resolveTypefaces("custom", "lora")).toEqual({ ui: "lora", chat: "system" });
+    const loaded = fontLinks();
+    for (const next of [
+      faces,
+      resolveTypefaces("dash", "geist", "geist"),
+      resolveTypefaces("dash", "system", "system"),
+      resolveTypefaces("custom", "lora"),
+      resolveTypefaces("custom"),
+    ]) {
+      syncTypefaceStylesheets(next);
+      expect(fontLinks()).toEqual(loaded);
+    }
   });
 
   it("reuses active faces when specimens are requested and never duplicates them on switches", () => {
     syncTypefaceStylesheets(resolveTypefaces("dash"));
-    const active = fontLinks()[0];
-    expect(fontLinks()).toHaveLength(2);
+    const active = fontLinks();
     loadTypefaceSpecimens();
     const specimens = fontLinks();
-    expect(specimens).toContain(active);
+    expect(specimens).toEqual(expect.arrayContaining(active));
     expect(specimens).toHaveLength(9);
     expect(new Set(hrefs()).size).toBe(9);
     loadTypefaceSpecimens();

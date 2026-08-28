@@ -19,11 +19,8 @@ import {
 } from "../../app/context.ts";
 import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import { isBrowserPanelAvailable } from "../../app/panel-availability.ts";
-import {
-  resetServerUiPref,
-  resolveServerUiPrefState,
-  type ServerUiPrefState,
-} from "../../app/server-prefs.ts";
+import { isAppearancePref, type ResettableServerUiPrefKey } from "../../app/server-prefs-state.ts";
+import { resetServerUiPref, resolveServerUiPrefState } from "../../app/server-prefs.ts";
 import {
   loadSettings,
   normalizeCatalogOpenTarget,
@@ -31,8 +28,6 @@ import {
   normalizeChatSendShortcut,
   patchSettings,
   UI_APPEARANCE_DEFAULTS,
-  type ChatFollowUpMode,
-  type ChatSendShortcut,
   type UiSettings,
 } from "../../app/settings.ts";
 import { startThemeTransition } from "../../app/theme-transition.ts";
@@ -878,95 +873,28 @@ export class ConfigPage extends OpenClawLightDomElement {
     void i18n.setLocale(locale);
   }
 
-  private currentLocalePref(): ServerUiPrefState<string> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "locale",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
-    );
-  }
-
-  private currentThemePref(): ServerUiPrefState<ThemeName> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "theme",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      {
-        canSync: this.serverUiPrefsCanSync("theme"),
-        profileId: this.context.gateway.snapshot?.selfUser?.id,
-      },
-    );
-  }
-
-  private currentThemeModePref(): ServerUiPrefState<ThemeMode> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "themeMode",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      {
-        canSync: this.serverUiPrefsCanSync("themeMode"),
-        profileId: this.context.gateway.snapshot?.selfUser?.id,
-      },
-    );
-  }
-
-  private currentAccentPref(): ServerUiPrefState<string> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "accent",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      {
-        canSync: this.serverUiPrefsCanSync("accent"),
-        profileId: this.context.gateway.snapshot?.selfUser?.id,
-      },
-    );
-  }
-
-  private currentFontPref(key: "fontUi" | "fontChat"): ServerUiPrefState<TypefaceId> {
+  private currentSyncedPref<K extends ResettableServerUiPrefKey>(key: K) {
     return resolveServerUiPrefState(
       this.context.runtimeConfig.state.configSnapshot?.config,
       key,
       this.context.gateway.connection.gatewayUrl,
       this.settings,
-      {
-        canSync: this.serverUiPrefsCanSync(key),
-        profileId: this.context.gateway.snapshot?.selfUser?.id,
-      },
+      isAppearancePref(key)
+        ? {
+            canSync: this.serverUiPrefsCanSync(key),
+            profileId: this.context.gateway.snapshot?.selfUser?.id,
+          }
+        : { canSync: this.serverUiPrefsCanSync() },
     );
   }
 
   private setFont(key: "fontUi" | "fontChat", font: TypefaceId | undefined) {
-    const preference = this.currentFontPref(key);
+    const preference = this.currentSyncedPref(key);
     if (preference.overridden && font === preference.resetValue) {
       this.resetSyncedAppearancePref(key);
     } else {
       this.applySettings({ [key]: font });
     }
-  }
-
-  private currentChatSendShortcutPref(): ServerUiPrefState<ChatSendShortcut> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "chatSendShortcut",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
-    );
-  }
-
-  private currentChatFollowUpModePref(): ServerUiPrefState<ChatFollowUpMode> {
-    return resolveServerUiPrefState(
-      this.context.runtimeConfig.state.configSnapshot?.config,
-      "chatFollowUpMode",
-      this.context.gateway.connection.gatewayUrl,
-      this.settings,
-      { canSync: this.serverUiPrefsCanSync() },
-    );
   }
 
   private serverUiPrefsCanSync(
@@ -988,7 +916,7 @@ export class ConfigPage extends OpenClawLightDomElement {
   private resetLocale() {
     this.settings = resetServerUiPref(
       "locale",
-      this.currentLocalePref(),
+      this.currentSyncedPref("locale"),
       this.context.gateway.connection.gatewayUrl,
     );
     if (isSupportedLocale(this.settings.locale)) {
@@ -998,61 +926,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     }
   }
 
-  private resetSyncedAppearancePref(
-    key:
-      | "theme"
-      | "themeMode"
-      | "accent"
-      | "fontUi"
-      | "fontChat"
-      | "chatSendShortcut"
-      | "chatFollowUpMode",
-  ) {
-    switch (key) {
-      case "fontUi":
-      case "fontChat":
-        this.settings = resetServerUiPref(
-          key,
-          this.currentFontPref(key),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-      case "theme":
-        this.settings = resetServerUiPref(
-          "theme",
-          this.currentThemePref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-      case "themeMode":
-        this.settings = resetServerUiPref(
-          "themeMode",
-          this.currentThemeModePref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-      case "accent":
-        this.settings = resetServerUiPref(
-          "accent",
-          this.currentAccentPref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-      case "chatSendShortcut":
-        this.settings = resetServerUiPref(
-          "chatSendShortcut",
-          this.currentChatSendShortcutPref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-      case "chatFollowUpMode":
-        this.settings = resetServerUiPref(
-          "chatFollowUpMode",
-          this.currentChatFollowUpModePref(),
-          this.context.gateway.connection.gatewayUrl,
-        );
-        break;
-    }
+  private resetSyncedAppearancePref(key: Exclude<ResettableServerUiPrefKey, "locale">) {
+    this.settings = resetServerUiPref(
+      key,
+      this.currentSyncedPref(key),
+      this.context.gateway.connection.gatewayUrl,
+    );
     this.context.theme.refresh();
   }
 
@@ -1060,7 +939,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     theme: ThemeName,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
-    const preference = this.currentThemePref();
+    const preference = this.currentSyncedPref("theme");
     const reset = preference.overridden && theme === preference.resetValue;
     this.customThemeImportOwner.recordActivation(reset ? null : theme);
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
@@ -1077,7 +956,7 @@ export class ConfigPage extends OpenClawLightDomElement {
     mode: ThemeMode,
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
-    const preference = this.currentThemeModePref();
+    const preference = this.currentSyncedPref("themeMode");
     const reset = preference.overridden && mode === preference.resetValue;
     const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
     startThemeTransition({
@@ -1253,12 +1132,12 @@ export class ConfigPage extends OpenClawLightDomElement {
     const gatewayConfig = asConfigRecord(configObject.gateway);
     const controlUiConfig = asConfigRecord(gatewayConfig?.controlUi);
     const agentsDefaults = asConfigRecord(asConfigRecord(configObject.agents)?.defaults);
-    const themePref = this.currentThemePref();
-    const themeModePref = this.currentThemeModePref();
-    const accentPref = this.currentAccentPref();
-    const localePref = this.currentLocalePref();
-    const chatSendShortcutPref = this.currentChatSendShortcutPref();
-    const chatFollowUpModePref = this.currentChatFollowUpModePref();
+    const themePref = this.currentSyncedPref("theme");
+    const themeModePref = this.currentSyncedPref("themeMode");
+    const accentPref = this.currentSyncedPref("accent");
+    const localePref = this.currentSyncedPref("locale");
+    const chatSendShortcutPref = this.currentSyncedPref("chatSendShortcut");
+    const chatFollowUpModePref = this.currentSyncedPref("chatFollowUpMode");
     const sessionObserverBusy =
       !configState.connected ||
       configState.configSaving ||
@@ -1327,8 +1206,8 @@ export class ConfigPage extends OpenClawLightDomElement {
       accentProvenance: accentPref.provenance,
       fontUi: this.settings.fontUi,
       fontChat: this.settings.fontChat,
-      fontUiProvenance: this.currentFontPref("fontUi").provenance,
-      fontChatProvenance: this.currentFontPref("fontChat").provenance,
+      fontUiProvenance: this.currentSyncedPref("fontUi").provenance,
+      fontChatProvenance: this.currentSyncedPref("fontChat").provenance,
       setFontUi: (font) => this.setFont("fontUi", font),
       setFontChat: (font) => this.setFont("fontChat", font),
       systemLocale: i18n.getSystemLocale(),

@@ -5,42 +5,39 @@ import type { ThemeName } from "./theme.ts";
 export type TypefaceId = (typeof UI_APPEARANCE_TYPEFACE_VALUES)[number];
 type TypefacePair = { ui: TypefaceId; chat: TypefaceId };
 
-const SANS = '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
-const SERIF = 'Georgia, "Times New Roman", serif';
-const MONO = 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace';
-
-export const TYPEFACES = {
-  "instrument-sans": {
-    label: "Instrument Sans",
-    stack: `"Instrument Sans", ${SANS}`,
-    asset: "fonts/instrument-sans.css",
-  },
-  geist: { label: "Geist", stack: `"Geist", ${SANS}`, asset: "fonts/geist.css" },
-  "dm-sans": { label: "DM Sans", stack: `"DM Sans", ${SANS}`, asset: "fonts/dm-sans.css" },
-  "ibm-plex-sans": {
-    label: "IBM Plex Sans",
-    stack: `"IBM Plex Sans", ${SANS}`,
-    asset: "fonts/ibm-plex-sans.css",
-  },
-  "space-grotesk": {
-    label: "Space Grotesk",
-    stack: `"Space Grotesk", ${SANS}`,
-    asset: "fonts/space-grotesk.css",
-  },
+const FONT_FALLBACKS = {
+  sans: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+  serif: 'Georgia, "Times New Roman", serif',
+  mono: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Monaco, Consolas, monospace',
+};
+const TYPEFACE_METADATA: Record<
+  TypefaceId,
+  { label: string; family?: string; kind: keyof typeof FONT_FALLBACKS }
+> = {
+  "instrument-sans": { label: "Instrument Sans", kind: "sans" },
+  geist: { label: "Geist", kind: "sans" },
+  "dm-sans": { label: "DM Sans", kind: "sans" },
+  "ibm-plex-sans": { label: "IBM Plex Sans", kind: "sans" },
+  "space-grotesk": { label: "Space Grotesk", kind: "sans" },
   "atkinson-hyperlegible": {
     label: "Atkinson Hyperlegible",
-    stack: `"Atkinson Hyperlegible Next", ${SANS}`,
-    asset: "fonts/atkinson-hyperlegible.css",
+    family: "Atkinson Hyperlegible Next",
+    kind: "sans",
   },
-  fraunces: { label: "Fraunces", stack: `"Fraunces", ${SERIF}`, asset: "fonts/fraunces.css" },
-  lora: { label: "Lora", stack: `"Lora", ${SERIF}`, asset: "fonts/lora.css" },
-  "jetbrains-mono": {
-    label: "JetBrains Mono",
-    stack: `"JetBrains Mono", ${MONO}`,
-    asset: "fonts/jetbrains-mono.css",
-  },
-  system: { label: "System", stack: SANS, asset: undefined },
-} satisfies Record<
+  fraunces: { label: "Fraunces", kind: "serif" },
+  lora: { label: "Lora", kind: "serif" },
+  "jetbrains-mono": { label: "JetBrains Mono", kind: "mono" },
+  system: { label: "System", kind: "sans" },
+};
+
+export const TYPEFACES = Object.fromEntries(
+  UI_APPEARANCE_TYPEFACE_VALUES.map((id) => {
+    const { label, family = label, kind } = TYPEFACE_METADATA[id];
+    const stack = id === "system" ? FONT_FALLBACKS.sans : `"${family}", ${FONT_FALLBACKS[kind]}`;
+    return [id, { label, stack, asset: id === "system" ? undefined : `fonts/${id}.css` }] as const;
+  }),
+  // SAFETY: Mapping the complete wire tuple emits one typed entry for every TypefaceId.
+) as Record<
   TypefaceId,
   { label: string; stack: string; asset: `fonts/${TypefaceId}.css` | undefined }
 >;
@@ -71,57 +68,31 @@ export function resolveTypefaces(
   return { ui: ui ?? defaults.ui, chat: chat ?? defaults.chat };
 }
 
-/* Fetch only the active faces until the picker opens. Loading with the app
-   bundle costs one font-display: swap on a cold load. Mount-relative hrefs and
-   stylesheet-relative url() sources keep both levels working below a base path. */
-function syncTypefaceLink(id: string, face?: TypefaceId): void {
-  const asset = face && TYPEFACES[face].asset;
-  const existing = document.getElementById(id);
-  if (!asset) {
-    existing?.remove();
+// Load faces only when selected or previewed; retain them so switching slots
+// or reopening specimens never replaces an already loaded stylesheet.
+function loadTypefaceStylesheet(face: TypefaceId): void {
+  const id = `openclaw-typeface-${face}`;
+  const asset = TYPEFACES[face].asset;
+  if (!asset || document.getElementById(id)) {
     return;
   }
-  const href = inferControlUiPublicAssetPath(asset);
-  const link = existing instanceof HTMLLinkElement ? existing : document.createElement("link");
-  if (link.getAttribute("href") !== href) {
-    link.href = href;
-  }
-  if (!existing) {
-    link.id = id;
-    link.rel = "stylesheet";
-    document.head.append(link);
-  }
+  const link = document.createElement("link");
+  link.id = id;
+  link.rel = "stylesheet";
+  link.href = inferControlUiPublicAssetPath(asset);
+  document.head.append(link);
 }
 
 export function syncTypefaceStylesheets(faces: TypefacePair): void {
   if (typeof document === "undefined") {
     return;
   }
-  for (const slot of ["ui", "chat"] as const) {
-    const face = faces[slot];
-    const duplicate =
-      (slot === "chat" && face === faces.ui) ||
-      document.getElementById(`openclaw-typeface-${face}`);
-    syncTypefaceLink(`openclaw-font-${slot}`, duplicate ? undefined : face);
-  }
+  loadTypefaceStylesheet(faces.ui);
+  loadTypefaceStylesheet(faces.chat);
 }
 
-/** Retain picker specimens once requested, reusing already active links. */
 export function loadTypefaceSpecimens(): void {
-  for (const face of UI_APPEARANCE_TYPEFACE_VALUES) {
-    const id = `openclaw-typeface-${face}`;
-    const asset = TYPEFACES[face].asset;
-    if (asset && !document.getElementById(id)) {
-      const href = inferControlUiPublicAssetPath(asset);
-      const active = ["ui", "chat"]
-        .map((slot) => document.getElementById(`openclaw-font-${slot}`))
-        .find((link) => link?.getAttribute("href") === href);
-      if (active) {
-        active.id = id;
-      }
-      syncTypefaceLink(id, face);
-    }
-  }
+  UI_APPEARANCE_TYPEFACE_VALUES.forEach(loadTypefaceStylesheet);
 }
 
 export function applyTypefaceOverrides(ui?: TypefaceId, chat?: TypefaceId): void {

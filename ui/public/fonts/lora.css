@@ -1,25 +1,9 @@
 /*
  * Self-hosted webfonts for Lora.
- *
- * Served as a static asset and linked at runtime by the theme applier, so
- * views that do not use this face download neither this file nor the
- * fonts. Paths are stable (public/, unhashed) because the link is built
- * from a constant rather than a bundler import.
- *
- * The url() references are relative to this stylesheet on purpose: the link
- * href is resolved against the configured Control UI mount, and relative
- * sources then follow it, so a gateway served under a base path such as
- * /openclaw still reaches the faces.
- *
- * This family is SIL Open Font License 1.1 and ships unmodified, with its
- * upstream license text beside the files in public/fonts. Serving them from the
- * gateway (not a font CDN) keeps `font-src 'self'` intact, avoids a third-party
- * request on every load, and works on an offline or LAN-only gateway.
- *
- * Latin and latin-ext subsets only, matching the Control UI's shipped locales;
- * unicode-range values come from the upstream subset definitions, so a glyph
- * outside them falls through to the stack's next family instead of loading a
- * face nothing renders.
+ * SIL Open Font License 1.1; unmodified, with upstream license text beside the files.
+ * Gateway-hosted for font-src 'self', offline/LAN use, and no third-party requests.
+ * Linked on demand at a stable public path. Relative url() sources follow the
+ * configured Control UI mount. Latin/latin-ext unicode ranges are upstream subsets.
  */
 
 @font-face {
