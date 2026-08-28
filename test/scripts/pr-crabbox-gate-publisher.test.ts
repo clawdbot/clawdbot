@@ -605,7 +605,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
 });
 
 describe("Crabbox broker authentication", () => {
-  it("requires and sends coordinator plus Cloudflare Access credentials", async () => {
+  it("sends bearer and complete Cloudflare Access credentials", async () => {
     const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
       expect(init?.headers).toEqual({
         Authorization: "Bearer coordinator-token",
@@ -627,15 +627,52 @@ describe("Crabbox broker authentication", () => {
     await expect(api.request("/v1/runs/run_abc123")).resolves.toEqual({
       run: { id: "run_abc123" },
     });
-    expect(() =>
-      createJsonApi({
-        accessClientId: "",
-        accessClientSecret: "access-secret",
-        baseUrl: "https://broker.example/",
-        fetchImpl,
-        token: "coordinator-token",
-      }),
-    ).toThrow(/Access client id/u);
+  });
+
+  it("sends bearer-only authentication when Cloudflare Access is absent", async () => {
+    const fetchImpl = vi.fn<typeof fetch>(async (_input, init) => {
+      expect(init?.headers).toEqual({
+        Authorization: "Bearer coordinator-token",
+      });
+      return new Response('{"run":{"id":"run_abc123"}}', {
+        headers: { "Content-Type": "application/json" },
+        status: 200,
+      });
+    });
+    const api = createJsonApi({
+      accessClientId: "",
+      accessClientSecret: "",
+      baseUrl: "https://broker.example/",
+      fetchImpl,
+      token: "coordinator-token",
+    });
+    await expect(api.request("/v1/runs/run_abc123")).resolves.toEqual({
+      run: { id: "run_abc123" },
+    });
+  });
+
+  it.each([
+    ["client secret", "access-id", ""],
+    ["client id", "", "access-secret"],
+  ])(
+    "rejects a Cloudflare Access half-pair missing %s",
+    (_label, accessClientId, accessClientSecret) => {
+      expect(() =>
+        createJsonApi({
+          accessClientId,
+          accessClientSecret,
+          baseUrl: "https://broker.example/",
+          token: "coordinator-token",
+        }),
+      ).toThrow(/must be provided together/u);
+    },
+  );
+
+  it.each([
+    ["coordinator URL", { baseUrl: "", token: "coordinator-token" }],
+    ["coordinator token", { baseUrl: "https://broker.example/", token: "" }],
+  ])("requires the %s", (_label, values) => {
+    expect(() => createJsonApi(values)).toThrow(/required/u);
   });
 });
 
@@ -645,7 +682,11 @@ describe("Crabbox gate workflow", () => {
       readFileSync(".github/workflows/pr-crabbox-gate-publisher.yml", "utf8"),
     ) as {
       jobs: {
-        publish: { permissions: Record<string, string>; steps: Array<Record<string, unknown>> };
+        publish: {
+          environment: string;
+          permissions: Record<string, string>;
+          steps: Array<Record<string, unknown>>;
+        };
       };
       on: { workflow_dispatch: { inputs: Record<string, unknown> } };
       permissions: Record<string, string>;
@@ -659,6 +700,7 @@ describe("Crabbox gate workflow", () => {
       "pr_number",
     ]);
     expect(workflow.permissions).toEqual({});
+    expect(workflow.jobs.publish.environment).toBe("qa-live-shared");
     expect(workflow.jobs.publish.permissions).toEqual({
       checks: "write",
       contents: "read",
@@ -675,8 +717,10 @@ describe("Crabbox gate workflow", () => {
       env: {
         CRABBOX_ACCESS_CLIENT_ID: "${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}",
         CRABBOX_ACCESS_CLIENT_SECRET: "${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}",
-        CRABBOX_COORDINATOR: "${{ secrets.CRABBOX_COORDINATOR }}",
-        CRABBOX_COORDINATOR_TOKEN: "${{ secrets.CRABBOX_COORDINATOR_TOKEN }}",
+        CRABBOX_COORDINATOR:
+          "${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}",
+        CRABBOX_COORDINATOR_TOKEN:
+          "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
         GH_APP_TOKEN:
           "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
         GH_TOKEN: "${{ github.token }}",

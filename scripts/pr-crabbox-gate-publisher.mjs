@@ -430,24 +430,30 @@ export async function runPublisher({
 }
 
 export function createJsonApi({
-  accessClientId,
-  accessClientSecret,
+  accessClientId = "",
+  accessClientSecret = "",
   baseUrl,
   token,
   fetchImpl = fetch,
 }) {
-  const base = new URL(baseUrl);
-  requiredString(accessClientId, "Crabbox Access client id");
-  requiredString(accessClientSecret, "Crabbox Access client secret");
-  requiredString(token, "Crabbox coordinator token");
+  const base = new URL(requiredString(baseUrl, "Crabbox coordinator URL"));
+  const hasAccess = Boolean(accessClientId);
+  if (hasAccess !== Boolean(accessClientSecret)) {
+    throw new Error("Crabbox Access client id and secret must be provided together");
+  }
+  const headers = {
+    Authorization: `Bearer ${requiredString(token, "Crabbox coordinator token")}`,
+    ...(hasAccess
+      ? {
+          "CF-Access-Client-Id": accessClientId,
+          "CF-Access-Client-Secret": accessClientSecret,
+        }
+      : {}),
+  };
   return {
     async request(requestPath, options = {}) {
       const response = await fetchImpl(new URL(requestPath, base), {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "CF-Access-Client-Id": accessClientId,
-          "CF-Access-Client-Secret": accessClientSecret,
-        },
+        headers,
         signal: AbortSignal.timeout(30_000),
       });
       if (!response.ok) {
@@ -488,8 +494,8 @@ async function main() {
   const event = JSON.parse(readFileSync(requiredEnv(process.env, "GITHUB_EVENT_PATH"), "utf8"));
   const brokerUrl = requiredEnv(process.env, "CRABBOX_COORDINATOR");
   const broker = createJsonApi({
-    accessClientId: requiredEnv(process.env, "CRABBOX_ACCESS_CLIENT_ID"),
-    accessClientSecret: requiredEnv(process.env, "CRABBOX_ACCESS_CLIENT_SECRET"),
+    accessClientId: process.env.CRABBOX_ACCESS_CLIENT_ID,
+    accessClientSecret: process.env.CRABBOX_ACCESS_CLIENT_SECRET,
     baseUrl: brokerUrl.endsWith("/") ? brokerUrl : `${brokerUrl}/`,
     token: requiredEnv(process.env, "CRABBOX_COORDINATOR_TOKEN"),
   });

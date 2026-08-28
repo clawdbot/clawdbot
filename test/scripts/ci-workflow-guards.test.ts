@@ -10468,6 +10468,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow.permissions).toEqual({});
     expect(workflow.on).toHaveProperty("workflow_dispatch");
     expect(job["runs-on"]).toBe("ubuntu-24.04");
+    expect(job.environment).toBe("qa-live-shared");
     expect(job.permissions).toEqual({
       checks: "write",
       contents: "read",
@@ -10485,8 +10486,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       env: {
         CRABBOX_ACCESS_CLIENT_ID: "${{ secrets.CRABBOX_ACCESS_CLIENT_ID }}",
         CRABBOX_ACCESS_CLIENT_SECRET: "${{ secrets.CRABBOX_ACCESS_CLIENT_SECRET }}",
-        CRABBOX_COORDINATOR: "${{ secrets.CRABBOX_COORDINATOR }}",
-        CRABBOX_COORDINATOR_TOKEN: "${{ secrets.CRABBOX_COORDINATOR_TOKEN }}",
+        CRABBOX_COORDINATOR:
+          "${{ secrets.CRABBOX_COORDINATOR || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR }}",
+        CRABBOX_COORDINATOR_TOKEN:
+          "${{ secrets.CRABBOX_COORDINATOR_TOKEN || secrets.OPENCLAW_QA_MANTIS_CRABBOX_COORDINATOR_TOKEN }}",
         GH_APP_TOKEN:
           "${{ steps.app-token.outputs.token || steps.app-token-fallback.outputs.token }}",
         GH_TOKEN: "${{ github.token }}",
