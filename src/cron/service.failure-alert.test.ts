@@ -124,6 +124,61 @@ function expectAlertTextContaining(
 }
 
 describe("CronService failure alerts", () => {
+  it.each([
+    { name: "default", global: undefined, job: undefined, cooldownMs: 3_600_000 },
+    {
+      name: "global",
+      global: { after: 8, cooldownMs: 60_000 },
+      job: undefined,
+      cooldownMs: 60_000,
+    },
+    {
+      name: "job override",
+      global: { cooldownMs: 60_000 },
+      job: { after: 8, cooldownMs: 120_000 },
+      cooldownMs: 120_000,
+    },
+    { name: "zero", global: undefined, job: { after: 8, cooldownMs: 0 }, cooldownMs: 0 },
+  ])("honors $name cooldown for delivery failures without an after gate", async (testCase) => {
+    await withFailureAlertCron(
+      {
+        failureAlert: testCase.global,
+        runResult: { status: "ok", delivered: false, deliveryError: "primary rejected" },
+      },
+      async ({ cron, sendCronFailureAlert, addJob }) => {
+        const job = await addJob("delivery cooldown", {
+          delivery: {
+            ...createTelegramDelivery(),
+            failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
+          },
+          failureAlert: testCase.job,
+        });
+        const firstAt = Date.now();
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+
+        if (testCase.cooldownMs > 0) {
+          vi.setSystemTime(firstAt + testCase.cooldownMs - 1);
+          await cron.run(job.id, "force");
+          expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+          expect(cron.getJob(job.id)?.state).toMatchObject({
+            lastRunStatus: "ok",
+            lastDeliveryStatus: "not-delivered",
+            lastDeliveryError: "primary rejected",
+            consecutiveErrors: 0,
+            lastFailureAlertAtMs: firstAt,
+            lastFailureNotificationDeliveryStatus: "not-requested",
+          });
+        }
+
+        vi.setSystemTime(firstAt + testCase.cooldownMs);
+        await cron.run(job.id, "force");
+        expect(sendCronFailureAlert).toHaveBeenCalledTimes(2);
+        expect(cron.getJob(job.id)?.state.lastFailureAlertAtMs).toBe(Date.now());
+      },
+    );
+  });
+
   it("defaults route-backed jobs to two failures and a one-hour cooldown", async () => {
     await withFailureAlertCron({}, async ({ cron, sendCronFailureAlert, addJob }) => {
       const job = await addJob("default routed alert", { delivery: createTelegramDelivery() });

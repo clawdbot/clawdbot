@@ -199,6 +199,14 @@ export function restoreFinalizedStartupRun(params: {
     job.state.lastFailureNotificationDelivered = entry.failureNotificationDelivery.delivered;
     job.state.lastFailureNotificationDeliveryStatus = entry.failureNotificationDelivery.status;
     job.state.lastFailureNotificationDeliveryError = entry.failureNotificationDelivery.error;
+    const lastAlert = job.state.lastFailureAlertAtMs;
+    // Recorded alert intent owns its cooldown even if today's route/policy changed.
+    if (
+      entry.failureNotificationDelivery.status !== "not-requested" &&
+      (lastAlert === undefined || lastAlert < endedAt || lastAlert > state.deps.nowMs())
+    ) {
+      job.state.lastFailureAlertAtMs = endedAt;
+    }
   }
   const finalizedNextRunAtMs = replacementAtMs ?? entry.nextRunAtMs;
   job.state.nextRunAtMs =

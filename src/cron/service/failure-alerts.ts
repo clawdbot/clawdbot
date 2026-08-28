@@ -192,12 +192,6 @@ export function resolveFailureAlert(
   };
 }
 
-function markFailureNotificationRequested(job: CronJob): void {
-  job.state.lastFailureNotificationDelivered = undefined;
-  job.state.lastFailureNotificationDeliveryStatus = "unknown";
-  job.state.lastFailureNotificationDeliveryError = undefined;
-}
-
 function transportFailureAlert(
   state: CronServiceState,
   params: {
@@ -291,6 +285,31 @@ function emitFailureAlert(
   });
 }
 
+function requestFailureNotification(
+  state: CronServiceState,
+  job: CronJob,
+  alertConfig: ResolvedFailureAlert,
+  occurredAtMs?: number,
+): boolean {
+  const wallClockNow = state.deps.nowMs();
+  const now = occurredAtMs ?? wallClockNow;
+  const lastAlert = job.state.lastFailureAlertAtMs;
+  // Cooldown is stored on job state so process restarts and service reloads do
+  // not spam operators. Future timestamps cannot prove a recent prior alert.
+  const inCooldown =
+    typeof lastAlert === "number" &&
+    lastAlert <= wallClockNow &&
+    now - lastAlert < Math.max(0, alertConfig.cooldownMs);
+  if (inCooldown) {
+    return false;
+  }
+  job.state.lastFailureNotificationDelivered = undefined;
+  job.state.lastFailureNotificationDeliveryStatus = "unknown";
+  job.state.lastFailureNotificationDeliveryError = undefined;
+  job.state.lastFailureAlertAtMs = now;
+  return true;
+}
+
 /** Emits a failure alert when threshold, best-effort, and cooldown policy allow it. */
 export function maybeEmitFailureAlert(
   state: CronServiceState,
@@ -317,20 +336,9 @@ export function maybeEmitFailureAlert(
   if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
-  const wallClockNow = state.deps.nowMs();
-  const now = params.occurredAtMs ?? wallClockNow;
-  const lastAlert = params.job.state.lastFailureAlertAtMs;
-  // Cooldown is stored on job state so process restarts and service reloads do
-  // not spam operators. Future timestamps cannot prove a recent prior alert.
-  const inCooldown =
-    typeof lastAlert === "number" &&
-    lastAlert <= wallClockNow &&
-    now - lastAlert < Math.max(0, alertConfig.cooldownMs);
-  if (inCooldown) {
+  if (!requestFailureNotification(state, params.job, alertConfig, params.occurredAtMs)) {
     return;
   }
-  markFailureNotificationRequested(params.job);
-  params.job.state.lastFailureAlertAtMs = now;
   if (params.delivery === "record-only") {
     return;
   }
@@ -393,9 +401,11 @@ export function finalizeCronFailureNotifications(
     params.job.state.lastDeliveryStatus === "not-delivered" &&
     params.alertConfig?.alternateRoute
   ) {
-    markFailureNotificationRequested(params.job);
-    // Finalized history owns replayed notification facts; recovery must not resend.
-    if (params.replayFailureAlertAtMs !== undefined) {
+    // Finalized history owns replayed notification facts and cooldown; never resend.
+    if (
+      params.replayFailureAlertAtMs !== undefined ||
+      !requestFailureNotification(state, params.job, params.alertConfig)
+    ) {
       return;
     }
     const job = structuredClone(params.job);

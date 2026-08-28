@@ -144,6 +144,14 @@ export function applyJobResult(
   job.state.lastFailureNotificationDeliveryStatus = "not-requested";
   job.state.lastFailureNotificationDeliveryError = undefined;
   job.updatedAtMs = result.endedAt;
+  const completionStatus =
+    result.completionStatus ??
+    resolveAdmittedCronCompletionStatus(
+      job,
+      result.status,
+      deliveryState.status,
+      deliveryState.deliverySuppressionReason,
+    );
 
   // Track consecutive errors for backoff / auto-disable; skipped runs use a
   // separate counter so opt-in skip alerts do not affect retry behavior.
@@ -168,13 +176,13 @@ export function applyJobResult(
           : {}),
         deferredNotifications: opts?.deferredNotifications,
       });
-    } else {
-      job.state.lastFailureAlertAtMs = undefined;
     }
   } else {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = 0;
-    job.state.lastFailureAlertAtMs = undefined;
+    if (completionStatus === "succeeded") {
+      job.state.lastFailureAlertAtMs = undefined;
+    }
   }
 
   // An operator force-run borrows a future at-schedule; it cannot consume,
@@ -187,14 +195,6 @@ export function applyJobResult(
     previousScheduleState.nextRunAtMs > (opts.scheduleOwnershipAtMs ?? result.startedAt);
   const ownsSchedule = opts?.scheduleOwnership !== "stale";
   const isOneShotSchedule = job.schedule.kind === "at" || job.schedule.kind === "on-exit";
-  const completionStatus =
-    result.completionStatus ??
-    resolveAdmittedCronCompletionStatus(
-      job,
-      result.status,
-      deliveryState.status,
-      deliveryState.deliverySuppressionReason,
-    );
   // Authored completion includes intentional silence and the admitted best-effort policy.
   const shouldDelete =
     ownsSchedule &&
@@ -584,10 +584,9 @@ export function applyTriggerNoFireResult(
   job.updatedAtMs = result.endedAt;
   if (!result.triggerEval.busy && opts?.triggerOwnership !== "stale") {
     // A non-firing evaluation is successful scheduler work, not a payload run;
-    // reset error machinery while leaving lastRun/delivery history untouched.
+    // reset error streaks, but preserve delivery history and its alert cooldown.
     job.state.consecutiveErrors = 0;
     job.state.scheduleErrorCount = 0;
-    job.state.lastFailureAlertAtMs = undefined;
     applyTriggerEvaluationState(job, result.triggerEval, result.endedAt);
   }
   if (opts?.scheduleMode === "immediate-preserve" || opts?.scheduleMode === "stale-preserve") {

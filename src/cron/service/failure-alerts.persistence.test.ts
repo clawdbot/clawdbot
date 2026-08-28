@@ -10,8 +10,10 @@ import { markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
 import type { CronJob, CronRunStatus } from "../types.js";
+import { restoreFinalizedStartupRun } from "./startup-run-repair.js";
 import { createCronServiceState } from "./state.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
+import { applyTriggerNoFireResult } from "./timer-outcomes.js";
 import { applyJobResult, authorCronRunCompletion } from "./timer.js";
 
 const fixtures = setupCronRegressionFixtures({
@@ -79,6 +81,116 @@ async function finalizeAlertOutcome(params: {
 }
 
 describe("cron failure alert persistence", () => {
+  it.each(["skipped run", "quiet trigger"])(
+    "keeps delivery cooldown across a %s",
+    (intervening) => {
+      const store = fixtures.makeStorePath();
+      const firstAt = Date.parse("2026-08-01T14:49:00Z");
+      let now = firstAt;
+      const job = createAlertJob({ id: "delivery-alert-order", dueAt: now });
+      job.delivery = {
+        mode: "announce",
+        failureDestination: { mode: "webhook", to: "https://alerts.example.test/cron" },
+      };
+      const sendCronFailureAlert = vi.fn(async () => undefined);
+      const state = createAlertState({
+        storePath: store.storePath,
+        nowMs: () => now,
+        sendCronFailureAlert,
+      });
+      const failDelivery = () =>
+        applyJobResult(state, job, {
+          status: "ok",
+          delivered: false,
+          deliveryError: "primary rejected",
+          startedAt: now,
+          endedAt: now,
+        });
+      failDelivery();
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      now += 1_000;
+      if (intervening === "skipped run") {
+        applyJobResult(state, job, { status: "skipped", startedAt: now, endedAt: now });
+      } else {
+        applyTriggerNoFireResult(state, job, {
+          startedAt: now,
+          endedAt: now,
+          triggerEval: { fired: false, stateChanged: false },
+        });
+      }
+      now += 1_000;
+      failDelivery();
+      expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+      expect(job.state.lastFailureAlertAtMs).toBe(firstAt);
+    },
+  );
+
+  it.each([
+    {
+      name: "recorded attempt",
+      notification: { status: "unknown" as const },
+      priorOffset: -20_000,
+      expectedOffset: 0,
+    },
+    {
+      name: "newer alert",
+      notification: { status: "delivered" as const, delivered: true },
+      priorOffset: 10_000,
+      expectedOffset: 10_000,
+    },
+    {
+      name: "future timestamp",
+      notification: { status: "unknown" as const },
+      priorOffset: 120_000,
+      expectedOffset: 0,
+    },
+    {
+      name: "suppressed alert",
+      notification: { status: "not-requested" as const },
+      priorOffset: -20_000,
+      expectedOffset: -20_000,
+    },
+    { name: "absent fact", notification: undefined, priorOffset: -20_000, expectedOffset: -20_000 },
+  ])("restores delivery-alert cooldown from $name without replaying transport", (testCase) => {
+    const endedAt = Date.parse("2026-08-01T14:50:00Z");
+    const store = fixtures.makeStorePath();
+    const job = createAlertJob({ id: "delivery-replay", dueAt: endedAt - 10 });
+    job.delivery = { mode: "none", bestEffort: true };
+    job.failureAlert = false;
+    job.state.lastFailureAlertAtMs = endedAt + testCase.priorOffset;
+    const sendCronFailureAlert = vi.fn(async () => undefined);
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => endedAt + 30_000,
+      sendCronFailureAlert,
+    });
+    const deferredNotifications: Array<() => void> = [];
+    restoreFinalizedStartupRun({
+      state,
+      job,
+      runningAtMs: endedAt - 10,
+      deferredNotifications,
+      entry: {
+        ts: endedAt,
+        jobId: job.id,
+        action: "finished",
+        status: "ok",
+        completionStatus: "failed",
+        deliveryStatus: "not-delivered",
+        deliveryError: "primary rejected",
+        failureNotificationDelivery: testCase.notification,
+        runAtMs: endedAt - 10,
+      },
+    });
+    expect(job.state.lastFailureAlertAtMs).toBe(endedAt + testCase.expectedOffset);
+    expect(job.state.lastFailureNotificationDeliveryStatus).toBe(
+      testCase.notification?.status ?? "not-requested",
+    );
+    expect(deferredNotifications).toEqual([]);
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+    expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
+  });
+
   it.each([
     { status: "error", includeSkipped: false },
     { status: "skipped", includeSkipped: true },
