@@ -70,12 +70,14 @@ function createControlEnvironment({ baseEnv = process.env, configPath, stateDir 
 
 export function createGatewayEnvironment({
   backend,
+  baseEnv = process.env,
   codexLogPath,
   configPath,
   stateDir,
   sutToken,
 }) {
   return {
+    ...sanitizeChildEnvironment(baseEnv),
     OPENCLAW_CONFIG_PATH: configPath,
     OPENCLAW_STATE_DIR: stateDir,
     TELEGRAM_BOT_TOKEN: sutToken,
@@ -587,6 +589,10 @@ function spawnProcess(command, args, options) {
   };
   child.stdout.on("data", capture);
   child.stderr.on("data", capture);
+  child.on("error", (error) => {
+    child.spawnError = error;
+    capture(error instanceof Error ? error.stack || error.message : String(error));
+  });
   return child;
 }
 
@@ -736,6 +742,10 @@ function waitForOutput(child, pattern, label, timeoutMs) {
     };
     child.stdout.on("data", onData);
     child.stderr.on("data", onData);
+    child.on("error", (error) => {
+      clearTimeout(timeout);
+      reject(error);
+    });
     child.on("exit", (code) => {
       clearTimeout(timeout);
       reject(new Error(`${label} exited before ready with code ${code}\n${output.slice(-4000)}`));
@@ -746,6 +756,7 @@ function waitForOutput(child, pattern, label, timeoutMs) {
 async function waitForGatewayReady(child, port, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
+    if (child.spawnError) throw child.spawnError;
     if (child.exitCode !== null) {
       throw new Error(`gateway exited before ready with code ${child.exitCode}\n${child.output}`);
     }

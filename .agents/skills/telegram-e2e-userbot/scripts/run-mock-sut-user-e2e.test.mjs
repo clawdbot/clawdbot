@@ -115,6 +115,11 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
   );
   const gatewayEnv = createGatewayEnvironment({
     backend: "codex-fixture",
+    baseEnv: {
+      PATH: "/safe/bin",
+      OPENCLAW_QA_CONVEX_SECRET_CI: "broker-secret",
+      TELEGRAM_E2E_STATE_DIR: "/private/lease",
+    },
     codexLogPath: path.join(temp, "codex.ndjson"),
     configPath: path.join(temp, "openclaw.json"),
     stateDir: path.join(temp, "state"),
@@ -152,6 +157,9 @@ test("lease loss during blocked readiness stops the gateway before polling", asy
   );
   await new Promise((resolve) => setTimeout(resolve, 250));
   assert.equal(gatewayEnv.OPENCLAW_QA_PARENT_PID, String(process.pid));
+  assert.equal(gatewayEnv.PATH, "/safe/bin");
+  assert.equal(gatewayEnv.OPENCLAW_QA_CONVEX_SECRET_CI, undefined);
+  assert.equal(gatewayEnv.TELEGRAM_E2E_STATE_DIR, undefined);
   assert.equal(fs.existsSync(gatewayReady), true);
   assert.equal(fs.existsSync(pollMarker), false);
 });
