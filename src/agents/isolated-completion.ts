@@ -124,10 +124,7 @@ function selectIsolatedHarnessAuthPlan(attempt: PreparedAgentRuntimeAuthAttempt)
   };
 }
 
-function requireIsolatedAssistantText(
-  assistant: AssistantMessage,
-  options: { allowEmpty: boolean },
-): string {
+function requireIsolatedAssistantText(assistant: AssistantMessage): string {
   if (assistant.stopReason !== "stop" && assistant.stopReason !== "length") {
     throw new IsolatedCompletionError(
       "output-rejected",
@@ -148,14 +145,7 @@ function requireIsolatedAssistantText(
       "Isolated completion returned a tool call; the result was rejected.",
     );
   }
-  const text = textParts.join("").trim();
-  if (!text && !options.allowEmpty) {
-    throw new IsolatedCompletionError(
-      "output-rejected",
-      "Isolated completion returned empty output.",
-    );
-  }
-  return text;
+  return textParts.join("").trim();
 }
 
 function hasCliSideEffectEvidence(result: {
@@ -231,6 +221,7 @@ async function runCliIsolatedCompletion(params: {
           cleanupBundleMcpOnRunEnd: true,
           requireExplicitMessageTarget: true,
           isolatedCompletion: true,
+          outputTextPolicy: params.request.outputTextPolicy,
         });
         if (hasCliSideEffectEvidence(result)) {
           throw new IsolatedCompletionError(
@@ -259,12 +250,6 @@ async function runCliIsolatedCompletion(params: {
           .map((payload) => payload.text ?? "")
           .join("\n")
           .trim();
-        if (!text) {
-          throw new IsolatedCompletionError(
-            "output-rejected",
-            "Isolated CLI completion returned empty output.",
-          );
-        }
         const backend = resolveCliBackendConfig(params.provider, params.request.config, {
           agentId: params.agentId,
         });
@@ -688,16 +673,21 @@ export async function runIsolatedCompletion(
         throw new IsolatedCompletionError("runtime-unavailable", "Isolated completion failed.");
       }
       return {
-        text: requireIsolatedAssistantText(result.assistant, {
-          allowEmpty: request.outputTextPolicy === "strict-visible",
-        }),
+        text: requireIsolatedAssistantText(result.assistant),
         provider: result.assistant.provider,
         model: result.assistant.model,
         owner: { kind: "harness", id: harness.id },
         usage: result.assistant.usage,
       };
     };
-    return await withPluginRuntimeGenerationScope(lease.snapshot, run);
+    const result = await withPluginRuntimeGenerationScope(lease.snapshot, run);
+    if (!result.text && request.outputTextPolicy !== "strict-visible") {
+      throw new IsolatedCompletionError(
+        "output-rejected",
+        "Isolated completion returned empty output.",
+      );
+    }
+    return result;
   } finally {
     lease.release();
   }

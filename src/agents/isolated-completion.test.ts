@@ -608,9 +608,16 @@ describe("runIsolatedCompletion", () => {
     },
   );
 
-  it.each([false, true])(
-    "allows thinking-only output only for strict title requests (%s)",
-    async (strict) => {
+  it.each([
+    [false, false],
+    [false, true],
+    [true, false],
+    [true, true],
+  ])(
+    "allows thinking-only output only for strict title requests (CLI: %s, strict: %s)",
+    async (cli, strict) => {
+      mocks.isCliRuntimeAliasForProvider.mockReturnValue(cli);
+      mocks.runCliAgent.mockResolvedValue({ payloads: [{ text: "hidden", isReasoning: true }] });
       registerHarness({
         runIsolatedCompletion: vi.fn(async () => ({
           assistant: assistant([{ type: "thinking", thinking: "hidden" }]),
@@ -629,51 +636,59 @@ describe("runIsolatedCompletion", () => {
           message: expect.stringContaining("empty output"),
         });
       }
+      if (cli) {
+        expect(mocks.runCliAgent).toHaveBeenCalledWith(
+          expect.objectContaining({ outputTextPolicy: strict ? "strict-visible" : undefined }),
+        );
+      }
     },
   );
 
-  it("routes CLI owners through one exact empty-tool run without direct preparation", async () => {
-    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-    mocks.runCliAgent.mockResolvedValue({
-      payloads: [{ text: '{"cli":true}' }],
-      meta: {
-        durationMs: 1,
-        agentMeta: {
-          sessionId: "cli-session",
-          provider: "claude-cli",
-          model: "claude-test",
-          usage: { input: 8, output: 3, cacheRead: 2, total: 13 },
+  it.each([undefined, { input: 8, output: 3, cacheRead: 2, total: 13 }])(
+    "routes CLI owners through one empty-tool run with reported usage %j",
+    async (usage) => {
+      mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
+      mocks.runCliAgent.mockResolvedValue({
+        payloads: [{ text: '{"cli":true}' }],
+        meta: {
+          durationMs: 1,
+          agentMeta: {
+            sessionId: "cli-session",
+            provider: "claude-cli",
+            model: "claude-test",
+            usage,
+          },
         },
-      },
-    });
+      });
 
-    await expect(
-      runIsolatedCompletion({
-        ...request(),
+      await expect(
+        runIsolatedCompletion({
+          ...request(),
+          provider: "anthropic",
+          model: "claude-test",
+          agentHarnessRuntimeOverride: "claude-cli",
+        }),
+      ).resolves.toStrictEqual({
+        text: '{"cli":true}',
         provider: "anthropic",
         model: "claude-test",
-        agentHarnessRuntimeOverride: "claude-cli",
-      }),
-    ).resolves.toEqual({
-      text: '{"cli":true}',
-      provider: "anthropic",
-      model: "claude-test",
-      owner: { kind: "cli", id: "claude-cli" },
-      usage: { input: 8, output: 3, cacheRead: 2, total: 13 },
-    });
-    expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
-    expect(mocks.runCliAgent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        provider: "claude-cli",
-        modelProvider: "anthropic",
-        authProfileId: undefined,
-        executionMode: "side-question",
-        isolatedCompletion: true,
-        disableTools: true,
-        cliToolAvailability: { native: [], openClaw: [] },
-      }),
-    );
-  });
+        owner: { kind: "cli", id: "claude-cli" },
+        ...(usage ? { usage } : {}),
+      });
+      expect(mocks.prepareSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.runCliAgent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          provider: "claude-cli",
+          modelProvider: "anthropic",
+          authProfileId: undefined,
+          executionMode: "side-question",
+          isolatedCompletion: true,
+          disableTools: true,
+          cliToolAvailability: { native: [], openClaw: [] },
+        }),
+      );
+    },
+  );
 
   it("keeps concurrent CLI isolated completions independently admitted", async () => {
     mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
@@ -748,30 +763,6 @@ describe("runIsolatedCompletion", () => {
       await Promise.allSettled(second ? [first, second] : [first]);
       clock.mockRestore();
     }
-  });
-
-  it("keeps unavailable CLI usage absent", async () => {
-    mocks.isCliRuntimeAliasForProvider.mockReturnValue(true);
-    mocks.runCliAgent.mockResolvedValue({
-      payloads: [{ text: "done" }],
-      meta: {
-        durationMs: 1,
-        agentMeta: {
-          sessionId: "cli-session",
-          provider: "claude-cli",
-          model: "claude-test",
-        },
-      },
-    });
-
-    const result = await runIsolatedCompletion({
-      ...request(),
-      provider: "anthropic",
-      model: "claude-test",
-      agentHarnessRuntimeOverride: "claude-cli",
-    });
-
-    expect(result).not.toHaveProperty("usage");
   });
 
   it("forwards one explicit auth profile unchanged to a CLI owner", async () => {

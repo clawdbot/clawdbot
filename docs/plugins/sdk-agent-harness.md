@@ -220,6 +220,8 @@ output are rejected. Title requests set `outputTextPolicy: "strict-visible"`:
 keep reasoning separate without recovering ambiguous reasoning as visible text;
 an empty visible result is valid. The host-prepared helper maps this policy to
 strict parsing before recovery. Omission preserves ordinary recovery behavior.
+CLI-backed title calls also allow clean empty output without a silent-reply token;
+ordinary CLI calls still reject empty responses.
 Older external harnesses may ignore the policy; a final title filter cannot
 restore provenance that a harness already discarded, so this is not a universal
 reasoning-privacy guarantee. If the harness cannot enforce isolation, omit the capability.
