@@ -5,6 +5,7 @@ import {
   formatChannelProgressDraftLine,
   formatChannelProgressDraftText,
 } from "openclaw/plugin-sdk/channel-outbound";
+import { getGlobalHookRunner } from "openclaw/plugin-sdk/plugin-runtime";
 import type { GetReplyOptions } from "openclaw/plugin-sdk/reply-runtime";
 import type { CoreConfig, MatrixConfig, MatrixStreamingMode, ReplyToMode } from "../../types.js";
 import type { MatrixClient } from "../sdk.js";
@@ -41,7 +42,14 @@ export async function createMatrixDraftController(params: {
   type DraftDisposition = "active" | "retained" | "consumed";
   let draftDisposition: DraftDisposition = "active";
 
-  const draftStreamingEnabled = streaming !== "off";
+  // Provider drafts render before outbound modifiers run. Keep them off whenever a hook can
+  // rewrite or cancel the payload so the raw draft cannot escape the durable delivery gate.
+  const hookRunner = getGlobalHookRunner();
+  const allowProviderPreview = !(
+    (hookRunner?.hasHooks("reply_payload_sending") ?? false) ||
+    (hookRunner?.hasHooks("message_sending") ?? false)
+  );
+  const draftStreamingEnabled = allowProviderPreview && streaming !== "off";
   const quietDraftStreaming = streaming === "quiet" || streaming === "progress";
   const progressDraftStreaming = streaming === "progress";
   const draftReplyToId = replyToMode !== "off" && !threadTarget ? messageId : undefined;
