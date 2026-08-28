@@ -4,6 +4,7 @@ import type { ChannelPlugin } from "../channels/plugins/types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
+import type { ChannelKind } from "./config-reload-plan.js";
 import { createChannelManager, type ChannelManager } from "./server-channels.js";
 import { rollbackStoppedGatewayChannels } from "./server-reload-channel-restart.js";
 
@@ -15,9 +16,13 @@ afterEach(async () => {
   resetGatewayWorkAdmission();
 });
 
-it.each(["idle", "stopped", "racing"] as const)(
-  "automatic rollback preserves %s manual stops while explicit starts resume",
-  async (state) => {
+it.each(
+  (["channel", "accounts"] as const).flatMap((scope) =>
+    (["idle", "stopped", "racing"] as const).map((state) => ({ scope, state })),
+  ),
+)(
+  "$scope rollback preserves $state manual stops while explicit starts resume",
+  async ({ scope, state }) => {
     const starts: string[] = [];
     const configuring = createDeferred();
     const releaseConfiguration = createDeferred();
@@ -59,10 +64,15 @@ it.each(["idle", "stopped", "racing"] as const)(
     if (state !== "racing") {
       await manager.stopChannel("discord", "manual");
     }
-    const rollback = rollbackStoppedGatewayChannels(
-      { startChannel: manager.startChannel, logChannels: { info: vi.fn(), error: vi.fn() } },
-      new Set(["discord"]),
-      new Map(),
+    const channels = new Set<ChannelKind>(scope === "channel" ? ["discord"] : []);
+    const accounts = new Map<ChannelKind, Set<string>>(
+      scope === "accounts" ? [["discord", new Set(["manual", "running"])]] : [],
+    );
+    const logChannels = { info: vi.fn(), error: vi.fn() };
+    const reload = rollbackStoppedGatewayChannels(
+      { startChannel: manager.startChannel, logChannels },
+      channels,
+      accounts,
       "cancelled plugin reload",
     );
     if (state === "racing") {
@@ -71,7 +81,10 @@ it.each(["idle", "stopped", "racing"] as const)(
       blockConfiguration = false;
       releaseConfiguration.resolve();
     }
-    await expect(rollback).resolves.toEqual([]);
+    expect(await reload).toEqual([]);
+    expect(channels.size).toBe(0);
+    expect(accounts.size).toBe(0);
+    expect(logChannels.error).not.toHaveBeenCalled();
     expect(manager.isManuallyStopped("discord", "manual")).toBe(true);
     expect(manager.getRuntimeSnapshot().channelAccounts.discord?.manual?.running).toBe(false);
     expect(starts).toEqual(state === "stopped" ? ["manual", "running"] : ["running"]);
