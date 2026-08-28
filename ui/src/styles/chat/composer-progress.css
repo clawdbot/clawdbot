@@ -1,6 +1,11 @@
 @media (max-width: 768px), (max-width: 932px) and (max-height: 500px) and (orientation: landscape) {
-  .chat-main__conversation-column {
+  :root {
+    /* The mobile pane header leaves flow; top-owned overlays consume this same
+       clearance so new transcript notices cannot cover its controls. */
     --chat-mobile-pane-header-height: 52px;
+  }
+
+  .chat-main__conversation-column {
     --chat-mobile-pane-header-fade-overhang: 8px;
     --chat-mobile-pane-header-paint-height: calc(
       var(--chat-mobile-pane-header-height) + var(--chat-mobile-pane-header-fade-overhang)

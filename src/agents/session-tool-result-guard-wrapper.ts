@@ -26,6 +26,10 @@ import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transc
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import type { SessionManager } from "./sessions/index.js";
+import {
+  copyCodeModeSourceAppend,
+  type CodeModeSourceAppend,
+} from "./transcript-code-mode-source.js";
 import { redactTranscriptMessage } from "./transcript-redact.js";
 
 type GuardedSessionManager = SessionManager & {
@@ -100,7 +104,10 @@ export function guardSessionManager(
     AgentMessage,
     Extract<AgentMessage, { role: "user" }>
   >();
-  const beforeMessageWrite = (event: { message: AgentMessage }) => {
+  const beforeMessageWrite = (
+    event: { message: AgentMessage },
+    sourceAppend?: CodeModeSourceAppend,
+  ) => {
     const runtimeUserMessage = runtimeUserMessageByPersistedMessage.get(event.message);
     let message = event.message;
     let changed = false;
@@ -123,7 +130,8 @@ export function guardSessionManager(
         changed = true;
       }
     }
-    const redacted = redactTranscriptMessage(message, opts?.config);
+    copyCodeModeSourceAppend(event.message, message, sourceAppend);
+    const redacted = redactTranscriptMessage(message, opts?.config, sourceAppend);
     if (redacted !== message) {
       message = redacted;
       changed = true;
@@ -133,6 +141,7 @@ export function guardSessionManager(
       message,
     });
     if (projectedMessage !== message) {
+      copyCodeModeSourceAppend(message, projectedMessage, sourceAppend);
       message = projectedMessage;
       changed = true;
     }

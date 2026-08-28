@@ -598,7 +598,7 @@ ensure_vm_running`,
       const restoreIndex = linux.indexOf(`this.phase("${lane}.restore-snapshot"`);
       const resetIndex = linux.indexOf(`this.phase("${lane}.reset-state"`);
       const installIndex = linux.indexOf(
-        `this.phase("${lane}.${lane === "fresh" ? "install-latest-bootstrap" : "install-latest"}"`,
+        `this.phase("${lane}.${lane === "fresh" ? "install-main" : "install-latest"}"`,
       );
       expect(restoreIndex).toBeGreaterThanOrEqual(0);
       expect(resetIndex).toBeGreaterThan(restoreIndex);

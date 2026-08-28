@@ -679,8 +679,8 @@ export async function loadCompactHooksHarness(): Promise<{
 
   vi.doMock("../../plugins/current-plugin-metadata-snapshot.js", () => ({
     getCurrentPluginMetadataSnapshot: getCurrentPluginMetadataSnapshotMock,
+    isCurrentPluginMetadataSnapshotRuntimeGeneration: () => false,
     resolvePluginMetadataControlPlaneFingerprint: vi.fn(() => "test-plugin-fingerprint"),
-    setCurrentPluginMetadataSnapshot: vi.fn(),
     withPluginMetadataSnapshotScope: (_snapshot: unknown, run: () => unknown) => run(),
   }));
 

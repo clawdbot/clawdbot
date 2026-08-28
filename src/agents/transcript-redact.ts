@@ -7,6 +7,7 @@ import { OPENAI_RESPONSES_APIS } from "@openclaw/ai/internal/openai-responses-pa
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { readLoggingConfig } from "../logging/config.js";
+import { redactSourceInputTextWithConfig } from "../logging/redact-source.js";
 import {
   redactModelVisibleSensitiveFieldValueWithConfig,
   redactModelVisibleToolPayloadTextWithConfig,
@@ -17,6 +18,11 @@ import {
 import type { ProviderEndpointClass } from "./provider-attribution.js";
 import { resolveProviderEndpoint } from "./provider-attribution.js";
 import type { AgentMessage } from "./runtime/index.js";
+import {
+  copyCodeModeSourceAppend,
+  readCodeModeSourceFields,
+  type CodeModeSourceAppend,
+} from "./transcript-code-mode-source.js";
 import {
   sanitizeTranscriptImageDataUrlField,
   sanitizeTranscriptImageRecord,
@@ -483,6 +489,8 @@ function redactTranscriptStructuredValue(
   location: TranscriptValueLocation = "nested",
   assistantRoute?: TranscriptAssistantRoute,
   modelVisibleToolResult = false,
+  sourceFields?: ReadonlyMap<string, string>,
+  sourceSlots?: ReadonlyMap<object, ReadonlyMap<string, string>>,
 ): unknown {
   if (typeof value === "string") {
     if (fieldKey) {
@@ -506,6 +514,8 @@ function redactTranscriptStructuredValue(
         location === "assistant-content-array" ? "assistant-content-block" : "nested",
         assistantRoute,
         modelVisibleToolResult,
+        undefined,
+        sourceSlots,
       );
       changed ||= next !== item;
       return next;
@@ -660,19 +670,30 @@ function redactTranscriptStructuredValue(
     if (shouldPreserveTranscriptImagePayload(source, key, item, preserveImageDataUrlFields)) {
       continue;
     }
-    const redacted = redactTranscriptStructuredValue(
-      item,
-      cfg,
-      key,
-      seen,
-      preserveImageDataUrlFields || shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
-      location === "root" && source.role === "assistant" && key === "content" && Array.isArray(item)
-        ? "assistant-content-array"
-        : "nested",
-      currentAssistantRoute,
-      modelVisibleToolResult ||
-        (location === "root" && source.role === "toolResult" && key === "content"),
-    );
+    const redacted =
+      typeof item === "string" && sourceFields?.get(key) === item
+        ? redactSourceInputTextWithConfig(item, resolveTranscriptLoggingConfig(cfg))
+        : redactTranscriptStructuredValue(
+            item,
+            cfg,
+            key,
+            seen,
+            preserveImageDataUrlFields ||
+              shouldPreserveNestedTranscriptImageDataUrlFields(source, key),
+            location === "root" &&
+              source.role === "assistant" &&
+              key === "content" &&
+              Array.isArray(item)
+              ? "assistant-content-array"
+              : "nested",
+            currentAssistantRoute,
+            modelVisibleToolResult ||
+              (location === "root" && source.role === "toolResult" && key === "content"),
+            location === "assistant-content-block" && key === "arguments"
+              ? sourceSlots?.get(source)
+              : undefined,
+            sourceSlots,
+          );
     if (redacted === item) {
       continue;
     }
@@ -684,13 +705,25 @@ function redactTranscriptStructuredValue(
 }
 
 /** Return a redacted transcript message according to logging config. */
-export function redactTranscriptMessage(message: AgentMessage, cfg?: OpenClawConfig): AgentMessage {
-  return redactTranscriptStructuredValue(
+export function redactTranscriptMessage(
+  message: AgentMessage,
+  cfg?: OpenClawConfig,
+  sourceAppend?: CodeModeSourceAppend,
+): AgentMessage {
+  const redacted = redactTranscriptStructuredValue(
     message,
     cfg,
     undefined,
     new WeakSet<object>(),
     false,
     "root",
+    undefined,
+    false,
+    undefined,
+    readCodeModeSourceFields(message, sourceAppend),
   ) as AgentMessage;
+  copyCodeModeSourceAppend(message, redacted, sourceAppend, (source) =>
+    redactSourceInputTextWithConfig(source, resolveTranscriptLoggingConfig(cfg)),
+  );
+  return redacted;
 }

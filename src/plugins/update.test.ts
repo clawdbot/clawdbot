@@ -1128,6 +1128,7 @@ describe("updateNpmInstalledPlugins", () => {
             pluginId,
             status: "error",
             message: expect.stringContaining("--accept-capabilities"),
+            code: "PLUGIN_CAPABILITY_CONSENT_REQUIRED",
           }),
         ]);
         if (previousPayload === "missing") {

@@ -8,6 +8,10 @@ import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
 import { AgentSelectionRequiredError, resolveDefaultAgentId } from "../agents/agent-scope.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { retainLegacyDefaultAgentId } from "../config/legacy.default-agent-owner.js";
+import {
+  loadSessionEntryReadOnly,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "../config/sessions/session-accessor.sqlite-canonical-repair.js";
 import { writeSessionEntry } from "../config/sessions/session-accessor.sqlite-entry-store.js";
 import { readMemoryHostEventRecords } from "../memory-host-sdk/events.js";
@@ -21,6 +25,7 @@ import type {
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { listOpenClawRegisteredAgentDatabases } from "../state/openclaw-agent-db-registry.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   ensureOpenClawAgentDatabaseSchema,
@@ -927,6 +932,73 @@ describe("state migrations", () => {
     expect(destination?.entry.sessionId).toBe("legacy-main-session");
   });
 
+  it.each([
+    { location: "inside", doctorOnlyStateMigrations: false },
+    { location: "outside", doctorOnlyStateMigrations: false },
+    { location: "inside", doctorOnlyStateMigrations: true },
+    { location: "outside", doctorOnlyStateMigrations: true },
+  ])(
+    "preserves the retired physical owner of a shared store $location state (Doctor: $doctorOnlyStateMigrations)",
+    async ({ location, doctorOnlyStateMigrations }) => {
+      const root = fsSync.realpathSync.native(await createTempDir());
+      const stateDir = path.join(root, ".openclaw");
+      const env = createEnv(stateDir);
+      const storePath = path.join(location === "inside" ? stateDir : root, "shared.sqlite");
+      const cfg: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { qa: {} } },
+        session: { store: storePath },
+      };
+      const scope = {
+        agentId: "qa",
+        defaultAgentId: "main",
+        env,
+        sessionKey: "agent:qa:proof",
+        storePath,
+      };
+      await upsertSessionEntryCore(scope, { sessionId: "qa-source", updatedAt: 1000 });
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      const originalEntry = loadSessionEntryReadOnly(scope);
+      expect(originalEntry).toMatchObject({
+        sessionId: "qa-source",
+        updatedAt: expect.any(Number),
+      });
+
+      const readFile = vi.spyOn(fsSync, "readFileSync");
+      try {
+        const result = await autoMigrateLegacyState({
+          cfg,
+          env,
+          homedir: () => root,
+          doctorOnlyStateMigrations,
+        });
+        expect(result.warnings).toEqual([]);
+        expect(readFile.mock.calls.map(([pathname]) => pathname)).not.toContain(storePath);
+      } finally {
+        readFile.mockRestore();
+      }
+      closeOpenClawAgentDatabasesForTest();
+      closeOpenClawStateDatabaseForTest();
+      expect(listOpenClawRegisteredAgentDatabases({ env })).toEqual([
+        expect.objectContaining({ agentId: "main", path: storePath }),
+      ]);
+      expect(loadSessionEntryReadOnly(scope)).toStrictEqual(originalEntry);
+      const database = new DatabaseSync(storePath, { readOnly: true });
+      try {
+        expect(
+          database
+            .prepare("SELECT agent_id, app_version FROM schema_meta WHERE meta_key = ?")
+            .get("historical-transcript-directives-v1"),
+        ).toEqual({ agent_id: "main", app_version: JSON.stringify({ phase: "complete" }) });
+        expect(
+          database.prepare("SELECT session_key FROM session_nodes ORDER BY session_key").all(),
+        ).toEqual([{ session_key: "agent:qa:proof" }]);
+      } finally {
+        database.close();
+      }
+    },
+  );
+
   it("reports unresolved legacy-main ownership as a nonblocking automatic notice", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
@@ -1085,7 +1157,7 @@ describe("state migrations", () => {
     },
   );
 
-  it("migrates legacy shared agent and session state to the configured system agent", async () => {
+  it("leaves legacy session files for Doctor repair with the configured system agent", async () => {
     const targetAgentId = "main";
     const cfg = {
       agents: {
@@ -1108,11 +1180,20 @@ describe("state migrations", () => {
     );
     await fs.writeFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "{}\n", "utf8");
     await fs.writeFile(path.join(legacyAgentDir, "settings.json"), '{"legacy":true}\n', "utf8");
+    const legacyStorePath = path.join(legacySessionsDir, "sessions.json");
+    const legacyBytes = await fs.readFile(legacyStorePath);
+    await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    await expect(fs.readFile(legacyStorePath)).resolves.toEqual(legacyBytes);
+    await expect(
+      fs.readFile(path.join(legacySessionsDir, "legacy-session.jsonl"), "utf8"),
+    ).resolves.toBe("{}\n");
+
     const result = await autoMigrateLegacyState({
       cfg,
       env,
       homedir: () => root,
       now: () => 1234,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(result.warnings).not.toContain(
@@ -1950,7 +2031,12 @@ describe("state migrations", () => {
         },
       } as OpenClawConfig;
 
-      result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+      result = await autoMigrateLegacyState({
+        cfg,
+        env,
+        homedir: () => root,
+        doctorOnlyStateMigrations: true,
+      });
       targetStore = JSON.parse(await fs.readFile(targetStorePath, "utf8")) as Record<
         string,
         { sessionId: string }
@@ -1990,7 +2076,12 @@ describe("state migrations", () => {
     await fs.symlink(outsideStorePath, storePath);
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
@@ -2035,7 +2126,12 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     expect((await fs.lstat(configuredStorePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
@@ -2090,7 +2186,12 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     for (const storePath of [targetStorePath, configuredStorePath]) {
       const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
@@ -2138,7 +2239,12 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     for (const storePath of [configuredStorePath, targetStorePath]) {
       const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
@@ -2197,7 +2303,12 @@ describe("state migrations", () => {
       },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -2270,7 +2381,12 @@ describe("state migrations", () => {
       },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -2368,7 +2484,12 @@ describe("state migrations", () => {
       acp: { allowedAgents: ["voice"] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     const store = JSON.parse(await fs.readFile(storePath, "utf8")) as Record<
       string,
@@ -2423,7 +2544,12 @@ describe("state migrations", () => {
     await fs.symlink(outsideStorePath, storePath);
     const cfg = { agents: { list: [{ id: "main", default: true }] } } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     expect((await fs.lstat(storePath)).isSymbolicLink()).toBe(true);
     const outsideStore = JSON.parse(await fs.readFile(outsideStorePath, "utf8")) as Record<
@@ -2436,7 +2562,7 @@ describe("state migrations", () => {
     );
   });
 
-  it("migrates standalone ACP metadata through the automatic fast path", async () => {
+  it("leaves standalone ACP session metadata unchanged until Doctor repair", async () => {
     const root = await createTempDir();
     const stateDir = path.join(root, ".openclaw");
     const env = createEnv(stateDir);
@@ -2466,10 +2592,30 @@ describe("state migrations", () => {
       "utf8",
     );
 
+    const cfg: OpenClawConfig = { agents: { list: [{ id: "main", default: true }] } };
+    const originalBytes = await fs.readFile(storePath);
+    const readFile = vi.spyOn(fsSync, "readFileSync");
+    try {
+      const automatic = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+      expect(readFile.mock.calls.map(([pathname]) => pathname)).not.toContain(storePath);
+      expect(automatic.changes).toEqual([]);
+    } finally {
+      readFile.mockRestore();
+    }
+    await expect(fs.readFile(storePath)).resolves.toEqual(originalBytes);
+    expect(
+      readAcpSessionMetaForEntry({
+        sessionKey: pendingKey,
+        entry: { lifecycleRevision: undefined },
+        env,
+      }),
+    ).toBeUndefined();
+
     const result = await autoMigrateLegacyState({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      cfg,
       env,
       homedir: () => root,
+      doctorOnlyStateMigrations: true,
     });
 
     expect(result.changes).toContain("Migrated 1 ACP session metadata row → shared SQLite state");
@@ -2506,9 +2652,10 @@ describe("state migrations", () => {
     closeOpenClawStateDatabaseForTest();
     resetAutoMigrateLegacyStateForTest();
     const rerun = await autoMigrateLegacyState({
-      cfg: { agents: { list: [{ id: "main", default: true }] } },
+      cfg,
       env,
       homedir: () => root,
+      doctorOnlyStateMigrations: true,
     });
     await expect(fs.readFile(storePath, "utf8")).resolves.toBe(firstBytes);
     expect(rerun.changes).not.toContain(
@@ -2574,7 +2721,12 @@ describe("state migrations", () => {
       agents: { list: [{ id: "main", default: true }, { id: "voice" }] },
     } as OpenClawConfig;
 
-    const result = await autoMigrateLegacyState({ cfg, env, homedir: () => root });
+    const result = await autoMigrateLegacyState({
+      cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
 
     expect(
       readAcpSessionMetaForEntry({
@@ -5104,7 +5256,7 @@ describe("state migrations", () => {
   });
 
   it.runIf(process.platform !== "win32")(
-    "preserves a key-shaped pending row while moving its matching legacy transcript",
+    "preserves a key-shaped pending row while Doctor moves its matching legacy transcript",
     async () => {
       const { root, stateDir, env, cfg } = await createLegacyStateFixture();
 
@@ -5146,6 +5298,7 @@ describe("state migrations", () => {
         env,
         homedir: () => root,
         now: () => 1234,
+        doctorOnlyStateMigrations: true,
       });
 
       expect(result.changes).toContain(`Merged sessions store → ${targetStorePath}`);
@@ -5204,6 +5357,7 @@ describe("state migrations", () => {
         env,
         homedir: () => root,
         now: () => 1234,
+        doctorOnlyStateMigrations: true,
       });
       await expect(fs.readFile(targetStorePath, "utf8")).resolves.toBe(firstBytes);
       expect(rerun.changes.some((change) => change.startsWith("Merged sessions store"))).toBe(

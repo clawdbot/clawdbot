@@ -43,7 +43,7 @@ dispatch.
 | `checks-fast-contracts-plugins-*`  | Two weighted plugin contract shards                                                                                                                                                                                                                                                                      | Node-relevant changes                                  |
 | `checks-fast-contracts-channels-*` | Two weighted channel contract shards                                                                                                                                                                                                                                                                     | Node-relevant changes                                  |
 | `checks-node-*`                    | Changed-target Node tests on pull requests; compact integration shards on `main`; metadata-complete compact fallback on broad PRs; full named shards on manual and release runs                                                                                                                          | Node-relevant changes                                  |
-| `docker-seed-e2e`                  | One Docker scheduler job for the executable `mcp-channels`, `cron-mcp-cleanup`, and `mcp-code-mode-gateway` owner lanes                                                                                                                                                                                  | PR changes to their seed helpers or CI gate owners     |
+| `docker-seed-e2e`                  | One Docker scheduler job for the executable `mcp-channels`, `cron-mcp-cleanup`, `mcp-code-mode-gateway`, and `update-channel-switch` owner lanes                                                                                                                                                         | PR changes to their E2E helpers or CI gate owners      |
 | `check-*`                          | Sharded main local gate equivalent: guards, transient npm-lock validation, bundled-channel config metadata, prod types, lint, dependencies, test types                                                                                                                                                   | Node-relevant changes                                  |
 | `check-additional-*`               | Boundary check stripes (including prompt snapshot drift), session accessor/transcript reader/SQLite transaction boundaries, extension lint groups, package boundary compile/canary, and runtime topology architecture; the pure-reporting plugin SDK API diff runs on manual and release dispatches only | Node-relevant changes                                  |
 | `checks-node-compat-node22`        | Node 22 compatibility build and smoke lane                                                                                                                                                                                                                                                               | Full Release Validation and manual dispatches only     |
@@ -61,7 +61,7 @@ dispatch.
 | `openclaw-performance`             | Separate workflow: daily/on-demand Kova runtime performance reports with mock-provider, deep-profile, and GPT 5.6 live lanes                                                                                                                                                                             | Scheduled and manual dispatch                          |
 
 The rare path-triggered `docker-seed-e2e` job selects only the executable
-owners of changed seed helpers and runs them through one scheduler invocation.
+owners of changed E2E helpers and runs them through one scheduler invocation.
 Trusted same-repository pull requests use one 16-vCPU Blacksmith runner with
 main and tail parallelism set to 3; GitHub-hosted, fork, and retry paths run the
 same selected lanes serially. The job is part of `openclaw/ci-gate`. It adds at
@@ -156,6 +156,8 @@ with a 120-minute batch timeout, while include-pattern groups share the same
 bounded job budget.
 
 Android CI runs both `testPlayDebugUnitTest` and `testThirdPartyDebugUnitTest` and then builds the Play debug APK. The third-party flavor has no separate source set or manifest; its unit-test lane still compiles the flavor with the SMS/call-log BuildConfig flags, while avoiding a duplicate debug APK packaging job on every Android-relevant push. Each current Gradle task has one protected sticky disk; PR jobs use disposable clones, while protected runs refresh content-addressed Gradle entries in place.
+
+Robolectric resolves Android SDK artifacts outside Gradle's dependency cache, so every Android `test-*` task receives a workflow-owned Gradle init script that points test JVMs at a dedicated Maven-local repository. Actions cache restores are task-, platform-, and Android-contract-scoped; a prefix restore can seed a changed contract, but only a successful trusted run may publish the completed exact cache after a miss. Cold runs may download missing SDK artifacts, while warm runs reuse the exact archive. Build and lint tasks do not receive the Robolectric init script.
 
 Remaining Blacksmith sticky-disk keys are deliberately bounded by supported task dimensions, never PR number, commit, run, branch, or dependency hash. Dependency, runtime transform, and compile caches use Actions cache instead because immutable archives expose verifiable restore/save results and avoid mutable snapshot-promotion failures. After a sticky key-version migration, add only the exact obsolete key, architecture, and region identities to `.github/retired-sticky-disks.json`, dispatch `Sticky Disk Cleanup` from `main` with the same dimensions and confirmation, verify deletion, then remove those entries. The workflow routes ARM identities to an ARM runner, rejects runner-region mismatches, uses Blacksmith's exact-key deletion action, and never deletes Docker builder caches or wildcard prefixes. Actions cache archives use normal LRU and inactivity eviction.
 
@@ -877,32 +879,35 @@ quota issues, or explicit owned-capacity testing.
 For an explicitly authorized admin-only PR landing fallback, set
 `OPENCLAW_PR_GATES_REMOTE=crabbox-aws` before `scripts/pr prepare-gates`.
 The mode does not replace the default hosted aggregate gate. After the exact
-prep head is pushed, the trusted wrapper downloads
-checksum-verified Crabbox v0.46, runs sanitized brokered AWS with `umask 022`,
-the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and a
-fail-closed PR-derived test plan. The existing changed-test owner evaluates
+prep head is pushed, the wrapper synchronously dispatches the protected-main
+publisher. That trusted workflow checksum-installs Crabbox v0.46, resolves its
+service principal through `/v1/whoami`, then runs sanitized brokered AWS with
+`umask 022`, the canonical untrusted bootstrap, `pnpm build`, `pnpm check`, and
+a fail-closed PR-derived test plan. The existing changed-test owner evaluates
 every executable changed path independently and must resolve each one to
 concrete matched test files; broad fallback, skipped paths, config targets,
 deleted executable paths, and partial plans are refused. Explicit docs and
 `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
 The exact PR base SHA, head SHA, bootstrap hash, and deterministic plan digest
 are bound into the broker command. The AWS lease uses a 90-minute idle timeout
-and 240-minute TTL before dispatching the protected-main
-`pr-crabbox-gate-publisher.yml` workflow. That workflow accepts an open draft
+and 240-minute TTL. The `pr-crabbox-gate-publisher.yml` workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native
 GitHub App token with `Members(read)` (the repository-scoped workflow token is
-not treated as org authority), validates the authenticated immutable broker
-run, ordered complete events, canonical command and bootstrap upload hash, and
+not treated as org authority), validates its newly created authenticated broker
+run under the same service token, ordered complete events, canonical command
+and bootstrap upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
 base/head/plan binding. The publisher also proves that the PR base is the merge
 base of its exact protected-main workflow SHA and adds that workflow SHA to the
-strict check summary. Main may therefore advance during the remote run without
-invalidating otherwise immutable proof.
+strict check summary. The same workflow SHA must remain live `main` after the
+remote run; any intervening main advance fails closed and requires a fresh
+publisher dispatch.
 Retained broker logs are validated when non-empty but are optional because
 released Crabbox v0.46 can report zero retained log bytes after a successful
-run. The local `.local/gates.env` provider/run/lease/URL fields are recovery
-metadata, not publication authority.
+run. Only after the publisher and exact-head check succeed does the local
+wrapper derive `.local/gates.env` provider/run/lease/URL recovery metadata from
+the trusted summary; those fields are not publication authority.
 
 The fallback never replaces or republishes `openclaw/ci-gate`. Native merge
 verification still rejects draft PRs and permits the server ruleset bypass only

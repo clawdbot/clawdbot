@@ -206,6 +206,21 @@ ${fixtureCommand} plugins update fixture`,
   });
 
   it.each([true, false])(
+    "records candidate capability consent support (supported=%s)",
+    (supported) => {
+      const root = tempDirs.make("openclaw-consent-support-");
+      const result = runShell(
+        root,
+        writeCandidate(root, { commands: supported ? undefined : [] }),
+        `${fixtureCommand} plugins install fixture
+printf 'support=%s\\n' "$OPENCLAW_E2E_LAST_FIXTURE_PLUGIN_CAPABILITY_CONSENT_SUPPORTED"`,
+      );
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.stdout).toContain(`support=${supported ? "1" : "0"}`);
+    },
+  );
+
+  it.each([true, false])(
     "consents to ClawHub install but not unchanged update (supported=%s)",
     (supported) => {
       const root = tempDirs.make("openclaw-consent-clawhub-");

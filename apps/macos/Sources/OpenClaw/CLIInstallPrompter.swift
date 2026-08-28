@@ -388,13 +388,20 @@ final class CLIInstallPrompter {
             .deletingLastPathComponent()
             .standardizedFileURL.path + "/"
         guard let executable = command.first else { return false }
-        let executablePath = URL(fileURLWithPath: executable).standardizedFileURL.path
+        let executableURL = URL(fileURLWithPath: executable).standardizedFileURL
         let managedRuntimeRoot = managedRoot + "tools/node/"
-        if executablePath.hasPrefix(managedRoot), !executablePath.hasPrefix(managedRuntimeRoot) {
+        if executableURL.path.hasPrefix(managedRoot), !executableURL.path.hasPrefix(managedRuntimeRoot) {
             return true
         }
-        guard command.count >= 2 else { return false }
-        let entrypoint = command[command.index(after: command.startIndex)]
+        guard ["node", "bun"].contains(executableURL.lastPathComponent) else { return false }
+        // Skip only the joined heap controls emitted by the service installer.
+        // Other native options may consume paths; those values never prove CLI ownership.
+        let entrypoint = command.dropFirst().drop(while: {
+            $0.hasPrefix("--max-old-space-size=") ||
+                $0.hasPrefix("--max-old-space-size-percentage=") ||
+                $0.hasPrefix("--max-heap-size=")
+        }).first
+        guard let entrypoint, !entrypoint.hasPrefix("-") else { return false }
         return URL(fileURLWithPath: entrypoint).standardizedFileURL.path.hasPrefix(managedRoot)
     }
 

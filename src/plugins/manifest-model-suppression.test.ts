@@ -17,6 +17,7 @@ vi.mock("./plugin-metadata-snapshot.js", () => ({
 }));
 
 import { buildManifestBuiltInModelSuppressionResolver } from "./manifest-model-suppression.js";
+import { createPluginCache, getPluginCache, withPluginCache } from "./plugin-cache.js";
 
 function createMetadataSnapshot(plugins: Record<string, unknown>[]) {
   return {
@@ -59,6 +60,34 @@ describe("manifest model suppression", () => {
       (params?: Parameters<typeof mocks.loadPluginMetadataSnapshot>[0]) =>
         mocks.loadPluginMetadataSnapshot(params),
     );
+  });
+
+  it("retains each exact snapshot's compiled rules across operation A/B/A interleaving", () => {
+    const config = {};
+    const ownerA = createPluginCache();
+    const ownerB = createPluginCache();
+    const snapshots = ["first rules", "second rules"].map((reason) =>
+      createMetadataSnapshot([
+        {
+          id: "fixture",
+          providers: ["fixture"],
+          modelCatalog: { suppressions: [{ provider: "fixture", model: "model", reason }] },
+        },
+      ]),
+    );
+    mocks.loadPluginMetadataSnapshot.mockImplementation(() =>
+      getPluginCache() === ownerA ? snapshots[0] : snapshots[1],
+    );
+    const build = () => buildManifestBuiltInModelSuppressionResolver({ config, env: process.env });
+    const first = withPluginCache(ownerA, build);
+    const second = withPluginCache(ownerB, build);
+    expect(first({ provider: "fixture", id: "model" })?.errorMessage).toBe(
+      "Unknown model: fixture/model. first rules",
+    );
+    expect(second({ provider: "fixture", id: "model" })?.errorMessage).toBe(
+      "Unknown model: fixture/model. second rules",
+    );
+    expect(withPluginCache(ownerA, build)).toBe(first);
   });
 
   describe("buildManifestBuiltInModelSuppressionResolver", () => {

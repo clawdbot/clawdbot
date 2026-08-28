@@ -1,6 +1,6 @@
-import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
-import { readResponseTextPrefix } from "openclaw/plugin-sdk/response-limit-runtime";
-import { escapeRegExp } from "openclaw/plugin-sdk/text-utility-runtime";
+import { readResponseTextPrefix } from "../infra/http-body.js";
+import { redactToolPayloadText } from "../logging/redact.js";
+import { escapeRegExp } from "../shared/regexp.js";
 
 const AUTHORIZATION_SECRET_HEADERS = new Set(["authorization", "proxy-authorization"]);
 const REDACTED_SECRET = "***";
@@ -95,12 +95,19 @@ function redactExactSecretValues(
     : `${redacted.slice(0, -longestPartialSuffix)}${REDACTED_SECRET}`;
 }
 
-function collectOllamaRequestHeaderSecretValues(
-  headers: Readonly<Record<string, string>>,
-): string[] {
+function collectRequestHeaderSecretValues(headers: HeadersInit): string[] {
   // Arbitrary configured headers can carry credentials. Authorization intermediaries
   // can also reflect the credential without its scheme, so redact both scoped forms.
-  return Object.entries(headers).flatMap(([headerName, headerValue]) => {
+  const entries =
+    headers instanceof Headers
+      ? [...headers.entries()]
+      : Array.isArray(headers)
+        ? headers
+        : Object.entries(headers);
+  return entries.flatMap(([headerName, headerValue]) => {
+    if (headerValue === undefined) {
+      return [];
+    }
     const normalizedHeaderName = headerName.toLowerCase();
     if (normalizedHeaderName === "content-type" && headerValue === "application/json") {
       return [];
@@ -108,35 +115,56 @@ function collectOllamaRequestHeaderSecretValues(
     if (!AUTHORIZATION_SECRET_HEADERS.has(normalizedHeaderName)) {
       return [headerValue];
     }
-    const credentialComponent = /^\s*\S+\s+(.+?)\s*$/u.exec(headerValue)?.[1];
-    return credentialComponent ? [headerValue, credentialComponent] : [headerValue];
+    const authorization = /^\s*(\S+)\s+(.+?)\s*$/u.exec(headerValue);
+    const credentialComponent = authorization?.[2];
+    if (!credentialComponent) {
+      return [headerValue];
+    }
+    const values = [headerValue, credentialComponent];
+    if (authorization?.[1]?.toLowerCase() === "basic") {
+      const bytes = Buffer.from(credentialComponent, "base64");
+      if (
+        bytes.toString("base64").replace(/=+$/u, "") === credentialComponent.replace(/=+$/u, "")
+      ) {
+        // RFC 7617: proxies may reflect the decoded pair or password. The first
+        // colon separates them; deployed Basic credentials use UTF-8 or Latin-1.
+        for (const encoding of ["utf8", "latin1"] as const) {
+          const pair = bytes.toString(encoding);
+          const separator = pair.indexOf(":");
+          if (separator >= 0) {
+            values.push(pair, pair.slice(separator + 1));
+          }
+        }
+      }
+    }
+    return values;
   });
 }
 
-export function redactOllamaResponseErrorText(
+export function redactProviderResponseErrorText(
   text: string,
-  headers: Readonly<Record<string, string>>,
+  headers: HeadersInit,
   options?: { sourceTruncated?: boolean },
 ): string {
   const exactRedacted = redactExactSecretValues(
     text,
-    collectOllamaRequestHeaderSecretValues(headers),
+    collectRequestHeaderSecretValues(headers),
     options?.sourceTruncated === true,
   );
   return redactToolPayloadText(exactRedacted);
 }
 
-export async function readOllamaResponseErrorText(
+export async function readProviderResponseErrorText(
   response: Response,
   limitBytes: number,
-  headers: Readonly<Record<string, string>>,
+  headers: HeadersInit,
 ): Promise<string> {
   const result = await readResponseTextPrefix(response, limitBytes, {
     chunkTimeoutMs: 10_000,
     onIdleTimeout: ({ chunkTimeoutMs }) =>
       new Error(`error body read stalled for ${chunkTimeoutMs}ms`),
   });
-  return redactOllamaResponseErrorText(result.text, headers, {
+  return redactProviderResponseErrorText(result.text, headers, {
     sourceTruncated: result.truncated,
   });
 }

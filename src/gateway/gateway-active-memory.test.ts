@@ -75,14 +75,35 @@ describe("Gateway Active Memory", () => {
       const providerErrors: unknown[] = [];
       let recallRequests = 0;
       let memoryToolIssued = false;
+      let instance: OpenClawTestInstance | undefined;
       let phase = "preparing fixture";
+      let statusLines: string[] | undefined;
+      let sessionFound = false;
+      let modelSelectionLocked = false;
+      let preparedRecallConfig: Record<string, boolean> | undefined;
       onTestFailed(() => {
+        const gatewayLogs = instance?.logs() ?? "";
         console.info({
           phase,
           fixtureHome: home,
           recallRequests,
           memoryResults: memoryResults.length,
           mainRequests: mainRequests.length,
+          preparedRecallConfig,
+          sessionFound,
+          modelSelectionLocked,
+          recallStatus: statusLines
+            ?.find((line) => line.startsWith("🧩 Active Memory: status="))
+            ?.slice(0, 240),
+          preflightTimeoutObserved: gatewayLogs.includes(
+            "active-memory: before_prompt_build preflight timed out",
+          ),
+          promptBuildFailureObserved: gatewayLogs.includes(
+            "active-memory: before_prompt_build failed, skipping memory lookup:",
+          ),
+          noToolAuthorityObserved: gatewayLogs.includes(
+            "active-memory: recall skipped because this prompt has no turn tool authority",
+          ),
         });
       });
       const providerServer = createServer((request, response) => {
@@ -136,7 +157,6 @@ describe("Gateway Active Memory", () => {
           response.writeHead(500).end("mock provider failed");
         });
       });
-      let instance: OpenClawTestInstance | undefined;
       let client: GatewayClient | undefined;
       try {
         await fs.mkdir(workspace, { recursive: true });
@@ -202,9 +222,22 @@ describe("Gateway Active Memory", () => {
             OPENCLAW_GATEWAY_STARTUP_TRACE: "1",
           },
         });
+        const preparedConfig = JSON.parse(
+          await fs.readFile(instance.configPath, "utf8"),
+        ) as OpenClawConfig;
+        const preparedPlugin = preparedConfig.plugins?.entries?.["active-memory"];
+        preparedRecallConfig = {
+          pluginAllowed: preparedConfig.plugins?.allow?.includes("active-memory") === true,
+          pluginEnabled: preparedPlugin?.enabled === true,
+          memoryCoreSlot: preparedConfig.plugins?.slots?.memory === "memory-core",
+          alwaysMode: preparedPlugin?.config?.mode === "always",
+          mainAgent: Array.isArray(preparedPlugin?.config?.agents)
+            ? preparedPlugin.config.agents.includes("main")
+            : false,
+        };
         expect(await instance.entrypoint()).toEqual(["dist/index.js"]);
         await instance.startGateway();
-        const connected = createDeferred<void>();
+        const connected = createDeferred();
         client = new GatewayClient({
           url: instance.url,
           token: instance.gatewayToken,
@@ -242,20 +275,22 @@ describe("Gateway Active Memory", () => {
         );
         expect(completed.status).toBe("ok");
         phase = "checking recall and main reply";
-        expect(providerErrors).toEqual([]);
-        expect(memoryResults).toEqual(
-          expect.arrayContaining([expect.stringContaining(memoryFact)]),
-        );
-        expect(recallRequests).toBeGreaterThan(1);
         const entry = loadSessionEntryReadOnly({
           agentId: "main",
           sessionKey,
           env: instance.env,
           storePath: path.join(instance.state.agentDir("main"), "openclaw-agent.sqlite"),
         });
-        const statusLines = entry?.pluginDebugEntries?.find(
+        sessionFound = entry !== undefined;
+        modelSelectionLocked = entry?.modelSelectionLocked === true;
+        statusLines = entry?.pluginDebugEntries?.find(
           (item) => item.pluginId === "active-memory",
         )?.lines;
+        expect(providerErrors).toEqual([]);
+        expect(memoryResults).toEqual(
+          expect.arrayContaining([expect.stringContaining(memoryFact)]),
+        );
+        expect(recallRequests).toBeGreaterThan(1);
         expect(statusLines?.join("\n")).toContain("Active Memory: status=failed");
         expect(mainRequests).toHaveLength(1);
         expect(mainRequests[0]).not.toContain("<active_memory_plugin>");

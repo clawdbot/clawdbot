@@ -87,6 +87,7 @@ export async function runEmbeddedAttemptExecutionPhase(
     replayAllowedToolNames,
     liveAllowedToolNames,
     anthropicPayloadLogger,
+    codeModeExecToolNames,
     effectiveAgentTransport,
     providerTextTransforms,
     runTrace: input.diagnostics.runTrace,

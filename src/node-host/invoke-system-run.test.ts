@@ -577,13 +577,7 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     prepareDelayedApprovalPlan?: boolean;
     signal?: AbortSignal;
   }): Promise<InvokeSpies> {
-    const {
-      runCommand,
-      runViaMacAppExecHost,
-      sendInvokeResult,
-      sendExecFinishedEvent,
-      sendNodeEvent,
-    } = createInvokeSpies({
+    const spies = createInvokeSpies({
       runCommand: params.runCommand,
       runViaMacAppExecHost:
         params.runViaMacAppExecHost ?? (async () => params.runViaResponse ?? null),
@@ -658,25 +652,15 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
       resolveExecAsk: params.resolveExecAsk ?? (() => params.ask ?? "off"),
       isCmdExeInvocation: params.isCmdExeInvocation ?? (() => false),
       sanitizeEnv: params.sanitizeEnv ?? (() => undefined),
-      runCommand,
-      runViaMacAppExecHost,
-      sendNodeEvent,
+      ...spies,
       buildExecEventPayload: (payload) => payload,
-      sendInvokeResult,
-      sendExecFinishedEvent,
       preferMacAppExecHost: params.preferMacAppExecHost,
       getRuntimeConfig: () => getRuntimeConfigSnapshot() ?? {},
       autoReviewer: params.autoReviewer,
       commitExecAuthorization: params.commitExecAuthorization,
     });
 
-    return {
-      runCommand,
-      runViaMacAppExecHost,
-      sendInvokeResult,
-      sendNodeEvent,
-      sendExecFinishedEvent,
-    };
+    return spies;
   }
 
   type SystemInvokeFixtureParams = Parameters<typeof runSystemInvoke>[0];
@@ -746,20 +730,28 @@ describe("handleSystemRunInvoke mac app exec host routing", () => {
     expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
   });
 
-  it("does not publish a cancelled Mac exec-host completion", async () => {
-    const controller = new AbortController();
-    const result = await runMacSystemInvoke({
-      signal: controller.signal,
-      runViaMacAppExecHost: async () => {
-        controller.abort();
-        return { ok: true, payload: createLocalRunResult("cancelled") };
-      },
-    });
+  it.each([null, createMacExecHostSuccess()])(
+    "cancels pending Mac exec without replay or publication (%j)",
+    async (response) => {
+      const controller = new AbortController();
+      const result = await runMacSystemInvoke({
+        signal: controller.signal,
+        runViaMacAppExecHost: ({ signal }) => {
+          expect(signal).toBe(controller.signal);
+          return new Promise((resolve) => {
+            signal?.addEventListener("abort", () => resolve(response), { once: true });
+            queueMicrotask(() => controller.abort());
+          });
+        },
+      });
 
-    expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
-    expect(result.sendInvokeResult).not.toHaveBeenCalled();
-    expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
-  });
+      expect(result.runViaMacAppExecHost).toHaveBeenCalledOnce();
+      expect(result.runCommand).not.toHaveBeenCalled();
+      expect(result.sendNodeEvent).not.toHaveBeenCalled();
+      expect(result.sendInvokeResult).not.toHaveBeenCalled();
+      expect(result.sendExecFinishedEvent).not.toHaveBeenCalled();
+    },
+  );
 
   it("routes local, mac host, and canonical shell-wrapper requests", async () => {
     const localInvoke = await runLocalSystemInvoke({});

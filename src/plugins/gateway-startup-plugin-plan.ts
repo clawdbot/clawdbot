@@ -9,6 +9,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listGatewayActivatedChannelIds } from "./channel-presence-policy.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
+import type { PluginDiscoveryResult } from "./discovery.js";
 import {
   canStartConfiguredChannelPlugin,
   canStartGatewayStartupPlugin,
@@ -56,6 +57,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
   index: PluginRegistrySnapshot;
   manifestRegistry: PluginManifestRegistry;
   workerProviderIds?: readonly string[];
+  discovery?: PluginDiscoveryResult;
   platform?: NodeJS.Platform;
   ambientEnvTriggers?: AmbientEnvTriggerPolicy;
 }): GatewayStartupPluginPlan {
@@ -70,6 +72,7 @@ export function resolveGatewayStartupPluginPlanFromRegistry(params: {
       env: params.env,
       ambientEnvTriggers: params.ambientEnvTriggers,
       manifestRecords: params.manifestRegistry.plugins,
+      discovery: params.discovery,
     }),
   );
   const pluginsConfig = normalizePluginsConfigWithRegistry(params.config.plugins, params.index, {

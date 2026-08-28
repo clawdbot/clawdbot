@@ -116,7 +116,9 @@ function seedInstallState() {
     ],
     diagnostics: [],
   };
-  writePluginInstallIndexForE2E(index, { storageMode: "pre-v13" });
+  // Package installation may already initialize current state. Unversioned
+  // fixtures retain the pre-v13 bootstrap path for frozen older candidates.
+  writePluginInstallIndexForE2E(index, { storageMode: "existing-schema" });
 }
 
 async function waitRegistry() {

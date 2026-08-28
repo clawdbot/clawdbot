@@ -742,6 +742,8 @@ describe("runReplyAgent media path normalization", () => {
       text: "here is the chart",
       mediaUrl: "/tmp/outbound-media/1-chart.png",
       mediaUrls: ["/tmp/outbound-media/1-chart.png"],
+      attachments: [{ name: "chart.png", mimeType: "image/png", trustedLocalMedia: true }],
+      trustedLocalMedia: true,
     });
     expect(finalPayload).toEqual(blockPayload);
     expect(resolveOutboundAttachmentFromUrlMock).toHaveBeenCalledTimes(1);

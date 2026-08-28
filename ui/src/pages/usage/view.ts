@@ -1,5 +1,9 @@
 // Control UI view renders usage screen content.
 import { html, nothing } from "lit";
+import {
+  addCostUsageTotals,
+  createEmptyCostUsageTotals,
+} from "../../../../src/infra/session-cost-usage-totals.js";
 import { renderProviderUsageDetails } from "../../components/provider-usage.ts";
 import { renderSettingsPage, renderSettingsSection } from "../../components/settings-ui.ts";
 import "../../components/tooltip.ts";
@@ -41,52 +45,6 @@ import {
   renderSessionsCard,
   renderUsageInsights,
 } from "./view-overview.ts";
-
-function createEmptyUsageTotals(): UsageTotals {
-  return {
-    input: 0,
-    output: 0,
-    cacheRead: 0,
-    cacheWrite: 0,
-    totalTokens: 0,
-    totalCost: 0,
-    inputCost: 0,
-    outputCost: 0,
-    cacheReadCost: 0,
-    cacheWriteCost: 0,
-    missingCostEntries: 0,
-  };
-}
-
-function addUsageTotals(
-  acc: UsageTotals,
-  usage: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheWrite: number;
-    totalTokens: number;
-    totalCost: number;
-    inputCost?: number;
-    outputCost?: number;
-    cacheReadCost?: number;
-    cacheWriteCost?: number;
-    missingCostEntries?: number;
-  },
-): UsageTotals {
-  acc.input += usage.input;
-  acc.output += usage.output;
-  acc.cacheRead += usage.cacheRead;
-  acc.cacheWrite += usage.cacheWrite;
-  acc.totalTokens += usage.totalTokens;
-  acc.totalCost += usage.totalCost;
-  acc.inputCost += usage.inputCost ?? 0;
-  acc.outputCost += usage.outputCost ?? 0;
-  acc.cacheReadCost += usage.cacheReadCost ?? 0;
-  acc.cacheWriteCost += usage.cacheWriteCost ?? 0;
-  acc.missingCostEntries += usage.missingCostEntries ?? 0;
-  return acc;
-}
 
 function renderUsageLoadingStatus(label: unknown, title?: string) {
   return html`
@@ -293,16 +251,24 @@ export function renderUsage(props: UsageProps) {
 
   // Compute totals from sessions
   const computeSessionTotals = (sessions: UsageSessionEntry[]): UsageTotals => {
-    return sessions.reduce(
-      (acc, s) => (s.usage ? addUsageTotals(acc, s.usage) : acc),
-      createEmptyUsageTotals(),
-    );
+    const totals = createEmptyCostUsageTotals();
+    for (const session of sessions) {
+      if (session.usage) {
+        addCostUsageTotals(totals, session.usage);
+      }
+    }
+    return totals;
   };
 
   // Compute totals from daily data for selected days (more accurate than session totals)
   const computeDailyTotals = (days: ReadonlySet<string>): UsageTotals => {
-    const matchingDays = data.costDaily.filter((d) => days.has(d.date));
-    return matchingDays.reduce((acc, day) => addUsageTotals(acc, day), createEmptyUsageTotals());
+    const totals = createEmptyCostUsageTotals();
+    for (const day of data.costDaily) {
+      if (days.has(day.date)) {
+        addCostUsageTotals(totals, day);
+      }
+    }
+    return totals;
   };
 
   // Compute display totals and count based on filters
@@ -917,5 +883,4 @@ export function renderUsage(props: UsageProps) {
   );
 }
 
-// Exposed for Playwright/Vitest browser unit tests.
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -12,7 +12,10 @@ import {
   resolveControlUiFollowUpMode,
   resolveControlUiServerQueueMode,
 } from "../../lib/chat/follow-up-mode.ts";
-import { isChatModelUnavailable } from "../../lib/chat/model-select-state.ts";
+import {
+  chatModelUnavailableMessage,
+  resolveChatModelUnavailableReason,
+} from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import {
@@ -155,7 +158,7 @@ export class ChatPane extends ChatPaneLayoutRender {
     );
     const agentDefaultModel = selectedAgent?.model?.primary;
     const modelCatalogState = resolveChatModelCatalogState(state);
-    const modelUnavailable = isChatModelUnavailable(
+    const modelUnavailableReason = resolveChatModelUnavailableReason(
       selectedSession?.model ?? agentDefaultModel,
       selectedSession?.modelProvider,
       modelCatalogState.status === "ready" ? state.chatModelCatalog : [],
@@ -201,11 +204,12 @@ export class ChatPane extends ChatPaneLayoutRender {
       isGatewayMethodAdvertised(gatewaySnapshot, "session.suggestions.list") === true;
     // Placement progress already explains its gate in the transcript. Other
     // gates need a reason here or a sessionDisabledBanner.
-    const disabledReason = modelUnavailable
-      ? `${t("modelSetup.failure.auth")}. ${t("modelSetup.failureGuidance.auth")}`
-      : sessionParticipationBlocked && !suggestionViewer
+    const modelUnavailableMessage = chatModelUnavailableMessage(modelUnavailableReason);
+    const disabledReason =
+      modelUnavailableMessage ??
+      (sessionParticipationBlocked && !suggestionViewer
         ? t("chat.sessionSharing.readOnlyNotice")
-        : null;
+        : null);
     const typingEnabled =
       multiIdentity &&
       hasOperatorWriteAccess(gatewaySnapshot.hello?.auth ?? null) &&
@@ -383,7 +387,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       canSend: catalogKey
         ? this.catalogSession?.canContinue === true
         : !modelSetupRequired &&
-          !modelUnavailable &&
+          !modelUnavailableMessage &&
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&

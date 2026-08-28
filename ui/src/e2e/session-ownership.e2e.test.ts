@@ -3,7 +3,7 @@ import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
-import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
+import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
 import {
   avatarLabelCenterDelta,
@@ -997,12 +997,12 @@ suite.define(() => {
     // Agent and system identities render the non-human icon from identity.type,
     // not from an ID-string heuristic; owner-chip presentation is human-only.
     await expectBrowser(dropdown.locator(".chat-pane__sharing-member-icon > svg")).toHaveCount(2);
-    expect(
-      await longNameItem.locator(".chat-pane__sharing-member-label").getAttribute("title"),
-    ).toBe(longMemberLabel);
-    expect(await longIdItem.locator(".chat-pane__sharing-member-label").getAttribute("title")).toBe(
-      longMemberId,
-    );
+    await expect
+      .poll(() => tooltipTitleText(longNameItem.locator(".chat-pane__sharing-member-label")))
+      .toBe(longMemberLabel);
+    await expect
+      .poll(() => tooltipTitleText(longIdItem.locator(".chat-pane__sharing-member-label")))
+      .toBe(longMemberId);
     await expectBrowser(selectedIndicator).toHaveCount(1);
     expect(await selectedIndicator.getAttribute("aria-label")).not.toBeNull();
   });

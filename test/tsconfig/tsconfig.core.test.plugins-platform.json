@@ -14,8 +14,6 @@
     "../../src/tui/**/*.test.tsx",
     "../../src/system-agent/**/*.test.ts",
     "../../src/system-agent/**/*.test.tsx",
-    "../../src/logging/**/*.test.ts",
-    "../../src/logging/**/*.test.tsx",
     "../../src/hooks/**/*.test.ts",
     "../../src/hooks/**/*.test.tsx",
     "../../src/daemon/**/*.test.ts",

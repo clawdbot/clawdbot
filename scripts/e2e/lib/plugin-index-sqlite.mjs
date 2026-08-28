@@ -219,7 +219,12 @@ export function writePluginInstallIndexForE2E(index, options = {}) {
   const db = new DatabaseSync(dbPath);
   try {
     const now = Date.now();
-    const storageMode = options.storageMode ?? "current";
+    const storageMode =
+      options.storageMode === "existing-schema"
+        ? Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0) >= 13
+          ? "current"
+          : "pre-v13"
+        : (options.storageMode ?? "current");
     if (storageMode === "current") {
       db.exec(`
         CREATE TABLE IF NOT EXISTS config_machine_state (

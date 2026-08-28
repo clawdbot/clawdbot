@@ -11,7 +11,10 @@ import {
   mergeUsageIntoAccumulator,
 } from "../usage-accumulator.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
-import { runEmbeddedSettledTurnFinalizationWithBackend } from "./backend.js";
+import {
+  resolveRuntimeModelAttempt,
+  runEmbeddedSettledTurnFinalizationWithBackend,
+} from "./backend.js";
 import { withEmbeddedRunLaneProgressHeartbeat } from "./lane-runtime.js";
 import {
   resolveEmbeddedRunAttemptTerminalOutcome,
@@ -201,6 +204,7 @@ async function runPreparedSettledTurnFinalization(input: {
         settledAttempt: input.settledAttempt,
         prompt: input.prompt,
         agentHarnessId: input.attempt.agentHarnessId,
+        runtimePlan: input.attempt.runtimePlan,
       }),
     };
   });
@@ -212,6 +216,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
   settledAttempt: EmbeddedRunAttemptWithReceiptEvidence;
   prompt: string;
   agentHarnessId?: string;
+  runtimePlan?: EmbeddedRunAttemptParams["runtimePlan"];
 }): EmbeddedRunAttemptWithReceiptEvidence {
   const { result, settledAttempt } = input;
   const text = input.outcome === "empty" ? "" : resolveSettledTurnFinalizationText(result);
@@ -222,6 +227,7 @@ function buildSettledTurnFinalizationAttemptResult(input: {
     sessionIdUsed: settledAttempt.sessionIdUsed,
     sessionFileUsed: settledAttempt.sessionFileUsed,
     ...(input.agentHarnessId ? { agentHarnessId: input.agentHarnessId } : {}),
+    modelAttempt: resolveRuntimeModelAttempt(input.runtimePlan),
     contextTokens: settledAttempt.contextTokens,
     contextTokensSource: settledAttempt.contextTokensSource,
     authBindingFingerprint: settledAttempt.authBindingFingerprint,

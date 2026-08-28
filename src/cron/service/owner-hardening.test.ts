@@ -458,20 +458,30 @@ describe("cron durable run ownership", () => {
         SELECT RAISE(ABORT, 'receipt finalization unavailable');
       END;
     `);
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     try {
       expect(() =>
         finishCronRunReceipt({ handle: receipt, status: "superseded", finishedAtMs: now }),
       ).toThrow("receipt finalization unavailable");
       releaseLocalCronRunReceiptOwnership(receipt);
       expect(isCronRunReceiptOwnerStale(receipt)).toBe(false);
+      expect(receipts(storePath, job.id)[0]?.status).toBe("running");
       database.exec("DROP TRIGGER reject_receipt_only_finish");
-      await vi.waitFor(() => expect(receipts(storePath, job.id)[0]?.status).toBe("superseded"), {
-        timeout: 3_000,
-        interval: 50,
-      });
+      await vi.advanceTimersByTimeAsync(999);
+      expect(isCronRunReceiptOwnerStale(receipt)).toBe(false);
+      expect(receipts(storePath, job.id)[0]?.status).toBe("running");
+      await vi.advanceTimersByTimeAsync(1);
+      expect(receipts(storePath, job.id)[0]?.status).toBe("superseded");
       expect(isCronRunReceiptOwnerStale(receipt)).toBe(true);
     } finally {
-      database.exec("DROP TRIGGER IF EXISTS reject_receipt_only_finish");
+      try {
+        database.exec("DROP TRIGGER IF EXISTS reject_receipt_only_finish");
+        // Drain even after a failed assertion so the retry clears its pending
+        // receipt and local ownership before the store fixture is removed.
+        await vi.runOnlyPendingTimersAsync();
+      } finally {
+        vi.useRealTimers();
+      }
     }
   });
 
