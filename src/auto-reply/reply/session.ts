@@ -9,7 +9,6 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { clearAllCliSessions, getCliSessionBinding } from "../../agents/cli-session.js";
 import { resetRegisteredAgentHarnessSessions } from "../../agents/harness/registry.js";
-import { isSubagentEnvelopeSession } from "../../agents/subagents/spawn/subagent-capabilities.js";
 import { cleanupBrowserSessionsForLifecycleEnd } from "../../browser-lifecycle-cleanup.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
 import { conversationRouteContextFromMsgContext } from "../../config/sessions/conversation-route-context.js";
@@ -74,6 +73,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gat
 import {
   buildAgentMainSessionKey,
   isAcpSessionKey,
+  isSubagentSessionKey,
   normalizeMainKey,
 } from "../../routing/session-key.js";
 import { resolveAgentHarnessSessionContextError } from "../../sessions/agent-harness-session-key.js";
@@ -391,16 +391,16 @@ function selectSessionModelOverride(
   };
 }
 
-function resolveReplySessionRolloverState(params: {
-  cfg: OpenClawConfig;
-  entry: SessionEntry;
-  sessionKey: string;
-}): Partial<InternalSessionEntry> {
-  const { cfg, entry, sessionKey } = params;
+function resolveReplySessionRolloverState(
+  entry: SessionEntry,
+  sessionKey: string,
+): Partial<InternalSessionEntry> {
   const preservedSelection = resolveResetPreservedSelection({ entry });
-  // ACP key shape alone is not child provenance. Keep spawn authority only
-  // when the canonical envelope classifier confirms a real spawned session.
-  const preserveSpawnLineage = isSubagentEnvelopeSession(sessionKey, { cfg, entry });
+  // ACP key shape and derived role fields are not child provenance. The spawn
+  // producer records the durable origin that lets real ACP children keep lineage.
+  const preserveSpawnLineage =
+    isSubagentSessionKey(sessionKey) ||
+    (isAcpSessionKey(sessionKey) && entry.createdVia === "spawn");
   return {
     thinkingLevel: entry.thinkingLevel,
     verboseLevel: entry.verboseLevel,
@@ -819,8 +819,7 @@ async function initSessionStateAttemptLocked(
       // spawn-applied default (subagent-spawn-thinking.ts) — so unlike model
       // overrides these need no fallback-provenance filtering (#92562).
       // Explicit /new and /reset rotate CLI conversation bindings elsewhere.
-      // Rollover keeps spawned-run lineage only for a verified child envelope.
-      preservedState = resolveReplySessionRolloverState({ cfg, entry, sessionKey });
+      preservedState = resolveReplySessionRolloverState(entry, sessionKey);
     }
   }
 

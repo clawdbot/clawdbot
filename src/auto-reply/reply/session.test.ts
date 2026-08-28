@@ -1989,28 +1989,45 @@ describe("initSessionState RawBody", () => {
       name: "ordinary top-level session",
       sessionKey: "agent:main:main",
       spawnedBy: "agent:main:subagent:stale-parent",
-      hasSubagentEnvelopeFields: true,
+      createdVia: "run" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
       preservesSpawnLineage: false,
     },
     {
-      name: "ordinary ACP session",
-      sessionKey: "agent:main:acp:ordinary-session",
+      name: "ordinary ACP session with a stale role",
+      sessionKey: "agent:main:acp:ordinary-stale-role",
       spawnedBy: "agent:main:main",
-      hasSubagentEnvelopeFields: false,
+      createdVia: "run" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: undefined,
+      preservesSpawnLineage: false,
+    },
+    {
+      name: "ordinary ACP session with a stale control scope",
+      sessionKey: "agent:main:acp:ordinary-stale-control-scope",
+      spawnedBy: "agent:main:main",
+      createdVia: "run" as const,
+      subagentRole: undefined,
+      subagentControlScope: "none" as const,
       preservesSpawnLineage: false,
     },
     {
       name: "real subagent",
       sessionKey: "agent:main:subagent:daily-rollover-lineage",
       spawnedBy: "agent:main:main",
-      hasSubagentEnvelopeFields: true,
+      createdVia: "spawn" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
       preservesSpawnLineage: true,
     },
     {
       name: "real ACP child",
       sessionKey: "agent:main:acp:daily-rollover-lineage",
       spawnedBy: "agent:main:subagent:parent",
-      hasSubagentEnvelopeFields: true,
+      createdVia: "spawn" as const,
+      subagentRole: "leaf" as const,
+      subagentControlScope: "none" as const,
       preservesSpawnLineage: true,
     },
   ])("keeps spawned-run lineage only for a $name rollover", async (testCase) => {
@@ -2024,11 +2041,9 @@ describe("initSessionState RawBody", () => {
       spawnedWorkspaceDir: "/tmp/child-workspace",
       spawnedCwd: "/tmp/task-repo",
       spawnDepth: 1,
-      ...(testCase.hasSubagentEnvelopeFields
-        ? {
-            subagentRole: "leaf" as const,
-            subagentControlScope: "none" as const,
-          }
+      ...(testCase.subagentRole ? { subagentRole: testCase.subagentRole } : {}),
+      ...(testCase.subagentControlScope
+        ? { subagentControlScope: testCase.subagentControlScope }
         : {}),
     };
     const threadProvenance = {
@@ -2039,7 +2054,7 @@ describe("initSessionState RawBody", () => {
         sessionKey: "agent:main:root",
         sessionId: "root-transcript-generation",
       },
-      createdVia: "spawn",
+      createdVia: testCase.createdVia,
       createdActor: { type: "agent", id: "agent:main:main" },
       createdAt: staleStartedAt - 1_000,
       sandbox: "required",
