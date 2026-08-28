@@ -1,5 +1,5 @@
 import type fs from "node:fs";
-import type { RootFileOpenFailure } from "@openclaw/fs-safe/advanced";
+import type { RootFileOpenFailure } from "../infra/boundary-file-read.js";
 import type { PluginDiagnosticCode, PluginManifest } from "./manifest-types.js";
 
 export type CachedPluginManifestResult =

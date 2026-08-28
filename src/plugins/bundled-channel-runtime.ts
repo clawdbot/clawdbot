@@ -5,7 +5,7 @@ import { resolveBundledPluginGeneratedPath } from "./bundled-plugin-metadata.js"
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
 import { pluginCacheExistsSync } from "./plugin-cache-files.js";
-import { loadPluginManifestRegistryForPluginRegistry } from "./plugin-registry.js";
+import { resolvePluginMetadataSnapshot } from "./plugin-metadata-snapshot.js";
 
 type BundledChannelEntryPathPair = {
   source: string;
@@ -106,9 +106,8 @@ export function listBundledChannelPluginMetadata(params?: {
   if (scope.kind === "empty") {
     return [];
   }
-  return loadPluginManifestRegistryForPluginRegistry({
+  return resolvePluginMetadataSnapshot({
     env: scope.kind === "env" ? scope.env : undefined,
-    includeDisabled: true,
   }).plugins.flatMap((record) => toBundledChannelPluginMetadata(record) ?? []);
 }
 

@@ -10,6 +10,8 @@ import {
   buildLaunchAgentPlist,
   readLaunchAgentProgramArgumentsFromFile,
 } from "../daemon/launchd-plist.js";
+import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
+import { createPluginManifestRecordFixture } from "../plugins/plugin-metadata.test-support.js";
 
 const mocks = vi.hoisted(() => ({
   hasAnyAuthProfileStoreSource: vi.fn(() => true),
@@ -23,14 +25,12 @@ const mocks = vi.hoisted(() => ({
   resolveOpenClawWrapperPath: vi.fn(),
   assertNoSystemLaunchDaemonOwnership: vi.fn(),
   execLaunchctl: vi.fn(),
-  loadPluginManifestRegistryCore: vi.fn<
-    (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
-  >(() => ({
+  loadPluginManifestRegistryCore: vi.fn<(...args: unknown[]) => PluginManifestRegistry>(() => ({
     diagnostics: [],
     plugins: [],
   })),
   loadPluginManifestRegistryForPluginRegistry: vi.fn<
-    (...args: unknown[]) => { diagnostics: unknown[]; plugins: unknown[] }
+    (...args: unknown[]) => PluginManifestRegistry
   >(() => ({
     diagnostics: [],
     plugins: [],
@@ -240,7 +240,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
   mocks.loadPluginManifestRegistryCore.mockReturnValue({
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "acme-secrets",
         origin: "global",
         rootDir: pluginRoot,
@@ -253,8 +253,8 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             passEnv: ["ACME_SECRETS_TOKEN"],
           },
         },
-      },
-      {
+      }),
+      createPluginManifestRecordFixture({
         id: "acme-plugin",
         origin: "global",
         rootDir: configuredPluginRoot,
@@ -264,13 +264,13 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             paths: [{ path: "apiKey", expected: "string" }],
           },
         },
-      },
+      }),
     ],
   });
   mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
     diagnostics: [],
     plugins: [
-      {
+      createPluginManifestRecordFixture({
         id: "acme-plugin",
         origin: "global",
         rootDir: configuredPluginRoot,
@@ -280,7 +280,7 @@ async function buildPluginConfigExecSecretRefPlan(home: string) {
             paths: [{ path: "apiKey", expected: "string" }],
           },
         },
-      },
+      }),
     ],
   });
 
@@ -966,7 +966,7 @@ describe("buildGatewayInstallPlan", () => {
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "acme-secrets",
           origin: "global",
           rootDir: pluginRoot,
@@ -978,7 +978,7 @@ describe("buildGatewayInstallPlan", () => {
               passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
             },
           },
-        },
+        }),
       ],
     });
 
@@ -1078,7 +1078,7 @@ describe("buildGatewayInstallPlan", () => {
     mocks.loadPluginManifestRegistryCore.mockReturnValue({
       diagnostics: [],
       plugins: [
-        {
+        createPluginManifestRecordFixture({
           id: "acme-secrets",
           origin: "global",
           rootDir: pluginRoot,
@@ -1090,7 +1090,7 @@ describe("buildGatewayInstallPlan", () => {
               passEnv: ["ACME_SECRETS_ADDR", "ACME_SECRETS_TOKEN"],
             },
           },
-        },
+        }),
       ],
     });
 

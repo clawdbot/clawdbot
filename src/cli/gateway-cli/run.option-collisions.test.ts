@@ -174,7 +174,8 @@ vi.mock("../../commands/doctor/shared/pristine-startup-state.js", () => ({
     pristineStartupMigrationPlan.state(env),
 }));
 
-vi.mock("../../config/paths.js", () => ({
+vi.mock("../../config/paths.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/paths.js")>()),
   CONFIG_PATH: "/tmp/openclaw-test-missing-config.json",
   normalizeStateDirEnv: (env?: NodeJS.ProcessEnv) => normalizeStateDirEnv(env),
   pinRuntimePaths: (env?: NodeJS.ProcessEnv) => pinRuntimePaths(env),
