@@ -435,6 +435,10 @@ export const validateExecApprovalsSetParams = compile(S.ExecApprovalsSetParamsSc
 export const validateExecApprovalGetParams = compile(S.ExecApprovalGetParamsSchema);
 export const validateExecApprovalRequestParams = compile(S.ExecApprovalRequestParamsSchema);
 export const validateExecApprovalResolveParams = compile(S.ExecApprovalResolveParamsSchema);
+export const validateExecApprovalGrantsListParams = compile(S.ExecApprovalGrantsListParamsSchema);
+export const validateExecApprovalGrantsRevokeParams = compile(
+  S.ExecApprovalGrantsRevokeParamsSchema,
+);
 export const validateQuestionRequestParams = compile(S.QuestionRequestParamsSchema);
 export const validateQuestionWaitAnswerParams = compile(S.QuestionWaitAnswerParamsSchema);
 export const validateQuestionResolveParams = compile(S.QuestionResolveParamsSchema);

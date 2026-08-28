@@ -33,6 +33,7 @@ import { sessionDeliveryRoute } from "../utils/delivery-context.shared.js";
 import {
   assertSafeSessionSqliteMigrationMove,
   createSessionSqliteMigrationFailureIssue,
+  createSessionSqliteMigrationRun,
   restoreSessionSqliteMigrationRun,
   type ActiveSessionSqliteMigrationRun,
 } from "./doctor-session-sqlite-migration-run.js";
@@ -41,6 +42,8 @@ import {
   readOnlySqliteValidationSnapshot,
   resolveTargetSqlitePath,
 } from "./doctor-session-sqlite-readers.js";
+import { recoverDoctorSessionSqliteTargets } from "./doctor-session-sqlite-recover-report.js";
+import { createDoctorSessionSqliteTargetReport } from "./doctor-session-sqlite-types.js";
 import { runDoctorSessionSqlite } from "./doctor-session-sqlite.js";
 
 type SessionSqliteMigrationManifest = ActiveSessionSqliteMigrationRun["manifest"];
@@ -62,9 +65,7 @@ const previousEnv = {
   OPENCLAW_STATE_DIR: process.env.OPENCLAW_STATE_DIR,
 };
 const autoCleanupTempDirs = useAutoCleanupTempDirTracker(afterEach);
-const lexicalTempDir = path.resolve(os.tmpdir());
-const realTempDir = fs.realpathSync.native(os.tmpdir());
-const hasPlatformTempAlias = lexicalTempDir !== realTempDir;
+// Vitest canonicalizes TMPDIR; alias coverage needs the platform's /tmp path.
 const lexicalRootTempDir = path.resolve("/tmp");
 const realRootTempDir = canonicalTestPath(lexicalRootTempDir);
 const hasPlatformRootTempAlias = lexicalRootTempDir !== realRootTempDir;
@@ -1163,44 +1164,149 @@ describe("runDoctorSessionSqlite", () => {
     expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
   });
 
-  it("repairs canonical index corruption in place during recovery", async () => {
-    const { sqlitePath, store } = await createImportedStoreForCompaction();
-    createCanonicalCacheIndexDrift(sqlitePath);
-    expect(
-      recordOpenClawDatabaseQuarantine({
+  it.each([false, true])(
+    "compacts and repairs canonical indexes in place (shared store: %s)",
+    async (shared) => {
+      const { sqlitePath, store } = await createImportedStoreForCompaction(shared);
+      const selection = {
         env: store.env,
-        kind: "agent",
-        path: sqlitePath,
-        reason: "canonical cache index drift",
-      }),
-    ).toBe(true);
-
-    const report = await runDoctorSessionSqlite({
-      env: store.env,
-      mode: "recover",
-      store: store.storePath,
-    });
-
-    expect(report.totals.issues).toBe(0);
-    expect(report.targets[0]?.corruptRecovery).toBeUndefined();
-    expect(fs.existsSync(sqlitePath)).toBe(true);
-    expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
-
-    const sqlite = nodeSqlite.requireNodeSqlite();
-    const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
-    try {
-      expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
-        integrity_check: "ok",
-      });
+        store: store.storePath,
+        ...(shared ? { agent: "beta" } : {}),
+      };
+      const compact = await runDoctorSessionSqlite({ ...selection, mode: "compact" });
+      expect(compact.totals.issues).toBe(0);
+      expect(compact.targets[0]?.compact?.skipped).toBe(false);
+      createCanonicalCacheIndexDrift(sqlitePath);
       expect(
-        database
-          .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
-          .get("doctor", "canonical-index"),
-      ).toEqual({ value_json: '{"ok":true}' });
-    } finally {
-      database.close();
-    }
-    expect(openOpenClawAgentDatabase({ agentId: "main", env: store.env }).db.isOpen).toBe(true);
+        recordOpenClawDatabaseQuarantine({
+          env: store.env,
+          kind: "agent",
+          path: sqlitePath,
+          reason: "canonical cache index drift",
+        }),
+      ).toBe(true);
+
+      const report = await runDoctorSessionSqlite({
+        ...selection,
+        mode: "recover",
+      });
+
+      expect(report.totals.issues).toBe(0);
+      expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+      expect(fs.existsSync(sqlitePath)).toBe(true);
+      expect(readOpenClawDatabaseQuarantine(sqlitePath, { env: store.env })).toBeUndefined();
+
+      const sqlite = nodeSqlite.requireNodeSqlite();
+      const database = new sqlite.DatabaseSync(sqlitePath, { readOnly: true });
+      try {
+        expect(database.prepare("PRAGMA integrity_check").get()).toEqual({
+          integrity_check: "ok",
+        });
+        expect(
+          database
+            .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+            .get("doctor", "canonical-index"),
+        ).toEqual({ value_json: '{"ok":true}' });
+      } finally {
+        database.close();
+      }
+      expect(
+        openOpenClawAgentDatabase({
+          agentId: shared ? "alpha" : "main",
+          env: store.env,
+          path: sqlitePath,
+        }).db.isOpen,
+      ).toBe(true);
+    },
+  );
+
+  it.each(["newer schema", "mismatched older schema", "I/O error"] as const)(
+    "keeps canonical-index repair failures in place after %s",
+    async (failure) => {
+      const { sqlitePath, store } = await createImportedStoreForCompaction();
+      createCanonicalCacheIndexDrift(sqlitePath);
+      if (failure !== "I/O error") {
+        const version = failure === "newer schema" ? OPENCLAW_AGENT_SCHEMA_VERSION + 1 : 1;
+        const database = new (nodeSqlite.requireNodeSqlite().DatabaseSync)(sqlitePath);
+        try {
+          database.exec(`PRAGMA user_version = ${version};`);
+          database
+            .prepare("UPDATE schema_meta SET schema_version = ? WHERE meta_key = 'primary'")
+            .run(failure === "newer schema" ? version : 2);
+        } finally {
+          database.close();
+        }
+      }
+      const before = fs.readFileSync(sqlitePath);
+      const openDatabase = nodeSqlite.openNodeSqliteDatabase;
+      const openSpy =
+        failure === "I/O error"
+          ? vi
+              .spyOn(nodeSqlite, "openNodeSqliteDatabase")
+              .mockImplementation((pathname, options) => {
+                if (pathname === sqlitePath && options?.readOnly !== true) {
+                  throw Object.assign(new Error("injected maintenance I/O failure"), {
+                    code: "EIO",
+                  });
+                }
+                return openDatabase(pathname, options);
+              })
+          : undefined;
+      let report: Awaited<ReturnType<typeof runDoctorSessionSqlite>>;
+      try {
+        report = await runDoctorSessionSqlite({
+          env: store.env,
+          mode: "recover",
+          store: store.storePath,
+        });
+      } finally {
+        openSpy?.mockRestore();
+      }
+      expect(report.targets[0]?.issues).toMatchObject([{ code: "sqlite_recovery_inspect_failed" }]);
+      expect(report.targets[0]?.corruptRecovery).toBeUndefined();
+      expect(fs.readFileSync(sqlitePath)).toEqual(before);
+      expect(
+        fs.readdirSync(path.dirname(sqlitePath)).some((entry) => entry.includes(".corrupt-")),
+      ).toBe(false);
+    },
+  );
+
+  it("validates the trusted SQLite override when recovering a migration manifest", async () => {
+    const store = createLegacyStore();
+    const target = {
+      agentId: "main",
+      sqlitePath: path.join(store.stateDir, "migration-target.sqlite"),
+      storePath: store.storePath,
+    };
+    await upsertSessionEntryCore(
+      {
+        agentId: target.agentId,
+        env: store.env,
+        sessionKey: "agent:main:main",
+        storePath: target.sqlitePath,
+      },
+      { sessionId: "session-1", updatedAt: 1 },
+    );
+    const run = createSessionSqliteMigrationRun(store.env, [target]);
+    const report = await recoverDoctorSessionSqliteTargets({
+      env: store.env,
+      options: { mode: "recover" },
+      targets: [target],
+      validateTarget: async (selected) => {
+        const validation = readOnlySqliteValidationSnapshot(selected);
+        if (!validation.ok) {
+          throw validation.error;
+        }
+        return createDoctorSessionSqliteTargetReport({
+          ...selected,
+          sqlitePath: resolveTargetSqlitePath(selected),
+          validatedEntries: validation.snapshot.sessionIdsBySessionKey.size,
+        });
+      },
+    });
+    expect(report.migrationRun?.manifestPath).toBe(run.manifestPath);
+    expect(report.targets[0]?.sqlitePath).toBe(target.sqlitePath);
+    expect(report.totals.validatedEntries).toBe(1);
   });
 
   it.skipIf(process.platform === "win32")(
@@ -2130,10 +2236,10 @@ describe("runDoctorSessionSqlite", () => {
     },
   );
 
-  it.skipIf(!hasPlatformTempAlias)(
+  it.skipIf(!hasPlatformRootTempAlias)(
     "restores version 1 manifests written through a platform root alias",
     async () => {
-      const store = createLegacyStore();
+      const store = createLegacyStore({ tempRoot: lexicalRootTempDir });
       const importReport = await runDoctorSessionSqlite({
         env: store.env,
         mode: "import",
@@ -2142,7 +2248,7 @@ describe("runDoctorSessionSqlite", () => {
       const manifestPath = requireMigrationManifestPath(importReport.migrationRun?.manifestPath);
       const manifest = readMigrationManifest(manifestPath);
       const aliasPath = (filePath: string) =>
-        path.join(lexicalTempDir, path.relative(realTempDir, filePath));
+        path.join(lexicalRootTempDir, path.relative(realRootTempDir, filePath));
       manifest.manifestVersion = 1;
       for (const target of manifest.targets) {
         target.sqlitePath = aliasPath(target.sqlitePath);
@@ -3563,21 +3669,27 @@ describe("runDoctorSessionSqlite", () => {
   });
 });
 
-async function createImportedStoreForCompaction(): Promise<{
+async function createImportedStoreForCompaction(shared = false): Promise<{
   sqlitePath: string;
   store: TestStore;
 }> {
-  const store = createLegacyStore();
+  const store = createLegacyStore({ agentDirName: shared ? "alpha" : undefined });
   const report = await runDoctorSessionSqlite({
     env: store.env,
     mode: "import",
     store: store.storePath,
   });
-  const sqlitePath = report.targets[0]?.sqlitePath;
+  let sqlitePath = report.targets[0]?.sqlitePath;
   if (!sqlitePath) {
     throw new Error("expected imported agent SQLite path");
   }
   closeOpenClawAgentDatabasesForTest();
+  if (shared) {
+    const sharedPath = path.join(store.stateDir, "shared.sqlite");
+    fs.renameSync(sqlitePath, sharedPath);
+    sqlitePath = sharedPath;
+    store.storePath = sharedPath;
+  }
   return { sqlitePath, store };
 }
 

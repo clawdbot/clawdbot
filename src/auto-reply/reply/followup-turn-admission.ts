@@ -154,9 +154,11 @@ export async function admitFollowupTurn(params: {
     upstreamAbortSignal: resolveFollowupAbortSignal(params.queued),
   });
   if (admission.status === "skipped") {
-    return admission.reason === "active-run"
-      ? { kind: "deferred", reason: "active-run" }
-      : { kind: "skipped", reason: admission.reason };
+    if (admission.reason !== "active-run") {
+      return { kind: "skipped", reason: admission.reason };
+    }
+    params.queued.turnAdoptionLifecycle?.onDeferredHeartbeat?.();
+    return { kind: "deferred", reason: "active-run" };
   }
   const operation = admission.operation;
   operation.retainFailureUntilComplete();

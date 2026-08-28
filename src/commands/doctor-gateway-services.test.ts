@@ -488,18 +488,26 @@ describe("maybeRepairGatewayServiceConfig", () => {
     }
   });
 
-  it("reports the installed Gateway heap limit and derivation", async () => {
-    const command = createGatewayCommand("/opt/openclaw/dist/index.js");
-    command.environment = { NODE_OPTIONS: "--max-old-space-size=6144" };
-    mocks.readCommand.mockResolvedValue(command);
-    mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
-    mocks.buildGatewayInstallPlan.mockResolvedValue(command);
+  it.each(["NODE_OPTIONS", "argv"])(
+    "reports configured Gateway heap controls from %s separately from runtime measurements",
+    async (source) => {
+      const command = createGatewayCommand("/opt/openclaw/dist/index.js");
+      if (source === "NODE_OPTIONS") {
+        command.environment = { NODE_OPTIONS: "--max-old-space-size=6144" };
+      } else {
+        command.programArguments.splice(1, 0, "--max-old-space-size=6144");
+      }
+      mocks.readCommand.mockResolvedValue(command);
+      mocks.auditGatewayServiceConfig.mockResolvedValue({ ok: true, issues: [] });
+      mocks.buildGatewayInstallPlan.mockResolvedValue(command);
 
-    await runRepair({ gateway: {} });
+      await runRepair({ gateway: {} });
 
-    expectNoteContaining("6144 MiB", "Gateway heap");
-    expectNoteContaining("adaptive default", "Gateway heap");
-  });
+      expectNoteContaining(`service ${source}: --max-old-space-size=6144`, "Gateway heap");
+      expectNoteContaining("installer recommendation:", "Gateway heap");
+      expectNoteContaining("runtime V8 ceiling: not measured", "Gateway heap");
+    },
+  );
 
   it("skips service audit and rewrite for a non-default install identity", async () => {
     mocks.isDefaultInstallIdentity.mockReturnValue(false);
@@ -680,16 +688,26 @@ describe("maybeRepairGatewayServiceConfig", () => {
   it("passes planned managed env keys into service audit for legacy inline secret detection", async () => {
     mockProcessPlatform("linux");
     const managedDefinition = {
-      programArguments: gatewayProgramArguments,
+      programArguments: [
+        "/usr/bin/node",
+        "--max-old-space-size=24576",
+        "--require=/tmp/service-preload.js",
+        ...gatewayProgramArguments.slice(1),
+      ],
       environment: { OPENCLAW_WRAPPER: "/managed-wrapper", TAVILY_API_KEY: "managed" },
       environmentValueSources: { TAVILY_API_KEY: "file" as const },
     };
-    mocks.readCommand.mockResolvedValue({
+    const existingCommand = {
       ...managedDefinition,
-      environment: { OPENCLAW_WRAPPER: "/operator-wrapper", TAVILY_API_KEY: "old-inline-value" },
+      environment: {
+        OPENCLAW_WRAPPER: "/operator-wrapper",
+        TAVILY_API_KEY: "old-inline-value",
+        NODE_OPTIONS: "--max-old-space-size=512",
+      },
       managedDefinition,
-      managedOverrides: { environment: { keys: ["OPENCLAW_WRAPPER"] } },
-    });
+      managedOverrides: { environment: { keys: ["OPENCLAW_WRAPPER", "NODE_OPTIONS"] } },
+    };
+    mocks.readCommand.mockResolvedValue(existingCommand);
     mocks.buildGatewayInstallPlan.mockResolvedValue({
       programArguments: gatewayProgramArguments,
       workingDirectory: "/tmp",
@@ -718,12 +736,15 @@ describe("maybeRepairGatewayServiceConfig", () => {
       "expectedManagedServiceEnvKeys",
       new Set(["TAVILY_API_KEY"]),
     );
-    expect(mocks.buildGatewayInstallPlan).toHaveBeenCalledWith(
-      expect.objectContaining({
-        existingEnvironment: managedDefinition.environment,
-        existingEnvironmentValueSources: managedDefinition.environmentValueSources,
-      }),
-    );
+    for (const [plan] of mocks.buildGatewayInstallPlan.mock.calls) {
+      expect(plan).toEqual(
+        expect.objectContaining({
+          existingCommand,
+          existingEnvironment: managedDefinition.environment,
+          existingEnvironmentValueSources: managedDefinition.environmentValueSources,
+        }),
+      );
+    }
     expect(mocks.install).toHaveBeenCalledTimes(1);
   });
 

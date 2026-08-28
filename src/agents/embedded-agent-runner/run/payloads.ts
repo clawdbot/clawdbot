@@ -507,6 +507,12 @@ export function buildEmbeddedRunPayloads(params: {
       if (item.media?.length) {
         payload.mediaUrls = item.media;
       }
+      if (item.attachments?.length) {
+        payload.attachments = item.attachments;
+      }
+      if (item.trustedLocalMedia !== undefined) {
+        payload.trustedLocalMedia = item.trustedLocalMedia;
+      }
       if (item.isError !== undefined) {
         payload.isError = item.isError;
       }

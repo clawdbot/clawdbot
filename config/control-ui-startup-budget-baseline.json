@@ -1,5 +1,5 @@
 {
-  "startupJsGzipBytes": 345524,
-  "reason": "typography picker module on the boot path (+301 B) plus unpinned boot growth from #131335 tooltips and #131336 new-session tab controls (~1.2 KiB) that predates this branch; measured on main 515c3d8ff3f",
+  "startupJsGzipBytes": 346461,
+  "reason": "standing-grant scope line + grants ledger (#131602); recorded at the CI e2e-lane build (346461 B) — checks-ui and local builds of the same tree measure ~600 B less, beyond the 64 B variance allowance",
   "updatedAt": "2026-08-28"
 }

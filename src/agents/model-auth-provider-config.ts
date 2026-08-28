@@ -318,7 +318,7 @@ type ProviderEntryApiKeyProfileReference =
       credentialType: AuthProfileCredential["type"];
       reason: "credential-class" | "provider-binding";
     }
-  | { kind: "marker" };
+  | { kind: "marker"; evidence: "environment" | "synthetic" };
 
 export type ProviderEntryApiKeyBindingResolution =
   | { kind: "none" }
@@ -415,7 +415,10 @@ export function resolveProviderEntryApiKeyProfileReference(params: {
     return { kind: "none" };
   }
   if (isNonSecretApiKeyMarker(perEntryRawKey)) {
-    return { kind: "marker" };
+    return {
+      kind: "marker",
+      evidence: isKnownEnvApiKeyMarker(perEntryRawKey) ? "environment" : "synthetic",
+    };
   }
   const credential = params.store.profiles[perEntryRawKey];
   if (!credential) {

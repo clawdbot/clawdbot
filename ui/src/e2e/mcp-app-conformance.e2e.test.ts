@@ -782,11 +782,14 @@ describeConformance("MCP App Control UI and standalone host conformance", () => 
             expect(events.filter((event) => event.event === "tool-complete")).toMatchObject(
               spec.cooperative ? [] : [{ requestId: call.id, aborted: true }],
             );
-            expect(
-              diagnostics
-                .slice(networkStart)
-                .filter((event) => event.event === "requestfailed" && event.method === "POST"),
-            ).toHaveLength(1);
+            // Fixture stdio and Playwright network events arrive independently.
+            await expect
+              .poll(() =>
+                diagnostics
+                  .slice(networkStart)
+                  .filter((event) => event.event === "requestfailed" && event.method === "POST"),
+              )
+              .toHaveLength(1);
           } finally {
             if (releasePath) {
               await fs.writeFile(releasePath, "released");

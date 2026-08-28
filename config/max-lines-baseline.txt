@@ -653,7 +653,6 @@ src/gateway/server-methods/sessions-files.ts
 src/gateway/server-methods/skills.ts
 src/gateway/server-methods/talk.test.ts
 src/gateway/server-methods/talk.ts
-src/gateway/server-methods/usage.ts
 src/gateway/server-node-events.test.ts
 src/gateway/server-node-events.ts
 src/gateway/server-plugins.test.ts
@@ -884,7 +883,6 @@ ui/src/pages/sessions/view.test.ts
 ui/src/pages/sessions/view.ts
 ui/src/pages/skill-workshop/view.ts
 ui/src/pages/skills/view.ts
-ui/src/pages/usage/metrics.ts
 ui/src/pages/usage/view-details.ts
 ui/src/pages/usage/view-overview.ts
 ui/src/pages/usage/view.ts

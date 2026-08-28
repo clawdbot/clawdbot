@@ -410,7 +410,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       this.preparedModelRuntime.publish(event.runtimeConfig);
     });
     this.preparedModelRuntime.publish(config);
-    // Local mode never runs gateway startup; canonicalize orphaned keys once here.
+    // Local mode shares the Gateway's session-store readiness checks.
     this.ready = (async () => {
       const { runSessionStartupMigration } =
         await import("../config/sessions/startup-migration.js");

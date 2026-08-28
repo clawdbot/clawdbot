@@ -30,12 +30,6 @@ export type {
   CostUsageTotals,
   DiscoveredSession,
   SessionCostSummary,
-  SessionDailyLatency,
-  SessionDailyModelUsage,
-  SessionLatencyStats,
-  SessionMessageCounts,
-  SessionModelUsage,
-  SessionToolUsage,
   UsageCacheStatus,
   UsageDailyBucket,
 } from "./session-cost-usage.types.js";

@@ -25,12 +25,13 @@ import {
   connectGatewayClient,
   disconnectGatewayClient,
 } from "../../src/gateway/test-helpers.e2e.js";
+import { listKnownProviderAuthEnvVarNames } from "../../src/secrets/provider-env-vars.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../src/state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../src/state/openclaw-state-db.js";
 import { sleep } from "../../src/utils.js";
 import { createOpenClawTestInstance } from "./openclaw-test-instance.js";
 
-type DoctorMode = "import" | "inspect" | "validate" | "restore";
+type DoctorMode = "fix" | "import" | "inspect" | "validate" | "restore";
 type ProofChildProcess = ChildProcessByStdio<null, Readable, Readable>;
 
 const SQLITE_FLIP_PROOF_OPERATION_TIMEOUT_MS = 60_000;
@@ -45,6 +46,7 @@ type DowngradeReupgradeEvidence = Awaited<ReturnType<typeof runDowngradeReupgrad
 type BusyContentionEvidence = Awaited<ReturnType<typeof runSqliteBusyContentionProof>>;
 type SecondStartupAfterResetEvidence = Awaited<ReturnType<typeof runSecondStartupAfterResetProof>>;
 type RollbackRestoreEvidence = Awaited<ReturnType<typeof runRollbackRestoreProof>>;
+type StartupRefusalEvidence = Awaited<ReturnType<typeof requireLegacyStartupRefusal>>;
 
 type ProofContext = ReturnType<typeof buildProofContext>;
 type GatewayClient = Awaited<ReturnType<typeof connectGatewayClient>>;
@@ -96,14 +98,13 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     name: `sqlite-sessions-transcripts-flip-${randomUUID()}`,
     config: buildMockOpenAiConfig(mockOpenAiPort),
     env: {
+      ...Object.fromEntries(listKnownProviderAuthEnvVarNames().map((name) => [name, undefined])),
       ALL_PROXY: undefined,
       HTTP_PROXY: undefined,
       HTTPS_PROXY: undefined,
       NO_PROXY: "127.0.0.1,localhost",
       ...(options.requireBuiltCli !== true
         ? {
-            OPENCODE_API_KEY: undefined,
-            OPENCODE_ZEN_API_KEY: undefined,
             OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
           }
         : {}),
@@ -120,6 +121,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   const context = buildProofContext(inst.stateDir);
   const checkpoints: ProofCheckpoint[] = [];
   const failures: string[] = [];
+  let bundledPlugins: Array<{ id: string; source: string }> = [];
   let gatewayEntrypoint: string[] = [];
   let busyContention: BusyContentionEvidence | undefined;
   let downgradeReupgrade: DowngradeReupgradeEvidence | undefined;
@@ -127,6 +129,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   let rollbackRestore: RollbackRestoreEvidence | undefined;
   let scaleMigration: ScaleMigrationEvidence | undefined;
   let secondStartupAfterReset: SecondStartupAfterResetEvidence | undefined;
+  let startupRefusal: StartupRefusalEvidence | undefined;
 
   const record = async (label: string, doctor?: DoctorCommandEvidence) => {
     const checkpoint = await captureCheckpoint(context, label, {
@@ -146,6 +149,23 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     if (options.requireBuiltCli === true && !isBuiltCliEntrypoint(gatewayEntrypoint)) {
       throw new Error(`expected built CLI entrypoint, got ${gatewayEntrypoint.join(" ")}`);
     }
+    if (options.requireBuiltCli === true) {
+      const inventory = await inst.cli(["plugins", "list", "--json"]);
+      const plugins = parseJsonObject(inventory.stdout)?.plugins;
+      if (inventory.code !== 0 || !Array.isArray(plugins)) {
+        throw new Error("built CLI could not list bundled plugin artifacts");
+      }
+      bundledPlugins = plugins.flatMap((value) => {
+        const plugin = asRecord(value);
+        if (plugin?.origin !== "bundled") {
+          return [];
+        }
+        if (typeof plugin.id !== "string" || typeof plugin.source !== "string") {
+          throw new Error("bundled plugin inventory omitted its identity or source artifact");
+        }
+        return [{ id: plugin.id, source: plugin.source }];
+      });
+    }
 
     mockOpenAi = await startMockOpenAiServer({
       port: mockOpenAiPort,
@@ -156,10 +176,16 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     await seedLegacySessionStore(context);
     await record("seeded-legacy-store");
 
-    const startupImportStartedAt = Date.now();
+    startupRefusal = await requireLegacyStartupRefusal(inst, context);
+    await record("after-startup-refusal");
+
+    const doctorImportStartedAt = Date.now();
+    const fixDoctor = await runDoctor(inst, "fix", context.storePath);
+    await record("after-doctor-fix", fixDoctor);
+    scaleMigration = requireScaleMigrationProof(context, Date.now() - doctorImportStartedAt);
+
     await inst.startGateway();
-    await record("after-startup-import");
-    scaleMigration = requireScaleMigrationProof(context, Date.now() - startupImportStartedAt);
+    await record("after-gateway-start");
 
     const inspectDoctor = await runDoctor(inst, "inspect", context.storePath);
     await record("after-doctor-inspect", inspectDoctor);
@@ -309,6 +335,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
   const report = {
     ok: failures.length === 0,
     agentId: context.agentId,
+    bundledPlugins,
     checkpoints,
     concurrentDeleteSessionKey: context.concurrentDeleteSessionKey,
     concurrentResetSessionKey: context.concurrentResetSessionKey,
@@ -327,6 +354,7 @@ export async function runSqliteSessionsTranscriptsFlipProof(options: RunOptions 
     ...(downgradeReupgrade ? { downgradeReupgrade } : {}),
     ...(scaleMigration ? { scaleMigration } : {}),
     ...(secondStartupAfterReset ? { secondStartupAfterReset } : {}),
+    ...(startupRefusal ? { startupRefusal } : {}),
     sharedSessionKeys: [...context.sharedSessionKeys],
     stateDir: context.stateDir,
   };
@@ -388,6 +416,7 @@ function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
     agents: {
       defaults: {
         model: { primary: modelRef },
+        modelPolicy: { allow: [modelRef] },
         models: {
           [modelRef]: {
             agentRuntime: { id: "openclaw" },
@@ -395,8 +424,9 @@ function buildMockOpenAiConfig(mockPort: number): Record<string, unknown> {
           },
         },
       },
-      entries: { main: { default: true } },
+      entries: { main: {} },
     },
+    gateway: { mode: "local" },
     models: {
       mode: "merge",
       providers: {
@@ -706,12 +736,53 @@ async function importProofSession(
   });
 }
 
+async function requireLegacyStartupRefusal(inst: OpenClawTestInstance, context: ProofContext) {
+  const sources = new Map<string, Buffer>();
+  for (const directory of [context.activeSessionsDir, context.legacySessionsDir]) {
+    await walkFiles(directory, async (filePath) => {
+      sources.set(filePath, await fs.readFile(filePath));
+    });
+    if (!sources.has(path.join(directory, "sessions.json"))) {
+      throw new Error(`missing seeded legacy session store in ${directory}`);
+    }
+  }
+  let message = "";
+  try {
+    await inst.startGateway();
+  } catch (error) {
+    message = error instanceof Error ? error.message : String(error);
+  }
+  if (
+    !message.startsWith("gateway exited before readiness (code=1 signal=null)") ||
+    !message.includes("Gateway failed to start: Legacy session store requires migration:") ||
+    !message.includes(path.join(context.legacySessionsDir, "sessions.json")) ||
+    !message.includes('Run "openclaw doctor --fix"')
+  ) {
+    throw new Error(
+      `expected legacy session migration refusal, got: ${message || "ready Gateway"}`,
+    );
+  }
+  for (const [filePath, bytes] of sources) {
+    if (!(await fs.readFile(filePath)).equals(bytes)) {
+      throw new Error(`Gateway changed legacy source bytes before Doctor migration: ${filePath}`);
+    }
+  }
+  return {
+    message,
+    preservedSourceFiles: [...sources.keys()]
+      .map((filePath) => path.relative(context.stateDir, filePath))
+      .toSorted(),
+  };
+}
+
 async function runDoctor(inst: OpenClawTestInstance, mode: DoctorMode, storePath: string) {
   const result = await inst.cli(
-    ["doctor", "--session-sqlite", mode, "--session-sqlite-store", storePath, "--json"],
+    mode === "fix"
+      ? ["doctor", "--fix", "--non-interactive"]
+      : ["doctor", "--session-sqlite", mode, "--session-sqlite-store", storePath, "--json"],
     { timeoutMs: 60_000 },
   );
-  const parsed = parseJsonObject(result.stdout);
+  const parsed = mode === "fix" ? undefined : parseJsonObject(result.stdout);
   return {
     code: result.code,
     mode,
@@ -969,7 +1040,7 @@ async function runDoctorIdempotenceProof(
   return doctor;
 }
 
-function requireScaleMigrationProof(context: ProofContext, startupImportElapsedMs: number) {
+function requireScaleMigrationProof(context: ProofContext, doctorImportElapsedMs: number) {
   const sqlite = readSqliteEvidence(context.agentDbPath, SCALE_SESSION_KEYS);
   const importedSessionKeys: string[] = [];
   for (const [index, sessionKey] of SCALE_SESSION_KEYS.entries()) {
@@ -990,7 +1061,7 @@ function requireScaleMigrationProof(context: ProofContext, startupImportElapsedM
     minTranscriptEventsPerSession: SCALE_EVENTS_PER_SESSION,
     seededEvents: SCALE_SESSION_COUNT * SCALE_EVENTS_PER_SESSION,
     seededSessions: SCALE_SESSION_COUNT,
-    startupImportElapsedMs,
+    doctorImportElapsedMs,
   };
 }
 
@@ -1863,7 +1934,7 @@ function validateCheckpointInvariants(
   checkpoint: ProofCheckpoint,
   failures: string[],
 ): void {
-  if (checkpoint.label !== "seeded-legacy-store") {
+  if (checkpoint.label !== "seeded-legacy-store" && checkpoint.label !== "after-startup-refusal") {
     for (const [description, inventory] of [
       ["active sessions directory", checkpoint.activeJsonl],
       ["old sessions directory", checkpoint.legacyStateJsonl],
@@ -1882,10 +1953,10 @@ function validateCheckpointInvariants(
     failures.push(`${checkpoint.label}: doctor ${doctor?.mode ?? "unknown"} exited non-zero`);
   }
   if (
-    checkpoint.label === "after-startup-import" &&
+    checkpoint.label === "after-doctor-fix" &&
     (checkpoint.sqlite.sessionEntries === 0 || checkpoint.sqlite.transcriptEvents === 0)
   ) {
-    failures.push(`${checkpoint.label}: startup did not import sessions into SQLite`);
+    failures.push(`${checkpoint.label}: Doctor did not import sessions into SQLite`);
   }
   if (
     checkpoint.label.startsWith("after-doctor") &&
@@ -1903,7 +1974,7 @@ function validateCheckpointInvariants(
   ) {
     failures.push(`${checkpoint.label}: shared sibling entry was deleted too early`);
   }
-  if (checkpoint.label === "after-startup-import") {
+  if (checkpoint.label === "after-doctor-fix") {
     requireArchiveText(checkpoint, failures, {
       description: "legacy trajectory sidecar",
       includes: ["trajectory", context.legacySessionId],

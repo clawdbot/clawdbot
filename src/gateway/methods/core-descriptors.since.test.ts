@@ -84,6 +84,8 @@ const CURRENT_TRAIN_METHODS = [
   "diagnostics.lanes",
   "plugins.inspect",
   "device.pair.setupStatus",
+  "exec.approval.grants.list",
+  "exec.approval.grants.revoke",
   "sessions.patchMany",
   "sessions.groups.update",
   "sessions.groups.defaults",

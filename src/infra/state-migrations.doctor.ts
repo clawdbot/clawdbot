@@ -27,7 +27,10 @@ import {
   type PluginDoctorStateMigrationDetection,
 } from "../plugins/doctor-contract-registry.js";
 import { resolveLegacyInstalledPluginIndexStorePath } from "../plugins/installed-plugin-index-store.js";
-import type { PreparedLegacySessionSurfaces } from "../plugins/legacy-session-surfaces.types.js";
+import {
+  EMPTY_LEGACY_SESSION_SURFACES,
+  type PreparedLegacySessionSurfaces,
+} from "../plugins/legacy-session-surfaces.types.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   DEFAULT_ACCOUNT_ID,
@@ -351,6 +354,8 @@ async function detectManagedWorktreeStateMigration(params: {
 
 export async function detectLegacyStateMigrations(params: {
   cfg: OpenClawConfig;
+  /** Legacy session file inspection belongs to Doctor, including its read-only preview. */
+  mode?: "automatic" | "doctor";
   pluginDoctorConfig?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   homedir?: () => string;
@@ -364,6 +369,7 @@ export async function detectLegacyStateMigrations(params: {
   const homedir = params.homedir ?? os.homedir;
   const stateDir = resolveStateDir(env, homedir);
   const oauthDir = resolveOAuthDir(env, stateDir);
+  const detectSessionFiles = params.mode !== "automatic";
   const migrationAgentId = tryResolveDoctorStateMigrationAgentId(params.cfg);
   const sessionMigrationAgentId = tryResolveDoctorSessionMigrationAgentId(params.cfg);
   const targetAgentId = migrationAgentId ?? sessionMigrationAgentId ?? LEGACY_IMPLICIT_AGENT_ID;
@@ -386,23 +392,24 @@ export async function detectLegacyStateMigrations(params: {
       env,
       pluginIds: collectRelevantDoctorPluginIds(pluginConfig),
     });
-  const currentSessionStoreOwnership = sessionMigrationAgentId
-    ? resolveSessionStoreOwnership({
-        cfg: params.cfg,
-        env,
-        stateDir,
-        targetAgentId: sessionMigrationAgentId,
-        pluginSessionStoreAgentIds,
-      })
-    : {
-        preserveAmbiguousKeys: true,
-        preserveForeignMainAliases: true,
-        targetStoreAliases: {
-          hasDistinctAliases: false,
-          hasFinalSymlink: false,
-          hasUnresolvedIdentity: false,
-        },
-      };
+  const currentSessionStoreOwnership =
+    detectSessionFiles && sessionMigrationAgentId
+      ? resolveSessionStoreOwnership({
+          cfg: params.cfg,
+          env,
+          stateDir,
+          targetAgentId: sessionMigrationAgentId,
+          pluginSessionStoreAgentIds,
+        })
+      : {
+          preserveAmbiguousKeys: true,
+          preserveForeignMainAliases: true,
+          targetStoreAliases: {
+            hasDistinctAliases: false,
+            hasFinalSymlink: false,
+            hasUnresolvedIdentity: false,
+          },
+        };
   const sessionStoreOwnership: SessionStoreOwnership = {
     preserveAmbiguousKeys:
       params.sessionStoreOwnership?.preserveAmbiguousKeys === true ||
@@ -416,15 +423,18 @@ export async function detectLegacyStateMigrations(params: {
     ),
   };
   const { preserveForeignMainAliases } = sessionStoreOwnership;
-  const legacySessionEntries = safeReadDir(sessionsLegacyDir);
   const hasLegacySessions =
-    migrationFileExists(sessionsLegacyStorePath) ||
-    legacySessionEntries.some((e) => e.isFile() && e.name.endsWith(".jsonl"));
+    detectSessionFiles &&
+    (migrationFileExists(sessionsLegacyStorePath) ||
+      safeReadDir(sessionsLegacyDir).some((e) => e.isFile() && e.name.endsWith(".jsonl")));
 
-  const targetSessionParsed = migrationFileExists(sessionsTargetStorePath)
-    ? readSessionStoreJson5(sessionsTargetStorePath)
-    : { store: {}, ok: true };
-  const legacySessionSurfaces = params.legacySessionSurfaces;
+  const targetSessionParsed =
+    detectSessionFiles && migrationFileExists(sessionsTargetStorePath)
+      ? readSessionStoreJson5(sessionsTargetStorePath)
+      : { store: {}, ok: true };
+  const legacySessionSurfaces = detectSessionFiles
+    ? params.legacySessionSurfaces
+    : EMPTY_LEGACY_SESSION_SURFACES;
   const legacyKeys =
     targetSessionParsed.ok && legacySessionSurfaces.failures.length === 0
       ? listLegacySessionKeys({
@@ -1197,6 +1207,8 @@ function buildLegacyStateMigrationSteps(
   const stateDir = detected.stateDir;
   const now = params.now ?? (() => Date.now());
   const isDoctor = params.mode === "doctor";
+  const repairSessionFiles =
+    (isDoctor || params.doctorOnlyStateMigrations === true) && !params.skipAgentScopedMigrations;
   const sharedStep = (
     run: LegacyStateMigrationStep["run"],
     collectNotices = false,
@@ -1334,7 +1346,7 @@ function buildLegacyStateMigrationSteps(
     ),
   ];
 
-  if (!params.skipAgentScopedMigrations) {
+  if (repairSessionFiles) {
     finalSteps.push(
       finalStep(() =>
         migrateLegacySessions(detected, now, {
@@ -1358,24 +1370,24 @@ function buildLegacyStateMigrationSteps(
       kind: "legacy-main-session-keys",
     });
   }
-  if (!params.skipAgentScopedMigrations) {
+  if (repairSessionFiles) {
     // ACP metadata must run once after sessions are canonicalized; otherwise
     // existing rows and newly imported rows generate conflicting repeat warnings.
-    finalSteps.push(
-      {
-        ...finalStep(() =>
-          migrateLegacyAcpSessionMetadata({
-            cfg: params.sessionConfig ?? params.config,
-            env: isDoctor ? { ...env, OPENCLAW_STATE_DIR: stateDir } : env,
-            now,
-            ...(isDoctor ? {} : { pluginSessionStoreAgentIds: params.pluginSessionStoreAgentIds }),
-            legacySessionSurfaces: params.legacySessionSurfaces,
-          }),
-        ),
-        kind: "acp-session-metadata",
-      },
-      finalStep(() => migrateLegacyAgentDir(detected, now)),
-    );
+    finalSteps.push({
+      ...finalStep(() =>
+        migrateLegacyAcpSessionMetadata({
+          cfg: params.sessionConfig ?? params.config,
+          env: isDoctor ? { ...env, OPENCLAW_STATE_DIR: stateDir } : env,
+          now,
+          ...(isDoctor ? {} : { pluginSessionStoreAgentIds: params.pluginSessionStoreAgentIds }),
+          legacySessionSurfaces: params.legacySessionSurfaces,
+        }),
+      ),
+      kind: "acp-session-metadata",
+    });
+  }
+  if (!params.skipAgentScopedMigrations) {
+    finalSteps.push(finalStep(() => migrateLegacyAgentDir(detected, now)));
   }
 
   return [...managedWorktreePrelude, ...sharedSteps, ...doctorStateSteps, ...finalSteps];
@@ -1455,17 +1467,7 @@ export async function runLegacyStateMigrations(params: {
   };
 }
 
-/**
- * Canonicalize orphaned raw session keys in all known agent session stores.
- *
- * Keys written by resolveSessionKey() used DEFAULT_AGENT_ID="main" regardless
- * of the configured default agent; reads always use resolveSessionStoreKey()
- * which canonicalizes via canonicalizeMainSessionAlias. This migration renames
- * any orphaned raw keys to their canonical form in-place, merging with any
- * existing canonical entry by preferring the most recently updated.
- *
- * Safe to run multiple times (idempotent). See #29683.
- */
+/** Run canonical startup migrations and explicit Doctor-owned file repairs. */
 export async function autoMigrateLegacyState(params: {
   cfg: OpenClawConfig;
   pluginDoctorConfig?: OpenClawConfig;
@@ -1519,16 +1521,16 @@ export async function autoMigrateLegacyState(params: {
     params.cfg,
     { allAgents: true },
     { env },
-  ).map((target) => ({
-    agentId: target.agentId,
-    path: resolveSqliteTargetFromSessionStorePath(target.storePath, {
+  ).map((target) => {
+    const resolved = resolveSqliteTargetFromSessionStorePath(target.storePath, {
       agentId: target.agentId,
       defaultAgentId: isPerAgentSessionStoreConfig(params.cfg.session?.store)
         ? target.agentId
         : resolveSessionStoreCompatibilityAgentId(params.cfg),
       env,
-    }).path,
-  }));
+    });
+    return { agentId: resolved.agentId ?? target.agentId, path: resolved.path };
+  });
   const transcriptDirectives = migrateHistoricalTranscriptDirectives({
     configuredAgentDatabaseTargets,
     env: { ...env, OPENCLAW_STATE_DIR: stateDir },
@@ -1578,14 +1580,19 @@ export async function autoMigrateLegacyState(params: {
     pluginIds: collectRelevantDoctorPluginIds(pluginDoctorConfig),
   });
   const legacySessionSurfaces =
-    params.legacySessionSurfaces ??
-    (await import("../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces({
-      config: params.cfg,
-      env,
-    });
+    params.doctorOnlyStateMigrations === true
+      ? (params.legacySessionSurfaces ??
+        (await import("../plugins/legacy-session-surfaces.js")).prepareLegacySessionSurfaces({
+          config: params.cfg,
+          env,
+        }))
+      : EMPTY_LEGACY_SESSION_SURFACES;
   // Capture ownership before orphan-key rewrites. Atomic replacement can split
   // a configured filesystem alias from the standard target pathname.
-  const ownershipAgentId = tryResolveDoctorSessionMigrationAgentId(params.cfg);
+  const ownershipAgentId =
+    params.doctorOnlyStateMigrations === true
+      ? tryResolveDoctorSessionMigrationAgentId(params.cfg)
+      : undefined;
   const sessionStoreOwnership = ownershipAgentId
     ? resolveSessionStoreOwnership({
         cfg: params.cfg,
@@ -1595,15 +1602,15 @@ export async function autoMigrateLegacyState(params: {
         pluginSessionStoreAgentIds,
       })
     : undefined;
-  // Canonicalize orphaned session keys regardless of whether legacy migration
-  // is needed — the orphan-key bug (#29683) affects all installs with
-  // non-default agent IDs or mainKey configuration.
-  const orphanKeys = await migrateOrphanedSessionKeys({
-    cfg: params.cfg,
-    env,
-    additionalAgentIds: pluginSessionStoreAgentIds,
-    legacySessionSurfaces,
-  });
+  const orphanKeys =
+    params.doctorOnlyStateMigrations === true
+      ? await migrateOrphanedSessionKeys({
+          cfg: params.cfg,
+          env,
+          additionalAgentIds: pluginSessionStoreAgentIds,
+          legacySessionSurfaces,
+        })
+      : { changes: [], warnings: [] };
 
   const logMigrationResults = (changes: string[], warnings: string[], notices: string[]) => {
     const logger = params.log ?? createSubsystemLogger("state-migrations");
@@ -1626,6 +1633,7 @@ export async function autoMigrateLegacyState(params: {
 
   const detected = await detectLegacyStateMigrations({
     cfg: params.cfg,
+    mode: params.doctorOnlyStateMigrations === true ? "doctor" : "automatic",
     pluginDoctorConfig: params.pluginDoctorConfig,
     pluginSessionStoreAgentIds,
     sessionStoreOwnership,
@@ -1664,6 +1672,7 @@ export async function autoMigrateLegacyState(params: {
     pluginSessionStoreAgentIds,
     recoverCorruptTargetStore: params.recoverCorruptTargetStore,
     skipAgentScopedMigrations: Boolean(hasCustomAgentDir),
+    doctorOnlyStateMigrations: params.doctorOnlyStateMigrations,
     legacySessionSurfaces,
   });
   const initialMigrationSources = [
@@ -1704,8 +1713,8 @@ export async function autoMigrateLegacyState(params: {
     !detected.workspace.hasLegacy &&
     !detected.channelPairing.hasLegacy
   ) {
-    // SQLite-native session rows do not trip the older JSON/file detectors. Keep these keyed
-    // convergers in the empty-detection path so automatic preflight cannot skip their ledgers.
+    // SQLite key migration and Doctor's standalone ACP repair can have no file preview.
+    // Preserve their convergence even when the other detectors have no work.
     const alwaysRunSources: MigrationMessages[] = [];
     for (const step of migrationSteps) {
       if (step.kind === "legacy-main-session-keys" || step.kind === "acp-session-metadata") {

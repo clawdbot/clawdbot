@@ -478,6 +478,11 @@ export function createChannelIngressDrain<
           state.occupiesLane = false;
         }
       },
+      onDeferredHeartbeat: () => {
+        if (state.phase === "deferred" && !state.guillotined && !state.superseded) {
+          armStallWatchdog(state);
+        }
+      },
       onAdoptionFinalizing: () => {
         if (state.phase !== "dispatching" && state.phase !== "deferred") {
           return;
@@ -705,12 +710,19 @@ export function createChannelIngressDrain<
         ),
     );
     const retryDelayedLaneKeys = new Set<string>();
+    const pendingLaneKeys = new Set<string>();
+    const candidateIds = new Set(pending.map((event) => event.id));
+    // listPending and claimNext share order, so the first row per lane is its head.
+    // Delayed tails leave this snapshot so a sibling cannot make them start early.
     for (const event of pending) {
+      const laneKey = resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey);
       if (resolveIngressRetryDelayMs(event, options.retryPolicy, now()) > 0) {
-        retryDelayedLaneKeys.add(
-          resolveLaneKey(event, options.deriveLaneKey, options.reconcileStoredLaneKey),
-        );
+        candidateIds.delete(event.id);
+        if (!pendingLaneKeys.has(laneKey)) {
+          retryDelayedLaneKeys.add(laneKey);
+        }
       }
+      pendingLaneKeys.add(laneKey);
     }
 
     // Deterministic blocked set for claimNext lane serialization.
@@ -732,7 +744,6 @@ export function createChannelIngressDrain<
       }
     }
 
-    const candidateIds = new Set(pending.map((event) => event.id));
     let started = 0;
     while (started < startLimit) {
       if (shouldStop()) {

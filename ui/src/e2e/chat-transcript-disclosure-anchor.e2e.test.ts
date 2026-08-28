@@ -4,6 +4,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import {
   controlUiBundledSettingsStorageKey,
+  controlUiE2eWaitTimeoutMs,
   installMockGateway,
 } from "../test-helpers/control-ui-e2e.ts";
 import { chatThreadDistanceFromBottom, waitForChatScrollIdle } from "./chat-flow.test-support.ts";
@@ -113,16 +114,25 @@ async function showSplitDashboard(page: import("playwright").Page, sessionKey: s
 
 suite.define(() => {
   it.each([
-    { reducedMotion: "no-preference", interruption: "wheel" },
-    { reducedMotion: "reduce", interruption: "wheel" },
-    { reducedMotion: "no-preference", interruption: "pointer" },
+    { reducedMotion: "no-preference", interruption: "wheel", recoveryPosition: "within-viewport" },
+    { reducedMotion: "reduce", interruption: "wheel", recoveryPosition: "within-viewport" },
+    {
+      reducedMotion: "no-preference",
+      interruption: "synthetic-pointer",
+      recoveryPosition: "within-viewport",
+    },
+    {
+      reducedMotion: "no-preference",
+      interruption: "native-pointer",
+      recoveryPosition: "above-viewport",
+    },
   ] as const)(
-    "remeasures recovered assistant text after interrupted scrolling ($reducedMotion, $interruption)",
-    async ({ reducedMotion, interruption }) => {
+    "remeasures recovered assistant text after interrupted scrolling ($reducedMotion, $interruption, $recoveryPosition)",
+    async ({ reducedMotion, interruption, recoveryPosition }) => {
       const artifactDir = path.resolve(
         process.env.OPENCLAW_CONTROL_UI_E2E_ARTIFACT_DIR ??
           ".artifacts/control-ui-e2e/virtual-sizing/after",
-        interruption === "wheel" ? reducedMotion : `${reducedMotion}-${interruption}`,
+        `${reducedMotion}-${interruption}-${recoveryPosition}`,
       );
       await fs.mkdir(artifactDir, { recursive: true });
       await suite.withPage(
@@ -144,7 +154,7 @@ suite.define(() => {
               __openclaw: {
                 id: `sizing-message-${index}`,
                 seq: index + 1,
-                ...(index === 1 || (interruption === "pointer" && index % 2 === 1)
+                ...(index === 1 || (interruption === "native-pointer" && index % 2 === 1)
                   ? { truncated: true, reason: "display-cap" }
                   : {}),
               },
@@ -163,31 +173,86 @@ suite.define(() => {
             .locator('.chat-bubble[data-entry-id="sizing-message-1"]')
             .waitFor({ state: "visible" });
           await page.screenshot({ path: path.join(artifactDir, "01-before-scroll.png") });
-          await page.locator(".chat-scroll-to-bottom").click();
-          await page.waitForFunction((pointerInterruption) => {
-            const scroller = document.querySelector<HTMLElement>(
-              ".chat-pane-cache__pane--active .chat-thread",
-            );
-            return (
-              scroller &&
-              scroller.scrollTop > 0 &&
-              (!pointerInterruption ||
-                Array.from(
-                  scroller.querySelectorAll<HTMLElement>(
-                    '.chat-bubble[data-entry-id^="sizing-message-"]',
-                  ),
-                ).some(
-                  (bubble) =>
-                    Number(bubble.dataset.entryId!.slice("sizing-message-".length)) % 2 === 1 &&
-                    bubble.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <=
-                      scroller.getBoundingClientRect().top,
-                ))
-            );
-          }, interruption === "pointer");
-          const during = await thread.evaluate((element) => ({
-            top: element.scrollTop,
-            max: element.scrollHeight - element.clientHeight,
-          }));
+          let during: { top: number; max: number };
+          if (interruption === "synthetic-pointer") {
+            // Check native gutter hit testing separately from animation timing.
+            const pointer = await thread.evaluateHandle((element) => {
+              const observed = { trusted: false, scroller: false };
+              document.addEventListener(
+                "pointerdown",
+                (event) => {
+                  observed.trusted = event.isTrusted;
+                  observed.scroller = event.target === element;
+                },
+                { capture: true, once: true },
+              );
+              return observed;
+            });
+            const track = await thread.boundingBox();
+            expect(track).not.toBeNull();
+            await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
+            expect(await pointer.jsonValue()).toEqual({ trusted: true, scroller: true });
+            await pointer.dispose();
+            // Synthetic intent runs in the first positive native scroll callback;
+            // a Node round trip can outlive the fixed row's visible range.
+            // Smooth animation and production cancellation remain real.
+            during = await page
+              .locator(".chat-scroll-to-bottom")
+              .evaluate((button, waitTimeout) => {
+                const scroller = document.querySelector<HTMLElement>(
+                  ".chat-pane-cache__pane--active .chat-thread",
+                )!;
+                return new Promise<{ top: number; max: number }>((resolve, reject) => {
+                  const interrupt = (event: Event) => {
+                    if (!event.isTrusted || scroller.scrollTop <= 0) {
+                      return;
+                    }
+                    clearTimeout(timer);
+                    scroller.removeEventListener("scroll", interrupt);
+                    const position = {
+                      top: scroller.scrollTop,
+                      max: scroller.scrollHeight - scroller.clientHeight,
+                    };
+                    scroller.dispatchEvent(
+                      new PointerEvent("pointerdown", { bubbles: true, pointerType: "mouse" }),
+                    );
+                    resolve(position);
+                  };
+                  const timer = setTimeout(() => {
+                    scroller.removeEventListener("scroll", interrupt);
+                    reject(new Error("Native scrolling did not reach the interruption geometry"));
+                  }, waitTimeout);
+                  scroller.addEventListener("scroll", interrupt);
+                  (button as HTMLElement).click();
+                });
+              }, controlUiE2eWaitTimeoutMs);
+          } else {
+            await page.locator(".chat-scroll-to-bottom").click();
+            await page.waitForFunction((pointerInterruption) => {
+              const scroller = document.querySelector<HTMLElement>(
+                ".chat-pane-cache__pane--active .chat-thread",
+              );
+              return (
+                scroller &&
+                scroller.scrollTop > 0 &&
+                (!pointerInterruption ||
+                  Array.from(
+                    scroller.querySelectorAll<HTMLElement>(
+                      '.chat-bubble[data-entry-id^="sizing-message-"]',
+                    ),
+                  ).some(
+                    (bubble) =>
+                      Number(bubble.dataset.entryId!.slice("sizing-message-".length)) % 2 === 1 &&
+                      bubble.closest(".chat-virtual-row")!.getBoundingClientRect().bottom <=
+                        scroller.getBoundingClientRect().top,
+                  ))
+              );
+            }, interruption === "native-pointer");
+            during = await thread.evaluate((element) => ({
+              top: element.scrollTop,
+              max: element.scrollHeight - element.clientHeight,
+            }));
+          }
           if (reducedMotion === "no-preference") {
             expect(during.top).toBeLessThan(during.max);
           }
@@ -195,11 +260,13 @@ suite.define(() => {
             await thread.hover();
             await page.mouse.wheel(0, -100_000);
           } else {
-            const track = await thread.boundingBox();
-            expect(track).not.toBeNull();
-            // A real pointer press in the scroll gutter can take over without
-            // a wheel event or a changed offset.
-            await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
+            if (interruption === "native-pointer") {
+              const track = await thread.boundingBox();
+              expect(track).not.toBeNull();
+              // A real pointer press in the scroll gutter can take over without
+              // a wheel event or a changed offset.
+              await page.mouse.click(track!.x + track!.width - 3, track!.y + 20);
+            }
             await page.locator(".chat-scroll-to-bottom").waitFor({ state: "visible" });
             // Chromium can commit its last canceled animation offset after the
             // pointer action returns. Capture the reader before releasing text.
@@ -216,7 +283,7 @@ suite.define(() => {
           // Native smooth scrolling can pass the first message before the pointer
           // arrives. Recover a still-mounted pending row above the settled reader.
           const messageId =
-            interruption === "pointer"
+            interruption === "native-pointer"
               ? await thread.evaluate((element) => {
                   const top = element.getBoundingClientRect().top;
                   const bubbles = Array.from(
@@ -246,8 +313,19 @@ suite.define(() => {
           expect(pendingRequest).toBeDefined();
           const initial = await bubble.evaluate((element) => {
             const row = element.closest<HTMLElement>(".chat-virtual-row")!;
-            return { key: row.dataset.virtualRowKey, height: row.offsetHeight };
+            return {
+              key: row.dataset.virtualRowKey,
+              height: row.offsetHeight,
+              bottom: row.getBoundingClientRect().bottom,
+              viewportTop: row.closest(".chat-thread")!.getBoundingClientRect().top,
+            };
           });
+          if (interruption !== "wheel") {
+            expect(
+              initial.bottom <= initial.viewportTop,
+              `recovered row must remain mounted ${recoveryPosition}`,
+            ).toBe(recoveryPosition === "above-viewport");
+          }
           const fullText = Array.from(
             { length: 5 },
             (_, index) =>
@@ -293,13 +371,20 @@ suite.define(() => {
               2,
             ),
           );
-          if (interruption === "pointer") {
+          if (interruption !== "wheel") {
             // Growth above the reader legitimately adjusts scrollTop; the visible
             // row must stay anchored regardless of where the pointer stopped scrolling.
             expect(finalAnchor.key).toBe(interruptedAnchor.key);
             expect(
               Math.abs(finalAnchor.viewportTop - interruptedAnchor.viewportTop),
             ).toBeLessThanOrEqual(1);
+            if (interruption === "synthetic-pointer") {
+              expect(
+                Math.abs(
+                  (await thread.evaluate((element) => element.scrollTop)) - interruptedOffset,
+                ),
+              ).toBeLessThanOrEqual(1);
+            }
           }
           expect(final.key).toBe(initial.key);
           expect(final.height).toBeGreaterThan(initial.height);

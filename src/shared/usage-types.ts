@@ -9,7 +9,7 @@ import type {
   SessionMessageCounts,
   SessionModelUsage,
   SessionToolUsage,
-} from "../infra/session-cost-usage.js";
+} from "../infra/session-cost-usage.types.js";
 
 /** One session or session-family row returned by the gateway usage endpoint. */
 export type SessionUsageEntry = {

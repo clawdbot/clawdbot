@@ -11,6 +11,10 @@ import type {
   AgentTool,
   ThinkingLevel,
 } from "../runtime/index.js";
+import {
+  takeCodeModeResponseSource,
+  prepareCodeModeSourceAppend,
+} from "../transcript-code-mode-source.js";
 import type {
   AgentSessionConfig,
   AgentSessionEvent,
@@ -374,8 +378,10 @@ export abstract class AgentSessionBase {
       retireQueuedUserMessage(event.message);
     }
 
+    const sourceSlots =
+      event.type === "message_end" ? takeCodeModeResponseSource(event.message) : undefined;
     // Emit to extensions first
-    const messageChangedByExtension = await this.emitExtensionEvent(event);
+    const messageChanged = await this.emitExtensionEvent(event);
     const publishAfterPersistence = event.type === "message_end" && event.message.role === "user";
 
     // Notify all listeners
@@ -414,10 +420,11 @@ export abstract class AgentSessionBase {
           // Normalize live delivery facts before persistence makes its redacted copy.
           // Stored arguments must never replace the values used for tool execution.
           applyAssistantDeliveryDirectives(event.message);
-          entryId = this.sessionManager.appendMessage(event.message, {
-            invalidateSerializedPrefixCache:
-              messageChangedByExtension || toolResultChangedByExtension,
-          });
+          const appendOptions = {
+            invalidateSerializedPrefixCache: messageChanged || toolResultChangedByExtension,
+          };
+          prepareCodeModeSourceAppend(appendOptions, event.message, sourceSlots);
+          entryId = this.sessionManager.appendMessage(event.message, appendOptions);
         } catch (error) {
           if (event.message.role === "user") {
             reportSteeringMessagePersistenceFailure(event.message, error);

@@ -1804,7 +1804,7 @@ src/agents/embedded-agent-runner/replay-history.ts	60
 src/agents/embedded-agent-runner/result-fallback-classifier.ts	2
 src/agents/embedded-agent-runner/run-entry.ts	3
 src/agents/embedded-agent-runner/run-orchestrator.ts	1
-src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	5
+src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts	4
 src/agents/embedded-agent-runner/run/abortable.ts	2
 src/agents/embedded-agent-runner/run/attempt-async-tasks.ts	1
 src/agents/embedded-agent-runner/run/attempt-before-agent-run.ts	2
@@ -2035,7 +2035,6 @@ src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/announce/subagent-announce-output.ts	8
 src/agents/subagents/completion/subagent-completion-admission.store.ts	2
 src/agents/subagents/registry/subagent-control-messaging.ts	2
-src/agents/subagents/registry/subagent-control.ts	1
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-helpers.ts	2
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
@@ -2155,8 +2154,7 @@ src/auto-reply/heartbeat-filter.ts	4
 src/auto-reply/heartbeat-tool-response.ts	3
 src/auto-reply/reply-payload.ts	2
 src/auto-reply/reply.directive.directive-behavior.e2e-mocks.ts	1
-src/auto-reply/reply/abort.ts	1
-src/auto-reply/reply/acp-reset-target.ts	3
+src/auto-reply/reply/acp-reset-target.ts	2
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-execution.ts	1
@@ -2362,9 +2360,9 @@ src/cli/command-options.ts	1
 src/cli/command-secret-gateway.ts	2
 src/cli/command-secret-targets.ts	2
 src/cli/completion-runtime.ts	4
-src/cli/config-cli-input.ts	3
+src/cli/config-cli-input.ts	2
 src/cli/config-cli-path.ts	6
-src/cli/config-cli-runner.ts	7
+src/cli/config-cli-runner.ts	3
 src/cli/config-cli.ts	8
 src/cli/config-model-validation.ts	7
 src/cli/config-set-input.ts	2
@@ -2988,7 +2986,6 @@ src/gateway/server-methods/terminal.ts	7
 src/gateway/server-methods/tools-catalog.ts	2
 src/gateway/server-methods/ui-command.ts	1
 src/gateway/server-methods/update.ts	2
-src/gateway/server-methods/usage.ts	3
 src/gateway/server-methods/web.ts	3
 src/gateway/server-methods/wizard.ts	1
 src/gateway/server-methods/workspace-fs.ts	2
@@ -3008,7 +3005,6 @@ src/gateway/server-startup-config-helpers.ts	1
 src/gateway/server-startup-config.ts	1
 src/gateway/server-startup-finish.ts	1
 src/gateway/server-startup-post-attach.ts	1
-src/gateway/server-startup-session-migration.ts	1
 src/gateway/server-worker-placement-startup.ts	2
 src/gateway/server.auth.control-ui.bootstrap-lifecycle.suite.ts	8
 src/gateway/server.auth.control-ui.device-token.suite.ts	2
@@ -3237,7 +3233,7 @@ src/infra/session-cost-usage-cache-runtime.ts	1
 src/infra/session-cost-usage-cache.sqlite.ts	1
 src/infra/session-cost-usage-collection.ts	4
 src/infra/session-cost-usage-pricing.ts	6
-src/infra/session-cost-usage-reporting.ts	9
+src/infra/session-cost-usage-reporting.ts	8
 src/infra/session-delivery-queue-runtime.ts	1
 src/infra/session-delivery-queue-storage.ts	4
 src/infra/shell-env.ts	1
@@ -4132,7 +4128,7 @@ ui/src/pages/chat/route.ts	2
 ui/src/pages/chat/run-lifecycle.ts	1
 ui/src/pages/chat/scroll.ts	1
 ui/src/pages/chat/session-cache.ts	2
-ui/src/pages/chat/stream-reconciliation.ts	12
+ui/src/pages/chat/stream-reconciliation.ts	11
 ui/src/pages/chat/tool-stream.ts	5
 ui/src/pages/chat/workspace-conflict.ts	2
 ui/src/pages/config/config-page.ts	1

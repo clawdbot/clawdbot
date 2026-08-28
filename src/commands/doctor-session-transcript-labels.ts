@@ -10,8 +10,11 @@ import { updateSqliteTranscriptEventJsonInTransaction } from "../config/sessions
 import { resolveAllAgentSessionStoreTargetsSync } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
-import { resolveTargetSqlitePath } from "./doctor-session-sqlite-readers.js";
+import {
+  resolveOpenClawAgentSqlitePath,
+  runOpenClawAgentWriteTransaction,
+} from "../state/openclaw-agent-db.js";
+import { resolveTargetSqliteOptions } from "./doctor-session-sqlite-readers.js";
 import {
   readOnlySqliteTranscriptSessionIds,
   readOnlySqliteTranscriptRepairSnapshot,
@@ -190,21 +193,15 @@ export async function noteSessionTranscriptLabelHealth(params: {
   let repairedSessions = 0;
   let repairedEvents = 0;
 
-  const targetsBySqlitePath = new Map<string, { agentId: string; storePath: string }>();
+  const seenPaths = new Set<string>();
   for (const target of resolveAllAgentSessionStoreTargetsSync(params.cfg, { env })) {
-    const sqlitePath = resolveTargetSqlitePath(target);
-    if (!targetsBySqlitePath.has(sqlitePath)) {
-      targetsBySqlitePath.set(sqlitePath, target);
-    }
-  }
-
-  for (const [sqlitePath, target] of targetsBySqlitePath) {
-    if (!fs.existsSync(sqlitePath)) {
+    const databaseOptions = resolveTargetSqliteOptions(target, env);
+    const sqlitePath = resolveOpenClawAgentSqlitePath(databaseOptions);
+    if (seenPaths.has(sqlitePath) || !fs.existsSync(sqlitePath)) {
       continue;
     }
-
+    seenPaths.add(sqlitePath);
     const { agentId } = target;
-    const databaseOptions = { agentId, env, path: sqlitePath };
 
     try {
       // Detect read-only, then repair each session in its own transaction as it is found, so a large

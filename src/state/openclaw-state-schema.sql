@@ -519,7 +519,7 @@ CREATE TABLE IF NOT EXISTS operator_approval_standing_grants (
   job_config_revision TEXT NOT NULL CHECK (length(job_config_revision) > 0),
   operation_binding TEXT NOT NULL CHECK (length(operation_binding) > 0),
   created_at_ms INTEGER NOT NULL,
-  expires_at_ms INTEGER NOT NULL CHECK (expires_at_ms >= created_at_ms),
+  expires_at_ms INTEGER CHECK (expires_at_ms IS NULL OR expires_at_ms >= created_at_ms),
   revoked_at_ms INTEGER,
   revoked_by TEXT,
   last_used_at_ms INTEGER,

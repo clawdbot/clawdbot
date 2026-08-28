@@ -2,8 +2,10 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 const itUnix = process.platform === "win32" ? it.skip : it;
 const runCommandWithTimeoutMock = vi.fn();
 
@@ -19,6 +21,57 @@ beforeEach(() => {
 async function loadGmailSetupUtils() {
   return await import("./gmail-setup-utils.js");
 }
+
+describe("ensureDependency binary availability", () => {
+  afterEach(() => runCommandWithTimeoutMock.mockReset());
+
+  it.each([true, false])(
+    "checks the installed executable when installer creates it: %s",
+    async (createsBinary) => {
+      const { ensureDependency } = await loadGmailSetupUtils();
+      await withTestDir({ prefix: "openclaw-dependency-probe-" }, async (root) => {
+        const binDir = path.join(root, "bin");
+        await fs.mkdir(binDir);
+        const writeExecutable = async (name: string) => {
+          const executable = path.join(binDir, name);
+          await fs.writeFile(executable, "#!/bin/sh\nexit 0\n");
+          await fs.chmod(executable, 0o755);
+        };
+        await writeExecutable("brew");
+        await withEnvAsync({ PATH: binDir, XDG_CONFIG_HOME: path.join(root, "config") }, () =>
+          withMockedPlatform("darwin", async () => {
+            runCommandWithTimeoutMock.mockImplementation(async (argv: string[]) => {
+              expect(argv).toEqual(["brew", "install", "fixture-probe-formula"]);
+              if (createsBinary) {
+                await writeExecutable("fixture-gmail-tool");
+              }
+              return {
+                stdout: "",
+                stderr: "",
+                code: 0,
+                signal: null,
+                killed: false,
+                termination: "exit",
+              };
+            });
+
+            const install = () => ensureDependency("fixture-gmail-tool", ["fixture-probe-formula"]);
+            if (createsBinary) {
+              await expect(install()).resolves.toBeUndefined();
+              await expect(install()).resolves.toBeUndefined();
+            } else {
+              await expect(install()).rejects.toThrow(
+                "fixture-gmail-tool still not available after brew install",
+              );
+            }
+            expect(process.env.PATH).toBe(binDir);
+            expect(runCommandWithTimeoutMock).toHaveBeenCalledTimes(1);
+          }),
+        );
+      });
+    },
+  );
+});
 
 describe("runGcloud interpreter resolution", () => {
   itUnix(
