@@ -1987,6 +1987,19 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/visitor-access:
+    dependencies:
+      typebox:
+        specifier: 1.3.16
+        version: 1.3.16
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/voice-call:
     dependencies:
       typebox:

@@ -120,6 +120,10 @@
       - any-glob-to-any-file:
           - "extensions/bonjour/**"
           - "docs/gateway/bonjour.md"
+"plugin: visitor-access":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/visitor-access/**"
 "channel: imessage":
   - changed-files:
       - any-glob-to-any-file:
