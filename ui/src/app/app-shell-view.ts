@@ -39,6 +39,7 @@ import {
   type LazyCustomElementRequestController,
   MACOS_TITLEBAR_ELEMENT,
   type OptionalCustomElement,
+  SIDEBAR_ATTENTION_ELEMENT,
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
 import type { NativeHistoryState } from "./native-web-chrome.ts";
@@ -59,11 +60,6 @@ import {
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const SIDEBAR_ATTENTION_ELEMENT = {
-  tagName: "openclaw-sidebar-attention",
-  label: t("attention.issues"),
-  loadModule: () => import("../components/sidebar-attention.ts"),
-} satisfies OptionalCustomElement;
 
 export interface ShellViewHost {
   readonly context: ApplicationContext<RouteId> | undefined;

@@ -383,11 +383,11 @@ async function dispatchChannelTurnWithDeliveryOwner(
   const normalizationSuppressionAttempts: PendingChannelDeliveryAttempt[] = [];
   let agentRun: [runId?: string, executionIdentityToken?: ExecutionToken] = [];
   const onAgentRunStart = replyPipeline.replyOptions?.onAgentRunStart;
-  const replyOptions = {
+  const replyOptions: NonNullable<AssembledChannelTurn["replyOptions"]> = {
     ...replyPipeline.replyOptions,
-    onAgentRunStart: (runId: string, executionIdentityToken?: ExecutionToken) => {
-      agentRun = [runId, executionIdentityToken];
-      onAgentRunStart?.(runId, executionIdentityToken);
+    onAgentRunStart: (...args) => {
+      agentRun = [args[0], args[1]];
+      return onAgentRunStart?.(...args);
     },
   };
   const hookCtx = delivery.observeMessageSent

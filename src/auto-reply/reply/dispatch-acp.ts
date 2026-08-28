@@ -633,7 +633,7 @@ export async function tryDispatchAcpReplyCore(params: {
   const requestId = resolveAcpRequestId(params.ctx);
   const existingRunId = normalizeOptionalString(params.runId);
   const auditOnly = existingRunId === undefined;
-  const completionSource = params.onAgentRunStart ? ("reply-dispatch" as const) : undefined;
+  let completionSource: ReplyDispatchRun["completionSource"] | undefined;
   const auditRunId = existingRunId ?? generateSecureUuid();
   const auditRuntime = await loadDispatchAcpAuditRuntime();
   const auditToolTracker = auditRuntime.createAcpToolLifecycleTracker();
@@ -650,10 +650,13 @@ export async function tryDispatchAcpReplyCore(params: {
       return;
     }
     auditStarted = true;
-    params.onAgentRunStart?.(auditRunId, undefined, {
+    const completionOwner = params.onAgentRunStart?.(auditRunId, undefined, {
       completionSource: "reply-dispatch",
       getResult: () => ({ assistantTranscript, terminalOutcome }),
     });
+    // Observers and channel wrappers also install this callback. Only an explicit
+    // synchronous acknowledgement transfers chat completion away from lifecycle events.
+    completionSource = completionOwner === "reply-dispatch" ? completionOwner : undefined;
     auditRuntime.emitAcpLifecycleStart({
       runId: auditRunId,
       sessionKey: canonicalSessionKey,

@@ -1,5 +1,7 @@
 // Channel turn delivery tests cover orchestration, dispatch, and completion behavior.
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import path from "node:path";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ReplyDispatchRun } from "../../auto-reply/get-reply-options.types.js";
 import {
   getReplyPayloadMetadata,
   setReplyPayloadMetadata,
@@ -10,6 +12,7 @@ import type { ReplyDispatchReceipt } from "../../auto-reply/reply/reply-dispatch
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resetDiagnosticEventsForTest } from "../../infra/diagnostic-events.js";
 import { resetLogger, setLoggerOverride } from "../../logging/logger.js";
+import { createSuiteTempRootTracker } from "../../test-helpers/temp-dir.js";
 import { outboundMessageIdentities } from "../message/outbound-echo-state.js";
 import {
   readAgentRunTerminalOutcome,
@@ -104,6 +107,8 @@ vi.mock("../../infra/outbound/delivery-completion.js", async (importOriginal) =>
 });
 
 const cfg = {} as OpenClawConfig;
+const tempDirs = createSuiteTempRootTracker({ prefix: "openclaw-channel-turn-delivery-" });
+let storePath: string;
 
 function dispatchTestAssembledTurn(
   overrides: Omit<
@@ -114,7 +119,7 @@ function dispatchTestAssembledTurn(
   return dispatchAssembledChannelTurn({
     cfg,
     agentId: "main",
-    storePath: "/tmp/sessions.json",
+    storePath,
     ...overrides,
   });
 }
@@ -172,7 +177,14 @@ function deliveryResult(value: unknown): DeliveryResult {
 }
 
 describe("channel turn delivery", () => {
-  beforeEach(() => {
+  beforeAll(async () => {
+    await tempDirs.setup();
+  });
+
+  afterAll(() => tempDirs.cleanup());
+
+  beforeEach(async () => {
+    storePath = path.join(await tempDirs.make(), "sessions.json");
     vi.clearAllMocks();
     recordInboundSessionCore.mockResolvedValue(undefined);
     dispatchReplyWithBufferedBlockDispatcherCore.mockImplementation(createDispatch());
@@ -265,7 +277,7 @@ describe("channel turn delivery", () => {
       intentId: "intent-1",
       sessionId: "session-1",
       sessionKey: "agent:main:telegram:peer",
-      storePath: "/tmp/sessions.json",
+      storePath,
     };
     const sourcePayload = setReplyPayloadMetadata(
       { text: "reply" },
@@ -1024,6 +1036,11 @@ describe("channel turn delivery", () => {
 
   it("observes provider-finalized content and identity after deferred delivery settles", async () => {
     const events: string[] = [];
+    const onAgentRunStart = vi.fn(() => "reply-dispatch");
+    const dispatchRun: ReplyDispatchRun = {
+      completionSource: "reply-dispatch",
+      getResult: () => ({}),
+    };
     emitMessageSent.mockImplementation((event) => {
       events.push("message_sent");
       return event;
@@ -1045,7 +1062,9 @@ describe("channel turn delivery", () => {
       return { visibleReplySent: false, finalization };
     });
     const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async (params) => {
-      params.replyOptions?.onAgentRunStart?.("run-finalized");
+      expect(params.replyOptions?.onAgentRunStart?.("run-finalized", undefined, dispatchRun)).toBe(
+        "reply-dispatch",
+      );
       await params.dispatcherOptions.deliver({ text: "pre-final text" }, { kind: "final" });
       events.push("provider-finalized");
       resolveFinalization({
@@ -1063,10 +1082,16 @@ describe("channel turn delivery", () => {
       ctxPayload: createCtx({ Surface: "feishu", Provider: "feishu", OriginatingTo: "oc_chat" }),
       recordInboundSession: createRecordInboundSession(),
       dispatchReplyWithBufferedBlockDispatcher,
+      replyOptions: { onAgentRunStart },
       delivery: { deliver, observeMessageSent: true },
     });
 
     expect(events).toEqual(["deliver", "provider-finalized", "message_sent"]);
+    expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
+      "run-finalized",
+      undefined,
+      dispatchRun,
+    );
     expect(emitMessageSent).toHaveBeenCalledOnce();
     expect(emitMessageSent).toHaveBeenCalledWith({
       success: true,

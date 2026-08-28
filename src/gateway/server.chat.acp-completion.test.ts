@@ -7,9 +7,7 @@ import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
-import { withReplyDispatcher } from "../auto-reply/dispatch-dispatcher.js";
 import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
-import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { createAcpSessionMeta } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
@@ -206,15 +204,20 @@ describe("Gateway ACP completion ownership", () => {
       },
     );
     runtime.rejectTranscript = scenario.persistFail === true;
+    const actualDispatch = await vi.importActual<typeof import("../auto-reply/dispatch.js")>(
+      "../auto-reply/dispatch.js",
+    );
     dispatchInboundMessageMock.mockImplementation(async (input: unknown) => {
       // SAFETY: The Gateway mock adapter forwards the real dispatchInboundMessage parameters.
       const { ctx, cfg, dispatcher, replyOptions } = input as Parameters<
         typeof dispatchInboundMessage
       >[0];
-      const finalized = finalizeInboundContext(ctx);
-      return withReplyDispatcher({
+      return actualDispatch.dispatchInboundMessage({
+        ctx,
+        cfg,
         dispatcher,
-        run: async () => {
+        replyOptions,
+        dispatchReplyFromConfig: async ({ ctx: finalized, replyOptions }) => {
           if (scenario.media) {
             dispatcher.appendBeforeDeliver?.((payload) => ({
               ...payload,

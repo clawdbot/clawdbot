@@ -147,12 +147,15 @@ export type GetReplyOptions = {
   imageOrder?: PromptImageOrderEntry[];
   /** Ordered media facts whose model-facing text projection is already present in the prompt. */
   media?: MediaFact[];
-  /** Notifies when an agent run actually starts (useful for webchat command handling). */
+  /**
+   * Notifies when an agent run starts. Return "reply-dispatch" synchronously to accept
+   * completion ownership offered in options; all other legacy callback results are ignored.
+   */
   onAgentRunStart?: (
     runId: string,
     executionIdentityToken?: ExecutionIdentityAdmissionToken,
     options?: ReplyDispatchRun,
-  ) => void;
+  ) => unknown;
   /** Reports the terminal agent-run classification to the shared dispatch owner. */
   onAgentRunTerminalOutcome?: (outcome: "completed" | "failed") => void;
   /**

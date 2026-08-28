@@ -1026,9 +1026,12 @@ helper forwards both automatically. Share the recorder so the runtime and
 Gateway do not append the same user turn independently; mark runtime
 persistence only after a successful transcript write.
 
-The optional third `onAgentRunStart` argument can declare
-`completionSource: "reply-dispatch"` with a `getResult()` callback. After dispatch
-settles, the callback supplies the canonical `terminalOutcome` and, when an
+The optional third `onAgentRunStart` argument can offer
+`completionSource: "reply-dispatch"` with a `getResult()` callback. The host must
+return `"reply-dispatch"` synchronously to accept completion ownership; observers
+and other callback results leave lifecycle completion unchanged. Wrappers must
+forward every callback argument and its return value. After dispatch settles,
+`getResult()` supplies the canonical `terminalOutcome` and, when an
 assistant write succeeded, its `assistantTranscript` receipt (target, message
 ID, idempotency key, and optional projection anchor). The host then emits one
 chat completion from the delivered, post-hook payloads while retaining runtime

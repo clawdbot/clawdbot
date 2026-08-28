@@ -1431,7 +1431,6 @@
  "ui/src/lib/sessions/session-group-catalog.ts",
  "ui/src/lib/sessions/session-key.ts",
  "ui/src/lib/sessions/session-mutations.ts",
- "ui/src/lib/sessions/session-placement-recovery-migration.runtime.ts",
  "ui/src/lib/sessions/session-placement-recovery-storage-key.ts",
  "ui/src/lib/sessions/session-placement-recovery.ts",
  "ui/src/lib/sessions/session-placement-startup.ts",

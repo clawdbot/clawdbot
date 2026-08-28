@@ -373,6 +373,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                       }
                     }
                   }
+                  return options?.completionSource;
                 },
                 onModelSelected: (modelSelection) => {
                   updateChatRunProvider(context.chatAbortControllers, {
