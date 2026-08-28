@@ -153,6 +153,15 @@ plugin identity, detail identity, or app-readiness evidence. If a connector
 requires additional sign-in, complete that authorization before expecting the
 plugin's tools to become available.
 
+When installation returns apps that still need sign-in, OpenClaw provides
+**Set up / manage** links to the app pages returned by Codex. Sign in with the
+same ChatGPT account and workspace used by the Codex harness. Opening a link
+does not verify the connection or make its tools callable in the current
+conversation. If the browser shows a directory instead of the app, or no safe
+link is available, run `/apps` in Codex CLI and select the app there. Responses
+show up to five app links and explicitly report additional apps to review in
+Codex CLI.
+
 After a `codexPlugins` change, new Codex conversations pick up the updated
 app set automatically. Run `/new` or `/reset` to refresh the current
 conversation. A gateway restart is not required for plugin enable/disable
