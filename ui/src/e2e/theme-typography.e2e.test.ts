@@ -1,5 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import {
   formatKeyboardShortcutCombo,
@@ -118,6 +119,37 @@ async function captureTypography(
   }
 }
 
+async function openPicker(picker: Locator) {
+  await Promise.all([
+    picker.evaluate(
+      (select) =>
+        new Promise<void>((resolve) => {
+          select.addEventListener("wa-after-show", () => resolve(), { once: true });
+        }),
+    ),
+    picker.click(),
+  ]);
+}
+
+async function selectPickerOption(picker: Locator, value: string) {
+  await openPicker(picker);
+  await clickPickerOption(picker, value);
+}
+
+async function clickPickerOption(picker: Locator, value: string) {
+  const option = picker.locator(`wa-option[value="${value}"]`);
+  await option.waitFor({ state: "visible" });
+  await Promise.all([
+    picker.evaluate(
+      (select) =>
+        new Promise<void>((resolve) => {
+          select.addEventListener("wa-after-hide", () => resolve(), { once: true });
+        }),
+    ),
+    option.click(),
+  ]);
+}
+
 suite.define(() => {
   it("previews fonts on demand, applies independent overrides, and restores theme typography", async () => {
     const { page, themeRequests, gateway } = await openThemedChat("dash", "dark");
@@ -151,23 +183,14 @@ suite.define(() => {
       await preview.scrollIntoViewIfNeeded();
     }
     await captureTypography(page, "picker-default");
-    await Promise.all([
-      ui.evaluate(
-        (select) =>
-          new Promise<void>((resolve) => {
-            select.addEventListener("wa-after-show", () => resolve(), { once: true });
-          }),
-      ),
-      ui.click(),
-    ]);
+    await openPicker(ui);
     await ui.locator('wa-option[value="geist"]').waitFor({ state: "visible" });
     await expect.poll(() => fontRequests().length).toBe(9);
     await captureTypography(page, "picker-specimens");
-    await ui.locator('wa-option[value="geist"]').click();
+    await clickPickerOption(ui, "geist");
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     expect((await families()).chat).toContain("Fraunces");
-    await chat.click();
-    await chat.locator('wa-option[value="lora"]').click();
+    await selectPickerOption(chat, "lora");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
     await expect
       .poll(() =>
@@ -183,13 +206,10 @@ suite.define(() => {
     await waitForControlUiSettingsTakeover(page);
     await expect.poll(async () => (await families()).ui).toContain("Geist");
     await expect.poll(async () => (await families()).chat).toContain("Lora");
-    await ui.click();
-    await ui.locator('wa-option[value="system"]').click();
+    await selectPickerOption(ui, "system");
     await expect.poll(async () => (await families()).ui).toContain("-apple-system");
-    await ui.click();
-    await ui.locator('wa-option[value="theme"]').click();
-    await chat.click();
-    await chat.locator('wa-option[value="theme"]').click();
+    await selectPickerOption(ui, "theme");
+    await selectPickerOption(chat, "theme");
     await expect.poll(families).toEqual(initial);
     expect(
       await page.evaluate(() =>
