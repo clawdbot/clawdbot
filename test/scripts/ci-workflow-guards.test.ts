@@ -5860,13 +5860,13 @@ server.listen(0, "127.0.0.1", () => {
   });
 
   it.each([
-    [".github/workflows/mantis-discord-smoke.yml"],
-    [".github/workflows/plugin-clawhub-release.yml"],
-  ])("bounds %s git fetches", (workflowPath) => {
+    [".github/workflows/mantis-discord-smoke.yml", 2],
+    [".github/workflows/plugin-clawhub-release.yml", 3],
+  ])("bounds %s git fetches", (workflowPath, expectedFetchCount) => {
     const source = readFileSync(workflowPath, "utf8");
     const gitFetchLines = source.split("\n").filter((line) => line.includes("git fetch"));
 
-    expect(gitFetchLines, workflowPath).toHaveLength(2);
+    expect(gitFetchLines, workflowPath).toHaveLength(expectedFetchCount);
     expect(
       gitFetchLines.every((line) =>
         line.trimStart().startsWith("timeout --signal=TERM --kill-after=10s 120s git fetch"),
