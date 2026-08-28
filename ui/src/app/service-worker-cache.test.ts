@@ -10,9 +10,18 @@ const here = path.dirname(fileURLToPath(import.meta.url));
 const serviceWorkerPath = path.join(here, "../../public/sw.js");
 
 describe("Control UI service worker cache versioning", () => {
-  it("broadcasts updated versions to uncontrolled window clients during activation", async () => {
+  it("reloads uncontrolled window clients during activation", async () => {
     const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
-    const windowClient = { postMessage: vi.fn() };
+    const windowClient = {
+      url: "https://control.example/chat",
+      postMessage: vi.fn(),
+      navigate: vi.fn(async () => undefined),
+    };
+    const siblingClient = {
+      url: "https://control.example/other-app",
+      postMessage: vi.fn(),
+      navigate: vi.fn(async () => undefined),
+    };
     const matchedClients = createDeferred<Array<typeof windowClient>>();
     const listeners = new Map<string, Array<(event: ActivateEventStub) => void>>();
     const cacheDelete = vi.fn(async () => true);
@@ -42,9 +51,18 @@ describe("Control UI service worker cache versioning", () => {
     };
     const context = vm.createContext({
       URL,
+      MessageChannel: UnresponsiveMessageChannel,
       caches,
+      clearTimeout,
       fetch: vi.fn(),
-      self: serviceWorkerGlobal,
+      setTimeout,
+      self: {
+        ...serviceWorkerGlobal,
+        registration: {
+          scope: "https://control.example/",
+          showNotification: vi.fn(),
+        },
+      },
     });
 
     new vm.Script(serviceWorkerSource, { filename: "ui/public/sw.js" }).runInContext(context);
@@ -65,19 +83,64 @@ describe("Control UI service worker cache versioning", () => {
     await Promise.resolve();
 
     expect(activationSettled).toBe(false);
-    expect(windowClient.postMessage).not.toHaveBeenCalled();
+    expect(windowClient.navigate).not.toHaveBeenCalled();
 
-    matchedClients.resolve([windowClient]);
+    matchedClients.resolve([windowClient, siblingClient]);
     await activationPromise;
 
     expect(clients.matchAll).toHaveBeenCalledWith({ type: "window", includeUncontrolled: true });
     expect(clients.claim).toHaveBeenCalledBefore(clients.matchAll);
     expect(cacheDelete).toHaveBeenCalledWith("openclaw-control-oldest");
-    expect(windowClient.postMessage).toHaveBeenCalledWith({
-      type: "sw-updated",
-      version: "new-build",
+    expect(windowClient.postMessage).toHaveBeenCalledOnce();
+    expect(windowClient.navigate).toHaveBeenCalledExactlyOnceWith(windowClient.url);
+    expect(siblingClient.postMessage).not.toHaveBeenCalled();
+    expect(siblingClient.navigate).not.toHaveBeenCalled();
+  });
+
+  it("keeps a current document mounted during activation", async () => {
+    const serviceWorkerSource = fs.readFileSync(serviceWorkerPath, "utf8");
+    const listeners = new Map<string, Array<(event: ActivateEventStub) => void>>();
+    const navigate = vi.fn(async () => undefined);
+    const clients = {
+      claim: vi.fn(async () => undefined),
+      matchAll: vi.fn(async () => [
+        {
+          url: "https://control.example/chat",
+          postMessage: vi.fn((_message: unknown, ports: MessagePort[]) => {
+            ports[0]?.postMessage({ version: "new-build" });
+          }),
+          navigate,
+        },
+      ]),
+    };
+    const context = vm.createContext({
+      URL,
+      MessageChannel,
+      caches: { delete: vi.fn(), keys: vi.fn(async () => []), open: vi.fn() },
+      clearTimeout,
+      fetch: vi.fn(),
+      setTimeout,
+      self: {
+        addEventListener(type: string, listener: (event: ActivateEventStub) => void) {
+          listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+        },
+        clients,
+        location: { href: "https://control.example/sw.js?v=new-build" },
+        registration: { scope: "https://control.example/", showNotification: vi.fn() },
+        skipWaiting: vi.fn(),
+      },
     });
-    expect(windowClient.postMessage.mock.calls[0]).toHaveLength(1);
+    new vm.Script(serviceWorkerSource, { filename: "ui/public/sw.js" }).runInContext(context);
+    let activationPromise: Promise<unknown> | undefined;
+
+    listeners.get("activate")?.[0]?.({
+      waitUntil(promise: Promise<unknown>) {
+        activationPromise = promise;
+      },
+    });
+
+    await expect(activationPromise).resolves.toBeUndefined();
+    expect(navigate).not.toHaveBeenCalled();
   });
 });
 
@@ -508,6 +571,11 @@ describe("Control UI service worker notification scope", () => {
 type ActivateEventStub = {
   waitUntil(promise: Promise<unknown>): void;
 };
+
+class UnresponsiveMessageChannel {
+  port1 = { addEventListener() {}, start() {} };
+  port2 = {};
+}
 
 type NotificationClickScenario = {
   name: string;

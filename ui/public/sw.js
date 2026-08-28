@@ -12,6 +12,30 @@ const CACHE_VERSION =
     : URL_CACHE_VERSION) || "dev";
 const CACHE_NAME = `${CACHE_PREFIX}${CACHE_VERSION}`;
 const CONTROL_CACHE_LIMIT = 3;
+const CLIENT_VERSION_TIMEOUT_MS = 1_000;
+
+function isControlUiChatClient(url) {
+  const clientUrl = new URL(url);
+  const scopeUrl = new URL(self.registration.scope);
+  const scopePath = scopeUrl.pathname.endsWith("/") ? scopeUrl.pathname : `${scopeUrl.pathname}/`;
+  return (
+    clientUrl.origin === scopeUrl.origin &&
+    (clientUrl.pathname === scopeUrl.pathname || clientUrl.pathname === `${scopePath}chat`)
+  );
+}
+
+function readClientVersion(client) {
+  return new Promise((resolve) => {
+    const channel = new MessageChannel();
+    const timeout = setTimeout(() => resolve(null), CLIENT_VERSION_TIMEOUT_MS);
+    channel.port1.addEventListener("message", (event) => {
+      clearTimeout(timeout);
+      resolve(typeof event.data?.version === "string" ? event.data.version : null);
+    });
+    channel.port1.start();
+    client.postMessage({ type: "sw-version-probe", version: CACHE_VERSION }, [channel.port2]);
+  });
+}
 
 // Minimal app-shell files to precache.
 const PRECACHE_URLS = ["./"];
@@ -39,17 +63,22 @@ self.addEventListener("activate", (event) => {
           controlKeys.filter((key) => !retained.has(key)).map((key) => caches.delete(key)),
         ),
       ]);
-      // Enumerate after claim so a concurrent reload receives the activation event
-      // instead of leaving the new document unaware of the replacement worker.
+      // A suspended mobile page can miss a one-shot update message. Current
+      // documents answer the probe; only stale or suspended chat documents reload.
       const windowClients = await self.clients.matchAll({
         type: "window",
         includeUncontrolled: true,
       });
 
-      for (const client of windowClients) {
-        // oxlint-disable-next-line unicorn/require-post-message-target-origin -- Service Worker Client.postMessage does not take targetOrigin.
-        client.postMessage({ type: "sw-updated", version: CACHE_VERSION });
-      }
+      await Promise.allSettled(
+        windowClients
+          .filter((client) => isControlUiChatClient(client.url))
+          .map(async (client) => {
+            if ((await readClientVersion(client)) !== CACHE_VERSION) {
+              await client.navigate(client.url);
+            }
+          }),
+      );
     })(),
   );
 });
