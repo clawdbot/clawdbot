@@ -209,6 +209,27 @@ function renderPairingQrExpiryNotices(count: number) {
   `;
 }
 
+function renderOmittedInlineImageNotice() {
+  return html`
+    <div
+      class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-inline-media-omitted"
+    >
+      <div class="chat-assistant-attachment-card__header">
+        <span class="chat-assistant-attachment-card__icon">${icons.alertTriangle}</span>
+        <span class="chat-assistant-attachment-card__title"
+          >${t("chat.inlineImageOmitted.title")}</span
+        >
+        <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
+          >${t("chat.inlineImageOmitted.badge")}</span
+        >
+      </div>
+      <div class="chat-assistant-attachment-card__reason">
+        ${t("chat.inlineImageOmitted.reason")}
+      </div>
+    </div>
+  `;
+}
+
 export function renderGroupedMessage(
   message: unknown,
   messageKey: string,
