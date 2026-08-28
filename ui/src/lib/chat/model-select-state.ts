@@ -54,11 +54,17 @@ export type ChatFastModeSelectState = {
   supported: boolean;
 };
 
+export type ChatFastModeTarget = Pick<
+  GatewaySessionRow,
+  "effectiveFastMode" | "fastMode" | "model" | "modelProvider"
+>;
+
 type ChatFastModeSelectStateInput = {
   activeRunId: string | null;
   catalog: ModelCatalogEntry[];
   connected: boolean;
   currentModelOverride: string;
+  fastModeTarget?: ChatFastModeTarget;
   gatewayAvailable: boolean;
   loading: boolean;
   sending: boolean;
@@ -71,6 +77,11 @@ type ChatFastModeSelectStateInput = {
 // service_tier), OpenAI sets service_tier priority, MiniMax/xAI select fast variants.
 // Providers without a wire mapping must not offer the toggle.
 const FAST_MODE_PROVIDER_IDS = new Set(["anthropic", "minimax", "minimax-portal", "openai", "xai"]);
+
+export function isChatFastModeProviderSupported(provider: string | null | undefined): boolean {
+  const providerId = normalizeChatModelProviderId(provider ?? "");
+  return Boolean(providerId && FAST_MODE_PROVIDER_IDS.has(providerId));
+}
 
 function resolveActiveSessionRow(state: ChatModelSelectStateInput) {
   return state.sessionsResult?.sessions?.find((row) =>
@@ -342,9 +353,11 @@ function resolveFastModeProvider(
 export function resolveChatFastModeSelectState(
   input: ChatFastModeSelectStateInput,
 ): ChatFastModeSelectState {
-  const activeRow = input.sessionsResult?.sessions?.find((row) =>
-    areUiSessionKeysEquivalent(row.key, input.sessionKey),
-  );
+  const activeRow =
+    input.fastModeTarget ??
+    input.sessionsResult?.sessions?.find((row) =>
+      areUiSessionKeysEquivalent(row.key, input.sessionKey),
+    );
   const activeProvider = normalizeChatModelProviderId(activeRow?.modelProvider ?? "") || null;
   const defaultProvider =
     normalizeChatModelProviderId(input.sessionsResult?.defaults?.modelProvider ?? "") || null;
@@ -373,9 +386,7 @@ export function resolveChatFastModeSelectState(
         ? "auto"
         : "off"
     : configuredOverride;
-  const providerSupported = Boolean(
-    effectiveProvider && FAST_MODE_PROVIDER_IDS.has(effectiveProvider),
-  );
+  const providerSupported = isChatFastModeProviderSupported(effectiveProvider);
   const supported = providerSupported || Boolean(configuredOverride);
   // The picker exposes speed as a two-state toggle: fast on, or back to the
   // provider baseline (explicit off for OpenAI's priority tier, inherited

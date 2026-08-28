@@ -32,6 +32,7 @@ export function buildDraftSessionCreateParams(draft: {
   model?: string;
   contextWindow?: string;
   thinkingLevel?: string;
+  fastMode?: SessionCreateParams["fastMode"];
   toolOverrides?: SessionCreateParams["toolOverrides"] | null;
   permissionMode?: SessionCreateParams["permissionMode"];
   visibility?: NewSessionVisibility;
@@ -71,6 +72,7 @@ export function buildDraftSessionCreateParams(draft: {
     ...(!catalogId && model ? { model } : {}),
     ...(!catalogId && contextWindow ? { contextWindow } : {}),
     ...(!catalogId && thinkingLevel ? { thinkingLevel } : {}),
+    ...(!catalogId && draft.fastMode !== undefined ? { fastMode: draft.fastMode } : {}),
     ...(draft.toolOverrides ? { toolOverrides: draft.toolOverrides } : {}),
     ...(draft.permissionMode ? { permissionMode: draft.permissionMode } : {}),
     ...(projectId ? { projectId } : {}),

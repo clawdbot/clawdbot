@@ -20,6 +20,7 @@ import { loadCombinedSessionStoreForGatewayCore } from "../config/sessions/combi
 import {
   loadSessionEntry,
   loadTranscriptEvents,
+  replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import {
@@ -32,6 +33,7 @@ import { withTimeout } from "../infra/fs-safe.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
+  beginSessionWorkAdmission,
   getSessionWorkAdmissionRelease,
   isSessionLifecycleMutationActive,
   SESSION_WORK_ADMISSION_DRAIN_TIMEOUT_MS,
@@ -2612,6 +2614,106 @@ test("sessions.create reset-in-place clears a prior node binding for Gateway exe
   expect(gatewaySession.payload?.entry.execCwd).toBeUndefined();
 });
 
+test("sessions.create reset-in-place applies Fast Mode only for admin callers", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("sess-fast-reset", { fastMode: false }) },
+  });
+  const params = {
+    agentId: "main",
+    parentSessionKey: "main",
+    emitCommandHooks: true,
+    fastMode: true,
+  };
+
+  const denied = await directSessionReq("sessions.create", params, {
+    client: { connect: { scopes: ["operator.write"] } } as never,
+  });
+  expect(denied).toMatchObject({
+    ok: false,
+    error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+  });
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+  ).toMatchObject({ sessionId: "sess-fast-reset", fastMode: false });
+
+  const changed = await directSessionReq<{ entry: { fastMode?: boolean } }>(
+    "sessions.create",
+    params,
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+  expect(changed.ok, JSON.stringify(changed.error)).toBe(true);
+  expect(changed.payload?.entry.fastMode).toBe(true);
+  expect(
+    loadSessionEntry({ agentId: "main", sessionKey: "agent:main:main", storePath }),
+  ).toMatchObject({ fastMode: true });
+});
+
+test("sessions.create rechecks Fast Mode before interrupting reset work", async () => {
+  testState.sessionConfig = { dmScope: "main" };
+  const { storePath } = await createSessionStoreDir();
+  const key = "agent:main:main";
+  await writeSessionStore({
+    entries: { main: sessionStoreEntry("sess-fast-race", { fastMode: false }) },
+  });
+  let interrupted = false;
+  let releaseAdmission = () => {};
+  const admission = await beginSessionWorkAdmission({
+    scope: storePath,
+    identities: [key, "sess-fast-race"],
+    assertAllowed: () => undefined,
+    onInterrupt: () => {
+      interrupted = true;
+      releaseAdmission();
+    },
+  });
+  releaseAdmission = admission.release;
+  let replaced = false;
+  const commitGuard = () => {
+    if (replaced) {
+      return;
+    }
+    replaced = true;
+    const current = loadSessionEntry({ agentId: "main", sessionKey: key, storePath });
+    if (!current) {
+      throw new Error("expected current main session");
+    }
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: key, storePath },
+      { ...current, fastMode: true },
+    );
+  };
+  const { createGatewaySession } = await import("./session-create-service.js");
+
+  try {
+    const denied = await createGatewaySession({
+      cfg: getRuntimeConfig(),
+      agentId: "main",
+      parentSessionKey: "main",
+      emitCommandHooks: true,
+      resetMainWhenUnspecified: true,
+      fastMode: false,
+      requestingOperatorScopes: ["operator.write"],
+      allowExistingModelSelection: false,
+      commandSource: "test",
+      commitGuard,
+    });
+
+    expect(denied).toMatchObject({
+      ok: false,
+      error: { code: "FORBIDDEN", message: "missing scope: operator.admin" },
+    });
+    expect(interrupted).toBe(false);
+    expect(loadSessionEntry({ agentId: "main", sessionKey: key, storePath })).toMatchObject({
+      sessionId: "sess-fast-race",
+      fastMode: true,
+    });
+  } finally {
+    admission.release();
+  }
+});
+
 test("sessions.reset preserves the recorded permission boundary", async () => {
   await createSessionStoreDir();
   await writeSessionStore({
@@ -3213,7 +3315,7 @@ test("sessions.create rejects worktrees for agent workspaces without a commit", 
   }
 });
 
-test("sessions.create stores dashboard model, thinking, and parent linkage, and creates a transcript", async () => {
+test("sessions.create stores dashboard model, thinking, fast mode, and parent linkage", async () => {
   const { storePath } = await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "ops" }] };
   agentDiscoveryMock.enabled = true;
@@ -3231,6 +3333,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
       providerOverride?: string;
       modelOverride?: string;
       thinkingLevel?: string;
+      fastMode?: boolean | "auto";
       parentSessionKey?: string;
       sessionFile?: string;
     };
@@ -3239,6 +3342,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
     label: "Dashboard Chat",
     model: "openai/gpt-test-a",
     thinkingLevel: "high",
+    fastMode: true,
     parentSessionKey: "main",
   });
 
@@ -3248,6 +3352,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   expect(created.payload?.entry?.providerOverride).toBe("openai");
   expect(created.payload?.entry?.modelOverride).toBe("gpt-test-a");
   expect(created.payload?.entry?.thinkingLevel).toBe("high");
+  expect(created.payload?.entry?.fastMode).toBe(true);
   expect(created.payload?.entry?.parentSessionKey).toBe("agent:main:main");
   expect(created.payload?.entry).not.toHaveProperty("sessionFile");
   expect(created.payload?.sessionId).toMatch(
@@ -3261,6 +3366,7 @@ test("sessions.create stores dashboard model, thinking, and parent linkage, and 
   expect(storedEntry?.providerOverride).toBe("openai");
   expect(storedEntry?.modelOverride).toBe("gpt-test-a");
   expect(storedEntry?.thinkingLevel).toBe("high");
+  expect(storedEntry?.fastMode).toBe(true);
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
   expect(storedEntry).not.toHaveProperty("sessionFile");
 
@@ -4155,6 +4261,16 @@ test("sessions.create inherits explicit selection without runtime model identity
   expect(storedEntry?.modelProvider).toBeUndefined();
   expect(storedEntry?.model).toBeUndefined();
   expect(storedEntry?.parentSessionKey).toBe("agent:main:main");
+
+  const overridden = await directSessionReq<{
+    entry?: { fastMode?: boolean | "auto" };
+  }>("sessions.create", {
+    agentId: "main",
+    fastMode: false,
+    parentSessionKey: "main",
+  });
+  expect(overridden.ok, JSON.stringify(overridden.error)).toBe(true);
+  expect(overridden.payload?.entry?.fastMode).toBe(false);
 });
 
 test("sessions.create skips inherited active auto fallback model overrides", async () => {
@@ -4279,7 +4395,7 @@ test("sessions.create accepts an explicit key for persistent dashboard sessions"
   );
 });
 
-test("sessions.create preserves write-scoped fresh keyed model selection but gates adopted rows", async () => {
+test("sessions.create preserves write-scoped fresh selection but gates adopted rows", async () => {
   const { storePath } = await createSessionStoreDir();
   agentDiscoveryMock.enabled = true;
   agentDiscoveryMock.models = [
@@ -4300,6 +4416,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
         providerOverride: "openai",
         modelOverride: "gpt-test-a",
         thinkingLevel: "low",
+        fastMode: false,
       }),
       [existingProfileKey]: sessionStoreEntry("sess-existing-profile", {
         providerOverride: "openai",
@@ -4312,19 +4429,29 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
   });
 
   const fresh = await directSessionReq<{
-    entry?: { providerOverride?: string; modelOverride?: string };
-  }>("sessions.create", { key: freshKey, model: "openai/gpt-test-a" }, { client: writeClient });
+    entry?: { fastMode?: boolean; providerOverride?: string; modelOverride?: string };
+  }>(
+    "sessions.create",
+    { key: freshKey, model: "openai/gpt-test-a", fastMode: true },
+    { client: writeClient },
+  );
   expect(fresh.ok, JSON.stringify(fresh.error)).toBe(true);
   expect(fresh.payload?.entry).toMatchObject({
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
+    fastMode: true,
   });
 
   const sameSelection = await directSessionReq<{
-    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+    entry?: {
+      fastMode?: boolean;
+      providerOverride?: string;
+      modelOverride?: string;
+      thinkingLevel?: string;
+    };
   }>(
     "sessions.create",
-    { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low" },
+    { key: existingKey, model: "openai/gpt-test-a", thinkingLevel: "low", fastMode: false },
     { client: writeClient },
   );
   expect(sameSelection.ok, JSON.stringify(sameSelection.error)).toBe(true);
@@ -4332,6 +4459,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     providerOverride: "openai",
     modelOverride: "gpt-test-a",
     thinkingLevel: "low",
+    fastMode: false,
   });
 
   const sameSubagentSelection = await directSessionReq<{
@@ -4434,11 +4562,27 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     message: "missing scope: operator.admin",
   });
 
+  const fastModeDenied = await directSessionReq(
+    "sessions.create",
+    { key: existingKey, fastMode: true },
+    { client: writeClient },
+  );
+  expect(fastModeDenied.ok).toBe(false);
+  expect(fastModeDenied.error).toMatchObject({
+    code: "FORBIDDEN",
+    message: "missing scope: operator.admin",
+  });
+
   const admin = await directSessionReq<{
-    entry?: { providerOverride?: string; modelOverride?: string; thinkingLevel?: string };
+    entry?: {
+      fastMode?: boolean;
+      providerOverride?: string;
+      modelOverride?: string;
+      thinkingLevel?: string;
+    };
   }>(
     "sessions.create",
-    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high" },
+    { key: existingKey, model: "openai/gpt-test-b", thinkingLevel: "high", fastMode: true },
     { client: adminClient },
   );
   expect(admin.ok, JSON.stringify(admin.error)).toBe(true);
@@ -4446,6 +4590,7 @@ test("sessions.create preserves write-scoped fresh keyed model selection but gat
     providerOverride: "openai",
     modelOverride: "gpt-test-b",
     thinkingLevel: "high",
+    fastMode: true,
   });
 });
 

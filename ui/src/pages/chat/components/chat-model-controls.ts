@@ -10,6 +10,7 @@ import {
   resolveChatFastModeSelectState,
   resolveChatModelSelectState,
   type ChatFastModeSelectValue,
+  type ChatFastModeTarget,
 } from "../../../lib/chat/model-select-state.ts";
 import {
   resolveChatThinkingSelectState,
@@ -47,6 +48,7 @@ type ChatModelControlsProps = {
   modelsLoading?: boolean;
   modelMutationDisabledReason?: string;
   effortMutationDisabledReason?: string;
+  fastModeTarget?: ChatFastModeTarget;
   showFastMode?: boolean;
   sending: boolean;
   sessionKey: string;
@@ -207,6 +209,7 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     catalog: props.modelCatalog,
     connected: props.connected,
     currentModelOverride: currentOverride,
+    fastModeTarget: props.fastModeTarget,
     gatewayAvailable: props.gatewayAvailable,
     loading: props.loading,
     sending: props.sending,
