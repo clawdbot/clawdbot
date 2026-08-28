@@ -447,4 +447,23 @@ describe("memory manager database publication", () => {
     await expectPathMissing(lockedShadow);
     await expect(fs.access(youngShadow)).resolves.toBeUndefined();
   });
+
+  it("removes aged orphan shadows left over from the pre-8b7269d1978 .tmp- naming", async () => {
+    const databasePath = path.join(fixtureRoot, "agent.sqlite");
+    const database = new DatabaseSync(databasePath);
+    database.close();
+    const oldLegacyShadow = `${databasePath}.tmp-11111111-2222-3333-4444-555555555555`;
+    const old = new Date(Date.now() - 48 * 60 * 60_000);
+
+    for (const suffix of ["", "-wal", "-shm"]) {
+      await fs.writeFile(`${oldLegacyShadow}${suffix}`, "orphan");
+      await fs.utimes(`${oldLegacyShadow}${suffix}`, old, old);
+    }
+
+    cleanupAgedMemoryReindexTempFiles(databasePath);
+
+    await expectPathMissing(oldLegacyShadow);
+    await expectPathMissing(`${oldLegacyShadow}-wal`);
+    await expectPathMissing(`${oldLegacyShadow}-shm`);
+  });
 });
