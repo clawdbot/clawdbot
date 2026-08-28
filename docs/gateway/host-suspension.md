@@ -85,6 +85,7 @@ must never be throttled away when a controller needs it.
     "queuedTurns": 0,
     "terminalPersistence": 0,
     "terminalSessions": 0,
+    "pluginParticipants": 0,
     "totalActive": 3
   },
   "blockers": [
@@ -122,11 +123,15 @@ and an in-progress gateway restart.
 The `requestId` is trimmed, must contain at least one non-whitespace character,
 and is limited to 128 characters. Anything else is rejected as invalid params.
 
+Optional `terminalPolicy` selects what open terminal sessions mean. `preserve`
+(the default) treats them as active work that blocks the suspension; `terminate`
+excludes them, for a host operation that will tear those sessions down anyway.
+
 Prepare closes new work admission _before_ taking its authoritative snapshot,
 pauses new cron ticks, and then inspects active and queued work.
 
-**If work is active**, prepare rolls back — it reopens admission, resumes the
-scheduler, and returns busy:
+**If work is active**, prepare rolls back by default — it reopens admission,
+resumes the scheduler, and returns busy:
 
 ```json
 {
@@ -154,6 +159,28 @@ Prepare never waits for work to finish. It returns immediately, and the
 controller polls and retries — honor `retryAfterMs` (20 seconds) between
 attempts. After `ready`, no new tracked user work is admitted.
 
+### Draining instead of refusing
+
+Pass `drain: true` when the controller would rather hold the fence than retry
+from scratch. Active work then keeps the lease in a `draining` state instead of
+rolling admission back open:
+
+```json
+{
+  "status": "draining",
+  "suspensionId": "0f6c…",
+  "expiresAtMs": 1756029600000,
+  "retryAfterMs": 20000,
+  "activeCount": 2,
+  "blockers": [{ "kind": "chat-run", "count": 2, "message": "2 active chat run(s)" }]
+}
+```
+
+A draining lease already owns the suspension, so no new work is admitted while
+the existing work finishes. Renew it by calling `prepare` again with the same
+`requestId`, `terminalPolicy`, and `drain`; the status flips to `ready` once the
+last blocker clears. Changing any of those three is a conflict, not a takeover.
+
 ## The lease
 
 A ready suspension holds a bounded **two-minute** lease.
@@ -175,8 +202,9 @@ fail-closed and returns a retryable `UNAVAILABLE` with
 
 ## Status and resume
 
-`status({suspensionId})` returns `running` (no suspension held), `ready` with
-`expiresAtMs`, or a retryable error while scheduler recovery is pending. A
+`status({suspensionId})` returns `running` (no suspension held), `draining` with
+the remaining blockers, `ready` with `expiresAtMs`, or a retryable error while
+scheduler recovery is pending. A
 missing or mismatched `suspensionId` never exposes or releases another
 controller's suspension — it returns a conflict instead.
 
@@ -195,13 +223,17 @@ confirmed, so a failed resume can be retried safely.
 ## What is refused while prepared
 
 While a suspension is held the gateway refuses new tracked work but stays
-inspectable and controllable:
+inspectable and controllable, so the line runs between control connections and
+user-work connections rather than between old and new sockets:
 
-**Refused** — new WebSocket handshakes; new agent, chat, and session work; new
-cron execution; ordinary user-work HTTP routes.
+**Refused** — new worker ingress sockets and new desktop, portal, and
+plugin-owned WebSocket upgrades; new agent, chat, and session work; new cron
+execution; ordinary user-work HTTP routes.
 
-**Allowed** — health and liveness checks; the four suspension methods over the
-authenticated control path; an exact targeted non-safe
+**Allowed** — new gateway control WebSocket handshakes, so a separate controller
+or CLI process can still connect, authenticate, and call `gateway.suspend.*`
+while the lease is held; health and liveness checks; the four suspension methods
+over the authenticated control path; an exact targeted non-safe
 `gateway.restart.request`.
 
 Cron schedules are paused, not dropped. A job that becomes due while suspended

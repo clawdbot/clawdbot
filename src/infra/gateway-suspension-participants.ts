@@ -8,7 +8,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 /** Active work a participant still owns. Zero means the participant is idle. */
-export type GatewaySuspensionParticipantReport = {
+type GatewaySuspensionParticipantReport = {
   activeCount: number;
   /** Operator-facing blocker text. Defaults to a generic count message. */
   message?: string;
@@ -149,9 +149,10 @@ export function inspectGatewaySuspensionParticipants(): GatewaySuspensionPartici
 }
 
 /**
- * Close every participant's admission. Callers hold the core fence already, so
- * this runs synchronously and rolls every participant back when any of them is
- * still busy or throws.
+ * Close every participant's admission and report what that close observed.
+ * Callers hold the core fence already, so this runs synchronously; reopening is
+ * the caller's job through resumeGatewaySuspensionParticipants, which keeps a
+ * drain lease fenced instead of rolling back the moment work is still in flight.
  */
 export function prepareGatewaySuspensionParticipants(): GatewaySuspensionParticipantBlocker[] {
   const blockers: GatewaySuspensionParticipantBlocker[] = [];
@@ -198,9 +199,4 @@ export function resumeGatewaySuspensionParticipants(): void {
   if (failed.length > 0) {
     throw new Error(`gateway suspension participants failed to resume: ${failed.join(", ")}`);
   }
-}
-
-export function resetGatewaySuspensionParticipantsForTest(): void {
-  PARTICIPANT_STATE.participants.clear();
-  PARTICIPANT_STATE.prepared.clear();
 }

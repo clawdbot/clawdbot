@@ -4,10 +4,8 @@ import {
   registerTestPlugin,
 } from "openclaw/plugin-sdk/plugin-test-contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  inspectGatewaySuspensionParticipants,
-  resetGatewaySuspensionParticipantsForTest,
-} from "../infra/gateway-suspension-participants.js";
+import { inspectGatewaySuspensionParticipants } from "../infra/gateway-suspension-participants.js";
+import { resetGatewaySuspensionParticipantsForTest } from "../infra/gateway-suspension-participants.test-support.js";
 import { createPluginRecord } from "./status.test-fixtures.js";
 
 afterEach(() => {

@@ -4,9 +4,9 @@ import {
   inspectGatewaySuspensionParticipants,
   prepareGatewaySuspensionParticipants,
   registerGatewaySuspensionParticipant,
-  resetGatewaySuspensionParticipantsForTest,
   resumeGatewaySuspensionParticipants,
 } from "./gateway-suspension-participants.js";
+import { resetGatewaySuspensionParticipantsForTest } from "./gateway-suspension-participants.test-support.js";
 
 function participant(id: string, activeCount: number) {
   return {
@@ -28,24 +28,28 @@ describe("gateway suspension participants", () => {
     registerGatewaySuspensionParticipant(first);
     registerGatewaySuspensionParticipant(second);
 
-    expect(prepareGatewaySuspensionParticipants()).toEqual({ idle: true, blockers: [] });
+    expect(prepareGatewaySuspensionParticipants()).toEqual([]);
     expect(first.prepare).toHaveBeenCalledOnce();
     expect(second.prepare).toHaveBeenCalledOnce();
     expect(first.resume).not.toHaveBeenCalled();
   });
 
-  it("rolls every participant back when one is still busy", () => {
+  it("keeps every participant fenced until the caller resumes", () => {
     const idle = participant("queue-a", 0);
     const busy = participant("queue-b", 2);
     registerGatewaySuspensionParticipant(idle);
     registerGatewaySuspensionParticipant(busy);
 
-    const result = prepareGatewaySuspensionParticipants();
+    const blockers = prepareGatewaySuspensionParticipants();
 
-    expect(result.idle).toBe(false);
-    expect(result.blockers).toEqual([
+    expect(blockers).toEqual([
       { participantId: "queue-b", count: 2, message: "2 active queue-b operation(s)" },
     ]);
+    // Reopening belongs to the coordinator so a drain lease can stay fenced.
+    expect(idle.resume).not.toHaveBeenCalled();
+
+    resumeGatewaySuspensionParticipants();
+
     // The idle participant must reopen too, or its queue stays fenced with no lease.
     expect(idle.resume).toHaveBeenCalledOnce();
     expect(busy.resume).toHaveBeenCalledOnce();
@@ -62,10 +66,12 @@ describe("gateway suspension participants", () => {
     };
     registerGatewaySuspensionParticipant(throwing);
 
-    const result = prepareGatewaySuspensionParticipants();
+    const blockers = prepareGatewaySuspensionParticipants();
 
-    expect(result.idle).toBe(false);
-    expect(result.blockers[0]?.message).toBe("queue-a could not prepare for suspension");
+    expect(blockers[0]?.message).toBe("queue-a could not prepare for suspension");
+
+    // A throwing prepare may still have closed admission, so it is owed a resume.
+    resumeGatewaySuspensionParticipants();
     expect(throwing.resume).toHaveBeenCalledOnce();
   });
 
@@ -102,17 +108,14 @@ describe("gateway suspension participants", () => {
       resume: vi.fn(),
     });
 
-    const result = prepareGatewaySuspensionParticipants();
-
-    expect(result.idle).toBe(false);
-    expect(result.blockers).toHaveLength(1);
+    expect(prepareGatewaySuspensionParticipants()).toHaveLength(1);
     expect(inspectGatewaySuspensionParticipants()).toHaveLength(1);
   });
 
   it("accepts an explicit zero count as idle", () => {
     registerGatewaySuspensionParticipant(participant("queue-a", 0));
 
-    expect(prepareGatewaySuspensionParticipants().idle).toBe(true);
+    expect(prepareGatewaySuspensionParticipants()).toEqual([]);
     expect(inspectGatewaySuspensionParticipants()).toEqual([]);
   });
 
@@ -159,12 +162,40 @@ describe("gateway suspension participants", () => {
     const entry = participant("queue-a", 3);
     const unregister = registerGatewaySuspensionParticipant(entry);
 
-    expect(prepareGatewaySuspensionParticipants().idle).toBe(false);
+    expect(prepareGatewaySuspensionParticipants()).toHaveLength(1);
+    resumeGatewaySuspensionParticipants();
 
     unregister();
 
-    expect(prepareGatewaySuspensionParticipants()).toEqual({ idle: true, blockers: [] });
+    expect(prepareGatewaySuspensionParticipants()).toEqual([]);
     expect(inspectGatewaySuspensionParticipants()).toEqual([]);
+  });
+
+  // Prepare closes the registered instance, so only that instance can reopen it.
+  // Unregister or a reload during a held lease must not strand its queue closed.
+  it("resumes a participant unregistered while the lease was held", () => {
+    const entry = participant("queue-a", 0);
+    const unregister = registerGatewaySuspensionParticipant(entry);
+    prepareGatewaySuspensionParticipants();
+
+    unregister();
+    resumeGatewaySuspensionParticipants();
+
+    expect(entry.resume).toHaveBeenCalledOnce();
+  });
+
+  it("resumes the prepared instance after a re-registration replaces it", () => {
+    const prepared = participant("queue-a", 0);
+    const replacement = participant("queue-a", 0);
+    registerGatewaySuspensionParticipant(prepared);
+    prepareGatewaySuspensionParticipants();
+
+    registerGatewaySuspensionParticipant(replacement);
+    resumeGatewaySuspensionParticipants();
+
+    expect(prepared.resume).toHaveBeenCalledOnce();
+    // The replacement never closed anything, so reopening it would be wrong.
+    expect(replacement.resume).not.toHaveBeenCalled();
   });
 
   it("replaces a participant re-registered under the same id", () => {
@@ -173,7 +204,7 @@ describe("gateway suspension participants", () => {
     registerGatewaySuspensionParticipant(stale);
     registerGatewaySuspensionParticipant(fresh);
 
-    expect(prepareGatewaySuspensionParticipants().idle).toBe(true);
+    expect(prepareGatewaySuspensionParticipants()).toEqual([]);
     expect(stale.prepare).not.toHaveBeenCalled();
     expect(fresh.prepare).toHaveBeenCalledOnce();
   });

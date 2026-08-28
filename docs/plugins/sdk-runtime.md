@@ -1371,8 +1371,9 @@ returning a promise or awaiting would let new work slip in between closing
 admission and taking the authoritative snapshot.
 
 - Report `activeCount: 0` only when the participant is genuinely idle. Any
-  nonzero count refuses the suspension and returns a `plugin-participant`
-  blocker to the controller.
+  nonzero count returns a `plugin-participant` blocker to the controller, which
+  refuses the suspension outright or holds it draining, depending on the
+  controller's request.
 - `resume` is called on explicit resume, on a refused (rolled-back) prepare, at
   lease expiry, and on in-process restart. It must be safe to call when the
   participant is already open.
@@ -1390,7 +1391,10 @@ admission and taking the authoritative snapshot.
   reported as `<plugin-id>:delivery-queue`.
 
 Keep the returned unregister handle and call it during plugin teardown so a
-reloaded plugin does not leave a stale closure owning the fence.
+reloaded plugin does not leave a stale closure owning the fence. Unregistering
+or replacing a participant while a suspension is held is safe: the host reopens
+the exact instance whose `prepare` closed the queue, so teardown mid-lease
+cannot strand that queue closed.
 
 ## Storing runtime references
 

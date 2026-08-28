@@ -31,10 +31,8 @@ import {
   resetGatewaySuspendCoordinatorForLifecycleRestart,
   resumeGatewaySuspend,
 } from "./gateway-suspend-coordinator.js";
-import {
-  registerGatewaySuspensionParticipant,
-  resetGatewaySuspensionParticipantsForTest,
-} from "./gateway-suspension-participants.js";
+import { registerGatewaySuspensionParticipant } from "./gateway-suspension-participants.js";
+import { resetGatewaySuspensionParticipantsForTest } from "./gateway-suspension-participants.test-support.js";
 
 const SUSPEND_TTL_MS = 2 * 60_000;
 const SUSPEND_RETRY_AFTER_MS = 20_000;
