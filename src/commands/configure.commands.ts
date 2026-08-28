@@ -44,7 +44,12 @@ function assertInteractiveConfigureTerminal(runtime: RuntimeEnv, interactive?: b
 }
 
 async function configureCommand(runtime: RuntimeEnv = defaultRuntime, agentId?: string) {
-  await runConfigureWizard({ command: "configure", ...(agentId ? { agentId } : {}) }, runtime);
+  // Presence, not truthiness: a supplied empty `--agent ""` must reach the wizard's strict
+  // validator instead of being dropped here and silently falling back to the default owner.
+  await runConfigureWizard(
+    { command: "configure", ...(agentId !== undefined ? { agentId } : {}) },
+    runtime,
+  );
 }
 
 async function configureCommandWithSections(
@@ -53,7 +58,7 @@ async function configureCommandWithSections(
   agentId?: string,
 ) {
   await runConfigureWizard(
-    { command: "configure", sections, ...(agentId ? { agentId } : {}) },
+    { command: "configure", sections, ...(agentId !== undefined ? { agentId } : {}) },
     runtime,
   );
 }
