@@ -7,20 +7,39 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { requestJsonlSocket } from "./jsonl-socket.js";
 
-async function listenOnSocket(server: net.Server, socketPath: string): Promise<boolean> {
-  try {
+async function withSocketServer(
+  server: net.Server,
+  run: (socketPath: string) => Promise<void>,
+): Promise<void> {
+  // macOS sockaddr_un cannot hold the test runner's nested temporary path.
+  await withTestDir({ prefix: "oc-jsonl-", parentDir: "/tmp" }, async (dir) => {
+    const socketPath = path.join(dir, "socket.sock");
+    const sockets: net.Socket[] = [];
+    const closed: Promise<void>[] = [];
+    server.on("connection", (socket) => {
+      sockets.push(socket);
+      closed.push(
+        new Promise<void>((resolve) => {
+          socket.once("close", resolve);
+        }),
+      );
+    });
     await new Promise<void>((resolve, reject) => {
       server.once("error", reject);
       server.listen(socketPath, resolve);
     });
-    return true;
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException).code;
-    if (code === "EPERM" || code === "EACCES") {
-      return false;
+    try {
+      await run(socketPath);
+    } finally {
+      for (const socket of sockets) {
+        socket.destroy();
+      }
+      await Promise.all(closed);
+      await new Promise<void>((resolve, reject) => {
+        server.close((error) => (error ? reject(error) : resolve()));
+      });
     }
-    throw err;
-  }
+  });
 }
 
 function acceptDoneValue(msg: unknown): number | null | undefined {
@@ -30,85 +49,56 @@ function acceptDoneValue(msg: unknown): number | null | undefined {
 
 describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   it("ignores malformed and non-accepted lines until one is accepted", async () => {
-    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      const server = net.createServer((socket) => {
-        socket.on("data", () => {
-          socket.write("{bad json}\n");
-          socket.write('{"type":"ignore"}\n');
-          socket.write('{"type":"done","value":42}\n');
-        });
+    const server = net.createServer((socket) => {
+      socket.on("data", () => {
+        socket.write("{bad json}\n");
+        socket.write('{"type":"ignore"}\n');
+        socket.write('{"type":"done","value":42}\n');
       });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
-
-      try {
-        await expect(
-          requestJsonlSocket({
-            socketPath,
-            requestLine: '{"hello":"world"}',
-            timeoutMs: 500,
-            accept: acceptDoneValue,
-          }),
-        ).resolves.toBe(42);
-      } finally {
-        server.close();
-      }
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestJsonlSocket({
+          socketPath,
+          requestLine: '{"hello":"world"}',
+          timeoutMs: 500,
+          accept: acceptDoneValue,
+        }),
+      ).resolves.toBe(42);
     });
   });
 
   it("does not connect or send an already-aborted request", async () => {
-    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      const connected = vi.fn();
-      const server = net.createServer((socket) => {
-        connected();
-        socket.resume();
-        socket.on("end", () => socket.end('{"type":"done","value":7}\n'));
-      });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
-
-      try {
-        await expect(
-          requestJsonlSocket({
-            socketPath,
-            requestLine: '{"hello":"world"}',
-            timeoutMs: 500,
-            accept: acceptDoneValue,
-            signal: AbortSignal.abort(),
-          }),
-        ).resolves.toBeNull();
-        expect(connected).not.toHaveBeenCalled();
-      } finally {
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      }
+    const connected = vi.fn();
+    const server = net.createServer((socket) => {
+      connected();
+      socket.resume();
+      socket.on("end", () => socket.end('{"type":"done","value":7}\n'));
+    });
+    await withSocketServer(server, async (socketPath) => {
+      await expect(
+        requestJsonlSocket({
+          socketPath,
+          requestLine: '{"hello":"world"}',
+          timeoutMs: 500,
+          accept: acceptDoneValue,
+          signal: AbortSignal.abort(),
+        }),
+      ).resolves.toBeNull();
+      expect(connected).not.toHaveBeenCalled();
     });
   });
 
   it.each([false, true])("half-closes the request and settles after abort=%s", async (abort) => {
-    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      const received = createDeferred<{ socket: net.Socket; buffer: string }>();
-      const peers = new Set<net.Socket>();
-      const server = net.createServer({ allowHalfOpen: true }, (socket) => {
-        peers.add(socket);
-        let buffer = "";
-        socket.on("data", (chunk) => {
-          buffer += chunk.toString("utf8");
-        });
-        socket.on("end", () => received.resolve({ socket, buffer }));
+    const received = createDeferred<{ socket: net.Socket; buffer: string }>();
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+      let buffer = "";
+      socket.on("data", (chunk) => {
+        buffer += chunk.toString("utf8");
       });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
+      socket.on("end", () => received.resolve({ socket, buffer }));
+    });
+    await withSocketServer(server, async (socketPath) => {
       const controller = new AbortController();
       const completed = vi.fn();
       const pending = requestJsonlSocket({
@@ -141,41 +131,19 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
         expect(getEventListeners(controller.signal, "abort")).toEqual([]);
       } finally {
         controller.abort();
-        for (const socket of peers) {
-          socket.destroy();
-        }
         await pending;
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
       }
     });
   });
 
   it("returns null on timeout and on socket errors", async () => {
-    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      const server = net.createServer(() => {
-        // Intentionally never reply.
-      });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
-
-      try {
-        await expect(
-          requestJsonlSocket({
-            socketPath,
-            requestLine: "{}",
-            timeoutMs: 50,
-            accept: () => undefined,
-          }),
-        ).resolves.toBeNull();
-      } finally {
-        server.close();
-      }
-
+    let closedSocketPath = "";
+    const server = net.createServer({ allowHalfOpen: true }, (socket) => {
+      socket.resume();
+      // Intentionally keep the response side open after the request half-close.
+    });
+    await withSocketServer(server, async (socketPath) => {
+      closedSocketPath = socketPath;
       await expect(
         requestJsonlSocket({
           socketPath,
@@ -185,35 +153,33 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
         }),
       ).resolves.toBeNull();
     });
+    await expect(
+      requestJsonlSocket({
+        socketPath: closedSocketPath,
+        requestLine: "{}",
+        timeoutMs: 50,
+        accept: () => undefined,
+      }),
+    ).resolves.toBeNull();
   });
 
   it("returns null when the socket closes without an accepted response", async () => {
-    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
-      const socketPath = path.join(dir, "socket.sock");
-      const server = net.createServer((socket) => {
-        socket.on("data", () => {
-          socket.destroy();
-        });
+    const server = net.createServer((socket) => {
+      socket.on("data", () => {
+        socket.destroy();
       });
-      const listening = await listenOnSocket(server, socketPath);
-      if (!listening) {
-        return;
-      }
+    });
+    await withSocketServer(server, async (socketPath) => {
+      const startMs = Date.now();
+      const result = await requestJsonlSocket({
+        socketPath,
+        requestLine: "{}",
+        timeoutMs: 250,
+        accept: () => undefined,
+      });
 
-      try {
-        const startMs = Date.now();
-        const result = await requestJsonlSocket({
-          socketPath,
-          requestLine: "{}",
-          timeoutMs: 250,
-          accept: () => undefined,
-        });
-
-        expect(result).toBeNull();
-        expect(Date.now() - startMs).toBeLessThan(100);
-      } finally {
-        server.close();
-      }
+      expect(result).toBeNull();
+      expect(Date.now() - startMs).toBeLessThan(100);
     });
   });
 });
