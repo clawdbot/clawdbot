@@ -6,6 +6,10 @@ import {
   normalizeOptionalString,
   readStringValue,
 } from "@openclaw/normalization-core/string-coerce";
+import {
+  hashCliImageTurnEntryId,
+  readCliImageTurnContext,
+} from "../agents/cli-image-turn-correlation.js";
 import { isOpenClawCliImageCachePath } from "../agents/embedded-agent-runner/run/images.media-refs.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
@@ -18,6 +22,7 @@ type ComparableHistoryMessage = {
   order: number;
   externalIdentityKey?: string;
   hasCliImageMentions: boolean;
+  cliImageTurnKey?: string;
   role?: string;
   text?: string;
   timestamp?: number;
@@ -64,6 +69,7 @@ function extractComparableText(
   role: string | undefined,
 ): {
   hasCliImageMentions: boolean;
+  cliImageTurnKey?: string;
   text?: string;
 } {
   if (!message || typeof message !== "object") {
@@ -103,8 +109,13 @@ function extractComparableText(
     role === "user" ? stripInboundMetadata(stripResult.text) : stripResult.text,
   ).text;
   const normalized = visible.replace(/\s+/g, " ").trim();
+  const meta = asOptionalRecord(asOptionalRecord(message)?.["__openclaw"]);
+  const storedImageTurnKey = normalizeOptionalString(meta?.cliImageTurnKey);
   return {
     hasCliImageMentions: stripResult.stripped,
+    ...(stripResult.stripped && isClaudeCliImportedUserMessage(message, role)
+      ? { cliImageTurnKey: storedImageTurnKey ?? readCliImageTurnContext(joined) }
+      : {}),
     ...(normalized ? { text: normalized } : {}),
   };
 }
@@ -121,6 +132,7 @@ function prepareComparableMessage(message: unknown, order: number): ComparableHi
     order,
     externalIdentityKey: resolveImportedExternalIdentityKey(message),
     hasCliImageMentions: comparableText.hasCliImageMentions,
+    ...(comparableText.cliImageTurnKey ? { cliImageTurnKey: comparableText.cliImageTurnKey } : {}),
     role,
     text: comparableText.text,
     timestamp: asFiniteNumber(record.timestamp),
@@ -227,19 +239,11 @@ function findLocalImageMediaMatch(
   candidates: ComparableHistoryMessage[],
   imported: ComparableHistoryMessage,
 ): number {
-  if (
-    !imported.hasCliImageMentions ||
-    imported.timestamp === undefined ||
-    imported.text === undefined
-  ) {
+  if (!imported.hasCliImageMentions || !imported.cliImageTurnKey) {
     return -1;
   }
-  const importedTimestamp = imported.timestamp;
   return candidates.findIndex(
-    (candidate) =>
-      candidate.timestamp !== undefined &&
-      Math.abs(candidate.timestamp - importedTimestamp) <= DEDUPE_TIMESTAMP_WINDOW_MS &&
-      candidate.text === imported.text,
+    (candidate) => candidate.cliImageTurnKey === imported.cliImageTurnKey,
   );
 }
 
@@ -272,8 +276,13 @@ export function mergeImportedChatHistoryMessages(params: {
     addRoleTextCandidate(allMessageRoleTextIndex, entry);
   };
   for (const entry of merged) {
+    const localMeta = asOptionalRecord(asOptionalRecord(entry.message)?.["__openclaw"]);
+    const localEntryId = normalizeOptionalString(localMeta?.id);
+    if (localEntryId) {
+      entry.cliImageTurnKey = hashCliImageTurnEntryId(localEntryId);
+    }
     indexEntry(entry);
-    if (hasLocalImageMediaFacts(entry) && entry.timestamp !== undefined) {
+    if (hasLocalImageMediaFacts(entry)) {
       localImageMediaCandidates.push(entry);
     }
   }
