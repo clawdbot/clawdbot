@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ConfigFileSnapshot } from "../config/types.js";
 import type { StartupMigrationLease } from "../infra/startup-migration-checkpoint.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-preflight-plugin-index.js";
 
 const writePersistedInstalledPluginIndexWithLeaseSync = vi.hoisted(() => vi.fn());
@@ -33,8 +34,8 @@ describe("persistRefreshedPluginIndex", () => {
   });
 
   it("reports selector diagnostics when the durable reread is rejected", async () => {
-    const index = {} as PluginMetadataSnapshot["index"];
-    const registryIndex = { plugins: [] } as PluginMetadataSnapshot["index"];
+    const index = createPluginMetadataSnapshotFixture({ plugins: [{ id: "secondary" }] }).index;
+    const registryIndex = createPluginMetadataSnapshotFixture().index;
     const lease = {} as StartupMigrationLease;
     const env = { OPENCLAW_STATE_DIR: "test-state" };
 
