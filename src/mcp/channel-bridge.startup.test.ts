@@ -42,7 +42,7 @@ vi.mock("../gateway/client.js", () => ({
       }
       const onHelloOk = this.options.onHelloOk;
       if (typeof onHelloOk === "function") {
-        onHelloOk();
+        onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
       }
     }
 
@@ -94,6 +94,9 @@ describe("OpenClawChannelBridge startup", () => {
     await bridge.start();
 
     expect(mockState.clientOptions?.tlsFingerprint).toBe("sha256:local");
+    expect(
+      (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
+    ).toBe(true);
     await bridge.close();
   });
 
@@ -114,9 +117,38 @@ describe("OpenClawChannelBridge startup", () => {
     if (typeof onHelloOk !== "function") {
       throw new Error("Expected Gateway hello callback");
     }
-    onHelloOk();
+    onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
 
     await expect(started).resolves.toBeUndefined();
+    await bridge.close();
+  });
+
+  it("updates exact message lookup support after reconnecting", async () => {
+    mockState.autoHello = false;
+    const bridge = new OpenClawChannelBridge({} as never, {
+      claudeChannelMode: "off",
+      verbose: false,
+    });
+
+    const started = bridge.start();
+    await vi.waitFor(() => {
+      expect(mockState.clientOptions).not.toBeNull();
+    });
+    const onHelloOk = mockState.clientOptions?.onHelloOk;
+    if (typeof onHelloOk !== "function") {
+      throw new Error("Expected Gateway hello callback");
+    }
+
+    onHelloOk({ features: { methods: ["chat.message.get"], events: [] } });
+    await expect(started).resolves.toBeUndefined();
+    expect(
+      (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
+    ).toBe(true);
+
+    onHelloOk({ features: { methods: [], events: [] } });
+    expect(
+      (bridge as unknown as { supportsExactMessageLookup: boolean }).supportsExactMessageLookup,
+    ).toBe(false);
     await bridge.close();
   });
 });

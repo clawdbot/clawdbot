@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { resolveIntegerOption } from "@openclaw/normalization-core/number-coercion";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalLowercaseString,
@@ -27,7 +28,13 @@ import type {
   SessionMessagePayload,
   WaitFilter,
 } from "./channel-shared.js";
-import { matchEventFilter, normalizeApprovalId, toConversation, toText } from "./channel-shared.js";
+import {
+  matchEventFilter,
+  normalizeApprovalId,
+  resolveMessageId,
+  toConversation,
+  toText,
+} from "./channel-shared.js";
 
 /**
  * Runtime bridge between MCP tools and the OpenClaw Gateway channel APIs.
@@ -78,6 +85,7 @@ export class OpenClawChannelBridge {
   private ready = false;
   private started = false;
   private retryingInitialConnect = false;
+  private supportsExactMessageLookup = false;
   private readonly readyPromise: Promise<void>;
   private resolveReady!: () => void;
   private rejectReady!: (error: Error) => void;
@@ -156,7 +164,8 @@ export class OpenClawChannelBridge {
       onEvent: (event) => {
         void this.dispatchGatewayEvent(event);
       },
-      onHelloOk: () => {
+      onHelloOk: (hello) => {
+        this.supportsExactMessageLookup = hello.features.methods.includes("chat.message.get");
         this.retryingInitialConnect = false;
         void this.handleHelloOk();
       },
@@ -267,6 +276,19 @@ export class OpenClawChannelBridge {
       limit: requestLimit,
     });
     return response.messages ?? [];
+  }
+
+  async readMessage(sessionKey: string, messageId: string, limit = 100) {
+    const messages = await this.readMessages(sessionKey, limit);
+    const message = messages.find((entry) => resolveMessageId(entry) === messageId);
+    if (message || !this.supportsExactMessageLookup) {
+      return message ?? null;
+    }
+    const result = await this.requestGateway("chat.message.get", {
+      sessionKey,
+      messageId,
+    });
+    return result.ok === true && isRecord(result.message) ? result.message : null;
   }
 
   /** Send a reply using the same channel route stored on the conversation. */

@@ -46,28 +46,21 @@ async function connectMcpWithoutGateway(params?: { claudeChannelMode?: "auto" | 
 function attachReadyGateway(
   bridge: OpenClawChannelBridge,
   gatewayRequest: ReturnType<typeof vi.fn>,
+  supportsExactMessageLookup = true,
 ) {
-  (
-    bridge as unknown as {
-      gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
-      readySettled: boolean;
-      resolveReady: () => void;
-    }
-  ).gateway = {
+  const bridgeInternals = bridge as unknown as {
+    gateway: { request: typeof gatewayRequest; stopAndWait: () => Promise<void> };
+    readySettled: boolean;
+    resolveReady: () => void;
+    supportsExactMessageLookup: boolean;
+  };
+  bridgeInternals.supportsExactMessageLookup = supportsExactMessageLookup;
+  bridgeInternals.gateway = {
     request: gatewayRequest,
     stopAndWait: async () => {},
   };
-  (
-    bridge as unknown as {
-      readySettled: boolean;
-      resolveReady: () => void;
-    }
-  ).readySettled = true;
-  (
-    bridge as unknown as {
-      resolveReady: () => void;
-    }
-  ).resolveReady();
+  bridgeInternals.readySettled = true;
+  bridgeInternals.resolveReady();
 }
 
 async function flushMcpNotifications() {
@@ -203,43 +196,49 @@ describe("openclaw channel mcp server", () => {
         ).toBe(true);
       });
 
-      test("projects canonical persisted media from a text-only transcript message", async () => {
+      test("fetches canonical persisted media by message id after recent history misses", async () => {
         const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
         try {
-          attachReadyGateway(
-            mcp.bridge,
-            vi.fn(async (method: string) => {
-              if (method !== "sessions.get") {
-                throw new Error(`unexpected gateway method ${method}`);
-              }
+          const gatewayRequest = vi.fn(async (method: string, params: Record<string, unknown>) => {
+            if (method === "sessions.get") {
+              expect(params).toEqual({ key: "agent:main:main", limit: 1 });
+              return { messages: [] };
+            }
+            if (method === "chat.message.get") {
+              expect(params).toEqual({
+                sessionKey: "agent:main:main",
+                messageId: "msg-canonical-media",
+              });
               return {
-                messages: [
-                  {
-                    id: "msg-canonical-media",
-                    role: "user",
-                    content: "text-only transcript content",
-                    __openclaw: {
-                      media: [
-                        {
-                          url: "media://inbound/photo.png",
-                          contentType: "image/png",
-                          kind: "image",
-                          fileName: "photo.png",
-                          sizeBytes: 123,
-                        },
-                      ],
-                    },
+                ok: true,
+                message: {
+                  id: "msg-canonical-media",
+                  role: "user",
+                  content: "text-only transcript content",
+                  __openclaw: {
+                    media: [
+                      {
+                        url: "media://inbound/photo.png",
+                        contentType: "image/png",
+                        kind: "image",
+                        fileName: "photo.png",
+                        sizeBytes: 123,
+                      },
+                    ],
                   },
-                ],
+                },
               };
-            }),
-          );
+            }
+            throw new Error(`unexpected gateway method ${method}`);
+          });
+          attachReadyGateway(mcp.bridge, gatewayRequest);
 
           const result = (await mcp.client.callTool({
             name: "attachments_fetch",
             arguments: {
               session_key: "agent:main:main",
               message_id: "msg-canonical-media",
+              limit: 1,
             },
           })) as {
             structuredContent?: { attachments?: unknown[] };
@@ -258,9 +257,107 @@ describe("openclaw channel mcp server", () => {
               },
             },
           ]);
+          expect(gatewayRequest).toHaveBeenCalledTimes(2);
         } finally {
           await mcp.close();
         }
+      });
+
+      test("preserves recent-history lookup when the message is already present", async () => {
+        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+        try {
+          const gatewayRequest = vi.fn(async (method: string, params: Record<string, unknown>) => {
+            if (method === "sessions.get") {
+              expect(params).toEqual({ key: "agent:main:main", limit: 1 });
+              return {
+                messages: [
+                  {
+                    id: "msg-recent",
+                    role: "user",
+                    content: [{ type: "image", source: { type: "url", url: "media://photo" } }],
+                  },
+                ],
+              };
+            }
+            throw new Error(`unexpected gateway method ${method}`);
+          });
+          attachReadyGateway(mcp.bridge, gatewayRequest);
+
+          const result = (await mcp.client.callTool({
+            name: "attachments_fetch",
+            arguments: {
+              session_key: "agent:main:main",
+              message_id: "msg-recent",
+              limit: 1,
+            },
+          })) as {
+            structuredContent?: { attachments?: unknown[] };
+          };
+
+          expect(result.structuredContent?.attachments).toHaveLength(1);
+          expect(gatewayRequest).toHaveBeenCalledTimes(1);
+        } finally {
+          await mcp.close();
+        }
+      });
+
+      test("falls back to recent history when an older Gateway lacks exact message lookup", async () => {
+        const mcp = await connectMcpWithoutGateway({ claudeChannelMode: "off" });
+        try {
+          const gatewayRequest = vi.fn(async (method: string, params: Record<string, unknown>) => {
+            if (method === "sessions.get") {
+              expect(params).toEqual({ key: "agent:main:main", limit: 1 });
+              return {
+                messages: [
+                  {
+                    id: "msg-legacy",
+                    role: "user",
+                    content: [{ type: "image", source: { type: "url", url: "media://photo" } }],
+                  },
+                ],
+              };
+            }
+            throw new Error(`unexpected gateway method ${method}`);
+          });
+          attachReadyGateway(mcp.bridge, gatewayRequest, false);
+
+          const result = (await mcp.client.callTool({
+            name: "attachments_fetch",
+            arguments: {
+              session_key: "agent:main:main",
+              message_id: "msg-legacy",
+              limit: 1,
+            },
+          })) as {
+            structuredContent?: { attachments?: unknown[] };
+          };
+
+          expect(result.structuredContent?.attachments).toHaveLength(1);
+          expect(gatewayRequest).toHaveBeenCalledTimes(1);
+        } finally {
+          await mcp.close();
+        }
+      });
+
+      test("preserves exact lookup errors", async () => {
+        const gatewayError = new Error("exact lookup failed");
+        const gatewayRequest = vi.fn(async (method: string) => {
+          if (method === "sessions.get") {
+            return { messages: [] };
+          }
+          if (method === "chat.message.get") {
+            throw gatewayError;
+          }
+          throw new Error(`unexpected gateway method ${method}`);
+        });
+        const bridge = new OpenClawChannelBridge({} as never, {
+          claudeChannelMode: "off",
+          verbose: false,
+        });
+        attachReadyGateway(bridge, gatewayRequest);
+
+        await expect(bridge.readMessage("agent:main:main", "msg-1")).rejects.toBe(gatewayError);
+        expect(gatewayRequest).toHaveBeenCalledTimes(2);
       });
 
       test("clamps direct bridge session limits to the public MCP windows", async () => {
