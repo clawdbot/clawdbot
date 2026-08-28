@@ -606,7 +606,11 @@ jobs:
       - name: Checkout workflow repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Ref trust needs every branch and tag, but no historical file blobs.
           fetch-depth: 0
+          filter: blob:none
+          sparse-checkout: package.json
+          sparse-checkout-cone-mode: false
 
       - name: Validate selected ref
         id: validate

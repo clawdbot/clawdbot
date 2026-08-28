@@ -93,6 +93,12 @@ Use `pnpm ci:timings`, `pnpm ci:timings:recent`, or `node scripts/ci-run-timings
 
 Run the timing helper locally; there is no in-workflow timing-summary job (a permanently disabled one was removed once the local helper became the tool everyone actually used). For build timing, check the `build-artifacts` job's `Build dist` step: `pnpm build:ci-artifacts` prints `[build-all] phase timings:` and includes `ui:build`; the job also uploads the `startup-memory` artifact.
 
+Node test shards that need a built CLI use the same `build:ci-artifacts` profile
+before starting Vitest. It builds the runtime, Control UI, and scoped plugin SDK
+declarations without repeating global declaration emission in each shard.
+Private QA shards retain their private runtime build selection. Release package
+builds still generate the full declarations.
+
 Local `pnpm build:ci-artifacts` uses the same memory admission as full and package
 builds. The orchestrator passes the resolved heap budget to every child process,
 including the SDK declaration writer, so local builds do not depend on CI's
@@ -484,6 +490,11 @@ with soak or explicit focused groups. Stable-publish maps to
 See [Full release validation](/reference/full-release-validation) for the
 stage matrix, exact workflow job names, profile differences, artifacts, and
 focused rerun handles.
+
+The live/E2E selected-ref validator fetches the complete commit and ref history
+with a sparse checkout. Ancestry and release-ref checks remain unchanged, while
+historical file contents stay out of this metadata-only job. Build and test jobs
+check out their own complete source trees.
 
 `OpenClaw Release Publish` is the manual mutating release workflow. Dispatch
 regular beta and stable publishes from trusted `main` after the release tag

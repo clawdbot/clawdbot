@@ -2858,14 +2858,15 @@ jobs:
 
       # A few real-CLI E2E tests need a current dist tree. Build it before
       # Vitest starts so the shard's worker processes cannot consume the
-      # cgroup memory that the build admission check must reserve.
+      # cgroup memory that the build admission check must reserve. Reuse the
+      # CI artifact profile: these runtime readers do not need global declarations.
       - name: Build Node test runtime
         if: matrix.pretest_build_mode != null
         env:
           NODE_OPTIONS: --max-old-space-size=8192
           OPENCLAW_BUILD_PRIVATE_QA: ${{ matrix.pretest_build_mode == 'private-qa' && '1' || '0' }}
           VITEST: "1"
-        run: pnpm build
+        run: pnpm build:ci-artifacts
 
       - name: Run Node test shard
         env:
