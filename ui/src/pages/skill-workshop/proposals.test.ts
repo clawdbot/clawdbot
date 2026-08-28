@@ -142,11 +142,55 @@ function proposalDecision(expectedRevisionHash: string | null = REVISION_HASH) {
   return { proposalId: "proposal-1", expectedRevisionHash };
 }
 
+// The mutation RPC returns the authoritative terminal record: apply wraps it
+// in `{ record, targetSkillFile }`, reject returns the bare record.
+function recordFrom(status: SkillWorkshopProposal["status"]): Record<string, unknown> {
+  return {
+    id: "proposal-1",
+    kind: "create",
+    status,
+    title: "Inbox Cleaner",
+    description: "Clean inbox triage",
+    createdAt: ISO_NOW,
+    updatedAt: ISO_NOW,
+    proposedVersion: "v1",
+    draftHash: DRAFT_HASH,
+    origin: { agentId: "research", sessionKey: "main" },
+    target: { skillName: "Inbox Cleaner", skillKey: "inbox-cleaner" },
+  };
+}
+
+function mutationResponse(
+  action: "apply" | "reject",
+  status: SkillWorkshopProposal["status"],
+): unknown {
+  const record = recordFrom(status);
+  return action === "apply" ? { record, targetSkillFile: "skills/inbox-cleaner/SKILL.md" } : record;
+}
+
 function clearNoticeTimer(state: SkillWorkshopState): void {
   if (state.skillWorkshopActionNoticeTimer) {
     globalThis.clearTimeout(state.skillWorkshopActionNoticeTimer);
     state.skillWorkshopActionNoticeTimer = null;
   }
+}
+
+function terminalStatusFor(action: "apply" | "reject"): SkillWorkshopProposal["status"] {
+  return action === "apply" ? "applied" : "rejected";
+}
+
+// Asserts the leak-free invariant shared by every in-flight agent-scope switch
+// case: neither the notice nor the originating terminal row nor the
+// unconfirmed-status error may surface in the new agent's workspace.
+function expectNoLeak(state: SkillWorkshopState, action: "apply" | "reject"): void {
+  const terminalStatus = terminalStatusFor(action);
+  expect(state.skillWorkshopActionNotice).toBeNull();
+  expect(
+    state.skillWorkshopProposals.some(
+      (item) => item.key === "proposal-1" && item.status === terminalStatus,
+    ),
+  ).toBe(false);
+  expect(state.skillWorkshopError ?? "").not.toContain("did not confirm as expected");
 }
 
 describe("Skill Workshop proposal RPCs", () => {
@@ -269,6 +313,12 @@ describe("Skill Workshop proposal RPCs", () => {
       proposalId: "proposal-1",
     });
     expect(state.skillWorkshopSelectedKey).toBe("proposal-1");
+    const inspected = state.skillWorkshopProposals[0]!;
+    expect(inspected.bodyLoaded).toBe(true);
+    expect(inspected.body).toBe("Review unread mail and archive low-priority threads.");
+    expect(inspected.slug).toBe("inbox-cleaner");
+    expect(inspected.name).toBe("Inbox Cleaner");
+    expect(inspected.version).toBe(1);
   });
 
   it.each([
@@ -287,7 +337,7 @@ describe("Skill Workshop proposal RPCs", () => {
       );
       request.mockImplementation(async (calledMethod: string) => {
         if (calledMethod === method) {
-          return {};
+          return mutationResponse(action, status);
         }
         if (calledMethod === "skills.proposals.list") {
           return manifest(status);
@@ -318,6 +368,231 @@ describe("Skill Workshop proposal RPCs", () => {
       });
     },
   );
+
+  it.each(
+    (
+      [
+        ["shows the terminal notice from the authoritative mutation record", "success", "ok"],
+        [
+          "withholds the success notice when the mutation record is not terminal",
+          "unconfirmed",
+          "ok",
+        ],
+        ["keeps the authoritative success notice when the refresh fails", "success", "fails"],
+      ] as const
+    ).flatMap(([name, outcome, refresh]) =>
+      (["apply", "reject"] as const).map((action) => ({ name, action, outcome, refresh })),
+    ),
+  )("$name ($action)", async ({ action, outcome, refresh }) => {
+    const method = `skills.proposals.${action}`;
+    const terminal = terminalStatusFor(action);
+    const mutationStatus: SkillWorkshopProposal["status"] =
+      outcome === "unconfirmed" ? "pending" : terminal;
+    const { state, context, request } = createFixture(
+      { skillWorkshopProposals: [proposal()], skillWorkshopSelectedKey: "proposal-1" },
+      {},
+      [method, "skills.proposals.list", "skills.proposals.inspect"],
+    );
+    request.mockImplementation(async (calledMethod: string) => {
+      if (calledMethod === method) {
+        return mutationResponse(action, mutationStatus);
+      }
+      if (calledMethod === "skills.proposals.list") {
+        if (refresh === "fails") {
+          throw new Error("refresh failed");
+        }
+        return manifest(mutationStatus);
+      }
+      if (calledMethod === "skills.proposals.inspect") {
+        if (refresh === "fails") {
+          throw new Error("refresh inspect failed");
+        }
+        return inspectResult(mutationStatus);
+      }
+      return {};
+    });
+
+    try {
+      await runSkillWorkshopLifecycleAction(state, context, action, proposalDecision());
+    } finally {
+      clearNoticeTimer(state);
+    }
+
+    if (outcome === "unconfirmed") {
+      expect(state.skillWorkshopActionNotice?.label).not.toBe(
+        action === "apply" ? "Applied" : "Rejected",
+      );
+      expect(state.skillWorkshopError).toContain("did not confirm as expected");
+      expect(state.skillWorkshopProposals[0]?.status).toBe("pending");
+      return;
+    }
+    expect(state.skillWorkshopActionNotice?.label).toBe(
+      action === "apply" ? "Applied" : "Rejected",
+    );
+    expect(state.skillWorkshopProposals[0]?.status).toBe(terminal);
+    if (refresh === "ok") {
+      expect(state.skillWorkshopError).toBeNull();
+    } else {
+      expect(state.skillWorkshopError ?? "").not.toContain("did not confirm as expected");
+    }
+  });
+
+  it("apply keeps the authoritative success notice when the connection drops before refresh", async () => {
+    const method = "skills.proposals.apply";
+    const { state, context, request, snapshot } = createFixture(
+      {
+        skillWorkshopProposals: [proposal()],
+        skillWorkshopSelectedKey: "proposal-1",
+      },
+      {},
+      [method, "skills.proposals.list", "skills.proposals.inspect"],
+    );
+    let connectionDropped = false;
+    request.mockImplementation(async (calledMethod: string) => {
+      if (calledMethod === method) {
+        // The apply RPC returns the committed applied record, then the gateway
+        // connection drops before the refresh, so both loaders silently early-
+        // return and the merged applied row is preserved.
+        connectionDropped = true;
+        snapshot.phase = "reconnecting";
+        return mutationResponse("apply", "applied");
+      }
+      if (calledMethod === "skills.proposals.list") {
+        expect(connectionDropped).toBe(false);
+        return manifest("pending");
+      }
+      if (calledMethod === "skills.proposals.inspect") {
+        return inspectResult("pending");
+      }
+      return {};
+    });
+
+    try {
+      await runSkillWorkshopLifecycleAction(state, context, "apply", proposalDecision());
+    } finally {
+      clearNoticeTimer(state);
+    }
+
+    expect(request).toHaveBeenCalledWith(method, {
+      agentId: "research",
+      expectedRevisionHash: REVISION_HASH,
+      proposalId: "proposal-1",
+    });
+    expect(state.skillWorkshopActionNotice?.label).toBe("Applied");
+    expect(state.skillWorkshopProposals[0]?.status).toBe("applied");
+    expect(state.skillWorkshopError).toBeNull();
+  });
+
+  it.each(
+    (
+      [
+        ["does not publish the terminal result across an in-flight scope switch", "success", false],
+        [
+          "does not publish the terminal result across a scope switch with a dropped connection",
+          "success",
+          true,
+        ],
+        [
+          "does not write the unconfirmed-status error across an in-flight scope switch",
+          "unconfirmed",
+          false,
+        ],
+        [
+          "does not show the revision-changed notice across an in-flight scope switch",
+          "revision",
+          false,
+        ],
+        [
+          "does not write the generic action error across an in-flight scope switch",
+          "generic",
+          false,
+        ],
+      ] as const
+    ).flatMap(([name, mode, disconnect]) =>
+      (["apply", "reject"] as const).map((action) => ({ name, action, mode, disconnect })),
+    ),
+  )("$name ($action)", async ({ action, mode, disconnect }) => {
+    const method = `skills.proposals.${action}`;
+    const terminal = terminalStatusFor(action);
+    const { state, context, request, snapshot } = createFixture(
+      {
+        skillWorkshopAgentId: "research",
+        skillWorkshopProposals: [proposal()],
+        skillWorkshopSelectedKey: "proposal-1",
+      },
+      {},
+      [method, "skills.proposals.list", "skills.proposals.inspect"],
+    );
+    const deferred = createDeferred<ReturnType<typeof mutationResponse>>();
+    request.mockImplementation(async (calledMethod: string) => {
+      if (calledMethod === method) {
+        return deferred.promise;
+      }
+      if (disconnect) {
+        return {};
+      }
+      if (calledMethod === "skills.proposals.list") {
+        // After the switch the new scope's list has no proposal-1, so any
+        // appearing applied row would only come from an unscoped leak.
+        return mode === "success"
+          ? { schema: manifest().schema, updatedAt: manifest().updatedAt, proposals: [] }
+          : manifest("pending");
+      }
+      if (calledMethod === "skills.proposals.inspect") {
+        if (mode === "success") {
+          throw new Error("proposal not in scope");
+        }
+        return inspectResult("pending");
+      }
+      return {};
+    });
+
+    let actionPromise: Promise<void>;
+    try {
+      actionPromise = runSkillWorkshopLifecycleAction(state, context, action, proposalDecision());
+      // The mutation is in flight when the session-derived agent scope changes
+      // (and, optionally, the connection drops before the refresh can run).
+      snapshot.sessionKey = "agent:ops:main";
+      if (disconnect) {
+        snapshot.phase = "reconnecting";
+      }
+      if (mode === "revision") {
+        deferred.reject(
+          new GatewayRequestError({
+            code: "INVALID_REQUEST",
+            message: "Skill proposal revision changed",
+            details: {
+              code: "SKILL_PROPOSAL_REVISION_CHANGED",
+              currentRevisionHash: UPDATED_REVISION_HASH,
+              expectedRevisionHash: REVISION_HASH,
+            },
+          }),
+        );
+      } else if (mode === "generic") {
+        deferred.reject(new Error(`${action} failed`));
+      } else {
+        deferred.resolve(mutationResponse(action, mode === "unconfirmed" ? "pending" : terminal));
+      }
+      await actionPromise;
+    } finally {
+      clearNoticeTimer(state);
+    }
+
+    expect(request).toHaveBeenCalledWith(method, {
+      agentId: "research",
+      expectedRevisionHash: REVISION_HASH,
+      proposalId: "proposal-1",
+    });
+    if (disconnect) {
+      const calledMethods = request.mock.calls.map(([calledMethod]) => calledMethod);
+      expect(calledMethods).not.toContain("skills.proposals.list");
+      expect(calledMethods).not.toContain("skills.proposals.inspect");
+    }
+    expectNoLeak(state, action);
+    if (mode === "generic") {
+      expect(state.skillWorkshopError).toBeNull();
+    }
+  });
 
   it.each(["apply", "reject"] as const)(
     "%s refuses to act without the reviewed revision hash",
@@ -522,6 +797,11 @@ describe("Skill Workshop proposal RPCs", () => {
       status: "completed",
       result: { decision: "block" },
     });
+    const evaluated = state.skillWorkshopProposals[0]!;
+    expect(evaluated.revisionHash).toBe(REVISION_HASH);
+    expect(evaluated.body).toBe("Review unread mail and archive low-priority threads.");
+    expect(evaluated.supportFiles).toEqual([]);
+    expect(evaluated.slug).toBe("inbox-cleaner");
   });
 
   it("does not evaluate after the initiating source changes during inspection", async () => {

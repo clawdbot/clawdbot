@@ -249,7 +249,16 @@ suite.define(() => {
         });
 
         await setProposalRevision(gateway, H2, status);
-        await gateway.resolveDeferred(method, {});
+        // The action RPC returns the committed terminal record (apply wraps it
+        // in { record, targetSkillFile }, reject returns the record itself), so
+        // the UI's completion authority confirms the action and refreshes.
+        const actionRecord = proposalInspect(H2, status).record;
+        await gateway.resolveDeferred(
+          method,
+          method === "skills.proposals.apply"
+            ? { record: actionRecord, targetSkillFile: `skills/${SKILL_KEY}/SKILL.md` }
+            : actionRecord,
+        );
         await gateway.waitForRequest("skills.proposals.list", { after: secondListCount });
         await gateway.waitForRequest("skills.proposals.inspect", { after: secondInspectCount });
         await page
