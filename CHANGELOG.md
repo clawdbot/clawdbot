@@ -70,6 +70,7 @@ Docs: https://docs.openclaw.ai
 ### Fixes
 
 - **Control UI command palette:** keep keyboard selection and Enter usable when reconnects or catalog refreshes replace search results, preserving the selected command while it remains available.
+- **Copilot BYOK streaming:** handle upstream response errors and cancel both streams on client disconnect or proxy shutdown, preventing unhandled stream errors from crashing the host.
 - **Control UI Gateway labels:** keep the discovered machine name through recovery initialization and refresh open folder-browser labels when name discovery finishes.
 - **Android settings:** keep form fields and actions reachable above the keyboard, and respect bottom system insets without duplicating navigation padding.
 - **Nextcloud Talk diagnostics:** redact reflected credentials before displaying send, reaction, and bot-preflight errors, and suppress incomplete error bodies. (#119976) Thanks @xialonglee.
