@@ -536,25 +536,37 @@ export function parseClaudeCliStreamingDelta(params: {
   backend: CliBackendConfig;
   providerId: string;
   parsed: Record<string, unknown>;
+  previousText: string;
 }): string | null {
   if (!supportsCliJsonlToolEvents(params)) {
     return null;
   }
-  if (params.parsed.type !== "stream_event" || !isRecord(params.parsed.event)) {
+  if (params.parsed.type === "stream_event" && isRecord(params.parsed.event)) {
+    const event = params.parsed.event;
+    if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
+      return null;
+    }
+    const delta = event.delta;
+    return delta.type === "text_delta" && typeof delta.text === "string" && delta.text
+      ? delta.text
+      : null;
+  }
+  if (
+    // `--include-partial-messages` marks cumulative assistant snapshots with an explicit null.
+    !isClaudeStreamJsonDialect(params) ||
+    params.parsed.type !== "assistant" ||
+    isClaudeSubagentRecord(params.parsed) ||
+    !isRecord(params.parsed.message) ||
+    params.parsed.message.stop_reason !== null
+  ) {
     return null;
   }
-  const event = params.parsed.event;
-  if (event.type !== "content_block_delta" || !isRecord(event.delta)) {
-    return null;
-  }
-  const delta = event.delta;
-  if (delta.type !== "text_delta" || typeof delta.text !== "string") {
-    return null;
-  }
-  if (!delta.text) {
-    return null;
-  }
-  return delta.text;
+  const snapshot = collectCliText(params.parsed.message);
+  // The delivery lane is append-only. Emit only cumulative suffixes and let
+  // a divergent revision defer to the terminal result instead of duplicating text.
+  return snapshot.startsWith(params.previousText)
+    ? snapshot.slice(params.previousText.length) || null
+    : null;
 }
 
 const GEMINI_CLI_ERROR_EVENT_FALLBACK = "Gemini CLI emitted an error event.";
