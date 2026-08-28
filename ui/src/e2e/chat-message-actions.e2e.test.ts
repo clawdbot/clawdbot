@@ -166,7 +166,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
     await server?.close();
   });
 
-  it("keeps only the latest assistant actions visible at rest", async () => {
+  it("keeps assistant actions hidden when the user message is last", async () => {
     const context = await browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
@@ -232,7 +232,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const inlineAction = latestAssistant.locator(".chat-message-actions-row button").first();
       await expect.poll(() => inlineAction.count()).toBe(1);
 
-      await screenshot(page, "latest-assistant-actions-resting-desktop.png");
+      await screenshot(page, "user-last-assistant-actions-hidden-desktop.png");
       await expect
         .poll(() => presentation(earlierAssistant))
         .toEqual({
@@ -244,10 +244,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await expect
         .poll(() => presentation(latestAssistant))
         .toEqual({
-          actionOpacity: "0.6",
-          actionPointerEvents: "auto",
-          footerOpacity: "1",
-          footerPointerEvents: "auto",
+          actionOpacity: "0",
+          actionPointerEvents: "none",
+          footerOpacity: "0",
+          footerPointerEvents: "none",
         });
       await expect
         .poll(() =>
@@ -263,7 +263,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await expect
         .poll(() => presentation(latestAssistant))
         .toEqual({
-          actionOpacity: "0.6",
+          actionOpacity: "0",
           actionPointerEvents: "none",
           footerOpacity: "0",
           footerPointerEvents: "none",
@@ -275,7 +275,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       await expect
         .poll(() => presentation(latestAssistant))
         .toEqual({
-          actionOpacity: "0.6",
+          actionOpacity: "1",
           actionPointerEvents: "auto",
           footerOpacity: "1",
           footerPointerEvents: "auto",

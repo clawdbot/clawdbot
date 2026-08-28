@@ -20,6 +20,7 @@ suite.define(() => {
     { label: "desktop hover", mobile: false, viewport: { height: 900, width: 1280 } },
     { label: "mobile tap", mobile: true, viewport: { height: 844, width: 390 } },
   ])("shows turn metadata only after completion on $label", async ({ mobile, viewport }) => {
+    const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
     const context = await suite.newBrowserContext({
       hasTouch: mobile,
       isMobile: mobile,
@@ -51,9 +52,26 @@ suite.define(() => {
             ? { opacity: "0", pointerEvents: "none" }
             : { opacity: "1", pointerEvents: "auto" },
         );
+      if (artifactDir && !mobile) {
+        await mkdir(artifactDir, { recursive: true });
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "before-user-follow-up-actions-visible.png"),
+        });
+      }
       await page.locator(".agent-chat__composer-combobox textarea").fill("show turn metadata");
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(() => footerPresentation(earlierAssistant))
+        .toEqual({ opacity: "0", pointerEvents: "none" });
+      if (artifactDir && !mobile) {
+        await page.screenshot({
+          fullPage: true,
+          path: path.join(artifactDir, "after-user-follow-up-actions-hidden.png"),
+        });
+      }
       const runId = requireString(
         requireRecord(sendRequest.params).idempotencyKey,
         "chat send idempotency key",

@@ -542,18 +542,21 @@ export function projectChatTranscript(
     });
     return false;
   });
-  // Default disclosure is for settled browsing; live runs and filtered
-  // projections keep their existing explicit hover/tap behavior.
+  // Default disclosure belongs only to a settled assistant at the transcript
+  // tail; any newer visible row returns the prior answer to hover/tap behavior.
+  const lastTranscriptItem = transcriptItems.at(-1);
   latestAssistantItemKey =
     props.runActive || props.runWorking || searchFiltering
       ? null
-      : (transcriptItems.findLast((item) =>
-          item.kind === "agent-run-frame"
-            ? item.outcome.kind === "completed" && item.outcome.actionOwner !== null
-            : item.kind === "group"
-              ? !item.isStreaming && assistantGroupCanOwnActiveRunStatus(item)
-              : false,
-        )?.key ?? null);
+      : lastTranscriptItem?.kind === "agent-run-frame" &&
+          lastTranscriptItem.outcome.kind === "completed" &&
+          lastTranscriptItem.outcome.actionOwner !== null
+        ? lastTranscriptItem.key
+        : lastTranscriptItem?.kind === "group" &&
+            !lastTranscriptItem.isStreaming &&
+            assistantGroupCanOwnActiveRunStatus(lastTranscriptItem)
+          ? lastTranscriptItem.key
+          : null;
   for (const item of transcriptItems) {
     const groups =
       item.kind === "agent-run-frame"
