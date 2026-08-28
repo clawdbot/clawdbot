@@ -85,7 +85,7 @@ it("renders a Windows PATH launcher for the running CLI", async () => {
       invocation: {
         command: "C:\\Program Files\\nodejs\\node.exe",
         args: ["C:\\OpenClaw\\dist\\index.js"],
-        cwd: "C:\\OpenClaw",
+        cwd: "C:\\OpenClaw %USERPROFILE%!",
       },
       platform: "win32",
       stateDir: root,
@@ -93,7 +93,7 @@ it("renders a Windows PATH launcher for the running CLI", async () => {
 
     const executablePath = path.join(root, "tmp", "agent-cli", "openclaw.cmd");
     expect(await fs.readFile(executablePath, "utf8")).toBe(
-      '@echo off\r\nset "TSX_TSCONFIG_PATH=C:\\OpenClaw\\tsconfig.json"\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
+      '@echo off\r\nset TSX_TSCONFIG_PATH="C:\\OpenClaw %%USERPROFILE%%^!\\tsconfig.json"\r\n"C:\\Program Files\\nodejs\\node.exe" C:\\OpenClaw\\dist\\index.js --profile work %*\r\n',
     );
   });
 });
