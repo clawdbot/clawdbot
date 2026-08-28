@@ -50,6 +50,11 @@ export type TabAccessPolicy = {
   capture(tabId: number): TabAccessEpoch;
   epochIsCurrent(tabId: number, epoch: TabAccessEpoch): boolean;
   invalidateTab(tabId: number): void;
+  renewTabAccess(
+    tabId: number,
+    attachedEpoch: TabAccessEpoch | undefined,
+    tab: BrowserTabSnapshot | undefined,
+  ): TabAccessEpoch | undefined;
   invalidateAll(): void;
   inspectTab(tabId: number, epoch?: TabAccessEpoch): Promise<TabAccessState>;
   requireTab(tabId: number, epoch?: TabAccessEpoch): Promise<AccessibleBrowserTabSnapshot>;

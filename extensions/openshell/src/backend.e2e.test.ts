@@ -422,6 +422,8 @@ describe("openshell sandbox backend e2e", () => {
       const previousXdgCacheHome = process.env.XDG_CACHE_HOME;
       const workspaceDir = path.join(rootDir, "workspace");
       const mirrorWorkspaceDir = path.join(rootDir, "mirror");
+      const overlapWorkspaceDir = path.join(rootDir, "overlap-primary");
+      const overlapAgentWorkspaceDir = path.join(rootDir, "overlap-agent");
       const dockerfileDir = path.join(rootDir, "custom-image");
       const dockerfilePath = path.join(dockerfileDir, "Dockerfile");
       const denyPolicyPath = path.join(rootDir, "deny-policy.yaml");
@@ -492,6 +494,24 @@ describe("openshell sandbox backend e2e", () => {
         agentWorkspaceDir: mirrorWorkspaceDir,
         cfg: sandboxCfg,
       });
+      const overlapBackend = await createOpenShellSandboxBackendFactory({
+        pluginConfig: resolveOpenShellPluginConfig({
+          command: OPENCLAW_OPENSHELL_COMMAND,
+          gateway: gatewayName,
+          workspace: openShellWorkspace,
+          from: dockerfilePath,
+          autoProviders: false,
+          policy: denyPolicyPath,
+          remoteWorkspaceDir: "/sandbox/agent/project",
+          remoteAgentWorkspaceDir: "/sandbox/agent",
+        }),
+      })({
+        sessionKey: `session:openshell-e2e-overlap:${scopeSuffix}`,
+        scopeKey: `session:openshell-e2e-overlap:${scopeSuffix}`,
+        workspaceDir: overlapWorkspaceDir,
+        agentWorkspaceDir: overlapAgentWorkspaceDir,
+        cfg: { ...sandboxCfg, workspaceAccess: "ro" },
+      });
       const allowBackend = await createOpenShellSandboxBackendFactory({
         pluginConfig: { ...pluginConfig, policy: allowPolicyPath },
       })({
@@ -512,6 +532,8 @@ describe("openshell sandbox backend e2e", () => {
         }
         await fs.mkdir(workspaceDir, { recursive: true });
         await fs.mkdir(mirrorWorkspaceDir, { recursive: true });
+        await fs.mkdir(overlapWorkspaceDir, { recursive: true });
+        await fs.mkdir(overlapAgentWorkspaceDir, { recursive: true });
         await fs.mkdir(dockerfileDir, { recursive: true });
         const isolatedConfigHome = env.XDG_CONFIG_HOME;
         if (!isolatedConfigHome) {
@@ -535,6 +557,14 @@ describe("openshell sandbox backend e2e", () => {
           path.join(mirrorWorkspaceDir, "mirror-seed.txt"),
           "mirror-from-local\n",
           "utf8",
+        );
+        await fs.writeFile(
+          path.join(overlapWorkspaceDir, "primary-only.txt"),
+          "primary-preserved\n",
+        );
+        await fs.writeFile(
+          path.join(overlapAgentWorkspaceDir, "agent-only.txt"),
+          "agent-preserved\n",
         );
         for (const protectedDirectory of [".git", "hooks", "git-hooks"]) {
           const protectedPath = path.join(mirrorWorkspaceDir, protectedDirectory);
@@ -685,6 +715,22 @@ describe("openshell sandbox backend e2e", () => {
         expect(mirrorExecResult.stdout).toContain("mirror-from-local");
         expect((await fs.lstat(mirrorFifoPath)).isFIFO()).toBe(true);
         expect((await fs.lstat(mirrorSocketPath)).isSocket()).toBe(true);
+        if (stressMode === "mirror") {
+          await expect(
+            runBackendExec({
+              backend: overlapBackend,
+              command:
+                "cat primary-only.txt ../agent-only.txt && printf 'agent-remote\\n' > ../agent-only.txt",
+              timeoutMs: 2 * 60_000,
+            }),
+          ).resolves.toMatchObject({
+            code: 0,
+            stdout: "primary-preserved\nagent-preserved\n",
+          });
+          await expect(
+            fs.readFile(path.join(overlapAgentWorkspaceDir, "agent-only.txt"), "utf8"),
+          ).resolves.toBe("agent-preserved\n");
+        }
         for (const relativePath of hostLinks) {
           await expect(fs.readlink(path.join(mirrorWorkspaceDir, relativePath))).resolves.toBe(
             hostLinkTarget,
@@ -876,6 +922,7 @@ describe("openshell sandbox backend e2e", () => {
         for (const sandboxName of [
           backend.runtimeId,
           mirrorBackend.runtimeId,
+          overlapBackend.runtimeId,
           allowBackend.runtimeId,
         ]) {
           await runCommand({

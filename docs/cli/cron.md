@@ -220,6 +220,8 @@ Isolated automation turns suppress stale acknowledgement-only replies. If the fi
 
 If an isolated automation run returns only the silent token (`NO_REPLY` or `no_reply`), the scheduler suppresses both direct outbound delivery and the fallback queued summary path, so nothing is posted back to chat.
 
+Human-readable `automations list` and `automations show` label successful intentional suppression as `ok (suppressed)`, not a delivery warning. `automations show` includes `last delivery suppression` with the recorded reason (`empty`, `silent`, `heartbeat`, or `channel_transform`). JSON keeps `deliveryStatus: "not-delivered"` and the separate `deliverySuppressionReason`; genuine delivery failures without an intentional reason still show `ok (not delivered)` when execution succeeded.
+
 ### Structured denials
 
 Isolated automation runs use structured execution-denial metadata from the embedded run (fatal exec-tool errors coded `SYSTEM_RUN_DENIED` or `INVALID_REQUEST`) as the authoritative denial signal. They also honor node-host `UNAVAILABLE` wrappers around a nested structured error carrying one of those codes.

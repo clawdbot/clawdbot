@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredEmbeddedRunLifecycleManager } from "../../agents/embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import { createAgentTurnTimingTracker } from "./agent-runner-turn-timing.js";
@@ -136,6 +137,11 @@ function runCandidate(
 ) {
   return runEmbeddedFallbackCandidate({
     preparedRunAdmission: createTestPreparedRunAdmission("run-test"),
+    deferredLifecycle: createDeferredEmbeddedRunLifecycleManager({
+      runId: "run-fallback",
+      sessionId: "session-fallback",
+      sessionKey: "agent:main:fallback",
+    }),
     githubPublicationAvailable: false,
     turn: createTurn(config),
     effectiveRun: createTurn(config).followupRun.run,

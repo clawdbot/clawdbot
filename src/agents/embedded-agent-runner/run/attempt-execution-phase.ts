@@ -216,7 +216,9 @@ export async function runEmbeddedAttemptExecutionPhase(
     },
     sideEffectToolOwners,
     diagnosticOwner,
+    trajectoryRecorder: sessionRuntime.trajectoryRecorder,
   });
+  state.deferredLifecycleOwner = preparedStream.deferredLifecycleOwner;
   input.lifecycle.setToolSearchCatalogExecutor(preparedStream.toolSearchCatalogExecutor);
   input.externalAbortController.setCompactionState({
     isPendingOrRetrying: preparedStream.subscription.isCompacting,

@@ -338,6 +338,35 @@ describe("validateConfigObjectWithPlugins channel metadata (applyDefaults: true)
     }
   });
 
+  it.each([
+    ["feishu", "allowlist", "allowlist_quote"],
+    ["mattermost", "allowlist_quote", "all"],
+  ] as const)(
+    "accepts %s contextVisibility at channel and account scope",
+    (channelId, channelMode, accountMode) => {
+      const result = validateConfigObjectWithPlugins({
+        channels: {
+          [channelId]: {
+            contextVisibility: channelMode,
+            accounts: { work: { contextVisibility: accountMode } },
+          },
+        },
+      });
+
+      expect(result).toMatchObject({
+        ok: true,
+        config: {
+          channels: {
+            [channelId]: {
+              contextVisibility: channelMode,
+              accounts: { work: { contextVisibility: accountMode } },
+            },
+          },
+        },
+      });
+    },
+  );
+
   it('warns on Mattermost dmPolicy="open" without wildcard allowFrom', () => {
     const result = validateConfigObjectWithPlugins({
       channels: {

@@ -2062,7 +2062,7 @@ src/agents/tool-mutation-names.ts	2
 src/agents/tool-policy-shared.ts	1
 src/agents/tool-result-error.ts	3
 src/agents/tool-schema-hints.ts	1
-src/agents/tool-search-catalog.ts	6
+src/agents/tool-search-catalog.ts	4
 src/agents/tool-search-directory.ts	1
 src/agents/tool-search-runtime.ts	4
 src/agents/tool-search-transcript.ts	3
@@ -2807,7 +2807,7 @@ src/daemon/schtasks-process.ts	2
 src/daemon/schtasks-runtime.ts	4
 src/daemon/service.ts	1
 src/daemon/systemd-exec.ts	2
-src/daemon/systemd-install.ts	5
+src/daemon/systemd-install.ts	2
 src/daemon/systemd-lifecycle.ts	2
 src/daemon/systemd-runtime.ts	1
 src/entry.compile-cache.ts	3
@@ -3934,7 +3934,6 @@ ui/src/components/board/board-widget-cell.ts	1
 ui/src/components/board/board-widget-frame.ts	1
 ui/src/components/browser/browser-annotation.ts	1
 ui/src/components/browser/browser-client.ts	1
-ui/src/components/browser/browser-panel-controller-input.ts	1
 ui/src/components/browser/browser-panel-render.ts	4
 ui/src/components/browser/browser-panel.ts	1
 ui/src/components/command-palette.ts	2

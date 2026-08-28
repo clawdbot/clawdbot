@@ -56,6 +56,10 @@ import {
 } from "./attempt-queue-message.js";
 import type { EmbeddedAttemptClientToolCallSlot } from "./attempt-result.js";
 import {
+  createEmbeddedAttemptDeferredLifecycleOwner,
+  type EmbeddedAttemptDeferredLifecycleOwner,
+} from "./deferred-lifecycle-owner.js";
+import {
   resolveFinalAssistantRawText,
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
@@ -104,6 +108,9 @@ export function prepareEmbeddedAttemptStream(input: {
   };
   sideEffectToolOwners?: ReadonlyMap<string, string>;
   diagnosticOwner: DiagnosticEmbeddedRunOwner;
+  trajectoryRecorder?: Parameters<
+    typeof createEmbeddedAttemptDeferredLifecycleOwner
+  >[0]["trajectoryRecorder"];
 }) {
   const attempt = input.attempt;
   const hookRunner = input.hookRunner;
@@ -259,6 +266,7 @@ export function prepareEmbeddedAttemptStream(input: {
   // Terminal callbacks run after queue construction; keep the queue in this
   // phase so active-run clearing and subscription teardown share one owner.
   const getQueueHandle = (): AttemptStreamQueueHandle => queueHandle;
+  let deferredLifecycleOwner: EmbeddedAttemptDeferredLifecycleOwner | undefined;
   const subscription = subscribeEmbeddedAgentSession({
     session: input.activeSession,
     runId: attempt.runId,
@@ -298,6 +306,9 @@ export function prepareEmbeddedAttemptStream(input: {
         ? AGENT_RUN_RESTART_ABORT_STOP_REASON
         : undefined,
     onBeforeLifecycleTerminal: () => {
+      if (deferredLifecycleOwner) {
+        return;
+      }
       if (
         requiresCompletionRequiredAsyncTaskWait({
           sessionKey: attempt.sessionKey,
@@ -440,6 +451,7 @@ export function prepareEmbeddedAttemptStream(input: {
     }
     externalAbortAccepted = true;
     input.markExternalAbort();
+    attempt.onDeferredLifecycleAbort?.(reason);
     attempt.onAttemptAbort?.();
     const abortReason =
       reason === "restart"
@@ -519,10 +531,31 @@ export function prepareEmbeddedAttemptStream(input: {
     attempt.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(attempt.runId),
   );
   setActiveEmbeddedRun(attempt.sessionId, queueHandle, attempt.sessionKey, attempt.sessionFile);
+  if (attempt.deferTerminalLifecycle && attempt.onDeferredLifecycleOwner) {
+    deferredLifecycleOwner = createEmbeddedAttemptDeferredLifecycleOwner({
+      runId: attempt.runId,
+      sessionId: attempt.sessionId,
+      trajectoryRecorder: input.trajectoryRecorder ?? null,
+      clearActiveRun: () =>
+        clearActiveEmbeddedRun(
+          attempt.sessionId,
+          queueHandle,
+          attempt.sessionKey,
+          attempt.sessionFile,
+        ),
+    });
+    try {
+      attempt.onDeferredLifecycleOwner(deferredLifecycleOwner);
+    } catch (error) {
+      deferredLifecycleOwner.discard();
+      throw error;
+    }
+  }
 
   return {
     subscription,
     queueHandle,
+    deferredLifecycleOwner,
     toolSearchCatalogExecutor,
     getBeforeAgentFinalizeRevisionReason: () => beforeAgentFinalizeRevisionReason,
     getBeforeAgentFinalizeRevisionEntryId: () => beforeAgentFinalizeRevisionEntryId,

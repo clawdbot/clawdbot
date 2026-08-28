@@ -83,6 +83,7 @@ const service = vi.hoisted(() => ({
   uninstall: vi.fn(async () => {}),
   restart: vi.fn(async () => {}),
   stop: vi.fn(async () => {}),
+  readDefinitionMutationCapability: vi.fn(async () => ({ kind: "writable" as const })),
   readCommand: vi.fn(async () => null),
   readRuntime: vi.fn(async () => ({ status: "stopped" as const })),
 }));
@@ -272,6 +273,7 @@ describe("runDaemonInstall", () => {
     service.isLoaded.mockReset();
     service.stage.mockReset();
     service.install.mockReset();
+    service.readDefinitionMutationCapability.mockReset();
     service.readCommand.mockReset();
     resetRuntimeCapture();
     actionState.warnings.length = 0;
@@ -304,6 +306,7 @@ describe("runDaemonInstall", () => {
     service.isLoaded.mockResolvedValue(false);
     service.stage.mockResolvedValue(undefined);
     service.install.mockResolvedValue(undefined);
+    service.readDefinitionMutationCapability.mockResolvedValue({ kind: "writable" });
     service.readCommand.mockResolvedValue(null);
     resolveNodeStartupTlsEnvironmentMock.mockReturnValue({
       NODE_EXTRA_CA_CERTS: undefined,
@@ -342,6 +345,15 @@ describe("runDaemonInstall", () => {
     expect(replaceConfigFileMock).not.toHaveBeenCalled();
     expect(service.isLoaded).not.toHaveBeenCalled();
     expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks inaccessible definitions before config reads or credential generation", async () => {
+    service.readDefinitionMutationCapability.mockRejectedValueOnce(new Error("secret-canary"));
+    await runDaemonInstall({ json: true, force: true });
+    expect(actionState.failed[0]?.message).toContain("SERVICE_DEFINITION_UNKNOWN");
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(randomTokenMock).not.toHaveBeenCalled();
+    expect(service.readCommand).toHaveBeenCalledOnce();
   });
 
   it("blocks non-default install identities before inspecting host services", async () => {
@@ -1002,29 +1014,14 @@ describe("runDaemonInstall", () => {
         OPENAI_API_KEY: "service-openai-key",
       },
     } as never);
-    const previous = process.env.OPENAI_API_KEY;
-    const previousNodeOptions = process.env.NODE_OPTIONS;
     delete process.env.OPENAI_API_KEY;
     process.env.NODE_OPTIONS = "--require /tmp/untrusted.js";
-    try {
-      await runDaemonInstall({ json: true, force: true });
+    await runDaemonInstall({ json: true, force: true });
 
-      expectFields(readFirstInstallPlanArg().env, {
-        OPENAI_API_KEY: "service-openai-key",
-      });
-      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-      if (previousNodeOptions === undefined) {
-        delete process.env.NODE_OPTIONS;
-      } else {
-        process.env.NODE_OPTIONS = previousNodeOptions;
-      }
-    }
+    expectFields(readFirstInstallPlanArg().env, {
+      OPENAI_API_KEY: "service-openai-key",
+    });
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 
   it("does not reuse stale service control env during forced reinstall", async () => {
@@ -1041,27 +1038,18 @@ describe("runDaemonInstall", () => {
       },
     } as never);
 
-    const previous = process.env.OPENAI_API_KEY;
     delete process.env.OPENAI_API_KEY;
-    try {
-      await runDaemonInstall({ json: true, force: true });
+    await runDaemonInstall({ json: true, force: true });
 
-      expectFields(readFirstInstallPlanArg().env, {
-        OPENAI_API_KEY: "service-openai-key",
-      });
-      const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
-      expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
-      expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
-      expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
-      expect(env.NODE_OPTIONS).toBeUndefined();
-      expect(env.PATH).not.toContain("/tmp/doctor-bin");
-      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
-    } finally {
-      if (previous === undefined) {
-        delete process.env.OPENAI_API_KEY;
-      } else {
-        process.env.OPENAI_API_KEY = previous;
-      }
-    }
+    expectFields(readFirstInstallPlanArg().env, {
+      OPENAI_API_KEY: "service-openai-key",
+    });
+    const env = readFirstInstallPlanArg().env as Record<string, string | undefined>;
+    expect(env.OPENCLAW_STATE_DIR).toBeUndefined();
+    expect(env.OPENCLAW_CONFIG_PATH).toBeUndefined();
+    expect(env.OPENCLAW_GATEWAY_TOKEN).toBeUndefined();
+    expect(env.NODE_OPTIONS).toBeUndefined();
+    expect(env.PATH).not.toContain("/tmp/doctor-bin");
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledTimes(1);
   });
 });

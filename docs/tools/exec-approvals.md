@@ -25,6 +25,10 @@ loosen them. If an approvals field is omitted, the `tools.exec` value is
 used. Host exec also uses local approvals state on that machine - a
 host-local `ask: "always"` in the execution host approvals document keeps
 prompting even if session or config defaults request `ask: "on-miss"`.
+An unconfigured node uses the same `full` / `off` baseline as the Gateway.
+Node execution still checks the target policy before dispatch: caller
+`allowlist` / `off` denies an unmatched command, and target `ask: "always"`
+requires approval even when the caller requests `full` / `off`.
 </Note>
 
 ## Where it applies
@@ -76,6 +80,12 @@ pending approval message. Matrix seeds reaction shortcuts (`✅` allow once,
 `♾️` allow always, `❌` deny) while still leaving `/approve ...` in the
 message as a fallback.
 </Tip>
+
+For native chat approval surfaces, a node exec waits for the decision within
+the originating tool call and returns the command output there. Closing or
+cancelling that turn invalidates its pending authority; a late approval cannot
+restart it. A typed `SYSTEM_RUN_DENIED` result means the node rejected execution,
+not that the command may have run.
 
 ## Settings and storage
 
@@ -252,7 +262,7 @@ explicitly when a no-UI approval prompt should fall back to allow.
 
 - `tools.exec.host=auto` chooses **where** exec runs: sandbox when available, otherwise gateway.
 - YOLO chooses **how** host exec is approved: `security=full` plus `ask=off`.
-- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy.
+- YOLO does **not** add a separate heuristic command-obfuscation approval gate or script-preflight rejection layer on top of the configured host exec policy. Node preparation still reads the target policy and resolves the working directory once. If both sides allow full/off, ordinary path aliases and inline scripts do not require approval binding; restrictive policy and later policy changes remain enforced.
 - `auto` does not make node or gateway routing a free override from a sandboxed session. Per-call `host=node` and `host=gateway` requests are allowed from `auto` only when no sandbox runtime is active. For a stable non-auto default, set `tools.exec.host` or use `/exec host=...` explicitly.
 
 </Warning>

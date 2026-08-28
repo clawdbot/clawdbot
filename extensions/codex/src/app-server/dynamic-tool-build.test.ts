@@ -633,10 +633,22 @@ describe("Codex app-server dynamic tool build", () => {
     {
       mode: "guarded" as const,
       execMode: "ask" as const,
+      command: "echo allowed",
+      expected: { status: "completed" },
+    },
+    {
+      mode: "guarded" as const,
+      execMode: "ask" as const,
+      command: "echo approval required",
       expected: { status: "failed", failureKind: "approval_required" },
     },
-    { mode: "full" as const, execMode: "full" as const, expected: { status: "completed" } },
-  ])("enforces the final $mode policy for an allowlisted Gateway command", async (testCase) => {
+    {
+      mode: "full" as const,
+      execMode: "full" as const,
+      command: "echo approval required",
+      expected: { status: "completed" },
+    },
+  ])("enforces $mode collector policy for $command", async (testCase) => {
     const workspaceDir = path.join(tempDir, `${testCase.mode}-allowlisted-workspace`);
     await fs.mkdir(workspaceDir, { recursive: true });
     const params = createParams(
@@ -644,22 +656,22 @@ describe("Codex app-server dynamic tool build", () => {
       workspaceDir,
     );
     params.disableTools = false;
+    params.swarmCollector = true;
+    params.pluginHarnessToolPolicyRestricted = true;
     params.permissionMode = testCase.mode;
     params.sessionRoot = workspaceDir;
     params.execOverrides = { host: "gateway", mode: testCase.execMode };
+    // Guarded mode asks only on an allowlist miss; two arguments exceed this profile.
     params.config = {
       tools: { exec: { safeBins: ["echo"], safeBinProfiles: { echo: { maxPositional: 1 } } } },
     };
     params.runtimePlan = createCodexRuntimePlanFixture();
     setOpenClawCodingToolsFactoryForTests((options) =>
-      createOpenClawCodingTools({
-        ...options,
-        swarmCollector: true,
-        wrapBeforeToolCallHook: false,
-      }).filter((tool) => ["exec", "process"].includes(tool.name)),
+      createOpenClawCodingTools(options).filter((tool) => ["exec", "process"].includes(tool.name)),
     );
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params),
       sessionPermissionPolicy: {
         mode: testCase.mode,
         root: workspaceDir,
@@ -667,11 +679,11 @@ describe("Codex app-server dynamic tool build", () => {
       },
     });
     const gatewayExec = expectDefined(
-      tools.find((tool) => tool.name === "gateway_exec"),
-      `${testCase.mode} Gateway shell alias`,
+      tools.find((tool) => tool.name === "exec"),
+      `${testCase.mode} OpenClaw shell replacement`,
     );
     const result = await gatewayExec.execute(`${testCase.mode}-allowlisted`, {
-      command: `echo ${testCase.mode}`,
+      command: testCase.command,
       ask: "off",
       security: "full",
     });
@@ -849,6 +861,76 @@ describe("Codex app-server dynamic tool build", () => {
 
     expect(receivedOptions).toMatchObject({ taskSuggestionDeliveryMode: "gateway" });
   });
+
+  it.each([{ toolsAllow: undefined }, { toolsAllow: ["read"] }, { toolsAllow: [] }])(
+    "preserves the collector handoff and dynamic tool through allowlist %j",
+    async ({ toolsAllow }) => {
+      const workspaceDir = path.join(tempDir, "workspace");
+      const params = createParams(path.join(tempDir, "collector-session.jsonl"), workspaceDir);
+      params.disableTools = false;
+      params.runtimePlan = createCodexRuntimePlanFixture();
+      params.toolsAllow = toolsAllow;
+      params.swarmCollector = true;
+      params.pluginHarnessToolPolicyRestricted = true;
+      params.swarmOutputSchema = {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      };
+      // An independent host result: the factory must not repair dropped attempt fields.
+      const output = {
+        ...createRuntimeDynamicTool("structured_output"),
+        catalogMode: "direct-only" as const,
+      };
+      const factory = vi.fn(() => [createRuntimeDynamicTool("read"), output]);
+      setOpenClawCodingToolsFactoryForTests(factory);
+      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+        sandbox: null,
+        nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params),
+      });
+
+      expect(factory).toHaveBeenCalledWith(
+        expect.objectContaining({
+          swarmCollector: true,
+          swarmOutputSchema: params.swarmOutputSchema,
+          ...(toolsAllow ? { runtimeToolAllowlist: [...toolsAllow, "structured_output"] } : {}),
+        }),
+      );
+      expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+      expect(tools.map((tool) => tool.name).toSorted()).toEqual(
+        [...(toolsAllow ?? ["read"]), "structured_output"].toSorted(),
+      );
+      const bridge = createCodexDynamicToolBridge({
+        tools,
+        signal: new AbortController().signal,
+      });
+      const outputSpec = expectDefined(
+        flattenCodexDynamicToolFunctions(bridge.specs).find(
+          (tool) => tool.name === "structured_output",
+        ),
+        "collector dynamic tool spec",
+      );
+      expect(outputSpec.deferLoading).not.toBe(true);
+      const args = { result: { answer: "ok" } };
+      const response = await bridge.handleToolCall({
+        threadId: "collector-thread",
+        turnId: "collector-turn",
+        tool: "structured_output",
+        callId: "collector-result",
+        arguments: args,
+      });
+      expect(response).toMatchObject({
+        success: true,
+        contentItems: [{ type: "inputText", text: "structured_output done" }],
+      });
+      expect(output.execute).toHaveBeenCalledWith(
+        "collector-result",
+        args,
+        expect.any(AbortSignal),
+        undefined,
+      );
+    },
+  );
 
   it("preserves the host-provided OpenClaw tool through the Codex allowlist", async () => {
     const workspaceDir = path.join(tempDir, "workspace");

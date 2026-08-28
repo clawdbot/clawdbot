@@ -388,6 +388,48 @@ describe("flows commands", () => {
     });
   });
 
+  it("shows and cancels live work before newer terminal history", async () => {
+    await withTaskFlowCommandStateDir(async () => {
+      const ownerKey = "agent:main:main";
+      const olderRunning = createManagedTaskFlow({
+        ownerKey,
+        controllerId: "tests/flows-command-owner-lookup",
+        goal: "Older live flow",
+        status: "running",
+        createdAt: 100,
+        updatedAt: 100,
+      });
+      const newerTerminal = createManagedTaskFlow({
+        ownerKey,
+        controllerId: "tests/flows-command-owner-lookup",
+        goal: "Newer terminal flow",
+        status: "succeeded",
+        createdAt: 200,
+        updatedAt: 200,
+        endedAt: 200,
+      });
+
+      const showRuntime = createRuntime();
+      await flowsShowCommand({ lookup: ownerKey, json: true }, showRuntime);
+      expect(vi.mocked(showRuntime.writeJson).mock.calls[0]?.[0]).toMatchObject({
+        flowId: olderRunning.flowId,
+        status: "running",
+      });
+
+      const cancelRuntime = createRuntime();
+      await flowsCancelCommand({ lookup: ownerKey }, cancelRuntime);
+      expect(vi.mocked(cancelRuntime.log)).toHaveBeenCalledWith(
+        `Cancelled ${olderRunning.flowId} (managed) with status cancelled.`,
+      );
+      expect(getTaskFlowById(olderRunning.flowId)).toMatchObject({
+        status: "cancelled",
+        cancelRequestedAt: expect.any(Number),
+      });
+      expect(getTaskFlowById(newerTerminal.flowId)).toMatchObject({ status: "succeeded" });
+      expect(getTaskFlowById(newerTerminal.flowId)?.cancelRequestedAt).toBeUndefined();
+    });
+  });
+
   it("keeps terminal reset bytes off stdout for JSON lookup failures", async () => {
     await withTaskFlowCommandStateDir(async () => {
       const runtime = createRuntime();

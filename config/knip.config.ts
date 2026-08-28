@@ -63,8 +63,13 @@ const repositoryScriptEntries = [
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs!",
   "scripts/e2e/lib/run-with-pty.mjs!",
   "scripts/e2e/lib/sandbox-browser-sidecar/scenario.mjs!",
+  // systemd-sealed-service-definition.sh executes these via Node stdin and a container path.
+  "scripts/e2e/lib/systemd-sealed-service-definition/file-mount.mjs!",
+  "scripts/e2e/lib/systemd-sealed-service-definition/paired-mounts.mjs!",
   "scripts/e2e/lib/upgrade-survivor/config-parking.mjs!",
   "scripts/e2e/lib/upgrade-survivor/probe-gateway.mjs!",
+  // update-restart-auth.sh installs this manager/launch adapter into the fixture bin directory.
+  "scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs!",
   "scripts/embedded-run-abort-leak.ts!",
   "scripts/fixtures/packed-plugin-sdk-type-smoke.ts!",
   "scripts/ios-release-cut.ts!",
@@ -100,6 +105,8 @@ const repositoryScriptEntries = [
   // Native shell UI tests connect to this manually launched loopback Gateway fixture.
   "scripts/test-ios-shell-gateway.mjs!",
   "scripts/update-clawtributors.ts!",
+  // The candidate binder invokes this trusted producer-identity verifier by path.
+  "scripts/verify-full-release-producer-job.mjs!",
   "scripts/verify-stable-main-closeout.mjs!",
   "scripts/write-package-dist-inventory.ts!",
   "scripts/write-plugin-sdk-entry-dts.ts!",

@@ -89,6 +89,7 @@ import {
 import type { RequestCompactionInvocation } from "../compaction-attribution.js";
 import { resolveConversationCapabilityProfile } from "../conversation-capability-profile.js";
 import { resolveConversationToolPolicies } from "../conversation-tool-policy-pipeline.js";
+import type { DeferredEmbeddedRunLifecycleManager } from "../embedded-agent-runner/run/deferred-lifecycle-owner.js";
 import type { RunEmbeddedAgentInternalParams } from "../embedded-agent-runner/run/internal-params.js";
 import { runEmbeddedAgent, type EmbeddedAgentRunResult } from "../embedded-agent.js";
 import { appendGitCoauthorContext } from "../git-coauthor-attribution.js";
@@ -547,6 +548,7 @@ export async function runAgentAttempt(params: {
     sessionKey?: string;
   }) => void | Promise<void>;
   deferTerminalLifecycle?: boolean;
+  deferredLifecycle?: DeferredEmbeddedRunLifecycleManager;
   authProfileProvider: string;
   sessionStore?: Record<string, SessionEntry>;
   storePath?: string;
@@ -824,6 +826,7 @@ export async function runAgentAttempt(params: {
       ? "openclaw"
       : undefined);
   if (!isRawModelRun && isCliExecutionProvider) {
+    params.deferredLifecycle?.handoffToCli();
     const cliSessionBinding = getCliSessionBinding(params.sessionEntry, cliExecutionProvider);
     const cliProcessCwd = params.cwd ? resolveUserPath(params.cwd) : params.workspaceDir;
     const cliContinuationBody = params.opts.execApprovalContinuationPromptRange
@@ -974,6 +977,7 @@ export async function runAgentAttempt(params: {
               runTimeoutOverrideMs: params.runTimeoutOverrideMs,
               runId: params.runId,
               lifecycleGeneration: params.lifecycleGeneration,
+              abortSignal: params.deferredLifecycle?.signal ?? params.opts.abortSignal,
               onExecutionStarted: params.opts.onExecutionStarted,
               onExecutionPhase: onRuntimeActivity,
               lane: params.opts.lane,
@@ -1414,6 +1418,8 @@ export async function runAgentAttempt(params: {
     onExecutionPhase: onRuntimeActivity,
     deferTerminalLifecycle: params.deferTerminalLifecycle,
     deferTerminalLifecycleEnd: params.deferTerminalLifecycle,
+    onDeferredLifecycleOwner: params.deferredLifecycle?.adopt,
+    onDeferredLifecycleAbort: params.deferredLifecycle?.abort,
     suppressNextUserMessagePersistence: params.suppressPromptPersistenceOnRetry === true,
     userTurnTranscriptRecorder: params.userTurnTranscriptRecorder,
     contextEngineLogicalTurnLease: params.contextEngineLogicalTurnLease,

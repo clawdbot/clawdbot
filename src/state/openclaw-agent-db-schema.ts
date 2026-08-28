@@ -513,7 +513,7 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
   database: DatabaseSync,
   agentId: string,
   pathname: string,
-): void {
+): boolean {
   database.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS};`);
   const userVersion = readSqliteUserVersion(database);
   const hasApplicationSchema = database
@@ -550,6 +550,7 @@ export function assertAgentDatabaseIntegrityBeforeMutation(
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   }
+  return hasPendingCurrentVersionMigration;
 }
 
 function ensureAgentSchema(

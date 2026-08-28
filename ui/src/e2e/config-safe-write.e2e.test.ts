@@ -357,11 +357,11 @@ suite.define(() => {
       async ({ page }) => {
         const initialConfig = {
           laboratory: { endpoint: "local-api", retryBudget: 2 },
-          tools: { codeMode: { enabled: false } },
+          tools: { codeMode: { timeoutMs: 5000 } },
         };
         const patchedConfig = {
           laboratory: initialConfig.laboratory,
-          tools: { codeMode: { enabled: "auto" } },
+          tools: { codeMode: { enabled: "auto", timeoutMs: 5000 } },
         };
         const gateway = await installMockGateway(page, {
           methodResponses: {
@@ -376,7 +376,7 @@ suite.define(() => {
         const codeModeRow = settingsRow(page, "Code Mode");
         const codeModeSwitch = codeModeRow.getByRole("switch", { name: "Code Mode", exact: true });
         await codeModeSwitch.waitFor();
-        await expect.poll(() => codeModeRow.textContent()).toContain("Default: Disabled");
+        await expect.poll(() => codeModeRow.textContent()).toContain("Using default: Disabled");
 
         const configGetsBeforePatch = (await gateway.getRequests("config.get")).length;
         await gateway.deferNext("config.patch");

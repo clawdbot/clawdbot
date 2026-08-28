@@ -35,6 +35,77 @@ afterEach(() => {
 });
 
 describe("tool-card extraction", () => {
+  it.each(["standalone", "block", "live"])("extracts browser tabs from %s results", (shape) => {
+    const details = {
+      browserTab: {
+        targetId: "tab-1",
+        url: "https://example.com",
+        title: "Example",
+        extra: "drop",
+      },
+    };
+    const result = { type: "toolresult", id: "call-browser", name: "browser", text: "ok" };
+    const message =
+      shape === "standalone"
+        ? { role: "toolResult", toolName: "browser", details, content: "ok" }
+        : {
+            role: "assistant",
+            details,
+            ...(shape === "live"
+              ? {
+                  __openclawToolStreamLive: true,
+                  __openclawToolStreamResultReceived: true,
+                }
+              : {}),
+            content: [
+              { type: "toolcall", id: "call-browser", name: "browser", arguments: {} },
+              { ...result, ...(shape === "block" ? { details } : {}) },
+            ],
+          };
+    const [card] = extractToolCards(message);
+    expect(card?.preview).toEqual({
+      kind: "browser-tab",
+      targetId: "tab-1",
+      url: "https://example.com",
+      title: "Example",
+    });
+    expect(card?.completed).toBe(true);
+  });
+
+  it.each([null, [], "tab", {}, { targetId: 3 }, { targetId: " " }])(
+    "ignores malformed browser tabs (%j)",
+    (browserTab) => {
+      expect(
+        extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview,
+      ).toBeUndefined();
+    },
+  );
+
+  it("drops non-string browser metadata and gives canvas previews precedence", () => {
+    const browserTab = { targetId: "tab-1", url: 42, title: [] };
+    expect(extractToolCards({ role: "tool", details: { browserTab } })[0]?.preview).toEqual({
+      kind: "browser-tab",
+      targetId: "tab-1",
+    });
+    const canvas = {
+      kind: "canvas",
+      view: { id: "cv_app" },
+      presentation: { target: "assistant_message" },
+      mcpApp: { viewId: "cv_app" },
+    };
+    for (const message of [
+      { role: "tool", details: { browserTab, mcpAppPreview: canvas } },
+      {
+        role: "tool",
+        toolName: "canvas_render",
+        details: { browserTab },
+        content: JSON.stringify(canvas),
+      },
+    ]) {
+      expect(extractToolCards(message)[0]?.preview?.kind).toBe("canvas");
+    }
+  });
+
   it("pretty-prints structured args and pairs tool output onto the same card", () => {
     const cards = extractToolCards(
       {
@@ -461,14 +532,16 @@ describe("tool-card extraction", () => {
       "msg:view:1",
     );
 
-    expect(card?.preview?.kind).toBe("canvas");
-    expect(card?.preview?.surface).toBe("assistant_message");
-    expect(card?.preview?.render).toBe("url");
-    expect(card?.preview?.viewId).toBe("cv_inline");
-    expect(card?.preview?.url).toBe("/__openclaw__/canvas/documents/cv_inline/index.html");
-    expect(card?.preview?.title).toBe("Inline demo");
-    expect(card?.preview?.preferredHeight).toBe(420);
-    expect(card?.preview?.sandbox).toBe("scripts");
+    expect(card?.preview).toMatchObject({
+      kind: "canvas",
+      surface: "assistant_message",
+      render: "url",
+      viewId: "cv_inline",
+      url: "/__openclaw__/canvas/documents/cv_inline/index.html",
+      title: "Inline demo",
+      preferredHeight: 420,
+      sandbox: "scripts",
+    });
   });
 
   it("uses transcript metadata ids for history-backed tool messages", () => {

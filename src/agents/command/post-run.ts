@@ -95,6 +95,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
     suppressUserTurnPersistence,
     userTurnTranscriptRecorder,
     fallbackTrajectoryRecorder,
+    deferredLifecycle,
     lifecycle,
     terminal,
     lifecycleGeneration,
@@ -619,5 +620,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
   } catch (error) {
     lifecycle.emitPostTurnError(error, terminal);
     throw error;
+  } finally {
+    await deferredLifecycle.complete();
   }
 }

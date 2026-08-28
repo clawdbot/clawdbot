@@ -6,6 +6,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { describe, expect, it } from "vitest";
+import { validateToolArguments } from "../../packages/llm-core/src/validation.js";
+import { execSchema } from "../../src/agents/bash-tools.schemas.js";
+import { writeJsonAtomic } from "../../src/infra/json-files.js";
 import { getFreePort } from "../../src/test-utils/ports.js";
 
 const mockOpenAiPath = "scripts/e2e/mock-openai-server.mjs";
@@ -143,6 +146,141 @@ async function withMockServer(
 }
 
 describe("mock OpenAI response markers", () => {
+  it.each([
+    { api: "responses", stream: false },
+    { api: "responses", stream: true },
+    { api: "chat/completions", stream: false },
+    { api: "chat/completions", stream: true },
+  ])("emits native exec draft-proof calls from $api (stream=$stream)", async ({ api, stream }) => {
+    await withMockServer(
+      mockOpenAiPath,
+      { MOCK_DRAFTPROOF_FINAL_DELAY_MS: "80" },
+      async (baseUrl) => {
+        const user = { role: "user", content: "return OPENCLAW_E2E_DRAFTPROOF" };
+        const tool = {
+          name: "exec",
+          description: "Execute a shell command",
+          parameters: execSchema,
+        };
+        const request = async (turns: unknown[]) => {
+          const response = await fetch(`${baseUrl}/v1/${api}`, {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify({
+              [api === "responses" ? "input" : "messages"]: turns,
+              tools: [
+                api === "responses"
+                  ? { type: "function", ...tool }
+                  : { type: "function", function: tool },
+              ],
+              stream,
+            }),
+          });
+          expect(response.status).toBe(200);
+          if (!stream) {
+            return [await response.json()];
+          }
+          return (await response.text())
+            .split("\n\n")
+            .filter((line) => line.startsWith("data: ") && line !== "data: [DONE]")
+            .map((line) => JSON.parse(line.slice(6)));
+        };
+
+        const first = await request([user]);
+        let call;
+        let assistant;
+        if (api === "responses") {
+          const items = stream
+            ? first
+                .filter((event) => event.type === "response.output_item.done")
+                .map((event) => event.item)
+            : first[0].output;
+          expect(items).toHaveLength(2);
+          expect(items[0]).toMatchObject({
+            type: "message",
+            phase: "commentary",
+            content: [{ type: "output_text", text: "Checking the workspace before answering." }],
+          });
+          call = items[1];
+          expect(call).toMatchObject({ type: "function_call", name: "exec" });
+          assistant = items;
+        } else {
+          const messages = first.map((chunk) =>
+            stream ? chunk.choices[0].delta : chunk.choices[0].message,
+          );
+          const toolIndex = messages.findIndex((message) => message.tool_calls?.length);
+          expect(toolIndex).toBeGreaterThanOrEqual(0);
+          expect(
+            messages
+              .slice(0, toolIndex + 1)
+              .map((message) => message.content ?? "")
+              .join(""),
+          ).toBe("Checking the workspace before answering.");
+          expect(messages.slice(toolIndex + 1).some((message) => message.content)).toBe(false);
+          const toolCalls = messages[toolIndex].tool_calls;
+          expect(toolCalls).toHaveLength(1);
+          call = { ...toolCalls[0].function, call_id: toolCalls[0].id };
+          expect(call.name).toBe("exec");
+          assistant = [
+            {
+              role: "assistant",
+              content: "Checking the workspace before answering.",
+              tool_calls: toolCalls,
+            },
+          ];
+        }
+
+        // A final marker also follows validation errors; prove the emitted call itself works.
+        const args = JSON.parse(call.arguments);
+        validateToolArguments(tool, {
+          type: "toolCall",
+          id: call.call_id,
+          name: call.name,
+          arguments: args,
+        });
+        expect(args.command).toBe("sleep 3 && echo openclaw-draft-proof");
+        let toolOutput = "openclaw-draft-proof\n";
+        // The command is POSIX shell syntax; Windows still covers HTTP and native validation.
+        if (process.platform !== "win32") {
+          const startedAt = performance.now();
+          const result = spawnSync("bash", ["-c", args.command], {
+            encoding: "utf8",
+            timeout: 10_000,
+          });
+          expect(result.status, result.stderr).toBe(0);
+          expect(result.signal).toBeNull();
+          expect(result.stdout).toBe(toolOutput);
+          expect(performance.now() - startedAt).toBeGreaterThanOrEqual(2_900);
+          toolOutput = result.stdout;
+        }
+
+        const finalStartedAt = performance.now();
+        const final = await request([
+          user,
+          ...assistant,
+          api === "responses"
+            ? { type: "function_call_output", call_id: call.call_id, output: toolOutput }
+            : { role: "tool", tool_call_id: call.call_id, content: toolOutput },
+        ]);
+        if (api === "responses") {
+          const response = stream
+            ? final.find((event) => event.type === "response.completed").response
+            : final[0];
+          expect(response.output[0].content[0].text).toBe("OPENCLAW_E2E_DRAFTPROOF");
+        } else {
+          expect(
+            final
+              .map((chunk) =>
+                stream ? (chunk.choices[0].delta.content ?? "") : chunk.choices[0].message.content,
+              )
+              .join(""),
+          ).toBe("OPENCLAW_E2E_DRAFTPROOF");
+          expect(performance.now() - finalStartedAt).toBeGreaterThanOrEqual(60);
+        }
+      },
+    );
+  });
+
   it("echoes dynamic OpenClaw E2E markers", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
       for (const marker of ["OPENCLAW_E2E_SEED_0_123", "OPENCLAW_E2E_ANDROID_OK"]) {
@@ -284,11 +422,16 @@ describe("mock OpenAI response markers", () => {
         });
         await delay(75);
         expect(settled).toBe(false);
-        await writeFile(
-          control,
-          JSON.stringify({ chunkDelayMs: 0, hold: false, text: "visible after reveal" }),
+        // The held request polls this file; never expose a truncated control document.
+        await writeJsonAtomic(control, {
+          chunkDelayMs: 0,
+          hold: false,
+          text: "visible after reveal",
+        });
+        const body = await request;
+        expect(body.output?.[0]?.content?.[0]?.text, JSON.stringify(body)).toBe(
+          "visible after reveal",
         );
-        expect((await request).output?.[0]?.content?.[0]?.text).toBe("visible after reveal");
       });
     } finally {
       await rm(root, { force: true, recursive: true });
@@ -324,9 +467,12 @@ describe("mock OpenAI response markers", () => {
             });
           const firstPromise = request();
           await delay(75);
-          await writeFile(control, JSON.stringify({ ...script, hold: false }));
+          await writeJsonAtomic(control, { ...script, hold: false });
           const first = await firstPromise;
-          expect((await first.json()).output?.[0]?.content?.[0]?.text).toBe("first response");
+          const firstBody = await first.json();
+          expect(firstBody.output?.[0]?.content?.[0]?.text, JSON.stringify(firstBody)).toBe(
+            "first response",
+          );
           const second = await request();
           expect(second.status).toBe(429);
           expect(await second.json()).toEqual({

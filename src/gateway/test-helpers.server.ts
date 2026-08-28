@@ -1250,11 +1250,9 @@ export async function rpcReq<T extends Record<string, unknown>>(
   if (hasUnsyncedGatewayTestSessionConfig()) {
     await persistTestSessionConfig();
   }
-  // Gateway suites often mutate testState-backed config/session inputs between
-  // RPCs while reusing one server instance; flush caches so the next request
-  // observes the updated test fixture state.
+  // Refresh mutable config fixtures, but leave in-flight session writers owned
+  // by the running Gateway; their producers publish SQLite cache updates.
   resetConfigRuntimeState();
-  clearSessionStoreCacheForTest();
   if (method === "agent" || method === "chat.send") {
     await prepareGatewayReplyRuntimeForTest();
   }

@@ -30,6 +30,7 @@ export type GatewayServiceControlArgs = {
   stdout: NodeJS.WritableStream;
   env?: GatewayServiceEnv;
   disable?: boolean;
+  preserveDefinition?: boolean;
   warn?: (message: string) => void;
   onMutation?: (mutation: GatewayLifecycleMutation) => void;
 };
@@ -82,6 +83,7 @@ export type GatewayServiceEnvArgs = {
 /** Options for read-only service inspection that should fail soft under a deadline. */
 export type GatewayServiceReadOptions = {
   timeoutMs?: number;
+  requireEffective?: boolean;
 };
 
 export type GatewayServiceEnvironmentValueSource = "inline" | "file" | "inline-and-file";
@@ -90,6 +92,22 @@ export type GatewayServiceLoadState =
   | { status: "loaded" }
   | { status: "not-loaded" }
   | { status: "unknown"; detail: string };
+
+export type ServiceDefinitionMutationCapability =
+  | { kind: "writable" }
+  | { kind: "sealed" | "unknown"; detail: string };
+
+export function assertServiceDefinitionWritable(capability: ServiceDefinitionMutationCapability) {
+  if (capability.kind !== "writable") {
+    const guidance =
+      capability.kind === "sealed"
+        ? "Ask the privileged deployment owner."
+        : "Inspect service definition access.";
+    throw new Error(
+      `SERVICE_DEFINITION_${capability.kind.toUpperCase()}: ${capability.detail} ${guidance}`,
+    );
+  }
+}
 
 export type GatewayServiceCommandSnapshot = {
   programArguments: string[];
@@ -106,6 +124,7 @@ export type GatewayServiceManagedOverrides = {
 /** Effective platform service command and, when externally owned, its managed base definition. */
 export type GatewayServiceCommandConfig = GatewayServiceCommandSnapshot & {
   sourcePath?: string;
+  definitionPaths?: string[];
   managedDefinition?: GatewayServiceCommandSnapshot;
   managedOverrides?: GatewayServiceManagedOverrides;
   reloadPending?: true;
@@ -220,6 +239,7 @@ export type GatewayServiceState = {
   running: boolean;
   env: GatewayServiceEnv;
   command: GatewayServiceCommandConfig | null;
+  definitionMutationCapability?: ServiceDefinitionMutationCapability;
   runtime?: GatewayServiceRuntime;
 };
 

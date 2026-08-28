@@ -9,11 +9,12 @@ import {
   resetTaskFlowRegistryRuntimeForTests,
   type TaskFlowRegistryObserverEvent,
 } from "./task-flow-registry.store.js";
-import type {
-  TaskFlowRecord,
-  TaskFlowStatus,
-  TaskFlowSyncMode,
-  JsonValue,
+import {
+  isTerminalTaskFlow,
+  type JsonValue,
+  type TaskFlowRecord,
+  type TaskFlowStatus,
+  type TaskFlowSyncMode,
 } from "./task-flow-registry.types.js";
 import type { TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 
@@ -786,8 +787,14 @@ export function listTaskFlowsForOwnerKey(ownerKey: string): TaskFlowRecord[] {
 }
 
 export function findLatestTaskFlowForOwnerKey(ownerKey: string): TaskFlowRecord | undefined {
-  const flow = listTaskFlowsForOwnerKey(ownerKey)[0];
-  return flow ? cloneFlowRecord(flow) : undefined;
+  return listTaskFlowsForOwnerKey(ownerKey)[0];
+}
+
+// Owner-key actions must target live work before retained terminal history;
+// otherwise `show` and `cancel` silently act on a completed flow.
+export function findTaskFlowForOwnerLookup(ownerKey: string): TaskFlowRecord | undefined {
+  const ownerFlows = listTaskFlowsForOwnerKey(ownerKey);
+  return ownerFlows.find((flow) => !isTerminalTaskFlow(flow)) ?? ownerFlows[0];
 }
 
 export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | undefined {
@@ -795,7 +802,7 @@ export function resolveTaskFlowForLookupToken(token: string): TaskFlowRecord | u
   if (!lookup) {
     return undefined;
   }
-  return getTaskFlowById(lookup) ?? findLatestTaskFlowForOwnerKey(lookup);
+  return getTaskFlowById(lookup) ?? findTaskFlowForOwnerLookup(lookup);
 }
 
 export function listTaskFlowRecords(): TaskFlowRecord[] {

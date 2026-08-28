@@ -242,16 +242,45 @@ describe("transcripts CLI", () => {
     expect(showOutput).toContain("# Design review");
   });
 
-  it("requires date-qualified selectors for repeated ids", async () => {
-    const olderSessionDir = await writeSession(stateDir, "standup", "2026-05-21");
-    await writeSession(stateDir, "standup", "2026-05-22");
+  it.each(["standup", "2026-07-03/raw-id", "notes: room/one"])(
+    "requires dated selectors for repeated %s",
+    async (id) => {
+      const olderSessionDir = await writeSession(stateDir, id, "2026-05-21");
+      await writeSession(stateDir, id, "2026-05-22");
 
-    await expect(runTranscriptsCli(["path", "standup"])).rejects.toThrow(
-      "multiple transcripts sessions match standup",
-    );
-    const output = await runTranscriptsCli(["path", "2026-05-21/standup"]);
+      await expect(runTranscriptsCli(["path", id])).rejects.toThrow(
+        "multiple transcripts sessions match",
+      );
+      const output = await runTranscriptsCli(["path", `2026-05-21/${id}`]);
 
-    expect(output.trim()).toBe(path.join(olderSessionDir, "summary.md"));
+      expect(output.trim()).toBe(path.join(olderSessionDir, "summary.md"));
+    },
+  );
+
+  it("round-trips list selectors and gives qualified targets priority over raw IDs", async () => {
+    await writeSession(stateDir, "2026-07-03/raw-id", "2026-07-04");
+    const fallback = JSON.parse(await runTranscriptsCli(["show", "2026-07-03/raw-id", "--json"]));
+    expect(fallback.session.sessionId).toBe("2026-07-03/raw-id");
+    await writeSession(stateDir, "raw-id", "2026-07-03");
+    const selected = JSON.parse(await runTranscriptsCli(["show", "2026-07-03/raw-id", "--json"]));
+    expect(selected.session.sessionId).toBe("raw-id");
+    const entries = JSON.parse(await runTranscriptsCli(["list", "--json"])) as Array<{
+      sessionId: string;
+      selector: string;
+    }>;
+    for (const entry of entries) {
+      const shown = JSON.parse(await runTranscriptsCli(["show", entry.selector, "--json"]));
+      expect(shown.session.sessionId).toBe(entry.sessionId);
+      const exported = JSON.parse(
+        await runTranscriptsCli(["path", entry.selector, "--transcript", "--json"]),
+      );
+      expect(exported).toMatchObject({
+        sessionId: entry.sessionId,
+        selector: entry.selector,
+        exists: true,
+      });
+      expect(await fs.readFile(exported.path, "utf8")).toContain("Ship CLI");
+    }
   });
 
   it("materializes metadata, transcript, and directory exports from SQLite", async () => {

@@ -11,6 +11,19 @@ function fail() {
   process.exit(1);
 }
 
+function readUnitContent(unitPath, missingUnitName) {
+  try {
+    return fs.readFileSync(unitPath, "utf8");
+  } catch (error) {
+    // Only a validated LoadUnit request may confirm absence; other read errors stay unavailable.
+    if (missingUnitName && error.code === "ENOENT") {
+      process.stderr.write(`Call failed: Unit ${missingUnitName} not found.\n`);
+      process.exit(1);
+    }
+    return fail();
+  }
+}
+
 function splitWords(value) {
   const words = [];
   let word = "";
@@ -65,8 +78,14 @@ if (args[0] !== "--user" || args[1] !== "--json=short") {
 }
 
 const invocation = args.slice(2);
+const unitName = `${process.env.OPENCLAW_SYSTEMD_UNIT || "openclaw-gateway"}`.replace(
+  /(?:\.service)?$/u,
+  ".service",
+);
+const unitPath = path.join(process.env.HOME, ".config/systemd/user", unitName);
 if (invocation[0] === "call") {
-  const [command, destination, objectPath, interfaceName, method, signature, unitName] = invocation;
+  const [command, destination, objectPath, interfaceName, method, signature, requestedUnit] =
+    invocation;
   if (
     invocation.length !== 7 ||
     command !== "call" ||
@@ -75,12 +94,12 @@ if (invocation[0] === "call") {
     interfaceName !== `${manager}.Manager` ||
     method !== "LoadUnit" ||
     signature !== "s" ||
-    !unitName.endsWith(".service") ||
-    path.basename(unitName) !== unitName ||
-    !fs.existsSync(path.join(process.env.HOME, ".config/systemd/user", unitName))
+    requestedUnit !== unitName ||
+    path.basename(unitName) !== unitName
   ) {
     fail();
   }
+  readUnitContent(unitPath, unitName);
   writeProperties([{ type: "o", data: [`${rootObjectPath}/unit/${encodeUnitName(unitName)}`] }]);
   process.exit(0);
 }
@@ -89,19 +108,15 @@ if (invocation[0] !== "get-property" || invocation[1] !== manager) {
   fail();
 }
 
-const unitName = `${process.env.OPENCLAW_SYSTEMD_UNIT || "openclaw-gateway"}`.replace(
-  /(?:\.service)?$/u,
-  ".service",
-);
-const unitPath = path.join(process.env.HOME, ".config/systemd/user", unitName);
 if (invocation[2] !== `${rootObjectPath}/unit/${encodeUnitName(unitName)}`) {
   fail();
 }
 
+const content = readUnitContent(unitPath);
 if (invocation[3] === `${manager}.Unit`) {
   if (
-    invocation.length !== 7 ||
-    invocation.slice(4).join(" ") !== "FragmentPath DropInPaths NeedDaemonReload"
+    invocation.length !== 8 ||
+    invocation.slice(4).join(" ") !== "FragmentPath DropInPaths NeedDaemonReload LoadState"
   ) {
     fail();
   }
@@ -109,6 +124,7 @@ if (invocation[3] === `${manager}.Unit`) {
     { type: "s", data: unitPath },
     { type: "as", data: [] },
     { type: "b", data: false },
+    { type: "s", data: "loaded" },
   ]);
   process.exit(0);
 }
@@ -129,13 +145,6 @@ const environmentFiles = [];
 const unsetEnvironment = [];
 const expandHome = (value) =>
   value.replace(/%%|%h/gu, (match) => (match === "%h" ? process.env.HOME : "%"));
-
-let content;
-try {
-  content = fs.readFileSync(unitPath, "utf8");
-} catch {
-  fail();
-}
 
 for (const rawLine of content.split(/\r?\n/u)) {
   const line = rawLine.trim();

@@ -1683,5 +1683,66 @@ describe("openshell fs bridges", () => {
     expect(resolved.hostPath).toBe(path.join(agentWorkspaceDir, "note.txt"));
     expect(await bridge.readFile({ filePath: "/agent/note.txt" })).toEqual(Buffer.from("agent"));
   });
+
+  it.each([
+    {
+      name: "nested agent root",
+      workspaceRemote: "/sandbox",
+      agentRemote: "/sandbox/nested/agent",
+      target: "/sandbox/nested/agent/note.txt",
+      owner: "agent",
+    },
+    {
+      name: "nested primary root",
+      workspaceRemote: "/sandbox/agent/project",
+      agentRemote: "/sandbox/agent",
+      target: "/sandbox/agent/project/note.txt",
+      owner: "workspace",
+    },
+    {
+      name: "equal roots",
+      workspaceRemote: "/sandbox",
+      agentRemote: "/sandbox",
+      target: "/sandbox/note.txt",
+      owner: "workspace",
+    },
+    {
+      name: "relative path under a nested agent root",
+      workspaceRemote: "/sandbox",
+      agentRemote: "/sandbox/nested/agent",
+      target: "nested/agent/note.txt",
+      owner: "agent",
+    },
+    {
+      name: "relative path under equal roots",
+      workspaceRemote: "/sandbox",
+      agentRemote: "/sandbox",
+      target: "note.txt",
+      owner: "workspace",
+    },
+  ])("routes $name to the authoritative host workspace", async (scenario) => {
+    await using workspace = await createOpenShellTestWorkspace("fs");
+    await using agentWorkspace = await createOpenShellTestWorkspace("agent");
+    const backend = {
+      ...createMirrorBackendMock(),
+      remoteAgentWorkspaceDir: scenario.agentRemote,
+    };
+    const sandbox = createSandboxTestContext({
+      overrides: {
+        backendId: "openshell",
+        workspaceDir: workspace.dir,
+        agentWorkspaceDir: agentWorkspace.dir,
+        workspaceAccess: "ro",
+        containerWorkdir: scenario.workspaceRemote,
+      },
+    });
+
+    const { createOpenShellFsBridge } = await import("./fs-bridge.js");
+    const bridge = createOpenShellFsBridge({ sandbox, backend });
+    const resolved = bridge.resolvePath({ filePath: scenario.target });
+    expect(resolved.hostPath).toBe(
+      path.join(scenario.owner === "agent" ? agentWorkspace.dir : workspace.dir, "note.txt"),
+    );
+  });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -301,6 +301,8 @@ export async function runEmbeddedFallbackCandidate(
         abortSignal: params.runAbortSignal,
         replyOperation: turn.replyOperation,
         deferTerminalLifecycle: true,
+        onDeferredLifecycleOwner: params.deferredLifecycle.adopt,
+        onDeferredLifecycleAbort: params.deferredLifecycle.abort,
         onExecutionStarted: (info) => {
           if (info?.lifecycleGeneration) {
             params.onLifecycleGeneration(info.lifecycleGeneration);

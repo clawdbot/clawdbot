@@ -64,7 +64,7 @@ describe("test runtime prerequisites", () => {
     ["Gateway umbrella config", ["test/vitest/vitest.gateway.config.ts"], "runtime"],
     ["agentic config", ["test/vitest/vitest.full-agentic.config.ts"], "runtime"],
     ["ordinary Gateway unit test", ["src/gateway/net.test.ts"], undefined],
-    ["ordinary QA unit test", ["extensions/qa-lab/src/gateway-child-command.test.ts"], undefined],
+    ["ordinary QA unit test", ["extensions/qa-lab/src/gateway-child.test.ts"], undefined],
     [
       "model reader",
       ["src/agents/embedded-agent-runner/model-resolution-consistency.test.ts"],
@@ -482,7 +482,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it("keeps extension batch runner edits on extension script tests", () => {
     expectChangedTargets(
       ["scripts/test-extension-batch.mts"],
-      ["test/scripts/test-extension.test.ts"],
+      ["test/scripts/test-extension.test.ts", "test/scripts/test-projects-build-admission.test.ts"],
     );
   });
 
@@ -1840,6 +1840,7 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+          "test/scripts/mcp-channels-seed.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],
@@ -2028,6 +2029,7 @@ describe("scripts/test-projects changed-target routing", () => {
         config: "test/vitest/vitest.e2e.config.ts",
         forwardedArgs: [
           "test/scripts/doctor-config-preflight-plugin-index.built-cli.e2e.test.ts",
+          "test/scripts/mcp-channels-seed.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.built-cli.e2e.test.ts",
           "test/scripts/sqlite-sessions-transcripts-flip-proof.e2e.test.ts",
         ],

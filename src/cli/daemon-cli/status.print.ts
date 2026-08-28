@@ -52,6 +52,7 @@ function sanitizeDaemonStatusForJson(status: DaemonStatus): DaemonStatus {
   };
   delete nextCommand.managedDefinition;
   delete nextCommand.managedOverrides;
+  delete nextCommand.definitionPaths;
   return {
     ...status,
     service: {

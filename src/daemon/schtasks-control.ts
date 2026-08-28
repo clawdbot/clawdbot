@@ -327,6 +327,7 @@ export async function startScheduledTask({
 }
 
 export async function restartRegisteredScheduledTask(params: {
+  preserveDefinition?: boolean;
   env: GatewayServiceEnv;
   stdout: NodeJS.WritableStream;
   mode: { kind: "standard" } | { kind: "fallback-takeover" };
@@ -402,7 +403,7 @@ export async function restartRegisteredScheduledTask(params: {
     }
     throw new Error("Replacement Windows Scheduled Task did not produce running evidence.");
   }
-  if (startupEntryInstalled && hasRunningEvidence) {
+  if (startupEntryInstalled && hasRunningEvidence && !params.preserveDefinition) {
     await removeStartupEntries(params.env, params.stdout);
   }
   params.stdout.write(`${formatLine("Restarted Scheduled Task", taskName)}\n`);
@@ -410,6 +411,7 @@ export async function restartRegisteredScheduledTask(params: {
 }
 
 export async function restartScheduledTask({
+  preserveDefinition,
   stdout,
   env,
   onMutation,
@@ -422,6 +424,7 @@ export async function restartScheduledTask({
     );
   }
   return restartRegisteredScheduledTask({
+    preserveDefinition,
     env: effectiveEnv,
     stdout,
     mode: { kind: "standard" },
