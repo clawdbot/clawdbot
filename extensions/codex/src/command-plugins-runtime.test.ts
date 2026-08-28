@@ -1,0 +1,231 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  clearRuntimeAuthProfileStoreSnapshots,
+  replaceRuntimeAuthProfileStoreSnapshots,
+} from "openclaw/plugin-sdk/agent-runtime";
+import type { PluginCommandContext } from "openclaw/plugin-sdk/plugin-entry";
+import {
+  clearSessionStoreCacheForTest,
+  resolveStorePath,
+  upsertSessionEntry,
+} from "openclaw/plugin-sdk/session-store-runtime";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { applyCodexAppServerAuthProfile } from "./app-server/auth-bridge.js";
+import { createCodexTestBindingStore } from "./app-server/session-binding.test-helpers.js";
+import * as sharedClients from "./app-server/shared-client.js";
+import { createClientHarness } from "./app-server/test-support.js";
+import { resolveCodexCommandDeps } from "./command-handler-deps.js";
+import { withCodexPluginCommandContext } from "./command-plugins-runtime.js";
+
+let root: string;
+const clients: ReturnType<typeof createClientHarness>[] = [];
+
+beforeEach(async () => {
+  root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "codex-plugin-status-")));
+  vi.stubEnv("OPENCLAW_STATE_DIR", root);
+});
+
+afterEach(async () => {
+  for (const harness of clients.splice(0)) {
+    harness.client.close();
+  }
+  vi.restoreAllMocks();
+  vi.unstubAllEnvs();
+  clearRuntimeAuthProfileStoreSnapshots();
+  clearSessionStoreCacheForTest();
+  await fs.rm(root, { recursive: true, force: true });
+});
+
+function fixture() {
+  const agentDir = path.join(root, "agents", "second", "agent");
+  const workspaceDir = path.join(root, "second-workspace");
+  replaceRuntimeAuthProfileStoreSnapshots([
+    {
+      agentDir,
+      store: {
+        version: 1,
+        profiles: {
+          "openai:second": {
+            type: "oauth",
+            provider: "openai",
+            access: "test-access-token",
+            refresh: "test-refresh-token",
+            expires: Date.now() + 24 * 60 * 60_000,
+            accountId: "test-second-account",
+          },
+        },
+        order: { openai: ["openai:second"] },
+      },
+    },
+  ]);
+  const current = {
+    enabled: true,
+    plugins: { notes: { marketplaceName: "company-tools", pluginName: "notes", enabled: true } },
+  };
+  const bindingStore = createCodexTestBindingStore();
+  const deps = resolveCodexCommandDeps({
+    bindingStore,
+    codexPluginsManagementIo: {
+      readConfig: async () => structuredClone(current),
+      mutate: vi.fn(),
+    },
+  });
+  const ctx: PluginCommandContext = {
+    config: { agents: { list: [{ id: "second", agentDir, workspace: workspaceDir }] } },
+    agentId: "second",
+    sessionId: "session-original",
+    sessionKey: "agent:second:chat",
+    channel: "test",
+    isAuthorizedSender: true,
+    senderIsOwner: true,
+    commandBody: "/codex plugins status notes",
+    getCurrentConversationBinding: async () => null,
+    requestConversationBinding: async () => ({ status: "error", message: "unused" }),
+    detachConversationBinding: async () => ({ removed: false }),
+  };
+  const harness = createClientHarness();
+  clients.push(harness);
+  const acquire = vi
+    .spyOn(sharedClients, "getLeasedSharedCodexAppServerClient")
+    .mockResolvedValue(harness.client);
+  const release = vi
+    .spyOn(sharedClients, "releaseLeasedSharedCodexAppServerClient")
+    .mockReturnValue(true);
+  const request = vi.spyOn(harness.client, "request").mockResolvedValue({ apps: [] });
+  return { deps, ctx, harness, acquire, release, request, current, agentDir, workspaceDir };
+}
+
+describe("Codex plugin command context", () => {
+  it("accepts delayed startup notifications for the unchanged managed account", async () => {
+    const test = fixture();
+    let pendingStartupNotification = true;
+    test.acquire.mockImplementation(async () => {
+      await applyCodexAppServerAuthProfile({
+        client: test.harness.client,
+        agentDir: test.agentDir,
+        authProfileId: "openai:second",
+        config: test.ctx.config,
+      });
+      return test.harness.client;
+    });
+    test.request.mockImplementation(async (method) => {
+      if (method === "account/login/start") {
+        return { type: "chatgptAuthTokens" };
+      }
+      if (pendingStartupNotification) {
+        // Codex 0.150.1 replies to login before refreshing caches and notifying.
+        pendingStartupNotification = false;
+        test.harness.send({
+          method: "account/login/completed",
+          params: { loginId: null, success: true, error: null },
+        });
+        test.harness.send({
+          method: "account/updated",
+          params: { authMode: "chatgptAuthTokens", planType: "team" },
+        });
+      }
+      return { apps: [] };
+    });
+    await expect(
+      withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) =>
+        context.request("app/installed", { forceRefresh: false }),
+      ),
+    ).resolves.toEqual({ apps: [] });
+    expect(test.request).toHaveBeenCalledWith(
+      "account/login/start",
+      expect.objectContaining({ type: "chatgptAuthTokens" }),
+    );
+    expect(test.release).toHaveBeenCalledOnce();
+  });
+
+  it("releases the lease when the startup account barrier fails", async () => {
+    const test = fixture();
+    test.request.mockRejectedValue(new Error("private provider failure"));
+    await expect(
+      withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async () => "unused"),
+    ).rejects.toThrow("Codex account startup could not be confirmed");
+    expect(test.release).toHaveBeenCalledOnce();
+  });
+
+  it("uses the selected agent profile and workspace in one physical-client lease", async () => {
+    const test = fixture();
+    await withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) => {
+      expect(context.agentId).toBe("second");
+      expect(context.profileId).toBe("openai:second");
+      expect(context.workspaceDir).toBe(test.workspaceDir);
+      expect(context.threadId).toBeUndefined();
+      await context.request("app/installed", { forceRefresh: false });
+    });
+    expect(test.acquire).toHaveBeenCalledOnce();
+    expect(test.acquire).toHaveBeenCalledWith(
+      expect.objectContaining({ agentDir: test.agentDir, authProfileId: "openai:second" }),
+    );
+    expect(test.release).toHaveBeenCalledOnce();
+  });
+
+  it.each([true, false])(
+    "only exposes a thread owned by this physical client (%s)",
+    async (sameClient) => {
+      const test = fixture();
+      await test.deps.bindingStore.mutate(
+        {
+          kind: "session",
+          agentId: "second",
+          sessionId: "session-original",
+          sessionKey: test.ctx.sessionKey,
+        },
+        {
+          kind: "set",
+          binding: {
+            threadId: "owned-thread",
+            clientId: sameClient ? test.harness.client.getInstanceId() : "retired-client",
+            cwd: test.workspaceDir,
+            authProfileId: "openai:second",
+          },
+        },
+      );
+      const threadId = await withCodexPluginCommandContext(
+        { ...test, pluginConfig: {} },
+        async (context) => context.threadId,
+      );
+      expect(threadId).toBe(sameClient ? "owned-thread" : undefined);
+    },
+  );
+
+  it.each(["policy", "account", "session"] as const)(
+    "rejects a delayed response after %s changes and releases the client",
+    async (change) => {
+      const test = fixture();
+      test.request.mockImplementation(async (method) => {
+        if (method !== "app/installed") {
+          return {};
+        }
+        if (change === "policy") {
+          test.current.plugins.notes.enabled = false;
+        }
+        if (change === "account") {
+          test.harness.send({
+            method: "account/updated",
+            params: { authMode: "chatgptAuthTokens", planType: "team" },
+          });
+        }
+        if (change === "session") {
+          await upsertSessionEntry({
+            storePath: resolveStorePath(test.ctx.config.session?.store, { agentId: "second" }),
+            sessionKey: test.ctx.sessionKey!,
+            entry: { sessionId: "session-after-reset", updatedAt: 1 },
+          });
+        }
+        return { apps: [] };
+      });
+      await expect(
+        withCodexPluginCommandContext({ ...test, pluginConfig: {} }, async (context) =>
+          context.request("app/installed", { forceRefresh: false }),
+        ),
+      ).rejects.toThrow("Codex account, conversation, or plugin policy changed");
+      expect(test.release).toHaveBeenCalledOnce();
+    },
+  );
+});

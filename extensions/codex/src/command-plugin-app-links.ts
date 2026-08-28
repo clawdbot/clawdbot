@@ -2,7 +2,7 @@ import type { MessagePresentationBlock } from "openclaw/plugin-sdk/interactive-r
 import type { v2 } from "./app-server/protocol.js";
 import { formatCodexDisplayText } from "./command-formatters.js";
 
-const CODEX_PLUGIN_APP_LINK_PAGE_SIZE = 5;
+export const CODEX_PLUGIN_APP_LINK_PAGE_SIZE = 5;
 
 export function buildCodexPluginAppLinks(
   apps: readonly Pick<v2.AppSummary, "id" | "name" | "installUrl">[],

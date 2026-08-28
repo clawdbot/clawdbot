@@ -162,6 +162,7 @@ describe("Codex /codex plugins subcommand", () => {
     expect(buttonCommands(result)).toEqual([
       "/codex plugins list",
       "/codex plugins available",
+      "/codex plugins status",
       "/codex plugins enable",
       "/codex plugins disable",
       "/codex plugins help",
