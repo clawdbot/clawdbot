@@ -215,7 +215,9 @@ Required members:
 
 Set `info.acceptedHostParams` to restrict the host-added lifecycle fields the
 engine receives. Current keys are `sessionKey`, `prompt`, `runtimeSettings`,
-`sessionTarget`, and `runtimeContext`. OpenClaw intersects the declaration with
+`sessionTarget`, `runtimeContext`, and `onProgress` (compact only — the
+compaction progress callback; declaring it lets the engine re-arm the host's
+compaction stall budget). OpenClaw intersects the declaration with
 the fields available for each lifecycle method, so undeclared or unknown keys
 are never injected. Engines without this declaration receive every current
 host field; declare an explicit list, including `[]`, when the engine validates

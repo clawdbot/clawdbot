@@ -128,6 +128,63 @@ describe("context-engine host parameter projection", () => {
     });
   });
 
+  it("delivers onProgress to compact only when declared", async () => {
+    // onProgress is a host-injected lifecycle field like the others: engines
+    // with a declared acceptedHostParams list receive it only when listed,
+    // and engines without a declaration receive everything.
+    const declaredCalls: Array<Record<string, unknown>> = [];
+    const undeclaredCalls: Array<Record<string, unknown>> = [];
+    const declaredId = registerProbeEngine({
+      acceptedHostParams: ["sessionKey", "onProgress"],
+      assembleCalls: [],
+      compactCalls: declaredCalls,
+    });
+    const undeclaredId = registerProbeEngine({
+      assembleCalls: [],
+      compactCalls: undeclaredCalls,
+    });
+
+    const cfgBase = { plugins: { slots: { contextEngine: declaredId } } } as const;
+    const declaredEngine = await resolveContextEngine(cfgBase);
+    await declaredEngine.compact({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      onProgress: () => {},
+    });
+    const undeclaredEngine = await resolveContextEngine({
+      plugins: { slots: { contextEngine: undeclaredId } },
+    });
+    await undeclaredEngine.compact({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      onProgress: () => {},
+    });
+
+    expect(declaredCalls[0]?.onProgress).toBeInstanceOf(Function);
+    expect(undeclaredCalls[0]?.onProgress).toBeInstanceOf(Function);
+  });
+
+  it("strips onProgress from a declared engine that does not list it", async () => {
+    const compactCalls: Array<Record<string, unknown>> = [];
+    const engineId = registerProbeEngine({
+      acceptedHostParams: ["sessionKey"],
+      assembleCalls: [],
+      compactCalls,
+    });
+    const engine = await resolveContextEngine({
+      plugins: { slots: { contextEngine: engineId } },
+    });
+
+    await engine.compact({
+      sessionId: "session-1",
+      sessionKey: "agent:main:session-1",
+      onProgress: () => {},
+    });
+
+    expect(compactCalls[0]?.sessionKey).toBe("agent:main:session-1");
+    expect(compactCalls[0]?.onProgress).toBeUndefined();
+  });
+
   it("projects host parameters on fresh logical-turn engines", async () => {
     const assembleCalls: Array<Record<string, unknown>> = [];
     const compactCalls: Array<Record<string, unknown>> = [];
