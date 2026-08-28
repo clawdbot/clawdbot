@@ -260,13 +260,14 @@ describe("Gateway Active Memory", () => {
         await withTestTimeout(connected.promise, 10_000, "Gateway connect timeout");
         const sessionKey = "agent:main:main";
         phase = "starting main turn";
-        const accepted = await client.request<{ runId: string; status: string }>("agent", {
+        // Interactive chat supplies the finalized turn tool authority that recall requires.
+        const accepted = await client.request<{ runId: string; status: string }>("chat.send", {
           sessionKey,
           message: "What do I usually have for lunch?",
           deliver: false,
           idempotencyKey: randomUUID(),
         });
-        expect(accepted.status).toBe("accepted");
+        expect(accepted.status).toBe("started");
         phase = "waiting for main reply";
         const completed = await client.request<{ status: string }>(
           "agent.wait",
