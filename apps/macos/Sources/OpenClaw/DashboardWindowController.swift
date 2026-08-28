@@ -936,7 +936,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
             return false
         }
         let components = url.path.split(separator: "/", omittingEmptySubsequences: true)
-        return components == ["mcp-app-sandbox"] || (components.count == 4 &&
+        return url.path(percentEncoded: true) == "/mcp-app-sandbox" || (components.count == 4 &&
             components[0] == "embed" &&
             (components[1] == "channel" || components[1] == "thread"))
     }

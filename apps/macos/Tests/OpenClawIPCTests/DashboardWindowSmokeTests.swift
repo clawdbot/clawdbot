@@ -305,6 +305,8 @@ struct DashboardWindowSmokeTests {
         let sandbox = try #require(URL(
             string: "https://widgets.example/mcp-app-sandbox?csp=encoded"))
         let unrelatedPath = try #require(URL(string: "https://widgets.example/mcp-app"))
+        let trailingSlash = try #require(URL(string: "https://widgets.example/mcp-app-sandbox/"))
+        let repeatedSlash = try #require(URL(string: "https://widgets.example//mcp-app-sandbox"))
 
         #expect(DashboardWindowController.shouldAllowNavigation(
             to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: true))
@@ -314,6 +316,16 @@ struct DashboardWindowSmokeTests {
             to: sandbox, dashboardURL: dashboard, isMainFrame: false, isTrustedDashboardSource: false))
         #expect(!DashboardWindowController.shouldAllowNavigation(
             to: unrelatedPath,
+            dashboardURL: dashboard,
+            isMainFrame: false,
+            isTrustedDashboardSource: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: trailingSlash,
+            dashboardURL: dashboard,
+            isMainFrame: false,
+            isTrustedDashboardSource: true))
+        #expect(!DashboardWindowController.shouldAllowNavigation(
+            to: repeatedSlash,
             dashboardURL: dashboard,
             isMainFrame: false,
             isTrustedDashboardSource: true))
