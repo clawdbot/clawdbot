@@ -167,14 +167,27 @@ describe("runCliAgentWithLifecycle", () => {
       });
       return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
     });
+    const callbackOrder: string[] = [];
     const onReasoningText = vi.fn<(payload: ReasoningTextPayload) => Promise<void>>(
-      async () => undefined,
+      async ({ text }) => {
+        callbackOrder.push(`reasoning:${text}`);
+      },
     );
+    const onReasoningEnd = vi.fn(async () => {
+      callbackOrder.push("reasoning:end");
+      throw new Error("reasoning notice failed");
+    });
+    const onAssistantText = vi.fn(async () => {
+      callbackOrder.push("assistant");
+    });
 
     const result = await runCliAgentWithLifecycle({
       runId: "run-thinking-bridge",
       provider: "claude-cli",
+      onAssistantText,
+      onReasoningEnd,
       onReasoningText,
+      preserveProgressCallbackStartOrder: true,
       runParams: {
         sessionId: "session-1",
         sessionFile: "/tmp/session.jsonl",
@@ -192,6 +205,12 @@ describe("runCliAgentWithLifecycle", () => {
     expect(onReasoningText.mock.calls.map((call) => call[0])).toEqual([
       { text: "Thinking", isReasoningSnapshot: true },
       { text: "Thinking more", isReasoningSnapshot: true },
+    ]);
+    expect(callbackOrder).toEqual([
+      "reasoning:Thinking",
+      "reasoning:Thinking more",
+      "reasoning:end",
+      "assistant",
     ]);
     expect(result.payloads).toEqual([
       { text: "Thinking more", isReasoning: true },

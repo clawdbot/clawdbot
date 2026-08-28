@@ -3076,6 +3076,7 @@ describe("matrix monitor handler draft streaming", () => {
       payload: {
         text?: string;
         isCompactionNotice?: boolean;
+        isReasoning?: boolean;
       },
       context?: { assistantMessageIndex?: number },
     ) => Promise<void> | void;
@@ -4507,6 +4508,25 @@ describe("matrix monitor handler draft streaming", () => {
     expect(singleTextMessageBody(1)).toBe("Beta");
     expect(deliverMatrixRepliesMock).not.toHaveBeenCalled();
     expect(redactEventMock).not.toHaveBeenCalled();
+    await finish();
+  });
+
+  it("keeps reasoning outside answer draft boundaries", async () => {
+    const { dispatch } = createStreamingHarness({ blockStreamingEnabled: true });
+    const { opts, finish } = await dispatch();
+
+    opts.onPartialReply?.({ text: "Alpha" });
+    await waitForMatrixState(() => {
+      expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledOnce();
+    });
+
+    await opts.onBlockReplyQueued?.({ text: "Thinking", isReasoning: true });
+    opts.onPartialReply?.({ text: "AlphaBeta" });
+
+    await waitForMatrixState(() => {
+      expectMatrixEdit("!room:example.org", "$draft1", "AlphaBeta");
+    });
+    expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledOnce();
     await finish();
   });
 

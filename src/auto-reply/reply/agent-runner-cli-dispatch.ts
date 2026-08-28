@@ -559,13 +559,31 @@ async function runCliAgentWithLifecycleInternal(
   const progressStartOrder = params.preserveProgressCallbackStartOrder
     ? createAgentEventDeliveryStartOrder()
     : undefined;
+  let finalReasoningText: string | undefined;
+  let reasoningEnded = false;
+  const endReasoning = async () => {
+    if (!finalReasoningText || reasoningEnded) {
+      return;
+    }
+    reasoningEnded = true;
+    try {
+      await params.onReasoningEnd?.();
+    } catch {
+      // Channel progress callbacks cannot turn a valid CLI result into a run failure.
+    }
+  };
+  const onAssistantText = params.onAssistantText;
   const assistantBridge = createAssistantTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: params.onAssistantText,
+    deliver: onAssistantText
+      ? async (text) => {
+          await endReasoning();
+          return await onAssistantText(text);
+        }
+      : undefined,
     startOrder: progressStartOrder,
   });
-  let finalReasoningText: string | undefined;
   const reasoningBridge = createReasoningTextBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
@@ -626,9 +644,7 @@ async function runCliAgentWithLifecycleInternal(
     }
     const result = params.transformResult?.(rawResult) ?? rawResult;
     await stopAgentEventBridges(bridges);
-    if (finalReasoningText) {
-      await params.onReasoningEnd?.();
-    }
+    await endReasoning();
 
     const cliText = normalizeOptionalString(result.payloads?.[0]?.text);
     const durableReasoningText = normalizeOptionalString(finalReasoningText);
