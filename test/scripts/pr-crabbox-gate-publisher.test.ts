@@ -635,8 +635,12 @@ describe("Crabbox gate workflow", () => {
         ref: "${{ github.workflow_sha }}",
       },
     });
-    expect(job.steps[2].run).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
-    expect(job.steps[2].run).toContain(
+    const installCommand = job.steps[2]?.run;
+    if (typeof installCommand !== "string") {
+      throw new Error("Crabbox install command is missing");
+    }
+    expect(installCommand).toContain("crabbox_0.46.0_linux_amd64.tar.gz");
+    expect(installCommand).toContain(
       "6a9341e810307356361dbed4c4b84be28a036b5cc291af1566d2ccd376570d90",
     );
     expect(job.steps.at(-1)).toMatchObject({
