@@ -6,22 +6,24 @@ title: "Security"
 ---
 
 <Warning>
-  **Personal assistant trust model.** This guidance assumes one trusted
-  operator boundary per gateway (single-user, personal-assistant model).
-  OpenClaw is not a hostile multi-tenant security boundary for multiple
-  adversarial users sharing one agent or gateway. For mixed-trust or
-  adversarial-user operation, split trust boundaries: separate gateway +
-  credentials, ideally separate OS users or hosts.
+  **One trust boundary per gateway.** This guidance assumes one trusted
+  boundary per gateway: a single operator, or a team whose members trust
+  each other. Group chats and [multi-user](/concepts/multi-user) operation
+  are supported deployments inside that boundary. OpenClaw is not a hostile
+  multi-tenant security boundary for mutually adversarial users sharing one
+  agent or gateway. For mixed-trust or adversarial-user operation, split
+  trust boundaries: separate gateway + credentials, ideally separate OS
+  users or hosts.
 </Warning>
 
-## Scope: personal assistant security model
+## Scope: one trust boundary per gateway
 
-- Supported: one user/trust boundary per gateway (prefer one OS user/host/VPS per boundary).
+- Supported: one trust boundary per gateway - a single operator or a mutually trusting team (prefer one OS user/host/VPS per boundary).
 - Not supported: one shared gateway/agent used by mutually untrusted or adversarial users.
 - Adversarial-user isolation needs separate gateways (and ideally separate OS users/hosts).
-- If several untrusted users can message one tool-enabled agent, they share that agent's delegated tool authority.
+- Everyone who can message a tool-enabled agent shares that agent's delegated tool authority. That is fine for teammates who already trust each other; it is why adversarial users cannot share an agent.
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
-- Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role.
+- Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate's connections can do; they are collaboration guardrails, not tenant isolation.
 - `sessionKey` (session IDs, labels) is a routing selector, not an authorization token.
 
 Hosting multiple users or organizations? Run one isolated Gateway cell per tenant instead of sharing a Gateway. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
@@ -46,7 +48,7 @@ openclaw security audit --json
 - **Inbound access** - DM/group policies, allowlists: can strangers trigger the bot?
 - **Tool blast radius** - elevated tools + open rooms: could prompt injection become shell/file/network actions?
 - **Exec filesystem drift** - mutating filesystem tools denied while `exec`/`process` stay available without sandbox constraints.
-- **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted personal-assistant setups; tighten it only when your threat model needs approval or allowlist guardrails.
+- **Exec approval drift** - `security="full"`, `autoAllowSkills`, interpreter allowlists without `strictInlineEval`. `security="full"` alone is a broad posture warning, not proof of a bug - it is the chosen default for trusted-operator setups; tighten it only when your threat model needs approval or allowlist guardrails.
 - **Network exposure** - Gateway bind/auth, Tailscale Serve/Funnel, weak/short auth tokens.
 - **Browser control exposure** - remote nodes, relay ports, remote CDP endpoints.
 - **Local disk hygiene** - permissions, symlinks, config includes, synced-folder paths.
@@ -173,7 +175,7 @@ openclaw pairing approve <channel> <code>
 
 Details + files on disk: [Pairing](/channels/pairing)
 
-Treat `dmPolicy="open"` and `groupPolicy="open"` as last-resort settings; prefer pairing + allowlists unless you fully trust every member of the room.
+Prefer pairing + allowlists for DMs. For groups, decide by membership, not by channel type: a private room whose members you trust - your team, family, or friends - is a normal deployment for `groupPolicy: "open"` (any member can trigger the bot). Keep sender allowlists or mention gating on rooms where strangers can join or post, and treat `dmPolicy="open"` as a deliberate opt-in.
 
 ### Allowlists (two layers)
 
