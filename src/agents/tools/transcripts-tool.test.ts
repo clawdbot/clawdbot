@@ -414,6 +414,10 @@ describe("transcripts tool", () => {
         vi.fn(),
       ),
     ).rejects.toThrow("transcripts session already active: shared-session");
+    await expect(
+      tool.execute("stop-pending", { action: "stop", sessionId: "shared-session" }),
+    ).resolves.toMatchObject({ details: { sessionId: "shared-session", skipped: true } });
+    expect(stop).not.toHaveBeenCalled();
     releaseStart?.();
     await firstStart;
     await tool.execute(
@@ -694,6 +698,9 @@ describe("transcripts tool", () => {
     );
 
     expect(stop).not.toHaveBeenCalled();
+    await expect(store.readSession("2026-05-21/standup")).resolves.toMatchObject({
+      stoppedAt: olderSession.stoppedAt,
+    });
     await expect(
       fs.readFile(
         path.join(stateDir, "transcripts", "2026-05-21", "standup", "summary.md"),
