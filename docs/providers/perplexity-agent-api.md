@@ -92,7 +92,7 @@ See Perplexity's [OpenClaw integration guide](https://docs.perplexity.ai/docs/ge
     See [Required configuration](#required-configuration) above for context and [Reserved tool names](#reserved-tool-names) for the full list.
   </Step>
   <Step title="Add the models you need">
-    Onboarding wires up one model. To make additional Agent API models available, add explicit entries under `agents.defaults.models`. See [Config example](#config-example) below for a working set. The full model list, current pricing, and per-model context windows are published at [docs.perplexity.ai/docs/getting-started/models](https://docs.perplexity.ai/docs/getting-started/models).
+    Onboarding wires up one model. To make additional Agent API models available, add explicit entries under `models.providers.perplexity.models[]`. `agents.defaults.models` is for aliases and per-model settings on already-registered models, not for registering new ones. See [Config example](#config-example) below for a working entry shape. The full model list, current pricing, and per-model context windows are published at [docs.perplexity.ai/docs/getting-started/models](https://docs.perplexity.ai/docs/getting-started/models).
   </Step>
 </Steps>
 
