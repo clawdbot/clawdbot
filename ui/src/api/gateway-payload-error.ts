@@ -1,5 +1,5 @@
 const DEFAULT_GATEWAY_PAYLOAD_ERROR_MESSAGE =
-  "Request exceeds the Gateway payload limit. Shorten the message or remove one or more attachments and retry.";
+  "Request exceeds the Gateway payload limit. Remove one or more attachments and retry.";
 
 export class GatewayPayloadLimitError extends Error {
   constructor(message = DEFAULT_GATEWAY_PAYLOAD_ERROR_MESSAGE) {

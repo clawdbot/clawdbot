@@ -1,7 +1,5 @@
 export const DEFAULT_GATEWAY_MAX_PAYLOAD_BYTES = 25 * 1024 * 1024;
 export const DEFAULT_GATEWAY_PREAUTH_MAX_PAYLOAD_BYTES = 64 * 1024;
-const GATEWAY_PAYLOAD_LIMIT_RECOVERY_MESSAGE =
-  "Shorten the message or remove one or more attachments and retry.";
 
 export function resolveGatewayMaxPayloadBytes(
   policy?: { maxPayload?: unknown } | null,
@@ -29,7 +27,7 @@ export function validateGatewayRequestFrame(
   if (frameBytes > limit) {
     throw new RangeError(
       `gateway request ${method} exceeds ${isConnect ? "pre-auth" : "negotiated"} max payload ` +
-        `(${frameBytes} > ${limit} bytes). ${GATEWAY_PAYLOAD_LIMIT_RECOVERY_MESSAGE}`,
+        `(${frameBytes} > ${limit} bytes). Remove one or more attachments and retry.`,
     );
   }
 }
