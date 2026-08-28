@@ -89,7 +89,9 @@ describe("secret store mutation lifecycle", () => {
           storeWriteService: createSecretStoreWriteService({ reloadSecrets }),
           log: {
             debug: () => {
-              if (closure === "mutation logging") releaseAgentRunDelegatedAuthority(authority);
+              if (closure === "mutation logging") {
+                releaseAgentRunDelegatedAuthority(authority);
+              }
             },
           },
         });
@@ -98,7 +100,9 @@ describe("secret store mutation lifecycle", () => {
           const dispatched = Promise.resolve().then(() =>
             invoke(handlers, "secrets.store.delete", { name }, client),
           );
-          if (closure === "dispatch continuation") releaseAgentRunDelegatedAuthority(authority);
+          if (closure === "dispatch continuation") {
+            releaseAgentRunDelegatedAuthority(authority);
+          }
           expect(await dispatched).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
           expect(readSecretStoreValue({ scope: { kind: "team" }, name })).toEqual({
             ok: true,
@@ -138,10 +142,12 @@ describe("secret store mutation lifecycle", () => {
         },
       } as GatewayClient;
       const manager = new QuestionManager();
-      const handlers = createQuestionHandlers(
-        manager,
-        createSecretStoreWriteService({ reloadSecrets: async () => ({ warningCount: 0 }) }),
-      );
+      const reloadSecrets = async () => ({ warningCount: 0 });
+      const storeWriteService = createSecretStoreWriteService({ reloadSecrets });
+      const handlers = {
+        ...createQuestionHandlers(manager, storeWriteService),
+        ...createSecretsHandlers({ reloadSecrets, resolveSecrets, storeWriteService }),
+      };
       const methods: string[] = [];
       try {
         const tool = createSecretsTool({
@@ -156,7 +162,9 @@ describe("secret store mutation lifecycle", () => {
               params as Record<string, unknown>,
               client,
             );
-            if (!response?.[0]) throw new Error("synthetic question RPC failed");
+            if (!response?.[0]) {
+              throw new Error("synthetic question RPC failed");
+            }
             if (method === "question.request") {
               const { id } = response[1] as { id: string };
               expect(
@@ -183,10 +191,11 @@ describe("secret store mutation lifecycle", () => {
           name: "APPROVED_POLICY_KEY",
           kind: "secret",
           ref: { source: "store", provider: "default", id: "APPROVED_POLICY_KEY" },
+          currentPolicy: { status: "available", allowedHosts: ["approved.example.test"] },
         });
         expect(JSON.stringify(result)).not.toContain("proposed.example.test");
         expect(JSON.stringify(result)).not.toContain("test-secret-operator-only");
-        expect(methods).toEqual(["question.request", "question.waitAnswer"]);
+        expect(methods).toEqual(["question.request", "question.waitAnswer", "secrets.store.list"]);
       } finally {
         manager.reset();
         releaseAgentRunDelegatedAuthority(authority);

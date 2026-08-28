@@ -151,20 +151,57 @@ function noSecretAnswerResult(status: "pending" | "expired" | "cancelled") {
   return textResult(`${note}\n\n${JSON.stringify(details, null, 2)}`, details);
 }
 
-function storedSecretResult(params: NormalizedSecretsRequestParams, provider: string) {
+async function fetchSecretStore(gatewayCall: GatewayQuestionCall, signal?: AbortSignal) {
+  const result = await gatewayCall("secrets.store.list", {}, {}, signal ? { signal } : undefined);
+  if (!validateSecretsStoreListResult(result)) {
+    throw new Error("secrets.store.list returned invalid metadata");
+  }
+  return result;
+}
+
+async function storedSecretResult(
+  params: NormalizedSecretsRequestParams,
+  provider: string,
+  gatewayCall: GatewayQuestionCall,
+  signal?: AbortSignal,
+) {
+  // This read observes current policy, not the earlier approval. Its failure
+  // cannot undo a committed save; never expose the inventory or read error.
+  const currentPolicy = await fetchSecretStore(gatewayCall, signal)
+    .then(({ entries }) => {
+      const entry = entries.find((candidate) => candidate.name === params.name);
+      if (!entry) {
+        return { status: "missing" as const };
+      }
+      if (entry.kind !== "secret") {
+        return { status: "kind_changed" as const };
+      }
+      const allowedHosts = entry.allowedHosts;
+      if (allowedHosts === undefined) {
+        return { status: "unavailable" as const };
+      }
+      // Return the complete policy or only its count, never a misleading prefix.
+      return JSON.stringify(allowedHosts).length > 512
+        ? { status: "omitted" as const, allowedHostCount: allowedHosts.length }
+        : { status: "available" as const, allowedHosts };
+    })
+    .catch(() => ({ status: "unavailable" as const }));
+  signal?.throwIfAborted();
+
   const details = {
     status: "stored" as const,
     name: params.name,
     kind: params.kind,
     ref: { source: "store", provider, id: params.name } satisfies SecretRef,
+    currentPolicy,
   };
   const guidance = [
-    `Stored ${params.name} without exposing its value.`,
-    "Use the returned ref in supported config SecretRef fields.",
-    "Human may edit allowed hosts; list current metadata before using them.",
-    "Secret values are substituted at egress only when secrets.egressProxy.enabled is true and the destination matches their allowed hosts.",
+    "Stored; value hidden. Use the returned ref for config SecretRefs.",
+    "currentPolicy is current store metadata, not an approval receipt; may change. It overrides proposed hosts.",
+    "Only available hosts are complete; [] means no egress. Otherwise make no host claims.",
+    "Stored does not prove proxy enabled or current exec snapshot; config refs are independent.",
   ];
-  return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details, null, 2)}`, details);
+  return textResult(`${guidance.join(" ")}\n\n${JSON.stringify(details)}`, details);
 }
 
 function listSecretStoreResult(result: SecretsStoreListResult) {
@@ -207,16 +244,7 @@ export function createSecretsTool(params: {
       const input = args;
       const action = readToolStringParam(input, "action", { required: true });
       if (action === "list") {
-        const result = await gatewayCall(
-          "secrets.store.list",
-          {},
-          {},
-          signal ? { signal } : undefined,
-        );
-        if (!validateSecretsStoreListResult(result)) {
-          throw new Error("secrets.store.list returned invalid metadata");
-        }
-        return listSecretStoreResult(result);
+        return listSecretStoreResult(await fetchSecretStore(gatewayCall, signal));
       }
       if (action === "delete") {
         const name = readSecretStoreName(input);
@@ -318,7 +346,7 @@ export function createSecretsTool(params: {
           if (questionResult.answers.answers.secret_value?.[0] !== "stored") {
             throw new Error("credential request returned an unexpected answer marker");
           }
-          return storedSecretResult(request, storeProvider);
+          return await storedSecretResult(request, storeProvider, gatewayCall, signal);
         }
         if (
           questionResult.status === "pending" ||

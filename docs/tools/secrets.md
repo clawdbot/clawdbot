@@ -67,6 +67,16 @@ Once the store write commits, the question is answered and cannot be submitted
 again. A later runtime refresh failure does not undo that write: resolve the
 reported provider error and run `openclaw secrets reload`, rather than resubmitting.
 
+The same tool result reports `status: "stored"`, the SecretRef, and `currentPolicy`
+from one follow-up metadata read. This is current store policy, not an immutable
+approval receipt: another write may have changed it. `available` includes the
+complete allowed-host list; an empty list means no egress. If the serialized list
+exceeds 512 characters, `omitted` reports only `allowedHostCount`. `missing`,
+`kind_changed`, and `unavailable` mean the entry disappeared, became an `env`
+entry, or has no complete validated host policy. None undo the saved result or invite
+resubmission. The agent must use the observed policy instead of its proposal and
+make no host claims when the complete list is unavailable.
+
 <Warning>
 Allowed hosts govern Gateway egress substitution, not config SecretRefs. Leave
 only the exact hosts that should receive the credential. An empty list prevents

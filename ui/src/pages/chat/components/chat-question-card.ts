@@ -472,6 +472,22 @@ class ChatQuestionPanel extends LitElement {
       ? `${model.requestPosition.current}/${model.requestPosition.total}`
       : null;
 
+    const requestNavigation = requestProgress
+      ? html`<div class="chat-question-panel__request-nav">
+          <button
+            type="button"
+            aria-label=${t("common.previous")}
+            @click=${props.onPreviousRequest}
+          >
+            ${icons.chevronLeft}
+          </button>
+          <span>${requestProgress}</span>
+          <button type="button" aria-label=${t("common.next")} @click=${props.onNextRequest}>
+            ${icons.chevronRight}
+          </button>
+        </div>`
+      : nothing;
+
     if (this.collapsed) {
       return html`
         <section
@@ -490,21 +506,7 @@ class ChatQuestionPanel extends LitElement {
             <span class="chat-question-panel__progress">${progress}</span>
             <span class="chat-question-panel__chevron">${icons.chevronDown}</span>
           </button>
-          ${requestProgress
-            ? html`<div class="chat-question-panel__request-nav">
-                <button
-                  type="button"
-                  aria-label=${t("common.previous")}
-                  @click=${props.onPreviousRequest}
-                >
-                  ${icons.chevronLeft}
-                </button>
-                <span>${requestProgress}</span>
-                <button type="button" aria-label=${t("common.next")} @click=${props.onNextRequest}>
-                  ${icons.chevronRight}
-                </button>
-              </div>`
-            : nothing}
+          ${requestNavigation}
         </section>
       `;
     }
@@ -519,21 +521,7 @@ class ChatQuestionPanel extends LitElement {
       >
         <div class="chat-question-panel__topline">
           <div class="chat-question-panel__title">${model.title}</div>
-          ${requestProgress
-            ? html`<div class="chat-question-panel__request-nav">
-                <button
-                  type="button"
-                  aria-label=${t("common.previous")}
-                  @click=${props.onPreviousRequest}
-                >
-                  ${icons.chevronLeft}
-                </button>
-                <span>${requestProgress}</span>
-                <button type="button" aria-label=${t("common.next")} @click=${props.onNextRequest}>
-                  ${icons.chevronRight}
-                </button>
-              </div>`
-            : nothing}
+          ${requestNavigation}
           <span class="chat-question-panel__progress">${progress}</span>
           <button
             class="chat-question-panel__collapse"

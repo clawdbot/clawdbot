@@ -152,6 +152,13 @@ const secretRequestParams = {
   questions: [secretRequestQuestion],
 };
 
+async function requestSecretQuestion(): Promise<string> {
+  const response = await call("question.request", secretRequestParams, {
+    client: adminRequestClient,
+  });
+  return (response[1] as { id: string }).id;
+}
+
 function mockReferencedStoreSnapshot() {
   vi.spyOn(secretsRuntimeState, "getActiveSecretsRuntimeSnapshotState").mockReturnValue({
     sourceConfig: {
@@ -597,10 +604,7 @@ describe("question gateway methods", () => {
     "fences a pending credential on exact requester %s while preserving ordinary questions",
     async (closure) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        const requested = await call("question.request", secretRequestParams, {
-          client: adminRequestClient,
-        });
-        const id = (requested[1] as { id: string }).id;
+        const id = await requestSecretQuestion();
         const ordinary = await call("question.request", requestParams);
         const ordinaryId = (ordinary[1] as { id: string }).id;
         const waiting = manager.waitAnswer(id);
@@ -698,7 +702,9 @@ describe("question gateway methods", () => {
             });
           }
         } finally {
-          if (successor) releaseAgentRunDelegatedAuthority(successor);
+          if (successor) {
+            releaseAgentRunDelegatedAuthority(successor);
+          }
         }
       });
     },
@@ -745,10 +751,7 @@ describe("question gateway methods", () => {
         updatedBy: "Previous Operator",
       });
 
-      const response = await call("question.request", secretRequestParams, {
-        client: adminRequestClient,
-      });
-      const id = (response[1] as { id: string }).id;
+      const id = await requestSecretQuestion();
       const record = manager.get(id);
 
       expect(record?.questions[0]).toMatchObject({
@@ -761,10 +764,7 @@ describe("question gateway methods", () => {
 
   it("diverts operator-entered credentials into the store and exposes only a stored marker", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const response = await call("question.request", secretRequestParams, {
-        client: adminRequestClient,
-      });
-      const id = (response[1] as { id: string }).id;
+      const id = await requestSecretQuestion();
       const value = "test-secret-value-gateway-diversion-123";
       const client = {
         connect: { client: { displayName: "Trusted Operator" } },
@@ -806,10 +806,7 @@ describe("question gateway methods", () => {
 
   it("uses operator-edited hosts and keeps invalid store submissions pending for retry", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const requested = await call("question.request", secretRequestParams, {
-        client: adminRequestClient,
-      });
-      const id = (requested[1] as { id: string }).id;
+      const id = await requestSecretQuestion();
       const value = "test-secret-value-retry-123";
       const answers = { answers: { secret_value: [value] } };
 
@@ -850,10 +847,7 @@ describe("question gateway methods", () => {
     },
   ])("keeps a secret question pending when there is $behavior", async ({ answers }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const requested = await call("question.request", secretRequestParams, {
-        client: adminRequestClient,
-      });
-      const id = (requested[1] as { id: string }).id;
+      const id = await requestSecretQuestion();
 
       expect(await call("question.resolve", { id, answers: { answers } })).toMatchObject([
         false,
@@ -891,10 +885,7 @@ describe("question gateway methods", () => {
         }),
       ).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
       expect(manager.get(ordinaryId)?.status).toBe("pending");
-      const response = await call("question.request", secretRequestParams, {
-        client: adminRequestClient,
-      });
-      const id = (response[1] as { id: string }).id;
+      const id = await requestSecretQuestion();
       expect(await call("question.resolve", { id, cancel: true })).toEqual([
         true,
         { status: "cancelled" },
@@ -906,10 +897,7 @@ describe("question gateway methods", () => {
   it("cold-refreshes configured SecretRefs after a store-bound question is answered", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       mockReferencedStoreSnapshot();
-      const requested = await call("question.request", secretRequestParams, {
-        client: adminRequestClient,
-      });
-      const id = (requested[1] as { id: string }).id;
+      const id = await requestSecretQuestion();
 
       expect(
         (
@@ -933,10 +921,7 @@ describe("question gateway methods", () => {
         mockReferencedStoreSnapshot();
         const reload = createDeferred<{ warningCount: number }>();
         reloadSecrets.mockReturnValue(reload.promise);
-        const requested = await call("question.request", secretRequestParams, {
-          client: adminRequestClient,
-        });
-        const id = (requested[1] as { id: string }).id;
+        const id = await requestSecretQuestion();
         const firstValue = "test-secret-committed-first";
         const pending = call("question.resolve", {
           id,
@@ -966,7 +951,9 @@ describe("question gateway methods", () => {
           await Promise.all([pending, ...competitors]);
         }
         expect((await pending)[0]).toBe(true);
-        for (const competitor of competitors) expect((await competitor)[0]).toBe(false);
+        for (const competitor of competitors) {
+          expect((await competitor)[0]).toBe(false);
+        }
         expect(await manager.waitAnswer(id)).toEqual({
           status: "answered",
           answers: { answers: { secret_value: ["stored"] } },
@@ -979,10 +966,7 @@ describe("question gateway methods", () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       mockReferencedStoreSnapshot();
       reloadSecrets.mockRejectedValue(new Error("synthetic refresh failure"));
-      const requested = await call("question.request", secretRequestParams, {
-        client: adminRequestClient,
-      });
-      const id = (requested[1] as { id: string }).id;
+      const id = await requestSecretQuestion();
       const value = "test-secret-refresh-failed";
       const result = await call("question.resolve", {
         id,
@@ -1024,10 +1008,7 @@ describe("question gateway methods", () => {
           throw new Error("database unavailable");
         }),
       });
-      const requested = await call("question.request", secretRequestParams, {
-        client: adminRequestClient,
-      });
-      const id = (requested[1] as { id: string }).id;
+      const id = await requestSecretQuestion();
 
       expect(
         await call("question.resolve", {
