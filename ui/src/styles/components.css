@@ -978,6 +978,10 @@ openclaw-session-progress-hovercard-provider {
   pointer-events: auto;
 }
 
+.person-activity-hovercard {
+  width: min(304px, calc(100vw - 24px));
+}
+
 .person-activity-card {
   font-size: calc(12px * var(--control-ui-text-scale));
   line-height: 1.5;
@@ -987,16 +991,18 @@ openclaw-session-progress-hovercard-provider {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 16px 16px 12px;
+  padding: 15px 16px 12px;
 }
 
 .person-activity-card__header > div {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
 .person-activity-card__header .viewer-avatar--footer {
-  width: 32px;
-  height: 32px;
+  width: 34.5px;
+  height: 34.5px;
   font-size: calc(12px * var(--control-ui-text-scale));
   /* The base ring color assumes the sidebar surface; blend with the popover. */
   border-color: var(--session-hovercard-surface);
@@ -1012,13 +1018,16 @@ openclaw-session-progress-hovercard-provider {
   overflow-wrap: anywhere;
   font-size: calc(14px * var(--control-ui-text-scale));
   font-weight: 600;
+  line-height: 1;
 }
 
 .person-activity-card__status {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
+  gap: 3px;
   color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
 }
 
 .person-activity-card__status > span {
@@ -1042,8 +1051,15 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__facts dt,
+.person-activity-card h3 {
+  color: var(--muted);
+  font-size: inherit;
+  font-weight: 400;
+}
+
 .person-activity-card__muted,
-.person-activity-card small {
+.person-activity-card small,
+.person-activity-card__session-age {
   color: var(--muted);
 }
 
@@ -1052,6 +1068,15 @@ openclaw-session-progress-hovercard-provider {
   gap: 3px;
   margin: 0;
   overflow-wrap: anywhere;
+}
+
+.person-activity-card__facts dd > span {
+  font-weight: 500;
+}
+
+.person-activity-card__facts time,
+.person-activity-card__session-age {
+  font-variant-numeric: tabular-nums;
 }
 
 .person-activity-card small {
@@ -1067,9 +1092,6 @@ openclaw-session-progress-hovercard-provider {
 
 .person-activity-card h3 {
   margin-bottom: 6px;
-  color: var(--muted);
-  font-size: inherit;
-  font-weight: 500;
 }
 
 .person-activity-card__sessions {
@@ -1079,7 +1101,7 @@ openclaw-session-progress-hovercard-provider {
 
 .person-activity-card__session {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   gap: 8px;
   padding: 6px;
   margin: 0 -6px;
@@ -1089,15 +1111,35 @@ openclaw-session-progress-hovercard-provider {
 }
 
 .person-activity-card__session-copy {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
   min-width: 0;
-  overflow-wrap: anywhere;
+  overflow-wrap: normal;
 }
 
 .person-activity-card__session-copy > span {
-  display: -webkit-box;
+  display: block;
+  min-width: 0;
   overflow: hidden;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.person-activity-card__session-copy > .hover-marquee {
+  color: var(--text);
+  text-overflow: clip;
+  -webkit-mask-image: linear-gradient(to right, black calc(100% - 18px), transparent 100%);
+  mask-image: linear-gradient(to right, black calc(100% - 18px), transparent 100%);
+}
+
+.person-activity-card__session-age {
+  justify-self: end;
+  font-size: calc(11px * var(--control-ui-text-scale));
+  font-weight: 400;
+  white-space: nowrap;
 }
 
 .person-activity-card__session-icon {
@@ -1112,11 +1154,19 @@ openclaw-session-progress-hovercard-provider {
   height: 14px;
 }
 
+.person-activity-card footer {
+  padding: 0;
+}
+
 .person-activity-card footer a {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  width: 100%;
+  min-height: 36px;
+  padding: 8px 16px;
   color: var(--text);
+  font-weight: 500;
   text-decoration: none;
 }
 

@@ -62,12 +62,14 @@ function startHoverMarquee(host: HTMLElement): void {
   // row actions, so a cached width would drift. A negative mid-transition
   // indent (re-hover while snapping back) shrinks scrollWidth; add it back.
   const indent = Number.parseFloat(getComputedStyle(label).textIndent) || 0;
-  const shift = label.scrollWidth - indent - label.clientWidth;
-  if (shift <= 1) {
+  const overflow = label.scrollWidth - indent - label.clientWidth;
+  if (overflow <= 1) {
     label.style.removeProperty("--hover-marquee-shift");
     label.style.removeProperty("--hover-marquee-duration");
     return;
   }
+  const extraShift = Number(label.dataset.hoverMarqueeExtraShift ?? 0);
+  const shift = overflow + (Number.isFinite(extraShift) ? Math.max(0, extraShift) : 0);
   const durationMs = Math.max(
     MARQUEE_MIN_DURATION_MS,
     Math.round((shift / MARQUEE_SPEED_PX_PER_SEC) * 1000),
@@ -75,12 +77,16 @@ function startHoverMarquee(host: HTMLElement): void {
   label.style.setProperty("--hover-marquee-shift", `${-shift}px`);
   label.style.setProperty("--hover-marquee-duration", `${durationMs}ms`);
   // Keep quick pointer passes quiet; leaving before the timer fires cancels it.
+  const hoverDelay = Number(label.dataset.hoverMarqueeDelay);
   pendingMarquees.set(
     label,
-    window.setTimeout(() => {
-      pendingMarquees.delete(label);
-      label.classList.add("hover-marquee--scrolling");
-    }, MARQUEE_HOVER_DELAY_MS),
+    window.setTimeout(
+      () => {
+        pendingMarquees.delete(label);
+        label.classList.add("hover-marquee--scrolling");
+      },
+      Number.isFinite(hoverDelay) ? Math.max(0, hoverDelay) : MARQUEE_HOVER_DELAY_MS,
+    ),
   );
 }
 
