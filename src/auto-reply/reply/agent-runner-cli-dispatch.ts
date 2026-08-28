@@ -561,16 +561,22 @@ async function runCliAgentWithLifecycleInternal(
     : undefined;
   let finalReasoningText: string | undefined;
   let reasoningEnded = false;
-  const endReasoning = async () => {
+  // CLI stream bridges drain independently. Every boundary shares this tail so
+  // later tool or assistant callbacks cannot overtake an in-flight close.
+  let reasoningClose = Promise.resolve();
+  const endReasoning = () => {
     if (!finalReasoningText || reasoningEnded) {
-      return;
+      return reasoningClose;
     }
     reasoningEnded = true;
-    try {
-      await params.onReasoningEnd?.();
-    } catch {
-      // Channel progress callbacks cannot turn a valid CLI result into a run failure.
-    }
+    reasoningClose = reasoningClose.then(async () => {
+      try {
+        await params.onReasoningEnd?.();
+      } catch {
+        // Channel progress callbacks cannot turn a valid CLI result into a run failure.
+      }
+    });
+    return reasoningClose;
   };
   const onAssistantText = params.onAssistantText;
   const assistantBridge = createAssistantTextBridge({
@@ -603,7 +609,10 @@ async function runCliAgentWithLifecycleInternal(
   const toolBridge = createToolEventBridge({
     runId: params.runId,
     suppressed: params.suppressAssistantBridge,
-    deliver: params.onToolEvent,
+    deliver: async (payload) => {
+      await endReasoning();
+      await params.onToolEvent?.(payload);
+    },
     startOrder: progressStartOrder,
   });
   const commentaryBridge = createCommentaryEventBridge({
