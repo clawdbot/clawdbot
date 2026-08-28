@@ -476,6 +476,55 @@ struct AppStateRemoteConfigTests {
     }
 
     @Test
+    func `file recovery abandons a pending discovery route without erasing accepted credentials`() async {
+        let configPath = TestIsolation.tempConfigPath()
+        await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-a.example.test",
+                        "token": "initial-token",
+                        "password": "gateway-a-password",
+                    ],
+                ],
+            ]))
+            let state = AppState(preview: true)
+
+            state.remoteUrl = "wss://discovered-b.example.test"
+            state.clearRemoteCredentialsForDiscoverySelection()
+
+            #expect(OpenClawConfigFile.saveDict([
+                "gateway": [
+                    "mode": "remote",
+                    "remote": [
+                        "transport": "direct",
+                        "url": "wss://gateway-a.example.test",
+                        "token": "file-token",
+                        "password": "file-password",
+                    ],
+                ],
+            ]))
+            state._testApplyConfigFromDisk()
+
+            #expect(state._testConflictedGatewayConfigFields == ["gateway.remote.token"])
+            state._testEnableGatewayConfigSync()
+            #expect(state.useFileGatewayConfigConflict())
+
+            let persistedRemote = (OpenClawConfigFile.loadDict()["gateway"] as? [String: Any])?["remote"]
+                as? [String: Any]
+            #expect(persistedRemote?["url"] as? String == "wss://gateway-a.example.test")
+            #expect(persistedRemote?["token"] as? String == "file-token")
+            #expect(persistedRemote?["password"] as? String == "file-password")
+            #expect(state.remoteUrl == "wss://gateway-a.example.test")
+            #expect(state.remoteToken == "file-token")
+            #expect(state.gatewayConfigConflict == nil)
+            #expect(state._testGatewayConfigIsCurrentForRouting)
+        }
+    }
+
+    @Test
     func `dirty token does not claim an externally changed remote URL`() async {
         let configPath = TestIsolation.tempConfigPath()
         await TestIsolation.withIsolatedState(env: ["OPENCLAW_CONFIG_PATH": configPath]) {
