@@ -42,6 +42,9 @@ overrides:
 
 packageExtensionsChecksum: sha256-zZ8fyodhMTumshonC7kktCqTPsiHL3UAyS9vltFAlMo=
 
+patchedDependencies:
+  '@vitest/runner@4.1.11': 55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93
+
 importers:
 
   .:
@@ -1647,8 +1650,8 @@ importers:
         specifier: 1.30.0
         version: 1.30.0(supports-color@10.2.2)(zod@4.4.3)
       '@openclaw/crabline':
-        specifier: 0.1.17
-        version: 0.1.17
+        specifier: 0.1.19
+        version: 0.1.19
       playwright-core:
         specifier: 1.62.1
         version: 1.62.1
@@ -1897,11 +1900,11 @@ importers:
   extensions/tlon:
     dependencies:
       '@aws-sdk/client-s3':
-        specifier: 3.1117.0
-        version: 3.1117.0
+        specifier: 3.1113.0
+        version: 3.1113.0
       '@aws-sdk/s3-request-presigner':
-        specifier: 3.1117.0
-        version: 3.1117.0
+        specifier: 3.1113.0
+        version: 3.1113.0
       '@tloncorp/tlon-skill':
         specifier: 0.5.0
         version: 0.5.0
@@ -1982,6 +1985,19 @@ importers:
         version: link:../../packages/plugin-sdk
 
   extensions/vllm:
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
+  extensions/visitor-access:
+    dependencies:
+      typebox:
+        specifier: 1.3.16
+        version: 1.3.16
+      zod:
+        specifier: 4.4.3
+        version: 4.4.3
     devDependencies:
       '@openclaw/plugin-sdk':
         specifier: workspace:*
@@ -2688,8 +2704,8 @@ packages:
     resolution: {integrity: sha512-KoC+gBIwMQlzFuSf99MT6S6Uy6E+H+9FQ6W1jLn+gDLK/8McNF6tBTD6bmddgvvRXVvJPkpRkyCDgLBY/LmI1A==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/client-s3@3.1117.0':
-    resolution: {integrity: sha512-M/zyjg0u0Sxm73sInvyDb9+/YUuAOz8/xxmcmj0quJ7NXllZqXPxzjti3oVDz/lQ5mDf7iuxBLc0Y3deJI2hRw==}
+  '@aws-sdk/client-s3@3.1113.0':
+    resolution: {integrity: sha512-NRqdtohoMRyWkEeeznfG1KPN08dclCbl+HFuLPB2v8qPcgoNmTFlLKl9ELiR6hsGXQ4Ur3qvRnoJVEk8ND74pg==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/core@3.977.8':
@@ -2788,8 +2804,8 @@ packages:
     resolution: {integrity: sha512-NhEgryjlBF9w38ZXqGymQV28IhkYa1mKhlbYnqIis57AYwWGVYfUPgg/qC2rLRqOUfblxx++irvju10kVTa8Vw==}
     engines: {node: '>=20.0.0'}
 
-  '@aws-sdk/s3-request-presigner@3.1117.0':
-    resolution: {integrity: sha512-4aivFw3OXy83wuh3utC2F6bgNg4SCdcCLOSXRvYF23qEL0OzGvkjqzLTU+T191laBKjbU/m6nJLFrZsEtOo9ow==}
+  '@aws-sdk/s3-request-presigner@3.1113.0':
+    resolution: {integrity: sha512-FdbHboJSscXRHnqOGRLN+MvtcYNlxw1+XWMKcKi72nBPxpSTGQA+/zmxEBTlkCvTdIPtl/g383nNY0RiKYPmWQ==}
     engines: {node: '>=20.0.0'}
 
   '@aws-sdk/signature-v4-multi-region@3.996.46':
@@ -4293,8 +4309,8 @@ packages:
     cpu: [x64]
     os: [win32]
 
-  '@openclaw/crabline@0.1.17':
-    resolution: {integrity: sha512-tMjpIhzJvCulDA6mYL8nOA6XExWXZoBOrD4XgL3gsNdEDAWY4FCaHYyNCXwKPU2QSs78FU0xZ3NIQRr9ErHRpQ==}
+  '@openclaw/crabline@0.1.19':
+    resolution: {integrity: sha512-qDAwSTffMSJxHgaHQwNockE/90ae4YERSuizJgfzT9kwmkyzMi1R0dlTuMla5IRWNVvL2RYbj9q/tMsQG+zOeQ==}
     engines: {node: '>=22'}
     hasBin: true
 
@@ -5239,6 +5255,10 @@ packages:
 
   '@smithy/node-config-provider@4.5.14':
     resolution: {integrity: sha512-6iv9dLiDX4he0KLFr2vw2u98Q+lIEsF0G+1MZVy5kWjZRLYXvY6S4uJ+R3aC4xYBkjljAtCB3uG9Y8pBL3O3Ug==}
+    engines: {node: '>=18.0.0'}
+
+  '@smithy/node-http-handler@4.11.2':
+    resolution: {integrity: sha512-avwAh9HM3h2lcfjvP3zYIZGf+XVgLQ91wOJ2qoFbNpW1UZeZb33aGlhTZvtkANHfcGhJroRY64525OjfgOg30g==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/node-http-handler@4.11.3':
@@ -9784,7 +9804,7 @@ snapshots:
       '@smithy/types': 4.17.2
       tslib: 2.8.1
 
-  '@aws-sdk/client-s3@3.1117.0':
+  '@aws-sdk/client-s3@3.1113.0':
     dependencies:
       '@aws-sdk/checksums': 3.1000.29
       '@aws-sdk/core': 3.977.8
@@ -9794,7 +9814,7 @@ snapshots:
       '@aws-sdk/types': 3.974.5
       '@smithy/core': 3.33.3
       '@smithy/fetch-http-handler': 5.7.2
-      '@smithy/node-http-handler': 4.11.3
+      '@smithy/node-http-handler': 4.11.2
       '@smithy/types': 4.17.2
       tslib: 2.8.1
 
@@ -10045,7 +10065,7 @@ snapshots:
       '@smithy/types': 4.17.2
       tslib: 2.8.1
 
-  '@aws-sdk/s3-request-presigner@3.1117.0':
+  '@aws-sdk/s3-request-presigner@3.1113.0':
     dependencies:
       '@aws-sdk/core': 3.977.8
       '@aws-sdk/signature-v4-multi-region': 3.996.46
@@ -11630,7 +11650,7 @@ snapshots:
   '@openai/codex@0.150.1-win32-x64':
     optional: true
 
-  '@openclaw/crabline@0.1.17':
+  '@openclaw/crabline@0.1.19':
     dependencies:
       '@types/node': 22.20.1
       commander: 15.0.0
@@ -11639,7 +11659,7 @@ snapshots:
       picocolors: 1.1.1
       proper-lockfile: 4.1.2
       re2js: 2.8.6
-      ws: 8.21.1
+      ws: 8.21.3
       yaml: 2.9.0
       zod: 4.4.3
     transitivePeerDependencies:
@@ -12506,6 +12526,12 @@ snapshots:
       '@smithy/core': 3.33.3
       tslib: 2.8.1
 
+  '@smithy/node-http-handler@4.11.2':
+    dependencies:
+      '@smithy/core': 3.33.3
+      '@smithy/types': 4.17.2
+      tslib: 2.8.1
+
   '@smithy/node-http-handler@4.11.3':
     dependencies:
       '@smithy/core': 3.33.3
@@ -13045,7 +13071,7 @@ snapshots:
     dependencies:
       tinyrainbow: 3.1.0
 
-  '@vitest/runner@4.1.11':
+  '@vitest/runner@4.1.11(patch_hash=55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93)':
     dependencies:
       '@vitest/utils': 4.1.11
       pathe: 2.0.3
@@ -16948,7 +16974,7 @@ snapshots:
       '@vitest/expect': 4.1.11
       '@vitest/mocker': 4.1.11(vite@8.2.2(@types/node@26.2.0)(esbuild@0.28.2)(jiti@2.7.0)(tsx@4.23.12)(yaml@2.9.0))
       '@vitest/pretty-format': 4.1.11
-      '@vitest/runner': 4.1.11
+      '@vitest/runner': 4.1.11(patch_hash=55258cdf55f944f5e9bfbc52251b3696225ca2993e2d9f56b90b88f764193d93)
       '@vitest/snapshot': 4.1.11
       '@vitest/spy': 4.1.11
       '@vitest/utils': 4.1.11

@@ -72,7 +72,7 @@ defineDiscordVoiceTests(
           provider.onClose?.(reason);
 
           expect(manager.status()).toEqual([]);
-          expect(entry.realtime).toBeUndefined();
+          expect(entry.realtimeLifecycle.status).toBe("stopped");
           expect(entry.transcripts).toBeUndefined();
           expect(onStop).toHaveBeenCalledExactlyOnceWith(undefined);
           expect(captureStream.destroy).toHaveBeenCalledOnce();
@@ -104,8 +104,8 @@ defineDiscordVoiceTests(
             { transcripts: replacementTranscripts },
           );
           const inputCalls = realtimeSessionMock.sendAudio.mock.calls.length;
-          turn?.sendInputAudio(Buffer.alloc(3840));
-          turn?.close();
+          turn.sendInputAudio(Buffer.alloc(3840));
+          turn.close();
           provider.onClose?.(reason);
           provider.onReady?.();
           provider.onEvent?.({ direction: "client", type: "session.reconnect.ready" });

@@ -11,7 +11,7 @@ import type { ModelSetupVerifyState } from "./state.ts";
 
 type Candidate = SystemAgentSetupDetectResult["candidates"][number];
 
-export function failureLabel(status: string): string {
+function failureLabel(status: string): string {
   const labels: Record<string, string> = {
     auth: t("modelSetup.failure.auth"),
     rate_limit: t("modelSetup.failure.rateLimit"),

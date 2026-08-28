@@ -151,9 +151,13 @@ export function createChannelIngressDrain<
     // Retire before abort so replacements recover; Set.delete makes disposal repeat safe.
     // Claim-token fencing prevents this owner from settling a recovered claim.
     deregisterLiveIngressDrainInstance(ownerId);
-    const reason = toErrorObject(options.abortSignal?.reason, "ingress-drain-aborted");
+    const reason = disposed
+      ? new Error("ingress-drain-disposed")
+      : toErrorObject(options.abortSignal?.reason, "ingress-drain-aborted");
     for (const state of activeByClaim.values()) {
       if (state.phase === "dispatching" || state.phase === "deferred") {
+        // Retire stall detection without blocking a late terminal claim write.
+        clearStallTimer(state);
         state.abortController.abort(reason);
       }
     }
@@ -354,7 +358,8 @@ export function createChannelIngressDrain<
         }
       },
       onDeferredHeartbeat: () => {
-        if (state.phase === "deferred" && !state.guillotined && !state.superseded) {
+        // Abort also covers disposal; retired callbacks cannot restart the watchdog.
+        if (state.phase === "deferred" && !state.abortController.signal.aborted) {
           armStallWatchdog(state);
         }
       },
@@ -673,18 +678,10 @@ export function createChannelIngressDrain<
     dispose: () => {
       disposed = true;
       options.abortSignal?.removeEventListener("abort", abortActiveClaims);
-      deregisterLiveIngressDrainInstance(ownerId);
+      abortActiveClaims();
       // Snapshot: removeActive mutates activeByClaim during this sweep.
       const activeStates = Array.from(activeByClaim.values());
       for (const state of activeStates) {
-        clearStallTimer(state);
-        if (state.phase === "dispatching" || state.phase === "deferred") {
-          try {
-            state.abortController.abort(new Error("ingress-drain-disposed"));
-          } catch {
-            // ignore
-          }
-        }
         removeActive(state);
       }
     },

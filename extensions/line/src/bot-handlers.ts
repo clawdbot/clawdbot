@@ -5,6 +5,7 @@ import {
   buildMentionRegexes,
   isChannelPartialDeliveryError,
   matchesMentionPatterns,
+  type ChannelInboundMediaInput,
 } from "openclaw/plugin-sdk/channel-inbound";
 import {
   resolveStableChannelMessageIngress,
@@ -49,7 +50,7 @@ import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
 import { hasAnyLineMention, isLineBotMentioned } from "./mentions.js";
-import { getLineGroupSummary, pushMessageLine, replyMessageLine } from "./send.js";
+import { getLineGroupName, getUserDisplayName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
@@ -61,10 +62,7 @@ type PostbackEvent = webhook.PostbackEvent;
 type UnfollowEvent = webhook.UnfollowEvent;
 type WebhookEvent = webhook.Event;
 
-interface MediaRef {
-  path: string;
-  contentType?: string;
-}
+type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
 const LINE_DOWNLOADABLE_MESSAGE_TYPES: ReadonlySet<string> = new Set([
   "image",
@@ -380,11 +378,22 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
     const historyKey = groupId ?? roomId;
     const senderId = sourceInfo.userId ?? "unknown";
     if (historyKey && context.groupHistories) {
+      const displayName = sourceInfo.userId
+        ? await getUserDisplayName(sourceInfo.userId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+            groupId,
+            roomId,
+          })
+        : senderId;
+      // History has one sender string; keep the stable ID when display names collide.
+      const sender = displayName === senderId ? senderId : `${displayName} (${senderId})`;
       createChannelHistoryWindow({ historyMap: context.groupHistories }).record({
         historyKey,
         limit: context.historyLimit ?? DEFAULT_GROUP_HISTORY_LIMIT,
         entry: {
-          sender: `user:${senderId}`,
+          sender,
           body: rawText || `<${message.type}>`,
           timestamp: event.timestamp,
         },
@@ -421,6 +430,9 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
         allMedia.push({
           path: media.path,
           contentType: media.contentType,
+          // LINE names only file messages; the model needs that name to answer
+          // questions that refer to the attachment by it.
+          ...(originalFilename ? { fileName: originalFilename } : {}),
         });
       } catch (err) {
         if (abortSignal?.aborted) {
@@ -513,19 +525,14 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
     resolveRoomContext: async () => {
       // LINE cannot retrieve prior messages, and multi-person rooms have no name API.
       const roomContext = { historyUnavailable: true };
-      if (!groupId) {
-        return roomContext;
-      }
-      try {
-        const summary = await getLineGroupSummary(groupId, {
-          cfg,
-          accountId: account.accountId,
-          channelAccessToken: account.channelAccessToken,
-        });
-        return { ...roomContext, title: summary.groupName };
-      } catch {
-        return roomContext;
-      }
+      const title = groupId
+        ? await getLineGroupName(groupId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+          })
+        : undefined;
+      return title ? { ...roomContext, title } : roomContext;
     },
   });
 }

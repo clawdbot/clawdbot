@@ -211,7 +211,11 @@ describe("session suggestion handlers", () => {
               }),
               internal: expect.objectContaining({
                 syntheticClient: true,
-                senderAttribution: { id: "alice", name: "Suggested by Alice" },
+                senderAttribution: {
+                  id: "alice",
+                  name: "Suggested by Alice",
+                  identity: { type: "profile", id: "alice" },
+                },
               }),
             }),
           }),
@@ -364,7 +368,11 @@ describe("session suggestion handlers", () => {
               role: "user",
               content: "Ship the focused change",
               idempotencyKey: `session-suggestion:${id}`,
-              __openclaw: { senderId: "alice", senderName: "Suggested by Alice" },
+              __openclaw: {
+                senderId: "alice",
+                senderName: "Suggested by Alice",
+                senderIdentity: { type: "profile", id: "alice" },
+              },
             },
           });
           expect(mocks.handleChatSend).toHaveBeenCalledOnce();

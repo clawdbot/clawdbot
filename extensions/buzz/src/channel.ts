@@ -70,6 +70,11 @@ export const buzzPlugin = createChatChannelPlugin<ResolvedBuzzAccount, BuzzProbe
       chatTypes: ["group"],
       threads: true,
     },
+    threading: {
+      // Only automatic replies carry replyDelivery; explicit message-tool targets stay intact.
+      resolveReplyTransport: ({ replyDelivery }) =>
+        replyDelivery?.replyToMode === "off" ? { threadId: null, replyToId: null } : null,
+    },
     agentPrompt: {
       messageToolHints: () => [
         "- Buzz targets: use a configured room UUID, `buzz:<ROOM_UUID>`, or a unique current room name. Use the UUID when room names are ambiguous.",

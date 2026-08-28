@@ -8,7 +8,7 @@ import {
   resetPluginRuntimeStateForTest,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
-import { createPluginGatewayMethodDescriptor } from "../methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "../methods/descriptor.js";
 import { createBoardHarness } from "./board.test-support.js";
 import type { GatewayRequestHandlers } from "./types.js";
 

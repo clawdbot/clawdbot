@@ -822,12 +822,6 @@ export async function buildGatewayInstallPlan(params: {
   >;
 }): Promise<GatewayInstallPlan> {
   const platform = params.platform ?? process.platform;
-  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
-    env: params.env,
-    runtime: params.runtime,
-    devMode: params.devMode,
-    runtimePath: params.runtimePath,
-  });
   const wrapperInput = params.wrapperPath ?? params.env[OPENCLAW_WRAPPER_ENV_KEY];
   const wrapperPointsAtWindowsTaskScript =
     Boolean(wrapperInput?.trim()) &&
@@ -841,6 +835,13 @@ export async function buildGatewayInstallPlan(params: {
   const wrapperPath = wrapperPointsAtWindowsTaskScript
     ? undefined
     : await resolveOpenClawWrapperPath(wrapperInput);
+  const { devMode, runtimePath } = await resolveDaemonInstallRuntimeInputs({
+    env: params.env,
+    runtime: params.runtime,
+    devMode: params.devMode,
+    runtimePath: params.runtimePath,
+    wrapperPath,
+  });
   const serviceInputEnv: Record<string, string | undefined> = wrapperPath
     ? { ...params.env, [OPENCLAW_WRAPPER_ENV_KEY]: wrapperPath }
     : wrapperPointsAtWindowsTaskScript

@@ -154,6 +154,7 @@ export async function updateWizardCommand(opts: UpdateWizardOptions = {}): Promi
       channel: requestedChannel ?? undefined,
       restart,
       timeout: opts.timeout,
+      acceptCapabilities: opts.acceptCapabilities,
     });
   } catch (err) {
     defaultRuntime.error(formatErrorMessage(err));

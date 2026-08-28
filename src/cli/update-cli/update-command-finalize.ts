@@ -242,6 +242,7 @@ export async function updateFinalizeCommand(opts: UpdateFinalizeOptions): Promis
               json: opts.json,
               timeout: opts.timeout,
               yes: opts.yes,
+              acceptCapabilities: opts.acceptCapabilities,
               restart: false,
             },
             timeoutMs: timeoutMs ?? DEFAULT_UPDATE_STEP_TIMEOUT_MS,

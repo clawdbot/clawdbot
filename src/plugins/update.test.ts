@@ -59,6 +59,19 @@ const withClawPackageLifecycleLeaseMock = vi.fn(
 const tempDirs: string[] = [];
 const capabilityConsentMode = vi.hoisted(() => ({ real: false }));
 
+vi.mock("./capability-consent.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./capability-consent.js")>();
+  return {
+    ...actual,
+    // Channel routing fixtures stub installers; update-channel.consent.test.ts owns staged proof.
+    prepareManagedPluginArtifactConsentHandler: async () => ({
+      onBeforePluginArtifactCommit: async () => {},
+      applyAcceptedSurface: <T extends PluginInstallRecord>(_pluginId: string, record: T): T =>
+        record,
+    }),
+  };
+});
+
 vi.mock("./update-capability-consent.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./update-capability-consent.js")>();
   return {

@@ -213,6 +213,49 @@ describe("install.ps1 failure handling", () => {
         ].join("\n"),
       },
       {
+        name: "pnpm-prefer-offline-policy",
+        source: [
+          scriptWithoutEntryPoint,
+          "",
+          '$root = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-pnpm-policy-" + [guid]::NewGuid().ToString("N"))',
+          '$project = Join-Path $root "project"',
+          "$previousUpper = $env:PNPM_CONFIG_PREFER_OFFLINE",
+          "$previousLower = $env:pnpm_config_prefer_offline",
+          "$script:PnpmConfigValue = 'undefined'",
+          "function Get-PnpmCommandPath { return 'Get-TestPnpmConfig' }",
+          "function Get-TestPnpmConfig {",
+          "  param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Arguments)",
+          "  if ($Arguments -join ' ' -ne 'config get prefer-offline') { throw \"unexpected pnpm command: $($Arguments -join ' ')\" }",
+          '  if ((Get-Location).Path -ne $project) { throw "unexpected pnpm cwd: $(Get-Location)" }',
+          "  if ($script:PnpmConfigValue -eq 'failure') { $global:LASTEXITCODE = 1; return }",
+          "  $global:LASTEXITCODE = 0",
+          "  return $script:PnpmConfigValue",
+          "}",
+          "try {",
+          "  New-Item -ItemType Directory -Force -Path $project | Out-Null",
+          "  Remove-Item Env:PNPM_CONFIG_PREFER_OFFLINE -ErrorAction SilentlyContinue",
+          "  Remove-Item Env:pnpm_config_prefer_offline -ErrorAction SilentlyContinue",
+          "  if (-not (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project)) { throw 'default was disabled' }",
+          "  $script:PnpmConfigValue = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'false pnpm config was ignored' }",
+          "  $script:PnpmConfigValue = 'true'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'true pnpm config was ignored' }",
+          "  $script:PnpmConfigValue = 'failure'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'failed pnpm config query enabled the default' }",
+          "  $env:PNPM_CONFIG_PREFER_OFFLINE = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'uppercase override was ignored' }",
+          "  Remove-Item Env:PNPM_CONFIG_PREFER_OFFLINE -ErrorAction SilentlyContinue",
+          "  $env:pnpm_config_prefer_offline = 'false'",
+          "  if (Test-ShouldPreferOfflinePnpmInstall -ProjectDir $project) { throw 'lowercase override was ignored' }",
+          "} finally {",
+          "  $env:PNPM_CONFIG_PREFER_OFFLINE = $previousUpper",
+          "  $env:pnpm_config_prefer_offline = $previousLower",
+          "  Remove-Item -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue",
+          "}",
+          "",
+        ].join("\n"),
+      },
+      {
         name: "npm-candidate-validation",
         source: [
           scriptWithoutEntryPoint,
@@ -715,10 +758,18 @@ describe("install.ps1 failure handling", () => {
           '$sandbox = Join-Path ([System.IO.Path]::GetTempPath()) ("openclaw-transactional-clone-" + [guid]::NewGuid().ToString("N"))',
           "New-Item -ItemType Directory -Path $sandbox | Out-Null",
           "$script:CloneMode = 'success'",
+          "$script:GitFilterSupport = $true",
+          "$script:LastCloneArgs = @()",
           "$script:ConcurrentRepo = $null",
           "$script:AliasPath = $null",
           "$script:AliasReplacement = $null",
           "function git {",
+          "  if ($args[0] -eq 'clone' -and $args[1] -eq '-h') {",
+          "    if ($script:GitFilterSupport) { Write-Output '  --[no-]filter <args>' }",
+          "    $global:LASTEXITCODE = 129",
+          "    return",
+          "  }",
+          "  if ($args[0] -eq 'clone') { $script:LastCloneArgs = @($args) }",
           "  $target = $args[-1]",
           "  New-Item -ItemType Directory -Force -Path (Join-Path $target '.git') | Out-Null",
           "  Set-Content -LiteralPath (Join-Path $target 'checkout.marker') -Value 'complete'",
@@ -738,11 +789,14 @@ describe("install.ps1 failure handling", () => {
           "  $successRepo = Join-Path $sandbox 'success'",
           "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $successRepo",
           "  if (-not (Test-Path -LiteralPath (Join-Path $successRepo 'checkout.marker'))) { throw 'complete checkout was not published' }",
+          "  if ($script:LastCloneArgs -notcontains '--filter=blob:none') { throw 'supported Git did not use a filtered clone' }",
           "",
           "  $emptyRepo = Join-Path $sandbox 'empty'",
           "  New-Item -ItemType Directory -Path $emptyRepo | Out-Null",
+          "  $script:GitFilterSupport = $false",
           "  New-TransactionalGitCheckout -RepoUrl 'https://example.invalid/openclaw.git' -RepoDir $emptyRepo",
           "  if (-not (Test-Path -LiteralPath (Join-Path $emptyRepo 'checkout.marker'))) { throw 'empty destination was not populated' }",
+          "  if ($script:LastCloneArgs -contains '--filter=blob:none') { throw 'unsupported Git used a filtered clone' }",
           "",
           "  $aliasTarget = Join-Path $sandbox 'alias-target'",
           "  $script:AliasReplacement = Join-Path $sandbox 'alias-replacement'",
@@ -936,6 +990,10 @@ describe("install.ps1 failure handling", () => {
 
   runIfPowerShell("applies the canonical npm lifecycle version policy", () => {
     expectBatchedPowerShellCase("npm-lifecycle-policy");
+  });
+
+  runIfPowerShell("preserves explicit pnpm prefer-offline settings for Git installs", () => {
+    expectBatchedPowerShellCase("pnpm-prefer-offline-policy");
   });
 
   runIfPowerShell("rejects npm success without a usable candidate package", () => {
@@ -1244,6 +1302,7 @@ describe("install.ps1 failure handling", () => {
     const pnpmVersionBody = extractFunctionBody(source, "Get-RepoPnpmVersion");
     const pnpmVersionMatchBody = extractFunctionBody(source, "Test-PnpmCommandMatchesVersion");
     const ensurePnpmBody = extractFunctionBody(source, "Ensure-Pnpm");
+    const gitFilterSupportBody = extractFunctionBody(source, "Test-GitFilterSupport");
     const transactionalCloneBody = extractFunctionBody(source, "New-TransactionalGitCheckout");
     const gitInstallBody = extractFunctionBody(source, "Install-OpenClawFromGit");
     const nodeOptionsBody = extractFunctionBody(source, "Resolve-NodeOptionsWithMinOldSpace");
@@ -1271,7 +1330,10 @@ describe("install.ps1 failure handling", () => {
     expect(ensurePnpmBody).toContain(
       'Invoke-NpmCommand -Arguments @("install", "-g", "--force", $pnpmSpec)',
     );
-    expect(transactionalCloneBody).toContain("git clone $RepoUrl $stagingDir");
+    expect(gitFilterSupportBody).toContain("git clone -h");
+    expect(gitFilterSupportBody).toContain("filter");
+    expect(transactionalCloneBody).toContain('$cloneArgs += "--filter=blob:none"');
+    expect(transactionalCloneBody).toContain("& git @cloneArgs");
     expect(gitInstallBody.indexOf("New-TransactionalGitCheckout")).toBeLessThan(
       gitInstallBody.indexOf("Ensure-Pnpm -RepoDir $RepoDir"),
     );
@@ -1283,7 +1345,8 @@ describe("install.ps1 failure handling", () => {
     expect(mainBody).toContain("$npmInstallResults = @(Install-OpenClaw)");
     expect(mainBody).toContain("Test-BooleanSuccessResult -Results $npmInstallResults");
     expect(gitInstallBody).toContain("Push-Location -LiteralPath $RepoDir");
-    expect(gitInstallBody).toContain("$sourceInstallArgs = @(");
+    expect(gitInstallBody).toContain('$sourceInstallArgs = @("install")');
+    expect(gitInstallBody).toContain("Test-ShouldPreferOfflinePnpmInstall -ProjectDir $RepoDir");
     expect(gitInstallBody).toContain('"--config.node-linker=hoisted"');
     expect(gitInstallBody).toContain('"--config.enable-pre-post-scripts=true"');
     expect(gitInstallBody).toContain('"--config.side-effects-cache=false"');

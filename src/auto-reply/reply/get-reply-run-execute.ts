@@ -25,6 +25,7 @@ import {
   createUserTurnTranscriptRecorder,
   resolvePersistedUserTurnText,
 } from "../../sessions/user-turn-transcript.js";
+import { buildChannelUserTurnSender } from "../../sessions/user-turn-transcript.metadata.js";
 import { isReasoningTagProvider } from "../../utils/provider-utils.js";
 import { buildInboundMediaNoteProjection } from "../media-note.js";
 import type { OriginatingChannelType } from "../templating.js";
@@ -309,13 +310,7 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
           // is identical whether this turn is sent as the current turn or
           // replayed as history. See: https://github.com/openclaw/openclaw/issues/3658
           ...(userTurnTimestamp ? { timestamp: userTurnTimestamp } : {}),
-          sender: persistChannelSender
-            ? {
-                id: normalizeOptionalString(sessionCtx.SenderId),
-                name: normalizeOptionalString(sessionCtx.SenderName),
-                username: normalizeOptionalString(sessionCtx.SenderUsername),
-              }
-            : undefined,
+          sender: persistChannelSender ? buildChannelUserTurnSender(sessionCtx) : undefined,
         }
       : undefined;
   const userTurnTranscriptRecorder =

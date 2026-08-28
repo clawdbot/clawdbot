@@ -112,17 +112,16 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
     init(
         url: URL,
         auth: DashboardWindowAuth,
+        websiteDataStore: WKWebsiteDataStore,
         updater: UpdaterProviding? = nil,
         updateBridgeEnabled: Bool = true,
         tlsParams: GatewayTLSParams? = nil,
         gatewaySnapshot: DashboardGatewaySnapshot? = nil,
         windowTitle: String = "OpenClaw",
-        windowAutosaveName: String = DashboardWindowLayout.windowFrameAutosaveName,
+        windowAutosaveName: String,
         reusingWindow: NSWindow? = nil,
         requestBrowserProfileImportOffer:
-        @escaping @MainActor (@escaping @MainActor () -> Bool) async -> Bool = { shouldApply in
-            await BrowserProfileImportModel.shared.requestAutomaticOfferIfEligible(while: shouldApply)
-        })
+        @escaping @MainActor (@escaping @MainActor () -> Bool) async -> Bool)
     {
         let shouldEnableUpdateBridge = updater?.isAvailable == true && updateBridgeEnabled
         self.currentURL = url
@@ -134,9 +133,8 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.updateBridgeEnabled = shouldEnableUpdateBridge
         self.requestBrowserProfileImportOffer = requestBrowserProfileImportOffer
 
-        let dataStore = WKWebsiteDataStore.default()
         let config = WKWebViewConfiguration()
-        config.websiteDataStore = dataStore
+        config.websiteDataStore = websiteDataStore
         config.preferences.isElementFullscreenEnabled = true
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
         config.preferences.tabFocusesLinks = true
@@ -170,7 +168,7 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         // carries in-app navigation; the web titlebar buttons use this list.
         self.webView.allowsBackForwardNavigationGestures = true
 
-        let linkBrowser = DashboardLinkBrowserView(websiteDataStore: dataStore)
+        let linkBrowser = DashboardLinkBrowserView(websiteDataStore: websiteDataStore)
         let linkBrowserSplitView = DashboardLinkSplitView()
         let splitViewController = NSSplitViewController()
         splitViewController.splitView = linkBrowserSplitView

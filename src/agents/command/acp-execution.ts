@@ -1,5 +1,6 @@
 import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elicitation-handler-lazy.js";
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
+import { recordAgentRunTerminalOutcome } from "../../channels/turn/agent-run-terminal-outcome.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -13,6 +14,10 @@ import {
   getAdmittedRunDelegatedAuthority,
   type PreparedAgentRunAdmission,
 } from "../admitted-run-context.js";
+import {
+  buildAgentRunTerminalOutcomeFromLifecycleEvent,
+  classifyAgentRunTerminalOutcome,
+} from "../agent-run-terminal-outcome.js";
 import { prepareInternalSessionEffectsSession } from "../internal-session-effects.js";
 import type { AgentRunSessionTarget } from "../run-session-target.js";
 import { isAgentRunRestartAbortReason } from "../run-termination.js";
@@ -313,7 +318,7 @@ export async function runAcpAgentCommand(params: {
     params.opts.abortSignal,
   );
   const { deliverAgentCommandResult } = await loadDeliveryRuntime();
-  return await deliverAgentCommandResult({
+  const deliveryResult = await deliverAgentCommandResult({
     cfg: params.cfg,
     deps: params.deps,
     runtime: params.runtime,
@@ -325,4 +330,14 @@ export async function runAcpAgentCommand(params: {
     assertDeliveryCurrent: () =>
       assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration),
   });
+  // Use the owner's status and current signal: delivery may outlive the result snapshot.
+  const outcome = buildAgentRunTerminalOutcomeFromLifecycleEvent({
+    phase: "end",
+    data: { status: resultStatus, stopReason },
+    abortSignal: params.opts.abortSignal,
+  });
+  return recordAgentRunTerminalOutcome(
+    deliveryResult,
+    classifyAgentRunTerminalOutcome(outcome) === "success" ? "completed" : "failed",
+  );
 }

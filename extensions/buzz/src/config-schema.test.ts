@@ -49,6 +49,18 @@ describe("BuzzConfigSchema", () => {
     expectJsonSchemaValidity(`buzz.history.${historyLimit}`, config, valid);
   });
   it.each([
+    ["off", true],
+    ["all", true],
+    ["first", false],
+    ["batched", false],
+    [false, false],
+  ])("validates replyToMode %s in runtime and JSON schemas", (replyToMode, valid) => {
+    const config = { replyToMode, groupPolicy: "allowlist" };
+    expect(parseBuzzConfig(config).success).toBe(valid);
+    expectJsonSchemaValidity(`buzz.reply-mode.${replyToMode}`, config, valid);
+  });
+
+  it.each([
     "ws://localhost:3000",
     "wss://buzz.example.com/relay",
     "Ws://localhost:3000",

@@ -4,11 +4,10 @@ import type {
   SessionParticipant,
   SessionParticipantIdentity,
 } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
-import { readPresenceEntries } from "../app/user-profile.ts";
 import { t } from "../i18n/index.ts";
 import {
   presenceViewerLabel,
-  projectPresenceEntries,
+  projectPresencePayload,
   type PresenceViewer,
 } from "../lib/presence-users.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
@@ -58,7 +57,7 @@ class ViewerAvatar extends OpenClawLightDomContentsElement {
     }
     const label = presenceViewerLabel(user);
     const view = resolveIdentityAvatarView({
-      identity: this.identity,
+      identity: this.identity ?? user.identity,
       id: user.id,
       name: user.name,
       username: user.email,
@@ -93,8 +92,8 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) personActivity?: PersonActivityRouting;
 
   override render() {
-    const projection = projectPresenceEntries(
-      readPresenceEntries(this.presencePayload) ?? [],
+    const projection = projectPresencePayload(
+      this.presencePayload,
       this.selfUserId,
       this.selfInstanceId,
     );
@@ -116,9 +115,7 @@ class ViewerFacepile extends OpenClawLightDomContentsElement {
           avatarUrl,
           watchedSessions: [],
         }))
-      : (this.staticUsers ?? viewers).map((user) =>
-          Object.assign({}, user, { identity: { type: "profile" as const, id: user.id } }),
-        );
+      : (this.staticUsers ?? viewers);
     if (users.length === 0) {
       return nothing;
     }

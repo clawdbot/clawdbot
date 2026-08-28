@@ -68,6 +68,7 @@ async function emitPullRequestSnapshot(
             state: "open",
             title: "Restore the session hovercard",
             url: "https://github.com/openclaw/openclaw/pull/417",
+            author: { login: "steipete" },
           },
           {
             additions: 72,
@@ -334,6 +335,9 @@ suite.define(() => {
           .poll(() => card.locator(".session-progress-card__heading").textContent())
           .toContain("1/3");
         await expect.poll(() => card.locator(".session-hovercard__pr-row").count()).toBe(4);
+        await expect
+          .poll(() => card.locator(".session-hovercard__pr-author").first().textContent())
+          .toBe("steipete");
         await captureProof(page, "sidebar-row-hovercard-maximum.png");
         await expect
           .poll(() => card.locator(".session-hovercard__identity-row").textContent())

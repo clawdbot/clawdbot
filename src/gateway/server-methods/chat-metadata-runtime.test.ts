@@ -72,6 +72,7 @@ function createHarness(
   let pluginRegistryVersion = 1;
   let authStore: AuthProfileStore | undefined = { version: 1, profiles: {} };
   let authStoreRevision = 1;
+  const invalidProjections = new WeakSet<object>();
   const getPreparedOwner = vi.fn((): PreparedModelRuntimeSnapshot | undefined => owner);
   const getPreparedAuthStore = vi.fn(() => authStore);
   const getAuthStoreRevision = vi.fn(() => authStoreRevision);
@@ -131,7 +132,17 @@ function createHarness(
       getSkillsVersion,
       getPluginRegistryVersion,
       buildCommands,
-      ...(useDefaultProjection ? {} : { buildProjection: buildProjection as never }),
+      ...(useDefaultProjection
+        ? {}
+        : {
+            buildProjection: async (params) => {
+              const projection = await buildProjection(params);
+              return {
+                read: () => projection,
+                isCurrent: () => !invalidProjections.has(projection),
+              };
+            },
+          }),
     },
   });
   return {
@@ -142,6 +153,7 @@ function createHarness(
     getPreparedAuthStore,
     getPreparedOwner,
     getSkillsVersion,
+    invalidProjections,
     runtime,
     setConfig(next: OpenClawConfig) {
       config = next;
@@ -201,7 +213,7 @@ describe("gateway chat metadata runtime", () => {
     releaseModels.resolve();
     await Promise.all([firstRefresh, secondRefresh]);
     const [first, second] = await Promise.all([firstRead, secondRead]);
-    expect(first).toBe(second);
+    expect(first).toEqual(second);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
   });
@@ -218,7 +230,7 @@ describe("gateway chat metadata runtime", () => {
     const first = await harness.runtime.read({ agentId: "main" });
     const second = await harness.runtime.read({ agentId: "main" });
 
-    expect(first).toBe(second);
+    expect(first).toEqual(second);
     expect(harness.getPreparedOwner).not.toHaveBeenCalled();
     expect(harness.getPreparedAuthStore).not.toHaveBeenCalled();
     expect(harness.getAuthStoreRevision).not.toHaveBeenCalled();
@@ -361,6 +373,46 @@ describe("gateway chat metadata runtime", () => {
     expect(harness.buildProjection).toHaveBeenCalledTimes(2);
   });
 
+  test.each(["neutral", "profile"] as const)(
+    "ready reads omit an invalid %s wrapper until a canonical read refreshes it",
+    async (invalid) => {
+      const harness = createHarness();
+      const sessionEntry = {
+        authProfileOverride: "test:session",
+        authProfileOverrideSource: "user" as const,
+      };
+      const params = { agentId: "main", sessionEntry };
+      await harness.runtime.refresh();
+      const initial = await harness.runtime.readStartup(params);
+      const stale =
+        await harness.buildProjection.mock.results[invalid === "neutral" ? 0 : 1]!.value;
+      harness.invalidProjections.add(stale);
+
+      await expect(
+        harness.runtime.readStartup({ ...params, readPolicy: "ready" }),
+      ).resolves.toBeUndefined();
+      expect(harness.buildProjection).toHaveBeenCalledTimes(2);
+
+      const replacement = [{ id: "replacement", name: "Replacement", provider: "test" }];
+      harness.buildProjection.mockResolvedValueOnce({
+        modelCatalog: replacement,
+        models: replacement,
+      });
+      const canonical = await harness.runtime.readStartup(params);
+      expect(canonical).toMatchObject(
+        invalid === "neutral"
+          ? { defaultModelCatalog: replacement, sessionModelCatalog: initial?.sessionModelCatalog }
+          : { defaultModelCatalog: initial?.defaultModelCatalog, sessionModelCatalog: replacement },
+      );
+      for (let read = 0; read < 2; read++) {
+        await expect(
+          harness.runtime.readStartup({ ...params, readPolicy: "ready" }),
+        ).resolves.toEqual(canonical);
+      }
+      expect(harness.buildProjection).toHaveBeenCalledTimes(3);
+    },
+  );
+
   test.each(["invalidate", "pending refresh", "failed", "stale facts"] as const)(
     "ready reads omit projections after %s without starting replacement work",
     async (state) => {
@@ -501,7 +553,7 @@ describe("gateway chat metadata runtime", () => {
     await harness.runtime.refresh();
     const second = await harness.runtime.read({ agentId: "main" });
 
-    expect(second).toBe(first);
+    expect(second).toEqual(first);
     expect(harness.buildCommands).toHaveBeenCalledTimes(1);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
   });
@@ -722,7 +774,7 @@ describe("gateway chat metadata runtime", () => {
     await harness.runtime.refresh();
     const second = await harness.runtime.read({ agentId: "main" });
 
-    expect(second).toBe(first);
+    expect(second).toEqual(first);
     expect(harness.buildProjection).toHaveBeenCalledTimes(1);
     expect(harness.getAuthStoreRevision).toHaveBeenCalledWith("/tmp/first/agent");
     expect(harness.getAuthStoreRevision).toHaveBeenCalledWith(undefined);

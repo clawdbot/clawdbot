@@ -139,6 +139,7 @@ function bundledPluginSweepLane(index: number): ReturnType<typeof summarizeLane>
 
 describe("scripts/lib/docker-e2e-plan", () => {
   it.each([
+    ["release-typed-onboarding", ["@openclaw/codex"]],
     ["npm-onboard-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-discord-channel-agent", ["@openclaw/codex"]],
     ["npm-onboard-slack-channel-agent", ["@openclaw/codex"]],

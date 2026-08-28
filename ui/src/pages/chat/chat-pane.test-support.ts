@@ -220,6 +220,7 @@ export function createInitializationContext(): ApplicationContext {
     },
     placementStartup: {
       get: () => null,
+      hasPendingTurn: () => false,
       retry: () => undefined,
       subscribe: () => () => {},
     },

@@ -457,8 +457,16 @@ export function processLineMessage(text: string): ProcessedLineMessage {
   }
 
   for (const span of codeSpans) {
-    const message = toFlexMessage("Code", convertCodeBlockToFlexBubble(toCodeBlock(ir, span)));
-    plainTextInsertions.push({ position: span.start, message });
+    const block = toCodeBlock(ir, span);
+    // An empty fence has no code to show, and LINE rejects the whole push when a
+    // Flex text is blank, so it drops out instead of costing the reply.
+    if (!block.code.trim()) {
+      continue;
+    }
+    plainTextInsertions.push({
+      position: span.start,
+      message: toFlexMessage("Code", convertCodeBlockToFlexBubble(block)),
+    });
   }
 
   const segments: LineMessageSegment[] = [];

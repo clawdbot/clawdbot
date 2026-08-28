@@ -1139,9 +1139,9 @@ class GatewayExecApprovalRuntimeTest {
     methods: Set<String>,
   ) {
     runtime.javaClass
-      .getDeclaredMethod("replaceGatewayMethods", Set::class.java)
+      .getDeclaredMethod("replaceGatewayMethods", Set::class.java, java.lang.Boolean.TYPE)
       .apply { isAccessible = true }
-      .invoke(runtime, methods)
+      .invoke(runtime, methods, true)
   }
 
   private fun writeField(

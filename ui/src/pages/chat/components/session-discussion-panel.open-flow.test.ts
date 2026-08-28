@@ -20,6 +20,19 @@ async function emptyStateText(panel: HTMLElement): Promise<string> {
 }
 
 describe("session discussion panel", () => {
+  it("does not render a skeleton without a loadable discussion", async () => {
+    const panel = document.createElement("openclaw-session-discussion") as HTMLElement & {
+      updateComplete: Promise<unknown>;
+    };
+    document.body.append(panel);
+    try {
+      await panel.updateComplete;
+      expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    } finally {
+      panel.remove();
+    }
+  });
+
   it("shows the opening affordance while auto-open is in flight", async () => {
     const openDiscussion = vi
       .fn<SessionDiscussionOpener>()
@@ -31,9 +44,27 @@ describe("session discussion panel", () => {
 
     await vi.waitFor(() => {
       expect(openDiscussion).toHaveBeenCalledTimes(1);
-      expect(panel.textContent).toContain("Opening discussion");
+      expect(
+        panel
+          .querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]')
+          ?.getAttribute("aria-label"),
+      ).toContain("Opening discussion");
     });
     expect(panel.querySelector("button")).toBeNull();
+  });
+
+  it("stops the skeleton when auto-open settles without opening", async () => {
+    const panel = mount({
+      loadInfo: vi.fn().mockResolvedValue({ state: "available" }),
+      openDiscussion: vi.fn().mockResolvedValue({ state: "available" }),
+    });
+
+    await vi.waitFor(async () => {
+      expect(await emptyStateText(panel)).toContain("cannot be embedded");
+    });
+    expect(
+      panel.querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]'),
+    ).toBeNull();
   });
 
   it("does not auto-open without operator write access", async () => {
@@ -142,7 +173,9 @@ describe("session discussion panel", () => {
 
     expect(openDiscussion).toHaveBeenCalledTimes(1);
     expect(panel.querySelector("iframe")).toBeNull();
-    expect(panel.textContent).not.toContain("Opening discussion");
+    expect(
+      panel.querySelector('openclaw-panel-loading-skeleton[data-panel-skeleton="discussion"]'),
+    ).toBeNull();
   });
 
   it("does not auto-open a superseded available resolution", async () => {

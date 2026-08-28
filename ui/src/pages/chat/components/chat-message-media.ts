@@ -47,6 +47,8 @@ export type RenderableImageBlock = ImageBlock & {
 };
 
 export type AttachmentItem = Extract<MessageContentItem, { type: "attachment" }>;
+type AttachmentFailureItem = Extract<MessageContentItem, { type: "attachment_error" }>;
+export type AssistantAttachmentItem = AttachmentItem | AttachmentFailureItem;
 
 type ChatMediaResourceKind =
   | "assistant-attachment"

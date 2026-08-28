@@ -32,7 +32,7 @@ dump_debug_logs() {
   echo "Codex media-path Docker E2E failed with exit code $status" >&2
   openclaw_e2e_dump_logs "$PLUGIN_INSTALL_LOG" "$PLUGIN_INSPECT_LOG" "$GATEWAY_LOG" "$CLIENT_LOG" "$OPENCLAW_CODEX_MEDIA_PATH_APP_SERVER_LOG"
 }
-trap 'status=$?; dump_debug_logs "$status"; exit "$status"' ERR
+openclaw_e2e_enable_failure_diagnostics
 
 entry="$(openclaw_e2e_resolve_entrypoint)"
 mkdir -p "$OPENCLAW_STATE_DIR" "$OPENCLAW_TEST_WORKSPACE_DIR"

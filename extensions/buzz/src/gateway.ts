@@ -290,8 +290,12 @@ export async function sendBuzzTyping(params: {
   if (!bus) {
     return;
   }
+  const account = resolveBuzzAccount({ cfg: params.cfg, accountId: resolvedAccountId });
   await bus.sendTyping({
     channelId: parseBuzzTarget(params.to),
-    threadId: params.threadId == null ? undefined : String(params.threadId),
+    threadId:
+      account.config.replyToMode === "off" || params.threadId == null
+        ? undefined
+        : String(params.threadId),
   });
 }

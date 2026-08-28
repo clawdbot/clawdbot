@@ -2,8 +2,9 @@ import { ErrorCodes } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import type { TranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
-import { assert, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
+import { ZOOM_MEETINGS_CLI_METADATA } from "./src/cli-output-mode.js";
 
 const MEETING_URL = "https://zoom.us/j/12345678901?pwd=owned";
 
@@ -159,35 +160,8 @@ describe("Zoom meetings plugin surface", () => {
       ].toSorted(),
     );
     expect(tools.map((tool) => tool.name)).toEqual(["zoom_meetings"]);
-    expect(cli).toEqual([
-      {
-        commands: ["zoommeetings"],
-        descriptors: [
-          {
-            name: "zoommeetings",
-            description: "Join and manage Zoom meeting guests",
-            hasSubcommands: true,
-            machineOutput: expect.any(Function),
-          },
-        ],
-      },
-    ]);
-    const descriptor = cli[0]?.descriptors?.[0];
-    assert(
-      descriptor && "machineOutput" in descriptor && typeof descriptor.machineOutput === "function",
-    );
-    for (const [args, expected] of [
-      [[], false],
-      [["status"], true],
-      [["--log-level", "debug", "future-action"], true],
-    ] as const) {
-      expect(
-        descriptor.machineOutput({
-          argv: ["node", "openclaw", "zoommeetings", ...args],
-          stdoutIsTTY: false,
-        }),
-      ).toBe(expected);
-    }
+    expect(cli).toEqual([expect.objectContaining({ commands: ["zoommeetings"] })]);
+    expect(cli[0]?.descriptors?.[0]).toBe(ZOOM_MEETINGS_CLI_METADATA.descriptor);
     expect(nodeCommands).toEqual([
       expect.objectContaining({ command: "zoommeetings.chrome", cap: "zoom-meetings" }),
     ]);

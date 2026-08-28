@@ -178,6 +178,13 @@ openclaw browser extension status
 openclaw browser extension status --json
 ```
 
+An `owned` registration is not necessarily launchable. Status reports a filesystem
+readiness snapshot of its registered runtime and native entry. It does not execute
+either target or verify that its code will run successfully. If an upgrade removes
+either target, rerun `openclaw browser extension install` to repair the owned
+registration. Ownership checks still refuse foreign or malformed manifests and
+launchers.
+
 Remove only OpenClaw-owned native-host manifests and launchers:
 
 ```bash

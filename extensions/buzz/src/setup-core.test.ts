@@ -8,6 +8,30 @@ describe("buzzSetupContract", () => {
   });
 
   it.each([
+    { name: "  Named bot  ", expected: "Named bot" },
+    { name: "", expected: "Existing bot" },
+    { name: "   ", expected: "Existing bot" },
+    { name: undefined, expected: "Existing bot" },
+  ])(
+    "persists the supplied account name without clearing an omitted name: $name",
+    ({ name, expected }) => {
+      const cfg = {
+        channels: { buzz: { name: "Existing bot", groupPolicy: "allowlist" } },
+      } as OpenClawConfig;
+      const before = structuredClone(cfg);
+      const result = buzzSetupContract.applyAccountConfig({
+        cfg,
+        accountId: "default",
+        input: { name, relayUrl: "wss://buzz.example.com", privateKey: "11".repeat(32) },
+      });
+
+      expect(result.channels?.buzz?.name).toBe(expected);
+      expect(result.channels?.buzz?.groupPolicy).toBe("allowlist");
+      expect(cfg).toEqual(before);
+    },
+  );
+
+  it.each([
     {
       name: "plaintext private key",
       privateKey: "11".repeat(32),
@@ -91,10 +115,11 @@ describe("buzzSetupContract", () => {
     const result = buzzSetupContract.applyAccountConfig({
       cfg,
       accountId: "default",
-      input: { relayUrl: "wss://buzz.example.com", useEnv: true },
+      input: { relayUrl: "wss://buzz.example.com", useEnv: true, name: " Environment bot " },
     });
 
     expect(result.channels?.buzz).toEqual({
+      name: "Environment bot",
       enabled: true,
       relayUrl: "wss://buzz.example.com",
     });

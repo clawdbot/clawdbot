@@ -2,6 +2,24 @@ import { describe, expect, it } from "vitest";
 import { buzzPlugin } from "./channel.js";
 
 describe("Buzz channel guidance", () => {
+  it.each([
+    { mode: "off", automatic: true, flat: true },
+    { mode: "all", automatic: true, flat: false },
+    { mode: "off", automatic: false, flat: false },
+  ] as const)(
+    "routes $mode automatic=$automatic without flattening explicit tools",
+    ({ mode, automatic, flat }) => {
+      const original = { threadId: "thread-root", replyToId: "requested-parent" };
+      const transport =
+        buzzPlugin.threading?.resolveReplyTransport?.({
+          cfg: {},
+          ...original,
+          replyToIsExplicit: !automatic,
+          replyDelivery: automatic ? { replyToMode: mode } : undefined,
+        }) ?? original;
+      expect(transport).toEqual(flat ? { threadId: null, replyToId: null } : original);
+    },
+  );
   it("advertises directory room targets and native mention syntax", () => {
     const hints = buzzPlugin.agentPrompt?.messageToolHints?.({} as never) ?? [];
 

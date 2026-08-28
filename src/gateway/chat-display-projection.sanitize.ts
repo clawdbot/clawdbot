@@ -19,6 +19,8 @@ import {
   isAssistantTextContentType,
   isProjectedSessionsSendForwardedMessage,
   shouldPreserveAssistantControlReplyText,
+  stripAssistantMediaDirectivesForDisplay,
+  takeAssistantManagedMediaUrlsForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
 import {
@@ -490,6 +492,8 @@ export function sanitizeChatHistoryMessage(
     changed = true;
   }
   const role = typeof entry.role === "string" ? entry.role.toLowerCase() : "";
+  const managedMedia = takeAssistantManagedMediaUrlsForDisplay(entry, role);
+  changed ||= managedMedia.changed;
   const preserveExactToolPayload =
     role === "toolresult" ||
     role === "tool_result" ||
@@ -551,7 +555,10 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.content === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.content)
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(entry.content),
+          managedMedia.urls,
+        )
       : entry.content;
     changed ||= controlStripped !== entry.content;
     if (preserveExactToolPayload) {
@@ -580,7 +587,10 @@ export function sanitizeChatHistoryMessage(
       if (!isAssistantTextContentType(contentBlock.type) || typeof contentBlock.text !== "string") {
         return sanitized;
       }
-      const text = stripSuppressedControlReplyToken(contentBlock.text);
+      const text = stripAssistantMediaDirectivesForDisplay(
+        stripSuppressedControlReplyToken(contentBlock.text),
+        managedMedia.urls,
+      );
       return text === contentBlock.text
         ? sanitized
         : { block: { ...contentBlock, text }, changed: true, truncated: sanitized.truncated };
@@ -610,7 +620,10 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.text === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.text)
+      ? stripAssistantMediaDirectivesForDisplay(
+          stripSuppressedControlReplyToken(entry.text),
+          managedMedia.urls,
+        )
       : entry.text;
     changed ||= controlStripped !== entry.text;
     if (preserveExactToolPayload) {

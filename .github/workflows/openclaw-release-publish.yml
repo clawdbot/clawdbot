@@ -674,20 +674,19 @@ jobs:
             ls -la "${RUNNER_TEMP}/full-release-validation-manifest" >&2 || true
             exit 1
           fi
-          trusted_workflow_commit_ref="refs/remotes/origin/main"
+          trusted_main_ref="refs/remotes/origin/main"
           if [[ "${TRUSTED_WORKFLOW_FULL_REF}" =~ ^refs/tags/release-publish/[a-f0-9]{12}-[1-9][0-9]*$ ]]; then
-            trusted_workflow_commit_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
+            trusted_publisher_ref="refs/tags/${TRUSTED_WORKFLOW_REF}"
             git fetch --no-tags origin \
-              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_workflow_commit_ref}"
-            if [[ "$(git rev-parse "${trusted_workflow_commit_ref}^{commit}")" != "${GITHUB_SHA}" ]]; then
+              "+${TRUSTED_WORKFLOW_FULL_REF}:${trusted_publisher_ref}"
+            if [[ "$(git rev-parse "${trusted_publisher_ref}^{commit}")" != "${GITHUB_SHA}" ]]; then
               echo "Trusted release-publish tag moved after workflow dispatch." >&2
               exit 1
             fi
-          else
-            git fetch --no-tags origin \
-              +refs/heads/main:refs/remotes/origin/main
           fi
-          TRUSTED_MAIN_REF="${trusted_workflow_commit_ref}" \
+          git fetch --no-tags origin \
+            "+refs/heads/main:${trusted_main_ref}"
+          TRUSTED_MAIN_REF="${trusted_main_ref}" \
             MANIFEST_FILE="$manifest" \
             node "$VALIDATOR_FILE" < "$RUN_JSON_FILE"
           node "$STRICT_VALIDATOR_FILE" \
@@ -1005,6 +1004,7 @@ jobs:
           TARGET_SHA: ${{ needs.resolve_release_target.outputs.sha }}
           GH_TOKEN: ${{ github.token }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           PLUGIN_PUBLISH_SCOPE: ${{ inputs.plugin_publish_scope }}
           PLUGINS: ${{ inputs.plugins }}
@@ -1082,6 +1082,7 @@ jobs:
             --release-tag "${RELEASE_TAG}"
             --release-sha "${TARGET_SHA}"
             --release-publish-branch "${PARENT_WORKFLOW_BRANCH}"
+            --release-publish-full-ref "${PARENT_WORKFLOW_FULL_REF}"
             --release-publish-run-attempt "${GITHUB_RUN_ATTEMPT}"
             --release-publish-run-id "${GITHUB_RUN_ID}"
             --plugin-publish-scope "${PLUGIN_PUBLISH_SCOPE}"
@@ -1234,6 +1235,7 @@ jobs:
           CHILD_WORKFLOW_REF: ${{ steps.clawhub_plan.outputs.child_workflow_ref }}
           PARENT_WORKFLOW_SHA: ${{ github.sha }}
           PARENT_WORKFLOW_BRANCH: ${{ github.ref_name }}
+          PARENT_WORKFLOW_FULL_REF: ${{ github.ref }}
           RELEASE_TAG: ${{ inputs.tag }}
           PREFLIGHT_RUN_ID: ${{ inputs.preflight_run_id }}
           FULL_RELEASE_VALIDATION_RUN_ID: ${{ inputs.full_release_validation_run_id }}
@@ -1984,29 +1986,6 @@ jobs:
             echo "- GitHub release draft: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
           }
 
-          publish_github_release() {
-            local expected_prerelease release_json
-            verify_release_tag_target
-            if is_android_release; then
-              verify_android_release_asset_contract
-            fi
-            if is_stable_release; then
-              verify_windows_release_asset_contract
-            fi
-            gh release edit "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --draft=false
-            release_json="$(gh release view "${RELEASE_TAG}" --repo "$GITHUB_REPOSITORY" --json isDraft,isPrerelease)"
-            expected_prerelease="false"
-            if [[ "${RELEASE_TAG}" == *"-alpha."* || "${RELEASE_TAG}" == *"-beta."* ]]; then
-              expected_prerelease="true"
-            fi
-            if [[ "$(printf '%s' "${release_json}" | jq -r '.isDraft')" != "false" ]] ||
-              [[ "$(printf '%s' "${release_json}" | jq -r '.isPrerelease')" != "${expected_prerelease}" ]]; then
-              echo "Published GitHub release state does not match the requested draft/prerelease classification." >&2
-              exit 1
-            fi
-            echo "- GitHub release: https://github.com/${GITHUB_REPOSITORY}/releases/tag/${RELEASE_TAG}" >> "$GITHUB_STEP_SUMMARY"
-          }
-
           verify_android_release_asset_contract() {
             local actual_android_assets actual_digest expected_android_assets expected_digest expected_hash release_json verify_dir
             local -a required_assets=(
@@ -2552,7 +2531,7 @@ jobs:
             if [[ "${WAIT_FOR_CLAWHUB}" == "true" ]]; then
               echo "- Workflow completion waits for ClawHub"
             else
-              echo "- Workflow completion does not wait for ClawHub; monitor the dispatched ClawHub run separately"
+              echo "- Workflow does not wait for ClawHub; monitor its run separately"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -2574,7 +2553,7 @@ jobs:
             bootstrap_workflow_sha="$(verify_bootstrap_workflow_sha)"
           fi
 
-          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}")
+          npm_args=(-f publish_scope="${PLUGIN_PUBLISH_SCOPE}" -f ref="${TARGET_SHA}" -f release_publish_run_id="${GITHUB_RUN_ID}" -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}")
           if [[ -n "${PLUGINS}" ]]; then
             npm_args+=(-f plugins="${PLUGINS}")
           fi
@@ -2586,7 +2565,7 @@ jobs:
             append_clawhub_dispatch_args normal
             plugin_clawhub_run_id="$(dispatch_workflow_at_ref \
               "$(jq -r '.normal.ref' "${clawhub_plan_path}")" \
-              "${TARGET_SHA}" \
+              "${PARENT_WORKFLOW_SHA}" \
               "$(jq -r '.normal.workflow' "${clawhub_plan_path}")" \
               "${clawhub_dispatch_args[@]}")"
           else
@@ -2661,6 +2640,8 @@ jobs:
                 -f preflight_run_id="${PREFLIGHT_RUN_ID}" \
                 -f release_publish_run_id="${GITHUB_RUN_ID}" \
                 -f release_publish_run_attempt="${GITHUB_RUN_ATTEMPT}" \
+                -f release_publish_branch="${PARENT_WORKFLOW_BRANCH}" \
+                -f release_publish_full_ref="${PARENT_WORKFLOW_FULL_REF}" \
                 -f plugin_sdk_api_acknowledgement="${PLUGIN_SDK_API_ACKNOWLEDGEMENT}" \
                 -f npm_dist_tag="${RELEASE_NPM_DIST_TAG}" \
                 "${evidence_args[@]}")"
@@ -2678,7 +2659,7 @@ jobs:
             if [[ -n "${plugin_clawhub_run_id}" ]]; then
               clawhub_result="$RUNNER_TEMP/clawhub-result.txt"
               wait_run_pid=""
-              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${TARGET_SHA}" "${clawhub_result}"
+              wait_for_run_background plugin-clawhub-release.yml "${plugin_clawhub_run_id}" "${PARENT_WORKFLOW_SHA}" "${clawhub_result}"
               clawhub_pid="${wait_run_pid}"
             fi
             if [[ -n "${plugin_clawhub_bootstrap_run_id}" ]]; then
