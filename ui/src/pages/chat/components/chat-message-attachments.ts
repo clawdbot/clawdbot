@@ -555,13 +555,9 @@ export function renderAssistantAttachments(
     ) {
       if (!attachmentUrl) {
         return renderAssistantAttachmentStatusCard({
-          kind: "image",
           label: attachment.label,
           mimeType: attachment.mimeType,
-          badge:
-            availability.status === "checking"
-              ? t("chat.attachments.checking")
-              : t("chat.attachments.unavailable"),
+          badge: t("chat.attachments.unavailable"),
           reason: availability.status === "unavailable" ? availability.reason : undefined,
           onRetry: retryUnavailableAttachment,
         });
@@ -595,13 +591,9 @@ export function renderAssistantAttachments(
     }
     if (!attachmentUrl) {
       return renderAssistantAttachmentStatusCard({
-        kind: attachment.kind,
         label: attachment.label,
         mimeType: attachment.mimeType,
-        badge:
-          availability.status === "checking"
-            ? t("chat.attachments.checking")
-            : t("chat.attachments.unavailable"),
+        badge: t("chat.attachments.unavailable"),
         reason: availability.status === "unavailable" ? availability.reason : undefined,
         onRetry: retryUnavailableAttachment,
       });

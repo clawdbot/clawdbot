@@ -1178,6 +1178,26 @@ describe("agent event handler", () => {
     nowSpy?.mockRestore();
   });
 
+  it("withholds MEDIA directives from assistant chat events", () => {
+    const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
+      createHarness({ now: 1_000 }),
+      [
+        "Prepared the batch.",
+        "MEDIA:./attachment-catalog-tiny/demo.jpg",
+        "MEDIA:./attachment-catalog-tiny/demo.mp3",
+      ].join("\n"),
+    );
+    const chatCalls = chatBroadcastCalls(broadcast);
+    expect(chatCalls).toHaveLength(1);
+    const payload = chatCalls[0]?.[1] as {
+      message?: { content?: Array<{ text?: string }> };
+    };
+    expect(payload.message?.content?.[0]?.text).toBe("Prepared the batch.");
+    expect(JSON.stringify(payload)).not.toContain("MEDIA:");
+    expect(sessionChatCalls(nodeSendToSession)).toHaveLength(1);
+    nowSpy?.mockRestore();
+  });
+
   it("strips internal runtime context from assistant chat events", () => {
     const { broadcast, nodeSendToSession, nowSpy } = emitRun1AssistantText(
       createHarness({ now: 1_000 }),

@@ -2,7 +2,6 @@ import { html, nothing } from "lit";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { renderAttachmentCardIcon } from "./chat-attachment-card.ts";
-import type { AttachmentItem } from "./chat-message-media.ts";
 
 type AttachmentFailureCode = "file-not-found" | "unsupported-format" | "delivery-failed";
 
@@ -15,7 +14,6 @@ export function attachmentFailureReason(code: AttachmentFailureCode): string {
 }
 
 export function renderAssistantAttachmentStatusCard(params: {
-  kind: AttachmentItem["attachment"]["kind"];
   label: string;
   mimeType?: string;
   badge: string;
@@ -32,6 +30,7 @@ export function renderAssistantAttachmentStatusCard(params: {
   return html`
     <div
       class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked ${statusClass}"
+      aria-busy=${unavailable ? nothing : "true"}
     >
       <div class="chat-assistant-attachment-card__header">
         <div class="chat-assistant-attachment-card__identity">
@@ -49,23 +48,28 @@ export function renderAssistantAttachmentStatusCard(params: {
               title=${params.label}
               >${params.label}</span
             >
-            <span
-              class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta"
-            >
-              <span class="chat-assistant-attachment-card__status-badge">${params.badge}</span>
-              ${params.reason
-                ? html`
-                    <span
-                      class="chat-assistant-attachment-card__status-separator"
-                      aria-hidden="true"
-                      >·</span
-                    >
-                    <span class="chat-assistant-attachment-card__status-reason"
-                      >${params.reason}</span
-                    >
-                  `
-                : nothing}
-            </span>
+            ${unavailable
+              ? html`<span
+                  class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta"
+                >
+                  <span class="chat-assistant-attachment-card__status-badge">${params.badge}</span>
+                  ${params.reason
+                    ? html`
+                        <span
+                          class="chat-assistant-attachment-card__status-separator"
+                          aria-hidden="true"
+                          >·</span
+                        >
+                        <span class="chat-assistant-attachment-card__status-reason"
+                          >${params.reason}</span
+                        >
+                      `
+                    : nothing}
+                </span>`
+              : html`<span
+                  class="chat-assistant-attachment-card__meta chat-assistant-attachment-card__status-meta skeleton skeleton-line skeleton-line--medium"
+                  aria-hidden="true"
+                ></span>`}
           </span>
         </div>
         ${params.onRetry

@@ -19,6 +19,7 @@ import {
   isAssistantTextContentType,
   isProjectedSessionsSendForwardedMessage,
   shouldPreserveAssistantControlReplyText,
+  stripAssistantMediaDirectivesForDisplay,
   truncateChatHistoryText,
 } from "./chat-display-projection.helpers.js";
 import {
@@ -551,7 +552,7 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.content === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.content)
+      ? stripAssistantMediaDirectivesForDisplay(stripSuppressedControlReplyToken(entry.content))
       : entry.content;
     changed ||= controlStripped !== entry.content;
     if (preserveExactToolPayload) {
@@ -580,7 +581,9 @@ export function sanitizeChatHistoryMessage(
       if (!isAssistantTextContentType(contentBlock.type) || typeof contentBlock.text !== "string") {
         return sanitized;
       }
-      const text = stripSuppressedControlReplyToken(contentBlock.text);
+      const text = stripAssistantMediaDirectivesForDisplay(
+        stripSuppressedControlReplyToken(contentBlock.text),
+      );
       return text === contentBlock.text
         ? sanitized
         : { block: { ...contentBlock, text }, changed: true, truncated: sanitized.truncated };
@@ -610,7 +613,7 @@ export function sanitizeChatHistoryMessage(
 
   if (typeof entry.text === "string") {
     const controlStripped = stripAssistantControlTokens
-      ? stripSuppressedControlReplyToken(entry.text)
+      ? stripAssistantMediaDirectivesForDisplay(stripSuppressedControlReplyToken(entry.text))
       : entry.text;
     changed ||= controlStripped !== entry.text;
     if (preserveExactToolPayload) {

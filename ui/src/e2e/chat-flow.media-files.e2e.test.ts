@@ -425,6 +425,126 @@ suite.define(() => {
     }
   });
 
+  it("moves a managed audio batch from skeletons directly to final cards", async () => {
+    const context = await suite.newBrowserContext({
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 900, width: 1280 },
+    });
+    const page = await context.newPage();
+    const proofDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+    const managedAudioSource = (artifactId: string) =>
+      `/api/chat/media/outgoing/agent%3Amain%3Amain/${artifactId.slice("artifact_managed_audio_".length)}/full`;
+    const attachments = [
+      {
+        artifactId: "artifact_managed_audio_11111111-1111-4111-8111-111111111111",
+        label: "demo.mp3",
+        mimeType: "audio/mpeg",
+        sizeBytes: 981,
+      },
+      {
+        artifactId: "artifact_managed_audio_22222222-2222-4222-8222-222222222222",
+        label: "demo.ogg",
+        mimeType: "audio/ogg",
+        sizeBytes: 2_774,
+      },
+      {
+        artifactId: "artifact_managed_audio_33333333-3333-4333-8333-333333333333",
+        label: "demo.m4a",
+        mimeType: "audio/mp4",
+        sizeBytes: 2_253,
+      },
+      {
+        artifactId: "artifact_managed_audio_44444444-4444-4444-8444-444444444444",
+        label: "demo.flac",
+        mimeType: "audio/flac",
+        sizeBytes: 8_231,
+      },
+    ] as const;
+    const methodCases = attachments.map((attachment) => {
+      const id = attachment.artifactId.slice("artifact_managed_audio_".length);
+      return {
+        match: { artifactId: attachment.artifactId, sessionKey: "agent:main:main" },
+        response: {
+          artifact: {
+            id: attachment.artifactId,
+            type: "audio",
+            title: attachment.label,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.sizeBytes,
+            download: { mode: "url" },
+          },
+          url: `/api/chat/media/outgoing/agent%3Amain%3Amain/${id}/full?mediaTicket=ticket-${id}`,
+          expiresAt: new Date(Date.now() + 5 * 60_000).toISOString(),
+        },
+      };
+    });
+    const gateway = await installMockGateway(page, {
+      heldMethods: ["artifacts.download"],
+      historyMessages: [
+        {
+          role: "assistant",
+          content: attachments.map((attachment) => ({
+            type: "audio",
+            artifactId: attachment.artifactId,
+            url: managedAudioSource(attachment.artifactId),
+            fileName: attachment.label,
+            mimeType: attachment.mimeType,
+            playback: "native",
+            sizeBytes: attachment.sizeBytes,
+          })),
+          timestamp: Date.now(),
+        },
+      ],
+      methodResponses: {
+        "artifacts.download": { cases: methodCases },
+      },
+    });
+
+    try {
+      await page.goto(`${suite.server.baseUrl}chat`);
+      const checkingCards = page.locator(".chat-assistant-attachment-card--checking");
+      await checkingCards.first().waitFor({ state: "visible", timeout: 10_000 });
+      expect(await checkingCards.count()).toBe(4);
+      const skeletons = checkingCards.locator(
+        ".chat-assistant-attachment-card__status-meta.skeleton",
+      );
+      expect(await skeletons.count()).toBe(4);
+      expect(await skeletons.first().getAttribute("aria-hidden")).toBe("true");
+      expect(
+        await skeletons
+          .first()
+          .evaluate((element) => getComputedStyle(element, "::after").animationName),
+      ).toBe("shimmer");
+      expect(await page.getByText("Checking...", { exact: true }).count()).toBe(0);
+      expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
+      if (proofDir) {
+        await mkdir(proofDir, { recursive: true });
+        await page.screenshot({ path: path.join(proofDir, "media-batch-skeletons.png") });
+      }
+
+      await gateway.resolveDeferred("artifacts.download");
+      await expect
+        .poll(() => page.locator(".chat-assistant-attachment-card--compact").count())
+        .toBe(4);
+      expect(await checkingCards.count()).toBe(0);
+      expect(await page.locator(".chat-assistant-attachment-card .skeleton").count()).toBe(0);
+      for (const attachment of attachments) {
+        const card = page
+          .locator(".chat-assistant-attachment-card--compact")
+          .filter({ hasText: attachment.label });
+        expect(await card.count()).toBe(1);
+        expect(((await card.textContent()) ?? "").includes("Audio ·")).toBe(true);
+      }
+      expect(((await page.locator("body").textContent()) ?? "").includes("MEDIA:")).toBe(false);
+      if (proofDir) {
+        await page.screenshot({ path: path.join(proofDir, "media-batch-final.png") });
+      }
+    } finally {
+      await suite.closeBrowserContext(context);
+    }
+  });
+
   it.each([
     {
       name: "canonical inbound",

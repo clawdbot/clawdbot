@@ -9,6 +9,7 @@ import {
 } from "../auto-reply/tokens.js";
 import { resolveAssistantEventPhase } from "../shared/chat-message-content.js";
 import { stripInlineDirectiveTagsForDisplay } from "../utils/directive-tags.js";
+import { stripAssistantMediaDirectivesForDisplay } from "./chat-display-projection.helpers.js";
 import {
   isSuppressedControlReplyLeadFragment,
   isSuppressedControlReplyText,
@@ -77,7 +78,9 @@ export function resolveMergedAssistantText(params: {
 
 /** Removes runtime-only context/directive tags from the merged live assistant buffer. */
 export function normalizeLiveAssistantBufferedText(text: string): string {
-  return stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text);
+  return stripAssistantMediaDirectivesForDisplay(
+    stripInternalRuntimeContext(stripInlineDirectiveTagsForDisplay(text).text),
+  );
 }
 
 /** Projects buffered assistant text into display text or a suppressed/pending state. */

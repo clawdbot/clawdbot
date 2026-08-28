@@ -208,7 +208,11 @@ function isExpectedFailureBlock(block: unknown, label: string, code: string): bo
   );
 }
 
-async function connectWebchat(url: string, token: string): Promise<GatewayClient> {
+async function connectWebchat(
+  url: string,
+  token: string,
+  onEvent?: (event: { event: string; payload?: unknown }) => void,
+): Promise<GatewayClient> {
   return await new Promise<GatewayClient>((resolve, reject) => {
     const connecting = new GatewayClient({
       url,
@@ -219,6 +223,7 @@ async function connectWebchat(url: string, token: string): Promise<GatewayClient
       role: "operator",
       scopes: ["operator.read", "operator.write", "operator.admin"],
       platform: "qa",
+      ...(onEvent ? { onEvent } : {}),
       onHelloOk: () => resolve(connecting),
       onConnectError: reject,
       onClose: (code, reason) => reject(new Error(`Gateway closed ${code}: ${reason}`)),
@@ -275,7 +280,11 @@ describe("WebChat managed media artifact matrix", () => {
       });
       await transport.waitReady({ gateway: harness.gateway });
       await writeFixtures(harness.gateway.workspaceDir);
-      client = await connectWebchat(harness.gateway.wsUrl, harness.gateway.token);
+      const events: Array<{ event: string; payload?: unknown }> = [];
+      client = await connectWebchat(harness.gateway.wsUrl, harness.gateway.token, (event) =>
+        events.push(event),
+      );
+      await client.request("sessions.subscribe", {});
       const content = await sendMediaReply(
         client,
         SESSION_KEY,
@@ -360,6 +369,13 @@ describe("WebChat managed media artifact matrix", () => {
       expect(JSON.stringify(mixedContent)).not.toContain("Media failed");
       expect(JSON.stringify(mixedContent)).not.toContain("MEDIA:./");
       const observed = [...accepted, ...rejected];
+      const displayEvents = events.filter((event) => {
+        if (event.event !== "chat" && event.event !== "session.message") {
+          return false;
+        }
+        const payload = event.payload as { sessionKey?: unknown } | undefined;
+        return payload?.sessionKey === SESSION_KEY;
+      });
       const verdict = {
         expected: FIXTURES.length,
         observed: observed.filter((entry) => entry.present).length,
@@ -370,7 +386,8 @@ describe("WebChat managed media artifact matrix", () => {
           "file-not-found",
         ),
         mixedBatch: mixedOutcomes,
-        rawMediaVisible: JSON.stringify(content).includes("MEDIA:./"),
+        displayEvents: displayEvents.length,
+        rawMediaVisible: JSON.stringify({ content, displayEvents }).includes("MEDIA:./"),
       };
 
       expect(verdict).toEqual({
@@ -379,8 +396,10 @@ describe("WebChat managed media artifact matrix", () => {
         missing: [],
         missingPath: true,
         mixedBatch: MIXED_BATCH.map(([name, outcome]) => ({ name, outcome, present: true })),
+        displayEvents: expect.any(Number),
         rawMediaVisible: false,
       });
+      expect(verdict.displayEvents).toBeGreaterThan(0);
       console.log(`WEBCHAT_MEDIA_ARTIFACTS_PROOF=${JSON.stringify(verdict)}`);
     },
   );

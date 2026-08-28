@@ -1,5 +1,7 @@
+import { hasHttpUrlPrefix } from "@openclaw/net-policy/url-protocol";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { isMeaningfulMediaFact, readPersistedMediaFacts } from "../media/media-facts.js";
+import { splitMediaFromOutput } from "../media/parse.js";
 import { normalizeInputProvenance } from "../sessions/input-provenance.js";
 import { isSuppressedControlReplyText } from "./control-reply-text.js";
 
@@ -9,6 +11,25 @@ export type RoleContentMessage = {
 };
 
 export const DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS = 8_000;
+
+/** Keeps attachment commands in the raw transcript while removing them from display text. */
+export function stripAssistantMediaDirectivesForDisplay(text: string): string {
+  if (!/(?:^|\n)\s*MEDIA:/iu.test(text)) {
+    return text;
+  }
+  const parsed = splitMediaFromOutput(text, {
+    extractAudioDirectives: false,
+    extractMarkdownImages: false,
+  });
+  // Legacy remote directives are already client-resolvable attachment input.
+  // Only withhold batches that contain host-local pipeline references.
+  if (parsed.mediaUrls?.length && parsed.mediaUrls.every(hasHttpUrlPrefix)) {
+    return text;
+  }
+  // The parser trims output as part of delivery. Preserve display bytes when it
+  // found only a fenced example or other non-directive text.
+  return parsed.text === text.trimEnd() ? text : parsed.text;
+}
 
 /** Resolve the text cap used when projecting chat history for display. */
 export function resolveEffectiveChatHistoryMaxChars(_cfg: unknown, maxChars?: number): number {

@@ -6265,7 +6265,6 @@ export const en: TranslationMap = {
       showInTextField: "Show in text field",
       outsideAllowedFolders: "Outside allowed folders",
       unavailable: "Unavailable",
-      checking: "Checking...",
       failureDeliveryFailed: "Delivery failed. Try sending this file again.",
       failureFileNotFound: "File not found. Check the path and try again.",
       failureUnsupportedFormat:

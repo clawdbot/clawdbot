@@ -4209,9 +4209,14 @@ describe("grouped chat rendering", () => {
       );
 
     renderMessage();
-    expect(
-      container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent?.trim(),
-    ).toBe("Checking...");
+    const checkingCard = container.querySelector(
+      '.chat-assistant-attachment-card--checking[aria-busy="true"]',
+    );
+    const skeleton = checkingCard?.querySelector(
+      ".chat-assistant-attachment-card__status-meta.skeleton",
+    );
+    expect(skeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(skeleton?.textContent?.trim()).toBe("");
     await flushAssistantAttachmentAvailabilityChecks();
 
     const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source).replaceAll("%20", "+")}&meta=1`;
@@ -4258,9 +4263,14 @@ describe("grouped chat rendering", () => {
       );
 
     rerender();
-    expect(
-      container.querySelector(".chat-assistant-attachment-card__status-meta")?.textContent?.trim(),
-    ).toBe("Checking...");
+    const checkingCard = container.querySelector(
+      '.chat-assistant-attachment-card--checking[aria-busy="true"]',
+    );
+    const skeleton = checkingCard?.querySelector(
+      ".chat-assistant-attachment-card__status-meta.skeleton",
+    );
+    expect(skeleton?.getAttribute("aria-hidden")).toBe("true");
+    expect(skeleton?.textContent?.trim()).toBe("");
 
     const expectedMetaUrl = `/openclaw/__openclaw__/assistant-media?source=${encodeURIComponent(source)}&meta=1`;
     const [, fetchInit] = requireFetchCallForUrl(fetchMock, expectedMetaUrl);
