@@ -15,13 +15,15 @@ function isJsonOpeningDelimiter(
 
 function extractBalancedJsonAt(
   raw: string,
-  opts: { openers?: readonly JsonOpeningDelimiter[] },
+  opts: { openers?: readonly JsonOpeningDelimiter[]; skipQuotedOpeners?: boolean },
   offset: number,
 ): BalancedJsonFragment | null {
   const openers = opts.openers ?? (["{", "["] as const);
   let start = offset;
-  while (start < raw.length && !isJsonOpeningDelimiter(raw[start], openers)) {
-    start += 1;
+  if (!opts.skipQuotedOpeners) {
+    while (start < raw.length && !isJsonOpeningDelimiter(raw[start], openers)) {
+      start += 1;
+    }
   }
   const stack: JsonOpeningDelimiter[] = [];
   let inString = false;
@@ -39,6 +41,9 @@ function extractBalancedJsonAt(
     } else if (char === '"') {
       inString = true;
     } else if (isJsonOpeningDelimiter(char, openers)) {
+      if (stack.length === 0) {
+        start = index;
+      }
       stack.push(char);
     } else if (stack.length > 0 && char === (stack.at(-1) === "{" ? "}" : "]")) {
       stack.pop();
@@ -53,7 +58,7 @@ function extractBalancedJsonAt(
 /** Extracts the first balanced JSON object/array from text. */
 export function extractBalancedJsonPrefix(
   raw: string,
-  opts: { openers?: readonly JsonOpeningDelimiter[] } = {},
+  opts: { openers?: readonly JsonOpeningDelimiter[]; skipQuotedOpeners?: boolean } = {},
 ): BalancedJsonFragment | null {
   return extractBalancedJsonAt(raw, opts, 0);
 }
@@ -61,7 +66,7 @@ export function extractBalancedJsonPrefix(
 /** Extracts every balanced JSON object/array fragment from arbitrary text. */
 export function extractBalancedJsonFragments(
   raw: string,
-  opts: { openers?: readonly JsonOpeningDelimiter[] } = {},
+  opts: { openers?: readonly JsonOpeningDelimiter[]; skipQuotedOpeners?: boolean } = {},
 ): BalancedJsonFragment[] {
   const fragments: BalancedJsonFragment[] = [];
   for (let offset = 0; offset < raw.length;) {

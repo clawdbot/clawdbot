@@ -551,6 +551,16 @@ describe("parseCliJsonl", () => {
       raw: '{"type":"init","session_id":"session-999"} {"type":"result","session_id":"session-999","result":"done"}',
       expected: { text: "done", sessionId: "session-999", usage: undefined },
     },
+    {
+      name: "skips quoted banners while retaining same-line JSONL metadata",
+      raw: 'banner "use { for JSON" {"type":"init","session_id":"session-999"} {"type":"result","result":"done"}',
+      expected: { text: "done", sessionId: "session-999", usage: undefined },
+    },
+    {
+      name: "does not carry unmatched banner quote state into the next JSONL line",
+      raw: 'banner "unterminated\n{"type":"init","session_id":"session-999"}\n{"type":"result","result":"done"}',
+      expected: { text: "done", sessionId: "session-999", usage: undefined },
+    },
   ])("$name", ({ raw, expected }) => {
     const result = parseCliJsonl(
       raw,
