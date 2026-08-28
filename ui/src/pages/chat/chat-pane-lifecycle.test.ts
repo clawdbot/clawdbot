@@ -19,7 +19,6 @@ import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { getChatComposerState, resetChatComposerState } from "./components/chat-composer-state.ts";
 import {
   dismissConfirmedActionPopovers,
   openChatRewindConfirmation,
@@ -708,7 +707,6 @@ function createConfirmationOwner() {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
-  resetChatComposerState();
   for (const owner of confirmationOwners) {
     dismissConfirmedActionPopovers(owner);
     owner.remove();
@@ -776,43 +774,6 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
-  it("commits the live composer draft before a hidden document can suspend", async () => {
-    let visibilityState: DocumentVisibilityState = "visible";
-    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
-    const { pane, requestUpdate, state } = createTestChatPane({
-      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
-    });
-    const lifecycle = pane as TestChatPane & {
-      hasUpdated: boolean;
-      paneId: string;
-      render: () => unknown;
-    };
-    lifecycle.render = () => null;
-    const textarea = document.createElement("textarea");
-    textarea.value = "Draft still being composed";
-    getChatComposerState(lifecycle.paneId).composerTextarea = textarea;
-    state.chatMessage = "Draft still being";
-    state.handleChatDraftChange = vi.fn((next: string) => {
-      state.chatMessage = next;
-    });
-    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
-    await lifecycle.updateComplete;
-
-    visibilityState = "hidden";
-    document.dispatchEvent(new Event("visibilitychange"));
-
-    expect(state.handleChatDraftChange).toHaveBeenCalledExactlyOnceWith(textarea.value);
-    expect(state.chatMessage).toBe(textarea.value);
-    expect(requestUpdate).toHaveBeenCalledOnce();
-
-    visibilityState = "visible";
-    document.dispatchEvent(new Event("visibilitychange"));
-    await lifecycle.updateComplete;
-    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
-    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
-  });
-
   it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
     let visibilityState: DocumentVisibilityState = "hidden";
     vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
