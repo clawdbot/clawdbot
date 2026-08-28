@@ -475,6 +475,17 @@ export async function sendSubagentAnnounceDirectly(params: {
       directAnnounceResult &&
       hasMessagingToolDeliveryToSource(directAnnounceResult, deliveryTarget),
     );
+    const hasYieldedContinuation = Boolean(
+      directAnnounceResult &&
+      directAnnounceResult.meta?.yielded === true &&
+      (directAnnounceResult.runtimeContinuationStarted === true ||
+        hasAcceptedSessionSpawnEvidence(directAnnounceResult.acceptedSessionSpawns)),
+    );
+    if (hasYieldedContinuation) {
+      // The runtime owns the accepted next wave. This wake is complete even
+      // though the resumed requester correctly withheld its terminal reply.
+      return { delivered: true, path: "direct" };
+    }
     const directDeliveryFailure =
       (shouldDeliverAgentFinal || requiresMessageToolDelivery) && directAnnounceResult
         ? getAgentCommandDeliveryFailure(directAnnounceResult)
@@ -490,17 +501,6 @@ export async function sendSubagentAnnounceDirectly(params: {
           ? { disposition: "ambiguous" as const }
           : {}),
       };
-    }
-    const hasYieldedContinuation = Boolean(
-      directAnnounceResult &&
-      directAnnounceResult.meta?.yielded === true &&
-      (directAnnounceResult.runtimeContinuationStarted === true ||
-        hasAcceptedSessionSpawnEvidence(directAnnounceResult.acceptedSessionSpawns)),
-    );
-    if (hasYieldedContinuation) {
-      // The runtime owns the accepted next wave. This wake is complete even
-      // though the resumed requester correctly withheld its terminal reply.
-      return { delivered: true, path: "direct" };
     }
     const completionPayloadVisibility = {
       includeErrorPayloads: false,

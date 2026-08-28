@@ -4139,6 +4139,35 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
     },
   );
 
+  it("accepts yielded continuation before classifying a failed direct-delivery status", async () => {
+    const callGateway = createGatewayMock({
+      result: {
+        payloads: [],
+        meta: { yielded: true },
+        runtimeContinuationStarted: true,
+        deliveryStatus: {
+          status: "failed",
+          errorMessage: "completion agent did not produce a visible reply",
+        },
+      },
+    });
+    const sendMessage = createSendMessageMock();
+
+    const result = await deliverDiscordDirectMessageCompletion({
+      callGateway,
+      sendMessage,
+      sourceTool: "subagent_announce",
+      sourceSessionKey: "agent:worker:subagent:yielded-next-wave-failed-status",
+      internalEvents: taskCompletionEvents({
+        childSessionId: "child-session-id",
+        result: "Wave one completed.",
+      }),
+    });
+
+    expectRecordFields(result, { delivered: true, path: "direct" });
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
   it("accepts a yielded continuation before enforcing message-tool-only final delivery", async () => {
     const callGateway = createGatewayMock({
       result: {
