@@ -11,10 +11,8 @@ import type {
 import type { ChannelPlugin } from "./channel-core.js";
 import type { MessageReceipt } from "./channel-outbound.js";
 import type { OpenClawConfig } from "./config-contracts.js";
-import {
-  createLazyFacadeObjectValue,
-  loadBundledPluginPublicSurfaceModuleSyncCore,
-} from "./facade-loader.js";
+import { createLazyFacadeObjectValue } from "./facade-loader.js";
+import { loadBundledPluginPublicSurfaceModuleSync } from "./facade-runtime.js";
 import { getRuntimeConfig, getRuntimeConfigSnapshot } from "./runtime-config-snapshot.js";
 
 /**
@@ -198,14 +196,14 @@ type DiscordRuntimeFacadeModule = {
 };
 
 function loadDiscordApiFacadeModule(): DiscordApiFacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSyncCore<DiscordApiFacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSync<DiscordApiFacadeModule>({
     dirName: "discord",
     artifactBasename: "api.js",
   });
 }
 
 function loadDiscordRuntimeFacadeModule(): DiscordRuntimeFacadeModule {
-  return loadBundledPluginPublicSurfaceModuleSyncCore<DiscordRuntimeFacadeModule>({
+  return loadBundledPluginPublicSurfaceModuleSync<DiscordRuntimeFacadeModule>({
     dirName: "discord",
     artifactBasename: "runtime-api.js",
   });

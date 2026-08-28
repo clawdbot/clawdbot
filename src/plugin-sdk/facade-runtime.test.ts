@@ -9,6 +9,7 @@ import { setCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import { setTestEnvValue } from "../test-utils/env.js";
 import {
   evaluateBundledPluginPublicSurfaceAccess,
   resolveBundledPluginPublicSurfaceAccess as resolveActivationCheckBundledPluginPublicSurfaceAccess,
@@ -117,6 +118,81 @@ afterEach(() => {
 });
 
 describe("plugin-sdk facade runtime", () => {
+  it.each([
+    {
+      artifactBasename: "api.js",
+      exportName: "normalizeDiscordMessagingTarget",
+      invoke: (sdk: typeof import("./discord.js")) => sdk.normalizeDiscordMessagingTarget("123456"),
+      value: (generation: string) => `${generation}:123456`,
+    },
+    {
+      artifactBasename: "runtime-api.js",
+      exportName: "collectDiscordAuditChannelIds",
+      invoke: (sdk: typeof import("./discord.js")) =>
+        sdk.collectDiscordAuditChannelIds({ cfg: {} }),
+      value: (generation: string) => ({ channelIds: [generation], unresolvedChannels: [] }),
+    },
+  ])(
+    "loads public Discord $artifactBasename from an external plugin across lifecycle changes",
+    async ({ artifactBasename, exportName, invoke, value }) => {
+      const root = fs.realpathSync(createTempDirSync("openclaw-discord-facade-installed-"));
+      const pluginDir = path.join(root, "plugin");
+      setTestEnvValue("OPENCLAW_STATE_DIR", path.join(root, "state"));
+      // Source checkouts contain Discord; packaged hosts resolve this excluded plugin through the registry.
+      setTestEnvValue("OPENCLAW_DISABLE_BUNDLED_PLUGINS", "1");
+      setRuntimeConfigSnapshot({});
+      // Keep the synchronous loader on Vitest's real source module graph.
+      testing.setFacadeActivationCheckRuntimeForTest(
+        await import("./facade-activation-check.runtime.js"),
+      );
+      const sdk = await import("./discord.js");
+      expect(() => invoke(sdk)).toThrow(
+        `Unable to resolve bundled plugin public surface discord/${artifactBasename}`,
+      );
+
+      writeJsonFile(path.join(pluginDir, "package.json"), {
+        name: "@openclaw/discord",
+        version: "0.0.0",
+        type: "commonjs",
+        openclaw: { extensions: ["./index.js"] },
+      });
+      writeJsonFile(path.join(pluginDir, "openclaw.plugin.json"), {
+        id: "discord",
+        channels: ["discord"],
+        configSchema: { type: "object", properties: {} },
+      });
+      fs.writeFileSync(path.join(pluginDir, "index.js"), "module.exports = {};\n");
+      const artifactPath = path.join(pluginDir, artifactBasename);
+      fs.writeFileSync(
+        artifactPath,
+        `const value = require("./value.cjs"); exports.${exportName} = () => value;\n`,
+      );
+      const writeValue = (generation: string) =>
+        fs.writeFileSync(
+          path.join(pluginDir, "value.cjs"),
+          `module.exports = ${JSON.stringify(value(generation))};\n`,
+        );
+      writeValue("installed");
+      setRuntimeConfigSnapshot({
+        plugins: { load: { paths: [pluginDir] }, entries: { discord: { enabled: false } } },
+      });
+      clearPluginMetadataLifecycleCaches();
+
+      // Deprecated compatibility helpers do not require plugin activation.
+      expect(invoke(sdk)).toEqual(value("installed"));
+      writeValue("replacement");
+      expect(invoke(sdk)).toEqual(value("installed"));
+      clearPluginMetadataLifecycleCaches();
+      expect(invoke(sdk)).toEqual(value("replacement"));
+
+      fs.linkSync(artifactPath, path.join(pluginDir, "hardlink.js"));
+      clearPluginMetadataLifecycleCaches();
+      expect(() => invoke(sdk)).toThrow(
+        `Unable to open bundled plugin public surface ${artifactPath}`,
+      );
+    },
+  );
+
   it("reuses successful facade locations without repeating filesystem probes", () => {
     const dir = createBundledPluginDir("openclaw-facade-location-cache-", "cached");
     useBundledPluginDirOverrideForTest(dir);

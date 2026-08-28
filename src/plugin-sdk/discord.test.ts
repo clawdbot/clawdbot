@@ -75,7 +75,7 @@ const mocks = vi.hoisted(() => {
     componentEditResult,
     runtimeModule,
     runtimeConfig,
-    loadBundledPluginPublicSurfaceModuleSyncCore: vi.fn((params: { artifactBasename: string }) => {
+    loadBundledPluginPublicSurfaceModuleSync: vi.fn((params: { artifactBasename: string }) => {
       if (params.artifactBasename === "runtime-api.js") {
         return runtimeModule;
       }
@@ -84,17 +84,8 @@ const mocks = vi.hoisted(() => {
   };
 });
 
-vi.mock("./facade-loader.js", () => ({
-  createLazyFacadeObjectValue: (load: () => object) =>
-    new Proxy(
-      {},
-      {
-        get(_target, property) {
-          return Reflect.get(load(), property);
-        },
-      },
-    ),
-  loadBundledPluginPublicSurfaceModuleSyncCore: mocks.loadBundledPluginPublicSurfaceModuleSyncCore,
+vi.mock("./facade-runtime.js", () => ({
+  loadBundledPluginPublicSurfaceModuleSync: mocks.loadBundledPluginPublicSurfaceModuleSync,
 }));
 
 vi.mock("./runtime-config-snapshot.js", () => ({
