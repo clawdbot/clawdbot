@@ -243,15 +243,15 @@ export async function dispatchCronDelivery(
           ...params.telemetry,
         });
       }
+      // A late run still executed fully; discarding its deliverable recorded a
+      // false success and silently lost the operator's report (#131491).
+      // Deliver with an explicit lateness annotation instead — the guard's
+      // original anti-confusion goal (#50092) is met by labeling.
+      let staleAnnotatedPayloads = normalizedPayloads;
       if (
         params.deliveryRequested &&
-        isStaleCronDelivery({
-          job: params.job,
-          runStartedAt: params.runStartedAt,
-        })
+        isStaleCronDelivery({ job: params.job, runStartedAt: params.runStartedAt })
       ) {
-        deliveryAttempted = true;
-        const nowMs = Date.now();
         const scheduledAtMs = resolveCronDeliveryScheduledAtMs({
           job: params.job,
           runStartedAt: params.runStartedAt,
@@ -260,23 +260,26 @@ export async function dispatchCronDelivery(
           job: params.job,
           runStartedAt: params.runStartedAt,
         });
-        const deliveryError = `skipping stale delivery scheduled at ${new Date(scheduledAtMs).toISOString()}, started ${Math.round(startDelayMs / 60_000)}m late, current age ${Math.round((nowMs - scheduledAtMs) / 60_000)}m`;
-        recordDelivery("not-delivered", deliveryError);
-        await logCronDeliveryWarn(`[cron:${params.job.id}] ${deliveryError}`);
-        return params.withRunSession({
-          status: "ok",
-          summary,
-          outputText,
-          deliveryAttempted,
-          delivered: false,
-          deliveryError,
-          ...params.telemetry,
-        });
+        const scheduledAtIso = new Date(scheduledAtMs).toISOString();
+        const lateMinutes = Math.round(startDelayMs / 60_000);
+        const notice = `⏰ Late automation run: scheduled for ${scheduledAtIso}, started ${lateMinutes}m late.`;
+        await logCronDeliveryWarn(
+          `[cron:${params.job.id}] delivering stale run scheduled at ${scheduledAtIso}, started ${lateMinutes}m late`,
+        );
+        const firstTextIndex = normalizedPayloads.findIndex((p) => p.text?.trim());
+        const firstTextPayload = normalizedPayloads[firstTextIndex];
+        staleAnnotatedPayloads =
+          firstTextIndex === -1 || !firstTextPayload
+            ? [{ text: notice }, ...normalizedPayloads]
+            : normalizedPayloads.with(firstTextIndex, {
+                ...firstTextPayload,
+                text: `${notice}\n\n${firstTextPayload.text}`,
+              });
       }
       const payloadsForDelivery = (
         await maybeApplyTtsToCronPayloads({
           cfg: params.cfgWithAgentDefaults,
-          payloads: normalizedPayloads,
+          payloads: staleAnnotatedPayloads,
           delivery,
           agentId: params.agentId,
           ttsAuto: params.ttsAuto,

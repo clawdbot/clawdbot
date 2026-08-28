@@ -2136,30 +2136,6 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     );
   });
 
-  it("skips stale cron deliveries while still suppressing fallback main summary", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
-
-    const params = makeBaseParams({ synthesizedText: "Yesterday's morning briefing." });
-    (params.job as { state?: { nextRunAtMs?: number } }).state = {
-      nextRunAtMs: Date.now() - (3 * 60 * 60_000 + 1),
-    };
-
-    const state = await dispatchCronDelivery(params);
-
-    const deliveryError = expect.stringContaining(
-      "scheduled at 2026-03-18T13:59:59.999Z, started 180m late",
-    );
-    expectResultFields(state.result, {
-      status: "ok",
-      delivered: false,
-      deliveryAttempted: true,
-      deliveryError,
-    });
-    expect(state.deliveryError).toEqual(deliveryError);
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-  });
-
   it("still delivers when the run started on time but finished more than three hours later", async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-03-18T17:00:00.000Z"));
@@ -4264,6 +4240,40 @@ describe("dispatchCronDelivery — double-announce guard", () => {
           expect.soft(result.deliveryError).toBeUndefined();
         }
       });
+    });
+  });
+
+  describe("stale delivery (#131491)", () => {
+    it("delivers a late run with a lateness annotation instead of discarding it", async () => {
+      const runStartedAt = Date.now();
+      const params = makeBaseParams({ synthesizedText: "lane results report", runStartedAt });
+      (params.job as { state?: { nextRunAtMs?: number } }).state = {
+        nextRunAtMs: runStartedAt - 4 * 60 * 60_000,
+      };
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+      const payloads = outboundDeliveryCall(0).payloads as Array<{ text?: string }>;
+      expect(payloads[0]?.text).toMatch(/late/i);
+      expect(payloads[0]?.text).toContain("lane results report");
+      expect(state.delivered).toBe(true);
+      expect(state.deliveryAttempted).toBe(true);
+      expect(state.deliveryError).toBeUndefined();
+    });
+
+    it("does not annotate a run that starts within the staleness window", async () => {
+      const runStartedAt = Date.now();
+      const params = makeBaseParams({ synthesizedText: "fresh report", runStartedAt });
+      (params.job as { state?: { nextRunAtMs?: number } }).state = {
+        nextRunAtMs: runStartedAt - 60_000,
+      };
+
+      const state = await dispatchCronDelivery(params);
+
+      expect(deliverOutboundPayloads).toHaveBeenCalledTimes(1);
+      expectDeliveryCall(0, { payloads: [{ text: "fresh report" }] });
+      expect(state.delivered).toBe(true);
     });
   });
 });
