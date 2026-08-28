@@ -44,11 +44,13 @@ const mocks = vi.hoisted(() => ({
     warnings: [],
   }),
   collectOpenAICodexAuthProfileStoreIdMap: vi.fn(() => new Map<string, string>()),
-  maybeRepairOpenAICodexAuthConfig: vi.fn((cfg: unknown) => ({
-    config: cfg,
-    changes: [],
-    warnings: [],
-  })),
+  maybeRepairOpenAICodexAuthConfig: vi.fn(
+    (cfg: unknown, _options?: { profileIdMap?: ReadonlyMap<string, string> }) => ({
+      config: cfg,
+      changes: [] as string[],
+      warnings: [] as string[],
+    }),
+  ),
   maybeMigrateLegacyPluginModelCatalogs: vi.fn().mockResolvedValue({
     detected: 0,
     migrated: 0,
