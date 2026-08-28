@@ -559,7 +559,7 @@ export async function withLeasedCodexAppServerClientStartSelectionRetry<T>(param
     client: CodexAppServerClient,
     requestOptions: () => CodexAppServerLeasedRequestOptions,
   ) => Promise<T>;
-  onClientChange: (client: CodexAppServerClient) => void;
+  onClientChange?: (client: CodexAppServerClient) => void;
 }): Promise<T> {
   let client = params.lease.client;
   if (!client) {
@@ -621,7 +621,7 @@ export async function withLeasedCodexAppServerClientStartSelectionRetry<T>(param
         ...(signal ? { abandonSignal: signal } : {}),
       });
       params.lease.client = client;
-      params.onClientChange(client);
+      params.onClientChange?.(client);
     } finally {
       scopeActive = false;
     }
