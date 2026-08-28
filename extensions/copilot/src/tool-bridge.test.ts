@@ -24,6 +24,13 @@ import {
 } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { withTempDir } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  addSubagentRunForTests,
+  getSubagentRunByRunId,
+  resetSubagentRegistryForTests,
+  testing as registryTesting,
+} from "../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
+import { consumeSwarmStructuredOutput } from "../../../src/agents/tools/structured-output-tool.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import { createCopilotToolBridge as createCopilotToolBridgeImpl } from "./tool-bridge.js";
 
@@ -1358,6 +1365,101 @@ describe("createCopilotToolBridge", () => {
   // so a Copilot run cannot expose the SDK any tool that the same
   // OpenClaw attempt would suppress. These tests pin the contract.
   describe("tool-surface gating (PR #86155 [P1] round-6)", () => {
+    it.each([
+      { collector: true, toolsAllow: undefined, codeMode: false },
+      { collector: true, toolsAllow: ["read"], codeMode: false },
+      { collector: true, toolsAllow: [], codeMode: false },
+      { collector: true, toolsAllow: undefined, codeMode: true },
+      { collector: false, toolsAllow: undefined, codeMode: false },
+      { collector: false, toolsAllow: ["read"], codeMode: false },
+    ])("preserves swarm collector contract %j", async ({ collector, toolsAllow, codeMode }) => {
+      await withTempDir("openclaw-copilot-collector-", async (workspaceDir) => {
+        const runId = "copilot-collector-contract";
+        const sessionKey = "agent:main:subagent:collector-contract";
+        const schema = {
+          type: "object",
+          properties: { answer: { type: "string" } },
+          required: ["answer"],
+          additionalProperties: false,
+        };
+        resetSubagentRegistryForTests({ persist: false });
+        registryTesting.setDepsForTest({ persistSubagentRunsToDiskOrThrow: vi.fn() });
+        addSubagentRunForTests({
+          runId,
+          childSessionKey: sessionKey,
+          collect: collector,
+          outputSchema: schema,
+        });
+        let bridge: Awaited<ReturnType<typeof createCopilotToolBridge>> | undefined;
+        try {
+          bridge = await createCopilotToolBridge({
+            agentId: "main",
+            modelId: "gpt-5.6-luna",
+            sessionKey,
+            workspaceDir,
+            attemptParams: {
+              config: {
+                agents: { entries: { main: { default: true } } },
+                tools: { swarm: true, codeMode },
+              },
+              disableMessageTool: true,
+              runId,
+              sessionKey,
+              workspaceDir,
+              toolsAllow,
+              swarmCollector: collector,
+              swarmOutputSchema: schema,
+            },
+            createOpenClawCodingTools: createRealOpenClawCodingTools,
+          });
+          const initial = bridge.promptToolPolicy.apply();
+          const names = initial.tools.map((tool) => tool.name);
+          if (toolsAllow) {
+            expect
+              .soft(names.toSorted())
+              .toEqual([...toolsAllow, ...(collector ? ["structured_output"] : [])].toSorted());
+          }
+          if (!collector) {
+            expect(names).not.toContain("structured_output");
+            if (!toolsAllow) {
+              expect(names).toContain("sessions_yield");
+            }
+            return;
+          }
+          for (const forbidden of ["ask_user", "sessions_send", "sessions_yield", "message"]) {
+            expect.soft(initial.callableToolNames).not.toContain(forbidden);
+          }
+          expect.soft(names).toContain("structured_output");
+          // Prompt hooks can narrow the already-compacted surface again.
+          const narrowed = bridge.promptToolPolicy.apply({ toolsAllow: ["read"] });
+          expect.soft(narrowed.callableToolNames).toContain("structured_output");
+          const output = expectDefined(
+            narrowed.tools.find((tool) => tool.name === "structured_output"),
+            "collector structured output tool",
+          );
+          expect.soft(output.defer).toBe("never");
+          const response = await runSdkTool(
+            output,
+            { result: { answer: "ok" } },
+            makeInvocation({
+              toolName: "structured_output",
+              toolCallId: "collector-result",
+            }),
+          );
+          expect(response).toMatchObject({ resultType: "success" });
+          expect(getSubagentRunByRunId(runId)?.structuredOutput).toEqual({
+            structured: { answer: "ok" },
+            invalidAttempts: 0,
+          });
+        } finally {
+          bridge?.cleanup?.();
+          consumeSwarmStructuredOutput(runId);
+          resetSubagentRegistryForTests({ persist: false });
+          registryTesting.setDepsForTest();
+        }
+      });
+    });
+
     it("submits the exact conversation-policy-filtered catalog to the SDK", async () => {
       await withTempDir("openclaw-copilot-policy-", async (workspaceDir) => {
         const result = await createCopilotToolBridge({

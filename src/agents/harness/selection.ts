@@ -152,6 +152,7 @@ type PluginHarnessToolPolicyContext = Pick<
   | "runtimePluginToolGrant"
   | "toolsAllow"
   | "disableTools"
+  | "swarmCollector"
 >;
 
 type PluginHarnessToolPolicy = { allow?: string[]; deny?: string[] };
@@ -870,9 +871,13 @@ function resolvePluginHarnessToolPolicies(
       requestedToolPolicy,
     ],
     safeDeniedToolNames: collectHarnessSafeDeniedToolNames(explicitPolicies, safeDenyToolNameSet),
-    toolPolicyRestricted: explicitPolicies.some((explicitPolicy) =>
-      toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
-    ),
+    // Native tools bypass the collector's noninteractive OpenClaw wrappers.
+    // Keep policy-allowed host replacements, without ambient input or approval surfaces.
+    toolPolicyRestricted:
+      params.swarmCollector === true ||
+      explicitPolicies.some((explicitPolicy) =>
+        toolPolicyRestrictsHarnessNativeTools(explicitPolicy, safeDenyToolNameSet),
+      ),
   };
 }
 

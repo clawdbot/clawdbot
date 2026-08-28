@@ -13,6 +13,13 @@ import {
 import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  addSubagentRunForTests,
+  getSubagentRunByRunId,
+  resetSubagentRegistryForTests,
+  testing as registryTesting,
+} from "../../../../src/agents/subagents/registry/subagent-registry.test-helpers.js";
+import { consumeSwarmStructuredOutput } from "../../../../src/agents/tools/structured-output-tool.js";
 import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
 import {
   buildDynamicTools,
@@ -633,10 +640,22 @@ describe("Codex app-server dynamic tool build", () => {
     {
       mode: "guarded" as const,
       execMode: "ask" as const,
+      command: "echo allowed",
+      expected: { status: "completed" },
+    },
+    {
+      mode: "guarded" as const,
+      execMode: "ask" as const,
+      command: "echo approval required",
       expected: { status: "failed", failureKind: "approval_required" },
     },
-    { mode: "full" as const, execMode: "full" as const, expected: { status: "completed" } },
-  ])("enforces the final $mode policy for an allowlisted Gateway command", async (testCase) => {
+    {
+      mode: "full" as const,
+      execMode: "full" as const,
+      command: "echo approval required",
+      expected: { status: "completed" },
+    },
+  ])("enforces $mode collector policy for $command", async (testCase) => {
     const workspaceDir = path.join(tempDir, `${testCase.mode}-allowlisted-workspace`);
     await fs.mkdir(workspaceDir, { recursive: true });
     const params = createParams(
@@ -644,22 +663,22 @@ describe("Codex app-server dynamic tool build", () => {
       workspaceDir,
     );
     params.disableTools = false;
+    params.swarmCollector = true;
+    params.pluginHarnessToolPolicyRestricted = true;
     params.permissionMode = testCase.mode;
     params.sessionRoot = workspaceDir;
     params.execOverrides = { host: "gateway", mode: testCase.execMode };
+    // Guarded mode asks only on an allowlist miss; two arguments exceed this profile.
     params.config = {
       tools: { exec: { safeBins: ["echo"], safeBinProfiles: { echo: { maxPositional: 1 } } } },
     };
     params.runtimePlan = createCodexRuntimePlanFixture();
     setOpenClawCodingToolsFactoryForTests((options) =>
-      createOpenClawCodingTools({
-        ...options,
-        swarmCollector: true,
-        wrapBeforeToolCallHook: false,
-      }).filter((tool) => ["exec", "process"].includes(tool.name)),
+      createOpenClawCodingTools(options).filter((tool) => ["exec", "process"].includes(tool.name)),
     );
 
     const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+      nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params),
       sessionPermissionPolicy: {
         mode: testCase.mode,
         root: workspaceDir,
@@ -667,11 +686,11 @@ describe("Codex app-server dynamic tool build", () => {
       },
     });
     const gatewayExec = expectDefined(
-      tools.find((tool) => tool.name === "gateway_exec"),
-      `${testCase.mode} Gateway shell alias`,
+      tools.find((tool) => tool.name === "exec"),
+      `${testCase.mode} OpenClaw shell replacement`,
     );
     const result = await gatewayExec.execute(`${testCase.mode}-allowlisted`, {
-      command: `echo ${testCase.mode}`,
+      command: testCase.command,
       ask: "off",
       security: "full",
     });
@@ -848,6 +867,134 @@ describe("Codex app-server dynamic tool build", () => {
     await buildDynamicToolsForTest(params, workspaceDir);
 
     expect(receivedOptions).toMatchObject({ taskSuggestionDeliveryMode: "gateway" });
+  });
+
+  it.each([
+    { label: "structured child", collector: true, toolsAllow: undefined },
+    { label: "structured child with read-only allowlist", collector: true, toolsAllow: ["read"] },
+    { label: "structured child with empty allowlist", collector: true, toolsAllow: [] },
+    { label: "ordinary child", collector: false, toolsAllow: undefined },
+    { label: "ordinary child with read-only allowlist", collector: false, toolsAllow: ["read"] },
+  ])("preserves swarm collector tool contract for $label", async ({ collector, toolsAllow }) => {
+    const workspaceDir = path.join(tempDir, "workspace");
+    const params = createParams(path.join(tempDir, "collector-session.jsonl"), workspaceDir);
+    params.disableTools = false;
+    params.disableMessageTool = true;
+    params.sessionKey = "agent:main:subagent:collector-contract";
+    params.runId = "codex-collector-contract";
+    params.runtimePlan = createCodexRuntimePlanFixture();
+    params.config = {
+      agents: { entries: { main: { default: true } } },
+      tools: { swarm: true },
+    };
+    params.toolsAllow = toolsAllow;
+    params.swarmCollector = collector;
+    // The selection boundary prepares this marker for collector attempts.
+    params.pluginHarnessToolPolicyRestricted = collector;
+    params.swarmOutputSchema = {
+      type: "object",
+      properties: { answer: { type: "string" } },
+      required: ["answer"],
+      additionalProperties: false,
+    };
+    // The production host must build core tools from Codex's options; injecting
+    // collector fields inside a replacement factory hides a dropped handoff.
+    const { hostCapabilities: _hostCapabilities, ...attempt } = params;
+    const host = await createAgentHarnessHostCapabilitiesForTest({ attempt, pluginId: "codex" });
+    params.hostCapabilities = host.capabilities;
+
+    try {
+      resetSubagentRegistryForTests({ persist: false });
+      registryTesting.setDepsForTest({ persistSubagentRunsToDiskOrThrow: vi.fn() });
+      addSubagentRunForTests({
+        runId: params.runId,
+        childSessionKey: params.sessionKey,
+        collect: collector,
+        outputSchema: params.swarmOutputSchema,
+      });
+      const tools = await buildDynamicToolsForTest(params, workspaceDir, {
+        sandbox: null as never,
+        nativeToolSurfaceEnabled: shouldEnableCodexAppServerNativeToolSurface(params),
+      });
+      const names = tools.map((tool) => tool.name);
+      if (toolsAllow) {
+        expect
+          .soft(names.toSorted())
+          .toEqual([...toolsAllow, ...(collector ? ["structured_output"] : [])].toSorted());
+      }
+      if (!collector) {
+        expect(names).not.toContain("structured_output");
+        if (!toolsAllow) {
+          expect(names).toEqual(expect.arrayContaining(["web_fetch", "sessions_yield"]));
+        }
+        return;
+      }
+      for (const forbidden of ["ask_user", "sessions_send", "sessions_yield", "message"]) {
+        expect.soft(names).not.toContain(forbidden);
+      }
+      expect(shouldEnableCodexAppServerNativeToolSurface(params)).toBe(false);
+      if (!toolsAllow) {
+        expect(names).toEqual(
+          expect.arrayContaining(["read", "write", "edit", "apply_patch", "exec", "process"]),
+        );
+        await fs.mkdir(workspaceDir, { recursive: true });
+        const write = expectDefined(
+          tools.find((tool) => tool.name === "write"),
+          "collector workspace write tool",
+        );
+        await write.execute("collector-write", {
+          path: "result.txt",
+          content: "collector file proof",
+        });
+        const read = expectDefined(
+          tools.find((tool) => tool.name === "read"),
+          "collector workspace read tool",
+        );
+        const readResult = await read.execute("collector-read", { path: "result.txt" });
+        expect(readResult.content).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              type: "text",
+              text: expect.stringContaining("collector file proof"),
+            }),
+          ]),
+        );
+      }
+      const bridge = createCodexDynamicToolBridge({
+        tools,
+        signal: new AbortController().signal,
+      });
+      const outputSpec = flattenCodexDynamicToolFunctions(bridge.specs).find(
+        (tool) => tool.name === "structured_output",
+      );
+      expect(outputSpec, "collector must advertise structured_output").toBeDefined();
+      expect(outputSpec).not.toHaveProperty("deferLoading", true);
+      const response = await bridge.handleToolCall({
+        threadId: "collector-thread",
+        turnId: "collector-turn",
+        tool: "structured_output",
+        callId: "collector-result",
+        arguments: { result: { answer: "ok" } },
+      });
+      expect(response.success).toBe(true);
+      const text = expectDefined(
+        response.contentItems.find((item) => item.type === "inputText"),
+        "structured_output response text",
+      );
+      if (!("text" in text) || typeof text.text !== "string") {
+        throw new Error("Expected structured_output text response");
+      }
+      expect(JSON.parse(text.text)).toEqual({ status: "recorded" });
+      expect(getSubagentRunByRunId(params.runId)?.structuredOutput).toEqual({
+        structured: { answer: "ok" },
+        invalidAttempts: 0,
+      });
+    } finally {
+      host.close();
+      consumeSwarmStructuredOutput(params.runId);
+      resetSubagentRegistryForTests({ persist: false });
+      registryTesting.setDepsForTest();
+    }
   });
 
   it("preserves the host-provided OpenClaw tool through the Codex allowlist", async () => {
