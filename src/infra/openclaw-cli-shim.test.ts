@@ -23,6 +23,57 @@ function readExecText(result: Awaited<ReturnType<ReturnType<typeof createExecToo
 }
 
 describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
+  it("resolves source-mode dependencies without changing the caller cwd", async () => {
+    await withTempDir("openclaw-agent-cli-shim-cwd-", async (root) => {
+      const outsideCwdPath = path.join(root, "outside");
+      const entryPath = path.join(root, "gateway-entry.ts");
+      const stateDir = path.join(root, "state");
+      await fs.mkdir(outsideCwdPath);
+      const outsideCwd = await fs.realpath(outsideCwdPath);
+      await fs.writeFile(
+        entryPath,
+        'import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";\n' +
+          'console.log(JSON.stringify({ cwd: process.cwd(), source: normalizeUniqueStringEntries(["gateway"])[0] }));\n',
+      );
+
+      const repoRoot = process.cwd();
+      const sourceEntry = path.join(repoRoot, "src", "entry.ts");
+      const sourceInvocation = resolveCurrentOpenClawCliInvocation([], {
+        argv1: sourceEntry,
+        cwd: repoRoot,
+        execArgv: ["--import", requireFromHere.resolve("tsx")],
+        execPath: process.execPath,
+      });
+      expect(sourceInvocation.tsxConfigPath).toBe(path.join(repoRoot, "tsconfig.json"));
+      const invocation = {
+        ...sourceInvocation,
+        args: sourceInvocation.args.map((arg) => (arg === sourceEntry ? entryPath : arg)),
+      };
+
+      await prepareGatewayAgentCliShim({
+        invocation,
+        stateDir,
+      });
+
+      process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
+      const execConfig = resolveExecToolConfig({ cfg: {} });
+      const tool = createExecTool({
+        ...execConfig,
+        host: "gateway",
+        security: "full",
+        ask: "off",
+        cwd: outsideCwd,
+        notifyOnExit: false,
+      });
+      const result = await tool.execute("gateway-cli-cwd-probe", {
+        command: "openclaw",
+        yieldMs: 120_000,
+      });
+
+      expect(JSON.parse(readExecText(result))).toEqual({ cwd: outsideCwd, source: "gateway" });
+    });
+  });
+
   it.each([
     { profile: "work", expectedArgs: ["--profile", "work", "probe"] },
     { profile: undefined, expectedArgs: ["probe"] },
@@ -73,57 +124,6 @@ describe.skipIf(process.platform === "win32")("Gateway agent CLI shim", () => {
         args: testCase.expectedArgs,
         pathHead: shimBinDir,
       });
-    });
-  });
-
-  it("resolves source-mode dependencies without changing the caller cwd", async () => {
-    await withTempDir("openclaw-agent-cli-shim-cwd-", async (root) => {
-      const outsideCwdPath = path.join(root, "outside");
-      const entryPath = path.join(root, "gateway-entry.ts");
-      const stateDir = path.join(root, "state");
-      await fs.mkdir(outsideCwdPath);
-      const outsideCwd = await fs.realpath(outsideCwdPath);
-      await fs.writeFile(
-        entryPath,
-        'import { normalizeUniqueStringEntries } from "@openclaw/normalization-core/string-normalization";\n' +
-          'console.log(JSON.stringify({ cwd: process.cwd(), source: normalizeUniqueStringEntries(["gateway"])[0] }));\n',
-      );
-
-      const repoRoot = process.cwd();
-      const sourceEntry = path.join(repoRoot, "src", "entry.ts");
-      const sourceInvocation = resolveCurrentOpenClawCliInvocation([], {
-        argv1: sourceEntry,
-        cwd: repoRoot,
-        execArgv: ["--import", requireFromHere.resolve("tsx")],
-        execPath: process.execPath,
-      });
-      expect(sourceInvocation.tsxConfigPath).toBe(path.join(repoRoot, "tsconfig.json"));
-      const invocation = {
-        ...sourceInvocation,
-        args: sourceInvocation.args.map((arg) => (arg === sourceEntry ? entryPath : arg)),
-      };
-
-      await prepareGatewayAgentCliShim({
-        invocation,
-        stateDir,
-      });
-
-      process.env.OPENCLAW_EXEC_SHELL_SNAPSHOT = "0";
-      const execConfig = resolveExecToolConfig({ cfg: {} });
-      const tool = createExecTool({
-        ...execConfig,
-        host: "gateway",
-        security: "full",
-        ask: "off",
-        cwd: outsideCwd,
-        notifyOnExit: false,
-      });
-      const result = await tool.execute("gateway-cli-cwd-probe", {
-        command: "openclaw",
-        yieldMs: 120_000,
-      });
-
-      expect(JSON.parse(readExecText(result))).toEqual({ cwd: outsideCwd, source: "gateway" });
     });
   });
 });
