@@ -829,6 +829,8 @@ The Gateway serves static files from `dist/control-ui`:
 pnpm ui:build
 ```
 
+For bundled builds, the Gateway retains manifest-verified assets so already-open tabs can fetch older asset URLs after an update. The cache keeps at most three generations and 96 MiB total, preferring the current generation; older generations can be pruned sooner to meet the byte budget. Background startup preparation reuses verified inventories through publication and pruning instead of rereading unchanged retained assets at each step. Newly published assets are verified before reuse, including a concurrent publisher's winning copy. Configured `gateway.controlUi.root` builds do not use this cache.
+
 Optional absolute base (fixed asset URLs):
 
 ```bash
