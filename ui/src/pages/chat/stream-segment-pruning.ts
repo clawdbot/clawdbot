@@ -1,17 +1,14 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
-  advanceAccumulatedStreamText,
   streamSegmentHasItemId,
   streamSegmentUsesAccumulatedText,
-  trimAccumulatedStreamPrefix,
   type ChatStreamSegment,
 } from "../../lib/chat/chat-types.ts";
 import { streamCausalInterval, type StreamCausalBoundaryState } from "./stream-causal-boundary.ts";
 import {
   hasAssistantStreamPartReplacement,
   visibleAssistantStreamParts,
-  visibleCurrentAssistantStreamTail,
 } from "./stream-reconciliation.ts";
 import {
   extractToolMessageRefs,
@@ -34,23 +31,14 @@ function pruneAccumulatedStreamSegments(
   segments: readonly ChatStreamSegment[],
   shouldPrune: (segment: ChatStreamSegment, index: number) => boolean,
 ): ChatStreamSegment[] {
-  let removedAccumulatedPrefix: string | null = null;
   return segments.flatMap((segment, index) => {
-    if (shouldPrune(segment, index)) {
-      if (streamSegmentUsesAccumulatedText(segment)) {
-        removedAccumulatedPrefix = advanceAccumulatedStreamText(
-          removedAccumulatedPrefix,
-          segment.text,
-        );
-      }
-      return [];
-    }
-    if (!removedAccumulatedPrefix || !streamSegmentUsesAccumulatedText(segment)) {
+    if (!shouldPrune(segment, index)) {
       return [segment];
     }
-    return [
-      { ...segment, text: trimAccumulatedStreamPrefix(segment.text, removedAccumulatedPrefix) },
-    ];
+    // Durable rows replace display, not the producer's cumulative baseline.
+    return streamSegmentUsesAccumulatedText(segment)
+      ? [{ ...segment, persisted: true as const }]
+      : [];
   });
 }
 
@@ -121,17 +109,10 @@ export function pruneHistoryReplacedStreamSegments(
   if (replacedIndexes.size === 0) {
     return false;
   }
-  const currentTail = visibleCurrentAssistantStreamTail(state, opts.isHiddenStreamText);
   state.chatStreamSegments = pruneAccumulatedStreamSegments(
     state.chatStreamSegments,
     (_segment, index) => replacedIndexes.has(index),
   );
-  if (typeof state.chatStream === "string") {
-    state.chatStream = currentTail;
-    if (currentTail === null) {
-      state.chatStreamStartedAt = null;
-    }
-  }
   return true;
 }
 
@@ -167,7 +148,7 @@ export function prunePersistedToolStreamMessages(
   }
   let toolIndexedSegmentIndex = 0;
   state.chatStreamSegments = pruneAccumulatedStreamSegments(state.chatStreamSegments, (segment) => {
-    if (segment.boundaryMarker === true) {
+    if (segment.boundaryMarker === true || segment.persisted === true) {
       return false;
     }
     const explicitToolCallId = normalizeOptionalString(segment.toolCallId);

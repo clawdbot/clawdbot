@@ -3,6 +3,7 @@ import {
   reduceSessionProjectionRunEvent,
 } from "@openclaw/gateway-client/browser";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import { accumulatedStreamText } from "../../lib/chat/chat-types.ts";
 import { isAssistantHeartbeatAckForDisplay } from "../../lib/chat/heartbeat-display.ts";
 import { extractText } from "../../lib/chat/message-extract.ts";
 // Control UI page module reconciles Chat Gateway events into Chat state.
@@ -387,7 +388,9 @@ function handleChatEvent(state: ChatState, payload?: ChatEventPayload) {
     if (payload.runId && payload.runId === state.chatRunId) {
       state.chatRunStartup = { state: "activity", runId: payload.runId };
     }
-    const next = resolveDeltaChatStreamText(state.chatStream, payload);
+    const cumulativeText =
+      state.chatStream ?? accumulatedStreamText(state.chatStreamSegments ?? []);
+    const next = resolveDeltaChatStreamText(cumulativeText, payload);
     if (
       typeof next === "string" &&
       !isSilentReplyStream(next) &&
