@@ -5773,6 +5773,8 @@ export const en: TranslationMap = {
       sendMessage: "Send message",
     },
     queue: {
+      initialTurnPending:
+        "The initial message is unresolved. Reconnect if needed, then review it before sending another message.",
       notSent: "Not sent",
       deliveryUnconfirmed: "Delivery unconfirmed",
       checkDelivery: "Check delivery",

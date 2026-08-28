@@ -376,6 +376,10 @@ export async function handleSendChat(
       parsed?.command.key === "model" && shouldForwardModelCommandToServer(parsed.args);
     if (parsed?.command.executeLocal && !forwardModel) {
       if (shouldQueueLocalSlashCommand(parsed.command.key)) {
+        if (host.hasPendingInitialTurn?.(submittedSessionKey)) {
+          setChatError(host, t("chat.queue.initialTurnPending"));
+          return;
+        }
         const submitKey = chatSubmitKey(host, "local", message, attachmentsToSend);
         await withChatSubmitGuard(host, submitKey, async () => {
           if (messageOverride == null) {
@@ -531,6 +535,10 @@ export async function handleSendChat(
       (resumedEditCandidate !== inlineEdit ||
         resumedEditCandidate.revision !== submittedInlineEditRevision)
     ) {
+      return;
+    }
+    if (host.hasPendingInitialTurn?.(submittedSessionKey)) {
+      setChatError(host, t("chat.queue.initialTurnPending"));
       return;
     }
     const cleared =

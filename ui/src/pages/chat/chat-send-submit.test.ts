@@ -632,6 +632,52 @@ describe("handleSendChat immediate local commands", () => {
 });
 
 describe("handleSendChat session ownership", () => {
+  it("rechecks initial ownership after settings settle without sending an admitted later turn", async () => {
+    const settingsPatch = createDeferred<boolean>();
+    let pending = false;
+    const attachment = createStagedAttachment("waiting-att");
+    const host = makeChatHost({
+      chatMessage: "later turn",
+      chatAttachments: [attachment],
+      requestHandlers: { "chat.send": { status: "started" } },
+      pendingSettingsPatches: { "agent:main": settingsPatch.promise },
+      hasPendingInitialTurn: () => pending,
+    });
+    const send = handleSendChat(host);
+    await vi.waitFor(() => expect(host.chatQueue).toHaveLength(1));
+    pending = true;
+    host.chatMessage = "newer draft";
+    settingsPatch.resolve(true);
+    await send;
+    expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+    expect(host.chatQueue).toMatchObject([
+      { text: "later turn", sendAttempts: 0, sendState: "waiting-idle" },
+    ]);
+    expect(host.chatMessage).toBe("newer draft");
+    expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+  });
+
+  it.each([true, false])(
+    "retains later text and attachments behind an initial turn (connected: %s)",
+    async (connected) => {
+      const attachment = createStagedAttachment("held-att");
+      const host = makeChatHost({
+        connected,
+        chatMessage: "keep this later draft",
+        chatAttachments: [attachment],
+        requestHandlers: { "chat.send": { status: "started" } },
+        hasPendingInitialTurn: () => true,
+      });
+      await handleSendChat(host);
+      expect(host.chatMessage).toBe("keep this later draft");
+      expect(host.chatAttachments).toEqual([attachment]);
+      expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+      expect(host.chatQueue).toEqual([]);
+      expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
+      expect(host.chatError).toContain("initial message");
+    },
+  );
+
   it("keeps the composer intact when no visible session owns the send", async () => {
     const attachment = createStagedAttachment("unscoped-att");
     const request = vi.fn();

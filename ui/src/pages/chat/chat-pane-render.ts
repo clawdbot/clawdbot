@@ -172,6 +172,8 @@ export class ChatPane extends ChatPaneLayoutRender {
       agentModel: agentDefaultModel,
     });
     const placementStartup = this.context.placementStartup.get(state.sessionKey);
+    const hasPendingInitialTurn =
+      placementStartup !== null || state.hasPendingInitialTurn?.(state.sessionKey);
     const placementStartupPending =
       placementStartup !== null && placementStartup.phase !== "failed";
     const sessionParticipationBlocked = this.sessionParticipationTracker.resolve({
@@ -392,8 +394,11 @@ export class ChatPane extends ChatPaneLayoutRender {
           !selectedSessionArchived &&
           !restartRecoveryTombstoned &&
           (!sessionParticipationBlocked || suggestionViewer) &&
-          placementStartup === null,
-      disabledReason: catalogDisabledReason ?? disabledReason,
+          !hasPendingInitialTurn,
+      disabledReason:
+        catalogDisabledReason ??
+        disabledReason ??
+        (hasPendingInitialTurn && !placementStartup ? t("chat.queue.initialTurnPending") : null),
       disabledReasonTone:
         sessionParticipationBlocked && !suggestionViewer && !catalogDisabledReason
           ? "info"

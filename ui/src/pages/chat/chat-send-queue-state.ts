@@ -155,9 +155,10 @@ export function finishChatDeliveryAdmission(
   }
   const sendsDuringActiveRun = Boolean(current.queueMode || options?.allowActiveRunSend);
   if (
-    !sendsDuringActiveRun &&
-    routeVisible(current.agentId) &&
-    (isChatBusy(host) || hasDirectSessionRun(host))
+    host.hasPendingInitialTurn?.(route) ||
+    (!sendsDuringActiveRun &&
+      routeVisible(current.agentId) &&
+      (isChatBusy(host) || hasDirectSessionRun(host)))
   ) {
     const parked = setState(host.connected && host.client ? "waiting-idle" : "waiting-reconnect");
     if (!parked) {

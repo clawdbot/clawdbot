@@ -47,6 +47,7 @@ export function createPlacementStartupHarness(
     recoveryScopeReady: true,
   };
   const gateway = {
+    connectionRevision: 0,
     connection: { gatewayUrl: "ws://gateway.example" },
     snapshot: { phase: "connected", client, hello: {} },
     subscribe: vi.fn(() => () => undefined),

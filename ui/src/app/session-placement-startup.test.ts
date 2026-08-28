@@ -31,6 +31,8 @@ function createFakeRuntime() {
   const publish = () => listeners.forEach((listener) => listener());
   const runtime: ApplicationPlacementStartupRuntime = {
     get: () => status,
+    hasPendingTurn: () => status !== null,
+    resumeRecovery: vi.fn(),
     start: vi.fn((input: PlacementStartupInput) => {
       status = {
         sessionKey: input.recovery.sessionKey,

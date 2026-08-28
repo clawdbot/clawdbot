@@ -23,9 +23,10 @@ import {
 import { generateUUID } from "../lib/uuid.ts";
 import { restoreChatApiAttachments } from "../pages/chat/attachment-api.ts";
 import { buildLocalUserMessage } from "../pages/chat/user-message-content.ts";
-import type {
-  ApplicationPlacementStartupRuntime,
-  ApplicationPlacementStartupDependencies,
+import {
+  capturePlacementStartupConnection,
+  type ApplicationPlacementStartupRuntime,
+  type ApplicationPlacementStartupDependencies,
 } from "./session-placement-startup.ts";
 
 type PlacementStartupPhase = NonNullable<
@@ -62,6 +63,7 @@ type PlacementStartupEntry = {
   readonly persistRecovery: boolean;
   readonly createdAt: number;
   readonly scope: GatewayConnectionScope;
+  readonly retainsConnection: () => boolean;
 };
 
 function initialTurn(entry: PlacementStartupEntry): ChatQueueItem {
@@ -93,9 +95,6 @@ export default function createApplicationPlacementStartupRuntime(
   const listeners = new Set<() => void>();
   const entries = new Map<string, PlacementStartupEntry>();
   const connection = createGatewayConnectionLifecycle(params.gateway.snapshot);
-  let lastRecoveryClient: object | null = null;
-  const recoveredFingerprints = new Set<string>();
-  let disposed = false;
 
   const publish = () => {
     for (const listener of listeners) {
@@ -118,10 +117,9 @@ export default function createApplicationPlacementStartupRuntime(
   const lifecycleCurrent = (entry: PlacementStartupEntry) => {
     const snapshot = params.gateway.snapshot;
     return Boolean(
+      entry.retainsConnection() &&
       connection.isCurrent(entry.scope) &&
-      snapshot.client?.recoveryScopeReady &&
-      params.gateway.connection.gatewayUrl === entry.owner.gatewayUrl &&
-      snapshot.client.recoveryScope === entry.owner.recoveryScope,
+      snapshot.client?.recoveryScopeReady,
     );
   };
 
@@ -217,24 +215,31 @@ export default function createApplicationPlacementStartupRuntime(
       },
     })
       .then((result) => {
-        if (!isCurrent(entry)) {
-          retireEntry(entry);
-          return;
-        }
-        if (result.status === "started") {
-          accepted = true;
-          prepareAcceptedMessage(entry, currentRecovery, result);
+        if (!ownsRecovery(entry) || !entry.retainsConnection()) {
           retireEntry(entry);
           return;
         }
         if (result.status === "paused") {
           entry.work = { kind: "paused", recovery: result.recovery };
           publish();
+          handleGatewaySnapshot(params.gateway.snapshot);
           return;
         }
         if (result.status === "cancelled" && result.cleanupError) {
           pauseEntry(entry, currentRecovery, result.cleanupError);
+          handleGatewaySnapshot(params.gateway.snapshot);
           return;
+        }
+        if (!lifecycleCurrent(entry)) {
+          // Interruption retains intent; only confirmed retirement releases admission.
+          if (result.status !== "interrupted") {
+            retireEntry(entry);
+          }
+          return;
+        }
+        if (result.status === "started") {
+          accepted = true;
+          prepareAcceptedMessage(entry, currentRecovery, result);
         }
         retireEntry(entry);
       })
@@ -254,8 +259,14 @@ export default function createApplicationPlacementStartupRuntime(
     if (input.recovery.phase === "creating") {
       return;
     }
+    connection.transition(params.gateway.snapshot);
     const existing = findEntry(input.recovery.sessionKey)?.entry;
-    if (existing && existing.work.kind !== "paused" && isCurrent(existing)) {
+    if (
+      existing &&
+      isCurrent(existing) &&
+      existing.owner.messageId === input.recovery.messageId &&
+      (existing.work.kind !== "paused" || input.recovery.phase === "paused")
+    ) {
       return;
     }
     if (existing) {
@@ -285,6 +296,7 @@ export default function createApplicationPlacementStartupRuntime(
       persistRecovery: input.persistRecovery,
       createdAt: input.createdAt,
       scope,
+      retainsConnection: capturePlacementStartupConnection(params.gateway, owner),
     };
     entries.set(owner.sessionKey, entry);
     publish();
@@ -298,46 +310,42 @@ export default function createApplicationPlacementStartupRuntime(
   ) => {
     connection.transition(snapshot);
     if (snapshot.phase !== "connected") {
-      lastRecoveryClient = null;
-      recoveredFingerprints.clear();
       return;
     }
     if (!snapshot.client?.recoveryScopeReady || !snapshot.client.recoveryScope) {
       return;
     }
-    const recoveries = listSessionPlacementRecoveries(
+    // Paused memory-only submissions have no storage row to rehydrate. Replace
+    // their lifecycle binding only after the same credential scope is validated.
+    for (const entry of entries.values()) {
+      if (
+        entry.work.kind !== "running" &&
+        !lifecycleCurrent(entry) &&
+        entry.retainsConnection() &&
+        ownsRecovery(entry)
+      ) {
+        start({
+          recovery: entry.work.recovery,
+          persistRecovery: entry.persistRecovery,
+          recovering: true,
+          createdAt: entry.createdAt,
+        });
+      }
+    }
+    for (const recovery of listSessionPlacementRecoveries(
       params.gateway.connection.gatewayUrl,
       snapshot.client.recoveryScope,
-    ).filter((recovery) => recovery.phase !== "creating");
-    if (lastRecoveryClient !== snapshot.client) {
-      lastRecoveryClient = snapshot.client;
-      recoveredFingerprints.clear();
-    }
-    const currentFingerprints = new Set<string>();
-    for (const recovery of recoveries) {
-      const fingerprint = `${recovery.sessionKey}\0${recovery.messageId}\0${recovery.phase}`;
-      currentFingerprints.add(fingerprint);
-      if (recoveredFingerprints.has(fingerprint)) {
-        continue;
-      }
-      recoveredFingerprints.add(fingerprint);
+    )) {
       start({ recovery, persistRecovery: true, recovering: true, createdAt: Date.now() });
     }
-    for (const fingerprint of recoveredFingerprints) {
-      if (!currentFingerprints.has(fingerprint)) {
-        recoveredFingerprints.delete(fingerprint);
-      }
-    }
   };
-  const stopGateway = params.gateway.subscribe(handleGatewaySnapshot);
-  // Let the facade drain queued fresh Starts before durable recovery claims the same session.
-  queueMicrotask(() => {
-    if (!disposed) {
-      handleGatewaySnapshot(params.gateway.snapshot);
-    }
-  });
 
   return {
+    resumeRecovery: () => handleGatewaySnapshot(params.gateway.snapshot),
+    hasPendingTurn(sessionKey) {
+      const entry = findEntry(sessionKey)?.entry;
+      return Boolean(entry && entry.retainsConnection() && ownsRecovery(entry));
+    },
     get(sessionKey) {
       const entry = findEntry(sessionKey)?.entry;
       if (!entry || !isCurrent(entry)) {
@@ -418,9 +426,7 @@ export default function createApplicationPlacementStartupRuntime(
       return () => listeners.delete(listener);
     },
     dispose() {
-      disposed = true;
       connection.dispose();
-      stopGateway();
       entries.clear();
       listeners.clear();
     },

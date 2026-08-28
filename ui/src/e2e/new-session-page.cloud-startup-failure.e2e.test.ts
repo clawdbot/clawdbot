@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
 import {
   WORKSPACE,
   controlUiSessionPath,
@@ -8,15 +9,21 @@ import {
   pastePng,
   ONE_PIXEL_PNG_B64,
   pollLocatorText,
+  replaceGatewayClient,
   waitForCommittedChatRoute,
 } from "./new-session-page.test-support.ts";
 
 const suite = createNewSessionPageE2eSuite();
 
 suite.define(() => {
-  it.each([false, true])(
-    "keeps cloud startup visible through failure (history fails: %s)",
-    async (historyFails) => {
+  it.each([
+    { historyFails: false, disconnect: false, replaceClient: false },
+    { historyFails: true, disconnect: false, replaceClient: false },
+    { historyFails: false, disconnect: true, replaceClient: false },
+    { historyFails: false, disconnect: true, replaceClient: true },
+  ])(
+    "keeps cloud startup visible through failure ($historyFails, disconnect: $disconnect, replacement: $replaceClient)",
+    async ({ historyFails, disconnect, replaceClient }) => {
       const context = await suite.browser.newContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -58,6 +65,10 @@ suite.define(() => {
           "sessions.create": { key: sessionKey },
           "sessions.list": createdSessionListResult(sessionKey),
           "sessions.describe": { session: {} },
+          "chat.history": {
+            messages: [],
+            sessionInfo: { hasActiveRun: false, status: "done" },
+          },
         },
       });
 
@@ -120,13 +131,59 @@ suite.define(() => {
         await failedGroup
           .locator(`img[src="data:image/png;base64,${ONE_PIXEL_PNG_B64}"]`)
           .waitFor({ state: "visible" });
-        await page.reload();
+        if (disconnect) {
+          await gateway.setOnline(false);
+          if (replaceClient) {
+            await replaceGatewayClient(page);
+          }
+          const pane = page.locator(".chat-pane-cache__pane--active");
+          await expect
+            .poll(() =>
+              pane.evaluate(
+                (element) => (element as HTMLElement & { state: ChatPageHost }).state.connected,
+              ),
+            )
+            .toBe(false);
+          // Use the public page action: non-composer callers must share admission.
+          const offline = await pane.evaluate(async (element) => {
+            const { state } = element as HTMLElement & { state: ChatPageHost };
+            state.handleChatDraftChange("later ordinary turn");
+            await state.handleSendChat();
+            return { draft: state.chatMessage, queued: state.chatQueue.map((item) => item.text) };
+          });
+          const composerDisabled = await page
+            .locator(".agent-chat__composer-combobox textarea")
+            .isDisabled();
+          await gateway.setOnline(true);
+          await failedGroup.waitFor({ state: "visible" });
+          // Observe the buggy delivery as well as admission before checking the invariant.
+          if (offline.queued.includes("later ordinary turn")) {
+            await gateway.waitForRequest("chat.send");
+          }
+          expect(composerDisabled).toBe(true);
+          expect({ offline, sends: await gateway.getRequests("chat.send") }).toMatchObject({
+            offline: { draft: "later ordinary turn", queued: [] },
+            sends: [],
+          });
+          expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
+            "later ordinary turn",
+          );
+          expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
+        } else {
+          await page.reload();
+        }
         await failedGroup.waitFor({ state: "visible" });
         expect(await failedGroup.locator(".chat-send-status").textContent()).toContain("Not sent");
-        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(disconnect ? 1 : 0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
+        if (disconnect) {
+          await gateway.deferNext("sessions.dispatch");
+        }
         await failedGroup.getByRole("button", { name: "Retry queued message" }).click();
-        const retry = await gateway.waitForRequest("sessions.dispatch");
+        await expect
+          .poll(async () => (await gateway.getRequests("sessions.dispatch")).length)
+          .toBe(disconnect ? 2 : 1);
+        const retry = (await gateway.getRequests("sessions.dispatch")).at(-1)!;
         expect(retry.params).toMatchObject({ key: sessionKey, profileId: "aws" });
         expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
         await gateway.resolveDeferred("sessions.dispatch", {
@@ -139,7 +196,13 @@ suite.define(() => {
             attachments: [{ content: ONE_PIXEL_PNG_B64, fileName: "pixel.png" }],
           },
         });
-        expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
+        expect(await gateway.getRequests("sessions.create")).toHaveLength(disconnect ? 1 : 0);
+        if (disconnect) {
+          expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
+            "later ordinary turn",
+          );
+          expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+        }
       } finally {
         await context.close();
       }

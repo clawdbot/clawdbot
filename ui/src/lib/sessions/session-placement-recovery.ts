@@ -8,6 +8,7 @@ import { Value } from "typebox/value";
 import { formatUiError } from "../format-error.ts";
 import type { SessionCreateParams } from "./create.ts";
 import {
+  listSessionPlacementRecoveryStorageKeys,
   sessionPlacementRecoveryExactStorageKey,
   sessionPlacementRecoveryScopeStoragePrefix,
 } from "./session-placement-recovery-storage-key.ts";
@@ -290,18 +291,8 @@ export function listSessionPlacementRecoveries(
     if (!storage) {
       return [];
     }
-    const scopePrefix = sessionPlacementRecoveryScopeStoragePrefix(gatewayUrl, recoveryScope);
-    const keys: string[] = [];
-    for (let index = 0; index < storage.length; index += 1) {
-      const key = storage.key(index);
-      if (key?.startsWith(scopePrefix)) {
-        keys.push(key);
-      }
-    }
-    const sortedKeys = keys.toSorted();
-
     const recoveries = new Map<string, SessionPlacementRecovery>();
-    for (const key of sortedKeys) {
+    for (const key of listSessionPlacementRecoveryStorageKeys(gatewayUrl, recoveryScope)) {
       const recovery = readOwnedSessionPlacementRecovery(storage, key, gatewayUrl, recoveryScope);
       if (!recovery) {
         continue;
