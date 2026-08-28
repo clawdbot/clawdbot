@@ -36,7 +36,7 @@ function assembledTool(
     codingRoot: process.cwd(),
     containmentRoot: process.cwd(),
     includeBaseCodingTools: kind === "data",
-    includeShellTools: kind === "tool",
+    shellTools: kind === "tool" ? "full" : "disabled",
     workspaceOnly: false,
     readOnly: false,
     applyPatchEnabled: false,
