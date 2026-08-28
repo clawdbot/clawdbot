@@ -64,6 +64,7 @@ type ApprovalRequestPayload = {
   sessionId?: string;
   runId?: string;
   toolCallId?: string;
+  detached?: boolean;
 };
 
 function requireApprovalRequestPayload(callIndex: number): ApprovalRequestPayload {
@@ -121,6 +122,47 @@ describe("exec approval requests", () => {
       runId: "run-1",
       toolCallId: "tool-1",
     });
+  });
+
+  it("carries detached approval ownership through the exact Gateway generation", async () => {
+    vi.mocked(callGatewayTool)
+      .mockResolvedValueOnce({
+        id: "approval-id",
+        gatewayGeneration: "gateway-generation-1",
+      })
+      .mockResolvedValueOnce({ id: "approval-id", decision: "allow-once" })
+      .mockResolvedValueOnce({ id: "other-approval", decision: "allow-once" });
+
+    const registration = await registerExecApprovalRequestForHostOrThrow({
+      approvalId: "approval-id",
+      command: "echo hi",
+      workdir: "/tmp",
+      host: "gateway",
+      security: "allowlist",
+      ask: "always",
+      detached: true,
+    });
+    expect(registration.gatewayGeneration).toBe("gateway-generation-1");
+    expect(requireApprovalRequestPayload(0)).toMatchObject({ detached: true });
+
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: "approval-id",
+        gatewayGeneration: "gateway-generation-1",
+        preResolvedDecision: undefined,
+      }),
+    ).resolves.toBe("allow-once");
+    expect(vi.mocked(callGatewayTool).mock.calls[1]?.[2]).toEqual({
+      id: "approval-id",
+      gatewayGeneration: "gateway-generation-1",
+    });
+    await expect(
+      resolveRegisteredExecApprovalDecision({
+        approvalId: "approval-id",
+        gatewayGeneration: "gateway-generation-1",
+        preResolvedDecision: undefined,
+      }),
+    ).rejects.toThrow("response id changed");
   });
 
   it("distinguishes run abort cancellation from unchanged timeout fallback", async () => {

@@ -1,8 +1,5 @@
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import {
-  closeAdmittedRunDelegatedAuthority,
-  getAdmittedRunDelegatedAuthority,
-} from "../../agents/admitted-run-context.js";
+import { getAdmittedRunDelegatedAuthority } from "../../agents/admitted-run-context.js";
 import {
   attachAgentCommandAdmissionFacts,
   attachAgentCommandRecoveryAdmissionFacts,
@@ -442,9 +439,7 @@ export function startAgentRunExecution(params: {
                 // Sessionless runs intentionally have no abort-map owner. Their
                 // prepared admission retains authority until agentCommand closes it.
                 if (prepared.activeRunAbort.registered) {
-                  prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority, () => {
-                    closeAdmittedRunDelegatedAuthority(admittedRunContext);
-                  });
+                  prepared.activeRunAbort.bindAgentRunDelegatedAuthority(authority);
                 }
               },
               internalDeliveryMediaUrls: params.client?.internal?.internalDeliveryMediaUrls,

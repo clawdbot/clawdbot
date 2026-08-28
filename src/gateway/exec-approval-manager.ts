@@ -119,6 +119,8 @@ export type ExecApprovalRecord<TPayload = ExecApprovalRequestPayload> = {
   approvalSignals?: readonly AbortSignal[];
   /** Process-local persistence proof; never serialized with approval presentation. */
   mcpToolApprovalActive?: () => boolean;
+  /** Process-local detached work is valid only in the Gateway generation that registered it. */
+  detachedGatewayGeneration?: string;
 };
 
 type OperatorApprovalPersistenceRuntime = {
@@ -1275,6 +1277,14 @@ export class ExecApprovalManager<TPayload = ExecApprovalRequestPayload> {
     }
     const entry = this.pending.get(recordId);
     return entry?.promise ?? null;
+  }
+
+  /** Checks manager-owned detached work against its exact record and Gateway generation. */
+  isDetachedGatewayGenerationCurrent(recordId: string, gatewayGeneration: string): boolean {
+    return (
+      this.runtimeEpoch === gatewayGeneration &&
+      this.pending.get(recordId)?.record.detachedGatewayGeneration === gatewayGeneration
+    );
   }
 
   /** Projects an allowed decision only while its exact runtime authority is live. */

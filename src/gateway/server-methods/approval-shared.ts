@@ -303,6 +303,7 @@ export async function handlePendingApprovalRequest<
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
   deliverToApprovalClientsOnly?: boolean;
+  gatewayGeneration?: string;
 }): Promise<void> {
   // Delivery may outlive the normal resolved-record grace. Keep the executable
   // binding until the requester response and post-decision handoff finish.
@@ -395,6 +396,7 @@ export async function handlePendingApprovalRequest<
         {
           id: params.record.id,
           decision: projectedDecision,
+          ...(params.gatewayGeneration ? { gatewayGeneration: params.gatewayGeneration } : {}),
           createdAtMs: params.record.createdAtMs,
           expiresAtMs: params.record.expiresAtMs,
         },
@@ -427,6 +429,7 @@ export async function handlePendingApprovalRequest<
         {
           id: params.record.id,
           decision: null,
+          ...(params.gatewayGeneration ? { gatewayGeneration: params.gatewayGeneration } : {}),
           createdAtMs: params.record.createdAtMs,
           expiresAtMs: params.record.expiresAtMs,
         },
@@ -441,6 +444,7 @@ export async function handlePendingApprovalRequest<
         {
           status: "accepted",
           id: params.record.id,
+          ...(params.gatewayGeneration ? { gatewayGeneration: params.gatewayGeneration } : {}),
           // Agent-side timeouts use this to distinguish delivered prompts from
           // requests kept pending only because manual /approve routing may work.
           deliveryRoute,

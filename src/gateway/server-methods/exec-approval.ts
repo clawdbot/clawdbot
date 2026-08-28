@@ -199,6 +199,7 @@ export function createExecApprovalHandlers(
         requireDeliveryRoute?: boolean;
         suppressDelivery?: boolean;
         deliverToApprovalClientsOnly?: boolean;
+        detached?: boolean;
         timeoutMs?: number;
         twoPhase?: boolean;
       };
@@ -221,6 +222,21 @@ export function createExecApprovalHandlers(
           errorShape(
             ErrorCodes.INVALID_REQUEST,
             "agent runtime approval authority is no longer active",
+          ),
+        );
+        return;
+      }
+      const detachedGatewayGeneration =
+        p.detached === true && trustedAgentRuntime && host === "gateway"
+          ? manager.runtimeEpoch
+          : null;
+      if (p.detached === true && !detachedGatewayGeneration) {
+        respond(
+          false,
+          undefined,
+          errorShape(
+            ErrorCodes.INVALID_REQUEST,
+            "detached exec approval requires the trusted local agent runtime",
           ),
         );
         return;
@@ -459,8 +475,11 @@ export function createExecApprovalHandlers(
         throw error;
       }
       bindApprovalRequesterMetadata({ record, client });
-      if (trustedAgentRuntime) {
+      if (trustedAgentRuntime && !detachedGatewayGeneration) {
         record.agentRuntimeDelegatedAuthority = trustedAgentRuntime.delegatedAuthority;
+      }
+      if (detachedGatewayGeneration) {
+        record.detachedGatewayGeneration = detachedGatewayGeneration;
       }
       const trustedExecutionIdentity = trustedAgentRuntime?.executionIdentity;
       if (trustedExecutionIdentity && requestRunId === trustedExecutionIdentity.runId) {
@@ -506,6 +525,7 @@ export function createExecApprovalHandlers(
         // caller omits the flag: cron cards belong on approval surfaces only.
         deliverToApprovalClientsOnly:
           p.deliverToApprovalClientsOnly === true || cronExecutionSource !== null,
+        ...(detachedGatewayGeneration ? { gatewayGeneration: detachedGatewayGeneration } : {}),
         deliverRequest: () =>
           runApprovalRequestDeliveries({
             context,
@@ -529,9 +549,24 @@ export function createExecApprovalHandlers(
       });
     },
     "exec.approval.waitDecision": async ({ params, respond, client, context }) => {
+      const waitParams = params as { id?: string; gatewayGeneration?: string };
+      if (
+        waitParams.gatewayGeneration &&
+        !manager.isDetachedGatewayGenerationCurrent(
+          waitParams.id ?? "",
+          waitParams.gatewayGeneration,
+        )
+      ) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "approval Gateway generation changed"),
+        );
+        return;
+      }
       await handleApprovalWaitDecision({
         manager,
-        inputId: (params as { id?: string }).id,
+        inputId: waitParams.id,
         client,
         ...(client?.authenticatedUserProfile ? { cfg: context.getRuntimeConfig() } : {}),
         respond,

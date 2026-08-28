@@ -11,7 +11,6 @@ import {
   createOperationalRunInstanceRef,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
-  retainAdmittedRunDelegatedAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
   resolveAdmittedRunActiveAssertion,
   resolvePreparedRunAdmission,
@@ -293,29 +292,6 @@ describe("prepared run admission", () => {
     expect(() => assertActive?.()).toThrow("no longer active");
     prepared.close();
     expect(() => assertActive?.()).toThrow("no longer active");
-  });
-
-  it("keeps an admitted authority alive until detached work settles", async () => {
-    const { runtime, ...admissionFacts } = facts;
-    const prepared = prepareAgentRunAdmission({
-      cfg: {},
-      facts: { ...admissionFacts, runId: "run-detached-work" },
-      operationalRunInstance: createOperationalRunInstanceRef("run-detached-work"),
-    });
-    const admitted = await prepared.admit(runtime.kind);
-    const authority = getAdmittedRunDelegatedAuthority(admitted)!;
-    const retained = retainAdmittedRunDelegatedAuthority(admitted);
-
-    expect(retained).toBeDefined();
-    prepared.close();
-    expect(getAdmittedRunDelegatedAuthority(admitted)).toBeUndefined();
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(true);
-    expect(() => retained?.assertActive()).not.toThrow();
-
-    retained?.release();
-    expect(validateAgentRunDelegatedAuthority(authority)).toBe(false);
-    expect(() => retained?.assertActive()).toThrow("no longer active");
-    retained?.release();
   });
 
   it("closes generic authority while keeping a recovery-only lease active", async () => {

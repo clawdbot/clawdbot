@@ -66,6 +66,7 @@ type RequestExecApprovalDecisionParams = {
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
   deliverToApprovalClientsOnly?: boolean;
+  detached?: boolean;
 };
 
 type ExecApprovalRequestToolParams = RequestExecApprovalDecisionParams & {
@@ -106,6 +107,7 @@ function buildExecApprovalRequestToolParams(
     requireDeliveryRoute: params.requireDeliveryRoute,
     suppressDelivery: params.suppressDelivery,
     deliverToApprovalClientsOnly: params.deliverToApprovalClientsOnly,
+    detached: params.detached,
     timeoutMs: DEFAULT_APPROVAL_TIMEOUT_MS,
     twoPhase: true,
   };
@@ -139,6 +141,7 @@ export type ExecApprovalRegistration = {
   id: string;
   expiresAtMs: number;
   finalDecision?: string | null;
+  gatewayGeneration?: string;
 };
 
 class ExecApprovalRunAbortedError extends Error {
@@ -169,25 +172,39 @@ async function registerExecApprovalRequest(
   const id = parseString(registrationResult?.id) ?? params.id;
   const expiresAtMs =
     parseExpiresAtMs(registrationResult?.expiresAtMs) ?? resolveDefaultExecApprovalExpiresAtMs();
+  const gatewayGeneration = parseString(registrationResult?.gatewayGeneration);
   if (decision.present) {
-    return { id, expiresAtMs, finalDecision: decision.value };
+    return {
+      id,
+      expiresAtMs,
+      finalDecision: decision.value,
+      ...(gatewayGeneration ? { gatewayGeneration } : {}),
+    };
   }
-  return { id, expiresAtMs };
+  return { id, expiresAtMs, ...(gatewayGeneration ? { gatewayGeneration } : {}) };
 }
 
 /** Uses a pre-resolved decision or waits for the registered approval id. */
 export async function resolveRegisteredExecApprovalDecision(params: {
   approvalId: string;
   preResolvedDecision: string | null | undefined;
+  gatewayGeneration?: string;
 }): Promise<string | null> {
   if (params.preResolvedDecision !== undefined) {
     return params.preResolvedDecision ?? null;
   }
   try {
-    const decisionResult = await callGatewayTool<{ decision: string }>(
+    const decisionResult = await callGatewayTool<{
+      id?: string;
+      decision?: string;
+      terminalReason?: string;
+    }>(
       "exec.approval.waitDecision",
       { timeoutMs: DEFAULT_APPROVAL_REQUEST_TIMEOUT_MS },
-      { id: params.approvalId },
+      {
+        id: params.approvalId,
+        ...(params.gatewayGeneration ? { gatewayGeneration: params.gatewayGeneration } : {}),
+      },
     );
     if (
       decisionResult &&
@@ -195,6 +212,9 @@ export async function resolveRegisteredExecApprovalDecision(params: {
       (decisionResult as { terminalReason?: unknown }).terminalReason === "run-aborted"
     ) {
       throw new ExecApprovalRunAbortedError();
+    }
+    if (params.gatewayGeneration && parseString(decisionResult?.id) !== params.approvalId) {
+      throw new Error("exec approval response id changed");
     }
     return parseDecision(decisionResult).value;
   } catch (err) {
@@ -235,6 +255,7 @@ type HostExecApprovalParams = {
   trigger?: string;
   requireDeliveryRoute?: boolean;
   suppressDelivery?: boolean;
+  detached?: boolean;
 };
 
 type ExecApprovalRequesterContext = {
@@ -357,6 +378,7 @@ async function buildHostApprovalDecisionParams(
         : undefined,
     deliverToApprovalClientsOnly:
       params.trigger === "cron" && params.host === "gateway" ? true : undefined,
+    detached: params.detached,
     approvalReviewerDeviceIds: params.approvalReviewerDeviceIds,
     ...buildExecApprovalTurnSourceContext(params),
   };

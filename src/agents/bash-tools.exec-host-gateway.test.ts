@@ -98,6 +98,7 @@ type MockRegisteredExecApprovalRequest = {
   initiatingSurface: unknown;
   sentApproverDms: boolean;
   unavailableReason: string | null;
+  gatewayGeneration?: string;
 };
 
 type MockExecHostApprovalContext = {
@@ -395,6 +396,9 @@ const detectInterpreterInlineEvalArgvMock = vi.hoisted(() =>
 const resolveApprovalCommandAuthorizationMock = vi.hoisted(() =>
   vi.fn<ResolveApprovalCommandAuthorization>(() => ({ authorized: true, explicit: true })),
 );
+const resolveRegisteredExecApprovalDecisionMock = vi.hoisted(() =>
+  vi.fn<() => Promise<string | null | undefined>>(),
+);
 
 vi.mock("../infra/exec-approvals.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/exec-approvals.js")>()),
@@ -419,6 +423,7 @@ vi.mock("./bash-tools.exec-approval-request.js", () => ({
   buildExecApprovalRequesterContext: vi.fn(() => ({})),
   buildExecApprovalTurnSourceContext: vi.fn(() => ({})),
   registerExecApprovalRequestForHostOrThrow: vi.fn(async () => undefined),
+  resolveRegisteredExecApprovalDecision: resolveRegisteredExecApprovalDecisionMock,
   isExecApprovalRunAbortedError: (error: unknown) => error === runAbortedApprovalError,
 }));
 
@@ -598,6 +603,11 @@ describe("processGatewayAllowlist", () => {
     detectInterpreterInlineEvalArgvMock.mockReturnValue(null);
     resolveApprovalCommandAuthorizationMock.mockReset();
     resolveApprovalCommandAuthorizationMock.mockReturnValue({ authorized: true, explicit: true });
+    resolveRegisteredExecApprovalDecisionMock.mockReset();
+    resolveRegisteredExecApprovalDecisionMock.mockImplementation(async () => {
+      const outcome = await resolveExecApprovalWaitOutcomeMock.mock.results.at(-1)?.value;
+      return outcome?.kind === "resolved" ? outcome.decision : undefined;
+    });
     resolveExecApprovalUnavailableDecisionsMock.mockClear();
     buildExecApprovalPendingToolResultMock.mockReturnValue({
       details: { status: "approval-pending" },
@@ -613,6 +623,7 @@ describe("processGatewayAllowlist", () => {
       initiatingSurface: "origin",
       sentApproverDms: false,
       unavailableReason: null,
+      gatewayGeneration: "gateway-generation-1",
     });
   });
 
@@ -3421,7 +3432,7 @@ EOF`,
     expect(sendExecApprovalFollowupResultMock).not.toHaveBeenCalled();
   });
 
-  it("rejects detached execution when its exact authority is replaced after approval", async () => {
+  it("rejects detached execution when its Gateway generation changes after approval", async () => {
     let resolveApproval: (decision: ExecApprovalDecision) => void = () => {};
     resolveApprovalDecisionOrUndefinedMock.mockReturnValue(
       new Promise<ExecApprovalDecision>((resolve) => {
@@ -3434,22 +3445,13 @@ EOF`,
       deniedReason: null,
     });
     buildExecApprovalFollowupTargetMock.mockImplementation((value) => value);
-    let authorityActive = true;
-    const assertActive = vi.fn(() => {
-      if (!authorityActive) {
-        throw new Error("retained admitted run authority is no longer active");
-      }
-    });
-    const release = vi.fn();
+    resolveRegisteredExecApprovalDecisionMock.mockResolvedValue(undefined);
 
     const result = await runGatewayAllowlist({
       command: "find . -maxdepth 1",
       turnSourceChannel: "feishu",
       runId: "run-replaced-after-approval",
       toolCallId: "tool-replaced-after-approval",
-      detachedApproval: {
-        retainAuthority: () => ({ assertActive, release }),
-      },
     });
     expect(result.pendingResult?.details.status).toBe("approval-pending");
     await vi.waitFor(() => {
@@ -3457,10 +3459,8 @@ EOF`,
     });
 
     resolveApproval("allow-once");
-    authorityActive = false;
-    await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(resolveRegisteredExecApprovalDecisionMock).toHaveBeenCalled());
 
-    expect(assertActive).toHaveBeenCalled();
     expect(commitExecAuthorizationMock).not.toHaveBeenCalled();
     expect(runExecProcessMock).not.toHaveBeenCalled();
     expect(markBackgroundedMock).not.toHaveBeenCalled();

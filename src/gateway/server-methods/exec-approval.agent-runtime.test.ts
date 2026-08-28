@@ -54,7 +54,7 @@ function identity(enabled: boolean): AgentRuntimeIdentity {
 }
 
 function requestOptions(
-  runtimeIdentity: AgentRuntimeIdentity,
+  runtimeIdentity?: AgentRuntimeIdentity,
   validateAuthority: () => boolean = () => true,
 ): GatewayRequestHandlerOptions {
   const request = {
@@ -77,7 +77,7 @@ function requestOptions(
     client: {
       connId: "conn-agent-runtime",
       connect: { client: { id: "test-client", displayName: "Test Client" } },
-      internal: { agentRuntimeIdentity: runtimeIdentity },
+      ...(runtimeIdentity ? { internal: { agentRuntimeIdentity: runtimeIdentity } } : {}),
     },
     isWebchatConnect: () => false,
     respond: vi.fn(),
@@ -109,6 +109,52 @@ describe("exec approval signed agent runtime", () => {
     expect(manager.listPendingRecords()).toHaveLength(0);
     expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
       message: expect.stringContaining("no longer active"),
+    });
+  });
+
+  it("rejects detached registration outside the trusted agent runtime", async () => {
+    const manager = new ExecApprovalManager();
+    const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
+    const opts = requestOptions();
+    Object.assign(opts.params as Record<string, unknown>, { detached: true, host: "gateway" });
+
+    await handler(opts);
+
+    expect(manager.listPendingRecords()).toHaveLength(0);
+    expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
+      message: expect.stringContaining("trusted local agent runtime"),
+    });
+  });
+
+  it("moves detached approval ownership to the current Gateway generation", async () => {
+    let authorityActive = true;
+    const manager = new ExecApprovalManager({
+      persistence: { runtimeEpoch: "gateway-generation-1", databaseOptions: databaseOptions() },
+      validateAgentRuntimeDelegatedAuthority: () => authorityActive,
+    });
+    const handlers = createExecApprovalHandlers(manager);
+    const opts = requestOptions(identity(false), () => authorityActive);
+    Object.assign(opts.params as Record<string, unknown>, { detached: true, host: "gateway" });
+
+    const pending = handlers["exec.approval.request"]!(opts);
+    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
+    const record = manager.listPendingRecords()[0]!;
+    expect(record.agentRuntimeDelegatedAuthority).toBeUndefined();
+    expect(record).toMatchObject({ detachedGatewayGeneration: "gateway-generation-1" });
+    expect(vi.mocked(opts.respond).mock.calls[0]?.[1]).toMatchObject({
+      id: record.id,
+      gatewayGeneration: "gateway-generation-1",
+    });
+
+    authorityActive = false;
+    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await pending;
+
+    const staleWait = requestOptions(identity(false));
+    staleWait.params = { id: record.id, gatewayGeneration: "gateway-generation-2" };
+    await handlers["exec.approval.waitDecision"]!(staleWait);
+    expect(vi.mocked(staleWait.respond).mock.calls[0]?.[2]).toMatchObject({
+      message: expect.stringContaining("Gateway generation changed"),
     });
   });
 

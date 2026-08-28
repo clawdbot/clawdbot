@@ -67,11 +67,6 @@ export type ExecToolDefaults = {
   runId?: string;
   /** Exact admitted execution instance that owns secret-egress proxy access. */
   operationalRunInstance?: OperationalRunInstanceRef;
-  /** In-flight async approval work keeps its admitted authority until it settles. */
-  detachedApproval?: {
-    signal?: AbortSignal;
-    retainAuthority: () => { assertActive: () => void; release: () => void } | undefined;
-  };
   /** Durable session that receives detached exec completion events and approval followups. */
   notifySessionKey?: string;
   /** Ephemeral session UUID active when this exec tool was built. Regenerated
