@@ -98,6 +98,8 @@ const settingsRowRoutes = [
   "debug",
 ] as const satisfies readonly RouteId[];
 
+const mobileSettingsRoutes = [...settingsRowRoutes, "logs"] as const satisfies readonly RouteId[];
+
 const responsiveViewports = [
   { width: 390, height: 844 },
   { width: 768, height: 1024 },
@@ -106,66 +108,94 @@ const responsiveViewports = [
 ] as const;
 
 suite.define(() => {
-  it("uses the full settings content width on mobile without changing desktop insets", async () => {
+  it("aligns every mobile settings page with the topbar content", async () => {
     const context = await suite.browser.newContext({
       colorScheme: "dark",
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 844, width: 390 },
     });
-    const page = await context.newPage();
+    let page = await context.newPage();
     await installMockGateway(page);
 
     try {
+      const readShellInsets = (route: RouteId) =>
+        page.evaluate((activeRoute) => {
+          const content = document.querySelector<HTMLElement>("main.content");
+          const topbar = document.querySelector<HTMLElement>(".topbar");
+          if (!content || !topbar) {
+            throw new Error(`${activeRoute} settings shell did not render`);
+          }
+          return {
+            contentPaddingInline: Math.round(
+              Number.parseFloat(getComputedStyle(content).paddingLeft),
+            ),
+            topbarPaddingInline: Math.round(
+              Number.parseFloat(getComputedStyle(topbar).paddingLeft),
+            ),
+          };
+        }, route);
+
+      const layouts = [];
+      for (const route of mobileSettingsRoutes) {
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        await page.waitForTimeout(200);
+        layouts.push({ route, ...(await readShellInsets(route)) });
+      }
+      for (const layout of layouts) {
+        if (layout.contentPaddingInline !== 12 || layout.topbarPaddingInline !== 12) {
+          throw new Error(`${layout.route} settings shell alignment: ${JSON.stringify(layout)}`);
+        }
+      }
+
+      for (const route of ["appearance", "model-setup"] as const) {
+        await page.close();
+        page = await context.newPage();
+        await installMockGateway(page);
+        const pathname = pathForRoute(route);
+        await page.goto(new URL(pathname, suite.server.baseUrl).toString());
+        await waitForControlUiRoute(page, { pathname, routeId: route });
+        const header = page.locator(".content-header").last();
+        const workspace = page.locator(".settings-workspace").last();
+        await Promise.all([header.waitFor(), workspace.waitFor()]);
+        await expect
+          .poll(async () => {
+            const [headerBox, workspaceBox] = await Promise.all([
+              header.boundingBox(),
+              workspace.boundingBox(),
+            ]);
+            return headerBox && workspaceBox
+              ? {
+                  headerLeft: Math.round(headerBox.x),
+                  headerTop: Math.round(headerBox.y),
+                  workspaceLeft: Math.round(workspaceBox.x),
+                  workspaceRight: Math.round(workspaceBox.x + workspaceBox.width),
+                }
+              : null;
+          })
+          .toEqual({ headerLeft: 12, headerTop: 70, workspaceLeft: 12, workspaceRight: 378 });
+      }
+
+      await page.setViewportSize({ height: 900, width: 1440 });
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiRoute(page, {
         pathname: "/settings/appearance",
         routeId: "appearance",
       });
-
-      const readInsets = () =>
-        page.evaluate(() => {
-          const header = document.querySelector<HTMLElement>(".content-header");
-          const workspace = document.querySelector<HTMLElement>(".settings-workspace");
-          const settingsPage = document.querySelector<HTMLElement>(".settings-page");
-          const group = document.querySelector<HTMLElement>(".settings-group");
-          const configContent = document.querySelector<HTMLElement>(".config-content");
-          if (!header || !workspace || !settingsPage || !group || !configContent) {
-            throw new Error("Appearance settings layout did not render");
-          }
-          const headerBox = header.getBoundingClientRect();
-          const workspaceBox = workspace.getBoundingClientRect();
-          const pageBox = settingsPage.getBoundingClientRect();
-          const groupBox = group.getBoundingClientRect();
-          return {
-            configPadding: Math.round(
-              Number.parseFloat(getComputedStyle(configContent).paddingLeft),
-            ),
-            groupInset: Math.round(groupBox.x - workspaceBox.x),
-            headerPadding: Math.round(Number.parseFloat(getComputedStyle(header).paddingLeft)),
-            pagePadding: Math.round(Number.parseFloat(getComputedStyle(settingsPage).paddingLeft)),
-            pageInset: Math.round(pageBox.x - workspaceBox.x),
-            pageWidthDelta: Math.round(workspaceBox.width - pageBox.width),
-            headerWidthDelta: Math.round(workspaceBox.width - headerBox.width),
-          };
-        });
-
-      await expect.poll(readInsets).toEqual({
-        configPadding: 0,
-        groupInset: 0,
-        headerPadding: 0,
-        pagePadding: 0,
-        pageInset: 0,
-        pageWidthDelta: 0,
-        headerWidthDelta: 0,
-      });
-
-      await page.setViewportSize({ height: 900, width: 1440 });
-      await expect.poll(readInsets).toMatchObject({
-        configPadding: 22,
-        headerPadding: 16,
-        pagePadding: 16,
-      });
+      const desktopInsets = await page.evaluate(() => ({
+        configPadding: Number.parseFloat(
+          getComputedStyle(document.querySelector<HTMLElement>(".config-content")!).paddingLeft,
+        ),
+        headerPadding: Number.parseFloat(
+          getComputedStyle(document.querySelector<HTMLElement>(".content-header")!).paddingLeft,
+        ),
+        pagePadding: Number.parseFloat(
+          getComputedStyle(document.querySelector<HTMLElement>(".settings-page")!).paddingLeft,
+        ),
+      }));
+      expect(desktopInsets).toEqual({ configPadding: 22, headerPadding: 16, pagePadding: 16 });
     } finally {
       await context.close();
     }
