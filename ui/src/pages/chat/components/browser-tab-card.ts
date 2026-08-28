@@ -257,12 +257,8 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
               >
                 ${icons.moreHorizontal}
               </button>
-              <wa-dropdown-item value="copy-url">
-                <span slot="icon" aria-hidden="true">${icons.copy}</span>
-                ${t("browser.copyUrl")}
-              </wa-dropdown-item>
+              <wa-dropdown-item value="copy-url">${t("browser.copyUrl")}</wa-dropdown-item>
               <wa-dropdown-item value="open-new-tab" data-new-tab-action>
-                <span slot="icon" aria-hidden="true">${icons.globe}</span>
                 ${t("browser.openNewTab")}
               </wa-dropdown-item>
             </wa-dropdown>
