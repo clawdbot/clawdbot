@@ -168,17 +168,13 @@ export async function resolveAttemptSessionTargets(params: {
   agentId: string;
   cwd?: string;
   runId: string;
-  sessionFile?: string;
+  sessionFile: string;
   sessionId: string;
   sessionKey?: string;
-  storePath?: string;
+  storePath: string;
   suppressVisibleSessionEffects: boolean;
   workspaceDir: string;
-}): Promise<{
-  internalSessionTarget: AgentRunSessionTarget | undefined;
-  attemptSessionTarget: AgentRunSessionTarget | undefined;
-  attemptSessionFile: string | undefined;
-}> {
+}) {
   const internalSessionTarget = params.suppressVisibleSessionEffects
     ? await prepareInternalSessionEffectsSession({
         agentId: params.agentId,
