@@ -949,7 +949,6 @@ type PluginHookGatewayCronJobState = {
   lastFailureNotificationDelivered?: boolean;
   lastFailureNotificationDeliveryStatus?: PluginHookGatewayCronDeliveryStatus;
   lastFailureNotificationDeliveryError?: string;
-  lastFailureNotificationAttemptId?: string;
   streamStatus?: "starting" | "running" | "restarting" | "stopped" | "disabled" | "error";
   streamError?: string;
   streamConsecutiveFailures?: number;
