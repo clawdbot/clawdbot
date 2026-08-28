@@ -703,6 +703,58 @@ describe("chat transcript controller", () => {
     },
   );
 
+  it("keeps a reader above the padded real end stationary when a rendered row grows", async () => {
+    transcriptDomState.measuredRowHeight = 120;
+    const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+      kind: "content",
+      key: `row:${index}`,
+      content: html`<div>row ${index}</div>`,
+    }));
+    const { container, renderRows, transcript } = await mountTestTranscript(
+      "padded-row-resize",
+      rows,
+    );
+    try {
+      const total = transcriptSize(container);
+      container.style.padding = "28px 0 56px";
+      container.scrollTo = (options?: ScrollToOptions | number) => {
+        if (typeof options === "object") {
+          container.scrollTop = options.top ?? container.scrollTop;
+        }
+      };
+      Object.defineProperties(container, {
+        clientHeight: { configurable: true, value: 600 },
+        scrollHeight: { configurable: true, value: total + 84 },
+      });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(container, 800, 600);
+      }
+      container.scrollTop = container.scrollHeight - container.clientHeight - 44;
+      container.dispatchEvent(new Event("scroll"));
+      const readerOffset = container.scrollTop;
+      expect(Math.max(total - container.clientHeight - readerOffset, 0)).toBe(0);
+      const row = expectDefined(
+        container.querySelector<HTMLElement>('[data-index="11"]'),
+        "last row",
+      );
+      expect(observedElements.has(row)).toBe(true);
+
+      Object.defineProperty(row, "offsetHeight", { configurable: true, value: 192 });
+      Object.defineProperty(container, "scrollHeight", {
+        configurable: true,
+        value: total + 84 + 72,
+      });
+      for (const observer of resizeObservers) {
+        observer.emitTarget(row, 800, 192);
+      }
+      renderRows(rows);
+      expect(transcriptSize(container)).toBe(total + 72);
+      expect(container.scrollTop).toBe(readerOffset);
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
+
   it.each([false, true])(
     "keeps disclosure anchoring only without reader interruption=%s",
     async (interrupt) => {
@@ -775,6 +827,48 @@ describe("chat transcript controller", () => {
       transcript.hostDisconnected();
     }
   });
+
+  it.each([0, 8, 50])(
+    "follows appended typing only within 8px of the real end (distance=%s)",
+    async (distance) => {
+      const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+        kind: "content",
+        key: `row:${index}`,
+        content: html`<div>row ${index}</div>`,
+      }));
+      const { container, renderRows, transcript } = await mountTestTranscript(
+        `typing-distance-${distance}`,
+        rows,
+      );
+      try {
+        const total = transcriptSize(container);
+        Object.defineProperties(container, {
+          clientHeight: { configurable: true, value: 600 },
+          scrollHeight: { configurable: true, value: total + 84 },
+        });
+        for (const observer of resizeObservers) {
+          observer.emitTarget(container, 800, 600);
+        }
+        container.scrollTop = container.scrollHeight - container.clientHeight - distance;
+        container.dispatchEvent(new Event("scroll"));
+        const readerOffset = container.scrollTop;
+        const scrollTo = vi.fn();
+        container.scrollTo = scrollTo;
+        renderRows([
+          ...rows,
+          { kind: "content", key: "presence:typing", content: html`<div>Typing</div>` },
+        ]);
+        if (distance <= 8) {
+          expect(scrollTo).toHaveBeenCalledWith({ top: total + 84 - 600, behavior: "auto" });
+        } else {
+          expect(scrollTo).not.toHaveBeenCalled();
+          expect(container.scrollTop).toBe(readerOffset);
+        }
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   it("cancels typing follow before later geometry can retarget the reader", async () => {
     const flushFrames = stubAnimationFrames();

@@ -310,7 +310,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
       measureElement: measureVirtualElement,
       rangeExtractor: (range) =>
         extractTranscriptRange(range, this.rowIndexesByKey, this.focusedRowKey),
-      scrollEndThreshold: CHAT_TRANSCRIPT_END_THRESHOLD_PX,
+      // Virtual distance omits real padding, pinning readers ~80px up past scroll.ts's follow-lock.
+      // scheduleCommittedChatScroll owns end-follow on content changes and source: "resize".
+      // Disable isAtEnd()'s default too; callers must supply an explicit threshold.
+      scrollEndThreshold: -1,
       overscan: CHAT_TRANSCRIPT_OVERSCAN,
     });
     if (initialOffset !== null) {
@@ -577,7 +580,10 @@ class ChatSessionVirtualizerHost implements ReactiveControllerHost, ChatTranscri
     const virtualizer = this.virtualizerController.getVirtualizer();
     const typingAdded =
       !this.rowIndexesByKey.has("presence:typing") && nextKeys.includes("presence:typing");
-    const followTyping = typingAdded && !this.pendingScrollOffset && virtualizer.isAtEnd();
+    const followTyping =
+      typingAdded &&
+      !this.pendingScrollOffset &&
+      virtualizer.isAtEnd(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
     this.rowKeys = Object.freeze(nextKeys);
     const rowIndexesByKey = new Map(this.rowKeys.map((key, index) => [key, index]));
     this.rowIndexesByKey = rowIndexesByKey;
