@@ -109,6 +109,7 @@ export function registerBrowserAgentDebugRoutes(
       ctx,
       targetId,
       feature: "page errors",
+      existingSessionUnsupported: EXISTING_SESSION_LIMITS.errors,
       collect: async ({ cdpUrl, targetId: targetIdValue, pw }) =>
         await pw.getPageErrorsViaPlaywright({
           cdpUrl,

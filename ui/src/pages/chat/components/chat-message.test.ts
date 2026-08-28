@@ -868,32 +868,46 @@ describe("grouped chat rendering", () => {
   });
 
   it.each([
-    { state: "failed", label: "Not sent" },
-    { state: "unconfirmed", label: "Delivery unconfirmed" },
-  ] as const)("shows a $state footer with its diagnostic and retry action", ({ state, label }) => {
-    const container = document.createElement("div");
-    const onRetryQueuedMessage = vi.fn();
-    renderGroupedMessage(
-      container,
-      createUserMessage("Attempted message", {
-        __openclaw: {
-          id: "attempted-send",
-          kind: "pending-send",
-          state,
-          error: "Delivery diagnostic",
+    { state: "failed", label: "Not sent", actionLabel: undefined },
+    { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: undefined },
+    { state: "unconfirmed", label: "Delivery unconfirmed", actionLabel: "Check delivery" },
+  ] as const)(
+    "shows a $state footer with its diagnostic and retry action ($actionLabel)",
+    ({ state, label, actionLabel }) => {
+      const container = document.createElement("div");
+      const onRetryQueuedMessage = vi.fn();
+      renderGroupedMessage(
+        container,
+        createUserMessage("Attempted message", {
+          __openclaw: {
+            id: "attempted-send",
+            kind: "pending-send",
+            state,
+            error: "Delivery diagnostic",
+          },
+        }),
+        "user",
+        {
+          onRetryQueuedMessage,
+          queuedMessageAction: actionLabel
+            ? { id: "attempted-send", label: actionLabel }
+            : undefined,
         },
-      }),
-      "user",
-      { onRetryQueuedMessage },
-    );
+      );
 
-    const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
-    expect(status.dataset.sendState).toBe(state);
-    expect(status.title).toBe("Delivery diagnostic");
-    expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(`· ${label} · Retry`);
-    status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
-    expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
-  });
+      const status = expectElement(container, ".chat-group.user .chat-send-status", HTMLElement);
+      expect(status.dataset.sendState).toBe(state);
+      expect(status.title).toBe("Delivery diagnostic");
+      expect(status.textContent?.replace(/\s+/g, " ").trim()).toBe(
+        `· ${label} · ${actionLabel ?? "Retry"}`,
+      );
+      expect(status.querySelector("button")?.getAttribute("aria-label")).toBe(
+        actionLabel ?? "Retry queued message",
+      );
+      status.querySelector<HTMLButtonElement>(".chat-send-status__retry")?.click();
+      expect(onRetryQueuedMessage).toHaveBeenCalledWith("attempted-send");
+    },
+  );
 
   it("orders peer footer actions after the sender name and timestamp", () => {
     const container = document.createElement("div");
@@ -983,27 +997,40 @@ describe("grouped chat rendering", () => {
     });
   });
 
-  it("collapses long user messages and toggles their disclosure state", () => {
+  it("collapses long image-bearing user messages and toggles their disclosure state", () => {
     const container = document.createElement("div");
     const collapsedLines = ["Inspect AGENTS.md:188 first.", "a".repeat(1_201)];
     const expandedTail = "Full prompt tail after the disclosure boundary.";
     const markdownContent = [...collapsedLines, expandedTail].join("\n");
+    const message = createUserMessage(
+      [
+        { type: "text", text: markdownContent },
+        createMediaBlock({
+          url: "data:image/png;base64,cG5n",
+          alt: "Sent image",
+          width: 640,
+          height: 640,
+        }),
+      ],
+      { timestamp: 1001 },
+    );
     const onToggleUserMessageExpanded = vi.fn();
     markdownRenderMock
       .mockImplementationOnce(renderMarkdownHtml)
       .mockImplementationOnce(renderMarkdownHtml);
 
-    renderGroupedMessage(
-      container,
-      createUserMessage(markdownContent, { timestamp: 1001 }),
-      "user",
-      {
-        isUserMessageExpanded: () => false,
-        onToggleUserMessageExpanded,
-      },
-    );
+    renderGroupedMessage(container, message, "user", {
+      isUserMessageExpanded: () => false,
+      onToggleUserMessageExpanded,
+    });
 
     const disclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
+    expect(
+      expectElement(container, ".chat-bubble", HTMLDivElement).classList.contains(
+        "chat-bubble--with-images",
+      ),
+    ).toBe(true);
+    expect(container.querySelector(".chat-message-image")).not.toBeNull();
     const toggle = expectElement(disclosure, ".chat-message-disclosure__toggle", HTMLButtonElement);
     const collapsedText = expectElement(disclosure, ".chat-text", HTMLDivElement);
     const collapsedFileLink = expectElement(
@@ -1021,15 +1048,10 @@ describe("grouped chat rendering", () => {
     toggle.click();
     expect(onToggleUserMessageExpanded).toHaveBeenCalledWith("user-message:user-message");
 
-    renderGroupedMessage(
-      container,
-      createUserMessage(markdownContent, { timestamp: 1001 }),
-      "user",
-      {
-        isUserMessageExpanded: () => true,
-        onToggleUserMessageExpanded,
-      },
-    );
+    renderGroupedMessage(container, message, "user", {
+      isUserMessageExpanded: () => true,
+      onToggleUserMessageExpanded,
+    });
 
     const expandedDisclosure = expectElement(container, ".chat-message-disclosure", HTMLDivElement);
     const collapseToggle = expectElement(
@@ -4997,8 +5019,11 @@ describe("grouped chat rendering", () => {
     expect(fetchMock).toHaveBeenCalledWith(thumbnailUrl, expect.anything());
 
     const imageActions = container.querySelectorAll<HTMLButtonElement>(".chat-image-action");
-    expect(imageActions).toHaveLength(3);
-    imageActions[1]?.click();
+    expect([...imageActions].map((action) => action.getAttribute("aria-label"))).toEqual([
+      "Download image",
+      "Copy image",
+    ]);
+    imageActions[0]?.click();
     await vi.waitFor(() => expect(click).toHaveBeenCalledOnce());
     expect(clickedDownloads[0]).toBe("Ticketed image.png");
 

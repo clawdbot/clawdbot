@@ -12,6 +12,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import {
   classifyReleaseGhTransportError,
+  compareReleaseJobsByName,
   composeReleaseChildAttemptEvidence,
   formatReleaseStateOutcome,
   isReleaseGhArtifactMissingError,
@@ -579,7 +580,9 @@ function normalizeManifestChildEvidence(value) {
         });
         if (
           new Set(jobs.map((job) => job.name)).size !== jobs.length ||
-          jobs.some((job, index) => index > 0 && jobs[index - 1].name.localeCompare(job.name) >= 0)
+          jobs.some(
+            (job, index) => index > 0 && compareReleaseJobsByName(jobs[index - 1], job) >= 0,
+          )
         ) {
           throw new Error(`release validation child job identity is duplicated: ${key}`);
         }

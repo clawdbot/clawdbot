@@ -246,6 +246,12 @@ function normalizedAttemptJob(job, runAttempt) {
   };
 }
 
+export function compareReleaseJobsByName(left, right) {
+  // Composite evidence is hashed and revalidated across runners, so its order
+  // must not depend on the host's locale collation.
+  return left.name === right.name ? 0 : left.name < right.name ? -1 : 1;
+}
+
 export function validateReleaseChildRunProvenance(run, expected = {}) {
   const plannedRunAttempt = positiveInteger(expected.plannedRunAttempt);
   const effectiveRunAttempt = positiveInteger(run?.run_attempt);
@@ -336,7 +342,7 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
 
   const composite = {
     effectiveRunAttempt,
-    jobs: [...accepted.values()].toSorted((left, right) => left.name.localeCompare(right.name)),
+    jobs: [...accepted.values()].toSorted(compareReleaseJobsByName),
     plannedRunAttempt,
   };
   return { ...composite, sha256: releaseCompositeJobsSha256(composite) };
@@ -1302,6 +1308,9 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
               url: boundedString(job?.url, MAX_URL_LENGTH),
             }));
             const jobNames = timingJobs.map((job) => job.name);
+            const canonicalJobNames = timingJobs
+              .toSorted(compareReleaseJobsByName)
+              .map((job) => job.name);
             if (
               child.compositeJobsSha256 &&
               (timingJobs.length === 0 ||
@@ -1313,7 +1322,7 @@ export function validateReleaseStateArtifact(payload, expected, expectedMode) {
                     job.acceptedRunAttempt > runAttempt,
                 ) ||
                 new Set(jobNames).size !== jobNames.length ||
-                JSON.stringify(jobNames) !== JSON.stringify(jobNames.toSorted()))
+                JSON.stringify(jobNames) !== JSON.stringify(canonicalJobNames))
             ) {
               throw new Error(`release state child composite jobs are invalid: ${key}`);
             }

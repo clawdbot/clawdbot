@@ -14,20 +14,22 @@ const resolvePluginControlPlaneWorkspaceMock = vi.fn(
   }),
 );
 const manifestRegistry = { diagnostics: [], plugins: [] };
+const index: PluginMetadataSnapshot["index"] = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  generatedAtMs: 1,
+  installRecords: {},
+  plugins: [],
+  policyHash: "policy",
+  diagnostics: [],
+};
 const metadataSnapshot: PluginMetadataSnapshot = {
   configFingerprint: "fingerprint",
   diagnostics: [],
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    policyHash: "policy",
-    diagnostics: [],
-  },
+  index,
+  registryIndex: index,
   manifestRegistry,
   registryDiagnostics: [],
   plugins: [],

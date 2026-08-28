@@ -51,6 +51,7 @@ export const BROWSER_TAB_BOUND_ACTIONS = [
   "close",
   "console",
   "requests",
+  "errors",
   "text",
   "emulate",
   "dialog",

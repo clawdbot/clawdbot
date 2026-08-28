@@ -33,9 +33,8 @@ describe("Control UI asset manifest", () => {
     "/assets/app.js",
   ])("rejects unsafe inventory path %s", (assetPath) => {
     const manifest = createControlUiAssetManifest([
-      { path: "assets/app.js", sha256: "a".repeat(64), size: 7 },
+      { path: assetPath, sha256: "a".repeat(64), size: 7 },
     ]);
-    manifest.assets[0] = { ...manifest.assets[0]!, path: assetPath };
 
     expect(parseControlUiAssetManifest(manifest)).toBeNull();
   });

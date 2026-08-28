@@ -58,6 +58,22 @@ describe("buildGatewayRuntimeHints", () => {
     expect(hints.join("\n")).not.toContain("systemd user services are unavailable");
   });
 
+  it("classifies systemd recovery from structured inspection diagnostics", () => {
+    const hints = buildGatewayRuntimeHints(
+      {
+        status: "unknown",
+        detail: "service runtime inspection failed; retry with openclaw status --deep",
+        inspectionFailure: {
+          code: "service-runtime-inspection-failed",
+          detail: "systemctl --user unavailable: Failed to connect to bus",
+        },
+      },
+      { platform: "linux", env: {} },
+    );
+
+    expect(hints.some((hint) => hint.includes("systemd user services are unavailable"))).toBe(true);
+  });
+
   it.each([
     {
       env: { OPENCLAW_PROFILE: "blue" },

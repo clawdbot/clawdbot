@@ -2,7 +2,6 @@ import crypto from "node:crypto";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveContextTokensForModel } from "../../agents/context.js";
 import { DEFAULT_CONTEXT_TOKENS } from "../../agents/defaults.js";
-import { isLikelyContextOverflowError } from "../../agents/failover/classify.js";
 import { prepareGitCoauthorAttribution } from "../../agents/git-coauthor-attribution.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
@@ -46,12 +45,6 @@ import { createReplyRestartRecoveryClaimController } from "./restart-recovery-cl
 import { resolveRoutedDeliveryThreadId } from "./routed-delivery-thread.js";
 import { resolveReplyHookTrigger } from "./run-provenance.js";
 import type { TypingSignaler } from "./typing-mode.js";
-type SessionResetOptions = {
-  failureLabel: string;
-  buildLogMessage: (nextSessionId: string) => string;
-  cleanupTranscripts?: boolean;
-};
-
 type ExecutePreparedReplyAgentRunInput = Pick<
   RunReplyAgentParams,
   | "blockReplyChunking"
@@ -94,7 +87,6 @@ type ExecutePreparedReplyAgentRunInput = Pick<
   isHeartbeat: boolean;
   isRestartRecoveryArmed: () => boolean;
   pendingToolTasks: Set<Promise<void>>;
-  performSessionReset: (options: SessionResetOptions) => Promise<boolean>;
   replyMediaContext: ReplyMediaContext;
   replyOperation: ReplyOperation;
   replyRouteThreadId: ReturnType<typeof resolveRoutedDeliveryThreadId>;
@@ -138,7 +130,6 @@ export async function executePreparedReplyAgentRun(
     isRestartRecoveryArmed,
     opts,
     pendingToolTasks,
-    performSessionReset,
     queueKey,
     replyMediaContext,
     replyOperation,
@@ -170,14 +161,6 @@ export async function executePreparedReplyAgentRun(
     typingSignals,
   } = context;
   let activeSessionEntry = getActiveSessionEntry();
-  let activeIsNewSession: boolean;
-  let preflightCompactionApplied: boolean | undefined;
-  const resetSession = async (options: SessionResetOptions): Promise<boolean> => {
-    const reset = await performSessionReset(options);
-    activeSessionEntry = getActiveSessionEntry();
-    activeIsNewSession = getActiveIsNewSession();
-    return reset;
-  };
   const admitUserTurn = async (
     ...args: Parameters<typeof admitUserTurnWithRecovery>
   ): ReturnType<typeof admitUserTurnWithRecovery> => {
@@ -235,53 +218,30 @@ export async function executePreparedReplyAgentRun(
   }
 
   const prePreflightCompactionCount = activeSessionEntry?.compactionCount ?? 0;
-  try {
-    activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
-      runSessionCompactionIfNeeded({
-        cfg,
-        followupRun,
-        promptForEstimate: followupRun.prompt,
-        defaultModel,
-        sessionEntry: activeSessionEntry,
-        sessionStore: activeSessionStore,
-        sessionKey,
-        runtimePolicySessionKey,
-        storePath,
-        isHeartbeat,
-        abortSignal: replyOperation.abortSignal,
-        onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
-        onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
-        onCompactionNotice: sendDirectCompactionNotice,
-      }),
-    );
-    setActiveSessionEntry(activeSessionEntry);
-    preflightCompactionApplied =
-      (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
-  } catch (err) {
-    const canRotateAfterPreflightFailure =
-      memoryFlushResult.outcome === "exhausted" &&
-      !replyOperation.abortSignal.aborted &&
-      isLikelyContextOverflowError(String(err));
-    if (!canRotateAfterPreflightFailure) {
-      throw err;
-    }
-    logVerbose(`Preflight compaction could not recover exhausted memory flush: ${String(err)}`);
-  }
+  activeSessionEntry = await traceAgentPhase("reply.preflight_compaction", () =>
+    runSessionCompactionIfNeeded({
+      cfg,
+      followupRun,
+      promptForEstimate: followupRun.prompt,
+      defaultModel,
+      sessionEntry: activeSessionEntry,
+      sessionStore: activeSessionStore,
+      sessionKey,
+      runtimePolicySessionKey,
+      storePath,
+      isHeartbeat,
+      abortSignal: replyOperation.abortSignal,
+      onCompactionStart: () => replyOperation.setPhase("preflight_compacting"),
+      onSessionIdChanged: (sessionId) => replyOperation.updateSessionId(sessionId),
+      onCompactionNotice: sendDirectCompactionNotice,
+    }),
+  );
+  setActiveSessionEntry(activeSessionEntry);
+  const preflightCompactionApplied =
+    (activeSessionEntry?.compactionCount ?? 0) > prePreflightCompactionCount;
 
-  if (memoryFlushResult.outcome === "exhausted" && !preflightCompactionApplied) {
-    await resetSession({
-      failureLabel: "memory flush exhaustion",
-      buildLogMessage: (nextSessionId) =>
-        `Memory flush exhausted. Rotating bloated session ${sessionKey} -> ${nextSessionId}.`,
-      // Rotate only when compaction could not recover the bloated context.
-      cleanupTranscripts: false,
-    });
-    if (activeSessionEntry?.sessionId) {
-      replyOperation.updateSessionId(activeSessionEntry.sessionId);
-    }
-  }
-
-  // Exhausted background maintenance is non-terminal: optionally notify, then reply normally.
+  // Optional memory maintenance cannot justify discarding conversation history.
+  // Required compaction failures surface above; otherwise optionally notify and continue.
   if (memoryFlushResult.outcome === "exhausted") {
     await sendDirectCompactionNotice?.("memory_flush_degraded");
   }
@@ -498,7 +458,7 @@ export async function executePreparedReplyAgentRun(
     replyOperation,
   );
   activeSessionEntry = getActiveSessionEntry();
-  activeIsNewSession = getActiveIsNewSession();
+  const activeIsNewSession = getActiveIsNewSession();
 
   if (operationSuperseded) {
     return { text: SILENT_REPLY_TOKEN };

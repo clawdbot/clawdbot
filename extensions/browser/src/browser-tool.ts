@@ -24,6 +24,7 @@ import {
   executeDownloadAction,
   executeEmulateAction,
   executeRequestsAction,
+  executeErrorsAction,
   executeTextAction,
   executeTabsAction,
   formatBrowserExternalToolResult,
@@ -563,7 +564,7 @@ export function createBrowserTool(opts?: {
       if (
         !proxyRequest &&
         isUserBrowserProfile &&
-        ["requests", "text", "emulate"].includes(action)
+        ["requests", "errors", "text", "emulate"].includes(action)
       ) {
         throw new Error(
           `action=${action} is not supported for existing-session profiles; use action=snapshot to inspect this page, or select a managed browser profile for ${action}.`,
@@ -1026,14 +1027,15 @@ export function createBrowserTool(opts?: {
           return result;
         }
         case "requests":
+        case "errors":
         case "text":
         case "emulate": {
-          const execute =
-            action === "requests"
-              ? executeRequestsAction
-              : action === "text"
-                ? executeTextAction
-                : executeEmulateAction;
+          const execute = {
+            requests: executeRequestsAction,
+            errors: executeErrorsAction,
+            text: executeTextAction,
+            emulate: executeEmulateAction,
+          }[action];
           const result = await execute({ input: params, baseUrl, profile, proxyRequest, signal });
           sessionTabs.touch(
             readStringValue(asNullableRecord(result.details)?.targetId) ??
@@ -1155,6 +1157,7 @@ export function createBrowserTool(opts?: {
         "snapshot",
         "text",
         "requests",
+        "errors",
         "console",
         "emulate",
         "act",

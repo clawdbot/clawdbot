@@ -53,6 +53,7 @@ import {
   getChatSessionProjection,
   readChatSessionProjectionScope,
   reduceChatSessionProjection,
+  setChatSessionProjection,
 } from "./history-merge.ts";
 import {
   controlUiNowMs,
@@ -1872,21 +1873,27 @@ async function loadChatHistoryUncached(
       for (const payload of response.messages) {
         applySessionMessagePayload(state, payload, runActive, { kind: "history-delta" });
       }
+      const historyProjection = getChatSessionProjection(state, state.chatMessages);
       if (Object.hasOwn(response.sessionInfo, "activeLeafEntryId")) {
         state.chatDisplayedLeafEntryId = response.sessionInfo.activeLeafEntryId?.trim() || null;
       }
       state.currentSessionId = response.sessionInfo.sessionId?.trim() || previousSessionId;
+      // An accepted delta advances the same transcript generation, not a branch replacement.
+      // Carry ownership across its leaf advance; reseeding loses attributed pending sends and runs.
+      setChatSessionProjection(state, {
+        ...historyProjection,
+        scope: { ...historyProjection.scope, ...readChatSessionProjectionScope(state) },
+      });
       state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
-      const currentRunProjections = readChatRunProjections(state, sessionKey, requestAgentId);
       applyHistoryRunSnapshot({
         state,
         run: response.inFlightRun,
         sessionInfo: response.sessionInfo,
         previousRunProjections,
         runProjectionsBeforeApply,
-        currentRunProjections,
+        currentRunProjections: historyProjection.runs,
         resetStream: !state.chatRunId || state.chatRunId === previousRunId,
         activeStreamBeforeReset: activeStreamBeforeApply,
       });

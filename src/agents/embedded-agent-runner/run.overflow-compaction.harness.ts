@@ -100,19 +100,21 @@ const anthropicAuthMetadataPlugin: PluginManifestRecord = {
   ],
 };
 
+const testPluginIndex: PluginMetadataSnapshot["index"] = {
+  version: 1,
+  hostContractVersion: "test",
+  compatRegistryVersion: "test",
+  migrationVersion: 1,
+  policyHash: "",
+  generatedAtMs: 1,
+  installRecords: {},
+  plugins: [],
+  diagnostics: [],
+};
 const testPluginMetadataSnapshot: PluginMetadataSnapshot = {
   policyHash: "",
-  index: {
-    version: 1,
-    hostContractVersion: "test",
-    compatRegistryVersion: "test",
-    migrationVersion: 1,
-    policyHash: "",
-    generatedAtMs: 1,
-    installRecords: {},
-    plugins: [],
-    diagnostics: [],
-  },
+  index: testPluginIndex,
+  registryIndex: testPluginIndex,
   registryDiagnostics: [],
   manifestRegistry: { plugins: [anthropicAuthMetadataPlugin], diagnostics: [] },
   plugins: [anthropicAuthMetadataPlugin],

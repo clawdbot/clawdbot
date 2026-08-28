@@ -265,7 +265,8 @@ vi.mock("../../channels/plugins/index.js", async (importOriginal) => ({
   getChannelPlugin: (channel: unknown) => state.getChannelPluginMock(channel),
 }));
 
-vi.mock("../../agents/embedded-agent-runner/runs.js", () => ({
+vi.mock("../../agents/embedded-agent-runner/runs.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent-runner/runs.js")>()),
   formatEmbeddedAgentQueueFailureSummary: () => "test queue rejection",
   queueEmbeddedAgentMessageWithOutcomeAsync: async (
     sessionId: string,
