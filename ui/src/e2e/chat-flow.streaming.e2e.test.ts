@@ -37,6 +37,20 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Earlier completed reply.").waitFor();
+      const earlierAssistant = page.locator(".chat-group.assistant").first();
+      const footerPresentation = (group: typeof earlierAssistant) =>
+        group.locator(".chat-group-footer").evaluate((element) => {
+          const style = getComputedStyle(element);
+          return { opacity: style.opacity, pointerEvents: style.pointerEvents };
+        });
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(() => footerPresentation(earlierAssistant))
+        .toEqual(
+          mobile
+            ? { opacity: "0", pointerEvents: "none" }
+            : { opacity: "1", pointerEvents: "auto" },
+        );
       await page.locator(".agent-chat__composer-combobox textarea").fill("show turn metadata");
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -69,9 +83,13 @@ suite.define(() => {
       };
       await reveal();
       expect(await activeGroup.locator(".chat-group-footer").count()).toBe(0);
-      expect(
-        await page.locator(".chat-group.assistant").first().locator(".chat-group-footer").count(),
-      ).toBe(1);
+      await page.mouse.move(0, 0);
+      await expect
+        .poll(() => footerPresentation(earlierAssistant))
+        .toEqual({
+          opacity: "0",
+          pointerEvents: "none",
+        });
 
       // Settled commentary is still part of an active turn while a tool runs.
       await gateway.emitGatewayEvent("agent", {
@@ -93,8 +111,16 @@ suite.define(() => {
 
       await gateway.emitChatFinal({ runId, text: "The turn is complete." });
       await activeGroup.getByText("The turn is complete.", { exact: true }).waitFor();
-      await reveal();
+      await page.mouse.move(0, 0);
       const footer = activeGroup.locator(".chat-group-footer");
+      await expect
+        .poll(() => footerPresentation(activeGroup))
+        .toEqual(
+          mobile
+            ? { opacity: "0", pointerEvents: "none" }
+            : { opacity: "1", pointerEvents: "auto" },
+        );
+      await reveal();
       await expect
         .poll(() => footer.evaluate((element) => getComputedStyle(element).opacity))
         .toBe("1");

@@ -371,7 +371,7 @@
   min-height: 24px;
   border-radius: var(--radius-md);
   color: var(--muted);
-  opacity: var(--chat-footer-disclosure-opacity, 0);
+  opacity: var(--chat-footer-action-opacity, var(--chat-footer-disclosure-opacity, 0));
   pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   transition:
     opacity 120ms ease-out,
@@ -386,6 +386,14 @@
 .chat-group:hover .chat-message-actions-row button {
   opacity: 0.6;
   pointer-events: auto;
+}
+
+@media (hover: hover) {
+  .chat-group--latest-assistant {
+    --chat-footer-action-opacity: 0.6;
+    --chat-footer-disclosure-opacity: 1;
+    --chat-footer-disclosure-pointer-events: auto;
+  }
 }
 
 .chat-group:hover .chat-group-footer-actions button:disabled,

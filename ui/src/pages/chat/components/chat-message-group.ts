@@ -120,6 +120,7 @@ type RenderMessageGroupOptions = {
   turnRecap?: TurnRecap;
   frameContent?: unknown;
   frameActionOwner?: MessageGroup["messages"][number] | null;
+  latestAssistant?: boolean;
 };
 
 type GroupedMessageRenderOptions = Parameters<typeof renderGroupedMessage>[2];
@@ -530,9 +531,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
 
   return html`
     <div
-      class="chat-group ${roleClass} chat-group--with-footer${isPeerGroup
-        ? " chat-group--peer"
-        : ""}${senderHue === null ? "" : " chat-group--sender-tint"}"
+      class="chat-group ${roleClass} chat-group--with-footer${opts.latestAssistant
+        ? " chat-group--latest-assistant"
+        : ""}${isPeerGroup ? " chat-group--peer" : ""}${senderHue === null
+        ? ""
+        : " chat-group--sender-tint"}"
       style=${senderHue === null ? nothing : `--chat-sender-hue: ${senderHue}`}
       data-chat-row-key=${group.key}
     >
