@@ -392,6 +392,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
                   controls
                   autoplay
                   playsinline
+                  tabindex="0"
                 ></video>`
               : html`<img
                   class=${this.scale > 1 ? "image zoomed" : "image"}

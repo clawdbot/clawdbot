@@ -1,4 +1,4 @@
-import type { ReactiveController, ReactiveControllerHost } from "lit";
+import { render, type ReactiveController, type ReactiveControllerHost } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
@@ -25,6 +25,7 @@ import {
 } from "./chat-state-refresh.ts";
 import { resolveChatAvatarUrl, selectedChatSessionRow } from "./chat-state-route.ts";
 import { buildChatItems } from "./chat-thread-build.ts";
+import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
 import { getChatSessionProjection, reduceChatSessionProjection } from "./history-merge.ts";
 import { scheduleControlUiAfterPaint } from "./performance.ts";
 import { applySessionMessagePayload } from "./session-message-apply.ts";
@@ -3131,11 +3132,29 @@ describe("image lightbox lifecycle", () => {
       { querySelector: () => null },
     );
 
-    state.handleOpenImage({ kind: "video", src: "data:video/mp4;base64,AAAA", title: "Clip" });
+    const source = "data:video/mp4;base64,AAAA";
+    const container = document.body.appendChild(document.createElement("div"));
+    render(
+      renderAssistantAttachments(
+        [
+          {
+            type: "attachment",
+            attachment: { kind: "video", label: "Clip", mimeType: "video/mp4", url: source },
+          },
+        ],
+        { onOpenImage: state.handleOpenImage },
+      ),
+      container,
+    );
+    const player = container.querySelector("openclaw-chat-video-player") as HTMLElement & {
+      onExpand: (src: string) => void;
+    };
+    player.onExpand(source);
     expect(state.imageLightbox?.src).toBe("data:video/mp4;base64,AAAA");
 
     state.handleOpenImage({ kind: "video", src: "data:audio/mp3;base64,AAAA", title: "Audio" });
     expect(state.imageLightbox).toBeNull();
+    container.remove();
   });
 
   it("invalidates immediately when beginning a deferred image open", () => {

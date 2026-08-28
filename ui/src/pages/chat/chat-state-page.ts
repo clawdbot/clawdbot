@@ -449,14 +449,12 @@ export function createPageState(
       return;
     }
     const video = item.kind === "video";
-    const safeSrc = video
-      ? safeMediaAttachmentHref(item.src, "video")
-      : resolveSafeExternalUrl(item.src, window.location.href, { allowDataImage: true });
-    const safeOriginalSrc = item.originalSrc
-      ? video
-        ? safeMediaAttachmentHref(item.originalSrc, "video")
-        : resolveSafeExternalUrl(item.originalSrc, window.location.href, { allowDataImage: true })
-      : undefined;
+    const resolveSrc = (src: string) =>
+      video
+        ? safeMediaAttachmentHref(src, "video")
+        : resolveSafeExternalUrl(src, window.location.href, { allowDataImage: true });
+    const safeSrc = resolveSrc(item.src);
+    const safeOriginalSrc = item.originalSrc ? resolveSrc(item.originalSrc) : undefined;
     if (!safeSrc || (item.originalSrc && !safeOriginalSrc)) {
       item.release?.();
       return;

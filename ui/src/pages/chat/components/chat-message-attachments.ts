@@ -456,16 +456,16 @@ export function renderAssistantAttachments(
       attachment.kind === "video" && onOpenImage && safeAttachmentUrl
         ? (src: string) => {
             const requestVersion = onRequestOpenImage?.();
-            const item = {
+            const overlayItem = {
               kind: "video" as const,
               src,
               originalSrc: safeAttachmentUrl,
               title: attachment.label,
             };
             if (requestVersion === undefined) {
-              onOpenImage(item);
+              onOpenImage(overlayItem);
             } else {
-              onOpenImage(item, requestVersion);
+              onOpenImage(overlayItem, requestVersion);
             }
           }
         : undefined;
