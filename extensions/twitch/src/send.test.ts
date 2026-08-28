@@ -216,7 +216,8 @@ describe("send", () => {
       );
 
       expect(result.ok).toBe(true);
-      expect(result.messageId).toBe("skipped");
+      expect(result.outcome).toBe("not_sent");
+      expect(result.messageId).toBe("");
       expect(result.receipt.platformMessageIds).toStrictEqual([]);
       expect(result.receipt.parts).toStrictEqual([]);
     });

@@ -9,6 +9,19 @@ export function createDeliveryResultRecorder(params: {
 }) {
   const results = params.results;
   let reportedResults: Array<{ identityKey: string; resultIndex: number }> = [];
+  let suppressionReason: "adapter_returned_no_send" | "adapter_returned_no_identity" | undefined;
+  const observeDeliveryResult = (delivery: OutboundDeliveryResult): boolean => {
+    if (hasDeliveryResultIdentity(delivery)) {
+      return true;
+    }
+    // One ambiguous completion prevents the payload from claiming that every
+    // transport deliberately declined to send, regardless of callback order.
+    suppressionReason =
+      delivery.outcome === "not_sent"
+        ? (suppressionReason ?? "adapter_returned_no_send")
+        : "adapter_returned_no_identity";
+    return false;
+  };
   const resultIdentityKey = (delivery: OutboundDeliveryResult): string =>
     JSON.stringify([
       delivery.channel,
@@ -44,7 +57,7 @@ export function createDeliveryResultRecorder(params: {
   const reportIdentifiedDeliveryResult = async (
     delivery: OutboundDeliveryResult,
   ): Promise<void> => {
-    if (!hasDeliveryResultIdentity(delivery)) {
+    if (!observeDeliveryResult(delivery)) {
       return;
     }
     const resultIndex = results.length;
@@ -58,6 +71,9 @@ export function createDeliveryResultRecorder(params: {
     deliveries: readonly OutboundDeliveryResult[],
     options?: { finalResultIsLastReported?: boolean },
   ): Promise<boolean[]> => {
+    if (deliveries.length === 0) {
+      suppressionReason = "adapter_returned_no_identity";
+    }
     const reportedByIdentity = new Map<string, number[]>();
     for (const reported of reportedResults) {
       const matches = reportedByIdentity.get(reported.identityKey) ?? [];
@@ -73,7 +89,7 @@ export function createDeliveryResultRecorder(params: {
       const removals = new Set<number>();
       const appendResults: OutboundDeliveryResult[] = [];
       for (const delivery of deliveries) {
-        if (!hasDeliveryResultIdentity(delivery)) {
+        if (!observeDeliveryResult(delivery)) {
           recorded.push(false);
           continue;
         }
@@ -171,8 +187,10 @@ export function createDeliveryResultRecorder(params: {
     recordIdentifiedDeliveryResult,
     recordIdentifiedDeliveryResults,
     reportIdentifiedDeliveryResult,
-    resetReportedResults: () => {
+    getSuppressionReason: () => suppressionReason ?? "adapter_returned_no_identity",
+    resetPayloadResults: () => {
       reportedResults = [];
+      suppressionReason = undefined;
     },
   };
 }

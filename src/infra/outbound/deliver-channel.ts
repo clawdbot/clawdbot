@@ -122,6 +122,9 @@ async function runChannelMessageSendWithLifecycle<
   try {
     attemptToken = await params.lifecycle.beforeSendAttempt?.(params.ctx);
     const result = await params.send();
+    if (result.outcome === "not_sent") {
+      return { result };
+    }
     const successCtx = {
       ...params.ctx,
       result,

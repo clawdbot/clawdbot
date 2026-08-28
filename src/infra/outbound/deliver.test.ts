@@ -34,7 +34,7 @@ import {
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
-import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
 type AppendAssistantTranscript =
@@ -947,6 +947,37 @@ describe("deliverOutboundPayloads", () => {
     expect(results[0]?.messageId).toBe("message-adapter-1");
   });
 
+  it("does not run successful delivery lifecycle hooks for an explicit no-send", async () => {
+    const beforeSendAttempt = vi.fn(() => "pending-no-send");
+    const afterSendSuccess = vi.fn();
+    const afterCommit = vi.fn();
+    const afterSendFailure = vi.fn();
+    const onPayloadDeliveryOutcome = vi.fn();
+    setMatrixMessageAdapter({
+      id: "matrix",
+      send: {
+        lifecycle: { beforeSendAttempt, afterSendSuccess, afterCommit, afterSendFailure },
+        text: async () => ({
+          ...createMatrixMessageSendResult(""),
+          outcome: "not_sent",
+        }),
+      },
+    });
+
+    const results = await deliverMatrix({ skipQueue: true, onPayloadDeliveryOutcome });
+
+    expect(results).toEqual([]);
+    expect(beforeSendAttempt).toHaveBeenCalledOnce();
+    expect(afterSendSuccess).not.toHaveBeenCalled();
+    expect(afterCommit).not.toHaveBeenCalled();
+    expect(afterSendFailure).not.toHaveBeenCalled();
+    expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith({
+      index: 0,
+      status: "suppressed",
+      reason: "adapter_returned_no_send",
+    });
+  });
+
   it("revalidates before direct adapter handoff when the adapter ignores the dispatch callback", async () => {
     const enteredPreflight = createDeferredCore();
     const resumePreflight = createDeferredCore();
@@ -1185,50 +1216,58 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("persists owner suppression before acknowledging its durable intent", async () => {
-    const order: string[] = [];
-    queueMocks.enqueueDelivery.mockImplementationOnce(async () => {
-      order.push("queue");
-      return "queue-suppressed";
-    });
-    completionMocks.suppressDurableDelivery.mockImplementationOnce(() => {
-      order.push("suppress");
-    });
-    queueMocks.ackDelivery.mockImplementationOnce(async () => {
-      order.push("ack");
-    });
-    const sendMatrix = vi.fn();
+  it.each([false, true])(
+    "persists owner suppression before ack (provider no-send: %s)",
+    async (providerNoSend) => {
+      const order: string[] = [];
+      queueMocks.enqueueDelivery.mockImplementationOnce(async () => {
+        order.push("queue");
+        return "queue-suppressed";
+      });
+      completionMocks.suppressDurableDelivery.mockImplementationOnce(() => {
+        order.push("suppress");
+      });
+      queueMocks.ackDelivery.mockImplementationOnce(async () => {
+        order.push("ack");
+      });
+      const sendMatrix = vi
+        .fn()
+        .mockResolvedValue({ channel: "matrix", messageId: "", outcome: "not_sent" });
+      setTestOutbound({ sendText: sendMatrix });
 
-    const results = await deliverMatrix({
-      cfg: {
-        agents: {
-          defaults: {
-            silentReply: {
-              group: "allow",
-              internal: "allow",
+      const results = await deliverMatrix({
+        cfg: {
+          agents: {
+            defaults: {
+              silentReply: {
+                group: "allow",
+                internal: "allow",
+              },
             },
           },
         },
-      },
-      payloads: [{ text: "NO_REPLY" }],
-      deps: { matrix: sendMatrix },
-      session: {
-        key: "agent:main:matrix:slash:!room",
-        policyKey: "agent:main:matrix:direct:!room",
-      },
-      deliveryCompletion: {
-        kind: "conversation",
-        agentId: "main",
-        operationId: "operation-suppressed",
-        routeFingerprint: "route-suppressed",
-      },
-      onDeliveryAttempt: async () => {},
-    });
+        payloads: [{ text: providerNoSend ? "---" : "NO_REPLY" }],
+        deps: { matrix: sendMatrix },
+        session: {
+          key: "agent:main:matrix:slash:!room",
+          policyKey: "agent:main:matrix:direct:!room",
+        },
+        deliveryCompletion: {
+          kind: "conversation",
+          agentId: "main",
+          operationId: "operation-suppressed",
+          routeFingerprint: "route-suppressed",
+        },
+        onDeliveryAttempt: async () => {},
+      });
 
-    expect(results).toEqual([]);
-    expect(sendMatrix).not.toHaveBeenCalled();
-    expect(order).toEqual(["queue", "suppress", "ack"]);
-  });
+      expect(results).toEqual([]);
+      expect(sendMatrix).toHaveBeenCalledTimes(providerNoSend ? 1 : 0);
+      expect(order).toEqual(["queue", "suppress", "ack"]);
+      expect(queueMocks.failDeliveryAfterPlatformSend).not.toHaveBeenCalled();
+      expect(completionMocks.failDurableDelivery).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects provider-blocked deferred delivery before queue creation or platform work", async () => {
     const admitDeferredDelivery = vi.fn(() => ({
@@ -3797,6 +3836,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendFormattedText).toHaveBeenCalledTimes(2);
     expect(results.map((result) => result.messageId)).toEqual(["push", "push"]);
+    expect(countPhysicalOutboundSends(results)).toBe(2);
   });
 
   it("preserves repeated receipt IDs within one adapter invocation", async () => {
@@ -3830,6 +3870,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(sendPayload).toHaveBeenCalledTimes(1);
     expect(results.map((result) => result.messageId)).toEqual(["push", "push"]);
+    expect(countPhysicalOutboundSends(results)).toBe(2);
   });
 
   it("replaces repeated progress IDs covered by aggregate receipt parts", async () => {
@@ -3864,6 +3905,7 @@ describe("deliverOutboundPayloads", () => {
       "push",
       "push",
     ]);
+    expect(countPhysicalOutboundSends(results)).toBe(2);
   });
 
   it("replaces per-message progress with one aggregate final receipt", async () => {
@@ -3901,6 +3943,7 @@ describe("deliverOutboundPayloads", () => {
 
     expect(results).toHaveLength(1);
     expect(results[0]?.receipt?.parts.map((part) => part.platformMessageId)).toEqual(["m1", "m2"]);
+    expect(countPhysicalOutboundSends(results)).toBe(2);
   });
 
   it("keeps commit hooks attached to a final result that replaces progress evidence", async () => {
@@ -5455,18 +5498,23 @@ describe("deliverOutboundPayloads", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it("does not count no-op sendPayload results as delivered", async () => {
+  it.each([
+    [undefined, "adapter_returned_no_identity"],
+    ["not_sent", "adapter_returned_no_send"],
+  ] as const)("does not count sendPayload outcome %s as delivered", async (outcome, reason) => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendText = vi.fn();
     const pinDeliveredMessage = vi.fn<OutboundPinDeliveredMessage>();
     const afterDeliverPayload = vi.fn();
+    const onPayloadDeliveryOutcome = vi.fn();
     const sendPayload = installPayloadOutbound(
-      { channel: "matrix", messageId: "" },
+      { channel: "matrix", messageId: "", ...(outcome ? { outcome } : {}) },
       { sendText, sendTextOnlyErrorPayloads: true, pinDeliveredMessage, afterDeliverPayload },
     );
 
     const results = await deliverMatrix({
       to: "!room:1",
+      onPayloadDeliveryOutcome,
       payloads: [
         {
           text: "provider exploded",
@@ -5488,7 +5536,116 @@ describe("deliverOutboundPayloads", () => {
     expect(afterDeliverPayload).not.toHaveBeenCalled();
     expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
+    expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith({
+      index: 0,
+      status: "suppressed",
+      reason,
+    });
   });
+
+  it.each([
+    ["all explicit no-sends", ["not_sent", "not_sent"], "adapter_returned_no_send"],
+    ["unknown completion last", ["not_sent", undefined], "adapter_returned_no_identity"],
+    ["unknown completion first", [undefined, "not_sent"], "adapter_returned_no_identity"],
+    ["empty result list", [], "adapter_returned_no_identity"],
+  ] as const)("records formatted text with %s honestly", async (_label, outcomes, reason) => {
+    const onPayloadDeliveryOutcome = vi.fn();
+    setTestOutbound({
+      sendFormattedText: async () =>
+        outcomes.map((outcome) => ({
+          channel: "matrix",
+          messageId: "",
+          ...(outcome ? { outcome } : {}),
+        })),
+    });
+
+    const results = await deliverMatrix({ skipQueue: true, onPayloadDeliveryOutcome });
+
+    expect(results).toEqual([]);
+    expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith({
+      index: 0,
+      status: "suppressed",
+      reason,
+    });
+  });
+
+  it("resets no-send disposition between chunked logical payloads", async () => {
+    const onPayloadDeliveryOutcome = vi.fn();
+    const noSend = { channel: "matrix" as const, messageId: "", outcome: "not_sent" as const };
+    const sendText = vi
+      .fn()
+      .mockResolvedValueOnce(noSend)
+      .mockResolvedValueOnce({ channel: "matrix", messageId: "" })
+      .mockResolvedValueOnce(noSend);
+    setTestOutbound({ sendText, chunker: chunkText, chunkerMode: "text", textChunkLimit: 2 });
+
+    const results = await deliverMatrix({
+      payloads: [{ text: "abcd" }, { text: "ef" }],
+      skipQueue: true,
+      onPayloadDeliveryOutcome,
+    });
+
+    expect(results).toEqual([]);
+    expect(sendText).toHaveBeenCalledTimes(3);
+    expect(onPayloadDeliveryOutcome.mock.calls.map(([outcome]) => outcome)).toEqual([
+      { index: 0, status: "suppressed", reason: "adapter_returned_no_identity" },
+      { index: 1, status: "suppressed", reason: "adapter_returned_no_send" },
+    ]);
+  });
+
+  it.each([
+    ["identified", "mx-progress", "sent"],
+    ["unknown", "", "suppressed"],
+  ])("preserves %s progress before a final no-send", async (_label, messageId, status) => {
+    const onPayloadDeliveryOutcome = vi.fn();
+    installPayloadOutbound(async (ctx) => {
+      await ctx.onDeliveryResult?.({ channel: "matrix", messageId });
+      return { channel: "matrix", messageId: "", outcome: "not_sent" };
+    });
+
+    const results = await deliverMatrix({
+      payloads: [{ text: "hello", channelData: { mode: "custom" } }],
+      skipQueue: true,
+      onPayloadDeliveryOutcome,
+    });
+
+    expect(results).toEqual(messageId ? [{ channel: "matrix", messageId }] : []);
+    expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
+      expect.objectContaining({
+        index: 0,
+        status,
+        ...(messageId ? { results } : { reason: "adapter_returned_no_identity" }),
+      }),
+    );
+  });
+
+  it.each(["ok", "unknown"])(
+    "counts the iMessage %s acknowledgement without an editable receipt ID",
+    async (messageId) => {
+      const onPayloadDeliveryOutcome = vi.fn();
+      const delivery = {
+        channel: "imessage" as const,
+        messageId,
+        receipt: createMessageReceiptFromOutboundResults({ results: [] }),
+      };
+      installTextOutbound(delivery, {}, "imessage");
+
+      const results = await deliverOutboundPayloads({
+        cfg: {},
+        channel: "imessage",
+        to: "chat_id:42",
+        payloads: [{ text: "hello" }],
+        skipQueue: true,
+        onPayloadDeliveryOutcome,
+      });
+
+      expect(results).toEqual([delivery]);
+      expect(countPhysicalOutboundSends(results)).toBe(1);
+      expect(onPayloadDeliveryOutcome).toHaveBeenCalledWith(
+        expect.objectContaining({ index: 0, status: "sent", results: [delivery] }),
+      );
+    },
+  );
 
   it("does not reuse a previous payload message id for a suppressed text send", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);

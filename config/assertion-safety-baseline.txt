@@ -3183,7 +3183,6 @@ src/infra/outbound/current-conversation-bindings.ts	1
 src/infra/outbound/deliver-channel.ts	4
 src/infra/outbound/deliver-payload.ts	1
 src/infra/outbound/deliver-prepare.ts	1
-src/infra/outbound/deliver-queue-execute.ts	2
 src/infra/outbound/deliver-queue-state.ts	1
 src/infra/outbound/delivery-queue-media-spool.ts	2
 src/infra/outbound/delivery-queue-media-staging.ts	2

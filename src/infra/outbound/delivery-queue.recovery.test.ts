@@ -447,59 +447,113 @@ describe("delivery-queue recovery", () => {
       closeOpenClawAgentDatabasesForTest();
     }
   });
-  it("keeps an uncertainty notice owed when recovery returns no delivery identity", async () => {
-    const deliveryId = "pending-final-unknown-recovery";
-    const { completion, context } = await createPendingFinalRecoveryFixture(deliveryId);
+  it("settles an explicit recovered no-send as suppression without replay", async () => {
+    const operationId = "operation-recovered-no-send";
+    const scope = await createConversationRecoveryFixture(operationId);
     const { auditEvents, unsubscribe } = captureAuditEvents();
     const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
-      expect(params.deliveryCompletion).toBeUndefined();
-      await markDeliveryPlatformSendAttemptStarted(deliveryId, tmpDir());
+      await markDeliveryPlatformSendAttemptStarted(
+        operationId,
+        tmpDir(),
+        undefined,
+        params.deliveryProducerClaimId,
+      );
       await params.onPlatformSendStart?.({});
+      params.onPayloadDeliveryOutcome?.({
+        index: 0,
+        status: "suppressed",
+        reason: "adapter_returned_no_send",
+      });
       return [];
     });
 
-    const { result } = await runRecovery({ deliver });
+    try {
+      const first = await runRecovery({ deliver });
 
-    expect(
-      loadSessionEntry({ sessionKey: completion.sessionKey, storePath: completion.storePath }),
-    ).toMatchObject({
-      pendingFinalDelivery: {
-        deliveries: [{ id: deliveryId, state: "unknown" }],
-      },
-      pendingDeliveryNotice: {
-        intentId: completion.intentId,
-        state: "owed",
-        context,
-      },
-    });
-    expect(result).toEqual(RECOVERY_SUMMARY.failed);
-    await expectPendingEntry({
-      id: deliveryId,
-      recoveryState: "unknown_after_send",
-      retryCount: 1,
-    });
-    expect(auditEvents).not.toContainEqual(
-      expect.objectContaining({ action: "message.outbound.finished" }),
-    );
+      expect(first.result).toEqual(RECOVERY_SUMMARY.recovered);
+      expect(getConversationDeliveryOperation(scope, operationId)).toMatchObject({
+        status: "suppressed",
+      });
+      expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
+      expectPayloadAudits(auditEvents, operationId, [
+        {
+          status: "blocked",
+          outcome: "suppressed",
+          reasonCode: "no_visible_payload",
+          resultCount: 0,
+        },
+      ]);
 
-    setQueuedEntryState(tmpDir(), deliveryId, {
-      retryCount: 1,
-      enqueuedAt: 0,
-      lastAttemptAt: 0,
-      availableAt: 0,
-    });
-    const second = await runRecovery({ deliver });
-    unsubscribe();
-
-    expect(second.result).toEqual(RECOVERY_SUMMARY.failed);
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(auditEvents.filter((event) => event.action === "message.outbound.finished")).toEqual([
-      expect.objectContaining({
-        sourceId: `message:outbound:queue:${deliveryId}:payload:0`,
-        outcome: "unknown",
-      }),
-    ]);
+      closeOpenClawAgentDatabasesForTest();
+      const second = await runRecovery({ deliver });
+      expect(second.result).toEqual(RECOVERY_SUMMARY.empty);
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(getConversationDeliveryOperation(scope, operationId)?.status).toBe("suppressed");
+      expect(auditEvents).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      closeOpenClawAgentDatabasesForTest();
+    }
   });
+  it.each([undefined, "adapter_returned_no_identity"] as const)(
+    "keeps an uncertainty notice owed when recovery returns no delivery identity (%s)",
+    async (reason) => {
+      const deliveryId = "pending-final-unknown-recovery";
+      const { completion, context } = await createPendingFinalRecoveryFixture(deliveryId);
+      const { auditEvents, unsubscribe } = captureAuditEvents();
+      const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+        expect(params.deliveryCompletion).toBeUndefined();
+        await markDeliveryPlatformSendAttemptStarted(deliveryId, tmpDir());
+        await params.onPlatformSendStart?.({});
+        if (reason) {
+          params.onPayloadDeliveryOutcome?.({ index: 0, status: "suppressed", reason });
+        }
+        return [];
+      });
+
+      const { result } = await runRecovery({ deliver });
+
+      expect(
+        loadSessionEntry({ sessionKey: completion.sessionKey, storePath: completion.storePath }),
+      ).toMatchObject({
+        pendingFinalDelivery: {
+          deliveries: [{ id: deliveryId, state: "unknown" }],
+        },
+        pendingDeliveryNotice: {
+          intentId: completion.intentId,
+          state: "owed",
+          context,
+        },
+      });
+      expect(result).toEqual(RECOVERY_SUMMARY.failed);
+      await expectPendingEntry({
+        id: deliveryId,
+        recoveryState: "unknown_after_send",
+        retryCount: 1,
+      });
+      expect(auditEvents).not.toContainEqual(
+        expect.objectContaining({ action: "message.outbound.finished" }),
+      );
+
+      setQueuedEntryState(tmpDir(), deliveryId, {
+        retryCount: 1,
+        enqueuedAt: 0,
+        lastAttemptAt: 0,
+        availableAt: 0,
+      });
+      const second = await runRecovery({ deliver });
+      unsubscribe();
+
+      expect(second.result).toEqual(RECOVERY_SUMMARY.failed);
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(auditEvents.filter((event) => event.action === "message.outbound.finished")).toEqual([
+        expect.objectContaining({
+          sourceId: `message:outbound:queue:${deliveryId}:payload:0`,
+          outcome: "unknown",
+        }),
+      ]);
+    },
+  );
   it.each([
     "acks a persisted suppressed conversation operation without replaying it",
     "acks a persisted rejected conversation operation without replaying it",

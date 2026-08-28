@@ -155,6 +155,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
 
     return {
       channel: "twitch",
+      ...(result.outcome ? { outcome: result.outcome } : {}),
       messageId: result.messageId,
       receipt: result.receipt,
       timestamp: Date.now(),

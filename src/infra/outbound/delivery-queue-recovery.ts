@@ -30,6 +30,7 @@ import {
   type QueuedPostSendState,
 } from "./deliver-queue-state.js";
 import {
+  areOutboundPayloadsIntentionallySuppressed,
   isOutboundDeliveryError,
   type OutboundDeliveryResult,
   type OutboundPayloadDeliveryOutcome,
@@ -888,7 +889,12 @@ async function drainQueuedEntry(opts: {
       (outcome) =>
         outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
     );
-    if (adapterReturnedNoIdentity || (results.length === 0 && platformSendStarted)) {
+    if (
+      adapterReturnedNoIdentity ||
+      (results.length === 0 &&
+        platformSendStarted &&
+        !areOutboundPayloadsIntentionallySuppressed(payloadOutcomes))
+    ) {
       const error = "recovered platform send returned no delivery identity";
       await recordRecoveredFailure(
         failDeliveryAfterPlatformSend,
