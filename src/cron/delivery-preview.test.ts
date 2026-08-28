@@ -123,6 +123,27 @@ describe("resolveCronDeliveryPreview", () => {
     });
   });
 
+  it("keeps unavailable external plugin routes fail-closed", async () => {
+    mocks.resolveDeliveryTarget.mockResolvedValueOnce({
+      ok: false,
+      channel: "unavailable-plugin",
+      mode: "implicit",
+      error: new Error("Channel plugin unavailable"),
+    });
+    const job = makeCronJob({
+      sessionTarget: "current",
+      sessionKey: "agent:main:dashboard:c5557dcf",
+      delivery: undefined,
+    });
+
+    const preview = await previewForJob(job);
+
+    expect(preview).toEqual({
+      label: "announce -> last",
+      detail: "last -> no route, will fail-closed: Channel plugin unavailable",
+    });
+  });
+
   it("does not describe unresolved no-delivery message-tool targets as fail-closed", async () => {
     mocks.resolveDeliveryTarget.mockResolvedValueOnce({
       ok: false,

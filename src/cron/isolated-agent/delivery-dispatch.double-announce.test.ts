@@ -3535,33 +3535,36 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it("keeps a committed current-target run successful when its external route fails to resolve", async () => {
-    const params = makeBaseParams({
-      synthesizedText: "committed but undeliverable externally",
-      sessionTarget: "current",
-      runStartedAt: 1_500,
-    });
-    params.resolvedDelivery = {
-      ok: false,
-      channel: "telegram",
-      to: undefined,
-      accountId: undefined,
-      threadId: undefined,
-      mode: "implicit",
-      error: new Error("Target is required"),
-    };
+  it.each(["telegram", "unavailable-plugin"])(
+    "keeps a committed current-target run successful when its %s route fails to resolve",
+    async (channel) => {
+      const params = makeBaseParams({
+        synthesizedText: "committed but undeliverable externally",
+        sessionTarget: "current",
+        runStartedAt: 1_500,
+      });
+      params.resolvedDelivery = {
+        ok: false,
+        channel,
+        to: undefined,
+        accountId: undefined,
+        threadId: undefined,
+        mode: "implicit",
+        error: new Error("Target is required"),
+      };
 
-    const state = await dispatchCronDelivery(params);
+      const state = await dispatchCronDelivery(params);
 
-    expect(state.result).toBeUndefined();
-    expect(state).toMatchObject({
-      delivered: false,
-      deliveryAttempted: true,
-      deliveryError: "Target is required",
-    });
-    expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
-    expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-  });
+      expect(state.result).toBeUndefined();
+      expect(state).toMatchObject({
+        delivered: false,
+        deliveryAttempted: true,
+        deliveryError: "Target is required",
+      });
+      expect(commitBackgroundResultToSessionMock).toHaveBeenCalledTimes(1);
+      expect(deliverOutboundPayloads).not.toHaveBeenCalled();
+    },
+  );
 
   it("requires the current-session commit in addition to one external delivery", async () => {
     const params = makeBaseParams({
