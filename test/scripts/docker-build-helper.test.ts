@@ -30,6 +30,13 @@ const OPENCLAW_E2E_INSTANCE_HELPER_PATH = "scripts/lib/openclaw-e2e-instance.sh"
 const COMPOSE_SETUP_E2E_PATH = "scripts/e2e/compose-setup.sh";
 const CLI_INSTALLER_DISTRIBUTION_E2E_PATH = "scripts/e2e/cli-installer-distribution-docker.sh";
 const DOCKER_PACKAGE_INSTALL_E2E_PATH = "scripts/e2e/docker-package-install.sh";
+const SURVIVOR_SERVICE_SHOW_ARGS = [
+  "--user",
+  "show",
+  "openclaw-gateway.service",
+  "--property",
+  "Id,ActiveState,SubState,Result,NRestarts,StartLimitBurst,MainPID,ExecMainStatus,ExecMainCode,KillMode,TasksCurrent,MemoryCurrent",
+];
 const INSTALL_E2E_RUNNER_PATH = "scripts/docker/install-sh-e2e/run.sh";
 const CLEANUP_DOCKER_SMOKE_PATH = "scripts/test-cleanup-docker.sh";
 const INSTALL_E2E_DOCKER_SMOKE_PATH = "scripts/test-install-sh-e2e-docker.sh";
@@ -4121,7 +4128,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
         shimPath,
         extractUpgradeSurvivorSystemctlShim(readFileSync(scriptPath, "utf8")),
       );
-      const shown = spawnSync("bash", [shimPath, "--user", "show"], {
+      const shown = spawnSync("bash", [shimPath, ...SURVIVOR_SERVICE_SHOW_ARGS], {
         encoding: "utf8",
         env: {
           ...process.env,
@@ -4204,15 +4211,27 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
       const workDir = tempDirs.make("openclaw-survivor-bootstrap-");
       const unitDir = join(workDir, ".config", "systemd", "user");
       mkdirSync(unitDir, { recursive: true });
-      writeFileSync(join(unitDir, "openclaw-gateway.service"), "ExecStart=node unused\n");
+      writeFileSync(
+        join(unitDir, "openclaw-gateway.service"),
+        `[Service]\nExecStart="${process.execPath}" unused\n`,
+      );
       const shimPath = join(workDir, "systemctl");
       writeFileSync(
         shimPath,
         extractUpgradeSurvivorSystemctlShim(readFileSync(scriptPath, "utf8")),
       );
+      writeFileSync(
+        join(workDir, "systemd-fixture.mjs"),
+        readFileSync("scripts/e2e/lib/upgrade-survivor/systemd-fixture.mjs"),
+      );
       const binDir = join(workDir, "bin");
       writeExecutables(binDir, {
-        node: "#!/bin/sh\necho supervisor-bootstrap-failure >&2\nexit 17\n",
+        node: `#!/bin/sh
+case "$1" in
+  *.supervisor.mjs) echo supervisor-bootstrap-failure >&2; exit 17 ;;
+esac
+exec ${shellQuote(process.execPath)} "$@"
+`,
       });
       const logPath = join(workDir, "gateway.log");
       const fixtureEnv = {
@@ -4222,7 +4241,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
         OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_LOG: join(workDir, "systemctl.log"),
         OPENCLAW_UPGRADE_SURVIVOR_SYSTEMCTL_SHIM_PID_FILE: join(workDir, "supervisor.pid"),
       };
-      const started = spawnSync("bash", [shimPath, "--user", "start"], {
+      const started = spawnSync("bash", [shimPath, "--user", "start", "openclaw-gateway.service"], {
         encoding: "utf8",
         env: { ...fixtureEnv, PATH: `${binDir}:${process.env.PATH ?? ""}` },
       });
@@ -4239,7 +4258,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
       }
       expect(readFileSync(bootstrapPath, "utf8")).toContain("supervisor-bootstrap-failure");
       expect(existsSync(`${logPath}.exit.json`)).toBe(false);
-      const shown = spawnSync("bash", [shimPath, "--user", "show"], {
+      const shown = spawnSync("bash", [shimPath, ...SURVIVOR_SERVICE_SHOW_ARGS], {
         encoding: "utf8",
         env: fixtureEnv,
       });
@@ -4300,10 +4319,11 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
           : extractUpgradeSurvivorPayload(source).split(
               "\nopenclaw_e2e_eval_test_state_from_b64",
             )[0];
-      for (const [exitCode, blocked] of [
-        [78, false],
-        [78, true],
-        [0, true],
+      for (const [exitCode, blocked, completed] of [
+        [78, false, true],
+        [78, true, true],
+        [0, true, true],
+        [0, false, false],
       ] as const) {
         const workDir = tempDirs.make("openclaw-survivor-exit-diagnostics-");
         const artifacts = join(workDir, "artifacts");
@@ -4317,7 +4337,7 @@ ${storage === "wal" ? 'process.kill(process.pid, "SIGKILL");' : ""}`,
             "-c",
             `${setup}
 CURRENT_PHASE=update-candidate
-run_completed=1
+run_completed=${completed ? 1 : 0}
 printf "original startup error\\n" >"$npm_config_prefix/../update.err"
 cleanup() { printf "cleanup replacement\\n" >"$npm_config_prefix/../update.err"; }
 exit ${exitCode}
@@ -4337,7 +4357,8 @@ exit ${exitCode}
             },
           },
         );
-        expect(result.status, result.stderr).toBe(exitCode);
+        const expectedStatus = exitCode || (completed ? 0 : 1);
+        expect(result.status, result.stderr).toBe(expectedStatus);
         expect(readFileSync(join(artifacts, "update.err"), "utf8")).toContain(
           "cleanup replacement",
         );
@@ -4345,7 +4366,7 @@ exit ${exitCode}
           const report = JSON.parse(
             readFileSync(join(artifacts, "diagnostics", "raw.json"), "utf8"),
           );
-          expect(report.exitStatus).toBe(78);
+          expect(report.exitStatus).toBe(expectedStatus);
           expect(report.logs["update.err"]).toContain("original startup error");
         } else if (exitCode) {
           expect(result.stdout + result.stderr).toContain("diagnostics missing");

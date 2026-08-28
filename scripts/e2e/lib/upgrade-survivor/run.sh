@@ -308,8 +308,12 @@ on_exit() {
   local status="$1"
   trap - ERR EXIT HUP INT TERM
   set +e
+  if [ "$status" -eq 0 ] && [ "$run_completed" != "1" ]; then
+    status=1
+    FAILURE_MESSAGE="upgrade survivor exited before all phases completed"
+  fi
   # Capture before stop/cleanup can replace the first failing service evidence.
-  if [ "$status" -ne 0 ] || [ "$run_completed" != "1" ]; then
+  if [ "$status" -ne 0 ]; then
     node scripts/e2e/lib/upgrade-survivor/diagnostics.mjs capture \
       "$ARTIFACT_ROOT" "${FAILURE_PHASE:-${CURRENT_PHASE:-unknown}}" "$status" "$FAILURE_SIGNAL" ||
       echo "Upgrade survivor diagnostics missing; preserving original phase failure." >&3
@@ -318,10 +322,6 @@ on_exit() {
   if [ "$status" -eq 0 ] && [ "$run_completed" = "1" ]; then
     write_summary passed ""
   else
-    if [ "$status" -eq 0 ]; then
-      status=1
-      FAILURE_MESSAGE="upgrade survivor exited before all phases completed"
-    fi
     [ -n "$FAILURE_PHASE" ] || FAILURE_PHASE="${CURRENT_PHASE:-unknown}"
     [ -n "$FAILURE_MESSAGE" ] || FAILURE_MESSAGE="upgrade survivor failed with status $status"
     write_summary failed "$FAILURE_MESSAGE"
