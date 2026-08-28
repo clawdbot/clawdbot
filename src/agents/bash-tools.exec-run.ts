@@ -14,6 +14,7 @@ import {
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
+import type { ExecAutoReviewDecision } from "../infra/exec-auto-review.js";
 import {
   rejectUnsafeExecControlShellCommand,
   rejectUnsafeExecLiveStateSqliteShellCommand,
@@ -104,6 +105,10 @@ export function createExecTool(
 ): AgentToolWithMeta<typeof execSchema, ExecToolDetails> {
   const secretEgressEnabled = isSecretEgressProxyActive();
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
+  // Run-scoped verdict memo: persists across exec invocations within the same
+  // agent run so identical exec requests reuse the reviewer's verdict instead
+  // of re-issuing paid model completions. FIFO-capped inside the reviewer.
+  const verdictMemo = new Map<string, ExecAutoReviewDecision>();
   // Agent runs own one tool instance, so the store is read on first exec and reused for that run.
   // A new run constructs a new instance and observes later store mutations.
   let storeEnvPromise: Promise<SecretStoreExecEnvironment>;
@@ -209,6 +214,7 @@ export function createExecTool(
           agentId,
           reviewer: resolveExecReviewerDefaults({ defaults, agentId }),
           signal,
+          verdictMemo,
         });
       let params = requestPreparation.normalizeParams(args);
       const resolveExecEnvPrepared = requestPreparation.isResolveExecEnvPrepared(
