@@ -990,6 +990,14 @@ openclaw-session-progress-hovercard-provider {
   min-width: 0;
 }
 
+.person-activity-card__header .viewer-avatar--footer {
+  width: 32px;
+  height: 32px;
+  font-size: calc(12px * var(--control-ui-text-scale));
+  /* The base ring color assumes the sidebar surface; blend with the popover. */
+  border-color: var(--session-hovercard-surface);
+}
+
 .person-activity-card h2,
 .person-activity-card h3,
 .person-activity-card p {

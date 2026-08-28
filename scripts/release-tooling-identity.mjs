@@ -11,6 +11,7 @@ const DIRECT_WORKFLOW_REF_PATTERN =
   /^(?:main|release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33|tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$/u;
 const RELEASE_PUBLISH_PARENT_STATE_POLICIES = new Set([
   "active",
+  "active-or-failure",
   "active-or-success",
   "manual-recovery",
 ]);
@@ -272,6 +273,7 @@ export function validateReleasePublishParentRun({
   const completedFailure = run?.status === "completed" && run?.conclusion === "failure";
   if (
     !active &&
+    !(parentStatePolicy === "active-or-failure" && completedFailure) &&
     !(parentStatePolicy === "active-or-success" && completedSuccess) &&
     !(parentStatePolicy === "manual-recovery" && (completedSuccess || completedFailure))
   ) {

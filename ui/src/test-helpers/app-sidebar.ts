@@ -128,6 +128,9 @@ export function createGatewayHarness(client: GatewayBrowserClient) {
     if (method === "cron.list") {
       return Promise.resolve({ jobs: [], total: 0 } as T);
     }
+    if (method === "cron.status") {
+      return Promise.resolve({ enabled: true, triggersEnabled: true, jobs: 0 } as T);
+    }
     if (method === "models.authStatus") {
       return Promise.resolve({ ts: 0, providers: [] } as T);
     }
