@@ -382,14 +382,15 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
             }
           : undefined,
     });
-    if (send.status === "failed") {
-      throw send.error;
-    }
-    if (send.status === "partial_failed") {
-      const delivery = summarizeVisibleRouteReplyDelivery(send.results);
+    if (send.status === "failed" || send.status === "partial_failed") {
+      const delivery = summarizeVisibleRouteReplyDelivery(
+        send.status === "partial_failed" ? send.results : [],
+      );
       return {
         ok: false,
-        delivered: delivery.delivered,
+        // A lost receipt is still retry-unsafe. Preserve the dispatch evidence
+        // so follow-up and ACP callers cannot send a duplicate fallback.
+        delivered: durableMessageBatchMayHaveReachedRecipient(send),
         error: `Failed to route reply to ${channel}: ${formatErrorMessage(send.error)}`,
         messageId: delivery.messageId,
       };

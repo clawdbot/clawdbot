@@ -646,46 +646,51 @@ describe("deliverOutboundPayloads queue integration: mid-batch failure with send
     expect(sendMatrix).toHaveBeenCalledOnce();
   });
 
-  it("never completes live Matrix batches when any platform send lacks an identity", async () => {
-    process.env.OPENCLAW_STATE_DIR = tmpDir;
-    const sendMatrix = vi
-      .fn()
-      .mockResolvedValueOnce({ messageId: "confirmed-live-message" })
-      .mockResolvedValueOnce({});
-    const deliveryIntentId = "cron-direct-delivery:v1:live-matrix-partial-no-identity";
-    const params = {
-      cfg: {} as OpenClawConfig,
-      channel: "matrix" as const,
-      to: "!room:example",
-      payloads: [{ text: "confirmed recipient message" }, { text: "ambiguous message" }],
-      deps: { matrix: sendMatrix },
-      queuePolicy: "required" as const,
-      deliveryIntentId,
-      completionRetention: boundedCronCompletionRetention,
-      reusePendingDeliveryIntent: true,
-    };
+  it.each([false, true])(
+    "never completes live Matrix batches with missing identity (reuse=%s)",
+    async (reusePendingDeliveryIntent) => {
+      process.env.OPENCLAW_STATE_DIR = tmpDir;
+      const sendMatrix = vi
+        .fn()
+        .mockResolvedValueOnce({ messageId: "confirmed-live-message" })
+        .mockResolvedValueOnce({});
+      const deliveryIntentId = "cron-direct-delivery:v1:live-matrix-partial-no-identity";
+      const params = {
+        cfg: {} as OpenClawConfig,
+        channel: "matrix" as const,
+        to: "!room:example",
+        payloads: [{ text: "confirmed recipient message" }, { text: "ambiguous message" }],
+        deps: { matrix: sendMatrix },
+        queuePolicy: "required" as const,
+        deliveryIntentId,
+        completionRetention: boundedCronCompletionRetention,
+        reusePendingDeliveryIntent,
+      };
 
-    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      "platform send returned no delivery identity for part of the delivery batch",
-    );
-    expect(sendMatrix).toHaveBeenCalledTimes(2);
-    expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
-      id: deliveryIntentId,
-      recoveryState: "unknown_after_send",
-      retryCount: 1,
-    });
-    expect(
-      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
-    ).toBe("pending");
+      await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+        "platform send returned no delivery identity for part of the delivery batch",
+      );
+      expect(sendMatrix).toHaveBeenCalledTimes(2);
+      expect((await loadPendingDeliveries(tmpDir))[0]).toMatchObject({
+        id: deliveryIntentId,
+        recoveryState: "unknown_after_send",
+        retryCount: 1,
+      });
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+      ).toBe("pending");
 
-    await expect(deliverOutboundPayloads(params)).rejects.toThrow(
-      `Stable delivery intent is already queued: ${deliveryIntentId}`,
-    );
-    expect(sendMatrix).toHaveBeenCalledTimes(2);
-    expect(
-      getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
-    ).not.toBe("completed");
-  });
+      if (reusePendingDeliveryIntent) {
+        await expect(deliverOutboundPayloads(params)).rejects.toThrow(
+          `Stable delivery intent is already queued: ${deliveryIntentId}`,
+        );
+      }
+      expect(sendMatrix).toHaveBeenCalledTimes(2);
+      expect(
+        getDeliveryQueueEntryStatus(OUTBOUND_DELIVERY_QUEUE_NAME, deliveryIntentId, tmpDir),
+      ).not.toBe("completed");
+    },
+  );
 
   it.each(["abort", "permanent rejection"] as const)(
     "never creates a successful stable receipt after platform %s",

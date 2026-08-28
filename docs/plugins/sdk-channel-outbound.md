@@ -157,6 +157,12 @@ the aggregate receipt omits `threadId`. Channels with read receipts or
 device-delivery state should track those facts through a separate
 channel-specific path.
 
+A logical payload completes only when every planned or returned send unit has
+delivery identity. An aggregate receipt can cover several physical sends;
+receipt counts alone do not establish completion. If one chunk or media send
+returns no identity, earlier identified sends remain evidence, but the full
+payload is not reported as delivered or mirrored as complete.
+
 If a channel adapter can prove that retrying a failure cannot duplicate a
 recipient-visible send and no finalization-capable call began, throw
 `new PlatformMessageNotDispatchedError("...", { cause: error })` from
@@ -200,13 +206,27 @@ Runtime send helpers also live on `channel-outbound`:
 | Outcome          | Meaning                                                                                 |
 | ---------------- | --------------------------------------------------------------------------------------- |
 | `sent`           | at least one visible platform message was accepted by the platform send path            |
-| `suppressed`     | no platform message should be treated as missing                                        |
+| `suppressed`     | no platform receipt was produced; inspect the reason for suppression or uncertainty     |
 | `partial_failed` | at least one platform message was accepted before a later payload or side effect failed |
 | `failed`         | no platform receipt was produced                                                        |
 
 Use `payloadOutcomes` when a batch mixes sent, suppressed, and failed
 payloads. Do not infer hook cancellation from an empty legacy
 direct-delivery result.
+
+`adapter_returned_no_identity` means the adapter may have sent the message;
+it is not a hook veto. Ordinary and reusable batches retain queue custody as
+`unknown_after_send` when any send remains unidentified, including when a later
+send is rejected before dispatch. Completion cannot use an earlier receipt to
+settle the whole batch. Hook cancellation before sending keeps its existing
+suppression behavior.
+
+Core routing checks recipient-reached evidence for every result status before
+choosing a fallback sender. Plugin callers must likewise inspect every payload
+outcome before retrying, including on a `failed` result.
+A `failed` result can carry `sentBeforeError` in `payloadOutcomes` despite having
+no message ID. Routed replies preserve this distinction with `ok: false` and
+`delivered: true`: delivery failed, but a second send could duplicate it.
 
 When a transport creates a thread during its first successful send, the
 outbound adapter may implement `adoptTargetFromDelivery(...)`. Return the

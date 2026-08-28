@@ -1067,32 +1067,31 @@ describe("createAcpDispatchDeliveryCoordinator", () => {
     await expect(coordinator.resolveAccumulatedDeliveredTranscriptText()).resolves.toBe("");
   });
 
-  it("does not retry routed ACP text after a partial delivery failure", async () => {
-    deliveryMocks.routeReply.mockResolvedValueOnce({
-      ok: false,
-      delivered: true,
-      messageId: "visible-1",
-      error: "later chunk failed",
-    });
-    const coordinator = createAcpDispatchDeliveryCoordinator({
-      cfg: createAcpTestConfig(),
-      ctx: buildTestCtx({
-        Provider: "visiblechat",
-        Surface: "visiblechat",
-        SessionKey: "agent:codex-acp:session-1",
-      }),
-      dispatcher: createDispatcher(),
-      inboundAudio: false,
-      shouldRouteToOriginating: true,
-      originatingChannel: "visiblechat",
-      originatingTo: "channel:thread-1",
-    });
+  it.each([false, true])(
+    "does not retry recipient-reached ACP failures (identityless TTS: %s)",
+    async (identitylessTts) => {
+      const payload = identitylessTts
+        ? {
+            text: "hello",
+            mediaUrl: "https://example.com/reply.mp3",
+            ttsSupplement: { spokenText: "hello", visibleTextAlreadyDelivered: false },
+          }
+        : { text: "hello" };
+      deliveryMocks.routeReply.mockResolvedValueOnce({
+        ok: false,
+        delivered: true,
+        messageId: identitylessTts ? undefined : "visible-1",
+        error: "later chunk failed",
+      });
+      const coordinator = createVisibleChatAcpCoordinator(createAcpTestConfig());
 
-    const delivered = await coordinator.deliver("final", { text: "hello" }, { skipTts: true });
+      const delivered = await coordinator.deliver("final", payload, { skipTts: true });
 
-    expect(delivered).toBe(true);
-    expect(coordinator.getRoutedCounts().final).toBe(1);
-  });
+      expect(delivered).toBe(true);
+      expect(deliveryMocks.routeReply).toHaveBeenCalledTimes(1);
+      expect(coordinator.getRoutedCounts().final).toBe(1);
+    },
+  );
 
   it("treats hook-suppressed routed ACP block text as handled", async () => {
     deliveryMocks.routeReply.mockResolvedValueOnce({

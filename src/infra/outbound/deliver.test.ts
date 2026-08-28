@@ -1810,6 +1810,89 @@ describe("deliverOutboundPayloads", () => {
     expect(queueWarn).toContain("queue offline");
   });
 
+  it.each([
+    { boundary: "enqueue failure", identifiedPrefix: true },
+    { boundary: "pre-send acknowledgement", identifiedPrefix: true },
+    { boundary: "uncertainty persistence failure", identifiedPrefix: true },
+    { boundary: "uncertainty persistence failure", identifiedPrefix: false },
+  ])(
+    "preserves identity loss across $boundary (identified prefix: $identifiedPrefix)",
+    async ({ boundary, identifiedPrefix }) => {
+      if (boundary === "enqueue failure") {
+        queueMocks.enqueueDelivery.mockRejectedValueOnce(new Error("queue offline"));
+      } else if (boundary === "pre-send acknowledgement") {
+        queueMocks.markDeliveryPlatformSendAttemptStarted.mockRejectedValueOnce(
+          new Error("pre-send marker offline"),
+        );
+        queueMocks.failDeliveryAfterPlatformSend.mockRejectedValue(new Error("queue row is gone"));
+      } else {
+        queueMocks.failDeliveryAfterPlatformSend.mockRejectedValueOnce(
+          new Error("queue update offline"),
+        );
+      }
+      hookMocks.runner.hasHooks.mockImplementation((hookName) => hookName === "message_sent");
+      const sendMatrix = vi.fn().mockResolvedValue({ messageId: "" });
+      if (identifiedPrefix) {
+        sendMatrix.mockResolvedValueOnce({ messageId: "confirmed" });
+      }
+      const payloads = identifiedPrefix
+        ? [{ text: "confirmed prefix" }, { text: "uncertain tail" }]
+        : [{ text: "uncertain send" }];
+      const events: TrustedMessageAuditEvent[] = [];
+      const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
+      let failure: unknown;
+      try {
+        failure = await deliverMatrix({
+          payloads,
+          deps: { matrix: sendMatrix },
+          queuePolicy: "best_effort",
+          deliveryCompletion: {
+            kind: "pending-final",
+            deliveryId: "uncertain-delivery",
+            intentId: "uncertain-intent",
+            sessionId: "uncertain-session",
+            sessionKey: "agent:main:matrix:direct:uncertain",
+            storePath: "/tmp/sessions.json",
+          },
+        }).catch((error: unknown) => error);
+      } finally {
+        unsubscribe();
+      }
+
+      expect(sendMatrix).toHaveBeenCalledTimes(payloads.length);
+      expect(failure).toMatchObject({
+        name: "OutboundDeliveryError",
+        results: identifiedPrefix ? [{ channel: "matrix", messageId: "confirmed" }] : [],
+        payloadOutcomes: [
+          ...(identifiedPrefix ? [{ index: 0, status: "sent" }] : []),
+          {
+            index: identifiedPrefix ? 1 : 0,
+            status: "suppressed",
+            reason: "adapter_returned_no_identity",
+          },
+        ],
+        ...(identifiedPrefix ? { sentBeforeError: true } : {}),
+      });
+      expect(completionMocks.completeDurableDelivery).not.toHaveBeenCalled();
+      expect(completionMocks.suppressDurableDelivery).not.toHaveBeenCalled();
+      const terminalOutcomes = events
+        .filter((event) => event.action === "message.outbound.finished")
+        .map((event) => event.outcome);
+      if (boundary === "uncertainty persistence failure") {
+        expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+        expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
+        expect(terminalOutcomes).toEqual([]);
+      } else {
+        expect(queueMocks.ackDelivery).toHaveBeenCalledTimes(
+          boundary === "pre-send acknowledgement" ? 1 : 0,
+        );
+        expect(queueMocks.failDeliveryAfterPlatformSend).not.toHaveBeenCalled();
+        expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(payloads.length);
+        expect(terminalOutcomes).toEqual(["sent", "unknown"]);
+      }
+    },
+  );
+
   it("emits one message_sent failure per payload when batch preparation fails", async () => {
     hookMocks.runner.hasHooks.mockImplementation(
       (hookName?: string) => hookName === "message_sent" || hookName === "reply_payload_sending",
@@ -2377,7 +2460,7 @@ describe("deliverOutboundPayloads", () => {
     );
   });
 
-  it("directly acks a sent delivery when the post-send unknown marker cannot be written", async () => {
+  it("acks a fully identified batch after an intermediate marker failure", async () => {
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
       new Error("unknown marker offline"),
     );
@@ -2390,11 +2473,12 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(sendMatrix).toHaveBeenCalled();
-    expect(queueMocks.ackDelivery).toHaveBeenCalledWith("mock-queue-id");
+    expect(queueMocks.ackDelivery).toHaveBeenCalledExactlyOnceWith("mock-queue-id");
+    expect(queueMocks.failDeliveryAfterPlatformSend).not.toHaveBeenCalled();
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
 
-  it("runs sent-result commit hooks when marker fallback ack precedes a partial failure", async () => {
+  it("defers commit hooks when marker persistence fails before a partial failure", async () => {
     queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
       new Error("unknown marker offline"),
     );
@@ -2416,27 +2500,12 @@ describe("deliverOutboundPayloads", () => {
     });
 
     expect(results).toHaveLength(1);
-    expect(queueMocks.ackDelivery).toHaveBeenCalledTimes(1);
-    expect(afterCommit).toHaveBeenCalledTimes(1);
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-  });
-
-  it("retains unknown-after-send evidence when both the marker and direct ack fail", async () => {
-    queueMocks.markDeliveryPlatformOutcomeUnknown.mockRejectedValueOnce(
-      new Error("unknown marker offline"),
-    );
-    queueMocks.ackDelivery.mockRejectedValueOnce(new Error("ack offline"));
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1" });
-
-    await deliverMatrix({
-      payloads: [{ text: "hi" }],
-      deps: { matrix: sendMatrix },
-      queuePolicy: "required",
-    });
-
+    expect(messageSendText).toHaveBeenCalledTimes(2);
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(afterCommit).not.toHaveBeenCalled();
     expect(queueMocks.failDeliveryAfterPlatformSend).toHaveBeenCalledWith(
       "mock-queue-id",
-      expect.stringContaining("marker=unknown marker offline; ack=ack offline"),
+      "partial delivery failure (bestEffort)",
     );
     expect(queueMocks.failDelivery).not.toHaveBeenCalled();
   });
@@ -5455,7 +5524,7 @@ describe("deliverOutboundPayloads", () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it("does not count no-op sendPayload results as delivered", async () => {
+  it("keeps identityless sendPayload results uncertain when required pinning cannot finish", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendText = vi.fn();
     const pinDeliveredMessage = vi.fn<OutboundPinDeliveredMessage>();
@@ -5465,23 +5534,23 @@ describe("deliverOutboundPayloads", () => {
       { sendText, sendTextOnlyErrorPayloads: true, pinDeliveredMessage, afterDeliverPayload },
     );
 
-    const results = await deliverMatrix({
-      to: "!room:1",
-      payloads: [
-        {
+    await expect(
+      deliverMatrix({
+        to: "!room:1",
+        payloads: [
+          {
+            text: "provider exploded",
+            isError: true,
+            delivery: { pin: { enabled: true, required: true } },
+          },
+        ],
+        mirror: {
+          sessionKey: "agent:main:main",
+          agentId: "main",
           text: "provider exploded",
-          isError: true,
-          delivery: { pin: { enabled: true, required: true } },
         },
-      ],
-      mirror: {
-        sessionKey: "agent:main:main",
-        agentId: "main",
-        text: "provider exploded",
-      },
-    });
-
-    expect(results).toStrictEqual([]);
+      }),
+    ).rejects.toThrow("no delivered message id was returned");
     expect(sendPayload).toHaveBeenCalledTimes(1);
     expect(sendText).not.toHaveBeenCalled();
     expect(pinDeliveredMessage).not.toHaveBeenCalled();
@@ -5490,7 +5559,7 @@ describe("deliverOutboundPayloads", () => {
     expect(mocks.appendAssistantMessageToSessionTranscript).not.toHaveBeenCalled();
   });
 
-  it("does not reuse a previous payload message id for a suppressed text send", async () => {
+  it("does not reuse a previous payload message id for an identityless text send", async () => {
     hookMocks.runner.hasHooks.mockReturnValue(true);
     const sendText = vi
       .fn()
@@ -5498,31 +5567,36 @@ describe("deliverOutboundPayloads", () => {
       .mockResolvedValueOnce({ channel: "matrix", messageId: "" });
     setTestOutbound({ sendText });
 
-    const results = await deliverMatrix({
-      to: "!room:1",
-      payloads: [{ text: "first" }, { text: "second" }],
-    });
+    const onMessageSentEvent = vi.fn();
+    await expect(
+      deliverMatrix({
+        to: "!room:1",
+        onMessageSentEvent,
+        payloads: [{ text: "first" }, { text: "second" }],
+      }),
+    ).rejects.toMatchObject({ results: [{ channel: "matrix", messageId: "mx-1" }] });
 
-    expect(results).toStrictEqual([{ channel: "matrix", messageId: "mx-1" }]);
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledTimes(2);
-    expect(hookMocks.runner.runMessageSent).toHaveBeenNthCalledWith(
+    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+    expect(hookMocks.runner.runMessageSent).not.toHaveBeenCalled();
+    expect(onMessageSentEvent).toHaveBeenCalledTimes(2);
+    expect(onMessageSentEvent).toHaveBeenNthCalledWith(
       1,
       expect.objectContaining({
         content: "first",
         success: true,
         messageId: "mx-1",
       }),
-      expect.objectContaining({ channelId: "matrix" }),
+      0,
     );
-    expect(hookMocks.runner.runMessageSent).toHaveBeenNthCalledWith(
+    expect(onMessageSentEvent).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
         content: "second",
         success: false,
       }),
-      expect.objectContaining({ channelId: "matrix" }),
+      1,
     );
-    expect(hookMocks.runner.runMessageSent.mock.calls[1]?.[0]).not.toHaveProperty("messageId");
+    expect(onMessageSentEvent.mock.calls[1]?.[0]?.messageId).toBeUndefined();
   });
 
   it("emits message_sent success for sendPayload deliveries", async () => {

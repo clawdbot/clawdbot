@@ -1396,14 +1396,14 @@ describe("delivery-queue recovery", () => {
   it.each([
     ["marks a recovered send unknown before ack so ack failure cannot make it replayable", "ack"],
     ["keeps a recovered zero-result delivery retryable when ack fails", "zero-result-ack"],
-    ["directly acks a recovered send when its post-send marker fails", "marker"],
+    ["acks a completed recovered batch when its post-send marker fails", "marker"],
     ["retains unknown-after-send when recovered-send marking and ack both fail", "marker-and-ack"],
   ])("%s", async (_, mode) => {
     const id = await enqueueRecoveryDelivery();
     const markerFails = mode === "marker" || mode === "marker-and-ack";
     const ackFails = mode === "ack" || mode === "zero-result-ack" || mode === "marker-and-ack";
     let recoveryStateAtAck: string | undefined;
-    const { summary, log } = await runRecoveryWithStorageOverrides({
+    const { summary } = await runRecoveryWithStorageOverrides({
       overrides: (actual) => ({
         ...(markerFails
           ? {
@@ -1434,7 +1434,6 @@ describe("delivery-queue recovery", () => {
       expect(summary).toEqual(RECOVERY_SUMMARY.recovered);
       expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
       expect(readOutboundQueueStatus(tmpDir(), id)).toBeUndefined();
-      expectMockMessageContaining(log.warn, "falling back to direct ack");
       return;
     }
     if (mode === "ack") {
@@ -1448,14 +1447,9 @@ describe("delivery-queue recovery", () => {
       recoveryState: mode === "zero-result-ack" ? undefined : "unknown_after_send",
       ...(mode === "ack" ? {} : { retryCount: 1 }),
     });
-    await runIf(markerFails, () =>
-      expect(pending?.lastError).toContain("marker=post-send state db locked"),
-    );
-    expect(pending?.lastError).toContain(
-      mode === "marker-and-ack" ? "ack=ack state db locked" : "ack state db locked",
-    );
+    expect(pending?.lastError).toContain("ack state db locked");
   });
-  it("retains later media until an early recovery ack finishes the batch", async () => {
+  it("retains custody and later media until the recovered batch finishes", async () => {
     const spoolDir = path.join(tmpDir(), "delivery-queue-media");
     const firstArtifact = path.join(spoolDir, "00000000-0000-4000-8000-000000000001.ogg");
     const secondArtifact = path.join(spoolDir, "00000000-0000-4000-8000-000000000002.ogg");
@@ -1472,6 +1466,7 @@ describe("delivery-queue recovery", () => {
     const secondResult = { channel: "demo-channel-a", messageId: "m2" };
     const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
       await params.onDeliveryResult?.(firstResult);
+      expect(await loadPendingDeliveries(tmpDir())).toHaveLength(1);
       await pruneOrphanedDeliveryQueueMedia({ stateDir: tmpDir() });
       expect(await fs.readFile(secondArtifact, "utf8")).toBe("second-audio");
       await params.onDeliveryResult?.(secondResult);
@@ -1508,7 +1503,7 @@ describe("delivery-queue recovery", () => {
     expect(JSON.stringify(auditEvents)).not.toContain("secret");
     expect(JSON.stringify(auditEvents)).not.toContain("provider rejected send");
   });
-  it("runs recovered commit hooks when marker fallback ack precedes a partial failure", async () => {
+  it("defers recovered commit hooks when a failed marker precedes a partial failure", async () => {
     await enqueueRecoveryDelivery({
       payloads: [{ text: "first" }, { text: "second" }],
       bestEffort: true,
@@ -1546,8 +1541,10 @@ describe("delivery-queue recovery", () => {
       },
     });
     expect(summary).toMatchObject({ recovered: 0, failed: 1 });
-    expect(afterCommit).toHaveBeenCalledTimes(1);
-    expect(await loadPendingDeliveries(tmpDir())).toHaveLength(0);
+    expect(afterCommit).not.toHaveBeenCalled();
+    expect(await loadPendingDeliveries(tmpDir())).toEqual([
+      expect.objectContaining({ recoveryState: "unknown_after_send", retryCount: 1 }),
+    ]);
   });
   it("replays stored delivery options during recovery", async () => {
     const storedOptions = {

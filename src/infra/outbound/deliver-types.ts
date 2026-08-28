@@ -133,7 +133,9 @@ export class OutboundDeliveryError extends Error {
     this.sentBeforeError =
       this.results.length > 0 ||
       this.payloadOutcomes.some(
-        (outcome) => outcome.status === "failed" && outcome.sentBeforeError,
+        (outcome) =>
+          (outcome.status === "failed" && outcome.sentBeforeError) ||
+          (outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity"),
       );
     this.stage = options.stage ?? "unknown";
   }

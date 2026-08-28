@@ -151,6 +151,7 @@ export async function deliverOutboundPayloadsCore(
   const { resolveCurrentReplyTo, applyReplyToConsumption } = createReplyToDeliveryPolicy({
     reply,
   });
+  const sendIdentities: boolean[] = [];
 
   const sendTextChunks = async (
     sendHandler: ChannelHandler,
@@ -177,8 +178,10 @@ export async function deliverOutboundPayloadsCore(
       }
       throwIfAborted(abortSignal);
       const resultIndex = results.length;
-      await recordIdentifiedDeliveryResult(
-        await sendHandler.sendText(unit.text, withPreparedTarget(unit.overrides)),
+      sendIdentities.push(
+        await recordIdentifiedDeliveryResult(
+          await sendHandler.sendText(unit.text, withPreparedTarget(unit.overrides)),
+        ),
       );
       adoptSuccessfulResultsSince(resultIndex);
     }
@@ -199,13 +202,7 @@ export async function deliverOutboundPayloadsCore(
     params.onPayloadDeliveryOutcome?.(outcome);
   }
   const deliveredMirrorPayloads: NormalizedOutboundPayload[] = [];
-  const recordDeliveredPayload = (
-    payloadSummary: NormalizedOutboundPayload,
-    deliveredResults: readonly OutboundDeliveryResult[],
-  ): void => {
-    if (deliveredResults.length === 0) {
-      return;
-    }
+  const recordDeliveredPayload = (payloadSummary: NormalizedOutboundPayload): void => {
     // Post-send observers are bookkeeping only. Never turn an identified
     // platform delivery into a retryable failure if an observer misbehaves.
     try {
@@ -228,6 +225,7 @@ export async function deliverOutboundPayloadsCore(
     const payloadIndex = preparedEntry.sourceIndex;
     activeSourceIndex = payloadIndex;
     const payload = preparedEntry.payload;
+    sendIdentities.length = 0;
     const payloadResultStartIndex = results.length;
     let effectivePayload: typeof payload | null | undefined;
     let payloadSummary = buildPayloadSummary(payload);
@@ -367,26 +365,17 @@ export async function deliverOutboundPayloadsCore(
           effectivePayload,
           withPreparedTarget(applySendReplyToConsumption(sendOverrides)),
         );
-        await recordIdentifiedDeliveryResult(delivery);
+        sendIdentities.push(await recordIdentifiedDeliveryResult(delivery));
         adoptSuccessfulResultsSince(beforeCount);
-        const deliveredResults = results.slice(beforeCount);
-        if (deliveredResults.length === 0) {
-          completeDeliveryDiagnostics(0);
-          recordPayloadOutcome(
-            suppressedPayloadOutcome({
-              index: payloadIndex,
-              reason: "adapter_returned_no_identity",
-            }),
-          );
-          continue;
-        }
       } else if (payloadSummary.mediaUrls.length === 0) {
         if (deliveryHandler.sendFormattedText) {
-          await recordIdentifiedDeliveryResults(
-            await deliveryHandler.sendFormattedText(
-              payloadSummary.text,
-              withPreparedTarget(applySendReplyToConsumption(sendOverrides)),
-            ),
+          sendIdentities.push(
+            ...(await recordIdentifiedDeliveryResults(
+              await deliveryHandler.sendFormattedText(
+                payloadSummary.text,
+                withPreparedTarget(applySendReplyToConsumption(sendOverrides)),
+              ),
+            )),
           );
           adoptSuccessfulResultsSince(beforeCount);
         } else {
@@ -437,6 +426,7 @@ export async function deliverOutboundPayloadsCore(
                 withPreparedTarget(unit.overrides),
               );
           const recorded = await recordIdentifiedDeliveryResult(delivery);
+          sendIdentities.push(recorded);
           adoptSuccessfulResultsSince(resultIndex);
           if (recorded) {
             mediaMessageIds.first ??= delivery.messageId;
@@ -446,13 +436,16 @@ export async function deliverOutboundPayloadsCore(
       }
 
       const deliveredResults = results.slice(beforeCount);
-      if (deliveredResults.length > 0) {
+      // One aggregate receipt can cover many sends. Completion requires identity
+      // for every returned unit, not merely one surviving receipt or matching counts.
+      const payloadComplete = sendIdentities.length > 0 && sendIdentities.every(Boolean);
+      if (payloadComplete) {
         recordPayloadOutcome({
           index: payloadIndex,
           status: "sent",
           results: deliveredResults,
         });
-        recordDeliveredPayload(mirroredPayload, deliveredResults);
+        recordDeliveredPayload(mirroredPayload);
       } else {
         recordPayloadOutcome(
           suppressedPayloadOutcome({
@@ -468,7 +461,7 @@ export async function deliverOutboundPayloadsCore(
         ? mediaMessageIds.last
         : deliveredResults.at(-1)?.messageId;
       recordMessageSentEvent({
-        success: deliveredResults.length > 0,
+        success: payloadComplete,
         content: payloadSummary.hookContent ?? payloadSummary.text,
         messageId: lastMessageId,
       });
@@ -504,7 +497,7 @@ export async function deliverOutboundPayloadsCore(
         index: payloadIndex,
         status: "failed",
         error: err,
-        sentBeforeError: failedPayloadResults.length > 0,
+        sentBeforeError: failedPayloadResults.length > 0 || sendIdentities.includes(false),
         stage: "platform_send",
         results: failedPayloadResults,
       });

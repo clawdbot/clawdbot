@@ -26,9 +26,10 @@ function acceptDoneValue(msg: unknown): number | null | undefined {
   return value.type === "done" ? (value.value ?? null) : undefined;
 }
 
+// Short prefixes leave room for the wrapper's temp namespace under macOS' socket path limit.
 describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   it("ignores malformed and non-accepted lines until one is accepted", async () => {
-    await withTestDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
       const server = net.createServer((socket) => {
         socket.on("data", () => {
@@ -58,7 +59,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   });
 
   it("half-closes the write side after sending the request line", async () => {
-    await withTestDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
       let receivedBuffer: string | null = null;
       const server = net.createServer((socket) => {
@@ -93,7 +94,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   });
 
   it("returns null on timeout and on socket errors", async () => {
-    await withTestDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
       const server = net.createServer(() => {
         // Intentionally never reply.
@@ -128,7 +129,7 @@ describe.runIf(process.platform !== "win32")("requestJsonlSocket", () => {
   });
 
   it("returns null when the socket closes without an accepted response", async () => {
-    await withTestDir({ prefix: "openclaw-jsonl-socket-" }, async (dir) => {
+    await withTestDir({ prefix: "oc-js-" }, async (dir) => {
       const socketPath = path.join(dir, "socket.sock");
       const server = net.createServer((socket) => {
         socket.on("data", () => {

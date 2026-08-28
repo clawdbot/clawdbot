@@ -152,4 +152,65 @@ describe("queued delivery dispatch evidence", () => {
       recoveryState: "unknown_after_send",
     });
   });
+
+  it.each([
+    { chunked: true, bestEffort: false },
+    { chunked: true, bestEffort: true },
+    { chunked: false, bestEffort: false },
+    { chunked: false, bestEffort: true },
+  ])(
+    "keeps earlier identity loss when a later send is rejected ($chunked/$bestEffort)",
+    async ({ chunked, bestEffort }) => {
+      vi.stubEnv("OPENCLAW_STATE_DIR", tmpDir);
+      setActivePluginRegistry(
+        createTestRegistry([
+          {
+            pluginId: "matrix",
+            source: "test",
+            plugin: createOutboundTestPlugin({
+              id: "matrix",
+              outbound: {
+                ...matrixOutboundForQueueTest,
+                ...(chunked
+                  ? { chunker: (text: string) => text.split(" "), textChunkLimit: 6 }
+                  : {}),
+              },
+            }),
+          },
+        ]),
+      );
+      const sendMatrix = vi
+        .fn()
+        .mockResolvedValueOnce({ messageId: "" })
+        .mockRejectedValueOnce(
+          new PlatformMessageNotDispatchedError("later unit rejected", { cause: undefined }),
+        );
+      const outcomes: OutboundPayloadDeliveryOutcome[] = [];
+      try {
+        await deliverOutboundPayloads({
+          cfg: {},
+          channel: "matrix",
+          to: "!room:example",
+          payloads: chunked ? [{ text: "first second" }] : [{ text: "first" }, { text: "second" }],
+          deps: { matrix: sendMatrix },
+          queuePolicy: "required",
+          bestEffort,
+          onPayloadDeliveryOutcome: (outcome) => outcomes.push(outcome),
+        }).catch((error: unknown) => {
+          expect(error).toMatchObject({ message: "later unit rejected" });
+        });
+        expect(sendMatrix.mock.calls.map((call) => call[1])).toEqual(["first", "second"]);
+        expect(await loadPendingDeliveries(tmpDir)).toEqual([
+          expect.objectContaining({ recoveryState: "unknown_after_send" }),
+        ]);
+        if (chunked) {
+          expect(outcomes).toEqual([
+            expect.objectContaining({ status: "failed", sentBeforeError: true }),
+          ]);
+        }
+      } finally {
+        vi.unstubAllEnvs();
+      }
+    },
+  );
 });

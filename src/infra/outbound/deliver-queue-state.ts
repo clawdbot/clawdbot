@@ -2,7 +2,11 @@
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { formatErrorMessage } from "../errors.js";
 import type { OutboundDeliveryQueuePolicy, PlatformSendRoute } from "./deliver-contracts.js";
-import { OutboundDeliveryError } from "./deliver-types.js";
+import {
+  OutboundDeliveryError,
+  type OutboundDeliveryResult,
+  type OutboundPayloadDeliveryOutcome,
+} from "./deliver-types.js";
 import {
   ackDelivery,
   failDelivery,
@@ -20,11 +24,28 @@ export const isDeliveryAbortError = (err: unknown): boolean =>
   (err instanceof OutboundDeliveryError &&
     isAbortError((err as Error & { cause?: unknown }).cause));
 
-export type QueuedPostSendState = "marked" | "acked" | "failed";
+export type QueuedPostSendState = "marked" | "unmarked" | "acked" | "failed";
 
 export type QueuedPreSendState = "marked" | "acked";
 
 type QueuedDeliveryFailureRecorder = typeof failDelivery | typeof failDeliveryAfterPlatformSend;
+
+/** A surviving receipt cannot settle a batch that also contains an unidentified send. */
+export function hasUnconfirmedOutboundSends(params: {
+  results: readonly OutboundDeliveryResult[];
+  payloadOutcomes: readonly OutboundPayloadDeliveryOutcome[];
+  platformSendStarted: boolean;
+}): boolean {
+  return (
+    params.payloadOutcomes.some(
+      (outcome) =>
+        outcome.status === "suppressed" && outcome.reason === "adapter_returned_no_identity",
+    ) ||
+    (params.results.length === 0 &&
+      params.platformSendStarted &&
+      !params.payloadOutcomes.some((outcome) => outcome.status === "failed"))
+  );
+}
 
 /** Keeps live and recovered queue transitions on the same producer claim. */
 export function createQueuedDeliveryOwner(params: {
@@ -108,20 +129,10 @@ export async function persistQueuedPreSendState(params: {
 
 export async function persistQueuedPostSendState(params: {
   queueId: string;
-  queuePolicy: OutboundDeliveryQueuePolicy;
   stateDir?: string;
-  producerClaimId?: string;
   expectedPlatformSendAttemptId?: string | null;
-  retainSpoolArtifacts?: boolean;
-  onPostSendMarkerError?: (error: unknown) => void;
-}): Promise<QueuedPostSendState> {
-  const expectedPlatformSendAttemptId =
-    params.producerClaimId ?? params.expectedPlatformSendAttemptId;
-  const owner = createQueuedDeliveryOwner({
-    queueId: params.queueId,
-    stateDir: params.stateDir,
-    expectedPlatformSendAttemptId,
-  });
+}): Promise<"marked" | "unmarked"> {
+  const expectedPlatformSendAttemptId = params.expectedPlatformSendAttemptId;
   try {
     if (expectedPlatformSendAttemptId !== undefined) {
       await markDeliveryPlatformOutcomeUnknown(
@@ -136,32 +147,12 @@ export async function persistQueuedPostSendState(params: {
     }
     return "marked";
   } catch (markErr: unknown) {
-    if (params.producerClaimId) {
-      // A bounded batch may still contain identityless later payloads. Its
-      // intermediate state must never become a premature success receipt.
-      await failDeliveryAfterPlatformSend(
-        params.queueId,
-        `post-send state persistence failed: ${formatErrorMessage(markErr)}`,
-        params.stateDir,
-        params.producerClaimId,
-      );
-      return "failed";
-    }
-    params.onPostSendMarkerError?.(markErr);
+    // Progress is not settlement: ack would erase an unfinished batch, and
+    // failure would release its live lease. Keep the dispatch fence until the
+    // owner can ack complete success or persist the settled failure.
     log.warn(
-      `failed to mark queued delivery ${params.queueId} as platform-outcome-unknown; falling back to direct ack (${params.queuePolicy}): ${formatErrorMessage(markErr)}`,
+      `failed to mark queued delivery ${params.queueId} as platform-outcome-unknown; deferring settlement until the batch finishes: ${formatErrorMessage(markErr)}`,
     );
-    try {
-      // The platform already returned a result. If state marking is unavailable,
-      // deleting the intent is safer than leaving it replayable.
-      await owner.ack(params.retainSpoolArtifacts ? { retainSpoolArtifacts: true } : undefined);
-      return "acked";
-    } catch (ackErr: unknown) {
-      const error = `post-send state persistence failed: marker=${formatErrorMessage(markErr)}; ack=${formatErrorMessage(ackErr)}`;
-      // Keep the evidence in the same canonical row if both primary state
-      // transitions fail; a generic failure update would make it replayable.
-      await owner.fail(failDeliveryAfterPlatformSend, error);
-      return "failed";
-    }
+    return "unmarked";
   }
 }
