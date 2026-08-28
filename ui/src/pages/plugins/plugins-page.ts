@@ -655,16 +655,13 @@ class PluginsPage extends OpenClawLightDomElement {
       await this.consentController.install(request, installIdentity);
       return;
     }
-    if (await confirmPluginInstall(request)) {
-      await this.consentController.install(request, installIdentity);
-    }
+    await this.consentController.install(request, installIdentity, () =>
+      confirmPluginInstall(request),
+    );
   }
 
   private async uninstall(pluginId: string, rowKey: string): Promise<void> {
     const name = this.result?.plugins.find((plugin) => plugin.id === pluginId)?.name ?? pluginId;
-    if (!(await confirmPluginUninstall(name))) {
-      return;
-    }
     await this.consentController.runMutation(
       rowKey,
       (client) => uninstallPlugin(client, pluginId),
@@ -684,6 +681,7 @@ class PluginsPage extends OpenClawLightDomElement {
         }
         await this.refreshCatalogAfterMutation(client);
       },
+      { confirm: () => confirmPluginUninstall(name) },
     );
   }
 

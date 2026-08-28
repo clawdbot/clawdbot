@@ -29,6 +29,11 @@ type PluginMutationSuccess<Result> = (
   isLatest: () => boolean,
 ) => Promise<void>;
 
+type PluginMutationOptions = {
+  confirm?: () => Promise<boolean>;
+  preserveMessageWhilePending?: boolean;
+};
+
 type PluginsConsentControllerHost = {
   gateway: GatewayPageController;
   getContext: () => ApplicationContext;
@@ -85,15 +90,25 @@ export class PluginsConsentController {
     rowKey: string,
     mutate: (client: GatewayBrowserClient) => Promise<Result>,
     onSuccess: PluginMutationSuccess<Result>,
+    options: PluginMutationOptions = {},
     onError: (error: unknown) => void = (error) => {
       this.host.setMessage(rowKey, { kind: "error", text: formatUiError(error) });
     },
-    options: { preserveMessageWhilePending?: boolean } = {},
   ): Promise<void> {
     const scope = this.host.gateway.capture();
     if (!scope || !this.host.canMutate() || this.host.isBusy(rowKey)) {
       return;
     }
+    if (
+      options.confirm &&
+      (!(await options.confirm()) ||
+        !this.host.gateway.isCurrent(scope) ||
+        !this.host.canMutate() ||
+        this.host.isBusy(rowKey))
+    ) {
+      return;
+    }
+    // Confirmation and request share the captured Gateway epoch and client.
     this.host.clearPageNotice();
     const mutationToken = ++this.mutationToken;
     this.mutationTokens.set(rowKey, mutationToken);
@@ -208,7 +223,11 @@ export class PluginsConsentController {
     }
   }
 
-  async install(request: PluginInstallRequest, installIdentity: string): Promise<void> {
+  async install(
+    request: PluginInstallRequest,
+    installIdentity: string,
+    confirm?: () => Promise<boolean>,
+  ): Promise<void> {
     // The server stages and inspects the requested artifact before asking for consent.
     // Catalog/search metadata cannot authorize that artifact's capabilities.
     await this.runMutation(
@@ -226,6 +245,7 @@ export class PluginsConsentController {
         );
         await this.host.refreshCatalogAfterMutation(client);
       },
+      { confirm, preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true },
       (error) => {
         const consentDetails = readPluginCapabilityConsentError(error);
         if (consentDetails) {
@@ -247,7 +267,6 @@ export class PluginsConsentController {
         }
         this.host.setMessage(installIdentity, { kind: "error", text: formatUiError(error) });
       },
-      { preserveMessageWhilePending: request.acknowledgeInstallPolicyWarning === true },
     );
   }
 
@@ -273,6 +292,7 @@ export class PluginsConsentController {
           this.host.getContext().gateway.connect();
         }
       },
+      {},
       (error) => {
         const details = readPluginCapabilityConsentError(error);
         if (enabled && details) {

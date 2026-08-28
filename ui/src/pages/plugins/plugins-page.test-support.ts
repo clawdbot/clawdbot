@@ -9,6 +9,7 @@ import type {
 import { t } from "../../i18n/index.ts";
 import type {
   PluginCatalogItem,
+  PluginInstallRequest,
   PluginListResult,
   PluginMutationResult,
   PluginSearchResult,
@@ -53,6 +54,7 @@ type TestPluginsPage = HTMLElement & {
   applyMutationResult: (result: PluginMutationResult) => void;
   consentController: Pick<PluginsConsentController, "install">;
   refreshCatalog: () => Promise<void>;
+  install: (request: PluginInstallRequest, installIdentity: string) => Promise<void>;
   updateEnabled: (pluginId: string, enabled: boolean, key?: string) => Promise<void>;
   uninstall: (pluginId: string, rowKey: string) => Promise<void>;
 };
