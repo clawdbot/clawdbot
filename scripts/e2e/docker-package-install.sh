@@ -81,6 +81,34 @@ DOCKER_COMMAND_TIMEOUT="$DOCKER_RUN_TIMEOUT" docker_e2e_docker_run_cmd run -d \
     openclaw --version > /tmp/openclaw-version
     openclaw --help > /tmp/openclaw-help
     test -s /tmp/openclaw-help
+    # A source install must follow checkout rebuilds without rewriting its package files.
+    (
+      export PNPM_HOME=/tmp/pnpm-source-link-home
+      export PATH="$PNPM_HOME/bin:$PATH"
+      mkdir -p /tmp/pnpm-source-link
+      cd /tmp/pnpm-source-link
+      node - "$1" <<"SOURCE_LINK"
+const fs = require("node:fs");
+fs.writeFileSync("package.json", JSON.stringify({
+  name: "openclaw-source-link-fixture", version: "1.0.0", packageManager: process.argv[2],
+  bin: { "openclaw-source-link-fixture": "cli.cjs" },
+}));
+fs.writeFileSync("pnpm-workspace.yaml", "packages: []\n");
+fs.writeFileSync("pnpm-lock.yaml", "lockfileVersion: 9.0\n");
+fs.writeFileSync("cli.cjs", "#!/usr/bin/env node\nconsole.log(1);\n", { mode: 0o755 });
+SOURCE_LINK
+      pnpm install
+      for file in package.json pnpm-workspace.yaml pnpm-lock.yaml; do cp "$file" "$file.before"; done
+      pnpm add --global "openclaw-source-link-fixture@link:$PWD"
+      test "$(openclaw-source-link-fixture)" = 1
+      node <<"SOURCE_LINK"
+const fs = require("node:fs");
+fs.writeFileSync("cli-next.cjs", "#!/usr/bin/env node\nconsole.log(2);\n", { mode: 0o755 });
+fs.renameSync("cli-next.cjs", "cli.cjs");
+SOURCE_LINK
+      test "$(openclaw-source-link-fixture)" = 2
+      for file in package.json pnpm-workspace.yaml pnpm-lock.yaml; do cmp "$file" "$file.before"; done
+    )
     touch /tmp/openclaw-proof-ready
     exec sleep infinity
   ' -- "$(node -p "require('$ROOT_DIR/package.json').packageManager")" >/dev/null
