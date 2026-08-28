@@ -17,6 +17,7 @@ import {
 import {
   ClawAddConfigCommitError,
   commitClawAgentConfig,
+  rollbackClawAgentConfigReservation,
   type ConfigCommit,
 } from "./add-config.js";
 import { ClawBootstrapWriteError, seedClawPackageBootstrap } from "./bootstrap.js";
@@ -287,6 +288,7 @@ export async function applyClawAddPlan(
 
   const installPackages = options.installPackages ?? installClawPackages;
   let packages: PersistedClawPackageRef[] = [];
+  let reservedAgentConfig = false;
   const preserveRecordedPhaseOrMarkPartial = (): ClawInstallStatus => {
     if (workspacePhaseRecorded) {
       return installRecord.status;
@@ -327,6 +329,21 @@ export async function applyClawAddPlan(
       });
     }
   }
+
+  const rollbackAgentConfigReservation = async (): Promise<void> => {
+    if (!reservedAgentConfig) {
+      return;
+    }
+    if (
+      await rollbackClawAgentConfigReservation({
+        plan,
+        commitConfig: options.commitConfig,
+      })
+    ) {
+      configCommitted = false;
+      reservedAgentConfig = false;
+    }
+  };
 
   try {
     assertWorkspacePathUnchanged(workspace);
@@ -407,13 +424,15 @@ export async function applyClawAddPlan(
   }
 
   try {
-    configCommitted = await commitClawAgentConfig({
+    const configCommit = await commitClawAgentConfig({
       plan,
       workspace,
       commitConfig: options.commitConfig,
       resumePlan: options.resumePlan,
       resumeRecord: options.resumeRecord,
     });
+    configCommitted = configCommit.committed;
+    reservedAgentConfig = configCommit.reservedConfig;
     try {
       recordAgentProvenance(plan.agent.finalId, { createdVia: "claw" }, options);
     } catch (error) {
@@ -470,14 +489,23 @@ export async function applyClawAddPlan(
       ...(options.nowMs !== undefined ? { nowMs: options.nowMs } : {}),
     });
   } catch (error) {
-    markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
+    await rollbackAgentConfigReservation();
+    const installStatus: ClawInstallStatus = configCommitted
+      ? "config_committed"
+      : "workspace_ready";
+    markInstallStatus(
+      plan.agent.finalId,
+      installStatus,
+      configCommitted ? ["config_committed"] : ["workspace_ready", "config_committed"],
+      options,
+    );
     return partialResult({
       plan,
       installRecord,
       workspaceCreated,
       configCommitted,
       packages,
-      installStatus: "config_committed",
+      installStatus,
       error: {
         code: error instanceof ClawBootstrapWriteError ? error.code : "bootstrap_write_failed",
         message: coerceErrorMessage(error),
@@ -491,6 +519,7 @@ export async function applyClawAddPlan(
   try {
     workspaceFiles = await createFiles(plan, options);
   } catch (error) {
+    await rollbackAgentConfigReservation();
     const workspaceError =
       error instanceof ClawWorkspaceWriteError
         ? error
@@ -506,7 +535,15 @@ export async function applyClawAddPlan(
             ],
             workspaceFiles,
           );
-    markInstallStatus(plan.agent.finalId, "config_committed", ["config_committed"], options);
+    const installStatus: ClawInstallStatus = configCommitted
+      ? "config_committed"
+      : "workspace_ready";
+    markInstallStatus(
+      plan.agent.finalId,
+      installStatus,
+      configCommitted ? ["config_committed"] : ["workspace_ready", "config_committed"],
+      options,
+    );
     return partialResult({
       plan,
       installRecord,
@@ -514,7 +551,7 @@ export async function applyClawAddPlan(
       configCommitted,
       workspaceFiles: workspaceError.createdFiles,
       packages,
-      installStatus: "config_committed",
+      installStatus,
       error: {
         code: "workspace_files_failed",
         message: workspaceError.message,

@@ -22,6 +22,11 @@ export class ClawAddConfigCommitError extends Error {
   }
 }
 
+export type ClawAddConfigCommitResult = {
+  committed: boolean;
+  reservedConfig: boolean;
+};
+
 function preserveAgentEntries(config: OpenClawConfig): {
   agents: AgentConfig[];
   config: OpenClawConfig;
@@ -63,8 +68,9 @@ export async function commitClawAgentConfig(params: {
   commitConfig?: ConfigCommit;
   resumePlan?: ClawAddPlan;
   resumeRecord?: PersistedClawInstall;
-}): Promise<boolean> {
+}): Promise<ClawAddConfigCommitResult> {
   let committed = false;
+  let reservedConfig = false;
   const commit =
     params.commitConfig ??
     (async (transform) => {
@@ -96,6 +102,7 @@ export async function commitClawAgentConfig(params: {
       });
       if (nextConfig) {
         committed = true;
+        reservedConfig = true;
         return nextConfig;
       }
       throw new ClawAddConfigCommitError(
@@ -116,8 +123,48 @@ export async function commitClawAgentConfig(params: {
       );
     }
     committed = true;
+    reservedConfig = true;
     return addPlannedAgent(preserved.config, preserved.agents, params.plan);
   });
 
-  return committed;
+  return { committed, reservedConfig };
+}
+
+export async function rollbackClawAgentConfigReservation(params: {
+  plan: ClawAddPlan;
+  commitConfig?: ConfigCommit;
+}): Promise<boolean> {
+  let rolledBack = false;
+  const commit =
+    params.commitConfig ??
+    (async (transform) => {
+      await transformConfigFileWithRetry({
+        afterWrite: { mode: "auto" },
+        transform: (config) => ({ nextConfig: transform(config) }),
+      });
+    });
+
+  await commit((config) => {
+    const preserved = preserveAgentEntries(config);
+    const normalizedAgentId = normalizeAgentId(params.plan.agent.finalId);
+    const existingAgent = preserved.agents.find(
+      (agent) => normalizeAgentId(agent.id) === normalizedAgentId,
+    );
+    if (!existingAgent || !sameCommittedAgent(existingAgent, params.plan)) {
+      return config;
+    }
+    const remainingAgents = preserved.agents.filter(
+      (agent) => normalizeAgentId(agent.id) !== normalizedAgentId,
+    );
+    rolledBack = true;
+    return {
+      ...preserved.config,
+      agents: {
+        ...preserved.config.agents,
+        entries: Object.fromEntries(remainingAgents.map(({ id, ...entry }) => [id, entry])),
+      },
+    };
+  });
+
+  return rolledBack;
 }
