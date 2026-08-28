@@ -118,8 +118,12 @@ describe("prepareEmbeddedAttemptTrajectory", () => {
     await prepareEmbeddedAttemptTrajectory(createInput() as never);
 
     const started = recorder.recordEvent.mock.calls.find((call) => call[0] === "session.started");
-    expect(started?.[1]).toMatchObject({ toolCount: 7 });
-    expect((started?.[1] as { authProfileId?: unknown }).authProfileId).toBeUndefined();
+    if (!started) {
+      expect.unreachable("expected a session.started trajectory event");
+    }
+    const startedPayload = started[1] as { authProfileId?: unknown };
+    expect(startedPayload).toMatchObject({ toolCount: 7 });
+    expect(startedPayload.authProfileId).toBeUndefined();
   });
 
   it("keeps trajectory path resolution but skips recorder creation when disabled", async () => {
