@@ -141,8 +141,8 @@ describe.each([false, true])("image omission through compaction (split turn: %s)
       expect(preparation.value.firstKeptEntryId).toBe(lastEntry.id);
 
       const model: Model = {
-        id: "summary-model",
-        name: "Summary Model",
+        id: "umbreon-latest",
+        name: "Umbreon Latest",
         api: "test-api",
         provider: "test-provider",
         baseUrl: "https://example.test",
