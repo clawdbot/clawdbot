@@ -47,7 +47,10 @@ import {
   resolveChatPaneParentSession,
   resolveChatPaneWorkspace,
 } from "./components/chat-pane-header.ts";
-import { renderChatSessionSharing } from "./components/chat-session-sharing.ts";
+import {
+  canManageChatSessionSharing,
+  renderChatSessionSharing,
+} from "./components/chat-session-sharing.ts";
 import type { SessionWorkspaceProps } from "./components/chat-session-workspace.ts";
 import { renderContinueInTerminalDialog } from "./components/continue-in-terminal-dialog.ts";
 import { hasAbortableSessionRun } from "./run-lifecycle.ts";
@@ -491,7 +494,10 @@ export abstract class ChatPaneHeader extends ChatPaneDiscussion {
         },
         onDockSideChange: (dock) => this.handleBoardDockChange(dock),
       }),
-      sharingControl: sharing && !this.narrow ? renderChatSessionSharing(sharing) : nothing,
+      sharingControl:
+        sharing && (!this.narrow || !canManageChatSessionSharing(sharing.session))
+          ? renderChatSessionSharing(sharing)
+          : nothing,
       sessionMenuAction:
         row && this.state
           ? html`<openclaw-chat-header-session-menu

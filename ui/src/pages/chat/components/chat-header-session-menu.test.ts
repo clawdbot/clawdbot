@@ -576,7 +576,7 @@ describe("chat header session menu", () => {
         key: "agent:main:shared",
         kind: "direct",
         updatedAt: 1,
-        visibility: "shared",
+        visibility: "draft",
         sharingRole: "owner",
       },
       state: {
@@ -606,7 +606,12 @@ describe("chat header session menu", () => {
       Array.from(
         compact.querySelectorAll<MenuItemElement>(":scope > wa-dropdown > wa-dropdown-item"),
       ).map(itemLabel),
-    ).toEqual(["Back", "Shared", "Read-only", "Suggest", "Draft", "Vyctor"]);
+    ).toEqual(["Back", "Publish draft", "Read-only", "Suggest", "Draft", "Vyctor"]);
+    expect(
+      compact
+        .querySelector(".chat-pane__publish-draft")
+        ?.classList.contains("session-menu__item"),
+    ).toBe(true);
     select(compact, "visibility:read-only");
     expect(onVisibilityChange).toHaveBeenCalledWith("read-only");
   });

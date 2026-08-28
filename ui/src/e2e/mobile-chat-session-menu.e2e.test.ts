@@ -40,7 +40,7 @@ suite.define(() => {
             {
               ...sessionRow(sessionKey, "Mobile menu", Date.parse("2026-08-28T12:00:00.000Z")),
               sharingRole: "owner",
-              visibility: "shared",
+              visibility: "draft",
             },
           ]),
           "session.members.listEvidence": {
@@ -49,7 +49,11 @@ suite.define(() => {
             members: [],
             identities: [
               { type: "human", id: "owner", label: "Owner" },
-              { type: "human", id: "vyctor", label: "Vyctor" },
+              ...Array.from({ length: 30 }, (_, index) => ({
+                type: "human" as const,
+                id: `member-${index}`,
+                label: `Member ${index}`,
+              })),
             ],
             role: "owner",
             allowedVisibilities: ["shared", "read-only", "suggest", "draft"],
@@ -87,12 +91,62 @@ suite.define(() => {
           .poll(() => page.getByRole("button", { name: "Session sharing" }).count())
           .toBe(0);
         await menuHost.locator('wa-dropdown-item[value="compact:open-sharing"]').click();
-        await menuHost.locator('wa-dropdown-item[value="visibility:shared"]').waitFor();
+        const publish = menuHost.locator(".chat-pane__publish-draft");
+        await publish.waitFor();
         await menuHost.getByText("Members", { exact: true }).waitFor();
+        await expect
+          .poll(() => menu.evaluate((element) => Math.round(element.getBoundingClientRect().height)))
+          .toBeLessThanOrEqual(421);
+        await expect.poll(() => menu.evaluate((element) => element.scrollHeight)).toBeGreaterThan(
+          await menu.evaluate((element) => element.clientHeight),
+        );
+        await expect
+          .poll(() =>
+            publish.evaluate((element) => Math.round(element.getBoundingClientRect().height)),
+          )
+          .toBe(34);
         await captureUiProof(page, `mobile-more-sharing-followup-after-${colorScheme}.png`);
       } finally {
         await context.close();
       }
     },
   );
+
+  it("keeps the mobile draft indicator for non-manager sessions", async () => {
+    const sessionKey = "agent:main:mobile-member-draft";
+    const context = await suite.browser.newContext({
+      hasTouch: true,
+      locale: "en-US",
+      serviceWorkers: "block",
+      viewport: { height: 844, width: 390 },
+    });
+    const page = await context.newPage();
+    await installMockGateway(page, {
+      allowedSessionVisibilities: ["shared", "read-only", "suggest", "draft"],
+      featureMethods: ["chat.metadata", "chat.startup", "session.visibility.set"],
+      operatorScopes: ["operator.read"],
+      sessionKey,
+      methodResponses: {
+        "sessions.list": sessionsListResponse([
+          {
+            ...sessionRow(sessionKey, "Member draft", Date.parse("2026-08-28T12:00:00.000Z")),
+            sharingRole: "member",
+            visibility: "draft",
+          },
+        ]),
+      },
+    });
+
+    try {
+      await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+      await page.locator(".chat-pane__draft-indicator").waitFor();
+      await page.getByRole("button", { name: "Actions for Member draft" }).click();
+      const menuHost = page.locator("openclaw-chat-header-session-menu");
+      await expect
+        .poll(() => menuHost.locator('wa-dropdown-item[value="compact:open-sharing"]').count())
+        .toBe(0);
+    } finally {
+      await context.close();
+    }
+  });
 });

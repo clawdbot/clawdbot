@@ -100,7 +100,7 @@ export function renderChatSessionSharing(props: ChatSessionSharingProps, inline 
     ${canPublish
       ? html`<wa-dropdown-item
             value="visibility:shared"
-            class="chat-pane__publish-draft"
+            class="session-menu__item chat-pane__publish-draft"
             ?disabled=${Boolean(props.visibilityDisabledReason)}
             title=${props.visibilityDisabledReason ?? nothing}
           >
