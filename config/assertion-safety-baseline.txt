@@ -4003,7 +4003,6 @@ ui/src/lib/board/widget-sandbox-host.ts	1
 ui/src/lib/board/widgets/workboard-card.ts	3
 ui/src/lib/board/widgets/workboard-widget.ts	2
 ui/src/lib/channels/index.ts	3
-ui/src/lib/chat/current-user-identity.ts	4
 ui/src/lib/chat/heartbeat-display.ts	4
 ui/src/lib/chat/message-extract.ts	7
 ui/src/lib/chat/message-normalizer.ts	3

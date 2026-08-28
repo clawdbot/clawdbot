@@ -73,6 +73,7 @@ function sameSelfUser(
 ): boolean {
   return (
     left?.id === right?.id &&
+    left?.identity?.id === right?.identity?.id &&
     left?.email === right?.email &&
     left?.name === right?.name &&
     left?.avatarUrl === right?.avatarUrl

@@ -908,6 +908,25 @@ describe("createApplicationGateway connection phase", () => {
     expect(gateway.eventLog).toHaveLength(1);
   });
 
+  it("updates sender provenance when presence qualification alone changes", () => {
+    const { gateway, current } = createStore();
+    gateway.start();
+    const user = { id: "same-id", name: "Person", avatarUrl: "/api/users/same-id/avatar" };
+    current().opts.onHello?.({
+      ...HELLO,
+      snapshot: { presence: [{ instanceId: current().instanceId, user }] },
+    });
+    const identity = { type: "profile", id: user.id };
+    for (const nextUser of [{ ...user, identity }, user, { ...user, identity }]) {
+      current().opts.onEvent?.({
+        type: "event",
+        event: "presence",
+        payload: { presence: [{ instanceId: current().instanceId, user: nextUser }] },
+      });
+      expect(gateway.snapshot.selfUser).toEqual(nextUser);
+    }
+  });
+
   it("projects only this browser connection's optional presence identity", () => {
     const { gateway, current } = createStore();
     gateway.start();

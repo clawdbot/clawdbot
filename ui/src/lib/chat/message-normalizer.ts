@@ -9,6 +9,7 @@ import {
   extractCanvasShortcodes,
   isCanvasBoardWidgetName,
 } from "../../../../src/chat/canvas-render.js";
+import { readTranscriptSenderIdentity } from "../../../../src/chat/sender-identity.js";
 import {
   isToolCallContentType,
   isToolResultContentType,
@@ -20,12 +21,9 @@ import type { NormalizedMessage, MessageContentItem } from "./chat-types.ts";
 import { normalizeAttachmentContentBlock } from "./message-normalizer-attachments.ts";
 import { formatSenderLabel, normalizeSenderIdentity } from "./sender-label.ts";
 
-// Older gateways baked sender labels as "name (<profile uuid>)" into transcript
-// text. The UUID is machine noise in a human label but it is also the row's
-// only author key, so split it into display + identity instead of discarding.
+// Keep legacy labels readable without treating their UUID suffix as profile evidence.
 const OPAQUE_ID_LABEL_SUFFIX_RE =
   /\s+\(([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\)$/iu;
-const OPAQUE_ID_LABEL_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
 const optionalMessageStringSchema = z.string().optional().catch(undefined);
 const optionalMessageNumberSchema = z.number().optional().catch(undefined);
@@ -138,20 +136,6 @@ const rawMessageSchema = z
 
 type RawContentBlock = z.infer<typeof rawContentBlockSchema>;
 type RawCanvasPreview = z.infer<typeof rawCanvasPreviewSchema>;
-
-function splitOpaqueIdLabel(label: string): { display: string; id: string } | null {
-  // A nameless legacy sender labels as the bare UUID; keep it as the
-  // last-resort display while still attributing the row to that profile.
-  if (OPAQUE_ID_LABEL_RE.test(label)) {
-    return { display: label, id: label };
-  }
-  const match = OPAQUE_ID_LABEL_SUFFIX_RE.exec(label);
-  if (!match?.[1]) {
-    return null;
-  }
-  const display = label.slice(0, match.index).trim();
-  return display ? { display, id: match[1] } : null;
-}
 
 export function normalizeRoleForGrouping(role: string): string {
   const lower = role.toLowerCase();
@@ -670,30 +654,20 @@ export function normalizeMessage(message: unknown): NormalizedMessage {
   const replyPreviewRecord = openClawMeta?.replyToPreview;
   const replyPreviewText = replyPreviewRecord?.text?.trim() ?? "";
   const replyPreviewSender = replyPreviewRecord?.senderLabel?.trim() ?? "";
+  const identity = readTranscriptSenderIdentity(openClawMeta?.senderIdentity);
   const metaSender = normalizeSenderIdentity({
+    identity,
     id: openClawMeta?.senderId,
     name: openClawMeta?.senderName,
     username: openClawMeta?.senderUsername,
-    profileAvatarUrl: openClawMeta?.senderProfileAvatarUrl,
+    profileAvatarUrl:
+      identity?.type === "profile" ? openClawMeta?.senderProfileAvatarUrl : undefined,
   });
   const rawLabel = m.senderLabel?.trim() ?? "";
-  const legacyLabelIdentity = rawLabel ? splitOpaqueIdLabel(rawLabel) : null;
   const senderLabel = rawLabel
-    ? (legacyLabelIdentity?.display ?? rawLabel)
+    ? rawLabel.replace(OPAQUE_ID_LABEL_SUFFIX_RE, "").trim()
     : formatSenderLabel(metaSender);
-  // Legacy transcripts baked the author's profile UUID only into the label.
-  // Keep it as structured (non-display) identity so the avatar gutter resolves
-  // the actual author instead of falling back to the local viewer.
-  const sender =
-    metaSender ??
-    (legacyLabelIdentity
-      ? normalizeSenderIdentity({
-          id: legacyLabelIdentity.id,
-          ...(legacyLabelIdentity.display !== legacyLabelIdentity.id
-            ? { name: legacyLabelIdentity.display }
-            : {}),
-        })
-      : null);
+  const sender = metaSender ?? (senderLabel ? { name: senderLabel } : null);
 
   content = stripMessageDisplayMetadata(content);
 

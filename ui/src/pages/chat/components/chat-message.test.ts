@@ -1952,9 +1952,9 @@ describe("grouped chat rendering", () => {
     expect(container.querySelector(".chat-author-avatar")).toBeNull();
   });
 
-  it("links a peer sender's name to their activity feed and leaves your own plain", () => {
+  it("sender provenance links only profiles and does not identify colliding legacy senders as you", () => {
     const navigate = vi.fn();
-    const renderSender = (senderId: string) => {
+    const renderSender = (senderId: string, profile = true) => {
       const container = document.createElement("div");
       const message = { role: "user", content: "hello", timestamp: 1000 };
       render(
@@ -1962,7 +1962,11 @@ describe("grouped chat rendering", () => {
           createMessageGroup(message, "user", {
             key: `sender-link-${senderId}`,
             senderLabel: "Alice Example",
-            sender: { id: senderId, name: "Alice Example" },
+            sender: {
+              id: senderId,
+              name: "Alice Example",
+              ...(profile ? { identity: { type: "profile" as const, id: senderId } } : {}),
+            },
             messages: [createMessageEntry(`sender-link-${senderId}-message`, message)],
           }),
           {
@@ -1986,6 +1990,10 @@ describe("grouped chat rendering", () => {
     const own = renderSender("me");
     expect(own.querySelector("a.chat-sender-name")).toBeNull();
     expect(own.querySelector(".chat-sender-name")?.textContent).toBe("Local User");
+    const legacy = renderSender("me", false);
+    expect(legacy.querySelector("a.chat-sender-name")).toBeNull();
+    expect(legacy.querySelector(".chat-sender-name")?.textContent).toBe("Alice Example");
+    expect(renderSender("profile-alice", false).querySelector("a.chat-sender-name")).toBeNull();
   });
 
   it("tints attributed user groups with the sender's stable identity hue", () => {
@@ -2030,7 +2038,12 @@ describe("grouped chat rendering", () => {
 
   it.each([
     { label: "foreign sender", sender: { id: "other-user" }, userId: "current-user", peer: true },
-    { label: "own sender", sender: { id: "current-user" }, userId: "current-user", peer: false },
+    {
+      label: "own sender",
+      sender: { id: "current-user", identity: { type: "profile" as const, id: "current-user" } },
+      userId: "current-user",
+      peer: false,
+    },
     { label: "unattributed sender", sender: undefined, userId: "current-user", peer: false },
     {
       label: "attributed sender without a viewer",
@@ -2303,14 +2316,18 @@ describe("grouped chat rendering", () => {
     expect(container.textContent).not.toContain("Guardian warning");
   });
 
-  it("uses the current profile display name for the signed-in user's historical messages", () => {
+  it("uses the current profile display name for the signed-in user's proven profile messages", () => {
     const container = document.createElement("div");
     render(
       renderMessageGroup(
         createMessageGroup({ role: "user", content: "hello", timestamp: 1000 }, "user", {
           key: "current-user-group",
           senderLabel: "fullerstackd",
-          sender: { id: "profile-1", username: "fullerstackd" },
+          sender: {
+            id: "profile-1",
+            username: "fullerstackd",
+            identity: { type: "profile", id: "profile-1" },
+          },
           messages: [
             {
               key: "current-user-message",
