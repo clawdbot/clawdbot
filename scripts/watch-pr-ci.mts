@@ -226,15 +226,22 @@ const newerJob = (a: JobIdentity, b: JobIdentity) =>
 export function classifyRollup(
   rollup: RollupPayload | null | undefined,
   runs: RunListItem[] = [],
-  reconciledChecks: ReadonlySet<number> = new Set(),
+  reconciledChecks: ReadonlyMap<number, string> = new Map(),
 ) {
   const rawNodes = rollup?.contexts?.nodes ?? [];
   const hiddenContextCount = Math.max(
     0,
     (rollup?.contexts?.totalCount ?? rawNodes.length) - rawNodes.length,
   );
+  const isReconciledPlaceholder = (check: RollupCheck) =>
+    check.databaseId !== undefined &&
+    check.name !== undefined &&
+    check.name.length > 0 &&
+    check.status === "QUEUED" &&
+    check.conclusion === null &&
+    reconciledChecks.get(check.databaseId) === check.name;
   const newestRunByWorkflow = new Map<number, number>();
-  const bestByJob = new Map<string, JobIdentity>();
+  const bestByJob = new Map<string, JobIdentity & { reconciled: boolean }>();
   for (const check of rawNodes) {
     const identity = checkRunIdentity(check);
     if (!identity) {
@@ -246,7 +253,8 @@ export function classifyRollup(
     );
     if (check.name && typeof check.databaseId === "number") {
       const key = `${identity.workflowId}:${check.name}`;
-      const candidate = { runId: identity.runId, checkId: check.databaseId };
+      const reconciled = isReconciledPlaceholder(check);
+      const candidate = { runId: identity.runId, checkId: check.databaseId, reconciled };
       const best = bestByJob.get(key);
       if (!best || newerJob(candidate, best)) {
         bestByJob.set(key, candidate);
@@ -265,14 +273,22 @@ export function classifyRollup(
     if (!identity) {
       return true;
     }
-    if (check.databaseId !== undefined && reconciledChecks.has(check.databaseId)) {
+    // Proof covers the queued observation, not a later name or outcome of the same ID.
+    if (isReconciledPlaceholder(check)) {
       reconciledCount += 1;
       supersededCount += 1;
       return false;
     }
     if (check.name && typeof check.databaseId === "number") {
       const best = bestByJob.get(`${identity.workflowId}:${check.name}`);
-      if (best && newerJob(best, { runId: identity.runId, checkId: check.databaseId })) {
+      // A removed placeholder cannot hide a verified sibling that changed in this
+      // attempt. Uncovered earlier attempts and newer runs retain normal supersession.
+      const changedAlias = reconciledChecks.has(check.databaseId);
+      if (
+        best &&
+        !(best.reconciled && best.runId === identity.runId && changedAlias) &&
+        newerJob(best, { runId: identity.runId, checkId: check.databaseId })
+      ) {
         supersededCount += 1;
         return false;
       }
@@ -334,16 +350,15 @@ export function classifyRollup(
         supersededCount,
       };
     }
-    // Reconciliation can explain a stale aggregate, never unknown sibling outcomes.
-    const unknownOutcome =
-      reconciledCount > 0 &&
-      checks.some((check) =>
-        check.kind === "StatusContext"
-          ? check.state !== "SUCCESS"
-          : check.status !== "COMPLETED" ||
-            !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion ?? ""),
-      );
-    if (pendingCount > 0 || unknownOutcome) {
+    // A refresh can invalidate every alias proof. Unknown outcomes still block,
+    // even when no placeholder was removed from this snapshot.
+    const hasUnresolvedChecks = checks.some((check) =>
+      check.kind === "StatusContext"
+        ? check.state !== "SUCCESS"
+        : check.status !== "COMPLETED" ||
+          !["SUCCESS", "SKIPPED", "NEUTRAL"].includes(check.conclusion ?? ""),
+    );
+    if (hasUnresolvedChecks) {
       return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
     }
     // GitHub's aggregate permanently counts superseded cancellations. With full visibility,
@@ -351,6 +366,17 @@ export function classifyRollup(
     return { verdict: "GREEN", pendingCount, failingNames: [], supersededCount };
   }
   return { verdict: "PENDING", pendingCount, failingNames: [], supersededCount };
+}
+
+function ghReadOptions(deadline?: number) {
+  if (deadline === undefined) {
+    return GH_READ_OPTIONS;
+  }
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    throw new Error("watcher evidence deadline elapsed");
+  }
+  return { ...GH_READ_OPTIONS, timeout: Math.min(GH_READ_OPTIONS.timeout, remaining) };
 }
 
 const readPr = (pr: number, repo: string) =>
@@ -369,20 +395,46 @@ const findRun = (repo: string, sha: string, after?: number) =>
     RunListSchema.parse(execGhJson(buildFindRunArgs(repo, sha), GH_READ_OPTIONS)),
     after,
   );
-const findTargetRuns = (repo: string, sha: string) =>
+const findTargetRuns = (repo: string, sha: string, deadline?: number) =>
   RunListSchema.parse(
     execGhJson(
       ["api", `repos/${repo}/actions/runs?event=pull_request_target&head_sha=${sha}&per_page=100`],
-      GH_READ_OPTIONS,
+      ghReadOptions(deadline),
     ),
   );
-const readRun = (repo: string, runId: number) =>
+const readRun = (repo: string, runId: number, deadline?: number) =>
   RunStatusSchema.parse(
     execGhJson(
       `run view ${runId} --repo ${repo} --json status,conclusion`.split(" "),
-      GH_READ_OPTIONS,
+      ghReadOptions(deadline),
     ),
   );
+
+function classifyPrRollup(
+  pr: RollupPage,
+  repo: string,
+  headSha: string,
+  reconciledChecks?: ReadonlyMap<number, string>,
+  deadline?: number,
+) {
+  const result = classifyRollup(pr.statusCheckRollup, [], reconciledChecks);
+  if (
+    result.verdict !== "FAILING" ||
+    !pr.statusCheckRollup?.contexts?.nodes?.some(
+      (check) =>
+        check.conclusion === "CANCELLED" &&
+        check.checkSuite?.workflowRun?.event === "pull_request_target" &&
+        checkRunIdentity(check),
+    )
+  ) {
+    return result;
+  }
+  return classifyRollup(
+    pr.statusCheckRollup,
+    findTargetRuns(repo, headSha, deadline),
+    reconciledChecks,
+  );
+}
 
 function readQueuedPlaceholderEvidence(
   repo: string,
@@ -391,7 +443,7 @@ function readQueuedPlaceholderEvidence(
   rollup: RollupPayload,
   deadline: number,
 ) {
-  const reconciled = new Set<number>();
+  const reconciled = new Map<number, string>();
   const contexts = rollup.contexts;
   const nodes = contexts?.nodes ?? [];
   if (
@@ -418,16 +470,8 @@ function readQueuedPlaceholderEvidence(
   const runPath = `repos/${repo}/actions/runs/${attached.id}`;
   // Request current evidence through the shared gh seam; the final run read must
   // not deliberately reuse the snapshot from before job collection.
-  const readEvidence = (endpoint: string) => {
-    const remaining = deadline - Date.now();
-    if (remaining <= 0) {
-      throw new Error("queued-alias evidence deadline elapsed");
-    }
-    return execGhJson(["api", endpoint, "-H", "Cache-Control: max-age=0"], {
-      ...GH_READ_OPTIONS,
-      timeout: Math.min(GH_READ_OPTIONS.timeout, remaining),
-    });
-  };
+  const readEvidence = (endpoint: string) =>
+    execGhJson(["api", endpoint, "-H", "Cache-Control: max-age=0"], ghReadOptions(deadline));
   const readCompletedRun = () => CompletedRunSchema.parse(readEvidence(runPath));
   const run = readCompletedRun();
   if (
@@ -505,8 +549,9 @@ function readQueuedPlaceholderEvidence(
       );
     });
     if (unexecuted) {
-      for (const check of checks) {
-        reconciled.add(check.id);
+      // The refreshed rollup can reveal an alias omitted from the first snapshot.
+      for (const alias of aliases) {
+        reconciled.set(alias.id, name);
       }
     }
   }
@@ -514,7 +559,7 @@ function readQueuedPlaceholderEvidence(
   // completion after a newer attempt starts while the job pages are being read.
   const current = readCompletedRun();
   if (JSON.stringify(current) !== JSON.stringify(run)) {
-    return new Set<number>();
+    return new Map<number, string>();
   }
   return reconciled;
 }
@@ -588,7 +633,7 @@ export function collectRollupContexts(
   };
 }
 
-function readRollup(pr: number, repo: string) {
+function readRollup(pr: number, repo: string, deadline?: number) {
   const [owner, name] = repo.split("/");
   return (
     collectRollupContexts((cursor) => {
@@ -607,7 +652,9 @@ function readRollup(pr: number, repo: string) {
       if (cursor !== null) {
         queryArgs.push("-f", `cursor=${cursor}`);
       }
-      const response = RollupResponseSchema.safeParse(execGhJson(queryArgs, GH_READ_OPTIONS));
+      const response = RollupResponseSchema.safeParse(
+        execGhJson(queryArgs, ghReadOptions(deadline)),
+      );
       return response.success ? response.data.data.repository?.pullRequest : undefined;
     }) ?? {}
   );
@@ -738,28 +785,15 @@ async function main(argv = process.argv.slice(2)) {
           }
           return undefined;
         }
-        const pr = readRollup(args.pr, args.repo);
+        let pr = readRollup(args.pr, args.repo);
         const blocked = precheck(pr, args.headSha, true);
         if (blocked !== null) {
           return blocked;
         }
-        let targetRuns: RunListItem[] = [];
-        let result = classifyRollup(pr.statusCheckRollup);
-        if (
-          result.verdict === "FAILING" &&
-          pr.statusCheckRollup?.contexts?.nodes?.some(
-            (check) =>
-              check.conclusion === "CANCELLED" &&
-              check.checkSuite?.workflowRun?.event === "pull_request_target" &&
-              checkRunIdentity(check),
-          )
-        ) {
-          targetRuns = findTargetRuns(args.repo, args.headSha);
-          result = classifyRollup(pr.statusCheckRollup, targetRuns);
-        }
+        let result = classifyPrRollup(pr, args.repo, args.headSha);
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
-        const run = result.verdict === "FAILING" ? undefined : readRun(args.repo, runId);
+        let run = result.verdict === "FAILING" ? undefined : readRun(args.repo, runId);
         if (
           result.verdict === "PENDING" &&
           result.pendingCount > 0 &&
@@ -774,8 +808,20 @@ async function main(argv = process.argv.slice(2)) {
             pr.statusCheckRollup,
             watchDeadline,
           );
-          result = classifyRollup(pr.statusCheckRollup, targetRuns, reconciled);
+          if (reconciled.size > 0) {
+            // The evidence scan may span pushes or new checks. Reobserve the PR
+            // before applying proof, then retain the ordinary final CI-run check.
+            pr = readRollup(args.pr, args.repo, watchDeadline);
+            const currentBlocked = precheck(pr, args.headSha, true);
+            if (currentBlocked !== null) {
+              return currentBlocked;
+            }
+            result = classifyPrRollup(pr, args.repo, args.headSha, reconciled, watchDeadline);
+            run =
+              result.verdict === "FAILING" ? undefined : readRun(args.repo, runId, watchDeadline);
+          }
         }
+        lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
         console.log(
           `STATUS state=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,

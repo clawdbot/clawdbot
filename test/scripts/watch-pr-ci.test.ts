@@ -50,11 +50,13 @@ function replayPlaceholder(
   fixture = structuredClone(placeholderFixture),
   evidence: {
     runSnapshots?: unknown[];
+    runViewSnapshots?: unknown[];
     jobPages?: unknown[];
     directJobs?: unknown[];
     merged?: boolean;
     watchTimeout?: number;
     delayFirstAlias?: boolean;
+    afterAliasScan?: unknown;
   } = {},
 ) {
   const root = tempDirs.make("openclaw-watch-pr-ci-replay-");
@@ -72,10 +74,15 @@ const args = process.argv.slice(2);
 const calls = fs.readFileSync(${JSON.stringify(calls)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
+const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
+const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
 let value;
-if (args[0] === "pr" && args[1] === "view") value = fixture.graphql.data.repository.pullRequest;
-else if (args[0] === "run" && args[1] === "view") value = fixture.run;
-else if (args[0] === "api" && args[1] === "graphql") value = fixture.graphql;
+if (args[0] === "pr" && args[1] === "view") value = currentGraphql.data.repository.pullRequest;
+else if (args[0] === "run" && args[1] === "view") {
+  const reads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
+  value = fixture.runViewSnapshots?.[Math.min(reads, fixture.runViewSnapshots.length - 1)] ?? fixture.run;
+}
+else if (args[0] === "api" && args[1] === "graphql") value = currentGraphql;
 else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { workflow_runs: [fixture.run] };
 else if (args[1] === runPath) {
   const reads = calls.filter((call) => call[1] === runPath).length;
@@ -249,7 +256,8 @@ esac
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
         expect(result.stdout).toContain(`pending=0 superseded=${observed}`);
         expect(result.stdout).toContain("GREEN");
-        // Cost and ordering matter: only one attempt scan, direct proof, then run revalidation.
+        // Cost and ordering matter: direct proof precedes run revalidation and
+        // a fresh PR snapshot, followed by the ordinary final CI-run check.
         const calls: string[][] = result.calls
           .trim()
           .split("\n")
@@ -259,8 +267,17 @@ esac
         expect(directReads.map((call) => Number(call[1]?.split("/").at(-1))).toSorted()).toEqual(
           fixture.directJobs.map((job) => job.id).toSorted(),
         );
-        expect(calls.at(-1)?.[1]).toBe("repos/openclaw/openclaw/actions/runs/33155056361");
-        expect(calls.at(-1)).toContain("Cache-Control: max-age=0");
+        const finalEvidenceRead = calls.findLastIndex(
+          (call) => call[1] === "repos/openclaw/openclaw/actions/runs/33155056361",
+        );
+        expect(finalEvidenceRead).toBeGreaterThan(
+          calls.findLastIndex((call) => call[1]?.includes("/actions/jobs/")),
+        );
+        expect(calls[finalEvidenceRead]).toContain("Cache-Control: max-age=0");
+        expect(calls.findLastIndex((call) => call[1] === "graphql")).toBeGreaterThan(
+          finalEvidenceRead,
+        );
+        expect(calls.at(-1)?.slice(0, 2)).toEqual(["run", "view"]);
       },
     );
 
@@ -303,6 +320,145 @@ esac
         .split("\n")
         .map((line) => JSON.parse(line));
       expect(calls.filter((call) => call[1]?.includes("/actions/jobs/"))).toHaveLength(1);
+    });
+
+    it.each([
+      {
+        label: "moved head",
+        patch: { headRefOid: sha, statusCheckRollup: null },
+        exitCode: 11,
+        output: "HEAD-MOVED",
+      },
+      { label: "closed PR", patch: { state: "CLOSED" }, exitCode: 10, output: "PR-CLOSED" },
+      {
+        label: "conflicting PR",
+        patch: { mergeable: false },
+        exitCode: 14,
+        output: "CONFLICTING-MID-WAIT",
+      },
+    ])("rechecks a $label after alias verification", ({ patch, exitCode, output }) => {
+      const fixture = structuredClone(placeholderFixture);
+      const afterAliasScan = structuredClone(fixture.graphql);
+      afterAliasScan.data.repository.pullRequest.state = "OPEN";
+      Object.assign(afterAliasScan.data.repository.pullRequest, patch);
+      const result = replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+      expect(result.stdout).toContain(output);
+      expect(result.stdout).not.toContain("GREEN");
+    });
+
+    it.each([
+      { label: "pending", status: "QUEUED", conclusion: null, exitCode: 16 },
+      { label: "failed", status: "COMPLETED", conclusion: "FAILURE", exitCode: 15 },
+    ])(
+      "observes a new $label required check after alias verification",
+      ({ status, conclusion, exitCode }) => {
+        const fixture = structuredClone(placeholderFixture);
+        const afterAliasScan = structuredClone(fixture.graphql);
+        afterAliasScan.data.repository.pullRequest.state = "OPEN";
+        const contexts = afterAliasScan.data.repository.pullRequest.statusCheckRollup.contexts;
+        Object.assign(contexts, {
+          totalCount: contexts.totalCount + 1,
+          nodes: [
+            ...contexts.nodes,
+            { kind: "CheckRun", name: "new required check", status, conclusion },
+          ],
+        });
+        const result = replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+        expect(result.stdout).not.toContain("GREEN");
+      },
+    );
+
+    it.each([
+      { label: "starts running", patch: { status: "IN_PROGRESS" }, exitCode: 16 },
+      { label: "fails", patch: { status: "COMPLETED", conclusion: "FAILURE" }, exitCode: 15 },
+      {
+        label: "loses its conclusion",
+        patch: { status: "COMPLETED", conclusion: null },
+        exitCode: 16,
+      },
+      { label: "is renamed", patch: { name: "different required check" }, exitCode: 16 },
+    ])("does not reuse proof when an alias $label", ({ patch, exitCode }) => {
+      const fixture = structuredClone(placeholderFixture);
+      const afterAliasScan = structuredClone(fixture.graphql);
+      afterAliasScan.data.repository.pullRequest.state = "OPEN";
+      const alias =
+        afterAliasScan.data.repository.pullRequest.statusCheckRollup.contexts.nodes.find(
+          (check) => check.databaseId === 98802098786,
+        );
+      assert(alias);
+      Object.assign(alias, patch);
+      const result = replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+      expect(result.stdout).not.toContain("GREEN");
+    });
+
+    it.each(
+      [
+        { status: "IN_PROGRESS", conclusion: null, exitCode: 16 },
+        { status: "COMPLETED", conclusion: "FAILURE", exitCode: 15 },
+      ].flatMap((outcome) =>
+        [false, true].map((initiallyVisible) => ({ ...outcome, initiallyVisible })),
+      ),
+    )(
+      "keeps a changed lower-ID alias blocking ($status, initially visible: $initiallyVisible)",
+      ({ status, conclusion, exitCode, initiallyVisible }) => {
+        const fixture = structuredClone(placeholderFixture);
+        const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
+        const queued = contexts.nodes.find((check) => check.databaseId === 98802098786);
+        assert(queued);
+        const lower = { ...queued, databaseId: 98802098559 };
+        if (initiallyVisible) {
+          contexts.nodes.push(lower);
+          contexts.totalCount += 1;
+        }
+        const afterAliasScan = structuredClone(fixture.graphql);
+        afterAliasScan.data.repository.pullRequest.state = "OPEN";
+        const refreshed = afterAliasScan.data.repository.pullRequest.statusCheckRollup.contexts;
+        if (!initiallyVisible) {
+          refreshed.nodes.push(lower);
+          refreshed.totalCount += 1;
+        }
+        const changed = refreshed.nodes.find((check) => check.databaseId === lower.databaseId);
+        assert(changed);
+        Object.assign(changed, { status, conclusion });
+        const result = replayPlaceholder(fixture, { afterAliasScan, watchTimeout: 5 });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+        expect(result.stdout).not.toContain("GREEN");
+      },
+    );
+
+    it.each([33155056361, 33155056360])(
+      "still supersedes an older failed check from run %s",
+      (runId) => {
+        const fixture = structuredClone(placeholderFixture);
+        const contexts = fixture.graphql.data.repository.pullRequest.statusCheckRollup.contexts;
+        const queued = contexts.nodes.find((check) => check.databaseId === 98802098786);
+        assert(queued);
+        const older = structuredClone(queued);
+        Object.assign(older, {
+          databaseId: 98790000000,
+          status: "COMPLETED",
+          conclusion: "FAILURE",
+        });
+        older.checkSuite.workflowRun.databaseId = runId;
+        contexts.nodes.push(older);
+        contexts.totalCount += 1;
+        const result = replayPlaceholder(fixture, { watchTimeout: 5 });
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+        expect(result.stdout).toContain("GREEN");
+      },
+    );
+
+    it("rechecks the attached run after refreshing the PR snapshot", () => {
+      const fixture = structuredClone(placeholderFixture);
+      const result = replayPlaceholder(fixture, {
+        runViewSnapshots: [fixture.run, fixture.run, { status: "in_progress", conclusion: null }],
+        watchTimeout: 5,
+      });
+      expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(16);
+      expect(result.stdout).not.toContain("GREEN");
     });
 
     it("keeps the captured merged PR closed", () => {

@@ -120,9 +120,11 @@ verifying the successful exact-head attempt, its complete same-name job group,
 and direct job evidence that every queued alias has no runner or executed
 steps. Each poll permits at most 32 direct alias lookups, and evidence requests
 share the remaining watcher timeout. Groups exceeding that lookup budget remain
-pending with a warning. Active retries, unrelated checks, and ambiguous or
-incomplete evidence still block completion. This is an observation of CI state,
-not atomic merge authorization.
+pending with a warning. Before applying that proof, the watcher refreshes the
+PR head, state, and check rollup, then rechecks the attached run. Proof applies
+only to checks that still have the verified name and queued state. Active
+retries, unrelated checks, and ambiguous or incomplete evidence still block
+completion. This is an observation of CI state, not atomic merge authorization.
 
 `--completion ci-run` waits only for the attached CI workflow. Callers must
 separately verify required checks; CI success does not override another
