@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { redactOllamaResponseErrorText } from "./request-header-redaction.js";
+import { redactProviderResponseErrorText } from "./provider-request-header-redaction.js";
 
 function mixPercentEscapeCase(value: string): string {
   let useLowerCase = true;
@@ -9,7 +9,36 @@ function mixPercentEscapeCase(value: string): string {
   });
 }
 
-describe("Ollama request header redaction", () => {
+describe("provider request header redaction", () => {
+  it.each(["utf8", "latin1"] as const)(
+    "redacts decoded Basic credentials encoded as %s",
+    (encoding) => {
+      const password = "fixture-päss:word";
+      const pair = `fixture-user:${password}`;
+      const token = Buffer.from(pair, encoding).toString("base64");
+      const text = `pair=${pair} pass=${password} encoded=${encodeURIComponent(password)} user=fixture-user`;
+      for (const header of ["Authorization", "Proxy-Authorization"]) {
+        const redacted = redactProviderResponseErrorText(text, { [header]: `bAsIc ${token}` });
+        expect(redacted).toBe("pair=*** pass=*** encoded=*** user=fixture-user");
+      }
+    },
+  );
+
+  it.each(["Bearer", "Basic"])("does not decode %s payloads in arbitrary headers", (scheme) => {
+    const pair = "fixture-user:fixture-password";
+    const token = Buffer.from(pair).toString("base64");
+    expect(redactProviderResponseErrorText(pair, { "X-Custom": `${scheme} ${token}` })).toBe(pair);
+  });
+
+  it.each([
+    { headers: new Headers({ "X-Proxy-Auth": "opaque-credential" }) },
+    { headers: [["X-Proxy-Auth", "opaque-credential"]] satisfies HeadersInit },
+  ])("redacts credentials supplied through HeadersInit", ({ headers }) => {
+    expect(redactProviderResponseErrorText("Rejected opaque-credential", headers)).toBe(
+      "Rejected ***",
+    );
+  });
+
   it("redacts configured header values and bare authorization credentials", () => {
     const secrets = [
       "Bearer bearer-credential",
@@ -18,7 +47,7 @@ describe("Ollama request header redaction", () => {
       "proxy-credential",
       "custom-credential",
     ];
-    const redacted = redactOllamaResponseErrorText(
+    const redacted = redactProviderResponseErrorText(
       `content-type=application/json reflected=${secrets.join(" ")}`,
       {
         "Content-Type": "application/json",
@@ -49,7 +78,7 @@ describe("Ollama request header redaction", () => {
       "safe=id%2fpart keep%afcase",
     ].join(" ");
 
-    const redacted = redactOllamaResponseErrorText(text, { "X-Proxy-Auth": secret });
+    const redacted = redactProviderResponseErrorText(text, { "X-Proxy-Auth": secret });
 
     for (const representation of [secret, jsonEncoded, uriEncoded, formEncoded]) {
       expect(redacted).not.toContain(representation);
@@ -61,7 +90,7 @@ describe("Ollama request header redaction", () => {
     const secret = "CASE-sensitive-credential";
     const lowerCaseControl = secret.toLowerCase();
 
-    expect(redactOllamaResponseErrorText(lowerCaseControl, { "X-Auth": secret })).toBe(
+    expect(redactProviderResponseErrorText(lowerCaseControl, { "X-Auth": secret })).toBe(
       lowerCaseControl,
     );
   });
@@ -72,16 +101,16 @@ describe("Ollama request header redaction", () => {
     const text = `safe diagnostic ${retainedPrefix}`;
 
     expect(
-      redactOllamaResponseErrorText(text, { "X-Auth": secret }, { sourceTruncated: true }),
+      redactProviderResponseErrorText(text, { "X-Auth": secret }, { sourceTruncated: true }),
     ).toBe("safe diagnostic ***");
-    expect(redactOllamaResponseErrorText(text, { "X-Auth": secret })).toBe(text);
+    expect(redactProviderResponseErrorText(text, { "X-Auth": secret })).toBe(text);
   });
 
   it("redacts a short secret prefix at a confirmed response boundary", () => {
     const secret = "boundary-credential-secret";
 
     expect(
-      redactOllamaResponseErrorText(
+      redactProviderResponseErrorText(
         "diagnostic boun",
         { "X-Auth": secret },
         {
@@ -94,7 +123,7 @@ describe("Ollama request header redaction", () => {
   it("redacts raw and JSON forms when a value contains a lone surrogate", () => {
     const secret = "lone-\ud800-surrogate-secret";
     const jsonEncoded = JSON.stringify(secret).slice(1, -1);
-    const redacted = redactOllamaResponseErrorText(`raw=${secret} json=${jsonEncoded}`, {
+    const redacted = redactProviderResponseErrorText(`raw=${secret} json=${jsonEncoded}`, {
       "X-Auth": secret,
     });
 
