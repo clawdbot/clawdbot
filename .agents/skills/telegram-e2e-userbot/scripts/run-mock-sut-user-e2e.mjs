@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { spawn, spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -299,13 +299,14 @@ function writePrivateJson(pathname, data) {
   fs.chmodSync(pathname, 0o600);
 }
 
-async function readTester(driverEnv) {
+async function readTester(driverEnv, leaseFailure, repoRoot) {
   let result;
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    result = spawnSync("uv", ["run", USER_DRIVER_PATH, "status", "--json"], {
+    result = await runCommand("uv", ["run", USER_DRIVER_PATH, "status", "--json"], {
+      cwd: repoRoot,
       env: driverEnv,
-      encoding: "utf8",
-      maxBuffer: 1024 * 1024,
+      leaseFailure,
+      timeoutMs: 30_000,
     });
     if (result.status === 0) break;
     if (attempt < 3) {
@@ -533,10 +534,11 @@ function spawnProcess(command, args, options) {
   return child;
 }
 
-function runCommand(command, args, options) {
-  return new Promise((resolveRun) => {
+async function runCommand(command, args, options) {
+  let child;
+  const completion = new Promise((resolveRun) => {
     assertRunnerActive();
-    const child = ownChild(
+    child = ownChild(
       spawn(command, args, {
         cwd: options.cwd,
         env: options.env,
@@ -566,6 +568,21 @@ function runCommand(command, args, options) {
       resolveRun({ status, stdout, stderr, timedOut });
     });
   });
+  if (!options.leaseFailure) return await completion;
+  const outcome = await Promise.race([
+    completion.then((result) => ({ type: "exit", result })),
+    options.leaseFailure,
+  ]);
+  if (outcome.type === "lease-failure") {
+    await fenceLeaseFailure({
+      error: outcome.error,
+      cancelControls: () => {},
+      probe: child,
+      controlWork: [],
+      persistLogs: () => {},
+    });
+  }
+  return outcome.result;
 }
 
 async function runCronScenarioAction({
@@ -852,7 +869,11 @@ async function drive(args, repoRoot, creds) {
 
 async function driveWithTelegramProxy(args, repoRoot, creds) {
   const driverEnv = { ...sanitizeChildEnvironment(), ...creds.driverEnv };
-  const tester = await readTester(driverEnv);
+  const leaseFailure = creds.whenLeaseUnhealthy.then((error) => ({
+    type: "lease-failure",
+    error,
+  }));
+  const tester = await readTester(driverEnv, leaseFailure, repoRoot);
   const evidenceDir = args.output ? dirname(resolve(args.output)) : "";
   if (evidenceDir) fs.mkdirSync(evidenceDir, { recursive: true });
   const temp = writeConfig({
@@ -979,10 +1000,6 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
       configPath: temp.configPath,
       stateDir: temp.stateDir,
     });
-    const leaseFailure = creds.whenLeaseUnhealthy.then((error) => ({
-      type: "lease-failure",
-      error,
-    }));
     const startGateway = async () => {
       const command = "node";
       const gatewayArgs = args.sourceGateway

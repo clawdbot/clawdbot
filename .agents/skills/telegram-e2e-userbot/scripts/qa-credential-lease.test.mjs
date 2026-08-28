@@ -116,10 +116,38 @@ test("hydrates an authenticated broker payload above the inline threshold", asyn
   await lease.release();
 });
 
-test("heartbeat loss stops delayed chunk hydration before returning credentials", async () => {
-  let finishHeartbeat;
+test("rejects an inline credential when its initial heartbeat fails", async () => {
   const calls = [];
-  const fetchImpl = async (url, init) => {
+  const fetchImpl = async (url) => {
+    calls.push(url);
+    if (url.endsWith("/acquire")) {
+      return Response.json({
+        status: "ok",
+        credentialId: "credential-inline-expired",
+        leaseToken: "lease-token-inline-expired",
+        payload: { schemaVersion: 1 },
+      });
+    }
+    if (url.endsWith("/heartbeat")) {
+      return Response.json(
+        { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
+        { status: 409 },
+      );
+    }
+    return Response.json({ status: "ok" });
+  };
+
+  await assert.rejects(
+    acquireQaLease({ kind: "telegram-test-userbot", env, fetchImpl }),
+    (error) => error instanceof QaCredentialBrokerError && error.code === "LEASE_EXPIRED",
+  );
+  assert.equal(calls.filter((url) => url.endsWith("/release")).length, 1);
+});
+
+test("heartbeat loss stops delayed chunk hydration before returning credentials", async () => {
+  let heartbeatCount = 0;
+  const calls = [];
+  const fetchImpl = async (url) => {
     calls.push(url);
     if (url.endsWith("/acquire")) {
       return Response.json({
@@ -134,26 +162,26 @@ test("heartbeat loss stops delayed chunk hydration before returning credentials"
       });
     }
     if (url.endsWith("/heartbeat")) {
-      return await new Promise((resolve) => {
-        finishHeartbeat = resolve;
-      });
+      heartbeatCount += 1;
+      if (heartbeatCount === 1) return Response.json({ status: "ok" });
+      return Response.json(
+        { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
+        { status: 409 },
+      );
     }
     if (url.endsWith("/payload-chunk")) {
-      queueMicrotask(() =>
-        finishHeartbeat(
-          Response.json(
-            { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
-            { status: 409 },
-          ),
-        ),
-      );
       return await new Promise(() => {});
     }
     return Response.json({ status: "ok" });
   };
 
   await assert.rejects(
-    acquireQaLease({ kind: "telegram-test-userbot", env, fetchImpl }),
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      heartbeatIntervalMs: 5,
+      env,
+      fetchImpl,
+    }),
     (error) => error instanceof QaCredentialBrokerError && error.code === "LEASE_EXPIRED",
   );
   assert.equal(calls.filter((url) => url.endsWith("/payload-chunk")).length, 1);
@@ -182,6 +210,7 @@ test("reports pool exhaustion after the acquire budget", async () => {
 
 test("surfaces terminal heartbeat loss and still releases", async () => {
   const calls = [];
+  let heartbeatCount = 0;
   const fetchImpl = async (url) => {
     calls.push(url);
     if (url.endsWith("/acquire")) {
@@ -193,6 +222,8 @@ test("surfaces terminal heartbeat loss and still releases", async () => {
       });
     }
     if (url.endsWith("/heartbeat")) {
+      heartbeatCount += 1;
+      if (heartbeatCount === 1) return Response.json({ status: "ok" });
       return Response.json(
         { status: "error", code: "LEASE_EXPIRED", message: "Lease expired." },
         { status: 409 },
@@ -217,6 +248,7 @@ test("surfaces terminal heartbeat loss and still releases", async () => {
 
 test("fences a stalled heartbeat and bounds lease cleanup", async () => {
   let released = false;
+  let heartbeatCount = 0;
   const fetchImpl = async (url, init) => {
     if (url.endsWith("/acquire")) {
       return Response.json({
@@ -227,6 +259,8 @@ test("fences a stalled heartbeat and bounds lease cleanup", async () => {
       });
     }
     if (url.endsWith("/heartbeat")) {
+      heartbeatCount += 1;
+      if (heartbeatCount === 1) return Response.json({ status: "ok" });
       return await new Promise((resolve, reject) => {
         init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
       });

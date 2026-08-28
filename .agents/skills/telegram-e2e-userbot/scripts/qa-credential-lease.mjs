@@ -173,7 +173,7 @@ export async function acquireQaLease({
     if (heartbeatError) throw heartbeatError;
   };
   const heartbeat = () => {
-    if (heartbeatInFlight || heartbeatError) return;
+    if (heartbeatInFlight || heartbeatError) return heartbeatInFlight;
     heartbeatInFlight = callBroker("heartbeat", { ...identity, leaseTtlMs }, requestOptions)
       .catch((error) => {
         heartbeatError = error;
@@ -182,8 +182,9 @@ export async function acquireQaLease({
       .finally(() => {
         heartbeatInFlight = undefined;
       });
+    return heartbeatInFlight;
   };
-  heartbeat();
+  const initialHeartbeat = heartbeat();
   const timer = setInterval(heartbeat, heartbeatIntervalMs);
   timer.unref?.();
   const stopHeartbeat = async () => {
@@ -193,6 +194,8 @@ export async function acquireQaLease({
   };
   let payload;
   try {
+    await initialHeartbeat;
+    assertHealthy();
     payload = await resolveCredentialPayload(
       acquired,
       identity,
