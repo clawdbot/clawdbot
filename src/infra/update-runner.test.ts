@@ -13,6 +13,7 @@ import { pathExists } from "../utils.js";
 import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
+import type { UpdateStepProgress } from "./update-runner-types.js";
 import {
   resolveUpdateDoctorExecutionPolicy,
   resolveUpdateInstallSurface,
@@ -747,6 +748,26 @@ describe("runGatewayUpdate", () => {
     );
   });
 
+  it("reports ambiguous release remotes without mutating tags", async () => {
+    await setupGitCheckout();
+    const { runner, calls } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} remote`]: { stdout: "upstream\nbackup\n" },
+      [`git -C ${tempDir} config --get branch.main.remote`]: { code: 1 },
+    });
+
+    const result = await runWithRunner(runner, { channel: "stable" });
+
+    expect(result).toMatchObject({ status: "error", reason: "ambiguous-release-remote" });
+    expect(calls).not.toContain(
+      `git -C ${tempDir} ls-remote --tags --refs --sort=-v:refname -- upstream v*`,
+    );
+    expect(calls).not.toContain(
+      `git -C ${tempDir} fetch --no-prune --no-tags -- upstream +refs/tags/*:refs/tags/*`,
+    );
+  });
+
   it("keeps release tags scoped to the main remote when another remote disagrees", async () => {
     const { sourceRoot, localRoot, releaseSha, releaseTag } =
       await createRecreatedReleaseTagFixture();
@@ -778,6 +799,25 @@ describe("runGatewayUpdate", () => {
     await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.not.toBe(
       secondarySha,
     );
+  });
+
+  it("fails closed with an actionable reason when release remotes are ambiguous", async () => {
+    const { localRoot } = await createRecreatedReleaseTagFixture();
+    await runRealGit(localRoot, "remote", "rename", "origin", "upstream");
+    await runRealGit(localRoot, "config", "--unset", "branch.main.remote");
+
+    const result = await runWithCommand(createRealGitUpdateRunner(), {
+      cwd: localRoot,
+      channel: "stable",
+    });
+
+    expect(result).toMatchObject({ status: "error", reason: "ambiguous-release-remote" });
+    expect(result.steps.map((step) => step.name)).toEqual([
+      "clean check",
+      "git fetch",
+      "git remote",
+      "git config main remote",
+    ]);
   });
 
   it("keeps a configured non-tag non-fast-forward ref protected", async () => {
@@ -815,6 +855,7 @@ describe("runGatewayUpdate", () => {
       deferConfiguredPluginInstallRepair?: boolean;
       allowGatewayServiceRepair?: boolean;
       allowGatewayActivation?: boolean;
+      progress?: UpdateStepProgress;
       beforeGitMutation?: (target: {
         schemaVersions?: { state: number; agent: number };
       }) => Promise<{
@@ -837,6 +878,7 @@ describe("runGatewayUpdate", () => {
         ? {}
         : { allowGatewayServiceRepair: options.allowGatewayServiceRepair }),
       ...(options?.allowGatewayActivation ? { allowGatewayActivation: true } : {}),
+      ...(options?.progress ? { progress: options.progress } : {}),
       ...(options?.beforeGitMutation ? { beforeGitMutation: options.beforeGitMutation } : {}),
     });
   }
@@ -849,6 +891,7 @@ describe("runGatewayUpdate", () => {
       cwd?: string;
       devTarget?: DevUpdateTarget;
       deferConfiguredPluginInstallRepair?: boolean;
+      progress?: UpdateStepProgress;
       beforeGitMutation?: (target: {
         schemaVersions?: { state: number; agent: number };
       }) => Promise<{
@@ -1054,7 +1097,7 @@ describe("runGatewayUpdate", () => {
     { name: "target ref", options: { devTarget: { mode: "detached", ref: "main" } } },
   ] as const)("stops dev update when fetch fails before resolving $name", async ({ options }) => {
     await setupGitCheckout();
-    const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-tags`;
+    const fetchCommand = `git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`;
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
       [fetchCommand]: {
@@ -1082,7 +1125,7 @@ describe("runGatewayUpdate", () => {
     });
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
         stdout: "origin/main",
       },
@@ -1110,7 +1153,7 @@ describe("runGatewayUpdate", () => {
     expect(beforeGitMutation).toHaveBeenCalledWith({
       schemaVersions: { state: 3, agent: 11 },
     });
-    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
+    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`);
     expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
     const cleanupIndex = calls.findIndex(
       (call) =>
@@ -1171,7 +1214,7 @@ describe("runGatewayUpdate", () => {
     });
     const { runner } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
         stdout: "origin/main",
       },
@@ -1198,7 +1241,7 @@ describe("runGatewayUpdate", () => {
     const beforeGitMutation = vi.fn<() => Promise<void>>();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses({ branch: "feature" }),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} show-ref --verify refs/heads/main`]: { stdout: "main\n" },
       [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name main@{upstream}`]: {
         code: 1,
@@ -1392,11 +1435,12 @@ describe("runGatewayUpdate", () => {
     const doctorCommand = `${doctorNodePath} ${path.join(tempDir, "openclaw.mjs")} doctor --non-interactive --fix`;
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
-      [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
-        stdout: "",
-      },
+      [`git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]:
+        {
+          stdout: "",
+        },
       [`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`]: {
         stdout: `${targetSha}\n`,
       },
@@ -1417,10 +1461,10 @@ describe("runGatewayUpdate", () => {
     });
 
     expect(result.status).toBe("ok");
-    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-tags`);
+    expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`);
     expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
     expect(calls).toContain(
-      `git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
+      `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
     );
     expect(calls).toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
   });
@@ -1429,12 +1473,13 @@ describe("runGatewayUpdate", () => {
     await setupGitCheckout();
     const { runner, calls } = createRunner({
       ...buildGitWorktreeProbeResponses(),
-      [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+      [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
-      [`git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]: {
-        code: 1,
-        stderr: "would clobber existing tag",
-      },
+      [`git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]:
+        {
+          code: 1,
+          stderr: "would clobber existing tag",
+        },
     });
 
     const result = await runWithRunner(runner, {
@@ -1445,7 +1490,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("no-target-sha");
     expect(calls).toContain(
-      `git -C ${tempDir} fetch origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
+      `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
     );
     expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
     expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2`);
@@ -2249,7 +2294,7 @@ describe("runGatewayUpdate", () => {
       calls.push(key);
       const responses = {
         ...buildGitWorktreeProbeResponses(),
-        [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+        [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
         [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
           stdout: "origin/main",
         },
@@ -2330,7 +2375,7 @@ describe("runGatewayUpdate", () => {
       calls.push(key);
       const responses = {
         ...buildGitWorktreeProbeResponses(),
-        [`git -C ${tempDir} fetch --all --prune --no-tags`]: { stdout: "" },
+        [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
         [`git -C ${tempDir} rev-parse --abbrev-ref --symbolic-full-name @{upstream}`]: {
           stdout: "origin/main",
         },

@@ -425,7 +425,9 @@ export async function updateGitCheckout(params: {
       releaseRemote = "origin";
     }
     if (!releaseRemote) {
-      return buildError("fetch-failed");
+      return buildError(
+        !configuredMainRemote && remotes.length > 1 ? "ambiguous-release-remote" : "fetch-failed",
+      );
     }
     let remoteTagsOutput = "";
     const remoteTagsStep = await runStep({
