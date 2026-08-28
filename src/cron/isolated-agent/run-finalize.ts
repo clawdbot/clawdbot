@@ -518,6 +518,7 @@ export async function finalizeCronRun(params: {
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryRequested: prepared.deliveryRequested,
+    undeliveredRunStatus: hasFatalErrorPayload || pendingPresentationWarningError ? "error" : "ok",
     skipDelivery: skipHeartbeatDelivery
       ? hasIntentionalSilentReply
         ? "silent"

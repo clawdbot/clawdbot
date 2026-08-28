@@ -130,7 +130,7 @@ Isolated automation runs treat run-level agent failures as job errors even when 
 
 Command jobs do not start an isolated agent turn. A zero exit code records `ok`; non-zero exit, signal, timeout, or no-output timeout records `error` and can trigger the same failure notification path.
 
-Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. The first delivery-failure alert can notify immediately through a resolved alternate failure destination, without the `after` threshold. Repeats honor the same job/global `failureAlert.cooldownMs` (default 1 hour), never retrying the primary route that just failed.
+Required completion delivery is separate: `status: "ok"` with `completionStatus: "failed"` does not increment the execution streak or backoff. Delivery-failure alerts use a resolved alternate failure destination without the `after` threshold. Every alert, including the first delivery failure after an execution alert, honors the shared job/global `failureAlert.cooldownMs` (default 1 hour), never retrying the primary route that just failed.
 
 If an isolated run times out before the first model request, `openclaw automations show` and `openclaw automations runs` include a phase-specific error such as `setup timed out before runner start` or a stall message naming the last-known startup phase (for example `context-engine`). For CLI-backed providers, the pre-model watchdog stays active until the external CLI turn starts, so session lookup, hook, auth, prompt, and CLI setup stalls are reported as pre-model automation failures.
 

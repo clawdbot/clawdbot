@@ -88,8 +88,8 @@ export function applyJobResult(
     scheduleOwnership?: CronScheduleOwnership;
     // Lane and admission waits must not transfer a pre-deadline manual run's ownership.
     scheduleOwnershipAtMs?: number;
-    // Startup replay restores alert cooldown bookkeeping without redelivery.
-    replayFailureAlertAtMs?: number;
+    // Startup recovery restores historical notification facts separately.
+    replay?: boolean;
     deferredNotifications?: DeferredCronNotifications;
   },
 ): boolean {
@@ -163,7 +163,7 @@ export function applyJobResult(
   } else if (result.status === "skipped") {
     job.state.consecutiveErrors = 0;
     job.state.consecutiveSkipped = (job.state.consecutiveSkipped ?? 0) + 1;
-    if (alertConfig?.includeSkipped) {
+    if (alertConfig?.includeSkipped && !opts?.replay) {
       maybeEmitFailureAlert(state, {
         job,
         alertConfig,
@@ -171,9 +171,6 @@ export function applyJobResult(
         error: result.error,
         runAtMs: result.startedAt,
         consecutiveCount: job.state.consecutiveSkipped,
-        ...(opts?.replayFailureAlertAtMs !== undefined
-          ? { delivery: "record-only" as const, occurredAtMs: opts.replayFailureAlertAtMs }
-          : {}),
         deferredNotifications: opts?.deferredNotifications,
       });
     }
@@ -210,7 +207,7 @@ export function applyJobResult(
       result,
       completionFailed: completionStatus === "failed",
       autoDisableNotificationOwnsFailure,
-      replayFailureAlertAtMs: opts?.replayFailureAlertAtMs,
+      replay: opts?.replay,
       deferredNotifications: opts?.deferredNotifications,
     });
     return shouldDelete;

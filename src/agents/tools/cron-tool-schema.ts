@@ -238,14 +238,14 @@ function createCronDeliverySchema(): TSchema {
         bestEffort: Type.Optional(
           Type.Boolean({
             description:
-              "Omitted/false requires requested delivery for successful completion; true allows completion and one-shot deletion despite failed/unknown delivery. Intentional silence succeeds in either mode.",
+              "Omitted/false requires requested delivery for successful completion; true lets successful execution complete and delete a one-shot despite failed/unknown delivery. Intentional silence succeeds in either mode.",
           }),
         ),
         accountId: deliveryStringSchema("Delivery account"),
         failureDestination: Type.Optional(
           Type.Union([failureDestinationObject, Type.Null()], {
             description:
-              "Failure-alert route override; first required-delivery failure alerts immediately, repeats honor cooldown; null clears.",
+              "Failure-alert route override; required-delivery failures bypass after but share the execution-alert cooldown; null clears.",
           }),
         ),
         completionDestination: Type.Optional(

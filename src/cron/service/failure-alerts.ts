@@ -289,16 +289,14 @@ function requestFailureNotification(
   state: CronServiceState,
   job: CronJob,
   alertConfig: ResolvedFailureAlert,
-  occurredAtMs?: number,
 ): boolean {
-  const wallClockNow = state.deps.nowMs();
-  const now = occurredAtMs ?? wallClockNow;
+  const now = state.deps.nowMs();
   const lastAlert = job.state.lastFailureAlertAtMs;
   // Cooldown is stored on job state so process restarts and service reloads do
   // not spam operators. Future timestamps cannot prove a recent prior alert.
   const inCooldown =
     typeof lastAlert === "number" &&
-    lastAlert <= wallClockNow &&
+    lastAlert <= now &&
     now - lastAlert < Math.max(0, alertConfig.cooldownMs);
   if (inCooldown) {
     return false;
@@ -322,8 +320,6 @@ export function maybeEmitFailureAlert(
     failureNotificationDetail?: CronFailureNotificationDetail;
     runAtMs?: number;
     consecutiveCount: number;
-    delivery?: "emit" | "record-only";
-    occurredAtMs?: number;
     deferredNotifications?: DeferredCronNotifications;
   },
 ) {
@@ -336,10 +332,7 @@ export function maybeEmitFailureAlert(
   if (params.job.delivery?.bestEffort === true && !params.job.failureAlert) {
     return;
   }
-  if (!requestFailureNotification(state, params.job, alertConfig, params.occurredAtMs)) {
-    return;
-  }
-  if (params.delivery === "record-only") {
+  if (!requestFailureNotification(state, params.job, alertConfig)) {
     return;
   }
 
@@ -376,10 +369,14 @@ export function finalizeCronFailureNotifications(
     };
     completionFailed: boolean;
     autoDisableNotificationOwnsFailure: boolean;
-    replayFailureAlertAtMs?: number;
+    replay?: boolean;
     deferredNotifications?: DeferredCronNotifications;
   },
 ): void {
+  // Finalized history owns notification facts and cooldown; recovery never requests an alert.
+  if (params.replay) {
+    return;
+  }
   if (params.result.status === "error" && !params.autoDisableNotificationOwnsFailure) {
     maybeEmitFailureAlert(state, {
       job: params.job,
@@ -390,9 +387,6 @@ export function finalizeCronFailureNotifications(
       failureNotificationDetail: params.result.failureNotificationDetail,
       runAtMs: params.result.startedAt,
       consecutiveCount: params.job.state.consecutiveErrors ?? 0,
-      ...(params.replayFailureAlertAtMs !== undefined
-        ? { delivery: "record-only" as const, occurredAtMs: params.replayFailureAlertAtMs }
-        : {}),
       deferredNotifications: params.deferredNotifications,
     });
   } else if (
@@ -401,11 +395,7 @@ export function finalizeCronFailureNotifications(
     params.job.state.lastDeliveryStatus === "not-delivered" &&
     params.alertConfig?.alternateRoute
   ) {
-    // Finalized history owns replayed notification facts and cooldown; never resend.
-    if (
-      params.replayFailureAlertAtMs !== undefined ||
-      !requestFailureNotification(state, params.job, params.alertConfig)
-    ) {
+    if (!requestFailureNotification(state, params.job, params.alertConfig)) {
       return;
     }
     const job = structuredClone(params.job);

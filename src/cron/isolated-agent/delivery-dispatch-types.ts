@@ -28,6 +28,8 @@ export type DispatchCronDeliveryParams = {
   timeoutMs: number;
   resolvedDelivery: DeliveryTargetResolution;
   deliveryRequested: boolean;
+  /** Finalizer-owned execution status if delivery cannot recover a presentation warning. */
+  undeliveredRunStatus: "ok" | "error";
   skipDelivery?: NormalizeReplySkipReason;
   spawnOnlyHandoff: boolean;
   sourceDeliveryOutcome: SourceDeliveryOutcome;

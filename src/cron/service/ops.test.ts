@@ -1567,6 +1567,7 @@ describe("cron service ops seam coverage", () => {
           job,
           status: "error",
           error: "provider unavailable",
+          failureNotificationDelivery: { status: "unknown" },
           runAtMs: startedAt,
           durationMs: endedAt - startedAt,
           nextRunAtMs: now + 30 * 60_000,

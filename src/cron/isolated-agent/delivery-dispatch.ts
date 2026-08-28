@@ -16,6 +16,7 @@ import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { stringifyRouteThreadId } from "../../plugin-sdk/channel-route.js";
 import { isCronSessionKey } from "../../routing/session-key.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
+import { resolveAdmittedCronCompletionStatus } from "../completion-status.js";
 import { normalizeCronRunErrorText } from "../service/execution-errors.js";
 import type { CronResolvedDeliveryState } from "../types.js";
 import { commitCurrentSessionCronCompletion } from "./current-session-completion.js";
@@ -104,8 +105,18 @@ export async function dispatchCronDelivery(
   let deliveryAttempted = verifiedMessageToolDelivery;
   let deferredDeletingSessionMirror: DirectCronTranscriptMirror | undefined;
   const buildDeliveryState = async (result?: RunCronAgentTurnResult) => {
-    // Retained one-shots need their undelivered transcript for inspection too.
-    if (deliveryState.status === "delivered" || deliveryState.status === "not-requested") {
+    const completion = resolveAdmittedCronCompletionStatus(
+      params.job,
+      result?.status === "error" ? "error" : params.undeliveredRunStatus,
+      deliveryState.status,
+      deliveryState.deliverySuppressionReason,
+    );
+    // Quiet/best-effort successes retire with their jobs; failed executions retain evidence.
+    if (
+      deliveryState.status === "delivered" ||
+      deliveryState.status === "not-requested" ||
+      completion === "succeeded"
+    ) {
       await cleanupDirectCronSessionIfNeeded();
     }
     await params.queueSourceSessionMessageToolAwareness?.();
@@ -126,18 +137,18 @@ export async function dispatchCronDelivery(
     params.sourceDeliveryOutcome.unverifiedMessageToolDelivery
       ? `${error}; the agent used the message tool, but OpenClaw could not verify that message matched the cron delivery target`
       : error;
-  const failDeliveryTarget = (error: string) => {
-    recordDelivery("not-delivered", formatDeliveryTargetError(error));
-    return params.withRunSession({
+  const failDeliveryTarget = (error: string) =>
+    params.withRunSession({
       status: "error",
       error: formatDeliveryTargetError(error),
       errorKind: "delivery-target",
       summary,
       outputText,
+      delivered: deliveryState.delivered,
       deliveryAttempted,
+      deliveryError: deliveryState.error,
       ...params.telemetry,
     });
-  };
   const cleanupDirectCronSessionIfNeeded = async () => {
     const cleanupOutcome = await cleanupCronRunSessionAfterRun({
       job: params.job,
@@ -171,22 +182,6 @@ export async function dispatchCronDelivery(
       ...params.telemetry,
     });
   };
-  const failCurrentSessionCompletion = async (reason: string): Promise<RunCronAgentTurnResult> => {
-    recordDelivery("not-delivered", reason);
-    deliveryAttempted = true;
-    return params.withRunSession({
-      status: "error",
-      error: formatDeliveryTargetError(reason),
-      errorKind: "delivery-target",
-      summary,
-      outputText,
-      delivered: deliveryState.delivered,
-      deliveryAttempted,
-      deliveryError: deliveryState.error,
-      ...params.telemetry,
-    });
-  };
-
   const deliverViaDirect = async (
     delivery: SuccessfulCronDeliveryTarget,
   ): Promise<RunCronAgentTurnResult | null> => {
@@ -705,7 +700,8 @@ export async function dispatchCronDelivery(
       deliveryAttempted = true;
       const completion = await commitCurrentSessionCronCompletion(params, synthesizedText);
       if (!completion.ok) {
-        return await failCurrentSessionCompletion(completion.reason);
+        recordDelivery("not-delivered", completion.reason);
+        return failDeliveryTarget(completion.reason);
       }
       params.queueSourceSessionMessageToolAwareness = undefined;
       if (!completion.requiresExternalDelivery) {
@@ -736,7 +732,9 @@ export async function dispatchCronDelivery(
         return buildDeliveryState(finalizedTextResult ?? undefined);
       }
       if (!params.deliveryBestEffort) {
-        return buildDeliveryState(failDeliveryTarget(params.resolvedDelivery.error.message));
+        const error = params.resolvedDelivery.error.message;
+        recordDelivery("not-delivered", formatDeliveryTargetError(error));
+        return buildDeliveryState(failDeliveryTarget(error));
       }
       recordDelivery("not-delivered", params.resolvedDelivery.error.message);
       await logCronDeliveryWarn(`[cron:${params.job.id}] ${params.resolvedDelivery.error.message}`);

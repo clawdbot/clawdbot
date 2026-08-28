@@ -263,6 +263,7 @@ function makeBaseParams(overrides: {
       sessionKey:
         overrides.sessionTarget === "current" ? "agent:main:webchat:direct:owner" : undefined,
       deleteAfterRun: false,
+      delivery: { mode: "announce", bestEffort: overrides.deliveryBestEffort },
       payload: { kind: "agentTurn", message: "hello" },
     } as never,
     agentId: "main",
@@ -278,6 +279,7 @@ function makeBaseParams(overrides: {
     timeoutMs: 30_000,
     resolvedDelivery,
     deliveryRequested: overrides.deliveryRequested ?? true,
+    undeliveredRunStatus: "ok",
     skipDelivery: undefined,
     spawnOnlyHandoff: overrides.spawnOnlyHandoff ?? false,
     sourceDeliveryOutcome: {
@@ -520,22 +522,41 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
   });
 
-  it.each(["failed", "silent", "unknown"])(
-    "retains a %s one-shot delivery transcript for inspection",
-    async (outcome) => {
+  it.each([
+    { outcome: "failed", bestEffort: false, deleted: false },
+    { outcome: "unknown", bestEffort: false, deleted: false },
+    { outcome: "hook veto", bestEffort: false, deleted: false },
+    { outcome: "failed", bestEffort: true, deleted: true },
+    { outcome: "unknown", bestEffort: true, deleted: true },
+    { outcome: "silent", bestEffort: false, deleted: true },
+    { outcome: "empty", bestEffort: false, deleted: true },
+    { outcome: "heartbeat", bestEffort: false, deleted: true },
+    { outcome: "channel_transform", bestEffort: false, deleted: true },
+  ])(
+    "settles $outcome one-shot transcript cleanup (bestEffort=$bestEffort)",
+    async ({ outcome, bestEffort, deleted }) => {
       const params = makeBaseParams({
         synthesizedText: outcome === "silent" ? "NO_REPLY" : "Report",
+        deliveryBestEffort: bestEffort,
       });
       params.job.deleteAfterRun = true;
+      params.beforeSessionDelete = vi.fn();
       params.agentSessionKey = "agent:main:cron:test-job";
       if (outcome === "failed") {
         vi.mocked(deliverOutboundPayloads).mockRejectedValueOnce(new Error("send rejected"));
-      } else if (outcome === "unknown") {
+      } else if (outcome === "empty" || outcome === "heartbeat") {
+        params.skipDelivery = outcome;
+      } else if (outcome === "channel_transform") {
+        channelTransformMock.current = () => null;
+      } else if (outcome === "unknown" || outcome === "hook veto") {
         vi.mocked(deliverOutboundPayloads).mockImplementationOnce(async (deliveryParams) => {
           deliveryParams.onPayloadDeliveryOutcome?.({
             index: 0,
             status: "suppressed",
-            reason: "adapter_returned_no_identity",
+            reason:
+              outcome === "unknown"
+                ? "adapter_returned_no_identity"
+                : "cancelled_by_message_sending_hook",
           });
           return [];
         });
@@ -544,7 +565,26 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       const state = await dispatchCronDelivery(params);
 
       expect(state.delivered).not.toBe(true);
-      expect(callGateway).not.toHaveBeenCalled();
+      expect(callGateway).toHaveBeenCalledTimes(deleted ? 1 : 0);
+      expect(params.beforeSessionDelete).toHaveBeenCalledTimes(deleted ? 1 : 0);
+      if (deleted) {
+        expect(callGateway).toHaveBeenCalledWith({
+          method: "sessions.delete",
+          params: {
+            key: params.agentSessionKey,
+            deleteTranscript: true,
+            emitLifecycleHooks: false,
+            expectedSessionId: params.sessionId,
+            expectedLifecycleRevision: params.lifecycleRevision,
+            expectedSessionUpdatedAt: params.sessionUpdatedAt,
+          },
+          timeoutMs: 10_000,
+        });
+      }
+      if (outcome === "hook veto") {
+        expect(state.deliverySuppressionReason).toBeUndefined();
+        expect(state.deliveryError).toContain("suppressed");
+      }
     },
   );
 
@@ -2142,7 +2182,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(state.deliveryAttempted).toBe(true);
   });
 
-  it("retains the direct cron session after a silent reply when deleteAfterRun is enabled", async () => {
+  it("cleans up the direct cron session after a silent reply when deleteAfterRun is enabled", async () => {
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     params.agentSessionKey = "agent:main:cron:test-job";
     (params.job as { deleteAfterRun?: boolean }).deleteAfterRun = true;
@@ -2154,7 +2194,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       delivered: false,
     });
     expect(deliverOutboundPayloads).not.toHaveBeenCalled();
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 
   it("cleans up the direct cron session after text delivery when deleteAfterRun is enabled", async () => {
@@ -2412,7 +2452,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     expect(callGateway).not.toHaveBeenCalled();
   });
 
-  it("retains the direct cron session when refused delivery is best-effort (deleteAfterRun)", async () => {
+  it("cleans up the direct cron session when refused delivery is best-effort (deleteAfterRun)", async () => {
     const params = makeBaseParams({
       synthesizedText: "refused report",
       deliveryBestEffort: true,
@@ -2437,7 +2477,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       delivered: false,
       deliveryError: "refusing inherited shared-bucket delivery target",
     });
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 
   it("text delivery fires exactly once (no double-deliver)", async () => {
@@ -3886,7 +3926,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
     });
   });
 
-  it("retains the direct cron session after a structured silent reply when deleteAfterRun is enabled", async () => {
+  it("cleans up the direct cron session after a structured silent reply when deleteAfterRun is enabled", async () => {
     const params = makeBaseParams({ synthesizedText: SILENT_REPLY_TOKEN });
     params.agentSessionKey = "agent:main:cron:test-job";
     (params as Record<string, unknown>).deliveryPayloadHasStructuredContent = true;
@@ -3899,7 +3939,7 @@ describe("dispatchCronDelivery — double-announce guard", () => {
       delivered: false,
       deliveryAttempted: true,
     });
-    expect(callGateway).not.toHaveBeenCalled();
+    expect(callGateway).toHaveBeenCalledOnce();
   });
 
   it("suppresses trailing NO_REPLY after summary text in direct delivery (#64976)", async () => {
