@@ -263,6 +263,10 @@ as untrusted.
   member who has not added the bot as a friend. If either lookup fails the raw
   id is used and the message is still delivered. Multi-person rooms have no name
   API, so they keep their room id.
+- LINE does not put an inline LINE emoji in the message text; it substitutes a
+  `()` placeholder and describes the emoji separately. Each one reaches the agent
+  as `[emoji]` so a message never arrives as bare parentheses. LINE reports no
+  name for these emoji, so they are not named individually.
 
 ## Structured rich messages
 

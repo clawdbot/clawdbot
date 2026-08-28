@@ -41,6 +41,7 @@ type EventSource = webhook.Source | undefined;
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
 type StickerEventMessage = webhook.StickerMessageContent;
+type TextEventMessage = webhook.TextMessageContent;
 
 type MediaRef = Pick<ChannelInboundMediaInput, "contentType" | "fileName"> & { path: string };
 
@@ -198,9 +199,28 @@ function describeLineSticker(sticker: StickerEventMessage): string {
   return description ? `[Sent a sticker: ${description}]` : "[Sent a sticker]";
 }
 
+// LINE writes every inline LINE emoji into the message text as a two-character
+// "()" placeholder and describes it only in `emojis`, so the raw text reaches the
+// agent as bare parentheses and an emoji-only message as nothing but "()". Each
+// span names itself instead. Offsets are UTF-16 code units, matching LINE's
+// mention contract, so they index the JS string directly; spans are replaced from
+// the end so the earlier offsets stay valid while the text grows.
+const LINE_EMOJI_PLACEHOLDER = "[emoji]";
+
+export function readLineTextMessageBody(message: TextEventMessage): string {
+  const spans = (message.emojis ?? [])
+    .filter((emoji) => emoji.index >= 0 && emoji.length > 0)
+    .toSorted((left, right) => right.index - left.index);
+  let text = message.text;
+  for (const span of spans) {
+    text = `${text.slice(0, span.index)}${LINE_EMOJI_PLACEHOLDER}${text.slice(span.index + span.length)}`;
+  }
+  return text;
+}
+
 function extractMessageText(message: MessageEvent["message"]): string {
   if (message.type === "text") {
-    return message.text;
+    return readLineTextMessageBody(message);
   }
   if (message.type === "location") {
     const loc = message;

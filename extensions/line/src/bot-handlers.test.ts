@@ -186,7 +186,10 @@ const { buildLineMessageContextMock, buildLinePostbackContextMock } = vi.hoisted
   buildLinePostbackContextMock: vi.fn(async () => null as unknown),
 }));
 
-vi.mock("./bot-message-context.js", () => ({
+vi.mock("./bot-message-context.js", async (importOriginal) => ({
+  // Reading a LINE text body is pure and is part of the behaviour these tests
+  // exercise, so it comes from the real module rather than a stub.
+  ...(await importOriginal<typeof import("./bot-message-context.js")>()),
   buildLineMessageContext: buildLineMessageContextMock,
   buildLinePostbackContext: buildLinePostbackContextMock,
   getLineSourceInfo: (source: {

@@ -44,6 +44,7 @@ import {
   buildLineMessageContext,
   buildLinePostbackContext,
   getLineSourceInfo,
+  readLineTextMessageBody,
   type LineInboundContext,
 } from "./bot-message-context.js";
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
@@ -351,7 +352,7 @@ function resolveEventRawText(event: MessageEvent | PostbackEvent): string {
   if (event.type === "message") {
     const msg = event.message;
     if (msg.type === "text") {
-      return msg.text;
+      return readLineTextMessageBody(msg);
     }
     return "";
   }
@@ -372,7 +373,7 @@ async function handleMessageEvent(event: MessageEvent, context: LineHandlerConte
 
   const { isGroup, groupId, roomId } = getLineSourceInfo(event.source);
   if (isGroup && decision.access.activationAccess.shouldSkip) {
-    const rawText = message.type === "text" ? message.text : "";
+    const rawText = message.type === "text" ? readLineTextMessageBody(message) : "";
     const sourceInfo = getLineSourceInfo(event.source);
     logVerbose(`line: skipping group message (requireMention, not mentioned)`);
     const historyKey = groupId ?? roomId;
