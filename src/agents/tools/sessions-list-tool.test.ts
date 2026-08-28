@@ -396,7 +396,7 @@ describe("sessions-list-tool", () => {
       linkedDetails.sessionLinkRule,
     );
     expect(compactToolOutputHint(tool.outputSchema)).toBe(
-      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; category?: string; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
+      '{ count: number; sessions: Array<{ agentId: string; archived: boolean; channel: string; key: string; kind: "main" | "group" | "cron" | "hook" | "node" | "other"; pinned: boolean; abortedLastRun?: boolean; category?: string; childSessions?: Array<string>; contextTokens?: number; derivedTitle?: string; displayName?: string; label?: string; lastMessagePreview?: string; messages?: Array<unknown>; model?: string; parentSessionKey?: string; sessionId?: string; stateVersion?: number; status?: "queued" | "running" | "done" | "failed" | "killed" | "timeout"; totalTokens?: number; updatedAt?: number }>; sessionLinkRule?: string; visibility?: { mode: "self" | "tree" | "agent"; restricted: true; warning: string } }',
     );
     expect(result.details).toEqual({
       count: 1,
@@ -426,6 +426,34 @@ describe("sessions-list-tool", () => {
         },
       ],
     });
+  });
+
+  it("exposes the queued run status the Gateway produces for admitted-but-waiting sessions", async () => {
+    mocks.gatewayCall.mockResolvedValue({
+      path: "/tmp/sessions.json",
+      sessions: [
+        {
+          key: "agent:main:subagent:queued",
+          sessionId: "session-queued",
+          agentId: "main",
+          kind: "direct",
+          classification: "subagent",
+          channel: "discord",
+          spawnedBy: "agent:main:main",
+          updatedAt: 100,
+          archived: false,
+          pinned: false,
+          status: "queued",
+        },
+      ],
+    });
+    const tool = createSessionsListTool({ config: VALID_CONFIG });
+    const result = await tool.execute("queued-status", {});
+
+    expect(tool.outputSchema).toBeDefined();
+    expect(Value.Check(tool.outputSchema!, result.details)).toBe(true);
+    expect(getSessionsListDetails(result).sessions?.[0]?.status).toBe("queued");
+    expect(tool.description).toContain("queued");
   });
 
   it("preserves the context window already projected by the Gateway", async () => {

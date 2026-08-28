@@ -69,6 +69,7 @@ export function describeSessionsListTool(options?: SessionLinkDescriptionOptions
     "List visible sessions and sidebar categories; filter kind/label/agentId/search/activity/archive.",
     "Preview recent messages inline via includeLastMessage/messageLimit; includeDerivedTitles adds derived titles.",
     "Use before history/send target selection.",
+    "A row `status` reflects the run lifecycle: `queued` means admitted and waiting to start (not idle — do not re-dispatch), `running` is executing, and `done`/`failed`/`killed`/`timeout` are terminal.",
     ...(options?.sessionLinkBase ? [describeSessionLinkRule(options.sessionLinkBase)] : []),
   ].join(" ");
 }

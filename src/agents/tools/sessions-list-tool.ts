@@ -86,6 +86,7 @@ const SessionListRowOutputSchema = Type.Object(
     totalTokens: Type.Optional(Type.Number()),
     status: Type.Optional(
       Type.Union([
+        Type.Literal("queued"),
         Type.Literal("running"),
         Type.Literal("done"),
         Type.Literal("failed"),
@@ -128,7 +129,8 @@ type GatewayCaller = AgentToolGatewayRequestCaller;
 const SESSIONS_LIST_TRANSCRIPT_FIELD_ROWS = 100;
 
 function readSessionRunStatus(value: unknown): SessionRunStatus | undefined {
-  return value === "running" ||
+  return value === "queued" ||
+    value === "running" ||
     value === "done" ||
     value === "failed" ||
     value === "killed" ||
