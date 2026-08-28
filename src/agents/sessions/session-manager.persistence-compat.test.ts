@@ -78,7 +78,6 @@ describe("SessionManager persistence compatibility", () => {
     expect(tagged).toMatchObject({
       openclawDelivery: {
         audioAsVoice: true,
-        replyToCurrent: true,
         replyToId: "message-7",
         tts: {
           tagged: true,

@@ -222,6 +222,7 @@ export async function finishUpdate(params: {
           opts: params.opts,
           pluginInstallRecords: params.preUpdatePluginInstallRecords,
           updateStartedAtMs: params.startedAt,
+          timeoutMs: params.updateStepTimeoutMs,
           nodeRunner: params.packageUpdateNodeRunner,
           preUpdateConfig: params.configSnapshot.valid
             ? {

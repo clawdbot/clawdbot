@@ -118,6 +118,33 @@ async function resolveTerminalText(overrides: TerminalInputOverrides): Promise<s
 }
 
 describe("terminal resolution", () => {
+  it.each(["empty", "reasoning"])(
+    "preserves a failed harness turn instead of retrying its %s output",
+    async (output) => {
+      const error = new Error("Authentication failed with provider (HTTP 401)");
+      const assistant =
+        output === "reasoning"
+          ? buildEmbeddedRunnerAssistant({ content: [{ type: "thinking", thinking: "checking" }] })
+          : undefined;
+      const attempt = makeEmbeddedRunnerAttempt({
+        terminal: { kind: "failed", source: "prompt", error },
+        assistantTexts: [],
+        currentAttemptAssistant: assistant,
+        lastAssistant: assistant,
+        replayMetadata: { hadPotentialSideEffects: false, replaySafe: false },
+      });
+      const input = makeTerminalInput({ attempt });
+
+      const resolved = await resolveEmbeddedRunTerminal(input);
+
+      expect(resolved).toMatchObject({
+        action: "complete",
+        result: { meta: { error: { message: error.message, fallbackSafe: false } } },
+      });
+      expect(input.activateInternalPrompt).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["openai:selected", undefined])(
     "reports the successful profile %s privately for command maintenance",
     async (authProfileId) => {

@@ -292,6 +292,7 @@ export const usageHandlers: GatewayRequestHandlers = {
                 modelProvider: merged.storeEntry?.modelProvider,
                 model: merged.storeEntry?.model,
                 usage,
+                hasContextWeight: Boolean(merged.storeEntry?.systemPromptReport),
                 contextWeight: includeContextWeight
                   ? (merged.storeEntry?.systemPromptReport ?? null)
                   : undefined,

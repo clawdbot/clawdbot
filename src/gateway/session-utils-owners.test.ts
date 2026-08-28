@@ -352,7 +352,7 @@ it("filters immutable creator and effective owner separately while preserving pr
   });
 });
 
-it("projects participant identities and filters sessions involving the viewer", () => {
+it("deduplicates participants in order, excludes the owner, and filters sessions involving the viewer", () => {
   const store: Record<string, SessionEntry> = {
     "agent:main:owned": {
       createdActor: { type: "human", id: "profile-ada" },
@@ -366,13 +366,15 @@ it("projects participant identities and filters sessions involving the viewer", 
       createdActor: { type: "human", id: "profile-bob" },
       createdVia: "operator",
       participants: [
+        { identity: { type: "profile", id: "profile-bob" } },
         { identity: { type: "agent", id: "research" } },
         { identity: { type: "profile", id: "profile-carol" } },
         { identity: { type: "profile", id: "profile-dana" } },
         { identity: { type: "profile", id: "profile-erin" } },
         { identity: { type: "profile", id: "profile-ada" } },
+        { identity: { type: "agent", id: "research" } },
       ],
-      participantCount: 5,
+      participantCount: 7,
       sessionId: "session-participating",
       updatedAt: 2,
     },

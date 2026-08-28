@@ -873,6 +873,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     const qaConfig = "test/vitest/vitest.extension-qa.config.ts";
     const runtimeTargets = [
       "test/e2e/qa-lab/runtime/gateway-support-export-runtime.test.ts",
+      "src/gateway/gateway-active-memory.test.ts",
       "src/gateway/gateway-concurrent-streams.test.ts",
     ];
     for (const shards of [
@@ -1561,7 +1562,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       requiresDist: false,
       runner: DEFAULT_NODE_TEST_RUNNER,
     });
-    expect(gatewayCoreShards).toMatchObject(
+    expect(gatewayCoreShards).toEqual(
       [1, 2, 3].map((stripe) => ({
         checkName: `checks-node-agentic-gateway-core-${stripe}`,
         shardName: `agentic-gateway-core-${stripe}`,
@@ -1570,6 +1571,13 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           "test/vitest/vitest.gateway-client.config.ts",
         ],
         includePatterns: gatewayCoreShards[stripe - 1]?.includePatterns,
+        ...(gatewayCoreShards[stripe - 1]?.includePatterns?.some(
+          (file) =>
+            file === "src/gateway/gateway-active-memory.test.ts" ||
+            file === "src/gateway/gateway-concurrent-streams.test.ts",
+        )
+          ? { pretestBuildMode: "runtime" }
+          : {}),
         requiresDist: false,
         runner: DEFAULT_NODE_TEST_RUNNER,
       })),

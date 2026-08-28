@@ -30,20 +30,22 @@ type EmbeddedRunnerBackoffMockOptions = {
 };
 
 export function createEmptyPluginMetadataSnapshot(workspaceDir?: string): PluginMetadataSnapshot {
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
+    policyHash: "",
+    generatedAtMs: 1,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
   return {
     policyHash: "",
     ...(workspaceDir !== undefined ? { workspaceDir } : {}),
-    index: {
-      version: 1,
-      hostContractVersion: "test",
-      compatRegistryVersion: "test",
-      migrationVersion: 1,
-      policyHash: "",
-      generatedAtMs: 1,
-      installRecords: {},
-      plugins: [],
-      diagnostics: [],
-    },
+    index,
+    registryIndex: index,
     registryDiagnostics: [],
     manifestRegistry: { plugins: [], diagnostics: [] },
     plugins: [],

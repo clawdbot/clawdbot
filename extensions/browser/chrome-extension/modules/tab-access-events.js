@@ -91,15 +91,16 @@ export function registerTabAccessEvents({
     })().catch(() => undefined);
   });
 
-  chromeApi.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  chromeApi.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     scheduleTabsSync();
     if (
       typeof changeInfo.url === "string" ||
       (policy.mode === ACCESS_MODE_SELECTED && typeof changeInfo.groupId === "number")
     ) {
-      // Security contract: every URL change retires synchronous CDP authority.
-      // Pre-proof events intentionally drop; replay could cross a restricted destination.
-      policy.invalidateTab(tabId);
+      const renewed = policy.renewTabAccess(tabId, attachedAccessEpochs.get(tabId), tab);
+      if (renewed && attachedTabs.has(tabId)) {
+        attachedAccessEpochs.set(tabId, renewed);
+      }
     }
     const eventEpoch = policy.capture(tabId);
     void (async () => {

@@ -68,7 +68,7 @@ function createWarmProvider(
       if (argv[1] === "config") {
         return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
       }
-      if (argv[1] === "inspect") {
+      if (argv[1] === "inspect" || argv[1] === "status") {
         return commandResult({
           stdout: JSON.stringify({
             id: argv[argv.indexOf("--id") + 1],
@@ -201,10 +201,19 @@ describe("Crabbox profile warm images", () => {
     }
   });
 
-  it("keeps warm images disabled by default and rejects non-boolean opt-ins", () => {
+  it("captures by default only for profiles that forward no setup environment", () => {
     const { warmImage, ...withoutWarmImage } = PROFILE;
     expect(warmImage).toBe(true);
-    expect(parseCrabboxProfile(withoutWarmImage).warmImage).toBe(false);
+    expect(parseCrabboxProfile(withoutWarmImage).warmImage).toBe(true);
+    const forwardsSetupEnv = {
+      ...withoutWarmImage,
+      setup: "install-toolchain",
+      setupEnv: ["REGISTRY_TOKEN"],
+    };
+    expect(parseCrabboxProfile(forwardsSetupEnv).warmImage).toBe(false);
+    // An explicit choice always wins over the derived default in both directions.
+    expect(parseCrabboxProfile({ ...forwardsSetupEnv, warmImage: true }).warmImage).toBe(true);
+    expect(parseCrabboxProfile({ ...withoutWarmImage, warmImage: false }).warmImage).toBe(false);
     expect(() => parseCrabboxProfile({ ...PROFILE, warmImage: "yes" })).toThrow(
       "Crabbox profile warmImage must be a boolean",
     );
@@ -239,6 +248,7 @@ describe("Crabbox profile warm images", () => {
     expect(scrub?.options.input).toContain("kill -TERM");
     expect(scrub?.options.input).toContain("kill -KILL");
     expect(scrub?.options.input).toContain('rm -rf "$worker_root"');
+    expect(scrub?.options.input).toContain('rm -rf "$HOME/.openclaw-worker/workspaces"');
     // Capture phases ride a full crabbox run/snapshot round trip; 60s starves
     // them under coordinator latency (live-measured on AWS 2026-08-26).
     expect(scrub?.options.timeoutMs).toBe(180_000);
@@ -255,6 +265,9 @@ describe("Crabbox profile warm images", () => {
       "session",
     );
     const npmCache = path.join(home, ".npm", "cached-package");
+    const sshWorkspace = path.join(home, ".openclaw-worker", "workspaces", "session");
+    const bundle = path.join(home, ".openclaw-worker", "bundle-hash", "index.js");
+    const gitSeed = path.join(home, ".openclaw-worker", "git-seeds", "gateway", "seed", "file");
     const bin = path.join(home, "bin");
     fs.mkdirSync(workspace, { recursive: true });
     fs.mkdirSync(path.dirname(npmCache), { recursive: true });
@@ -262,11 +275,18 @@ describe("Crabbox profile warm images", () => {
     fs.writeFileSync(path.join(bin, "ps"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     fs.writeFileSync(path.join(workspace, "private.txt"), "session workspace bytes");
     fs.writeFileSync(npmCache, "reusable npm package");
+    for (const file of [path.join(sshWorkspace, "private.txt"), bundle, gitSeed]) {
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, file);
+    }
     execFileSync("/bin/sh", ["-c", String(scrub?.options.input)], {
       env: { ...process.env, HOME: home, PATH: `${bin}${path.delimiter}${process.env.PATH ?? ""}` },
     });
     expect(fs.existsSync(path.join(home, ".openclaw", "cloud-workers"))).toBe(false);
+    expect(fs.existsSync(sshWorkspace)).toBe(false);
     expect(fs.readFileSync(npmCache, "utf8")).toBe("reusable npm package");
+    expect(fs.readFileSync(bundle, "utf8")).toBe(bundle);
+    expect(fs.readFileSync(gitSeed, "utf8")).toBe(gitSeed);
     expect(calls[1]?.argv.slice(1)).toEqual([
       "checkpoint",
       "create",
@@ -285,6 +305,197 @@ describe("Crabbox profile warm images", () => {
     expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
     expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
   });
+
+  it("captures machine0 reusable images with its image strategy and availability timeout", async () => {
+    const { provider, calls } = createWarmProvider();
+    await captureWarmImage(provider, { ...PROFILE, provider: "machine0" });
+
+    const create = calls.find(({ argv }) => argv[2] === "create");
+    expect(create?.argv).toEqual([
+      expect.any(String),
+      "checkpoint",
+      "create",
+      "--provider",
+      "machine0",
+      "--id",
+      LEASE_ID,
+      "--mode",
+      "native",
+      "--wait=false",
+      "--json",
+      "--strategy",
+      "image",
+    ]);
+    expect(create?.options.timeoutMs).toBe(600_000);
+    const scrub = calls.find(({ options }) => options.input?.toString().includes("kill -TERM"));
+    expect(scrub?.options.timeoutMs).toBe(180_000);
+  });
+
+  it.each([
+    { ageMs: 24 * 60 * 60 * 1_000 - 1, refreshed: false, deleteFails: false },
+    { ageMs: 24 * 60 * 60 * 1_000, refreshed: true, deleteFails: false },
+    { ageMs: 24 * 60 * 60 * 1_000, refreshed: true, deleteFails: true },
+  ])(
+    "refreshes=$refreshed after $ageMs ms and preserves the replacement when deleteFails=$deleteFails",
+    async ({ ageMs, refreshed, deleteFails }) => {
+      let refreshing = false;
+      let checkpointAtDeletion: string | undefined;
+      const replacementId = "chk_profile_refreshed";
+      const { provider, calls, warn } = createWarmProvider(({ argv }) => {
+        if (refreshing && argv[2] === "create") {
+          return commandResult({
+            stdout: JSON.stringify({
+              id: replacementId,
+              kind: "aws-ebs-snapshot",
+              leaseId: LEASE_ID,
+              native: { state: "pending" },
+            }),
+          });
+        }
+        if (refreshing && argv[2] === "delete") {
+          checkpointAtDeletion = openWarmImageStore().entries()[0]?.value.checkpointId;
+          return deleteFails ? commandResult({ code: 7, stderr: "delete failed" }) : undefined;
+        }
+        return undefined;
+      });
+      await captureWarmImage(provider);
+      const lease = await provisionWarmProfile(provider);
+      const store = openWarmImageStore();
+      const [image] = store.entries();
+      if (!image) {
+        throw new Error("Expected a captured warm image");
+      }
+      const now = Date.now();
+      vi.spyOn(Date, "now").mockReturnValue(now);
+      store.register(image.key, { ...image.value, createdAtMs: now - ageMs });
+      calls.length = 0;
+      refreshing = true;
+
+      await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+
+      expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(refreshed ? 1 : 0);
+      expect(calls.filter(({ argv }) => argv[2] === "delete").map(({ argv }) => argv[3])).toEqual(
+        refreshed ? [CHECKPOINT_ID] : [],
+      );
+      expect(store.lookup(image.key)?.checkpointId).toBe(refreshed ? replacementId : CHECKPOINT_ID);
+      expect(checkpointAtDeletion).toBe(refreshed ? replacementId : undefined);
+      expect(warn).toHaveBeenCalledTimes(deleteFails ? 1 : 0);
+      expect(calls.at(-1)?.argv[1]).toBe("stop");
+    },
+  );
+
+  it.each(["run", "create"])(
+    "restores the old warm image when refresh %s fails",
+    async (action) => {
+      let refreshing = false;
+      const { provider, calls, warn } = createWarmProvider(({ argv }) =>
+        refreshing && (argv[1] === action || argv[2] === action)
+          ? commandResult({ code: 7, stderr: "refresh failed" })
+          : undefined,
+      );
+      await captureWarmImage(provider);
+      const lease = await provisionWarmProfile(provider);
+      const store = openWarmImageStore();
+      const [image] = store.entries();
+      if (!image) {
+        throw new Error("Expected a captured warm image");
+      }
+      const existing = { ...image.value, createdAtMs: Date.now() - 24 * 60 * 60 * 1_000 };
+      store.register(image.key, existing);
+      calls.length = 0;
+      refreshing = true;
+
+      await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+
+      expect(warn).toHaveBeenCalledOnce();
+      expect(store.lookup(image.key)).toEqual(existing);
+      expect(calls.some(({ argv }) => argv[2] === "delete")).toBe(false);
+      refreshing = false;
+      calls.length = 0;
+      await provisionWarmProfile(provider);
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(CHECKPOINT_ID);
+      expect(calls.some(({ argv }) => argv[1] === "warmup")).toBe(false);
+    },
+  );
+
+  it.each([
+    { action: "inspect", missing: false },
+    { action: "inspect", missing: true },
+    { action: "fork", missing: false },
+  ])(
+    "preserves a refreshed image when an older $action finishes afterward (missing=$missing)",
+    async ({ action, missing }) => {
+      let releaseCommand!: () => void;
+      const commandBlocked = new Promise<void>((resolve) => {
+        releaseCommand = resolve;
+      });
+      let commandStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        commandStarted = resolve;
+      });
+      let blockNext = false;
+      let refreshing = false;
+      const replacementId = "chk_profile_refreshed";
+      const { provider, calls } = createWarmProvider(async ({ argv }) => {
+        if (blockNext && argv[2] === action) {
+          blockNext = false;
+          commandStarted();
+          await commandBlocked;
+          if (missing) {
+            return commandResult({
+              stdout: JSON.stringify({
+                localState: "available",
+                providerState: "missing",
+                nextAction: "delete",
+              }),
+            });
+          }
+        }
+        if (refreshing && argv[2] === "create") {
+          return commandResult({
+            stdout: JSON.stringify({
+              id: replacementId,
+              kind: "aws-ebs-snapshot",
+              leaseId: LEASE_ID,
+              native: { state: "available" },
+            }),
+          });
+        }
+        return undefined;
+      });
+      await captureWarmImage(provider);
+      const lease = await provisionWarmProfile(provider);
+      const store = openWarmImageStore();
+      const [image] = store.entries();
+      if (!image) {
+        throw new Error("Expected a captured warm image");
+      }
+      store.register(image.key, {
+        ...image.value,
+        state: action === "inspect" ? "pending" : "available",
+        createdAtMs: Date.now() - 24 * 60 * 60 * 1_000,
+      });
+      blockNext = true;
+      const provisioning = provisionWarmProfile(
+        provider,
+        PROFILE,
+        `provision:v2:${"1".repeat(64)}`,
+      );
+      await started;
+      refreshing = true;
+      try {
+        await provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+      } finally {
+        releaseCommand();
+      }
+      await provisioning;
+
+      expect(store.lookup(image.key)?.checkpointId).toBe(replacementId);
+      calls.length = 0;
+      await provisionWarmProfile(provider, PROFILE, `provision:v2:${"2".repeat(64)}`);
+      expect(calls.find(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(replacementId);
+    },
+  );
 
   it.each([
     { action: "run", name: "scrub fails", result: { code: 7, stderr: "scrub failed" } },
@@ -543,7 +754,8 @@ describe("Crabbox profile warm images", () => {
     store.register(image.key, {
       ...image.value,
       checkpointId: "",
-      createdAtMs: Date.now() - 360_001,
+      // Reservation staleness covers the slowest (machine0) capture budget twice over.
+      createdAtMs: Date.now() - 1_200_001,
     });
 
     const restarted = createWarmProvider(undefined, initial.stateDir);
@@ -554,38 +766,54 @@ describe("Crabbox profile warm images", () => {
     expect(store.lookup(image.key)?.checkpointId).toBe(CHECKPOINT_ID);
   });
 
-  it("reserves one capture when enrolled leases with the same profile stop concurrently", async () => {
-    let releaseScrub!: () => void;
-    const scrubBlocked = new Promise<void>((resolve) => {
-      releaseScrub = resolve;
-    });
-    let capturing = false;
-    const { provider, calls } = createWarmProvider(async ({ argv }) => {
-      if (capturing && argv[1] === "run") {
-        await scrubBlocked;
+  it.each([false, true])(
+    "reserves one capture when leases stop concurrently (refresh=%s)",
+    async (refresh) => {
+      let releaseScrub!: () => void;
+      const scrubBlocked = new Promise<void>((resolve) => {
+        releaseScrub = resolve;
+      });
+      let capturing = false;
+      const { provider, calls } = createWarmProvider(async ({ argv }) => {
+        if (capturing && argv[1] === "run") {
+          await scrubBlocked;
+        }
+        return undefined;
+      });
+      const first = await provisionWarmProfile(provider);
+      const secondOperationId = `provision:v2:${"1".repeat(64)}`;
+      const second = await provisionWarmProfile(provider, PROFILE, secondOperationId);
+      if (refresh) {
+        await captureWarmImage(provider, PROFILE, `provision:v2:${"2".repeat(64)}`);
+        const store = openWarmImageStore();
+        const [image] = store.entries();
+        if (!image) {
+          throw new Error("Expected a captured warm image");
+        }
+        store.register(image.key, {
+          ...image.value,
+          createdAtMs: Date.now() - 24 * 60 * 60 * 1_000,
+        });
       }
-      return undefined;
-    });
-    const first = await provisionWarmProfile(provider);
-    const secondOperationId = `provision:v2:${"1".repeat(64)}`;
-    const second = await provisionWarmProfile(provider, PROFILE, secondOperationId);
-    capturing = true;
+      calls.length = 0;
+      capturing = true;
 
-    const firstDestroy = provider.destroy({ leaseId: first.leaseId, profile: PROFILE });
-    await vi.waitFor(() =>
-      expect(
-        calls.some(
-          ({ argv, options }) =>
-            argv[1] === "run" && options.input?.toString().includes("kill -TERM"),
-        ),
-      ).toBe(true),
-    );
-    const secondDestroy = provider.destroy({ leaseId: second.leaseId, profile: PROFILE });
-    await secondDestroy;
-    releaseScrub();
-    await firstDestroy;
+      const firstDestroy = provider.destroy({ leaseId: first.leaseId, profile: PROFILE });
+      await vi.waitFor(() =>
+        expect(
+          calls.some(
+            ({ argv, options }) =>
+              argv[1] === "run" && options.input?.toString().includes("kill -TERM"),
+          ),
+        ).toBe(true),
+      );
+      const secondDestroy = provider.destroy({ leaseId: second.leaseId, profile: PROFILE });
+      await secondDestroy;
+      releaseScrub();
+      await firstDestroy;
 
-    expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
-    expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(2);
-  });
+      expect(calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(1);
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(2);
+    },
+  );
 });

@@ -456,19 +456,21 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
     const generation = owner.generation;
     const key = ownerKey(input);
     let registered = params.owners.get(key) === owner;
+    // Scoped reloads retain unaffected generations beyond their creating publication epoch.
+    // Persistent catalog/auth callbacks must retire only with this exact registered generation.
+    const isGenerationCurrent = () =>
+      owner.generation === generation && params.owners.get(key) === owner;
     return {
       catalogMode: owner.catalogMode,
       input,
+      isGenerationCurrent,
       isEligible: () =>
         (params.isPublicationCurrent?.() ?? true) &&
         owner.generation === generation &&
         (registered
           ? params.owners.get(key) === owner
           : params.registerEntriesAfterBuildStart === true),
-      isCurrent: () =>
-        (params.isPublicationCurrent?.() ?? true) &&
-        owner.generation === generation &&
-        params.owners.get(key) === owner,
+      isCurrent: () => (params.isPublicationCurrent?.() ?? true) && isGenerationCurrent(),
       key,
       generation,
       markRegistered: () => {
@@ -512,8 +514,11 @@ export async function publishPreparedModelRuntimeOwnerBatch(params: {
               params.buildTimeoutMs,
               catalogMode,
               params.onBuildStats,
-              new Map(currentGroup.map((candidate) => [candidate.input, candidate.isCurrent])),
-              params.isBuildCurrent,
+              new Map(
+                currentGroup.map((candidate) => [candidate.input, candidate.isGenerationCurrent]),
+              ),
+              params.isBuildCurrent ??
+                new Map(currentGroup.map((candidate) => [candidate.input, candidate.isCurrent])),
               new Set(
                 currentGroup
                   .filter((candidate) => candidate.owner.provenance === "configured")

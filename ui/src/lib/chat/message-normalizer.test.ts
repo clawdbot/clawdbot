@@ -658,6 +658,25 @@ describe("message-normalizer", () => {
       ]);
     });
 
+    it("classifies absolute WebM MEDIA paths as video attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: "MEDIA:/tmp/openclaw/clip.webm",
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "/tmp/openclaw/clip.webm",
+            kind: "video",
+            label: "clip.webm",
+            mimeType: "video/webm",
+          },
+        },
+      ]);
+    });
+
     it("keeps spaced local filenames together instead of leaking suffix text", () => {
       const result = normalizeMessage({
         role: "assistant",
@@ -822,6 +841,71 @@ describe("message-normalizer", () => {
             mimeType: "image/png",
             width: 1280,
             height: 720,
+          },
+        },
+      ]);
+    });
+
+    it("preserves named attachment failures beside successful attachments", () => {
+      const result = normalizeMessage({
+        role: "assistant",
+        content: [
+          {
+            type: "attachment",
+            attachment: {
+              url: "https://files.example/deploy.yaml",
+              kind: "document",
+              label: "deploy.yaml",
+              mimeType: "application/yaml",
+            },
+          },
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "unsupported-format",
+              kind: "document",
+              label: "settings.toml",
+              mimeType: "application/toml",
+            },
+          },
+          {
+            type: "attachment_error",
+            attachment: {
+              code: "delivery-failed",
+              kind: "document",
+              label: "bundle.7z",
+              mimeType: "application/x-7z-compressed",
+            },
+          },
+        ],
+      });
+
+      expect(result.content).toEqual([
+        {
+          type: "attachment",
+          attachment: {
+            url: "https://files.example/deploy.yaml",
+            kind: "document",
+            label: "deploy.yaml",
+            mimeType: "application/yaml",
+          },
+        },
+        {
+          type: "attachment_error",
+          attachment: {
+            code: "unsupported-format",
+            kind: "document",
+            label: "settings.toml",
+            mimeType: "application/toml",
+          },
+        },
+        {
+          type: "attachment_error",
+          attachment: {
+            code: "delivery-failed",
+            kind: "document",
+            label: "bundle.7z",
+            mimeType: "application/x-7z-compressed",
           },
         },
       ]);

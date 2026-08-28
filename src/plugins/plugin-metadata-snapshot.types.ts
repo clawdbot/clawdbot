@@ -52,6 +52,8 @@ export type PluginMetadataSnapshot = {
   registrySource?: PluginRegistrySnapshotSource;
   workspaceDir?: string;
   index: InstalledPluginIndex;
+  /** The original workspace-scoped index described by registrySource, before runtime unions. */
+  registryIndex: InstalledPluginIndex;
   registryDiagnostics: readonly PluginMetadataSnapshotRegistryDiagnostic[];
   manifestRegistry: PluginManifestRegistry;
   /** Independently validated bundled owners, including packages shadowed by active plugins. */

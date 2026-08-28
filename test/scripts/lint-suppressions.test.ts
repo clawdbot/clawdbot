@@ -187,6 +187,7 @@ describe("production lint suppressions", () => {
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
     expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
       filterExpectedSuppressionsForPresentFiles([
+        "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
         "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
         "extensions/browser/src/cli/browser-cli-actions-input/register.files-downloads.ts|typescript/no-unnecessary-type-parameters|1",
@@ -245,7 +246,6 @@ describe("production lint suppressions", () => {
         "src/tasks/task-registry.sqlite.shared.ts|typescript/no-unnecessary-type-parameters|1",
         "src/test-utils/vitest-mock-fn.ts|typescript/no-explicit-any|1",
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
-        "ui/public/sw.js|unicorn/require-post-message-target-origin|1",
         // oxlint misreads CanvasRenderingContext2D.fill(path) as Array.fill.
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
       ]),

@@ -10,10 +10,27 @@ import {
   shouldSkipSparseTsgoGuardError,
 } from "../../scripts/lib/tsgo-sparse-guard.mts";
 import { resolveTsgoTimeoutMs } from "../../scripts/run-tsgo.mts";
-import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
+import {
+  isProcessAlive,
+  waitForChildClose,
+  waitForDead,
+  waitForPidFile,
+} from "../helpers/process-wait.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
+
+it("runs the installed compiler version through the real tsgo wrapper", () => {
+  const result = spawnSync(process.execPath, [path.resolve("scripts/run-tsgo.mjs"), "--version"], {
+    encoding: "utf8",
+    timeout: 25_000,
+    killSignal: "SIGKILL",
+  });
+
+  expect(result.error).toBeUndefined();
+  expect(result.status).toBe(0);
+  expect(result.stdout).toMatch(/^Version \d/m);
+}, 30_000);
 
 describe("run-tsgo sparse guard", () => {
   it("ends sparse-checkout failures with the stable failure trailer", () => {
@@ -303,6 +320,59 @@ describe.skipIf(process.platform === "win32")("run-tsgo watchdog", () => {
       reapFakeTsgo(cwd);
     }
   }
+
+  it("rejects and drains compiler descendants left after a successful leader exit", async () => {
+    const cwd = createTempDir("openclaw-run-tsgo-lingering-");
+    const descendantPidPath = path.join(cwd, "descendant.pid");
+    writeFakeTsgo(
+      cwd,
+      `#!/usr/bin/env node
+const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+fs.writeFileSync("fake-tsgo.pid", String(process.pid));
+const child = spawn(process.execPath, ["-e", ${JSON.stringify(`
+const fs = require("node:fs");
+setInterval(() => {}, 1000);
+fs.writeFileSync(process.argv[1], String(process.pid));
+process.send("ready");
+process.disconnect();
+`)}, ${JSON.stringify(descendantPidPath)}], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+child.once("message", () => process.exit(0));
+`,
+    );
+    let observedPids: Array<number | undefined> = [];
+    let liveBeforeTeardown: number[] = [];
+    try {
+      const result = runFakeTsgo(cwd, undefined, (pid) => {
+        observedPids = [
+          pid,
+          fs.existsSync(descendantPidPath)
+            ? Number(fs.readFileSync(descendantPidPath, "utf8"))
+            : undefined,
+        ];
+        liveBeforeTeardown = observedPids.filter(
+          (owned): owned is number => owned !== undefined && isProcessAlive(owned),
+        );
+      });
+      expect(result.error).toBeUndefined();
+      expect(
+        observedPids.every((pid) => pid !== undefined && Number.isSafeInteger(pid) && pid > 1),
+      ).toBe(true);
+      expect.soft(result.status).toBe(1);
+      expect.soft(result.stderr).toContain("EPROCESSGROUP_CLEANUP_FAILED");
+      expect
+        .soft(liveBeforeTeardown, "compiler descendants must be absent before fixture teardown")
+        .toEqual([]);
+    } finally {
+      for (const pidFile of [descendantPidPath, path.join(cwd, "fake-tsgo.pid")]) {
+        if (!fs.existsSync(pidFile)) continue;
+        const pid = Number(fs.readFileSync(pidFile, "utf8"));
+        if (!Number.isSafeInteger(pid) || pid <= 1) continue;
+        if (isProcessAlive(pid)) process.kill(pid, "SIGKILL");
+        await waitForDead(pid, 2_000);
+      }
+    }
+  }, 30_000);
 
   it.each([{ bound: "0" }, { bound: "abc" }])(
     "explains a rejected OPENCLAW_TSGO_TIMEOUT_MS of $bound instead of crashing",

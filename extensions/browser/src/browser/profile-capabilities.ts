@@ -27,6 +27,10 @@ export type BrowserProfileCapabilities = {
   supportsBatchActions: boolean;
   supportsDownloads: boolean;
   supportsPdf: boolean;
+  supportsRequests: boolean;
+  supportsErrors: boolean;
+  supportsPageText: boolean;
+  supportsEmulation: boolean;
   requiresCompleteTargetEnumeration: boolean;
 };
 
@@ -38,6 +42,10 @@ export function getBrowserProfileCapabilities(
     supportsBatchActions: profile.driver !== "existing-session",
     supportsDownloads: profile.driver !== "existing-session",
     supportsPdf: profile.driver !== "existing-session",
+    supportsRequests: profile.driver !== "existing-session",
+    supportsErrors: profile.driver !== "existing-session",
+    supportsPageText: profile.driver !== "existing-session",
+    supportsEmulation: profile.driver !== "existing-session",
     requiresCompleteTargetEnumeration: profile.driver === "extension",
   };
   if (profile.driver === "existing-session") {

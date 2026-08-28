@@ -12,6 +12,7 @@ import {
 } from "../test-helpers/settings-node.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import {
+  loadGatewaySessionSelection,
   loadSettings,
   persistSessionToken,
   resolvePageGatewaySettings,
@@ -355,6 +356,7 @@ describe("loadSettings default gateway URL derivation", () => {
       token: "",
       sessionKey: "agent:test_old:main",
       lastActiveSessionKey: "agent:test_old:main",
+      selectedAgentId: " OpenClaw ",
       theme: "claw",
       themeMode: "system",
       chatShowThinking: true,
@@ -368,6 +370,12 @@ describe("loadSettings default gateway URL derivation", () => {
     expect(settings.gatewayUrl).toBe(gwUrl);
     expect(settings.sessionKey).toBe("agent:test_old:main");
     expect(settings.lastActiveSessionKey).toBe("agent:test_old:main");
+    expect(settings.selectedAgentId).toBe("openclaw");
+    expect(loadGatewaySessionSelection(gwUrl)).toEqual({
+      sessionKey: "agent:test_old:main",
+      lastActiveSessionKey: "agent:test_old:main",
+      selectedAgentId: "openclaw",
+    });
   });
 
   it("caps persisted session scopes to the most recent gateways", () => {

@@ -1,7 +1,9 @@
-import { writeFile } from "node:fs/promises";
+import { execFileSync } from "node:child_process";
+import { readFile, writeFile } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { MessageFlags } from "discord-api-types/v10";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   GatewayClient,
@@ -25,7 +27,12 @@ const INLINE_SESSION_KEY = "agent:qa:inline-widget-proof";
 const INVENTORY_MARKER = "DISCORD_WIDGET_PRESENTER_INVENTORY";
 
 type JsonRecord = Record<string, unknown>;
-type DiscordRestRequest = { method: string; pathname: string; body?: JsonRecord };
+type DiscordRestRequest = {
+  method: string;
+  pathname: string;
+  body?: JsonRecord;
+  files?: Array<{ field: string; name: string; type: string; base64: string }>;
+};
 type ToolsInvokeResult = {
   ok: boolean;
   source?: string;
@@ -33,18 +40,46 @@ type ToolsInvokeResult = {
   error?: { code?: string; message?: string };
 };
 
-async function readRequestBody(req: IncomingMessage): Promise<JsonRecord | undefined> {
+async function readRequestBody(
+  req: IncomingMessage,
+): Promise<Pick<DiscordRestRequest, "body" | "files">> {
   const chunks: Buffer[] = [];
   for await (const chunk of req) {
     chunks.push(Buffer.from(chunk));
   }
   if (chunks.length === 0) {
-    return undefined;
+    return {};
   }
-  const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
-    ? (parsed as JsonRecord)
-    : undefined;
+  const raw = Buffer.concat(chunks);
+  const contentType = req.headers["content-type"] ?? "";
+  if (contentType.startsWith("multipart/form-data;")) {
+    const form = await new Response(raw, {
+      headers: { "content-type": contentType },
+    }).formData();
+    const files: NonNullable<DiscordRestRequest["files"]> = [];
+    for (const [field, value] of form) {
+      if (typeof value !== "string") {
+        files.push({
+          field,
+          name: value.name,
+          type: value.type,
+          base64: Buffer.from(await value.arrayBuffer()).toString("base64"),
+        });
+      }
+    }
+    const payloadJson = form.get("payload_json");
+    if (typeof payloadJson !== "string") {
+      throw new Error("Discord multipart request did not contain string payload_json");
+    }
+    return { body: JSON.parse(payloadJson) as JsonRecord, files };
+  }
+  const parsed = JSON.parse(raw.toString("utf8")) as unknown;
+  return {
+    body:
+      parsed && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as JsonRecord)
+        : undefined,
+  };
 }
 
 function writeJson(res: ServerResponse, statusCode: number, value: unknown): void {
@@ -62,8 +97,8 @@ async function startDiscordRestLoopback() {
     try {
       const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
       const method = req.method ?? "GET";
-      const body = await readRequestBody(req);
-      requests.push({ method, pathname, ...(body ? { body } : {}) });
+      const payload = await readRequestBody(req);
+      requests.push({ method, pathname, ...payload });
       if (method === "GET" && pathname === `/api/v10/channels/${DISCORD_CHANNEL_ID}`) {
         writeJson(res, 200, { id: DISCORD_CHANNEL_ID, type: 0 });
         return;
@@ -254,6 +289,162 @@ describe("Discord show_widget contextual presenter process proof", () => {
   });
 
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+  it(
+    "preserves component attachment filenames through the public Gateway message action",
+    { timeout: 180_000 },
+    async () => {
+      const head = execFileSync("git", ["rev-parse", "HEAD"], {
+        cwd: REPO_ROOT,
+        encoding: "utf8",
+      }).trim();
+      expect(head).toMatch(/^[0-9a-f]{40}$/);
+      // A prebuilt entrypoint alone does not prove which source produced it.
+      for (const [file, field] of [
+        [".buildstamp", "head"],
+        [".runtime-postbuildstamp", "head"],
+        ["build-info.json", "commit"],
+      ] as const) {
+        const metadata = JSON.parse(
+          await readFile(path.join(REPO_ROOT, "dist", file), "utf8"),
+        ) as JsonRecord;
+        expect(metadata[field], `dist/${file} source revision`).toBe(head);
+      }
+      process.stdout.write(
+        `${JSON.stringify({ proof: "discord-gateway-built-revision", head })}\n`,
+      );
+      const scratch = tempDirs.make("openclaw-discord-attachment-e2e-");
+      const discord = await startDiscordRestLoopback();
+      cleanups.push(() => discord.stop());
+      const preloadPath = await writeDiscordFetchPreload(scratch);
+      const mock = await startQaMockOpenAiServer();
+      cleanups.push(() => mock.stop());
+      const gateway = await startQaGatewayChild({
+        repoRoot: REPO_ROOT,
+        command: {
+          executablePath: process.execPath,
+          argsPrefix: [path.join(REPO_ROOT, "dist", "entry.js")],
+          cwd: REPO_ROOT,
+          usePackagedPlugins: true,
+        },
+        providerBaseUrl: `${mock.baseUrl}/v1`,
+        providerMode: "mock-openai",
+        primaryModel: MODEL_REF,
+        alternateModel: MODEL_REF,
+        transport: discordTransport,
+        transportBaseUrl: "http://127.0.0.1:9",
+        controlUiEnabled: false,
+        mutateConfig: (cfg) => ({
+          ...cfg,
+          // Public message actions do not need QA Lab's private runtime tools.
+          plugins: {
+            ...cfg.plugins,
+            allow: cfg.plugins?.allow?.filter((id) => id !== "qa-lab"),
+            entries: Object.fromEntries(
+              Object.entries(cfg.plugins?.entries ?? {}).filter(([id]) => id !== "qa-lab"),
+            ),
+          },
+          tools: { ...cfg.tools, alsoAllow: [...(cfg.tools?.alsoAllow ?? []), "message"] },
+        }),
+        runtimeEnvPatch: {
+          DISCORD_BOT_TOKEN: "qa-activities-token",
+          NODE_OPTIONS: `--import=${pathToFileURL(preloadPath).href}`,
+          OPENCLAW_QA_DISCORD_REST_BASE: discord.baseUrl,
+          OPENCLAW_SKIP_CHANNELS: "1",
+        },
+      });
+      cleanups.push(() => gateway.stop());
+      const media = path.join(gateway.workspaceDir, "source.pdf");
+      const bytes = Buffer.from("%PDF-1.4\nDiscord attachment filename proof\n%%EOF\n");
+      await writeFile(media, bytes);
+      const cases = [
+        { label: "declared", declared: true, expected: "report.pdf" },
+        { label: "blank override", declared: true, filename: "  ", expected: "report.pdf" },
+        {
+          label: "explicit override",
+          declared: true,
+          filename: " operator.pdf ",
+          expected: "operator.pdf",
+        },
+        { label: "media-derived", declared: false, expected: "source.pdf" },
+        { label: "components V2", declared: true, v2: true, expected: "report.pdf" },
+      ];
+      for (const testCase of cases) {
+        const before = discord.requests.filter((request) => request.method === "POST").length;
+        const response = await fetch(`${gateway.baseUrl}/tools/invoke`, {
+          method: "POST",
+          signal: AbortSignal.timeout(20_000),
+          headers: {
+            authorization: `Bearer ${gateway.token}`,
+            "content-type": "application/json",
+            "x-openclaw-account-id": "default",
+            "x-openclaw-message-channel": "discord",
+            "x-openclaw-message-to": `channel:${DISCORD_CHANNEL_ID}`,
+          },
+          body: JSON.stringify({
+            tool: "message",
+            sessionKey: DISCORD_SESSION_KEY,
+            args: {
+              action: "send",
+              channel: "discord",
+              target: `channel:${DISCORD_CHANNEL_ID}`,
+              message: `Attachment proof: ${testCase.label}`,
+              media,
+              filename: testCase.filename,
+              components: {
+                blocks: testCase.declared
+                  ? [{ type: "file", file: "attachment://report.pdf" }]
+                  : [],
+                ...(testCase.v2 ? { container: { accentColor: 0x123456 } } : {}),
+              },
+            },
+          }),
+        });
+        const result = (await response.json()) as JsonRecord;
+        expect(response.status, JSON.stringify(result)).toBe(200);
+        expect(result).toMatchObject({
+          ok: true,
+          result: {
+            details: {
+              channel: "discord",
+              deliveryStatus: "sent",
+              messageDelivery: {
+                status: "settled",
+                primaryPlatformMessageId: DISCORD_MESSAGE_ID,
+                partialDelivery: false,
+                createdThreadIds: [],
+              },
+            },
+          },
+        });
+        const posts = discord.requests.filter((request) => request.method === "POST");
+        expect(posts, testCase.label).toHaveLength(before + 1);
+        const post = posts.at(-1);
+        expect(post?.pathname).toBe(`/api/v10/channels/${DISCORD_CHANNEL_ID}/messages`);
+        expect(post?.files).toEqual([
+          {
+            field: "files[0]",
+            name: testCase.expected,
+            type: "application/pdf",
+            base64: bytes.toString("base64"),
+          },
+        ]);
+        expect(post?.body?.attachments).toEqual([{ id: 0, filename: testCase.expected }]);
+        expect(Boolean(Number(post?.body?.flags ?? 0) & MessageFlags.IsComponentsV2)).toBe(
+          testCase.v2 === true,
+        );
+        process.stdout.write(
+          `${JSON.stringify({
+            proof: "gateway-message-action-to-discord-multipart",
+            case: testCase.label,
+            files: post?.files,
+            attachments: post?.body?.attachments,
+            componentsV2: testCase.v2 === true,
+          })}\n`,
+        );
+      }
+    },
+  );
 
   it(
     "routes one core tool through Discord and keeps mismatched and inline paths honest",

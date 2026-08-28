@@ -368,8 +368,6 @@ struct OpenClawTypographyTests {
         #expect(skillWorkshop.contains("Text(\"Apply\")"))
         #expect(skillWorkshop.contains("Text(\"Reject\")"))
 
-        #expect(skills.contains("Text(\"Gateway warning\").font(OpenClawType.headline)"))
-        #expect(skills.contains("Text(\"Acknowledge and install\").font(OpenClawType.subheadSemiBold)"))
         #expect(skills.contains("prompt: Text(\"Search ClawHub\").font(OpenClawType.body)"))
 
         for source in [agentDestinations, dreaming, instances, channels, skills, docs] {

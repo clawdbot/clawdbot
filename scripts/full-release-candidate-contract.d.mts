@@ -85,5 +85,12 @@ export interface FullReleaseCandidateBinding extends Omit<FullReleaseCandidateMa
 export function buildFullReleaseCandidateRequest(
   input: FullReleaseCandidateRecord,
 ): FullReleaseCandidateRequest;
+export function buildFullReleaseCandidateBinding(input: {
+  artifact: FullReleaseCandidateRecord;
+  manifest: FullReleaseCandidateRecord;
+}): FullReleaseCandidateBinding;
+export function canonicalFullReleaseCandidateRequestJson(value: unknown): string;
+export function candidateRequestSha256(value: unknown): string;
+export function fullReleaseCandidateArtifactName(requestSha256: string): string;
 export function validateFullReleaseCandidateRequest(value: unknown): FullReleaseCandidateRequest;
 export function validateFullReleaseCandidateBinding(value: unknown): FullReleaseCandidateBinding;

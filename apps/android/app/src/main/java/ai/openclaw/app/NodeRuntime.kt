@@ -2602,7 +2602,6 @@ class NodeRuntime private constructor(
 
   internal fun installClawHubSkill(
     slug: String,
-    acknowledgeClawHubRisk: Boolean = false,
     version: String? = null,
   ): Job? {
     val normalized = slug.trim()
@@ -2610,7 +2609,6 @@ class NodeRuntime private constructor(
     return scope.launch {
       installClawHubSkillFromGateway(
         slug = normalized,
-        acknowledgeClawHubRisk = acknowledgeClawHubRisk,
         version = version,
       )
     }
@@ -2622,8 +2620,6 @@ class NodeRuntime private constructor(
       _clawHubSkillSearchState.value.copy(
         reviewingSlug = null,
         installReview = null,
-        acknowledgeSlug = null,
-        acknowledgeVersion = null,
         errorText = null,
         messageText = null,
       )
@@ -6296,8 +6292,6 @@ class NodeRuntime private constructor(
           results = emptyList(),
           reviewingSlug = null,
           installReview = null,
-          acknowledgeSlug = null,
-          acknowledgeVersion = null,
           errorText = null,
           messageText = null,
         )
@@ -6352,8 +6346,6 @@ class NodeRuntime private constructor(
         _clawHubSkillSearchState.value.copy(
           reviewingSlug = skill.reference,
           installReview = null,
-          acknowledgeSlug = null,
-          acknowledgeVersion = null,
           errorText = null,
           messageText = null,
         )
@@ -6394,7 +6386,6 @@ class NodeRuntime private constructor(
 
   private suspend fun installClawHubSkillFromGateway(
     slug: String,
-    acknowledgeClawHubRisk: Boolean,
     version: String?,
   ) {
     val gatewayScope = captureGatewayDataScope()
@@ -6446,8 +6437,6 @@ class NodeRuntime private constructor(
       _clawHubSkillSearchState.value =
         _clawHubSkillSearchState.value.copy(
           installReview = null,
-          acknowledgeSlug = null,
-          acknowledgeVersion = null,
           errorText = null,
           messageText = null,
         )
@@ -6457,7 +6446,7 @@ class NodeRuntime private constructor(
         requestGatewayData(
           gatewayScope,
           "skills.install",
-          clawHubInstallParams(slug, attemptedVersion, acknowledgeClawHubRisk),
+          clawHubInstallParams(slug, attemptedVersion),
           timeoutMs = CLAWHUB_INSTALL_REQUEST_TIMEOUT_MS,
         )
       val root = json.parseToJsonElement(response).asObjectOrNull()
@@ -6500,12 +6489,10 @@ class NodeRuntime private constructor(
       }
     } catch (err: GatewayRequestRejected) {
       val confirmed = refreshAndConfirmClawHubInstall(gatewayScope, slug, attemptedVersion)
-      val rejection = if (confirmed) null else clawHubInstallRejection(err.gatewayError, attemptedVersion)
+      val rejection = if (confirmed) null else clawHubInstallRejection(err.gatewayError)
       publishGatewayData(gatewayScope) {
         _clawHubSkillSearchState.value =
           _clawHubSkillSearchState.value.copy(
-            acknowledgeSlug = if (rejection?.requiresAcknowledgement == true) slug else null,
-            acknowledgeVersion = rejection?.acknowledgeVersion,
             errorText = rejection?.let { formatClawHubInstallMessage(it.message, it.warning) },
             messageText = if (confirmed) "Installed $slug." else null,
           )

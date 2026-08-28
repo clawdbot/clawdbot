@@ -598,11 +598,12 @@ Required env when `--credential-source env`:
 - `OPENCLAW_QA_DISCORD_SUT_APPLICATION_ID` - must match the SUT bot user id
   returned by Discord (the lane fails fast otherwise).
 
-Optional:
+Voice destination:
 
 - `OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID` selects the voice/stage channel for
   `discord-voice-autojoin`; without it, the scenario picks the first visible
-  voice/stage channel for the SUT bot.
+  voice/stage channel for the SUT bot. It is required for
+  `discord-transcripts-voice-authorization` when using env credentials.
 
 Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
 
@@ -623,7 +624,11 @@ Discord YAML module scenarios (`qa/scenarios/channels/discord-*.yaml`):
   channel receives a visible transcript-tool denial without a join. The same
   sender is then allowlisted and must start, stop, and leave live capture. The
   scenario writes redacted JSON evidence and deletes its known Discord
-  messages during cleanup.
+  messages during cleanup. It requires an explicit `voiceChannelId` in the
+  leased credential or `OPENCLAW_QA_DISCORD_VOICE_CHANNEL_ID`; it never discovers
+  a room automatically. The operator must reserve a dedicated empty QA voice
+  channel before running it. An explicit ID does not prove that prerequisite:
+  the harness observes the SUT bot's connection, not the room's full membership.
 - `discord-status-reactions-tool-only` - opt-in Mantis scenario. Runs by
   itself because it switches the SUT to always-on, tool-only guild replies
   with `messages.statusReactions.enabled=true`, then captures a REST
@@ -641,7 +646,12 @@ pnpm openclaw qa discord \
   --provider-mode mock-openai
 ```
 
-Run the transcript authorization scenario with a Convex lease:
+During teardown of a successfully started child gateway, the Discord adapter
+keeps its credential lease and heartbeat until that gateway has stopped. If
+shutdown fails, the suite withholds lease release.
+
+Run the transcript authorization scenario with a Convex lease whose payload
+contains the reserved QA room's `voiceChannelId`:
 
 ```bash
 pnpm openclaw qa discord \

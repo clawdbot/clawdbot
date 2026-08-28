@@ -25,6 +25,16 @@ export type AttachmentCardHeaderOptions = {
   voiceNote?: boolean;
 };
 
+export function renderCompactAttachmentCard(options: AttachmentCardHeaderOptions): TemplateResult {
+  return html`<div
+    class="chat-assistant-attachment-card chat-assistant-attachment-card--compact"
+    ?data-openable=${Boolean(options.onExpand)}
+    @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, options.onExpand)}
+  >
+    ${renderAttachmentCardHeader({ ...options, visualMode: "large-placeholder" })}
+  </div>`;
+}
+
 const attachmentCardInteractiveSelector =
   "a, button, input, select, textarea, audio, video, iframe, [contenteditable='true'], [tabindex], [role='button']";
 

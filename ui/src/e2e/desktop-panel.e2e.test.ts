@@ -608,7 +608,7 @@ suite.define(() => {
         source: { kind: "environment", environmentId: "worker-desktop-1" },
         control: false,
       });
-      await panel.getByText("Connecting to desktop…", { exact: true }).waitFor();
+      await panel.getByRole("status", { name: "Connecting to desktop…" }).waitFor();
       await panel.getByRole("button", { name: "Browser", exact: true }).waitFor();
       await panel.getByRole("button", { name: "Terminal", exact: true }).waitFor();
       expect(await panel.getByText("View only", { exact: true }).count()).toBe(0);

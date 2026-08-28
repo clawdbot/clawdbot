@@ -1,6 +1,10 @@
 import { isAudioFileName } from "@openclaw/media-core/mime";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
-import { getReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  stripReplyMediaFailureFallback,
+  type ReplyPayload,
+} from "../../auto-reply/reply-payload.js";
 import type { ReplyDispatcherOptions } from "../../auto-reply/reply/reply-dispatcher.js";
 import { readSessionTranscriptWatermark } from "../../config/sessions/session-accessor.js";
 import {
@@ -139,7 +143,7 @@ export function createChatSendReplyDispatch(params: {
   let appendedWebchatAgentMedia = false;
   const needsAgentMediaTranscriptFinalization = (payload: ReplyPayload): boolean =>
     isMediaBearingPayload(payload) ||
-    getReplyPayloadMetadata(payload)?.assistantMediaNormalizationFailed === true;
+    Boolean(getReplyPayloadMetadata(payload)?.assistantMediaFailures?.length);
   const agentMediaTranscriptKey = (payload: ReplyPayload): string => {
     const metadata = getReplyPayloadMetadata(payload);
     const ownedIdempotencyKey =
@@ -205,8 +209,9 @@ export function createChatSendReplyDispatch(params: {
       assistantContent,
       mediaMessage,
     );
-    const mediaNormalizationFailed =
-      getReplyPayloadMetadata(transcriptPayload)?.assistantMediaNormalizationFailed === true;
+    const transcriptPayloadMetadata = getReplyPayloadMetadata(transcriptPayload);
+    const mediaFailures = transcriptPayloadMetadata?.assistantMediaFailures ?? [];
+    const mediaNormalizationFailed = mediaFailures.length > 0;
     const persistedContentForAppend =
       hasAssistantDisplayMediaContent(persistedAssistantContent) || mediaNormalizationFailed
         ? persistedAssistantContent
@@ -305,6 +310,25 @@ export function createChatSendReplyDispatch(params: {
         }
         return;
       }
+    }
+    const hasOnlyFailureDisplay =
+      persistedContentForAppend.some((block) => block.type === "attachment_error") &&
+      persistedContentForAppend.every(
+        (block) => block.type === "text" || block.type === "attachment_error",
+      );
+    const runtimeOwnedText = stripReplyMediaFailureFallback(
+      transcriptPayload.text,
+      mediaFailures,
+    )?.trim();
+    if (
+      assistantMessageIndex === undefined &&
+      mediaNormalizationFailed &&
+      hasOnlyFailureDisplay &&
+      runtimeOwnedText
+    ) {
+      // Agent message_end owns the text row. Without its identity, appending a failure card
+      // would duplicate that row; the live broadcast still carries the visible failure.
+      return;
     }
     const appended = await appendAssistantTranscriptMessage({
       sessionKey,

@@ -71,6 +71,18 @@ export function projectToolResultDetails(
     return { details: undefined, truncated: false };
   }
   const projected: Record<string, unknown> = {};
+  const browserTab = readRecord(record.browserTab);
+  if (typeof browserTab?.targetId === "string" && browserTab.targetId.trim()) {
+    projected.browserTab = {
+      targetId: truncateUtf16Safe(browserTab.targetId, 128),
+      ...(typeof browserTab.url === "string"
+        ? { url: truncateUtf16Safe(browserTab.url, 2_048) }
+        : {}),
+      ...(typeof browserTab.title === "string"
+        ? { title: truncateUtf16Safe(browserTab.title, 512) }
+        : {}),
+    };
+  }
   // The diff is the one display-capped field here; surface the fact so the
   // message-level marker covers capped tool-result details too.
   let truncated = false;

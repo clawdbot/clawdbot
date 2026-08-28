@@ -183,6 +183,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
         typeof detail?.url === "string" ? normalizeBrowserUrlDraft(detail.url) : null;
       if (normalizedRequestedUrl) {
         void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (detail?.targetId) {
+        void this.browserPanelController.selectTab(detail.targetId);
       } else if (detail?.newTab === true) {
         this.browserPanelController.beginNewTab();
       } else {
@@ -207,6 +209,8 @@ class OpenClawBrowserPanel extends OpenClawLitElement implements BrowserPanelCon
       this.dockLayout.setOpen(true);
       if (normalizedRequestedUrl) {
         void this.browserPanelController.openUrl(normalizedRequestedUrl, { newTab: true });
+      } else if (detail?.targetId) {
+        void this.browserPanelController.selectTab(detail.targetId);
       } else if (detail?.newTab === true) {
         this.browserPanelController.beginNewTab();
       } else if (!wasOpen) {

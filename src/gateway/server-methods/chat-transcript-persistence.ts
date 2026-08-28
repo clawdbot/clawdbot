@@ -1,9 +1,6 @@
 // Transcript persistence and source-reply rewrites shared by chat send and abort.
 import { asOptionalRecord as transcriptEventRecord } from "@openclaw/normalization-core/record-coerce";
-import {
-  appendReplyMediaFailureWarning,
-  getReplyPayloadMetadata,
-} from "../../auto-reply/reply-payload.js";
+import { getReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import {
   findTranscriptEvent,
   loadTranscriptEventRowsAfterSeqSync,
@@ -147,14 +144,7 @@ function mergeManagedMediaIntoAssistantContent(params: {
     ? (params.message.content as AssistantDisplayContentBlock[])
     : [];
   const managedBlocks = params.replacement.filter((block) => block?.type !== "text");
-  const mediaFailureWarning = appendReplyMediaFailureWarning(undefined);
-  const preserveMediaFailureWarning = params.replacement.some(
-    (block) =>
-      block?.type === "text" &&
-      typeof block.text === "string" &&
-      block.text.includes(mediaFailureWarning),
-  );
-  if (managedBlocks.length === 0 && !preserveMediaFailureWarning) {
+  if (managedBlocks.length === 0) {
     return null;
   }
   let replaced = false;
@@ -172,18 +162,13 @@ function mergeManagedMediaIntoAssistantContent(params: {
       const { textSignature: _textSignature, ...rest } = block;
       merged.push({
         ...rest,
-        text: preserveMediaFailureWarning
-          ? appendReplyMediaFailureWarning(visibleText)
-          : visibleText,
+        text: visibleText,
       });
     }
     if (split.mediaUrls?.length && !replaced) {
       merged.push(...managedBlocks);
       replaced = true;
     }
-  }
-  if (replaced && preserveMediaFailureWarning && merged.length === 0) {
-    merged.push({ type: "text", text: mediaFailureWarning });
   }
   return replaced ? merged : null;
 }
@@ -414,11 +399,13 @@ export async function rewriteSourceReplyTranscriptMirrors(params: {
         return event;
       }
       return Object.assign({}, event as Record<string, unknown>, {
-        message: {
+        message: applyAssistantDeliveryDirectives({
           ...replacement.message,
           idempotencyKey: replacement.request.idempotencyKey,
-          content: replacement.request.state.persistedContent,
-        },
+          content: replacement.request.state.persistedContent.map((block) =>
+            Object.assign({}, block),
+          ),
+        }),
       });
     });
     await transcript.replaceEvents(rewrittenEvents);
@@ -447,10 +434,10 @@ export async function rewriteAssistantTranscriptMessageByIdempotencyKey(params: 
     const rewrittenEvents = events.map((event) =>
       transcriptEventId(event) === target.messageId
         ? Object.assign({}, event as Record<string, unknown>, {
-            message: {
+            message: applyAssistantDeliveryDirectives({
               ...target.message,
-              content: params.content,
-            },
+              content: params.content.map((block) => Object.assign({}, block)),
+            }),
           })
         : event,
     );

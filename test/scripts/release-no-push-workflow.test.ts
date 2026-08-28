@@ -329,14 +329,16 @@ describe("release validation no-push transport", () => {
     );
     expect(dispatch.run).toContain('-f rerun_group="$RERUN_GROUP"');
     expect(dispatch.run).not.toContain("child_rerun_group");
+    const discovery = job(full, "candidate_discovery");
     const candidate = job(full, "prepare_release_candidate");
-    expect(candidate.if).not.toContain('"release-checks"');
-    expect(candidate.if).toContain(
+    expect(discovery.if).not.toContain('"release-checks"');
+    expect(discovery.if).toContain(
       'contains(fromJSON(\'["all","plugin-prerelease","cross-os","package"]\'), inputs.rerun_group)',
     );
-    expect(candidate.if).toContain(
+    expect(discovery.if).toContain(
       "(inputs.rerun_group == 'live-e2e' && needs.resolve_target.outputs.live_suite_filter == '')",
     );
+    expect(candidate.if).toContain("needs.candidate_discovery.outputs.state == 'miss'");
     expect(capture.run).toContain(
       "release_check_groups=(install-smoke cross-os package qa-parity)",
     );

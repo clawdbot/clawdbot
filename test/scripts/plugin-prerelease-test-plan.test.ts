@@ -804,7 +804,14 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
     expect(dockerSuite.with.enable_prepublish_plugin_registry).toBe(true);
     expect(
       Object.keys(dockerSuite.with).filter((key) => key.startsWith("prepublish_plugin_registry_")),
-    ).toEqual([]);
+    ).toEqual([
+      "prepublish_plugin_registry_artifact_name",
+      "prepublish_plugin_registry_artifact_id",
+      "prepublish_plugin_registry_artifact_digest",
+      "prepublish_plugin_registry_artifact_run_id",
+      "prepublish_plugin_registry_artifact_run_attempt",
+      "prepublish_plugin_registry_manifest_sha256",
+    ]);
     expect(dockerSuite.with.package_artifact_id).toBe(
       "${{ fromJSON(inputs.candidate_artifact_json || '{}').packageArtifactId || '' }}",
     );

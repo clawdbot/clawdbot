@@ -86,11 +86,50 @@ function assertOpenAiEnvRef() {
   assert(!readStateText().includes(rawKey), "raw OpenAI key was persisted");
 }
 
+function summarizeKnownValue(value, knownValues) {
+  if (value === undefined) {
+    return "missing";
+  }
+  return knownValues.includes(value) ? value : "unexpected";
+}
+
+function summarizeBoolean(value) {
+  if (value === true || value === false) {
+    return value;
+  }
+  return value === undefined ? "missing" : "unexpected";
+}
+
+function sessionMemoryHookConfigProjection(cfg) {
+  const wizard = cfg?.wizard;
+  const hooks = cfg?.hooks;
+  const internal = hooks?.internal;
+  const sessionMemory = internal?.entries?.["session-memory"];
+  return {
+    wizard: {
+      present: wizard !== undefined,
+      lastRunCommand: summarizeKnownValue(wizard?.lastRunCommand, ["onboard", "configure"]),
+      lastRunMode: summarizeKnownValue(wizard?.lastRunMode, ["local", "remote"]),
+    },
+    hooks: {
+      present: hooks !== undefined,
+      internalPresent: internal !== undefined,
+      internalEnabled: summarizeBoolean(internal?.enabled),
+      sessionMemoryPresent: sessionMemory !== undefined,
+      sessionMemoryEnabled: summarizeBoolean(sessionMemory?.enabled),
+    },
+  };
+}
+
 function assertSessionMemoryHookEnabled() {
   const cfg = readJson(configPath());
-  assert(
-    cfg.hooks?.internal?.entries?.["session-memory"]?.enabled === true,
-    "session-memory hook was not enabled",
+  if (cfg?.hooks?.internal?.entries?.["session-memory"]?.enabled === true) {
+    return;
+  }
+  throw new Error(
+    `session-memory hook was not enabled. Onboarding config projection: ${JSON.stringify(
+      sessionMemoryHookConfigProjection(cfg),
+    )}`,
   );
 }
 

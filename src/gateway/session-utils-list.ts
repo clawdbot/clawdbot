@@ -332,9 +332,8 @@ function filterSessionEntries(params: {
       const viewerOwns =
         effectiveOwner?.identity?.type === "profile" &&
         effectiveOwner.identity.id === involvingActorId;
-      const viewerParticipates = projectSessionParticipants(entry, identities, cfg).some(
-        (participant) =>
-          participant.identity.type === "profile" && participant.identity.id === involvingActorId,
+      const viewerParticipates = projectSessionParticipants(entry, identities, cfg).has(
+        JSON.stringify({ type: "profile", id: involvingActorId }),
       );
       if (!viewerOwns && !viewerParticipates) {
         continue;

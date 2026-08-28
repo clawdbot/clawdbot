@@ -20,6 +20,7 @@ import {
   handleMarkdownTableInteraction,
   releaseMarkdownTables,
 } from "../../../components/markdown-tables.ts";
+import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import { t } from "../../../i18n/index.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
 import { hydrateLinkFavicons } from "../link-favicon-loader.ts";
@@ -62,57 +63,10 @@ function markdownTableOwnerRef(
   return callback;
 }
 
-function renderLoadingSkeleton() {
-  return html`
-    <div class="chat-loading-skeleton" aria-label=${t("chat.thread.loading")}>
-      <div class="chat-line assistant">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div
-              class="skeleton skeleton-line skeleton-line--long"
-              style="margin-bottom: 8px"
-            ></div>
-            <div
-              class="skeleton skeleton-line skeleton-line--medium"
-              style="margin-bottom: 8px"
-            ></div>
-            <div class="skeleton skeleton-line skeleton-line--short"></div>
-          </div>
-        </div>
-      </div>
-      <div class="chat-line user" style="margin-top: 12px">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div class="skeleton skeleton-line skeleton-line--medium"></div>
-          </div>
-        </div>
-      </div>
-      <div class="chat-line assistant" style="margin-top: 12px">
-        <div class="chat-msg">
-          <div class="chat-bubble">
-            <div
-              class="skeleton skeleton-line skeleton-line--long"
-              style="margin-bottom: 8px"
-            ></div>
-            <div class="skeleton skeleton-line skeleton-line--short"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-  `;
-}
-
 function renderHistorySentinel(loading: boolean) {
   return html`
     <div class="chat-history-sentinel">
-      ${loading
-        ? html`
-            <div class="chat-history-loading" role="status">
-              <span class="session-run-spinner" aria-hidden="true"></span>
-              <span>${t("common.loading")}</span>
-            </div>
-          `
-        : nothing}
+      ${loading ? renderPanelLoadingSkeleton("chat", t("common.loading"), true) : nothing}
     </div>
   `;
 }
@@ -137,7 +91,10 @@ function renderTranscriptShell(
     projection.showLoadingSkeleton || projection.isEmpty
       ? html`
           <div class="chat-thread-inner" ${ref(transcript.scrollElementRef)}>
-            ${historySentinel} ${projection.showLoadingSkeleton ? renderLoadingSkeleton() : nothing}
+            ${historySentinel}
+            ${projection.showLoadingSkeleton
+              ? renderPanelLoadingSkeleton("chat", t("chat.thread.loading"))
+              : nothing}
             ${projection.isEmpty && !projection.searchOpen ? renderWelcomeState(props) : nothing}
             ${projection.isEmpty && projection.searchOpen
               ? html` <div class="agent-chat__empty">${t("chat.thread.noMatches")}</div> `

@@ -6,10 +6,8 @@ import {
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
-import {
-  createGatewayMethodRegistry,
-  createPluginGatewayMethodDescriptor,
-} from "./methods/registry.js";
+import { createPluginGatewayMethodDescriptor } from "./methods/descriptor.js";
+import { createGatewayMethodRegistry } from "./methods/registry.js";
 import { NodeRegistry } from "./node-registry.js";
 import { QuestionManager } from "./question-manager.js";
 import { handleGatewayRequest } from "./server-methods.js";

@@ -1358,6 +1358,64 @@ describe("createCopilotToolBridge", () => {
   // so a Copilot run cannot expose the SDK any tool that the same
   // OpenClaw attempt would suppress. These tests pin the contract.
   describe("tool-surface gating (PR #86155 [P1] round-6)", () => {
+    it.each([
+      { toolsAllow: undefined, codeMode: false },
+      { toolsAllow: ["read"], codeMode: false },
+      { toolsAllow: [], codeMode: false },
+      { toolsAllow: undefined, codeMode: true },
+    ])("preserves the collector handoff and SDK result %j", async ({ toolsAllow, codeMode }) => {
+      const schema = {
+        type: "object",
+        properties: { answer: { type: "string" } },
+        required: ["answer"],
+      };
+      const output = makeTool({ name: "structured_output", catalogMode: "direct-only" });
+      // The host contract is checked below, not recreated inside this factory.
+      const createTools = vi.fn(async () => [makeTool({ name: "read" }), output]);
+      const bridge = await createCopilotToolBridge({
+        attemptParams: {
+          config: { tools: { codeMode } },
+          runId: "copilot-collector-contract",
+          toolsAllow,
+          swarmCollector: true,
+          swarmOutputSchema: schema,
+        },
+        createOpenClawCodingTools: createTools,
+      });
+      try {
+        expect(createTools).toHaveBeenCalledWith(
+          expect.objectContaining({
+            swarmCollector: true,
+            swarmOutputSchema: schema,
+            ...(toolsAllow ? { runtimeToolAllowlist: [...toolsAllow, "structured_output"] } : {}),
+          }),
+        );
+        const initial = bridge.promptToolPolicy.apply();
+        expect(initial.callableToolNames).toContain("structured_output");
+        if (toolsAllow) {
+          expect(initial.tools.map((tool) => tool.name).toSorted()).toEqual(
+            [...toolsAllow, "structured_output"].toSorted(),
+          );
+        }
+        // Prompt hooks narrow the already-compacted surface a second time.
+        const narrowed = bridge.promptToolPolicy.apply({ toolsAllow: ["read"] });
+        expect(narrowed.callableToolNames).toContain("structured_output");
+        const sdkOutput = expectDefined(
+          narrowed.tools.find((tool) => tool.name === "structured_output"),
+          "collector structured output tool",
+        );
+        expect(sdkOutput.defer).toBe("never");
+        const args = { result: { answer: "ok" } };
+        await expect(runSdkTool(sdkOutput, args)).resolves.toEqual({
+          resultType: "success",
+          textResultForLlm: "done",
+        });
+        expect(output.execute).toHaveBeenCalledWith("call-1", args, undefined, undefined);
+      } finally {
+        bridge.cleanup?.();
+      }
+    });
+
     it("submits the exact conversation-policy-filtered catalog to the SDK", async () => {
       await withTempDir("openclaw-copilot-policy-", async (workspaceDir) => {
         const result = await createCopilotToolBridge({

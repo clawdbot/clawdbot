@@ -264,12 +264,19 @@ export function validateFullReleaseCandidateRequest(value) {
   };
 }
 
-function canonicalFullReleaseCandidateRequestJson(value) {
+export function canonicalFullReleaseCandidateRequestJson(value) {
   return canonicalAsciiJson(validateFullReleaseCandidateRequest(value));
 }
 
-function candidateRequestSha256(value) {
+export function candidateRequestSha256(value) {
   return createHash("sha256").update(canonicalFullReleaseCandidateRequestJson(value)).digest("hex");
+}
+
+export function fullReleaseCandidateArtifactName(requestSha256) {
+  return `${FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX}${sha256(
+    requestSha256,
+    "full release candidate requestSha256",
+  )}`;
 }
 
 function artifactIdentity(value, label) {
@@ -471,10 +478,10 @@ function fullReleaseCandidateManifestSha256(value) {
     .digest("hex");
 }
 
-function buildFullReleaseCandidateBinding({ artifact, manifest }) {
+export function buildFullReleaseCandidateBinding({ artifact, manifest }) {
   const validatedManifest = validateFullReleaseCandidateManifest(manifest);
   const evidenceArtifact = artifactIdentity(artifact, "full release candidate evidence artifact");
-  const expectedName = `${FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX}${validatedManifest.requestSha256}`;
+  const expectedName = fullReleaseCandidateArtifactName(validatedManifest.requestSha256);
   if (
     evidenceArtifact.name !== expectedName ||
     evidenceArtifact.runId !== validatedManifest.producer.runId ||
@@ -555,7 +562,7 @@ export function validateFullReleaseCandidateBinding(value) {
     "full release candidate binding evidenceArtifact",
   );
   if (
-    evidenceArtifact.name !== `${FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX}${requestSha256}` ||
+    evidenceArtifact.name !== fullReleaseCandidateArtifactName(requestSha256) ||
     evidenceArtifact.runId !== producer.runId ||
     evidenceArtifact.runAttempt !== producer.runAttempt
   ) {

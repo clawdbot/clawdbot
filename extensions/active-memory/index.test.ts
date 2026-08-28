@@ -14,7 +14,17 @@ import {
 import { parseAgentSessionKey } from "openclaw/plugin-sdk/routing";
 import { parseSqliteSessionFileMarker } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  onTestFailed,
+  vi,
+} from "vitest";
 import { applyCliRuntimeRecallTimeoutDefault } from "./config.js";
 import plugin, { testing } from "./index.js";
 import { resolveActiveRecallForRun } from "./recall-state.js";
@@ -3067,6 +3077,101 @@ describe("active-memory plugin", () => {
     expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
   });
 
+  it.each([
+    { failed: true, persistTranscripts: true, cleanupFails: false },
+    { failed: false, persistTranscripts: true, cleanupFails: false },
+    { failed: true, persistTranscripts: false, cleanupFails: false },
+    { failed: false, persistTranscripts: false, cleanupFails: false },
+    { failed: true, persistTranscripts: true, cleanupFails: true },
+    { failed: false, persistTranscripts: true, cleanupFails: true },
+  ])(
+    "preserves terminal recall outcome when cleanup crosses its deadline (failed=$failed, persist=$persistTranscripts, cleanupFails=$cleanupFails)",
+    async ({ failed, persistTranscripts, cleanupFails }) => {
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      testing.setMinimumTimeoutMsForTests(1);
+      testing.setSetupGraceTimeoutMsForTests(0);
+      registerPluginConfig({ timeoutMs: 1_000, persistTranscripts, logging: true });
+      const sessionKey = "agent:main:completed-recall-cleanup-deadline";
+      seedSession(sessionKey, "s-completed-recall-cleanup-deadline", 0);
+      const summary = "User usually orders ramen.";
+      const firstCleanupAttempt = createDeferred<void>();
+      const cleanupStarted = createDeferred<void>();
+      const releaseCleanup = createDeferred<void>();
+      const recallAborted = createDeferred<void>();
+      const cleanup = expectDefined(
+        hoisted.cleanupSessionLifecycleArtifacts.getMockImplementation(),
+        "recall cleanup fixture",
+      );
+      let cleanupAttempts = 0;
+      hoisted.cleanupSessionLifecycleArtifacts.mockImplementation(async (params) => {
+        cleanupAttempts += 1;
+        firstCleanupAttempt.resolve();
+        if (cleanupFails && cleanupAttempts < 3) {
+          throw new Error("session store remains busy");
+        }
+        cleanupStarted.resolve();
+        await releaseCleanup.promise;
+        if (cleanupFails) {
+          throw new Error("session store remains busy");
+        }
+        return await cleanup(params);
+      });
+      runEmbeddedAgent.mockImplementationOnce(
+        async (params: { sessionFile: string; abortSignal: AbortSignal }) => {
+          params.abortSignal.addEventListener("abort", () => recallAborted.resolve(), {
+            once: true,
+          });
+          await writeTranscriptJsonl(params.sessionFile, [
+            usableMemoryTranscriptRecord(summary),
+            { message: { role: "assistant", content: summary } },
+          ]);
+          return {
+            payloads: [{ text: summary }],
+            meta: {
+              durationMs: 0,
+              ...(failed ? { error: { kind: "incomplete_turn", message: "No final reply." } } : {}),
+            },
+          };
+        },
+      );
+      const resultPromise = runPromptBuild(
+        { prompt: "what food do i usually order? cleanup deadline" },
+        { sessionKey },
+      );
+      void resultPromise.catch(() => undefined);
+      try {
+        if (cleanupFails) {
+          await firstCleanupAttempt.promise;
+          // Exhaust the two retry delays before holding the last attempt across the deadline.
+          await vi.advanceTimersByTimeAsync(500);
+        }
+        await cleanupStarted.promise;
+        // Execution has settled; only cleanup is held across the original watchdog.
+        await vi.advanceTimersByTimeAsync(cleanupFails ? 500 : 1_000);
+        await recallAborted.promise;
+      } finally {
+        releaseCleanup.resolve();
+      }
+      const result = await resultPromise;
+      if (cleanupFails) {
+        expect(cleanupAttempts).toBe(3);
+        expect(api.logger.warn).toHaveBeenCalledWith(
+          expect.stringContaining("failed to clean up recall session"),
+        );
+      }
+      if (!failed && persistTranscripts && !cleanupFails) {
+        expectPrependContextContains(result, summary);
+        expectLinesToContain(getActiveMemoryLines(sessionKey), "status=timeout_partial");
+      } else {
+        expect(result).toBeUndefined();
+        const statusLines = getActiveMemoryLines(sessionKey);
+        expect(statusLines).not.toEqual([]);
+        expectLinesNotToContain(statusLines, "status=ok");
+        expectLinesNotToContain(statusLines, "status=timeout_partial");
+      }
+    },
+  );
+
   it("returns partial transcript text on timeout when the subagent has already written assistant output", async () => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
@@ -3347,11 +3452,20 @@ describe("active-memory plugin", () => {
     expectLinesNotToContain(lines, "LLM request timed out");
   });
 
-  it("returns partial transcript text when an aborted subagent rejects before the race timeout wins", async () => {
+  it.each([
+    { name: "partial abort", failed: false, cleanupFails: false },
+    { name: "failed agent", failed: true, cleanupFails: false },
+    { name: "failed cleanup", failed: false, cleanupFails: true },
+  ])("projects direct abort recovery for $name", async ({ failed, cleanupFails }) => {
     testing.setMinimumTimeoutMsForTests(1);
     registerPluginConfig({ timeoutMs: 5_000, persistTranscripts: true, logging: true });
     const sessionKey = "agent:main:abort-timeout-partial";
     seedSession(sessionKey, "s-abort-timeout-partial", 0);
+    if (cleanupFails) {
+      hoisted.cleanupSessionLifecycleArtifacts.mockRejectedValue(
+        new Error("session store remains busy"),
+      );
+    }
     runEmbeddedAgent.mockImplementationOnce(
       async (params: { sessionFile: string; abortSignal?: AbortSignal }) => {
         await writeTranscriptJsonl(params.sessionFile, [
@@ -3361,10 +3475,20 @@ describe("active-memory plugin", () => {
             message: { role: "assistant", content: "partial abort summary" },
           },
         ]);
+        // Select the direct rejection projection without firing the watchdog's abort listener.
         Object.defineProperty(params.abortSignal as AbortSignal, "aborted", {
           configurable: true,
           value: true,
         });
+        if (failed) {
+          return {
+            payloads: [{ text: "partial abort summary" }],
+            meta: {
+              durationMs: 0,
+              error: { kind: "incomplete_turn", message: "No final reply." },
+            },
+          };
+        }
         const abortErr = new Error("Operation aborted");
         abortErr.name = "AbortError";
         throw abortErr;
@@ -3376,13 +3500,25 @@ describe("active-memory plugin", () => {
       { sessionKey },
     );
 
-    expectPrependContextContains(result, "partial abort summary");
+    if (cleanupFails) {
+      expect(hoisted.cleanupSessionLifecycleArtifacts).toHaveBeenCalledTimes(3);
+      expect(api.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining("failed to clean up recall session"),
+      );
+    }
     const lines = getActiveMemoryLines(sessionKey);
-    expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
-    expectLinesToContain(
-      lines,
-      "🔎 Active Memory Debug: timeout_partial: 21 chars recovered (not persisted)",
-    );
+    if (failed || cleanupFails) {
+      expect(result).toBeUndefined();
+      expectLinesToContain(lines, "🧩 Active Memory: status=timeout");
+      expectLinesNotToContain(lines, "status=timeout_partial");
+    } else {
+      expectPrependContextContains(result, "partial abort summary");
+      expectLinesToContain(lines, "🧩 Active Memory: status=timeout_partial");
+      expectLinesToContain(
+        lines,
+        "🔎 Active Memory Debug: timeout_partial: 21 chars recovered (not persisted)",
+      );
+    }
     expect(getActiveMemoryLines(sessionKey).join("\n")).not.toContain("partial abort summary");
   });
 
@@ -4445,12 +4581,45 @@ describe("active-memory plugin", () => {
     expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
   });
 
-  it("uses harness-native tool results when the runtime does not mirror them to the transcript", async () => {
+  it.each([
+    { name: "successful summary", summary: true, error: false, failed: false, status: "ok" },
+    { name: "terminal error only", summary: false, error: true, failed: true, status: "failed" },
+    {
+      name: "terminal error with retained summary",
+      summary: true,
+      error: true,
+      failed: true,
+      status: "failed",
+    },
+    {
+      name: "error payload without terminal metadata",
+      summary: false,
+      error: true,
+      failed: false,
+      status: "no_relevant_memory",
+    },
+    {
+      name: "usable summary beside a nonterminal error",
+      summary: true,
+      error: true,
+      failed: false,
+      status: "ok",
+    },
+  ])("classifies grounded harness-native recall: $name", async (testCase) => {
     testing.setMinimumTimeoutMsForTests(1);
     testing.setSetupGraceTimeoutMsForTests(0);
     registerPluginConfig({ timeoutMs: 1_000, toolsAllow: ["memory_search"], logging: true });
     const sessionKey = "agent:main:harness-tool-evidence";
+    const summary = "User usually orders ramen.";
+    const errorText = "Agent couldn't generate a response. Please try again.";
     seedSession(sessionKey, "s-harness-tool-evidence", 0);
+    onTestFailed(() => {
+      console.info({
+        statusLines: getActiveMemoryLines(sessionKey),
+        warnings: vi.mocked(api.logger.warn).mock.calls,
+        embeddedRuns: runEmbeddedAgent.mock.calls.length,
+      });
+    });
     runEmbeddedAgent.mockImplementationOnce(
       async (params: {
         onAgentToolResult?: (event: {
@@ -4466,13 +4635,22 @@ describe("active-memory plugin", () => {
             content: [
               {
                 type: "text",
-                text: '{"results":[{"text":"User usually orders ramen."}]}',
+                text: JSON.stringify({ results: [{ text: summary }] }),
               },
             ],
-            details: { results: [{ text: "User usually orders ramen." }] },
+            details: { results: [{ text: summary }] },
           },
         });
-        return { payloads: [{ text: "User usually orders ramen." }] };
+        return {
+          payloads: [
+            ...(testCase.summary ? [{ text: summary }] : []),
+            ...(testCase.error ? [{ text: errorText, isError: true }] : []),
+          ],
+          meta: {
+            durationMs: 0,
+            ...(testCase.failed ? { error: { kind: "incomplete_turn", message: errorText } } : {}),
+          },
+        };
       },
     );
 
@@ -4481,8 +4659,17 @@ describe("active-memory plugin", () => {
       { sessionKey },
     );
 
-    expectPrependContextContains(result, "User usually orders ramen.");
-    expectLinesToContain(getActiveMemoryLines(sessionKey), "Active Memory: status=ok");
+    if (testCase.status === "ok") {
+      const context = requirePrependContext(result);
+      expect(context).toContain(summary);
+      expect(context).not.toContain("Please try again.");
+    } else {
+      expect(result).toBeUndefined();
+    }
+    expectLinesToContain(
+      getActiveMemoryLines(sessionKey),
+      `Active Memory: status=${testCase.status}`,
+    );
   });
 
   it("rejects completed output after a configured custom tool reports a content-only timeout", async () => {

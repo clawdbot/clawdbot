@@ -1511,6 +1511,7 @@ jobs:
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
           RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
           RUN_TUI_PTY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
+          FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         shell: bash
         run: |
           set -uo pipefail
@@ -1521,6 +1522,7 @@ jobs:
           declare -A results=(
             ["channels"]="skipped"
             ["core-support-boundary"]="skipped"
+            ["discord-component-attachments"]="skipped"
             ["doctor-plugin-index"]="skipped"
             ["gateway-watch"]="skipped"
             ["plugin-singleton"]="skipped"
@@ -1574,6 +1576,46 @@ jobs:
             fi
           }
 
+          run_discord_component_attachments() {
+            local test_file="test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts"
+            if [[ "$FROZEN_TARGET" = "true" && ! -f "$test_file" ]]; then
+              echo "[skip] Frozen target predates the Discord component attachment Gateway proof."
+              return 0
+            fi
+            rm -f "${RUNNER_TEMP}/discord-component-attachments.json" || return
+            env OPENCLAW_E2E_USE_PREBUILT_DIST=1 OPENCLAW_E2E_WORKERS=1 OPENCLAW_E2E_VERBOSE=1 OPENCLAW_VITEST_MAX_WORKERS=1 \
+              node scripts/run-vitest.mjs run --config test/vitest/vitest.e2e.config.ts \
+              "$test_file" \
+              --testNamePattern "preserves component attachment filenames through the public Gateway message action" \
+              --reporter=default --reporter=json \
+              --outputFile.json "${RUNNER_TEMP}/discord-component-attachments.json" || return
+            node --input-type=module <<'DISCORD_PROOF_REPORT'
+          import assert from "node:assert/strict";
+          import { readFileSync } from "node:fs";
+          import path from "node:path";
+
+          const report = JSON.parse(readFileSync(path.join(process.env.RUNNER_TEMP, "discord-component-attachments.json"), "utf8"));
+          assert.equal(report.success, true);
+          assert.equal(report.numFailedTestSuites, 0);
+          assert.equal(report.numFailedTests, 0);
+          assert.equal(report.testResults.length, 1);
+          const file = report.testResults[0];
+          assert.equal(file.name, path.resolve("test/e2e/qa-lab/plugins/discord-show-widget-contextual-presenter.e2e.test.ts"));
+          assert.equal(file.status, "passed");
+          const fullName = "Discord show_widget contextual presenter process proof preserves component attachment filenames through the public Gateway message action";
+          const matches = file.assertionResults.filter((entry) => entry.fullName === fullName);
+          if (matches.length === 0 && process.env.FROZEN_TARGET === "true") {
+            assert.equal(report.numPassedTests, 0);
+            console.log("[skip] Frozen target predates the named Discord component attachment Gateway proof.");
+          } else {
+            assert.equal(matches.length, 1, "The named Discord attachment proof must be present.");
+            assert.equal(matches[0].status, "passed");
+            assert.equal(report.numPassedTests, 1);
+            console.log(JSON.stringify({ proof: "discord-component-attachments", fullName, passed: 1, failed: 0 }));
+          }
+          DISCORD_PROOF_REPORT
+          }
+
           # A missing startup asset rebuild must finish before any verifier forks
           # so concurrent readers never observe dist mid-write.
           startup_assets=success
@@ -1625,6 +1667,12 @@ jobs:
             wait_checks
           fi
 
+          # Run the real Gateway send alone, after other artifact readers finish.
+          if [ "$RUN_CHANNELS" = "true" ]; then
+            start_check "discord-component-attachments" run_discord_component_attachments
+            wait_checks
+          fi
+
           # The dedicated Node shard owns the full built-CLI PTY suite. Keep
           # only the local roundtrip and Gateway-connect artifact canaries here.
           if [ "$RUN_TUI_PTY" = "true" ]; then
@@ -1649,13 +1697,24 @@ jobs:
             echo "::error title=startup assets failed::cli startup asset build failed"
             failures=1
           fi
-          for name in channels core-support-boundary doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do
+          for name in channels core-support-boundary discord-component-attachments doctor-plugin-index gateway-watch plugin-singleton startup-memory tui-pty; do
             if [ "${results[$name]}" = "failure" ]; then
               echo "::error title=${name} failed::${name} failed"
               failures=1
             fi
           done
           exit "$failures"
+
+      - name: Upload Discord component attachment proof
+        if: always() && needs.preflight.outputs.run_checks == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: discord-component-attachments
+          path: |
+            ${{ runner.temp }}/discord-component-attachments.json
+            ${{ runner.temp }}/discord-component-attachments.log
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Upload startup memory report
         if: always()
@@ -3083,14 +3142,15 @@ jobs:
             runner: blacksmith-8vcpu-ubuntu-2404
     steps:
       - *linux_node_checkout_step
+      # The report is dispatch-only; fetching its inputs can otherwise fail skipped PR work.
       - name: Ensure Plugin SDK API diff base commit
-        if: matrix.group == 'plugin-sdk-api-diff'
+        if: matrix.group == 'plugin-sdk-api-diff' && github.event_name == 'workflow_dispatch'
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_base_revision }}
           fetch-ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.ref || github.event.repository.default_branch }}
       - name: Ensure Plugin SDK API diff head commit
-        if: matrix.group == 'plugin-sdk-api-diff'
+        if: matrix.group == 'plugin-sdk-api-diff' && github.event_name == 'workflow_dispatch'
         uses: ./.ci-harness/.github/actions/ensure-base-commit
         with:
           base-sha: ${{ needs.preflight.outputs.diff_head_revision }}
@@ -3779,9 +3839,10 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
-          key: ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
+          # Exact hits are immutable; exclude pre-native products from both restore paths.
+          key: ${{ runner.os }}-swift-build-v4-native-tests-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package.swift', 'apps/macos/Package.resolved', 'apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/OpenClawKit/Package.swift', 'apps/shared/OpenClawKit/Sources/**', 'apps/swabble/Package.swift', 'apps/swabble/Sources/**') }}
           restore-keys: |
-            ${{ runner.os }}-swift-build-v3-${{ steps.swift-toolchain.outputs.key }}-
+            ${{ runner.os }}-swift-build-v4-native-tests-${{ steps.swift-toolchain.outputs.key }}-
 
       - name: Validate Swift build cache
         id: validate-swift-build-cache
@@ -3885,15 +3946,40 @@ jobs:
             --parallel
 
       - name: Swift test
+        id: swift-test
         run: |
           set -euo pipefail
-          swift_test_args=(--package-path apps/macos --enable-code-coverage)
+          # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
+          # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
+          # Keep the release build above on the default backend.
+          swift_test_args=(--package-path apps/macos --build-system native --enable-code-coverage)
+          swift build "${swift_test_args[@]}" --build-tests
+          echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
+          swift_test_args+=(--skip-build)
           if [[ "$SWIFT_TEST_EXECUTION" == "parallel" ]]; then
             swift_test_args+=(--parallel)
           else
             swift_test_args+=(--no-parallel)
           fi
           swift test "${swift_test_args[@]}"
+
+      - name: Render isolated macOS health fixtures
+        id: health-render
+        if: ${{ !cancelled() && steps.swift-test.outputs.debug-tests-built == 'true' && hashFiles('scripts/test-macos-health-render.sh') != '' }}
+        run: bash scripts/test-macos-health-render.sh
+
+      - name: Upload macOS health component renders
+        if: ${{ always() && steps.health-render.outputs.artifact-path != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-health-component-renders
+          path: |
+            ${{ steps.health-render.outputs.artifact-path }}/ready.png
+            ${{ steps.health-render.outputs.artifact-path }}/startup-grace.png
+            ${{ steps.health-render.outputs.artifact-path }}/stale-socket.png
+            ${{ steps.health-render.outputs.artifact-path }}/disabled.png
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Save SwiftPM cache
         if: needs.preflight.outputs.cache_write_allowed == 'true' && steps.swiftpm-cache.outputs.cache-hit != 'true'
