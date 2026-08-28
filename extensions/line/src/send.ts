@@ -38,6 +38,7 @@ const userProfileCache = new Map<
   string,
   { displayName: string; pictureUrl?: string; fetchedAt: number }
 >();
+const groupNameCache = new Map<string, { groupName: string; fetchedAt: number }>();
 const PROFILE_CACHE_TTL_MS = 5 * 60 * 1000;
 const PROFILE_CACHE_MAX_ENTRIES = 1000;
 const LINE_FLEX_ALT_TEXT_LIMIT = 1500;
@@ -46,22 +47,31 @@ const LINE_LOCATION_LABEL_LIMIT = 100;
 // delivery, while rejected responses keep their status with prefix-only diagnostics.
 const LINE_PROVIDER_RESPONSE_MAX_BYTES = 16 * 1024;
 
-function cacheUserProfile(
-  userId: string,
-  profile: { displayName: string; pictureUrl?: string; fetchedAt: number },
+// Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
+function rememberLineIdentity<T extends { fetchedAt: number }>(
+  cache: Map<string, T>,
+  key: string,
+  value: T,
 ): void {
-  // Refresh insertion order so overflow evicts expired entries first, then the oldest live fetch.
-  userProfileCache.delete(userId);
-  userProfileCache.set(userId, profile);
-  if (userProfileCache.size <= PROFILE_CACHE_MAX_ENTRIES) {
+  cache.delete(key);
+  cache.set(key, value);
+  if (cache.size <= PROFILE_CACHE_MAX_ENTRIES) {
     return;
   }
-  for (const [key, cached] of userProfileCache) {
-    if (profile.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
-      userProfileCache.delete(key);
+  for (const [cachedKey, cached] of cache) {
+    if (value.fetchedAt - cached.fetchedAt >= PROFILE_CACHE_TTL_MS) {
+      cache.delete(cachedKey);
     }
   }
-  pruneMapToMaxSize(userProfileCache, PROFILE_CACHE_MAX_ENTRIES);
+  pruneMapToMaxSize(cache, PROFILE_CACHE_MAX_ENTRIES);
+}
+
+function readLineIdentityCache<T extends { fetchedAt: number }>(
+  cache: Map<string, T>,
+  key: string,
+): T | undefined {
+  const cached = cache.get(key);
+  return cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS ? cached : undefined;
 }
 
 interface LineSendOpts {
@@ -631,7 +641,7 @@ export async function showLoadingAnimation(
   }
 }
 
-export async function getLineGroupSummary(
+async function getLineGroupSummary(
   groupId: string,
   opts: LineClientOpts,
 ): Promise<messagingApi.GroupSummaryResponse> {
@@ -639,29 +649,51 @@ export async function getLineGroupSummary(
   return await client.getGroupSummary(groupId);
 }
 
+export type LineConversationScope = { groupId?: string; roomId?: string };
+
+// A group or room member who has not added the bot as a friend is invisible to
+// the plain profile endpoint, so the sender's conversation decides which one can
+// answer. Reading the wrong one returns 404 for exactly the people whose names
+// matter most in a group.
+function fetchLineMemberProfile(
+  client: messagingApi.MessagingApiClient,
+  userId: string,
+  scope: LineConversationScope,
+): Promise<{ displayName: string; pictureUrl?: string }> {
+  if (scope.groupId) {
+    return client.getGroupMemberProfile(scope.groupId, userId);
+  }
+  if (scope.roomId) {
+    return client.getRoomMemberProfile(scope.roomId, userId);
+  }
+  return client.getProfile(userId);
+}
+
 export async function getUserProfile(
   userId: string,
-  opts: LineClientOpts & { useCache?: boolean },
+  opts: LineClientOpts & { useCache?: boolean } & LineConversationScope,
 ): Promise<{ displayName: string; pictureUrl?: string } | null> {
   const useCache = opts.useCache ?? true;
 
   if (useCache) {
-    const cached = userProfileCache.get(userId);
-    if (cached && Date.now() - cached.fetchedAt < PROFILE_CACHE_TTL_MS) {
+    const cached = readLineIdentityCache(userProfileCache, userId);
+    if (cached) {
       return { displayName: cached.displayName, pictureUrl: cached.pictureUrl };
     }
   }
 
-  const { client } = createLineMessagingClient(opts);
-
   try {
-    const profile = await client.getProfile(userId);
+    // Client construction resolves the account token and can throw, so it stays
+    // inside the guard: an unresolvable name degrades to the raw id, never to a
+    // failed inbound turn.
+    const { client } = createLineMessagingClient(opts);
+    const profile = await fetchLineMemberProfile(client, userId, opts);
     const result = {
       displayName: profile.displayName,
       pictureUrl: profile.pictureUrl,
     };
 
-    cacheUserProfile(userId, {
+    rememberLineIdentity(userProfileCache, userId, {
       ...result,
       fetchedAt: Date.now(),
     });
@@ -673,7 +705,34 @@ export async function getUserProfile(
   }
 }
 
-export async function getUserDisplayName(userId: string, opts: LineClientOpts): Promise<string> {
+export async function getUserDisplayName(
+  userId: string,
+  opts: LineClientOpts & LineConversationScope,
+): Promise<string> {
   const profile = await getUserProfile(userId, opts);
   return profile?.displayName ?? userId;
+}
+
+// LINE never puts the group name in a webhook, and multi-person rooms have no
+// name endpoint at all, so only groups can be named and only by asking.
+export async function getLineGroupName(
+  groupId: string,
+  opts: LineClientOpts,
+): Promise<string | undefined> {
+  const cached = readLineIdentityCache(groupNameCache, groupId);
+  if (cached) {
+    return cached.groupName;
+  }
+  try {
+    const summary = await getLineGroupSummary(groupId, opts);
+    const groupName = summary.groupName.trim();
+    if (!groupName) {
+      return undefined;
+    }
+    rememberLineIdentity(groupNameCache, groupId, { groupName, fetchedAt: Date.now() });
+    return groupName;
+  } catch (err) {
+    logVerbose(`line: failed to fetch group summary for ${groupId}: ${String(err)}`);
+    return undefined;
+  }
 }

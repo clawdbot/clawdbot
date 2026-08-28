@@ -49,7 +49,7 @@ import {
 import { downloadLineMedia, isRetryableLineInboundMediaError } from "./download.js";
 import { reserveLineGroupHistory } from "./group-history.js";
 import { resolveLineGroupConfigEntry } from "./group-keys.js";
-import { getLineGroupSummary, pushMessageLine, replyMessageLine } from "./send.js";
+import { getLineGroupName, pushMessageLine, replyMessageLine } from "./send.js";
 import type { LineGroupConfig, ResolvedLineAccount } from "./types.js";
 import type { LineWebhookTurnAdoptionLifecycle } from "./webhook-spool.js";
 
@@ -535,19 +535,14 @@ async function handleJoinEvent(event: JoinEvent, context: LineHandlerContext): P
     resolveRoomContext: async () => {
       // LINE cannot retrieve prior messages, and multi-person rooms have no name API.
       const roomContext = { historyUnavailable: true };
-      if (!groupId) {
-        return roomContext;
-      }
-      try {
-        const summary = await getLineGroupSummary(groupId, {
-          cfg,
-          accountId: account.accountId,
-          channelAccessToken: account.channelAccessToken,
-        });
-        return { ...roomContext, title: summary.groupName };
-      } catch {
-        return roomContext;
-      }
+      const title = groupId
+        ? await getLineGroupName(groupId, {
+            cfg,
+            accountId: account.accountId,
+            channelAccessToken: account.channelAccessToken,
+          })
+        : undefined;
+      return title ? { ...roomContext, title } : roomContext;
     },
   });
 }

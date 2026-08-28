@@ -18,6 +18,10 @@ import { buildLineMessageContext, buildLinePostbackContext } from "./bot-message
 import type { ResolvedLineAccount } from "./types.js";
 
 const logVerboseMock = vi.hoisted(() => vi.fn());
+const getUserProfileMock = vi.hoisted(() =>
+  vi.fn(async () => null as { displayName: string } | null),
+);
+const getLineGroupNameMock = vi.hoisted(() => vi.fn(async () => undefined as string | undefined));
 const toInboundMediaFactsWithMetadataMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
@@ -28,6 +32,14 @@ vi.mock("openclaw/plugin-sdk/channel-inbound", async (importOriginal) => {
     toInboundMediaFactsWithMetadata: toInboundMediaFactsWithMetadataMock,
   };
 });
+
+// Names are LINE API reads; the context under test only cares what it does with
+// the answers, so the two lookups are stubbed and the default answer is "unknown",
+// which is what an unreachable or unauthorized LINE account produces.
+vi.mock("./send.js", () => ({
+  getUserProfile: getUserProfileMock,
+  getLineGroupName: getLineGroupNameMock,
+}));
 
 vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
   const actual = await vi.importActual<typeof import("openclaw/plugin-sdk/runtime-env")>(
@@ -188,7 +200,12 @@ describe("buildLineMessageContext", () => {
       account,
       commandAuthorized: true,
     });
-    const baselineLog = String(logVerboseMock.mock.calls[0]?.[0]);
+    // Identity lookups log their own misses, so select the preview line by shape
+    // rather than by call order.
+    const baselineLog =
+      logVerboseMock.mock.calls
+        .map((call) => String(call[0]))
+        .find((line) => line.includes('preview="')) ?? "";
     const baselinePreview = baselineLog.match(/preview="(.*)"$/)?.[1] ?? "";
     const markerIndex = baselinePreview.indexOf("BODY_MARKER");
     expect(markerIndex).toBeGreaterThanOrEqual(0);
@@ -625,5 +642,68 @@ describe("buildLineMessageContext", () => {
     expect(context?.route.agentId).toBe("codex");
     expect(context?.route.sessionKey).toBe("agent:codex:acp:binding:line:default:test123");
     expect(context?.route.matchedBy).toBe("binding.channel");
+  });
+
+  it("gives the agent the sender's and the group's name instead of their ids", async () => {
+    getUserProfileMock.mockResolvedValueOnce({ displayName: "Sora" });
+    getLineGroupNameMock.mockResolvedValueOnce("Release Squad");
+
+    const event = createMessageEvent({
+      type: "group",
+      groupId: "C5aeb18d690759492f1a8c391c37549a0",
+      userId: "U47f0bbc534dc503c4e4cadc86e619b63",
+    });
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.SenderName).toBe("Sora");
+    expect(context?.ctxPayload.GroupSubject).toBe("Release Squad");
+    expect(context?.ctxPayload.ConversationLabel).toBe("Release Squad");
+    // The envelope the agent reads names the speaker rather than their raw id.
+    expect(context?.ctxPayload.Body).toContain("Sora");
+    expect(context?.ctxPayload.Body).not.toContain("user:U47f0bbc534dc503c4e4cadc86e619b63");
+  });
+
+  it("falls back to the raw ids when LINE will not name the sender or the group", async () => {
+    const event = createMessageEvent({
+      type: "group",
+      groupId: "C5aeb18d690759492f1a8c391c37549a0",
+      userId: "U47f0bbc534dc503c4e4cadc86e619b63",
+    });
+    const context = await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(context?.ctxPayload.SenderName).toBeUndefined();
+    expect(context?.ctxPayload.GroupSubject).toBe("C5aeb18d690759492f1a8c391c37549a0");
+  });
+
+  it("asks LINE for the sender's profile through the conversation they wrote in", async () => {
+    const event = createMessageEvent({
+      type: "group",
+      groupId: "C5aeb18d690759492f1a8c391c37549a0",
+      userId: "U47f0bbc534dc503c4e4cadc86e619b63",
+    });
+    await buildLineMessageContext({
+      event,
+      allMedia: [],
+      cfg,
+      account,
+      commandAuthorized: true,
+    });
+
+    expect(getUserProfileMock).toHaveBeenCalledWith(
+      "U47f0bbc534dc503c4e4cadc86e619b63",
+      expect.objectContaining({ groupId: "C5aeb18d690759492f1a8c391c37549a0" }),
+    );
   });
 });
