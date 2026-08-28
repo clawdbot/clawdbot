@@ -279,8 +279,8 @@ export function registerLineCardCommand(api: OpenClawPluginApi): void {
             const yesStr = flags.yes || "Yes|yes";
             const noStr = flags.no || "No|no";
 
-            const [yesLabel, yesData] = yesStr.split("|").map((s) => s.trim());
-            const [noLabel, noData] = noStr.split("|").map((s) => s.trim());
+            const [yesLabel, yesData] = splitCardPair(yesStr);
+            const [noLabel, noData] = splitCardPair(noStr);
 
             return buildLineReply({
               templateMessage: {

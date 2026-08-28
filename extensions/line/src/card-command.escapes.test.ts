@@ -130,4 +130,26 @@ describe("line card option separators", () => {
     const line = await runCardCommand(String.raw`receipt "Receipt" "A\|B:$10" --total "$10"`);
     expect(cardAltText(line)).toBe(String.raw`Receipt: A\|B $10`);
   });
+
+  it("keeps a backslashed comma literal in a confirm label, which confirm does not split on", async () => {
+    const line = await runCardCommand(
+      String.raw`confirm "Ship it?" --yes "Yes\,now|go" --no "No|stop"`,
+    );
+    expect(line.templateMessage).toMatchObject({ confirmLabel: String.raw`Yes\,now` });
+  });
+
+  it("keeps an escaped pipe inside a confirm button label", async () => {
+    const line = await runCardCommand(
+      String.raw`confirm "Ship it?" --yes "Yes\|now|go" --no "No|stop"`,
+    );
+    expect(line.templateMessage).toEqual({
+      type: "confirm",
+      text: "Ship it?",
+      altText: "Ship it?",
+      confirmLabel: "Yes|now",
+      confirmData: "go",
+      cancelLabel: "No",
+      cancelData: "stop",
+    });
+  });
 });
