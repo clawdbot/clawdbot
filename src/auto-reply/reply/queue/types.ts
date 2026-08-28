@@ -64,6 +64,14 @@ type QueueInsertPosition = "tail" | "front";
 export type EnqueueFollowupRunOptions = {
   position?: QueueInsertPosition;
   steerCandidate?: boolean;
+  /** Skip the durable write so the caller can persist a larger atomic mutation. */
+  deferPersist?: boolean;
+  /**
+   * When set with `deferPersist`, overflow and reject completions are appended
+   * here instead of running immediately so the caller can roll back on persist
+   * failure.
+   */
+  collectDeferredDrops?: FollowupRun[];
 };
 
 export type FollowupQueueDisposition = "queue-cap" | "queue-cap-old" | "queue-cap-new";
@@ -90,6 +98,22 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
   return error instanceof FollowupRunDeferredError;
 }
 
+export class FollowupTerminalDeliveryError extends Error {
+  constructor(
+    message = "Follow-up terminal delivery failed after execution",
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "FollowupTerminalDeliveryError";
+  }
+}
+
+export function isFollowupTerminalDeliveryError(
+  error: unknown,
+): error is FollowupTerminalDeliveryError {
+  return error instanceof FollowupTerminalDeliveryError;
+}
+
 export type FollowupRun = {
   prompt: string;
   /** Latest session to claim without rewriting the queued run before store refresh. */
@@ -111,6 +135,22 @@ export type FollowupRun = {
   abortSignal?: AbortSignal;
   /** Queue-owned cancellation fence used when lifecycle cleanup invalidates pending work. */
   queueAbortSignal?: AbortSignal;
+  /**
+   * Durable fail-closed tombstone for in-process cancellation. Abort signals are
+   * not serialized; restore skips these rows instead of replaying canceled work.
+   */
+  canceled?: true;
+  /**
+   * Durable completion tombstone written after channel delivery succeeds and
+   * before the row is omitted. Restore fail-closes these items so a crash
+   * between send and acknowledgement cannot replay the follow-up.
+   */
+  delivered?: true;
+  /**
+   * Durable fail-closed tombstone written after execution when terminal
+   * delivery failed. Restore skip these rows instead of replaying side effects.
+   */
+  discarded?: true;
   deliveryCorrelations?: QueuedReplyDeliveryCorrelation[];
   /** Canonical ownership lifecycle for durable ingress / reply-lane transfer. */
   turnAdoptionLifecycle?: TurnAdoptionLifecycle;
@@ -253,6 +293,43 @@ export type FollowupRun = {
     /** Gateway-private optimistic-concurrency constraint for an operator-requested proposal revision. */
     skillWorkshopProposalRevision?: SkillWorkshopProposalRevisionConstraint;
   };
+};
+
+/**
+ * Canonical runtime shape for active, pending, and restored follow-up queues.
+ * Runtime-only fields (abortController, inFlight, activeSummarySources) are
+ * reconstructed fresh when persistence restores queue state from disk.
+ */
+export type FollowupQueueState = {
+  abortController: AbortController;
+  items: FollowupRun[];
+  draining: boolean;
+  /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
+  inFlight: Set<FollowupRun>;
+  lastEnqueuedAt: number;
+  mode: QueueMode;
+  debounceMs: number;
+  cap: number;
+  dropPolicy: QueueDropPolicy;
+  droppedCount: number;
+  summaryLines: string[];
+  summarySources: FollowupRun[];
+  /** Serializes parked steer acceptance so later parked candidates wait their turn. */
+  steerAcceptanceTail: Promise<boolean>;
+  /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
+  activeSummarySources: WeakSet<FollowupRun>;
+  summaryElisions: Array<{
+    contextKey: string;
+    count: number;
+    /** Compact sources stay strong so cancellation follows summarized content until delivery. */
+    sources: FollowupRun[];
+    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
+    summaryLines: string[];
+    /** Weak source mapping keeps concurrent summary consumption identity-safe. */
+    sourceRefs: WeakMap<FollowupRun, FollowupRun>;
+  }>;
+  evictedSummaryCount: number;
+  lastRun?: FollowupRun["run"];
 };
 
 export function isFollowupRunAborted(

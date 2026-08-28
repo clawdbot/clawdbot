@@ -18,6 +18,7 @@ export type HeartbeatWakeSource =
   | "session-state"
   | "cli-watchdog"
   | "restart-sentinel"
+  | "followup-queue-restore"
   | "retry"
   | "other";
 

@@ -160,6 +160,116 @@ describe("drainNextQueueItem", () => {
     expect(countPendingQueueItems([active, pending], new Set([active, alreadyRemoved]))).toBe(1);
   });
 
+  it("acknowledges after success while keeping the in-memory identity during run", async () => {
+    type Item = { id: string };
+    const item: Item = { id: "ack-after" };
+    const items: Item[] = [item];
+    const inFlight = new Set<Item>();
+    const events: string[] = [];
+
+    await drainNextQueueItem(
+      items,
+      async () => {
+        events.push(`run:items=${items.length}:inFlight=${inFlight.has(item)}`);
+      },
+      {
+        inFlight,
+        acknowledgeAfterSuccess: () => {
+          events.push(`ack:items=${items.length}:inFlight=${inFlight.has(item)}`);
+        },
+      },
+    );
+
+    expect(events).toEqual(["run:items=1:inFlight=true", "ack:items=0:inFlight=true"]);
+    expect(items).toEqual([]);
+    expect(inFlight.size).toBe(0);
+  });
+
+  it("does not acknowledge after success when delivery fails and the item is restored", async () => {
+    type Item = { id: string };
+    const item: Item = { id: "retry-me" };
+    const items: Item[] = [item];
+    const inFlight = new Set<Item>();
+    const acknowledgements: Array<{ items: number; inFlight: boolean }> = [];
+
+    await expect(
+      drainNextQueueItem(
+        items,
+        async () => {
+          throw new Error("send failed");
+        },
+        {
+          inFlight,
+          acknowledgeAfterSuccess: () => {
+            acknowledgements.push({ items: items.length, inFlight: inFlight.has(item) });
+          },
+        },
+      ),
+    ).rejects.toThrow("send failed");
+
+    expect(acknowledgements).toEqual([]);
+    expect(items).toEqual([item]);
+    expect(inFlight.size).toBe(0);
+  });
+
+  it("acknowledges after success on fail-closed discard", async () => {
+    type Item = { id: string };
+    const item: Item = { id: "discard-me" };
+    const items: Item[] = [item];
+    const inFlight = new Set<Item>();
+    const discarded: Item[] = [];
+    const acknowledgements: Array<{ items: number; inFlight: boolean }> = [];
+
+    await expect(
+      drainNextQueueItem(
+        items,
+        async () => {
+          throw new Error("send failed");
+        },
+        {
+          inFlight,
+          shouldRestoreOnError: () => false,
+          onDiscard: (discardedItem) => {
+            discarded.push(discardedItem);
+          },
+          acknowledgeAfterSuccess: () => {
+            acknowledgements.push({ items: items.length, inFlight: inFlight.has(item) });
+          },
+        },
+      ),
+    ).rejects.toThrow("send failed");
+
+    expect(discarded).toEqual([item]);
+    expect(acknowledgements).toEqual([{ items: 0, inFlight: true }]);
+    expect(items).toEqual([]);
+    expect(inFlight.size).toBe(0);
+  });
+
+  it("still supports optional acknowledge-before-run for generic callers", async () => {
+    type Item = { id: string };
+    const item: Item = { id: "ack-first" };
+    const items: Item[] = [item];
+    const inFlight = new Set<Item>();
+    const events: string[] = [];
+
+    await drainNextQueueItem(
+      items,
+      async () => {
+        events.push(`run:items=${items.length}:inFlight=${inFlight.has(item)}`);
+      },
+      {
+        inFlight,
+        acknowledgeBeforeRun: () => {
+          events.push(`ack:items=${items.length}:inFlight=${inFlight.has(item)}`);
+        },
+      },
+    );
+
+    expect(events).toEqual(["ack:items=1:inFlight=true", "run:items=1:inFlight=true"]);
+    expect(items).toEqual([]);
+    expect(inFlight.size).toBe(0);
+  });
+
   it("keeps overflow survivors when the queue mutates during an awaited drain", async () => {
     type Item = { id: string };
     const queue = {

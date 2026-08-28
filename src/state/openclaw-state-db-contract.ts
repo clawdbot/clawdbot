@@ -47,6 +47,7 @@ export const LAZY_ADDITIVE_STATE_TABLES = [
   "agent_provenance",
   "cron_run_receipts",
   "config_revision_keys",
+  "followup_queue_entries",
   "secret_store_entries",
   "projects",
   "user_preferences",
@@ -67,6 +68,7 @@ export const LAZY_ADDITIVE_STATE_INDEXES = [
   "idx_github_publication_requests_pending",
   "idx_skill_workshop_collection_reviews_workspace_time",
   "secret_store_entries_live_idx",
+  "idx_followup_queue_entries_updated",
 ] as const;
 /** Maximum time one synchronous SQLite call may wait for a lock. */
 export const OPENCLAW_SQLITE_BUSY_TIMEOUT_MS = 5_000;

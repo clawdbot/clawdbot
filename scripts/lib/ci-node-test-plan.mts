@@ -1360,6 +1360,7 @@ function resolveInfraShardName(file: string): string {
     return "core-runtime-infra-provider-push";
   }
   if (
+    name.startsWith("followup-queue") ||
     name.startsWith("kysely") ||
     name.startsWith("session") ||
     name.startsWith("sqlite") ||

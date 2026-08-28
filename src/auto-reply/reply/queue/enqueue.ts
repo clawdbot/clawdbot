@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { normalizeChatType } from "../../../channels/chat-type.js";
 import { logMessageQueuedWithBacklogPolicy } from "../../../logging/diagnostic-runtime.js";
 import { channelRouteDedupeKey } from "../../../plugin-sdk/channel-route.js";
+import { defaultRuntime } from "../../../runtime.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   applyQueueDropPolicy,
@@ -17,9 +18,11 @@ import {
   resolveFollowupDeliveryContextKey,
   resolveFollowupReplyAnchor,
 } from "./drain.js";
+import { persistFollowupQueuesOrThrow } from "./persist.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
+  releaseRecentQueueMessageId,
   resetRecentQueuedMessageIdDedupe,
 } from "./recent-message-ids.js";
 import {
@@ -33,6 +36,7 @@ import {
   isFollowupRunAborted,
   markFollowupRunEnqueued,
   type EnqueueFollowupRunOptions,
+  type FollowupQueueState,
   type FollowupRun,
   type QueueDedupeMode,
   type QueueSettings,
@@ -121,6 +125,88 @@ function appendQueueItem(params: {
   }
 }
 
+function captureQueueMutationState(queue: FollowupQueueState) {
+  return {
+    items: queue.items.slice(),
+    summarySources: queue.summarySources.slice(),
+    summaryLines: queue.summaryLines.slice(),
+    summaryElisions: queue.summaryElisions.map((elision) => ({
+      contextKey: elision.contextKey,
+      count: elision.count,
+      sources: elision.sources.slice(),
+      summaryLines: elision.summaryLines.slice(),
+      sourceRefs: elision.sourceRefs,
+    })),
+    droppedCount: queue.droppedCount,
+    lastEnqueuedAt: queue.lastEnqueuedAt,
+    lastRun: queue.lastRun,
+    evictedSummaryCount: queue.evictedSummaryCount,
+    cap: queue.cap,
+  };
+}
+
+function restoreQueueMutationState(
+  queue: FollowupQueueState,
+  snapshot: ReturnType<typeof captureQueueMutationState>,
+): void {
+  queue.items.splice(0, queue.items.length, ...snapshot.items);
+  queue.summarySources.splice(0, queue.summarySources.length, ...snapshot.summarySources);
+  queue.summaryLines.splice(0, queue.summaryLines.length, ...snapshot.summaryLines);
+  queue.summaryElisions.splice(0, queue.summaryElisions.length, ...snapshot.summaryElisions);
+  queue.droppedCount = snapshot.droppedCount;
+  queue.lastEnqueuedAt = snapshot.lastEnqueuedAt;
+  queue.lastRun = snapshot.lastRun;
+  queue.evictedSummaryCount = snapshot.evictedSummaryCount;
+  queue.cap = snapshot.cap;
+}
+
+function completeDeferredDrops(drops: readonly FollowupRun[]): void {
+  for (const dropped of drops) {
+    completeFollowupRunLifecycle(dropped);
+  }
+}
+
+function rollbackFailedDurableAdmission(params: {
+  key: string;
+  run: FollowupRun;
+  restore: () => void;
+  err: unknown;
+}): false {
+  params.restore();
+  defaultRuntime.error?.(
+    `rejected followup enqueue for ${params.key}: persistence failed: ${String(params.err)}`,
+  );
+  // Lifecycle-less runs keep the reservation for the five-minute TTL on
+  // completeFollowupRunLifecycle. Failed durable admission never delivered, so
+  // the same inbound retry must be re-admittable.
+  releaseRecentQueueMessageId(params.run);
+  completeFollowupRunLifecycle(params.run);
+  return false;
+}
+
+function appendQueueItemWithPersist(params: Parameters<typeof appendQueueItem>[0]): boolean {
+  const itemsSnapshot = params.queue.items.slice();
+  const lastEnqueuedAtSnapshot = params.queue.lastEnqueuedAt;
+  const lastRunSnapshot = params.queue.lastRun;
+  appendQueueItem(params);
+  try {
+    persistFollowupQueuesOrThrow();
+    return true;
+  } catch (err) {
+    return rollbackFailedDurableAdmission({
+      key: params.key,
+      run: params.run,
+      restore: () => {
+        params.queue.items.length = 0;
+        params.queue.items.push(...itemsSnapshot);
+        params.queue.lastEnqueuedAt = lastEnqueuedAtSnapshot;
+        params.queue.lastRun = lastRunSnapshot;
+      },
+      err,
+    });
+  }
+}
+
 export function enqueueFollowupRun(
   key: string,
   run: FollowupRun,
@@ -163,17 +249,24 @@ export function enqueueFollowupRun(
       return false;
     }
     const { promise: acceptance, resolve: settle } = createDeferredCore<boolean>();
-    run.steerPending = { predecessor: queue.steerAcceptanceTail, settle };
+    const previousAcceptanceTail = queue.steerAcceptanceTail;
+    run.steerPending = { predecessor: previousAcceptanceTail, settle };
     queue.steerAcceptanceTail = acceptance;
-    appendQueueItem({
-      key,
-      queue,
-      run,
-      recentMessageIdKey,
-      runFollowup,
-      restartIfIdle,
-      front: options.position === "front",
-    });
+    if (
+      !appendQueueItemWithPersist({
+        key,
+        queue,
+        run,
+        recentMessageIdKey,
+        runFollowup,
+        restartIfIdle,
+        front: options.position === "front",
+      })
+    ) {
+      queue.steerAcceptanceTail = previousAcceptanceTail;
+      delete run.steerPending;
+      return false;
+    }
     return true;
   }
   // A later normal/interrupt prompt cannot be dropped while an older steer is
@@ -183,7 +276,7 @@ export function enqueueFollowupRun(
     if (!markFollowupRunEnqueued(run)) {
       return false;
     }
-    appendQueueItem({
+    return appendQueueItemWithPersist({
       key,
       queue,
       run,
@@ -192,7 +285,6 @@ export function enqueueFollowupRun(
       restartIfIdle,
       front: false,
     });
-    return true;
   }
   // drop:new rejects this source without mutating the existing queue. Do not
   // publish an external queued identity for work that will never be admitted.
@@ -204,12 +296,22 @@ export function enqueueFollowupRun(
     pendingCount >= queue.cap
   ) {
     run.onQueueDisposition?.("queue-cap-new");
-    completeFollowupRunLifecycle(run);
+    if (options.deferPersist === true) {
+      options.collectDeferredDrops?.push(run);
+    } else {
+      completeFollowupRunLifecycle(run);
+    }
     return false;
   }
   if (!markFollowupRunEnqueued(run)) {
     return false;
   }
+
+  // Snapshot before overflow mutations so a failed durable admit can restore
+  // pre-existing queue work instead of permanently dropping/summarizing it.
+  const admissionSnapshot = captureQueueMutationState(queue);
+  const restoreAdmissionSnapshot = () => restoreQueueMutationState(queue, admissionSnapshot);
+  const deferredOverflowDrops: FollowupRun[] = [];
 
   const elidedSummaryLines: string[] = [];
   const shouldEnqueue = applyQueueDropPolicy({
@@ -224,7 +326,8 @@ export function enqueueFollowupRun(
       }
       for (const item of dropped) {
         item.onQueueDisposition?.("queue-cap-old");
-        completeFollowupRunLifecycle(item);
+        // Defer lifecycle completion until durable admit succeeds.
+        deferredOverflowDrops.push(item);
       }
     },
     isProtected: (item) => item.protectFromQueueOverflow === true || item.steerAnchor === true,
@@ -262,13 +365,22 @@ export function enqueueFollowupRun(
             queue.activeSummarySources.add(compactSource);
           }
         }
-        trimSummaryElisionsToCap(queue);
+        // Defer irreversible lifecycle completion until SQLite admission succeeds;
+        // a failed write must restore summarized sources as live queued work.
+        deferredOverflowDrops.push(
+          ...trimSummaryElisionsToCap(queue, { deferLifecycleCompletion: true }),
+        );
       }
     }
   }
   if (!shouldEnqueue) {
+    restoreAdmissionSnapshot();
     run.onQueueDisposition?.("queue-cap");
-    completeFollowupRunLifecycle(run);
+    if (options.deferPersist === true) {
+      options.collectDeferredDrops?.push(run);
+    } else {
+      completeFollowupRunLifecycle(run);
+    }
     return false;
   }
   appendQueueItem({
@@ -280,6 +392,21 @@ export function enqueueFollowupRun(
     restartIfIdle,
     front: options.position === "front",
   });
+  if (options.deferPersist !== true) {
+    try {
+      persistFollowupQueuesOrThrow();
+    } catch (err) {
+      return rollbackFailedDurableAdmission({
+        key,
+        run,
+        restore: restoreAdmissionSnapshot,
+        err,
+      });
+    }
+    completeDeferredDrops(deferredOverflowDrops);
+  } else {
+    options.collectDeferredDrops?.push(...deferredOverflowDrops);
+  }
   return true;
 }
 
@@ -316,10 +443,13 @@ function reapplyDeferredOverflow(key: string): void {
     return;
   }
   const lastAnchor = queue.items.findLastIndex((item) => item.steerAnchor === true);
-  const suffix = queue.items.splice(lastAnchor + 1);
+  const suffix = queue.items.slice(lastAnchor + 1);
   if (suffix.length === 0) {
     return;
   }
+  const mutationSnapshot = captureQueueMutationState(queue);
+  const deferredDrops: FollowupRun[] = [];
+  queue.items.splice(lastAnchor + 1);
   const originalCap = queue.cap;
   const settings: QueueSettings = {
     mode: queue.mode,
@@ -328,11 +458,27 @@ function reapplyDeferredOverflow(key: string): void {
     dropPolicy: queue.dropPolicy,
   };
   for (const item of suffix) {
-    if (!enqueueFollowupRun(key, item, settings, "none", undefined, false)) {
-      completeFollowupRunLifecycle(item);
+    if (
+      !enqueueFollowupRun(key, item, settings, "none", undefined, false, {
+        deferPersist: true,
+        collectDeferredDrops: deferredDrops,
+      }) &&
+      !deferredDrops.includes(item)
+    ) {
+      deferredDrops.push(item);
     }
   }
   queue.cap = originalCap;
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    restoreQueueMutationState(queue, mutationSnapshot);
+    defaultRuntime.error?.(
+      `failed to persist followup queue after deferred overflow for ${key}: ${String(err)}`,
+    );
+    return;
+  }
+  completeDeferredDrops(deferredDrops);
 }
 
 /** Remove an exactly committed steer while preserving every sibling's FIFO position. */
@@ -343,6 +489,15 @@ function consumeParkedFollowupRun(key: string, run: FollowupRun): boolean {
     return false;
   }
   queue.items.splice(index, 1);
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    queue.items.splice(index, 0, run);
+    defaultRuntime.error?.(
+      `rejected parked-steer consume for ${key}: persistence failed: ${String(err)}`,
+    );
+    return false;
+  }
   run.steerPending?.settle(true);
   delete run.steerPending;
   delete run.protectFromQueueOverflow;

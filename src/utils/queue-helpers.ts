@@ -105,6 +105,17 @@ type DrainQueueItemOptions<T> = {
   inFlight?: Set<T>;
   shouldRestoreOnError?: (item: T) => boolean;
   onDiscard?: (item: T) => void;
+  /**
+   * Optional pre-send settle hook for generic callers that still want durable
+   * omission before run. Followup drains prefer {@link acknowledgeAfterSuccess}.
+   */
+  acknowledgeBeforeRun?: (item: T) => void;
+  /**
+   * Called after a successful remove (and after fail-closed discard remove)
+   * before `finally` clears inFlight, so durable state can settle once delivery
+   * (or discard) has completed.
+   */
+  acknowledgeAfterSuccess?: (item: T) => void;
 };
 
 /** Apply overflow policy before enqueueing another item. */
@@ -256,14 +267,52 @@ export async function drainNextQueueItem<T>(
   // Mark the item as in-flight so applyQueueDropPolicy skips it during the
   // await window when the shared items array is still mutated by enqueuers.
   options?.inFlight?.add(next);
+  const acknowledgeBeforeRun = options?.acknowledgeBeforeRun;
+  const acknowledgeAfterSuccess = options?.acknowledgeAfterSuccess;
+  if (acknowledgeBeforeRun) {
+    try {
+      acknowledgeBeforeRun(next);
+    } catch (error) {
+      options?.inFlight?.delete(next);
+      throw error;
+    }
+  }
   try {
     await run(next);
-    // Keep the identity protected until its successful by-reference removal.
     removeQueuedItemsByRef(items, [next]);
+    if (acknowledgeAfterSuccess) {
+      acknowledgeAfterSuccess(next);
+    }
   } catch (error) {
+    if (acknowledgeBeforeRun) {
+      // Drop the in-flight mark before re-settling so a retryable failure
+      // leaves the identity durable again (or omits it after onDiscard removal).
+      options?.inFlight?.delete(next);
+      if (options?.shouldRestoreOnError?.(next) ?? true) {
+        try {
+          acknowledgeBeforeRun(next);
+        } catch {
+          // Prefer the original drain error; a second persist failure must not mask it.
+        }
+      } else {
+        removeQueuedItemsByRef(items, [next]);
+        options?.onDiscard?.(next);
+        try {
+          acknowledgeBeforeRun(next);
+        } catch {
+          // Prefer the original drain error.
+        }
+      }
+      throw error;
+    }
     if (!(options?.shouldRestoreOnError?.(next) ?? true)) {
       removeQueuedItemsByRef(items, [next]);
       options?.onDiscard?.(next);
+      try {
+        acknowledgeAfterSuccess?.(next);
+      } catch {
+        // Prefer the original drain error.
+      }
     }
     throw error;
   } finally {

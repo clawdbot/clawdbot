@@ -41,6 +41,10 @@ import { REPLY_RUN_STILL_SHUTTING_DOWN_TEXT } from "./get-reply-run-queue.js";
 import { resolveOriginMessageProvider } from "./origin-routing.js";
 import { resolveActiveRunQueueAction } from "./queue-policy.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
+import {
+  createRestoredFollowupDrainOpts,
+  tryScheduleRestoredFollowupQueueDrain,
+} from "./queue/restored-drain.js";
 import { REPLY_ADMISSION_TICKET } from "./reply-admission-ticket.js";
 import { createReplyMediaContext } from "./reply-media-paths.js";
 import { isReplyOperationSuperseded } from "./reply-operation-abort.js";
@@ -259,6 +263,43 @@ export async function runReplyAgent(
     releaseAdmissionTicket();
     typing.cleanup();
     return undefined;
+  }
+
+  // Restored follow-up queues cannot drain through ordinary heartbeat admission:
+  // nonempty restored queues make resolveActiveRunQueueAction drop heartbeats,
+  // and isolated heartbeat sessions use `<base>:heartbeat` instead of the
+  // durable queue key. Explicitly register a non-heartbeat drain callback for
+  // the original restored key and idle-kick (or wait for the active owner).
+  if (isHeartbeat) {
+    const restoredQueueKey = tryScheduleRestoredFollowupQueueDrain({
+      candidates: [queueKey, sessionKey, activeSessionEntry?.heartbeatIsolatedBaseSessionKey],
+      createRunFollowup: (restoredKey) =>
+        createFollowupRunner({
+          opts: createRestoredFollowupDrainOpts(),
+          typing,
+          typingMode,
+          sessionEntry: activeSessionEntry,
+          sessionStore: activeSessionStore,
+          sessionKey: restoredKey,
+          storePath,
+          defaultModel,
+          toolProgressDetail,
+        }),
+      getActiveReplyOperation: (key) => replyRunRegistry.get(key),
+      scheduleAfterClear: scheduleFollowupDrainAfterReplyOperationClear,
+      scheduleNow: scheduleFollowupDrain,
+    });
+    if (restoredQueueKey) {
+      if (replyOperationRunState) {
+        replyOperationRunState.admission = {
+          status: "accepted",
+          mode: "followup",
+        };
+      }
+      releaseAdmissionTicket();
+      typing.cleanup();
+      return undefined;
+    }
   }
 
   if (

@@ -443,6 +443,11 @@ const config = {
     // asserted by the focused Beam mirror tests; production wires only the service.
     "extensions/beam/src/mirror.ts": ["exports", "types"],
     "src/infra/heartbeat-wake.ts": ["exports"],
+    // Follow-up queue restart helpers are consumed by focused restart/persistence tests.
+    // The full-tree companion Knip config includes tests as entries and still audits them.
+    "src/auto-reply/reply/queue/persist.ts": ["exports"],
+    "src/gateway/server-followup-queue-recovery.ts": ["exports"],
+    "src/infra/followup-queue-sqlite.ts": ["exports"],
   },
   workspaces: {
     ".": {

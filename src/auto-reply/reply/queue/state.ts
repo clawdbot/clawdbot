@@ -1,6 +1,5 @@
 // Tracks queue state for active, pending, and recently deduped reply runs.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
@@ -10,43 +9,14 @@ import {
   resolveThinkingDefaultForModel,
   type ThinkingCatalogEntry,
 } from "../../thinking.js";
+import { persistFollowupQueuesOrThrow, restoreFollowupQueues } from "./persist.js";
 import {
   completeFollowupRunLifecycle,
+  type FollowupQueueState,
   type FollowupRun,
   type QueueDropPolicy,
   type QueueSettings,
 } from "./types.js";
-
-type FollowupQueueState = {
-  abortController: AbortController;
-  items: FollowupRun[];
-  draining: boolean;
-  /** Identities retained in `items` while delivery awaits; pending cap and depth must exclude them. */
-  inFlight: Set<FollowupRun>;
-  lastEnqueuedAt: number;
-  mode: QueueMode;
-  debounceMs: number;
-  cap: number;
-  dropPolicy: QueueDropPolicy;
-  droppedCount: number;
-  summaryLines: string[];
-  summarySources: FollowupRun[];
-  steerAcceptanceTail: Promise<boolean>;
-  /** Sources currently used by an async summary delivery cannot be evicted mid-run. */
-  activeSummarySources: WeakSet<FollowupRun>;
-  summaryElisions: Array<{
-    contextKey: string;
-    count: number;
-    /** Compact sources stay strong so cancellation follows summarized content until delivery. */
-    sources: FollowupRun[];
-    /** Summary lines stay index-aligned with sources across context isolation and eviction. */
-    summaryLines: string[];
-    /** Weak source mapping keeps concurrent summary consumption identity-safe. */
-    sourceRefs: WeakMap<FollowupRun, FollowupRun>;
-  }>;
-  evictedSummaryCount: number;
-  lastRun?: FollowupRun["run"];
-};
 
 export const DEFAULT_QUEUE_DEBOUNCE_MS = 500;
 export const DEFAULT_QUEUE_CAP = 20;
@@ -65,7 +35,19 @@ export function getExistingFollowupQueue(key: string): FollowupQueueState | unde
   if (!cleaned) {
     return undefined;
   }
-  return FOLLOWUP_QUEUES.get(cleaned);
+  const queue = FOLLOWUP_QUEUES.get(cleaned);
+  if (!queue) {
+    return undefined;
+  }
+  ensureFollowupQueueSummaryState(queue);
+  return queue;
+}
+
+function ensureFollowupQueueSummaryState(queue: FollowupQueueState): void {
+  queue.summarySources ??= [];
+  queue.summaryElisions ??= [];
+  queue.evictedSummaryCount ??= 0;
+  queue.steerAcceptanceTail ??= Promise.resolve(true);
 }
 
 export function hasPendingFollowupQueueWork(keys: Iterable<string | undefined>): boolean {
@@ -89,7 +71,18 @@ type SummaryElisionCapState = Pick<
   "activeSummarySources" | "cap" | "evictedSummaryCount" | "summaryElisions"
 >;
 
-export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
+/**
+ * Trim overflow summary-elision sources down to the queue cap.
+ *
+ * By default, completes the lifecycle of each evicted source. Pass
+ * `deferLifecycleCompletion: true` when the caller needs atomic rollback across a
+ * later durable write — evicted sources are returned instead of completed.
+ */
+export function trimSummaryElisionsToCap(
+  queue: SummaryElisionCapState,
+  options?: { deferLifecycleCompletion?: boolean },
+): FollowupRun[] {
+  const deferredCompletions: FollowupRun[] = [];
   let sourceCount = queue.summaryElisions.reduce(
     (count, entry) =>
       count + entry.sources.filter((source) => !queue.activeSummarySources.has(source)).length,
@@ -110,7 +103,11 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
       queue.evictedSummaryCount += 1;
       sourceCount -= 1;
       if (source) {
-        completeFollowupRunLifecycle(source);
+        if (options?.deferLifecycleCompletion) {
+          deferredCompletions.push(source);
+        } else {
+          completeFollowupRunLifecycle(source);
+        }
       }
       if (entry.sources.length === 0) {
         queue.summaryElisions.splice(entryIndex, 1);
@@ -120,19 +117,49 @@ export function trimSummaryElisionsToCap(queue: SummaryElisionCapState): void {
     }
     if (!evicted) {
       // A deferred delivery temporarily retains at most one queue-cap-sized active set.
-      return;
+      return deferredCompletions;
     }
+  }
+  return deferredCompletions;
+}
+
+function persistCapDrivenElisionTrim(queue: FollowupQueueState): void {
+  const snapshotElisions = queue.summaryElisions.map((elision) => ({
+    contextKey: elision.contextKey,
+    count: elision.count,
+    sources: elision.sources.slice(),
+    summaryLines: elision.summaryLines.slice(),
+    sourceRefs: elision.sourceRefs,
+  }));
+  const snapshotEvictedSummaryCount = queue.evictedSummaryCount;
+  const deferredCompletions = trimSummaryElisionsToCap(queue, { deferLifecycleCompletion: true });
+  if (
+    deferredCompletions.length === 0 &&
+    queue.evictedSummaryCount === snapshotEvictedSummaryCount
+  ) {
+    return;
+  }
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    queue.summaryElisions.splice(0, queue.summaryElisions.length, ...snapshotElisions);
+    queue.evictedSummaryCount = snapshotEvictedSummaryCount;
+    throw err;
+  }
+  for (const source of deferredCompletions) {
+    completeFollowupRunLifecycle(source);
   }
 }
 
 export function getFollowupQueue(key: string, settings: QueueSettings): FollowupQueueState {
   const existing = FOLLOWUP_QUEUES.get(key);
   if (existing) {
+    ensureFollowupQueueSummaryState(existing);
     applyQueueRuntimeSettings({
       target: existing,
       settings,
     });
-    trimSummaryElisionsToCap(existing);
+    persistCapDrivenElisionTrim(existing);
     return existing;
   }
 
@@ -174,19 +201,25 @@ export function clearFollowupQueue(key: string): number {
   if (!queue) {
     return 0;
   }
-  queue.abortController.abort();
-  const cleared = queue.items.length + queue.droppedCount;
-  for (const item of queue.items) {
-    completeFollowupRunLifecycle(item);
-  }
-  for (const item of queue.summarySources) {
-    completeFollowupRunLifecycle(item);
-  }
-  for (const entry of queue.summaryElisions) {
-    for (const source of entry.sources) {
-      completeFollowupRunLifecycle(source);
-    }
-  }
+  const clearedItems = queue.items.slice();
+  const clearedSummarySources = queue.summarySources.slice();
+  const clearedSummaryElisions = queue.summaryElisions.map((elision) => ({
+    contextKey: elision.contextKey,
+    count: elision.count,
+    sources: elision.sources.slice(),
+    summaryLines: elision.summaryLines.slice(),
+    sourceRefs: elision.sourceRefs,
+  }));
+  const clearedSummaryLines = queue.summaryLines.slice();
+  const clearedInFlight = [...queue.inFlight];
+  const clearedDroppedCount = queue.droppedCount;
+  const clearedLastRun = queue.lastRun;
+  const clearedLastEnqueuedAt = queue.lastEnqueuedAt;
+  const clearedEvictedSummaryCount = queue.evictedSummaryCount;
+  const cleared = clearedItems.length + clearedDroppedCount;
+
+  // Wipe durable + memory state first. Abort only after SQLite acknowledges the
+  // clear so a failed write can restore prior work with live queue abort signals.
   queue.items.length = 0;
   queue.inFlight.clear();
   queue.droppedCount = 0;
@@ -197,6 +230,35 @@ export function clearFollowupQueue(key: string): number {
   queue.lastRun = undefined;
   queue.lastEnqueuedAt = 0;
   FOLLOWUP_QUEUES.delete(cleaned);
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    queue.items.splice(0, 0, ...clearedItems);
+    queue.summarySources.splice(0, 0, ...clearedSummarySources);
+    queue.summaryElisions.splice(0, 0, ...clearedSummaryElisions);
+    queue.summaryLines.splice(0, 0, ...clearedSummaryLines);
+    for (const item of clearedInFlight) {
+      queue.inFlight.add(item);
+    }
+    queue.droppedCount = clearedDroppedCount;
+    queue.lastRun = clearedLastRun;
+    queue.lastEnqueuedAt = clearedLastEnqueuedAt;
+    queue.evictedSummaryCount = clearedEvictedSummaryCount;
+    FOLLOWUP_QUEUES.set(cleaned, queue);
+    throw err;
+  }
+  queue.abortController.abort();
+  for (const item of clearedItems) {
+    completeFollowupRunLifecycle(item);
+  }
+  for (const item of clearedSummarySources) {
+    completeFollowupRunLifecycle(item);
+  }
+  for (const entry of clearedSummaryElisions) {
+    for (const source of entry.sources) {
+      completeFollowupRunLifecycle(source);
+    }
+  }
   return cleared;
 }
 
@@ -298,6 +360,28 @@ export function refreshQueuedFollowupSession(params: {
     }
   };
 
+  const snapshotRunFields = (run: FollowupRun["run"]) => ({
+    sessionId: run.sessionId,
+    sessionFile: run.sessionFile,
+    provider: run.provider,
+    model: run.model,
+    requestedRouteResolution: run.requestedRouteResolution,
+    hasAutoFallbackProvenance: run.hasAutoFallbackProvenance,
+    hasSessionModelOverride: run.hasSessionModelOverride,
+    modelOverrideSource: run.modelOverrideSource,
+    authProfileId: run.authProfileId,
+    authProfileIdSource: run.authProfileIdSource,
+    thinkingCatalog: run.thinkingCatalog,
+    thinkLevel: run.thinkLevel,
+  });
+  const priorRuns = [
+    ...(queue.lastRun ? [queue.lastRun] : []),
+    ...queue.items.map((item) => item.run),
+    ...queue.summarySources.map((item) => item.run),
+    ...queue.summaryElisions.flatMap((entry) => entry.sources.map((source) => source.run)),
+  ];
+  const priorSnapshots = priorRuns.map((run) => ({ run, fields: snapshotRunFields(run) }));
+
   rewriteRun(queue.lastRun);
   for (const item of queue.items) {
     rewriteRun(item.run);
@@ -310,4 +394,33 @@ export function refreshQueuedFollowupSession(params: {
       rewriteRun(source.run);
     }
   }
+  try {
+    persistFollowupQueuesOrThrow();
+  } catch (err) {
+    for (const { run, fields } of priorSnapshots) {
+      run.sessionId = fields.sessionId;
+      run.sessionFile = fields.sessionFile;
+      run.provider = fields.provider;
+      run.model = fields.model;
+      run.requestedRouteResolution = fields.requestedRouteResolution;
+      if (fields.hasAutoFallbackProvenance === undefined) {
+        delete run.hasAutoFallbackProvenance;
+      } else {
+        run.hasAutoFallbackProvenance = fields.hasAutoFallbackProvenance;
+      }
+      if (fields.hasSessionModelOverride === undefined) {
+        delete run.hasSessionModelOverride;
+      } else {
+        run.hasSessionModelOverride = fields.hasSessionModelOverride;
+      }
+      run.modelOverrideSource = fields.modelOverrideSource;
+      run.authProfileId = fields.authProfileId;
+      run.authProfileIdSource = fields.authProfileIdSource;
+      run.thinkingCatalog = fields.thinkingCatalog;
+      run.thinkLevel = fields.thinkLevel;
+    }
+    throw err;
+  }
 }
+
+restoreFollowupQueues();
