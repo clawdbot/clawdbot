@@ -31,8 +31,8 @@ function isTagFetchRefspec(refspec: string): boolean {
   if (/^tag\s+\S+$/u.test(withoutForce)) {
     return true;
   }
-  const destination = withoutForce.split(":", 2)[1]?.trim() ?? "";
-  return destination === "refs/tags" || destination.startsWith("refs/tags/");
+  const [source = "", destination = ""] = withoutForce.split(":", 2).map((ref) => ref.trim());
+  return [source, destination].some((ref) => ref === "refs/tags" || ref.startsWith("refs/tags/"));
 }
 
 export type StableGitFetchResult = {
@@ -65,11 +65,24 @@ export async function prepareStableGitFetch(params: {
       results: steps,
     });
   const fetchConfigArgv = ["git", "-C", gitRoot, "config", "--get-regexp", "^remote\\..*\\.fetch$"];
-  const fetchConfigResult = await runCommand(fetchConfigArgv, { cwd: gitRoot, timeoutMs });
-  if (fetchConfigResult.code !== 0 && fetchConfigResult.code !== 1) {
+  let fetchConfigStdout = "";
+  const fetchConfigStep = await runStep({
+    runCommand: async (command, options) => {
+      const result = await runCommand(command, options);
+      fetchConfigStdout = result.stdout;
+      return result.code === 1 ? { ...result, code: 0 } : result;
+    },
+    name: "git config fetch refspecs",
+    argv: fetchConfigArgv,
+    cwd: gitRoot,
+    timeoutMs,
+    progress,
+    results: steps,
+  });
+  if (fetchConfigStep.exitCode !== 0) {
     return { reason: "fetch-failed" };
   }
-  const fetchConfig = parseRemoteFetchConfig(fetchConfigResult.stdout);
+  const fetchConfig = parseRemoteFetchConfig(fetchConfigStdout);
   const hasConfiguredTagRefspec = [...fetchConfig.values()].some((refspecs) =>
     refspecs.some(isTagFetchRefspec),
   );

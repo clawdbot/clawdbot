@@ -147,7 +147,7 @@ describe("runGatewayUpdate", () => {
       }
       if (
         key ===
-        `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/${params.stableTag}:refs/tags/${params.stableTag}`
+        `git -C ${tempDir} fetch --no-prune --no-tags --refmap= -- origin +refs/tags/${params.stableTag}:refs/tags/${params.stableTag}`
       ) {
         return { stdout: "", stderr: "", code: 0 };
       }
@@ -362,7 +362,7 @@ describe("runGatewayUpdate", () => {
     const tagOutput = tags.map((tag) => `${"a".repeat(40)}\trefs/tags/${tag}`).join("\n");
     const tagFetchResponses = Object.fromEntries(
       tags.map((tag) => [
-        `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/${tag}:refs/tags/${tag}`,
+        `git -C ${tempDir} fetch --no-prune --no-tags --refmap= -- origin +refs/tags/${tag}:refs/tags/${tag}`,
         { stdout: "" },
       ]),
     ) satisfies Record<string, CommandResponse>;
@@ -837,7 +837,7 @@ describe("runGatewayUpdate", () => {
       `git -C ${tempDir} ls-remote --tags --refs --sort=-v:refname -- upstream v*`,
     );
     expect(calls).not.toContain(
-      `git -C ${tempDir} fetch --no-prune --no-tags -- upstream +refs/tags/*:refs/tags/*`,
+      `git -C ${tempDir} fetch --no-prune --no-tags --refmap= -- upstream +refs/tags/*:refs/tags/*`,
     );
   });
 
@@ -887,10 +887,48 @@ describe("runGatewayUpdate", () => {
     expect(result).toMatchObject({ status: "error", reason: "ambiguous-release-remote" });
     expect(result.steps.map((step) => step.name)).toEqual([
       "clean check",
+      "git config fetch refspecs",
       "git fetch",
       "git remote",
       "git config main remote",
     ]);
+  });
+
+  it("records fetch-config probe failures in steps and progress", async () => {
+    await setupGitCheckout();
+    const onStepStart = vi.fn();
+    const onStepComplete = vi.fn();
+    const { runner } = createRunner({
+      ...buildGitWorktreeProbeResponses(),
+      [`git -C ${tempDir} config --get-regexp ^remote\\..*\\.fetch$`]: {
+        code: 128,
+        stderr: "fatal: bad config line",
+      },
+    });
+
+    const result = await runWithRunner(runner, {
+      channel: "stable",
+      progress: { onStepStart, onStepComplete },
+    });
+
+    expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        name: "git config fetch refspecs",
+        exitCode: 128,
+        stderrTail: "fatal: bad config line",
+      }),
+    );
+    expect(onStepStart).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "git config fetch refspecs" }),
+    );
+    expect(onStepComplete).toHaveBeenCalledWith(
+      expect.objectContaining({
+        name: "git config fetch refspecs",
+        exitCode: 128,
+        stderrTail: "fatal: bad config line",
+      }),
+    );
   });
 
   it("keeps a configured non-tag non-fast-forward ref protected", async () => {
@@ -913,6 +951,41 @@ describe("runGatewayUpdate", () => {
 
     expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
     await expect(runRealGit(localRoot, "rev-parse", "protected-cache")).resolves.toBe(releaseSha);
+  });
+
+  it("refreshes recreated release tags when a tag source maps to a local branch", async () => {
+    const { localRoot, baseSha, releaseSha, releaseTag } = await createRecreatedReleaseTagFixture();
+    await runRealGit(localRoot, "branch", "release", baseSha);
+    await runRealGit(
+      localRoot,
+      "config",
+      "--add",
+      "remote.origin.fetch",
+      `refs/tags/${releaseTag}:refs/heads/release`,
+    );
+    const reachedMutation = new Error("reached release mutation");
+    const realRunner = createRealGitUpdateRunner();
+
+    await expect(
+      runWithCommand(
+        async (argv, options) => {
+          return await realRunner(argv, options);
+        },
+        {
+          cwd: localRoot,
+          channel: "stable",
+          beforeGitMutation: async () => {
+            throw reachedMutation;
+          },
+        },
+      ),
+    ).rejects.toBe(reachedMutation);
+
+    await expect(runRealGit(localRoot, "rev-parse", `${releaseTag}^{}`)).resolves.toBe(releaseSha);
+    await expect(runRealGit(localRoot, "rev-parse", "refs/remotes/origin/main")).resolves.toBe(
+      releaseSha,
+    );
+    await expect(runRealGit(localRoot, "rev-parse", "refs/heads/release")).resolves.toBe(baseSha);
   });
 
   it("refreshes remote-tracking refs for a broad configured mapping", async () => {
@@ -1544,7 +1617,7 @@ describe("runGatewayUpdate", () => {
       ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
-      [`git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]:
+      [`git -C ${tempDir} fetch --no-prune --no-tags --refmap= -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]:
         {
           stdout: "",
         },
@@ -1571,7 +1644,7 @@ describe("runGatewayUpdate", () => {
     expect(calls).toContain(`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`);
     expect(calls).not.toContain(`git -C ${tempDir} fetch --all --prune --tags`);
     expect(calls).toContain(
-      `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
+      `git -C ${tempDir} fetch --no-prune --no-tags --refmap= -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
     );
     expect(calls).toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
   });
@@ -1582,7 +1655,7 @@ describe("runGatewayUpdate", () => {
       ...buildGitWorktreeProbeResponses(),
       [`git -C ${tempDir} fetch --all --prune --no-prune-tags --no-tags`]: { stdout: "" },
       [`git -C ${tempDir} remote`]: { stdout: "origin\n" },
-      [`git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]:
+      [`git -C ${tempDir} fetch --no-prune --no-tags --refmap= -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`]:
         {
           code: 1,
           stderr: "would clobber existing tag",
@@ -1597,7 +1670,7 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("error");
     expect(result.reason).toBe("no-target-sha");
     expect(calls).toContain(
-      `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
+      `git -C ${tempDir} fetch --no-prune --no-tags --refmap= -- origin +refs/tags/v2026.5.19-beta.2:refs/tags/v2026.5.19-beta.2`,
     );
     expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2^{}`);
     expect(calls).not.toContain(`git -C ${tempDir} rev-parse refs/tags/v2026.5.19-beta.2`);
@@ -4038,7 +4111,7 @@ describe("runGatewayUpdate", () => {
         }
         if (
           key ===
-          `git -C ${tempDir} fetch --no-prune --no-tags -- origin +refs/tags/${stableTag}:refs/tags/${stableTag}`
+          `git -C ${tempDir} fetch --no-prune --no-tags --refmap= -- origin +refs/tags/${stableTag}:refs/tags/${stableTag}`
         ) {
           return toCommandResult();
         }

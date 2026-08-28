@@ -483,6 +483,7 @@ export async function updateGitCheckout(params: {
         "fetch",
         "--no-prune",
         "--no-tags",
+        "--refmap=",
         "--",
         releaseRemote,
         `+refs/tags/${tag}:refs/tags/${tag}`,
