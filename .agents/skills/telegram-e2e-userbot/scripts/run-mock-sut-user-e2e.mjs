@@ -96,6 +96,10 @@ export async function cleanupOwnedRuntime(credential = activeCredential) {
   await credential?.release();
 }
 
+export function removeRunnerScratch(root) {
+  fs.rmSync(root, { recursive: true, force: true });
+}
+
 export async function fenceLeaseFailure({
   error,
   cancelControls,
@@ -1330,7 +1334,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
           completed: exitCode === 0,
           credentialSource: creds.credentialSource,
           mode: recording ? "record" : "probe",
-          scratchRemovedAfterExit: Boolean(evidenceDir),
+          scratchRemovedAfterExit: true,
           mockRequests: requestRows,
           gatewayActions: gatewayActions.map((action) => ({
             type: action.type,
@@ -1350,7 +1354,7 @@ async function driveWithTelegramProxy(args, repoRoot, creds) {
   } finally {
     await stopChild(gateway);
     await stopChild(mock);
-    if (evidenceDir) fs.rmSync(temp.root, { recursive: true, force: true });
+    removeRunnerScratch(temp.root);
   }
 }
 

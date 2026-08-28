@@ -10,6 +10,7 @@ import {
   drainSutUpdates,
   fenceLeaseFailure,
   ownChild,
+  removeRunnerScratch,
   runCommand,
   sanitizeChildEnvironment,
   waitForGatewayLeaseReady,
@@ -28,6 +29,13 @@ function exited(child) {
   if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
   return new Promise((resolve) => child.once("exit", resolve));
 }
+
+test("successful probe cleanup removes private runner scratch without an output directory", () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-runner-scratch-"));
+  fs.writeFileSync(path.join(root, "openclaw.json"), "private config");
+  removeRunnerScratch(root);
+  assert.equal(fs.existsSync(root), false);
+});
 
 test("termination joins credential-bearing children before lease release", async () => {
   const gateway = startOwnedChild();
