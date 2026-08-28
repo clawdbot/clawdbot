@@ -19,6 +19,54 @@ import type {
 import { chunkTextForTwitch } from "./utils/markdown.js";
 import { missingTargetError, normalizeTwitchChannel } from "./utils/twitch.js";
 
+type TwitchAccountContext = ReturnType<typeof resolveTwitchAccountContext>;
+
+export async function sendTwitchOutboundText(
+  params: ChannelOutboundContext,
+  accountContext: TwitchAccountContext = resolveTwitchAccountContext(params.cfg, params.accountId),
+): Promise<OutboundDeliveryResult> {
+  const { cfg, to, text } = params;
+  const signal = (params as { signal?: AbortSignal }).signal;
+
+  if (signal?.aborted) {
+    throw new Error("Outbound delivery aborted");
+  }
+
+  const { accountId: resolvedAccountId, account, availableAccountIds } = accountContext;
+  if (!account) {
+    throw new Error(
+      `Twitch account not found: ${resolvedAccountId}. ` +
+        `Available accounts: ${availableAccountIds.join(", ") || "none"}`,
+    );
+  }
+
+  const channel = to || account.channel;
+  if (!channel) {
+    throw new Error("No channel specified and no default channel in account config");
+  }
+
+  const result = await sendMessageTwitchInternal(
+    normalizeTwitchChannel(channel),
+    text,
+    cfg,
+    resolvedAccountId,
+    true, // stripMarkdown
+    console,
+    accountContext,
+  );
+
+  if (!result.ok) {
+    throw new Error(result.error ?? "Send failed");
+  }
+
+  return {
+    channel: "twitch",
+    messageId: result.messageId,
+    receipt: result.receipt,
+    timestamp: Date.now(),
+  };
+}
+
 /**
  * Twitch outbound adapter.
  *
@@ -118,48 +166,7 @@ export const twitchOutbound: ChannelOutboundAdapter = {
    *   accountId: "default",
    * });
    */
-  sendText: async (params: ChannelOutboundContext): Promise<OutboundDeliveryResult> => {
-    const { cfg, to, text, accountId } = params;
-    const signal = (params as { signal?: AbortSignal }).signal;
-
-    if (signal?.aborted) {
-      throw new Error("Outbound delivery aborted");
-    }
-
-    const resolvedAccountId = accountId ?? resolveTwitchAccountContext(cfg).accountId;
-    const { account, availableAccountIds } = resolveTwitchAccountContext(cfg, resolvedAccountId);
-    if (!account) {
-      throw new Error(
-        `Twitch account not found: ${resolvedAccountId}. ` +
-          `Available accounts: ${availableAccountIds.join(", ") || "none"}`,
-      );
-    }
-
-    const channel = to || account.channel;
-    if (!channel) {
-      throw new Error("No channel specified and no default channel in account config");
-    }
-
-    const result = await sendMessageTwitchInternal(
-      normalizeTwitchChannel(channel),
-      text,
-      cfg,
-      resolvedAccountId,
-      true, // stripMarkdown
-      console,
-    );
-
-    if (!result.ok) {
-      throw new Error(result.error ?? "Send failed");
-    }
-
-    return {
-      channel: "twitch",
-      messageId: result.messageId,
-      receipt: result.receipt,
-      timestamp: Date.now(),
-    };
-  },
+  sendText: sendTwitchOutboundText,
 
   /**
    * Send media to a Twitch channel.

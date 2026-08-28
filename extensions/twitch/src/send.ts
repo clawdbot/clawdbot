@@ -83,13 +83,14 @@ export async function sendMessageTwitchInternal(
   accountId?: string,
   stripMarkdown = true,
   logger: Console = console,
+  accountContext?: ReturnType<typeof resolveTwitchAccountContext>,
 ): Promise<SendMessageResult> {
   const {
     account,
     configured,
     availableAccountIds,
     accountId: resolvedAccountId,
-  } = resolveTwitchAccountContext(cfg, accountId);
+  } = accountContext ?? resolveTwitchAccountContext(cfg, accountId);
   if (!account) {
     return {
       ok: false,

@@ -2,7 +2,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { twitchMessageActions } from "./actions.js";
 import { resolveTwitchAccountContext } from "./config.js";
-import { twitchOutbound } from "./outbound.js";
+import { sendTwitchOutboundText } from "./outbound.js";
 
 type ResolvedTwitchAccountContext = ReturnType<typeof resolveTwitchAccountContext>;
 
@@ -12,9 +12,7 @@ vi.mock("./config.js", () => ({
 }));
 
 vi.mock("./outbound.js", () => ({
-  twitchOutbound: {
-    sendText: vi.fn(),
-  },
+  sendTwitchOutboundText: vi.fn(),
 }));
 
 function createSecondaryAccountContext(accountId = "secondary"): ResolvedTwitchAccountContext {
@@ -39,16 +37,9 @@ describe("twitchMessageActions", () => {
   });
 
   it("uses configured defaultAccount when action accountId is omitted", async () => {
-    vi.mocked(resolveTwitchAccountContext)
-      .mockImplementationOnce(() => createSecondaryAccountContext())
-      .mockImplementation((_cfg, accountId) =>
-        createSecondaryAccountContext(accountId?.trim() || "secondary"),
-      );
-    const sendText = twitchOutbound.sendText;
-    if (!sendText) {
-      throw new Error("twitchOutbound.sendText is unavailable");
-    }
-    vi.mocked(sendText).mockResolvedValue({
+    const accountContext = createSecondaryAccountContext();
+    vi.mocked(resolveTwitchAccountContext).mockReturnValue(accountContext);
+    vi.mocked(sendTwitchOutboundText).mockResolvedValue({
       channel: "twitch",
       messageId: "msg-1",
       timestamp: 1,
@@ -67,11 +58,15 @@ describe("twitchMessageActions", () => {
       cfg,
     } as never);
 
-    expect(twitchOutbound.sendText).toHaveBeenCalledWith({
-      cfg,
-      to: "secondary-channel",
-      text: "Hello!",
-      accountId: "secondary",
-    });
+    expect(resolveTwitchAccountContext).toHaveBeenCalledOnce();
+    expect(sendTwitchOutboundText).toHaveBeenCalledWith(
+      {
+        cfg,
+        to: "secondary-channel",
+        text: "Hello!",
+        accountId: "secondary",
+      },
+      accountContext,
+    );
   });
 });

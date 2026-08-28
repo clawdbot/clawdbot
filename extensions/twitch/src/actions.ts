@@ -6,7 +6,7 @@
 
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { resolveTwitchAccountContext } from "./config.js";
-import { twitchOutbound } from "./outbound.js";
+import { sendTwitchOutboundText } from "./outbound.js";
 import type { ChannelMessageActionAdapter, ChannelMessageActionContext } from "./types.js";
 
 /**
@@ -131,9 +131,8 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
 
     const message = readStringParam(ctx.params, "message", { required: true });
     const to = readStringParam(ctx.params, "to", { required: false });
-    const accountId = ctx.accountId ?? resolveTwitchAccountContext(ctx.cfg).accountId;
-
-    const { account, availableAccountIds } = resolveTwitchAccountContext(ctx.cfg, accountId);
+    const accountContext = resolveTwitchAccountContext(ctx.cfg, ctx.accountId);
+    const { accountId, account, availableAccountIds } = accountContext;
     if (!account) {
       return errorResponse(
         `Account not found: ${accountId}. Available accounts: ${availableAccountIds.join(", ") || "none"}`,
@@ -146,17 +145,16 @@ export const twitchMessageActions: ChannelMessageActionAdapter = {
       return errorResponse("No channel specified and no default channel in account config");
     }
 
-    if (!twitchOutbound.sendText) {
-      return errorResponse("sendText not implemented");
-    }
-
     try {
-      const result = await twitchOutbound.sendText({
-        cfg: ctx.cfg,
-        to: targetChannel,
-        text: message ?? "",
-        accountId,
-      });
+      const result = await sendTwitchOutboundText(
+        {
+          cfg: ctx.cfg,
+          to: targetChannel,
+          text: message ?? "",
+          accountId,
+        },
+        accountContext,
+      );
 
       return {
         content: [
