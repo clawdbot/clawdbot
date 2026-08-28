@@ -125,12 +125,10 @@ function ensureStandingGrantSchema(db: DatabaseSync): void {
   // authority (dropping one only re-prompts the next occurrence), so rebuild
   // instead of migrating: fail-closed, no data a user can miss.
   if (tableExists(db, STANDING_GRANT_TABLE)) {
-    // sqlite-allow-raw -- pragma introspection for the one-time shape check.
+    // sqlite-allow-raw -- pragma introspection for the one-time shape check:
+    const rawColumns = db.prepare(`PRAGMA table_info(${STANDING_GRANT_TABLE})`).all(); // sqlite-allow-raw
     // SAFETY: PRAGMA table_info rows always carry name/notnull columns.
-    const columns = db.prepare(`PRAGMA table_info(${STANDING_GRANT_TABLE})`).all() as Array<{
-      name: string;
-      notnull: number;
-    }>;
+    const columns = rawColumns as Array<{ name: string; notnull: number }>;
     const legacyMandatoryExpiry = columns.some(
       (column) => column.name === "expires_at_ms" && column.notnull === 1,
     );
