@@ -23,18 +23,24 @@ function writeJson(file: string, value: unknown) {
   writeFileSync(file, JSON.stringify(value));
 }
 
-function setupFixture(mode: "split" | "override" | "local", missingTargetScript = false) {
+function setupFixture(
+  mode: "split" | "override" | "local",
+  missingTargetScript = false,
+  corepack = false,
+) {
   const artifactRoot = path.resolve(".artifacts");
   mkdirSync(artifactRoot, { recursive: true });
   const root = realpathSync(tempDirs.make("docker-harness-", artifactRoot));
-  const target = path.join(root, "frozen target");
+  const target = path.join(root, "frozen pnpm target");
   mkdirSync(target);
   const harness = mode === "local" ? target : path.join(target, ".release-harness");
-  const selectedHarness = mode === "override" ? path.join(root, "operator's $& harness") : harness;
+  const selectedHarness =
+    mode === "override" ? path.join(root, "operator's $& pnpm harness") : harness;
   copyDockerSchedulerHarness(harness);
   if (selectedHarness !== harness) mkdirSync(selectedHarness, { recursive: true });
   const marker = path.join(root, "calls.jsonl");
   const poison = path.join(root, "target-ran");
+  const toolchainMarker = path.join(root, "toolchains.jsonl");
   const version = "2026.8.1";
   const packageDir = path.join(root, "packed", "package");
   writeJson(path.join(packageDir, "package.json"), { name: "openclaw", version });
@@ -56,6 +62,8 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
   package: process.env.OPENCLAW_CURRENT_PACKAGE_TGZ,
   sha256: process.env.OPENCLAW_CURRENT_PACKAGE_SHA256,
   selectedSha: process.env.OPENCLAW_DOCKER_E2E_SELECTED_SHA,
+  cache: process.env.OPENCLAW_DOCKER_CACHE_HOME_DIR,
+  tools: process.env.OPENCLAW_DOCKER_CLI_TOOLS_DIR,
 }) + '\\n');
 `;
   const poisonedScript = `require('node:fs').writeFileSync(${JSON.stringify(poison)}, 'old harness'); process.exit(47);`;
@@ -79,6 +87,9 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
     writeJson(path.join(dir, "package.json"), {
       name: "openclaw",
       version,
+      ...(corepack && {
+        packageManager: dir === selectedHarness ? "pnpm@11.22.0" : "pnpm@12.0.0",
+      }),
       scripts:
         dir === target && missingTargetScript
           ? {}
@@ -86,6 +97,7 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
               "test:docker:gateway-network": "node marker.cjs",
               "test:docker:e2e-build": "node marker.cjs package-image",
               "test:docker:cleanup": "node marker.cjs cleanup",
+              "test:docker:all": `node ${quote(path.join(harness, "scripts/test-docker-all.mjs"))}`,
             },
     });
     // Keep pnpm in this miniature workspace, away from the host repo's toolchain pin.
@@ -124,8 +136,32 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
   });
   const registrySha256 = createHash("sha256").update(readFileSync(registryManifest)).digest("hex");
   const pnpm = execFileSync("bash", ["-c", "command -v pnpm"], { encoding: "utf8" }).trim();
-  const pinnedPnpm = path.join(root, "pinned '$& pnpm");
-  writeFileSync(pinnedPnpm, `#!/usr/bin/env bash\nexec ${quote(pnpm)} "$@"\n`);
+  const pinnedPnpm = path.join(root, "pinned '$& pnpm wrapper");
+  // Corepack Engine.executePackageManagerRequest resolves findProjectSpec(cwd)
+  // before runVersion forwards argv. pnpm then checks its effective project's pin.
+  // Model only that offline boundary; package scripts still execute as real children.
+  writeFileSync(
+    pinnedPnpm,
+    corepack
+      ? `#!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
+import { spawnSync } from 'node:child_process';
+const manifest = (cwd) => JSON.parse(fs.readFileSync(path.join(cwd, 'package.json'), 'utf8'));
+const selected = manifest(process.cwd()).packageManager;
+const args = process.argv.slice(2);
+const cwd = args[0] === '--dir' ? args.splice(0, 2)[1] : process.cwd();
+const project = manifest(cwd);
+fs.appendFileSync(${JSON.stringify(toolchainMarker)}, JSON.stringify({ cwd: process.cwd(), selected, required: project.packageManager }) + '\\n');
+if (selected !== project.packageManager) {
+  console.error('ERR_PNPM_BAD_PM_VERSION: Corepack selected ' + selected + ' before --dir; project requires ' + project.packageManager);
+  process.exit(1);
+}
+const result = spawnSync(project.scripts[args[0]], { cwd, shell: true, stdio: 'inherit' });
+process.exit(result.status ?? 1);
+`
+      : `#!/usr/bin/env bash\nexec ${quote(pnpm)} "$@"\n`,
+  );
   chmodSync(pinnedPnpm, 0o755);
   return {
     root,
@@ -140,6 +176,7 @@ fs.appendFileSync(${JSON.stringify(marker)}, JSON.stringify({
     pinnedPnpm,
     registry,
     registrySha256,
+    toolchainMarker,
   };
 }
 
@@ -188,8 +225,14 @@ describe("Docker scheduler trusted harness execution", () => {
   posixIt.each(["split", "override", "local"] as const)(
     "executes current scripts with the frozen candidate in %s mode",
     (mode) => {
-      const fixture = setupFixture(mode);
-      const { result, logDir } = runFixture(fixture, mode);
+      const fixture = setupFixture(mode, false, true);
+      const { result, logDir } = runFixture(fixture, mode, laneNames, {
+        env: {
+          OPENCLAW_DOCKER_ALL_PNPM_COMMAND: path.relative(fixture.target, fixture.pinnedPnpm),
+          OPENCLAW_DOCKER_CACHE_HOME_DIR: "relative cache",
+          OPENCLAW_DOCKER_CLI_TOOLS_DIR: "relative tools",
+        },
+      });
       expect(result.status, result.stdout + result.stderr).toBe(0);
       expect(existsSync(fixture.poison)).toBe(false);
       const calls = readFileSync(fixture.marker, "utf8")
@@ -208,15 +251,57 @@ describe("Docker scheduler trusted harness execution", () => {
           registry: fixture.registry,
           registryVersion: "2026.8.1",
           registrySha256: fixture.registrySha256,
+          cache: path.join(fixture.target, "relative cache"),
+          tools: path.join(fixture.target, "relative tools"),
         });
       }
       expect(calls.find((call) => call.lane === "gateway-network").cwd).toBe(
         fixture.selectedHarness,
       );
       expect(calls.find((call) => call.lane === "live-models").cwd).toBe(fixture.target);
+      expect(calls.find((call) => call.lane === "gateway-concurrency").cwd).toBe(fixture.target);
       const summary = JSON.parse(readFileSync(path.join(logDir, "summary.json"), "utf8"));
       expect(summary.status).toBe("passed");
       expect(summary.lanes).toHaveLength(3);
+      expect(JSON.parse(readFileSync(fixture.toolchainMarker, "utf8").trim())).toEqual({
+        cwd: fixture.selectedHarness,
+        selected: "pnpm@11.22.0",
+        required: "pnpm@11.22.0",
+      });
+      if (mode === "override") {
+        const rerun = spawnSync(
+          "bash",
+          [
+            "-c",
+            summary.lanes.find((lane: { name: string }) => lane.name === "gateway-network")
+              .rerunCommand,
+          ],
+          {
+            cwd: fixture.target,
+            encoding: "utf8",
+            timeout: 30_000,
+            env: {
+              ...process.env,
+              OPENCLAW_DOCKER_ALL_LOG_DIR: path.join(fixture.root, "rerun logs"),
+              OPENCLAW_DOCKER_ALL_TIMINGS: "0",
+            },
+          },
+        );
+        expect(rerun.status, rerun.stdout + rerun.stderr).toBe(0);
+        const rerunCall = JSON.parse(
+          readFileSync(fixture.marker, "utf8").trim().split("\n").at(-1)!,
+        );
+        expect(rerunCall).toMatchObject({
+          lane: "gateway-network",
+          cwd: fixture.selectedHarness,
+          target: fixture.target,
+          package: fixture.tarball,
+          sha256: fixture.sha256,
+          selectedSha: fixture.selectedSha,
+          registry: fixture.registry,
+          registrySha256: fixture.registrySha256,
+        });
+      }
     },
   );
 

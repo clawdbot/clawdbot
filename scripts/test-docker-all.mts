@@ -565,24 +565,33 @@ export function buildLaneRerunCommand(name: string, baseEnv: NodeJS.ProcessEnv) 
   if (baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND) {
     env.push(["OPENCLAW_DOCKER_ALL_PNPM_COMMAND", baseEnv.OPENCLAW_DOCKER_ALL_PNPM_COMMAND]);
   }
-  return `${env
+  const envPrefix = env
     .filter(
       (entry): entry is readonly [string, string] => entry[1] !== undefined && entry[1] !== "",
     )
     .map(([key, value]) => `${key}=${shellQuote(value)}`)
-    .join(" ")} ${prepareHarnessCommand("pnpm test:docker:all", baseEnv)}`;
+    .join(" ");
+  return prepareHarnessCommand("pnpm test:docker:all", baseEnv, envPrefix);
 }
 
-function prepareHarnessCommand(command: string, env: NodeJS.ProcessEnv) {
+function prepareHarnessCommand(command: string, env: NodeJS.ProcessEnv, envPrefix = "") {
+  if (!/(^|\s)pnpm(?=\s)/.test(command)) {
+    return command;
+  }
   const pinnedPnpm = env.OPENCLAW_DOCKER_ALL_PNPM_COMMAND?.trim();
-  const pnpm = pinnedPnpm ? shellQuote(pinnedPnpm) : "pnpm";
-  // Keep shell CWD on the candidate for relative inputs, but resolve test scripts
-  // from the trusted harness, including scripts absent from historical packages.
-  const directory = HARNESS_ROOT_DIR === ROOT_DIR ? "" : ` --dir ${shellQuote(HARNESS_ROOT_DIR)}`;
-  return command.replace(
+  const executable = pinnedPnpm?.includes("/") ? path.resolve(ROOT_DIR, pinnedPnpm) : pinnedPnpm;
+  const invocation = command.replace(
     /(^|\s)pnpm(?=\s)/g,
-    (_, prefix: string) => `${prefix}${pnpm}${directory}`,
+    (_, prefix: string) => `${prefix}${executable ? shellQuote(executable) : "pnpm"}`,
   );
+  // Quoted environment values may themselves contain " pnpm ". Substitute only
+  // the catalog invocation, then add the already-quoted rerun assignments.
+  const prepared = envPrefix ? `${envPrefix} ${invocation}` : invocation;
+  // Corepack selects the package-manager pin before pnpm parses --dir. Enter
+  // the harness first; candidate paths have already been prepared as absolute.
+  return HARNESS_ROOT_DIR === ROOT_DIR
+    ? prepared
+    : `(cd ${shellQuote(HARNESS_ROOT_DIR)} && ${prepared})`;
 }
 
 async function loadTimingStore(file: string, enabled: boolean) {
@@ -1317,10 +1326,12 @@ function laneEnv(
   const cacheName = cacheKey || name;
   const env: DockerLaneEnv = {
     ...baseEnv,
-    OPENCLAW_DOCKER_CACHE_HOME_DIR:
+    OPENCLAW_DOCKER_CACHE_HOME_DIR: path.resolve(
       process.env.OPENCLAW_DOCKER_CACHE_HOME_DIR ?? path.join(logDir, `${cacheName}-cache`),
-    OPENCLAW_DOCKER_CLI_TOOLS_DIR:
+    ),
+    OPENCLAW_DOCKER_CLI_TOOLS_DIR: path.resolve(
       process.env.OPENCLAW_DOCKER_CLI_TOOLS_DIR ?? path.join(logDir, `${cacheName}-cli-tools`),
+    ),
   };
   env.OPENCLAW_DOCKER_ALL_LANE_NAME = name;
   const image = e2eImageForLane(poolLane, baseEnv);
