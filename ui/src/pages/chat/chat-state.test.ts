@@ -3109,6 +3109,35 @@ describe("session pull request refresh", () => {
 });
 
 describe("image lightbox lifecycle", () => {
+  it("accepts only matching base64 video at the page boundary", () => {
+    const context = {
+      agents: { state: { agentsList: null }, ensureList: vi.fn(async () => null) },
+      agentSelection: { state: { selectedId: "main" } },
+      basePath: "",
+      config: {
+        current: {
+          allowExternalEmbedUrls: false,
+          assistantIdentity: { name: "Assistant" },
+          embedSandboxMode: "scripts",
+          localMediaPreviewRoots: [],
+        },
+      },
+      initialUserMessage: createInitialUserMessageHandoff(),
+      sessions: {},
+    } as unknown as ApplicationContext;
+    const state = createPageState(
+      context,
+      { invalidate: vi.fn(), afterCommit: () => () => {} },
+      { querySelector: () => null },
+    );
+
+    state.handleOpenImage({ kind: "video", src: "data:video/mp4;base64,AAAA", title: "Clip" });
+    expect(state.imageLightbox?.src).toBe("data:video/mp4;base64,AAAA");
+
+    state.handleOpenImage({ kind: "video", src: "data:audio/mp3;base64,AAAA", title: "Audio" });
+    expect(state.imageLightbox).toBeNull();
+  });
+
   it("invalidates immediately when beginning a deferred image open", () => {
     const invalidate = vi.fn();
     const context = {

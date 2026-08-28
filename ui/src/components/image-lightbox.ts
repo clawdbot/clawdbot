@@ -9,6 +9,7 @@ import "./modal-dialog.ts";
 export type ImageLightboxItem = {
   kind?: "image" | "video";
   src: string;
+  originalSrc?: string;
   title: string;
   release?: () => void;
 };
@@ -36,10 +37,11 @@ function dataUrlMimeType(source: string): string | undefined {
 class OpenClawImageLightbox extends OpenClawLitElement {
   @property() mediaKind: "image" | "video" = "image";
   @property() src = "";
+  @property() originalSrc = "";
   @property({ attribute: false }) imageTitle = "";
   @query(".stage") private stage?: HTMLDivElement;
   @query(".image") private image?: HTMLImageElement;
-  @queryAll(".action") private actions!: NodeListOf<HTMLElement>;
+  @queryAll(".action, video[controls]") private focusables!: NodeListOf<HTMLElement>;
   @state() private openOriginalUrl = "";
   @state() private scale = 1;
   @state() private imageReady = false;
@@ -184,29 +186,26 @@ class OpenClawImageLightbox extends OpenClawLitElement {
       overflow: hidden;
     }
 
-    .image {
-      display: block;
-      min-width: 0;
-      min-height: 0;
-      max-width: 100%;
-      max-height: 100%;
-      width: auto;
-      height: auto;
-      object-fit: contain;
-      cursor: zoom-in;
-      -webkit-user-drag: none;
-    }
-
+    .image,
     .video {
       display: block;
       min-width: 0;
       min-height: 0;
       max-width: 100%;
       max-height: 100%;
-      width: min(1280px, 100%);
       height: auto;
-      background: var(--media-bg);
       object-fit: contain;
+    }
+
+    .image {
+      width: auto;
+      cursor: zoom-in;
+      -webkit-user-drag: none;
+    }
+
+    .video {
+      width: min(1280px, 100%);
+      background: var(--media-bg);
     }
 
     .image.zoomed {
@@ -320,10 +319,9 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   }
 
   protected override updated(changed: PropertyValues<this>) {
-    if (changed.has("src") || changed.has("mediaKind")) {
+    if (changed.has("src") || changed.has("originalSrc") || changed.has("mediaKind")) {
       this.destroyPanzoom();
       this.scale = 1;
-      this.imageReady = false;
       void this.resolveOriginalUrl();
     }
   }
@@ -583,7 +581,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
   private async resolveOriginalUrl() {
     const request = ++this.originalUrlRequest;
     this.revokeOriginalBlobUrl();
-    const source = this.src.trim();
+    const source = (this.originalSrc || this.src).trim();
     if (!source) {
       this.openOriginalUrl = "";
       return;
@@ -642,7 +640,7 @@ class OpenClawImageLightbox extends OpenClawLitElement {
     if (event.key !== "Tab") {
       return;
     }
-    const actions = [...this.actions].filter(
+    const actions = [...this.focusables].filter(
       (action) => !(action instanceof HTMLButtonElement && action.disabled),
     );
     const first = actions[0];

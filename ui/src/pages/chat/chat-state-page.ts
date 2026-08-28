@@ -30,6 +30,7 @@ import { handleSendChat } from "./chat-send-submit.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
 import { retireChatModelSelectionOwnership } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { safeMediaAttachmentHref } from "./components/chat-attachment-href.ts";
 import {
   handleChatDraftChange,
   handleChatInputHistoryKey,
@@ -447,14 +448,24 @@ export function createPageState(
       item.release?.();
       return;
     }
-    const safeSrc = resolveSafeExternalUrl(item.src, window.location.href, {
-      allowDataImage: true,
-    });
-    if (!safeSrc) {
+    const video = item.kind === "video";
+    const safeSrc = video
+      ? safeMediaAttachmentHref(item.src, "video")
+      : resolveSafeExternalUrl(item.src, window.location.href, { allowDataImage: true });
+    const safeOriginalSrc = item.originalSrc
+      ? video
+        ? safeMediaAttachmentHref(item.originalSrc, "video")
+        : resolveSafeExternalUrl(item.originalSrc, window.location.href, { allowDataImage: true })
+      : undefined;
+    if (!safeSrc || (item.originalSrc && !safeOriginalSrc)) {
       item.release?.();
       return;
     }
-    state.imageLightbox = { ...item, src: safeSrc };
+    state.imageLightbox = {
+      ...item,
+      src: safeSrc,
+      ...(safeOriginalSrc ? { originalSrc: safeOriginalSrc } : {}),
+    };
     renderLifecycle.invalidate();
   };
   state.handleCloseImage = () => {

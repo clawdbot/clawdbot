@@ -24,7 +24,8 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
   @property({ type: Number }) sizeBytes: number | undefined;
   @property({ type: Number }) mediaWidth: number | undefined;
   @property({ type: Number }) mediaHeight: number | undefined;
-  @property({ attribute: false }) onExpand: (() => void) | undefined;
+  @property({ attribute: false }) onExpand: ((src: string) => void) | undefined;
+  @property({ attribute: false }) onFallbackExpand: (() => void) | undefined;
   @property({ attribute: false }) onMediaLoaded: (() => void) | undefined;
 
   private media: HTMLVideoElement | null = null;
@@ -122,6 +123,15 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
     return true;
   }
 
+  private expand = () => {
+    const source = this.sourceController.readySource;
+    if (!source) {
+      return;
+    }
+    this.media?.pause();
+    this.onExpand?.(source);
+  };
+
   override render() {
     const downloadHref = safeMediaAttachmentHref(this.src);
     const preparing = this.sourceController.readiness === "preparing";
@@ -133,9 +143,10 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
         mimeType: this.mimeType,
         sizeBytes: this.sizeBytes,
         downloadHref,
-        onExpand: this.onExpand,
+        onExpand: this.onFallbackExpand,
       });
     }
+    const onExpand = this.onExpand && this.sourceController.readySource ? this.expand : undefined;
     const dimensions =
       this.mediaWidth && this.mediaHeight
         ? { "aspect-ratio": `${this.mediaWidth} / ${this.mediaHeight}` }
@@ -144,8 +155,8 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
       <div
         class="chat-assistant-attachment-card chat-assistant-attachment-card--video"
         ${ref(this.setViewportElement)}
-        ?data-openable=${Boolean(this.onExpand)}
-        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, this.onExpand)}
+        ?data-openable=${Boolean(onExpand)}
+        @click=${(event: MouseEvent) => openAttachmentCardFromClick(event, onExpand)}
       >
         ${renderAttachmentCardHeader({
           kind: "video",
@@ -154,7 +165,7 @@ class ChatVideoPlayer extends OpenClawLightDomContentsElement {
           sizeBytes: this.sizeBytes,
           downloadHref,
           expandLabel: t("chat.mediaPlayer.openVideo", { filename: this.label }),
-          onExpand: this.onExpand,
+          onExpand,
           visualMode: "preview-with-favicon",
         })}
         ${preparing

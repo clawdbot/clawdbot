@@ -96,7 +96,8 @@ describe("openclaw-image-lightbox", () => {
     render(
       html`<openclaw-image-lightbox
         mediaKind="video"
-        src="https://example.com/demo.mp4"
+        src="https://example.com/demo.mp4?playback=1"
+        originalSrc="https://example.com/demo.mp4"
         .imageTitle=${"Demo clip"}
       ></openclaw-image-lightbox>`,
       container,
@@ -108,13 +109,28 @@ describe("openclaw-image-lightbox", () => {
     await modal.updateComplete;
 
     const video = modal.shadowRoot?.querySelector<HTMLVideoElement>("video");
-    expect(video?.src).toBe("https://example.com/demo.mp4");
+    expect(video?.src).toBe("https://example.com/demo.mp4?playback=1");
     expect(video?.controls).toBe(true);
     expect(video?.autoplay).toBe(true);
     expect(modal.shadowRoot?.querySelector("img, .zoom-controls")).toBeNull();
     expect(
       modal.shadowRoot?.querySelector<HTMLButtonElement>(".close")?.getAttribute("aria-label"),
     ).toBe("Close video preview");
+    await vi.waitFor(() =>
+      expect(modal.shadowRoot?.querySelector<HTMLAnchorElement>(".open-original")?.href).toBe(
+        "https://example.com/demo.mp4",
+      ),
+    );
+    const openOriginal = modal.shadowRoot?.querySelector<HTMLAnchorElement>(".open-original");
+    video?.focus();
+    video?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", bubbles: true, composed: true }),
+    );
+    expect(modal.shadowRoot?.activeElement).toBe(openOriginal);
+    openOriginal?.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Tab", shiftKey: true, bubbles: true, composed: true }),
+    );
+    expect(modal.shadowRoot?.activeElement).toBe(video);
   });
 
   it("accepts parameters on safe raster MIME types", async () => {
