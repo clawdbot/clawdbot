@@ -190,15 +190,21 @@ describeControlUiE2e("Control UI chat message actions", () => {
         },
         {
           role: "assistant",
-          content: "Latest assistant reply.",
+          content: "Latest assistant lead-in.",
           timestamp: Date.now() - 2_000,
           __openclaw: { id: "latest-assistant", seq: 3 },
+        },
+        {
+          role: "assistant",
+          content: "Latest assistant reply.",
+          timestamp: Date.now() - 1_500,
+          __openclaw: { id: "latest-assistant-final", seq: 4 },
         },
         {
           role: "user",
           content: "A newer user follow-up.",
           timestamp: Date.now() - 1_000,
-          __openclaw: { id: "latest-user", seq: 4 },
+          __openclaw: { id: "latest-user", seq: 5 },
         },
       ],
     });
@@ -223,6 +229,8 @@ describeControlUiE2e("Control UI chat message actions", () => {
       const earlierAssistant = assistantGroups.first();
       const latestAssistant = assistantGroups.last();
       await latestAssistant.getByText("Latest assistant reply.", { exact: true }).waitFor();
+      const inlineAction = latestAssistant.locator(".chat-message-actions-row button").first();
+      await expect.poll(() => inlineAction.count()).toBe(1);
 
       await screenshot(page, "latest-assistant-actions-resting-desktop.png");
       await expect
@@ -241,6 +249,14 @@ describeControlUiE2e("Control UI chat message actions", () => {
           footerOpacity: "1",
           footerPointerEvents: "auto",
         });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "0", pointerEvents: "none" });
 
       await page.setViewportSize({ width: 390, height: 844 });
       await screenshot(page, "latest-assistant-actions-resting-mobile.png");
@@ -252,7 +268,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
           footerOpacity: "0",
           footerPointerEvents: "none",
         });
-      await latestAssistant.locator(".chat-bubble").dispatchEvent("pointerup", {
+      await latestAssistant.locator(".chat-bubble").last().dispatchEvent("pointerup", {
         button: 0,
         pointerType: "touch",
       });
@@ -264,6 +280,14 @@ describeControlUiE2e("Control UI chat message actions", () => {
           footerOpacity: "1",
           footerPointerEvents: "auto",
         });
+      await expect
+        .poll(() =>
+          inlineAction.evaluate((element) => ({
+            opacity: getComputedStyle(element).opacity,
+            pointerEvents: getComputedStyle(element).pointerEvents,
+          })),
+        )
+        .toEqual({ opacity: "1", pointerEvents: "auto" });
     } finally {
       await context.close();
     }

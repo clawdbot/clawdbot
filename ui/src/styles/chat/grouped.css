@@ -371,8 +371,6 @@
   min-height: 24px;
   border-radius: var(--radius-md);
   color: var(--muted);
-  opacity: var(--chat-footer-action-opacity, var(--chat-footer-disclosure-opacity, 0));
-  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
   transition:
     opacity 120ms ease-out,
     color 120ms ease-out,
@@ -380,6 +378,19 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.chat-group-footer-actions button,
+.chat-group-footer .chat-send-status__retry {
+  opacity: var(--chat-footer-action-opacity, var(--chat-footer-disclosure-opacity, 0));
+  pointer-events: var(--chat-footer-disclosure-pointer-events, none);
+}
+
+/* Inline rows belong to earlier messages in a group, so the latest footer's
+   resting disclosure must not reveal them before hover or touch. */
+.chat-message-actions-row button {
+  opacity: var(--chat-message-action-opacity, 0);
+  pointer-events: var(--chat-message-action-pointer-events, none);
 }
 
 .chat-group:hover .chat-group-footer-actions button,
@@ -852,6 +863,8 @@ img.chat-avatar.chat-avatar--logo {
     --chat-footer-disclosure-opacity: 1;
     --chat-footer-disclosure-pointer-events: auto;
     --chat-footer-detail-position: static;
+    --chat-message-action-opacity: var(--chat-footer-disclosure-opacity, 0);
+    --chat-message-action-pointer-events: var(--chat-footer-disclosure-pointer-events, none);
     padding-bottom: calc(var(--chat-turn-gap) - var(--chat-touch-row-margin));
     margin-bottom: var(--chat-touch-row-margin);
   }
