@@ -2277,7 +2277,9 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
     }
   });
 
-  it("keeps managed image actions anchored around tiny rendered images", async () => {
+  // Concurrent siblings clear Vitest's ambient test when they finish. Bind polls
+  // to this test so an awaited hover cannot lose its assertion context.
+  it("keeps managed image actions anchored around tiny rendered images", async (context) => {
     const page = await openBrowserPage(1280, 900);
     try {
       await page.setContent(
@@ -2317,7 +2319,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
         </body></html>`,
       );
       const frames = page.locator(".chat-image-frame--managed");
-      await expect.poll(() => frames.count()).toBe(2);
+      await context.expect.poll(() => frames.count()).toBe(2);
       const frameRows = await frames.evaluateAll((elements) =>
         elements.map((element) => {
           const box = element.getBoundingClientRect();
@@ -2328,7 +2330,7 @@ describeBrowserLayout.concurrent("chat responsive browser layout", () => {
       for (const [index, expectedWidth] of [160, 84].entries()) {
         const frame = frames.nth(index);
         await frame.hover();
-        await expect
+        await context.expect
           .poll(() => frame.evaluate((element) => getComputedStyle(element, "::after").opacity))
           .toBe("1");
         const geometry = await frame.evaluate((element) => {
