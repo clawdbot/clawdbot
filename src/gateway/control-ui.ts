@@ -1054,7 +1054,10 @@ export async function handleControlUiHttpRequest(
       );
       return true;
     }
-    const lastModifiedMs = safeFile.mtimeMs;
+    // Filesystem clocks may lead this host; validators cannot postdate message
+    // origination or a future date would 304 later replacements (mirrors
+    // resolveByteResponse in http-byte-range.ts).
+    const lastModifiedMs = Math.floor(Math.min(safeFile.mtimeMs, Date.now()) / 1_000) * 1_000;
     if (isControlUiFileUnmodified(req, lastModifiedMs)) {
       fs.closeSync(safeFile.fd);
       respondControlUiNotModified(res, { immutable: immutableAsset, lastModifiedMs });
