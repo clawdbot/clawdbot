@@ -246,6 +246,14 @@ export const KEYBOARD_SHORTCUTS_ELEMENT = {
   loadModule: () => import("../components/keyboard-shortcuts-dialog.ts"),
 } satisfies OptionalCustomElement;
 
+const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
+
+export const MACOS_TITLEBAR_ELEMENT = {
+  tagName: MACOS_TITLEBAR_TAG,
+  label: MACOS_TITLEBAR_TAG,
+  loadModule: () => import("../components/macos-titlebar-controls.runtime.ts"),
+} satisfies OptionalCustomElement;
+
 export const TERMINAL_PANEL_ELEMENT = {
   tagName: "openclaw-terminal-panel",
   label: "terminal panel",

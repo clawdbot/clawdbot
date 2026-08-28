@@ -37,6 +37,7 @@ import {
   isOptionalElementDefined,
   KEYBOARD_SHORTCUTS_ELEMENT,
   type LazyCustomElementRequestController,
+  MACOS_TITLEBAR_ELEMENT,
   type OptionalCustomElement,
 } from "./lazy-custom-element.ts";
 import { isMobileNavLayout, shouldMergeChatChrome } from "./mobile-nav-layout.ts";
@@ -58,12 +59,6 @@ import {
 import { createUpdateProgressWatcher } from "./update-overlay-helpers.ts";
 
 const EMPTY_SESSION_HAS_DRAFT = () => false;
-const MACOS_TITLEBAR_TAG = "openclaw-macos-titlebar-controls";
-const MACOS_TITLEBAR_ELEMENT = {
-  tagName: MACOS_TITLEBAR_TAG,
-  label: MACOS_TITLEBAR_TAG,
-  loadModule: () => import("../components/macos-titlebar-controls.runtime.ts"),
-} satisfies OptionalCustomElement;
 const SIDEBAR_ATTENTION_ELEMENT = {
   tagName: "openclaw-sidebar-attention",
   label: t("attention.issues"),
