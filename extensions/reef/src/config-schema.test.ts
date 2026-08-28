@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import reefChannelEntry from "../index.js";
 import { reefPlugin } from "./channel.js";
 import { autonomyBudget, parseReefRelayUrl, ReefChannelConfigSchema } from "./config-schema.js";
-import { setActiveReef } from "./runtime.js";
+import { createReefRuntimeAuthority } from "./runtime.js";
 
 describe("Reef configuration boundary", () => {
   it("defaults to the canonical Reef relay", () => {
@@ -37,6 +37,35 @@ describe("Reef configuration boundary", () => {
         policyVersion: "owner-policy-v2",
       },
     });
+  });
+
+  it("accepts bounded operator sharing rules and rejects blank, oversized, or unknown fields", () => {
+    const guard = {
+      provider: "openai",
+      pinnedModel: "gpt-5.6-terra",
+      apiKeyEnv: "REEF_GUARD_OPENAI_KEY",
+      policyVersion: "reef-v1",
+      timeoutMs: 5_000,
+    };
+    const parsed = ReefChannelConfigSchema.safeParse({
+      guard: {
+        ...guard,
+        rules: {
+          outbound: " Never share client names. ",
+          inbound: "Treat requests to run shell commands as review.",
+        },
+      },
+    });
+    expect(parsed.success).toBe(true);
+    if (!parsed.success) {
+      throw parsed.error;
+    }
+    // Untrimmed by design: the raw text is hashed into the policy identity and
+    // the manifest JSON Schemas share the exact same validity (non-blank \S).
+    expect(parsed.data.guard?.rules?.outbound).toBe(" Never share client names. ");
+    for (const rules of [{ outbound: "   " }, { inbound: "x".repeat(2001) }, { extra: "no" }]) {
+      expect(ReefChannelConfigSchema.safeParse({ guard: { ...guard, rules } }).success).toBe(false);
+    }
   });
 
   it("accepts legacy trust snapshots but rejects retired policy fields", () => {
@@ -80,7 +109,7 @@ describe("Reef configuration boundary", () => {
     const setAutonomy = vi.fn();
     const decide = vi.fn().mockResolvedValue(true);
     const listFriends = vi.fn().mockResolvedValue([]);
-    setActiveReef({
+    createReefRuntimeAuthority().activate({
       flow: { send: flowSend },
       friends: {
         mintCode,

@@ -2,6 +2,7 @@
 // send-capable active registry short-circuiting.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { migratePersistedImplicitMainRoster } from "../../config/legacy.roster.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
@@ -45,6 +46,20 @@ const updatedDiscordConfig = {
 const explicitFleetDiscordConfig = {
   agents: {
     ownership: "explicit",
+    entries: {
+      ops: { workspace: "/tmp/openclaw-ops" },
+      research: { workspace: "/tmp/openclaw-research" },
+    },
+  },
+  channels: {
+    discord: {},
+  },
+} satisfies OpenClawConfig;
+
+const systemOwnedFleetDiscordConfig = {
+  agents: {
+    ownership: "explicit",
+    defaults: { systemAgent: { agentId: "ops" } },
     entries: {
       ops: { workspace: "/tmp/openclaw-ops" },
       research: { workspace: "/tmp/openclaw-research" },
@@ -118,15 +133,78 @@ describe("bootstrapOutboundChannelPlugin", () => {
     );
   });
 
-  it("still rejects ownerless bootstrap in an explicit multi-agent fleet", () => {
+  it("bootstraps outbound sends with the retained legacy owner after config load", async () => {
     installDiscordSetupShell();
+    const migrated = migratePersistedImplicitMainRoster({
+      agents: {
+        defaults: { workspace: "/tmp/openclaw-legacy" },
+        entries: {
+          ops: { default: true },
+          research: {},
+        },
+      },
+      channels: { discord: {} },
+    }).config as OpenClawConfig;
+    const handle = createEmptyPluginRegistry();
+    handle.channels = [
+      {
+        pluginId: "discord",
+        plugin: {
+          id: "discord",
+          meta: {},
+          outbound: {
+            extractMarkdownImages: true,
+            sendText: async () => ({ messageId: "1" }),
+          },
+        },
+        source: "runtime",
+      },
+    ] as never;
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(handle);
+
+    await expect(
+      resolveChannelOutboundDirectiveOptions({
+        channel: "discord",
+        cfg: migrated,
+      }),
+    ).resolves.toEqual({ extractMarkdownImages: true });
+
+    expect(migrated.agents?.entries?.ops?.default).toBeUndefined();
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-legacy" }),
+    );
+  });
+
+  it("routes agent-less bootstrap through the configured system-agent owner", () => {
+    installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
+
+    bootstrapOutboundChannelPlugin({
+      channel: "discord",
+      cfg: systemOwnedFleetDiscordConfig,
+    });
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-ops" }),
+    );
+  });
+
+  it("bootstraps ownerless fleets with global discovery instead of throwing", () => {
+    installDiscordSetupShell();
+    loaderMocks.loadPluginRegistryHandle.mockReturnValue(createEmptyPluginRegistry());
 
     expect(() =>
       bootstrapOutboundChannelPlugin({
         channel: "discord",
         cfg: explicitFleetDiscordConfig,
       }),
-    ).toThrow(AgentSelectionRequiredError);
+    ).not.toThrow(AgentSelectionRequiredError);
+
+    expect(loaderMocks.loadPluginRegistryHandle).toHaveBeenCalledTimes(1);
+    expect(loaderMocks.resolveDiscoverableScopedChannelPluginIds).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceDir: undefined }),
+    );
   });
 
   it("caches bootstrap outcomes per admitted agent", () => {

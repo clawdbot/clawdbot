@@ -76,7 +76,11 @@ vi.mock("openclaw/plugin-sdk/system-event-runtime", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/system-event-runtime")>();
   return {
     ...actual,
-    enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+    enqueueRoutedSystemEvent: (
+      text: unknown,
+      route: { sessionKey: unknown },
+      options: Record<string, unknown>,
+    ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
   };
 });
 
@@ -354,7 +358,10 @@ function createContext(overrides?: {
     client: listenerClient,
   };
   const runtimeLog = vi.fn();
-  const resolveSessionKey = vi.fn().mockReturnValue("agent:ops:slack:channel:C1");
+  const resolveSessionKey = vi.fn().mockReturnValue({
+    agentId: "ops",
+    sessionKey: "agent:ops:slack:channel:C1",
+  });
   const isChannelAllowed = vi
     .fn<
       (params: {
@@ -406,7 +413,7 @@ function createContext(overrides?: {
     isChannelAllowed,
     resolveUserName,
     resolveChannelName,
-    resolveSlackSystemEventSessionKey: resolveSessionKey,
+    resolveSlackSystemEventRoute: resolveSessionKey,
   };
   return {
     ctx,
@@ -1307,6 +1314,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "ops",
       sessionKey: "agent:ops:slack:channel:C1",
       heartbeat: { target: "last" },
     });
@@ -1657,7 +1665,8 @@ describe("registerSlackInteractionEvents", () => {
           blocks: [
             {
               type: "section",
-              text: { type: "mrkdwn", text: "*Exec approval required*\nA command needs approval." },
+              block_id: "openclaw_approval_header",
+              text: { type: "mrkdwn", text: "Approval copy can change independently." },
             },
             { type: "section", text: { type: "mrkdwn", text: "Command preview" } },
             {
@@ -3177,6 +3186,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "ops",
       sessionKey: "agent:ops:slack:channel:C1",
       heartbeat: { target: "last" },
     });
@@ -4001,6 +4011,7 @@ describe("registerSlackInteractionEvents", () => {
       source: "hook",
       intent: "immediate",
       reason: "hook:slack-interaction",
+      agentId: "main",
       sessionKey: "agent:main:slack:channel:C99",
       heartbeat: { target: "last" },
     });

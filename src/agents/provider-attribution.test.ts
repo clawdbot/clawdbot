@@ -130,7 +130,8 @@ const loadPluginMetadataSnapshot = vi.hoisted(() =>
   })),
 );
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: (params?: {
     allowScopedSnapshot?: boolean;
     requireDefaultDiscoveryContext?: boolean;
@@ -378,7 +379,6 @@ describe("provider attribution", () => {
       OPENCLAW_VERSION: "2026.3.22",
     });
 
-    expect(policy).toBeDefined();
     expect(policy).toEqual({
       provider: "nvidia",
       enabledByDefault: true,

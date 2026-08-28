@@ -5,6 +5,7 @@ import type { TemplateContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
   createFollowupRun,
+  initialFallbackAttemptOptions,
   createMockTypingSignaler,
   getExecuteAgentTurnForTest,
   loadActualRunCliAgentForTest,
@@ -54,7 +55,11 @@ process.stdin.on("end", () => {
 function useClaudeCliFallback() {
   state.isCliProviderMock.mockReturnValue(true);
   state.runWithModelFallbackMock.mockImplementationOnce(async (params: FallbackRunnerParams) => ({
-    result: await params.run("claude-cli", "claude-opus-4-6"),
+    result: await params.run(
+      "claude-cli",
+      "claude-opus-4-6",
+      initialFallbackAttemptOptions(params),
+    ),
     provider: "claude-cli",
     model: "claude-opus-4-6",
     attempts: [],
@@ -92,6 +97,7 @@ function useScriptedClaudeCliBackend() {
 
 function createClaudeCliFollowupRun() {
   const followupRun = createFollowupRun();
+  followupRun.run.agentId = "agent";
   followupRun.run.provider = "claude-cli";
   followupRun.run.model = "claude-opus-4-6";
   followupRun.run.skillsSnapshot = { prompt: "", skills: [], version: 0 };

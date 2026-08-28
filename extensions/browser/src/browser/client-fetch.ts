@@ -13,8 +13,10 @@ import {
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { readResponseWithLimit } from "openclaw/plugin-sdk/response-limit-runtime";
 import { fetchWithSsrFGuard } from "openclaw/plugin-sdk/ssrf-runtime";
-import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
+import {
+  normalizeOptionalString,
+  normalizeLowercaseStringOrEmpty,
+} from "openclaw/plugin-sdk/string-coerce-runtime";
 import { formatCliCommand } from "../cli/command-format.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { isLoopbackHost } from "../gateway/net.js";
@@ -23,6 +25,8 @@ import { resolveBrowserConfig, resolveProfile } from "./config.js";
 import { resolveBrowserControlAuth } from "./control-auth.js";
 import {
   parseBrowserErrorPayload,
+  type BrowserActErrorCode,
+  type BrowserErrorPayload,
   type BrowserNoDisplayErrorMetadata,
   type BrowserNoDisplayErrorDetails,
 } from "./errors.js";
@@ -32,15 +36,19 @@ import { resolveBrowserRateLimitMessage } from "./rate-limit-message.js";
 // but returned an error response). Must NOT be wrapped with "Can't reach ..." messaging.
 export class BrowserServiceError extends Error {
   readonly status?: number;
+  readonly code?: BrowserActErrorCode;
+  readonly unrecognizedCode?: true;
   readonly reason?: BrowserNoDisplayErrorMetadata["reason"];
   readonly details?: BrowserNoDisplayErrorDetails;
 
-  constructor(message: string, metadata?: BrowserNoDisplayErrorMetadata, status?: number) {
+  constructor(message: string, metadata?: BrowserErrorPayload, status?: number) {
     super(message);
     this.name = "BrowserServiceError";
     this.status = status;
-    this.reason = metadata?.reason;
-    this.details = metadata?.details;
+    this.code = metadata?.code;
+    this.unrecognizedCode = metadata?.unrecognizedCode;
+    this.reason = metadata && "reason" in metadata ? metadata.reason : undefined;
+    this.details = metadata && "details" in metadata ? metadata.details : undefined;
   }
 }
 
@@ -54,7 +62,7 @@ function browserServiceErrorFromPayload(
   const modelHint = resolveBrowserServiceModelHint(message, status);
   return new BrowserServiceError(
     modelHint ? appendBrowserToolModelHint(message, modelHint) : message,
-    parsed && "reason" in parsed ? parsed : undefined,
+    parsed ?? undefined,
     status,
   );
 }

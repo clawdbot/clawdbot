@@ -81,7 +81,7 @@ const ACTIVE_MEMORY_RESERVED_TOOLS_ALLOW = new Set([
   "sessions_yield",
   "subagents",
   "tts",
-  "update_plan",
+  "progress_card",
   "video_generate",
   "web_fetch",
   "web_search",
@@ -253,6 +253,7 @@ type ActiveMemoryPartialTimeoutError = Error & {
   activeMemoryPartialReply?: string;
   activeMemorySearchDebug?: ActiveMemorySearchDebug;
   activeMemoryUnavailableMemorySearch?: boolean;
+  activeMemoryHasUsableMemoryResult?: boolean;
 };
 
 type TranscriptReadLimits = {

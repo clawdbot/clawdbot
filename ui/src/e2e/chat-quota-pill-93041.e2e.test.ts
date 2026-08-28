@@ -3,7 +3,7 @@
 import path from "node:path";
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { controlUiE2eWaitTimeoutMs, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -50,6 +50,11 @@ const gatewayInjectedSessions = {
     },
   ],
   ts: Date.now(),
+};
+
+const highPressureSessions = {
+  ...gatewayInjectedSessions,
+  sessions: [{ ...gatewayInjectedSessions.sessions[0], totalTokens: 190_000 }],
 };
 
 const claudeSubscriptionAuthStatus = {
@@ -123,7 +128,7 @@ async function openChat(
       viewport: { height: 900, width: 1280 },
     });
     page = await context.newPage();
-    page.setDefaultTimeout(15_000);
+    page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
     const gateway = await installMockGateway(page, {
       deferredMethods,
       methodResponses: { "models.authStatus": authStatus, ...extraMethodResponses },
@@ -144,6 +149,31 @@ async function closeChat(fixture: { context: BrowserContext; page: Page }): Prom
 }
 
 suite.define(() => {
+  it("shows high context pressure without a compact action", async () => {
+    const fixture = await openChat(authStatusWithUsage, {
+      "sessions.list": highPressureSessions,
+    });
+    const { page } = fixture;
+    try {
+      const contextRing = page.locator(".context-ring");
+      await contextRing.waitFor({ state: "visible" });
+      expect(await contextRing.getAttribute("aria-label")).toBe(
+        "Session context usage: 190k of 200k (95%)",
+      );
+      expect(
+        await contextRing.evaluate((element) =>
+          element.classList.contains("context-ring--warning"),
+        ),
+      ).toBe(true);
+      expect(await page.locator(".context-usage button").count()).toBe(0);
+      await page.screenshot({
+        path: path.join(artifactDir, "00-high-context-without-compact-action.png"),
+      });
+    } finally {
+      await closeChat(fixture);
+    }
+  });
+
   it("renders provider usage inside the desktop context popover", async () => {
     const fixture = await openChat(authStatusWithUsage, {
       "sessions.list": gatewayInjectedSessions,

@@ -217,6 +217,33 @@ function runRestartArgParser(...args: string[]) {
   return spawnSync("bash", [harnessPath, ...args], { encoding: "utf8" });
 }
 
+function runSigningEnvironmentBlock(signIdentity: string) {
+  const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-signing-test-"));
+  tempRoots.push(root);
+  const script = readFileSync(restartScriptPath, "utf8");
+  const start = script.indexOf('if [ "$NO_SIGN" -eq 1 ]; then');
+  const signingBlock = script.slice(start, script.indexOf("# 3) Package and sign", start));
+  const harnessPath = join(root, "signing-environment-harness.sh");
+  writeFileSync(
+    harnessPath,
+    [
+      "#!/usr/bin/env bash",
+      "set -euo pipefail",
+      "NO_SIGN=0",
+      "SIGN=1",
+      "check_signing_keys() { return 0; }",
+      'fail() { printf "ERROR: %s\\n" "$*" >&2; exit 1; }',
+      signingBlock,
+      'printf "%s\\n" "${SIGN_IDENTITY-<unset>}"',
+    ].join("\n"),
+  );
+  chmodSync(harnessPath, 0o755);
+  return spawnSync("bash", [harnessPath], {
+    encoding: "utf8",
+    env: { ...process.env, SIGN_IDENTITY: signIdentity },
+  });
+}
+
 function runProfileGuard(profile: string) {
   const root = mkdtempSync(join(tmpdir(), "openclaw-restart-mac-profile-test-"));
   tempRoots.push(root);
@@ -355,6 +382,15 @@ afterEach(() => {
 });
 
 describe("scripts/restart-mac.sh", () => {
+  it("preserves an explicit signing identity through signed packaging", () => {
+    const identity = "Developer ID Application: OpenClaw Foundation (FWJYW4S8P8)";
+    const result = runSigningEnvironmentBlock(identity);
+
+    expect(result.status).toBe(0);
+    expect(result.stdout.trim()).toBe(identity);
+    expect(result.stderr).toBe("");
+  });
+
   it("rejects unknown restart options before side effects", () => {
     const result = runRestartArgParser("--wat");
 

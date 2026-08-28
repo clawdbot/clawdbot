@@ -15,6 +15,7 @@ import { sessionDeliveryChannel } from "../../utils/delivery-context.shared.js";
 import { performGatewaySessionReset } from "../session-reset-service.js";
 import { loadSessionEntry } from "../session-utils.js";
 import type { TrustedSessionCreation } from "./session-creation-provenance.js";
+import type { GatewayOperatorRoleActor } from "./shared-types.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
 
 export async function runSessionResetFromAgent(params: {
@@ -22,6 +23,8 @@ export async function runSessionResetFromAgent(params: {
   agentId?: string;
   reason: "new" | "reset";
   creation: TrustedSessionCreation;
+  requestingOperatorProfileId?: string;
+  operatorRoleActor?: GatewayOperatorRoleActor;
   assertCurrent?: () => void;
   onCommitted?: (commit: { key: string; sessionId: string }) => void;
 }) {
@@ -31,6 +34,11 @@ export async function runSessionResetFromAgent(params: {
     reason: params.reason,
     commandSource: "gateway:agent",
     creation: params.creation,
+    ...(params.requestingOperatorProfileId
+      ? { requestingOperatorProfileId: params.requestingOperatorProfileId }
+      : {}),
+    ...(params.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
+    armSessionDiffBaselineCapture: true,
     assertCurrent: params.assertCurrent,
     onCommitted: params.onCommitted,
   });

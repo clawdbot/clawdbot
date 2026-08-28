@@ -2,6 +2,7 @@ import { Command } from "commander";
 // Register status/health/session tests cover status-related command registration.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ExpectedCliError } from "../failure-output.js";
 import { registerStatusHealthSessionsCommands } from "./register.status-health-sessions.js";
 
 const mocks = vi.hoisted(() => ({
@@ -14,15 +15,11 @@ const mocks = vi.hoisted(() => ({
   sessionsArchiveCommand: vi.fn(),
   sessionsDeleteCommand: vi.fn(),
   exportTrajectoryCommand: vi.fn(),
-  tasksListCommand: vi.fn(),
-  tasksAuditCommand: vi.fn(),
-  tasksMaintenanceCommand: vi.fn(),
-  tasksShowCommand: vi.fn(),
-  tasksNotifyCommand: vi.fn(),
-  tasksCancelCommand: vi.fn(),
-  flowsListCommand: vi.fn(),
-  flowsShowCommand: vi.fn(),
-  flowsCancelCommand: vi.fn(),
+  sessionsCleanupModuleLoaded: vi.fn(),
+  sessionsTailModuleLoaded: vi.fn(),
+  sessionsCompactModuleLoaded: vi.fn(),
+  sessionsLifecycleModuleLoaded: vi.fn(),
+  exportTrajectoryModuleLoaded: vi.fn(),
   setVerbose: vi.fn(),
   runtime: {
     log: vi.fn(),
@@ -40,15 +37,6 @@ const sessionsCompactCommand = mocks.sessionsCompactCommand;
 const sessionsArchiveCommand = mocks.sessionsArchiveCommand;
 const sessionsDeleteCommand = mocks.sessionsDeleteCommand;
 const exportTrajectoryCommand = mocks.exportTrajectoryCommand;
-const tasksListCommand = mocks.tasksListCommand;
-const tasksAuditCommand = mocks.tasksAuditCommand;
-const tasksMaintenanceCommand = mocks.tasksMaintenanceCommand;
-const tasksShowCommand = mocks.tasksShowCommand;
-const tasksNotifyCommand = mocks.tasksNotifyCommand;
-const tasksCancelCommand = mocks.tasksCancelCommand;
-const flowsListCommand = mocks.flowsListCommand;
-const flowsShowCommand = mocks.flowsShowCommand;
-const flowsCancelCommand = mocks.flowsCancelCommand;
 const setVerbose = mocks.setVerbose;
 const runtime = mocks.runtime;
 
@@ -85,41 +73,33 @@ vi.mock("../../commands/sessions.js", () => ({
   sessionsCommand: mocks.sessionsCommand,
 }));
 
-vi.mock("../../commands/sessions-cleanup.js", () => ({
-  sessionsCleanupCommand: mocks.sessionsCleanupCommand,
-}));
+vi.mock("../../commands/sessions-cleanup.js", () => {
+  mocks.sessionsCleanupModuleLoaded();
+  return { sessionsCleanupCommand: mocks.sessionsCleanupCommand };
+});
 
-vi.mock("../../commands/sessions-tail.js", () => ({
-  sessionsTailCommand: mocks.sessionsTailCommand,
-}));
+vi.mock("../../commands/sessions-tail.js", () => {
+  mocks.sessionsTailModuleLoaded();
+  return { sessionsTailCommand: mocks.sessionsTailCommand };
+});
 
-vi.mock("../../commands/sessions-compact.js", () => ({
-  sessionsCompactCommand: mocks.sessionsCompactCommand,
-}));
+vi.mock("../../commands/sessions-compact.js", () => {
+  mocks.sessionsCompactModuleLoaded();
+  return { sessionsCompactCommand: mocks.sessionsCompactCommand };
+});
 
-vi.mock("../../commands/sessions-lifecycle.js", () => ({
-  sessionsArchiveCommand: mocks.sessionsArchiveCommand,
-  sessionsDeleteCommand: mocks.sessionsDeleteCommand,
-}));
+vi.mock("../../commands/sessions-lifecycle.js", () => {
+  mocks.sessionsLifecycleModuleLoaded();
+  return {
+    sessionsArchiveCommand: mocks.sessionsArchiveCommand,
+    sessionsDeleteCommand: mocks.sessionsDeleteCommand,
+  };
+});
 
-vi.mock("../../commands/export-trajectory.js", () => ({
-  exportTrajectoryCommand: mocks.exportTrajectoryCommand,
-}));
-
-vi.mock("../../commands/tasks.js", () => ({
-  tasksListCommand: mocks.tasksListCommand,
-  tasksAuditCommand: mocks.tasksAuditCommand,
-  tasksMaintenanceCommand: mocks.tasksMaintenanceCommand,
-  tasksShowCommand: mocks.tasksShowCommand,
-  tasksNotifyCommand: mocks.tasksNotifyCommand,
-  tasksCancelCommand: mocks.tasksCancelCommand,
-}));
-
-vi.mock("../../commands/flows.js", () => ({
-  flowsListCommand: mocks.flowsListCommand,
-  flowsShowCommand: mocks.flowsShowCommand,
-  flowsCancelCommand: mocks.flowsCancelCommand,
-}));
+vi.mock("../../commands/export-trajectory.js", () => {
+  mocks.exportTrajectoryModuleLoaded();
+  return { exportTrajectoryCommand: mocks.exportTrajectoryCommand };
+});
 
 vi.mock("../../globals.js", () => ({
   setVerbose: mocks.setVerbose,
@@ -130,10 +110,27 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 describe("registerStatusHealthSessionsCommands", () => {
-  async function runCli(args: string[]) {
+  function createProgram() {
     const program = new Command();
     registerStatusHealthSessionsCommands(program);
-    await program.parseAsync(args, { from: "user" });
+    return program;
+  }
+
+  async function runCli(args: string[]) {
+    await createProgram().parseAsync(args, { from: "user" });
+  }
+
+  async function expectSessionsRegistrationError(
+    args: string[],
+    message: string,
+    owner: typeof sessionsCleanupCommand,
+  ) {
+    const execution = runCli(args);
+    await expect(execution).rejects.toBeInstanceOf(ExpectedCliError);
+    await expect(execution).rejects.toMatchObject({ message });
+    expect(runtime.error).not.toHaveBeenCalled();
+    expect(runtime.exit).not.toHaveBeenCalled();
+    expect(owner).not.toHaveBeenCalled();
   }
 
   beforeEach(() => {
@@ -148,15 +145,82 @@ describe("registerStatusHealthSessionsCommands", () => {
     sessionsArchiveCommand.mockResolvedValue(undefined);
     sessionsDeleteCommand.mockResolvedValue(undefined);
     exportTrajectoryCommand.mockResolvedValue(undefined);
-    tasksListCommand.mockResolvedValue(undefined);
-    tasksAuditCommand.mockResolvedValue(undefined);
-    tasksMaintenanceCommand.mockResolvedValue(undefined);
-    tasksShowCommand.mockResolvedValue(undefined);
-    tasksNotifyCommand.mockResolvedValue(undefined);
-    tasksCancelCommand.mockResolvedValue(undefined);
-    flowsListCommand.mockResolvedValue(undefined);
-    flowsShowCommand.mockResolvedValue(undefined);
-    flowsCancelCommand.mockResolvedValue(undefined);
+  });
+
+  it.each([
+    {
+      name: "cleanup inherited list filter",
+      args: ["sessions", "--active", "5", "cleanup", "--json"],
+      message:
+        "`sessions cleanup` does not support the parent `sessions` option --active; session-list filters cannot scope session maintenance.",
+      owner: sessionsCleanupCommand,
+    },
+    {
+      name: "human-only tail inherited JSON",
+      args: ["sessions", "--json", "tail"],
+      message:
+        "`sessions tail` does not support the parent `sessions` option --json; trajectory tail emits human-readable progress and selects sessions separately.",
+      owner: sessionsTailCommand,
+    },
+    {
+      name: "trajectory export inherited all-agent scope",
+      args: ["sessions", "--all-agents", "export-trajectory", "--json"],
+      message:
+        "`sessions export-trajectory` does not support the parent `sessions` option --all-agents; trajectory export targets one session and cannot apply session-list filters.",
+      owner: exportTrajectoryCommand,
+    },
+    {
+      name: "archive inherited store",
+      args: ["sessions", "--store", "/tmp/other.sqlite", "archive", "agent:main:test", "--json"],
+      message:
+        "`sessions archive` does not support the parent `sessions` option --store; the gateway resolves target stores from each key and --agent.",
+      owner: sessionsArchiveCommand,
+    },
+    {
+      name: "delete inherited all-agent scope",
+      args: ["sessions", "--all-agents", "delete", "agent:main:test", "--yes", "--json"],
+      message:
+        "`sessions delete` does not support the parent `sessions` option --all-agents; the gateway resolves target stores from each key and --agent.",
+      owner: sessionsDeleteCommand,
+    },
+    {
+      name: "archive invalid timeout",
+      args: ["sessions", "--json", "archive", "agent:main:test", "--timeout", "0"],
+      message: "--timeout must be a positive integer (milliseconds).",
+      owner: sessionsArchiveCommand,
+    },
+    {
+      name: "delete invalid timeout",
+      args: ["sessions", "delete", "agent:main:test", "--timeout", "nope", "--yes", "--json"],
+      message: "--timeout must be a positive integer (milliseconds).",
+      owner: sessionsDeleteCommand,
+    },
+    {
+      name: "compact inherited all-agent scope",
+      args: ["sessions", "--all-agents", "compact", "agent:main:test", "--json"],
+      message:
+        "`sessions compact` does not support the parent `sessions` option --all-agents; the gateway resolves the target store from <key> and --agent.",
+      owner: sessionsCompactCommand,
+    },
+    {
+      name: "compact invalid max-lines",
+      args: ["sessions", "compact", "agent:main:test", "--max-lines", "0", "--json"],
+      message: "--max-lines must be a positive integer.",
+      owner: sessionsCompactCommand,
+    },
+    {
+      name: "compact invalid timeout",
+      args: ["sessions", "--json", "compact", "agent:main:test", "--timeout", "0"],
+      message: "--timeout must be a positive integer (milliseconds).",
+      owner: sessionsCompactCommand,
+    },
+  ])("rejects $name before loading any session owner", async ({ args, message, owner }) => {
+    await expectSessionsRegistrationError(args, message, owner);
+    expect(mocks.sessionsCleanupModuleLoaded).not.toHaveBeenCalled();
+    expect(mocks.sessionsTailModuleLoaded).not.toHaveBeenCalled();
+    expect(mocks.sessionsCompactModuleLoaded).not.toHaveBeenCalled();
+    expect(mocks.sessionsLifecycleModuleLoaded).not.toHaveBeenCalled();
+    expect(mocks.exportTrajectoryModuleLoaded).not.toHaveBeenCalled();
   });
 
   it("runs status command with timeout and debug-derived verbose", async () => {
@@ -166,6 +230,8 @@ describe("registerStatusHealthSessionsCommands", () => {
       "--all",
       "--deep",
       "--usage",
+      "--agent",
+      "beta",
       "--debug",
       "--timeout",
       "5000",
@@ -177,6 +243,7 @@ describe("registerStatusHealthSessionsCommands", () => {
       all: true,
       deep: true,
       usage: true,
+      agent: "beta",
       timeoutMs: 5000,
       verbose: true,
     });
@@ -242,6 +309,19 @@ describe("registerStatusHealthSessionsCommands", () => {
       agent: "work",
       allAgents: false,
     });
+  });
+
+  it("documents explicit selection for multi-agent session-store commands", () => {
+    const sessions = createProgram().commands.find((command) => command.name() === "sessions");
+    const list = sessions?.commands.find((command) => command.name() === "list");
+    const cleanup = sessions?.commands.find((command) => command.name() === "cleanup");
+
+    expect(list?.options.find((option) => option.long === "--agent")?.description).toBe(
+      "Agent id to inspect (required for multiple explicit agents)",
+    );
+    expect(cleanup?.options.find((option) => option.long === "--agent")?.description).toBe(
+      "Agent id to maintain (required for multiple explicit agents)",
+    );
   });
 
   it("runs sessions command with --all-agents forwarding", async () => {
@@ -320,28 +400,19 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("rejects an inherited parent --store for compact instead of mutating a different store (regression #91378)", async () => {
-    await runCli(["sessions", "--store", "/tmp/other-sessions.json", "compact", "agent:work:main"]);
-
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--store"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(sessionsCompactCommand).not.toHaveBeenCalled();
+    await expectSessionsRegistrationError(
+      ["sessions", "--store", "/tmp/other-sessions.json", "compact", "agent:work:main"],
+      "`sessions compact` does not support the parent `sessions` option --store; the gateway resolves the target store from <key> and --agent.",
+      sessionsCompactCommand,
+    );
   });
 
   it("rejects other unsupported inherited parent list options for compact", async () => {
-    await runCli([
-      "sessions",
-      "--all-agents",
-      "--limit",
-      "25",
-      "--verbose",
-      "compact",
-      "agent:work:main",
-    ]);
-
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--verbose"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(sessionsCompactCommand).not.toHaveBeenCalled();
+    await expectSessionsRegistrationError(
+      ["sessions", "--all-agents", "--limit", "25", "--verbose", "compact", "agent:work:main"],
+      "`sessions compact` does not support the parent `sessions` options --all-agents, --limit, --verbose; the gateway resolves the target store from <key> and --agent.",
+      sessionsCompactCommand,
+    );
   });
 
   it("forwards multi-key archive options and inherits parent sessions output options", async () => {
@@ -400,29 +471,26 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("rejects inherited session-list filters for lifecycle mutations", async () => {
-    await runCli([
-      "sessions",
-      "--store",
-      "/tmp/other-sessions.json",
-      "--all-agents",
-      "archive",
-      "agent:main:scratch-1",
-    ]);
-
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--store"));
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(sessionsArchiveCommand).not.toHaveBeenCalled();
+    await expectSessionsRegistrationError(
+      [
+        "sessions",
+        "--store",
+        "/tmp/other-sessions.json",
+        "--all-agents",
+        "archive",
+        "agent:main:scratch-1",
+      ],
+      "`sessions archive` does not support the parent `sessions` options --store, --all-agents; the gateway resolves target stores from each key and --agent.",
+      sessionsArchiveCommand,
+    );
   });
 
   it("rejects invalid lifecycle RPC timeouts", async () => {
-    await runCli(["sessions", "delete", "agent:main:scratch-1", "--timeout", "0", "--yes"]);
-
-    expect(runtime.error).toHaveBeenCalledWith(
+    await expectSessionsRegistrationError(
+      ["sessions", "delete", "agent:main:scratch-1", "--timeout", "0", "--yes"],
       "--timeout must be a positive integer (milliseconds).",
+      sessionsDeleteCommand,
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(sessionsDeleteCommand).not.toHaveBeenCalled();
   });
 
   it("forwards sessions list-side options", async () => {
@@ -493,11 +561,11 @@ describe("registerStatusHealthSessionsCommands", () => {
     { flag: "--active", value: "5" },
     { flag: "--limit", value: "1" },
   ])("rejects inherited $flag before running session cleanup", async ({ flag, value }) => {
-    await runCli(["sessions", flag, value, "cleanup", "--enforce"]);
-
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining(flag));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(sessionsCleanupCommand).not.toHaveBeenCalled();
+    await expectSessionsRegistrationError(
+      ["sessions", flag, value, "cleanup", "--enforce"],
+      `\`sessions cleanup\` does not support the parent \`sessions\` option ${flag}; session-list filters cannot scope session maintenance.`,
+      sessionsCleanupCommand,
+    );
   });
 
   it("runs sessions tail with forwarded progress options", async () => {
@@ -523,14 +591,6 @@ describe("registerStatusHealthSessionsCommands", () => {
       follow: true,
       tail: "5",
     });
-  });
-
-  it("rejects inherited JSON mode for human-readable session tail", async () => {
-    await runCli(["sessions", "--json", "tail"]);
-
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--json"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(sessionsTailCommand).not.toHaveBeenCalled();
   });
 
   it("runs sessions export-trajectory with owner-routable export options", async () => {
@@ -573,114 +633,10 @@ describe("registerStatusHealthSessionsCommands", () => {
   });
 
   it("rejects inherited all-agent scope for single-session trajectory exports", async () => {
-    await runCli([
-      "sessions",
-      "--all-agents",
-      "export-trajectory",
-      "--session-key",
-      "agent:main:main",
-    ]);
-
-    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("--all-agents"));
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(exportTrajectoryCommand).not.toHaveBeenCalled();
-  });
-
-  it("runs tasks list from the parent command", async () => {
-    await runCli(["tasks", "--json", "--runtime", "acp", "--status", "running"]);
-
-    expectCommandOptions(tasksListCommand, {
-      json: true,
-      runtime: "acp",
-      status: "running",
-    });
-  });
-
-  it("runs tasks show subcommand with lookup forwarding", async () => {
-    await runCli(["tasks", "show", "run-123", "--json"]);
-
-    expectCommandOptions(tasksShowCommand, {
-      lookup: "run-123",
-      json: true,
-    });
-  });
-
-  it("runs tasks maintenance subcommand with apply forwarding", async () => {
-    await runCli(["tasks", "--json", "maintenance", "--apply"]);
-
-    expectCommandOptions(tasksMaintenanceCommand, {
-      json: true,
-      apply: true,
-    });
-  });
-
-  it("runs tasks audit subcommand with filters", async () => {
-    await runCli([
-      "tasks",
-      "--json",
-      "audit",
-      "--severity",
-      "error",
-      "--code",
-      "stale_running",
-      "--limit",
-      "5",
-    ]);
-
-    expectCommandOptions(tasksAuditCommand, {
-      json: true,
-      severity: "error",
-      code: "stale_running",
-      limit: 5,
-    });
-  });
-
-  it("rejects partially numeric tasks audit limits", async () => {
-    await runCli(["tasks", "--json", "audit", "--limit", "5abc"]);
-
-    expect(runtime.error).toHaveBeenCalledWith(
-      "--limit must be a positive integer, for example --limit 25.",
+    await expectSessionsRegistrationError(
+      ["sessions", "--all-agents", "export-trajectory", "--session-key", "agent:main:main"],
+      "`sessions export-trajectory` does not support the parent `sessions` option --all-agents; trajectory export targets one session and cannot apply session-list filters.",
+      exportTrajectoryCommand,
     );
-    expect(runtime.exit).toHaveBeenCalledWith(1);
-    expect(tasksAuditCommand).not.toHaveBeenCalled();
-  });
-
-  it("routes tasks flow commands through the TaskFlow handlers", async () => {
-    await runCli(["tasks", "flow", "list", "--json", "--status", "blocked"]);
-    expectCommandOptions(flowsListCommand, {});
-
-    await runCli(["tasks", "flow", "show", "flow-123", "--json"]);
-    expectCommandOptions(flowsShowCommand, {
-      lookup: "flow-123",
-    });
-
-    await runCli(["tasks", "flow", "cancel", "flow-123"]);
-    expectCommandOptions(flowsCancelCommand, {
-      lookup: "flow-123",
-    });
-  });
-
-  it("runs tasks notify subcommand with lookup and policy forwarding", async () => {
-    await runCli(["tasks", "notify", "run-123", "state_changes"]);
-
-    expectCommandOptions(tasksNotifyCommand, {
-      lookup: "run-123",
-      notify: "state_changes",
-    });
-  });
-
-  it("runs tasks cancel subcommand with lookup forwarding", async () => {
-    await runCli(["tasks", "cancel", "run-123"]);
-
-    expectCommandOptions(tasksCancelCommand, {
-      lookup: "run-123",
-    });
-  });
-
-  it("does not register the legacy top-level flows command", () => {
-    const program = new Command();
-    registerStatusHealthSessionsCommands(program);
-
-    expect(program.commands.find((command) => command.name() === "flows")).toBeUndefined();
   });
 });

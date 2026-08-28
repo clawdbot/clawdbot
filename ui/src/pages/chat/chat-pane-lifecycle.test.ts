@@ -15,6 +15,7 @@ import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.t
 import type { ApplicationContext } from "../../app/context.ts";
 import { createInitialUserMessageHandoff } from "../../app/initial-user-message-handoff.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { ChatPaneBase } from "./chat-pane-base.ts";
 import { createTestChatPane, type TestChatPane } from "./chat-pane.test-support.ts";
 import { applySelectedChatAgent } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -56,7 +57,9 @@ describe("chat pane composer prefill attention", () => {
 
     expect(document.activeElement).toBe(textarea);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(1_200);
+    vi.advanceTimersByTime(599);
+    expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
+    vi.advanceTimersByTime(1);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
@@ -66,12 +69,12 @@ describe("chat pane composer prefill attention", () => {
     const { input, lifecycle } = createComposerAttentionFixture();
 
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(300);
     lifecycle.updated(new Map([["focusComposer", false]]));
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(599);
 
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(true);
-    vi.advanceTimersByTime(600);
+    vi.advanceTimersByTime(1);
     expect(input.classList.contains("agent-chat__input--prefill-attention")).toBe(false);
     input.remove();
   });
@@ -771,6 +774,69 @@ describe("chat pane presentation teardown", () => {
 });
 
 describe("chat pane connection lifecycle", () => {
+  it("renders once while initially hidden, then reconciles hidden invalidations", async () => {
+    let visibilityState: DocumentVisibilityState = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => visibilityState);
+    const { pane, requestUpdate, state } = createTestChatPane({
+      client: { request: vi.fn() } as unknown as GatewayBrowserClient,
+      sessions: {} as SessionCapability,
+    });
+    const lifecycle = pane as TestChatPane & {
+      performUpdate: () => void;
+      hasUpdated: boolean;
+      render: () => unknown;
+      requestUpdate: () => void;
+    };
+    lifecycle.render = () => null;
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await vi.waitFor(() => expect(lifecycle.hasUpdated).toBe(true), { interval: 1, timeout: 50 });
+    await lifecycle.updateComplete;
+    const performUpdate = vi.spyOn(lifecycle, "performUpdate");
+    const cancelAnimationFrame = vi.spyOn(globalThis, "cancelAnimationFrame");
+
+    state.chatStreamRenderFrame = 7;
+    document.dispatchEvent(new Event("visibilitychange"));
+    expect(cancelAnimationFrame).toHaveBeenCalledWith(7);
+    expect(state.chatStreamRenderFrame).toBeNull();
+    expect(requestUpdate).toHaveBeenCalledOnce();
+    lifecycle.requestUpdate();
+    lifecycle.requestUpdate();
+    await Promise.resolve();
+    expect(performUpdate).not.toHaveBeenCalled();
+
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await lifecycle.updateComplete;
+    expect(performUpdate).toHaveBeenCalledOnce();
+
+    const addVisibilityListener = vi.spyOn(document, "addEventListener");
+    const removeVisibilityListener = vi.spyOn(document, "removeEventListener");
+    visibilityState = "hidden";
+    lifecycle.requestUpdate();
+    await Promise.resolve();
+    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+    expect(removeVisibilityListener).toHaveBeenCalledWith("visibilitychange", expect.any(Function));
+
+    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: true });
+    ChatPaneBase.prototype.connectedCallback.call(lifecycle);
+    await Promise.resolve();
+    visibilityState = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await lifecycle.updateComplete;
+    expect(performUpdate).toHaveBeenCalledTimes(2);
+
+    Object.defineProperty(lifecycle, "isConnected", { configurable: true, value: false });
+    ChatPaneBase.prototype.disconnectedCallback.call(lifecycle);
+    addVisibilityListener.mockClear();
+    lifecycle.requestUpdate();
+    await lifecycle.updateComplete;
+    expect(addVisibilityListener).not.toHaveBeenCalledWith(
+      "visibilitychange",
+      expect.any(Function),
+    );
+  });
+
   it("fully tears down realtime Talk when the gateway disconnects", () => {
     const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
     const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
@@ -851,7 +917,6 @@ describe("chat pane connection lifecycle", () => {
     const cancelCommit = vi.fn();
     const initialScrollGeneration = state.chatScrollGeneration;
     state.chatScrollCommitCleanup = cancelCommit;
-    state.chatIsProgrammaticScroll = true;
 
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
@@ -863,7 +928,6 @@ describe("chat pane connection lifecycle", () => {
     expect(cancelCommit).toHaveBeenCalledOnce();
     expect(state.chatScrollCommitCleanup).toBeNull();
     expect(state.chatScrollGeneration).toBe(initialScrollGeneration + 1);
-    expect(state.chatIsProgrammaticScroll).toBe(false);
   });
 
   it("retires pending model selection state when the Gateway owner changes", () => {
@@ -885,6 +949,29 @@ describe("chat pane connection lifecycle", () => {
 
     expect(state.chatModelSwitchPromises).toEqual({});
     expect(retireModelOverride).toHaveBeenCalledWith("global");
+  });
+
+  it("discards Guardian and system notices when Gateway ownership changes", () => {
+    const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
+    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    state.guardianNotices = [
+      {
+        key: "guardian:old-run:review:denied",
+        runId: "old-run",
+        timestamp: 1,
+        kind: "denied",
+        command: "private command",
+      },
+    ];
+
+    pane.applyGatewaySnapshot({
+      ...pane.context.gateway.snapshot,
+      client,
+      phase: "reconnecting",
+      hello: null,
+    });
+
+    expect(state.guardianNotices).toEqual([]);
   });
 
   it("releases sending state when the Gateway owner changes", () => {
@@ -947,7 +1034,7 @@ describe("chat pane connection lifecycle", () => {
     });
 
     expect(request).toHaveBeenCalledWith(
-      "chat.history",
+      "chat.startup",
       expect.objectContaining({ limit: 100, sessionKey: state.sessionKey }),
     );
     expect(deferHydration).toHaveBeenCalledWith(state.sessionKey, expect.any(Promise));

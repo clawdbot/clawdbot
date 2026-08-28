@@ -6,6 +6,41 @@ import Testing
 @testable import OpenClaw
 
 struct MacNodeRuntimeTests {
+    private actor ComputerProviderWorkerProbe: MacNodeHostWorking {
+        private let commands: Set<String>
+        private(set) var invokedCommands: [String] = []
+
+        init(commands: Set<String>) {
+            self.commands = commands
+        }
+
+        func start(launch _: MacNodeHostWorkerLaunch) async throws -> MacNodeHostManifest {
+            MacNodeHostManifest(
+                version: "test",
+                caps: ["screen", "computer"],
+                commands: Array(self.commands),
+                pathEnv: "/usr/bin:/bin")
+        }
+
+        func supports(_ command: String) -> Bool {
+            self.commands.contains(command)
+        }
+
+        func invoke(_ request: BridgeInvokeRequest) -> BridgeInvokeResponse {
+            self.invokedCommands.append(request.command)
+            return BridgeInvokeResponse(id: request.id, ok: true, payloadJSON: #"{"owner":"worker"}"#)
+        }
+
+        func handleInput(invokeId _: String, seq _: Int, payloadJSON _: String) {}
+        func cancel(invokeId _: String) {}
+        func setRoute(_: GatewayNodeSessionRoute?, authorityGeneration _: UInt64) -> Bool {
+            true
+        }
+
+        func publishInventory(ifCurrentRoute _: GatewayNodeSessionRoute) {}
+        func stop() {}
+    }
+
     private final class LockedCounter: @unchecked Sendable {
         private let lock = NSLock()
         private var count = 0
@@ -25,6 +60,7 @@ struct MacNodeRuntimeTests {
 
     private final class CatalogWorkerProbe: @unchecked Sendable {
         private let lock = NSLock()
+        let firstStarted = AsyncTestGate()
         private let releaseFirst = DispatchSemaphore(value: 0)
         private var calls = 0
         private var active = 0
@@ -38,6 +74,7 @@ struct MacNodeRuntimeTests {
             self.peakActive = max(self.peakActive, self.active)
             self.lock.unlock()
             if call == 1 {
+                self.firstStarted.open()
                 self.releaseFirst.wait()
             }
             self.lock.lock()
@@ -87,11 +124,11 @@ struct MacNodeRuntimeTests {
         params: some Encodable,
         nodeId: String? = nil) async throws -> BridgeInvokeResponse
     {
-        return await self.invoke(
+        try await self.invoke(
             runtime,
             id,
             command,
-            String(decoding: try JSONEncoder().encode(params), as: UTF8.self),
+            String(decoding: JSONEncoder().encode(params), as: UTF8.self),
             nodeId: nodeId)
     }
 
@@ -244,7 +281,7 @@ struct MacNodeRuntimeTests {
 
     @Test func `handle invoke rejects unknown command`() async {
         let runtime = MacNodeRuntime()
-        let response = await self.invoke(runtime, "req-1", "unknown.command")
+        let response = await invoke(runtime, "req-1", "unknown.command")
         #expect(response.ok == false)
     }
 
@@ -256,7 +293,7 @@ struct MacNodeRuntimeTests {
                 #expect(paramsJSON == #"{"limit":7}"#)
                 return payload
             })
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-codex-threads", MacNodeCodexThreadCatalogContract.listCommand, #"{"limit":7}"#)
 
         #expect(response.ok)
@@ -270,7 +307,7 @@ struct MacNodeRuntimeTests {
                 Issue.record("disabled Codex catalog request must not execute")
                 return #"{"sessions":[]}"#
             })
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-codex-disabled", MacNodeCodexThreadCatalogContract.listCommand)
 
         #expect(!response.ok)
@@ -286,7 +323,7 @@ struct MacNodeRuntimeTests {
                 #expect(paramsJSON == #"{"threadId":"thread-1","limit":50}"#)
                 return payload
             })
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-codex-items", MacNodeCodexThreadCatalogContract.turnsCommand,
             #"{"threadId":"thread-1","limit":50}"#)
 
@@ -308,9 +345,9 @@ struct MacNodeRuntimeTests {
                 return readPayload
             })
 
-        let list = await self.invoke(
+        let list = await invoke(
             runtime, "req-claude-list", MacNodeClaudeSessionCatalogContract.listCommand, #"{"limit":7}"#)
-        let read = await self.invoke(
+        let read = await invoke(
             runtime, "req-claude-read", MacNodeClaudeSessionCatalogContract.readCommand,
             #"{"threadId":"thread-1","limit":20}"#)
 
@@ -321,29 +358,39 @@ struct MacNodeRuntimeTests {
     }
 
     @Test func `Claude catalog worker serializes filesystem operations`() async throws {
+        let secondStarted = AsyncTestGate()
         let probe = CatalogWorkerProbe()
         let worker = MacNodeClaudeSessionCatalogWorker(
             listOperation: { _ in probe.run() },
             readOperation: { _ in probe.run() })
         let first = Task { try await worker.list(paramsJSON: nil) }
-        while probe.snapshot().calls == 0 {
-            await Task.yield()
+        let second = Task {
+            await probe.firstStarted.wait()
+            secondStarted.open()
+            return try await worker.read(paramsJSON: nil)
         }
-        let second = Task { try await worker.read(paramsJSON: nil) }
-        try await Task.sleep(for: .milliseconds(50))
-
-        #expect(probe.snapshot().calls == 1)
-        let cancelStarted = ContinuousClock.now
         let watchdog = Task {
-            try await Task.sleep(for: .seconds(1))
+            try await Task.sleep(for: .seconds(10))
+            Issue.record("timed out waiting for Claude catalog worker cancellation")
+            probe.firstStarted.open()
+            secondStarted.open()
             probe.release()
         }
+        defer {
+            watchdog.cancel()
+            first.cancel()
+            second.cancel()
+            probe.release()
+        }
+        await probe.firstStarted.wait()
+        await secondStarted.wait()
+
+        #expect(probe.snapshot().calls == 1)
         second.cancel()
         await #expect(throws: CancellationError.self) {
             try await second.value
         }
-        #expect(ContinuousClock.now - cancelStarted < .milliseconds(500))
-        watchdog.cancel()
+        #expect(probe.snapshot().calls == 1)
         probe.release()
         #expect(try await first.value == "call-1")
         #expect(try await worker.read(paramsJSON: nil) == "call-2")
@@ -363,7 +410,10 @@ struct MacNodeRuntimeTests {
             readOperation: { _ in "unused" })
         let task = Task { try await worker.list(paramsJSON: nil) }
         let watchdog = Task {
-            try? await Task.sleep(for: .seconds(5))
+            try? await Task.sleep(for: .seconds(10))
+            guard !Task.isCancelled else { return }
+            Issue.record("timed out waiting for Claude catalog worker start")
+            task.cancel()
             started.continuation.finish()
         }
         var iterator = started.stream.makeAsyncIterator()
@@ -384,29 +434,12 @@ struct MacNodeRuntimeTests {
                 Issue.record("disabled Claude catalog request must not execute")
                 return #"{"sessions":[]}"#
             })
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-claude-disabled", MacNodeClaudeSessionCatalogContract.listCommand)
 
         #expect(!response.ok)
         #expect(response.error?.code == .unavailable)
         #expect(response.error?.message == "UNAVAILABLE: Claude session catalog is disabled")
-    }
-
-    @Test func `A2UI host capability refresh uses injected node session refresher`() async {
-        let probe = CanvasRefreshProbe()
-        let resolver = MacNodeCanvasHostedSurfaceResolver(
-            currentSurfaceURL: { "http://127.0.0.1:18789/__openclaw__/cap/current-token" },
-            refreshSurfaceURL: { _ in await probe.refresh() })
-
-        let current = await resolver.resolveA2UIURL()
-        #expect(current ==
-            "http://127.0.0.1:18789/__openclaw__/cap/current-token/__openclaw__/a2ui/?platform=macos")
-        #expect(await probe.calls == 0)
-
-        let refreshed = await resolver.resolveA2UIURL(forceRefresh: true)
-        #expect(refreshed ==
-            "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token/__openclaw__/a2ui/?platform=macos")
-        #expect(await probe.calls == 1)
     }
 
     @Test func `hosted Canvas commands refresh capability and preserve target components`() async throws {
@@ -417,9 +450,8 @@ struct MacNodeRuntimeTests {
 
         let resolved = try await resolver.resolveTarget(
             "/__openclaw__/canvas/demo%20page.html?mode=proof#result")
-        #expect(resolved?.url.absoluteString ==
+        #expect(resolved?.absoluteString ==
             "http://127.0.0.1:18789/__openclaw__/cap/refreshed-token/__openclaw__/canvas/demo%20page.html?mode=proof#result")
-        #expect(resolved?.allowsA2UIActions == false)
         #expect(await probe.calls == 1)
 
         let external = try await resolver.resolveTarget("https://example.com/")
@@ -435,14 +467,37 @@ struct MacNodeRuntimeTests {
 
         let resolved = try await resolver.resolveTarget("/__openclaw__/canvas/demo.html")
 
-        #expect(resolved?.url.absoluteString ==
+        #expect(resolved?.absoluteString ==
             "http://127.0.0.1:18789/__openclaw__/cap/new-token/__openclaw__/canvas/demo.html")
+    }
+
+    @Test func `removed Canvas commands are unknown even when Canvas is disabled`() async {
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: false]) {
+            let response = await self.invoke(MacNodeRuntime(), "req-canvas-eval", "canvas.eval")
+
+            #expect(response.error?.code == .invalidRequest)
+            #expect(response.error?.message == "INVALID_REQUEST: unknown command")
+        }
+    }
+
+    @Test func `Canvas commands reject arbitrary web targets`() async {
+        await TestIsolation.withUserDefaultsValues([canvasEnabledKey: true]) {
+            let response = await self.invoke(
+                MacNodeRuntime(),
+                "req-canvas-external",
+                OpenClawCanvasCommand.navigate.rawValue,
+                #"{"url":"https://example.com/widget.html"}"#)
+
+            #expect(response.error?.code == .invalidRequest)
+            #expect(response.error?.message ==
+                "INVALID_REQUEST: canvas target must be a hosted widget-document path or app-local Canvas URL")
+        }
     }
 
     @Test func `handle invoke rejects empty notification`() async throws {
         let runtime = MacNodeRuntime()
         let params = OpenClawSystemNotifyParams(title: "", body: "")
-        let response = try await self.invoke(
+        let response = try await invoke(
             runtime, "req-3", OpenClawSystemCommand.notify.rawValue, params: params)
         #expect(response.ok == false)
     }
@@ -485,7 +540,7 @@ struct MacNodeRuntimeTests {
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
         let params = MacNodeScreenRecordParams(durationMs: 250)
-        let response = try await self.invoke(
+        let response = try await invoke(
             runtime, "req-5", MacNodeScreenCommand.record.rawValue, params: params)
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)
@@ -509,9 +564,9 @@ struct MacNodeRuntimeTests {
                     height: 450,
                     displayFrameId: "display-frame-test"),
                 snapshotInspection: { screenIndex, maxWidth, quality, _ in
-                #expect(screenIndex == 0)
-                #expect(maxWidth == 800)
-                #expect(quality == 0.5)
+                    #expect(screenIndex == 0)
+                    #expect(maxWidth == 800)
+                    #expect(quality == 0.5)
                 })
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
@@ -521,7 +576,7 @@ struct MacNodeRuntimeTests {
             maxWidth: 800,
             quality: 0.5,
             format: .jpeg)
-        let response = try await self.invoke(
+        let response = try await invoke(
             runtime, "req-screen-snapshot", MacNodeScreenCommand.snapshot.rawValue, params: params)
         #expect(response.ok == true)
         let payloadJSON = try #require(response.payloadJSON)
@@ -551,7 +606,7 @@ struct MacNodeRuntimeTests {
         let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-screen-snapshot-invalid", MacNodeScreenCommand.snapshot.rawValue, #"{"screenIndex":"#)
 
         #expect(response.ok == false)
@@ -565,7 +620,7 @@ struct MacNodeRuntimeTests {
         let services = await MainActor.run { MainActorServicesProbe() }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-screen-snapshot-defaults", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == true)
@@ -580,7 +635,7 @@ struct MacNodeRuntimeTests {
             computerControlEnabled: { false })
 
         let params = OpenClawComputerActParams(action: .leftClick, x: 5, y: 6, refWidth: 1280)
-        let response = try await self.invoke(
+        let response = try await invoke(
             runtime, "req-computer-disabled", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == false)
@@ -597,7 +652,7 @@ struct MacNodeRuntimeTests {
             computerControlEnabled: { true })
 
         let params = OpenClawComputerActParams(action: .leftClick, x: 12, y: 34, refWidth: 1280)
-        let response = try await self.invoke(
+        let response = try await invoke(
             runtime, "req-computer-ok", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == true)
@@ -608,6 +663,68 @@ struct MacNodeRuntimeTests {
         let result = try JSONDecoder().decode(OpenClawComputerActResult.self, from: Data(payloadJSON.utf8))
         #expect(result.ok == true)
         #expect(result.cursorX == 12)
+    }
+
+    @Test func `provider selection owns both snapshot and action without cross-provider fallback`() async throws {
+        let commands: Set<String> = [MacNodeScreenCommand.snapshot.rawValue, OpenClawComputerCommand.act.rawValue]
+        let cuaWorker = ComputerProviderWorkerProbe(commands: commands)
+        let cuaServices = await MainActor.run { MainActorServicesProbe() }
+        let cuaRuntime = MacNodeRuntime(
+            nodeHostWorker: cuaWorker,
+            makeMainActorServices: { cuaServices },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let action = OpenClawComputerActParams(action: .leftClick, x: 12, y: 34, refWidth: 1280)
+
+        #expect(await (self.invoke(
+            cuaRuntime,
+            "cua-snapshot",
+            MacNodeScreenCommand.snapshot.rawValue)).ok)
+        #expect(try await (self.invoke(
+            cuaRuntime,
+            "cua-action",
+            OpenClawComputerCommand.act.rawValue,
+            params: action)).ok)
+        #expect(await cuaWorker.invokedCommands == [
+            MacNodeScreenCommand.snapshot.rawValue,
+            OpenClawComputerCommand.act.rawValue,
+        ])
+        #expect(await MainActor.run { cuaServices.snapshotCallCount == 0 && cuaServices.performCallCount == 0 })
+
+        let peekabooWorker = ComputerProviderWorkerProbe(commands: commands)
+        let peekabooServices = await MainActor.run { MainActorServicesProbe() }
+        let peekabooRuntime = MacNodeRuntime(
+            nodeHostWorker: peekabooWorker,
+            makeMainActorServices: { peekabooServices },
+            computerControlEnabled: { true },
+            computerControlProvider: { .peekaboo })
+        #expect(await (self.invoke(
+            peekabooRuntime,
+            "peekaboo-snapshot",
+            MacNodeScreenCommand.snapshot.rawValue)).ok)
+        #expect(try await (self.invoke(
+            peekabooRuntime,
+            "peekaboo-action",
+            OpenClawComputerCommand.act.rawValue,
+            params: action)).ok)
+        #expect(await peekabooWorker.invokedCommands.isEmpty)
+        #expect(await MainActor.run {
+            peekabooServices.snapshotCallCount == 1 && peekabooServices.performCallCount == 1
+        })
+
+        let unavailableWorker = ComputerProviderWorkerProbe(commands: [])
+        let unavailableServices = await MainActor.run { MainActorServicesProbe() }
+        let unavailableRuntime = MacNodeRuntime(
+            nodeHostWorker: unavailableWorker,
+            makeMainActorServices: { unavailableServices },
+            computerControlEnabled: { true },
+            computerControlProvider: { .cua })
+        let unavailable = await invoke(
+            unavailableRuntime,
+            "cua-unavailable",
+            MacNodeScreenCommand.snapshot.rawValue)
+        #expect(!unavailable.ok)
+        #expect(await MainActor.run { unavailableServices.snapshotCallCount == 0 })
     }
 
     @Test func `concurrent invokes share one main actor services initialization`() async throws {
@@ -632,11 +749,11 @@ struct MacNodeRuntimeTests {
         let first = Task {
             await self.invoke(runtime, "req-computer-single-flight-1", OpenClawComputerCommand.act.rawValue, json)
         }
-        try #require(await self.waitForCount(1, counter: factoryCalls))
+        try #require(await waitForCount(1, counter: factoryCalls))
         let second = Task {
             await self.invoke(runtime, "req-computer-single-flight-2", OpenClawComputerCommand.act.rawValue, json)
         }
-        try #require(await self.waitForCount(2, counter: admissionCalls))
+        try #require(await waitForCount(2, counter: admissionCalls))
         // The actor barrier proves the second invoke reached its first suspension.
         await runtime.updateMainSessionKey("single-flight-barrier")
 
@@ -665,7 +782,7 @@ struct MacNodeRuntimeTests {
         let invoke = Task {
             await self.invoke(runtime, "req-computer-release-during-init", OpenClawComputerCommand.act.rawValue, json)
         }
-        try #require(await self.waitForCount(1, counter: factoryCalls))
+        try #require(await waitForCount(1, counter: factoryCalls))
 
         await runtime.releaseHeldComputerInput()
         factoryGate.open()
@@ -699,7 +816,11 @@ struct MacNodeRuntimeTests {
         let params = OpenClawComputerActParams(action: .leftMouseDown, x: 12, y: 34, refWidth: 1280)
         let json = try String(data: JSONEncoder().encode(params), encoding: .utf8)
         let invoke = Task {
-            await self.invoke(runtime, "req-computer-release-after-admission", OpenClawComputerCommand.act.rawValue, json)
+            await self.invoke(
+                runtime,
+                "req-computer-release-after-admission",
+                OpenClawComputerCommand.act.rawValue,
+                json)
         }
         await performEntered.wait()
 
@@ -714,7 +835,7 @@ struct MacNodeRuntimeTests {
 
         #expect(!response.ok)
         #expect(response.error?.code == .unavailable)
-        #expect(response.error?.message.contains("lifecycle changed") == true)
+        #expect(response.error?.message.contains("COMPUTER_STALE_OBSERVATION") == true)
         #expect(generations.perform == [0])
         #expect(generations.release == [1])
     }
@@ -728,7 +849,7 @@ struct MacNodeRuntimeTests {
             computerControlEnabled: { true })
 
         let params = OpenClawComputerActParams(action: .leftClick, x: 1, y: 1, refWidth: 1280)
-        let response = try await self.invoke(
+        let response = try await invoke(
             runtime, "req-computer-ax", OpenClawComputerCommand.act.rawValue, params: params)
 
         #expect(response.ok == false)
@@ -742,7 +863,7 @@ struct MacNodeRuntimeTests {
             makeMainActorServices: { services },
             computerControlEnabled: { true })
 
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-computer-bad", OpenClawComputerCommand.act.rawValue, #"{"action":"#)
 
         #expect(response.ok == false)
@@ -763,7 +884,7 @@ struct MacNodeRuntimeTests {
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-screen-snapshot-error", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == false)
@@ -777,7 +898,7 @@ struct MacNodeRuntimeTests {
                 snapshotError: ScreenSnapshotService.ScreenSnapshotError.invalidScreenIndex(4))
         }
         let invalidIndexRuntime = MacNodeRuntime(makeMainActorServices: { invalidIndexServices })
-        let invalidIndexResponse = await self.invoke(
+        let invalidIndexResponse = await invoke(
             invalidIndexRuntime, "req-screen-snapshot-bad-index", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(invalidIndexResponse.ok == false)
@@ -788,7 +909,7 @@ struct MacNodeRuntimeTests {
             MainActorServicesProbe(snapshotError: ScreenSnapshotService.ScreenSnapshotError.noDisplays)
         }
         let noDisplaysRuntime = MacNodeRuntime(makeMainActorServices: { noDisplaysServices })
-        let noDisplaysResponse = await self.invoke(
+        let noDisplaysResponse = await invoke(
             noDisplaysRuntime, "req-screen-snapshot-no-displays", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(noDisplaysResponse.ok == false)
@@ -810,7 +931,7 @@ struct MacNodeRuntimeTests {
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-screen-snapshot-too-large", MacNodeScreenCommand.snapshot.rawValue)
 
         #expect(response.ok == false)
@@ -833,7 +954,7 @@ struct MacNodeRuntimeTests {
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-screen-snapshot-slash-heavy", MacNodeScreenCommand.snapshot.rawValue,
             nodeId: "node-slash-heavy")
 
@@ -856,7 +977,7 @@ struct MacNodeRuntimeTests {
         }
         let runtime = MacNodeRuntime(makeMainActorServices: { services })
 
-        let response = await self.invoke(
+        let response = await invoke(
             runtime, "req-fit", MacNodeScreenCommand.snapshot.rawValue, nodeId: "node-fit")
 
         #expect(response.ok == true)

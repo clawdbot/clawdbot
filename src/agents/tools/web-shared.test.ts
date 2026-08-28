@@ -118,6 +118,91 @@ describe("web shared timeout seconds", () => {
 });
 
 describe("readResponseText", () => {
+  it.each([
+    {
+      name: "UTF-8 HTML",
+      bytes: new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("café 日本")]),
+      contentType: "text/html; charset=iso-8859-1",
+    },
+    {
+      name: "UTF-16LE HTML",
+      bytes: new Uint8Array([0xff, 0xfe, ...Buffer.from("café 日本", "utf16le")]),
+      contentType: "text/html; charset=utf-8",
+    },
+    {
+      name: "UTF-16BE XML",
+      bytes: new Uint8Array([0xfe, 0xff, ...Buffer.from("café 日本", "utf16le").swap16()]),
+      contentType: "application/xml; charset=iso-8859-1",
+    },
+    {
+      name: "UTF-8 plain text",
+      bytes: new Uint8Array([0xef, 0xbb, 0xbf, ...new TextEncoder().encode("café 日本")]),
+      contentType: "text/plain; charset=iso-8859-1",
+    },
+  ])(
+    "prioritizes the $name byte-order mark over a conflicting header",
+    async ({ bytes, contentType }) => {
+      for (const options of [undefined, { maxBytes: bytes.byteLength }]) {
+        const response = new Response(bytes, {
+          headers: { "content-type": contentType },
+        });
+
+        await expect(readResponseText(response, options)).resolves.toEqual({
+          text: "café 日本",
+          truncated: false,
+          bytesRead: bytes.byteLength,
+        });
+      }
+    },
+  );
+
+  it("keeps declared legacy charsets ahead of document metadata without a byte-order mark", async () => {
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode('<meta charset="utf-8"><p>caf'),
+      0xe9,
+      ...new TextEncoder().encode("</p>"),
+    ]);
+    const response = new Response(bytes, {
+      headers: { "content-type": "text/html; charset=iso-8859-1" },
+    });
+
+    await expect(readResponseText(response, { maxBytes: bytes.byteLength })).resolves.toMatchObject(
+      {
+        text: '<meta charset="utf-8"><p>café</p>',
+        truncated: false,
+      },
+    );
+  });
+
+  it("uses document metadata when there is no byte-order mark or declared charset", async () => {
+    const bytes = new Uint8Array([
+      ...new TextEncoder().encode('<meta charset="iso-8859-1"><p>caf'),
+      0xe9,
+      ...new TextEncoder().encode("</p>"),
+    ]);
+    const response = new Response(bytes, { headers: { "content-type": "text/html" } });
+
+    await expect(readResponseText(response, { maxBytes: bytes.byteLength })).resolves.toMatchObject(
+      {
+        text: '<meta charset="iso-8859-1"><p>café</p>',
+        truncated: false,
+      },
+    );
+  });
+
+  it("drops incomplete UTF-16 characters after a byte-order-marked bounded read", async () => {
+    const bytes = new Uint8Array([0xff, 0xfe, ...Buffer.from("abc", "utf16le")]);
+    const response = new Response(bytes, {
+      headers: { "content-type": "text/plain; charset=utf-8" },
+    });
+
+    await expect(readResponseText(response, { maxBytes: 5 })).resolves.toEqual({
+      text: "a",
+      truncated: true,
+      bytesRead: 5,
+    });
+  });
+
   it("releases bounded response readers after complete reads", async () => {
     const cancel = vi.fn(async () => undefined);
     const releaseLock = vi.fn();

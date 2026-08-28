@@ -51,6 +51,7 @@ describe("secrets store state", () => {
       name: "SERVICE_URL",
       value: "https://service.test",
       kind: "env",
+      allowedHosts: "",
     });
 
     expect(request.mock.calls.map(([method]) => method)).toEqual([
@@ -82,5 +83,27 @@ describe("secrets store state", () => {
       "secrets.store.set",
       "secrets.store.list",
     ]);
+  });
+
+  it("sends parsed allowed hosts through the store RPC", async () => {
+    const { client, request } = clientWithResponses([
+      { ok: true, reloaded: false },
+      { entries: [] },
+    ]);
+    const state = createInitialSecretsStoreState({ client, connected: true });
+
+    await setSecretsStoreEntry(state, {
+      name: "SERVICE_API_KEY",
+      value: "secret",
+      kind: "secret",
+      allowedHosts: "api.example.com, uploads.example.com\napi2.example.com",
+    });
+
+    expect(request).toHaveBeenNthCalledWith(1, "secrets.store.set", {
+      name: "SERVICE_API_KEY",
+      value: "secret",
+      kind: "secret",
+      allowedHosts: ["api.example.com", "uploads.example.com", "api2.example.com"],
+    });
   });
 });

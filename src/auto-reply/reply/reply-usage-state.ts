@@ -12,6 +12,7 @@ const store = new Map<string, { snapshot: PluginHookReplyUsageState; expiresAt: 
 
 export function buildReplyUsageState(params: {
   config: OpenClawConfig;
+  agentDir: string;
   provider?: string;
   model?: string;
   fallbackExhausted?: boolean;
@@ -67,6 +68,7 @@ export function buildReplyUsageState(params: {
             provider: params.provider,
             model: params.model,
             config: params.config,
+            agentDir: params.agentDir,
           }),
         })
       : undefined,

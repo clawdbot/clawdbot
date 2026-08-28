@@ -29,6 +29,21 @@ availability, Blacksmith control-plane health, and downstream queue drains.
   scans should stay on GitHub-hosted runners unless measured evidence says
   Blacksmith is required.
 
+## Rejected Experiments
+
+- **Actions-artifact checkout (2026-08-16):** Do not recommend replacing the
+  shared Blacksmith Git fetch with a preflight-produced workspace or `.git`
+  artifact. [PR #124818](https://github.com/openclaw/openclaw/pull/124818)
+  measured a 16s Blacksmith checkout baseline versus 7s hosted. The best direct
+  artifact variant cost 1s to pack, 3s to upload, and 11s median to restore;
+  including the serial prefix left only about 1s median improvement and
+  regressed Blacksmith's fast-fetch runs. The official artifact client was
+  worse: [run 31971531521](https://github.com/openclaw/openclaw/actions/runs/31971531521)
+  measured 22s median download plus 2s materialization. Blacksmith's fast
+  Actions-cache path does not imply fast Actions-artifact downloads. Reconsider
+  only with measured end-to-end proof for a different transport, including its
+  producer cost and fast-fetch regressions.
+
 ## First Checks
 
 Before changing CI, collect current pressure:
@@ -163,13 +178,14 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   same-repo pull requests, preflight owns the sole immutable semantic
   dependency-cache write of workspace `node_modules` plus the local pnpm store
   before fanout; all Blacksmith Node jobs are restore-only consumers and exact
-  misses fall back to the ordinary pnpm-store cache, while
-  hosted/fork/manual paths use only that store cache.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 28, Windows and
-  Android at 2.
+  misses fall back to the ordinary pnpm-store cache, while hosted/fork/manual
+  paths use only that store cache.
+- CI matrix caps: fast/check lanes at 12, Node test shards at 28 on Blacksmith
+  and 96 with the GitHub or hybrid planner profile, Windows at 3, and Android
+  at 2.
 - Canonical PR Node tests use one precise changed-target job when possible;
-  broad, deleted, unknown, or planner-failed changes fall back to the 14-job
-  compact full-suite plan. Targeted plans retain the full built-artifact
+  broad, deleted, unknown, or planner-failed changes fall back to the compact
+  full-suite plan. Targeted plans retain the full built-artifact
   boundary gate. `main`, manual, and release runs stay full.
 - `build-artifacts` on `blacksmith-16vcpu-ubuntu-2404`.
 - lower-weight Node/check shards on `blacksmith-4vcpu-ubuntu-2404`.

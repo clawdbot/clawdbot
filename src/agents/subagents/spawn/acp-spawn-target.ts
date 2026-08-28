@@ -1,23 +1,54 @@
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { getAcpRuntimeBackend } from "../../../acp/runtime/registry.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
-import { normalizeOptionalAgentId } from "../../../routing/session-key.js";
-import { listAgentEntries } from "../../agent-scope-config.js";
+import { normalizeAgentIdStrict, normalizeOptionalAgentId } from "../../../routing/session-key.js";
+import { listAgentEntries, resolveAgentEntry } from "../../agent-scope-config.js";
 import { listAgentIds } from "../../agent-scope.js";
+
+type ResolvedAcpAgentTarget = {
+  ok: true;
+  agentId: string;
+  configAgentId?: string;
+  backendId?: string;
+};
+
+function resolveAcpAgentTarget(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  configAgentId?: string;
+  agentBackend?: string;
+}): ResolvedAcpAgentTarget {
+  const backendId =
+    normalizeOptionalString(params.agentBackend) ??
+    normalizeOptionalString(params.cfg.acp?.backend) ??
+    getAcpRuntimeBackend()?.id;
+  return {
+    ok: true,
+    agentId: params.agentId,
+    ...(params.configAgentId ? { configAgentId: params.configAgentId } : {}),
+    ...(backendId ? { backendId } : {}),
+  };
+}
 
 export function resolveTargetAcpAgentId(params: {
   requestedAgentId?: string;
   cfg: OpenClawConfig;
-}): { ok: true; agentId: string; configAgentId?: string } | { ok: false; error: string } {
-  const requested = normalizeOptionalAgentId(params.requestedAgentId);
+}): ResolvedAcpAgentTarget | { ok: false; error: string } {
+  const normalizedRequest =
+    params.requestedAgentId === undefined ? null : normalizeAgentIdStrict(params.requestedAgentId);
+  if (normalizedRequest && !normalizedRequest.ok) {
+    return { ok: false, error: `agentId "${params.requestedAgentId}" was not found` };
+  }
+  const requested = normalizedRequest?.value;
   if (requested) {
-    const configuredAgent = listAgentEntries(params.cfg).find(
-      (agent) => normalizeOptionalAgentId(agent.id) === requested,
-    );
+    const configuredAgent = resolveAgentEntry(params.cfg, requested);
     if (configuredAgent?.runtime?.type === "acp") {
-      return {
-        ok: true,
+      return resolveAcpAgentTarget({
+        cfg: params.cfg,
         agentId: normalizeOptionalAgentId(configuredAgent.runtime.acp?.agent) ?? requested,
         configAgentId: requested,
-      };
+        agentBackend: configuredAgent.runtime.acp?.backend,
+      });
     }
     if (configuredAgent && !isExplicitlyAllowedAcpAgent(params.cfg, requested)) {
       return {
@@ -28,16 +59,22 @@ export function resolveTargetAcpAgentId(params: {
           'Use runtime="acp" only with external ACP harness ids such as codex, claude, droid, gemini, or opencode, or configure agents.entries.*.runtime.type="acp" with runtime.acp.agent.',
       };
     }
-    return {
-      ok: true,
+    return resolveAcpAgentTarget({
+      cfg: params.cfg,
       agentId: requested,
       ...(configuredAgent ? { configAgentId: requested } : {}),
-    };
+    });
   }
 
   const configuredDefault = normalizeOptionalAgentId(params.cfg.acp?.defaultAgent);
   if (configuredDefault) {
-    return { ok: true, agentId: configuredDefault };
+    const configuredAgent = resolveAgentEntry(params.cfg, configuredDefault);
+    return resolveAcpAgentTarget({
+      cfg: params.cfg,
+      agentId: configuredDefault,
+      agentBackend:
+        configuredAgent?.runtime?.type === "acp" ? configuredAgent.runtime.acp?.backend : undefined,
+    });
   }
 
   return {

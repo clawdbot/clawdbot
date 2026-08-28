@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { captureEnv, deleteTestEnvValue, setTestEnvValue } from "../test-utils/env.js";
-import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndexSync } from "./installed-plugin-index-store-write.js";
 import { listOpenClawPluginManifestMetadata } from "./manifest-metadata-scan.js";
 import { normalizeProviderModelIdWithManifest } from "./manifest-model-id-normalization.js";
 // Registers the snapshot resolver in the runtime bridge slot. Production and
@@ -103,7 +103,7 @@ describe("manifest model id normalization", () => {
     tempDirs.cleanup();
   });
 
-  it("reflects manifest edits and state directory changes without a prepared snapshot", () => {
+  it("keeps process metadata stable until the lifecycle owner reloads it", () => {
     const stateDirA = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDirA = path.join(stateDirA, "extensions", "normalizer");
     writeInstallIndex({ stateDir: stateDirA, pluginDir: pluginDirA });
@@ -117,6 +117,9 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("alpha/demo-model");
 
     writeNormalizerManifest({ pluginDir: pluginDirA, prefix: "bravo-local" });
+    expect(normalizeDemoModel()).toBe("alpha/demo-model");
+
+    clearPluginMetadataLifecycleCaches();
     expect(normalizeDemoModel()).toBe("bravo-local/demo-model");
 
     const stateDirB = tempDirs.make("openclaw-model-id-normalization-");
@@ -129,7 +132,7 @@ describe("manifest model id normalization", () => {
     expect(normalizeDemoModel()).toBe("charlie/demo-model");
   });
 
-  it("reuses manifest metadata while file fingerprints are unchanged", () => {
+  it("reuses manifest metadata for the same environment identity", () => {
     const stateDir = tempDirs.make("openclaw-model-id-normalization-");
     const pluginDir = path.join(stateDir, "extensions", "normalizer");
     writeInstallIndex({ stateDir, pluginDir });

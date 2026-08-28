@@ -5,6 +5,7 @@ import type { Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import tls from "node:tls";
+import { normalizeTlsFingerprint } from "../../../packages/gateway-client/src/client-address-utils.js";
 import type { GatewayTlsConfig } from "../../config/types.gateway.js";
 import { runExec } from "../../process/exec.js";
 import { CONFIG_DIR, resolveUserPath, shortenHomeInString } from "../../utils.js";
@@ -12,7 +13,6 @@ import { ensureDurableDirectory, publishFileNoClobber } from "../directory-durab
 import { sameFileIdentity } from "../fs-safe-advanced.js";
 import { canonicalPathFromExistingAncestor, pathExists } from "../fs-safe.js";
 import { resolveSystemBin } from "../resolve-system-bin.js";
-import { normalizeFingerprint } from "./fingerprint.js";
 
 const GATEWAY_TLS_CERT_GENERATION_TIMEOUT_MS = 30_000;
 
@@ -248,7 +248,7 @@ export async function loadGatewayTlsRuntime(
     const key = await fs.readFile(keyPath, "utf8");
     const ca = caPath ? await fs.readFile(caPath, "utf8") : undefined;
     const x509 = new X509Certificate(cert);
-    const fingerprintSha256 = normalizeFingerprint(x509.fingerprint256 ?? "");
+    const fingerprintSha256 = normalizeTlsFingerprint(x509.fingerprint256 ?? "");
 
     if (!fingerprintSha256) {
       return {

@@ -43,6 +43,7 @@ export {
   getSandboxBackendManager,
   getSandboxBackendWorkdirResolver,
   isToolAllowed,
+  prepareSshSandboxExec,
   registerSandboxBackend,
   requireSandboxBackendFactory,
   resolveSandboxRuntimeStatus,

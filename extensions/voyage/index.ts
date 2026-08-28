@@ -7,6 +7,6 @@ export default definePluginEntry({
   name: "Voyage Embeddings",
   description: "Voyage memory embedding provider plugin",
   register(api) {
-    api.registerMemoryEmbeddingProvider(voyageMemoryEmbeddingProviderAdapter);
+    api.registerEmbeddingProvider(voyageMemoryEmbeddingProviderAdapter);
   },
 });

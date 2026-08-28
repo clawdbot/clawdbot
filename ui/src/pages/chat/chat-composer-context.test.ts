@@ -1,46 +1,16 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { i18n } from "../../i18n/index.ts";
-import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
+import { renderComposerFixture, resetComposerFixture } from "./chat-composer.test-support.ts";
 
-type ComposerProps = Parameters<typeof renderChatComposer>[0];
+type ComposerOverrides = Parameters<typeof renderComposerFixture>[0];
 
-function renderComposer(overrides: Partial<ComposerProps> = {}) {
-  const container = document.createElement("div");
-  render(
-    renderChatComposer({
-      paneId: crypto.randomUUID(),
-      sessionKey: "main",
-      currentAgentId: "main",
-      connected: true,
-      canSend: true,
-      disabledReason: null,
-      sending: false,
-      messages: [],
-      stream: null,
-      queue: [],
-      draft: "",
-      sessions: null,
-      assistantName: "OpenClaw",
-      onDraftChange: vi.fn(),
-      onSend: vi.fn(),
-      onQueueRemove: vi.fn(),
-      onNewSession: vi.fn(),
-      ...overrides,
-    }),
-    container,
-  );
-  return container;
+function renderComposer(overrides: ComposerOverrides = {}) {
+  return renderComposerFixture(overrides).container;
 }
 
 afterEach(async () => {
-  resetChatComposerState();
-  document.body.replaceChildren();
-  vi.useRealTimers();
-  await i18n.setLocale("en");
-  vi.restoreAllMocks();
+  await resetComposerFixture();
 });
 
 describe("renderChatComposer context usage", () => {
@@ -208,8 +178,17 @@ describe("renderChatComposer context usage", () => {
     expect(container.textContent).not.toContain("Est. cost");
   });
 
-  it("falls back from an unmatched session provider to the response quota group", () => {
-    const container = renderComposer({
+  it("uses response provenance only when the session provider is absent", () => {
+    const session = {
+      key: "main",
+      kind: "direct",
+      updatedAt: null,
+      totalTokens: 1_000,
+      contextTokens: 200_000,
+      model: "gateway-injected",
+      modelProvider: "openclaw" as string | undefined,
+    };
+    const composerProps = {
       messages: [
         { role: "user", content: "hi" },
         {
@@ -221,19 +200,9 @@ describe("renderChatComposer context usage", () => {
         },
       ],
       sessions: {
-        sessions: [
-          {
-            key: "main",
-            kind: "direct",
-            updatedAt: null,
-            totalTokens: 1_000,
-            contextTokens: 200_000,
-            model: "gateway-injected",
-            modelProvider: "openclaw",
-          },
-        ],
+        sessions: [session],
         defaults: { contextTokens: 200_000 },
-      } as never,
+      },
       providerUsage: {
         modelAuthStatusResult: {
           ts: Date.now(),
@@ -261,16 +230,23 @@ describe("renderChatComposer context usage", () => {
           ],
         },
       },
-    });
-
-    expect(
+    };
+    const providerNames = (container: HTMLElement) =>
       [...container.querySelectorAll("[data-chat-usage-provider='true']")].map((row) =>
         row.textContent?.replace(/\s+/g, " ").trim(),
-      ),
-    ).toEqual(["Provider: OpenAI", "Provider: Claude"]);
-    expect(container.textContent).not.toContain("Est. cost");
-    expect(container.textContent).not.toContain("Cost by Type");
+      );
+
+    const container = renderComposer(composerProps as never);
+
+    expect(providerNames(container)).toEqual(["Provider: Claude", "Provider: OpenAI"]);
+    expect(container.textContent).toContain("Cost by Type");
     expect(container.textContent).not.toContain("Model:");
+
+    session.modelProvider = undefined;
+    expect(providerNames(renderComposer(composerProps as never))).toEqual([
+      "Provider: OpenAI",
+      "Provider: Claude",
+    ]);
   });
 
   it("omits the cost-by-type section when every recorded cost is zero", () => {
@@ -378,10 +354,8 @@ describe("renderChatComposer context usage", () => {
     expect(container.textContent).not.toContain("Model:");
   });
 
-  it("warns on fresh high usage but keeps stale usage approximate and nonactionable", () => {
-    const onCompact = vi.fn();
+  it("warns on fresh high usage but keeps stale usage approximate", () => {
     let container = renderComposer({
-      onCompact,
       sessions: {
         sessions: [
           {
@@ -395,13 +369,14 @@ describe("renderChatComposer context usage", () => {
         defaults: { contextTokens: 200_000 },
       } as never,
     });
-    expect(container.querySelector(".context-ring")?.textContent?.trim()).toBe("95%");
-    expect(container.querySelector(".context-ring")?.classList).toContain("context-ring--warning");
-    container.querySelector<HTMLButtonElement>(".context-ring__action")?.click();
-    expect(onCompact).toHaveBeenCalledOnce();
+    const contextRing = container.querySelector(".context-ring");
+    expect(contextRing?.getAttribute("aria-label")).toBe(
+      "Session context usage: 190k of 200k (95%)",
+    );
+    expect(contextRing?.classList).toContain("context-ring--warning");
+    expect(container.textContent).not.toContain("Compact");
 
     container = renderComposer({
-      onCompact,
       sessions: {
         sessions: [
           {
@@ -416,10 +391,11 @@ describe("renderChatComposer context usage", () => {
         defaults: { contextTokens: 200_000 },
       } as never,
     });
-    expect(container.querySelector(".context-ring")?.textContent?.trim()).toBe("~95%");
+    expect(container.querySelector(".context-ring")?.getAttribute("aria-label")).toBe(
+      "Session context usage: ~190k of 200k (~95%)",
+    );
     expect(container.querySelector(".context-ring")?.classList).not.toContain(
       "context-ring--warning",
     );
-    expect(container.querySelector(".context-ring__action")).toBeNull();
   });
 });

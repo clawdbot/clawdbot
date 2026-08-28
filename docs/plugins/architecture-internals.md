@@ -107,9 +107,10 @@ choices, and install-catalog metadata without loading provider runtime. Explicit
 `requiresRuntime` keeps the legacy setup-api fallback for compatibility. If
 more than one discovered plugin claims the same normalized setup provider or
 CLI backend id, setup lookup refuses the ambiguous owner instead of relying on
-discovery order. When setup runtime does execute, registry diagnostics report
-drift between `setup.providers` / `setup.cliBackends` and the providers or CLI
-backends actually registered by setup-api, without blocking legacy plugins.
+discovery order. When setup runtime executes, registry diagnostics reject
+undeclared provider and CLI backend registrations. CLI backend descriptors also
+report missing runtime registrations; provider descriptors may stay
+metadata-only while the setup module contributes other setup hooks.
 
 ### Plugin cache boundary
 
@@ -271,7 +272,7 @@ listed here.
 | `resolveExternalAuthProfiles`     | Overlay provider-owned external auth profiles; default `persistence` is `runtime-only` for CLI/app-owned creds | Provider reuses external auth credentials without persisting copied refresh tokens; declare `contracts.externalAuthProviders` in the manifest |
 | `shouldDeferSyntheticProfileAuth` | Lower stored synthetic profile placeholders behind env/config-backed auth                                      | Provider stores synthetic placeholder profiles that should not win precedence                                                                 |
 | `resolveDynamicModel`             | Sync fallback for provider-owned model ids not in the local registry yet                                       | Provider accepts arbitrary upstream model ids                                                                                                 |
-| `prepareDynamicModel`             | Async warm-up, then `resolveDynamicModel` runs again                                                           | Provider needs network metadata before resolving unknown ids                                                                                  |
+| `prepareDynamicModel`             | Return an asynchronously prepared model, or warm reusable metadata before retrying `resolveDynamicModel`       | Provider needs network metadata before resolving unknown ids                                                                                  |
 | `normalizeResolvedModel`          | Final rewrite before the embedded runner uses the resolved model                                               | Provider needs transport rewrites but still uses a core transport                                                                             |
 | `normalizeToolSchemas`            | Normalize tool schemas before the embedded runner sees them                                                    | Provider needs transport-family schema cleanup                                                                                                |
 | `inspectToolSchemas`              | Surface provider-owned schema diagnostics after normalization                                                  | Provider wants keyword warnings without teaching core provider-specific rules                                                                 |
@@ -735,6 +736,11 @@ instead of provider-native button, component, block, or card fields.
 See [Message Presentation](/plugins/message-presentation) for the contract,
 fallback rules, provider mapping, and plugin author checklist.
 
+Provider-native schema extensions require explicit maintainer approval,
+channel-owned parsing, documented cross-channel behavior, and capabilities that
+`MessagePresentation` cannot express. Discord `components` is the approved
+built-in exception for its advanced Components V2 layouts.
+
 Send-capable plugins declare what they can render through message capabilities:
 
 - `presentation` for semantic presentation blocks (`text`, `context`,
@@ -742,9 +748,9 @@ Send-capable plugins declare what they can render through message capabilities:
 - `delivery-pin` for pinned-delivery requests
 
 Core decides whether to render the presentation natively or degrade it to text.
-Do not expose provider-native UI escape hatches from the generic message tool.
-Deprecated SDK helpers for legacy native schemas remain exported for existing
-third-party plugins, but new plugins should not use them.
+Do not expose unapproved provider-native UI escape hatches from the generic
+message tool. Deprecated SDK helpers for legacy native schemas remain exported
+for existing third-party plugins, but new plugins should not use them.
 
 ## Channel target resolution
 
@@ -1016,10 +1022,11 @@ plugin index entry with `source: "path"` and a workspace-relative
 `plugins.load.paths`; the install record avoids duplicating local workstation
 paths into long-lived config. This keeps local development installs visible to
 source-plane diagnostics without adding a second raw filesystem-path disclosure
-surface. The persisted `installed_plugin_index` SQLite table is the install
-source of truth and can be refreshed without loading plugin runtime modules.
-Its `installRecords` map is durable even when a plugin manifest is missing or
-invalid; its `plugins` payload is a rebuildable manifest view.
+surface. The persisted `config_machine_state` value under
+`plugins.installedIndex` is the install source of truth and can be refreshed
+without loading plugin runtime modules. Its `installRecords` map is durable
+even when a plugin manifest is missing or invalid; its `plugins` payload is a
+rebuildable manifest view.
 
 ## Context engine plugins
 

@@ -6,12 +6,14 @@ import { resolveToolUseId } from "../../../../src/chat/tool-content.js";
 import { escapeRegExp } from "../../../../src/shared/regexp.js";
 import type { ChatItem, ChatQueueItem, ToolCard } from "../../lib/chat/chat-types.ts";
 import { extractTextCached, readTranscriptMediaEntries } from "../../lib/chat/message-extract.ts";
-import { stripMessageDisplayMetadataText } from "../../lib/chat/message-normalizer.ts";
-import { normalizeRoleForGrouping } from "../../lib/chat/message-normalizer.ts";
+import {
+  stripMessageDisplayMetadataText,
+  normalizeRoleForGrouping,
+} from "../../lib/chat/message-normalizer.ts";
 import { extractToolCardsCached, extractToolPreview } from "../../lib/chat/tool-cards.ts";
 import { fnv1aUtf16 } from "../../lib/fnv1a.ts";
 import { chatItemStartsUserTurn, safeNormalizeMessage } from "./chat-turn-boundary.ts";
-import { buildUserChatMessageContentBlocks } from "./user-message-content.ts";
+import { buildLocalUserMessage } from "./user-message-content.ts";
 
 export function appendCanvasBlockToAssistantMessage(
   message: unknown,
@@ -275,7 +277,7 @@ export function findCanvasInsertionIndex(
   return maximumIndex;
 }
 
-export function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
+function resolveMessageToolUseId(message: Record<string, unknown>): string | undefined {
   for (const field of ["tool_call_id", "toolCallId", "tool_use_id", "toolUseId"] as const) {
     const value = message[field];
     if (typeof value === "string" && value.trim()) {
@@ -294,6 +296,28 @@ export function resolveToolBlockId(
 
 export function isPendingSendMessage(message: unknown): boolean {
   return asRecord(asRecord(message)?.["__openclaw"])?.kind === "pending-send";
+}
+
+export function readPendingSendFailure(message: unknown): {
+  error?: string;
+  id: string;
+  state: "failed" | "unconfirmed";
+} | null {
+  const metadata = asRecord(asRecord(message)?.["__openclaw"]);
+  const state = metadata?.state;
+  const id = metadata?.id;
+  if (
+    metadata?.kind !== "pending-send" ||
+    (state !== "failed" && state !== "unconfirmed") ||
+    typeof id !== "string"
+  ) {
+    return null;
+  }
+  return {
+    id,
+    state,
+    ...(typeof metadata.error === "string" ? { error: metadata.error } : {}),
+  };
 }
 
 function readChatThreadMessageIdentity(message: unknown) {
@@ -534,15 +558,19 @@ export function collapseSequentialDuplicateMessages(items: ChatItem[]): ChatItem
 
   return collapsed;
 }
-export function hasRenderableNormalizedMessage(message: unknown): boolean {
-  const normalized = safeNormalizeMessage(message);
+export function hasRenderableNormalizedMessage(
+  message: unknown,
+  normalized = safeNormalizeMessage(message),
+): boolean {
   if (!normalized) {
     return false;
   }
   const role = normalizeRoleForGrouping(normalized.role);
   const label = role === "assistant" && normalized.senderLabel?.trim();
   const media = role === "user" && readTranscriptMediaEntries(message).length;
-  return Boolean(normalized.content.length || normalized.replyTarget || label || media);
+  return Boolean(
+    role === "tool" || normalized.content.length || normalized.replyTarget || label || media,
+  );
 }
 
 export function sanitizeStreamText(text: string): string {
@@ -551,27 +579,20 @@ export function sanitizeStreamText(text: string): string {
 }
 
 export function queuedSendThreadMessage(item: ChatQueueItem): Record<string, unknown> | null {
-  const content = buildUserChatMessageContentBlocks(item.text, item.attachments);
-  if (content.length === 0) {
-    return null;
-  }
-  return {
-    role: "user",
-    content,
-    timestamp: item.createdAt,
-    __openclaw: {
-      kind: "pending-send",
+  const runId = item.sendRunId ?? item.pendingRunId;
+  return buildLocalUserMessage({
+    text: item.text,
+    attachments: item.attachments,
+    createdAt: item.createdAt,
+    ...(runId ? { runId } : {}),
+    replyToId: item.replyToId,
+    sender: item.sender,
+    pending: {
       id: item.id,
       state: item.sendState,
-      ...(item.replyToId ? { replyToId: item.replyToId } : {}),
-      ...(item.sender?.id ? { senderId: item.sender.id } : {}),
-      ...(item.sender?.name ? { senderName: item.sender.name } : {}),
-      ...(item.sender?.username ? { senderUsername: item.sender.username } : {}),
-      ...(item.sender?.profileAvatarUrl
-        ? { senderProfileAvatarUrl: item.sender.profileAvatarUrl }
-        : {}),
+      error: item.sendError,
     },
-  };
+  });
 }
 
 export function rawMessageTimestamp(message: unknown): number | null {
@@ -590,7 +611,6 @@ function chatItemTimestamp(item: ChatItem): number | null {
     case "question":
       return item.startedAt;
     case "reading-indicator":
-    case "plan":
       return null;
   }
   return null;

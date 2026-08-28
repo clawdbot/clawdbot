@@ -150,7 +150,7 @@ describe("unit vitest config", () => {
     );
     const testConfig = requireTestConfig(unitConfig);
     const coverageInclude = testConfig.coverage?.include;
-    expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/embeddings.ts");
+    expect(coverageInclude).toContain("packages/memory-host-sdk/src/host/batch-runner.ts");
     expect(coverageInclude).toContain("src/media-generation/runtime-shared.ts");
     expect(coverageInclude).toContain("src/web-search/runtime.ts");
     expect(coverageInclude).not.toContain("packages/markdown-core/src/render.ts");

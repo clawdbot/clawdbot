@@ -1,5 +1,6 @@
 /** Normalizes live streamed tool-call names, ids, and unknown-tool loops. */
 import { randomUUID } from "node:crypto";
+import { stripCompactionReplayCheckpointInPlace } from "@openclaw/ai/transports";
 import { visitObjectContentBlocks } from "../../../shared/message-content-blocks.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { normalizeToolPolicyName } from "../../tool-policy.js";
@@ -193,6 +194,7 @@ function rewriteUnknownToolLoopMessage(message: unknown, toolName: string): void
       text: `I can't use the tool "${toolName}" here because it isn't available. I need to stop retrying it and answer without that tool.`,
     },
   ];
+  stripCompactionReplayCheckpointInPlace(message);
 }
 
 function guardUnknownToolLoopInMessage(

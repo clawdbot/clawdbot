@@ -1,18 +1,18 @@
 // Node pairing auto-approve tests cover LAN self-connect detection, token auth,
 // node identity persistence, and auto-approved pairing state.
-import { describe, expect, test } from "vitest";
+import { expect, test } from "vitest";
 import { writeConfigFile } from "../config/config.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { installGatewayTestHooks } from "./test-helpers.js";
-import { withLanNodePairingAttempt } from "./test-helpers.lan-pairing.js";
+import { describeWithLanNodePairingServer } from "./test-helpers.lan-pairing.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
-describe("gateway trusted CIDR node pairing auto-approve", () => {
+describeWithLanNodePairingServer("gateway trusted CIDR node pairing auto-approve", (attempt) => {
   test("stays disabled by default for a direct non-loopback node", async () => {
-    await withLanNodePairingAttempt({
+    await attempt({
       identityName: "trusted-cidr-default-off",
-      beforeStart: async () => {
+      configure: async () => {
         // Pin SSH verification off so this case exercises the CIDR default
         // without spawning a real ssh probe to the runner's own LAN IP.
         await writeConfigFile({
@@ -34,9 +34,9 @@ describe("gateway trusted CIDR node pairing auto-approve", () => {
   });
 
   test("auto-approves first-time node pairing from a matching direct non-loopback CIDR", async () => {
-    await withLanNodePairingAttempt({
+    await attempt({
       identityName: "trusted-cidr-direct-lan-auto-approve",
-      beforeStart: async (lanIp) => {
+      configure: async (lanIp) => {
         await writeConfigFile({
           gateway: {
             nodes: {
@@ -58,6 +58,11 @@ describe("gateway trusted CIDR node pairing auto-approve", () => {
         const paired = await getPairedDevice(loaded.identity.deviceId);
         expect(paired?.role).toBe("node");
         expect(paired?.approvedScopes ?? []).toStrictEqual([]);
+        expect(paired?.approvedVia).toBe("trusted-cidr");
+        // Network origin approves the device only: the capability surface must
+        // stay on the manual operator prompt (#128446 documents the flow).
+        expect(paired?.nodeSurface).toBeUndefined();
+        expect(paired?.pendingNodeSurface).toBeDefined();
       },
     });
   });

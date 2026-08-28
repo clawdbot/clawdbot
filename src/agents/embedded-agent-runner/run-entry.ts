@@ -21,19 +21,24 @@ import { selectAgentHarness } from "../harness/selection.js";
 import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { ModelFallbackStepFields } from "../model-fallback-observation.js";
 import { runWithModelFallback } from "../model-fallback-runner.js";
-import type { FallbackAttempt, ModelFallbackRouteResolution } from "../model-fallback.types.js";
+import type {
+  FallbackAttempt,
+  ModelFallbackAttemptProvenance,
+  ModelFallbackRouteResolution,
+} from "../model-fallback.types.js";
 import type { ModelManifestNormalizationContext } from "../model-ref-shared.js";
 import { resolveAgentRunAbortLifecycleFields } from "../run-termination.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./result-fallback-classifier.js";
-import type { EmbeddedAgentRunResult } from "./types.js";
+import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 type RunEntryCandidateOptions = {
   allowTransientCooldownProbe?: boolean;
   isFinalFallbackAttempt?: boolean;
   isFallbackRetry: boolean;
+  modelRoutingProvenance: ModelFallbackAttemptProvenance;
   contextEngineLogicalTurnLease: ContextEngineLogicalTurnLease;
   onContextEngineTurnCandidate: (facts: ContextEngineTurnAttemptFacts) => void;
 };
@@ -186,6 +191,80 @@ function canAdvanceContextEngineTurn(params: {
   );
 }
 
+function mergeRunEntryExecutionTrace<T extends EmbeddedAgentRunResult>(params: {
+  result: T;
+  outcome: "completed" | "exhausted";
+  provider: string;
+  model: string;
+  requestedProvider: string;
+  requestedModel: string;
+  fallbackAttempts: FallbackAttempt[];
+}): T {
+  const currentTrace = params.result.meta.executionTrace;
+  const winnerProvider =
+    params.outcome === "completed" ? (currentTrace?.winnerProvider ?? params.provider) : undefined;
+  const winnerModel =
+    params.outcome === "completed" ? (currentTrace?.winnerModel ?? params.model) : undefined;
+  const outerAttempts: TraceAttempt[] = params.fallbackAttempts.map((attempt) => ({
+    provider: attempt.provider,
+    model: attempt.model,
+    result: attempt.reason === "timeout" ? "timeout" : "candidate_failed",
+    ...(attempt.reason ? { reason: attempt.reason } : {}),
+    ...(typeof attempt.status === "number" ? { status: attempt.status } : {}),
+  }));
+  const innerAttempts = (currentTrace?.attempts ?? []).filter(
+    (attempt) => attempt.result !== "success",
+  );
+  const winnerAttempt = currentTrace?.attempts?.findLast(
+    (attempt) =>
+      attempt.result === "success" &&
+      attempt.provider === winnerProvider &&
+      attempt.model === winnerModel,
+  );
+  const attempts = [
+    ...outerAttempts,
+    ...innerAttempts,
+    ...(winnerProvider && winnerModel
+      ? [
+          winnerAttempt ?? {
+            provider: winnerProvider,
+            model: winnerModel,
+            result: "success" as const,
+          },
+        ]
+      : []),
+  ];
+  const terminalReceipt = params.result.meta.agentMeta?.terminalReceipt;
+  const requested = { provider: params.requestedProvider, model: params.requestedModel };
+  const agentMeta = terminalReceipt
+    ? {
+        ...params.result.meta.agentMeta,
+        terminalReceipt: {
+          ...terminalReceipt,
+          requested,
+          rerouted:
+            terminalReceipt.rerouted ||
+            terminalReceipt.effective.provider !== requested.provider ||
+            terminalReceipt.effective.model !== requested.model,
+        },
+      }
+    : params.result.meta.agentMeta;
+  return {
+    ...params.result,
+    meta: {
+      ...params.result.meta,
+      agentMeta,
+      executionTrace: {
+        ...currentTrace,
+        winnerProvider,
+        winnerModel,
+        attempts: attempts.length > 0 ? attempts : undefined,
+        fallbackUsed: currentTrace?.fallbackUsed === true || outerAttempts.length > 0,
+      },
+    },
+  };
+}
+
 function buildTerminal(params: {
   result: EmbeddedAgentRunResult;
   fallbackExhausted: boolean;
@@ -209,9 +288,7 @@ function buildTerminal(params: {
       terminalReplyKind: meta.terminalReplyKind,
     });
   const metadata: Record<string, unknown> = { terminalReply };
-  const terminalReceipt = normalizeAgentRunTerminalReceipt(
-    (meta.agentMeta as { terminalReceipt?: unknown } | undefined)?.terminalReceipt,
-  );
+  const terminalReceipt = normalizeAgentRunTerminalReceipt(meta.agentMeta?.terminalReceipt);
   if (terminalReceipt?.runId === params.runId) {
     metadata.terminalReceipt = {
       ...terminalReceipt,
@@ -417,6 +494,9 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             }),
           }),
       run: async (provider, model, options) => {
+        if (!options) {
+          throw new Error("Model fallback attempt is missing routing provenance");
+        }
         const isFallbackRetry = candidateIndex > 0;
         candidateIndex += 1;
         let contextEngineTurnCandidate: ContextEngineTurnAttemptFacts | undefined;
@@ -424,6 +504,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
           allowTransientCooldownProbe: options?.allowTransientCooldownProbe,
           isFinalFallbackAttempt: options?.isFinalFallbackAttempt,
           isFallbackRetry,
+          modelRoutingProvenance: options.modelRoutingProvenance,
           contextEngineLogicalTurnLease,
           onContextEngineTurnCandidate: (facts) => {
             contextEngineTurnCandidate = facts;
@@ -437,7 +518,7 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
       params.behavior.kind === "command-rpc"
         ? resolveAgentRunAbortLifecycleFields(params.abortSignal)
         : {};
-    const result =
+    const candidateResult =
       abortFields.aborted === true
         ? ({
             ...fallbackResult.result.result,
@@ -447,10 +528,20 @@ export async function runEmbeddedAgentEntry<T extends EmbeddedAgentRunResult>(
             },
           } as T)
         : fallbackResult.result.result;
+    const outcome =
+      fallbackResult.outcome === "exhausted" ? ("exhausted" as const) : ("completed" as const);
+    const result = mergeRunEntryExecutionTrace({
+      result: candidateResult,
+      outcome,
+      provider: fallbackResult.provider,
+      model: fallbackResult.model,
+      requestedProvider: params.selection.provider,
+      requestedModel: params.selection.model,
+      fallbackAttempts: fallbackResult.attempts,
+    });
     const settledResult = {
       ...fallbackResult,
-      outcome:
-        fallbackResult.outcome === "exhausted" ? ("exhausted" as const) : ("completed" as const),
+      outcome,
       result,
     };
     const terminal = buildTerminal({

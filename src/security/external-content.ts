@@ -311,18 +311,20 @@ export function truncateSanitizedExternalContent(
 ): { text: string; truncated: boolean; retainedRawChars: number } {
   const sanitizePrefix = (candidate: string): { text: string; retainedRawChars: number } => {
     let retained = candidate;
-    let text = sanitizeExternalContentText(retained);
     if (retained.length < value.length) {
-      const markerPrefix = /<<<\s*(?:END[\s_]+)?EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT/iu;
-      if (markerPrefix.test(foldMarkerTextWithIndexMap(text).folded)) {
-        // Clipping inside a forged marker bypasses complete-marker replacement.
-        const folded = foldMarkerTextWithIndexMap(retained);
-        const match = markerPrefix.exec(folded.folded);
-        retained = retained.slice(0, folded.originalStartByFoldedIndex[match?.index ?? 0] ?? 0);
-        text = sanitizeExternalContentText(retained);
+      const folded = foldMarkerTextWithIndexMap(retained);
+      // Consume complete markers (including their ids) before locating a clipped
+      // one, or an earlier opening marker can erase all useful wrapped content.
+      const markers =
+        /<<<\s*(?:END[\s_]+)?EXTERNAL[\s_]+UNTRUSTED[\s_]+CONTENT((?:\s+id=\\*"[^"]*")?\s*>>>)?/giu;
+      for (const match of folded.folded.matchAll(markers)) {
+        if (!match[1]) {
+          retained = retained.slice(0, folded.originalStartByFoldedIndex[match.index]);
+          break;
+        }
       }
     }
-    return { text, retainedRawChars: retained.length };
+    return { text: sanitizeExternalContentText(retained), retainedRawChars: retained.length };
   };
   const prefix = truncateUtf16Safe(value, maxChars);
   const sanitized = sanitizePrefix(prefix);

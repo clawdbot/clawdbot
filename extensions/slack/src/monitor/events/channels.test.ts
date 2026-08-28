@@ -12,7 +12,11 @@ let registerSlackChannelIdChangedEvent: typeof import("./channels.js").registerS
 let createSlackSystemEventTestHarness: typeof import("./system-event-test-harness.js").createSlackSystemEventTestHarness;
 
 vi.mock("openclaw/plugin-sdk/system-event-runtime", () => ({
-  enqueueSystemEvent: (...args: unknown[]) => enqueueSystemEventMock(...args),
+  enqueueRoutedSystemEvent: (
+    text: unknown,
+    route: { sessionKey: unknown },
+    options: Record<string, unknown>,
+  ) => enqueueSystemEventMock(text, { ...options, sessionKey: route.sessionKey }),
 }));
 vi.mock("openclaw/plugin-sdk/channel-config-writes", () => ({
   resolveChannelConfigWrites: () => true,
@@ -111,10 +115,12 @@ describe("registerSlackChannelEvents", () => {
       enterpriseId: "E_GRID",
     };
     const resolveSessionKey = vi.fn(
-      (input: Parameters<typeof ctx.resolveSlackSystemEventSessionKey>[0]) =>
-        `session:${input.eventScope?.teamId ?? "workspace"}`,
+      (input: Parameters<typeof ctx.resolveSlackSystemEventRoute>[0]) => ({
+        agentId: "main",
+        sessionKey: `session:${input.eventScope?.teamId ?? "workspace"}`,
+      }),
     );
-    ctx.resolveSlackSystemEventSessionKey = resolveSessionKey;
+    ctx.resolveSlackSystemEventRoute = resolveSessionKey;
 
     const cases = [
       {

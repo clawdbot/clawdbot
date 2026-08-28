@@ -1,17 +1,17 @@
-import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 // Codex plugin module implements conversation control behavior.
+import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import {
   applyModelOverrideWithAuthProfileCompatibility,
   ModelSelectionLockedError,
 } from "openclaw/plugin-sdk/model-session-runtime";
-import { patchSessionEntry, resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
+import {
+  getSessionEntry,
+  patchSessionEntry,
+  resolveStorePath,
+} from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveCodexBindingAppServerConnection } from "./app-server/binding-connection.js";
 import type { CodexAppServerClient } from "./app-server/client.js";
-import {
-  isCodexFastServiceTier,
-  type CodexAppServerApprovalPolicy,
-  type CodexAppServerSandboxMode,
-} from "./app-server/config.js";
+import { isCodexFastServiceTier } from "./app-server/config.js";
 import type { CodexServiceTier } from "./app-server/protocol.js";
 import {
   bindingStoreKey,
@@ -187,7 +187,6 @@ export async function setCodexConversationModel(params: {
   pluginConfig?: unknown;
   agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
-  session?: { agentId: string; sessionId: string; sessionKey: string };
 }): Promise<string> {
   const model = params.model.trim();
   if (!model) {
@@ -218,31 +217,27 @@ export async function setCodexConversationModel(params: {
   });
   const nextModel = modelSelection.model;
   const modelChanged = nextModel !== binding.model || nextModelProvider !== binding.modelProvider;
-  const session =
-    params.session ??
-    (params.identity.kind === "session" && params.identity.sessionKey
-      ? {
-          agentId: params.identity.agentId,
-          sessionId: params.identity.sessionId,
-          sessionKey: params.identity.sessionKey,
-        }
-      : undefined);
-  if (session) {
+  const projectionPatch =
+    modelChanged && binding.contextEngine?.projection
+      ? { contextEngine: { ...binding.contextEngine, projection: undefined } }
+      : {};
+  const identity = params.identity;
+  if (identity.kind === "session" && identity.sessionKey) {
+    // SessionEntry owns the desired model; retain the loaded binding until
+    // lifecycle reconciliation can rotate its native generation safely.
     const updated = await patchSessionEntry({
-      agentId: session.agentId,
-      storePath: resolveStorePath(params.config?.session?.store, { agentId: session.agentId }),
-      sessionKey: session.sessionKey,
+      agentId: identity.agentId,
+      storePath: resolveStorePath(params.config?.session?.store, { agentId: identity.agentId }),
+      sessionKey: identity.sessionKey,
       requireWriteSuccess: true,
-      // Model override helpers delete stale credentials and model metadata;
-      // replacing the snapshot is required because partial patches merge fields.
       replaceEntry: true,
       update: (entry) => {
-        if (entry.sessionId !== session.sessionId) {
+        if (entry.sessionId !== identity.sessionId) {
           throw new Error("Codex session changed while applying the model selection.");
         }
         applyModelOverrideWithAuthProfileCompatibility({
           cfg: params.config ?? {},
-          agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, session.agentId),
+          agentDir: params.agentDir ?? resolveAgentDir(params.config ?? {}, identity.agentId),
           entry,
           currentProvider: binding.modelProvider ?? "openai",
           selection: { provider: nextModelProvider ?? "openai", model: nextModel },
@@ -254,28 +249,16 @@ export async function setCodexConversationModel(params: {
     if (!updated) {
       throw new Error("Codex session changed while applying the model selection.");
     }
-    // SessionEntry owns desired selection; the native binding remains the
-    // currently loaded model so generation transitions still rotate safely.
-    if (params.identity.kind === "conversation") {
-      await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
-        model: nextModel,
-        modelProvider: nextModelProvider,
-        ...(modelChanged && binding.contextEngine?.projection
-          ? { contextEngine: { ...binding.contextEngine, projection: undefined } }
-          : {}),
-      });
-    } else if (modelChanged && binding.contextEngine?.projection) {
-      await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
-        contextEngine: { ...binding.contextEngine, projection: undefined },
-      });
+    if (modelChanged && binding.contextEngine?.projection) {
+      await patchThreadBinding(params.bindingStore, identity, binding.threadId, projectionPatch);
     }
   } else {
+    // Conversation bindings and ephemeral sessions own native selection;
+    // ambient outer-session metadata must never redirect their runtime.
     await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
       model: nextModel,
       modelProvider: nextModelProvider,
-      ...(modelChanged && binding.contextEngine?.projection
-        ? { contextEngine: { ...binding.contextEngine, projection: undefined } }
-        : {}),
+      ...projectionPatch,
     });
   }
   return `Codex model set to ${formatCodexDisplayText(nextModel)}.`;
@@ -301,24 +284,43 @@ export async function setCodexConversationFastMode(params: {
 }
 
 export async function setCodexConversationPermissions(params: {
-  identity: CodexAppServerBindingIdentity;
-  bindingStore: CodexAppServerBindingStore;
   mode?: PermissionsMode;
-  pluginConfig?: unknown;
-  agentDir?: string;
   config?: CodexAppServerBindingLookup["config"];
+  session: { agentId: string; sessionId: string; sessionKey: string };
 }): Promise<string> {
-  const binding = await requireThreadBinding(params.bindingStore, params.identity);
-  if (!params.mode) {
-    return `Codex permissions: ${formatPermissionsMode(binding)}.`;
-  }
-  const policy = permissionsForMode(params.mode);
-  // Native bound turns pass these settings at turn/start time, so this command
-  // can update the local binding even when app-server resume overrides fail.
-  await patchThreadBinding(params.bindingStore, params.identity, binding.threadId, {
-    approvalPolicy: policy.approvalPolicy,
-    sandbox: policy.sandbox,
+  const storePath = resolveStorePath(params.config?.session?.store, {
+    agentId: params.session.agentId,
   });
+  if (!params.mode) {
+    const entry = getSessionEntry({
+      agentId: params.session.agentId,
+      hydrateSkillPromptRefs: false,
+      readConsistency: "latest",
+      sessionKey: params.session.sessionKey,
+      storePath,
+    });
+    if (entry?.sessionId !== params.session.sessionId) {
+      throw new Error("Codex session changed while reading the permission mode.");
+    }
+    return `Codex permissions: ${formatPermissionsMode(entry.permissionMode)}.`;
+  }
+  const updated = await patchSessionEntry({
+    agentId: params.session.agentId,
+    storePath,
+    sessionKey: params.session.sessionKey,
+    requireWriteSuccess: true,
+    replaceEntry: true,
+    update: (entry) => {
+      if (entry.sessionId !== params.session.sessionId) {
+        throw new Error("Codex session changed while applying the permission mode.");
+      }
+      entry.permissionMode = params.mode === "yolo" ? "full" : "guarded";
+      return entry;
+    },
+  });
+  if (!updated) {
+    throw new Error("Codex session changed while applying the permission mode.");
+  }
   return `Codex permissions set to ${params.mode === "yolo" ? "full access" : "default"}.`;
 }
 
@@ -344,19 +346,16 @@ export function parseCodexPermissionsModeArg(arg: string | undefined): Permissio
   if (normalized === "yolo" || normalized === "full" || normalized === "full-access") {
     return "yolo";
   }
-  if (normalized === "default" || normalized === "guardian") {
+  if (["default", "guardian", "guarded", "approve"].includes(normalized)) {
     return "default";
   }
   return undefined;
 }
 
-export function formatPermissionsMode(binding: {
-  approvalPolicy?: CodexAppServerApprovalPolicy;
-  sandbox?: CodexAppServerSandboxMode;
-}): string {
-  return binding.approvalPolicy === "never" && binding.sandbox === "danger-full-access"
-    ? "full access"
-    : "default";
+export function formatPermissionsMode(
+  mode: "read-only" | "guarded" | "workspace" | "full" | undefined,
+): string {
+  return mode === "full" ? "full access" : (mode ?? "default");
 }
 
 async function requireThreadBinding(
@@ -412,13 +411,4 @@ function resolveConversationControlModelProvider(params: {
     return undefined;
   }
   return modelProvider.toLowerCase() === "openai" ? "openai" : modelProvider;
-}
-
-function permissionsForMode(mode: PermissionsMode): {
-  approvalPolicy: CodexAppServerApprovalPolicy;
-  sandbox: CodexAppServerSandboxMode;
-} {
-  return mode === "yolo"
-    ? { approvalPolicy: "never", sandbox: "danger-full-access" }
-    : { approvalPolicy: "on-request", sandbox: "workspace-write" };
 }

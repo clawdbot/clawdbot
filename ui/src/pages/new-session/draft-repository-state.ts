@@ -5,12 +5,12 @@ import type {
 import type { ApplicationContext } from "../../app/context.ts";
 import type { DraftRepositoryState } from "./discovery.ts";
 import type { NewSessionPreference } from "./preferences.ts";
+import type { DraftRemoteProject } from "./project-chip.ts";
 
 type DraftRepositorySnapshot = Readonly<{
-  execNode: string;
-  cloudProfileId: string;
+  remotePlacement: boolean;
   selectedProject: ProjectRecord | undefined;
-  remoteProjectSelected: boolean;
+  remoteProject: DraftRemoteProject | null;
   folder: string;
   workspace: string;
   workspaceGit: boolean;
@@ -22,6 +22,31 @@ type DraftRepositoryCallbacks = {
   persistPreference: (patch: NewSessionPreference) => void;
 };
 
+type RepositoryRestore = { worktree: boolean; baseRef: string; baseRefEditGeneration: number };
+type ResolvedRepository = Exclude<DraftRepositoryState, { kind: "checking" }>;
+
+function planRepositoryDiscovery(
+  snapshot: DraftRepositorySnapshot,
+):
+  | { plan: "none" }
+  | { plan: "resolved"; state: ResolvedRepository }
+  | { plan: "check"; repoRoot: string } {
+  if (snapshot.remoteProject) {
+    return {
+      plan: "resolved",
+      state: { kind: "pending-clone", cloneUrl: snapshot.remoteProject.cloneUrl },
+    };
+  }
+  const repoRoot =
+    snapshot.selectedProject?.repoRoot ?? (snapshot.folder.trim() || snapshot.workspace);
+  if (!repoRoot || (snapshot.selectedProject && !snapshot.selectedProject.repoRoot)) {
+    return { plan: "none" };
+  }
+  return !snapshot.selectedProject && repoRoot === snapshot.workspace && !snapshot.workspaceGit
+    ? { plan: "resolved", state: { kind: "direct", repoRoot } }
+    : { plan: "check", repoRoot };
+}
+
 export class DraftRepositoryController {
   private worktreeValue = false;
   private worktreeNameValue = "";
@@ -32,6 +57,7 @@ export class DraftRepositoryController {
   private preferredWorktreeRestore = false;
   private preferredBaseRefRestore = "";
   private worktreeSelectedByUser = false;
+  private detailsSelectedByUser = false;
 
   constructor(
     private readonly read: () => DraftRepositorySnapshot,
@@ -58,11 +84,16 @@ export class DraftRepositoryController {
     return !this.preferredWorktreeRestore;
   }
 
+  get hasUserSelection(): boolean {
+    return this.worktreeSelectedByUser || this.detailsSelectedByUser;
+  }
+
   adoptPreference(preference: NewSessionPreference | null) {
     this.preferredWorktreeRestore = preference?.worktree === true;
     this.preferredBaseRefRestore = preference?.baseRef ?? "";
     this.worktreeNameValue = preference?.worktreeName ?? "";
     this.worktreeSelectedByUser = false;
+    this.detailsSelectedByUser = false;
   }
 
   reset() {
@@ -75,6 +106,7 @@ export class DraftRepositoryController {
     this.preferredWorktreeRestore = false;
     this.preferredBaseRefRestore = "";
     this.worktreeSelectedByUser = false;
+    this.detailsSelectedByUser = false;
   }
 
   invalidate() {
@@ -102,7 +134,7 @@ export class DraftRepositoryController {
   }
 
   toggle() {
-    if (this.read().cloudProfileId) {
+    if (this.read().remotePlacement) {
       return;
     }
     this.worktreeValue = !this.worktreeValue;
@@ -112,7 +144,11 @@ export class DraftRepositoryController {
       folder: this.read().folder.trim() || this.read().workspace,
       worktree: this.worktreeValue,
     });
-    if (this.worktreeValue && this.repositoryValue.kind !== "git") {
+    if (
+      this.worktreeValue &&
+      this.repositoryValue.kind !== "git" &&
+      this.repositoryValue.kind !== "pending-clone"
+    ) {
       this.load();
     }
     this.callbacks.requestUpdate();
@@ -125,6 +161,7 @@ export class DraftRepositoryController {
     this.baseRefEditGeneration += 1;
     this.baseRefValue = baseRef;
     this.preferredBaseRefRestore = "";
+    this.detailsSelectedByUser = true;
     this.callbacks.persistPreference({ baseRef });
     this.callbacks.requestUpdate();
   }
@@ -134,78 +171,59 @@ export class DraftRepositoryController {
       return;
     }
     this.worktreeNameValue = worktreeName;
+    this.detailsSelectedByUser = true;
     this.callbacks.persistPreference({ worktreeName });
     this.callbacks.requestUpdate();
   }
 
   available(): boolean {
     const snapshot = this.read();
-    if (snapshot.execNode) {
-      return false;
-    }
     if (snapshot.selectedProject?.repoRoot) {
       return true;
     }
-    if (this.repositoryValue.kind === "git") {
-      return true;
-    }
+    const state = this.repositoryValue;
     return (
-      this.repositoryValue.kind === "unavailable" &&
-      this.repositoryValue.repoRoot === snapshot.workspace &&
-      snapshot.workspaceGit
+      state.kind === "git" ||
+      state.kind === "pending-clone" ||
+      (state.kind === "unavailable" &&
+        state.repoRoot === snapshot.workspace &&
+        snapshot.workspaceGit)
     );
   }
 
   matchesCurrentRepo(): boolean {
-    if (this.read().execNode || this.repositoryValue.kind === "idle") {
+    const snapshot = this.read();
+    const state = this.repositoryValue;
+    if (state.kind === "pending-clone") {
+      return snapshot.remoteProject?.cloneUrl === state.cloneUrl;
+    }
+    if (state.kind === "idle" || snapshot.remoteProject) {
       return false;
     }
-    const snapshot = this.read();
     const repoRoot =
       snapshot.selectedProject?.repoRoot ?? (snapshot.folder.trim() || snapshot.workspace);
-    return this.repositoryValue.repoRoot === repoRoot;
+    return state.repoRoot === repoRoot;
   }
 
   load() {
     const requestId = ++this.requestToken;
-    const restoreWorktree = this.preferredWorktreeRestore && !this.worktreeSelectedByUser;
-    const restoreBaseRef = this.preferredBaseRefRestore;
-    const baseRefEditGeneration = this.baseRefEditGeneration;
+    const restore = {
+      worktree: this.preferredWorktreeRestore && !this.worktreeSelectedByUser,
+      baseRef: this.preferredBaseRefRestore,
+      baseRefEditGeneration: this.baseRefEditGeneration,
+    };
     const snapshot = this.read();
     this.repositoryValue = { kind: "idle" };
     this.baseRefValue = "";
-    if (
-      snapshot.remoteProjectSelected ||
-      snapshot.execNode ||
-      (snapshot.selectedProject && !snapshot.selectedProject.repoRoot)
-    ) {
-      this.preferredWorktreeRestore = false;
-      return;
-    }
-    const repoRoot =
-      snapshot.selectedProject?.repoRoot ?? (snapshot.folder.trim() || snapshot.workspace);
-    const usesWorkspace = !snapshot.selectedProject && repoRoot === snapshot.workspace;
-    if (!repoRoot) {
-      this.preferredWorktreeRestore = false;
-      return;
-    }
-    if (usesWorkspace && !snapshot.workspaceGit) {
-      this.repositoryValue = { kind: "direct", repoRoot };
-      const rejectedWorktree = !snapshot.cloudProfileId && (this.worktreeValue || restoreWorktree);
-      if (!snapshot.cloudProfileId) {
-        this.worktreeValue = false;
-      }
-      this.preferredWorktreeRestore = false;
-      if (rejectedWorktree) {
-        this.callbacks.persistPreference({ worktree: false });
-      }
-      return;
+    const discovery = planRepositoryDiscovery(snapshot);
+    if (discovery.plan === "resolved") {
+      return this.adoptResolvedRepository(discovery.state, restore);
     }
     const client = snapshot.gateway?.client;
-    if (snapshot.gateway?.phase !== "connected" || !client) {
-      this.preferredWorktreeRestore = false;
-      return;
+    if (discovery.plan === "none" || snapshot.gateway?.phase !== "connected" || !client) {
+      return this.adoptResolvedRepository({ kind: "idle" }, restore);
     }
+    const { repoRoot } = discovery;
     this.repositoryValue = { kind: "checking", repoRoot };
     void client
       .request<WorktreesBranchesResult>("worktrees.branches", {
@@ -216,56 +234,54 @@ export class DraftRepositoryController {
         if (requestId !== this.requestToken) {
           return;
         }
-        if (result?.repositoryStatus !== "git") {
-          this.repositoryValue = {
-            kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable",
-            repoRoot,
-          };
-          if (result?.repositoryStatus === "not_git") {
-            const rejectedWorktree =
-              !this.read().cloudProfileId && (this.worktreeValue || restoreWorktree);
-            if (!this.read().cloudProfileId) {
-              this.worktreeValue = false;
-            }
-            if (rejectedWorktree) {
-              this.callbacks.persistPreference({ worktree: false });
-            }
-          } else if (restoreWorktree && !this.worktreeSelectedByUser && this.available()) {
-            this.worktreeValue = true;
-          }
-          this.preferredWorktreeRestore = false;
-          this.callbacks.requestUpdate();
-          return;
-        }
-        this.repositoryValue = {
-          kind: "git",
-          repoRoot,
-          branches: result.branches,
-          ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
-          ...(result.headBranch ? { headBranch: result.headBranch } : {}),
-        };
-        if (restoreWorktree && !this.worktreeSelectedByUser && !this.read().execNode) {
-          this.worktreeValue = true;
-        }
-        this.preferredWorktreeRestore = false;
-        if (baseRefEditGeneration === this.baseRefEditGeneration) {
-          this.baseRefValue = restoreBaseRef || result.defaultBranch || result.headBranch || "";
-          if (restoreBaseRef) {
-            this.preferredBaseRefRestore = "";
-          }
-        }
-        this.callbacks.requestUpdate();
+        this.adoptResolvedRepository(
+          result?.repositoryStatus === "git"
+            ? {
+                kind: "git",
+                repoRoot,
+                branches: result.branches,
+                ...(result.defaultBranch ? { defaultBranch: result.defaultBranch } : {}),
+                ...(result.headBranch ? { headBranch: result.headBranch } : {}),
+              }
+            : { kind: result?.repositoryStatus === "not_git" ? "direct" : "unavailable", repoRoot },
+          restore,
+        );
       })
       .catch(() => {
         if (requestId !== this.requestToken) {
           return;
         }
-        this.repositoryValue = { kind: "unavailable", repoRoot };
-        if (restoreWorktree && !this.worktreeSelectedByUser && this.available()) {
-          this.worktreeValue = true;
-        }
-        this.preferredWorktreeRestore = false;
-        this.callbacks.requestUpdate();
+        this.adoptResolvedRepository({ kind: "unavailable", repoRoot }, restore);
       });
+  }
+
+  private adoptResolvedRepository(state: ResolvedRepository, restore: RepositoryRestore) {
+    // Discovery owns restore/rejection for both immediate and RPC results;
+    // placement and user edits may have changed while an RPC was pending.
+    this.repositoryValue = state;
+    if (state.kind === "direct") {
+      if (!this.read().remotePlacement) {
+        const rejectedWorktree = this.worktreeValue || restore.worktree;
+        this.worktreeValue = false;
+        if (rejectedWorktree) {
+          this.callbacks.persistPreference({ worktree: false });
+        }
+      }
+    } else if (
+      state.kind !== "idle" &&
+      restore.worktree &&
+      !this.worktreeSelectedByUser &&
+      this.available()
+    ) {
+      this.worktreeValue = true;
+    }
+    this.preferredWorktreeRestore = false;
+    if (state.kind === "git" && restore.baseRefEditGeneration === this.baseRefEditGeneration) {
+      this.baseRefValue = restore.baseRef || state.defaultBranch || state.headBranch || "";
+      if (restore.baseRef) {
+        this.preferredBaseRefRestore = "";
+      }
+    }
+    this.callbacks.requestUpdate();
   }
 }

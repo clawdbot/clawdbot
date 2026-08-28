@@ -9,6 +9,7 @@ import { loadAuthProfileStoreWithoutExternalProfiles } from "../agents/auth-prof
 import {
   getRuntimeAuthProfileStoreCredentialsRevision,
   getRuntimeAuthProfileStoreSnapshotCore,
+  prepareRuntimeAuthProfileStoreSnapshots,
   setRuntimeAuthProfileStoreSnapshot,
 } from "../agents/auth-profiles/runtime-snapshots.js";
 import { writePersistedAuthProfileStoreRaw } from "../agents/auth-profiles/sqlite.js";
@@ -1235,7 +1236,7 @@ describe("gateway startup config secret preflight", () => {
     const initial = preparedSnapshot(gatewayTokenConfig({}));
     const candidate: PreparedSecretsRuntimeSnapshot = {
       ...preparedSnapshotWithGatewayToken(initial.sourceConfig, "candidate-token"),
-      authStores: [
+      authStores: prepareRuntimeAuthProfileStoreSnapshots([
         {
           agentDir,
           store: {
@@ -1251,7 +1252,7 @@ describe("gateway startup config secret preflight", () => {
             },
           },
         },
-      ],
+      ]),
     };
     const activateRuntimeSecretsSnapshot = vi.fn(activateSecretsRuntimeSnapshotForTest);
     const activateRuntimeSecrets = runtimeSecretsActivatorForTest({
@@ -1378,7 +1379,6 @@ describe("gateway startup config secret preflight", () => {
       await activateRuntimeSecrets(config, { reason: "startup", activate: false });
 
       const events = readTimelineEvents(timelineEnv.timelinePath);
-      expect(events).toHaveLength(2);
       expect(events.map((event) => event.type)).toEqual(["span.start", "span.end"]);
       for (const event of events) {
         expect(event.name).toBe("secrets.prepare");
@@ -2821,12 +2821,12 @@ describe("gateway startup config secret preflight", () => {
       agentDir,
     );
     const active = preparedSnapshot(gatewayTokenConfig({}));
-    active.authStores = [
+    active.authStores = prepareRuntimeAuthProfileStoreSnapshots([
       {
         agentDir,
         store: { version: 1, profiles: { "openai:default": credential } },
       },
-    ];
+    ]);
     active.authStoreCredentialsRevision = getRuntimeAuthProfileStoreCredentialsRevision();
     activateSecretsRuntimeSnapshotState({
       snapshot: active,

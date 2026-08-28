@@ -18,19 +18,19 @@ import {
   type StableDeliveryPreparationOwner,
 } from "../infra/outbound/delivery-queue-preparation.js";
 import {
+  drainPendingDeliveriesCore,
+  withActiveDeliveryClaim,
+} from "../infra/outbound/delivery-queue-recovery.js";
+import {
+  ackDelivery,
+  failDelivery,
+  failDeliveryAfterPlatformSend,
+  failDeliveryBeforePlatformSend,
   failPendingDelivery,
   findDeliveryIntentOwner,
   loadPendingDelivery,
   reserveDeliveryAttempt,
 } from "../infra/outbound/delivery-queue-storage.js";
-import {
-  ackDelivery,
-  drainPendingDeliveriesCore,
-  failDelivery,
-  failDeliveryAfterPlatformSend,
-  failDeliveryBeforePlatformSend,
-  withActiveDeliveryClaim,
-} from "../infra/outbound/delivery-queue.js";
 import {
   createMessageSentEmitter,
   type MessageSentEvent,
@@ -340,8 +340,6 @@ export async function deliverRestartSentinelNotice(
           if (pending) {
             const settled = await failPendingDelivery({
               id: params.queueId,
-              expectedStatus: "pending",
-              lastError: error,
               entry: pending,
             });
             if (settled.status === "failed") {

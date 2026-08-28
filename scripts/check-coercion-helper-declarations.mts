@@ -33,7 +33,7 @@ export const CANONICAL_COERCION_HELPER_OWNERS = [
   {
     file: "packages/normalization-core/src/agent-id.ts",
     kind: "function",
-    names: ["isValidAgentId", "normalizeAgentId"],
+    names: ["isValidAgentId", "normalizeAgentId", "normalizeAgentIdStrict"],
   },
   {
     file: "packages/normalization-core/src/string-coerce.ts",
@@ -215,10 +215,28 @@ export const DEFERRED_CANONICAL_COERCION_EXPORTS = [
 
 const EXCEPTIONAL_COERCION_HELPER_CARVE_OUTS = [
   {
+    file: "scripts/lib/ci-test-timings-schema.mts",
+    name: "isRecord",
+    kind: "function",
+    reason: "Dependency-free CI preflight runs before install and cannot use workspace resolution.",
+  },
+  {
     file: "ui/src/test-helpers/control-ui-e2e.ts",
     name: "isRecord",
     kind: "function",
     reason: "Serialized mock Gateway closure cannot capture module imports.",
+  },
+  {
+    file: "src/gateway/mcp-app-standalone-host.ts",
+    name: "asStandaloneRecord",
+    kind: "variable",
+    reason: "Serialized standalone app closure cannot capture module imports.",
+  },
+  {
+    file: "extensions/diffs/src/viewer-payload.ts",
+    name: "isViewerRecord",
+    kind: "function",
+    reason: "Standalone browser asset build cannot resolve workspace package imports.",
   },
   {
     file: "scripts/lib/kova-report-gate.mts",

@@ -1,9 +1,9 @@
 // Resolves native module require paths for plugin runtime loading.
 import fs from "node:fs";
-import { createRequire } from "node:module";
-import Module from "node:module";
+import Module, { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
+import { isPathInside } from "../infra/path-guards.js";
 
 const nodeRequire = createRequire(import.meta.url);
 type ResolveFilename = (
@@ -131,17 +131,12 @@ function clearRequireCacheSubtree(
   const cached = nodeRequire.cache[resolvedPath];
   if (cached) {
     for (const child of cached.children) {
-      if (isPathInsideOrSame(dependencyRoot, child.id)) {
+      if (isPathInside(dependencyRoot, child.id)) {
         clearRequireCacheSubtree(child.id, dependencyRoot, seen);
       }
     }
   }
   delete nodeRequire.cache[resolvedPath];
-}
-
-function isPathInsideOrSame(root: string, target: string): boolean {
-  const relative = path.relative(root, target);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
 }
 
 function requireWithOptionalAliases(

@@ -72,6 +72,7 @@ describe("buildQaGatewayConfig", () => {
     expect(cfg.meta).toEqual({ lastTouchedVersion: OPENCLAW_VERSION });
     expect(cfg.plugins?.allow).toEqual(["acpx", "memory-core", "qa-lab", "qa-channel"]);
     expect(getPrimaryModel(cfg.agents?.defaults?.model)).toBe("mock-openai/gpt-5.6-luna");
+    expect(cfg.agents?.entries?.qa).not.toHaveProperty("default");
     expect(cfg.channels?.["qa-channel"]?.baseUrl).toBe("http://127.0.0.1:43124");
   });
 

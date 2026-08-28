@@ -16,8 +16,9 @@ export async function downloadInboundMedia(
   msg: proto.IWebMessageInfo,
   sock: Awaited<ReturnType<typeof createWaSocket>>,
   maxBytes = 50 * 1024 * 1024,
+  normalizedMessage?: proto.IMessage,
 ): Promise<{ saved: SavedMedia; mimetype?: string; fileName?: string } | undefined> {
-  const message = unwrapMessage(msg.message as proto.IMessage | undefined);
+  const message = normalizedMessage ?? unwrapMessage(msg.message as proto.IMessage | undefined);
   if (!message) {
     return undefined;
   }

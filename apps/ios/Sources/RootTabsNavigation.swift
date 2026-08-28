@@ -145,10 +145,6 @@ extension RootTabs {
         return max(0, min(sidebarWidth, dragOffset))
     }
 
-    static func shouldShowSidebarRevealControl(isSidebarVisible: Bool) -> Bool {
-        !isSidebarVisible
-    }
-
     static func visibleSettingsRoute(
         navigationPath: [SettingsRoute],
         baseRoute: SettingsRoute?) -> SettingsRoute?
@@ -164,7 +160,7 @@ extension RootTabs {
         case .split:
             true
         case .drawer:
-            self.shouldShowSidebarRevealControl(isSidebarVisible: isSidebarVisible)
+            !isSidebarVisible
         }
     }
 

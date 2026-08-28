@@ -14,6 +14,7 @@ version and the additive schema surface. Dates are authoring dates (2026).
 - Slim worker and session-catalog payloads to the active wire contract.
 - Remove dead protocol surfaces and add since-vintage metadata to retained schemas and methods.
 - Add optional `step` on `SystemAgentChatResult` carrying the full awaited wizard step.
+- Project plugin tab `placement` in `hello-ok` so active plugins can target native Control UI routes.
 
 ## Protocol v4 (current)
 

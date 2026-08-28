@@ -11,10 +11,10 @@ const GATEWAY_SERVICE_KIND = "gateway";
 // make direct clients use a different token than the managed gateway service.
 type GatewayAuthTokenSourceConflict = {
   checkId: "gateway.env_token_overrides_config";
+  severity: "warn";
   title: string;
   detail: string;
   remediation: string;
-  warningLines: string[];
   diagnostic: string;
 };
 
@@ -72,10 +72,10 @@ export function resolveGatewayAuthTokenSourceConflict(params: {
 
   return {
     checkId: "gateway.env_token_overrides_config",
+    severity: "warn",
     title,
     detail,
     remediation,
-    warningLines: [`- WARNING: ${title}.`, `  ${detail}`, `  Fix: ${remediation}`],
     diagnostic: `${title}: ${remediation}`,
   };
 }

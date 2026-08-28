@@ -58,33 +58,40 @@ function selectChatSendAgentReplyPayloads(params: {
     .map((entry) => entry.payload);
 }
 
-/** Persist and broadcast agent-run source/status replies that bypass the normal model turn. */
-export async function finalizeChatSendSourceReplies(params: {
+type FinalizeChatSendAgentRepliesBase = {
   accountId: string | undefined;
   context: GatewayRequestContext;
-  deliveredReplies: readonly DeliveredReply[];
   emitFirstAssistantServerTiming: () => void;
-  hasReturnedAgentErrorPayloads: boolean;
   session: Pick<
     PreparedChatSendSession,
     "agentId" | "backingSessionId" | "cfg" | "clientRunId" | "sessionKey" | "sessionLoadOptions"
   >;
-}): Promise<boolean> {
-  const {
-    accountId,
-    context,
-    deliveredReplies,
-    emitFirstAssistantServerTiming,
-    hasReturnedAgentErrorPayloads,
-    session,
-  } = params;
+};
+
+type ChatSendAgentReplyFinalization =
+  | { kind: "delivered"; hasSourceReplyTranscriptMirror: boolean }
+  | { kind: "dropped"; reason: "no-visible-content" };
+
+export function createChatSendLateReplyFinalizer(
+  params: Omit<FinalizeChatSendAgentRepliesBase, "emitFirstAssistantServerTiming">,
+) {
+  return async ({ runId, payloads }: { runId: string; payloads: ReplyPayload[] }) =>
+    await finalizeChatSendAgentReplyPayloads({
+      ...params,
+      emitFirstAssistantServerTiming: () => {},
+      payloads,
+      session: { ...params.session, clientRunId: runId },
+    });
+}
+
+async function finalizeChatSendAgentReplyPayloads(
+  params: FinalizeChatSendAgentRepliesBase & { payloads: readonly ReplyPayload[] },
+): Promise<ChatSendAgentReplyFinalization> {
+  const { accountId, context, emitFirstAssistantServerTiming, session } = params;
   const { agentId, backingSessionId, cfg, clientRunId, sessionKey, sessionLoadOptions } = session;
-  const agentRunReplyPayloads = selectChatSendAgentReplyPayloads({
-    deliveredReplies,
-    hasReturnedAgentErrorPayloads,
-  });
+  const agentRunReplyPayloads = [...params.payloads];
   if (agentRunReplyPayloads.length === 0) {
-    return false;
+    return { kind: "dropped", reason: "no-visible-content" };
   }
 
   const hasSourceReplyTranscriptMirror = agentRunReplyPayloads.some(
@@ -172,7 +179,7 @@ export async function finalizeChatSendSourceReplies(params: {
     extractAssistantDisplayTextFromContent(sourceReplyBroadcastContent) ??
     buildTranscriptReplyText(finalPayloads);
   if (!sourceReplyBroadcastContent.length && !displayReply) {
-    return false;
+    return { kind: "dropped", reason: "no-visible-content" };
   }
 
   const sourceReplyPersistenceRequests: Array<{
@@ -233,7 +240,7 @@ export async function finalizeChatSendSourceReplies(params: {
     if (!attachParams.messageId) {
       return;
     }
-    await attachManagedOutgoingMediaToMessage({
+    attachManagedOutgoingMediaToMessage({
       messageId: attachParams.messageId,
       blocks: attachParams.request.state.persistedContent,
     });
@@ -301,5 +308,22 @@ export async function finalizeChatSendSourceReplies(params: {
     agentId,
     message,
   });
-  return hasSourceReplyTranscriptMirror;
+  return { kind: "delivered", hasSourceReplyTranscriptMirror };
+}
+
+/** Persist and broadcast agent-run source/status replies that bypass the normal model turn. */
+export async function finalizeChatSendSourceReplies(
+  params: FinalizeChatSendAgentRepliesBase & {
+    deliveredReplies: readonly DeliveredReply[];
+    hasReturnedAgentErrorPayloads: boolean;
+  },
+): Promise<boolean> {
+  const result = await finalizeChatSendAgentReplyPayloads({
+    accountId: params.accountId,
+    context: params.context,
+    emitFirstAssistantServerTiming: params.emitFirstAssistantServerTiming,
+    payloads: selectChatSendAgentReplyPayloads(params),
+    session: params.session,
+  });
+  return result.kind === "delivered" && result.hasSourceReplyTranscriptMirror;
 }

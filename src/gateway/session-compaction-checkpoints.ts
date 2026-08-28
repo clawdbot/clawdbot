@@ -79,6 +79,7 @@ type BranchCheckpointSessionParams = {
   sourceStoreKey?: string;
   nextKey: string;
   checkpointId: string;
+  creation?: Parameters<typeof branchCompactionCheckpointSession>[0]["creation"];
 };
 
 type RestoreCheckpointSessionParams = {
@@ -435,7 +436,7 @@ export async function readSessionLeafStateFromTranscriptAsync(
 }
 
 function readSessionLeafStateFromRecords(
-  records: readonly Record<string, unknown>[],
+  records: readonly { type?: unknown; id?: unknown }[],
 ): { entryId: string; leafId: string | null } | null {
   let latestEntryId: string | undefined;
   for (const record of records) {
@@ -547,6 +548,7 @@ async function branchCheckpointSessionFromStoredBoundary(
     nextKey: params.nextKey,
     checkpointId: params.checkpointId,
     expectedState: params.expectedState,
+    creation: params.creation,
     ...(params.sourceStoreKey ? { sourceStoreKey: params.sourceStoreKey } : {}),
     ...(legacySource ? { legacySource } : {}),
   });
@@ -620,7 +622,7 @@ async function captureCompactionCheckpointSnapshotAsync(params: {
     if (typeof params.sessionManager?.getEntries !== "function") {
       return null;
     }
-    const entryRecords = params.sessionManager.getEntries() as unknown as Record<string, unknown>[];
+    const entryRecords = params.sessionManager.getEntries();
     const transcriptState = readSessionLeafStateFromRecords(entryRecords);
     const position = resolveCompactionCheckpointTranscriptPosition({
       preferredLeafId: liveLeafId,

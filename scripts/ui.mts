@@ -5,6 +5,8 @@ import fs from "node:fs";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
+import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import { assertRealOutputRoot } from "./lib/output-root-guard.mjs";
 import { resolvePnpmRunner } from "./pnpm-runner.mts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";
@@ -15,6 +17,78 @@ const uiDir = path.join(repoRoot, "ui");
 
 const WINDOWS_CMD_EXE_EXTENSIONS = new Set([".cmd", ".bat"]);
 const FORWARDED_SIGNAL_KILL_GRACE_MS = 250;
+
+type UiBuildEnvironmentSources = {
+  env?: NodeJS.ProcessEnv;
+  now?: () => Date;
+  readBuildInfo?: () => unknown;
+  readGitCommit?: () => string | null;
+  readPackageVersion?: () => string | null;
+};
+
+function readCurrentGitCommit(): string | null {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  return result.status === 0 ? result.stdout.trim() : null;
+}
+
+function readCurrentPackageVersion(): string | null {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(repoRoot, "package.json"), "utf8")) as {
+      version?: unknown;
+    };
+    return typeof parsed.version === "string" && parsed.version.trim()
+      ? parsed.version.trim()
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+function readExistingBuildInfo(): unknown {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(repoRoot, "dist/build-info.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Reuse a matching runtime identity for a standalone rebuild of the bundled UI. */
+export function resolveUiBuildEnvironment(
+  sources: UiBuildEnvironmentSources = {},
+): NodeJS.ProcessEnv {
+  const env = sources.env ?? process.env;
+  const buildEnv = resolveBuildIdentityEnvironment({
+    commitLabel: "Control UI build commit",
+    env,
+    now: sources.now,
+    readGitCommit: sources.readGitCommit ?? readCurrentGitCommit,
+  });
+  if (env.OPENCLAW_BUILD_TIMESTAMP?.trim() || env.OPENCLAW_CONTROL_UI_BUILD_ID?.trim()) {
+    return buildEnv;
+  }
+
+  const existing = normalizeControlUiBuildInfo((sources.readBuildInfo ?? readExistingBuildInfo)());
+  const version = (sources.readPackageVersion ?? readCurrentPackageVersion)();
+  const release = env.OPENCLAW_CONTROL_UI_RELEASE_BUILD?.trim() === "1";
+  if (
+    existing.buildId === "dev" ||
+    !existing.builtAt ||
+    existing.commit !== buildEnv.GIT_COMMIT ||
+    existing.version !== version ||
+    existing.release !== release
+  ) {
+    return buildEnv;
+  }
+  return {
+    ...buildEnv,
+    OPENCLAW_BUILD_TIMESTAMP: existing.builtAt,
+    OPENCLAW_CONTROL_UI_BUILD_ID: existing.buildId,
+  };
+}
 
 type UiSpawnCall = {
   args: string[];
@@ -335,7 +409,7 @@ function resolveScriptAction(action: string): "dev" | "build" | "test" | null {
   return null;
 }
 
-function main(argv: string[] = process.argv.slice(2)): void {
+export function runUiCli(argv: string[] = process.argv.slice(2)): void {
   const [action, ...rest] = argv;
   if (!action) {
     usage();
@@ -367,13 +441,14 @@ function main(argv: string[] = process.argv.slice(2)): void {
   }
 
   if (action === "build") {
+    const buildEnv = resolveUiBuildEnvironment();
     const buildCall = noPnpmBuild
-      ? resolveSpawnCall(process.execPath, [
-          path.join(repoRoot, "node_modules/vite/bin/vite.js"),
-          "build",
-          ...rest,
-        ])
-      : resolvePnpmSpawnCall(["run", "build", ...rest]);
+      ? resolveSpawnCall(
+          process.execPath,
+          [path.join(repoRoot, "node_modules/vite/bin/vite.js"), "build", ...rest],
+          buildEnv,
+        )
+      : resolvePnpmSpawnCall(["run", "build", ...rest], buildEnv);
     runSpawnCallSync(buildCall, "Control UI build");
     if (rest.some((arg) => arg === "--help" || arg === "-h")) {
       return;
@@ -385,8 +460,8 @@ function main(argv: string[] = process.argv.slice(2)): void {
       runSpawnCallSync(
         resolveSpawnCall(
           process.execPath,
-          ["--import", "tsx", path.join(repoRoot, "scripts", validator)],
-          process.env,
+          ["--import", new URL("./tsx.mjs", import.meta.url).href, path.join(here, validator)],
+          buildEnv,
           { cwd: repoRoot },
         ),
         validator,
@@ -426,5 +501,5 @@ export function isDirectScriptExecution(
 const isDirectExecution = isDirectScriptExecution();
 
 if (isDirectExecution) {
-  main();
+  runUiCli();
 }

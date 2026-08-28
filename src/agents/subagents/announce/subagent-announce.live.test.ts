@@ -13,7 +13,7 @@ import { startGatewayServer, type GatewayServer } from "../../../gateway/server.
 import { extractPayloadText } from "../../../gateway/test-helpers.agent-results.js";
 import { onAgentEvent, type AgentEventPayload } from "../../../infra/agent-events.js";
 import { isTruthyEnvValue } from "../../../infra/env.js";
-import { clearCurrentPluginMetadataSnapshot } from "../../../plugins/current-plugin-metadata-state.js";
+import { clearPluginMetadataLifecycleCaches } from "../../../plugins/plugin-metadata-lifecycle.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -260,7 +260,7 @@ describeLive("subagent announce live", () => {
     await server?.close({ reason: "subagent announce live test done" }).catch(() => undefined);
     await state?.cleanup().catch(() => undefined);
     clearRuntimeConfigSnapshot();
-    clearCurrentPluginMetadataSnapshot();
+    clearPluginMetadataLifecycleCaches();
     client = undefined;
     server = undefined;
     state = undefined;
@@ -309,7 +309,7 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
@@ -501,7 +501,7 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
 
       server = await startGatewayServer(port, {
         bind: "loopback",
@@ -717,7 +717,7 @@ describeLive("subagent announce live", () => {
         }),
       );
       clearRuntimeConfigSnapshot();
-      clearCurrentPluginMetadataSnapshot();
+      clearPluginMetadataLifecycleCaches();
 
       server = await startGatewayServer(port, {
         bind: "loopback",

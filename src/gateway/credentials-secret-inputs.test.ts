@@ -2,6 +2,8 @@
 // remote, CLI override, env override, and config-secret connection flows.
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveConfigForRead } from "../config/io.read-helpers.js";
+import { setConfigResolutionFacts } from "../config/resolution-facts.js";
 import { resolveGatewayCredentialsWithSecretInputs } from "./credentials-secret-inputs.js";
 
 type ResolvedAuth = { token?: string; password?: string };
@@ -209,6 +211,47 @@ describe("resolveGatewayCredentialsWithSecretInputs", () => {
         env: { OPENCLAW_GATEWAY_TOKEN: "env-token" },
       }),
     ).resolves.toEqual({ token: "env-token", password: undefined });
+  });
+
+  it.each([
+    {
+      name: "pending bare shorthand",
+      authored: "$SOURCE",
+      readEnv: {},
+      runtimeEnv: { SOURCE: "${OTHER}" },
+    },
+    {
+      name: "substituted template-looking literal",
+      authored: "${SOURCE}",
+      readEnv: { SOURCE: "${OTHER}" },
+      runtimeEnv: {},
+    },
+  ])(
+    "materializes authored provenance atomically: $name",
+    async ({ authored, readEnv, runtimeEnv }) => {
+      const read = resolveConfigForRead(
+        { gateway: { mode: "local", auth: { mode: "token", token: authored } } },
+        readEnv,
+      );
+      const config = cfg(read.resolvedConfigRaw as OpenClawConfig);
+      setConfigResolutionFacts(config, read.resolutionFacts);
+
+      await expect(
+        resolveGatewayCredentialsWithSecretInputs({ config, env: runtimeEnv }),
+      ).resolves.toEqual({ token: "${OTHER}", password: undefined });
+    },
+  );
+
+  it("preserves escaped literal credentials through async resolution clones", async () => {
+    const config = cfg({
+      gateway: { mode: "local", auth: { mode: "token", token: "${LITERAL_TOKEN}" } },
+    });
+    setConfigResolutionFacts(config, new Set());
+
+    await expect(resolveGatewayCredentialsWithSecretInputs({ config, env: {} })).resolves.toEqual({
+      token: "${LITERAL_TOKEN}",
+      password: undefined,
+    });
   });
 
   it("resolves config-first token SecretRef even when OPENCLAW env token exists", async () => {

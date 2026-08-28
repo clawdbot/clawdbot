@@ -23,6 +23,7 @@ export {
 export { getSessionBindingService } from "../../../infra/outbound/session-binding-service.js";
 export { resolveGatewaySessionStoreTarget } from "../../../gateway/session-utils.js";
 export { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
+export { resolveProviderRefOwnership } from "../../../plugins/providers.js";
 export { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 export {
   mergeDeliveryContext,

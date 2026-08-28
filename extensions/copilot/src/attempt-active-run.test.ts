@@ -24,6 +24,7 @@ vi.mock("openclaw/plugin-sdk/agent-harness-runtime", async (importOriginal) => {
 
 function registerTestRun(params?: {
   canAcceptSteering?: () => boolean;
+  startedAtMs?: number;
   receipt?: Promise<void>;
   send?: SessionLike["send"];
 }) {
@@ -40,6 +41,7 @@ function registerTestRun(params?: {
     abortActiveSession: vi.fn(),
     bridge: undefined,
     canAcceptSteering: params?.canAcceptSteering ?? (() => true),
+    startedAtMs: params?.startedAtMs ?? 1_750_000_000_000,
     input: { runId: "run-1", sessionId: "session-1" } as AttemptParamsLike,
     isAborted: () => false,
     isSettled: () => false,
@@ -99,6 +101,17 @@ describe("registerCopilotActiveRun", () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("exposes pending-question cancellation for queued image fallback", async () => {
+    const { handle } = registerTestRun();
+
+    await expect(handle.cancelPendingUserInput?.("image-reply")).resolves.toBe(false);
+
+    expect(harnessMocks.cancelPendingAgentQuestionForSession).toHaveBeenCalledWith({
+      sessionKey: "session-1",
+      resolvedBy: "image-reply",
+    });
+  });
+
   it("reports pre-ownership validation failure as rejected", async () => {
     const onQueueAccepted = vi.fn();
     const { handle, send } = registerTestRun({ canAcceptSteering: () => false });
@@ -144,4 +157,10 @@ describe("registerCopilotActiveRun", () => {
     });
     expect(onQueueAccepted).toHaveBeenCalledOnce();
   });
+});
+
+it("threads the attempt start timestamp onto the embedded run handle", () => {
+  const startedAtMs = 1_750_000_000_000;
+  const { handle } = registerTestRun({ startedAtMs });
+  expect(handle.startedAtMs).toBe(startedAtMs);
 });

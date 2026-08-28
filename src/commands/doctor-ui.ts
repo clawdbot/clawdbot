@@ -5,8 +5,7 @@ import { note } from "../../packages/terminal-core/src/note.js";
 import type { HealthFinding, HealthRepairEffect } from "../flows/health-checks.js";
 import {
   ensureControlUiAssetsBuilt,
-  isControlUiStartupAssetsReady,
-  resolveControlUiDistIndexHealth,
+  resolveControlUiAssetHealth,
   resolveControlUiDistIndexPathForRoot,
 } from "../infra/control-ui-assets.js";
 import { resolveOpenClawPackageRoot } from "../infra/openclaw-root.js";
@@ -52,10 +51,7 @@ export async function detectUiProtocolFreshnessIssues(
     return [];
   }
 
-  const uiHealth = await resolveControlUiDistIndexHealth({
-    root,
-    argv1: opts.argv1 ?? process.argv[1],
-  });
+  const uiHealth = await resolveControlUiAssetHealth({ root });
   const uiIndexPath = uiHealth.indexPath ?? resolveControlUiDistIndexPathForRoot(root);
   const uiSourcesPath = path.join(root, "ui/package.json");
 
@@ -65,7 +61,7 @@ export async function detectUiProtocolFreshnessIssues(
       fs.stat(uiSourcesPath).catch(() => null),
     ]);
     const canBuild = uiSourcesStats !== null;
-    if (!uiStats || !isControlUiStartupAssetsReady(path.dirname(uiIndexPath))) {
+    if (!uiStats || uiHealth.kind !== "ready") {
       return [{ kind: "missing-assets", root, uiIndexPath, canBuild }];
     }
     if (!canBuild) {

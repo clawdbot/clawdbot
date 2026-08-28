@@ -222,7 +222,7 @@ describe("legacy device identity Doctor migration", () => {
     ).toBe(true);
   });
 
-  it("keeps normal migration read-only and imports only with Doctor authority", async () => {
+  it("keeps normal migration read-only and imports with explicit startup authority", async () => {
     const { env, stateDir } = useStateDir();
     const sourcePath = await writeLegacy({ stateDir });
 
@@ -238,10 +238,13 @@ describe("legacy device identity Doctor migration", () => {
     closeOpenClawStateDatabaseForTest();
 
     const repaired = await migrateLegacyDeviceIdentity({
-      detected: detectLegacyDeviceIdentity({ stateDir, doctorOnlyStateMigrations: true }),
+      detected: detectLegacyDeviceIdentity({
+        stateDir,
+        allowLegacyDeviceIdentityImport: true,
+      }),
       env,
       stateDir,
-      doctorOnlyStateMigrations: true,
+      allowLegacyDeviceIdentityImport: true,
     });
 
     expect(repaired.changes).toContain("Migrated primary device identity to SQLite.");
@@ -361,6 +364,13 @@ describe("legacy device identity Doctor migration", () => {
     seedInvalidCanonical(env);
 
     expect(detectLegacyDeviceIdentity({ stateDir, env }).hasInvalidCanonical).toBe(false);
+    expect(
+      detectLegacyDeviceIdentity({
+        stateDir,
+        env,
+        allowLegacyDeviceIdentityImport: true,
+      }).hasInvalidCanonical,
+    ).toBe(false);
     const detected = detectLegacyDeviceIdentity({
       stateDir,
       env,
@@ -698,7 +708,58 @@ describe("legacy device identity Doctor migration", () => {
     expect(receipt(env)).toMatchObject({ removed_source: 1 });
   });
 
-  it("does not discard recreated bytes that differ from the receipt", async () => {
+  it("preserves a divergent recreated identity as a boot-safe notice while the canonical row is valid", async () => {
+    const { env, stateDir } = useStateDir();
+    const sourcePath = await writeLegacy({ stateDir });
+    await migrate(stateDir, env, {
+      removeSource: () => {
+        throw new Error("simulated unlink failure");
+      },
+    });
+    const divergent = anotherIdentity();
+    const replacement = `${JSON.stringify({
+      version: 1,
+      deviceId: divergent.deviceId,
+      publicKeyPem: divergent.publicKeyPem,
+      privateKeyPem: divergent.privateKeyPem,
+      createdAtMs: divergent.createdAtMs,
+    })}\n`;
+    await fsp.writeFile(sourcePath, replacement, "utf8");
+
+    closeOpenClawStateDatabaseForTest();
+    const retry = await migrate(stateDir, env);
+
+    // The startup readiness gate hard-fails on any migration warning, so this exact
+    // classification is what keeps a divergent inert file from crash-looping the gateway.
+    expect(retry.warnings).toEqual([]);
+    expect(retry.notices?.join("\n")).toContain("canonical SQLite identity remains authoritative");
+    await expect(fsp.readFile(sourcePath, "utf8")).resolves.toBe(replacement);
+    expect(identityRow(env)?.created_at_ms).toBe(CREATED_AT_MS);
+    expect(receipt(env)).toMatchObject({ removed_source: 1 });
+  });
+
+  it("does not mark a divergent preserved claim as removed", async () => {
+    const { env, stateDir } = useStateDir();
+    const sourcePath = await writeLegacy({ stateDir });
+    await migrate(stateDir, env, {
+      removeSource: () => {
+        throw new Error("simulated unlink failure");
+      },
+    });
+    const claimPath = `${sourcePath}.doctor-importing`;
+    const replacement = `${JSON.stringify({ version: 1, ...anotherIdentity() })}\n`;
+    await fsp.writeFile(claimPath, replacement, "utf8");
+
+    closeOpenClawStateDatabaseForTest();
+    const retry = await migrate(stateDir, env);
+
+    expect(retry.warnings).toEqual([]);
+    expect(retry.notices?.join("\n")).toContain("canonical SQLite identity remains authoritative");
+    await expect(fsp.readFile(claimPath, "utf8")).resolves.toBe(replacement);
+    expect(receipt(env)).toMatchObject({ removed_source: 0 });
+  });
+
+  it("keeps the divergent-file warning fatal when the canonical row is invalid", async () => {
     const { env, stateDir } = useStateDir();
     const sourcePath = await writeLegacy({ stateDir });
     await migrate(stateDir, env, {
@@ -708,13 +769,21 @@ describe("legacy device identity Doctor migration", () => {
     });
     const replacement = `${JSON.stringify({ ...nodeIdentity(), createdAtMs: CREATED_AT_MS + 1 })}\n`;
     await fsp.writeFile(sourcePath, replacement, "utf8");
+    const db = database(env);
+    executeSqliteQuerySync(
+      db,
+      getNodeSqliteKysely<MigrationDatabase>(db)
+        .updateTable("device_identities")
+        .set({ public_key_pem: "invalid-public-key", private_key_pem: "invalid-private-key" })
+        .where("identity_key", "=", "primary"),
+    );
 
     closeOpenClawStateDatabaseForTest();
     const retry = await migrate(stateDir, env);
 
     expect(retry.warnings.join("\n")).toContain("bytes differ from the migration receipt");
+    expect(retry.notices ?? []).toEqual([]);
     await expect(fsp.readFile(sourcePath, "utf8")).resolves.toBe(replacement);
-    expect(identityRow(env)?.created_at_ms).toBe(CREATED_AT_MS);
   });
 
   it("rejects symlinked, hardlinked, oversized, non-UTF-8, and invalid sources", async () => {

@@ -19,15 +19,18 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
 }
 
 @Suite struct DeepLinksSecurityTests {
-    @Test func setupResultInitializerKeepsLegacySignature() {
+    @Test func setupResultInitializerDefaultsOptionalFields() {
         let result = DevicePairSetupCodeResult(
+            setupid: "setup-1",
             setupcode: "code",
             qrdataurl: nil,
             gatewayurl: "wss://gateway.example.com",
             auth: AnyCodable("token"),
-            urlsource: "config")
+            urlsource: "config",
+            expiresatms: 1_700_000_000_000)
 
         #expect(result.gatewayurls == nil)
+        #expect(result.accessdowngraded == nil)
     }
 
     @Test func dashboardDeepLinkParses() {
@@ -187,6 +190,69 @@ private func gatewayLink(from raw: String) -> GatewayConnectDeepLink? {
             bootstrapToken: "tok",
             token: nil,
             password: nil))
+    }
+
+    @Test func setupCodeCarriesNormalizedTLSFingerprint() {
+        let fingerprint = (0..<32).map { _ in "AB" }.joined(separator: ":")
+        let payload = #"{"url":"wss://gateway.example.com","tlsFingerprint":"SHA256:\#(fingerprint)"}"#
+        let link = GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload))
+
+        #expect(link?.tlsFingerprintSha256 == fingerprint.replacingOccurrences(of: ":", with: "").lowercased())
+    }
+
+    @Test func setupCodeRejectsInvalidTLSFingerprint() {
+        let payload = #"{"url":"wss://gateway.example.com","tlsFingerprint":"not-a-fingerprint"}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func setupCodeRejectsExpiredPayload() {
+        let payload = #"{"url":"wss://gateway.example.com","expiresAtMs":1}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func publicInitializerRejectsMalformedTLSFingerprint() {
+        let link = GatewayConnectDeepLink(
+            host: "gateway.example.com",
+            port: 443,
+            tls: true,
+            tlsFingerprintSha256: "not-a-fingerprint",
+            bootstrapToken: nil,
+            token: nil,
+            password: nil)
+
+        #expect(!link.isValidEndpoint)
+    }
+
+    @Test func setupCodeRejectsTLSFingerprintOnPlaintextEndpoint() {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let payload = #"{"url":"ws://127.0.0.1:18789","tlsFingerprint":"\#(fingerprint)"}"#
+
+        #expect(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)) == nil)
+    }
+
+    @Test func fallbackEndpointDoesNotInheritPrimaryTLSFingerprint() throws {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let expiresAtMs: Int64 = 4_102_444_800_000
+        let payload = #"{"url":"wss://direct.example.com","urls":["wss://direct.example.com","wss://proxy.example.com"],"tlsFingerprint":"\#(fingerprint)","expiresAtMs":\#(expiresAtMs)}"#
+        let link = try #require(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)))
+        let fallback = try #require(link.fallbackEndpoints.first)
+        let selectedFallback = link.selectingEndpoint(fallback)
+
+        #expect(link.tlsFingerprintSha256 == fingerprint)
+        #expect(link.expiresAtMs == expiresAtMs)
+        #expect(selectedFallback.tlsFingerprintSha256 == nil)
+        #expect(selectedFallback.expiresAtMs == expiresAtMs)
+    }
+
+    @Test func rejectedPrimaryDoesNotTransferTLSFingerprintToFallback() throws {
+        let fingerprint = String(repeating: "ab", count: 32)
+        let payload = #"{"url":"ws://127.0.0.1:18789","urls":["wss://proxy.example.com"],"tlsFingerprint":"\#(fingerprint)"}"#
+        let link = try #require(GatewayConnectDeepLink.fromSetupCode(setupCode(from: payload)))
+
+        #expect(link.host == "proxy.example.com")
+        #expect(link.tlsFingerprintSha256 == nil)
     }
 
     @Test func legacyEncodedGatewayLinkDecodesWithoutFallbacks() throws {

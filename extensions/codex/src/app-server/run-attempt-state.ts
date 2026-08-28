@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { EmbeddedRunAttemptResult } from "./attempt-terminal.js";
 import { CodexAppServerRpcError } from "./client.js";
+import { neutralizeCodexExplicitMentionSigils } from "./context-engine-projection.js";
 import { isJsonObject, type CodexServerNotification } from "./protocol.js";
 import type {
   CodexAppServerBindingIdentity,
@@ -52,11 +53,17 @@ export async function markCodexAppServerBindingCoveredThroughTurn(params: {
   bindingStore: CodexAppServerBindingStore;
   identity: CodexAppServerBindingIdentity;
   threadId: string;
+  continuityCalibration?: { promptChars: number; inputTokens: number };
 }): Promise<void> {
   await params.bindingStore.mutate(params.identity, {
     kind: "patch",
     threadId: params.threadId,
-    patch: { historyCoveredThrough: new Date().toISOString() },
+    patch: {
+      historyCoveredThrough: new Date().toISOString(),
+      ...(params.continuityCalibration
+        ? { continuityCalibration: params.continuityCalibration }
+        : {}),
+    },
   });
 }
 
@@ -136,14 +143,12 @@ export function prependCurrentInboundContext(
   prompt: string,
   context: EmbeddedRunAttemptParams["currentInboundContext"],
 ): string {
+  // Inbound context carries quoted replies and room backlog, not the raw
+  // current request; Codex must not resolve explicit mentions from it.
   const text = context?.text.trim();
-  return text ? [text, prompt].filter(Boolean).join("\n\n") : prompt;
-}
-
-export function waitForCodexNotificationDispatchTurn(): Promise<void> {
-  return new Promise((resolve) => {
-    setImmediate(resolve);
-  });
+  return text
+    ? [neutralizeCodexExplicitMentionSigils(text), prompt].filter(Boolean).join("\n\n")
+    : prompt;
 }
 
 export function buildCodexAppServerTimeoutDiagnostics(params: {

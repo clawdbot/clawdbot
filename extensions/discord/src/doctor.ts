@@ -13,6 +13,7 @@ import { resolveDefaultDiscordAccountId } from "./accounts.js";
 import { normalizeCompatibilityConfig as normalizeDiscordCompatibilityConfig } from "./doctor-contract.js";
 import { DISCORD_LEGACY_CONFIG_RULES } from "./doctor-shared.js";
 import { isDiscordMutableAllowEntry } from "./security-doctor.js";
+import { discordVoiceTranscriptsSourceProvider } from "./voice/transcripts-source.js";
 
 type DiscordNumericIdHit = { path: string; entry: number; safe: boolean };
 
@@ -234,6 +235,35 @@ export function collectDiscordMissingEnvTokenWarnings(params: {
   ];
 }
 
+function collectDiscordTranscriptsAutoStartWarnings(cfg: OpenClawConfig): string[] {
+  if (cfg.transcripts?.enabled === false || !Array.isArray(cfg.transcripts?.autoStart)) {
+    return [];
+  }
+  const ownership = discordVoiceTranscriptsSourceProvider.accessControl;
+  if (!ownership) {
+    return [];
+  }
+
+  return cfg.transcripts.autoStart.flatMap((entry, index) => {
+    const providerId = normalizeOptionalString(entry.providerId)?.toLowerCase();
+    if (
+      (providerId !== discordVoiceTranscriptsSourceProvider.id &&
+        !discordVoiceTranscriptsSourceProvider.aliases?.includes(providerId ?? "")) ||
+      normalizeOptionalString(entry.accountId)
+    ) {
+      return [];
+    }
+    const resolution = ownership.resolveAccountId({ cfg, source: entry });
+    if (resolution.ok) {
+      return [];
+    }
+    const path = `transcripts.autoStart[${index}]`;
+    return [
+      `- ${path} cannot select a Discord voice account: ${resolution.error} Set ${path}.accountId to the intended enabled voice account, or set channels.discord.defaultAccount when one account should be the global default.`,
+    ];
+  });
+}
+
 function collectDiscordMutableAllowlistWarnings(cfg: OpenClawConfig): string[] {
   const hits: Array<{ path: string; entry: string }> = [];
   const addHits = (pathLabel: string, list: unknown) => {
@@ -311,6 +341,7 @@ export const discordDoctor: ChannelDoctorAdapter = {
       hits: scanDiscordNumericIdEntries(cfg),
       doctorFixCommand,
     }),
+    ...collectDiscordTranscriptsAutoStartWarnings(cfg),
   ],
   collectMutableAllowlistWarnings: ({ cfg }) => collectDiscordMutableAllowlistWarnings(cfg),
   repairConfig: ({ cfg, doctorFixCommand }) => maybeRepairDiscordNumericIds(cfg, doctorFixCommand),

@@ -1,7 +1,12 @@
+import {
+  assertSecretOwnerAvailable,
+  isSecretOwnerAvailable,
+} from "openclaw/plugin-sdk/channel-secret-owner-runtime";
 import type { DiscordAccountConfig, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   buildRealtimeVoiceSessionInstructions,
   buildRealtimeVoiceSpeakExactMessage,
+  canonicalizeRealtimeVoiceProviderId,
   createRealtimeVoiceSessionHarness,
   isRealtimeVoiceWakeNameRequired,
   matchRealtimeVoiceConsultQuestions,
@@ -22,6 +27,7 @@ import {
 } from "openclaw/plugin-sdk/realtime-voice";
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { formatErrorMessage } from "openclaw/plugin-sdk/ssrf-runtime";
+import { discordRealtimeVoiceSecretOwnerId } from "../secret-config-contract.js";
 import { formatVoiceLogPreview } from "./log-preview.js";
 import { DiscordRealtimeConsults, type AgentProxyConsultState } from "./realtime-consults.js";
 import { DiscordRealtimePlayback } from "./realtime-playback.js";
@@ -127,6 +133,7 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
 
   constructor(
     private readonly params: {
+      accountId: string;
       cfg: OpenClawConfig;
       discordConfig: DiscordAccountConfig;
       entry: VoiceSessionEntry;
@@ -173,8 +180,8 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       onTerminalError: this.params.onTerminalError,
       providerId: () => this.realtimeProviderId,
       realtimeConfig: () => this.realtimeConfig,
-      stopTerminally: () => {
-        this.stopLifecycle("exact-speech overflow");
+      stopTerminally: (reason) => {
+        this.stopLifecycle(reason);
         this.consults.close();
       },
       stopped: () => this.isStopped(),
@@ -222,14 +229,48 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       generation: lifecycleGeneration,
       instance: this,
     };
+    const configuredProviderId = this.realtimeConfig?.provider?.trim();
+    if (configuredProviderId) {
+      const ownerProviderIds = new Set([configuredProviderId]);
+      const canonicalProviderId = canonicalizeRealtimeVoiceProviderId(
+        configuredProviderId,
+        this.params.cfg,
+      );
+      if (canonicalProviderId) {
+        ownerProviderIds.add(canonicalProviderId);
+      }
+      // Secret collection keys owners by configured provider blocks, while selection also accepts
+      // aliases. Gate both identities before provider config normalization can read an unresolved ref.
+      for (const providerId of ownerProviderIds) {
+        assertSecretOwnerAvailable(
+          "capability",
+          discordRealtimeVoiceSecretOwnerId(this.params.accountId, providerId),
+        );
+      }
+    }
     const resolved = resolveConfiguredRealtimeVoiceProvider({
       configuredProviderId: this.realtimeConfig?.provider,
       providerConfigs: buildProviderConfigs(this.realtimeConfig),
       providerConfigOverrides: buildProviderConfigOverrides(this.realtimeConfig),
       cfg: this.params.cfg,
+      agentId: this.params.entry.route.agentId,
       defaultModel: this.realtimeConfig?.model,
+      isProviderAvailable: (provider) =>
+        isSecretOwnerAvailable(
+          "capability",
+          discordRealtimeVoiceSecretOwnerId(this.params.accountId, provider.id),
+        ),
+      assertProviderAvailable: (provider) =>
+        assertSecretOwnerAvailable(
+          "capability",
+          discordRealtimeVoiceSecretOwnerId(this.params.accountId, provider.id),
+        ),
       noRegisteredProviderMessage: "No configured realtime voice provider registered",
     });
+    assertSecretOwnerAvailable(
+      "capability",
+      discordRealtimeVoiceSecretOwnerId(this.params.accountId, resolved.provider.id),
+    );
     this.realtimeProviderId = resolved.provider.id;
     const isAgentProxy = isDiscordAgentProxyVoiceMode(this.params.mode);
     const sessionPolicy = resolveRealtimeVoiceSessionPolicy({
@@ -281,9 +322,16 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       toolPolicy,
       consultPolicy,
     });
+    const onReady = () => {
+      this.markProviderGenerationObserved();
+      if (this.markLifecycleReady(lifecycleGeneration)) {
+        this.playback.drainQueuedExactSpeechMessages("provider-ready");
+      }
+    };
     this.bridge = this.harness.createBridge({
       provider: resolved.provider,
       cfg: this.params.cfg,
+      agentId: this.params.entry.route.agentId,
       providerConfig: resolved.providerConfig,
       audioFormat: REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
       instructions,
@@ -327,13 +375,14 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
         this.markProviderGenerationObserved();
         return this.consults.handleToolCall(event, session);
       },
-      onReady: () => {
-        this.markProviderGenerationObserved();
-        if (this.markLifecycleReady(lifecycleGeneration)) {
-          this.playback.drainQueuedExactSpeechMessages("provider-ready");
+      onReady,
+      onEvent: (event) => {
+        this.handleBridgeEvent(event);
+        // Some providers report recovered readiness without repeating onReady.
+        if (event.direction === "client" && event.type === "session.reconnect.ready") {
+          onReady();
         }
       },
-      onEvent: (event) => this.handleBridgeEvent(event),
       onResponseDone: (outcome) => {
         this.markProviderGenerationObserved();
         this.playback.handleResponseDone(outcome);
@@ -347,10 +396,20 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
       },
       onError: (error) => this.logRealtimeError(formatErrorMessage(error)),
       onClose: (reason) => {
-        this.flushSuppressedRealtimeErrors();
-        logVoiceVerbose(`realtime closed: ${reason}`);
+        // Reconnects stay provider-owned. A close is terminal unless local teardown started it.
+        if (!this.isStopped()) {
+          this.stopLifecycle(`provider closed: ${reason}`);
+          this.params.onTerminalError(
+            new Error(`Realtime provider closed unexpectedly: ${reason}`),
+          );
+        }
       },
     });
+    // createBridge may close synchronously, before its returned bridge can be disposed.
+    if (this.isStopped()) {
+      this.close();
+      return;
+    }
     const resolvedModel =
       readProviderConfigString(resolved.providerConfig, "model") ?? resolved.provider.defaultModel;
     const resolvedVoice = readProviderConfigString(resolved.providerConfig, "voice");
@@ -449,7 +508,6 @@ export class DiscordRealtimeVoiceSession implements VoiceRealtimeSession {
     if (shouldLogRealtimeVerboseEvent(event)) {
       logVoiceVerbose(`realtime ${event.direction}:${event.type}${detail}`);
     }
-    this.playback.handleProviderEvent(event);
     const interruptionLog = formatRealtimeInterruptionLog(event);
     if (interruptionLog) {
       logger.info(interruptionLog);

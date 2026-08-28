@@ -7,6 +7,11 @@ import {
   replaceConfigFile,
   resolveConfigSnapshotHash,
 } from "../../config/config.js";
+import {
+  attachRuntimeConfigWriteApplication,
+  createRuntimeConfigWriteApplication,
+  type RuntimeConfigWriteApplicationStatus,
+} from "../../config/runtime-write-application.js";
 import { extractDeliveryInfo } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -15,6 +20,7 @@ import {
   writeRestartSentinel,
 } from "../../infra/restart-sentinel.js";
 import { scheduleGatewaySigusr1Restart } from "../../infra/restart.js";
+import { captureGatewayRootWorkAdmissionContinuationScope } from "../../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { isRecord } from "../../utils.js";
 import { resolveEffectiveSharedGatewayAuth, resolveGatewayAuth } from "../auth.js";
@@ -212,6 +218,14 @@ function resolveConfigRestartRequirement(params: {
   return { requiresRestart: false, scheduleDirectRestart: false };
 }
 
+/** Returns whether a managed config write can settle without restarting the Gateway. */
+export function shouldAwaitGatewayConfigApplication(params: {
+  changedPaths: string[];
+  nextConfig: OpenClawConfig;
+}): boolean {
+  return !resolveConfigRestartRequirement(params).requiresRestart;
+}
+
 function resolveConfigRestartRequest(params: unknown): {
   sessionKey: string | undefined;
   note: string | undefined;
@@ -284,25 +298,33 @@ export async function commitGatewayConfigWrite(params: {
   nextConfig: OpenClawConfig;
   context?: GatewayRequestContext;
   disconnectSharedAuthClients?: boolean;
+  awaitRuntimeApplication?: boolean;
 }): Promise<{
   path: string;
   config: OpenClawConfig;
   hash: string | null;
+  application?: Promise<RuntimeConfigWriteApplicationStatus>;
   queueFollowUp: () => void;
 }> {
+  const application = params.awaitRuntimeApplication
+    ? createRuntimeConfigWriteApplication(captureGatewayRootWorkAdmissionContinuationScope()?.run)
+    : undefined;
   const result = await replaceConfigFile({
     nextConfig: params.nextConfig,
     // The early RPC hash check is only advisory until this lock-time CAS. Without
     // it, concurrent writers can both succeed and overwrite each other's config.
     baseHash: resolveConfigSnapshotHash(params.snapshot) ?? undefined,
-    writeOptions: {
-      ...params.writeOptions,
-      auditOrigin: "config-rpc",
-      runtimeRefresh: {
-        ...params.writeOptions.runtimeRefresh,
-        includeAuthStoreRefs: false,
+    writeOptions: attachRuntimeConfigWriteApplication<ConfigWriteOptions>(
+      {
+        ...params.writeOptions,
+        auditOrigin: "config-rpc",
+        runtimeRefresh: {
+          ...params.writeOptions.runtimeRefresh,
+          includeAuthStoreRefs: false,
+        },
       },
-    },
+      application,
+    ),
     afterWrite: { mode: "auto" },
   });
   // Watcher acceptance is debounced; clear now so the writer's immediate
@@ -314,6 +336,13 @@ export async function commitGatewayConfigWrite(params: {
     // Persisted hash of the re-read file (resolveConfigSnapshotHash), i.e.
     // exactly what a follow-up config.get reports — writers ack against it.
     hash: result.persistedHash,
+    ...(application
+      ? {
+          application: application.claimed
+            ? application.result
+            : Promise.resolve<RuntimeConfigWriteApplicationStatus>("unclaimed"),
+        }
+      : {}),
     queueFollowUp: () => {
       // Defer generation refresh/disconnect until after the RPC response so
       // the writer receives the success payload before its connection is closed.

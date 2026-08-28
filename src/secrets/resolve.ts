@@ -1,5 +1,4 @@
 /** Resolves SecretRef values from env, file, exec, and store secret providers. */
-import fs from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
@@ -20,11 +19,10 @@ import {
   type PluginManifestRegistry,
 } from "../plugins/manifest-registry.js";
 import { runCommandWithTimeout } from "../process/exec.js";
-import { inspectPathPermissions, safeStat } from "../security/audit-fs.js";
-import { isPathInside } from "../security/scan-paths.js";
 import { getOrCreatePromise } from "../shared/lazy-promise.js";
 import { resolveUserPath } from "../utils.js";
 import { runTasksWithConcurrency } from "../utils/run-with-concurrency.js";
+import { assertSecureExecCommandPath } from "./exec-provider-path-validation.js";
 import { readJsonPointer } from "./json-pointer.js";
 import {
   isPluginIntegrationSecretProviderConfig,
@@ -32,12 +30,13 @@ import {
 } from "./provider-integrations.js";
 import {
   formatExecSecretRefIdValidationMessage,
+  isBuiltInDefaultSecretProviderRef,
   isValidExecSecretRefId,
   isValidFileSecretRefId,
   isValidSecretProviderAlias,
-  SINGLE_VALUE_FILE_REF_ID,
-  resolveDefaultSecretProviderAlias,
+  resolveSecretRefProviderSourceMismatch,
   secretRefKey,
+  SINGLE_VALUE_FILE_REF_ID,
 } from "./ref-contract.js";
 import {
   isMissingSecretRefResolutionError,
@@ -64,8 +63,6 @@ const DEFAULT_EXEC_TIMEOUT_MS = 5_000;
 const DEFAULT_EXEC_MAX_OUTPUT_BYTES = 1024 * 1024;
 // Exec diagnostics cross CLI, RPC, and log boundaries; surface only canonical safe codes.
 const SAFE_EXEC_ERROR_CODES = new Set(["AMBIGUOUS_DUPLICATE_KEY", "NOT_FOUND"]);
-const WINDOWS_ABS_PATH_PATTERN = /^[A-Za-z]:[\\/]/;
-const WINDOWS_UNC_PATH_PATTERN = /^\\\\[^\\]+\\[^\\]+/;
 
 export type { SecretRefResolveCache } from "./resolve-types.js";
 
@@ -118,25 +115,6 @@ function throwUnknownProviderResolutionError(params: {
   });
 }
 
-async function readFileStatOrThrow(pathname: string, label: string) {
-  const stat = await safeStat(pathname);
-  if (!stat.ok) {
-    throw new Error(`${label} is not readable: ${pathname}`);
-  }
-  if (stat.isDir) {
-    throw new Error(`${label} must be a file: ${pathname}`);
-  }
-  return stat;
-}
-
-function isAbsolutePathname(value: string): boolean {
-  return (
-    path.isAbsolute(value) ||
-    WINDOWS_ABS_PATH_PATTERN.test(value) ||
-    WINDOWS_UNC_PATH_PATTERN.test(value)
-  );
-}
-
 function resolveResolutionLimits(): ResolutionLimits {
   return {
     maxProviderConcurrency: DEFAULT_PROVIDER_CONCURRENCY,
@@ -157,12 +135,13 @@ function resolveConfiguredProvider(params: {
 }): SecretProviderConfig {
   const { ref, config } = params;
   const providerConfig = config.secrets?.providers?.[ref.provider];
-  if (
-    providerConfig?.source !== ref.source &&
-    (ref.source === "env" || ref.source === "store") &&
-    ref.provider === resolveDefaultSecretProviderAlias(config, ref.source)
-  ) {
-    return { source: ref.source };
+  if (isBuiltInDefaultSecretProviderRef(config, ref)) {
+    if (ref.source === "env") {
+      return { source: "env" };
+    }
+    if (ref.source === "store") {
+      return { source: "store" };
+    }
   }
   if (!providerConfig) {
     throw providerResolutionError({
@@ -172,12 +151,13 @@ function resolveConfiguredProvider(params: {
       message: `Secret provider "${ref.provider}" is not configured (ref: ${ref.source}:${ref.provider}:${ref.id}).`,
     });
   }
-  if (providerConfig.source !== ref.source) {
+  const configuredSource = resolveSecretRefProviderSourceMismatch(config, ref);
+  if (configuredSource) {
     throw providerResolutionError({
       code: "SECRET_PROVIDER_INVALID",
       source: ref.source,
       provider: ref.provider,
-      message: `Secret provider "${ref.provider}" has source "${providerConfig.source}" but ref requests "${ref.source}".`,
+      message: `Secret provider "${ref.provider}" has source "${configuredSource}" but ref requests "${ref.source}".`,
     });
   }
   if (isPluginIntegrationSecretProviderConfig(providerConfig)) {
@@ -209,72 +189,6 @@ function resolveConfiguredProvider(params: {
     return resolved.providerConfig;
   }
   return providerConfig;
-}
-
-async function assertSecurePath(params: {
-  targetPath: string;
-  label: string;
-  trustedDirs?: string[];
-  allowReadableByOthers?: boolean;
-  allowSymlinkPath?: boolean;
-}): Promise<string> {
-  if (!isAbsolutePathname(params.targetPath)) {
-    throw new Error(`${params.label} must be an absolute path.`);
-  }
-
-  let effectivePath = params.targetPath;
-  let stat = await readFileStatOrThrow(effectivePath, params.label);
-  if (stat.isSymlink) {
-    if (!params.allowSymlinkPath) {
-      throw new Error(`${params.label} must not be a symlink: ${effectivePath}`);
-    }
-    try {
-      effectivePath = await fs.realpath(effectivePath);
-    } catch {
-      throw new Error(`${params.label} symlink target is not readable: ${params.targetPath}`);
-    }
-    if (!isAbsolutePathname(effectivePath)) {
-      throw new Error(`${params.label} resolved symlink target must be an absolute path.`);
-    }
-    stat = await readFileStatOrThrow(effectivePath, params.label);
-    if (stat.isSymlink) {
-      throw new Error(`${params.label} symlink target must not be a symlink: ${effectivePath}`);
-    }
-  }
-
-  if (params.trustedDirs && params.trustedDirs.length > 0) {
-    const trusted = params.trustedDirs.map((entry) => resolveUserPath(entry));
-    const inTrustedDir = trusted.some((dir) => isPathInside(dir, effectivePath));
-    if (!inTrustedDir) {
-      throw new Error(`${params.label} is outside trustedDirs: ${effectivePath}`);
-    }
-  }
-  const perms = await inspectPathPermissions(effectivePath);
-  if (!perms.ok) {
-    throw new Error(`${params.label} permissions could not be verified: ${effectivePath}`);
-  }
-  const writableByOthers = perms.worldWritable || perms.groupWritable;
-  const readableByOthers = perms.worldReadable || perms.groupReadable;
-  if (writableByOthers || (!params.allowReadableByOthers && readableByOthers)) {
-    throw new Error(`${params.label} permissions are too open: ${effectivePath}`);
-  }
-
-  if (process.platform === "win32" && perms.source === "unknown") {
-    throw new FsSafeError(
-      "permission-unverified",
-      `${params.label} ACL verification unavailable on Windows for ${effectivePath}. Move the command to a path whose ACLs OpenClaw can verify; there is no provider-level bypass.`,
-    );
-  }
-
-  if (process.platform !== "win32" && typeof process.getuid === "function" && stat.uid != null) {
-    const uid = process.getuid();
-    if (stat.uid !== uid) {
-      throw new Error(
-        `${params.label} must be owned by the current user (uid=${uid}): ${effectivePath}`,
-      );
-    }
-  }
-  return effectivePath;
 }
 
 async function readFileProviderPayload(params: {
@@ -522,15 +436,12 @@ async function resolveExecRefs(params: {
     });
   }
 
-  const commandPath = resolveUserPath(params.providerConfig.command);
   let secureCommandPath: string;
   try {
-    secureCommandPath = await assertSecurePath({
-      targetPath: commandPath,
+    secureCommandPath = await assertSecureExecCommandPath({
+      command: params.providerConfig.command,
       label: `secrets.providers.${params.providerName}.command`,
       trustedDirs: params.providerConfig.trustedDirs,
-      allowReadableByOthers: true,
-      allowSymlinkPath: false,
     });
   } catch (err) {
     throwUnknownProviderResolutionError({

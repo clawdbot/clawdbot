@@ -75,17 +75,12 @@ const WEAR_GENERATED_RESOURCE_RE =
 
 type NativeInventoryEntry = {
   id: string;
-  kind: string;
-  path: string;
   source: string;
+  sites: Array<{ kind: string; path: string }>;
   surface: "android" | "apple";
 };
 
-type NativeArtifactEntry = {
-  id: string;
-  source: string;
-  translated: string;
-};
+type NativeTranslations = Record<string, string>;
 
 type ResourceString = {
   attrs: string;
@@ -1090,58 +1085,37 @@ async function readInventory(): Promise<NativeInventoryEntry[]> {
   return (parsed.entries ?? []).filter((entry) => entry.surface === "android");
 }
 
-async function readArtifacts(): Promise<Map<string, NativeArtifactEntry[]>> {
+async function readArtifacts(): Promise<Map<string, NativeTranslations>> {
   return new Map(
     await Promise.all(
       NATIVE_I18N_LOCALES.map(async (locale) => {
         const parsed = JSON.parse(
           await readFile(path.join(ARTIFACT_ROOT, `${locale}.json`), "utf8"),
-        ) as { entries?: NativeArtifactEntry[] };
-        return [locale, parsed.entries ?? []] as const;
+        ) as { translations?: NativeTranslations };
+        return [locale, parsed.translations ?? {}] as const;
       }),
     ),
   );
 }
 
 function translationsBySource(
-  artifactEntries: readonly NativeArtifactEntry[],
+  inventory: readonly NativeInventoryEntry[],
+  translationsById: Readonly<NativeTranslations>,
 ): Map<string, string[]> {
   const translations = new Map<string, string[]>();
-  for (const entry of artifactEntries) {
-    const values = translations.get(entry.source) ?? [];
-    values.push(entry.translated);
-    translations.set(entry.source, values);
+  for (const entry of inventory) {
+    const translated = translationsById[entry.id];
+    if (translated !== undefined) {
+      translations.set(entry.source, [translated]);
+    }
   }
   return translations;
-}
-
-function artifactEntriesById(
-  artifactEntries: readonly NativeArtifactEntry[],
-): Map<string, NativeArtifactEntry> {
-  return new Map(artifactEntries.map((entry) => [entry.id, entry]));
-}
-
-export function selectExactArtifactTranslation(
-  source: string,
-  inventoryId: string,
-  artifactEntries: ReadonlyMap<string, { source: string; translated: string }>,
-): string {
-  const artifactEntry = artifactEntries.get(inventoryId);
-  if (!artifactEntry) {
-    return source;
-  }
-  if (artifactEntry.source !== source) {
-    throw new Error(
-      `Wear translation source drift for ${inventoryId}: ${JSON.stringify(artifactEntry.source)} != ${JSON.stringify(source)}`,
-    );
-  }
-  return artifactEntry.translated || source;
 }
 
 function localizeManualStrings(
   base: ReadonlyMap<string, ResourceString>,
   inventoryBySource: ReadonlyMap<string, NativeInventoryEntry>,
-  artifactEntries: ReadonlyMap<string, NativeArtifactEntry>,
+  translations: Readonly<NativeTranslations>,
   surface: string,
 ): ResourceString[] {
   return [...base.values()].map((entry) => {
@@ -1153,10 +1127,7 @@ function localizeManualStrings(
         `${surface} string is missing from native inventory: ${JSON.stringify(source)}`,
       );
     }
-    const value =
-      translatable && inventoryEntry
-        ? selectExactArtifactTranslation(source, inventoryEntry.id, artifactEntries)
-        : source;
+    const value = (translatable && inventoryEntry && translations[inventoryEntry.id]) || source;
     return {
       attrs: translatable ? withGeneratedTranslationLintIgnores(entry.attrs) : entry.attrs,
       key: entry.key,
@@ -1226,8 +1197,8 @@ function renderKotlin(sourceToKey: ReadonlyMap<string, string>): string {
 }
 
 export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
+  const inventory = await readInventory();
   const [
-    inventory,
     artifacts,
     localeStrings,
     thirdPartyBaseStrings,
@@ -1235,7 +1206,6 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     sourceFiles,
     toolDisplaySources,
   ] = await Promise.all([
-    readInventory(),
     readArtifacts(),
     Promise.all(LOCALES.map((locale) => readStrings(locale))),
     readStrings("values", ANDROID_THIRD_PARTY_RESOURCE_ROOT, THIRD_PARTY_STRINGS_FILE),
@@ -1247,12 +1217,12 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   const translatedStrings = localeStrings.slice(1);
   const wearInventoryBySource = new Map(
     inventory
-      .filter((entry) => entry.path === WEAR_STRINGS_REPO_PATH)
+      .filter((entry) => entry.sites.some((site) => site.path === WEAR_STRINGS_REPO_PATH))
       .map((entry) => [entry.source, entry]),
   );
   const thirdPartyInventoryBySource = new Map(
     inventory
-      .filter((entry) => entry.path === THIRD_PARTY_STRINGS_REPO_PATH)
+      .filter((entry) => entry.sites.some((site) => site.path === THIRD_PARTY_STRINGS_REPO_PATH))
       .map((entry) => [entry.source, entry]),
   );
   const manualBase = [...baseStrings.values()].filter(
@@ -1261,7 +1231,10 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   const manualSourceToKey = new Map(manualBase.map((entry) => [entry.value, entry.key]));
   const entriesBySource = new Map<string, NativeInventoryEntry[]>();
   for (const entry of inventory) {
-    if (entry.surface !== "android" || entry.kind === "resource-string") {
+    if (
+      entry.surface !== "android" ||
+      entry.sites.every((site) => site.kind === "resource-string")
+    ) {
       continue;
     }
     const group = entriesBySource.get(entry.source) ?? [];
@@ -1286,7 +1259,8 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
   const contradictions: TranslationContradiction[] = [];
   for (const [localeIndex, locale] of NATIVE_I18N_LOCALES.entries()) {
     const manualTranslations = translatedStrings[localeIndex] ?? new Map();
-    const artifactTranslationsBySource = translationsBySource(artifacts.get(locale) ?? []);
+    const localeTranslations = artifacts.get(locale) ?? {};
+    const artifactTranslationsBySource = translationsBySource(inventory, localeTranslations);
     const generated = new Map<string, { source: string; value: string }>();
     for (const source of entriesBySource.keys()) {
       const key = sourceToKey.get(source);
@@ -1329,7 +1303,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     const wearManual = localizeManualStrings(
       wearBaseStrings,
       wearInventoryBySource,
-      artifactEntriesById(artifacts.get(locale) ?? []),
+      localeTranslations,
       "Wear",
     );
     resources.set(
@@ -1339,7 +1313,7 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     const thirdPartyManual = localizeManualStrings(
       thirdPartyBaseStrings,
       thirdPartyInventoryBySource,
-      artifactEntriesById(artifacts.get(locale) ?? []),
+      localeTranslations,
       "Android third-party",
     );
     resources.set(
@@ -1371,13 +1345,8 @@ export async function buildAndroidAppI18nCatalog(): Promise<GeneratedCatalog> {
     "utf8",
   );
   const assistantItems = parseArrays(assistantSource).get("ask_openclaw_query_patterns") ?? [];
-  for (const [locale, artifactEntries] of artifacts) {
-    const translatedBySource = new Map<string, string[]>();
-    for (const entry of artifactEntries) {
-      const values = translatedBySource.get(entry.source) ?? [];
-      values.push(entry.translated);
-      translatedBySource.set(entry.source, values);
-    }
+  for (const [locale, localeTranslations] of artifacts) {
+    const translatedBySource = translationsBySource(inventory, localeTranslations);
     const translatedItems = assistantItems.map(
       (source) =>
         selectDeterministicTranslation(source, translatedBySource.get(source) ?? []) || source,

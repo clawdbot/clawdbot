@@ -1,11 +1,13 @@
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { resolveAgentEffectiveModelPrimary, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAmbientOwnerAgentId } from "../agents/agent-scope-config.js";
+import { resolveAgentEffectiveModelPrimary } from "../agents/agent-scope.js";
 import { areRuntimeModelRefsEquivalent } from "../agents/model-runtime-aliases.js";
 import { resolveModelRuntimePolicy } from "../agents/model-runtime-policy.js";
 import { normalizeProviderId } from "../agents/model-selection.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { enablePluginInConfig } from "../plugins/enable.js";
+import { enablePluginInConfig, enablePluginWithCapabilityConsent } from "../plugins/enable.js";
+import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import {
   type ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoices,
@@ -35,6 +37,7 @@ import { parseRef } from "./setup-inference-plan-helpers.js";
 function resolveConfiguredCandidateKind(
   config: Parameters<typeof resolveModelRuntimePolicy>[0]["config"],
   modelRef: string | undefined,
+  agentId?: string,
 ): SetupInferenceCandidate["kind"] | undefined {
   if (!modelRef) {
     return undefined;
@@ -45,7 +48,7 @@ function resolveConfiguredCandidateKind(
       config,
       provider: ref.provider,
       modelId: ref.model,
-      agentId: resolveDefaultAgentId(config ?? {}),
+      agentId: resolveAmbientOwnerAgentId(config ?? {}, agentId),
     }).policy?.id,
   );
   if (runtime === "codex") {
@@ -64,6 +67,7 @@ function resolveConfiguredCandidateKind(
  */
 export async function listManualSetupInferenceOptions(
   deps: DetectSetupInferenceDeps = {},
+  agentId?: string,
 ): Promise<
   Pick<
     SetupInferenceDetection,
@@ -76,6 +80,7 @@ export async function listManualSetupInferenceOptions(
     throw new Error(invalidSetupConfigError(snapshot));
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
+  const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
   const { workspace } = await resolveSetupInferenceWorkspace({
     configExists: snapshot.exists,
     configValid: snapshot.valid,
@@ -97,12 +102,13 @@ export async function listManualSetupInferenceOptions(
     workspace,
     // Derived from config only (no probing): a pre-existing default model must
     // keep classifying the install as configured even when scanning declined.
-    setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, resolveDefaultAgentId(cfg))),
+    setupComplete: Boolean(resolveAgentEffectiveModelPrimary(cfg, targetAgentId)),
   };
 }
 
 export async function detectSetupInference(
   deps: DetectSetupInferenceDeps = {},
+  agentId?: string,
 ): Promise<SetupInferenceDetection> {
   const { readConfigFileSnapshot } = await import("../config/config.js");
   const snapshot = await readConfigFileSnapshot();
@@ -110,7 +116,11 @@ export async function detectSetupInference(
     throw new Error(invalidSetupConfigError(snapshot));
   }
   const cfg = snapshot.runtimeConfig ?? snapshot.config;
-  const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({ config: cfg });
+  const targetAgentId = resolveAmbientOwnerAgentId(cfg, agentId);
+  const detected = await (deps.detectInferenceBackends ?? detectInferenceBackends)({
+    config: cfg,
+    agentId: targetAgentId,
+  });
   const unavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const deferredUnavailableCandidates: SetupInferenceUnavailableCandidate[] = [];
   const probe = deps.probeLocalCommand ?? probeLocalCommand;
@@ -136,7 +146,11 @@ export async function detectSetupInference(
   const configuredModel = detected.find(
     (candidate) => candidate.kind === "existing-model",
   )?.modelRef;
-  const configuredCandidateKind = resolveConfiguredCandidateKind(cfg, configuredModel);
+  const configuredCandidateKind = resolveConfiguredCandidateKind(
+    cfg,
+    configuredModel,
+    targetAgentId,
+  );
   const raw = detected.filter(
     (candidate) =>
       candidate.kind !== "gemini-cli" &&
@@ -178,29 +192,38 @@ export async function detectSetupInference(
       choice.appGuidedDiscovery === true && supportsSetupTextInference(choice.onboardingScopes),
   );
   if (discoveryChoices.length > 0) {
-    let discoveryConfig = cfg;
-    const enabledChoices: ProviderAuthChoiceMetadata[] = [];
-    for (const choice of discoveryChoices) {
-      const enabled = (deps.enablePluginInConfig ?? enablePluginInConfig)(
-        discoveryConfig,
-        choice.pluginId,
-      );
-      if (!enabled.enabled) {
-        continue;
+    // Resolve the reviewed generation before releasing the lease for remote probes.
+    const discovery = await withPluginLifecycleLease({}, async () => {
+      let discoveryConfig = cfg;
+      const enabledChoices: ProviderAuthChoiceMetadata[] = [];
+      for (const choice of discoveryChoices) {
+        // Keep unaccepted choices visible, but do not import their runtime during discovery.
+        const enabled = await enablePluginWithCapabilityConsent(cfg, choice.pluginId, {
+          workspaceDir: workspace,
+        });
+        if (!enabled.enabled) {
+          continue;
+        }
+        discoveryConfig = (deps.enablePluginInConfig ?? enablePluginInConfig)(
+          discoveryConfig,
+          choice.pluginId,
+        ).config;
+        enabledChoices.push(choice);
       }
-      discoveryConfig = enabled.config;
-      enabledChoices.push(choice);
-    }
-    const providers = (deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
-      config: discoveryConfig,
-      workspaceDir: workspace,
-      mode: "setup",
-      includeUntrustedWorkspacePlugins: false,
-      onlyPluginIds: [...new Set(enabledChoices.map((choice) => choice.pluginId))],
+      const providers = enabledChoices.length
+        ? (deps.resolvePluginProviders ?? resolvePluginProvidersCore)({
+            config: discoveryConfig,
+            workspaceDir: workspace,
+            mode: "setup",
+            includeUntrustedWorkspacePlugins: false,
+            onlyPluginIds: [...new Set(enabledChoices.map((choice) => choice.pluginId))],
+          })
+        : [];
+      return { discoveryConfig, enabledChoices, providers };
     });
     const discovered = await Promise.all(
-      enabledChoices.map(async (choice): Promise<SetupInferenceCandidate | null> => {
-        const provider = providers.find(
+      discovery.enabledChoices.map(async (choice): Promise<SetupInferenceCandidate | null> => {
+        const provider = discovery.providers.find(
           (candidate) =>
             candidate.pluginId === choice.pluginId &&
             normalizeProviderId(candidate.id) === normalizeProviderId(choice.providerId),
@@ -211,7 +234,7 @@ export async function detectSetupInference(
         }
         try {
           const candidate = await method.appGuidedSetup.detect({
-            config: discoveryConfig,
+            config: discovery.discoveryConfig,
             env: process.env,
             workspaceDir: workspace,
           });

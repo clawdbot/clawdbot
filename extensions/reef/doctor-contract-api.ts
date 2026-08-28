@@ -4,6 +4,7 @@ import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import {
   archiveLegacyStateSource,
+  defineStrayPluginEntryConfigMigration,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -126,6 +127,15 @@ function hasRetiredReefPolicyConfig(value: unknown): boolean {
   return isRecord(value) && ["dmPolicy", "allowFrom"].some((key) => Object.hasOwn(value, key));
 }
 
+// Reef reads channels.reef only. Older manifests advertised the full channel
+// schema as plugin-entry config, so a Control UI plugin form could park values
+// under plugins.entries.reef.config where the runtime never saw them.
+const reefStrayEntryConfigMigration = defineStrayPluginEntryConfigMigration({
+  pluginId: "reef",
+  channelId: "reef",
+  validateMergedChannelConfig: (merged) => ReefChannelConfigSchema.safeParse(merged).success,
+});
+
 function inspectLegacyReefFriends(cfg: OpenClawConfig) {
   const reef = cfg.channels?.reef;
   if (!isRecord(reef) || !Object.hasOwn(reef, "friends")) {
@@ -158,6 +168,7 @@ export const legacyConfigRules: ChannelDoctorLegacyConfigRule[] = [
       'channels.reef dmPolicy/allowFrom are legacy; run "openclaw doctor --fix" to remove them. Peer trust is SQLite-backed.',
     match: hasRetiredReefPolicyConfig,
   },
+  reefStrayEntryConfigMigration.legacyConfigRule,
 ];
 
 export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): {
@@ -165,25 +176,23 @@ export function normalizeCompatibilityConfig({ cfg }: { cfg: OpenClawConfig }): 
   changes: string[];
 } {
   const reef = cfg.channels?.reef;
-  if (!isRecord(reef) || !hasRetiredReefPolicyConfig(reef)) {
-    return { config: cfg, changes: [] };
-  }
-  const next = structuredClone(cfg);
-  const nextReef = next.channels?.reef;
-  if (!isRecord(nextReef)) {
-    return { config: cfg, changes: [] };
-  }
+  let config = cfg;
   const changes: string[] = [];
-  for (const key of ["dmPolicy", "allowFrom"] as const) {
-    if (Object.hasOwn(nextReef, key)) {
-      delete nextReef[key];
-      changes.push(`Removed retired Reef ${key} field.`);
+  if (isRecord(reef) && hasRetiredReefPolicyConfig(reef)) {
+    const next = structuredClone(cfg);
+    const nextReef = next.channels?.reef;
+    if (isRecord(nextReef)) {
+      for (const key of ["dmPolicy", "allowFrom"] as const) {
+        if (Object.hasOwn(nextReef, key)) {
+          delete nextReef[key];
+          changes.push(`Removed retired Reef ${key} field.`);
+        }
+      }
+      config = next;
     }
   }
-  return {
-    config: next,
-    changes,
-  };
+  const stray = reefStrayEntryConfigMigration.normalizeConfig({ cfg: config });
+  return { config: stray.config, changes: [...changes, ...stray.changes] };
 }
 
 export const stateMigrations: PluginDoctorStateMigration[] = [

@@ -1,9 +1,36 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { resetWorkingProgress, resolveTurnRecap } from "./chat-progress.ts";
+import { resetWorkingProgress, resolveTurnRecap, resolveWorkingProgress } from "./chat-progress.ts";
 
 const SESSION = "agent:main:main";
 const PREVIOUS_ENDED_AT = 900_000;
 const RUN_ENDED_AT = 1_000_000;
+
+describe("resolveWorkingProgress", () => {
+  beforeEach(() => resetWorkingProgress());
+  afterEach(() => resetWorkingProgress());
+
+  it("prefers observed stream identity over a future queued send", () => {
+    expect(
+      resolveWorkingProgress(
+        SESSION,
+        null,
+        1_000,
+        [
+          {
+            id: "future-send",
+            text: "Run next",
+            createdAt: 2_000,
+            sendRunId: "future-run",
+            sendState: "waiting-reconnect",
+            sendAttempts: 1,
+          },
+        ],
+        [{ ts: 1_000, runId: "active-run" }],
+        [],
+      ),
+    ).toMatchObject({ runId: "active-run" });
+  });
+});
 
 const doneRow = (endedAt: number, runtimeMs = 51_000, outputTokens?: number) => ({
   status: "done",
@@ -30,6 +57,35 @@ describe("resolveTurnRecap", () => {
     expect(resolveTurnRecap(SESSION, false, row)).toEqual({
       runtimeMs: 51_000,
       outputTokens: 485,
+    });
+  });
+
+  it("does not show the previous turn's token count when the usage persist lags", () => {
+    // Terminal stamp and usage persist are separate writes: the fresh-endedAt
+    // row still carries the previous turn's outputTokens (10).
+    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10));
+    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 10))).toEqual({
+      runtimeMs: 14_000,
+      outputTokens: null,
+    });
+  });
+
+  it("falls back to the watched run's live usage counter for a lagging row", () => {
+    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 120);
+    // Counter grows while the run streams; the watch keeps the max.
+    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 695);
+    // Usage map entry died at lifecycle end: settle renders pass null.
+    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 10), null)).toEqual({
+      runtimeMs: 14_000,
+      outputTokens: 695,
+    });
+  });
+
+  it("prefers the row's tokens once the usage persist has landed", () => {
+    resolveTurnRecap(SESSION, true, doneRow(PREVIOUS_ENDED_AT, 51_000, 10), 690);
+    expect(resolveTurnRecap(SESSION, false, doneRow(RUN_ENDED_AT, 14_000, 695))).toEqual({
+      runtimeMs: 14_000,
+      outputTokens: 695,
     });
   });
 

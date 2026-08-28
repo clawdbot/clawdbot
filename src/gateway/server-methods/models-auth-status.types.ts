@@ -47,10 +47,18 @@ export type ModelAuthStatusProvider = {
   };
 };
 
+export type ModelProviderCapability = {
+  provider: string;
+  apiKeySupported: boolean;
+  quickApiKeySetup: boolean;
+};
+
 export type ModelAuthStatusResult = {
   /** Snapshot build time, ms since epoch. 0 = never loaded (UI fallback sentinel). */
   ts: number;
   providers: ModelAuthStatusProvider[];
+  /** Process-stable provider setup capabilities from the active plugin generation. */
+  providerCapabilities?: ModelProviderCapability[];
 };
 
 export type ModelAuthLogoutResult = {

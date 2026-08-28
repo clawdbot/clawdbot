@@ -2,11 +2,12 @@ import { definePage } from "@openclaw/uirouter";
 import { html } from "lit";
 import { routePageSpec } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   formatMissingOperatorReadScopeMessage,
   isMissingOperatorReadScopeError,
 } from "../../lib/gateway-errors.ts";
-import { requestUsageSnapshot } from "./request-usage-snapshot.ts";
+import { providerUsageFromSnapshotResult, requestUsageSnapshot } from "./request-usage-snapshot.ts";
 import type { UsageRouteData } from "./usage-page.ts";
 
 function currentLocalDate(): string {
@@ -18,10 +19,7 @@ function errorMessage(error: unknown): string {
   if (isMissingOperatorReadScopeError(error)) {
     return formatMissingOperatorReadScopeMessage("usage");
   }
-  if (error instanceof Error && error.message.trim()) {
-    return error.message;
-  }
-  return typeof error === "string" ? error : "request failed";
+  return formatUiError(error, "request failed");
 }
 
 async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRouteData> {
@@ -42,7 +40,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: { state: "pending" },
       loadedAtMs: null,
       error: null,
     };
@@ -53,13 +51,27 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       ...query,
       agentId: query.agentId ?? undefined,
     });
+    if (snapshot.ok) {
+      return {
+        gateway,
+        gatewaySnapshot,
+        query,
+        result: snapshot.value.result,
+        costSummary: snapshot.value.costSummary,
+        providerUsage: snapshot.value.providerUsage,
+        loadedAtMs: Date.now(),
+        error: null,
+      };
+    }
     return {
       gateway,
       gatewaySnapshot,
       query,
-      ...snapshot,
-      loadedAtMs: Date.now(),
-      error: null,
+      result: null,
+      costSummary: null,
+      providerUsage: providerUsageFromSnapshotResult(snapshot),
+      loadedAtMs: null,
+      error: errorMessage(snapshot.error.cause),
     };
   } catch (error) {
     return {
@@ -68,7 +80,7 @@ async function loadUsageRouteData(context: ApplicationContext): Promise<UsageRou
       query,
       result: null,
       costSummary: null,
-      providerUsageSummary: null,
+      providerUsage: { state: "pending" },
       loadedAtMs: null,
       error: errorMessage(error),
     };

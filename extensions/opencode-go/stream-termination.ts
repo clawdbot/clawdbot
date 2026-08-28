@@ -3,6 +3,7 @@
 // stuck-session recovery kicks in.
 import type { AssistantMessage, AssistantMessageEvent } from "openclaw/plugin-sdk/llm";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
+import { asPositiveFiniteNumber as validTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
 
 type ProviderStreamFn = NonNullable<ProviderWrapStreamFnContext["streamFn"]>;
@@ -338,4 +339,3 @@ export function createOpencodeGoStalledStreamWrapper(
     return output;
   };
 }
-import { asPositiveFiniteNumber as validTimeoutMs } from "openclaw/plugin-sdk/number-runtime";

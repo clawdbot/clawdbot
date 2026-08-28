@@ -2,8 +2,11 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { TObject } from "typebox";
 import { ErrorCodes, errorShape } from "../../packages/gateway-protocol/src/schema/error-codes.js";
-import { readNonNegativeIntegerParam, readPositiveIntegerParam } from "../agents/tools/common.js";
-import { jsonResult } from "../agents/tools/common.js";
+import {
+  readNonNegativeIntegerParam,
+  readPositiveIntegerParam,
+  jsonResult,
+} from "../agents/tools/common.js";
 import { callGatewayFromCli } from "../cli/gateway-rpc.js";
 import type { GatewayRequestHandlerOptions } from "../gateway/server-methods/types.js";
 import { formatErrorMessage } from "../infra/errors.js";

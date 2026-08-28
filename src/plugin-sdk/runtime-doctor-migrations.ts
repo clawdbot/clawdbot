@@ -10,6 +10,7 @@ import fs from "node:fs/promises";
 import { asObjectRecord } from "../config/channel-compat-normalization.js";
 import type { CompatMutationResult } from "../config/channel-compat-normalization.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import type { OpenKeyedStoreOptions } from "../plugin-state/plugin-state-store.js";
 import type { PluginDoctorStateMigration } from "../plugins/doctor-contract-module.js";
 import { archiveLegacyStateSource } from "../plugins/doctor-state-migration-fs.js";
@@ -299,6 +300,95 @@ export function defineKeyMoveMigration(params: {
   };
 }
 
+/**
+ * Defines the repair for channel config parked under `plugins.entries.<id>.config`.
+ * Channel plugins read `channels.<channelId>` only, but retired rich plugin-entry
+ * schemas let config UIs park values in the unread plugin-entry location.
+ */
+export function defineStrayPluginEntryConfigMigration(params: {
+  pluginId: string;
+  channelId: string;
+  validateMergedChannelConfig: (merged: Record<string, unknown>) => boolean;
+}): {
+  legacyConfigRule: {
+    path: string[];
+    message: string;
+    match: (value: unknown) => boolean;
+  };
+  normalizeConfig: (params: { cfg: OpenClawConfig }) => {
+    config: OpenClawConfig;
+    changes: string[];
+  };
+} {
+  const { pluginId, channelId } = params;
+  const entryConfigPath = `plugins.entries.${pluginId}.config`;
+  const readStrayEntryConfig = (cfg: OpenClawConfig): Record<string, unknown> | null => {
+    const entries = asObjectRecord(asObjectRecord(cfg.plugins)?.entries);
+    const config = asObjectRecord(asObjectRecord(entries?.[pluginId])?.config);
+    return config && Object.keys(config).length > 0 ? config : null;
+  };
+  return {
+    legacyConfigRule: {
+      path: ["plugins", "entries", pluginId, "config"],
+      message: `${entryConfigPath} is not read by the ${channelId} channel; run "openclaw doctor --fix" to move its keys to channels.${channelId}.`,
+      match: (value) => {
+        const record = asObjectRecord(value);
+        return Boolean(record && Object.keys(record).length > 0);
+      },
+    },
+    // Existing channel keys stay authoritative, and the move only commits when
+    // the merged record validates, so a doctor fix can never turn a valid
+    // channels.<id> invalid — unmergeable values stay in place and keep
+    // surfacing through the legacy rule message.
+    normalizeConfig: ({ cfg }) => {
+      const stray = readStrayEntryConfig(cfg);
+      if (!stray) {
+        return { config: cfg, changes: [] };
+      }
+      const next = structuredClone(cfg);
+      const currentChannel = asObjectRecord(asObjectRecord(next.channels)?.[channelId]) ?? {};
+      const staged: string[] = [];
+      const dropped: string[] = [];
+      const merged = { ...currentChannel };
+      for (const [key, value] of Object.entries(stray)) {
+        if (Object.hasOwn(currentChannel, key)) {
+          dropped.push(key);
+        } else {
+          merged[key] = value;
+          staged.push(key);
+        }
+      }
+      if (!params.validateMergedChannelConfig(merged)) {
+        return { config: cfg, changes: [] };
+      }
+      const channels = asObjectRecord(next.channels) ?? {};
+      channels[channelId] = merged;
+      // Doctor migrations operate on the raw parsed config; the merged channel
+      // record was just validated by validateMergedChannelConfig.
+      // SAFETY: widening past ChannelsConfig only reattaches the same runtime shape.
+      (next as Record<string, unknown>).channels = channels;
+      const entry = asObjectRecord(
+        asObjectRecord(asObjectRecord(next.plugins)?.entries)?.[pluginId],
+      );
+      if (entry) {
+        delete entry.config;
+      }
+      return {
+        config: next,
+        changes: [
+          ...staged.map(
+            (key) => `Moved ${entryConfigPath}.${key} to channels.${channelId}.${key}.`,
+          ),
+          ...dropped.map(
+            (key) =>
+              `Removed ${entryConfigPath}.${key}; channels.${channelId}.${key} is authoritative.`,
+          ),
+        ],
+      };
+    },
+  };
+}
+
 /** Defines a single-file legacy JSON import into one keyed plugin-state namespace. */
 export function defineLegacyJsonStateMigration<TSource>(params: {
   id: string;
@@ -324,7 +414,10 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
   const readSource = async (filePath: string): Promise<TSource | null> => {
     try {
       return params.parse(JSON.parse(await fs.readFile(filePath, "utf8")) as unknown);
-    } catch {
+    } catch (error) {
+      if (!hasErrnoCode(error, "ENOENT")) {
+        throw error;
+      }
       return null;
     }
   };
@@ -365,8 +458,8 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
         maxEntries: params.maxEntries,
         ...(params.overflowPolicy ? { overflowPolicy: params.overflowPolicy } : {}),
       });
+      const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
       if (params.capacityPrecheck) {
-        const existingKeys = new Set((await store.entries()).map((entry) => entry.key));
         const missingKeys = new Set(
           rows.map((row) => row.key).filter((key) => !existingKeys.has(key)),
         );
@@ -381,6 +474,17 @@ export function defineLegacyJsonStateMigration<TSource>(params: {
         if (await store.registerIfAbsent(row.key, row.value)) {
           imported++;
         }
+      }
+      // Successful inserts can evict earlier rows. Verify source and existing keys
+      // before reporting completion or removing the source from future doctor runs.
+      const retainedKeys = new Set((await store.entries()).map((entry) => entry.key));
+      const expectedKeys = new Set([...existingKeys, ...rows.map((row) => row.key)]);
+      const missing = [...expectedKeys].filter((key) => !retainedKeys.has(key)).length;
+      if (missing > 0) {
+        warnings.push(
+          `Incomplete ${params.label} migration: plugin state failed to retain every required entry (${missing} missing); left legacy source in place`,
+        );
+        return { changes, warnings };
       }
       const change = description.change({
         imported,

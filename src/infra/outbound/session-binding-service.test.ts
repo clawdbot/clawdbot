@@ -9,12 +9,14 @@ import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
   testing,
   getSessionBindingService,
+  inspectSessionBindingByConversation,
   isSessionBindingError,
   registerSessionBindingAdapter,
   unregisterSessionBindingAdapter,
   type SessionBindingAdapter,
   type SessionBindingBindInput,
   type SessionBindingRecord,
+  type SessionBindingService,
 } from "./session-binding-service.js";
 
 type SessionBindingServiceModule = typeof import("./session-binding-service.js");
@@ -48,9 +50,59 @@ function setMinimalCurrentConversationRegistry(): void {
           },
         },
       },
+      {
+        pluginId: "adapter-chat",
+        source: "test",
+        plugin: {
+          id: "adapter-chat",
+          meta: { aliases: [] },
+          conversationBindings: {
+            supportsCurrentConversationBinding: true,
+            bindingStore: "adapter",
+          },
+        },
+      },
+      {
+        pluginId: "legacy-adapter-chat",
+        source: "test",
+        plugin: {
+          id: "legacy-adapter-chat",
+          meta: { aliases: [] },
+          conversationBindings: {
+            supportsCurrentConversationBinding: true,
+            createManager: () => ({ stop: () => undefined }),
+          },
+        },
+      },
     ]),
   );
 }
+
+it("keeps the stable session-binding service shape structurally assignable", () => {
+  const service: SessionBindingService = {
+    bind: async () => {
+      throw new Error("not implemented");
+    },
+    getCapabilities: () => ({
+      adapterAvailable: false,
+      bindSupported: false,
+      unbindSupported: false,
+      placements: [],
+    }),
+    listBySession: () => [],
+    resolveByConversation: () => null,
+    touch: () => {},
+    unbind: async () => [],
+  };
+
+  expect(
+    service.resolveByConversation({
+      channel: "demo",
+      accountId: "default",
+      conversationId: "room-1",
+    }),
+  ).toBeNull();
+});
 
 async function importSessionBindingServiceModule(
   cacheBust: string,
@@ -206,6 +258,51 @@ describe("session binding service", () => {
       "BINDING_ADAPTER_UNAVAILABLE",
     );
   });
+
+  it.each(["adapter-chat", "legacy-adapter-chat"])(
+    "distinguishes an unavailable %s owner from an empty result",
+    async (channel) => {
+      const service = getSessionBindingService();
+      const conversation = {
+        channel,
+        accountId: "default",
+        conversationId: "room-1",
+      };
+
+      expect(service.getCapabilities(conversation)).toEqual({
+        adapterAvailable: false,
+        bindSupported: false,
+        unbindSupported: false,
+        placements: [],
+      });
+      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+        status: "unavailable",
+      });
+      await expectSessionBindingError(
+        service.bind({
+          targetSessionKey: "agent:finance:bound",
+          targetKind: "session",
+          conversation,
+        }),
+        "BINDING_ADAPTER_UNAVAILABLE",
+      );
+      const adapter: SessionBindingAdapter = {
+        channel,
+        accountId: "default",
+        listBySession: () => [],
+        resolveByConversation: () => null,
+      };
+      registerSessionBindingAdapter(adapter);
+      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+        status: "available",
+        binding: null,
+      });
+      unregisterSessionBindingAdapter({ channel, accountId: "default", adapter });
+      expect(inspectSessionBindingByConversation(conversation)).toEqual({
+        status: "unavailable",
+      });
+    },
+  );
 
   it("returns structured errors for unsupported placement", async () => {
     registerSessionBindingAdapter({

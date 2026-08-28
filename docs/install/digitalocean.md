@@ -44,12 +44,12 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
     apt update && apt upgrade -y
 
-    # Install Node.js 26
-    curl -fsSL https://deb.nodesource.com/setup_26.x | bash -
+    # Install Node.js 24 LTS
+    curl -fsSL https://deb.nodesource.com/setup_24.x | bash -
     apt install -y nodejs
 
-    # Install OpenClaw
-    curl -fsSL https://openclaw.ai/install.sh | bash
+    # Install OpenClaw; run onboarding later as the non-root owner.
+    curl -fsSL https://openclaw.ai/install.sh | bash -s -- --no-onboard
 
     # Create the non-root user that will own OpenClaw state and services.
     adduser openclaw
@@ -123,7 +123,7 @@ DigitalOcean is a straightforward paid VPS path. For cheaper or free options:
 
 OpenClaw state lives under:
 
-- `~/.openclaw/` -- `openclaw.json`, channel/provider credentials, per-agent `auth-profiles.json`, and session data.
+- `~/.openclaw/` -- `openclaw.json`, channel/provider credentials, shared and per-agent SQLite auth stores, and session data.
 - `~/.openclaw/workspace/` -- the agent workspace (SOUL.md, memory, artifacts).
 
 These survive Droplet reboots. To take a portable snapshot:

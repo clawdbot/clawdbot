@@ -1,114 +1,184 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  installPackageDir,
+  requestDeferredPackageDirInstall,
+  resolvePackageDirInstallTransaction,
+} from "../infra/install-package-dir.js";
+import type { PluginCapabilityConsentHandler } from "./capability-consent.js";
+import {
+  attachPluginInstallTransaction,
+  isPluginInstallCommitDeferred,
+} from "./install-transaction.js";
+import type { PluginInstallArtifactConsentHandler } from "./install-types.js";
+import type { ManagedPluginSourceInstallRequest } from "./management-service.js";
+import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
+import { invokePluginArtifactInstallMock } from "./test-helpers/install-fixtures.js";
 
-const mocks = vi.hoisted(() => ({
-  applyUninstall: vi.fn(),
-  clawhubInstall: vi.fn(),
-  installRecords: vi.fn(),
-  pathInstall: vi.fn(),
-  persistInstall: vi.fn(),
-  planUninstall: vi.fn(),
-}));
-
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const mocks = vi.hoisted(() => ({ install: vi.fn(), persist: vi.fn() }));
 vi.mock("./clawhub.js", () => ({
-  installPluginFromClawHub: (...args: unknown[]) => mocks.clawhubInstall(...args),
+  installPluginFromClawHub: (...args: unknown[]) => mocks.install(...args),
 }));
-
+vi.mock("./git-install.js", () => ({
+  installPluginFromGitSpec: (...args: unknown[]) => mocks.install(...args),
+}));
 vi.mock("./install.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./install.js")>()),
-  installPluginFromPath: (...args: unknown[]) => mocks.pathInstall(...args),
+  installPluginFromNpmSpec: (...args: unknown[]) => mocks.install(...args),
+  installPluginFromNpmPackArchive: (...args: unknown[]) => mocks.install(...args),
+  installPluginFromPath: (...args: unknown[]) => mocks.install(...args),
 }));
-
+vi.mock("./marketplace.js", () => ({
+  installPluginFromMarketplace: (...args: unknown[]) => mocks.install(...args),
+}));
 vi.mock("./install-persistence.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./install-persistence.js")>()),
-  persistPluginInstall: (...args: unknown[]) => mocks.persistInstall(...args),
+  persistPluginInstall: (...args: unknown[]) => mocks.persist(...args),
 }));
-
-vi.mock("./installed-plugin-index-records.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./installed-plugin-index-records.js")>()),
-  loadInstalledPluginIndexInstallRecords: (...args: unknown[]) => mocks.installRecords(...args),
-}));
-
-vi.mock("./uninstall.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("./uninstall.js")>()),
-  applyPluginUninstallDirectoryRemoval: (...args: unknown[]) => mocks.applyUninstall(...args),
-  planPluginUninstall: (...args: unknown[]) => mocks.planUninstall(...args),
-}));
-
 const { installManagedPluginSource } = await import("./management-service.js");
+const snapshot = { config: {}, baseHash: "base-hash", writeOptions: {} };
+const acceptCapabilities: PluginCapabilityConsentHandler = async (review) => ({
+  reviewToken: review.reviewToken,
+});
+const requests = [
+  { source: "local", path: "/incoming", recordSource: "path", mode: "update" },
+  { source: "npm", spec: "demo@2.0.0", mode: "update" },
+  { source: "npm-pack", archivePath: "/incoming.tgz", mode: "update" },
+  { source: "git", spec: "git:example/demo", mode: "update" },
+  { source: "clawhub", spec: "clawhub:community/demo", mode: "update" },
+  {
+    source: "marketplace",
+    marketplace: "local/repo",
+    plugin: "demo",
+    mode: "update",
+  },
+] satisfies ManagedPluginSourceInstallRequest[];
 
-function installPersistSnapshot() {
-  return {
-    config: {},
-    baseHash: "base-hash",
-    writeOptions: {
-      expectedConfigPath: "/tmp/openclaw.json",
-      includeFileHashesForWrite: { "/tmp/plugins.json": "include-hash" },
-      includeFileTargetsForWrite: { "/tmp/plugins.json": "/tmp/plugins.json" },
-    },
-  };
-}
+describe("managed plugin install transactions", () => {
+  beforeEach(() => vi.resetAllMocks());
 
-function mockClawHubInstall(pluginId: string, packageName: string, targetDir: string) {
-  mocks.clawhubInstall.mockResolvedValue({
-    ok: true,
-    pluginId,
-    targetDir,
-    extensions: ["index.js"],
-    packageName,
-    clawhub: {
-      source: "clawhub",
-      clawhubUrl: "https://clawhub.ai",
-      clawhubPackage: packageName,
-      clawhubFamily: "code-plugin",
-    },
+  it.each(requests)("settles $source payloads at the config commit boundary", async (request) => {
+    for (const failure of ["before-commit", "after-commit", "none"] as const) {
+      const home = await fs.realpath(tempDirs.make("openclaw-managed-upgrade-"));
+      const sourceDir = path.join(home, "incoming");
+      const targetDir = path.join(home, "extensions", "demo");
+      await fs.mkdir(sourceDir, { recursive: true });
+      await fs.mkdir(targetDir, { recursive: true });
+      createColdPluginFixture({
+        rootDir: sourceDir,
+        pluginId: "demo",
+        packageVersion: "2.0.0",
+        manifest: { contracts: { tools: ["demo.write"] } },
+      });
+      createColdPluginFixture({ rootDir: targetDir, pluginId: "demo", packageVersion: "1.0.0" });
+      await fs.writeFile(path.join(sourceDir, "version"), "2.0.0");
+      await fs.writeFile(path.join(targetDir, "version"), "1.0.0");
+      const conflict = new Error(failure);
+      mocks.persist.mockImplementation(
+        async (
+          params: Parameters<typeof import("./install-persistence.js").persistPluginInstall>[0],
+        ) => {
+          expect(params.install.acceptedSurface?.tools).toEqual(["demo.write"]);
+          if (request.source === "marketplace") {
+            expect(params.install).toMatchObject({
+              source: "marketplace",
+              marketplaceSource: request.marketplace,
+              marketplacePlugin: request.plugin,
+            });
+          }
+          if (failure === "before-commit") {
+            throw conflict;
+          }
+          params.onCommitted?.();
+          if (failure === "after-commit") {
+            throw conflict;
+          }
+          return {};
+        },
+      );
+      mocks.install.mockImplementation(
+        async (params: { onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler }) => {
+          const copy = {
+            sourceDir,
+            targetDir,
+            mode: "update" as const,
+            timeoutMs: 1000,
+            copyErrorPrefix: "copy failed",
+            hasDeps: false,
+            depsLogMessage: "",
+            afterInstall: async (stagedArtifactDir: string) => {
+              await params.onBeforePluginArtifactCommit?.({
+                pluginId: "demo",
+                stagedArtifactDir,
+                currentArtifactDir: targetDir,
+                mode: "update",
+              });
+              return { ok: true as const };
+            },
+          };
+          const copied = await installPackageDir(
+            isPluginInstallCommitDeferred(params) ? requestDeferredPackageDirInstall(copy) : copy,
+          );
+          if (!copied.ok) {
+            throw new Error(copied.error);
+          }
+          const result = {
+            ok: true,
+            pluginId: "demo",
+            targetDir,
+            version: "2.0.0",
+            extensions: [],
+            marketplaceName: "Local",
+            marketplaceSource: "local/repo",
+            marketplacePlugin: "demo",
+            git: { url: "https://example.test/demo.git" },
+            packageName: "community/demo",
+            clawhub: {
+              source: "clawhub",
+              clawhubUrl: "https://clawhub.ai",
+              clawhubPackage: "community/demo",
+              clawhubFamily: "code-plugin",
+            },
+          };
+          const transaction = resolvePackageDirInstallTransaction(copied);
+          return transaction ? attachPluginInstallTransaction(result, transaction) : result;
+        },
+      );
+      const onCapabilityConsent = vi.fn<PluginCapabilityConsentHandler>(async (review) => {
+        expect(await fs.readFile(path.join(targetDir, "version"), "utf8")).toBe("1.0.0");
+        return await acceptCapabilities(review);
+      });
+      const installed = installManagedPluginSource({
+        request,
+        snapshot,
+        env: { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") },
+        onCapabilityConsent,
+      });
+      if (failure === "none") {
+        await expect(installed).resolves.toMatchObject({ ok: true });
+      } else {
+        await expect(installed).rejects.toBe(conflict);
+      }
+      expect(onCapabilityConsent).toHaveBeenCalledOnce();
+      expect(await fs.readFile(path.join(targetDir, "version"), "utf8"), failure).toBe(
+        failure === "before-commit" ? "1.0.0" : "2.0.0",
+      );
+      expect(await fs.readdir(path.join(home, "extensions", ".openclaw-install-backups"))).toEqual(
+        [],
+      );
+    }
   });
-}
 
-describe("managed plugin install compensation", () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mocks.installRecords.mockResolvedValue({});
-    mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
-  });
-
-  it("defaults direct managed source installs to persistence-failure cleanup", async () => {
-    const env = { HOME: "/tmp/openclaw-managed-source-conflict-home" };
-    const conflict = new Error("config changed during plugin install");
-    const targetDir = "/tmp/openclaw-managed-source-conflict-home/extensions/demo";
-    mockClawHubInstall("demo", "community/demo", targetDir);
-    mocks.persistInstall.mockRejectedValue(conflict);
-    mocks.planUninstall.mockReturnValue({
-      ok: true,
-      config: {},
-      pluginId: "demo",
-      actions: {},
-      directoryRemoval: { target: targetDir },
-    });
-
-    await expect(
-      installManagedPluginSource({
-        request: { source: "clawhub", spec: "clawhub:community/demo" },
-        snapshot: installPersistSnapshot(),
-        env,
-      }),
-    ).rejects.toBe(conflict);
-
-    expect(mocks.installRecords).toHaveBeenCalledWith({ env });
-    expect(mocks.applyUninstall).toHaveBeenCalledWith({ target: targetDir });
-  });
-
-  it("never deletes an operator-owned source when link persistence fails", async () => {
-    const env = { HOME: "/tmp/openclaw-managed-link-conflict-home" };
-    const sourcePath = "/tmp/operator-owned-plugin-source";
+  it("leaves linked operator source untouched when persistence fails", async () => {
+    const sourcePath = tempDirs.make("openclaw-managed-link-");
+    createColdPluginFixture({ rootDir: sourcePath, pluginId: "demo" });
+    await fs.writeFile(path.join(sourcePath, "version"), "operator-owned");
     const conflict = new Error("config changed during plugin link");
-    mocks.pathInstall.mockResolvedValue({
-      ok: true,
-      pluginId: "demo",
-      targetDir: sourcePath,
-      version: "1.0.0",
-    });
-    mocks.persistInstall.mockRejectedValue(conflict);
-
+    mocks.install.mockResolvedValue({ ok: true, pluginId: "demo", targetDir: sourcePath });
+    mocks.persist.mockRejectedValue(conflict);
     await expect(
       installManagedPluginSource({
         request: {
@@ -118,17 +188,60 @@ describe("managed plugin install compensation", () => {
           mode: "install",
           link: true,
         },
-        snapshot: installPersistSnapshot(),
-        env,
-        cleanupOnPersistenceFailure: true,
+        snapshot,
+        onCapabilityConsent: acceptCapabilities,
       }),
     ).rejects.toBe(conflict);
-
-    expect(mocks.pathInstall).toHaveBeenCalledWith(
+    expect(mocks.install).toHaveBeenCalledWith(
       expect.objectContaining({ path: sourcePath, dryRun: true }),
     );
-    expect(mocks.installRecords).not.toHaveBeenCalled();
-    expect(mocks.planUninstall).not.toHaveBeenCalled();
-    expect(mocks.applyUninstall).not.toHaveBeenCalled();
+    expect(await fs.readFile(path.join(sourcePath, "version"), "utf8")).toBe("operator-owned");
   });
+
+  it.each(["rollback", "commit"] as const)(
+    "reports %s failure without reversing committed state",
+    async (settlement) => {
+      const conflict = new Error("config write rejected");
+      const settlementError = new Error(`${settlement} failed`);
+      const transaction = { commit: vi.fn(), rollback: vi.fn() };
+      transaction[settlement].mockRejectedValue(settlementError);
+      mocks.install.mockImplementation(
+        (params: Parameters<typeof invokePluginArtifactInstallMock>[1]) =>
+          invokePluginArtifactInstallMock(
+            async () =>
+              attachPluginInstallTransaction(
+                { ok: true, pluginId: "demo", targetDir: "/managed/demo" },
+                transaction,
+              ),
+            params,
+          ),
+      );
+      mocks.persist.mockImplementation(async (params: { onCommitted?: () => void }) => {
+        if (settlement === "rollback") {
+          throw conflict;
+        }
+        params.onCommitted?.();
+        return {};
+      });
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const installed = installManagedPluginSource({
+        request: { source: "local", path: "/incoming", recordSource: "path", mode: "update" },
+        snapshot,
+        runtime,
+        onCapabilityConsent: acceptCapabilities,
+      });
+      if (settlement === "rollback") {
+        await expect(installed).rejects.toMatchObject({
+          cause: settlementError,
+          errors: [conflict, settlementError],
+        });
+        expect(transaction.commit).not.toHaveBeenCalled();
+      } else {
+        const warning = "Plugin install committed, but backup cleanup failed. Restart is required.";
+        await expect(installed).resolves.toMatchObject({ ok: true, warnings: [warning] });
+        expect(runtime.log).toHaveBeenCalledWith(warning);
+        expect(transaction.rollback).not.toHaveBeenCalled();
+      }
+    },
+  );
 });

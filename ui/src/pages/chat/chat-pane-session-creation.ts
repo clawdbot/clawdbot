@@ -1,4 +1,5 @@
 import { t } from "../../i18n/index.ts";
+import { formatUiError } from "../../lib/format-error.ts";
 import {
   readSessionMethodAccess,
   type SessionMethodAccess,
@@ -47,6 +48,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
       return {
         kind: "composer-replacement" as const,
         text: t("chat.archivedSessionDisabled"),
+        icon: "archive" as const,
         actionLabel: t("common.unarchive"),
         disabledReason: !params.selectedSessionId
           ? "Session lifecycle action requires a durable session identity."
@@ -154,7 +156,7 @@ export abstract class ChatPaneSessionCreation extends ChatPaneRetainedPresentati
         return false;
       }
       if (recovery.continuation.status === "rejected") {
-        setChatError(state, recovery.continuation.error.message);
+        setChatError(state, formatUiError(recovery.continuation.error.message));
         state.requestUpdate?.();
         return false;
       }

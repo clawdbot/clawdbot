@@ -7,18 +7,79 @@ import {
   isEmbeddedAgentRunActive,
   setActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import {
+  createReplyOperation,
+  markReplyOperationExecutionStarted,
+} from "../../auto-reply/reply/reply-run-registry.js";
 import {
   buildProjectedAgentRunIndex,
   clearAgentRunContext,
   registerAgentRunContext,
 } from "../../infra/agent-run-registry.js";
+import { registerChatAbortController } from "../chat-abort.js";
 import {
   collectTrackedActiveSessionRuns,
   hasRegisteredChatRunForSessionKey,
   hasTrackedActiveSessionRun,
   resolveVisibleActiveSessionRunState,
 } from "./session-active-runs.js";
+
+it("projects admitted work as queued until execution starts", () => {
+  const sessionKey = "agent:main:queued";
+  const sessionId = "queued-session";
+  const runId = "queued-run";
+  const chatAbortControllers = new Map();
+  const registration = registerChatAbortController({
+    chatAbortControllers,
+    runId,
+    sessionId,
+    sessionKey,
+    agentId: "main",
+    timeoutMs: 60_000,
+    kind: "agent",
+  });
+  const state = () =>
+    resolveVisibleActiveSessionRunState({
+      context: { chatAbortControllers } as never,
+      requestedKey: sessionKey,
+      canonicalKey: sessionKey,
+      sessionId,
+      agentId: "main",
+    });
+
+  expect(state()).toEqual({ active: true, runIds: [runId], status: "queued" });
+  expect(registration.markExecutionStarted()).toBe(true);
+  expect(state()).toEqual({ active: true, runIds: [runId] });
+  expect(registration.markExecutionStarted()).toBe(false);
+  registration.cleanup({ force: true });
+});
+
+it("keeps terminal persistence visible only to chat history", () => {
+  const terminal = {
+    sessionKey: "agent:main:main",
+    sessionId: "session-main",
+    projectSessionActive: false,
+    projectSessionTerminalPending: true,
+  };
+  const context = { chatAbortControllers: new Map([["run-terminal", terminal]]) } as never;
+  const params = {
+    context,
+    requestedKey: terminal.sessionKey,
+    canonicalKey: terminal.sessionKey,
+    sessionId: terminal.sessionId,
+    agentId: "main",
+  };
+
+  expect(resolveVisibleActiveSessionRunState(params)).toEqual({ active: false, runIds: [] });
+  expect(
+    resolveVisibleActiveSessionRunState({ ...params, includeTerminalPersistence: true }),
+  ).toEqual({ active: true });
+
+  terminal.projectSessionTerminalPending = false;
+  expect(
+    resolveVisibleActiveSessionRunState({ ...params, includeTerminalPersistence: true }),
+  ).toEqual({ active: false, runIds: [] });
+});
 
 it("keeps prebuilt active-run indexes in parity with per-row scans", () => {
   const context = {
@@ -165,13 +226,13 @@ it("projects a lifecycle-owned worker run without widening event visibility", ()
         canonicalKey: "agent:main:worker",
         sessionId: "worker-session",
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
   } finally {
     clearAgentRunContext("worker-run");
   }
 });
 
-it("does not project a terminal reply operation retained for settlement as active", () => {
+it("projects reply lifecycle state without hiding independent embedded work", () => {
   const sessionKey = "agent:main:reply-settling";
   const sessionId = "reply-settling-session";
   const operation = createReplyOperation({ sessionKey, sessionId, resetTriggered: false });
@@ -190,9 +251,49 @@ it("does not project a terminal reply operation retained for settlement as activ
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true, status: "queued" });
+
+    operation.markWaitingForGlobalLane();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: true, status: "queued" });
+    operation.markGlobalLaneWaitEnded();
 
     operation.setPhase("running");
+    operation.markWaitingForGlobalLane();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: true, status: "queued" });
+    operation.markGlobalLaneWaitEnded();
+    markReplyOperationExecutionStarted(operation);
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: true });
+    operation.markWaitingForGlobalLane();
+    expect(
+      resolveVisibleActiveSessionRunState({
+        context: {},
+        requestedKey: sessionKey,
+        canonicalKey: sessionKey,
+        sessionId,
+      }),
+    ).toEqual({ active: true });
+    operation.markGlobalLaneWaitEnded();
     expect(operation.abortByUser()).toBe(true);
     expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);
     expect(
@@ -212,7 +313,7 @@ it("does not project a terminal reply operation retained for settlement as activ
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
   } finally {
     clearActiveEmbeddedRun(sessionId, replacementHandle, sessionKey);
     operation.complete();
@@ -229,7 +330,6 @@ it("preserves an independent lifecycle-owned worker while a reply operation sett
     sessionKey,
   });
   try {
-    expect(operation.abortByUser()).toBe(true);
     expect(
       resolveVisibleActiveSessionRunState({
         context: {},
@@ -237,7 +337,7 @@ it("preserves an independent lifecycle-owned worker while a reply operation sett
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
   } finally {
     operation.complete();
     clearAgentRunContext("worker-overlap-run");
@@ -269,7 +369,7 @@ it("does not project an aborted embedded handle retained for cleanup as active",
         canonicalKey: sessionKey,
         sessionId,
       }),
-    ).toEqual({ active: true, runIds: [] });
+    ).toEqual({ active: true });
 
     expect(abortEmbeddedAgentRun(sessionId)).toBe(true);
     expect(isEmbeddedAgentRunActive(sessionId)).toBe(true);

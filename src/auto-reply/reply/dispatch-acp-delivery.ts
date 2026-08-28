@@ -30,14 +30,13 @@ import {
 import type { FinalizedMsgContext } from "../templating.js";
 import type { ReplyPayload } from "../types.js";
 import { prepareAcpDeliveryPayload } from "./dispatch-acp-payload.js";
-import type { NormalizeReplySkipReason } from "./normalize-reply.js";
+import type { NormalizeReplySkipReason } from "./normalize-reply-skip-reason.js";
 import {
   attachReplyDispatchUndeliveredFallback,
   captureReplyDispatchDeliveryOutcome,
   waitForReplyDispatcherIdle,
 } from "./reply-dispatcher.js";
 import type { ReplyDispatchKind, ReplyDispatcher } from "./reply-dispatcher.types.js";
-import { readDispatcherFailedCounts } from "./reply-dispatcher.types.js";
 import {
   createReplyDeliveryContext,
   resolveReplyDeliveryAccountId,
@@ -331,15 +330,17 @@ export function createAcpDispatchDeliveryCoordinator(params: {
     }
     state.settledDirectVisibleText = true;
     hasPendingDirectBlockReplyDelivery = false;
-    await params.dispatcher.waitForIdle();
-    const failedCounts = readDispatcherFailedCounts(params.dispatcher);
-    const failedVisibleCount = failedCounts.block + failedCounts.final;
-    if (failedVisibleCount > 0) {
-      state.failedVisibleTextDelivery = true;
+    const receipt = await params.dispatcher.waitForIdle();
+    if (!receipt) {
+      return;
     }
-    if (state.queuedDirectVisibleTextDeliveries > failedVisibleCount) {
-      state.deliveredVisibleText = true;
-    }
+    const visibleCounts = [receipt.counts.block, receipt.counts.final];
+    state.failedVisibleTextDelivery ||= visibleCounts.some(
+      (counts) => counts.failedBeforeSend + counts.failedAfterSend > 0,
+    );
+    state.deliveredVisibleText ||= visibleCounts.some(
+      (counts) => counts.delivered + counts.failedAfterSend > 0,
+    );
   };
 
   const startReplyLifecycleOnce = async () => {

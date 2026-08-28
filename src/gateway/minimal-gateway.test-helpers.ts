@@ -40,7 +40,7 @@ export function buildMinimalGatewayHelloOkPayload(params?: {
   connId?: string;
   methods?: string[];
   snapshot?: Record<string, unknown>;
-  auth?: { role: string; scopes: string[] };
+  auth?: { role: string; scopes: string[]; deviceToken?: string };
   policy?: {
     maxPayload: number;
     maxBufferedBytes: number;

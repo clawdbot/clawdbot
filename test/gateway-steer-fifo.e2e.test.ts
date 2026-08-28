@@ -486,7 +486,12 @@ async function connectDiagnosticsClient(instance: OpenClawTestInstance): Promise
     mode: GATEWAY_CLIENT_MODES.UI,
     role: "operator",
     scopes: ["operator.admin", "operator.read", "operator.write"],
-    caps: [GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS],
+    caps: [
+      GATEWAY_CLIENT_CAPS.AGENT_KIND,
+      GATEWAY_CLIENT_CAPS.PLUGIN_APPROVALS,
+      GATEWAY_CLIENT_CAPS.TASK_SUGGESTIONS,
+      GATEWAY_CLIENT_CAPS.TOOL_EVENTS,
+    ],
     platform: process.platform,
     requestTimeoutMs: 30_000,
     onHelloOk: resolveHello,
@@ -643,70 +648,6 @@ async function queueSteer(fixture: GatewayFixture, marker = "QUEUED_STEER_A") {
     expect(fixture.modelServer.requests).toHaveLength(1);
   }, WAIT_OPTS);
   return result;
-}
-
-async function resolveUiSteerTarget(
-  fixture: GatewayFixture,
-  expectedChatRunId: string,
-): Promise<{ expectedRunId: string; expectedLeafEntryId: string }> {
-  let target: { expectedRunId: string; expectedLeafEntryId: string } | undefined;
-  await vi.waitFor(async () => {
-    const [sessions, history] = await Promise.all([
-      fixture.diagnosticsClient.request<{
-        sessions?: Array<{
-          key?: string;
-          hasActiveRun?: boolean;
-          activeRunIds?: string[];
-          activeLeafEntryId?: string | null;
-        }>;
-      }>("sessions.list", { includeGlobal: true, limit: 20 }),
-      fixture.diagnosticsClient.request<{
-        sessionInfo?: { activeRunIds?: string[]; activeLeafEntryId?: string | null };
-        inFlightRun?: { runId?: string };
-      }>("chat.history", { sessionKey: fixture.sessionKey, limit: 20 }),
-    ]);
-    const row = sessions.sessions?.find((candidate) => candidate.key === fixture.sessionKey);
-    expect(row?.hasActiveRun).toBe(true);
-    expect(row?.activeRunIds).toHaveLength(1);
-    const expectedRunId = row?.activeRunIds?.[0];
-    const expectedLeafEntryId = history.sessionInfo?.activeLeafEntryId?.trim();
-    expect(expectedRunId).toBe(expectedChatRunId);
-    expect(history.sessionInfo?.activeRunIds).toEqual([expectedRunId]);
-    expect(history.inFlightRun?.runId).toBe(expectedRunId);
-    expect(expectedLeafEntryId).toEqual(expect.any(String));
-    if (row?.activeLeafEntryId) {
-      expect(row.activeLeafEntryId).toBe(expectedLeafEntryId);
-    }
-    if (expectedRunId && expectedLeafEntryId) {
-      target = { expectedRunId, expectedLeafEntryId };
-    }
-  }, WAIT_OPTS);
-  if (!target) {
-    throw new Error(`Gateway omitted the active UI steering identity for ${fixture.sessionKey}`);
-  }
-  return target;
-}
-
-async function queueExactUiSteer(params: {
-  fixture: GatewayFixture;
-  marker: string;
-  target: { expectedRunId: string; expectedLeafEntryId: string };
-}): Promise<string> {
-  const runId = `run-${params.marker.toLowerCase()}`;
-  const result = await params.fixture.diagnosticsClient.request<{
-    runId?: string;
-    status?: string;
-  }>("chat.send", {
-    sessionKey: params.fixture.sessionKey,
-    message: params.marker,
-    deliver: false,
-    queueMode: "steer",
-    ...params.target,
-    idempotencyKey: runId,
-  });
-  expect(result).toMatchObject({ runId, status: "started" });
-  expect(params.fixture.modelServer.requests).toHaveLength(1);
-  return runId;
 }
 
 async function queueOrdinaryFollowup(
@@ -928,7 +869,7 @@ describe("Gateway steer FIFO", () => {
   );
 
   it(
-    "finishes a running tool, skips its sequential tail, and injects an exact UI steer once",
+    "finishes a running tool, skips its sequential tail, and injects a UI steer once",
     async () => {
       const fixture = await createGatewayFixture("steer-running-tool-tail", {
         withSteeringTools: true,
@@ -947,8 +888,19 @@ describe("Gateway steer FIFO", () => {
           expect(await readTrace(steeringTools.tracePath)).toEqual(["gate-execute-start"]);
           expect(fixture.modelServer.requests).toHaveLength(1);
         }, WAIT_OPTS);
-        const target = await resolveUiSteerTarget(fixture, first.runId);
-        const steerRunId = await queueExactUiSteer({ fixture, marker: steerMarker, target });
+        const steerRunId = `run-${steerMarker.toLowerCase()}`;
+        const steerResult = await fixture.diagnosticsClient.request<{
+          runId?: string;
+          status?: string;
+        }>("chat.send", {
+          sessionKey: fixture.sessionKey,
+          message: steerMarker,
+          deliver: false,
+          queueMode: "steer",
+          idempotencyKey: steerRunId,
+        });
+        expect(steerResult).toMatchObject({ runId: steerRunId, status: "started" });
+        expect(fixture.modelServer.requests).toHaveLength(1);
         await new Promise<void>((resolve) => {
           setImmediate(resolve);
         });

@@ -1,20 +1,8 @@
 import type { RouteId } from "../../app-route-paths.ts";
-
-export const MODEL_SETTINGS_TARGET_IDS = {
-  behavior: "settings-model-behavior",
-} as const;
+import { APPEARANCE_SETTINGS_TARGET_IDS, SETTINGS_ROUTE_TARGETS } from "./route-data.ts";
 
 export const CONNECTION_SETTINGS_TARGET_IDS = {
   host: "settings-connection-host",
-} as const;
-
-export const APPEARANCE_SETTINGS_TARGET_IDS = {
-  language: "settings-language",
-  theme: "settings-appearance-theme",
-  textSize: "settings-appearance-text-size",
-  sidebar: "settings-appearance-sidebar",
-  chat: "settings-appearance-chat",
-  connection: "settings-appearance-connection",
 } as const;
 
 // Stable scroll-target id predates the dedicated Notifications page; keeping it
@@ -54,7 +42,6 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "quickSettings.security.gatewayAuth",
       "quickSettings.security.execPolicy",
-      "quickSettings.security.deviceAuth",
       "quickSettings.security.browserEnabled",
       "quickSettings.security.toolProfile",
     ],
@@ -94,9 +81,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     requiresIdentity: true,
   },
   modelBehavior: {
-    routeId: "model-providers",
+    ...SETTINGS_ROUTE_TARGETS.modelBehavior,
     labelKey: "quickSettings.model.title",
-    hash: `#${MODEL_SETTINGS_TARGET_IDS.behavior}`,
     searchKeys: [
       "quickSettings.model.model",
       "quickSettings.model.thinking",
@@ -111,10 +97,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
   },
   appearanceLanguage: {
-    routeId: "appearance",
+    ...SETTINGS_ROUTE_TARGETS.appearanceLanguage,
     labelKey: "quickSettings.language",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.language}`,
     searchKeys: ["configView.syncedHint"],
     aliases: "locale translation",
   },
@@ -132,6 +116,27 @@ export const SETTINGS_SEARCH_TARGETS = {
     ],
     aliases: "tweakcn light dark system",
   },
+  appearanceAccent: {
+    routeId: "appearance",
+    labelKey: "configView.appearance.accent",
+    search: "?section=__appearance__",
+    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.accent}`,
+    searchKeys: [
+      "configView.appearance.accentHint",
+      "configView.appearance.customAccent",
+      "configView.appearance.accents.default",
+      "configView.appearance.accents.claw",
+      "configView.appearance.accents.coral",
+      "configView.appearance.accents.amber",
+      "configView.appearance.accents.mint",
+      "configView.appearance.accents.teal",
+      "configView.appearance.accents.blue",
+      "configView.appearance.accents.violet",
+      "configView.appearance.accents.pink",
+      "configView.appearance.accents.slate",
+    ],
+    aliases: "colour swatch palette highlight green purple neutral",
+  },
   appearanceTextSize: {
     routeId: "appearance",
     labelKey: "configView.appearance.textSize",
@@ -147,10 +152,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     aliases: "scale",
   },
   appearanceSidebar: {
-    routeId: "appearance",
+    ...SETTINGS_ROUTE_TARGETS.appearanceSidebar,
     labelKey: "configView.sidebarPrefs.title",
-    search: "?section=__appearance__",
-    hash: `#${APPEARANCE_SETTINGS_TARGET_IDS.sidebar}`,
     searchKeys: [
       "configView.sidebarPrefs.hint",
       "configView.sidebarPrefs.liveActivity",

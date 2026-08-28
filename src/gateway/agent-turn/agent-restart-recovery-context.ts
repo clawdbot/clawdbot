@@ -31,13 +31,17 @@ export function resolveAgentRestartRecoveryExecutionIdentityAdmission(params: {
   const stored = (params.sessionEntry as InternalSessionEntry | undefined)?.mainRestartRecovery
     ?.executionIdentity;
   if (!stored) {
-    return createExecutionIdentityRecoveryAdmission({ retryOnly: params.retryOnly });
+    return createExecutionIdentityRecoveryAdmission({
+      retryOnly: params.retryOnly,
+      expectedOperationalRunId: params.runId,
+    });
   }
   const token = parseExecutionIdentityAdmissionToken(stored);
-  if (token.runId !== params.runId) {
-    throw new Error("restart recovery execution identity token disagrees with the admitted run");
-  }
-  return createExecutionIdentityRecoveryAdmission({ token, retryOnly: params.retryOnly });
+  return createExecutionIdentityRecoveryAdmission({
+    token,
+    retryOnly: params.retryOnly,
+    expectedOperationalRunId: params.runId,
+  });
 }
 
 /** Rehydrates durable channel authority only for the exact host-owned recovery run. */

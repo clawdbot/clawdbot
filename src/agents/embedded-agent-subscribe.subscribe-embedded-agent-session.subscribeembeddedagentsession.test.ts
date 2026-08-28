@@ -20,7 +20,15 @@ import {
   findLifecycleErrorAgentEvent,
 } from "./embedded-agent-subscribe.e2e-harness.js";
 import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
+import { createOpenAiResponsesTextEvent } from "./embedded-agent-subscribe.openai-responses.test-helpers.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
+
+const retryingCompactionEnd = () =>
+  ({
+    type: "compaction_end",
+    reason: "overflow",
+    outcome: { status: "completed", tokensBefore: 100, tokensAfter: 50, willRetry: true },
+  }) as const;
 
 describe("subscribeEmbeddedAgentSession", () => {
   async function flushBlockReplyCallbacks(): Promise<void> {
@@ -315,6 +323,46 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
+  it("delivers generated media after dropping malformed provider attachment metadata", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedHarness({
+      runId: "generated-malformed-metadata",
+      onBlockReply,
+      blockReplyBreak: "message_end",
+      builtinToolNames: new Set(["music_generate"]),
+    });
+    const mediaPath = "/tmp/generated-song.mp3";
+
+    emitToolRun({
+      emit,
+      toolName: "music_generate",
+      toolCallId: "music-tool",
+      isError: false,
+      result: {
+        content: [{ type: "text", text: "Generated media." }],
+        details: {
+          media: {
+            mediaUrls: [mediaPath],
+            attachments: [
+              { type: "audio", path: mediaPath, name: 1, mimeType: null, durationMs: -1 },
+            ],
+          },
+        },
+      },
+    });
+    await subscription.waitForPendingEvents();
+    emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated song." });
+    emit({ type: "agent_end", messages: [], willRetry: false });
+    await subscription.waitForPendingEvents();
+
+    expect(onBlockReply).toHaveBeenCalledOnce();
+    expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+      text: "Here is your generated song.",
+      mediaUrls: [mediaPath],
+      attachments: [{ type: "audio", path: mediaPath }],
+    });
+  });
+
   it("does not double-count usage when done and message_end carry the same snapshot", () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
     const usage = {
@@ -374,6 +422,72 @@ describe("subscribeEmbeddedAgentSession", () => {
       output: 66,
       cacheRead: 120_320,
       total: 158_719,
+    });
+  });
+
+  it("keeps a successful retry call when later post-call processing fails", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 100, output: 20, totalTokens: 120 },
+      },
+    });
+    emit(retryingCompactionEnd());
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 240, output: 30, totalTokens: 270 },
+      },
+    });
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 240,
+      output: 30,
+      total: 270,
+    });
+  });
+
+  it("restores the previous call when a retry fails before recording usage", () => {
+    const { emit, subscription } = createSubscribedSessionHarness({ runId: "run" });
+
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        usage: { input: 100, output: 20, totalTokens: 120 },
+      },
+    });
+    emit(retryingCompactionEnd());
+    emit({ type: "message_start", message: { role: "assistant" } });
+    emit({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        stopReason: "error",
+        usage: makeZeroUsageSnapshot(),
+      },
+    });
+
+    expect(subscription.getLastAssistantUsage()).toEqual({
+      input: 100,
+      output: 20,
+      total: 120,
     });
   });
 
@@ -475,7 +589,7 @@ describe("subscribeEmbeddedAgentSession", () => {
   it("delivers generated image media once in markdown verbose output", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -523,7 +637,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: [{ type: "text", text: "Here is the image." }],
       },
     });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     expectBlockReplyPayload(onBlockReply, {
       text: "Here is the image.",
@@ -531,10 +645,77 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
+  it.each([
+    {
+      toolName: "image_generate",
+      type: "image",
+      mimeType: "image/png",
+      metadata: { width: 640, height: 480 },
+    },
+    {
+      toolName: "music_generate",
+      type: "audio",
+      mimeType: "audio/mpeg",
+      metadata: { durationMs: 2_000 },
+    },
+    {
+      toolName: "video_generate",
+      type: "video",
+      mimeType: "video/mp4",
+      metadata: { durationMs: 5_000, width: 1280, height: 720 },
+    },
+  ] as const)(
+    "delivers generated $type attachment metadata with the assistant reply",
+    async ({ toolName, type, mimeType, metadata }) => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: `generated-${type}`,
+        onBlockReply,
+        blockReplyBreak: "message_end",
+        builtinToolNames: new Set([toolName]),
+      });
+      const attachment = {
+        type,
+        path: `/tmp/generated-${type}`,
+        name: `friendly-${type}`,
+        mimeType,
+        sizeBytes: 137,
+        ...metadata,
+      };
+
+      emitToolRun({
+        emit,
+        toolName,
+        toolCallId: `${type}-tool`,
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "Generated media." }],
+          details: { media: { mediaUrls: [attachment.path], attachments: [attachment] } },
+        },
+      });
+      await subscription.waitForPendingEvents();
+      expect(subscription.getPendingToolMediaReply()).toMatchObject({
+        mediaUrls: [attachment.path],
+        attachments: [attachment],
+      });
+
+      emitMessageStartAndEndForAssistantText({ emit, text: "Here is your generated file." });
+      emit({ type: "agent_end", messages: [], willRetry: false });
+      await subscription.waitForPendingEvents();
+
+      expect(onBlockReply).toHaveBeenCalledOnce();
+      expect(onBlockReply.mock.calls[0]?.[0]).toMatchObject({
+        text: "Here is your generated file.",
+        mediaUrls: [attachment.path],
+        attachments: [attachment],
+      });
+    },
+  );
+
   it("does not duplicate generated image media when the assistant reply has MEDIA lines", async () => {
     const onToolResult = vi.fn();
     const onBlockReply = vi.fn();
-    const { emit } = createSubscribedHarness({
+    const { emit, subscription } = createSubscribedHarness({
       runId: "run",
       onToolResult,
       onBlockReply,
@@ -576,7 +757,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         content: [{ type: "text", text: "Here is the selected image.\nMEDIA:./selected.png" }],
       },
     });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     expectBlockReplyPayload(onBlockReply, {
       text: "Here is the selected image.",
@@ -623,6 +804,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     emit({ type: "message_start", message: { role: "assistant" } });
     emitAssistantTextDelta(emit, "Generated 1 image.\n");
+    await subscription.waitForPendingEvents();
 
     expectBlockReplyPayload(onBlockReply, {
       text: "Generated 1 image.",
@@ -654,7 +836,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       },
     });
     emit({ type: "agent_end" });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     const mediaPayloads = onBlockReply.mock.calls
       .map(([payload]) => payload)
@@ -855,7 +1037,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     },
   );
 
-  it("keeps orphaned tool media available for non-block final payload assembly", () => {
+  it("keeps orphaned tool media available for non-block final payload assembly", async () => {
     const { emit, subscription } = createSubscribedSessionHarness({
       runId: "run",
       builtinToolNames: new Set(["tts"]),
@@ -876,6 +1058,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       },
     });
     emit({ type: "agent_end" });
+    await subscription.waitForPendingEvents();
 
     expect(subscription.getPendingToolMediaReply()).toEqual({
       mediaUrls: ["/tmp/reply.opus"],
@@ -906,7 +1089,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       },
     });
     emit({ type: "agent_end" });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     expect(onBlockReply).toHaveBeenCalledWith({
       mediaUrls: ["/tmp/reply.opus"],
@@ -996,6 +1179,74 @@ describe("subscribeEmbeddedAgentSession", () => {
       .filter((value): value is string => typeof value === "string");
     expect(streamTexts.at(-1)).toBe("Checking files done");
     expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    { label: "successful", stopReason: "stop", phase: undefined },
+    { label: "failed", stopReason: "error", phase: undefined },
+    { label: "aborted", stopReason: "aborted", phase: undefined },
+    { label: "commentary", stopReason: "stop", phase: "commentary" },
+  ] as const)(
+    "closes a reasoning preview before the $label message ends without thinking_end",
+    ({ stopReason, phase }) => {
+      const visibleEvents: string[] = [];
+      const onReasoningEnd = vi.fn(async () => {
+        visibleEvents.push("reasoning-end");
+      });
+      const { emit } = createSubscribedHarness({
+        runId: "run-reasoning-terminal",
+        reasoningMode: "stream",
+        onReasoningStream: vi.fn(),
+        onReasoningEnd,
+        onAgentEvent: (event) => {
+          if (event.stream === "assistant") {
+            visibleEvents.push("assistant");
+          }
+        },
+      });
+      const thinkingMessage = {
+        role: "assistant" as const,
+        content: [{ type: "thinking" as const, thinking: "Checking files" }],
+      };
+
+      emit({ type: "message_start", message: thinkingMessage });
+      emit({
+        type: "message_update",
+        message: thinkingMessage,
+        assistantMessageEvent: { type: "thinking_delta", delta: "Checking files" },
+      });
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          stopReason,
+          ...(phase ? { phase } : {}),
+          content: [
+            { type: "thinking", thinking: "Checking files" },
+            { type: "text", text: "Final answer" },
+          ],
+        },
+      });
+
+      expect(onReasoningEnd).toHaveBeenCalledTimes(1);
+      expect(visibleEvents[0]).toBe("reasoning-end");
+    },
+  );
+
+  it("does not close a reasoning preview that was never opened", () => {
+    const onReasoningEnd = vi.fn();
+    const { emit } = createSubscribedHarness({
+      runId: "run-without-reasoning",
+      reasoningMode: "stream",
+      onReasoningEnd,
+    });
+
+    emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: "Final answer" }] },
+    });
+
+    expect(onReasoningEnd).not.toHaveBeenCalled();
   });
 
   type ReasoningWindowGateCase = {
@@ -1382,7 +1633,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(payloads.at(-1)?.mediaUrls).toEqual(["https://example.com/a.png"]);
   });
 
-  it("keeps unresolved mutating failure when an unrelated tool succeeds", () => {
+  it("keeps unresolved mutating failure when an unrelated tool succeeds", async () => {
     const { emit, subscription } = createWriteFailureHarness({
       runId: "run-tools-1",
       path: "/tmp/demo.txt",
@@ -1398,10 +1649,11 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { text: "ok" },
     });
 
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()?.toolName).toBe("write");
   });
 
-  it("clears unresolved mutating failure when the same action succeeds", () => {
+  it("clears unresolved mutating failure when the same action succeeds", async () => {
     const { emit, subscription } = createWriteFailureHarness({
       runId: "run-tools-2",
       path: "/tmp/demo.txt",
@@ -1417,10 +1669,11 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
-  it("preserves distinct mutation failures through compaction until each action recovers", () => {
+  it("preserves distinct mutation failures through compaction until each action recovers", async () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-compaction-retry");
 
     for (const [toolCallId, filePath] of [
@@ -1437,7 +1690,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       });
     }
 
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     emitToolRun({
       emit,
       toolName: "write",
@@ -1447,7 +1700,8 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
-    expect(subscription.getLastToolError()?.actionFingerprint).toContain("path=/tmp/a.txt");
+    await subscription.waitForPendingEvents();
+    expect(subscription.getLastToolError()).toBeUndefined();
 
     emitToolRun({
       emit,
@@ -1458,10 +1712,11 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
+    await subscription.waitForPendingEvents();
     expect(subscription.getLastToolError()).toBeUndefined();
   });
 
-  it("keeps unresolved mutating failure when same tool succeeds on a different target", () => {
+  it("clears a failure when the same tool succeeds on a different target", async () => {
     const { emit, subscription } = createToolErrorHarness("run-tools-3");
 
     emitToolRun({
@@ -1482,31 +1737,8 @@ describe("subscribeEmbeddedAgentSession", () => {
       result: { ok: true },
     });
 
-    expect(subscription.getLastToolError()?.toolName).toBe("write");
-  });
-
-  it("keeps unresolved session_status model-mutation failure on later read-only status success", () => {
-    const { emit, subscription } = createToolErrorHarness("run-tools-4");
-
-    emitToolRun({
-      emit,
-      toolName: "session_status",
-      toolCallId: "s1",
-      args: { sessionKey: "agent:main:main", model: "openai/gpt-4o" },
-      isError: true,
-      result: { error: "Model not allowed." },
-    });
-
-    emitToolRun({
-      emit,
-      toolName: "session_status",
-      toolCallId: "s2",
-      args: { sessionKey: "agent:main:main" },
-      isError: false,
-      result: { ok: true },
-    });
-
-    expect(subscription.getLastToolError()?.toolName).toBe("session_status");
+    await subscription.waitForPendingEvents();
+    expect(subscription.getLastToolError()).toBeUndefined();
   });
 
   it("emits lifecycle:error event on agent_end when last assistant message was an error", () => {
@@ -1568,7 +1800,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     );
   });
 
-  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", () => {
+  it("preserves replay-invalid lifecycle truth across compaction retries after mutating tools", async () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
@@ -1591,8 +1823,9 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result: { ok: true },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
     emit({ type: "agent_end" });
+    await subscription.waitForPendingEvents();
 
     expect(subscription.getReplayState()).toEqual({
       replayInvalid: true,
@@ -1606,15 +1839,14 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("preserves deterministic side-effect liveness across compaction retries", () => {
+  it("preserves successful cron evidence and liveness across compaction retries", async () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
 
-    subscribeEmbeddedAgentSession({
+    const subscription = subscribeEmbeddedAgentSession({
       session,
       runId: "run-cron-side-effect-compaction",
       onAgentEvent,
-      sessionKey: "test-session",
     });
 
     emitToolRun({
@@ -1625,7 +1857,12 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result: { details: { status: "ok" } },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    await subscription.waitForPendingEvents();
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
+    emit(retryingCompactionEnd());
+    await subscription.waitForPendingEvents();
+    expect(subscription.isCompacting()).toBe(true);
+    expect(subscription.getSuccessfulCronAdds()).toBe(1);
     emit({ type: "agent_end" });
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
@@ -1636,7 +1873,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("preserves accepted session spawn terminal evidence across compaction retries", () => {
+  it("preserves accepted session spawn terminal evidence across compaction retries", async () => {
     const { session, emit } = createStubSessionHarness();
     const onAgentEvent = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
@@ -1660,7 +1897,8 @@ describe("subscribeEmbeddedAgentSession", () => {
         },
       },
     });
-    emit({ type: "compaction_end", willRetry: true, result: { summary: "compacted" } });
+    emit(retryingCompactionEnd());
+    await subscription.waitForPendingEvents();
 
     expect(subscription.getAcceptedSessionSpawns()).toEqual([
       {
@@ -1670,6 +1908,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     ]);
 
     emit({ type: "agent_end" });
+    await subscription.waitForPendingEvents();
 
     const payloads = extractAgentEventPayloads(onAgentEvent.mock.calls);
     expectLifecyclePayload(payloads, {
@@ -1679,7 +1918,7 @@ describe("subscribeEmbeddedAgentSession", () => {
     });
   });
 
-  it("notifies the runner once when a heartbeat response tool result is recorded", async () => {
+  it("notifies the runner once when a heartbeat response tool result is accepted", async () => {
     const { session, emit } = createStubSessionHarness();
     const onHeartbeatToolResponse = vi.fn();
     const subscription = subscribeEmbeddedAgentSession({
@@ -1691,7 +1930,7 @@ describe("subscribeEmbeddedAgentSession", () => {
 
     const result = {
       details: {
-        status: "recorded",
+        status: "accepted",
         outcome: "no_change",
         notify: false,
         summary: "Nothing needs attention.",
@@ -1721,7 +1960,7 @@ describe("subscribeEmbeddedAgentSession", () => {
       isError: false,
       result,
     });
-    await flushBlockReplyCallbacks();
+    await subscription.waitForPendingEvents();
 
     expect(subscription.getHeartbeatToolResponse()).toEqual({
       outcome: "no_change",
@@ -1733,6 +1972,355 @@ describe("subscribeEmbeddedAgentSession", () => {
       outcome: "no_change",
       notify: false,
       summary: "Nothing needs attention.",
+    });
+  });
+
+  describe("flushPartialAssistantText", () => {
+    it("does not commit commentary-phase text on timeout flush", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      // OpenAI Responses commentary items stream text_delta events that the
+      // normal path deliberately keeps out of reply buffers. The timeout flush
+      // must preserve that boundary: commentary must not become assistantTexts.
+      emit(
+        createOpenAiResponsesTextEvent({
+          type: "text_delta",
+          text: "Working...",
+          delta: "Working...",
+          id: "item-commentary",
+          signaturePhase: "commentary",
+          partialPhase: "commentary",
+        }),
+      );
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual([]);
+    });
+
+    it("commits final-answer text that follows a commentary item", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emit(
+        createOpenAiResponsesTextEvent({
+          type: "text_delta",
+          text: "Working...",
+          delta: "Working...",
+          id: "item-commentary",
+          signaturePhase: "commentary",
+          partialPhase: "commentary",
+        }),
+      );
+      // A later final-answer item resets the buffered item boundary, so the
+      // timeout flush must preserve the visible final text while dropping the
+      // preceding commentary bytes.
+      emit(
+        createOpenAiResponsesTextEvent({
+          type: "text_delta",
+          text: "Final answer",
+          delta: "Final answer",
+          id: "item-final",
+          signaturePhase: "final_answer",
+          partialPhase: "final_answer",
+        }),
+      );
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Final answer"]);
+    });
+
+    it("preserves normal visible text", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Hello ");
+      emitAssistantTextDelta(emit, "world");
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Hello world"]);
+    });
+
+    it("strips think tags before committing text", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Before<think>");
+      emitAssistantTextDelta(emit, " secret");
+      emitAssistantTextDelta(emit, "</think>After");
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["BeforeAfter"]);
+    });
+
+    it("handles final tags matching enforceFinalTag param", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+        enforceFinalTag: true,
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Discarded <final>");
+      emitAssistantTextDelta(emit, "preserved");
+      emitAssistantTextDelta(emit, "</final> also discarded");
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["preserved"]);
+    });
+
+    it("strips final tags but preserves visible text when enforceFinalTag is disabled", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+        // Default policy: final-tag enforcement is off, so the timeout flush
+        // must keep the same visible text the normal path would retain and
+        // only strip the <final> markers themselves.
+        enforceFinalTag: false,
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Discarded <final>");
+      emitAssistantTextDelta(emit, "preserved");
+      emitAssistantTextDelta(emit, "</final> also kept");
+
+      subscription.flushPartialAssistantText();
+
+      // Same normalization as normal completion with enforceFinalTag=false:
+      // the final-tag markers are stripped, no surrounding visible text is lost.
+      expect(subscription.assistantTexts).toEqual(["Discarded preserved also kept"]);
+    });
+
+    it("strips downgraded tool call text", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Visible answer");
+      emitAssistantTextDelta(emit, " [Tool Call: some_fn]");
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Visible answer"]);
+    });
+
+    it("is a no-op when deltaBuffer is empty", () => {
+      const { subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual([]);
+    });
+
+    it("preserves visible prefix before unclosed think tag on flush", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      // Streaming path advances state.blockState.thinking to true on <think>,
+      // then a timeout fires before </think>. flushPartialAssistantText must
+      // use fresh filter state so "Before " is not treated as hidden content.
+      emitAssistantTextDelta(emit, "Before ");
+      emitAssistantTextDelta(emit, "<think> reasoning without close");
+
+      subscription.flushPartialAssistantText();
+
+      // The visible prefix is preserved (trimEnd removes trailing space).
+      expect(subscription.assistantTexts).toEqual(["Before"]);
+    });
+
+    it("preserves visible prefix before unclosed final tag on flush", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+        enforceFinalTag: true,
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      // Same boundary: streaming advances state.blockState.final to true
+      // on <final>, then timeout fires. Flush must preserve text inside
+      // the unclosed final block and hide text that appeared before <final>.
+      emitAssistantTextDelta(emit, "Before ");
+      emitAssistantTextDelta(emit, "<final> content without close");
+
+      subscription.flushPartialAssistantText();
+
+      // enforceFinalTag hides text before <final>; text inside the
+      // unclosed final block is preserved.
+      expect(subscription.assistantTexts).toEqual([" content without close"]);
+    });
+
+    it("does not re-append text already committed by an earlier flush", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Hello world");
+
+      // Pre-abort flush commits the buffered text.
+      subscription.flushPartialAssistantText();
+      // Post-drain re-flush sees the same buffer (a queued suffix may or may
+      // not have landed); it must not append the cumulative text again.
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Hello world"]);
+    });
+
+    it("commits only the queued suffix on a second flush", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Hello ");
+
+      subscription.flushPartialAssistantText();
+      // A message_update serialized behind the abort lands after the first
+      // flush; the re-flush must append only the new suffix to the same entry
+      // (never re-append the already-committed prefix).
+      emitAssistantTextDelta(emit, "world");
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Hello world"]);
+    });
+
+    it("replaces already-delivered live block chunks with the cumulative text instead of duplicating them", () => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+        onBlockReply,
+        blockReplyChunking: {
+          minChars: 8,
+          maxChars: 200,
+          breakPreference: "sentence",
+        },
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Hello world. ");
+      emitAssistantTextDelta(emit, "Next sentence. ");
+
+      // Normal live block streaming already committed each chunk into
+      // assistantTexts before the deadline; the timeout flush must not append
+      // the cumulative buffer on top of them (P1: avoid duplicating live block
+      // chunks during timeout flushing).
+      expect(subscription.assistantTexts).toEqual(["Hello world.", "Next sentence."]);
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Hello world. Next sentence."]);
+      expect(onBlockReply).toHaveBeenCalled();
+    });
+
+    it("folds a queued suffix into the already-committed live projection without duplicating it", () => {
+      const onBlockReply = vi.fn();
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+        onBlockReply,
+        blockReplyChunking: {
+          minChars: 8,
+          maxChars: 200,
+          breakPreference: "sentence",
+        },
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Hello world. ");
+
+      // Pre-abort flush replaces the live chunk with the buffered projection.
+      subscription.flushPartialAssistantText();
+      expect(subscription.assistantTexts).toEqual(["Hello world."]);
+
+      // A message_update serialized behind the abort lands after the first
+      // flush; the live path also commits the new chunk. The re-flush must
+      // reconcile the whole segment instead of appending the suffix twice.
+      emitAssistantTextDelta(emit, "Next sentence. ");
+      expect(subscription.assistantTexts).toEqual(["Hello world.", "Next sentence."]);
+
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Hello world. Next sentence."]);
+    });
+
+    it("retains hidden-tag context across flushes so a queued suffix inside an unclosed think tag never leaks", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Before ");
+      emitAssistantTextDelta(emit, "<think> reasoning without close");
+
+      // First flush commits the visible prefix and would have cleared the
+      // buffer under the previous implementation, losing the opening <think>.
+      subscription.flushPartialAssistantText();
+      expect(subscription.assistantTexts).toEqual(["Before"]);
+
+      // A queued suffix inside the still-open hidden block must stay hidden:
+      // the retained buffer keeps the opening tag visible to the filter.
+      emitAssistantTextDelta(emit, "secret continuation");
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Before"]);
+    });
+
+    it("replaces flushed partial text with the complete text when message_end arrives", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      emitAssistantTextDelta(emit, "Hello");
+      subscription.flushPartialAssistantText();
+      expect(subscription.assistantTexts).toEqual(["Hello"]);
+
+      // The abort raced a clean completion: message_end finalizes the complete
+      // text. The flushed partial must be replaced, not duplicated.
+      emit({
+        type: "message_end",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "Hello world" }],
+        },
+      });
+
+      expect(subscription.assistantTexts).toEqual(["Hello world"]);
+    });
+
+    it("replaces a flushed entry when a queued orphan reasoning close retracts the prefix", () => {
+      const { emit, subscription } = createSubscribedHarness({
+        runId: "run",
+      });
+
+      emit({ type: "message_start", message: { role: "assistant" } });
+      // First flush commits text that the sanitizer still treats as visible:
+      // the opening reasoning tag has not arrived yet.
+      emitAssistantTextDelta(emit, "private chain");
+      subscription.flushPartialAssistantText();
+      expect(subscription.assistantTexts).toEqual(["private chain"]);
+
+      // A queued delta delivers the orphan close plus the real answer. The
+      // full-buffer re-filter retracts the leaked prefix; the flush must
+      // REPLACE the stored entry, not extend it (P1: reconcile retractions).
+      emitAssistantTextDelta(emit, "</mm:think>Visible answer");
+      subscription.flushPartialAssistantText();
+
+      expect(subscription.assistantTexts).toEqual(["Visible answer"]);
     });
   });
 });

@@ -39,7 +39,7 @@ describe("browser tab tool binding", () => {
     });
   });
 
-  it("rejects page snapshot route escapes and browser-wide actions", () => {
+  it("rejects page snapshot route escapes", () => {
     for (const [input, error] of [
       [{ targetId: "target-b" }, "cannot override its run-bound tab target"],
       [{ profile: "other" }, "cannot override its run-bound profile"],
@@ -50,9 +50,6 @@ describe("browser tab tool binding", () => {
         error,
       );
     }
-    expect(() => applyBrowserTabToolBinding({ action: "open" }, binding)).toThrow(
-      "unavailable in a tab-bound run",
-    );
   });
 
   it("fails closed on malformed bindings", () => {

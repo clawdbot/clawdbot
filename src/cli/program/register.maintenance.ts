@@ -1,11 +1,12 @@
-// Maintenance command registration: doctor, dashboard, reset, and uninstall.
+// Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 import type { Command } from "commander";
 import { formatDocsLink } from "../../../packages/terminal-core/src/links.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
 import { defaultRuntime } from "../../runtime.js";
-import { runCommandWithRuntime } from "../cli-utils.js";
+import { formatErrorMessage as formatError, runCommandWithRuntime } from "../cli-utils.js";
 import { hasExplicitOptions } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
+import { formatCliJsonFailure } from "../failure-output.js";
 import { setCommandJsonMode } from "./json-mode.js";
 
 const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
@@ -30,6 +31,15 @@ const STATE_SQLITE_CONFLICTING_OPTION_NAMES = [
   "skip",
   "only",
 ] as const;
+
+function exitDoctorError(message: string, json: boolean): void {
+  if (json) {
+    defaultRuntime.writeJson(formatCliJsonFailure(message));
+  } else {
+    defaultRuntime.error(message);
+  }
+  defaultRuntime.exit(2);
+}
 
 /** Register maintenance commands that inspect or mutate local OpenClaw state. */
 export function registerMaintenanceCommands(program: Command) {
@@ -77,11 +87,7 @@ export function registerMaintenanceCommands(program: Command) {
       "With --session-sqlite recover: prepare and optionally create an openclaw/openclaw issue",
       false,
     )
-    .option(
-      "--json",
-      "Run read-only lint checks as JSON (or emit JSON for another machine mode)",
-      false,
-    )
+    .option("--json", "Emit JSON; bare --json runs advisory read-only health checks", false)
     .option(
       "--severity-min <level>",
       "With --lint: drop findings below this severity (info|warning|error)",
@@ -104,27 +110,47 @@ export function registerMaintenanceCommands(program: Command) {
         typeof opts.stateSqlite === "string" &&
         hasExplicitOptions(command, STATE_SQLITE_CONFLICTING_OPTION_NAMES)
       ) {
-        defaultRuntime.error(
+        return exitDoctorError(
           "doctor shared-state SQLite maintenance can only be combined with --json.",
+          opts.json === true,
         );
-        defaultRuntime.exit(2);
-        return;
+      }
+      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
+        return exitDoctorError(
+          "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
+          opts.json === true || (opts.lint === true && !process.stdout.isTTY),
+        );
       }
       const jsonImpliesLint =
         opts.json === true &&
         opts.lint !== true &&
         opts.postUpgrade !== true &&
         typeof opts.stateSqlite !== "string" &&
-        typeof opts.sessionSqlite !== "string" &&
-        !hasSessionSqliteOnlyDoctorOptions(opts);
-      if (jsonImpliesLint && (opts.repair === true || opts.fix === true || opts.force === true)) {
-        defaultRuntime.error(
-          "doctor --json runs read-only lint checks and cannot be combined with --repair, --fix, or --force.",
+        typeof opts.sessionSqlite !== "string";
+      const lintMode = opts.lint === true ? "--lint" : jsonImpliesLint ? "--json" : undefined;
+      const mutationOption =
+        opts.repair === true || opts.fix === true || opts.force === true
+          ? "--repair, --fix, or --force"
+          : opts.yes === true
+            ? "--yes"
+            : opts.generateGatewayToken === true
+              ? "--generate-gateway-token"
+              : typeof opts.sessionSqlite === "string"
+                ? `--session-sqlite ${opts.sessionSqlite}`
+                : undefined;
+      if (lintMode && mutationOption) {
+        return exitDoctorError(
+          `doctor ${lintMode} runs read-only lint checks and cannot be combined with ${mutationOption}.`,
+          opts.json === true || !process.stdout.isTTY,
         );
-        defaultRuntime.exit(2);
-        return;
       }
-      if (opts.lint === true || jsonImpliesLint) {
+      if (opts.lint !== true && hasLintOnlyDoctorOptions(opts)) {
+        return exitDoctorError(
+          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
+          opts.json === true,
+        );
+      }
+      if (lintMode) {
         await runCommandWithRuntime(
           defaultRuntime,
           async () => {
@@ -138,59 +164,78 @@ export function registerMaintenanceCommands(program: Command) {
               allowExec: Boolean(opts.allowExec),
               deep: Boolean(opts.deep),
             });
-            defaultRuntime.exit(exitCode);
+            defaultRuntime.exit(jsonImpliesLint ? 0 : exitCode);
           },
-          (err) => {
-            defaultRuntime.error(String(err));
-            defaultRuntime.exit(2);
-          },
+          (err) => exitDoctorError(formatError(err), opts.json === true || !process.stdout.isTTY),
         );
         return;
       }
-      if (hasSessionSqliteOnlyDoctorOptions(opts)) {
-        defaultRuntime.error(
-          "doctor session SQLite options require --session-sqlite. Use `openclaw doctor --session-sqlite dry-run ...`.",
-        );
-        defaultRuntime.exit(2);
-        return;
-      }
-      if (hasLintOnlyDoctorOptions(opts)) {
-        defaultRuntime.error(
-          "doctor lint options require --lint. Use `openclaw doctor --lint ...`.",
-        );
-        defaultRuntime.exit(2);
-        return;
-      }
-      await runCommandWithRuntime(defaultRuntime, async () => {
-        const { doctorCommand } = await import("../../commands/doctor.js");
-        const stateSqlite = parseDoctorStateSqliteMode(opts.stateSqlite);
-        const sessionSqlite = parseDoctorSessionSqliteMode(opts.sessionSqlite);
-        await doctorCommand(defaultRuntime, {
-          workspaceSuggestions: opts.workspaceSuggestions,
-          yes: Boolean(opts.yes),
-          repair: Boolean(opts.repair) || Boolean(opts.fix),
-          force: Boolean(opts.force),
-          nonInteractive: Boolean(opts.nonInteractive),
-          generateGatewayToken: Boolean(opts.generateGatewayToken),
-          allowExec: Boolean(opts.allowExec),
-          deep: Boolean(opts.deep),
-          postUpgrade: Boolean(opts.postUpgrade),
-          ...(stateSqlite ? { stateSqlite } : {}),
-          ...(sessionSqlite ? { sessionSqlite } : {}),
-          ...(typeof opts.sessionSqliteStore === "string"
-            ? { sessionSqliteStore: opts.sessionSqliteStore }
-            : {}),
-          ...(typeof opts.sessionSqliteAgent === "string"
-            ? { sessionSqliteAgent: opts.sessionSqliteAgent }
-            : {}),
-          sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
-          sessionSqliteGithubIssue: Boolean(opts.githubIssue),
-          json: Boolean(opts.json),
-        });
-        defaultRuntime.exit(0);
-      });
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const { doctorCommand } = await import("../../commands/doctor.js");
+          const stateSqlite = parseDoctorStateSqliteMode(opts.stateSqlite, opts.json === true);
+          const sessionSqlite = parseDoctorSessionSqliteMode(
+            opts.sessionSqlite,
+            opts.json === true,
+          );
+          await doctorCommand(defaultRuntime, {
+            workspaceSuggestions: opts.workspaceSuggestions,
+            yes: Boolean(opts.yes),
+            repair: Boolean(opts.repair) || Boolean(opts.fix),
+            force: Boolean(opts.force),
+            nonInteractive: Boolean(opts.nonInteractive),
+            generateGatewayToken: Boolean(opts.generateGatewayToken),
+            allowExec: Boolean(opts.allowExec),
+            deep: Boolean(opts.deep),
+            postUpgrade: Boolean(opts.postUpgrade),
+            ...(stateSqlite ? { stateSqlite } : {}),
+            ...(sessionSqlite ? { sessionSqlite } : {}),
+            ...(typeof opts.sessionSqliteStore === "string"
+              ? { sessionSqliteStore: opts.sessionSqliteStore }
+              : {}),
+            ...(typeof opts.sessionSqliteAgent === "string"
+              ? { sessionSqliteAgent: opts.sessionSqliteAgent }
+              : {}),
+            sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
+            sessionSqliteGithubIssue: Boolean(opts.githubIssue),
+            json: Boolean(opts.json),
+          });
+          defaultRuntime.exit(0);
+        },
+        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
+      );
     });
   setCommandJsonMode(doctor, "output", isDoctorMachineOutput);
+
+  program
+    .command("triage")
+    .description("Collect sanitized diagnostics and prepare an agent debugging handoff")
+    .addHelpText(
+      "after",
+      () =>
+        `\n${theme.muted("Docs:")} ${formatDocsLink("/cli/triage", "docs.openclaw.ai/cli/triage")}\n`,
+    )
+    .option("--json", "Output sanitized handoff paths, finding counts, and commands as JSON", false)
+    .option("--no-export", "Skip the sanitized diagnostics archive")
+    .option("--run", "Run one embedded agent turn after verifying model inference", false)
+    .action(async (opts) => {
+      if (opts.json === true && opts.run === true) {
+        return exitDoctorError("triage --json cannot be combined with --run.", true);
+      }
+      await runCommandWithRuntime(
+        defaultRuntime,
+        async () => {
+          const { triageCommand } = await import("../../commands/triage.js");
+          await triageCommand(defaultRuntime, {
+            json: opts.json === true,
+            noExport: opts.export === false,
+            run: opts.run === true,
+          });
+        },
+        opts.json ? (err: unknown) => exitDoctorError(formatError(err), true) : undefined,
+      );
+    });
 
   program
     .command("dashboard")
@@ -301,25 +346,20 @@ function hasSessionSqliteOnlyDoctorOptions(opts: {
   );
 }
 
-function parseDoctorStateSqliteMode(value: unknown): "compact" | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
-  if (value === "compact") {
+function parseDoctorStateSqliteMode(value: unknown, json: boolean): "compact" | undefined {
+  if (value === undefined || value === "compact") {
     return value;
   }
-  defaultRuntime.error("Invalid --state-sqlite mode. Use compact.");
-  defaultRuntime.exit(2);
+  exitDoctorError("Invalid --state-sqlite mode. Use compact.", json);
   throw new Error("unreachable");
 }
 
 function parseDoctorSessionSqliteMode(
   value: unknown,
+  json: boolean,
 ): "dry-run" | "import" | "validate" | "inspect" | "compact" | "restore" | "recover" | undefined {
-  if (value === undefined) {
-    return undefined;
-  }
   if (
+    value === undefined ||
     value === "dry-run" ||
     value === "import" ||
     value === "validate" ||
@@ -330,9 +370,9 @@ function parseDoctorSessionSqliteMode(
   ) {
     return value;
   }
-  defaultRuntime.error(
+  exitDoctorError(
     "Invalid --session-sqlite mode. Use dry-run, import, validate, inspect, compact, restore, or recover.",
+    json,
   );
-  defaultRuntime.exit(2);
   throw new Error("unreachable");
 }

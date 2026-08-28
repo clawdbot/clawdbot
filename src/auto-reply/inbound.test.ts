@@ -178,6 +178,14 @@ describe("applyTemplate", () => {
 
     expect(applyTemplate("missing={{Missing}}", ctx)).toBe("missing=");
   });
+
+  it("never renders channel-owned conversation image references", () => {
+    const ctx = {
+      ConversationAvatar: "/private/media/inbound/avatar.png",
+    } as unknown as TemplateContext;
+
+    expect(applyTemplate("avatar={{ConversationAvatar}}", ctx)).toBe("avatar=");
+  });
 });
 
 describe("normalizeInboundTextNewlines", () => {

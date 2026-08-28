@@ -43,7 +43,7 @@ type SelectionOps = {
     browserAlreadyEnsured?: boolean,
   ) => Promise<BrowserTab>;
   focusTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
-  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<void>;
+  closeTab: (targetId: string, options?: BrowserTabTargetOptions) => Promise<string>;
 };
 
 function mergeOpenedTabSnapshot(
@@ -285,7 +285,7 @@ export function createProfileSelectionOps({
     runtime.lastTargetId = resolvedTargetId;
   };
 
-  const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<void> => {
+  const closeTab = async (targetId: string, options?: BrowserTabTargetOptions): Promise<string> => {
     const resolvedTargetId = await resolveTargetIdOrThrow(targetId, options);
 
     if (capabilities.usesChromeMcp) {
@@ -324,6 +324,7 @@ export function createProfileSelectionOps({
       // handle can block every later targetless action.
       runtime.lastTargetId = null;
     }
+    return resolvedTargetId;
   };
 
   return {

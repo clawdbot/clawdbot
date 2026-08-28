@@ -40,8 +40,10 @@ type KnownNodeApprovedSource = {
   caps: string[];
   commands: string[];
   permissions?: Record<string, boolean>;
+  sessionHost?: boolean;
   approvedAtMs?: number;
   lastConnectedAtMs?: number;
+  lastDisconnectedAtMs?: number;
   lastSeenAtMs?: number;
   lastSeenReason?: string;
 };
@@ -131,8 +133,10 @@ function buildApprovedNodeSource(entry: PairedDeviceNode): KnownNodeApprovedSour
     caps: entry.caps ?? [],
     commands: filterPublicNodeCommands(entry.commands ?? []),
     permissions: entry.permissions,
+    sessionHost: entry.sessionHost,
     approvedAtMs: entry.approvedAtMs,
     lastConnectedAtMs: entry.lastConnectedAtMs,
+    lastDisconnectedAtMs: entry.lastDisconnectedAtMs,
     lastSeenAtMs: entry.lastSeenAtMs,
     lastSeenReason: entry.lastSeenReason,
   };
@@ -178,6 +182,11 @@ function resolveCurrentPendingNodePairing(params: {
     : undefined;
 }
 
+function maxDefinedTimestamp(...values: Array<number | undefined>): number | undefined {
+  const defined = values.filter((value): value is number => value !== undefined);
+  return defined.length > 0 ? Math.max(...defined) : undefined;
+}
+
 function resolveEffectiveLastSeen(params: {
   live?: NodeSession;
   devicePairing?: KnownNodeDevicePairingSource;
@@ -219,9 +228,27 @@ function buildEffectiveKnownNode(entry: {
   pendingNodePairing?: KnownNodePendingSource;
   live?: NodeSession;
   sessionHost: boolean;
+  workerSlots?: NodeListNode["workerSlots"];
+  workerBundle?: NodeListNode["workerBundle"];
+  issues?: NodeListNode["issues"];
 }): NodeListNode {
-  const { nodeId, devicePairing, nodePairing, pendingNodePairing, live, sessionHost } = entry;
+  const {
+    nodeId,
+    devicePairing,
+    nodePairing,
+    pendingNodePairing,
+    live,
+    sessionHost,
+    workerSlots,
+    workerBundle,
+    issues,
+  } = entry;
   const lastSeen = resolveEffectiveLastSeen({ live, devicePairing, nodePairing });
+  const lastConnectedAtMs = maxDefinedTimestamp(
+    nodePairing?.lastConnectedAtMs,
+    live?.connectedAtMs,
+  );
+  const lastDisconnectedAtMs = live ? undefined : nodePairing?.lastDisconnectedAtMs;
   return {
     nodeId,
     displayName: firstNormalizedString(
@@ -283,7 +310,11 @@ function buildEffectiveKnownNode(entry: {
     commands: filterPublicNodeCommands(
       live ? uniqueSortedStrings(live.commands) : uniqueSortedStrings(nodePairing?.commands),
     ),
+    computerUse: live?.computerUse,
     sessionHost,
+    ...(live && workerSlots ? { workerSlots: { ...workerSlots } } : {}),
+    ...(live && workerBundle ? { workerBundle: structuredClone(workerBundle) } : {}),
+    ...(issues?.length ? { issues: [...issues] } : {}),
     nodePluginTools: live?.nodePluginTools,
     pathEnv: live?.pathEnv,
     permissions: live?.permissions ?? nodePairing?.permissions,
@@ -299,6 +330,8 @@ function buildEffectiveKnownNode(entry: {
     pendingDeclaredCommands: pendingNodePairing?.commands,
     pendingDeclaredPermissions: pendingNodePairing?.permissions,
     connectedAtMs: live?.connectedAtMs,
+    lastConnectedAtMs,
+    lastDisconnectedAtMs,
     lastActiveAtMs: live?.lastActiveAtMs,
     presenceUpdatedAtMs: live?.presenceUpdatedAtMs,
     lastSeenAtMs: lastSeen.lastSeenAtMs,
@@ -331,6 +364,9 @@ export function createKnownNodeCatalog(params: {
   pendingNodes?: readonly NodePairingPendingRequest[];
   connectedNodes: readonly NodeSession[];
   sessionHostNodeIds?: ReadonlySet<string>;
+  workerSlotsByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerSlots"]>>;
+  workerBundleByNodeId?: ReadonlyMap<string, NonNullable<NodeListNode["workerBundle"]>>;
+  issuesByNodeId?: ReadonlyMap<string, NodeListNode["issues"]>;
 }): KnownNodeCatalog {
   const devicePairingById = new Map(
     params.pairedDevices
@@ -383,7 +419,14 @@ export function createKnownNodeCatalog(params: {
         nodePairing,
         pendingNodePairing,
         live,
-        sessionHost: params.sessionHostNodeIds?.has(nodeId) === true,
+        // Live inventory is authoritative while connected; stored consent is
+        // only the offline identity hint and never carries live capacity.
+        sessionHost: live
+          ? params.sessionHostNodeIds?.has(nodeId) === true
+          : nodePairing?.sessionHost === true,
+        workerSlots: params.workerSlotsByNodeId?.get(nodeId),
+        workerBundle: params.workerBundleByNodeId?.get(nodeId),
+        issues: params.issuesByNodeId?.get(nodeId),
       }),
     });
   }

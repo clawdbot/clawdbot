@@ -2,6 +2,7 @@ import {
   defineLegacyConfigMigration,
   ensureRecord,
   getRecord,
+  mergeMissing,
   type LegacyConfigMigrationSpec,
   type LegacyConfigRule,
 } from "../../../config/legacy.shared.js";
@@ -91,11 +92,50 @@ function migrateRetiredQmdExternalPaths(params: {
   }
 }
 
+function migrateRetiredQmdSessionIndexing(
+  qmd: Record<string, unknown> | null,
+  scope: Record<string, unknown>,
+  sourcePath: string,
+  changes: string[],
+  targetPath = sourcePath === "memory.qmd" ? "memory.search" : sourcePath.slice(0, -4),
+): void {
+  if (getRecord(qmd?.sessions)?.enabled !== true) {
+    return;
+  }
+  const search = ensureRecord(ensureRecord(scope, "memory"), "search");
+  const experimental = getRecord(search.experimental);
+  let changed = false;
+  if (
+    (experimental || search.experimental === undefined) &&
+    experimental?.sessionMemory === undefined
+  ) {
+    ensureRecord(search, "experimental").sessionMemory = true;
+    changed = true;
+  }
+  if (
+    search.sources === undefined ||
+    (Array.isArray(search.sources) && search.sources.length === 0)
+  ) {
+    search.sources = ["memory", "sessions"];
+    changed = true;
+  } else if (Array.isArray(search.sources) && !search.sources.includes("sessions")) {
+    search.sources.push("sessions");
+    changed = true;
+  }
+  if (changed) {
+    changes.push(
+      `Migrated ${sourcePath}.sessions.enabled → ${targetPath}.experimental.sessionMemory and ${targetPath}.sources.`,
+    );
+  }
+}
+
 function migrateRetiredMemoryQmd(raw: Record<string, unknown>, changes: string[]): void {
   const memory = getRecord(raw.memory);
   const search = getRecord(memory?.search);
   const qmd = getRecord(memory?.qmd);
   const searchQmd = getRecord(search?.qmd);
+  migrateRetiredQmdSessionIndexing(qmd, raw, "memory.qmd", changes);
+  migrateRetiredQmdSessionIndexing(searchQmd, raw, "memory.search.qmd", changes);
   migrateRetiredQmdExternalPaths({
     changes,
     entries: [
@@ -117,14 +157,32 @@ function migrateRetiredMemoryQmd(raw: Record<string, unknown>, changes: string[]
   visitAgentConfigScopes(raw, (scope, scopePath) => {
     const agentSearch = getRecord(getRecord(scope.memory)?.search);
     const agentSearchQmd = getRecord(agentSearch?.qmd);
+    const isAgentDefaults = scopePath === "agents.defaults" && agentSearch?.qmd !== undefined;
+    const targetScope = isAgentDefaults ? raw : scope;
+    const targetPath = isAgentDefaults ? "memory.search" : `${scopePath}.memory.search`;
+    if (isAgentDefaults && agentSearch) {
+      // Agent defaults have no memory owner; global memory.search owns their policy.
+      removed = deleteRetiredPath(scope, ["memory", "search", "qmd"]) || removed;
+      mergeMissing(ensureRecord(ensureRecord(raw, "memory"), "search"), agentSearch);
+      delete scope.memory;
+    }
+    migrateRetiredQmdSessionIndexing(
+      agentSearchQmd,
+      targetScope,
+      `${scopePath}.memory.search.qmd`,
+      changes,
+      targetPath,
+    );
     migrateRetiredQmdExternalPaths({
       changes,
       entries: readRetiredQmdExternalPaths(agentSearchQmd?.extraCollections),
-      scope,
+      scope: targetScope,
       sourcePath: `${scopePath}.memory.search.qmd.extraCollections`,
-      targetPath: `${scopePath}.memory.search.extraPaths`,
+      targetPath: `${targetPath}.extraPaths`,
     });
-    removed = deleteRetiredPath(scope, ["memory", "search", "qmd"]) || removed;
+    if (!isAgentDefaults) {
+      removed = deleteRetiredPath(scope, ["memory", "search", "qmd"]) || removed;
+    }
   });
   if (removed) {
     changes.push(
@@ -152,7 +210,7 @@ export const LEGACY_CONFIG_MIGRATION_RUNTIME_MEMORY_QMD: LegacyConfigMigrationSp
       ),
       rule(
         ["agents", "defaults", "memory", "search", "qmd"],
-        "agents.defaults.memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to agents.defaults.memory.search.extraPaths.",
+        "agents.defaults.memory.search.qmd is retired because the QMD memory backend was removed; configured external collections migrate to memory.search.extraPaths.",
       ),
       rule(
         ["agents", "entries"],

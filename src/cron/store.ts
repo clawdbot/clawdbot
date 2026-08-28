@@ -34,6 +34,7 @@ import type {
   LoadedCronStore,
   QuarantinedCronConfigJob,
 } from "./store/types.js";
+import type { CronStoreFile } from "./types.js";
 export type {
   CronConfigJobRuntimeEntry,
   CronQuarantinedJob,
@@ -41,7 +42,6 @@ export type {
   QuarantinedCronConfigJob,
 } from "./store/types.js";
 export { loadCronQuarantinedJobs, saveCronQuarantinedJobs } from "./store/quarantine.js";
-import type { CronStoreFile } from "./types.js";
 
 const MAX_TRACKED_CRON_STORE_REVISIONS = 64;
 const cronStoreRevisions = new Map<string, number>();

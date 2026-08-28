@@ -39,9 +39,10 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             } ?? []
 
             let hasVisibleWindows = !visibleWindows.isEmpty
-            let policy: NSApplication.ActivationPolicy = !userWantsDockHidden || hasVisibleWindows
-                ? .regular
-                : .accessory
+            let policy = Self.activationPolicy(
+                launchPlan: .current,
+                userWantsDockHidden: userWantsDockHidden,
+                hasVisibleWindows: hasVisibleWindows)
             guard NSApp.activationPolicy() != policy else { return }
             NSApp.setActivationPolicy(policy)
         }
@@ -49,6 +50,7 @@ final class DockIconManager: NSObject, @unchecked Sendable {
 
     func temporarilyShowDock() {
         Task { @MainActor in
+            guard AppLaunchRuntimePlan.current.allowsDockIcon else { return }
             guard NSApp != nil else {
                 self.logger.warning("NSApp not ready, cannot show Dock icon")
                 return
@@ -56,6 +58,15 @@ final class DockIconManager: NSObject, @unchecked Sendable {
             guard NSApp.activationPolicy() != .regular else { return }
             NSApp.setActivationPolicy(.regular)
         }
+    }
+
+    static func activationPolicy(
+        launchPlan: AppLaunchRuntimePlan,
+        userWantsDockHidden: Bool,
+        hasVisibleWindows: Bool) -> NSApplication.ActivationPolicy
+    {
+        guard launchPlan.allowsDockIcon else { return .accessory }
+        return !userWantsDockHidden || hasVisibleWindows ? .regular : .accessory
     }
 
     private func setupObservers() {

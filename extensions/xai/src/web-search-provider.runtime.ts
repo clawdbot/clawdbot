@@ -25,7 +25,6 @@ import {
 } from "openclaw/plugin-sdk/provider-web-search";
 import {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   requestXaiWebSearch,
   resolveXaiInlineCitations,
   resolveXaiWebSearchEndpoint,
@@ -153,6 +152,7 @@ function runXaiWebSearch(params: {
       inlineCitations: params.inlineCitations,
       ...(params.signal ? { signal: params.signal } : {}),
     });
+    params.signal?.throwIfAborted();
     const payload = buildXaiWebSearchPayload({
       query: params.query,
       provider: "grok",
@@ -422,7 +422,6 @@ export async function executeXaiWebSearchProviderTool(
 
 export const testing = {
   buildXaiWebSearchPayload,
-  extractXaiWebSearchContent,
   resolveXaiToolSearchConfig,
   resolveXaiInlineCitations,
   resolveXaiWebSearchCredential,

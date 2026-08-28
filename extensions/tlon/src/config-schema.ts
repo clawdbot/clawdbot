@@ -29,6 +29,7 @@ const tlonCommonConfigFields = {
   name: z.string().optional(),
   enabled: z.boolean().optional(),
   configWrites: z.boolean().optional(),
+  mediaMaxMb: z.number().positive().optional(),
   ship: ShipSchema.optional(),
   url: z.string().optional(),
   code: z.string().optional(),
@@ -53,6 +54,7 @@ const TlonAccountSchema = z.object({
 
 const TlonConfigSchema = z.object({
   ...tlonCommonConfigFields,
+  historyLimit: z.number().int().min(0).optional(),
   authorization: TlonAuthorizationSchema.optional(),
   defaultAuthorizedShips: z.array(ShipSchema).optional(),
   accounts: z.record(z.string(), TlonAccountSchema).optional(),

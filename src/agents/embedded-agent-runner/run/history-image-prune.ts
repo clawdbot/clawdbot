@@ -85,7 +85,7 @@ function resolveMessageMediaFacts(message: AgentMessage): MediaFact[] {
 }
 
 function wasStructurallyMediaPruned(message: AgentMessage): boolean {
-  const meta = (message as unknown as Record<string, unknown>)["__openclaw"];
+  const meta = Reflect.get(message, "__openclaw");
   return (
     Boolean(meta) &&
     typeof meta === "object" &&

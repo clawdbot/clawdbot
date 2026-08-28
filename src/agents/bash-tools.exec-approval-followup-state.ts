@@ -181,10 +181,11 @@ export function claimExecApprovalFollowupRuntimeHandoff(params: {
   return cloneExecApprovalFollowupRuntimeHandoff(entry);
 }
 
-/** Finalize a claimed handoff once its run has been dispatched. */
+/** Consume a claimed handoff at its final privileged use. */
 export function finalizeExecApprovalFollowupRuntimeHandoff(params: {
   handoffId?: string;
   claimId?: string;
+  nowMs?: number;
 }): boolean {
   const handoffId = normalizeOptionalString(params.handoffId);
   const claimId = normalizeOptionalString(params.claimId);
@@ -192,6 +193,11 @@ export function finalizeExecApprovalFollowupRuntimeHandoff(params: {
     return false;
   }
   const entry = execApprovalFollowupRuntimeHandoffs.get(handoffId);
+  const nowMs = params.nowMs ?? Date.now();
+  if (entry && !isFutureDateTimestampMs(entry.expiresAtMs, { nowMs })) {
+    execApprovalFollowupRuntimeHandoffs.delete(handoffId);
+    return false;
+  }
   if (entry?.claimId !== claimId) {
     return false;
   }

@@ -1,5 +1,6 @@
 // Shared directive parsing helpers used by model and auth directive handlers.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentModelPrimaryWriteTarget } from "../../agents/agent-scope.js";
 import type { StickyModelSelectionDispatchOutcome } from "../../agents/sticky-model-selection.js";
 import { formatCliCommand } from "../../cli/command-format.js";
 import {
@@ -8,7 +9,7 @@ import {
   sessionModelOverrideChangesApplied,
   sessionSnapshotChangesApplied,
 } from "../../config/sessions/session-snapshot-merge.js";
-import type { SessionEntry } from "../../config/sessions/types.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
 import { SYSTEM_MARK, prefixSystemMessage } from "../../infra/system-message.js";
 import { applyTraceOverride, applyVerboseOverride } from "../../sessions/level-overrides.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
@@ -66,15 +67,22 @@ export function formatModelSelectionScopeAck(params: {
   isDefault: boolean;
   label: string;
   configuredDefaultUpdate?: StickyModelSelectionDispatchOutcome;
+  stickyModelSelectionTarget?: AgentModelPrimaryWriteTarget;
 }): string {
-  if (params.isDefault) {
+  if (params.isDefault && !params.stickyModelSelectionTarget) {
     return `Session model reset to configured default (${params.label}).`;
   }
+  const targetLabel =
+    params.stickyModelSelectionTarget === "agent"
+      ? "Agent default"
+      : params.stickyModelSelectionTarget === "defaults"
+        ? "Global default"
+        : "Configured default";
   if (params.configuredDefaultUpdate === "requested") {
-    return `Model set to ${params.label} for this session. Configured default update requested.`;
+    return `Model set to ${params.label} for this session. ${targetLabel} update requested.`;
   }
   if (params.configuredDefaultUpdate === "skipped-immutable") {
-    return `Model set to ${params.label} for this session. Configured default unchanged because configuration is immutable.`;
+    return `Model set to ${params.label} for this session. ${targetLabel} unchanged because configuration is immutable.`;
   }
   return `Model set to ${params.label} for this session only; configured default unchanged.`;
 }

@@ -5,7 +5,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { Logger as TsLogger } from "tslog";
 import type { OpenClawConfig } from "../config/types.js";
+import { hasInternalDiagnosticEventInterest } from "../infra/diagnostic-event-listener-presence.js";
 import {
+  areDiagnosticsEnabledForProcess,
   emitDiagnosticEvent,
   emitDiagnosticEventWithTrustedTraceContext,
 } from "../infra/diagnostic-events.js";
@@ -22,17 +24,20 @@ import {
   DEFAULT_POSIX_TMP_ROOT,
   resolvePreferredOpenClawTmpDir,
 } from "../infra/tmp-openclaw-dir.js";
-import { readLoggingConfig } from "./config.js";
+import { invalidateLoggingConfigCache, readLoggingConfig } from "./config.js";
 import { resolveEnvLogLevelOverride } from "./env-log-level.js";
 import { type LogLevel, levelToMinLevel, normalizeLogLevel } from "./levels.js";
-import { isLegacyRollingLogFilePath, resolveRollingLogFilePathForDate } from "./log-file-path.js";
-import { resolveDefaultRollingLogFile } from "./log-file-path.js";
+import {
+  isLegacyRollingLogFilePath,
+  resolveRollingLogFilePathForDate,
+  resolveDefaultRollingLogFile,
+} from "./log-file-path.js";
 import { canUseNodeFs, formatLocalDate, LOG_PREFIX, LOG_SUFFIX } from "./log-file-shared.js";
 import { fileLogTransport } from "./logger-file-transport.js";
 import { defaultLoggerHostnameResolver, loggerHostnameState } from "./logger-hostname-state.js";
 import { setLoggerFileTargetResolver } from "./logger-settings-internal.js";
 import { redactSecrets, redactSensitiveText } from "./redact.js";
-import { loggingState } from "./state.js";
+import { APPLIED_LOGGING_CONFIG_UNOWNED, loggingState } from "./state.js";
 import { formatTimestamp } from "./timestamps.js";
 import type { LoggerSettings } from "./types.js";
 export type { LoggerSettings } from "./types.js";
@@ -76,10 +81,27 @@ const MAX_DIAGNOSTIC_LOG_MESSAGE_CHARS = 4 * 1024;
 const loadLoggerConfigDefault: LoggerConfigLoader = () => readLoggingConfig();
 let loadLoggerConfig: LoggerConfigLoader = loadLoggerConfigDefault;
 
-export function setLoggerConfigLoaderForTests(loader?: LoggerConfigLoader): void {
-  loadLoggerConfig = loader ?? loadLoggerConfigDefault;
+function invalidateLoggerSettings(): void {
+  loggingState.generation += 1;
   loggingState.cachedLogger = null;
   loggingState.cachedSettings = null;
+  loggingState.cachedConsoleSettings = null;
+}
+
+/** Publishes authoritative config-derived logging state for the active runtime. */
+export function applyLoggingConfig(config: OpenClawConfig["logging"] | undefined): void {
+  loggingState.appliedConfig = config;
+  invalidateLoggingConfigCache();
+  invalidateLoggerSettings();
+}
+
+export function setLoggerConfigLoaderForTests(loader?: LoggerConfigLoader): void {
+  loadLoggerConfig = loader ?? loadLoggerConfigDefault;
+  invalidateLoggerSettings();
+}
+
+export function readLoggerConfig(): OpenClawConfig["logging"] | undefined {
+  return loadLoggerConfig();
 }
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_COUNT = 32;
 const MAX_DIAGNOSTIC_LOG_ATTRIBUTE_VALUE_CHARS = 2 * 1024;
@@ -477,6 +499,9 @@ function redactLogRecordForTransport<T extends LogObj>(record: T): T {
 
 function attachDiagnosticEventTransport(logger: TsLogger<LogObj>): void {
   logger.attachTransport((logObj: LogObj) => {
+    if (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("log.record")) {
+      return;
+    }
     try {
       const record = buildDiagnosticLogRecord(redactLogRecordForTransport(logObj) as TsLogRecord);
       const emit = record.trustedTraceContext
@@ -548,18 +573,6 @@ setLoggerFileTargetResolver(() => {
   const { file, rolling } = resolveSettings();
   return { file, rolling };
 });
-
-function settingsChanged(a: ResolvedRuntimeSettings | null, b: ResolvedRuntimeSettings) {
-  if (!a) {
-    return true;
-  }
-  return (
-    a.level !== b.level ||
-    a.file !== b.file ||
-    a.maxFileBytes !== b.maxFileBytes ||
-    a.rolling !== b.rolling
-  );
-}
 
 export function isFileLogLevelEnabled(level: LogLevel): boolean {
   const settings =
@@ -648,13 +661,15 @@ function resolveMaxLogFileBytes(raw: unknown): number {
 }
 
 export function getLogger(): TsLogger<LogObj> {
-  const settings = resolveSettings();
   const cachedLogger = loggingState.cachedLogger as TsLogger<LogObj> | null;
   const cachedSettings = loggingState.cachedSettings as ResolvedRuntimeSettings | null;
-  if (!cachedLogger || settingsChanged(cachedSettings, settings)) {
-    loggingState.cachedLogger = buildLogger(settings);
-    loggingState.cachedSettings = settings;
+  if (cachedLogger && cachedSettings) {
+    return cachedLogger;
   }
+  const settings = cachedSettings ?? resolveSettings();
+  const logger = buildLogger(settings);
+  loggingState.cachedLogger = logger;
+  loggingState.cachedSettings = settings;
   return loggingState.cachedLogger as TsLogger<LogObj>;
 }
 
@@ -741,19 +756,17 @@ export async function flushLogger(): Promise<void> {
 // Test helpers
 export function setLoggerOverride(settings: LoggerSettings | null) {
   loggingState.overrideSettings = settings;
-  loggingState.cachedLogger = null;
-  loggingState.cachedSettings = null;
-  loggingState.cachedConsoleSettings = null;
+  invalidateLoggerSettings();
 }
 
 export function resetLogger() {
-  loggingState.cachedLogger = null;
-  loggingState.cachedSettings = null;
-  loggingState.cachedConsoleSettings = null;
+  loggingState.appliedConfig = APPLIED_LOGGING_CONFIG_UNOWNED;
   loggingState.overrideSettings = null;
+  invalidateLoggingConfigCache();
   loadLoggerConfig = loadLoggerConfigDefault;
   loggerHostnameState.resolver = defaultLoggerHostnameResolver;
   loggerHostnameState.cached = null;
+  invalidateLoggerSettings();
 }
 
 function resolveActiveLogFileWithMode(file: string, rolling: boolean): string {

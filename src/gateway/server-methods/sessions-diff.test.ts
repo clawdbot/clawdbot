@@ -17,6 +17,7 @@ import {
 } from "./sessions-diff.js";
 
 const hoisted = vi.hoisted(() => ({
+  loadSessionEntryReadOnly: vi.fn(),
   loadSessionEntry: vi.fn(),
   patchSessionEntryCore: vi.fn(),
   resolveAgentWorkspaceDir: vi.fn(),
@@ -35,6 +36,7 @@ vi.mock("../../agents/agent-scope.js", async (importOriginal) => ({
 }));
 
 vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntryReadOnly: hoisted.loadSessionEntryReadOnly,
   patchSessionEntryCore: hoisted.patchSessionEntryCore,
 }));
 
@@ -134,6 +136,59 @@ describe("loadSessionDiff", () => {
     mockSession(repoRoot);
     const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
     expect(result.unavailableReason).toBe("not_git");
+  });
+
+  // Diff and baseline reads run inside the Gateway process against user
+  // checkouts, so a checkout-configured core.fsmonitor command (or hook) must
+  // never execute — same invariant as the publication git transport.
+  it.skipIf(process.platform === "win32")(
+    "never executes a checkout-configured core.fsmonitor command",
+    async () => {
+      initRepo(repoRoot);
+      fs.writeFileSync(path.join(repoRoot, "a.txt"), "one\n");
+      git(repoRoot, "add", "a.txt");
+      git(repoRoot, "commit", "-qm", "init");
+      fs.writeFileSync(path.join(repoRoot, "a.txt"), "two\n");
+      // Script and sentinel live outside the checkout so they never show up
+      // as untracked entries in the diffs under test.
+      const outside = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-fsmonitor-"));
+      try {
+        const sentinel = path.join(outside, "sentinel");
+        const hook = path.join(outside, "fsmonitor.sh");
+        fs.writeFileSync(hook, `#!/bin/sh\n: > "${sentinel}"\nexit 1\n`, { mode: 0o755 });
+        git(repoRoot, "config", "core.fsmonitor", hook);
+        // Sanity: unpinned git in this checkout does run the command.
+        git(repoRoot, "status", "--porcelain");
+        expect(fs.existsSync(sentinel)).toBe(true);
+        fs.rmSync(sentinel);
+
+        mockSession(repoRoot);
+        const diff = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+        expect(diff.files.map((file) => file.path)).toEqual(["a.txt"]);
+        const baseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
+        expect(baseline?.files.map((file) => file.path)).toEqual(["a.txt"]);
+        expect(fs.existsSync(sentinel)).toBe(false);
+      } finally {
+        fs.rmSync(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("shows the full diff without mutating a pending baseline claim", async () => {
+    initRepo(repoRoot);
+    fs.writeFileSync(path.join(repoRoot, "pending.txt"), "pending first turn\n");
+    mockSession(repoRoot, {
+      sessionDiffBaselineCapture: {
+        version: 1,
+        captureId: "pending-capture",
+        status: "pending",
+      },
+    });
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1" });
+
+    expect(result.files.map((file) => file.path)).toEqual(["pending.txt"]);
+    expect(hoisted.patchSessionEntryCore).not.toHaveBeenCalled();
   });
 
   it("uses the persisted fixed-store owner for a bare session checkout", async () => {
@@ -558,6 +613,7 @@ describe("ensureSessionDiffBaseline", () => {
       sessionId: "existing-session",
       updatedAt: Date.now(),
     };
+    hoisted.loadSessionEntryReadOnly.mockReturnValue(entry);
 
     const result = await ensureSessionDiffBaseline({
       cwd: "/unused",

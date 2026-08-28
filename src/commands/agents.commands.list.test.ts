@@ -11,6 +11,8 @@ const {
   buildProviderStatusIndexMock,
   buildProviderSummaryMetadataIndexMock,
   listProvidersForAgentMock,
+  listAgentProvenanceMock,
+  readAgentProvenanceMock,
   providerSummaryMetadataMock,
   requireValidConfigMock,
   summarizeBindingsMock,
@@ -18,6 +20,8 @@ const {
   buildProviderStatusIndexMock: vi.fn(),
   buildProviderSummaryMetadataIndexMock: vi.fn(),
   listProvidersForAgentMock: vi.fn(),
+  listAgentProvenanceMock: vi.fn(),
+  readAgentProvenanceMock: vi.fn(),
   providerSummaryMetadataMock: new Map([
     [
       "telegram",
@@ -41,6 +45,11 @@ vi.mock("./agents.providers.js", () => ({
   buildProviderSummaryMetadataIndex: buildProviderSummaryMetadataIndexMock,
   listProvidersForAgent: listProvidersForAgentMock,
   summarizeBindings: summarizeBindingsMock,
+}));
+
+vi.mock("../state/agent-provenance.js", () => ({
+  listAgentProvenance: listAgentProvenanceMock,
+  readAgentProvenance: readAgentProvenanceMock,
 }));
 
 const { agentsListCommand } = await import("./agents.commands.list.js");
@@ -75,19 +84,64 @@ describe("agentsListCommand", () => {
     buildProviderStatusIndexMock.mockResolvedValue(new Map());
     buildProviderSummaryMetadataIndexMock.mockReturnValue(providerSummaryMetadataMock);
     listProvidersForAgentMock.mockReturnValue(["Telegram default: configured"]);
+    listAgentProvenanceMock.mockReturnValue([]);
+    readAgentProvenanceMock.mockReturnValue(undefined);
     summarizeBindingsMock.mockReturnValue(["Telegram default"]);
   });
 
-  it("keeps plain JSON output on the config-only path", async () => {
+  it("adds durable provenance to JSON without loading provider details", async () => {
     const runtime = createRuntime();
+    readAgentProvenanceMock.mockReturnValue({
+      agentId: "main",
+      createdVia: "operator",
+      creatorAgentId: null,
+      createdAtMs: 42,
+    });
 
     await agentsListCommand({ json: true }, runtime);
 
     expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
     const summary = (runtime.json[0] as Array<Record<string, unknown>>)[0];
     expect(summary?.id).toBe("main");
+    expect(summary).toMatchObject({
+      createdVia: "operator",
+      creatorAgentId: null,
+      createdAt: 42,
+    });
     expect(summary).not.toHaveProperty("routes");
     expect(summary).not.toHaveProperty("providers");
+  });
+
+  it("renders roots, children, missing rows, and dangling creators as a tree", async () => {
+    requireValidConfigMock.mockResolvedValueOnce({
+      agents: {
+        entries: {
+          main: { name: "Main" },
+          child: { name: "Child" },
+          legacy: { name: "Legacy" },
+          orphan: { name: "Orphan" },
+        },
+      },
+    } satisfies OpenClawConfig);
+    listAgentProvenanceMock.mockReturnValue([
+      { agentId: "main", createdVia: "operator", creatorAgentId: null, createdAtMs: 1 },
+      { agentId: "child", createdVia: "agent", creatorAgentId: "main", createdAtMs: 2 },
+      { agentId: "orphan", createdVia: "agent", creatorAgentId: "deleted", createdAtMs: 3 },
+    ]);
+    const runtime = createRuntime();
+
+    await agentsListCommand({ tree: true }, runtime);
+
+    expect(vi.mocked(runtime.log)).toHaveBeenCalledWith(
+      [
+        "Agents:",
+        "- main (Main)",
+        "  - child (Child)",
+        "- legacy (Legacy)",
+        "- orphan (Orphan)",
+      ].join("\n"),
+    );
+    expect(buildProviderStatusIndexMock).not.toHaveBeenCalled();
   });
 
   it("keeps provider details available for JSON callers that request bindings", async () => {
@@ -117,6 +171,9 @@ describe("agentsListCommand", () => {
     expect(summary?.id).toBe("main");
     expect(summary?.routes).toEqual(["Telegram default"]);
     expect(summary?.providers).toEqual(["Telegram default: configured"]);
+    expect(summary).not.toHaveProperty("createdVia");
+    expect(summary).not.toHaveProperty("creatorAgentId");
+    expect(summary).not.toHaveProperty("createdAt");
   });
 
   it("keeps human output enriched from read-only provider metadata", async () => {
@@ -142,6 +199,48 @@ describe("agentsListCommand", () => {
         ].join("\n"),
       ],
     ]);
+  });
+
+  it("sanitizes configured agent text without changing JSON summaries", async () => {
+    const control = "\u001B]0;agents-list-injection\u0007";
+    const identityName = `${control}Operator 🦞\r\nforged-row`;
+    const workspace = `/tmp/workspace-${control}\tpath`;
+    const model = `${control}provider/model\nvariant`;
+    const cfg = {
+      agents: {
+        entries: {
+          main: {
+            name: `${control}Main\nAlias`,
+            workspace,
+            agentDir: `/tmp/agent-${control}\npath`,
+            model,
+            identity: { name: identityName },
+          },
+        },
+      },
+      bindings: [{ agentId: "main", match: { channel: "telegram" } }],
+    } satisfies OpenClawConfig;
+    requireValidConfigMock.mockResolvedValue(cfg);
+    summarizeBindingsMock.mockReturnValue([`${control}Telegram\nroute`]);
+    listProvidersForAgentMock.mockReturnValue([`${control}Telegram\tconfigured`]);
+
+    const textRuntime = createRuntime();
+    await agentsListCommand({ bindings: true }, textRuntime);
+
+    const textOutput = vi.mocked(textRuntime.log).mock.calls.flat().join("\n");
+    expect(textOutput).not.toContain("\u001B");
+    expect(textOutput).not.toContain("\nforged-row");
+    expect(textOutput).toContain("Operator 🦞\\r\\nforged-row");
+    expect(textOutput).toContain("provider/model\\nvariant");
+    expect(textOutput).toContain("Telegram\\nroute");
+
+    const jsonRuntime = createRuntime();
+    await agentsListCommand({ json: true }, jsonRuntime);
+
+    // Workspace paths are platform-normalized before JSON, so assert the
+    // non-sanitization invariant on it rather than byte equality.
+    expect(jsonRuntime.json[0]).toEqual([expect.objectContaining({ identityName, model })]);
+    expect((jsonRuntime.json[0] as Array<{ workspace: string }>)[0]?.workspace).toContain(control);
   });
 
   it.skipIf(process.platform !== "win32")(

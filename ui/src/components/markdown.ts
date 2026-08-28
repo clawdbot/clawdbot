@@ -1,8 +1,9 @@
 // Control UI module implements markdown behavior.
 import DOMPurify from "dompurify";
+import { CONTROL_UI_ROOT_PUBLIC_ASSETS } from "../../../src/gateway/control-ui-root-assets.js";
 import { stripUnsupportedCitationControlMarkers } from "../../../src/shared/text/citation-control-markers.js";
 import { routeIdFromPath } from "../app-route-paths.ts";
-import { resolveControlUiBasePath } from "../app/browser.ts";
+import { resolveControlUiPaths } from "../app/browser.ts";
 import { i18n, t } from "../i18n/index.ts";
 import { truncateText } from "../lib/format.ts";
 import { renderAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
@@ -75,8 +76,13 @@ const allowedAttrs = [
   "data-file-kind",
   "data-file-line",
   "data-file-path",
+  "data-link-favicon-host",
+  "data-session-key",
+  "data-table-interactions",
   "type",
+  "aria-expanded",
   "aria-label",
+  "aria-pressed",
   "role",
 ];
 const sanitizeOptions = {
@@ -84,6 +90,13 @@ const sanitizeOptions = {
   ALLOWED_ATTR: allowedAttrs,
   ADD_DATA_URI_TAGS: ["img"],
 };
+const progressSanitizeOptions = {
+  ...sanitizeOptions,
+  ALLOWED_TAGS: [...allowedTags, "progress"],
+  ALLOWED_ATTR: [...allowedAttrs, "value", "max"],
+};
+const PROGRESS_CARD_RAW_CONTENT_BLOCK_RE =
+  /<(script|style|iframe|object|template)\b[^>]*>[\s\S]*?<\/\1\s*>/giu;
 
 let hooksInstalled = false;
 const MARKDOWN_CHAR_LIMIT = 140_000;
@@ -297,20 +310,15 @@ const APP_RESOURCE_ROOT_SEGMENTS = new Set([
   "__openclaw__",
   "_next",
   "api",
-  "apple-touch-icon.png",
   "assets",
   "avatar",
-  "favicon-32.png",
-  "favicon.ico",
-  "favicon.svg",
   "manifest.json",
-  "manifest.webmanifest",
   "media",
   "res",
   "socket.io",
-  "sw.js",
   "static",
   "ws",
+  ...CONTROL_UI_ROOT_PUBLIC_ASSETS,
 ]);
 const APP_RESOURCE_PATH_PREFIXES = [
   ["plugins", "diffs"],
@@ -357,7 +365,7 @@ function currentControlUiBasePath(): string {
   if (typeof window === "undefined") {
     return "";
   }
-  return resolveControlUiBasePath(window.location.pathname);
+  return resolveControlUiPaths(window.location.pathname)[0];
 }
 
 function pathSegments(pathname: string): string[] {
@@ -459,6 +467,11 @@ function installHooks() {
         node.removeAttribute("href");
         return;
       }
+      if (url.origin === window.location.origin && isControlUiRoutePath(url.pathname)) {
+        node.removeAttribute("rel");
+        node.removeAttribute("target");
+        return;
+      }
     } catch {
       // Relative URLs are fine; malformed absolute URLs with dangerous schemes
       // will fail to parse and keep their href — but DOMPurify already strips
@@ -468,11 +481,6 @@ function installHooks() {
     node.setAttribute("rel", "noreferrer noopener");
     node.setAttribute("target", "_blank");
   });
-}
-
-function formatTruncatedMarkdownInput(input: string): string {
-  const truncated = truncateText(input, MARKDOWN_CHAR_LIMIT);
-  return appendMarkdownTruncationNotice(truncated);
 }
 
 function appendMarkdownTruncationNotice(truncated: {
@@ -496,22 +504,27 @@ const markdownParser = createMarkdownParser();
 // wrapper) keeps per-message churn out of the LRU cache.
 function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRenderEnv): string {
   installHooks();
+  const activeSanitizeOptions = renderOptions.progressBars
+    ? progressSanitizeOptions
+    : sanitizeOptions;
   const documentMode = renderOptions.mode === "document";
   const truncated = documentMode
     ? { text: renderInput, truncated: false, total: renderInput.length }
     : truncateText(renderInput, MARKDOWN_CHAR_LIMIT);
-  const input = appendMarkdownTruncationNotice(truncated);
+  const input = renderOptions.progressBars
+    ? appendMarkdownTruncationNotice(truncated).replace(PROGRESS_CARD_RAW_CONTENT_BLOCK_RE, "")
+    : appendMarkdownTruncationNotice(truncated);
   if (isMarkdownBlockArtText(truncated.text)) {
     return DOMPurify.sanitize(
       renderMarkdownCodeBlock(input, "", renderOptions, { blockArt: true }),
-      sanitizeOptions,
+      activeSanitizeOptions,
     );
   }
   if (!documentMode && truncated.text.length > MARKDOWN_PARSE_LIMIT) {
     // Large plain-text replies should stay readable without inheriting the
     // capped code-block chrome, while still preserving whitespace for logs
     // and other structured text that commonly trips the parse guard.
-    return DOMPurify.sanitize(toEscapedPlainTextHtml(input, renderOptions), sanitizeOptions);
+    return DOMPurify.sanitize(toEscapedPlainTextHtml(input, renderOptions), activeSanitizeOptions);
   }
   let rendered: string;
   try {
@@ -521,7 +534,7 @@ function renderSanitizedMarkdown(renderInput: string, renderOptions: MarkdownRen
     console.warn("[markdown] md.render failed, falling back to plain text:", err);
     rendered = toEscapedPlainTextHtml(input, renderOptions);
   }
-  return DOMPurify.sanitize(rendered, sanitizeOptions);
+  return DOMPurify.sanitize(rendered, activeSanitizeOptions);
 }
 
 export function toSanitizedMarkdownHtml(
@@ -537,18 +550,16 @@ export function toSanitizedMarkdownHtml(
     return "";
   }
   const renderInput = isMarkdownBlockArtText(rawInput) ? rawInput : input;
-  const cacheable = input.length <= MARKDOWN_CACHE_MAX_CHARS;
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.mode}\0${renderInput}`;
-  if (cacheable) {
-    const cached = getCachedMarkdown(cacheKey);
-    if (cached !== null) {
-      return cached;
-    }
+  if (input.length > MARKDOWN_CACHE_MAX_CHARS) {
+    return renderSanitizedMarkdown(renderInput, renderOptions);
+  }
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
+  const cached = getCachedMarkdown(cacheKey);
+  if (cached !== null) {
+    return cached;
   }
   const sanitized = renderSanitizedMarkdown(renderInput, renderOptions);
-  if (cacheable) {
-    setCachedMarkdown(cacheKey, sanitized);
-  }
+  setCachedMarkdown(cacheKey, sanitized);
   return sanitized;
 }
 
@@ -564,6 +575,7 @@ function toEscapedPlainTextHtml(value: string, options: MarkdownRenderEnv): stri
 export function toStreamingMarkdownHtml(
   markdownLocal: string,
   options: MarkdownRenderOptions = {},
+  streamKey?: string,
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
   const rawInput = normalizeMarkdownLineBreaks(
@@ -577,9 +589,14 @@ export function toStreamingMarkdownHtml(
   if (!trimmedInput) {
     return "";
   }
-  const input = formatTruncatedMarkdownInput(trimmedInput);
+  const truncated = truncateText(trimmedInput, MARKDOWN_CHAR_LIMIT);
+  const input = appendMarkdownTruncationNotice(truncated);
 
-  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(input);
+  const { boundary, tailRepairStart } = splitStableStreamingMarkdown(
+    input,
+    streamKey,
+    truncated.text.length,
+  );
   const stableMarkdown = input.slice(0, boundary);
   const streamingTail = input.slice(boundary);
   const stableHtml = boundary > 0 ? toSanitizedMarkdownHtml(stableMarkdown, options) : "";
@@ -588,7 +605,7 @@ export function toStreamingMarkdownHtml(
   }
   const tailHtml =
     tailRepairStart === null
-      ? renderSanitizedMarkdown(streamingTail, renderOptions)
+      ? renderSanitizedMarkdown(streamingTail, { ...renderOptions, streamingOpenFence: true })
       : renderSanitizedMarkdown(
           repairStreamingMarkdownTail(streamingTail, tailRepairStart - boundary),
           renderOptions,

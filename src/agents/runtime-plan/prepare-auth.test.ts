@@ -15,6 +15,7 @@ import {
 // coverage; keep those runtimes out of this focused planner test.
 vi.mock("../../plugins/provider-runtime.js", () => ({
   buildProviderMissingAuthMessageWithPlugin: () => undefined,
+  resolveProviderDeprecatedAuthProfileIds: () => [],
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
   shouldDeferProviderSyntheticProfileAuthWithPlugin: () => undefined,
 }));
@@ -124,6 +125,26 @@ function allCooldownOpenAIStore(): AuthProfileStore {
 }
 
 describe("prepareAgentRuntimeAuthPlan", () => {
+  it("carries prepared provider aliases into generic auth planning", () => {
+    const plan = prepareAgentRuntimeAuthPlan({
+      provider: "legacy-provider",
+      modelId: "model",
+      env: {},
+      authProfileStore: authStore({}),
+      metadataSnapshot: {
+        plugins: [
+          {
+            id: "alias-owner",
+            origin: "bundled",
+            providerAuthAliases: { "legacy-provider": "canonical-provider" },
+          } as never,
+        ],
+      },
+    });
+
+    expect(plan.providerForAuth).toBe("canonical-provider");
+  });
+
   it("keeps unknown no-observation models on the legacy auth plan", () => {
     const plan = prepareAgentRuntimeAuthPlan({
       provider: "openai",

@@ -50,6 +50,14 @@ function createDeps(shell: "zsh" | "bash" | "fish" | "powershell" = "zsh") {
   return deps;
 }
 
+function wrappedFsError(code: string, profilePath: string): Error {
+  const cause = Object.assign(new Error(`${code}: profile write failed`), {
+    code,
+    path: profilePath,
+  });
+  return new Error(`Failed to install completion: ${cause.message}`, { cause });
+}
+
 describe("setupWizardShellCompletion", () => {
   it("QuickStart: installs without prompting", async () => {
     const prompter = createPrompter();
@@ -75,6 +83,55 @@ describe("setupWizardShellCompletion", () => {
     expect(deps.ensureCompletionCacheExists).not.toHaveBeenCalled();
     expect(deps.installCompletion).not.toHaveBeenCalled();
     expect(prompter.note).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      description: "upgrading a slow shell profile",
+      profileInstalled: true,
+      usesSlowPattern: true,
+    },
+    {
+      description: "installing a new shell profile",
+      profileInstalled: false,
+      usesSlowPattern: false,
+    },
+  ])(
+    "keeps onboarding completion optional when $description is not writable",
+    async ({ profileInstalled, usesSlowPattern }) => {
+      const profilePath = "/tmp/read-only/.zshrc";
+      const prompter = createPrompter();
+      const deps = createDeps();
+      vi.mocked(deps.checkShellCompletionStatus!).mockResolvedValue({
+        shell: "zsh",
+        profileInstalled,
+        cacheExists: false,
+        cachePath: "/tmp/openclaw.zsh",
+        usesSlowPattern,
+      });
+      vi.mocked(deps.installCompletion!).mockRejectedValue(wrappedFsError("EACCES", profilePath));
+
+      await expect(
+        setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
+      ).resolves.not.toThrow();
+
+      expect(prompter.note).toHaveBeenCalledWith(
+        `Shell completion was not changed: ${profilePath} is not writable. Run \`openclaw completion --install\` against a writable profile file.`,
+        "Shell completion",
+      );
+    },
+  );
+
+  it("re-throws unexpected completion installation errors", async () => {
+    const prompter = createPrompter();
+    const deps = createDeps();
+    vi.mocked(deps.installCompletion!).mockRejectedValue(
+      wrappedFsError("ENOSPC", "/tmp/full/.zshrc"),
+    );
+
+    await expect(
+      setupWizardShellCompletion({ flow: "quickstart", prompter, deps }),
+    ).rejects.toThrow("ENOSPC");
   });
 
   it.each([

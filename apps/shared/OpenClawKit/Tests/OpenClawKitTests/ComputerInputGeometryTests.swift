@@ -270,4 +270,72 @@ struct ComputerInputGeometryTests {
         #expect(holdParams.keys == "space")
         #expect(holdParams.durationMs == 2000)
     }
+
+    @Test func `v1 result encoding omits every additive v2 field`() throws {
+        let data = try JSONEncoder().encode(OpenClawComputerActResult(
+            ok: true,
+            cursorX: 12,
+            cursorY: 34))
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object.keys.sorted() == ["cursorX", "cursorY", "ok"])
+        #expect(object["ok"] as? Bool == true)
+        #expect(object["cursorX"] as? Double == 12)
+        #expect(object["cursorY"] as? Double == 34)
+    }
+
+    @Test func `decodes v2 window observation and element delivery fields`() throws {
+        let data = try #require("""
+        {
+          "action":"set_value",
+          "windowRef":"window-1",
+          "elementRef":"element-1",
+          "observationId":"observation-1",
+          "value":"hello",
+          "deliveryMode":"background"
+        }
+        """.data(using: .utf8))
+        let params = try JSONDecoder().decode(OpenClawComputerActParams.self, from: data)
+
+        #expect(params.action == .setValue)
+        #expect(params.windowRef == "window-1")
+        #expect(params.elementRef == "element-1")
+        #expect(params.observationId == "observation-1")
+        #expect(params.value == "hello")
+        #expect(params.deliveryMode == .background)
+    }
+
+    @Test func `v2 result encoding matches the shared result envelope`() throws {
+        let result = OpenClawComputerActResult(
+            ok: false,
+            effect: .suspectedNoop,
+            observation: OpenClawComputerObservation(
+                kind: "window",
+                base64: "cG5n",
+                format: "png",
+                width: 10,
+                height: 20,
+                observationId: "observation-1",
+                elements: [OpenClawComputerObservationElement(
+                    elementRef: "element-1",
+                    role: "button",
+                    label: "Save",
+                    bounds: OpenClawComputerBounds(x: 1, y: 2, width: 3, height: 4))]),
+            escalation: OpenClawComputerEscalation(
+                recommended: "foreground",
+                reasonCode: "background_delivery_failed"),
+            details: ["deliveryMode": AnyCodable("background")])
+        let data = try JSONEncoder().encode(result)
+        let object = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+
+        #expect(object["ok"] as? Bool == false)
+        #expect(object["effect"] as? String == "suspected_noop")
+        let observation = try #require(object["observation"] as? [String: Any])
+        #expect(observation["observationId"] as? String == "observation-1")
+        let elements = try #require(observation["elements"] as? [[String: Any]])
+        #expect(elements.first?["elementRef"] as? String == "element-1")
+        let escalation = try #require(object["escalation"] as? [String: Any])
+        #expect(escalation["recommended"] as? String == "foreground")
+        #expect(escalation["reasonCode"] as? String == "background_delivery_failed")
+    }
 }

@@ -542,4 +542,46 @@ describe("browser.request profile selection", () => {
       details: errorBody,
     });
   });
+
+  it.each([
+    {
+      name: "recognized action code",
+      body: { error: "evaluation disabled", code: "ACT_EVALUATE_DISABLED" },
+      details: { error: "evaluation disabled", code: "ACT_EVALUATE_DISABLED" },
+    },
+    {
+      name: "unrecognized action code",
+      body: { error: "evaluation disabled", code: "ACT_FUTURE_CODE" },
+      details: { error: "evaluation disabled", unrecognizedCode: true },
+    },
+  ])("preserves bounded $name state through the node proxy", async ({ body, details }) => {
+    const { respond } = await runBrowserRequest(
+      { method: "POST", path: "/act" },
+      { ok: true, payload: { error: { status: 403, body } } },
+    );
+
+    expect(firstRespondCall(respond)[2]).toEqual({
+      code: "INVALID_REQUEST",
+      message: "evaluation disabled",
+      details,
+    });
+  });
+
+  it("returns UNAVAILABLE for an incomplete node file envelope", async () => {
+    const { respond } = await runBrowserRequest(
+      { method: "POST", path: "/screenshot" },
+      {
+        ok: true,
+        payload: { result: { path: "/node/browser/screenshot.png" } },
+      },
+    );
+
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "UNAVAILABLE",
+      message: "browser proxy file transfer failed",
+    });
+  });
 });

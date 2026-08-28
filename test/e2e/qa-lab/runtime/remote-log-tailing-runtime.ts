@@ -100,7 +100,11 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       lines: string[];
       truncated: boolean;
     };
-    if (first.lines.length !== 2 || !first.lines.some((line) => line.includes("qa-line-three"))) {
+    if (
+      first.lines.length !== 2 ||
+      !first.lines.some((line) => line.includes("qa-line-three")) ||
+      !first.truncated
+    ) {
       throw new Error(`logs.tail did not honor limit: ${JSON.stringify(first)}`);
     }
     const bounded = (await gateway.call("logs.tail", { limit: 20, maxBytes: 96 })) as {
@@ -132,9 +136,9 @@ export async function runRemoteLogTailing(repoRoot: string, outputRoot: string) 
       gateway.token,
       "--json",
       "--limit",
-      "2",
+      "200",
       "--max-bytes",
-      "4096",
+      "250000",
     ]);
     const cliRecords = cliJson
       .trim()

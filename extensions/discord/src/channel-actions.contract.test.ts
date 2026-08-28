@@ -1,7 +1,7 @@
 // Discord tests cover channel actions.contract plugin behavior.
 import { installChannelActionsContractSuite } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { describe } from "vitest";
+import { describe, expect, it } from "vitest";
 import { discordPlugin } from "../api.js";
 
 describe("discord actions contract", () => {
@@ -9,7 +9,7 @@ describe("discord actions contract", () => {
     plugin: discordPlugin,
     cases: [
       {
-        name: "describes configured Discord actions and capabilities",
+        name: "describes configured Discord actions and canonical outbound poll",
         cfg: {
           channels: {
             discord: {
@@ -42,5 +42,10 @@ describe("discord actions contract", () => {
         expectedCapabilities: ["presentation"],
       },
     ],
+  });
+
+  it("declines poll actions so canonical outbound delivery owns them", () => {
+    expect(discordPlugin.actions?.supportsAction?.({ action: "poll" })).toBe(false);
+    expect(discordPlugin.outbound?.sendPoll).toBeTypeOf("function");
   });
 });

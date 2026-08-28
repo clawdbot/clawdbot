@@ -1,20 +1,30 @@
 import { createHash } from "node:crypto";
 import { stableStringify } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { parseWorkerLaunchDescriptor, type WorkerLaunchDescriptor } from "./launch-descriptor.js";
+import { parseWorkerLaunchPlan, type WorkerLaunchPlan } from "./launch-descriptor.js";
 
 const IDENTIFIER_MAX_CHARS = 256;
 const GATEWAY_NAMESPACE_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/u;
-const NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES = 4 * 1024;
+const NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES = 4 * 1024;
 const NODE_WORKER_RESULT_JSON_MAX_BYTES = 64 * 1024;
 const NODE_WORKER_ERROR_TEXT_MAX_BYTES = 4 * 1024;
+const NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES = 64 * 1024;
+export const NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE = "openclaw-worker-connection-failure-v1";
 
 export type NodeWorkerLaunchInput = {
+  environmentSession: 1;
   launchId: string;
   gatewayNamespace: string;
-  bundleHash: string;
+  expectedBundleHash: string;
   placementGeneration: number;
-  descriptor: WorkerLaunchDescriptor;
+  descriptor: WorkerLaunchPlan;
+};
+
+export type NodeWorkerEnvironmentStopInput = {
+  gatewayNamespace: string;
+  environmentId: string;
+  sessionId: string;
+  ownerEpoch: number;
 };
 
 export type NodeWorkerSupervisorIdentity = {
@@ -45,6 +55,11 @@ export type NodeWorkerSupervisorReceipt =
   | NodeWorkerSupervisorActiveReceipt
   | NodeWorkerSupervisorCompletedReceipt
   | NodeWorkerSupervisorErrorReceipt;
+
+export type NodeWorkerConnectionFailureMessage = {
+  type: typeof NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE;
+  cause: string | null;
+};
 
 function hasExactKeys(value: Record<string, unknown>, keys: readonly string[]): boolean {
   return (
@@ -95,41 +110,64 @@ function decodeRequest(raw?: string | null): unknown {
   }
 }
 
+function assertNodeWorkerLaunchIdentity(
+  input: Pick<NodeWorkerLaunchInput, "launchId" | "expectedBundleHash">,
+  descriptor: WorkerLaunchPlan,
+): void {
+  if (descriptor.assignment.turnId !== input.launchId) {
+    throw new Error("INVALID_REQUEST: launchId must match descriptor assignment turnId");
+  }
+  if (descriptor.admission.handshake.bundleHash !== input.expectedBundleHash) {
+    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match expectedBundleHash");
+  }
+}
+
 export function parseNodeWorkerLaunchInput(raw?: string | null): NodeWorkerLaunchInput {
-  const value = decodeRequest(raw);
+  return validateNodeWorkerLaunchInput(decodeRequest(raw));
+}
+
+export function validateNodeWorkerLaunchInput(value: unknown): NodeWorkerLaunchInput {
   if (
     !isRecord(value) ||
     !hasExactKeys(value, [
+      "environmentSession",
       "launchId",
       "gatewayNamespace",
-      "bundleHash",
+      "expectedBundleHash",
       "placementGeneration",
       "descriptor",
     ])
   ) {
     throw new Error("INVALID_REQUEST: invalid node worker launch request");
   }
+  if (value.environmentSession !== 1) {
+    throw new Error("INVALID_REQUEST: node worker environment lifetime support required");
+  }
   const launchId = requireIdentifier(value.launchId, "launchId");
   const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
   if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
     throw new Error("INVALID_REQUEST: gatewayNamespace must be a safe bounded path component");
   }
-  if (!isPlanHash(value.bundleHash)) {
-    throw new Error("INVALID_REQUEST: bundleHash must be 64 lowercase hexadecimal characters");
+  if (!isPlanHash(value.expectedBundleHash)) {
+    throw new Error(
+      "INVALID_REQUEST: expectedBundleHash must be 64 lowercase hexadecimal characters",
+    );
   }
-  let descriptor: WorkerLaunchDescriptor;
+  let descriptor: WorkerLaunchPlan;
   try {
-    descriptor = parseWorkerLaunchDescriptor(value.descriptor);
+    descriptor = parseWorkerLaunchPlan(value.descriptor);
   } catch {
     throw new Error("INVALID_REQUEST: invalid worker launch descriptor");
   }
-  if (descriptor.admission.handshake.bundleHash !== value.bundleHash) {
-    throw new Error("INVALID_REQUEST: descriptor bundle hash does not match bundleHash");
-  }
+  assertNodeWorkerLaunchIdentity(
+    { launchId, expectedBundleHash: value.expectedBundleHash },
+    descriptor,
+  );
   return {
+    environmentSession: 1,
     launchId,
     gatewayNamespace,
-    bundleHash: value.bundleHash,
+    expectedBundleHash: value.expectedBundleHash,
     placementGeneration: requireNonNegativeInteger(
       value.placementGeneration,
       "placementGeneration",
@@ -147,7 +185,7 @@ export function parseNodeWorkerLookupInput(raw?: string | null): { launchId: str
 }
 
 export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSupervisorIdentity {
-  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CANCEL_REQUEST_MAX_BYTES) {
+  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES) {
     throw new Error("INVALID_REQUEST: invalid node worker cancel request");
   }
   const value = decodeRequest(raw);
@@ -182,16 +220,41 @@ export function parseNodeWorkerCancelInput(raw?: string | null): NodeWorkerSuper
   };
 }
 
+export function parseNodeWorkerEnvironmentStopInput(
+  raw?: string | null,
+): NodeWorkerEnvironmentStopInput {
+  if (!raw || Buffer.byteLength(raw, "utf8") > NODE_WORKER_SUPERVISOR_CONTROL_REQUEST_MAX_BYTES) {
+    throw new Error("INVALID_REQUEST: invalid node worker environment stop request");
+  }
+  const value = decodeRequest(raw);
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["gatewayNamespace", "environmentId", "sessionId", "ownerEpoch"])
+  ) {
+    throw new Error("INVALID_REQUEST: invalid node worker environment stop request");
+  }
+  const gatewayNamespace = requireIdentifier(value.gatewayNamespace, "gatewayNamespace");
+  if (!GATEWAY_NAMESPACE_PATTERN.test(gatewayNamespace)) {
+    throw new Error("INVALID_REQUEST: gatewayNamespace must be a safe bounded path component");
+  }
+  return {
+    gatewayNamespace,
+    environmentId: requireIdentifier(value.environmentId, "environmentId"),
+    sessionId: requireIdentifier(value.sessionId, "sessionId"),
+    ownerEpoch: requireNonNegativeInteger(value.ownerEpoch, "ownerEpoch"),
+  };
+}
+
 export function nodeWorkerPlanHash(
   input: Pick<
     NodeWorkerLaunchInput,
-    "bundleHash" | "descriptor" | "gatewayNamespace" | "placementGeneration"
+    "descriptor" | "expectedBundleHash" | "gatewayNamespace" | "placementGeneration"
   >,
 ): string {
   return createHash("sha256")
     .update(
       stableStringify({
-        bundleHash: input.bundleHash,
+        expectedBundleHash: input.expectedBundleHash,
         descriptor: input.descriptor,
         gatewayNamespace: input.gatewayNamespace,
         placementGeneration: input.placementGeneration,
@@ -255,6 +318,26 @@ function isBoundedErrorText(value: unknown): value is string {
     Buffer.byteLength(value, "utf8") <= NODE_WORKER_ERROR_TEXT_MAX_BYTES &&
     !/[\r\n]/u.test(value)
   );
+}
+
+export function parseNodeWorkerConnectionFailureMessage(
+  value: unknown,
+): NodeWorkerConnectionFailureMessage | null {
+  if (
+    !isRecord(value) ||
+    !hasExactKeys(value, ["type", "cause"]) ||
+    value.type !== NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE ||
+    (value.cause !== null &&
+      (typeof value.cause !== "string" ||
+        value.cause.length === 0 ||
+        Buffer.byteLength(value.cause, "utf8") > NODE_WORKER_CONNECTION_FAILURE_CAUSE_MAX_BYTES))
+  ) {
+    return null;
+  }
+  return {
+    type: NODE_WORKER_CONNECTION_FAILURE_MESSAGE_TYPE,
+    cause: value.cause,
+  };
 }
 
 export function parseNodeWorkerSupervisorReceipt(

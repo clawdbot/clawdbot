@@ -1,5 +1,4 @@
 // QA Lab Slack scenario reply observation and channel readiness.
-import type { WebClient } from "@slack/web-api";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import type { startQaGatewayChild } from "../../gateway-child.js";
@@ -11,6 +10,7 @@ import {
   type SlackAuthIdentity,
   type SlackObservedMessage,
   type SlackMessage,
+  type SlackQaWebClient as WebClient,
 } from "./slack-live.contracts.js";
 import {
   listSlackMessages,

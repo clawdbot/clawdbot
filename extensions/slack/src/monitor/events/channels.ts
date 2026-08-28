@@ -7,7 +7,7 @@ import {
 } from "openclaw/plugin-sdk/config-mutation";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { danger, warn } from "openclaw/plugin-sdk/runtime-env";
-import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
+import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import { migrateSlackChannelConfig } from "../../channel-migration.js";
 import { resolveSlackChannelLabel } from "../channel-config.js";
 import type { SlackMonitorContext } from "../context.js";
@@ -48,13 +48,12 @@ export function registerSlackChannelEvents(params: {
       channelId: paramsLocal.channelId,
       channelName: paramsLocal.channelName,
     });
-    const sessionKey = ctx.resolveSlackSystemEventSessionKey({
+    const route = ctx.resolveSlackSystemEventRoute({
       channelId: paramsLocal.channelId,
       channelType: "channel",
       eventScope: paramsLocal.eventScope,
     });
-    enqueueSystemEvent(`Slack channel ${paramsLocal.kind}: ${label}.`, {
-      sessionKey,
+    enqueueRoutedSystemEvent(`Slack channel ${paramsLocal.kind}: ${label}.`, route, {
       contextKey: `slack:channel:${paramsLocal.eventScope ? `${paramsLocal.eventScope.teamId}:` : ""}${paramsLocal.kind}:${paramsLocal.channelId ?? paramsLocal.channelName ?? "unknown"}:${paramsLocal.eventId}`,
     });
   };

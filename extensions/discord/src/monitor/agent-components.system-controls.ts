@@ -21,7 +21,7 @@ import {
   type AgentComponentContext,
   type AgentComponentMessageInteraction,
 } from "./agent-components-helpers.js";
-import { enqueueSystemEvent } from "./agent-components.deps.runtime.js";
+import { enqueueRoutedSystemEvent } from "./agent-components.deps.runtime.js";
 
 type AgentSystemControlParams = {
   ctx: AgentComponentContext;
@@ -96,8 +96,7 @@ async function runAgentSystemControlInteraction(params: AgentSystemControlParams
   const eventText = params.formatEventText({ componentId, username, userId });
   logDebug(`${params.label}: enqueuing event for channel ${channelId}: ${eventText}`);
 
-  enqueueSystemEvent(eventText, {
-    sessionKey: route.sessionKey,
+  enqueueRoutedSystemEvent(eventText, route, {
     // The immutable interaction ID identifies one occurrence, preserving repeat clicks while
     // deduplicating gateway replays of that same occurrence.
     contextKey: `${params.contextKeyPrefix}:${channelId}:${componentId}:${userId}:${params.interaction.id}`,

@@ -3,17 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { runE2eGlobalSetup } from "../../scripts/lib/vitest-build-prerequisites.mts";
 import {
   forceKillVitestProcessGroup,
   forwardSignalToVitestProcessGroup,
 } from "../../scripts/vitest-process-group.mts";
-import {
-  isProcessAlive,
-  waitForChildClose,
-  waitForDead,
-  waitForPidFile,
-} from "../helpers/process-wait.js";
-import { runE2eGlobalSetup } from "../vitest/vitest.e2e.global-setup.js";
+import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 
 type SetupCommandRunner = NonNullable<Parameters<typeof runE2eGlobalSetup>[0]>;
 
@@ -74,8 +69,9 @@ describe("vitest E2E global setup", () => {
 
   posixIt("forwards output and SIGTERM through the runner process group", async () => {
     const fixtureDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-e2e-setup-group-"));
-    const fixturePath = path.join(fixtureDir, "build-fixture.mjs");
+    const fixturePath = path.join(fixtureDir, "scripts", "run-node.mjs");
     const pidPaths = ["child.pid", "descendant.pid"].map((name) => path.join(fixtureDir, name));
+    fs.mkdirSync(path.dirname(fixturePath), { recursive: true });
     fs.writeFileSync(
       fixturePath,
       `import { spawn } from "node:child_process";
@@ -91,9 +87,11 @@ process.stdin.once("data", () => {
 process.stdin.resume();
 `,
     );
-    const setupUrl = new URL("../vitest/vitest.e2e.global-setup.ts", import.meta.url).href;
-    const runnerScript = `import { runE2eSetupCommand } from ${JSON.stringify(setupUrl)};
-await runE2eSetupCommand([${JSON.stringify(fixturePath)}], process.env);`;
+    const setupUrl = new URL("../../scripts/lib/vitest-build-prerequisites.mts", import.meta.url)
+      .href;
+    const runnerScript = `import { runE2eGlobalSetup } from ${JSON.stringify(setupUrl)};
+process.chdir(${JSON.stringify(fixtureDir)});
+await runE2eGlobalSetup(undefined, process.env);`;
     const runner = spawn(
       process.execPath,
       ["--import", "tsx", "--input-type=module", "--eval", runnerScript],
@@ -127,8 +125,12 @@ await runE2eSetupCommand([${JSON.stringify(fixturePath)}], process.env);`;
     } finally {
       forceKillVitestProcessGroup(runner);
       for (const pid of pids) {
-        if (isProcessAlive(pid)) {
+        try {
           process.kill(pid, "SIGKILL");
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
+            throw error;
+          }
         }
       }
       fs.rmSync(fixtureDir, { force: true, recursive: true });

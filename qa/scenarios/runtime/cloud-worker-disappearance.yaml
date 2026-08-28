@@ -8,12 +8,12 @@ scenario:
     secondary:
       - gateway.session-apis-sessions-list
       - gateway.restart-and-stop-gateway-restart
-  objective: Prove an isolated Gateway records an unexpected worker disappearance as a durable per-session failure and keeps another session on the same environment isolated.
+  objective: Prove an isolated Gateway records an unexpected worker disappearance as a durable per-session failure and keeps another session on its own logical environment isolated.
   successCriteria:
     - A real qa-channel turn succeeds through the mock OpenAI provider before worker state is injected.
-    - The static-SSH mock worker provider reports its seeded active lease as unknown during restart reconciliation.
+    - The static-SSH worker provider reports the seeded lease identity as unknown.
     - The active placement becomes failed with a bounded cloud-worker-disappeared terminal reason and timestamp.
-    - A second failed session referencing the same environment retains its own distinct terminal reason.
+    - A second failed session referencing a different logical environment retains its own distinct terminal reason.
     - Two additional Gateway replacements preserve both terminal reasons and the original terminal timestamps.
     - environments.list continues to expose the environment-scoped orphaned error independently.
   docsRefs:

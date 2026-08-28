@@ -73,6 +73,11 @@ predicate allowedRawSocketClientCall(Expr call) {
   or
   allowedOwnerScope(call, "src/proxy-capture/proxy-server.ts", "startDebugProxyServer")
   or
+  // Bypass hosts are blind TLS tunnels for pinned clients: the proxy relays bytes it
+  // deliberately cannot read, so no secret substitution happens on this route. Every
+  // substituting route uses the managed https client, not a raw socket.
+  allowedOwnerScope(call, "src/secrets/egress-proxy/proxy-server.ts", "startSecretEgressProxyServer")
+  or
   allowedOwnerScope(call, "extensions/codex/src/app-server/transport-websocket.ts", "connectCodexAppServerUnixSocket")
   or
   allowedOwnerScope(call, "extensions/irc/src/client.ts", "connectIrcClient")

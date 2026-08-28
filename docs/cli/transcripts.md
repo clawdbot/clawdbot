@@ -63,6 +63,14 @@ occurs on more than one day, for example `openclaw transcripts show
 2026-05-22/standup`. Default session ids include a timestamp and random
 suffix; give a session a fixed id only when that id is unique within the day.
 
+If the filesystem-safe export name exceeds 255 bytes, OpenClaw shortens it
+to a prefix plus a deterministic SHA-256 hash of the complete original session
+ID. Only the derived export name and its selector change; the raw session ID,
+provider stop handle, and stored notes stay intact. Names that already fit
+remain unchanged. Use the selector printed by `list` for the shortened name.
+For existing sessions with oversized stored names, run `openclaw doctor --fix`
+to repair their derived selectors without changing stored notes.
+
 ## Output
 
 `list` prints one tab-separated line per session: selector, start time, title,
@@ -103,14 +111,46 @@ when it will not repeat on the same date.
 
 ## Missing summaries
 
-Live sessions store and materialize `summary.md` when the session stops;
-imported transcripts do so immediately after import. A session can appear in
-`list` without a summary while capture is still active, if a provider failed
-during stop, or if metadata was stored before any utterances arrived.
+The tool's `status` action lists active capture subscriptions, not historical
+notes. When a provider ends or replaces a subscription, OpenClaw records
+`stoppedAt` and stores its summary; the transcript remains available to `list`,
+`show`, and the tool's `summarize` action. A temporary transport disconnect does
+not end a subscription. Stopping historical notes does not stop a newer capture
+or change the recorded stop time.
+
+Provider-driven completion stores the summary without exporting files. Explicit
+tool stop, import, summarize, and configured auto-start shutdown also attempt to
+materialize `summary.md`.
+If terminal persistence fails, `status` reports the ended capture under
+`pendingFinalization`, separately from active captures. Use the tool's `stop`
+action for that session to retry persistence without stopping the provider again.
+
+A session can appear in `list` without a summary while capture is still active,
+if a provider failed during stop, or if metadata was stored before any utterances
+arrived.
 
 Use `path <session> --transcript` to inspect the raw append-only transcript,
 or run the `transcripts` tool's `summarize` action to regenerate the Markdown
 summary.
+
+Summaries are saved in SQLite before optional artifact export. If export fails,
+the saved summary remains available even when `summary.md` is missing. Configured
+auto-start captures log warnings during shutdown for failed exports or provider
+stop errors. Correct the export destination problem, then run
+`openclaw transcripts path <session>` or `openclaw transcripts show <session>`
+to retry the export; an intended path in a warning is not proof of an exported file.
+
+Historical sessions without complete account-owner metadata remain on a local
+recovery path. Recover an agent-owned row with a local turn for that agent; a row
+with no agent attribution requires a local main-agent turn. Sources without
+account binding retain main-agent access across their normal surfaces. Missing
+providers, partial owner metadata, and accountless historical sources also stay
+on this local recovery path.
+
+```bash
+openclaw agent --agent <owning-agent-or-main> --local --message \
+  "Use transcripts summarize for session <session>."
+```
 
 ## Upgrading the legacy file store
 
@@ -147,7 +187,11 @@ Meeting transcript capture is enabled by default. To opt out globally:
   Configure auto-start sources with `transcripts.autoStart`. Each entry is
   enabled by being present; omit an entry to disable that source. `discord-voice`
   is the bundled auto-start-capable source and requires `guildId` and
-  `channelId`:
+  `channelId`. When exactly one configured Discord account has credentials and
+  voice enabled, OpenClaw selects it automatically. When multiple accounts are
+  voice-capable, OpenClaw selects a capable `channels.discord.defaultAccount`.
+  Otherwise, set `accountId` to the corresponding key under
+  `channels.discord.accounts`; an omitted account is rejected as ambiguous:
 
 ```json
 {
@@ -156,6 +200,7 @@ Meeting transcript capture is enabled by default. To opt out globally:
     "autoStart": [
       {
         "providerId": "discord-voice",
+        "accountId": "work",
         "guildId": "1234567890",
         "channelId": "2345678901"
       }

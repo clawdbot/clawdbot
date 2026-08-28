@@ -1,20 +1,20 @@
 import type { DatabaseSync } from "node:sqlite";
-import type { Generated } from "kysely";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import type { ColumnType, Generated } from "kysely";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  iterateSqliteQuerySync,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   isCanonicalSessionTranscriptEntry,
   parseSessionTranscriptTreeEntry,
+  scanSessionTranscriptTree,
+  selectSessionTranscriptTreePathNodes,
 } from "./transcript-tree.js";
-import {
-  resolveVisibleTranscriptAppendParentId,
-  selectVisibleTranscriptEventEntries,
-} from "./transcript-visible-events.js";
 
 type TranscriptProjectionDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -23,8 +23,12 @@ type TranscriptProjectionDatabase = Pick<
   session_transcript_active_events: OpenClawAgentKyselyDatabase["session_transcript_active_events"] & {
     rowid: Generated<number>;
   };
-  session_transcript_fts: OpenClawAgentKyselyDatabase["session_transcript_fts"] & {
+  session_transcript_fts: Omit<
+    OpenClawAgentKyselyDatabase["session_transcript_fts"],
+    "timestamp"
+  > & {
     rowid: Generated<number>;
+    timestamp: ColumnType<string | null, number | string | null, number | string | null>;
   };
 };
 
@@ -51,12 +55,6 @@ export type PreparedSessionTranscriptProjection = PreparedSessionTranscriptProje
     messagePosition: number | null;
   }>;
   ftsRows: TranscriptIndexEntry[];
-};
-
-export type SessionTranscriptProjectionSourceRow = {
-  createdAt: number;
-  event: unknown;
-  seq: number;
 };
 
 type ProjectionDeleteChunkResult = {
@@ -158,49 +156,102 @@ export function shouldProjectActiveEvent(event: unknown): boolean {
   );
 }
 
-/** Builds the same active-branch and search projection for worker and in-transaction owners. */
-export function buildSessionTranscriptProjection(params: {
-  rows: readonly SessionTranscriptProjectionSourceRow[];
-  sessionId: string;
-  sourceTranscriptUpdatedAt: number | null;
-}): PreparedSessionTranscriptProjection {
-  const now = Date.now();
-  const events = params.rows.map((row) => row.event);
-  const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
-  const ftsRows: TranscriptIndexEntry[] = [];
+/** Streams projection payloads; only navigation metadata is retained for branch resolution. */
+export function visitSessionTranscriptProjection(
+  db: DatabaseSync,
+  sessionId: string,
+  visitor: {
+    activeRow: (row: PreparedSessionTranscriptProjection["activeRows"][number]) => void;
+    ftsRow: (row: TranscriptIndexEntry) => void;
+  },
+): PreparedSessionTranscriptProjectionMetadata | undefined {
+  const kysely = getProjectionKysely(db);
+  const session = executeSqliteQueryTakeFirstSync(
+    db,
+    kysely
+      .selectFrom("session_windows")
+      .select("transcript_updated_at")
+      .where("session_id", "=", sessionId),
+  );
+  if (!session) {
+    return undefined;
+  }
+  const query = kysely
+    .selectFrom("transcript_events")
+    .select(["event_json", "seq", "created_at"])
+    .where("session_id", "=", sessionId);
+  let sourceIndexedSeq = -1;
+  const tree = scanSessionTranscriptTree(
+    (function* () {
+      for (const row of iterateSqliteQuerySync(db, query.orderBy("seq", "asc"))) {
+        sourceIndexedSeq = row.seq;
+        const event: unknown = JSON.parse(row.event_json);
+        const navigation: Record<string, unknown> & { seq: number } = { seq: row.seq };
+        if (isRecord(event)) {
+          // Preserve own-property presence, including malformed controls, without retaining
+          // message/tool/compaction payloads in the ancestry graph.
+          for (const key of [
+            "type",
+            "id",
+            "parentId",
+            "targetId",
+            "appendParentId",
+            "appendMode",
+          ]) {
+            if (Object.hasOwn(event, key)) {
+              navigation[key] = event[key];
+            }
+          }
+        }
+        yield navigation;
+      }
+    })(),
+  );
+  if (sourceIndexedSeq < 0) {
+    return undefined;
+  }
+  const visiblePath = selectSessionTranscriptTreePathNodes(tree, tree.leafId);
+  const rows =
+    visiblePath.length > 0
+      ? (function* () {
+          for (const node of visiblePath) {
+            const row = executeSqliteQueryTakeFirstSync(
+              db,
+              query.where("seq", "=", node.entry.seq),
+            );
+            if (row) {
+              yield row;
+            }
+          }
+        })()
+      : tree.hasLeafControl
+        ? []
+        : iterateSqliteQuerySync(db, query.orderBy("seq", "asc"));
+  let activeEventCount = 0;
   let activeMessageCount = 0;
-
-  for (const entry of selectVisibleTranscriptEventEntries(events)) {
-    const source = params.rows[entry.seq - 1];
-    // Forward appends and both rebuild owners must give timestamp-less events
-    // the same persisted source timestamp, not the time a projection ran.
-    const indexed = extractTranscriptIndexEntry(entry.event, source?.createdAt ?? now);
+  for (const row of rows) {
+    const event: unknown = JSON.parse(row.event_json);
+    const indexed = extractTranscriptIndexEntry(event, row.created_at);
     if (indexed) {
-      ftsRows.push(indexed);
+      visitor.ftsRow(indexed);
     }
-    if (!source || !shouldProjectActiveEvent(entry.event)) {
+    if (!shouldProjectActiveEvent(event)) {
       continue;
     }
-    const projectsMessage = hasTranscriptMessage(entry.event);
-    activeRows.push({
-      activePosition: activeRows.length,
-      eventSeq: source.seq,
-      messagePosition: projectsMessage ? activeMessageCount : null,
+    const projectsMessage = hasTranscriptMessage(event);
+    visitor.activeRow({
+      activePosition: activeEventCount++,
+      eventSeq: row.seq,
+      messagePosition: projectsMessage ? activeMessageCount++ : null,
     });
-    if (projectsMessage) {
-      activeMessageCount += 1;
-    }
   }
-
   return {
-    activeEventCount: activeRows.length,
+    activeEventCount,
     activeMessageCount,
-    activeRows,
-    ftsRows,
-    leafEventId: resolveVisibleTranscriptAppendParentId(events),
-    sessionId: params.sessionId,
-    sourceIndexedSeq: params.rows.at(-1)?.seq ?? -1,
-    sourceTranscriptUpdatedAt: params.sourceTranscriptUpdatedAt,
+    leafEventId: tree.appendParentId,
+    sessionId,
+    sourceIndexedSeq,
+    sourceTranscriptUpdatedAt: session.transcript_updated_at,
   };
 }
 
@@ -212,35 +263,13 @@ export function prepareSessionTranscriptProjection(
   return runSqliteDeferredTransactionSync(
     db,
     () => {
-      const kysely = getProjectionKysely(db);
-      const session = executeSqliteQueryTakeFirstSync(
-        db,
-        kysely
-          .selectFrom("session_windows")
-          .select("transcript_updated_at")
-          .where("session_id", "=", sessionId),
-      );
-      const rows = executeSqliteQuerySync(
-        db,
-        kysely
-          .selectFrom("transcript_events")
-          .select(["event_json", "seq", "created_at"])
-          .where("session_id", "=", sessionId)
-          .orderBy("seq", "asc"),
-      ).rows;
-      if (!session || rows.length === 0) {
-        return undefined;
-      }
-
-      return buildSessionTranscriptProjection({
-        rows: rows.map((row) => ({
-          createdAt: row.created_at,
-          event: JSON.parse(row.event_json) as unknown,
-          seq: row.seq,
-        })),
-        sessionId,
-        sourceTranscriptUpdatedAt: session.transcript_updated_at,
+      const activeRows: PreparedSessionTranscriptProjection["activeRows"] = [];
+      const ftsRows: TranscriptIndexEntry[] = [];
+      const metadata = visitSessionTranscriptProjection(db, sessionId, {
+        activeRow: (row) => activeRows.push(row),
+        ftsRow: (row) => ftsRows.push(row),
       });
+      return metadata ? { ...metadata, activeRows, ftsRows } : undefined;
     },
     {
       databaseLabel: "agent transcript projection",
@@ -419,7 +448,7 @@ export function appendPreparedSessionTranscriptProjectionChunkInTransaction(
           role: row.role,
           session_id: params.sessionId,
           text: row.text,
-          timestamp: row.timestamp as unknown as string,
+          timestamp: row.timestamp,
         })),
       ),
     );

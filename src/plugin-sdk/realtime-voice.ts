@@ -1,12 +1,15 @@
 /** Production-private runtime seam for bundled and separately published official plugins. */
 export type { RealtimeVoiceProviderPlugin } from "../plugins/types.js";
 export type {
+  OpenAICompatibleRealtimeAudioFormat,
   RealtimeVoiceAudioFormat,
   RealtimeVoiceAgentConsultRunner,
   RealtimeVoiceBargeInOptions,
   RealtimeVoiceBridge,
   RealtimeVoiceBridgeCallbacks,
   RealtimeVoiceBridgeEvent,
+  RealtimeVoiceCloseDisposition,
+  RealtimeVoiceCloseOptions,
   RealtimeVoiceBrowserSession,
   RealtimeVoiceBrowserSessionCreateRequest,
   RealtimeVoiceGatewayControl,
@@ -28,6 +31,8 @@ export {
   normalizeRealtimeVoiceResponseOutcome,
   REALTIME_VOICE_AUDIO_FORMAT_G711_ULAW_8KHZ,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
+  realtimeVoiceAudioDurationMs,
+  toOpenAICompatibleRealtimeAudioFormat,
 } from "../talk/provider-types.js";
 export {
   createTalkEventSequencer,
@@ -220,6 +225,7 @@ export {
 } from "../talk/audio-energy.js";
 export {
   convertPcmToMulaw8k,
+  createStreamingPcmResampler,
   mulawToPcm,
   pcmToMulaw,
   resamplePcm,

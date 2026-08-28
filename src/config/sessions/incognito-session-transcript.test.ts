@@ -143,6 +143,7 @@ describe("incognito transcript access", () => {
 
       await patchSessionEntryCore(activeScope, () => ({ model: "gpt-test" }), {
         maintenanceConfig: {
+          archiveDashboardAfterMs: null,
           highWaterBytes: null,
           maxDiskBytes: null,
           maxEntries: 1,

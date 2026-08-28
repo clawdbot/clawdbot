@@ -1,6 +1,9 @@
 import type { WizardAnswer } from "@openclaw/gateway-protocol";
+import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import type { WizardStep } from "../../api/types.ts";
+import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
+import { isGatewayCapabilityAdvertised } from "../../lib/gateway-methods.ts";
 
 type CustodianWizardSubmission = {
   answer: WizardAnswer;
@@ -59,4 +62,13 @@ export function initialCustodianWizardValue(step: WizardStep): unknown {
       ? [...step.initialValue]
       : []
     : step.initialValue;
+}
+
+export function isCustodianWizardCancelAvailable(context: ApplicationContext | null): boolean {
+  return (
+    isGatewayCapabilityAdvertised(
+      context?.gateway.snapshot ?? {},
+      GATEWAY_SERVER_CAPS.SYSTEM_AGENT_WIZARD_CANCEL,
+    ) ?? false
+  );
 }

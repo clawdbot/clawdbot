@@ -24,9 +24,20 @@ import {
 } from "./tts-settings.js";
 import type { VoiceModelRef, VoiceProviderCandidate } from "./voice-models.js";
 
+// The transport names its abort "TimeoutError" (fetch-timeout.ts) and provider
+// deadlines throw plain Errors ending in "timed out"; AbortError alone misses both.
+function isTtsTimeoutError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  return (
+    err.name === "AbortError" || err.name === "TimeoutError" || /\btimed out\b/iu.test(err.message)
+  );
+}
+
 export function formatTtsProviderError(provider: TtsProvider, err: unknown): string {
   const error = err instanceof Error ? err : new Error(String(err));
-  if (error.name === "AbortError") {
+  if (isTtsTimeoutError(error)) {
     return `${provider}: request timed out`;
   }
   return `${provider}: ${redactSensitiveText(error.message)}`;
@@ -386,8 +397,7 @@ export async function executeTtsProviderAttempts<TSynthesis, TResult>(params: {
       attempts.push({
         provider,
         outcome: "failed",
-        reasonCode:
-          err instanceof Error && err.name === "AbortError" ? "timeout" : "provider_error",
+        reasonCode: isTtsTimeoutError(err) ? "timeout" : "provider_error",
         latencyMs,
         persona: persona?.id,
         personaBinding: resolvePersonaBinding(persona, provider),

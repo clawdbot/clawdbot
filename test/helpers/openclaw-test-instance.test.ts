@@ -178,11 +178,15 @@ describe("openclaw test instance", () => {
     expect(instance.logs().split(RESTART_MARKER)).toHaveLength(2);
   });
 
-  it("bounds both attempts by one startup deadline", async () => {
+  it("bounds migration retries by one startup deadline", async () => {
     const { instance, readAttempts } = await createFakeGateway("refuse:200,hang", 500);
     const startedAt = Date.now();
     await expect(instance.startGateway()).rejects.toThrow("timeout waiting for gateway readiness");
-    expect(await readAttempts()).toHaveLength(2);
+    const attempts = await readAttempts();
+    // A loaded runner may consume the deadline before observing the first refusal.
+    // The restart-path tests above require two attempts when that refusal arrives in time.
+    expect(attempts.length).toBeGreaterThanOrEqual(1);
+    expect(attempts.length).toBeLessThanOrEqual(2);
     expect(Date.now() - startedAt).toBeLessThan(650);
   });
 

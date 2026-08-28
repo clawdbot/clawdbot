@@ -23,6 +23,10 @@ started.
 - **CJK support** via trigram tokenization for Chinese, Japanese, and Korean.
 - **sqlite-vec acceleration** for in-database vector queries (optional).
 
+Native sqlite-vec queries run in a separate, read-only process so a slow query
+does not block the Gateway event loop. Cancelling a search terminates its query
+process; OpenClaw does not retry that native query on the Gateway thread.
+
 ## Getting started
 
 By default, the builtin engine uses OpenAI embeddings. If `OPENAI_API_KEY` or
@@ -43,8 +47,8 @@ To set a provider explicitly:
 
 Without an embedding provider, only keyword search is available.
 
-To force local GGUF embeddings, install the official llama.cpp provider
-plugin, then point `local.modelPath` at a GGUF file:
+To force local GGUF embeddings, install and configure the official llama.cpp
+provider, then point `local.modelPath` at a GGUF file:
 
 ```bash
 openclaw plugins install @openclaw/llama-cpp-provider
@@ -57,7 +61,7 @@ openclaw plugins install @openclaw/llama-cpp-provider
       provider: "local",
       fallback: "none",
       local: {
-        modelPath: "~/.node-llama-cpp/models/embeddinggemma-300m-qat-Q8_0.gguf",
+        modelPath: "~/.openclaw/models/llama.cpp/hf_ggml-org_embeddinggemma-300m-qat-Q8_0.gguf",
       },
     },
   },
@@ -73,7 +77,7 @@ openclaw plugins install @openclaw/llama-cpp-provider
 | Gemini            | `gemini`            | Supports multimodal (image + audio) |
 | GitHub Copilot    | `github-copilot`    | Uses your Copilot subscription      |
 | LM Studio         | `lmstudio`          | Local/self-hosted                   |
-| Local             | `local`             | `@openclaw/llama-cpp-provider`      |
+| Local             | `local`             | OpenClaw-managed llama.cpp server   |
 | Mistral           | `mistral`           |                                     |
 | Ollama            | `ollama`            | Local/self-hosted                   |
 | OpenAI            | `openai`            | Default: `text-embedding-3-small`   |
@@ -96,7 +100,10 @@ only injects curated or promoted-trusted entries.
 Each indexed chunk also has SQLite-owned provenance: origin class (`owner`,
 `agent`, `untrusted`, or `system`), session kind, observation time, and an
 optional supersession key. This metadata is stored separately from Markdown
-so recalled prose cannot rewrite its own trust classification.
+so recalled prose cannot rewrite its own trust classification. Automatic
+session ingestion also records source-session origins for its staged entries,
+which support selective deletion after promotion. For coverage and limits, see
+[Memory provenance and deletion](/concepts/memory-provenance).
 
 - **Index location:** the owning agent database at
   `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite`
@@ -107,6 +114,10 @@ so recalled prose cannot rewrite its own trust classification.
 - **Auto-reindex:** the index rebuilds automatically when the embedding
   provider, model, chunking config, configured sources, or scope change.
 - **Reindex on demand:** `openclaw memory index --force`
+
+Full reindexes build a replacement in a temporary database and publish the
+memory tables atomically. Concurrent searches and status reads keep using the
+published index; a failed rebuild leaves that index intact.
 
 <Info>
 You can also index Markdown files outside the workspace with
@@ -126,7 +137,12 @@ Doctor removes the retired `memory.backend`, `memory.qmd`, and
 `memory.search.qmd` settings, including agent-scoped `memory.search.qmd`
 forms. It preserves QMD paths and extra collections as the corresponding
 `memory.search.extraPaths` entries, including `{ path, pattern }` globs. When
-Memory Core finds a retired per-agent QMD workspace under
+QMD session indexing was enabled, Doctor also enables builtin session indexing
+and adds `sessions` to `memory.search.sources` without enabling broader
+cross-conversation recall. Retained session-reset transcripts remain in the
+agent's sessions directory and are indexed from those original artifacts.
+
+When Memory Core finds a retired per-agent QMD workspace under
 `~/.openclaw/agents/<agentId>/qmd/`, Doctor also offers to remove its derived
 indexes, model downloads, collection metadata, and session exports.
 
@@ -172,7 +188,8 @@ with automatic user modeling.
 **Memory search disabled?** Check `openclaw memory status`. If no provider is
 detected, set one explicitly or add an API key.
 
-**Local provider not detected?** Confirm the local path exists and run:
+**Local provider not detected?** Run interactive llama.cpp setup once, confirm
+the local path exists, and run:
 
 ```bash
 openclaw memory status --deep --agent main

@@ -34,15 +34,7 @@ export class LegacyContextEngine implements ContextEngine {
     };
   }
 
-  async afterTurn(_params: Parameters<NonNullable<ContextEngine["afterTurn"]>>[0]): Promise<void> {
-    // No-op: legacy flow persists context directly in SessionManager.
-  }
-
   compact(params: Parameters<ContextEngine["compact"]>[0]) {
     return delegateCompactionToRuntime(params);
-  }
-
-  async dispose(): Promise<void> {
-    // Nothing to clean up for legacy engine
   }
 }

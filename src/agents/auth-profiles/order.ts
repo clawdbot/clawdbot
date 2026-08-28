@@ -129,6 +129,7 @@ function isConfiguredProfileCompatibleWithAuthProvider(params: {
 
 function listProfilesCompatibleWithAuthProvider(params: {
   cfg?: OpenClawConfig;
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   store: AuthProfileStore;
   provider: string;
   providerAuthKey: string;
@@ -140,6 +141,7 @@ function listProfilesCompatibleWithAuthProvider(params: {
     .filter(([, credential]) =>
       isCredentialProviderCompatibleWithAuthProvider({
         cfg: params.cfg,
+        authAliasLookupParams: params.authAliasLookupParams,
         providerAuthKey: params.providerAuthKey,
         credential,
       }),
@@ -263,6 +265,8 @@ type ResolveAuthProfileOrderParams = {
   cfg?: OpenClawConfig;
   store: AuthProfileStore;
   provider: string;
+  /** Exact prepared metadata for request paths that must not rediscover plugin aliases. */
+  authAliasLookupParams?: ProviderAuthAliasLookupParams;
   preferredProfile?: string;
   /** Model that will consume the profile, for model-scoped cooldowns. */
   forModel?: string;
@@ -276,46 +280,58 @@ export type AuthProfileOrderResolution = {
   hasExplicitOrder: boolean;
 };
 
+/** Shares stored-over-config order precedence with CLI runtime selection. */
+export function resolveExplicitAuthOrderSelection(params: {
+  storeOrder: AuthProfileStore["order"] | undefined;
+  configuredOrder: Record<string, string[]> | undefined;
+  providerKey: string;
+  providerAuthKey: string;
+}): {
+  order: string[] | undefined;
+  fromStore: boolean;
+} {
+  const { storeOrder, configuredOrder, providerKey, providerAuthKey } = params;
+  const stored =
+    findNormalizedProviderValue(storeOrder, providerAuthKey) ??
+    findNormalizedProviderValue(storeOrder, providerKey);
+  return {
+    order:
+      stored ??
+      findNormalizedProviderValue(configuredOrder, providerAuthKey) ??
+      findNormalizedProviderValue(configuredOrder, providerKey),
+    fromStore: stored !== undefined,
+  };
+}
+
 /** Resolves ordered usable auth profiles plus whether an explicit order owns selection. */
 export function resolveAuthProfileOrderWithMetadata(
   params: ResolveAuthProfileOrderParams,
 ): AuthProfileOrderResolution {
   const { cfg, store, provider, preferredProfile, forModel } = params;
   const providerKey = normalizeProviderId(provider);
-  const providerAuthKey = resolveProviderIdForAuth(provider, { config: cfg });
+  const providerAuthKey = resolveProviderIdForAuth(provider, {
+    config: cfg,
+    ...params.authAliasLookupParams,
+  });
   const now = Date.now();
 
   // Clear any cooldowns that have expired since the last check so profiles
   // get a fresh error count and are not immediately re-penalized on the
   // next transient failure. See #3604.
   clearExpiredCooldowns(store, now);
-  const openAIOrderAliasProvider =
-    providerAuthKey === OPENAI_CODEX_PROVIDER_ID || providerKey === OPENAI_CODEX_PROVIDER_ID
-      ? OPENAI_PROVIDER_ID
-      : undefined;
-  const directStoredOrder =
-    resolveAuthOrder(store.order, providerAuthKey) ?? resolveAuthOrder(store.order, providerKey);
-  const aliasStoredOrder = openAIOrderAliasProvider
-    ? resolveAuthOrder(store.order, openAIOrderAliasProvider)
-    : undefined;
-  const directConfiguredOrder =
-    resolveAuthOrder(cfg?.auth?.order, providerAuthKey) ??
-    resolveAuthOrder(cfg?.auth?.order, providerKey);
-  const aliasConfiguredOrder = openAIOrderAliasProvider
-    ? resolveAuthOrder(cfg?.auth?.order, openAIOrderAliasProvider)
-    : undefined;
-  const directExplicitOrder = directStoredOrder ?? directConfiguredOrder;
-  const aliasExplicitOrder = aliasStoredOrder ?? aliasConfiguredOrder;
-  // Stored order repairs are allowed to fall back to live store profiles when
-  // old setup flows persisted profile ids that no longer exist.
-  const explicitOrderFromStore =
-    directStoredOrder !== undefined ||
-    (directExplicitOrder === undefined && aliasStoredOrder !== undefined);
+  const { order: explicitOrder, fromStore: explicitOrderFromStore } =
+    resolveExplicitAuthOrderSelection({
+      storeOrder: store.order,
+      configuredOrder: cfg?.auth?.order,
+      providerKey,
+      providerAuthKey,
+    });
   const explicitProfiles = cfg?.auth?.profiles
     ? Object.entries(cfg.auth.profiles)
         .filter(([profileId, profile]) =>
           isConfiguredProfileCompatibleWithAuthProvider({
             cfg,
+            authAliasLookupParams: params.authAliasLookupParams,
             providerAuthKey,
             provider: profile.provider,
             mode: profile.mode,
@@ -326,28 +342,11 @@ export function resolveAuthProfileOrderWithMetadata(
     : [];
   const storeProfiles = listProfilesCompatibleWithAuthProvider({
     cfg,
+    authAliasLookupParams: params.authAliasLookupParams,
     store,
     provider,
     providerAuthKey,
   });
-  const nativeStoreProfiles =
-    openAIOrderAliasProvider && providerAuthKey === OPENAI_CODEX_PROVIDER_ID
-      ? storeProfiles.filter((profileId) =>
-          isNativeCredentialProviderCompatibleWithAuthProvider({
-            cfg,
-            providerAuthKey,
-            credential: store.profiles[profileId],
-          }),
-        )
-      : [];
-  const explicitOrder =
-    directExplicitOrder ??
-    (aliasExplicitOrder
-      ? mergeAliasOrderWithNativeProfiles({
-          aliasOrder: aliasExplicitOrder,
-          nativeProfiles: nativeStoreProfiles,
-        })
-      : undefined);
   const baseOrder =
     explicitOrder ?? (explicitProfiles.length > 0 ? explicitProfiles : storeProfiles);
   if (baseOrder.length === 0) {
@@ -357,6 +356,7 @@ export function resolveAuthProfileOrderWithMetadata(
   const isValidProfile = (profileId: string): boolean => {
     const eligibility = resolveAuthProfileEligibility({
       cfg,
+      authAliasLookupParams: params.authAliasLookupParams,
       store,
       provider,
       profileId,
@@ -434,40 +434,6 @@ export function resolveAuthProfileOrderWithMetadata(
 /** Resolves ordered usable auth profile ids for a provider. */
 export function resolveAuthProfileOrder(params: ResolveAuthProfileOrderParams): string[] {
   return resolveAuthProfileOrderWithMetadata(params).profileIds;
-}
-
-function resolveAuthOrder(
-  order: Record<string, string[]> | undefined,
-  provider: string,
-): string[] | undefined {
-  return findNormalizedProviderValue(order, provider);
-}
-
-function isNativeCredentialProviderCompatibleWithAuthProvider(params: {
-  cfg?: OpenClawConfig;
-  providerAuthKey: string;
-  credential: AuthProfileCredential | undefined;
-}): boolean {
-  if (!params.credential) {
-    return false;
-  }
-  return (
-    resolveProviderIdForAuth(params.credential.provider, { config: params.cfg }) ===
-    params.providerAuthKey
-  );
-}
-
-function mergeAliasOrderWithNativeProfiles(params: {
-  aliasOrder: string[];
-  nativeProfiles: string[];
-}): string[] {
-  const nativeIds = new Set(params.nativeProfiles);
-  const aliasHasNativeProfile = params.aliasOrder.some((profileId) => nativeIds.has(profileId));
-  return dedupeProfileIds(
-    aliasHasNativeProfile
-      ? [...params.aliasOrder, ...params.nativeProfiles]
-      : [...params.nativeProfiles, ...params.aliasOrder],
-  );
 }
 
 function orderProfilesByMode(

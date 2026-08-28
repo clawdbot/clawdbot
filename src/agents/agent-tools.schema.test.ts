@@ -50,7 +50,8 @@ describe("direct exec tool schema", () => {
     const descriptions = Object.values(fields).map((field) => field.description ?? "");
 
     expect(descriptions.join("").length).toBeLessThan(550);
-    expect(describeField("workdir")).toContain("Blank/whitespace");
+    expect(describeField("workdir")).toContain("empty string");
+    expect(describeField("workdir")).toContain("whitespace-only");
     expect(describeField("yieldMs")).toContain("Milliseconds");
     expect(describeField("timeoutSeconds")).toContain("seconds");
     expect(describeField("pty")).toContain("PTY");
@@ -956,6 +957,58 @@ describe("normalizeToolParameterSchema", () => {
     expect(parentId?.anyOf).toBeUndefined();
     expect(count?.oneOf).toBeUndefined();
   });
+
+  // Regression for #128743: a root-level union whose branches carry their own
+  // properties must not replace the root properties. Root `required` entries
+  // (e.g. thread_id) must remain declared in `properties`, otherwise the schema
+  // becomes unsatisfiable when `additionalProperties` is false.
+  it.each(["anyOf", "oneOf"] as const)(
+    "preserves root properties and constraints when flattening root-level %s (#128743)",
+    (unionKey) => {
+      const schema = {
+        type: "object",
+        title: "MessagesReplyInput",
+        additionalProperties: false,
+        required: ["thread_id"],
+        properties: {
+          thread_id: { type: "string", minLength: 1, maxLength: 128 },
+          body: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+          body_file: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+          task_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+          turn_grant_id: { anyOf: [{ type: "string" }, { type: "null" }], default: null },
+        },
+        [unionKey]: [
+          { required: ["body"], properties: { body: { type: "string" } } },
+          { required: ["body_file"], properties: { body_file: { type: "string" } } },
+        ],
+      } as Record<string, unknown>;
+
+      const normalized = normalizeToolParameterSchema(schema) as Record<string, unknown>;
+      const properties = (normalized.properties as Record<string, unknown>) ?? {};
+      const required = (normalized.required as string[] | undefined) ?? [];
+
+      // The root composition keyword is flattened for portability, but the root
+      // declared properties must survive the merge.
+      expect(Object.keys(properties)).toEqual(
+        expect.arrayContaining(["thread_id", "body", "body_file", "task_id", "turn_grant_id"]),
+      );
+      expect(normalized.additionalProperties).toBe(false);
+      // Every required field must be a declared property, otherwise the schema is
+      // unsatisfiable by construction (required + additionalProperties:false).
+      for (const field of required) {
+        expect(Object.hasOwn(properties, field)).toBe(true);
+      }
+      expect(properties.thread_id).toEqual({ type: "string", minLength: 1, maxLength: 128 });
+      expect(properties.body).toEqual({
+        anyOf: [{ type: "string" }, { type: "null" }],
+        default: null,
+      });
+      expect(properties.body_file).toEqual({
+        anyOf: [{ type: "string" }, { type: "null" }],
+        default: null,
+      });
+    },
+  );
 });
 
 function makeTool(parameters: TSchema): AnyAgentTool {

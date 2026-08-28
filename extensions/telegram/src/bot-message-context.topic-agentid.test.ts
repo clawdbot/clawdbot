@@ -24,9 +24,11 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
   async function buildForumContext(params: {
     threadId?: number;
     topicConfig?: Record<string, unknown>;
+    cfg?: Record<string, unknown>;
   }) {
     return await buildTelegramMessageContextForTest({
       message: buildForumMessage(params.threadId),
+      cfg: params.cfg,
       options: { forceWasMentioned: true },
       resolveGroupActivation: () => true,
       resolveTelegramGroupConfig: () => ({
@@ -49,6 +51,15 @@ describe("buildTelegramMessageContext per-topic agentId routing", () => {
 
     expect(ctx?.ctxPayload?.SessionKey).toContain("agent:zu:");
     expect(ctx?.ctxPayload?.SessionKey).toContain("telegram:group:-1001234567890:topic:3");
+  });
+
+  it("keeps the effective main group scope for a topic-specific agent", async () => {
+    const ctx = await buildForumContext({
+      cfg: { session: { groupScope: "main", mainKey: "work" } },
+      topicConfig: { agentId: "zu" },
+    });
+
+    expect(ctx?.ctxPayload?.SessionKey).toBe("agent:zu:work");
   });
 
   it("different topics route to different agents", async () => {

@@ -44,8 +44,8 @@ Check for Updates, and uninstall.
 - Native chat window plus access to the browser Control UI.
 - Command Center diagnostics for sessions, usage, channels, nodes, pairing,
   and repair commands.
-- Windows node mode for agent-controlled canvas, screen, camera,
-  notifications, device status, talk, and controlled `system.run`.
+- Windows node mode for screen, camera, notifications, device status, talk,
+  and controlled `system.run`.
 - Local MCP server mode for MCP clients such as Claude Desktop, Claude Code,
   and Cursor.
 
@@ -76,14 +76,13 @@ declared by the node and allowed by Gateway policy before they run; see
 
 Common commands:
 
-| Family | Commands                                                                             |
-| ------ | ------------------------------------------------------------------------------------ |
-| Canvas | `canvas.present`, `canvas.hide`, `canvas.navigate`, `canvas.eval`, `canvas.snapshot` |
-| Screen | `screen.snapshot`; `screen.record` requires explicit opt-in                          |
-| Camera | `camera.list`; `camera.snap`, `camera.clip` require explicit opt-in                  |
-| System | `system.notify`, `system.run`, `system.run.prepare`, `system.which`                  |
-| Device | `location.get`, `device.info`, `device.status`                                       |
-| Talk   | `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, `talk.ptt.once`, `talk.speak`  |
+| Family | Commands                                                                            |
+| ------ | ----------------------------------------------------------------------------------- |
+| Screen | `screen.snapshot`; `screen.record` requires explicit opt-in                         |
+| Camera | `camera.list`; `camera.snap`, `camera.clip` require explicit opt-in                 |
+| System | `system.notify`, `system.run`, `system.run.prepare`, `system.which`                 |
+| Device | `location.get`, `device.info`, `device.status`                                      |
+| Talk   | `talk.ptt.start`, `talk.ptt.stop`, `talk.ptt.cancel`, `talk.ptt.once`, `talk.speak` |
 
 Node mode requires Gateway pairing. If the app shows a pairing request,
 approve it from the Gateway host:

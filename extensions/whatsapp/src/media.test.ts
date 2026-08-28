@@ -4,8 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { resolveStateDir } from "openclaw/plugin-sdk/state-paths";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
-import { captureEnv } from "openclaw/plugin-sdk/test-env";
-import { mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
+import { captureEnv, mockPinnedHostnameResolution } from "openclaw/plugin-sdk/test-env";
 import {
   createGrayscaleAlphaPngBuffer,
   createSolidPngBuffer,
@@ -160,15 +159,9 @@ describe("web media loading", () => {
   });
 
   it("includes URL + status in fetch errors", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: false,
-      body: true,
-      text: async () => "Not Found",
-      headers: { get: () => null },
-      status: 404,
-      statusText: "Not Found",
-      url: "https://example.com/missing.jpg",
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response("Not Found", { status: 404, statusText: "Not Found" }));
 
     await expect(loadWebMedia("https://example.com/missing.jpg", 1024 * 1024)).rejects.toThrow(
       /Failed to fetch media from https:\/\/example\.com\/missing\.jpg.*HTTP 404/i,
@@ -202,15 +195,11 @@ describe("web media loading", () => {
   });
 
   it("respects maxBytes for raw URL fetches", async () => {
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () => Buffer.alloc(2048).buffer,
-      headers: {
-        get: (name: string) => (name === "content-type" ? "image/png" : null),
-      },
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(
+        new Response(new Uint8Array(2048), { headers: { "content-type": "image/png" } }),
+      );
 
     await expect(loadWebMediaRaw("https://example.com/too-big.png", 1024)).rejects.toThrow(
       /exceeds maxBytes 1024/i,
@@ -233,24 +222,14 @@ describe("web media loading", () => {
 
   it("uses content-disposition filename when available", async () => {
     const pdfBytes = Buffer.from("%PDF-1.4");
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () =>
-        pdfBytes.buffer.slice(pdfBytes.byteOffset, pdfBytes.byteOffset + pdfBytes.byteLength),
-      headers: {
-        get: (name: string) => {
-          if (name === "content-disposition") {
-            return 'attachment; filename="report.pdf"';
-          }
-          if (name === "content-type") {
-            return "application/pdf";
-          }
-          return null;
+    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
+      new Response(Uint8Array.from(pdfBytes), {
+        headers: {
+          "content-disposition": 'attachment; filename="report.pdf"',
+          "content-type": "application/pdf",
         },
-      },
-      status: 200,
-    } as unknown as Response);
+      }),
+    );
 
     const result = await loadWebMedia("https://example.com/download?id=1", 1024 * 1024);
 
@@ -266,16 +245,9 @@ describe("web media loading", () => {
       0x00, 0x00, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x02, 0x01, 0x44, 0x00, 0x3b,
     ]);
 
-    const fetchMock = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce({
-      ok: true,
-      body: true,
-      arrayBuffer: async () =>
-        gifBytes.buffer.slice(gifBytes.byteOffset, gifBytes.byteOffset + gifBytes.byteLength),
-      headers: {
-        get: (name: string) => (name === "content-type" ? "image/gif" : null),
-      },
-      status: 200,
-    } as unknown as Response);
+    const fetchMock = vi
+      .spyOn(globalThis, "fetch")
+      .mockResolvedValueOnce(new Response(gifBytes, { headers: { "content-type": "image/gif" } }));
 
     const result = await loadWebMedia("https://example.com/animation.gif", 1024 * 1024);
 

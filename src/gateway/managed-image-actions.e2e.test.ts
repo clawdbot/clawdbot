@@ -1,11 +1,13 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { readImageProbeFromHeader } from "../media/image-ops.js";
 import {
+  cleanupManagedOutgoingMediaRecords,
   createManagedOutgoingMediaBlocks,
   MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX,
 } from "./managed-image-attachments.js";
+import { readManagedImageRecord } from "./managed-image-record-store.js";
 import { connectGatewayClient, disconnectGatewayClient } from "./test-helpers.e2e.js";
 import {
   installGatewayTestHooks,
@@ -26,6 +28,7 @@ describe("managed image actions Gateway E2E", () => {
       throw new Error("OPENCLAW_STATE_DIR is required for managed image E2E fixtures");
     }
     testState.gatewayAuth = { mode: "token", token: GATEWAY_TOKEN };
+    testState.gatewayControlUi = { basePath: "/rosita" };
     testState.sessionStorePath = path.join(stateDir, "sessions.sqlite");
 
     const source = await fs.readFile(
@@ -108,6 +111,13 @@ describe("managed image actions Gateway E2E", () => {
           const fullUrl = new URL(download.url ?? "", `http://127.0.0.1:${port}`);
           expect(fullUrl.searchParams.get("mediaTicket")).toMatch(/^v1\./u);
 
+          const rootFull = await fetch(fullUrl);
+          expect(rootFull.status).toBe(200);
+          expect(rootFull.headers.get("content-type")).toBe("image/png");
+          expect(Buffer.from(await rootFull.arrayBuffer())).toEqual(source);
+
+          fullUrl.pathname = `/rosita${fullUrl.pathname}`;
+
           const full = await fetch(fullUrl);
           expect(full.status).toBe(200);
           const fullBytes = Buffer.from(await full.arrayBuffer());
@@ -129,8 +139,59 @@ describe("managed image actions Gateway E2E", () => {
           });
           expect(authenticated.status).toBe(200);
           expect(Buffer.from(await authenticated.arrayBuffer())).toEqual(source);
-        } finally {
+
+          const wrongIdentity = new URL(fullUrl);
+          wrongIdentity.pathname = wrongIdentity.pathname.replace(
+            /\/[0-9a-f-]+\/full$/u,
+            "/22222222-2222-4222-8222-222222222222/full",
+          );
+          const wrong = await fetch(wrongIdentity, {
+            headers: { Authorization: `Bearer ${GATEWAY_TOKEN}` },
+          });
+          expect(wrong.status).toBe(404);
+          expect(await wrong.text()).toBe("not found");
+
+          vi.useFakeTimers({ toFake: ["Date"] });
+          vi.setSystemTime(Date.parse(download.expiresAt ?? "") + 1);
+          try {
+            const expired = await fetch(fullUrl);
+            expect(expired.status).toBe(401);
+            expect(await expired.text()).toContain("unauthorized");
+          } finally {
+            vi.useRealTimers();
+          }
+
           await disconnectGatewayClient(client);
+          const afterDisconnect = await fetch(fullUrl);
+          expect(afterDisconnect.status).toBe(200);
+          expect(Buffer.from(await afterDisconnect.arrayBuffer())).toEqual(source);
+
+          const record = readManagedImageRecord(
+            artifactId.slice(MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX.length),
+            stateDir,
+          );
+          if (!record) {
+            throw new Error("managed image record disappeared before cleanup");
+          }
+          const originalPath = path.join(
+            record.original.mediaRoot,
+            record.original.mediaSubdir,
+            record.original.mediaId,
+          );
+          const cleanup = await cleanupManagedOutgoingMediaRecords({
+            stateDir,
+            sessionKey: SESSION_KEY,
+            forceDeleteSessionRecords: true,
+          });
+          expect(cleanup).toMatchObject({ deletedRecordCount: 1, deletedFileCount: 1 });
+          expect(readManagedImageRecord(record.attachmentId, stateDir)).toBeNull();
+          await expect(fs.access(originalPath)).rejects.toMatchObject({ code: "ENOENT" });
+
+          const afterCleanup = await fetch(fullUrl);
+          expect(afterCleanup.status).toBe(404);
+          expect(await afterCleanup.text()).toBe("not found");
+        } finally {
+          await disconnectGatewayClient(client).catch(() => {});
         }
       },
       { serverOptions: { auth: { mode: "token", token: GATEWAY_TOKEN } } },

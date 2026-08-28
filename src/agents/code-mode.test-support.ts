@@ -3,10 +3,20 @@ import { setPluginToolMeta } from "../plugins/tools.js";
 import { codeModeReplayIdForToolCall } from "./code-mode-bridge.js";
 import { resolveCodeModeHeadlessConfig } from "./code-mode-runtime.js";
 import type { CodeModeSkill } from "./code-mode-skills.js";
-import { activeRuns, removeExpiredRuns, resumingRunIds } from "./code-mode-state.js";
+import {
+  activeRuns,
+  disposeAllCodeModeRuns,
+  removeExpiredRuns,
+  resumingRunIds,
+} from "./code-mode-state.js";
 import { normalizeCodeModeWorkerResult, runCodeModeWorker } from "./code-mode-worker.js";
 import { createCodeModeTools } from "./code-mode.js";
-import { createToolSearchCatalogRef, type ToolSearchCatalogRef } from "./tool-search.js";
+import {
+  createToolSearchCatalogRef,
+  registerHeadlessToolSearchCatalog,
+  type ToolSearchCatalogRef,
+  type ToolSearchToolContext,
+} from "./tool-search.js";
 import { jsonResult, type AnyAgentTool } from "./tools/common.js";
 
 export const testing = {
@@ -20,8 +30,7 @@ export const testing = {
 };
 
 export function resetCodeModeTestState(): void {
-  testing.activeRuns.clear();
-  testing.resumingRunIds.clear();
+  disposeAllCodeModeRuns();
 }
 
 export function fakeTool(name: string, description: string): AnyAgentTool {
@@ -109,6 +118,26 @@ export function resultDetails(result: { details?: unknown }): Record<string, unk
   expect(result.details).toBeDefined();
   expect(typeof result.details).toBe("object");
   return result.details as Record<string, unknown>;
+}
+
+export function createHeadlessCodeModeHarness(
+  tools: AnyAgentTool[] = [],
+  options: { swarmEnabled?: boolean } = {},
+): ToolSearchToolContext {
+  const config = {
+    tools: {
+      codeMode: { enabled: false, timeoutMs: 60_000 },
+      ...(options.swarmEnabled ? { swarm: true } : {}),
+    },
+  } as never;
+  const catalogRef = createToolSearchCatalogRef();
+  registerHeadlessToolSearchCatalog({ catalogRef, tools });
+  return {
+    config,
+    runtimeConfig: config,
+    agentId: "main",
+    catalogRef,
+  };
 }
 
 export function createCodeModeHarness(

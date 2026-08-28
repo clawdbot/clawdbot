@@ -109,7 +109,7 @@ export function parseStatusRouteArgs(argv: string[]) {
   const positionals = getRoutedCommandPositionals(argv, {
     commandPath: ["status"],
     booleanFlags: ["--json", "--deep", "--all", "--usage", "--verbose", "--debug"],
-    valueFlags: ["--timeout"],
+    valueFlags: ["--timeout", "--agent"],
   });
   if (!positionals || positionals.length !== 0) {
     return null;
@@ -118,11 +118,16 @@ export function parseStatusRouteArgs(argv: string[]) {
   if (timeoutMs === null) {
     return null;
   }
+  const agent = parseOptionalFlagValue(argv, "--agent");
+  if (!agent.ok) {
+    return null;
+  }
   return {
     json: hasFlag(argv, "--json"),
     deep: hasFlag(argv, "--deep"),
     all: hasFlag(argv, "--all"),
     usage: hasFlag(argv, "--usage"),
+    ...(agent.value !== undefined ? { agent: agent.value } : {}),
     verbose: getVerboseFlag(argv, { includeDebug: true }),
     timeoutMs,
   };
@@ -271,20 +276,25 @@ export function parseSessionsRouteArgs(argv: string[]) {
 export function parseAgentsListRouteArgs(argv: string[]) {
   const listPositionals = getRoutedCommandPositionals(argv, {
     commandPath: ["agents", "list"],
-    booleanFlags: ["--json", "--bindings"],
+    booleanFlags: ["--json", "--bindings", "--tree"],
   });
   if (listPositionals && listPositionals.length === 0) {
     return {
       json: hasFlag(argv, "--json"),
       bindings: hasFlag(argv, "--bindings"),
+      tree: hasFlag(argv, "--tree"),
     };
   }
   const aliasPositionals = getRoutedCommandPositionals(argv, {
     commandPath: ["agents"],
-    booleanFlags: ["--json", "--bindings"],
+    booleanFlags: ["--json", "--bindings", "--tree"],
   });
   return aliasPositionals?.length === 0
-    ? { json: hasFlag(argv, "--json"), bindings: hasFlag(argv, "--bindings") }
+    ? {
+        json: hasFlag(argv, "--json"),
+        bindings: hasFlag(argv, "--bindings"),
+        tree: hasFlag(argv, "--tree"),
+      }
     : null;
 }
 

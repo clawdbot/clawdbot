@@ -116,6 +116,13 @@ describe("memory consolidation project groups", () => {
       return prompt.candidates.map((item) => item.projectKey);
     });
     expect(promptedGroups).toEqual([[null], ["github.com/acme/alpha"], ["github.com/acme/beta"]]);
+    expect(
+      subagent.run.mock.calls.every(
+        ([options]) =>
+          (options as { disableTools?: boolean; promptMode?: string }).disableTools === true &&
+          (options as { promptMode?: string }).promptMode === "minimal",
+      ),
+    ).toBe(true);
 
     const result = applyMemoryConsolidationPlan({
       existingMemory,

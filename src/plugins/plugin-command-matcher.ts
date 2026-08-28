@@ -33,29 +33,30 @@ function listInvocationKeys(
   return [...keys];
 }
 
+export function parsePluginInvocation(commandBody: string) {
+  const commandMatch = commandBody.trim().match(/^\/\s*([^\s]+)(?:\s+([\s\S]*))?$/);
+  if (!commandMatch) {
+    return null;
+  }
+  const key = normalizeLowercaseStringOrEmpty(`/${commandMatch[1]}`);
+  return {
+    keys: [...new Set([key, key.replace(/_/g, "-"), key.replace(/-/g, "_")])],
+    args: commandMatch[2]?.trim() || undefined,
+  };
+}
+
 export function matchRegisteredPluginCommand(params: {
   commands: readonly RegisteredPluginCommand[];
   commandBody: string;
   channel?: string;
   aliasScope: PluginCommandAliasScope;
 }): { command: RegisteredPluginCommand; args?: string } | null {
-  const trimmed = params.commandBody.trim();
-  if (!trimmed.startsWith("/")) {
+  const invocation = parsePluginInvocation(params.commandBody);
+  if (!invocation) {
     return null;
   }
-  const commandMatch = trimmed.match(/^\/\s*([^\s]+)(?:\s+([\s\S]*))?$/);
-  if (!commandMatch) {
-    return null;
-  }
-  const key = normalizeLowercaseStringOrEmpty(`/${commandMatch[1]}`);
-  const alternateKeys = [key];
-  if (key.includes("_")) {
-    alternateKeys.push(key.replace(/_/g, "-"));
-  }
-  if (key.includes("-")) {
-    alternateKeys.push(key.replace(/-/g, "_"));
-  }
-  const command = alternateKeys
+  const { keys, args } = invocation;
+  const command = keys
     .map((candidateKey) =>
       params.commands.find(
         (candidate) =>
@@ -64,12 +65,8 @@ export function matchRegisteredPluginCommand(params: {
       ),
     )
     .find((candidate): candidate is RegisteredPluginCommand => candidate !== undefined);
-  if (!command) {
+  if (!command || (args && !command.acceptsArgs)) {
     return null;
   }
-  const args = commandMatch[2]?.trim();
-  if (args && !command.acceptsArgs) {
-    return null;
-  }
-  return { command, args: args || undefined };
+  return { command, args };
 }

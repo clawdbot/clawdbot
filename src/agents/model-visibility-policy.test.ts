@@ -150,7 +150,7 @@ describe("explicit model visibility policy", () => {
         (entry) => entry.provider === "external" && entry.id === "sensitive",
       ),
     ).toBe(false);
-    expect(policy.automaticFallbackKeys).toEqual(new Set(["external/sensitive"]));
+    expect(policy.retainedKeys).toEqual(new Set(["openai/gpt-5.5", "external/sensitive"]));
   });
 
   it("allows a configured fallback when the explicit policy also allows it", () => {

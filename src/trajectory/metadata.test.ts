@@ -145,7 +145,6 @@ describe("trajectory metadata", () => {
       webFetchProviderIds: [],
       webSearchProviderIds: [],
       migrationProviderIds: [],
-      memoryEmbeddingProviderIds: [],
       agentHarnessIds: ["openclaw"],
       cliCommands: [],
       services: [],

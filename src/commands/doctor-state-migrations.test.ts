@@ -6,6 +6,12 @@ import type { DatabaseSync } from "node:sqlite";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { resolveSharedMainAuthAgentDir } from "../agents/auth-profiles/shared-main-dir.js";
+import {
+  readPersistedAuthProfileStoreRaw,
+  readPersistedSharedAuthProfileStoreRaw,
+  writePersistedAuthProfileStoreRaw,
+} from "../agents/auth-profiles/sqlite.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
@@ -18,16 +24,16 @@ import {
   seedPluginStateEntriesForTests,
   setMaxPluginStateEntriesPerPluginForTests,
 } from "../plugin-state/plugin-state-store.test-helpers.js";
-import {
-  readPersistedInstalledPluginIndex,
-  writePersistedInstalledPluginIndex,
-} from "../plugins/installed-plugin-index-store.js";
+import { writePersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store-write.js";
+import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginInstallRecordInfo } from "../plugins/installed-plugin-index.js";
 import { EMPTY_LEGACY_SESSION_SURFACES } from "../plugins/legacy-session-surfaces.types.js";
+import { readConfigMachineState, writeConfigMachineState } from "../state/config-machine-state.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
-  OPENCLAW_STATE_SCHEMA_VERSION,
 } from "../state/openclaw-state-db.js";
 import { loadTaskFlowRegistryStateFromSqlite } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqlite } from "../tasks/task-registry.store.sqlite.js";
@@ -250,6 +256,7 @@ afterEach(() => {
   resetAutoMigrateLegacyStateDirForTest();
   resetAutoMigrateLegacyTaskStateSidecarsForTest();
   closeOpenClawStateDatabaseForTest();
+  closeOpenClawAgentDatabasesForTest();
   setMaxPluginStateEntriesPerPluginForTests();
   resetPluginStateStoreForTests();
   mockedChannelMigrationPlans.plans = [];
@@ -913,6 +920,66 @@ describe("doctor legacy state migrations", () => {
     expect(store["agent:main:slack:channel:c123"]?.sessionId).toBe("c");
     expect(store["agent:main:unknown:group:abc"]?.sessionId).toBe("d");
     expect(store["agent:main:subagent:xyz"]?.sessionId).toBe("e");
+  });
+
+  it("routes shared auth relocation through the doctor-only migration plan", async () => {
+    const stateDir = makeDoctorStateDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const mainAgentDir = resolveSharedMainAuthAgentDir(env);
+    const store = {
+      version: 1,
+      profiles: {
+        "openai:default": { type: "api_key" as const, provider: "openai", key: "secret" },
+      },
+    };
+    writePersistedAuthProfileStoreRaw(store, mainAgentDir);
+    const detected = await detectLegacyStateMigrations({
+      cfg: {},
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(detected.sharedAuthStore.hasLegacy).toBe(true);
+    expect(detected.preview).toContain(
+      "- Shared auth store: legacy main-agent rows → shared SQLite state",
+    );
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toEqual([]);
+    expect(result.changes).toContain("Relocated shared auth profiles into shared SQLite state.");
+    expect(result.notices).toContain(
+      "The main agent no longer owns shared credentials and can now be deleted.",
+    );
+    expect(readPersistedSharedAuthProfileStoreRaw(env)).toEqual(store);
+    expect(readPersistedAuthProfileStoreRaw(mainAgentDir)).toBeNull();
+  });
+
+  it("records fresh shared auth ownership without reporting a relocation", async () => {
+    const stateDir = makeDoctorStateDir();
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+
+    const result = await autoMigrateLegacyState({
+      cfg: {},
+      env,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.changes).not.toContain(
+      "Relocated shared auth profiles into shared SQLite state.",
+    );
+    expect(result.notices ?? []).not.toContain(
+      "The main agent no longer owns shared credentials and can now be deleted.",
+    );
+    const database = openOpenClawStateDatabase({ env }).db;
+    expect(
+      database
+        .prepare("SELECT value_json FROM config_machine_state WHERE state_key = 'auth.sharedStore'")
+        .get(),
+    ).toEqual({ value_json: JSON.stringify({ location: "state-db" }) });
   });
 
   it("removes stale transcript paths left by a shipped legacy migration", async () => {
@@ -2862,11 +2929,14 @@ describe("doctor legacy state migrations", () => {
       "utf8",
     );
     const { db } = openOpenClawStateDatabase({ env });
-    db.prepare(
-      `INSERT INTO update_check_state (
-        state_key, last_checked_at, last_available_version, updated_at_ms
-      ) VALUES (?, ?, ?, ?)`,
-    ).run("default", "2026-07-14T00:00:00.000Z", "2026.7.2", 1);
+    writeConfigMachineState(
+      "update.checkState",
+      {
+        lastCheckedAt: "2026-07-14T00:00:00.000Z",
+        lastAvailableVersion: "2026.7.2",
+      },
+      { env },
+    );
     db.prepare(
       `INSERT INTO config_health_entries (
         config_path, last_known_good_json, last_promoted_good_json,
@@ -2900,13 +2970,9 @@ describe("doctor legacy state migrations", () => {
         demo: { source: "npm", spec: "demo@1.0.0", version: "1.0.0" },
       },
     });
-    expect(
-      db
-        .prepare(
-          "SELECT last_available_version FROM update_check_state WHERE state_key = 'default'",
-        )
-        .get(),
-    ).toMatchObject({ last_available_version: "2026.7.2" });
+    expect(readConfigMachineState("update.checkState", { env })).toMatchObject({
+      lastAvailableVersion: "2026.7.2",
+    });
     expect(
       db
         .prepare("SELECT last_known_good_json FROM config_health_entries WHERE config_path = ?")

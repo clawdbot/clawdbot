@@ -1,5 +1,6 @@
 ---
 summary: "Choose and configure Google Meet, Microsoft Teams, or Zoom meeting participation"
+doc-schema-version: 1
 read_when:
   - You want an OpenClaw agent to join a video meeting
   - You are choosing between the Google Meet, Microsoft Teams meetings, and Zoom meetings plugins
@@ -33,6 +34,8 @@ The three plugins share the same modes:
 
 Use `transcribe` when the agent only needs meeting text. Use `agent` for normal OpenClaw reasoning and tools. Use `bidi` when low-latency direct voice is more important than routing each turn through the regular agent.
 
+In `bidi` mode, recoverable provider diagnostics are logged without stopping the audio bridge. Providers that support reconnecting own that recovery. Terminal provider closure, exhausted recovery, failed initial setup, and local audio-transport failures still stop the bridge; leaving the meeting also stops it.
+
 The bounded live transcript remains available only in `transcribe` mode. In all
 three modes, browser joins also persist completed caption rows and a derived
 summary to the shared state database. Leaving the meeting finalizes visible
@@ -44,6 +47,45 @@ Automatic notes are on by default. Set `transcripts.enabled: false` to disable
 durable notes globally. An explicitly selected `transcribe` session retains its
 bounded live-caption tail without writing durable rows. Caption availability
 still depends on the meeting platform, account, language, and host policy.
+
+## Configure Teams or Zoom
+
+The Teams and Zoom plugins share the same configuration shape for their common
+meeting runtime. Add an entry only when you need to override a default. This
+example selects the normal agent path, changes the guest display name, and runs
+Chrome on a paired node:
+
+```json5
+{
+  plugins: {
+    entries: {
+      "teams-meetings": {
+        config: {
+          defaultMode: "agent",
+          chrome: { guestName: "OpenClaw Agent" },
+          chromeNode: { node: "meeting-node" },
+        },
+      },
+    },
+  },
+}
+```
+
+Use `"zoom-meetings"` as the entry id for Zoom. Omit `chromeNode` to run
+Chrome on the Gateway host.
+
+| Setting                          | Purpose                                                                           |
+| -------------------------------- | --------------------------------------------------------------------------------- |
+| `defaultMode`                    | `agent` (default), `bidi`, or `transcribe`                                        |
+| `chrome.guestName`               | Guest display name entered on the platform prejoin page                           |
+| `chrome.browserProfile`          | OpenClaw browser profile used for the meeting                                     |
+| `chrome.audioBackend`            | `auto` (default), `blackhole-2ch`, or `pipewire-pulse`                            |
+| `chromeNode.node`                | Paired node id, name, or IP that owns Chrome and the native virtual-audio backend |
+| `realtime.transcriptionProvider` | Realtime transcription provider used by `agent` mode                              |
+| `realtime.voiceProvider`         | Realtime voice provider used by `bidi` mode                                       |
+| `realtime.model`                 | Optional realtime model override                                                  |
+| `realtime.agentId`               | Agent consulted in `agent` mode                                                   |
+| `realtime.toolPolicy`            | `safe-read-only`, `owner`, or `none`                                              |
 
 ## Prepare Chrome and audio
 

@@ -40,6 +40,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -69,7 +70,7 @@ describe("AppSidebar live narration", () => {
     const link = sidebar.querySelector<HTMLAnchorElement>(
       `[data-session-key="${key}"] .sidebar-recent-session__link`,
     );
-    expect(link?.title).toContain("Final verification is running.");
+    expect(link?.hasAttribute("title")).toBe(false);
     expect(link?.querySelector("[aria-live]")).toBeNull();
 
     sessions.publishList({
@@ -91,6 +92,7 @@ describe("AppSidebar live narration", () => {
     const sessions = createSessionsHarness("main", [key]);
     sessions.publishList({ result: sessionsResult([runningRow(key, 5)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -129,8 +131,8 @@ describe("AppSidebar live narration", () => {
     );
     expect(row?.textContent).not.toContain("Checking the remaining files.");
     expect(
-      row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")?.title,
-    ).not.toContain("Checking the remaining files.");
+      row?.querySelector<HTMLAnchorElement>(".sidebar-recent-session__link")?.hasAttribute("title"),
+    ).toBe(false);
   });
 
   it("keeps only the six newest running subscriptions and evicts the old boundary", async () => {
@@ -140,6 +142,7 @@ describe("AppSidebar live narration", () => {
     const rows = keys.map((key, index) => runningRow(key, index + 1));
     sessions.publishList({ result: sessionsResult(rows), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -159,6 +162,27 @@ describe("AppSidebar live narration", () => {
     expect(sessions.subscribeMessages.mock.calls.at(-1)?.[0]).toBe(keys[0]);
   });
 
+  it("keeps six background subscriptions when the open session is also running", async () => {
+    const keys = Array.from({ length: 7 }, (_, index) => `agent:main:run-${index + 1}`);
+    const gateway = createGatewayHarness({} as GatewayBrowserClient);
+    const sessions = createSessionsHarness("main", keys);
+    sessions.publishList({
+      result: sessionsResult(keys.map((key, index) => runningRow(key, index + 1))),
+      agentId: "main",
+    });
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = keys[0]!;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
+    sidebar.connected = true;
+    await sidebar.updateComplete;
+
+    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(7));
+    expect(sessions.subscribeMessages.mock.calls.map(([key]) => key)).toEqual(
+      expect.arrayContaining(keys),
+    );
+  });
+
   it("stays inert when the synced preference is off", async () => {
     const key = "agent:main:quiet";
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -166,6 +190,7 @@ describe("AppSidebar live narration", () => {
     sessions.publishList({ result: sessionsResult([runningRow(key, 1)]), agentId: "main" });
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.sidebarLiveActivity = false;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
@@ -182,7 +207,7 @@ describe("AppSidebar live narration", () => {
     ).toBeNull();
   });
 
-  it("skips the open chat subscription and resubscribes background runs after reconnect", async () => {
+  it("leases open and background running sessions again after reconnect", async () => {
     const openKey = "agent:main:open";
     const backgroundKey = "agent:main:background";
     const gateway = createGatewayHarness({} as GatewayBrowserClient);
@@ -194,25 +219,32 @@ describe("AppSidebar live narration", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
     sidebar.activeRouteId = "chat";
     sidebar.sessionKey = openKey;
+    sidebar.sessionOrganizer.setSessionsShowPreview(true);
     sidebar.connected = true;
     await sidebar.updateComplete;
 
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(1));
-    expect(sessions.subscribeMessages).toHaveBeenLastCalledWith(backgroundKey, {
+    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2));
+    expect(sessions.subscribeMessages).toHaveBeenCalledWith(openKey, {
+      agentId: undefined,
+    });
+    expect(sessions.subscribeMessages).toHaveBeenCalledWith(backgroundKey, {
       agentId: undefined,
     });
 
     gateway.publish({ phase: "stopped" });
     sidebar.connected = false;
     await sidebar.updateComplete;
-    await waitForFast(() => expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(sessions.unsubscribeMessages).toHaveBeenCalledTimes(2));
 
     gateway.publish({ phase: "connected" });
     sidebar.connected = true;
     await sidebar.updateComplete;
-    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(2));
-    expect(sessions.subscribeMessages).toHaveBeenLastCalledWith(backgroundKey, {
-      agentId: undefined,
-    });
+    await waitForFast(() => expect(sessions.subscribeMessages).toHaveBeenCalledTimes(4));
+    expect(sessions.subscribeMessages.mock.calls.slice(2)).toEqual(
+      expect.arrayContaining([
+        [backgroundKey, { agentId: undefined }],
+        [openKey, { agentId: undefined }],
+      ]),
+    );
   });
 });

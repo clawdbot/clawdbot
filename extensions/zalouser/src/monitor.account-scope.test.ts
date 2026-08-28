@@ -2,19 +2,21 @@
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig, PluginRuntime } from "../runtime-api.js";
-import "./monitor.send.test-mocks.js";
-import "./zalo-js.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
+// Preserve module setup before modules that consume it.
+// oxfmt-ignore
+import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
 import {
   createRawZalouserMessageFromNormalized,
   waitForZalouserIngressVerdict,
   withZalouserIngressTestQueue,
 } from "./ingress.test-support.js";
 import { monitorZalouserProvider } from "./monitor.js";
-import { sendMessageZalouserMock } from "./monitor.send.test-mocks.js";
 import { setZalouserRuntime } from "./runtime.js";
 import { createZalouserRuntimeEnv } from "./test-helpers.js";
 import type { ResolvedZalouserAccount, ZaloInboundMessage } from "./types.js";
-import { startZaloListenerMock } from "./zalo-js.test-mocks.js";
 
 type ZaloJsModule = typeof import("./zalo-js.js");
 type ListenerParams = Parameters<ZaloJsModule["startZaloListener"]>[0];

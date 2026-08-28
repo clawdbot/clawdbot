@@ -9,6 +9,7 @@ import {
   normalizeHeadersInitForFetch,
   normalizeRequestInitHeadersForFetch,
 } from "../fetch-headers.js";
+import { cancelUnreadResponseBody } from "../http-body.js";
 import {
   shouldUseConfiguredLocalOriginManagedProxyBypass,
   shouldResolveConfiguredLocalOriginManagedProxyBypass,
@@ -109,6 +110,18 @@ export type GuardedFetchResult = {
   refreshTimeout?: () => void;
   dispatcherReused?: boolean;
 };
+
+export class GuardedFetchRedirectError extends Error {
+  readonly status: number;
+  readonly maxRedirects: number;
+
+  constructor(params: { status: number; maxRedirects: number }) {
+    super(`Too many redirects (limit: ${params.maxRedirects})`);
+    this.name = "GuardedFetchRedirectError";
+    this.status = params.status;
+    this.maxRedirects = params.maxRedirects;
+  }
+}
 
 type GuardedFetchInternalOptions = GuardedFetchOptions & {
   managedProxyBypass?: ConfiguredLocalOriginManagedProxyBypass;
@@ -504,9 +517,10 @@ async function fetchWithSsrFGuardInternal(
       : DEFAULT_MAX_REDIRECTS;
   const mode = resolveGuardedFetchMode(params);
 
+  // Compose the caller signal before the deadline can mask init.signal.
   const { signal, cleanup, refresh } = buildTimeoutAbortSignal({
     timeoutMs: params.timeoutMs,
-    signal: params.signal,
+    signal: params.signal ?? params.init?.signal ?? undefined,
     operation: "fetchWithSsrFGuard",
     url: params.url,
   });
@@ -547,9 +561,14 @@ async function fetchWithSsrFGuardInternal(
 
     let dispatcher: Dispatcher | null = null;
     let dispatcherLease: PinnedDispatcherLease | undefined;
-    let activeResponse: Response | undefined;
-    const releaseDispatcher = async () =>
+    let response: Response | undefined;
+    const requestController = new AbortController();
+    const releaseDispatcher = async () => {
+      // Release only this hop's transport, including capture tees, before returning its pool lease.
+      requestController.abort();
+      await cancelUnreadResponseBody(response);
       await (dispatcherLease ? dispatcherLease.release() : closeDispatcher(dispatcher));
+    };
     // Resolve inside the redirect loop so exact-origin trust never carries across origins.
     const policyForUrl = resolveSsrFPolicyForUrl(parsedUrl, params.policy);
     const dispatcherPolicy = params.resolveDispatcherPolicy?.(parsedUrl) ?? params.dispatcherPolicy;
@@ -667,11 +686,9 @@ async function fetchWithSsrFGuardInternal(
                 timeoutMs,
               ),
           });
-          if (!dispatcherLease) {
-            dispatcher = createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
-          } else {
-            dispatcher = dispatcherLease.dispatcher;
-          }
+          dispatcher = dispatcherLease
+            ? dispatcherLease.dispatcher
+            : createPinnedDispatcher(pinned, undefined, policyForUrl, timeoutMs);
         } else {
           dispatcher = createPinnedDispatcher(pinned, dispatcherPolicy, policyForUrl, timeoutMs);
         }
@@ -681,7 +698,9 @@ async function fetchWithSsrFGuardInternal(
         ...(currentInit ? { ...currentInit } : {}),
         redirect: "manual",
         ...(dispatcher ? { dispatcher } : {}),
-        ...(signal ? { signal } : {}),
+        signal: signal
+          ? AbortSignal.any([signal, requestController.signal])
+          : requestController.signal,
       };
 
       const supportsDispatcherInit =
@@ -696,10 +715,9 @@ async function fetchWithSsrFGuardInternal(
       // because the default global fetch path will not honor per-request
       // dispatchers.
       const shouldUseRuntimeFetch = Boolean(dispatcher) && !supportsDispatcherInit;
-      const response = shouldUseRuntimeFetch
+      response = shouldUseRuntimeFetch
         ? await fetchWithRuntimeDispatcher(parsedUrl.toString(), init)
         : await defaultFetch(parsedUrl.toString(), init);
-      activeResponse = response;
       const capturedByGlobalFetchPatch =
         !shouldUseRuntimeFetch &&
         isAmbientGlobalFetch({
@@ -721,13 +739,13 @@ async function fetchWithSsrFGuardInternal(
       });
 
       if (isRedirectStatus(response.status)) {
+        redirectCount += 1;
+        if (redirectCount > maxRedirects) {
+          throw new GuardedFetchRedirectError({ status: response.status, maxRedirects });
+        }
         const location = response.headers.get("location");
         if (!location) {
           throw new Error(`Redirect missing location header (${response.status})`);
-        }
-        redirectCount += 1;
-        if (redirectCount > maxRedirects) {
-          throw new Error(`Too many redirects (limit: ${maxRedirects})`);
         }
         const nextParsedUrl = new URL(location, parsedUrl);
         const nextUrl = nextParsedUrl.toString();
@@ -753,8 +771,6 @@ async function fetchWithSsrFGuardInternal(
           throw new Error("Redirect loop detected");
         }
         visited.add(nextVisitKey);
-        await response.body?.cancel().catch(() => undefined);
-        activeResponse = undefined;
         await releaseDispatcher();
         currentUrl = nextUrl;
         continue;
@@ -774,7 +790,6 @@ async function fetchWithSsrFGuardInternal(
           `security: blocked URL fetch (${context}) targetOrigin=${parsedUrl.origin} reason=${err.message}`,
         );
       }
-      await activeResponse?.body?.cancel().catch(() => undefined);
       await finishRequest(releaseDispatcher);
       throw err;
     }

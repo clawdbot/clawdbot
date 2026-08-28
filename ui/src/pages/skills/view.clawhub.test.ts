@@ -224,6 +224,150 @@ describe("renderSkills ClawHub", () => {
     ]);
   });
 
+  it("offers install without a detail card for an install-only search result", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onClawHubDetailOpen = vi.fn();
+    const onClawHubInstall = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "pdf",
+          clawhubResults: [
+            {
+              score: 1,
+              slug: "pdf",
+              // The Gateway marks external sources install-only; it serves no card for them.
+              installRef: "skills-sh:openai/skills/pdf",
+              installOnly: true,
+              trustState: "not-scanned-by-clawhub",
+              displayName: "Pdf",
+            },
+            {
+              score: 1,
+              slug: "pdf",
+              installRef: "@awspace/pdf",
+              displayName: "Pdf",
+            },
+          ],
+          onClawHubDetailOpen,
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const rows = [...container.querySelectorAll<HTMLElement>(".clawhub-skill-result__button")].map(
+      (copy) => copy.closest<HTMLElement>(".plugins-item")!,
+    );
+    expect(rows).toHaveLength(2);
+    // A detail button on the external row would open a dialog the Gateway always refuses.
+    expect(rows[0]!.querySelector(".plugins-item__detail-button")).toBeNull();
+    expect(rows[1]!.querySelector(".plugins-item__detail-button")).not.toBeNull();
+    // The row is the only place left to say the source was never scanned.
+    expect(rows[0]!.querySelector(".settings-row__desc")?.textContent).toContain(
+      "Not scanned by ClawHub",
+    );
+
+    for (const row of rows) {
+      row
+        .querySelector<HTMLButtonElement>(".btn.btn--sm")!
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    }
+
+    // Install keeps the exact source the operator picked instead of a same-slug native skill.
+    expect(onClawHubInstall.mock.calls.flat()).toEqual([
+      "skills-sh:openai/skills/pdf",
+      "@awspace/pdf",
+    ]);
+    expect(onClawHubDetailOpen).not.toHaveBeenCalled();
+  });
+
+  it("renders an installed external result from its exact recorded reference", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onClawHubInstall = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "pdf",
+          clawhubResults: [
+            {
+              score: 1,
+              slug: "pdf",
+              installRef: "skills-sh:openai/skills/pdf",
+              installOnly: true,
+              displayName: "Pdf",
+            },
+          ],
+          report: {
+            workspaceDir: "/tmp/workspace",
+            managedSkillsDir: "/tmp/skills",
+            skills: [
+              createSkill({
+                clawhub: {
+                  status: "linked",
+                  valid: true,
+                  registry: "https://clawhub.ai",
+                  slug: "pdf",
+                  requestedReference: "skills-sh:openai/skills/pdf",
+                  installedVersion: "0.0.0",
+                  installedAt: 1,
+                },
+              }),
+            ],
+          },
+          onClawHubInstall,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const button = container.querySelector<HTMLButtonElement>(".btn.btn--sm")!;
+    expect(button.textContent?.trim()).toBe("Installed");
+    expect(button.disabled).toBe(true);
+    button.click();
+    expect(onClawHubInstall).not.toHaveBeenCalled();
+  });
+
+  it("keeps the review flow for results from a gateway that predates the install-only flag", async () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    dialogRestores.push(() => container.remove());
+    const onClawHubDetailOpen = vi.fn();
+
+    render(
+      renderSkills(
+        createProps({
+          clawhubQuery: "email",
+          // An older gateway sends installRef with no capability field at all.
+          clawhubResults: [
+            { score: 1, slug: "email", installRef: "@alice/email", displayName: "Email" },
+          ],
+          onClawHubDetailOpen,
+        }),
+      ),
+      container,
+    );
+    await Promise.resolve();
+
+    const row = container
+      .querySelector<HTMLElement>(".clawhub-skill-result__button")!
+      .closest<HTMLElement>(".plugins-item")!;
+    // Reading omission as install-only would silently drop the reviewed-version step that every
+    // released gateway still expects.
+    const detailButton = row.querySelector<HTMLButtonElement>(".plugins-item__detail-button");
+    expect(detailButton).not.toBeNull();
+    detailButton!.click();
+    expect(onClawHubDetailOpen).toHaveBeenCalledWith("@alice/email");
+  });
+
   it("sizes the ClawHub detail dialog to a refusal message instead of a reader", async () => {
     const container = document.createElement("div");
     document.body.append(container);
@@ -244,38 +388,6 @@ describe("renderSkills ClawHub", () => {
     // Without this the panel keeps the tall reader height meant for skill documents, so a
     // two-line refusal renders in a mostly empty dialog and reads as broken.
     expect(container.querySelectorAll(".md-preview-dialog__panel--message-only")).toHaveLength(1);
-  });
-
-  it("renders ClawHub acknowledgement retry actions", async () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    dialogRestores.push(() => container.remove());
-    const onClawHubInstall = vi.fn();
-
-    render(
-      renderSkills(
-        createProps({
-          clawhubInstallMessage: {
-            kind: "error",
-            text: "REVIEW REQUIRED - ClawHub found suspicious behavior.",
-            acknowledgeRef: "github",
-            acknowledgeVersion: "1.2.3",
-          },
-          onClawHubInstall,
-        }),
-      ),
-      container,
-    );
-
-    const retryButton = container.querySelector<HTMLButtonElement>(".callout button");
-    expect(normalizeText(container.querySelector(".callout")!)).toBe(
-      "REVIEW REQUIRED - ClawHub found suspicious behavior. Acknowledge risk and install",
-    );
-    expect(retryButton).toBeInstanceOf(HTMLButtonElement);
-    retryButton!.click();
-
-    expect(onClawHubInstall).toHaveBeenCalledTimes(1);
-    expect(onClawHubInstall).toHaveBeenCalledWith("github", true, "1.2.3");
   });
 
   it("renders installed ClawHub verdicts and the local Skill Card tab", async () => {
@@ -394,6 +506,61 @@ describe("renderSkills ClawHub", () => {
     expect(container.querySelector(".sidebar-markdown strong")?.textContent).toBe("trust");
     expect(normalizeText(container)).toContain("AgentReceipt Local trust card.");
   });
+
+  it.each([
+    { loading: true, label: "Refreshing…", warning: false },
+    { loading: false, label: "Unavailable", warning: true },
+  ])(
+    "shows $label consistently for a missing ClawHub verdict while loading=$loading",
+    async ({ loading, label, warning }) => {
+      const container = document.createElement("div");
+      document.body.append(container);
+      dialogRestores.push(() => container.remove());
+      installDialogMethod("showModal", function (this: HTMLDialogElement) {
+        this.setAttribute("open", "");
+      });
+
+      const linkedSkill = createSkill({
+        skillKey: "agentreceipt",
+        name: "AgentReceipt",
+        clawhub: {
+          status: "linked",
+          valid: true,
+          registry: "https://clawhub.ai",
+          slug: "agentreceipt",
+          installedVersion: "1.2.3",
+          installedAt: 123,
+        },
+      });
+      render(
+        renderSkills(
+          createProps({
+            report: {
+              workspaceDir: "/tmp/workspace",
+              managedSkillsDir: "/tmp/skills",
+              skills: [linkedSkill],
+            },
+            detailKey: "agentreceipt",
+            clawhubVerdictsLoading: loading,
+          }),
+        ),
+        container,
+      );
+      await Promise.resolve();
+
+      const rowVerdict = Array.from(container.querySelectorAll(".settings-status")).find(
+        (element) => normalizeText(element) === label,
+      );
+      const detailVerdict = Array.from(container.querySelectorAll(".chip")).find(
+        (element) => normalizeText(element) === label,
+      );
+      expect(rowVerdict).toBeDefined();
+      expect(detailVerdict).toBeDefined();
+      expect(rowVerdict?.classList.contains("settings-status--warn")).toBe(warning);
+      expect(detailVerdict?.classList.contains("chip-warn")).toBe(warning);
+      expect(normalizeText(container).match(new RegExp(label, "gu")) ?? []).toHaveLength(2);
+    },
+  );
 
   it("fails closed for inconsistent ClawHub verdict envelopes", async () => {
     const container = document.createElement("div");

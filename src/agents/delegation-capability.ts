@@ -72,12 +72,7 @@ function wrapReportOnlyTool(tool: AnyAgentTool, allowedActions: ReadonlySet<stri
         if (!allowedActions.has(readToolAction(params))) {
           throw new ToolAuthorizationError(REPORT_ONLY_ERROR);
         }
-        return await Reflect.apply(target.execute, undefined, [
-          toolCallId,
-          params,
-          signal,
-          onUpdate,
-        ]);
+        return await target.execute(toolCallId, params, signal, onUpdate);
       };
     },
   });

@@ -1,8 +1,10 @@
 // Control UI route classifier for base-path and root-mounted SPA serving.
+import { isControlUiFocusPath } from "@openclaw/session-url-contract";
 import { acceptsControlUiHtmlResponse, isReadHttpMethod } from "./control-ui-http-utils.js";
 import {
   classifyGatewayProbePath,
   classifyMcpAppStandalonePath,
+  classifyNodeWorkspaceTransferPath,
   classifyWorkerGatewayPath,
 } from "./gateway-http-route-contracts.js";
 
@@ -44,6 +46,14 @@ export function isControlUiApprovalDocumentPath(params: {
   return encodedId.length > 0 && !encodedId.includes("/");
 }
 
+/** Focused presentation namespace used only after plugin routing declines it. */
+export function isControlUiFocusDocumentPath(params: {
+  basePath: string;
+  pathname: string;
+}): boolean {
+  return isControlUiFocusPath(params.pathname, params.basePath);
+}
+
 /** Classify an HTTP request as Control UI serving, redirect, 404, or non-Control-UI. */
 export function classifyControlUiRequest(params: {
   basePath: string;
@@ -74,6 +84,11 @@ export function classifyControlUiRequest(params: {
     // Worker admission is upgrade-only; never let the root SPA turn a plain GET
     // or a malformed descendant into an apparently successful HTML response.
     if (classifyWorkerGatewayPath(pathname) !== "outside") {
+      return { kind: "not-control-ui" };
+    }
+    // Node workspace transfers are authenticated core routes. Reserve malformed
+    // descendants too, so the SPA never turns a transfer failure into HTML.
+    if (classifyNodeWorkspaceTransferPath(pathname) !== "outside") {
       return { kind: "not-control-ui" };
     }
     // Keep plugin-owned HTTP routes outside the root-mounted Control UI SPA

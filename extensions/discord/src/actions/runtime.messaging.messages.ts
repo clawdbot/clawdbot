@@ -4,7 +4,8 @@ import {
   readPositiveIntegerParam,
   readStringArrayParam,
   readStringParam,
-} from "../runtime-api.js";
+} from "openclaw/plugin-sdk/channel-actions";
+import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { discordMessagingActionRuntime } from "./runtime.messaging.runtime.js";
 import type { DiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 
@@ -208,9 +209,8 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
               inferChannelId,
               ctx.withOpts(),
             );
-            if (channelInfo && typeof channelInfo === "object") {
-              const record = channelInfo as unknown as Record<string, unknown>;
-              const resolved = record.guild_id ?? record.guildId;
+            if (isRecord(channelInfo)) {
+              const resolved = channelInfo.guild_id ?? channelInfo.guildId;
               if (typeof resolved === "string" && resolved.trim()) {
                 guildId = resolved.trim();
               }

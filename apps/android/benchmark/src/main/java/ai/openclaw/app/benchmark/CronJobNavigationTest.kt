@@ -16,13 +16,15 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class CronJobNavigationTest {
   private lateinit var device: UiDevice
+  private val packageName: String
+    get() = InstrumentationRegistry.getInstrumentation().targetContext.packageName
 
   @Before
   fun setUp() {
     device = UiDevice.getInstance(InstrumentationRegistry.getInstrumentation())
     device.executeShellCommand("am force-stop $packageName")
     device.executeShellCommand(
-      "am start -W -n $packageName/.MainActivity " +
+      "am start -W -n $packageName/ai.openclaw.app.MainActivity " +
         "--ez openclaw.screenshotMode true --es openclaw.screenshotScene settings",
     )
     assertNotNull(device.wait(Until.findObject(By.text("Settings")), waitTimeoutMs))
@@ -72,7 +74,6 @@ class CronJobNavigationTest {
   }
 
   private companion object {
-    const val packageName = "ai.openclaw.app"
     const val waitTimeoutMs = 10_000L
     const val shortWaitMs = 1_000L
     const val maxScrolls = 6

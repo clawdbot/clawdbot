@@ -22,7 +22,7 @@ export type SystemAgentOperation =
       id: string;
       provider?: string;
     }
-  | { kind: "setup"; workspace?: string; model?: string }
+  | { kind: "setup"; workspace?: string; model?: string; agentName?: string }
   | { kind: "model-setup"; workspace?: string }
   | { kind: "channel-list" }
   | { kind: "channel-info"; channel: string }
@@ -47,6 +47,12 @@ export type SystemAgentOperation =
   | { kind: "plugin-install"; spec: string }
   | { kind: "plugin-uninstall"; pluginId: string }
   | { kind: "audit" }
-  | { kind: "create-agent"; agentId: string; workspace?: string; model?: string }
+  | {
+      kind: "create-agent";
+      agentId: string;
+      workspace?: string;
+      model?: string;
+      requesterAgentId?: string;
+    }
   | { kind: "open-tui"; agentId?: string; workspace?: string; agentDraft?: "hatch" }
   | { kind: "set-default-model"; model: string; agentId?: string };

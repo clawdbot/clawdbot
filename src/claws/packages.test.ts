@@ -523,8 +523,8 @@ describe("installClawPackages", () => {
     expect(installPlugin).toHaveBeenCalledWith(
       expect.objectContaining({
         raw: "clawhub:@owner/audit@2.0.1",
+        allowInstallPolicyWarningPrompt: false,
         opts: {
-          acknowledgeClawHubRisk: true,
           expectedIntegrity:
             "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
           expectedPluginId: "audit",

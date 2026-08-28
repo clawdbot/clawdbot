@@ -12,7 +12,6 @@ private const val NONZERO_SEED: ULong = 0x9E37_79B9_7F4A_7C15uL
 private const val XORSHIFT_MULTIPLIER: ULong = 2_685_821_657_736_338_717uL
 private const val TAU = PI * 2.0
 private const val BLINK_DURATION = 0.16
-private const val CATCH_DURATION = 0.8
 
 private enum class Gesture {
   Wave,
@@ -109,9 +108,6 @@ class MascotAnimator(
   private var currentGaze = MascotGaze()
   private var nextClawSnapAt = 0.0
   private var nextMoodBeatAt = 0.0
-  private var teaseActive = false
-  private var teaseChangedAt = 0.0
-  private var catchStartedAt: Double? = null
 
   fun setMood(
     mood: MascotMood,
@@ -124,18 +120,6 @@ class MascotAnimator(
     activeGesture = null
     rescheduleMoodBeat(timeSeconds)
     entranceGesture(mood)?.let { startGesture(it, timeSeconds) }
-  }
-
-  fun setTease(
-    active: Boolean,
-    timeSeconds: Double,
-  ) {
-    teaseActive = active
-    teaseChangedAt = timeSeconds
-  }
-
-  fun playCatch(timeSeconds: Double) {
-    catchStartedAt = timeSeconds
   }
 
   fun poseAt(timeSeconds: Double): MascotPose {
@@ -156,23 +140,6 @@ class MascotAnimator(
         activeGesture = null
       } else {
         applyGesture(gesture, pose, progress)
-      }
-    }
-
-    if (teaseActive && timeSeconds >= teaseChangedAt) {
-      pose.mouthRound = max(pose.mouthRound, 0.5)
-      pose.gaze = MascotGaze(x = 0.0, y = 0.6)
-    }
-    catchStartedAt?.let { startedAt ->
-      val progress = (timeSeconds - startedAt) / CATCH_DURATION
-      if (progress >= 1.0) {
-        catchStartedAt = null
-      } else if (progress >= 0.0) {
-        val flash = bell(progress)
-        applyGesture(Gesture.ClawSnap, pose, clamp(progress / 0.75))
-        pose.happyEyes = max(pose.happyEyes, 0.9 * flash)
-        pose.mouthCurve = max(pose.mouthCurve, 0.7 * flash)
-        pose.blush = max(pose.blush, 0.65 * flash)
       }
     }
 

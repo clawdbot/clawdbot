@@ -31,9 +31,24 @@ import {
 import type { DiscordVoiceReceive } from "./voice-receive.js";
 
 const logger = createSubsystemLogger("discord/voice");
+const REALTIME_PLAYBACK_MAX_MISSED_FRAMES = 100;
 
 function isVoiceSessionStopped(entry: VoiceSessionEntry): boolean {
   return entry.sessionLifecycle.status === "stopped";
+}
+
+function retireTranscripts(entry: VoiceSessionEntry): void {
+  const transcripts = entry.transcripts;
+  entry.transcripts = undefined;
+  // Detach before notifying: retained delivery and reentrant stop cannot target
+  // this binding or a replacement installed while notification settles.
+  try {
+    void Promise.resolve(transcripts?.onStop?.()).catch((error: unknown) => {
+      logger.warn(`discord voice: transcripts retirement failed: ${formatErrorMessage(error)}`);
+    });
+  } catch (error) {
+    logger.warn(`discord voice: transcripts retirement failed: ${formatErrorMessage(error)}`);
+  }
 }
 
 type DiscordVoiceSdk = ReturnType<typeof loadDiscordVoiceSdk>;
@@ -158,13 +173,21 @@ export class DiscordVoiceSessions {
     const { guildId, channelId } = params;
     const voiceConfig = this.params.discordConfig.voice;
     const voiceMode = resolveDiscordVoiceMode(voiceConfig);
+    const cancelledJoinResult = (): VoiceOperationResult => ({
+      ok: false,
+      message: "Discord voice join was cancelled.",
+      guildId,
+      channelId,
+    });
 
     const existing = this.params.sessions.get(guildId);
     if (existing && existing.channelId === channelId) {
+      existing.autoJoinWhenOccupied = options?.autoJoinWhenOccupied === true;
       if (authority) {
         existing.generation = authority.generation;
       }
       if (options?.transcripts) {
+        retireTranscripts(existing);
         existing.transcripts = options.transcripts;
       }
       if (
@@ -199,16 +222,26 @@ export class DiscordVoiceSessions {
       await this.leave({ guildId }, { preserveFollowState: options?.preserveFollowState });
     }
 
-    const channelInfo = await this.params.client.fetchChannel(channelId).catch(() => null);
-    if (authority && !authority.isCurrent()) {
+    let channelInfo: Awaited<ReturnType<Client["fetchChannel"]>>;
+    try {
+      channelInfo = await this.params.client.fetchChannel(channelId);
+    } catch (err) {
+      // A leave or replacement can invalidate the join while the REST lookup is pending;
+      // cancellation remains authoritative over a stale lookup failure.
+      if (authority && !authority.isCurrent()) {
+        return cancelledJoinResult();
+      }
       return {
         ok: false,
-        message: "Discord voice join was cancelled.",
+        message: `Failed to resolve Discord channel ${channelId}: ${formatErrorMessage(err)}`,
         guildId,
         channelId,
       };
     }
-    if (!channelInfo || ("type" in channelInfo && !isVoiceChannel(channelInfo.type))) {
+    if (authority && !authority.isCurrent()) {
+      return cancelledJoinResult();
+    }
+    if (!isVoiceChannel(channelInfo.type)) {
       return { ok: false, message: `Channel ${channelId} is not a voice channel.` };
     }
     const channelGuildId = "guildId" in channelInfo ? channelInfo.guildId : undefined;
@@ -241,7 +274,6 @@ export class DiscordVoiceSessions {
     const existingEntry = this.params.sessions.get(guildId);
     if (existingEntry) {
       existingEntry.stop();
-      this.params.sessions.delete(guildId);
     }
     const voiceConnectionGroup = resolveVoiceConnectionGroup(this.params.accountId);
     const staleConnection = voiceSdk.getVoiceConnection(guildId, voiceConnectionGroup);
@@ -308,12 +340,7 @@ export class DiscordVoiceSessions {
         voiceSdk,
         reason: `cancelled join guild ${guildId} channel ${channelId}`,
       });
-      return {
-        ok: false,
-        message: "Discord voice join was cancelled.",
-        guildId,
-        channelId,
-      };
+      return cancelledJoinResult();
     }
     if (this.params.destroyed()) {
       destroyVoiceConnectionSafely({
@@ -364,39 +391,30 @@ export class DiscordVoiceSessions {
       `discord voice: joining guild=${guildId} channel=${channelId} mode=${voiceMode} agent=${route.agentId} voiceSession=${voiceRoute.sessionKey} supervisorSession=${route.sessionKey} agentSessionMode=${agentSessionMode}${agentSessionTarget ? ` agentSessionTarget=${agentSessionTarget}` : ""} voiceModel=${voiceConfig?.model ?? "route-default"} realtimeProvider=${voiceConfig?.realtime?.provider ?? "auto"} realtimeModel=${voiceConfig?.realtime?.model ?? "provider-default"} realtimeVoice=${voiceConfig?.realtime?.speakerVoice ?? voiceConfig?.realtime?.speakerVoiceId ?? "provider-default"}`,
     );
 
-    const player = voiceSdk.createAudioPlayer();
+    // Discord consumes frames every 20 ms; provider jitter must not end a live response after 100 ms.
+    const player = isDiscordRealtimeVoiceMode(voiceMode)
+      ? voiceSdk.createAudioPlayer({
+          behaviors: { maxMissedFrames: REALTIME_PLAYBACK_MAX_MISSED_FRAMES },
+        })
+      : voiceSdk.createAudioPlayer();
     connection.subscribe(player);
-    const clearSessionIfCurrent = () => {
-      const active = this.params.sessions.get(guildId);
-      if (active?.connection === connection) {
-        this.params.sessions.delete(guildId);
-      }
-    };
-    const stopEntry = (
-      entry: VoiceSessionEntry,
-      optionsLocal: { destroyConnection: boolean; reason: string },
-    ) => {
+    const stopEntry = (optionsLocal: { destroyConnection: boolean; reason: string }) => {
       if (entry.sessionLifecycle.status === "stopped") {
         return;
       }
       entry.sessionLifecycle = { status: "stopped", reason: optionsLocal.reason };
+      retireTranscripts(entry);
+      // A late callback from an old connection must not remove its replacement.
+      if (this.params.sessions.get(guildId) === entry) {
+        this.params.sessions.delete(guildId);
+      }
       this.params.membership.deactivate(entry);
-      if (speakingHandler) {
-        connection.receiver.speaking.off("start", speakingHandler);
-      }
-      if (speakingEndHandler) {
-        connection.receiver.speaking.off("end", speakingEndHandler);
-      }
+      connection.receiver.speaking.off("start", speakingHandler);
+      connection.receiver.speaking.off("end", speakingEndHandler);
       stopVoiceCaptureState(entry.capture);
-      if (disconnectedHandler) {
-        connection.off(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
-      }
-      if (destroyedHandler) {
-        connection.off(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
-      }
-      if (playerErrorHandler) {
-        player.off("error", playerErrorHandler);
-      }
+      connection.off(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
+      connection.off(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
+      player.off("error", playerErrorHandler);
       const realtimeLifecycle = entry.realtimeLifecycle;
       if (realtimeLifecycle.status === "starting" || realtimeLifecycle.status === "active") {
         realtimeLifecycle.instance.close();
@@ -406,7 +424,8 @@ export class DiscordVoiceSessions {
         generation: realtimeLifecycle.generation,
         reason: optionsLocal.reason,
       };
-      player.stop();
+      // Buffering resources cannot drain silence padding; terminal teardown must reach Idle now.
+      player.stop(true);
       if (optionsLocal.destroyConnection) {
         destroyVoiceConnectionSafely({
           connection,
@@ -419,6 +438,7 @@ export class DiscordVoiceSessions {
 
     const entry: VoiceSessionEntry = {
       generation: authority?.generation ?? 0,
+      autoJoinWhenOccupied: options?.autoJoinWhenOccupied === true,
       sessionLifecycle: { status: "active" },
       guildId,
       guildName:
@@ -440,62 +460,29 @@ export class DiscordVoiceSessions {
       player,
       playbackQueue: Promise.resolve(),
       processingQueue: Promise.resolve(),
+      ttsStreamFallbackWarned: false,
       capture: createVoiceCaptureState(),
       transcripts: options?.transcripts,
       receiveRecovery: createVoiceReceiveRecoveryState(),
       realtimeLifecycle: { status: "inactive", generation: 0 },
       stop(reason) {
-        clearSessionIfCurrent();
-        stopEntry(entry, {
+        stopEntry({
           destroyConnection: true,
           reason: reason ?? `stop guild ${guildId} channel ${channelId}`,
         });
       },
     };
 
-    if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode)) {
-      const realtimeResult = await this.attachRealtimeSession(entry, voiceMode, {
-        isCurrent: authority?.isCurrent,
-      });
-      if (!realtimeResult.ok) {
-        destroyVoiceConnectionSafely({
-          connection,
-          voiceSdk,
-          reason: `realtime setup failed guild ${guildId} channel ${channelId}`,
-        });
-        return {
-          ok: false,
-          message: realtimeResult.message,
-          guildId,
-          channelId,
-        };
-      }
-    }
-    if (this.params.destroyed() || (authority && !authority.isCurrent())) {
-      stopEntry(entry, {
-        destroyConnection: true,
-        reason: `${this.params.destroyed() ? "manager stopped" : "join cancelled"} during setup guild ${guildId} channel ${channelId}`,
-      });
-      return {
-        ok: false,
-        message: this.params.destroyed()
-          ? "Discord voice manager is stopped."
-          : "Discord voice join was cancelled.",
-        guildId,
-        channelId,
-      };
-    }
-
-    const speakingHandler: ((userId: string) => void) | undefined = (userId: string) => {
+    const speakingHandler = (userId: string) => {
       void this.params.receive.handleSpeakingStart(entry, userId).catch((err: unknown) => {
         logger.warn(`discord voice: capture failed: ${formatErrorMessage(err)}`);
       });
     };
-    const speakingEndHandler: ((userId: string) => void) | undefined = (userId: string) => {
+    const speakingEndHandler = (userId: string) => {
       this.params.receive.scheduleCaptureFinalize(entry, userId, "speaker end");
     };
 
-    const disconnectedHandler: (() => void) | undefined = () => {
+    const disconnectedHandler = () => {
       void (async () => {
         try {
           logVoiceVerbose(
@@ -518,24 +505,59 @@ export class DiscordVoiceSessions {
           logger.warn(
             `discord voice: disconnect recovery failed: guild ${guildId} channel ${channelId} timeout=${reconnectGraceMs}ms error=${formatErrorMessage(err)}; destroying connection`,
           );
-          clearSessionIfCurrent();
-          stopEntry(entry, {
+          stopEntry({
             destroyConnection: true,
             reason: `disconnect recovery failed guild ${guildId} channel ${channelId}`,
           });
         }
       })();
     };
-    const destroyedHandler: (() => void) | undefined = () => {
-      clearSessionIfCurrent();
-      stopEntry(entry, {
+    const destroyedHandler = () => {
+      stopEntry({
         destroyConnection: false,
         reason: `destroyed guild ${guildId} channel ${channelId}`,
       });
     };
-    const playerErrorHandler: ((err: Error) => void) | undefined = (err: Error) => {
+    const playerErrorHandler = (err: Error) => {
       logger.warn(`discord voice: playback error: ${formatErrorMessage(err)}`);
     };
+
+    // Realtime callbacks can stop playback during connect. Initialize teardown and
+    // observe connection/player failure before startup, but admit capture only once ready.
+    connection.on(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
+    connection.on(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
+    player.on("error", playerErrorHandler);
+    if (!options?.transcripts && isDiscordRealtimeVoiceMode(voiceMode)) {
+      const realtimeResult = await this.attachRealtimeSession(entry, voiceMode, {
+        isCurrent: authority?.isCurrent,
+      });
+      if (!realtimeResult.ok) {
+        entry.stop(`realtime setup failed guild ${guildId} channel ${channelId}`);
+        return {
+          ok: false,
+          message: realtimeResult.message,
+          guildId,
+          channelId,
+        };
+      }
+    }
+    if (
+      isVoiceSessionStopped(entry) ||
+      this.params.destroyed() ||
+      (authority && !authority.isCurrent())
+    ) {
+      entry.stop(
+        `${this.params.destroyed() ? "manager stopped" : "join cancelled"} during setup guild ${guildId} channel ${channelId}`,
+      );
+      return {
+        ok: false,
+        message: this.params.destroyed()
+          ? "Discord voice manager is stopped."
+          : "Discord voice join was cancelled.",
+        guildId,
+        channelId,
+      };
+    }
 
     this.params.receive.enableDaveReceivePassthrough(
       entry,
@@ -544,9 +566,6 @@ export class DiscordVoiceSessions {
     );
     connection.receiver.speaking.on("start", speakingHandler);
     connection.receiver.speaking.on("end", speakingEndHandler);
-    connection.on(voiceSdk.VoiceConnectionStatus.Disconnected, disconnectedHandler);
-    connection.on(voiceSdk.VoiceConnectionStatus.Destroyed, destroyedHandler);
-    player.on("error", playerErrorHandler);
 
     this.params.sessions.set(guildId, entry);
     this.params.membership.activate(entry, this.params.botUserId());
@@ -587,7 +606,7 @@ export class DiscordVoiceSessions {
         entry.realtimeLifecycle.status === "active" ||
         entry.realtimeLifecycle.status === "starting"
       ) {
-        entry.transcripts = undefined;
+        retireTranscripts(entry);
         return {
           ok: true,
           message: `Stopped transcripts for ${formatMention({ channelId: entry.channelId })}.`,
@@ -597,7 +616,6 @@ export class DiscordVoiceSessions {
       }
     }
     entry.stop();
-    this.params.sessions.delete(guildId);
     if (!entry.receiveRecovery.decryptRecoveryInFlight) {
       this.params.receive.deleteRecoveryAttempt(guildId);
     }
@@ -635,6 +653,7 @@ export class DiscordVoiceSessions {
     }
     const { DiscordRealtimeVoiceSession } = await import("./realtime-session.runtime.js");
     const realtime = new DiscordRealtimeVoiceSession({
+      accountId: this.params.accountId,
       bootstrapContextInstructions,
       cfg: this.params.cfg,
       discordConfig: this.params.discordConfig,

@@ -86,7 +86,7 @@ const detected: SystemAgentSetupDetectResult = {
       id: "llama-cpp",
       brandId: "llama-cpp",
       label: "llama.cpp",
-      hint: "Run one private GGUF model directly inside this Gateway",
+      hint: "Install a verified llama.cpp server and run a private GGUF model managed by OpenClaw",
       actionLabel: "Set up model",
     },
   ],
@@ -983,7 +983,7 @@ describe("renderModelSetup", () => {
 
     const feedback = copied ? "Copied!" : "Copy failed";
     await vi.waitFor(() => expect(copy?.textContent?.trim()).toBe(feedback));
-    expect(copy?.getAttribute("aria-label")).toBe(feedback);
+    expect(copy?.getAttribute("aria-label")).toBeNull();
     expect(execCommand).toHaveBeenCalledWith("copy");
     expect(writeText).toHaveBeenCalledTimes(copied ? 0 : 1);
     expect(document.querySelector("textarea")).toBeNull();

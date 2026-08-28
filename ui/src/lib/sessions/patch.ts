@@ -1,3 +1,4 @@
+import type { SessionPermissionMode } from "../../../../packages/gateway-protocol/src/index.js";
 import type { FastMode, SessionsPatchResult } from "../../api/types.ts";
 
 export type SessionToolOverrides = {
@@ -9,13 +10,16 @@ export type SessionToolOverrides = {
 
 export type SessionPatch = {
   label?: string | null;
+  icon?: string | null;
   category?: string | null;
   boardFace?: "chat" | "dashboard";
   model?: string | null;
+  contextWindow?: string | null;
   thinkingLevel?: string | null;
   fastMode?: FastMode | null;
   verboseLevel?: string | null;
   reasoningLevel?: string | null;
+  permissionMode?: SessionPermissionMode | null;
   toolOverrides?: SessionToolOverrides | null;
   archived?: boolean;
   pinned?: boolean;
@@ -24,10 +28,10 @@ export type SessionPatch = {
 
 export type SessionPatchOptions = {
   agentId?: string;
-  /** Durable identity observed with the row before an archive or restore action. */
+  /** Durable identity observed with the row before the action or edit began. */
   expectedSessionId?: string;
-  /** Let a caller with stricter lifecycle ownership publish the resolved model value. */
-  deferModelOverride?: boolean;
+  /** Explicit unread marker observed by an automatic read acknowledgement. */
+  expectedMarkedUnreadAt?: number | null;
   /** Keep optimistic model state bound to the UI owner that initiated the patch. */
   ownsModelOverride?: () => boolean;
   /** Capture the current connection now, but dispatch only after this tail settles. */

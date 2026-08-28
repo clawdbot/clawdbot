@@ -19,6 +19,7 @@ export type ChatPaneElement = HTMLElement & {
   prepareForEviction?: () => void;
   presented?: boolean;
   sessionKey?: string;
+  visuallyPresented?: boolean;
 };
 
 let pendingHandoff: PendingHandoff | undefined;

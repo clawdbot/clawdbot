@@ -3,6 +3,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.plugin.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import type { SessionEntry } from "../../config/sessions/types.js";
 import { createChannelTestPluginBase } from "../../test-utils/channel-plugins.js";
 import {
   bindOutboundSessionEntry,
@@ -17,6 +18,8 @@ type InboundMetadataParams = {
 };
 
 const mocks = vi.hoisted(() => ({
+  loadSessionEntryReadOnly:
+    vi.fn<(params: { sessionKey: string; storePath: string }) => SessionEntry | undefined>(),
   updateSessionLastRoute: vi.fn(async (_params: InboundMetadataParams) => ({
     sessionId: "session-1",
     updatedAt: 1,
@@ -44,6 +47,10 @@ function firstMockArg(
 vi.mock("../../config/sessions/inbound.runtime.js", () => ({
   resolveSessionStorePathCore: mocks.resolveStorePath,
   updateSessionLastRoute: mocks.updateSessionLastRoute,
+}));
+
+vi.mock("../../config/sessions/session-accessor.js", () => ({
+  loadSessionEntryReadOnly: mocks.loadSessionEntryReadOnly,
 }));
 
 describe("resolveOutboundSessionRoute", () => {
@@ -100,6 +107,61 @@ describe("resolveOutboundSessionRoute", () => {
     expect(route?.chatType).toBe("direct");
   });
 
+  it.each([
+    {
+      name: "group binding collapses an exact room into main",
+      globalSession: { groupScope: "per-group" as const },
+      peer: { kind: "group" as const, id: "team-room" },
+      bindingSession: { groupScope: "main" as const },
+      pluginBaseKey: "agent:main:bound-channel:group:team-room",
+      pluginSessionKey: "agent:main:bound-channel:group:team-room",
+      expectedSessionKey: "agent:main:main",
+    },
+    {
+      name: "DM binding collapses an exact peer into main and preserves its thread",
+      globalSession: { dmScope: "per-channel-peer" as const },
+      peer: { kind: "direct" as const, id: "alice" },
+      bindingSession: { dmScope: "main" as const },
+      pluginBaseKey: "agent:main:bound-channel:direct:alice",
+      pluginSessionKey: "agent:main:bound-channel:direct:alice:thread:topic-1",
+      expectedSessionKey: "agent:main:main:thread:topic-1",
+    },
+  ])("applies $name before returning the canonical route", async (testCase) => {
+    const plugin = {
+      ...createChannelTestPluginBase({ id: "bound-channel" }),
+      messaging: {
+        resolveOutboundSessionRoute: () => ({
+          sessionKey: testCase.pluginSessionKey,
+          baseSessionKey: testCase.pluginBaseKey,
+          recipientSessionExact: true as const,
+          peer: testCase.peer,
+          chatType: testCase.peer.kind === "direct" ? ("direct" as const) : ("group" as const),
+          from: `bound-channel:${testCase.peer.id}`,
+          to: testCase.peer.id,
+        }),
+      },
+    } satisfies ChannelPlugin;
+    const route = await resolveOutboundSessionRoute({
+      cfg: {
+        session: testCase.globalSession,
+        bindings: [
+          {
+            agentId: "main",
+            match: { channel: "bound-channel", peer: testCase.peer },
+            session: testCase.bindingSession,
+          },
+        ],
+      } as OpenClawConfig,
+      channel: "bound-channel",
+      plugin,
+      agentId: "main",
+      target: testCase.peer.id,
+    });
+
+    expect(route?.sessionKey).toBe(testCase.expectedSessionKey);
+    expect(route?.baseSessionKey).toBe("agent:main:main");
+  });
+
   async function expectResolvedRoute(params: {
     cfg: OpenClawConfig;
     channel: string;
@@ -152,6 +214,16 @@ describe("resolveOutboundSessionRoute", () => {
         sessionKey: "agent:main:mobilechat:group:120363040000000000@g.us",
         from: "120363040000000000@g.us",
         to: "120363040000000000@g.us",
+        chatType: "group",
+      },
+    },
+    {
+      name: "global groupScope main",
+      cfg: { session: { groupScope: "main" } } as OpenClawConfig,
+      channel: "mobilechat",
+      target: "120363040000000000@g.us",
+      expected: {
+        sessionKey: "agent:main:main",
         chatType: "group",
       },
     },
@@ -436,18 +508,6 @@ describe("resolveOutboundSessionRoute", () => {
         chatType: "channel",
       },
     },
-    {
-      name: "Legacy parser-only plugin chat type fallback",
-      cfg: baseConfig,
-      channel: "legacyparser",
-      target: "team-ops",
-      expected: {
-        sessionKey: "agent:main:legacyparser:group:team-ops",
-        from: "legacyparser:group:team-ops",
-        to: "channel:team-ops",
-        chatType: "group",
-      },
-    },
   ] satisfies NamedRouteCase[])("$name", async ({ name: _name, ...params }) => {
     await expectResolvedRoute(params);
   });
@@ -551,6 +611,7 @@ describe("resolveOutboundSessionRoute", () => {
 
 describe("ensureOutboundSessionEntry", () => {
   beforeEach(() => {
+    mocks.loadSessionEntryReadOnly.mockReset();
     mocks.updateSessionLastRoute.mockClear();
     mocks.resolveStorePath.mockClear();
   });
@@ -607,6 +668,46 @@ describe("ensureOutboundSessionEntry", () => {
     });
     expect(metadata.createIfMissing).toBe(true);
   });
+
+  it.each(["operator", "required-parent", "unstamped-parent"] as const)(
+    "carries %s creation policy without requiring current role configuration",
+    async (source) => {
+      const actor = { type: "human" as const, id: "outbound-creator" };
+      const creation = { via: "operator" as const, actor, sandbox: "required" as const };
+      mocks.loadSessionEntryReadOnly.mockImplementation((params) =>
+        params.sessionKey === "agent:other:main" && params.storePath === "/stores/other.json"
+          ? {
+              sessionId: "source-session",
+              updatedAt: 1,
+              createdVia: "operator",
+              createdActor: actor,
+              ...(source === "required-parent" ? { sandbox: "required" as const } : {}),
+            }
+          : undefined,
+      );
+
+      await ensureOutboundSessionEntry({
+        cfg: {},
+        channel: "reef",
+        route: {
+          sessionKey: "agent:main:reef:direct:first-contact",
+          baseSessionKey: "agent:main:reef:direct:first-contact",
+          peer: { kind: "direct", id: "first-contact" },
+          chatType: "direct",
+          from: "reef:first-contact",
+          to: "user:first-contact",
+        },
+        ...(source === "operator" ? { creation } : { sourceSessionKey: "agent:other:main" }),
+      });
+
+      const metadata = firstMockArg(mocks.updateSessionLastRoute, "updateSessionLastRoute");
+      if (source === "unstamped-parent") {
+        expect(metadata.ctx).not.toHaveProperty("SessionCreation", expect.anything());
+      } else {
+        expect(metadata.ctx).toMatchObject({ SessionCreation: creation });
+      }
+    },
+  );
 
   it("keeps ordinary outbound sends best-effort when route persistence fails", async () => {
     mocks.updateSessionLastRoute.mockRejectedValueOnce(new Error("storage unavailable"));

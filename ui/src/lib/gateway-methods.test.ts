@@ -38,21 +38,11 @@ describe("canCallGatewayMethod", () => {
     ["disconnected", { connected: false }],
     ["method unavailable", { methods: [], scopes: ["operator.admin"] }],
     ["scope insufficient", { methods: ["skills.update"], scopes: ["operator.write"] }],
+    ["method catalog omitted", { scopes: ["operator.admin"] }],
+    ["auth omitted", { methods: ["skills.update"], includeAuth: false }],
+    ["scopes omitted", { methods: ["skills.update"], includeScopes: false }],
   ])("blocks %s calls", (_name, params) => {
     expect(canCallGatewayMethod(snapshot(params), "skills.update", "operator.admin")).toBe(false);
-  });
-
-  it("preserves legacy behavior when methods or auth scopes are omitted", () => {
-    expect(
-      canCallGatewayMethod(snapshot({ includeAuth: false }), "skills.update", "operator.admin"),
-    ).toBe(true);
-    expect(
-      canCallGatewayMethod(
-        snapshot({ methods: ["skills.update"], includeScopes: false }),
-        "skills.update",
-        "operator.admin",
-      ),
-    ).toBe(true);
   });
 
   it("supports registered methods that are intentionally not advertised", () => {

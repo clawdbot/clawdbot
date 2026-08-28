@@ -18,6 +18,7 @@ import { basename, dirname, join, resolve as resolvePath } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { parse as parseYaml } from "yaml";
 import {
   booleanFlag,
   parseFlagArgs,
@@ -420,7 +421,7 @@ export function validateParallelsRegistryPackageArtifact(
     packedPackage.version !== packageVersion
   ) {
     throw new Error(
-      `plugin npm preflight tarball identity mismatch: manifest=${packageName}@${packageVersion} packed=${isRecord(packedPackage) ? (packedPackage.name ?? "<missing>") : "<missing>"}@${isRecord(packedPackage) ? (packedPackage.version ?? "<missing>") : "<missing>"}`,
+      `plugin npm preflight tarball identity mismatch: manifest=${packageName}@${packageVersion} packed=${formatJsonValue(isRecord(packedPackage) ? (packedPackage.name ?? "<missing>") : "<missing>")}@${formatJsonValue(isRecord(packedPackage) ? (packedPackage.version ?? "<missing>") : "<missing>")}`,
     );
   }
   return {
@@ -604,7 +605,7 @@ export async function validateWindowsSourceRelease(tag: string, options: GithubA
   }
   if (release.tag_name !== tag) {
     throw new Error(
-      `Windows source release tag mismatch: expected ${tag}, got ${release.tag_name}`,
+      `Windows source release tag mismatch: expected ${tag}, got ${formatJsonValue(release.tag_name)}`,
     );
   }
   if (release.draft) {
@@ -1205,6 +1206,47 @@ export function requireRunIdFromDispatchOutput(output: string, workflowFile: str
   return runId;
 }
 
+export function fullReleaseTrustedWorkflowFields({
+  workflowRef,
+  workflowSha,
+  workflowSource,
+}: {
+  workflowRef: string;
+  workflowSha: string;
+  workflowSource: string;
+}) {
+  const workflow: unknown = parseYaml(workflowSource);
+  const env = isRecord(workflow) && isRecord(workflow.env) ? workflow.env : undefined;
+  const contract = formatJsonValue(env?.RELEASE_ISOLATION_TOOLING_CONTRACT ?? "");
+  if (contract === "1") {
+    return {};
+  }
+  if (contract !== "2") {
+    throw new Error(
+      "Full Release Validation does not declare a supported release tooling contract",
+    );
+  }
+  const workflowDispatch =
+    isRecord(workflow) && isRecord(workflow.on) && isRecord(workflow.on.workflow_dispatch)
+      ? workflow.on.workflow_dispatch
+      : undefined;
+  const inputs =
+    workflowDispatch && isRecord(workflowDispatch.inputs) ? workflowDispatch.inputs : undefined;
+  if (!inputs || !Object.hasOwn(inputs, "trusted_workflow_json")) {
+    throw new Error(`Full Release Validation contract ${contract} requires trusted_workflow_json`);
+  }
+  if (!/^[a-f0-9]{40}$/u.test(workflowSha)) {
+    throw new Error("Full Release Validation trusted workflow SHA must be a full lowercase SHA");
+  }
+  return {
+    trusted_workflow_json: JSON.stringify({
+      ref: workflowRef,
+      fullRef: `refs/heads/${workflowRef}`,
+      sha: workflowSha,
+    }),
+  };
+}
+
 async function wait(ms: number) {
   await new Promise<void>((resolve) => {
     setTimeout(resolve, ms);
@@ -1273,8 +1315,8 @@ function summarizePendingDeployments(repo: string, runId: string, deployments: u
       const deployment = isRecord(deploymentValue) ? deploymentValue : {};
       const environment = isRecord(deployment.environment) ? deployment.environment : {};
       return [
-        `- pending approval: env=${environment.name ?? "<unknown>"} canApprove=${String(deployment.current_user_can_approve ?? "<unknown>")}`,
-        `  approve: gh api -X POST repos/${repo}/actions/runs/${runId}/pending_deployments -F 'environment_ids[]=${environment.id ?? "<id>"}' -f state=approved -f comment='Approve release gate'`,
+        `- pending approval: env=${formatJsonValue(environment.name ?? "<unknown>")} canApprove=${formatJsonValue(deployment.current_user_can_approve ?? "<unknown>")}`,
+        `  approve: gh api -X POST repos/${repo}/actions/runs/${runId}/pending_deployments -F 'environment_ids[]=${formatJsonValue(environment.id ?? "<id>")}' -f state=approved -f comment='Approve release gate'`,
       ].join("\n");
     })
     .join("\n");
@@ -1286,7 +1328,10 @@ function summarizeFailedRun(info: RunInfo) {
   );
   return [
     `${info.workflowName} ${info.databaseId} ended ${info.status}/${info.conclusion}: ${info.url}`,
-    ...failedJobs.map((job) => `- ${job.name}: ${job.conclusion} ${job.url ?? ""}`),
+    ...failedJobs.map(
+      (job) =>
+        `- ${formatJsonValue(job.name)}: ${formatJsonValue(job.conclusion)} ${formatJsonValue(job.url ?? "")}`,
+    ),
   ].join("\n");
 }
 
@@ -1819,9 +1864,18 @@ async function main() {
   if (!options.fullReleaseRunId && !options.skipDispatch) {
     const workflowFile = "full-release-validation.yml";
     const targetContextRef = releaseBranchForTag(options.tag);
+    const trustedWorkflowFields = fullReleaseTrustedWorkflowFields({
+      workflowRef: options.workflowRef,
+      workflowSha: toolingSha,
+      workflowSource: readFileSync(
+        join(TOOLING_ROOT, ".github", "workflows", workflowFile),
+        "utf8",
+      ),
+    });
     options.fullReleaseRunId = dispatchWorkflow(options.repo, workflowFile, options.workflowRef, {
       ref: targetSha,
       ...(targetContextRef ? { target_context_ref: targetContextRef } : {}),
+      ...trustedWorkflowFields,
       provider: options.provider,
       mode: options.mode,
       release_profile: options.releaseProfile,
@@ -1947,7 +2001,7 @@ async function main() {
   const actualTarballSha = sha256(tarballPath);
   if (actualTarballSha !== npmManifest.tarballSha256) {
     throw new Error(
-      `prepared tarball digest mismatch: expected ${npmManifest.tarballSha256}, got ${actualTarballSha}`,
+      `prepared tarball digest mismatch: expected ${formatJsonValue(npmManifest.tarballSha256)}, got ${actualTarballSha}`,
     );
   }
   const corePackageTarballPaths = new Map(
@@ -2061,7 +2115,7 @@ async function main() {
       `- npm preflight: ${options.npmPreflightRunId} ${npmRun.url}`,
       ...(windowsNodeSourceRelease
         ? [
-            `- Windows Node source release: ${windowsNodeSourceRelease.tag} ${windowsNodeSourceRelease.url}`,
+            `- Windows Node source release: ${windowsNodeSourceRelease.tag} ${formatJsonValue(windowsNodeSourceRelease.url)}`,
             ...windowsNodeSourceRelease.assets.map(
               (asset) => `- Windows Node source asset: ${asset.name} ${asset.digest}`,
             ),

@@ -34,7 +34,7 @@ import {
   toSessionDisplayRows,
 } from "./sessions-table.js";
 
-const ACTION_PAD = "prune-model-run".length;
+const ACTION_PAD = "archive-dashboard".length;
 
 type SessionCleanupActionRow = ReturnType<typeof toSessionDisplayRows>[number] & {
   action: ReturnType<typeof resolveSessionCleanupAction>;
@@ -58,6 +58,9 @@ function formatCleanupActionCell(
   if (action === "keep") {
     return theme.muted(label);
   }
+  if (action === "archive-dashboard") {
+    return theme.warn(label);
+  }
   if (action === "prune-missing") {
     return theme.error(label);
   }
@@ -80,9 +83,9 @@ function buildActionRows(params: {
   beforeStore: Parameters<typeof toSessionDisplayRows>[0];
   missingKeys: Set<string>;
   modelRunPrunedKeys: Set<string>;
+  archivedKeys?: Set<string>;
   staleKeys: Set<string>;
   cappedKeys: Set<string>;
-  budgetEvictedKeys: Set<string>;
   dmScopeRetiredKeys: Set<string>;
 }): SessionCleanupActionRow[] {
   // Recompute row actions from the preview sets so dry-run output uses the same
@@ -94,9 +97,9 @@ function buildActionRows(params: {
         key: row.key,
         missingKeys: params.missingKeys,
         modelRunPrunedKeys: params.modelRunPrunedKeys,
+        archivedKeys: params.archivedKeys,
         staleKeys: params.staleKeys,
         cappedKeys: params.cappedKeys,
-        budgetEvictedKeys: params.budgetEvictedKeys,
         dmScopeRetiredKeys: params.dmScopeRetiredKeys,
       }),
     }),
@@ -113,7 +116,7 @@ function buildLabelSummaries(actionRows: SessionCleanupActionRow[]): SessionClea
       summary = { label, kept: 0, pruned: 0 };
       summaryByLabel.set(label, summary);
     }
-    if (actionRow.action === "keep") {
+    if (actionRow.action === "keep" || actionRow.action === "archive-dashboard") {
       summary.kept += 1;
     } else {
       summary.pruned += 1;
@@ -172,6 +175,7 @@ function renderStoreDryRunPlan(params: {
   params.runtime.log(`Would prune missing transcripts: ${params.summary.missing}`);
   params.runtime.log(`Would retire stale direct DM sessions: ${params.summary.dmScopeRetired}`);
   params.runtime.log(`Would prune stale model-run probes: ${params.summary.modelRunPruned}`);
+  params.runtime.log(`Would archive inactive dashboard sessions: ${params.summary.archived ?? 0}`);
   params.runtime.log(`Would prune stale: ${params.summary.pruned}`);
   params.runtime.log(`Would cap overflow: ${params.summary.capped}`);
   if (params.summary.unreferencedArtifacts?.scannedFiles) {
@@ -265,9 +269,9 @@ async function maybeRunGatewayCleanup(
     });
     return { delegated: true, result };
   } catch (error) {
-    if (isGatewayTransportError(error)) {
-      // A stopped gateway should not block local maintenance; fall back to the
-      // on-disk session stores when transport is unavailable.
+    if (isGatewayTransportError(error) && error.kind === "closed" && error.code === undefined) {
+      // Only a pre-connect failure proves the Gateway never received this
+      // mutation; timeouts and established closes must not replay it locally.
       return { delegated: false };
     }
     throw error;
@@ -302,15 +306,20 @@ export async function sessionsCleanupCommand(opts: SessionsCleanupOptions, runti
       allAgents: opts.allAgents,
     },
     runtime,
+    json: opts.json,
   });
   if (!targets) {
     return;
   }
-  const { mode, previewResults, appliedSummaries } = await runSessionsCleanup({
-    cfg,
-    opts,
-    targets,
-  });
+  const cleanupParams = { cfg, opts, targets };
+  let cleanupResult;
+  if (opts.dryRun) {
+    cleanupResult = await runSessionsCleanup(cleanupParams);
+  } else {
+    const { runLocalSessionsCleanup } = await import("./sessions-cleanup.runtime.js");
+    cleanupResult = await runLocalSessionsCleanup(cleanupParams, runtime);
+  }
+  const { mode, previewResults, appliedSummaries } = cleanupResult;
 
   if (opts.dryRun) {
     if (opts.json) {

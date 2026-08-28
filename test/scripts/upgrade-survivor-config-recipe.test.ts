@@ -146,11 +146,28 @@ describe("upgrade survivor config recipe command resolution", () => {
     ]);
   });
 
+  it.each([
+    ["base", "stable"],
+    ["prerelease-plugin-registry", "beta"],
+  ])("keeps the %s scenario on the %s update channel", (scenario, expectedChannel) => {
+    const updateChannels = resolveUpgradeSurvivorConfigSteps(scenario)
+      .filter((step) => step.argv.slice(0, 3).join(" ") === "config set update.channel")
+      .map((step) => step.argv[3]);
+
+    expect(updateChannels.at(-1)).toBe(expectedChannel);
+  });
+
   it("inserts scenario config before final validation", () => {
     const steps = resolveUpgradeSurvivorConfigSteps("feishu-channel");
     expect(steps.find((step) => step.id === "channels-discord")).toBeDefined();
     expect(steps.find((step) => step.id === "channels-feishu")).toBeDefined();
     expect(steps.at(-1)?.id).toBe("validate");
+  });
+
+  it("composes configured plugin installs into the SQLite volume scenario", () => {
+    expect(resolveScenarioConfigSteps("sqlite-volume")).toEqual(
+      resolveScenarioConfigSteps("configured-plugin-installs"),
+    );
   });
 
   it("removes unsupported scenario config for older baselines", () => {

@@ -1,12 +1,13 @@
 /**
  * Exec security floor tests.
- * Verifies tool config and exec-approvals policy combine by tightening
- * security/ask rather than silently broadening execution.
+ * Verifies host approval floors tighten normal exec policy while explicit
+ * full-session authority remains full/off.
  */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { onAgentEvent } from "../infra/agent-events.js";
 import { saveExecApprovals, type ExecApprovalsFile } from "../infra/exec-approvals.js";
 import type { ExecAutoReviewer } from "../infra/exec-auto-review.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -334,6 +335,98 @@ describe("exec security floor", () => {
     expect(autoReviewer).not.toHaveBeenCalled();
   });
 
+  it("retains the Guardian approval on the completed gateway result without a run ID", async () => {
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "read-only version check",
+    }));
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "auto",
+      safeBins: [],
+      autoReviewer,
+      sessionKey: "agent:main:main",
+    });
+
+    const liveReviews: unknown[] = [];
+    const unsubscribe = onAgentEvent((event) => {
+      if (event.data.phase === "review") {
+        liveReviews.push(event.data);
+      }
+    });
+    let result: Awaited<ReturnType<typeof tool.execute>>;
+    try {
+      result = await tool.execute("call-guardian-review", {
+        command: "node --version",
+      });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(liveReviews).toEqual([]);
+    expect(result.details).toMatchObject({
+      status: "completed",
+      approvalReviewOutcome: "approved",
+      approvalReviews: [
+        {
+          id: "guardian:call-guardian-review",
+          label: "Guardian",
+          status: "approved",
+          riskLevel: "low",
+          rationale: "read-only version check",
+        },
+      ],
+    });
+  });
+
+  it("retains the terminal Guardian review when its approved script changes before execution", async () => {
+    const workdir = tempRoot ?? os.tmpdir();
+    const script = path.join(workdir, "script.sh");
+    fs.writeFileSync(script, "#!/bin/sh\necho approved\n");
+    const autoReviewer = vi.fn<ExecAutoReviewer>(async () => ({
+      decision: "allow-once",
+      risk: "low",
+      rationale: "approved script",
+    }));
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "auto",
+      safeBins: [],
+      autoReviewer,
+      runId: "run-guardian-script",
+      cwd: workdir,
+    });
+    let changedAfterApproval = false;
+    const unsubscribe = onAgentEvent((event) => {
+      if (
+        event.runId === "run-guardian-script" &&
+        event.data.approvalReviewOutcome === "approved"
+      ) {
+        fs.writeFileSync(script, "#!/bin/sh\necho mutated\n");
+        changedAfterApproval = true;
+      }
+    });
+    let result: Awaited<ReturnType<typeof tool.execute>>;
+    try {
+      result = await tool.execute("tool-guardian-script", { command: "sh script.sh" });
+    } finally {
+      unsubscribe();
+    }
+
+    expect(changedAfterApproval).toBe(true);
+    expect(result.content[0]).toEqual(
+      expect.objectContaining({
+        text: expect.stringContaining("approval script operand changed before execution"),
+      }),
+    );
+    expect(result.details).toMatchObject({
+      status: "failed",
+      approvalReviewOutcome: "approved",
+      approvalReviews: [{ id: "guardian:tool-guardian-script", status: "approved" }],
+    });
+  });
+
   it("uses agent-scoped host policy when clamping normalized modes", async () => {
     writeExecApprovalsFixture(tempRoot ?? os.tmpdir(), {
       version: 1,
@@ -375,6 +468,24 @@ describe("exec security floor", () => {
     expect(calls).toContain("exec.approval.request");
   });
 
+  it("does not prompt explicit full sessions despite host ask floors", async () => {
+    writeFullAskExecApprovalsFixture(tempRoot ?? os.tmpdir());
+    const tool = createExecTool({
+      host: "gateway",
+      mode: "full",
+      bypassHostApprovalFloors: true,
+      approvalRunningNoticeMs: 0,
+    });
+
+    const result = await tool.execute("call-session-full-host-ask-floor", {
+      command: "echo session-full-ok",
+    });
+
+    expect(result.details.status).toBe("completed");
+    expect((result.content[0] as { text?: string }).text).toContain("session-full-ok");
+    expect(callGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("honors normalized auto mode before elevated full bypass", async () => {
     const calls = mockPendingApprovalGateway();
     const autoReviewer = createAskingAutoReviewer();
@@ -393,7 +504,7 @@ describe("exec security floor", () => {
 
     expect(autoReviewer).toHaveBeenCalledWith(
       expect.objectContaining({
-        command: "whoami",
+        command: expect.stringMatching(/(?:^|[/\\])whoami(?:\.exe)?$/u),
         host: "gateway",
         reason: "allowlist-miss",
       }),
@@ -421,7 +532,7 @@ describe("exec security floor", () => {
 
       expect(autoReviewer).toHaveBeenCalledWith(
         expect.objectContaining({
-          command: "whoami",
+          command: expect.stringMatching(/(?:^|[/\\])whoami(?:\.exe)?$/u),
           host: "gateway",
           reason: "allowlist-miss",
         }),

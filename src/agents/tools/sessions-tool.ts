@@ -1,9 +1,14 @@
 /** Session self-service tool. */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { Type } from "typebox";
-import type { SessionsPatchResult } from "../../../packages/gateway-protocol/src/index.js";
-import { SESSION_AGENT_ATTENTION_ICON_IDS } from "../../../packages/gateway-protocol/src/session-agent-status.js";
-import { getRuntimeConfig } from "../../config/config.js";
+import type {
+  SessionsAssignOwnerResult,
+  SessionsPatchResult,
+} from "../../../packages/gateway-protocol/src/index.js";
+import {
+  SESSION_AGENT_ATTENTION_ICON_IDS,
+  SESSION_ICON_GLYPH_IDS,
+} from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import { resolveAgentMainSessionKey } from "../../config/sessions/main-session.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { loadSessionEntry } from "../../config/sessions/session-accessor.js";
@@ -15,11 +20,8 @@ import { boundedJsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { isTransientNetworkError } from "../../infra/unhandled-rejections.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
-import {
-  getCurrentSessionWorkAdmissionRelease,
-  getSessionWorkAdmissionRelease,
-} from "../../sessions/session-lifecycle-admission.js";
-import { resolveSessionAgentIds } from "../agent-scope.js";
+import { getSessionWorkAdmissionRelease } from "../../sessions/session-lifecycle-admission.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { stringEnum } from "../schema/typebox.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -35,9 +37,10 @@ import {
 } from "./in-process-gateway.js";
 import { resolveSessionToolTargetAgentId } from "./scoped-session-access.js";
 import {
-  createAgentToAgentPolicy,
-  resolveEffectiveSessionToolsVisibility,
+  formatSessionToolAccessDenial,
+  recordSessionToolActionFact,
   resolveSessionToolAccess,
+  runSessionToolActionWithConflictReceipt,
 } from "./sessions-access.js";
 import { resolveSessionToolContext } from "./sessions-helpers.js";
 import { resolveSessionReference, shouldResolveSessionIdInput } from "./sessions-resolution.js";
@@ -46,16 +49,17 @@ const ACTIONS = [
   "patch",
   "reset",
   "delete",
+  "assign_owner",
   "group_list",
   "group_set",
   "group_rename",
   "group_delete",
 ] as const;
 const GROUP_NAME_MAX_LENGTH = 512;
-const GROUP_NAMES_MAX_ITEMS = 200;
 const SELF_ARCHIVE_MAX_RETRY_DELAY_MS = 5_000;
 const SESSIONS_TOOL_RESULT_MAX_BYTES = 3_840;
 const RESOLVED_OMITTED_REASON = "response_budget_exceeded";
+const SESSION_ICON_GLYPH_DESCRIPTION = SESSION_ICON_GLYPH_IDS.join(", ");
 const log = createSubsystemLogger("agents/sessions");
 
 type SessionsResolved = NonNullable<SessionsPatchResult["resolved"]>;
@@ -103,6 +107,17 @@ const SessionsToolSchema = Type.Object(
     label: Type.Optional(
       Type.String({ description: "Sidebar title override. Empty string clears it." }),
     ),
+    icon: Type.Optional(
+      Type.String({
+        description: `Persistent sidebar icon: a single emoji, or a named icon: ${SESSION_ICON_GLYPH_DESCRIPTION}. Empty string clears it. Distinct from attention, which is temporary.`,
+      }),
+    ),
+    category: Type.Optional(
+      Type.Union([Type.String(), Type.Null()], {
+        description:
+          "Sidebar category membership. Null or an empty string clears it. This assigns one session; group_set only replaces the ordered category catalog.",
+      }),
+    ),
     statusNote: Type.Optional(
       Type.String({
         maxLength: 120,
@@ -129,7 +144,17 @@ const SessionsToolSchema = Type.Object(
     ),
     model: Type.Optional(Type.String({ description: "Model override" })),
     thinkingLevel: Type.Optional(Type.String({ description: "Thinking override" })),
-    names: Type.Optional(Type.Array(Type.String(), { description: "Ordered group names" })),
+    ownerType: Type.Optional(
+      stringEnum(["human", "agent"] as const, {
+        description: "New owner kind for assign_owner",
+      }),
+    ),
+    ownerId: Type.Optional(Type.String({ description: "New owner id for assign_owner" })),
+    names: Type.Optional(
+      Type.Array(Type.String(), {
+        description: "Ordered sidebar category catalog; does not assign sessions.",
+      }),
+    ),
     name: Type.Optional(Type.String({ description: "Group name" })),
     to: Type.Optional(Type.String({ description: "New group name" })),
   },
@@ -194,9 +219,6 @@ function readGroupNames(value: unknown): string[] {
   if (!Array.isArray(value)) {
     throw new ToolInputError("names required");
   }
-  if (value.length > GROUP_NAMES_MAX_ITEMS) {
-    throw new ToolInputError("Too many group names");
-  }
   return value.map((name, index) => readGroupName(name, `names[${index}]`));
 }
 
@@ -209,14 +231,16 @@ async function resolvePatchTarget(
   cfg: OpenClawConfig;
   isRequesterSession: boolean;
   key: string;
+  requesterAgentId: string;
+  requesterSessionKey: string;
 }> {
   const context = resolveSessionToolContext(opts);
   const rawKey = sessionKey ?? context.effectiveRequesterKey;
-  const requesterAgentId = resolveSessionAgentIds({
+  const requesterAgentId = resolveSessionAgentId({
     config: context.cfg,
     sessionKey: context.effectiveRequesterKey,
     agentId: opts.requesterAgentIdOverride,
-  }).sessionAgentId;
+  });
   const normalizedRawKey = rawKey.trim();
   const isCurrentSession = normalizedRawKey === "current";
   const isConfiguredMainAlias =
@@ -267,22 +291,24 @@ async function resolvePatchTarget(
         : resolved.key;
     const access = await resolveSessionToolAccess({
       action: "status",
-      defaultAgentId: requesterAgentId,
       requesterSessionKey: context.effectiveRequesterKey,
+      mainSessionKey: context.mainSessionKey,
       authorizationTargetSessionKey: authorizationKey,
       requesterAgentId,
       targetAgentId: agentId,
       targetSessionKey: resolved.key,
       requesterOwned: resolved.requesterOwned === true,
-      visibility: resolveEffectiveSessionToolsVisibility({
-        cfg: context.cfg,
-        sandboxed: opts.sandboxed === true,
-      }),
-      a2aPolicy: createAgentToAgentPolicy(context.cfg),
+      visibility: context.sessionVisibility,
+      a2aPolicy: context.a2aPolicy,
       callGateway,
     });
     if (!access.allowed) {
-      throw new ToolAuthorizationError(access.error);
+      throw new ToolAuthorizationError(
+        formatSessionToolAccessDenial(access, {
+          action: "status",
+          targetSessionKey: resolved.displayKey,
+        }),
+      );
     }
   }
   return {
@@ -290,6 +316,8 @@ async function resolvePatchTarget(
     cfg: context.cfg,
     isRequesterSession,
     key: resolved.key,
+    requesterAgentId,
+    requesterSessionKey: context.effectiveRequesterKey,
   };
 }
 
@@ -303,7 +331,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
     label: "Sessions",
     name: "sessions",
     description:
-      "Session settings, reset, delete, and groups: patch label/status, pin, archive/restore, model/thinking override; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
+      "Session settings, ownership, reset, delete, and sidebar categories: patch label/icon/category/status, pin, archive/restore, model/thinking override; category assigns one session while group_set replaces the ordered category catalog; assign_owner hands responsibility to a human or agent; reset/delete visible sessions; group_list/group_set/group_rename/group_delete.",
     parameters: SessionsToolSchema,
     execute: async (_toolCallId, rawArgs) => {
       const params = rawArgs as Record<string, unknown>;
@@ -311,7 +339,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       if (action === "reset" || action === "delete") {
         const rawKey = readToolStringParam(params, "sessionKey", { required: true });
         const { agentId, isRequesterSession, key } = await resolvePatchTarget(
-          { ...opts, config: opts.config ?? getRuntimeConfig() },
+          opts,
           rawKey,
           gatewayRequest,
         );
@@ -320,9 +348,24 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
         const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
         if (action === "reset") {
-          return jsonResult(
-            await callGateway("sessions.reset", { key, ...agentScope, reason: "reset" }),
-          );
+          const result = await runSessionToolActionWithConflictReceipt({
+            operation: "reset",
+            targetAgentId: agentId,
+            targetSessionKey: key,
+            run: async () =>
+              await callGateway("sessions.reset", {
+                key,
+                ...agentScope,
+                reason: "reset",
+              }),
+          });
+          recordSessionToolActionFact({
+            operation: "reset",
+            fact: "committed",
+            targetAgentId: agentId,
+            targetSessionKey: key,
+          });
+          return jsonResult(result);
         }
         // Archive returns the exact row generation. Carry it into the locked
         // delete so a concurrent reset cannot delete a replacement session.
@@ -332,13 +375,19 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if (!expectedSessionId) {
           throw new ToolInputError("Session lifecycle action requires a durable session identity");
         }
-        const archived = await callGateway<{
-          entry?: { sessionId?: string; lifecycleRevision?: string };
-        }>("sessions.patch", {
-          key,
-          ...agentScope,
-          expectedSessionId,
-          archived: true,
+        const archived = await runSessionToolActionWithConflictReceipt({
+          operation: "delete",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+          run: async () =>
+            await callGateway<{
+              entry?: { sessionId?: string; lifecycleRevision?: string };
+            }>("sessions.patch", {
+              key,
+              ...agentScope,
+              expectedSessionId,
+              archived: true,
+            }),
         });
         const archivedSessionId = normalizeOptionalString(archived.entry?.sessionId);
         if (!archivedSessionId) {
@@ -347,19 +396,65 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         const expectedLifecycleRevision = normalizeOptionalString(
           archived.entry?.lifecycleRevision,
         );
-        return jsonResult(
-          await callGateway("sessions.delete", {
-            key,
-            ...agentScope,
-            archivedOnly: true,
-            expectedSessionId: archivedSessionId,
-            ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
-            deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
-          }),
-        );
+        const result = await runSessionToolActionWithConflictReceipt({
+          operation: "delete",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+          run: async () =>
+            await callGateway<{ deleted?: boolean }>("sessions.delete", {
+              key,
+              ...agentScope,
+              archivedOnly: true,
+              expectedSessionId: archivedSessionId,
+              ...(expectedLifecycleRevision ? { expectedLifecycleRevision } : {}),
+              deleteTranscript: readBooleanParam(params, "deleteTranscript") ?? true,
+            }),
+        });
+        recordSessionToolActionFact({
+          operation: "delete",
+          // Archive is part of this composite action and already committed.
+          // A delete miss therefore cannot make the whole operation a no-op.
+          fact: "committed",
+          targetAgentId: agentId,
+          targetSessionKey: key,
+        });
+        return jsonResult(result);
       }
       if (action === "group_list") {
         return jsonResult(await callGateway("sessions.groups.list", {}));
+      }
+      if (action === "assign_owner") {
+        const ownerType = readToolStringParam(params, "ownerType", { required: true });
+        const ownerId = normalizeOptionalString(
+          readToolStringParam(params, "ownerId", { required: true }),
+        );
+        if ((ownerType !== "human" && ownerType !== "agent") || !ownerId) {
+          throw new ToolInputError("assign_owner requires ownerType and ownerId");
+        }
+        const { agentId, key, requesterAgentId, requesterSessionKey } = await resolvePatchTarget(
+          opts,
+          normalizeOptionalString(readToolStringParam(params, "sessionKey")),
+          gatewayRequest,
+        );
+        const agentScope = parseAgentSessionKey(key) ? {} : { agentId };
+        const result = await gatewayRequest<SessionsAssignOwnerResult>({
+          method: "sessions.assignOwner",
+          params: {
+            key,
+            ...agentScope,
+            owner: { type: ownerType, id: ownerId },
+          },
+          agentToolCaller: { agentId: requesterAgentId, sessionKey: requesterSessionKey },
+        });
+        return jsonResult({
+          status: "updated",
+          sessionKey: result.key,
+          owner: {
+            type: result.owner.actor.type,
+            id: result.owner.actor.id,
+            ...(result.owner.actor.label ? { label: result.owner.actor.label } : {}),
+          },
+        });
       }
       // Group catalog is global by contract. Owner-only tool gating protects mutations.
       if (action === "group_set") {
@@ -386,7 +481,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
       }
 
       const { agentId, cfg, isRequesterSession, key } = await resolvePatchTarget(
-        { ...opts, config: opts.config ?? getRuntimeConfig() },
+        opts,
         normalizeOptionalString(readToolStringParam(params, "sessionKey")),
         gatewayRequest,
       );
@@ -408,6 +503,10 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         key,
         ...lifecycleIdentity,
         ...(params.label !== undefined ? { label: readClearableString(params, "label") } : {}),
+        ...(params.icon !== undefined ? { icon: readClearableString(params, "icon") } : {}),
+        ...(params.category !== undefined
+          ? { category: readClearableString(params, "category") }
+          : {}),
         ...(params.statusNote !== undefined
           ? { statusNote: readClearableString(params, "statusNote") }
           : {}),
@@ -458,7 +557,7 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         if (key !== resolveAgentMainSessionKey({ cfg, agentId })) {
           const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId });
           const currentEntry = loadSessionEntry({ agentId, sessionKey: key, storePath });
-          const released = getCurrentSessionWorkAdmissionRelease({
+          const released = getSessionWorkAdmissionRelease({
             scope: storePath,
             identities: [key, currentEntry?.sessionId],
           });
@@ -568,6 +667,13 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
                 log.warn(`deferred self-archive failed for ${key}: ${formatErrorMessage(error)}`);
               });
 
+            recordSessionToolActionFact({
+              operation: "archive",
+              fact: "scheduled",
+              targetAgentId: agentId,
+              targetSessionKey: key,
+            });
+
             return jsonResult(
               withBoundedSessionsResolved(
                 {
@@ -582,7 +688,20 @@ export function createSessionsTool(opts: SessionsToolOptions = {}): AnyAgentTool
         }
       }
 
-      const result = await callSessionPatch({ ...patch, ...agentScope });
+      const operation =
+        archived === true ? "archive" : archived === false ? "restore" : ("patch" as const);
+      const result = await runSessionToolActionWithConflictReceipt({
+        operation,
+        targetAgentId: agentId,
+        targetSessionKey: key,
+        run: async () => await callSessionPatch({ ...patch, ...agentScope }),
+      });
+      recordSessionToolActionFact({
+        operation,
+        fact: "committed",
+        targetAgentId: agentId,
+        targetSessionKey: key,
+      });
       return jsonResult(
         withBoundedSessionsResolved(
           {

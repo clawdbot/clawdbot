@@ -110,6 +110,36 @@ describe("resolveChannelSetupSelectionContributions", () => {
     isChannelConfigured.mockReturnValue(false);
   });
 
+  it("uses the configured system agent workspace for explicit multi-agent setup", async () => {
+    const cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: {
+          main: { workspace: "/tmp/openclaw-main-workspace" },
+          helper: { workspace: "/tmp/openclaw-helper-workspace" },
+          third: { workspace: "/tmp/openclaw-third-workspace" },
+        },
+      },
+    } as const;
+
+    await collectChannelStatus({
+      cfg,
+      accountOverrides: {},
+      installedPlugins: [],
+    });
+    resolveChannelSelectionNoteLines({ cfg, installedPlugins: [], selection: [] });
+
+    expect(resolveChannelSetupEntries).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-main-workspace" }),
+    );
+    expect(resolveChannelSetupEntries).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({ workspaceDir: "/tmp/openclaw-main-workspace" }),
+    );
+  });
+
   it("sorts channels alphabetically by picker label", () => {
     const contributions = resolveChannelSetupSelectionContributions({
       entries: [
@@ -515,6 +545,42 @@ describe("resolveChannelSetupSelectionContributions", () => {
     }
     expect(docsLink("/channels/zalo", "Docs")).toBe("https://docs.openclaw.ai/channels/zalo");
     expect(lines).toEqual(["Zalo\\nBot — Setup\\nhelp"]);
+  });
+
+  it.each([
+    ["empty", "", ""],
+    ["whitespace", " \t ", "Docs:"],
+    ["control-only", "\u001B[2K\u0007", "Docs:"],
+  ] as const)("normalizes %s selection docs prefixes", (_label, prefix, expected) => {
+    resolveChannelSetupEntries.mockReturnValue(
+      makeChannelSetupEntries({
+        entries: [
+          {
+            id: "custom-chat",
+            meta: {
+              id: "custom-chat",
+              label: "Custom Chat",
+              selectionLabel: "Custom Chat",
+              docsPath: "/channels/custom-chat",
+              blurb: "External channel.",
+              selectionDocsPrefix: prefix,
+            },
+          },
+        ],
+      }),
+    );
+
+    resolveChannelSelectionNoteLines({
+      cfg: {} as never,
+      installedPlugins: [],
+      selection: ["custom-chat"],
+    });
+
+    const [selectionMeta] = requireFirstMockCall(
+      formatChannelSelectionLine.mock.calls,
+      "selection line",
+    );
+    expect(selectionMeta?.selectionDocsPrefix).toBe(expected);
   });
 
   it("localizes built-in channel blurbs before selection notes", () => {

@@ -21,12 +21,14 @@ function streamJob(overrides: Partial<CronJobCreate> = {}): CronJobCreate {
   };
 }
 
-async function createCron(triggersEnabled: boolean) {
+async function createCron(triggersEnabled: boolean | undefined, cronEnabled = true) {
   const { storePath } = await makeStorePath();
   const cron = new CronService({
     storePath,
-    cronEnabled: true,
-    cronConfig: { triggers: { enabled: triggersEnabled } },
+    cronEnabled,
+    ...(triggersEnabled === undefined
+      ? {}
+      : { cronConfig: { triggers: { enabled: triggersEnabled } } }),
     log: logger,
     enqueueSystemEvent: vi.fn(),
     requestHeartbeat: vi.fn(),
@@ -37,10 +39,33 @@ async function createCron(triggersEnabled: boolean) {
 }
 
 describe("cron stream schedule validation", () => {
+  it.each([
+    { cronEnabled: true, configured: undefined, triggersEnabled: true },
+    { cronEnabled: true, configured: true, triggersEnabled: true },
+    { cronEnabled: true, configured: false, triggersEnabled: false },
+    { cronEnabled: false, configured: true, triggersEnabled: true },
+    { cronEnabled: false, configured: false, triggersEnabled: false },
+  ])(
+    "reports active trigger capability independently of scheduler enablement ($cronEnabled/$configured)",
+    async ({ cronEnabled, configured, triggersEnabled }) => {
+      const cron = await createCron(configured, cronEnabled);
+      try {
+        await expect(cron.status()).resolves.toMatchObject({
+          enabled: cronEnabled,
+          triggersEnabled,
+        });
+      } finally {
+        cron.stop();
+      }
+    },
+  );
+
   it("rejects creation while cron triggers are disabled", async () => {
     const cron = await createCron(false);
     try {
-      await expect(cron.add(streamJob())).rejects.toThrow("cron.triggers.enabled=true");
+      await expect(cron.add(streamJob())).rejects.toThrow(
+        "the operator set cron.triggers.enabled: false",
+      );
     } finally {
       cron.stop();
     }

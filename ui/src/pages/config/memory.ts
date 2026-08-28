@@ -4,7 +4,7 @@ import "../../components/agent-select-registration.ts";
 import type { AgentSelectOption } from "../../components/agent-select.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import {
-  renderDocsLink,
+  renderLearnMoreLink,
   renderSettingsDefaultState,
   renderSettingsRow,
   renderSettingsSection,
@@ -170,6 +170,7 @@ type MemoryViewProps = {
   onAddonChange: (pluginId: string, enabled: boolean) => void;
   pluginsHref: string;
   memoryImportHref: string;
+  canImportMemory: boolean;
   /** New status-led landing view. */
   overview: TemplateResult;
   /** Search and read the selected agent's indexed memory. */
@@ -384,9 +385,11 @@ function renderSettingsTab(props: MemoryViewProps) {
         renderSettingsRow({
           title: t("tabs.memoryImport"),
           description: t("subtitles.memoryImport"),
-          control: html`<a class="memory-page__link" href=${props.memoryImportHref}
-            >${t("memoryPage.import.link")}</a
-          >`,
+          control: props.canImportMemory
+            ? html`<a class="memory-page__link" href=${props.memoryImportHref}
+                >${t("memoryPage.import.link")}</a
+              >`
+            : renderSettingsValue(t("memoryImport.adminRequired")),
         }),
       )}
     </div>
@@ -400,7 +403,7 @@ export function renderMemory(props: MemoryViewProps) {
         <div class="hub-page-header__title">
           <div class="page-title">${t("tabs.memory")}</div>
           <div class="page-subtitle">
-            ${t("memoryPage.intro")} ${renderDocsLink(MEMORY_DOCS_URL, t("common.learnMore"))}
+            ${t("memoryPage.intro")} ${renderLearnMoreLink(MEMORY_DOCS_URL)}
           </div>
         </div>
         <div class="hub-page-header__tabs">

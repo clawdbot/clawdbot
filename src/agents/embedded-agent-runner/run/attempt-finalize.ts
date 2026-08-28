@@ -278,6 +278,7 @@ export async function completeEmbeddedAttemptAfterTurn(
             withSessionManagerRewriteLock: transcript.withSessionManagerRewriteLock,
             config: attempt.config,
             agentId: runtime.sessionAgentId,
+            contextEngineAgentId: attempt.contextEngineAgentId,
           }),
         sessionManager: transcript.sessionManager,
         config: attempt.config,
@@ -367,8 +368,11 @@ export async function completeEmbeddedAttemptAfterTurn(
   });
   runtime.anthropicPayloadLogger?.recordUsage(state.messagesSnapshot, state.promptError);
 
+  // A detached run (such as skill experience review) writes no transcript or session record.
+  // Firing agent_end would expose maintenance as a normal turn and schedule successor work.
   if (
     attempt.operation !== "settled-tool-finalization" &&
+    attempt.sessionPersistence !== "detached" &&
     !state.beforeAgentFinalizeRevisionReason
   ) {
     const lifecycleForAgentEnd = input.readLifecycleState();
@@ -389,6 +393,7 @@ export async function completeEmbeddedAttemptAfterTurn(
       ctx: buildEmbeddedAgentEndContext({
         run: attempt,
         agentId: runtime.hookAgentId,
+        agentDir: runtime.agentDir,
         trace: freezeDiagnosticTraceContext(runtime.diagnosticTrace),
         skillWorkshopAvailable: runtime.skillWorkshopAvailable,
         compacted: state.compactionOccurredThisAttempt,

@@ -190,6 +190,7 @@ export function writeGatewayStatusJson(params: {
         close: entry.probe.close,
       },
       auth: entry.probe.auth,
+      server: entry.probe.server,
       self: entry.self,
       config: entry.configSummary,
       health: entry.probe.health,

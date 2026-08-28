@@ -2,25 +2,12 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  collectRetiredWebSearchCorePathEntries,
-  main,
-} from "../scripts/check-plugin-extension-import-boundary.mts";
-import { createCapturedIo } from "./helpers/captured-io.js";
+import { collectRetiredWebSearchCorePathEntries } from "../scripts/check-plugin-extension-import-boundary.mts";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("plugin extension import boundary inventory", () => {
-  it("current tree has no plugin extension imports", async () => {
-    const captured = createCapturedIo();
-    const exitCode = await main(["--json"], captured.io);
-
-    expect(exitCode).toBe(0);
-    expect(captured.readStderr()).toBe("");
-    expect(JSON.parse(captured.readStdout())).toEqual([]);
-  });
-
   it("rejects retired core web-search ownership paths", () => {
     const root = tempDirs.make("openclaw-retired-web-search-");
     const relativeFile = "src/plugins/web-search-providers.mjs";

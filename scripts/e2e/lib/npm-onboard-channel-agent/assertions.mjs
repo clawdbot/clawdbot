@@ -1,12 +1,15 @@
 // Assertions for npm onboard channel-agent E2E scenarios.
 import fs from "node:fs";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 import {
   assertAgentReplyContainsMarker,
   assertOpenAiRequestLogUsed,
 } from "../agent-turn-output.mjs";
-import { assertOpenAiEnvAuthProfileStore } from "../auth-profile-store-assertions.mjs";
+import {
+  assertNoLegacyPrimaryAuthRows,
+  assertOpenAiEnvAuthProfileStore,
+  readSharedAuthProfileStoreText,
+} from "../auth-profile-store-assertions.mjs";
 import { readPositiveIntEnv } from "../env-limits.mjs";
 import {
   applyMockOpenAiModelConfig,
@@ -77,38 +80,16 @@ function extractStatusSection(text, title) {
   return stripAnsi(section.join("\n"));
 }
 
-function readAuthProfileStoreText(agentDir) {
-  const dbPath = path.join(agentDir, "openclaw-agent.sqlite");
-  if (!fs.existsSync(dbPath)) {
-    return "";
-  }
-  let db;
-  try {
-    db = new DatabaseSync(dbPath, { readOnly: true });
-    const row = db
-      .prepare("SELECT store_json FROM auth_profile_store WHERE store_key = ?")
-      .get("primary");
-    return typeof row?.store_json === "string" ? row.store_json : "";
-  } catch {
-    return "";
-  } finally {
-    db?.close();
-  }
-}
-
 function assertOnboardState() {
   const home = process.argv[3];
   const stateDir = path.join(home, ".openclaw");
   const configPath = path.join(stateDir, "openclaw.json");
-  const agentDir = path.join(stateDir, "agents", "main", "agent");
 
   if (!fs.existsSync(configPath)) {
     throw new Error("onboard did not write openclaw.json");
   }
-  if (!fs.existsSync(agentDir)) {
-    throw new Error("onboard did not create main agent dir");
-  }
-  const authStoreText = readAuthProfileStoreText(agentDir);
+  assertNoLegacyPrimaryAuthRows(stateDir);
+  const authStoreText = readSharedAuthProfileStoreText(stateDir);
   if (!authStoreText) {
     throw new Error("onboard did not persist auth profile store");
   }

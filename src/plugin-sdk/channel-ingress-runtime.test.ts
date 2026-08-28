@@ -2,8 +2,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   fanInChannelIngressLifecycles,
+  meetsIdentifierAuthentication,
   resolveChannelMessageIngress,
   type ChannelIngressIdentityDescriptor,
+  type IdentifierAuthentication,
   type ResolveChannelMessageIngressParams,
 } from "./channel-ingress-runtime.js";
 
@@ -26,6 +28,17 @@ async function resolve(input: Partial<ResolveChannelMessageIngressParams> = {}) 
 }
 
 describe("plugin-sdk/channel-ingress-runtime", () => {
+  it("compares typed identifier claims through the public SDK", () => {
+    const minimum: IdentifierAuthentication = "asserted";
+    const subject = {
+      email: "verified",
+      displayName: "mutable",
+    } satisfies NonNullable<ResolveChannelMessageIngressParams["subject"]["authentication"]>;
+
+    expect(meetsIdentifierAuthentication(subject.email, minimum)).toBe(true);
+    expect(meetsIdentifierAuthentication(subject.displayName, minimum)).toBe(false);
+  });
+
   it("fans one logical turn lifecycle across every durable claim", async () => {
     const createLifecycle = () => ({
       abortSignal: new AbortController().signal,
@@ -58,13 +71,14 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
 
   it("settles or abandons claims that no reply lane adopted", async () => {
     const adopted = vi.fn(async () => {});
+    const failed = vi.fn(async () => {});
     const abandoned = vi.fn(async () => {});
     const lifecycle = {
       abortSignal: new AbortController().signal,
       onAdopted: adopted,
       onDeferred: vi.fn(),
       onAdoptionFinalizing: vi.fn(),
-      onFailed: vi.fn(async () => {}),
+      onFailed: failed,
       onAbandoned: abandoned,
     };
 
@@ -73,6 +87,7 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
 
     expect(adopted).toHaveBeenCalledOnce();
     expect(abandoned).toHaveBeenCalledOnce();
+    expect(failed).not.toHaveBeenCalled();
     expect(fanInChannelIngressLifecycles([]).lifecycle).toBeUndefined();
   });
 
@@ -127,8 +142,10 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
     expect(second.cancellationCount).toBe(1);
   });
 
-  it("can abandon claims after terminal settlement adoption fails", async () => {
+  it("fans failed settlement into modern failure and legacy abandonment", async () => {
+    const failed = vi.fn(async () => {});
     const abandoned = vi.fn(async () => {});
+    const legacyAbandoned = vi.fn(async () => {});
     const combined = fanInChannelIngressLifecycles([
       {
         abortSignal: new AbortController().signal,
@@ -137,15 +154,25 @@ describe("plugin-sdk/channel-ingress-runtime", () => {
         },
         onDeferred: vi.fn(),
         onAdoptionFinalizing: vi.fn(),
-        onFailed: vi.fn(async () => {}),
+        onFailed: failed,
         onAbandoned: abandoned,
+      },
+      {
+        abortSignal: new AbortController().signal,
+        onAdopted: vi.fn(async () => {}),
+        onDeferred: vi.fn(),
+        onAdoptionFinalizing: vi.fn(),
+        onAbandoned: legacyAbandoned,
       },
     ]);
 
     await expect(combined.settle()).rejects.toThrow("adoption failed");
-    await combined.abandon(new Error("dispatch failed"));
+    const failure = new Error("dispatch failed");
+    await combined.abandon(failure);
 
-    expect(abandoned).toHaveBeenCalledOnce();
+    expect(failed).toHaveBeenCalledExactlyOnceWith(failure);
+    expect(abandoned).not.toHaveBeenCalled();
+    expect(legacyAbandoned).toHaveBeenCalledOnce();
   });
 
   it("derives store allowlists, command auth, sender separation, and redaction", async () => {

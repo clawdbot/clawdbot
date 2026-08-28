@@ -1,6 +1,7 @@
 import Foundation
 import OpenClawChatUI
 import OpenClawKit
+import OpenClawProtocol
 
 extension OnboardingAISetupModel {
     struct PersistedActivationState: Equatable {
@@ -22,6 +23,28 @@ extension OnboardingAISetupModel {
     struct CompletedHandoff {
         let routeIdentity: String
         let activationOwner: OnboardingSystemAgentResumeStore.ActivationOwner?
+    }
+
+    @MainActor
+    struct ReconciliationDeadline {
+        private let clock: ContinuousClock
+        private let deadline: ContinuousClock.Instant
+
+        init(timeout: ContinuousClock.Duration, clock: ContinuousClock = .init()) {
+            self.clock = clock
+            self.deadline = clock.now.advanced(by: timeout)
+        }
+
+        var hasTimeRemaining: Bool {
+            self.clock.now < self.deadline
+        }
+
+        func remainingMilliseconds(cappedAt capMs: Int) -> Int {
+            OnboardingAISetupModel.remainingMilliseconds(
+                until: self.deadline,
+                clock: self.clock,
+                cappedAt: capMs)
+        }
     }
 
     struct DetectResult: Decodable {
@@ -59,6 +82,7 @@ extension OnboardingAISetupModel {
         let modelRef: String?
         let status: String?
         let error: String?
+        let gatewayRestartRequired: Bool?
     }
 
     struct Candidate: Identifiable, Equatable {
@@ -183,6 +207,16 @@ extension OnboardingAISetupModel {
         self.providerWizardKind == .prepare
     }
 
+    var authWizardOptions: [WizardOption] {
+        parseWizardOptions(self.authStep?.options)
+    }
+
+    var selectedAuthWizardOption: WizardOption? {
+        let options = self.authWizardOptions
+        guard options.indices.contains(self.authSelection) else { return options.first }
+        return options[self.authSelection]
+    }
+
     var connected: Bool {
         self.phase == .connected
     }
@@ -195,6 +229,32 @@ extension OnboardingAISetupModel {
     func canSelectCandidate(kind: String) -> Bool {
         guard !self.connected else { return false }
         return !self.isBusy || (self.phase == .testing && self.selectedKind != kind)
+    }
+
+    func startProviderAuth(_ option: AuthOption) {
+        self.startProviderWizard(option, kind: .auth)
+    }
+
+    func startProviderPrepare(_ option: PrepareOption) {
+        self.startProviderWizard(
+            AuthOption(
+                id: option.id,
+                brandId: option.brandId,
+                label: option.label,
+                hint: option.hint,
+                groupLabel: nil,
+                icon: option.icon,
+                website: option.website,
+                kind: "prepare",
+                featured: false),
+            kind: .prepare)
+    }
+
+    /// True when setup live-verified an already-configured route instead of
+    /// activating a new one. The custodian first-run handoff belongs only to
+    /// fresh activations; verified reopens land on the normal dashboard.
+    var verifiedExistingInference: Bool {
+        self.connected && self.selectedKind == "existing-model"
     }
 
     /// Once setup starts changing inference, its successful result belongs to

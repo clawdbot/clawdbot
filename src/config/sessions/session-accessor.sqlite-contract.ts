@@ -14,9 +14,10 @@ import type {
   SessionLifecycleArtifactCleanupResult,
   SessionLifecycleStoreTarget,
 } from "./session-accessor.lifecycle-types.js";
+import type { TranscriptEvent } from "./session-accessor.types.js";
 import type { ResolvedSessionMaintenanceConfig } from "./store-maintenance.js";
 import type { TranscriptEntryAnchor } from "./transcript-entry-anchor.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionAccessScope = {
   agentId?: string;
@@ -67,6 +68,7 @@ export type SessionEntrySummary = {
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
 export type SessionTranscriptInstance = SessionEntrySummary & {
+  agentId: string;
   /** Stable transcript identity, including rotated history for one logical session key. */
   sessionId: string;
   /** True when this transcript instance was owned by an ACP runtime. */
@@ -75,12 +77,26 @@ export type SessionTranscriptInstance = SessionEntrySummary & {
   provenanceKnown: boolean;
   /** Activity timestamp for this transcript instance, not the current logical session row. */
   updatedAtMs: number;
+  /** Recorded source facts; coarse historical trust classes cannot identify an exact hook source. */
+  sourceMetadata: {
+    createdAt: number;
+    channel: string | null;
+    accountId: string | null;
+    chatType: NonNullable<SessionEntry["chatType"]> | null;
+    hookExternalContentSource: NonNullable<SessionEntry["hookExternalContentSource"]> | null;
+  };
 };
 
-export type TranscriptEvent = unknown;
+export type SessionTranscriptInstanceListOptions = {
+  /** Include empty and internal windows when inspecting recorded source metadata. */
+  includeAllWindows?: boolean;
+  sessionId?: string;
+};
 
 export type TranscriptEventAppendOptions = {
   appendIntent?: "active-branch";
+  /** Synchronous authority check run inside the append transaction. */
+  beforeCommitInTransaction?: () => void;
 };
 
 export type TranscriptEventAppendError =
@@ -119,6 +135,7 @@ export type {
   SessionTranscriptRawDeltaResult,
   SessionTranscriptVisibleMessageDeltaLimits,
   SessionTranscriptVisibleMessageDeltaResult,
+  TranscriptEvent,
 } from "./session-accessor.types.js";
 
 export type TranscriptMessageAppendOptions<TMessage> = {

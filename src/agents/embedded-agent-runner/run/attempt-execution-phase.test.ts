@@ -40,11 +40,17 @@ vi.mock("./attempt-timeout-prepare.js", () => ({
   prepareEmbeddedAttemptTimeout: mocks.prepareTimeout,
 }));
 
+import { agentSessionSetContextReplacementHook } from "../../sessions/agent-session-compaction.js";
 import { runEmbeddedAttemptExecutionPhase } from "./attempt-execution-phase.js";
 
 type ExecutionInput = Parameters<typeof runEmbeddedAttemptExecutionPhase>[0];
 
-function createFixture(options: { aborted?: boolean } = {}) {
+function createFixture(
+  options: {
+    aborted?: boolean;
+    exerciseTerminalMerges?: boolean;
+  } = {},
+) {
   const order: string[] = [];
   const attemptAbortController = new AbortController();
   if (options.aborted) {
@@ -67,7 +73,9 @@ function createFixture(options: { aborted?: boolean } = {}) {
     getRunAbortDeadlineAtMs: vi.fn(() => 123),
     clearTimers: vi.fn(),
   };
+  const setContextReplacementHook = vi.fn();
   const activeSession = {
+    [agentSessionSetContextReplacementHook]: setContextReplacementHook,
     agent: { streamFn: vi.fn() },
     dispose: vi.fn(),
     isCompacting: false,
@@ -92,13 +100,13 @@ function createFixture(options: { aborted?: boolean } = {}) {
     terminal: { kind: "ok" as const },
     trajectoryEndRecorded: false,
   };
+  const skillInstructionDeliveryCache = new Map([["skill", Promise.resolve(true)]]);
   const sessionRuntime = {
     agentSession: {
       activeSession,
       allCustomTools: [{ name: "custom" }],
       builtinToolNames: new Set(["read"]),
       clientToolCallSlots: [],
-      clientToolLoopDetection: {},
       hasDeliveredSourceReply: vi.fn(() => false),
       hookRunner: {},
       markSourceReplyDelivered: vi.fn(),
@@ -141,7 +149,7 @@ function createFixture(options: { aborted?: boolean } = {}) {
       bundleTools: {},
       sessionRuntime,
       systemPrompt: { runtimeChannel: "telegram" },
-      toolBase: { toolSearchTargetTranscriptProjections: new Map() },
+      toolBase: { skillInstructionDeliveryCache, toolSearchTargetTranscriptProjections: new Map() },
       toolCatalog: {
         toolSearchRunPlan: {
           capabilityToolNames: new Set(["read"]),
@@ -201,22 +209,26 @@ function createFixture(options: { aborted?: boolean } = {}) {
   });
   mocks.prepareStream.mockImplementation((streamInput) => {
     order.push("stream");
-    const idleError = new Error("idle timeout");
-    mocks.installStreamGuards.mock.calls[0]?.[0].onIdleTimeout(idleError);
-    streamInput.markExternalAbort();
+    if (options.exerciseTerminalMerges !== false) {
+      const idleError = new Error("idle timeout");
+      mocks.installStreamGuards.mock.calls[0]?.[0].onIdleTimeout(idleError);
+      streamInput.markExternalAbort();
+    }
     return streamResult;
   });
   mocks.prepareTimeout.mockImplementation((timeoutInput) => {
     order.push("timeout");
-    timeoutInput.markTimedOutDuringCompaction();
-    timeoutInput.markTimedOutByRunBudget();
+    if (options.exerciseTerminalMerges !== false) {
+      timeoutInput.markTimedOutDuringCompaction();
+      timeoutInput.markTimedOutByRunBudget();
+    }
     return timeoutResult;
   });
   mocks.runSettledPhase.mockImplementation(async (settledInput) => {
     order.push("settled-phase");
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(false);
-    mocks.installStreamGuards.mock.calls[0]?.[0].onRejectedThinkingReplayRepaired();
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(true);
+    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(false);
+    mocks.installStreamGuards.mock.calls[0]?.[0].onRejectedProviderReplayRepaired();
+    expect(settledInput.getRepairedRejectedProviderReplay()).toBe(true);
     return result;
   });
 
@@ -232,6 +244,8 @@ function createFixture(options: { aborted?: boolean } = {}) {
     result,
     runAbort,
     sessionManager,
+    setContextReplacementHook,
+    skillInstructionDeliveryCache,
     setToolSearchCatalogExecutor,
     state,
     streamResult,
@@ -253,6 +267,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const result = await runEmbeddedAttemptExecutionPhase(fixture.input);
 
     expect(result).toBe(fixture.result);
+    expect(fixture.setContextReplacementHook).toHaveBeenCalledOnce();
+    const replacementHook = fixture.setContextReplacementHook.mock.calls[0]?.[0];
+    expect(replacementHook).toEqual(expect.any(Function));
+    replacementHook?.();
+    expect(fixture.skillInstructionDeliveryCache.size).toBe(0);
     expect(fixture.order).toEqual([
       "guards",
       "stream-ready",
@@ -284,7 +303,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     const settledInput = mocks.runSettledPhase.mock.calls[0]?.[0];
     expect(settledInput).toEqual(
       expect.objectContaining({
-        getRepairedRejectedThinkingReplay: expect.any(Function),
         preparedStreamRuntime: expect.objectContaining({
           cache: {
             observabilityEnabled: true,
@@ -297,7 +315,6 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
         }),
       }),
     );
-    expect(settledInput.getRepairedRejectedThinkingReplay()).toBe(true);
 
     const guardInput = mocks.installStreamGuards.mock.calls[0]?.[0];
     expect(guardInput).toEqual(
@@ -338,14 +355,11 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
     expect(mocks.withOwnedSessionTranscriptWrites).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    { label: "external cancellation", message: "run cancelled" },
-    { label: "run timeout", message: "run timed out" },
-  ])("does not start a prompt after $label", async ({ message }) => {
+  it("does not start a prompt after external cancellation", async () => {
     const fixture = createFixture();
     await runEmbeddedAttemptExecutionPhase(fixture.input);
-    const reason = new Error(message);
-    const abortError = new Error(message, { cause: reason });
+    const reason = new Error("run cancelled");
+    const abortError = new Error("run cancelled", { cause: reason });
     abortError.name = "AbortError";
     fixture.input.runAbortController.abort(reason);
     mocks.abortable.mockImplementationOnce((_signal, _promise) => Promise.reject(abortError));
@@ -353,11 +367,26 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
 
     await expect(
       settledInput.preparedStreamRuntime.promptActiveSession("must not start"),
-    ).rejects.toBe(abortError);
+    ).rejects.toThrow("run cancelled");
 
     expect(fixture.activeSession.prompt).not.toHaveBeenCalled();
-    expect(fixture.trackPromptSettlePromise).not.toHaveBeenCalled();
-    expect(mocks.abortable).toHaveBeenCalledOnce();
+  });
+
+  it("attributes an idle timeout during authoritative compaction to compaction", async () => {
+    const fixture = createFixture({ exerciseTerminalMerges: false });
+    fixture.activeSession.isCompacting = true;
+    await runEmbeddedAttemptExecutionPhase(fixture.input);
+    const idleError = new Error("idle timeout");
+    const guardInput = mocks.installStreamGuards.mock.calls[0]?.[0];
+
+    guardInput.onIdleTimeout(idleError);
+
+    expect(fixture.state.terminal).toEqual({
+      kind: "timeout",
+      phase: "compaction",
+      source: "idle",
+    });
+    expect(fixture.runAbort).toHaveBeenCalledWith(true, idleError);
   });
 
   it("flushes pending tool results and disposes the session when history preparation fails", async () => {
@@ -374,22 +403,5 @@ describe("runEmbeddedAttemptExecutionPhase", () => {
       timeoutMs: 0,
     });
     expect(fixture.activeSession.dispose).toHaveBeenCalledOnce();
-    expect(mocks.createRunAbort).not.toHaveBeenCalled();
-    expect(mocks.prepareStream).not.toHaveBeenCalled();
-    expect(mocks.prepareTimeout).not.toHaveBeenCalled();
-    expect(mocks.runSettledPhase).not.toHaveBeenCalled();
-  });
-
-  it("does not enter settlement when stream preparation fails", async () => {
-    const fixture = createFixture();
-    mocks.prepareStream.mockImplementationOnce(() => {
-      throw new Error("stream setup failed");
-    });
-
-    await expect(runEmbeddedAttemptExecutionPhase(fixture.input)).rejects.toThrow(
-      "stream setup failed",
-    );
-
-    expect(mocks.runSettledPhase).not.toHaveBeenCalled();
   });
 });

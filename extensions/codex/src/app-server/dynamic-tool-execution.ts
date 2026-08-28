@@ -23,9 +23,6 @@ import {
   withDynamicToolTerminalResolution,
 } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
-import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
-
-export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 import {
   isJsonObject,
   type CodexDynamicToolCallParams,
@@ -33,6 +30,9 @@ import {
   type CodexDynamicToolDiagnosticTerminalReason,
   type JsonValue,
 } from "./protocol.js";
+import { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
+
+export { resolveCodexToolAbortTerminalReason } from "./tool-abort-terminal-reason.js";
 
 /** Default timeout for Codex dynamic tool calls. */
 const CODEX_DYNAMIC_TOOL_TIMEOUT_MS = 90_000;
@@ -141,12 +141,13 @@ function formatDynamicToolTimeoutDetails(params: {
 }
 
 /**
- * Runs a dynamic tool call with run-abort and per-call timeout handling,
- * returning a Codex protocol response instead of throwing.
+ * Runs a dynamic tool call with run-abort and the budget prepared by
+ * resolveDynamicToolCallTimeoutMs, preserving tool-specific completion grace.
  */
 export async function handleDynamicToolCallWithTimeout(params: {
   call: CodexDynamicToolCallParams;
-  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot">;
+  toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot"> &
+    Partial<Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool">>;
   signal: AbortSignal;
   timeoutMs: number;
   toolMeta?: string;
@@ -162,6 +163,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
   const conservativeRaceResponses = new WeakSet<CodexDynamicToolRuntimeResponse>();
   const finalizeTerminal = (response: CodexDynamicToolRuntimeResponse) => {
     const executionSnapshot = params.toolBridge.consumeToolExecutionSnapshot?.(params.call.callId);
+    const ownerKey = params.toolBridge.sideEffectOwnerKeyForTool?.(params.call.tool);
     // The host observer owns active wrapper state. A bridge snapshot is only needed
     // after that wrapper settles while result post-processing remains pending.
     const observedExecutionStarted =
@@ -173,6 +175,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
       arguments:
         response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
+      ...(ownerKey ? { ownerMutation: { ownerKey } } : {}),
       ...(observedExecutionStarted !== undefined
         ? { executionStarted: observedExecutionStarted }
         : {}),
@@ -252,7 +255,7 @@ export async function handleDynamicToolCallWithTimeout(params: {
     resolveAbort = resolve;
   });
   const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
-    const timeoutMs = clampDynamicToolTimeoutMs(params.timeoutMs);
+    const { timeoutMs } = params;
     timeout = setTimeout(() => {
       timedOut = true;
       const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
@@ -337,17 +340,23 @@ export function toCodexDynamicToolProgressResponse(
 ): CodexDynamicToolCallResponse & {
   details?: { async: true; status: "started" } | { mcpAppPreview: unknown };
 } {
-  const transcriptDetails = response.transcriptDetails;
-  if (response.asyncStarted !== true && transcriptDetails === undefined) {
+  const transcriptDetails = isJsonObject(response.transcriptDetails)
+    ? response.transcriptDetails
+    : undefined;
+  const mcpAppPreview = isJsonObject(transcriptDetails?.mcpAppPreview)
+    ? transcriptDetails.mcpAppPreview
+    : undefined;
+  const progressDetails = mcpAppPreview ? { mcpAppPreview } : undefined;
+  if (response.asyncStarted !== true && progressDetails === undefined) {
     return protocolResponse;
   }
   return {
     ...protocolResponse,
-    ...(transcriptDetails ? { details: transcriptDetails } : {}),
+    ...(progressDetails ? { details: progressDetails } : {}),
     ...(response.asyncStarted === true
       ? {
           details: {
-            ...transcriptDetails,
+            ...progressDetails,
             async: true as const,
             status: "started" as const,
           },
@@ -576,7 +585,7 @@ function readConfiguredDynamicToolTimeoutMs(
     );
   }
 
-  if (toolName === "image") {
+  if (toolName === "view_image") {
     const candidates = (config?.tools?.media?.models ?? []).filter(
       (entry) => !entry.capabilities || entry.capabilities.includes("image"),
     );

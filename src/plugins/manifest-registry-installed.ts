@@ -2,7 +2,10 @@
 import fs from "node:fs";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import {
+  normalizeOptionalString,
+  readStringValue,
+} from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
 import {
   resolveChannelSetupFieldCliAttributeName,
@@ -13,7 +16,7 @@ import { tryReadJsonSync } from "../infra/json-files.js";
 import { pruneMapToMaxSize } from "../infra/map-size.js";
 import { recordPluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import type { PluginCandidate } from "./discovery.js";
-import { hashJson } from "./installed-plugin-index-hash.js";
+import { hashJson, hashStableJson } from "./installed-plugin-index-hash.js";
 import {
   isInstalledPluginIndexInstallOwnerAmbiguous,
   resolveInstalledPluginIndexInstallOwner,
@@ -24,8 +27,8 @@ import {
   loadPluginManifestRegistryCore,
   type PluginManifestRecord,
   type PluginManifestRegistry,
+  type BundledChannelConfigCollector,
 } from "./manifest-registry.js";
-import type { BundledChannelConfigCollector } from "./manifest-registry.js";
 import {
   DEFAULT_PLUGIN_ENTRY_CANDIDATES,
   getPackageManifestMetadata,
@@ -137,7 +140,7 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
   }
   // The immutable installed inventory owns freshness; lifecycle clears publish
   // a replacement instead of polling manifests or package paths on hot reads.
-  const fingerprint = hashJson({
+  const fingerprint = hashStableJson({
     version: index.version,
     hostContractVersion: index.hostContractVersion,
     compatRegistryVersion: index.compatRegistryVersion,
@@ -145,7 +148,19 @@ export function resolveInstalledManifestRegistryIndexFingerprint(
     policyHash: index.policyHash,
     installRecords: index.installRecords,
     diagnostics: index.diagnostics,
-    plugins: index.plugins.map(({ doctorContractFile: _doctorContractFile, ...plugin }) => plugin),
+    plugins: index.plugins.map(
+      ({ doctorContractFile: _doctorContractFile, packageBuild, ...plugin }) => ({
+        ...plugin,
+        ...(packageBuild
+          ? {
+              packageBuild:
+                packageBuild.bundledDist === undefined
+                  ? {}
+                  : { bundledDist: packageBuild.bundledDist },
+            }
+          : {}),
+      }),
+    ),
   });
   if (isDeepFrozenJsonLike(index)) {
     installedManifestRegistryIndexFingerprintCache.set(index, fingerprint);
@@ -388,12 +403,15 @@ function normalizePersistedPackageChannel(value: unknown): PluginPackageChannel 
     "docsLabel",
     "blurb",
     "systemImage",
-    "selectionDocsPrefix",
   ] as const) {
     const normalized = normalizeOptionalString(value[key]);
     if (normalized) {
       channel[key] = normalized;
     }
+  }
+  const selectionDocsPrefix = readStringValue(value.selectionDocsPrefix);
+  if (selectionDocsPrefix !== undefined) {
+    channel.selectionDocsPrefix = selectionDocsPrefix;
   }
   if (typeof value.order === "number" && Number.isFinite(value.order)) {
     channel.order = value.order;

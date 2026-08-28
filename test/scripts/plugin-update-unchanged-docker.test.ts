@@ -9,6 +9,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
 import { loadInstalledPluginIndex } from "../../src/plugins/installed-plugin-index.js";
 import { resolveInstalledPluginPackageOwnership } from "../../src/plugins/installed-plugin-package-ownership.js";
+import {
+  closeOpenClawStateDatabaseByPath,
+  openOpenClawStateDatabase,
+} from "../../src/state/openclaw-state-db.js";
 
 const PLUGIN_UPDATE_DOCKER_SCRIPT = "scripts/e2e/plugin-update-unchanged-docker.sh";
 const PLUGIN_UPDATE_SCENARIO_SCRIPT = "scripts/e2e/lib/plugin-update/unchanged-scenario.sh";
@@ -101,7 +105,7 @@ async function waitForPortFile(portFile: string): Promise<number> {
 }
 
 describe("plugin update unchanged Docker E2E", () => {
-  it("seeds current plugin install ledger state before checking config stability", async () => {
+  it("seeds pre-v13 plugin install ledger state before checking config stability", async () => {
     const runner = readFileSync(PLUGIN_UPDATE_DOCKER_SCRIPT, "utf8");
     const scenario = readFileSync(PLUGIN_UPDATE_SCENARIO_SCRIPT, "utf8");
     const probe = readFileSync(PLUGIN_UPDATE_PROBE_SCRIPT, "utf8");
@@ -114,6 +118,7 @@ describe("plugin update unchanged Docker E2E", () => {
     );
     expect(probe).toContain("installRecords: {");
     expect(probe).toContain('"lossless-claw": {');
+    expect(probe).toContain('{ storageMode: "pre-v13" }');
 
     const root = mkdtempSync(path.join(tmpdir(), "openclaw-plugin-update-seed-"));
     try {
@@ -139,6 +144,8 @@ describe("plugin update unchanged Docker E2E", () => {
         }),
       ]);
 
+      const database = openOpenClawStateDatabase({ env });
+      closeOpenClawStateDatabaseByPath(database.path);
       const liveIndex = loadInstalledPluginIndex({
         config,
         env,

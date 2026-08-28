@@ -61,7 +61,7 @@ export function parseModelPolicyWildcardRef(raw: string): ModelPolicyWildcardRef
 }
 
 /** True for a syntactically valid exact provider/model policy reference. */
-export function isValidExactModelPolicyRef(raw: string): boolean {
+function isValidExactModelPolicyRef(raw: string): boolean {
   const parsed = parseModelCatalogRef(raw);
   return Boolean(
     parsed &&
@@ -71,7 +71,24 @@ export function isValidExactModelPolicyRef(raw: string): boolean {
   );
 }
 
-/** True for a supported bare selector whose target is resolved from config. */
-export function isModelPolicyCompatSelector(raw: string): boolean {
-  return MODEL_POLICY_COMPAT_SELECTORS.has(normalizeLowercaseStringOrEmpty(raw));
+/** Share policy grammar and owner-scoped aliases between validation and migration. */
+export function createModelPolicyRefValidator(
+  ...modelMaps: Array<Record<string, { alias?: string }> | undefined>
+): (raw: string) => boolean {
+  const aliases = new Set(
+    modelMaps
+      .flatMap((models) =>
+        Object.values(models ?? {}).map((entry) => normalizeLowercaseStringOrEmpty(entry?.alias)),
+      )
+      .filter(Boolean),
+  );
+  return (raw) => {
+    const trimmed = raw.trim();
+    return Boolean(
+      aliases.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+      MODEL_POLICY_COMPAT_SELECTORS.has(normalizeLowercaseStringOrEmpty(trimmed)) ||
+      isValidExactModelPolicyRef(trimmed) ||
+      parseModelPolicyWildcardRef(trimmed),
+    );
+  };
 }

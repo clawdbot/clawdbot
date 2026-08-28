@@ -1,0 +1,320 @@
+title: Admitted channel participant identity inspection
+
+scenario:
+  id: channel-participant-identity-inspection
+  surface: qa-channel
+  coverage:
+    primary:
+      - gateway.identity-and-presence-apis
+    secondary:
+      - channels.qa-channel-final-reply
+  objective: Verify admitted QA Channel DM, group, senderless, and collect-configured turns retain only authoritative participant identity across restart while a rejected ingress creates no audit state.
+  gatewayConfigPatch:
+    logging:
+      audit:
+        executionIdentity: true
+    messages:
+      queue:
+        mode: collect
+        debounceMsByChannel:
+          qa-channel: 1000
+    channels:
+      qa-channel:
+        allowFrom: ["*"]
+        groupPolicy: allowlist
+        groupAllowFrom: [qa-group-person, qa-same-person, qa-mixed-a, qa-mixed-b]
+    tools:
+      alsoAllow: [exec]
+    agents:
+      entries:
+        qa:
+          tools:
+            alsoAllow: [exec]
+  successCriteria:
+    - Direct and group runs project a person invoker while room and route identifiers never become principals.
+    - Senderless input is admitted with an unknown invoker, and an allowlist rejection creates no run, identity context, or decision fact.
+    - Same and mixed participants remain correctly distinguished across collect-configured QA Channel ingress.
+    - JSON and human CLI inspection remain stable after a Gateway replacement restart without exposing private generic decision facts as trusted owner evidence.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+    - docs/channels/qa-channel.md
+    - docs/concepts/qa-e2e-automation.md
+  codeRefs:
+    - extensions/qa-channel/src/inbound.ts
+    - src/channels/message-access/admission-evidence.ts
+    - src/auto-reply/reply/queue/drain.ts
+    - extensions/qa-lab/src/execution-identity-storage-inspection.ts
+  execution:
+    kind: flow
+    channel: qa-channel
+    suiteIsolation: isolated
+    isolationReason: Enables execution identity and collect mode, then inspects one isolated audit database across restart.
+    retryCount: 0
+    summary: Run admitted channel turns through an ephemeral Gateway and mock provider, inspect exact identity/decision records, and prove restart stability plus rejection non-creation.
+    config:
+      requiredProviderMode: mock-openai
+
+flow:
+  steps:
+    - name: inspects direct, group, and senderless admitted participants
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: channel participant identity proof requires mock-openai
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 60000]
+        - call: reset
+        - set: dmRunsBefore
+          value:
+            expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+        - sendInbound:
+            conversation: { id: qa-dm-room, kind: direct }
+            senderId: qa-dm-person
+            senderName: QA DM Person
+            text: "Reply exactly: QA-CHANNEL-IDENTITY-DM-OK"
+        - waitForOutbound:
+            conversation: { id: qa-dm-room, kind: direct }
+            textIncludes: QA-CHANNEL-IDENTITY-DM-OK
+            timeoutMs: 60000
+        - call: waitForCondition
+          saveAs: dmRunId
+          args:
+            - lambda:
+                async: true
+                expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string' && !dmRunsBefore.includes(id)))][0]"
+            - 60000
+            - 250
+        - call: waitForCondition
+          saveAs: dmInspect
+          args:
+            - lambda:
+                async: true
+                expr: "runQaCli(env, ['audit', '--run', dmRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => value.identity?.state === 'present' ? value : undefined).catch(() => undefined)"
+            - 60000
+            - 250
+        - set: dmText
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', dmRunId, '--explain'], { timeoutMs: 60000 })"
+        - assert:
+            expr: "dmInspect.identity.context.invoker.state === 'present' && dmInspect.identity.context.invoker.principal?.kind === 'person' && dmInspect.identity.context.ingress.kind === 'channel' && !JSON.stringify(dmInspect).includes('qa-dm-person') && !JSON.stringify(dmInspect).includes('qa-dm-room')"
+            message:
+              expr: "`direct inspection must retain a pseudonymized person without room or raw sender material: ${JSON.stringify(dmInspect)}`"
+        - assert:
+            expr: "dmText.includes('Identity') && dmText.includes('Invoker [present]') && dmText.includes('Decisions')"
+            message: human audit output omitted direct participant evidence
+        - set: groupRunsBefore
+          value:
+            expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+        - sendInbound:
+            conversation: { id: qa-group-room, kind: group }
+            senderId: qa-group-person
+            senderName: QA Group Person
+            text: "Reply exactly: QA-CHANNEL-IDENTITY-GROUP-OK"
+        - waitForOutbound:
+            conversation: { id: qa-group-room, kind: group }
+            textIncludes: QA-CHANNEL-IDENTITY-GROUP-OK
+            timeoutMs: 60000
+        - call: waitForCondition
+          saveAs: groupRunId
+          args:
+            - lambda:
+                async: true
+                expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string' && !groupRunsBefore.includes(id)))][0]"
+            - 60000
+            - 250
+        - call: waitForCondition
+          saveAs: groupInspect
+          args:
+            - lambda:
+                async: true
+                expr: "runQaCli(env, ['audit', '--run', groupRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => value.identity?.state === 'present' ? value : undefined).catch(() => undefined)"
+            - 60000
+            - 250
+        - assert:
+            expr: "groupInspect.identity.context.invoker.state === 'present' && groupInspect.coverage.state === 'unknown' && groupInspect.coverage.missingEvidence.includes('decision.display_provenance') && groupInspect.decisionDisplays.some((receipt) => receipt.action.family === 'decision' && receipt.provenance.state === 'unverified') && !JSON.stringify(groupInspect).includes('qa-group-room')"
+            message: group inspection must retain participant identity without presenting private generic facts or the room as trusted owner evidence
+        - set: senderlessRunsBefore
+          value:
+            expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+        - sendInbound:
+            conversation: { id: qa-senderless-room, kind: direct }
+            senderId: ""
+            text: "Reply exactly: QA-CHANNEL-IDENTITY-SENDERLESS-OK"
+        - waitForOutbound:
+            conversation: { id: qa-senderless-room, kind: direct }
+            textIncludes: QA-CHANNEL-IDENTITY-SENDERLESS-OK
+            timeoutMs: 60000
+        - call: waitForCondition
+          saveAs: senderlessRunId
+          args:
+            - lambda:
+                async: true
+                expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string' && !senderlessRunsBefore.includes(id)))][0]"
+            - 60000
+            - 250
+        - call: waitForCondition
+          saveAs: senderlessInspect
+          args:
+            - lambda:
+                async: true
+                expr: "runQaCli(env, ['audit', '--run', senderlessRunId, '--explain', '--json'], { timeoutMs: 60000, json: true }).then((value) => value.identity?.state === 'present' ? value : undefined).catch(() => undefined)"
+            - 60000
+            - 250
+        - assert:
+            expr: "senderlessInspect.identity.context.invoker.state === 'unknown' && senderlessInspect.coverage.state === 'unknown' && senderlessInspect.decisionDisplays.some((receipt) => receipt.action.family === 'decision' && receipt.provenance.state === 'unverified')"
+            message: senderless admission must stay unknown
+      detailsExpr: "`dm=${dmRunId}; group=${groupRunId}; senderless=${senderlessRunId}`"
+
+    - name: distinguishes same and mixed participants on collect-configured ingress
+      actions:
+        - sendInbound:
+            conversation: { id: qa-same-collect, kind: group }
+            senderId: qa-same-person
+            text: /queue collect debounce:1s
+        - waitForOutbound:
+            conversation: { id: qa-same-collect, kind: group }
+            textIncludes: Queue mode set to collect.
+            timeoutMs: 60000
+        - set: sameRunsBefore
+          value:
+            expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+        - sendInbound:
+            conversation: { id: qa-same-collect, kind: group }
+            senderId: qa-same-person
+            text: "Tool progress QA check: call the exec tool exactly once with this exact command before answering: `sleep 3`. After that command completes, reply exactly `QA-SAME-BUSY-OK`."
+        - call: sleep
+          args: [500]
+        - sendInbound:
+            conversation: { id: qa-same-collect, kind: group }
+            senderId: qa-same-person
+            text: repeated request queued reply gateway qa check same one
+        - sendInbound:
+            conversation: { id: qa-same-collect, kind: group }
+            senderId: qa-same-person
+            text: repeated request queued reply gateway qa check same two
+        - call: waitForCondition
+          saveAs: sameRunIds
+          args:
+            - lambda:
+                async: true
+                expr: "(ids => ids.length >= 3 ? ids : undefined)([...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string' && !sameRunsBefore.includes(id)))])"
+            - 60000
+            - 250
+        - assert:
+            expr: "sameRunIds.length === 3"
+            message:
+              expr: "`same-participant collect produced ${sameRunIds.length} runs: ${sameRunIds.join(',')}`"
+        - set: sameInspections
+          value:
+            expr: "await (async () => { const values = []; for (const id of sameRunIds) values.push(await runQaCli(env, ['audit', '--run', id, '--explain', '--json'], { timeoutMs: 60000, json: true })); return values; })()"
+        - assert:
+            expr: "sameInspections.every((value) => value.identity.state === 'present' && value.identity.context.invoker.state === 'present') && new Set(sameInspections.map((value) => value.identity.context.invoker.principal?.principalRef)).size === 1"
+            message: same-participant collect sources must retain one person pseudonym
+        - sendInbound:
+            conversation: { id: qa-mixed-collect, kind: group }
+            senderId: qa-mixed-a
+            text: /queue collect debounce:1s
+        - waitForOutbound:
+            conversation: { id: qa-mixed-collect, kind: group }
+            textIncludes: Queue mode set to collect.
+            timeoutMs: 60000
+        - set: mixedRunsBefore
+          value:
+            expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+        - sendInbound:
+            conversation: { id: qa-mixed-collect, kind: group }
+            senderId: qa-mixed-a
+            text: "Tool progress QA check: call the exec tool exactly once with this exact command before answering: `sleep 3`. After that command completes, reply exactly `QA-MIXED-BUSY-OK`."
+        - call: sleep
+          args: [500]
+        - sendInbound:
+            conversation: { id: qa-mixed-collect, kind: group }
+            senderId: qa-mixed-a
+            text: repeated request queued reply gateway qa check mixed one
+        - sendInbound:
+            conversation: { id: qa-mixed-collect, kind: group }
+            senderId: qa-mixed-b
+            text: repeated request queued reply gateway qa check mixed two
+        - call: waitForCondition
+          saveAs: mixedRunIds
+          args:
+            - lambda:
+                async: true
+                expr: "(ids => ids.length >= 3 ? ids : undefined)([...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string' && !mixedRunsBefore.includes(id)))])"
+            - 60000
+            - 250
+        - assert:
+            expr: "mixedRunIds.length === 3"
+            message:
+              expr: "`mixed-participant collect produced ${mixedRunIds.length} runs: ${mixedRunIds.join(',')}`"
+        - set: mixedInspections
+          value:
+            expr: "await (async () => { const values = []; for (const id of mixedRunIds) values.push(await runQaCli(env, ['audit', '--run', id, '--explain', '--json'], { timeoutMs: 60000, json: true })); return values; })()"
+        - assert:
+            expr: "mixedInspections.every((value) => value.identity.context?.invoker.state === 'present') && new Set(mixedInspections.map((value) => value.identity.context?.invoker.principal?.principalRef)).size === 2"
+            message:
+              expr: "`collect-configured mixed participants must preserve two distinct admitted people before aggregation: ${JSON.stringify(mixedInspections.map((value) => value.identity.context?.invoker))}`"
+      detailsExpr: "`same=${sameRunIds.join(',')}; mixed=${mixedRunIds.join(',')}`"
+
+    - name: rejects pre-run ingress without synthetic audit state
+      actions:
+        - set: denialRunsBefore
+          value:
+            expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+        - set: denialStorageBefore
+          value:
+            expr: "inspectQaExecutionIdentityStorage(env)"
+        - set: denialOutboundStart
+          value:
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length"
+        - sendInbound:
+            conversation: { id: qa-denied-group, kind: group }
+            senderId: qa-denied-person
+            text: "Reply exactly: QA-DENIED-MUST-NOT-RUN"
+        - waitForNoOutbound:
+            sinceIndex: { ref: denialOutboundStart }
+            quietMs: 1500
+        - call: sleep
+          args: [1000]
+        - set: denialRunsAfter
+          value:
+            expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+        - set: denialStorageAfter
+          value:
+            expr: "inspectQaExecutionIdentityStorage(env)"
+        - assert:
+            expr: "denialRunsAfter.every((id) => denialRunsBefore.includes(id)) && denialStorageAfter.contextCount === denialStorageBefore.contextCount && denialStorageAfter.decisionCount === denialStorageBefore.decisionCount"
+            message: pre-run rejection created a synthetic run, identity context, or decision fact
+      detailsExpr: "`contexts=${denialStorageAfter.contextCount}; decisions=${denialStorageAfter.decisionCount}`"
+
+    - name: preserves exact CLI identity across Gateway restart
+      actions:
+        - set: dmContextBeforeRestart
+          value:
+            expr: "JSON.stringify(dmInspect.identity.context)"
+        - assert:
+            expr: "typeof env.gateway.restartAfterStateMutation === 'function'"
+            message: QA Gateway does not expose lifecycle-owned restart
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                params: [ctx]
+                expr: "Promise.resolve()"
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForQaChannelReady
+          args: [{ ref: env }, 60000]
+        - set: dmAfterRestart
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', dmRunId, '--explain', '--json'], { timeoutMs: 60000, json: true })"
+        - set: dmTextAfterRestart
+          value:
+            expr: "await runQaCli(env, ['audit', '--run', dmRunId, '--explain'], { timeoutMs: 60000 })"
+        - assert:
+            expr: "JSON.stringify(dmAfterRestart.identity.context) === dmContextBeforeRestart && dmTextAfterRestart.includes('Invoker [present]') && dmTextAfterRestart.includes('Decisions')"
+            message: exact participant identity or human CLI projection changed across restart
+      detailsExpr: "`restart-stable run=${dmRunId}`"

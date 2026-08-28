@@ -38,6 +38,12 @@ export function readCronCallerScope(
     cronSelfManagementContext && Date.now() < cronSelfManagementContext.expiresAtMs
       ? cronSelfManagementContext.jobId.trim() || undefined
       : undefined;
+  const sourceChannel = identity.turnSourceChannel?.trim().toLowerCase();
+  const callerOrigin = sourceChannel
+    ? ({ kind: "external", channel: sourceChannel } as const)
+    : identity.turnSourceLocal === true
+      ? ({ kind: "local" } as const)
+      : ({ kind: "unknown" } as const);
   return {
     kind: "agentTool",
     agentId: normalizeAgentId(identity.agentId),
@@ -49,6 +55,7 @@ export function readCronCallerScope(
           toolsAllowProvenance: {
             version: 1 as const,
             source: "final-executable-surface" as const,
+            callerOrigin,
           },
         }
       : {}),

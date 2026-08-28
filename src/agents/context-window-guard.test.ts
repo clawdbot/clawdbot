@@ -2,7 +2,6 @@
 import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import {
-  CONTEXT_WINDOW_HARD_MIN_TOKENS,
   evaluateContextWindowGuard,
   formatContextWindowBlockMessage,
   formatContextWindowWarningMessage,
@@ -208,59 +207,6 @@ describe("context-window-guard", () => {
     });
   });
 
-  it("caps with agents.defaults.contextTokens", () => {
-    const cfg = {
-      agents: { defaults: { contextTokens: 20_000 } },
-    } satisfies OpenClawConfig;
-    const info = resolveContextWindowInfo({
-      cfg,
-      provider: "anthropic",
-      modelId: "whatever",
-      modelContextWindow: 200_000,
-      defaultTokens: 200_000,
-    });
-    const guard = evaluateContextWindowGuard({ info });
-    expect(info.source).toBe("agentContextTokens");
-    expect(info.tokens).toBe(20_000);
-    expect(info.referenceTokens).toBe(200_000);
-    expect(guard.hardMinTokens).toBe(20_000);
-    expect(guard.warnBelowTokens).toBe(40_000);
-    expect(guard.shouldWarn).toBe(true);
-    expect(guard.shouldBlock).toBe(false);
-  });
-
-  it("uses the selected agent cap instead of the default", () => {
-    const info = resolveContextWindowInfo({
-      cfg: { agents: { defaults: { contextTokens: 20_000 } } },
-      provider: "anthropic",
-      modelId: "whatever",
-      modelContextWindow: 200_000,
-      agentContextTokens: 40_000,
-      defaultTokens: 200_000,
-    });
-
-    expect(info).toEqual({
-      source: "agentContextTokens",
-      tokens: 40_000,
-      referenceTokens: 200_000,
-    });
-  });
-
-  it("does not override when cap exceeds base window", () => {
-    const cfg = {
-      agents: { defaults: { contextTokens: 128_000 } },
-    } satisfies OpenClawConfig;
-    const info = resolveContextWindowInfo({
-      cfg,
-      provider: "anthropic",
-      modelId: "whatever",
-      modelContextWindow: 64_000,
-      defaultTokens: 200_000,
-    });
-    expect(info.source).toBe("model");
-    expect(info.tokens).toBe(64_000);
-  });
-
   it("uses default when nothing else is available", () => {
     const info = resolveContextWindowInfo({
       cfg: undefined,
@@ -312,10 +258,6 @@ describe("context-window-guard", () => {
     expect(guard.shouldBlock).toBe(false);
   });
 
-  it("exports the public hard-min floor as expected", () => {
-    expect(CONTEXT_WINDOW_HARD_MIN_TOKENS).toBe(4_000);
-  });
-
   it("derives percentage-based guard thresholds above the safe floors", () => {
     const largeGuard = evaluateContextWindowGuard({
       info: { tokens: 1_000_000, source: "model" },
@@ -328,28 +270,6 @@ describe("context-window-guard", () => {
     });
     expect(mediumGuard.hardMinTokens).toBe(6_400);
     expect(mediumGuard.warnBelowTokens).toBe(12_800);
-  });
-
-  it("derives guard thresholds from the reference window when capped", () => {
-    const guard = evaluateContextWindowGuard({
-      info: { tokens: 150_000, referenceTokens: 1_000_000, source: "agentContextTokens" },
-    });
-    expect(guard.hardMinTokens).toBe(100_000);
-    expect(guard.warnBelowTokens).toBe(200_000);
-    expect(guard.shouldWarn).toBe(true);
-    expect(guard.shouldBlock).toBe(false);
-  });
-
-  it("does not let inflated reference metadata hard-block a valid effective cap", () => {
-    // Reference metadata can be wildly large; hard blocking must be based on the
-    // effective cap so valid operator limits remain usable.
-    const guard = evaluateContextWindowGuard({
-      info: { tokens: 20_000, referenceTokens: 1_000_000_000, source: "agentContextTokens" },
-    });
-    expect(guard.hardMinTokens).toBe(20_000);
-    expect(guard.warnBelowTokens).toBe(200_000_000);
-    expect(guard.shouldWarn).toBe(true);
-    expect(guard.shouldBlock).toBe(false);
   });
 
   it("adds a local-model hint to warning messages for localhost endpoints", () => {
@@ -393,25 +313,6 @@ describe("context-window-guard", () => {
         runtimeBaseUrl: "http://127.0.0.1:11434/v1",
       }),
     ).toContain("This looks like a local model endpoint.");
-  });
-
-  it("points agent-cap block remediation at the agent contextTokens setting", () => {
-    const guard = evaluateContextWindowGuard({
-      info: { tokens: 8_000, source: "agentContextTokens" },
-    });
-
-    const message = formatContextWindowBlockMessage({
-      guard,
-      runtimeBaseUrl: "http://127.0.0.1:11434/v1",
-    });
-
-    // A per-agent contextTokens overrides the default, so the remediation must
-    // name the agent setting. resolveAgentConfig reads both roster shapes, so it
-    // must name agents.list[] and agents.entries.*, not just defaults (#118678).
-    expect(message).toContain("agents.list[].contextTokens");
-    expect(message).toContain("agents.entries.<id>.contextTokens");
-    expect(message).toContain("agents.defaults.contextTokens");
-    expect(message).not.toContain("choose a larger model");
   });
 
   it("points model config block remediation at contextWindow/contextTokens", () => {

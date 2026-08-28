@@ -15,9 +15,6 @@ const MAX_AUDIT_TOOL_NAMES = 50;
 const MAX_AUDIT_FIELD_LENGTH = 160;
 const toolPolicyAuditLogger = createSubsystemLogger("agents/tool-policy");
 
-/** Log level used for tool-policy audit events. */
-export type ToolPolicyAuditLogLevel = "info" | "debug";
-
 type ToolPolicyRuleKind = "allow" | "deny" | "allow+deny" | "unknown";
 
 function toolPolicyRuleKind(policy: ToolPolicyLike): ToolPolicyRuleKind {
@@ -174,7 +171,6 @@ export function auditToolPolicyFilter(params: {
   policy: ToolPolicyLike;
   before: readonly { name: string }[];
   after: readonly { name: string }[];
-  logLevel?: ToolPolicyAuditLogLevel;
 }): void {
   const removedByRule = removedToolNamesByRule({
     policy: params.policy,
@@ -208,11 +204,9 @@ export function auditToolPolicyFilter(params: {
       removedTools: toolNames,
       removedToolsTruncated: truncated,
     };
-    if (params.logLevel === "debug") {
-      toolPolicyAuditLogger.debug(message, metadata);
-    } else {
-      toolPolicyAuditLogger.info(message, metadata);
-    }
+    // Routine policy filtering runs on every turn; per-turn removal detail is
+    // diagnostic, not operator-facing, so it stays out of info-level logs.
+    toolPolicyAuditLogger.debug(message, metadata);
   }
 }
 

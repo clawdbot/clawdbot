@@ -1,9 +1,11 @@
 // Gateway control-plane handlers for cold plugin catalog and lifecycle operations.
+import { buildCapabilityConsentErrorDetails } from "../../../packages/gateway-protocol/src/capability-consent-error-details.js";
 import {
   buildClawHubTrustErrorDetails,
   ErrorCodes,
   errorShape,
   isClawHubTrustErrorCode,
+  validatePluginsInspectParams,
   validatePluginsInstallParams,
   validatePluginsListParams,
   validatePluginsRefreshParams,
@@ -11,13 +13,18 @@ import {
   validatePluginsSetEnabledParams,
   validatePluginsUninstallParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
+  readInstallPolicyWarningErrorDetails,
+} from "../../../packages/gateway-protocol/src/install-policy-warning-error-details.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { searchInstallablePluginPackages } from "../../plugins/catalog-search.js";
+import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import {
+  inspectManagedPlugin,
   installManagedPlugin,
   listManagedPlugins,
-  ManagedPluginLifecycleError,
   setManagedPluginEnabled,
   uninstallManagedPlugin,
 } from "../../plugins/management-service.js";
@@ -52,6 +59,33 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       respond(true, await listManagedPlugins({ config: context.getRuntimeConfig() }), undefined);
     } catch (error) {
       respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, formatErrorMessage(error)));
+    }
+  },
+  "plugins.inspect": async ({ params, respond, context }) => {
+    if (!assertValidParams(params, validatePluginsInspectParams, "plugins.inspect", respond)) {
+      return;
+    }
+    try {
+      respond(
+        true,
+        await inspectManagedPlugin({
+          config: context.getRuntimeConfig(),
+          pluginId: params.pluginId,
+        }),
+        undefined,
+      );
+    } catch (error) {
+      const lifecycleError = error instanceof ManagedPluginLifecycleError ? error : undefined;
+      respond(
+        false,
+        undefined,
+        errorShape(
+          lifecycleError?.kind === "invalid-request"
+            ? ErrorCodes.INVALID_REQUEST
+            : ErrorCodes.UNAVAILABLE,
+          formatErrorMessage(error),
+        ),
+      );
     }
   },
   "plugins.search": async ({ params, respond }) => {
@@ -127,13 +161,23 @@ export const pluginsHandlers: GatewayRequestHandlers = {
         lifecycleError?.code && isClawHubTrustErrorCode(lifecycleError.code)
           ? lifecycleError.code
           : undefined;
-      const details = lifecycleError
+      const trustDetails = lifecycleError
         ? buildClawHubTrustErrorDetails({
             ...(trustCode ? { code: trustCode } : {}),
             ...(lifecycleError.version ? { version: lifecycleError.version } : {}),
             ...(lifecycleError.warning ? { warning: lifecycleError.warning } : {}),
           })
         : undefined;
+      const installPolicyDetails = lifecycleError?.installPolicyWarning
+        ? readInstallPolicyWarningErrorDetails({
+            installPolicyCode: INSTALL_POLICY_WARNING_ACKNOWLEDGEMENT_REQUIRED,
+            ...lifecycleError.installPolicyWarning,
+          })
+        : undefined;
+      const capabilityConsentDetails = lifecycleError?.capabilityConsent
+        ? buildCapabilityConsentErrorDetails(lifecycleError.capabilityConsent)
+        : undefined;
+      const details = capabilityConsentDetails ?? installPolicyDetails ?? trustDetails;
       respond(
         false,
         undefined,
@@ -188,6 +232,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
       const result = await setManagedPluginEnabled({
         pluginId: params.pluginId,
         enabled: params.enabled,
+        ...(params.acknowledgeCapabilities
+          ? { acknowledgeCapabilities: params.acknowledgeCapabilities }
+          : {}),
       });
       respond(
         true,
@@ -212,6 +259,9 @@ export const pluginsHandlers: GatewayRequestHandlers = {
             ? ErrorCodes.INVALID_REQUEST
             : ErrorCodes.UNAVAILABLE,
           formatErrorMessage(error),
+          lifecycleError?.capabilityConsent
+            ? { details: buildCapabilityConsentErrorDetails(lifecycleError.capabilityConsent) }
+            : undefined,
         ),
       );
     }

@@ -4,8 +4,11 @@ import { expectDefined } from "@openclaw/normalization-core";
 import type { DiagnosticEventPrivateData } from "openclaw/plugin-sdk/diagnostic-runtime";
 // Diagnostics Prometheus tests cover service plugin behavior.
 import { describe, expect, it, vi } from "vitest";
-import type { DiagnosticEventMetadata, DiagnosticEventPayload } from "../api.js";
-import type { OpenClawPluginServiceContext } from "../api.js";
+import type {
+  DiagnosticEventMetadata,
+  DiagnosticEventPayload,
+  OpenClawPluginServiceContext,
+} from "../api.js";
 import { createDiagnosticsPrometheusExporter } from "./service.js";
 
 const trusted: DiagnosticEventMetadata = Object.freeze({ trusted: true });

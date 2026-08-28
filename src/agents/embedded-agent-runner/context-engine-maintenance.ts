@@ -21,6 +21,10 @@ import {
   isGatewayDraining,
 } from "../../process/command-queue.js";
 import {
+  CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND as TURN_MAINTENANCE_TASK_KIND,
+  registerContextEngineMaintenanceTaskOwner,
+} from "../../tasks/context-engine-maintenance-task-owner.js";
+import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
   failTaskRunByRunId,
@@ -39,7 +43,6 @@ import { log } from "./logger.js";
 import { rewriteTranscriptEntriesInSessionManager } from "./transcript-rewrite.js";
 import { resolveRuntimeTranscriptReadTarget } from "./transcript-runtime-state.js";
 
-const TURN_MAINTENANCE_TASK_KIND = "context_engine_turn_maintenance";
 const TURN_MAINTENANCE_LANE_PREFIX = "context-engine-turn-maintenance:";
 const TURN_MAINTENANCE_LONG_WAIT_MS = 10_000;
 const DEFERRED_TURN_MAINTENANCE_ABORT_STATE_KEY = Symbol.for(
@@ -59,6 +62,7 @@ type ContextEngineMaintenanceParams = {
   runtimeContext?: ContextEngineRuntimeContext;
   runtimeSettings?: ContextEngineRuntimeSettings;
   agentId?: string;
+  contextEngineAgentId?: string;
   executionMode?: "foreground" | "background";
   onDeferredMaintenance?: (promise: Promise<void>) => void;
   onDeferredMaintenanceFailure?: (error: unknown) => void;
@@ -236,7 +240,7 @@ function buildContextEngineMaintenanceRuntimeContext(
     ...resolveContextEngineCapabilities({
       config: params.config,
       sessionKey: params.sessionKey,
-      agentId: params.agentId,
+      explicitAgentId: params.contextEngineAgentId,
       authProfileId: normalizeOptionalString(params.runtimeContext?.authProfileId),
       contextEnginePluginId: params.contextEnginePluginId,
       purpose: params.purpose ?? "context-engine.maintenance",
@@ -501,17 +505,22 @@ function scheduleDeferredTurnMaintenance(
     });
   };
   const schedulerAbort = createDeferredTurnMaintenanceAbortSignal();
+  // Durable task rows outlive this process. Register before enqueue so the
+  // authoritative reconciler can distinguish a live worker from an orphan.
+  const releaseProcessOwner = registerContextEngineMaintenanceTaskOwner(task.taskId);
   let runPromise: Promise<void>;
   try {
     runPromise = enqueueCommandInLane(lane, () =>
       runDeferredTurnMaintenanceWorker({ ...params, sessionKey, runId: task.runId! }),
     );
   } catch (err) {
+    releaseProcessOwner();
     schedulerAbort.dispose();
     cancelFailedTask(err);
     return undefined;
   }
   const cleanupDeferredTurnMaintenance = async () => {
+    releaseProcessOwner();
     schedulerAbort.dispose();
     const current = activeDeferredTurnMaintenanceRuns.get(sessionKey);
     if (current !== state) {

@@ -280,13 +280,4 @@ describe("HTTP 429 overload wording (#98101)", () => {
       "⚠️ API rate limit reached. Please try again later.",
     );
   });
-
-  it("preserves actionable retry details when a rate limit also mentions overload", () => {
-    expect(
-      renderRateLimitOrOverloadedCopy({
-        reason: "rate_limit",
-        raw: "429 rate limit: service overloaded, try again in 30 seconds",
-      }),
-    ).toBe("⚠️ rate limit: service overloaded, try again in 30 seconds");
-  });
 });

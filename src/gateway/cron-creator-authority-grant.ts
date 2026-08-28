@@ -1,5 +1,9 @@
 import { randomBytes } from "node:crypto";
 import { cloneCronRuntimeAuthority, type CronRuntimeAuthority } from "../cron/runtime-authority.js";
+import {
+  normalizeCronScheduledToolCallerOrigin,
+  type CronScheduledToolCallerOrigin,
+} from "../cron/scheduled-tool-policy.js";
 
 export type CronCreatorAuthorityGrant = Readonly<{
   runId: string;
@@ -8,6 +12,7 @@ export type CronCreatorAuthorityGrant = Readonly<{
 
 export type CronCreatorAuthorityRunScope = {
   readonly runId: string;
+  readonly callerOrigin: CronScheduledToolCallerOrigin;
   readonly signal: AbortSignal;
   readonly grantTokens: Set<string>;
   active: boolean;
@@ -32,10 +37,14 @@ function expiredAuthorityError(): Error & { status: number } {
   );
 }
 
-export function createCronCreatorAuthorityRunScope(runId: string): CronCreatorAuthorityRunScope {
+export function createCronCreatorAuthorityRunScope(
+  runId: string,
+  callerOrigin: CronScheduledToolCallerOrigin = { kind: "unknown" },
+): CronCreatorAuthorityRunScope {
   const abortController = new AbortController();
   return {
     runId,
+    callerOrigin: normalizeCronScheduledToolCallerOrigin(callerOrigin),
     signal: abortController.signal,
     grantTokens: new Set(),
     active: true,

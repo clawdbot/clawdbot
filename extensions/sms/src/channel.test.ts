@@ -1,16 +1,12 @@
 // Sms tests cover channel plugin behavior.
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
+import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveSmsAccount } from "./accounts.js";
+import { smsPlugin } from "./channel.js";
 import type { SmsDeliveryRecord } from "./delivery-observations.js";
 import type { probeSmsAccount as probeSmsAccountType } from "./status.js";
 import type { sendSmsViaTwilio as sendSmsViaTwilioType } from "./twilio.js";
-
-type ChannelModule = typeof import("./channel.js");
-type PlatformMessageNotDispatchedErrorConstructor =
-  (typeof import("openclaw/plugin-sdk/error-runtime"))["PlatformMessageNotDispatchedError"];
-
-let smsPlugin: ChannelModule["smsPlugin"];
-let PlatformMessageNotDispatchedError: PlatformMessageNotDispatchedErrorConstructor;
 
 const sendSmsViaTwilio = vi.hoisted(() =>
   vi.fn<typeof sendSmsViaTwilioType>(async ({ to, onPlatformSendDispatch }) => {
@@ -45,8 +41,25 @@ const probeSmsAccount = vi.hoisted(() =>
   })),
 );
 
-beforeEach(async () => {
-  vi.resetModules();
+vi.mock("./twilio.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./twilio.js")>()),
+  sendSmsViaTwilio,
+}));
+vi.mock("./media.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./media.js")>()),
+  prepareHostedSmsMedia: hostedMediaMocks.prepare,
+}));
+vi.mock("./delivery-observations.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./delivery-observations.js")>()),
+  listRecentSmsDeliveryRecords,
+  recordInitialSmsDeliveryResult,
+}));
+vi.mock("./status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./status.js")>()),
+  probeSmsAccount,
+}));
+
+beforeEach(() => {
   sendSmsViaTwilio.mockReset();
   sendSmsViaTwilio.mockImplementation(async ({ to, onPlatformSendDispatch }) => {
     await onPlatformSendDispatch?.();
@@ -68,31 +81,35 @@ beforeEach(async () => {
   recordInitialSmsDeliveryResult.mockReset();
   recordInitialSmsDeliveryResult.mockResolvedValue(null);
   probeSmsAccount.mockClear();
-  vi.doMock("./twilio.js", () => ({
-    sendSmsViaTwilio,
-    TWILIO_MESSAGE_BODY_MAX_LENGTH: 1600,
-  }));
-  vi.doMock("./media.js", () => ({
-    prepareHostedSmsMedia: hostedMediaMocks.prepare,
-  }));
-  vi.doMock("./delivery-observations.js", () => ({
-    listRecentSmsDeliveryRecords,
-    recordInitialSmsDeliveryResult,
-  }));
-  vi.doMock("./status.js", () => ({
-    probeSmsAccount,
-    formatSmsProbeLines: vi.fn(() => []),
-  }));
-  ({ PlatformMessageNotDispatchedError } = await import("openclaw/plugin-sdk/error-runtime"));
-  ({ smsPlugin } = await import("./channel.js"));
 });
 
 afterEach(() => {
   vi.useRealTimers();
-  vi.doUnmock("./twilio.js");
-  vi.doUnmock("./media.js");
-  vi.doUnmock("./delivery-observations.js");
-  vi.doUnmock("./status.js");
+});
+
+describe("smsPlugin account removal", () => {
+  it("removes the default media cap without changing retained named accounts", () => {
+    const cfg = smsPlugin.config.deleteAccount?.({
+      accountId: "default",
+      cfg: {
+        agents: { defaults: { mediaMaxMb: 3 } },
+        channels: {
+          sms: {
+            accountSid: "AC123",
+            authToken: "secret",
+            fromNumber: "+15557654321",
+            mediaMaxMb: 1,
+            accounts: { support: { mediaMaxMb: 2 }, inherited: { enabled: true } },
+          },
+        },
+      },
+    });
+    if (!cfg) {
+      throw new Error("expected SMS account deletion result");
+    }
+    expect(resolveSmsAccount(cfg, "support").mediaMaxBytes).toBe(2 * 1024 * 1024);
+    expect(resolveSmsAccount(cfg, "inherited").mediaMaxBytes).toBe(3 * 1024 * 1024);
+  });
 });
 
 describe("smsPlugin status", () => {

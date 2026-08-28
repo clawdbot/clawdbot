@@ -12,9 +12,9 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../p
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { PlatformMessageNotDispatchedError } from "./deliver-types.js";
 import { collectEntrySpoolPaths } from "./delivery-queue-media-spool.js";
-import { loadPendingDeliveries } from "./delivery-queue-storage.js";
-import { drainPendingDeliveriesCore, type DeliverFn } from "./delivery-queue.js";
+import { drainPendingDeliveriesCore, type DeliverFn } from "./delivery-queue-recovery.js";
 import {
+  loadPendingDeliveries,
   createRecoveryLog,
   installDeliveryQueueTmpDirHooks,
 } from "./delivery-queue.test-helpers.js";

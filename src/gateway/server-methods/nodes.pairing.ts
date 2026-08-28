@@ -21,6 +21,7 @@ import {
   listApprovedPairedDeviceRoles,
   removePairedDeviceRole,
 } from "../../infra/device-pairing.js";
+import { reconcileRevokedDeviceWorker } from "../device-worker-revocation.js";
 import {
   resolveNodePairingCommandAllowlist,
   normalizeDeclaredNodeCommands,
@@ -36,10 +37,11 @@ import {
   type DeviceManagementAuthz,
 } from "./device-management-authz.js";
 import { emitDeviceManagementSecurityEvent } from "./device-management-security.js";
-import { respondInvalidParams, respondUnavailableOnThrow } from "./nodes.helpers.js";
+import { respondUnavailableOnThrow } from "./nodes.helpers.js";
 import { refreshConnectedNodeSurfaceCaches } from "./nodes.read.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./shared-types.js";
 import type { GatewayRequestHandlers } from "./types.js";
+import { assertValidParams } from "./validation.js";
 
 function broadcastRemovedNodePairing(params: {
   context: Pick<GatewayRequestContext, "broadcast">;
@@ -143,7 +145,11 @@ async function removePairedDeviceBackedNode(params: {
   client: GatewayClient | null;
   context: Pick<
     GatewayRequestContext,
-    "disconnectClientsForDevice" | "invalidateClientsForDevice" | "logGateway"
+    | "disconnectClientsForDevice"
+    | "invalidateClientsForDevice"
+    | "logGateway"
+    | "workerEnvironmentService"
+    | "workerPlacementDispatchService"
   >;
 }): Promise<
   | {
@@ -208,6 +214,7 @@ async function removePairedDeviceBackedNode(params: {
     role: "node",
     reason: "device-pair-removed",
   });
+  await reconcileRevokedDeviceWorker(params.context, removed.deviceId);
   return {
     status: "removed",
     nodeId: removed.deviceId,
@@ -217,12 +224,7 @@ async function removePairedDeviceBackedNode(params: {
 
 export const nodePairingHandlers: GatewayRequestHandlers = {
   "node.pair.list": async ({ params, respond, client }) => {
-    if (!validateNodePairListParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.list",
-        validator: validateNodePairListParams,
-      });
+    if (!assertValidParams(params, validateNodePairListParams, "node.pair.list", respond)) {
       return;
     }
     await respondUnavailableOnThrow(respond, async () => {
@@ -241,15 +243,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     });
   },
   "node.pair.approve": async ({ params, respond, context, client }) => {
-    if (!validateNodePairApproveParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.approve",
-        validator: validateNodePairApproveParams,
-      });
+    if (!assertValidParams(params, validateNodePairApproveParams, "node.pair.approve", respond)) {
       return;
     }
-    const { requestId } = params as { requestId: string };
+    const { requestId } = params;
     // Intentionally fail closed for RPC callers without an explicit scoped session.
     const callerScopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
     await respondUnavailableOnThrow(respond, async () => {
@@ -363,15 +360,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     });
   },
   "node.pair.reject": async ({ params, respond, context, client }) => {
-    if (!validateNodePairRejectParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.reject",
-        validator: validateNodePairRejectParams,
-      });
+    if (!assertValidParams(params, validateNodePairRejectParams, "node.pair.reject", respond)) {
       return;
     }
-    const { requestId } = params as { requestId: string };
+    const { requestId } = params;
     await respondUnavailableOnThrow(respond, async () => {
       if (
         !(await enforcePendingNodePairingOwnership({
@@ -411,15 +403,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
   // revoking its own node role on a mixed-role device additionally needs
   // operator.admin (see removePairedDeviceBackedNode).
   "node.pair.remove": async ({ params, respond, context, client }) => {
-    if (!validateNodePairRemoveParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.pair.remove",
-        validator: validateNodePairRemoveParams,
-      });
+    if (!assertValidParams(params, validateNodePairRemoveParams, "node.pair.remove", respond)) {
       return;
     }
-    const { nodeId } = params as { nodeId: string };
+    const { nodeId } = params;
     await respondUnavailableOnThrow(respond, async () => {
       const deviceBacked = await removePairedDeviceBackedNode({ nodeId, client, context });
       if (deviceBacked.status === "denied") {
@@ -446,18 +433,10 @@ export const nodePairingHandlers: GatewayRequestHandlers = {
     });
   },
   "node.rename": async ({ params, respond, context, client }) => {
-    if (!validateNodeRenameParams(params)) {
-      respondInvalidParams({
-        respond,
-        method: "node.rename",
-        validator: validateNodeRenameParams,
-      });
+    if (!assertValidParams(params, validateNodeRenameParams, "node.rename", respond)) {
       return;
     }
-    const { nodeId, displayName } = params as {
-      nodeId: string;
-      displayName: string;
-    };
+    const { nodeId, displayName } = params;
     await respondUnavailableOnThrow(respond, async () => {
       const authz = resolveDeviceManagementAuthz(client, nodeId);
       if (deniesCrossDeviceManagement(authz)) {

@@ -1,6 +1,9 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
   discoverAllSessions: vi.fn(),
@@ -59,17 +62,24 @@ function sessionSummary(totalTokens: number) {
 async function runSessionsUsage(
   params: Record<string, unknown>,
   runtimeConfig: OpenClawConfig = config,
+  client?: GatewayClient,
+  method: "sessions.usage" | "usage.cost" = "sessions.usage",
 ) {
   const respond = vi.fn();
   await expectDefined(
-    usageHandlers["sessions.usage"],
-    'usageHandlers["sessions.usage"] test invariant',
+    usageHandlers[method],
+    `usageHandlers["${method}"] test invariant`,
   )({
     respond,
     params,
+    client: client ?? null,
     context: { getRuntimeConfig: () => runtimeConfig },
   } as unknown as Parameters<(typeof usageHandlers)["sessions.usage"]>[0]);
   expect(respond).toHaveBeenCalledTimes(1);
+  if (method === "usage.cost") {
+    expect(respond.mock.calls[0]?.[0]).toBe(false);
+    return expectDefined(respond.mock.calls[0]?.[2], "usage.cost error");
+  }
   expect(respond.mock.calls[0]?.[0]).toBe(true);
   return expectDefined(respond.mock.calls[0]?.[1], "sessions.usage result");
 }
@@ -83,6 +93,8 @@ describe("sessions.usage result cache", () => {
     vi.clearAllMocks();
     testApi.sessionsUsageCache.clear();
     mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+      agentIdBySessionKey: new Map(),
+      durableTargets: [],
       storePath: "(multiple)",
       store: {},
     });
@@ -155,6 +167,124 @@ describe("sessions.usage result cache", () => {
 
     expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(2);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
+  });
+
+  it("partitions usage by role identity and excludes foreign sessions before aggregation", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const firstProfile = ensureProfileForEmail("first@example.com");
+      const secondProfile = ensureProfileForEmail("second@example.com");
+      const roleConfig: OpenClawConfig = {
+        ...config,
+        gateway: {
+          roles: {
+            default: "guest",
+            definitions: {
+              guest: {
+                sessions: { others: "none" },
+                agents: "*",
+                scopes: ["operator.read", "operator.write"],
+              },
+            },
+          },
+        },
+      };
+      mocks.loadCombinedSessionStoreForGatewayCore.mockReturnValue({
+        agentIdBySessionKey: new Map([
+          ["agent:main:first", "main"],
+          ["agent:main:second", "main"],
+        ]),
+        durableTargets: [],
+        storePath: "(multiple)",
+        store: {
+          "agent:main:first": {
+            sessionId: "session-first",
+            updatedAt: 200,
+            createdActor: { type: "human", id: firstProfile.id },
+            visibility: "shared",
+          },
+          "agent:main:second": {
+            sessionId: "session-second",
+            updatedAt: 100,
+            createdActor: { type: "human", id: secondProfile.id },
+            visibility: "shared",
+          },
+        },
+      });
+      mocks.discoverAllSessions.mockResolvedValue([
+        { sessionId: "session-first", sessionFile: "/tmp/first.jsonl", mtime: 200 },
+        { sessionId: "session-second", sessionFile: "/tmp/second.jsonl", mtime: 100 },
+      ]);
+      const identifiedClient = (profileId: string): GatewayClient => ({
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: {
+            id: "openclaw-control-ui",
+            version: "test",
+            platform: "test",
+            mode: "webchat",
+          },
+          role: "operator",
+          scopes: ["operator.read", "operator.write"],
+        },
+        authenticatedUserProfile: {
+          profileId,
+          displayName: null,
+          hasAvatar: false,
+          updatedAt: 1,
+        },
+      });
+
+      // Host-internal dispatch mints system authority; a clientless call with roles
+      // active is an unidentified operator and correctly resolves to the denied role.
+      const systemClient: GatewayClient = {
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          client: {
+            id: "gateway-client",
+            version: "test",
+            platform: "test",
+            mode: "backend",
+          },
+          role: "operator",
+          scopes: ["operator.read"],
+        },
+        internal: { operatorRoleActor: { kind: "system" } },
+      };
+      const unrestricted = (await runSessionsUsage(baseParams, roleConfig, systemClient)) as {
+        sessions: Array<{ key: string }>;
+        totals: { totalTokens: number };
+      };
+      const first = (await runSessionsUsage(
+        baseParams,
+        roleConfig,
+        identifiedClient(firstProfile.id),
+      )) as typeof unrestricted;
+      const second = (await runSessionsUsage(
+        baseParams,
+        roleConfig,
+        identifiedClient(secondProfile.id),
+      )) as typeof unrestricted;
+
+      expect(unrestricted.totals.totalTokens).toBe(20);
+      expect(first.sessions.map((session) => session.key)).toEqual(["agent:main:first"]);
+      expect(second.sessions.map((session) => session.key)).toEqual(["agent:main:second"]);
+      expect(first.totals.totalTokens).toBe(10);
+      expect(second.totals.totalTokens).toBe(10);
+      expect(testApi.sessionsUsageCache.size).toBe(3);
+
+      const deniedCost = await runSessionsUsage(
+        baseParams,
+        roleConfig,
+        identifiedClient(firstProfile.id),
+        "usage.cost",
+      );
+      expect(deniedCost).toMatchObject({
+        code: "FORBIDDEN",
+        message: expect.stringContaining("sessions hidden by your operator role"),
+      });
+    });
   });
 
   it("coalesces concurrent cold misses into one transcript aggregation", async () => {

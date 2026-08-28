@@ -8,6 +8,9 @@ import {
   bundledPluginFile,
 } from "./bundled-plugin-paths.mjs";
 import { shouldBuildBundledCluster } from "./optional-bundled-clusters.mjs";
+import { collectRootPackageExcludedExtensionDirs } from "./root-package-bundled-plugin-excludes.mjs";
+
+export { collectRootPackageExcludedExtensionDirs };
 
 const TOP_LEVEL_PUBLIC_SURFACE_EXTENSIONS = new Set([".ts", ".js", ".mts", ".cts", ".mjs", ".cjs"]);
 /** Bundled plugin directories built with core but not packaged as standalone npm plugins. */
@@ -34,7 +37,7 @@ function parseBundledPluginBuildIdFilter(env = process.env) {
   );
 }
 
-function parseDockerSelectedPluginBuildIdFilter(env = process.env) {
+export function parseDockerSelectedPluginBuildIdFilter(env = process.env) {
   const raw = env[DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV];
   if (typeof raw !== "string" || raw.trim() === "") {
     return null;
@@ -309,31 +312,6 @@ export function listBundledPluginBuildEntries(params = {}) {
       }),
     ),
   );
-}
-
-/**
- * Collect bundled extension dirs that root package builds should exclude.
- * @internal Shared repository-script contract.
- */
-export function collectRootPackageExcludedExtensionDirs(params = {}) {
-  const cwd = params.cwd ?? process.cwd();
-  const packageJsonPath = path.join(cwd, "package.json");
-  const excluded = new Set();
-  if (!fs.existsSync(packageJsonPath)) {
-    return excluded;
-  }
-
-  const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, "utf8"));
-  for (const entry of packageJson.files ?? []) {
-    if (typeof entry !== "string") {
-      continue;
-    }
-    const match = /^!dist\/extensions\/([^/]+)\/\*\*$/u.exec(entry);
-    if (match?.[1]) {
-      excluded.add(match[1]);
-    }
-  }
-  return excluded;
 }
 
 /**

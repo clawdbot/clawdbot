@@ -1,6 +1,6 @@
 // System launchd ownership tests cover loaded, installed, and unverifiable states.
 import { execFileSync } from "node:child_process";
-import { chmodSync, constants, mkdirSync, writeFileSync } from "node:fs";
+import { chmodSync, constants, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -80,21 +80,27 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const hostPlatform = process.platform;
+const absentQuery = 'printf "%s\\n" "Could not find service" >&2\nexit 113';
 
 function runRenderedProbe(
   plistName: string,
   plistMode: "unlabeled" | "same-label" | "malformed" | "unreadable",
+  launchctlBody = absentQuery,
 ) {
   const root = tempDirs.make("openclaw-launchd-probe-");
   const daemonsDir = path.join(root, "daemons");
   const binDir = path.join(root, "bin");
+  const probeLog = path.join(root, "probe.log");
   mkdirSync(daemonsDir);
   mkdirSync(binDir);
+  writeFileSync(probeLog, "");
+  writeFileSync(path.join(root, "non-executable"), "#!/bin/sh\nexit 0\n", { mode: 0o600 });
   writeFileSync(path.join(daemonsDir, plistName), `${plistMode}\n`);
   const plutilShim = path.join(binDir, "plutil");
   writeFileSync(
     plutilShim,
     `#!/bin/sh
+printf 'scan\\n' >> "$OPENCLAW_TEST_PROBE_LOG"
 mode=$1
 for last; do :; done
 case "$last" in
@@ -103,7 +109,7 @@ case "$last" in
     exit 1
     ;;
 esac
-fixture=$(cat "$last")
+fixture=$(/bin/cat "$last")
 if [ "$mode" = "-extract" ]; then
   if [ "$fixture" = "same-label" ]; then
     printf '%s\\n' "ai.openclaw.gateway"
@@ -122,7 +128,11 @@ exit 1
   const launchctlShim = path.join(binDir, "launchctl");
   writeFileSync(
     launchctlShim,
-    '#!/bin/sh\nprintf "%s\\n" "Could not find service" >&2\nexit 113\n',
+    `#!/bin/sh
+printf 'query\\n' >> "$OPENCLAW_TEST_PROBE_LOG"
+query_count=$(/usr/bin/grep -c '^query$' "$OPENCLAW_TEST_PROBE_LOG")
+${launchctlBody}
+`,
     { mode: 0o700 },
   );
   chmodSync(plutilShim, 0o700);
@@ -133,12 +143,25 @@ exit 1
   const script = renderSystemLaunchDaemonOwnershipShellProbe("ai.openclaw.gateway")
     .replaceAll("/Library/LaunchDaemons", daemonsDir)
     .replaceAll("/usr/bin/plutil", plutilShim)
-    .concat('printf "conflict=%s\\n" "$openclaw_system_launchd_conflict"\n');
+    .concat(
+      'printf "conflict=%s\\ndetail=%s\\n" "$openclaw_system_launchd_conflict" "$openclaw_system_launchd_detail"\n',
+    );
   const shell = hostPlatform === "darwin" ? "/bin/sh" : "/bin/bash";
-  return execFileSync(shell, ["-c", script], {
+  const output = execFileSync(shell, ["-c", script], {
     encoding: "utf8",
-    env: { ...process.env, PATH: `${binDir}:${process.env.PATH ?? ""}` },
-  }).match(/^conflict=(.*)$/m)?.[1];
+    env: {
+      HOME: root,
+      TMPDIR: root,
+      PATH: binDir,
+      OPENCLAW_TEST_PROBE_LOG: probeLog,
+      OPENCLAW_TEST_PROBE_DIR: root,
+    },
+  });
+  return {
+    conflict: output.match(/^conflict=(.*)$/m)?.[1],
+    detail: output.match(/^detail=(.*)$/m)?.[1],
+    events: readFileSync(probeLog, "utf8").trim().split("\n").filter(Boolean),
+  };
 }
 
 describe("system LaunchDaemon ownership", () => {
@@ -173,7 +196,7 @@ describe("system LaunchDaemon ownership", () => {
       status: "loaded",
       serviceTarget: "system/ai.openclaw.gateway",
     });
-    expect(execLaunchctl).toHaveBeenCalledWith(["print", "system/ai.openclaw.gateway"]);
+    expect(execLaunchctl).toHaveBeenCalledWith(["print", "system/ai.openclaw.gateway"], undefined);
   });
 
   it("fails closed when launchctl cannot classify system ownership", async () => {
@@ -351,7 +374,6 @@ describe("system LaunchDaemon ownership", () => {
     const script = renderSystemLaunchDaemonOwnershipShellProbe("ai.openclaw.gateway");
 
     expect(script).toContain('launchctl print "$openclaw_system_launchd_target"');
-    expect(script.match(/launchctl print "\$openclaw_system_launchd_target"/g)).toHaveLength(2);
     expect(script).toContain(
       '/usr/bin/plutil -extract Label raw -o - -- "$openclaw_system_launchd_plist"',
     );
@@ -372,13 +394,56 @@ describe("system LaunchDaemon ownership", () => {
   });
 
   it("executes the rendered probe across readable and unreadable plists", () => {
-    expect(runRenderedProbe("com.google.keystone.daemon.plist", "unlabeled")).toBe("");
-    expect(runRenderedProbe("com.vendor.unreadable.plist", "unreadable")).toBe("");
-    expect(runRenderedProbe("vendor-openclaw.plist", "same-label")).toContain(
+    expect(runRenderedProbe("com.google.keystone.daemon.plist", "unlabeled").conflict).toBe("");
+    expect(runRenderedProbe("com.vendor.unreadable.plist", "unreadable").conflict).toBe("");
+    expect(runRenderedProbe("vendor-openclaw.plist", "same-label").conflict).toContain(
       "vendor-openclaw.plist",
     );
-    expect(runRenderedProbe("com.vendor.broken.plist", "malformed")).toContain(
+    expect(runRenderedProbe("com.vendor.broken.plist", "malformed").conflict).toContain(
       "com.vendor.broken.plist",
     );
   });
+
+  it.each([
+    ["loaded", "exit 0", 1, "loaded system LaunchDaemon"],
+    ["absent", absentQuery, 2, ""],
+    ["query error", 'printf "Operation not permitted\\n" >&2\nexit 1', 1, "could not verify"],
+    ["signal", 'printf "Could not find service\\n" >&2\nkill -TERM $$', 1, "could not verify"],
+    [
+      "execution failure",
+      'printf "Could not find service\\n" >&2\nexec "$OPENCLAW_TEST_PROBE_DIR/non-executable"',
+      1,
+      "could not verify",
+    ],
+    [
+      "missing command",
+      'printf "Could not find service\\n" >&2\nexec "$OPENCLAW_TEST_PROBE_DIR/missing"',
+      1,
+      "could not verify",
+    ],
+    [
+      "signal after scan",
+      `if [ "$query_count" -eq 1 ]; then\n${absentQuery}\nfi\nprintf "Could not find service\\n" >&2\nkill -TERM $$`,
+      2,
+      "could not verify",
+    ],
+    [
+      "loaded after scan",
+      `if [ "$query_count" -eq 2 ]; then exit 0; fi\n${absentQuery}`,
+      2,
+      "loaded system LaunchDaemon",
+    ],
+  ] as const)(
+    "executes the rendered ownership query with %s outcome",
+    (_, body, queries, detail) => {
+      const result = runRenderedProbe("foreign.plist", "unlabeled", body);
+      expect(result.conflict).toBe(detail ? "system/ai.openclaw.gateway" : "");
+      if (detail) {
+        expect(result.detail).toContain(detail);
+      } else {
+        expect(result.detail).toBe("");
+      }
+      expect(result.events).toEqual(queries === 1 ? ["query"] : ["query", "scan", "scan", "query"]);
+    },
+  );
 });

@@ -1,5 +1,9 @@
 package ai.openclaw.app
 
+import ai.openclaw.app.gateway.Question
+import ai.openclaw.app.gateway.QuestionListResult
+import ai.openclaw.app.gateway.QuestionRecord
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
@@ -23,6 +27,44 @@ internal object AndroidScreenshotFixture {
   const val primarySessionTitle = "Android release planning"
   const val cronJobId = "android-release-digest"
   const val cronJobName = "Android release digest"
+
+  fun createRequester(): (String, String?) -> String {
+    // A runtime gets a fresh lifetime; list refreshes and scene re-entry keep its exact record.
+    val pendingQuestion =
+      System.currentTimeMillis().let { nowMs ->
+        QuestionRecord(
+          id = "android-screenshot-question",
+          questions =
+            listOf(
+              Question(
+                questionId = "release_note",
+                header = "Release note",
+                question = "What should the release note mention?",
+                options = emptyList(),
+              ),
+            ),
+          agentId = "main",
+          sessionKey = mainSessionKey,
+          createdAtMs = nowMs,
+          expiresAtMs = nowMs + 600_000,
+          status = "pending",
+        )
+      }
+    return { method, paramsJson ->
+      when (method) {
+        "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
+        "chat.history" -> chatHistory()
+        "sessions.list" -> sessionList(paramsJson)
+        "chat.metadata" -> chatMetadata()
+        "question.list" -> Json.encodeToString(QuestionListResult(listOf(pendingQuestion)))
+        "cron.list" -> cronList()
+        "cron.get" -> cronJob().toString()
+        "cron.runs" -> cronRuns()
+        "openclaw.chat" -> systemAgentChat(paramsJson)
+        else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
+      }
+    }
+  }
 
   val agents =
     listOf(
@@ -99,22 +141,6 @@ internal object AndroidScreenshotFixture {
           ),
         ),
     )
-
-  fun request(
-    method: String,
-    paramsJson: String?,
-  ): String =
-    when (method) {
-      "health" -> buildJsonObject { put("ok", JsonPrimitive(true)) }.toString()
-      "chat.history" -> chatHistory()
-      "sessions.list" -> sessionList(paramsJson)
-      "chat.metadata" -> chatMetadata()
-      "cron.list" -> cronList()
-      "cron.get" -> cronJob().toString()
-      "cron.runs" -> cronRuns()
-      "openclaw.chat" -> systemAgentChat(paramsJson)
-      else -> error("Screenshot fixture does not implement gateway method $method with params $paramsJson")
-    }
 
   private fun systemAgentChat(paramsJson: String?): String {
     val message =
@@ -260,6 +286,15 @@ internal object AndroidScreenshotFixture {
       put(
         "messages",
         buildJsonArray {
+          repeat(24) { index ->
+            add(
+              chatMessage(
+                role = "assistant",
+                content = "Earlier discussion ${index + 1}: keep the release note concise and describe the user-visible change.",
+                timestamp = 1_783_550_000_000 + index * 10_000L,
+              ),
+            )
+          }
           add(chatMessage("user", "What is blocking the Android release?", 1_783_555_020_000))
           add(
             chatMessage(
@@ -289,8 +324,8 @@ internal object AndroidScreenshotFixture {
           add(
             chatMessage(
               "assistant",
-              "The main thread asks for a regression test around session restore, and the second one wants the new " +
-                "config key documented before merge. Both are small; I can draft patches for each if you want.",
+              "The release check is ready:\n\n```kotlin\nval ready = lint && tests\n```\n\n" +
+                "Review https://openclaw.ai before tagging.",
               1_783_555_200_000,
             ),
           )
@@ -341,6 +376,13 @@ internal object AndroidScreenshotFixture {
           put("modelProvider", JsonPrimitive("openai"))
           put("model", JsonPrimitive("gpt-5.2"))
           put("contextTokens", JsonPrimitive(200_000))
+        },
+      )
+      put(
+        "inFlightRun",
+        buildJsonObject {
+          put("runId", JsonPrimitive("android-screenshot-active-run"))
+          put("text", JsonPrimitive(""))
         },
       )
     }.toString()
@@ -455,13 +497,22 @@ internal object AndroidScreenshotFixture {
       put(
         "commands",
         buildJsonArray {
-          add(
-            buildJsonObject {
-              put("name", JsonPrimitive("status"))
-              put("description", JsonPrimitive("Show current OpenClaw status"))
-              put("acceptsArgs", JsonPrimitive(false))
-            },
-          )
+          listOf(
+            Triple("help", "Show available commands.", false),
+            Triple("commands", "List all slash commands.", false),
+            Triple("tools", "List available runtime tools.", true),
+            Triple("skill", "Run a skill by name.", true),
+            Triple("learn", "Draft a reusable skill from recent work or named sources.", true),
+            Triple("loop", "Loop a prompt: /loop [interval] <prompt> | /loop status | /loop stop [name]", true),
+          ).forEach { (name, description, acceptsArgs) ->
+            add(
+              buildJsonObject {
+                put("name", JsonPrimitive(name))
+                put("description", JsonPrimitive(description))
+                put("acceptsArgs", JsonPrimitive(acceptsArgs))
+              },
+            )
+          }
         },
       )
       put(

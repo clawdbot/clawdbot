@@ -1,6 +1,10 @@
+import { registerComputerUseProvider } from "openclaw/plugin-sdk/computer-use";
 import { buildPluginConfigSchema, definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { z } from "zod";
-import { createCuaComputerCommands } from "./src/commands.js";
+import { registerCuaDriverDoctorChecks } from "./api.js";
+import { createCuaComputerProvider } from "./src/commands.js";
+import { verifyInstalledCuaDriverArtifacts } from "./src/driver-artifacts.js";
+import { createCuaComputerNodeInvokePolicy } from "./src/node-invoke-policy.js";
 
 const CuaComputerConfigSchema = z.strictObject({
   // Keep the shipped daemon setting as a named no-op: strict validation accepts
@@ -13,26 +17,23 @@ const configSchema = buildPluginConfigSchema(CuaComputerConfigSchema);
 export default definePluginEntry({
   id: "cua-computer",
   name: "CUA Computer",
-  description: "Experimental CUA Driver SDK computer control for Windows and Linux node hosts.",
+  description: "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts.",
   configSchema,
   register(api) {
+    registerCuaDriverDoctorChecks();
     const parsed = CuaComputerConfigSchema.safeParse(api.pluginConfig ?? {});
     if (!parsed.success) {
       throw new Error(
         `Invalid cua-computer plugin config: ${parsed.error.issues[0]?.message ?? "invalid config"}`,
       );
     }
-    for (const command of createCuaComputerCommands()) {
-      api.registerNodeHostCommand(command);
+    const artifactVerification = verifyInstalledCuaDriverArtifacts();
+    if (!artifactVerification.ok) {
+      api.logger?.error(artifactVerification.diagnostic);
     }
-    // computer.act is dangerous-by-default and therefore also requires the
-    // operator's explicit gateway.nodes.commands.allow entry. The plugin
-    // policy is the final Gateway guard and the only path that may forward the
-    // already-allowlisted invocation to the paired node.
-    api.registerNodeInvokePolicy({
-      commands: ["computer.act"],
-      dangerous: true,
-      handle: async (ctx) => await ctx.invokeNode(),
-    });
+    registerComputerUseProvider(api, createCuaComputerProvider());
+    // Dangerous plugin command: excluded from default allowlists, and the
+    // Gateway fails closed when this policy registration is missing.
+    api.registerNodeInvokePolicy(createCuaComputerNodeInvokePolicy());
   },
 });

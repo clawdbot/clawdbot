@@ -1,0 +1,154 @@
+/* Knot palette; selected by index.html and app/theme.ts. */
+
+/* Theme families override accent tokens while keeping shared surfaces/layout. */
+:root[data-theme="openknot"] {
+  /*
+   * Accent — crimson red on true black
+   *
+   * WCAG 2.1 AA audit (bg = #080808, relative luminance ≈ 0.003):
+   *   --accent #e5243b  L ≈ 0.118  contrast ≈ 5.8:1  AA text ✓
+   *   --accent-hover #f03e52  L ≈ 0.163  contrast ≈ 7.2:1  ✓
+   *   --primary-foreground #fafafa on #d92a3f button: 4.62:1 AA ✓
+   *   --primary-foreground #fafafa on #c22537 hover: 5.57:1 AA ✓
+   *   --destructive-foreground #fafafa on #d32f2f button: 4.77:1 AA ✓
+   *   --destructive-foreground #fafafa on #bc2a2a hover: 5.74:1 AA ✓
+   *   focus-ring at 70% opacity: ≈ 3.4:1 against bg ✓ (non-text 3:1 required)
+   */
+  --ring: #e5243b;
+  --accent: #e5243b;
+  --accent-hover: #f03e52;
+  --accent-muted: #e5243b;
+  --accent-subtle: rgba(229, 36, 59, 0.12);
+  --accent-glow: rgba(229, 36, 59, 0.24);
+  --primary: #d92a3f;
+  --primary-hover: #c22537;
+  --primary-foreground: #fafafa;
+
+  /* Deepen only the text-bearing destructive fill; keep danger accents vivid. */
+  --destructive: #d32f2f;
+  --destructive-hover: #bc2a2a;
+
+  /* Focus — crimson ring */
+  --focus: rgba(229, 36, 59, 0.2);
+  --focus-ring: 0 0 0 2px var(--bg), 0 0 0 3px color-mix(in srgb, var(--ring) 70%, transparent);
+
+  /* Surfaces — true black canvas */
+  --bg: #080808;
+  --bg-accent: #0d0d0f;
+  --bg-elevated: #141416;
+  --bg-hover: #1a1a1e;
+  --bg-muted: #1a1a1e;
+
+  --card: #111113;
+  --card-highlight: rgba(255, 255, 255, 0.03);
+  --popover: #141416;
+
+  --panel: #080808;
+  --panel-strong: #141416;
+  --panel-hover: #1a1a1e;
+  --chrome: rgba(8, 8, 8, 0.96);
+  --chrome-strong: rgba(8, 8, 8, 0.98);
+
+  /* Text — 11.8:1 on black: crisp without the glare a near-white (15:1+) body
+     face has on a true-black canvas; --text-strong keeps the bright step. */
+  --text: #c6c6cb;
+  --text-strong: #f5f5f7;
+  --chat-text: #c6c6cb;
+  --muted: #8a8a94;
+  --muted-strong: #888892;
+  --muted-foreground: #8a8a94;
+
+  /* Borders — thin, but with enough presence to structure true black */
+  --border: #202026;
+  --border-strong: #303038;
+  --border-hover: #42424c;
+  --input: #202026;
+
+  --secondary: #111113;
+  /* Steel silver, not a second red: crimson stays the only warm voice, and the
+     silver reads at 10.6:1 where the old #8b1a2b maroon vanished (2.0:1). */
+  --accent-2: #b8bdc4;
+  --accent-2-muted: rgba(184, 189, 196, 0.7);
+  --accent-2-subtle: rgba(184, 189, 196, 0.1);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.6);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(255, 255, 255, 0.025);
+  /* Typography — Geist (fonts/geist.css): a sharp Swiss grotesque to match the
+     crimson-on-black identity. Fallbacks keep text painting if the face fails. */
+  --font-body: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}
+
+:root[data-theme="openknot-light"] {
+  /*
+   * Accent — deep red on cool white
+   *
+   * WCAG 2.1 AA audit (bg = #f9f9fb, relative luminance ≈ 0.941):
+   *   --accent #c41e30  L ≈ 0.078  contrast ≈ 7.5:1  AAA text ✓
+   *   --accent-hover #a8192a  L ≈ 0.054  contrast ≈ 9.1:1  ✓
+   *   --primary-foreground #ffffff on #c41e30 button: 5.0:1 AA ✓
+   *   focus-ring at 60% opacity: ≈ 3.2:1 against bg ✓ (non-text 3:1 required)
+   */
+  --ring: #c41e30;
+  --accent: #c41e30;
+  --accent-hover: #a8192a;
+  --accent-muted: #c41e30;
+  --accent-subtle: rgba(196, 30, 48, 0.08);
+  --accent-glow: rgba(196, 30, 48, 0.12);
+  --primary: #c41e30;
+
+  /* Surfaces — cool white with subtle warmth */
+  --bg: #f9f9fb;
+  --bg-accent: #f2f2f5;
+  --bg-hover: #eaeaef;
+  --bg-muted: #eaeaef;
+  --bg-content: #f2f2f5;
+
+  --card-foreground: #18181b;
+  --card-highlight: rgba(0, 0, 0, 0.02);
+  --popover-foreground: #18181b;
+  --session-hovercard-progress-surface: color-mix(
+    in srgb,
+    var(--card) 52%,
+    var(--panel-strong) 48%
+  );
+
+  --panel: #f9f9fb;
+  --panel-strong: #f2f2f5;
+  --panel-hover: #e4e4ea;
+  --chrome: rgba(249, 249, 251, 0.96);
+  --chrome-strong: rgba(249, 249, 251, 0.98);
+
+  /* Text — crisp dark on white */
+  --text: #3a3a42;
+  --text-strong: #18181b;
+  --chat-text: #3a3a42;
+  --muted: #68676f;
+  --muted-strong: #52525a;
+  --muted-foreground: #68676f;
+
+  /* Borders — clean, minimal */
+  --border: #e2e2e8;
+  --border-strong: #ccccd4;
+  --border-hover: #adadb8;
+  --input: #e2e2e8;
+
+  --secondary: #f2f2f5;
+  --secondary-foreground: #3a3a42;
+  /* Slate steel mirrors the dark variant's silver second voice (5.9:1 on bg). */
+  --accent-2: #5a626e;
+  --accent-2-muted: rgba(90, 98, 110, 0.75);
+  --accent-2-subtle: rgba(90, 98, 110, 0.08);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.06);
+  --shadow-lg: 0 12px 28px rgba(0, 0, 0, 0.08);
+  --overlay-shadow: var(--shadow-md);
+
+  --grid-line: rgba(0, 0, 0, 0.04);
+  /* Typography — Geist (fonts/geist.css); see the dark block. */
+  --font-body: "Geist", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+}

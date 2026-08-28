@@ -10,7 +10,7 @@ import { normalizeChatType } from "../../chat-type.js";
 import { resolveConversationLabel } from "../../conversation-label.js";
 import {
   hasFinalChannelTurnDispatch,
-  hasVisibleChannelTurnDispatch,
+  hasVisibleChannelTurnDispatchFromReceipt as hasVisibleChannelTurnDispatch,
   resolveChannelTurnDispatchCounts,
   type ChannelTurnDispatchResultLike,
 } from "../../turn/dispatch-result.js";

@@ -1,14 +1,9 @@
 // Covers channel activity recording and lookup.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  getChannelActivity,
-  recordChannelActivity,
-  resetChannelActivityForTest,
-} from "./channel-activity.js";
+import { getChannelActivity, recordChannelActivity } from "./channel-activity.js";
 
 describe("channel activity", () => {
   beforeEach(() => {
-    resetChannelActivityForTest();
     vi.useFakeTimers();
     vi.setSystemTime(new Date("2026-01-08T00:00:00Z"));
   });
@@ -82,16 +77,6 @@ describe("channel activity", () => {
     expect(getChannelActivity({ channel: "telegram", accountId: " team-b " })).toEqual({
       inboundAt: null,
       outboundAt: 20,
-    });
-  });
-
-  it("reset clears previously recorded activity", () => {
-    recordChannelActivity({ channel: "line", direction: "outbound", at: 7 });
-    resetChannelActivityForTest();
-
-    expect(getChannelActivity({ channel: "line" })).toEqual({
-      inboundAt: null,
-      outboundAt: null,
     });
   });
 });

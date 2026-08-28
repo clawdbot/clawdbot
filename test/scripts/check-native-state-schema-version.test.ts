@@ -3,18 +3,20 @@ import {
   checkNativeStateSchemaVersion,
   compareNativeStateSchemaVersions,
 } from "../../scripts/check-native-state-schema-version.mjs";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../src/state/openclaw-state-db-contract.js";
 
 describe("native state schema version guard", () => {
   it("keeps the checked-in Swift and TypeScript contracts aligned", () => {
-    expect(checkNativeStateSchemaVersion()).toBe(7);
+    expect(OPENCLAW_STATE_SCHEMA_VERSION).toBe(13);
+    expect(checkNativeStateSchemaVersion()).toBe(OPENCLAW_STATE_SCHEMA_VERSION);
   });
 
   it("fails when a deliberate Swift fixture drifts behind TypeScript", () => {
     expect(() =>
       compareNativeStateSchemaVersions({
         swiftSource: "private static let maximumSupportedSchemaVersion: Int64 = 5\n",
-        typescriptSource: "export const OPENCLAW_STATE_SCHEMA_VERSION = 7;\n",
+        typescriptSource: "export const OPENCLAW_STATE_SCHEMA_VERSION = 9;\n",
       }),
-    ).toThrow("Native state schema version drift: Swift supports 5, TypeScript owns 7");
+    ).toThrow("Native state schema version drift: Swift supports 5, TypeScript owns 9");
   });
 });

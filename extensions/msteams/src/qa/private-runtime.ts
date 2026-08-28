@@ -81,7 +81,10 @@ class PrivateQaHttpClient {
       const text = await response.text();
       const data = text ? (JSON.parse(text) as T) : (undefined as T);
       if (!response.ok) {
-        throw new Error(`Microsoft Teams private QA connector returned HTTP ${response.status}`);
+        throw Object.assign(
+          new Error(`Microsoft Teams private QA connector returned HTTP ${response.status}`),
+          { statusCode: response.status },
+        );
       }
       return {
         data,

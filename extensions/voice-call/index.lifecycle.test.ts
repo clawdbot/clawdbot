@@ -13,6 +13,7 @@ import plugin from "./index.js";
 import { createVoiceCallRuntime } from "./runtime-entry.js";
 
 type VoiceCallService = Parameters<OpenClawPluginApi["registerService"]>[0];
+type VoiceCallGatewayHandler = Parameters<OpenClawPluginApi["registerGatewayMethod"]>[1];
 type VoiceCallTool = {
   execute: (toolCallId: string, params: unknown) => Promise<VoiceCallToolResult>;
 };
@@ -28,10 +29,15 @@ type RuntimeFixture = {
   stop: ReturnType<typeof vi.fn>;
 };
 
+const serviceHealth = {
+  reportFailure: vi.fn(),
+  clearFailure: vi.fn(),
+};
 const serviceContext = {
   config: {},
   stateDir: os.tmpdir(),
   logger: { info() {}, warn() {}, error() {}, debug() {} },
+  serviceHealth,
 } as Parameters<VoiceCallService["start"]>[0];
 
 function createLogger(onError?: (message: string) => void) {
@@ -61,6 +67,7 @@ function registerVoiceCall(params: {
 }) {
   let service: VoiceCallService | undefined;
   let toolFactory: VoiceCallToolFactory | undefined;
+  const gatewayHandlers = new Map<string, VoiceCallGatewayHandler>();
   const api = createTestPluginApi({
     id: "voice-call",
     name: "Voice Call",
@@ -72,7 +79,9 @@ function registerVoiceCall(params: {
     pluginConfig: { provider: "mock", ...params.config },
     runtime: { tts: { textToSpeechTelephony: vi.fn() } } as unknown as OpenClawPluginApi["runtime"],
     logger: params.logger ?? createLogger(),
-    registerGatewayMethod: () => {},
+    registerGatewayMethod: (method, handler) => {
+      gatewayHandlers.set(method, handler);
+    },
     registerTool: (registration) => {
       toolFactory =
         typeof registration === "function"
@@ -90,11 +99,25 @@ function registerVoiceCall(params: {
     throw new Error("expected voice-call service and tool registrations");
   }
   const registeredToolFactory = toolFactory;
-  return { service, toolFactory: registeredToolFactory, tool: () => registeredToolFactory({}) };
+  return {
+    gatewayHandlers,
+    service,
+    toolFactory: registeredToolFactory,
+    tool: () => registeredToolFactory({}),
+  };
 }
 
 function executeCall(tool: VoiceCallTool): Promise<VoiceCallToolResult> {
   return tool.execute("call", { action: "initiate_call", message: "hello" });
+}
+
+async function executeGatewayCall(registration: ReturnType<typeof registerVoiceCall>) {
+  const respond = vi.fn();
+  await registration.gatewayHandlers.get("voicecall.initiate")?.({
+    params: { message: "hello" },
+    respond,
+  } as never);
+  return respond;
 }
 
 function expectLifecycleError(result: VoiceCallToolResult, text: string): void {
@@ -107,6 +130,8 @@ function expectLifecycleError(result: VoiceCallToolResult, text: string): void {
 describe("voice-call runtime lifecycle", () => {
   beforeEach(() => {
     vi.mocked(createVoiceCallRuntime).mockReset();
+    serviceHealth.reportFailure.mockReset();
+    serviceHealth.clearFailure.mockReset();
   });
 
   afterEach(() => {
@@ -153,6 +178,29 @@ describe("voice-call runtime lifecycle", () => {
     expect(logger.error).not.toHaveBeenCalled();
     expectLifecycleError(await executeCall(generationA.tool()), "retired");
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
+  });
+
+  it("restarts tools and gateway commands on the same service registration", async () => {
+    const runtimeA = createRuntime("call-a", "+15550000001");
+    const runtimeB = createRuntime("call-b", "+15550000002");
+    vi.mocked(createVoiceCallRuntime)
+      .mockResolvedValueOnce(runtimeA.runtime)
+      .mockResolvedValueOnce(runtimeB.runtime);
+    const registration = registerVoiceCall({});
+    const retainedTool = registration.tool();
+
+    expect(registration.service.start(serviceContext)).toBeUndefined();
+    await executeCall(retainedTool);
+    await registration.service.stop?.(serviceContext);
+    expect(registration.service.start(serviceContext)).toBeUndefined();
+
+    await executeCall(retainedTool);
+    const respond = await executeGatewayCall(registration);
+
+    expect(respond).toHaveBeenCalledWith(true, { callId: "call-b", initiated: true });
+    expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
+    expect(runtimeA.stop).toHaveBeenCalledTimes(1);
+    expect(runtimeB.initiateCall).toHaveBeenCalledTimes(2);
   });
 
   it("waits for A stopping before creating B with B config", async () => {
@@ -235,32 +283,44 @@ describe("voice-call runtime lifecycle", () => {
   });
 
   it("does not revive an older staged A after activated B stops", async () => {
+    const logged = createDeferred<string>();
     const runtimeB = createRuntime("call-b", "+15550000002");
     vi.mocked(createVoiceCallRuntime).mockResolvedValue(runtimeB.runtime);
-    const stagedA = registerVoiceCall({ registrationMode: "full" });
+    const stagedA = registerVoiceCall({
+      logger: createLogger(logged.resolve),
+      registrationMode: "full",
+    });
     const retainedToolA = stagedA.tool();
     const generationB = registerVoiceCall({ registrationMode: "full" });
 
     await executeCall(generationB.tool());
     await generationB.service.stop?.(serviceContext);
     expectLifecycleError(await executeCall(retainedToolA), "superseded");
+    expect(stagedA.service.start(serviceContext)).toBeUndefined();
+    await expect(logged.promise).resolves.toContain("superseded");
+    expect(serviceHealth.reportFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: expect.stringContaining("superseded") }),
+    );
 
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(1);
     expect(runtimeB.stop).toHaveBeenCalledTimes(1);
   });
 
-  it("logs when successor startup is blocked by an active predecessor", async () => {
-    const logged = createDeferred<string>();
+  it("takes over a running slot owned by a retired predecessor", async () => {
     const runtimeA = createRuntime("call-a", "+15550000001");
-    vi.mocked(createVoiceCallRuntime).mockResolvedValue(runtimeA.runtime);
+    const runtimeB = createRuntime("call-b", "+15550000002");
+    vi.mocked(createVoiceCallRuntime)
+      .mockResolvedValueOnce(runtimeA.runtime)
+      .mockResolvedValueOnce(runtimeB.runtime);
     const generationA = registerVoiceCall({});
     await executeCall(generationA.tool());
-    const generationB = registerVoiceCall({ logger: createLogger(logged.resolve) });
+    const generationB = registerVoiceCall({});
 
     expect(generationB.service.start(serviceContext)).toBeUndefined();
-    await expect(logged.promise).resolves.toContain("previous voice call runtime generation");
+    await executeCall(generationB.tool());
 
-    await generationA.service.stop?.(serviceContext);
+    expect(runtimeA.stop).toHaveBeenCalledTimes(1);
+    expect(runtimeB.initiateCall).toHaveBeenCalledTimes(1);
     await generationB.service.stop?.(serviceContext);
   });
 
@@ -274,9 +334,13 @@ describe("voice-call runtime lifecycle", () => {
 
     expect(generationA.service.start(serviceContext)).toBeUndefined();
     await expect(logged.promise).resolves.toContain("Failed to start runtime: provider boom");
+    expect(serviceHealth.reportFailure).toHaveBeenCalledWith(
+      expect.objectContaining({ message: "provider boom" }),
+    );
 
     await executeCall(generationA.tool());
     expect(createVoiceCallRuntime).toHaveBeenCalledTimes(2);
     expect(runtimeA.initiateCall).toHaveBeenCalledTimes(1);
+    expect(serviceHealth.clearFailure).toHaveBeenCalled();
   });
 });

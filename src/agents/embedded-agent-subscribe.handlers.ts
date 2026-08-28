@@ -21,21 +21,18 @@ import {
   handleToolExecutionStart,
   handleToolExecutionUpdate,
 } from "./embedded-agent-subscribe.handlers.tools.js";
-import type {
-  EmbeddedAgentSubscribeContext,
-  EmbeddedAgentSubscribeEvent,
-} from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentSubscribeContext } from "./embedded-agent-subscribe.handlers.types.js";
 import type { AgentMessage } from "./runtime/index.js";
+import type { AgentSessionEvent } from "./sessions/index.js";
 
 /** Create the serialized event dispatcher for subscribed embedded-agent sessions. */
 export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscribeContext) {
   const scheduleEvent = (
-    evt: EmbeddedAgentSubscribeEvent,
+    evt: AgentSessionEvent,
     handler: () => void | Promise<void>,
-    options?: { detach?: boolean },
   ): void | Promise<void> => {
-    // Most stream events must preserve order across async formatting and flush
-    // work. A detached event may run after the chain without blocking delivery.
+    // Tool-result delivery must settle before later assistant or terminal events;
+    // suppression flags would discard those events instead of preserving order.
     const run = () => {
       try {
         return handler();
@@ -58,11 +55,8 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
             ctx.state.pendingEventChain = null;
           }
         });
-      if (!options?.detach) {
-        ctx.state.pendingEventChain = task;
-        return task;
-      }
-      return;
+      ctx.state.pendingEventChain = task;
+      return task;
     }
 
     const task = ctx.state.pendingEventChain
@@ -75,13 +69,11 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
           ctx.state.pendingEventChain = null;
         }
       });
-    if (!options?.detach) {
-      ctx.state.pendingEventChain = task;
-      return task;
-    }
+    ctx.state.pendingEventChain = task;
+    return task;
   };
 
-  return (evt: EmbeddedAgentSubscribeEvent) => {
+  return (evt: AgentSessionEvent) => {
     switch (evt.type) {
       case "message_start":
         // Delivery from the previous message may still be queued, but usage is
@@ -123,13 +115,9 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         });
         return;
       case "tool_execution_end":
-        void scheduleEvent(
-          evt,
-          () => {
-            return handleToolExecutionEnd(ctx, evt as never);
-          },
-          { detach: true },
-        );
+        void scheduleEvent(evt, async () => {
+          await handleToolExecutionEnd(ctx, evt as never);
+        });
         return;
       case "agent_start":
         void scheduleEvent(evt, () => {
@@ -146,13 +134,7 @@ export function createEmbeddedAgentSessionEventHandler(ctx: EmbeddedAgentSubscri
         return;
       case "compaction_end":
         void scheduleEvent(evt, () => {
-          handleCompactionEnd(ctx, {
-            type: "compaction_end",
-            reason: evt.reason,
-            willRetry: evt.willRetry,
-            result: evt.result,
-            aborted: evt.aborted,
-          });
+          handleCompactionEnd(ctx, evt);
         });
         return;
       case "agent_end":

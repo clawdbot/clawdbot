@@ -403,11 +403,13 @@ describe("staged attachment composer adoption", () => {
       phase: "reconnecting",
       hello: null,
     });
-    expect(state.chatAttachments).toEqual([]);
-    expect(state.chatComposerFallbackByScope.fallback?.attachments).toEqual([]);
+    // Rotation invalidates annotation-backed attachments only; plain payloads
+    // are client-local and survive (live state and fallbacks alike).
+    expect(state.chatAttachments).toEqual([ordinary]);
+    expect(state.chatComposerFallbackByScope.fallback?.attachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(current)).toBeNull();
     expect(getChatAttachmentDataUrl(fallback)).toBeNull();
-    expect(getChatAttachmentDataUrl(ordinary)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
   });
 
   it("discards a staged package captured without a client when the first client arrives", () => {
@@ -433,9 +435,9 @@ describe("staged attachment composer adoption", () => {
       hello: null,
     });
 
-    expect(state.chatAttachments).toEqual([]);
+    expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).toBeNull();
-    expect(getChatAttachmentDataUrl(ordinary)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
   });
 
   it("invalidates annotation Undo when the logical Gateway client is replaced", async () => {
@@ -474,9 +476,9 @@ describe("staged attachment composer adoption", () => {
     });
     toastHost.querySelector<HTMLButtonElement>(".app-toast__action")?.click();
 
-    expect(state.chatAttachments).toEqual([]);
+    expect(state.chatAttachments).toEqual([ordinary]);
     expect(getChatAttachmentDataUrl(annotation)).toBeNull();
-    expect(getChatAttachmentDataUrl(ordinary)).toBeNull();
+    expect(getChatAttachmentDataUrl(ordinary)).not.toBeNull();
     toastHost.remove();
   });
 });

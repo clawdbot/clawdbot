@@ -1,7 +1,7 @@
 // Control UI tests cover GitHub link hover card behavior.
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
-import { chromium, type Browser, type BrowserContext, type Locator } from "playwright";
+import { chromium, type Browser, type BrowserContext, type Locator, type Page } from "playwright";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import {
   canRunPlaywrightChromium,
@@ -37,6 +37,75 @@ async function closeBrowsers(): Promise<void> {
 
 async function expectText(locator: Locator, text: string): Promise<void> {
   await expect.poll(() => locator.textContent()).toContain(text);
+}
+
+async function captureArtifact(page: Page, name: string): Promise<void> {
+  const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  if (!artifactDir) {
+    return;
+  }
+  await mkdir(artifactDir, { recursive: true });
+  await page.screenshot({ path: path.join(artifactDir, `${name}.png`) });
+}
+
+const pullPreviewResponse = {
+  additions: 101,
+  avatarDataUrl:
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9WlY9Z8AAAAASUVORK5CYII=",
+  changedFiles: 3,
+  closedAt: "2026-07-04T09:53:52Z",
+  createdAt: "2026-07-04T05:03:47Z",
+  deletions: 12,
+  draft: false,
+  kind: "pull",
+  login: "steipete",
+  mergedAt: "2026-07-04T09:53:52Z",
+  number: 99816,
+  owner: "openclaw",
+  repo: "openclaw",
+  state: "closed",
+  title: "fix(agents): derive conversation scope from trusted group facts",
+  updatedAt: "2026-07-04T09:53:55Z",
+};
+
+// Shared page setup for the two pointer-lifecycle cases below: both only need
+// a single previewable pull-request link, unlike the full walkthrough above.
+async function openPullPreviewPage(): Promise<{
+  card: Locator;
+  page: Page;
+  pullLink: Locator;
+}> {
+  const context = await newBrowserContext();
+  await context.route("https://github.com/**", (route) =>
+    route.fulfill({
+      contentType: "text/html",
+      body: "<!doctype html><title>GitHub item</title>",
+    }),
+  );
+
+  const page = await context.newPage();
+  await installMockGateway(page, {
+    methodResponses: {
+      "controlUi.githubPreview": {
+        cases: [{ match: { kind: "pull", number: 99816 }, response: pullPreviewResponse }],
+      },
+    },
+    historyMessages: [
+      {
+        content: [
+          { type: "text", text: "Review https://github.com/openclaw/openclaw/pull/99816." },
+        ],
+        role: "assistant",
+        timestamp: Date.now(),
+      },
+    ],
+  });
+  await page.goto(`${server.baseUrl}chat`);
+
+  const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
+  const card = page.locator(".github-link-hovercard");
+  await pullLink.waitFor({ state: "visible" });
+  return { card, page, pullLink };
 }
 
 describeControlUiE2e("GitHub link hover cards", () => {
@@ -125,6 +194,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
                 "then https://github.com/openclaw/openclaw/issues/99815.",
                 "A [missing item](https://github.com/openclaw/openclaw/issues/999999) stays usable.",
                 "The [repository](https://github.com/openclaw/openclaw) has no item preview.",
+                "The skill lives at https://github.com/blader/humanizer/blob/main/SKILL.md.",
                 "Styling notes live in [the docs](https://docs.openclaw.ai/web/control-ui).",
               ].join(" "),
             },
@@ -158,36 +228,23 @@ describeControlUiE2e("GitHub link hover cards", () => {
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("light");
     }
 
-    const longLink = page.getByRole("link", {
-      name: "a-very-long-organization-name/a-very-long-repository-name#99817",
-    });
-    await page.setViewportSize({ height: 800, width: 360 });
-    expect(await longLink.evaluate((element) => getComputedStyle(element).lineBreak)).toBe(
-      "anywhere",
-    );
-    const longMessageBox = await longLink
-      .locator("xpath=ancestor::*[contains(@class, 'chat-text')]")
-      .boundingBox();
-    const longLinkBox = await longLink.boundingBox();
-    expect(longMessageBox).not.toBeNull();
-    expect(longLinkBox).not.toBeNull();
-    expect(longLinkBox!.x).toBeGreaterThanOrEqual(longMessageBox!.x);
-    expect(longLinkBox!.x + longLinkBox!.width).toBeLessThanOrEqual(
-      longMessageBox!.x + longMessageBox!.width,
-    );
-    await page.setViewportSize({ height: 800, width: 1180 });
+    await expect
+      .poll(() => page.getByRole("link", { name: "#99817" }).getAttribute("href"))
+      .toBe(
+        "https://github.com/a-very-long-organization-name/a-very-long-repository-name/issues/99817",
+      );
+    await expect
+      .poll(() => page.getByRole("link", { name: "SKILL.md" }).getAttribute("href"))
+      .toBe("https://github.com/blader/humanizer/blob/main/SKILL.md");
 
-    const pullLink = page.getByRole("link", { name: "openclaw/openclaw#99816" });
+    const pullLink = page.locator('a.markdown-github-link[href$="/pull/99816"]');
 
-    // The mark carries the link signal at rest, so the underline only returns on
-    // hover. Non-GitHub links keep the base underline, which keeps the rule scoped.
     const decorationLine = (link: Locator) =>
       link.evaluate((element) => getComputedStyle(element).textDecorationLine);
     expect(await decorationLine(pullLink)).toBe("none");
     expect(await decorationLine(page.getByRole("link", { name: "the docs" }))).toBe("underline");
 
     await pullLink.hover();
-    await expect.poll(() => decorationLine(pullLink)).toBe("underline");
     const card = page.locator(".github-link-hovercard");
     await expectText(card, "Merged");
     await expectText(card, "openclaw/openclaw #99816");
@@ -203,7 +260,7 @@ describeControlUiE2e("GitHub link hover cards", () => {
     expect(pullBox!.x + pullBox!.width).toBeLessThanOrEqual(1180);
     expect(pullBox!.y + pullBox!.height).toBeLessThanOrEqual(800);
 
-    const issueLink = page.getByRole("link", { name: "openclaw/openclaw#99815" });
+    const issueLink = page.locator('a.markdown-github-link[href$="/issues/99815"]');
     await issueLink.hover();
     await expectText(card, "Keep hover previews compact");
     await expectText(card, "octocat");
@@ -251,5 +308,116 @@ describeControlUiE2e("GitHub link hover cards", () => {
     const popup = await popupPromise;
     await popup.waitForLoadState("domcontentloaded");
     expect(popup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816");
+  });
+
+  it("keeps the card open while the pointer crosses the gap onto it, then closes once it leaves both", async () => {
+    const { card, page, pullLink } = await openPullPreviewPage();
+
+    await pullLink.hover();
+    await expectText(card, "openclaw/openclaw #99816");
+    const linkBox = await pullLink.boundingBox();
+    expect(linkBox).not.toBeNull();
+
+    // Cross the physical gap with real intermediate pointer positions: off the
+    // link, through the unowned strip below it, then onto the card body. Each
+    // move is a fast CDP round trip, so the whole crossing lands comfortably
+    // inside CLOSE_DELAY_MS (github-link-hovercard.runtime.ts); the card must
+    // survive every step.
+    await page.mouse.move(linkBox!.x + linkBox!.width / 2, linkBox!.y + linkBox!.height / 2);
+    await page.mouse.move(linkBox!.x + linkBox!.width / 2, linkBox!.y + linkBox!.height + 5);
+    const cardBox = await card.boundingBox();
+    expect(cardBox).not.toBeNull();
+    await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + 4);
+    await page.mouse.move(cardBox!.x + cardBox!.width / 2, cardBox!.y + cardBox!.height / 2);
+    expect(await card.count()).toBe(1);
+    await captureArtifact(page, "github-hovercard-pointer-open");
+
+    // Staying on the card holds it open regardless of elapsed time, mirroring
+    // the unit test's ten-grace-window persistence check.
+    await page.waitForTimeout(300);
+    expect(await card.count()).toBe(1);
+    await expectText(card, "openclaw/openclaw #99816");
+
+    // Leaving both surfaces, with no click, still dismisses the card after the
+    // traversal grace period.
+    await page.mouse.move(1, 1);
+    await expect.poll(() => card.count()).toBe(0);
+  });
+
+  it("exposes the card as a dialog whose title link Tab reaches and Escape leaves", async () => {
+    const { card, page, pullLink } = await openPullPreviewPage();
+
+    await pullLink.focus();
+    await expectText(card, "openclaw/openclaw #99816");
+    // The real accessibility tree has to report a dialog, not a tooltip: the card
+    // owns a link, which tooltip semantics may not contain.
+    await expect.poll(() => page.getByRole("dialog").count()).toBe(1);
+    await expect.poll(() => pullLink.getAttribute("aria-expanded")).toBe("true");
+    await expect
+      .poll(() => pullLink.getAttribute("aria-controls"))
+      .toBe(await card.getAttribute("id"));
+
+    // Tab enters the card at its first link and then walks the rest natively.
+    const focused = () => page.evaluate(() => document.activeElement?.className ?? "");
+    await page.keyboard.press("Tab");
+    await expect.poll(focused).toBe("github-link-hovercard__repo");
+    await page.keyboard.press("Tab");
+    await expect.poll(focused).toBe("github-link-hovercard__title");
+    await captureArtifact(page, "github-hovercard-keyboard-focus");
+    await page.keyboard.press("Tab");
+    await expect.poll(focused).toBe("github-link-hovercard__author");
+
+    await page.keyboard.press("Escape");
+    await expect.poll(() => card.count()).toBe(0);
+    await expect
+      .poll(() => pullLink.evaluate((element) => element === document.activeElement))
+      .toBe(true);
+    // Returning focus to the trigger must not reopen what Escape just dismissed.
+    await page.waitForTimeout(300);
+    expect(await card.count()).toBe(0);
+  });
+
+  it("opens the linked pull request when the card's title link is clicked", async () => {
+    const { card, page, pullLink } = await openPullPreviewPage();
+
+    await pullLink.hover();
+    await expectText(card, "openclaw/openclaw #99816");
+    const titleLink = card.locator(".github-link-hovercard__title");
+    await expectText(titleLink, pullPreviewResponse.title);
+
+    // The title owns the card's only underline; the other links stay quiet even
+    // under the pointer, so the card keeps reading as a preview and not a menu.
+    for (const quiet of ["repo", "author", "metric--files"]) {
+      const link = card.locator(`.github-link-hovercard__${quiet}`);
+      await link.hover();
+      expect(await link.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe("none");
+    }
+    await titleLink.hover();
+    expect(await titleLink.evaluate((el) => getComputedStyle(el).textDecorationLine)).toBe(
+      "underline",
+    );
+
+    // Mirrors the source-link popup assertion above: the title anchor reuses
+    // the same validated href, target="_blank", and safe rel.
+    const popupPromise = page.waitForEvent("popup");
+    await titleLink.click();
+    const popup = await popupPromise;
+    await popup.waitForLoadState("domcontentloaded");
+    expect(popup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816");
+
+    // The diff-size chip is the card's deep link into the files-changed view.
+    const filesPopupPromise = page.waitForEvent("popup");
+    await card.locator(".github-link-hovercard__metric--files").click();
+    const filesPopup = await filesPopupPromise;
+    await filesPopup.waitForLoadState("domcontentloaded");
+    expect(filesPopup.url()).toBe("https://github.com/openclaw/openclaw/pull/99816/files");
+    await filesPopup.close();
+
+    // The click focused the title link inside the card; leaving the card still
+    // dismisses it with no click-outside required (github-link-hovercard.runtime.ts
+    // clears cardFocusInside for a pointer-opened card once the pointer leaves).
+    await popup.close();
+    await page.mouse.move(1, 1);
+    await expect.poll(() => card.count()).toBe(0);
   });
 });

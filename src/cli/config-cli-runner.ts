@@ -1,7 +1,11 @@
+import { isDeepStrictEqual } from "node:util";
 import { uniqueValues } from "@openclaw/normalization-core/string-normalization";
+import { resolveManagedUnsetPathsForWrite } from "../config/config-path-mutation.js";
 import { replaceConfigFile } from "../config/config.js";
 import { AUTO_MANAGED_CONFIG_META_PATHS } from "../config/io.meta.js";
+import { prepareConfigWriteTopology } from "../config/io.write-topology.js";
 import { formatConfigIssueLines } from "../config/issue-format.js";
+import { ConfigMutationConflictError } from "../config/mutation-conflict.js";
 import { resolveConfigPath } from "../config/paths.js";
 import { readBestEffortRuntimeConfigSchema } from "../config/runtime-schema.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -10,6 +14,7 @@ import { diffConfigPaths } from "../gateway/config-diff.js";
 import { buildGatewayReloadPlan } from "../gateway/config-reload-plan.js";
 import { resolveGatewayReloadSettings } from "../gateway/config-reload-settings.js";
 import { danger, info } from "../globals.js";
+import { formatErrorMessage } from "../infra/errors.js";
 import type { RuntimeEnv } from "../runtime.js";
 import { writeRuntimeJson } from "../runtime.js";
 import { toDotPath } from "../shared/dot-path.js";
@@ -26,22 +31,27 @@ import {
 } from "./config-cli-model-normalization.js";
 import {
   assertNonDestructiveReplacement,
+  formatConfigSetPath,
+  formatConfigUnsetMissingPathMessage,
   getAtPath,
   mergeAtPath,
+  parseConfigSetPath,
   setAtPath,
   type JsonSchemaRecord,
   type PathSegment,
   unsetAtPath,
 } from "./config-cli-path.js";
+import { ConfigMutationAgentRoster } from "./config-cli-roster.js";
 import {
+  assertStrictConfigForMutation,
   collectDryRunRefs,
   collectDryRunResolvabilityErrors,
   collectDryRunSchemaErrors,
   collectDryRunStaticErrorsForSkippedExecRefs,
-  collectPluginIntegrationProviderErrors,
+  collectConfigSecretProviderErrors,
   dedupeDryRunErrors,
   formatDryRunFailureMessage,
-  loadValidConfig,
+  loadValidConfigForWrite,
   selectDryRunRefsForResolution,
 } from "./config-cli-validation.js";
 import { checkTouchedTextModelRefs } from "./config-model-validation.js";
@@ -133,15 +143,6 @@ function formatAutoManagedMetaError(paths: readonly PathSegment[][]): string {
   ].join("\n");
 }
 
-export function assertConfigPathIsNotAutoManaged(path: PathSegment[]): void {
-  const targets = findAutoManagedMetaTargets([
-    { inputMode: "json", requestedPath: path, setPath: path, value: undefined, mutation: "delete" },
-  ]);
-  if (targets.length > 0) {
-    throw new Error(formatAutoManagedMetaError(targets));
-  }
-}
-
 function pruneInactiveGatewayAuthCredentials(params: {
   root: Record<string, unknown>;
   operations: ConfigSetOperation[];
@@ -217,7 +218,7 @@ function expandActualChangedPaths(
   return [...expanded];
 }
 
-export function configApplyHintForOperations(
+function configApplyHintForOperations(
   operations: ReadonlyArray<{ requestedPath?: PathSegment[] }>,
   beforeConfig: OpenClawConfig,
   afterConfig: OpenClawConfig,
@@ -290,27 +291,85 @@ export async function runConfigOperations(params: {
   if (autoManagedTargets.length > 0) {
     throw new Error(formatAutoManagedMetaError(autoManagedTargets));
   }
-  const snapshot = await loadValidConfig(runtime);
+  const mutationStart = await loadValidConfigForWrite(runtime);
+  const { snapshot } = mutationStart;
   // Mutate resolved config so runtime defaults never leak into the authored file.
   const next = structuredClone(snapshot.resolved) as Record<string, unknown>;
   const currentConfig = normalizeConfigMutationModelRefs(
     structuredClone(snapshot.resolved) as OpenClawConfig,
   );
   const mutationSchema = await loadMutationSchema();
-  const unsetPaths: PathSegment[][] = [];
+  const roster = new ConfigMutationAgentRoster(next, snapshot.sourceConfigBeforeMigrations);
+  let unsetPaths: PathSegment[][] = [];
   const explicitSetPaths: PathSegment[][] = [];
+  const appliedOperations: ConfigSetOperation[] = [];
+  const recordOperation = (operation: ConfigSetOperation): PathSegment[] => {
+    const setPath = roster.writePath(operation.setPath);
+    let touchedSecretTargetPath = operation.touchedSecretTargetPath;
+    if (touchedSecretTargetPath) {
+      const path = parseConfigSetPath(touchedSecretTargetPath);
+      const writePath = roster.writePath(path);
+      if (writePath !== path) {
+        touchedSecretTargetPath = toDotPath(writePath);
+      }
+    }
+    appliedOperations.push({
+      ...operation,
+      setPath,
+      ...(touchedSecretTargetPath ? { touchedSecretTargetPath } : {}),
+    });
+    return setPath;
+  };
   for (const operation of operations) {
+    const merge =
+      operation.mutation === "merge" || (options.merge && operation.mutation !== "replace");
+    roster.prepare(operation, Boolean(merge));
     if (operation.mutation === "delete") {
+      const writePath = recordOperation(operation);
       const unsetResult = unsetAtPath(next, operation.setPath);
+      if (!unsetResult.removed && operation.inputMode === "unset") {
+        const requestedPath = formatConfigSetPath(operation.requestedPath, operation.pathTokens);
+        const runtimeOnly = getAtPath(snapshot.runtimeConfig, operation.setPath).found;
+        const message = formatConfigUnsetMissingPathMessage({ path: requestedPath, runtimeOnly });
+        if (options.dryRun && options.json) {
+          throw new ConfigSetDryRunValidationError({
+            ok: false,
+            operations: 1,
+            configPath: snapshot.path,
+            inputModes: ["unset"],
+            checks: { schema: false, resolvability: false, resolvabilityComplete: false },
+            refsChecked: 0,
+            skippedExecRefs: 0,
+            errors: [
+              {
+                kind: "missing-path",
+                message: runtimeOnly
+                  ? message
+                  : `Config path not found: ${requestedPath}. Nothing was changed.`,
+              },
+            ],
+          });
+        }
+        if (!options.dryRun) {
+          assertStrictConfigForMutation(
+            currentConfig,
+            mutationStart.writeOptions.basePluginMetadataSnapshot,
+          );
+        }
+        throw new Error(message);
+      }
       if (!unsetResult.removed || unsetResult.leafContainer !== "array") {
-        unsetPaths.push(operation.setPath);
+        unsetPaths.push(writePath);
       }
       continue;
     }
-    explicitSetPaths.push(operation.setPath);
-    if (operation.mutation === "merge" || (options.merge && operation.mutation !== "replace")) {
+    if (merge) {
       mergeAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
+        ...(operation.pathTokens ? { pathTokens: operation.pathTokens } : {}),
+        ...(operation.quotedNumericSegments
+          ? { quotedNumericSegments: operation.quotedNumericSegments }
+          : {}),
         schema: mutationSchema,
       });
     } else {
@@ -322,22 +381,41 @@ export async function runConfigOperations(params: {
       });
       setAtPath(next, operation.setPath, operation.value, {
         numericObjectKeys: params.successMode === "patch",
+        ...(operation.pathTokens ? { pathTokens: operation.pathTokens } : {}),
+        ...(operation.quotedNumericSegments
+          ? { quotedNumericSegments: operation.quotedNumericSegments }
+          : {}),
         schema: mutationSchema,
       });
     }
+    explicitSetPaths.push(recordOperation(operation));
   }
+  roster.finish();
+  // A later operation can recreate a deleted path, including through a roster alias.
+  // Only final deletions may be replayed by the persistence owner.
+  unsetPaths = unsetPaths.filter((path) => !getAtPath(next, path).found);
   const removedGatewayAuthPaths = pruneInactiveGatewayAuthCredentials({ root: next, operations });
-  const nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
+  let nextConfig = normalizeConfigMutationModelRefs(next as OpenClawConfig);
   const normalizedExplicitSetPaths = explicitSetPaths.map(normalizeConfigMutationExplicitSetPath);
+  if (options.dryRun) {
+    nextConfig = prepareConfigWriteTopology({
+      snapshot,
+      pluginMetadataSnapshot: mutationStart.writeOptions.basePluginMetadataSnapshot,
+      nextConfig,
+      options: { explicitSetPaths: normalizedExplicitSetPaths },
+      unsetPaths: resolveManagedUnsetPathsForWrite(unsetPaths),
+      env: process.env,
+    }).nextConfig;
+  }
   const policyIssueLines = formatConfigIssueLines(
     collectUnsupportedSecretRefPolicyIssues(nextConfig),
     "",
     { normalizeRoot: true },
   ).map((line) => line.trim());
-  const pluginIntegrationErrors = collectPluginIntegrationProviderErrors({
-    config: nextConfig,
-    operations,
-  });
+  const providerErrors = formatConfigIssueLines(
+    await collectConfigSecretProviderErrors({ config: nextConfig, operations: appliedOperations }),
+    "",
+  ).map((message): ConfigSetDryRunError => ({ kind: "schema", message }));
 
   if (options.dryRun) {
     const hasJsonMode = operations.some(({ inputMode }) => inputMode === "json");
@@ -349,7 +427,9 @@ export async function runConfigOperations(params: {
         (operation.inputMode === "json" && operation.schemaValidated !== true),
     );
     const checksRefs = hasJsonMode || hasBuilderMode || hasUnsetMode;
-    const refs = checksRefs ? collectDryRunRefs({ config: nextConfig, operations }) : [];
+    const refs = checksRefs
+      ? collectDryRunRefs({ config: nextConfig, operations: appliedOperations })
+      : [];
     const selectedRefs = selectDryRunRefsForResolution({
       refs,
       allowExecInDryRun: Boolean(options.allowExec),
@@ -358,16 +438,21 @@ export async function runConfigOperations(params: {
     const modelRefCheck = await checkTouchedTextModelRefs({
       config: nextConfig,
       previousConfig: currentConfig,
-      touchedPaths: operations.map(({ setPath }) => setPath),
+      touchedPaths: appliedOperations.map(({ setPath }) => setPath),
       redactDependencyValues: true,
     });
     errors.push(...modelRefCheck.errors.map((message) => ({ kind: "model" as const, message })));
     if ((!hasJsonMode || !requiresFullSchemaValidation) && policyIssueLines.length > 0) {
       errors.push(...policyIssueLines.map((message) => ({ kind: "schema" as const, message })));
     }
-    errors.push(...pluginIntegrationErrors);
+    errors.push(...providerErrors);
     if (requiresFullSchemaValidation) {
-      errors.push(...collectDryRunSchemaErrors(nextConfig));
+      errors.push(
+        ...collectDryRunSchemaErrors(
+          nextConfig,
+          mutationStart.writeOptions.basePluginMetadataSnapshot,
+        ),
+      );
     }
     if (checksRefs) {
       errors.push(
@@ -389,9 +474,7 @@ export async function runConfigOperations(params: {
       inputModes: uniqueValues(operations.map(({ inputMode }) => inputMode)),
       checks: {
         schema:
-          requiresFullSchemaValidation ||
-          policyIssueLines.length > 0 ||
-          pluginIntegrationErrors.length > 0,
+          requiresFullSchemaValidation || policyIssueLines.length > 0 || providerErrors.length > 0,
         resolvability: checksRefs || modelRefCheck.refsTotal > 0,
         resolvabilityComplete:
           (checksRefs || modelRefCheck.refsTotal > 0) &&
@@ -442,18 +525,26 @@ export async function runConfigOperations(params: {
   if (policyIssueLines.length > 0) {
     throw new Error(formatPolicyFailure(policyIssueLines));
   }
-  if (pluginIntegrationErrors.length > 0) {
+  if (providerErrors.length > 0) {
     throw new Error(
       [
-        "Config validation failed: plugin-managed SecretRef provider integration is invalid.",
-        ...pluginIntegrationErrors.map((error) => `- ${error.message}`),
+        "Config validation failed: SecretRef provider configuration is invalid.",
+        ...providerErrors.map((error) => `- ${error.message}`),
       ].join("\n"),
     );
+  }
+  if (params.successMode === "set" && isDeepStrictEqual(currentConfig, nextConfig)) {
+    assertStrictConfigForMutation(
+      nextConfig,
+      mutationStart.writeOptions.basePluginMetadataSnapshot,
+    );
+    runtime.log(info("No change"));
+    return;
   }
   const modelRefCheck = await checkTouchedTextModelRefs({
     config: nextConfig,
     previousConfig: currentConfig,
-    touchedPaths: operations.map(({ setPath }) => setPath),
+    touchedPaths: appliedOperations.map(({ setPath }) => setPath),
     redactDependencyValues: true,
   });
   if (modelRefCheck.errors[0]) {
@@ -462,8 +553,10 @@ export async function runConfigOperations(params: {
 
   await replaceConfigFile({
     nextConfig,
+    snapshot,
     ...(snapshot.hash !== undefined ? { baseHash: snapshot.hash } : {}),
     writeOptions: {
+      ...mutationStart.writeOptions,
       auditOrigin: "cli",
       ...(unsetPaths.length > 0 ? { unsetPaths } : {}),
       ...(normalizedExplicitSetPaths.length > 0
@@ -482,7 +575,12 @@ export async function runConfigOperations(params: {
   if (params.successMode === "set" && operations.length === 1) {
     const operation = operations[0];
     const action = operation?.mutation === "delete" ? "Removed" : "Updated";
-    runtime.log(info(`${action} ${toDotPath(operation?.requestedPath ?? [])}. ${hint}`));
+    const requestedPath = formatConfigSetPath(
+      operation?.requestedPath ?? [],
+      operation?.pathTokens,
+      nextConfig,
+    );
+    runtime.log(info(`${action} ${requestedPath}. ${hint}`));
   } else if (params.successMode === "set") {
     runtime.log(info(`Updated ${operations.length} config paths. ${hint}`));
   } else {
@@ -495,13 +593,17 @@ export function handleConfigMutationError(params: {
   runtime: RuntimeEnv;
   options: ConfigMutationOptions;
 }) {
+  const isConflict = params.err instanceof ConfigMutationConflictError;
+  const detail = formatErrorMessage(params.err);
+  const message = isConflict
+    ? `The config file changed while this command was writing (${detail}), so nothing was changed. Re-run the same command to pick up the new file and try again.`
+    : detail;
   if (params.options.dryRun && params.options.json) {
     if (params.err instanceof ConfigSetDryRunValidationError) {
       writeRuntimeJson(params.runtime, params.err.result);
       params.runtime.exit(1);
       return;
     }
-    const message = params.err instanceof Error ? params.err.message : String(params.err);
     const result: ConfigSetDryRunResult = {
       ok: false,
       operations: 0,
@@ -510,13 +612,13 @@ export function handleConfigMutationError(params: {
       checks: { schema: false, resolvability: false, resolvabilityComplete: false },
       refsChecked: 0,
       skippedExecRefs: 0,
-      errors: [{ kind: "schema", message }],
+      errors: [{ kind: isConflict ? "conflict" : "schema", message }],
     };
     writeRuntimeJson(params.runtime, result);
-    params.runtime.error(danger(String(params.err)));
+    params.runtime.error(danger(message));
     params.runtime.exit(1);
     return;
   }
-  params.runtime.error(danger(String(params.err)));
+  params.runtime.error(danger(message));
   params.runtime.exit(1);
 }

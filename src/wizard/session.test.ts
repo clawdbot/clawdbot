@@ -1,6 +1,7 @@
 // Wizard session tests cover session creation and state transitions.
 
 import { describe, expect, test, vi } from "vitest";
+import { DEVICE_CODE_PHISHING_WARNING } from "./prompts.js";
 import { WizardSession, wizardStepAwaitsInput, type WizardStep } from "./session.js";
 
 function noteRunner() {
@@ -12,6 +13,23 @@ function noteRunner() {
 }
 
 describe("WizardSession", () => {
+  test.each([true, false, "true", "false", 1, {}, null, undefined])(
+    "only literal true confirms a wire answer (%j)",
+    async (answer) => {
+      let confirmed: boolean | undefined;
+      const session = new WizardSession(async (prompter) => {
+        confirmed = await prompter.confirm({ message: "Continue?", initialValue: false });
+      });
+      const step = (await session.next()).step;
+      if (!step) {
+        throw new Error("expected confirmation step");
+      }
+      await session.answer(step.id, answer);
+      await session.whenSettled();
+      expect(confirmed).toBe(answer === true);
+    },
+  );
+
   test.each([
     ["select", undefined, true],
     ["multiselect", undefined, true],
@@ -138,8 +156,12 @@ describe("WizardSession", () => {
     expect(first.step).toMatchObject({
       type: "note",
       title: "Provider sign-in",
-      message:
-        "Enter this one-time code in your browser.\nCode: ABCD-1234\nCode expires in 15 minutes. Never share it.",
+      message: [
+        "Enter this one-time code in your browser.",
+        "Code: ABCD-1234",
+        "Code expires in 15 minutes.",
+        DEVICE_CODE_PHISHING_WARNING,
+      ].join("\n"),
       externalUrl: "https://provider.example/device",
       deviceCode: {
         code: "ABCD-1234",

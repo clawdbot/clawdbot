@@ -36,6 +36,10 @@ export const PLAYBACK_TRANSCODE_SUBDIR = "playback-transcode";
 // records/*.json files are the pre-SQLite migration barrier. An mtime-only
 // sweep would delete both out from under that reaper.
 const MANAGED_OUTGOING_SUBDIR = "outgoing";
+const OUTBOUND_STAGING_SUBDIR = "outbound";
+// Match delivery-queue orphan grace: staged files get a full day to reach
+// every direct, streamed, fan-out, or queue-owned delivery path.
+const OUTBOUND_STAGING_TTL_MS = 24 * 60 * 60_000;
 /** Fixed disk budget for cached playback renditions; oldest outputs are evicted first. */
 const PLAYBACK_TRANSCODE_MAX_CACHE_BYTES = 512 * 1024 * 1024;
 /** Playback renditions outlive transient media but are still retired after one week. */
@@ -318,6 +322,18 @@ export async function prunePlaybackTranscodeCache(): Promise<void> {
   });
 }
 
+/** Prunes stale delivery staging without touching inbound replay or SQLite-owned outgoing media. */
+export async function pruneOutboundMedia(): Promise<void> {
+  const outboundDir = resolveMediaScopedDir(OUTBOUND_STAGING_SUBDIR, "pruneOutboundMedia");
+  await openMediaStore(MAX_BYTES, outboundDir).pruneExpired({
+    ttlMs: OUTBOUND_STAGING_TTL_MS,
+    recursive: true,
+    pruneEmptyDirs: true,
+  });
+  const { pruneStaleTrustedGeneratedHtmlMarkers } = await import("./web-media.js");
+  await pruneStaleTrustedGeneratedHtmlMarkers();
+}
+
 /** Prunes expired non-playback media, optionally recursing into scoped subdirectories. */
 export async function cleanOldMedia(ttlMs = DEFAULT_TTL_MS, options: CleanOldMediaOptions = {}) {
   await pruneNonPlaybackMedia(ttlMs, options);
@@ -487,7 +503,7 @@ async function writeMediaStreamToFile(params: {
         sniffChunks.push(buffer.byteLength > remaining ? buffer.subarray(0, remaining) : buffer);
         sniffLen += Math.min(buffer.byteLength, remaining);
       }
-      await handle.write(buffer);
+      await handle.writeFile(buffer);
     }
     return {
       sniffBuffer: Buffer.concat(sniffChunks, sniffLen),

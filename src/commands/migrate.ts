@@ -415,7 +415,7 @@ export async function migrateApplyCommand(
   }
   if (!opts.yes && !process.stdin.isTTY) {
     throw new Error(
-      `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand("openclaw migrate plan --provider <provider>")}.`,
+      `openclaw migrate apply requires --yes in non-interactive mode. Preview first with ${formatCliCommand(`openclaw migrate plan '${providerId.replaceAll("'", "'\\''")}'`)}.`,
     );
   }
   const provider = resolveMigrationProvider(providerId, opts.configOverride);

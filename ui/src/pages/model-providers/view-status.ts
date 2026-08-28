@@ -39,10 +39,13 @@ function hasProviderCredentials(card: ModelProviderCard): boolean {
   return card.hasConfigApiKey || Boolean(card.apiKey) || card.profiles.length > 0;
 }
 
-export function hasValidProviderSignIn(card: ModelProviderCard): boolean {
-  const catalogUnavailable =
-    card.catalogStatus === "auth-rejected" || card.catalogStatus === "unavailable";
-  return card.auth?.kind === "ok" && !catalogUnavailable;
+export function hasVerifiedProvider(card: ModelProviderCard): boolean {
+  return (
+    card.catalogStatus === "ready" &&
+    card.auth?.kind !== "expired" &&
+    card.auth?.kind !== "missing" &&
+    card.auth?.kind !== "expiring"
+  );
 }
 
 export function renderProviderStatus(card: ModelProviderCard) {
@@ -65,16 +68,19 @@ export function renderProviderStatus(card: ModelProviderCard) {
   if (!hasProviderCredentials(card)) {
     return renderAuthStatus(card);
   }
-  if (card.availableModelCount > 0 && (hasValidProviderSignIn(card) || !card.auth)) {
+  if (hasVerifiedProvider(card) && card.availableModelCount > 0) {
     return renderSettingsStatus({
       kind: "ok",
       label: t("modelProviders.status.ready"),
     });
   }
-  return hasValidProviderSignIn(card)
+  return hasVerifiedProvider(card)
     ? renderSettingsStatus({
         kind: "muted",
         label: t("modelProviders.status.ok"),
       })
-    : renderAuthStatus(card);
+    : renderSettingsStatus({
+        kind: "muted",
+        label: t("modelProviders.status.configured"),
+      });
 }

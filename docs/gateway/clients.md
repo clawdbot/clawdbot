@@ -97,8 +97,14 @@ const caps = [GATEWAY_CLIENT_CAPS.TOOL_EVENTS];
 
 The current registry contains `approvals`, `exec-approvals`, `inline-widgets`,
 `run-tool-bindings`, `session-scoped-events`, `plugin-approvals`,
-`task-suggestions`, `terminal-offset-seq`, `tool-events`, and `ui-commands`.
+`task-suggestions`, `terminal-offset-seq`, `tool-events`, `ui-commands`, and
+`usage-refreshing`.
 Advertise only capabilities the client actually implements.
+
+`usage-refreshing` allows a cold `usage.status` request to return immediately
+with `refreshing: true` and an empty provider list. A client advertising it must
+keep that payload cache-cold and refetch on a short bounded schedule. Other
+clients retain the blocking cold read.
 
 <Warning>
 `tool-events` gates live tool-execution streaming. The Gateway registers only
@@ -139,20 +145,48 @@ snapshot, so re-read them on every reconnect.
 Treat every successful reconnect as a new projection over durable history and
 current in-memory run state:
 
-1. Re-establish `sessions.subscribe` and the selected session's
-   `sessions.messages.subscribe` subscription.
+1. Re-establish `sessions.subscribe` with your list parameters to receive the
+   current roster in the same response, as described
+   [below](/gateway/clients#subscribe-instead-of-polling-usage). Also re-establish
+   the selected session's `sessions.messages.subscribe` subscription.
 2. Call `chat.history` for the selected `sessionKey` and replace local persisted
    rows with the returned `messages` projection.
 3. If `inFlightRun` is present, adopt its `runId`, buffered `text`, and optional
    `plan`. Adopt the run even when `text` is empty.
-4. Read `sessionInfo.hasActiveRun` and `sessionInfo.activeRunIds`. Prefer exact
-   membership in `activeRunIds` when deciding whether a retained run still owns
-   the streaming UI. A true `hasActiveRun` with no listed ID can represent another
-   active runtime projection.
-5. Reconcile subsequent `agent` events by `payload.runId` and `payload.seq`.
+4. Treat `sessionInfo.hasActiveRun` as aggregate direct-session activity.
+   `activeRunIds`, when present, is the complete exact active set; an empty array
+   therefore proves the session is idle. When `hasActiveRun` is true and
+   `activeRunIds` is omitted, another runtime owner is active but its exact run
+   identities are unavailable. In incremental merge events, omission means no
+   change, `null` is the event-only tombstone that clears cached exact IDs to
+   unavailable, and an array replaces the cache (including `[]` for proven
+   idle). Correlate only a run ID the client owns locally or received from a
+   request, history response, or event, and never select the first list entry as
+   an owner.
+5. Show an observer headline or run-inspector link only when the observer digest's
+   exact `runId` is present in `activeRunIds`. Aggregate activity alone does not
+   make a retained digest current.
+6. Reconcile subsequent `agent` events by `payload.runId` and `payload.seq`.
    Maintain the highest accepted sequence independently for each run, ignore an
    already-seen or lower sequence, and treat a forward gap as a reason to reload
    authoritative history.
+
+### Active-run cache matrix
+
+Classify the source before applying `activeRunIds`; the same omission has
+different meaning in a full snapshot and an incremental delta.
+
+| Client cache             | Read path                                                  | Class    | Required behavior                                                                                  |
+| ------------------------ | ---------------------------------------------------------- | -------- | -------------------------------------------------------------------------------------------------- |
+| Web session roster       | `sessions.list`, reconnect hydration                       | Snapshot | Replace the row; omission clears cached exact IDs to unavailable.                                  |
+| Web selected session     | `chat.history.sessionInfo`                                 | Snapshot | Replace the row projection; omission clears cached exact IDs.                                      |
+| Web session events       | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Omission is inert; `null` clears; an array replaces.                                               |
+| Android session roster   | `sessions.list`, reconnect hydration                       | Snapshot | Replace the list rows; omission clears cached exact IDs.                                           |
+| Android selected session | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace `activeRunIds` even while other partial history fields merge.                              |
+| Android session events   | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Field presence controls replacement; `null` clears and omission is inert.                          |
+| Apple session roster     | `sessions.list`, reconnect hydration                       | Snapshot | Replace live rows; the offline cache strips transient active-run facts.                            |
+| Apple selected session   | `chat.history.sessionInfo`, reconnect recovery             | Snapshot | Replace both the current row and its run-ID projection; omission clears both.                      |
+| Apple session events     | `sessions.changed`, `session.message`, lifecycle snapshots | Delta    | Preserve field presence through decoding; omission is inert, `null` clears, and an array replaces. |
 
 The outer event frame also has an optional `seq`, which orders events on the
 current WebSocket connection. It resets with a new connection. The `seq` inside
@@ -208,8 +242,27 @@ archive history; anchored responses intentionally omit numeric paging metadata.
 
 ## Subscribe instead of polling usage
 
-Load the initial catalog with `sessions.list`, then call `sessions.subscribe` once
-per connection. Merge `sessions.changed` events by `sessionKey`. Session change
+Install the `sessions.changed` listener, then call `sessions.subscribe` once per
+connection with your `sessions.list` parameters, such as
+`{ limit: 60, ownerFirst: true }`. The response is `{ subscribed: true, list }`,
+where `list` is the normal `SessionsListResult` snapshot. Passing `{}` activates
+the subscription but returns only `{ subscribed: true }`, without a list.
+
+The Gateway activates the subscription before reading the snapshot. Events can
+therefore arrive before the response. Track changes received during bootstrap
+and follow the response with a `sessions.list` refresh when needed; do not let
+the snapshot silently overwrite a newer event. Re-establish this flow after
+every reconnect.
+
+`ownerFirst: true` prepends up to 60 matching sessions owned by the authenticated
+viewer to the normal first page, removing duplicates within that response. It
+applies only when `offset` is zero or omitted. The Gateway derives the viewer
+identity from the authenticated connection, not a client-supplied identity.
+The shared page's pagination metadata is unchanged, so use `nextOffset`, not the
+number of returned rows, when loading another page, and merge rows by session
+key. See [Session list bootstrap](/gateway/protocol#session-list-bootstrap).
+
+Merge subsequent `sessions.changed` events by `sessionKey`. Session change
 payloads can carry live `inputTokens`, `outputTokens`, `totalTokens`,
 `totalTokensFresh`, `contextTokens`, `estimatedCostUsd`, response-usage settings,
 and active-run state.

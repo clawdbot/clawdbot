@@ -5,6 +5,10 @@ import type { runEmbeddedAgentEntry } from "../../agents/embedded-agent-runner/r
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
 import { FailoverError, type FallbackAttemptRecord } from "../../agents/failover-error.js";
 import { AUTH_INVALID_TOKEN_USER_TEXT } from "../../agents/failover/user-copy.js";
+import {
+  initialModelFallbackAttemptOptions,
+  type TestModelFallbackRunnerParams,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import {
   createUserTurnTranscriptRecorder,
@@ -24,6 +28,7 @@ type RunEntryDelegate = (params: RunEntryParams) => Promise<RunEntryResult>;
 type RunCliAgent = typeof import("../../agents/cli-runner.js").runCliAgent;
 
 export const PROVIDER_AUTHENTICATION_ERROR_USER_MESSAGE = `⚠️ ${AUTH_INVALID_TOKEN_USER_TEXT}`;
+export { createMockReplyOperation } from "./test-helpers.js";
 export const PROVIDER_RATE_LIMIT_OR_QUOTA_ERROR_USER_MESSAGE =
   "⚠️ The model provider returned HTTP 429 before replying. This can mean rate limiting, exhausted quota, or an account balance/billing issue. Check the selected provider/model, API key, and provider billing/quota dashboard, then try again.";
 export const PROVIDER_INTERNAL_ERROR_USER_MESSAGE =
@@ -62,6 +67,7 @@ const state = vi.hoisted(() => ({
   updateSessionStoreMock: vi.fn(),
   resolveCurrentTurnImagesMock: vi.fn(),
   peekSessionMcpRuntimeMock: vi.fn(),
+  recordMessageToolRunOutcomeMock: vi.fn(),
   productionBuildEmbeddedRunExecutionParams: undefined as
     | typeof buildEmbeddedRunExecutionParams
     | undefined,
@@ -221,6 +227,10 @@ vi.mock("../../infra/agent-run-registry.js", async () => {
   };
 });
 
+vi.mock("../../infra/message-tool-run-outcome-store.js", () => ({
+  recordMessageToolRunOutcome: (params: unknown) => state.recordMessageToolRunOutcomeMock(params),
+}));
+
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: {
     error: vi.fn(),
@@ -236,13 +246,17 @@ vi.mock("../../utils/message-channel.js", async () => ({
   isInternalMessageChannel: (value: unknown) => state.isInternalMessageChannelMock(value),
 }));
 
-vi.mock("../heartbeat.js", () => ({
-  stripHeartbeatToken: (text: string) => ({
-    text,
-    didStrip: false,
-    shouldSkip: false,
-  }),
-}));
+vi.mock("../heartbeat.js", async () => {
+  const actual = await vi.importActual<typeof import("../heartbeat.js")>("../heartbeat.js");
+  return {
+    ...actual,
+    stripHeartbeatToken: (text: string) => ({
+      text,
+      didStrip: false,
+      shouldSkip: false,
+    }),
+  };
+});
 
 vi.mock("./current-turn-images.js", () => ({
   resolveCurrentTurnImages: (params: unknown) => state.resolveCurrentTurnImagesMock(params),
@@ -350,12 +364,9 @@ export async function loadActualRunCliAgentForTest(): Promise<RunCliAgent> {
   ).runCliAgent;
 }
 
-export type FallbackRunnerParams = {
-  provider: string;
-  model: string;
+export type FallbackRunnerParams = TestModelFallbackRunnerParams & {
   sessionId?: string;
   abortSignal?: AbortSignal;
-  run: (provider: string, model: string) => Promise<unknown>;
   classifyResult?: (params: {
     result: { payloads?: Array<{ text?: string; isError?: boolean; isReasoning?: boolean }> };
     provider: string;
@@ -364,6 +375,12 @@ export type FallbackRunnerParams = {
     total: number;
   }) => Promise<unknown>;
 };
+
+export {
+  fallbackModelAttemptOptions as fallbackAttemptOptions,
+  initialModelFallbackAttemptOptions as initialFallbackAttemptOptions,
+  runInitialModelFallbackAttempt as runInitialFallbackAttempt,
+} from "../../agents/test-helpers/model-fallback-runner.test-support.js";
 
 export type EmbeddedAgentParams = {
   runId: string;
@@ -451,7 +468,7 @@ export function createFollowupRun(): FollowupRun {
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     run: {
-      agentId: "agent",
+      agentId: "main",
       agentDir: "/tmp/agent",
       sessionId: "session",
       sessionKey: "main",
@@ -481,59 +498,6 @@ export function createTestUserTurnRecorder(message: PersistedUserTurnMessage) {
     target: createTestUserTurnTranscriptTarget(),
     updateMode: "none",
   });
-}
-
-export function createMockReplyOperation(options?: { abortSignal?: AbortSignal }): {
-  replyOperation: ReplyOperation;
-  failMock: ReturnType<typeof vi.fn>;
-  freezeAbortMock: ReturnType<typeof vi.fn>;
-  retainFailureUntilCompleteMock: ReturnType<typeof vi.fn>;
-  updateSessionIdMock: ReturnType<typeof vi.fn>;
-} {
-  const failMock = vi.fn();
-  const freezeAbortMock = vi.fn();
-  const retainFailureUntilCompleteMock = vi.fn();
-  const updateSessionIdMock = vi.fn();
-  return {
-    failMock,
-    freezeAbortMock,
-    retainFailureUntilCompleteMock,
-    updateSessionIdMock,
-    replyOperation: {
-      key: "main",
-      sessionId: "session",
-      abortSignal: options?.abortSignal ?? new AbortController().signal,
-      staleExpiryReason: undefined,
-      resetTriggered: false,
-      terminalRecovery: false,
-      acceptedSteeredInboundAudio: false,
-      phase: "running",
-      result: null,
-      startedAtMs: Date.now(),
-      lastActivityAtMs: Date.now(),
-      hasOwnedSessionId: vi.fn((sessionId: string) => sessionId === "session"),
-      recordActivity: vi.fn(),
-      setPhase: vi.fn(),
-      markWaitingForDeferredMaintenance: vi.fn(),
-      markDeferredMaintenanceWaitEnded: vi.fn(),
-      markWaitingForGlobalLane: vi.fn(),
-      markGlobalLaneWaitEnded: vi.fn(),
-      updateSessionId: updateSessionIdMock,
-      updateSessionKey: vi.fn(),
-      attachBackend: vi.fn(),
-      detachBackend: vi.fn(),
-      freezeAbort: freezeAbortMock,
-      retainFailureUntilComplete: retainFailureUntilCompleteMock,
-      complete: vi.fn(),
-      completeThen: vi.fn((afterClear: () => void) => afterClear()),
-      completeWithAfterClearBarrier: vi.fn(),
-      fail: failMock,
-      abortByUser: vi.fn(() => true),
-      abortForRestart: vi.fn(() => true),
-      markTerminalRecovery: vi.fn(),
-      markAcceptedSteeredInboundAudio: vi.fn(),
-    },
-  };
 }
 
 export function requireRecord(value: unknown, label: string): Record<string, unknown> {
@@ -691,6 +655,7 @@ export function setupAgentRunnerExecutionTestState() {
     state.updateSessionStoreMock.mockReset();
     state.resolveCurrentTurnImagesMock.mockReset();
     state.peekSessionMcpRuntimeMock.mockReset();
+    state.recordMessageToolRunOutcomeMock.mockReset();
     state.productionBuildEmbeddedRunExecutionParams = undefined;
     state.peekSessionMcpRuntimeMock.mockReturnValue(undefined);
     state.resolveCurrentTurnImagesMock.mockImplementation(
@@ -700,7 +665,7 @@ export function setupAgentRunnerExecutionTestState() {
       }),
     );
     state.runWithModelFallbackMock.mockImplementation(async (params: FallbackRunnerParams) => ({
-      result: await params.run("anthropic", "claude"),
+      result: await params.run("anthropic", "claude", initialModelFallbackAttemptOptions(params)),
       provider: "anthropic",
       model: "claude",
       attempts: [],

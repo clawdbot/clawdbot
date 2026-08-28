@@ -74,7 +74,10 @@ enum class WearProxyCapability(
   AgentControls(wireValue = "agent-controls"),
   GatewayControls(wireValue = "gateway-controls"),
   ModelControls(wireValue = "model-controls"),
+  ModelCatalogSearch(wireValue = "model-catalog-search"),
   SessionSelectionLookup(wireValue = "session-selection-lookup"),
+  SessionSearchPagination(wireValue = "session-search-pagination"),
+  AgentPulse(wireValue = "agent-pulse"),
   AttemptScopedRealtimeAudio(wireValue = "attempt-scoped-realtime-audio"),
   ;
 
@@ -99,6 +102,9 @@ enum class WearConnectionFailure(
 enum class WearRpcMethod {
   @SerialName("proxy.status")
   ProxyStatus,
+
+  @SerialName("agent.pulse")
+  AgentPulse,
 
   @SerialName("sessions.list")
   SessionsList,

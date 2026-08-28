@@ -122,7 +122,8 @@ const providerPolicySurfaceMock = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("../plugins/current-plugin-metadata-snapshot.js", () => ({
+vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/current-plugin-metadata-snapshot.js")>()),
   getCurrentPluginMetadataSnapshot: () => manifestNormalizationSnapshot,
 }));
 
@@ -746,6 +747,44 @@ describe("model-selection", () => {
     ])("$name", ({ cfg, model }) => {
       expect(inferUniqueProviderFromConfiguredModels({ cfg, model })).toBeUndefined();
     });
+
+    it("prefers a unique agent match over global and provider-config collisions", () => {
+      const cfg = {
+        agents: {
+          defaults: { models: { "openai/shared-model": {} } },
+          entries: {
+            worker: { models: { "anthropic/shared-model": {} } },
+          },
+        },
+        models: {
+          providers: { minimax: { models: [{ id: "shared-model" }] } },
+        },
+      } as unknown as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({ cfg, agentId: "worker", model: "shared-model" }),
+      ).toBe("anthropic");
+    });
+
+    it("keeps ambiguous agent matches unresolved without falling back globally", () => {
+      const cfg = {
+        agents: {
+          defaults: { models: { "openai/shared-model": {} } },
+          entries: {
+            worker: {
+              models: {
+                "anthropic/shared-model": {},
+                "minimax/shared-model": {},
+              },
+            },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        inferUniqueProviderFromConfiguredModels({ cfg, agentId: "worker", model: "shared-model" }),
+      ).toBeUndefined();
+    });
   });
 
   describe("buildConfiguredModelCatalog", () => {
@@ -789,6 +828,7 @@ describe("model-selection", () => {
                   id: "Qwen/Qwen3-8B",
                   name: "Qwen 3 8B",
                   reasoning: true,
+                  thinkingLevelMap: { off: null, max: "max" },
                   compat: {
                     thinkingFormat: "qwen-chat-template",
                   },
@@ -804,6 +844,8 @@ describe("model-selection", () => {
       );
       expect(model?.compat).toEqual({ thinkingFormat: "qwen-chat-template" });
       expect(model?.reasoning).toBe(true);
+      expect(model?.configuredReasoning).toBe(true);
+      expect(model?.thinkingLevelMap).toEqual({ off: null, max: "max" });
     });
 
     it("carries configured model params into catalog entries for provider policy", () => {
@@ -905,6 +947,77 @@ describe("model-selection", () => {
       expect(index.byProviderAlias?.get("lmstudio-dense/local")?.ref).toEqual({
         provider: "lmstudio-dense",
         model: "qwen3.6-27b",
+      });
+    });
+
+    it.each([
+      {
+        name: "inherits the global alias when agent metadata omits alias",
+        agentMetadata: { agentRuntime: { id: "codex" } },
+        expectedAlias: "global-luna",
+      },
+      {
+        name: "replaces the global alias with an explicit agent alias",
+        agentMetadata: { alias: "worker-luna" },
+        expectedAlias: "worker-luna",
+      },
+      {
+        name: "disables the global alias with an explicit empty agent alias",
+        agentMetadata: { alias: "" },
+        expectedAlias: undefined,
+      },
+    ])("$name", ({ agentMetadata, expectedAlias }) => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.6-luna": { alias: "global-luna" } },
+          },
+          entries: {
+            worker: { models: { "openai/gpt-5.6-luna": agentMetadata } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const index = buildModelAliasIndex({
+        cfg,
+        agentId: "worker",
+        defaultProvider: "openai",
+      });
+
+      expect(index.byKey.get("openai/gpt-5.6-luna")?.at(-1)).toBe(expectedAlias);
+      expect(index.byAlias.get("global-luna")?.ref).toEqual(
+        expectedAlias === "global-luna" ? { provider: "openai", model: "gpt-5.6-luna" } : undefined,
+      );
+    });
+
+    it("preserves another model's provider-qualified duplicate alias during replacement", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-a": { alias: "shared" },
+              "openai/gpt-b": { alias: "shared" },
+            },
+          },
+          entries: {
+            worker: { models: { "openai/gpt-a": { alias: "worker-a" } } },
+          },
+        },
+      } as OpenClawConfig;
+
+      const index = buildModelAliasIndex({
+        cfg,
+        agentId: "worker",
+        defaultProvider: "openai",
+      });
+
+      expect(index.byProviderAlias?.get("openai/shared")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-b",
+      });
+      expect(index.byProviderAlias?.get("openai/worker-a")?.ref).toEqual({
+        provider: "openai",
+        model: "gpt-a",
       });
     });
 
@@ -1038,6 +1151,7 @@ describe("model-selection", () => {
           name: "Configured Llama Fast",
           contextWindow: 128_000,
           reasoning: true,
+          configuredReasoning: true,
         },
       ]);
     });
@@ -1375,6 +1489,7 @@ describe("model-selection", () => {
           contextTokens: undefined,
           input: undefined,
           reasoning: true,
+          configuredReasoning: true,
           compat: { supportedReasoningEfforts: ["low", "medium", "high", "xhigh"] },
         },
       ]);
@@ -1395,9 +1510,6 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
-      expect(result.automaticFallbackKeys).toEqual(
-        new Set(["anthropic/claude-sonnet-4-6", "google/gemini-3.1-pro-preview"]),
-      );
       expect(result.allowAny).toBe(false);
     });
 
@@ -1415,7 +1527,7 @@ describe("model-selection", () => {
       expect(result.allowAny).toBe(false);
     });
 
-    it("prefers per-agent fallback overrides when agentId is provided", () => {
+    it("keeps per-agent fallback overrides out of explicit selection", () => {
       const cfg = createAgentFallbackConfig({
         fallbacks: ["google/gemini-3-pro"],
         agentFallbacks: ["anthropic/claude-sonnet-4-6"],
@@ -1432,7 +1544,6 @@ describe("model-selection", () => {
       expect(result.allowedKeys.has("openai/gpt-4o")).toBe(true);
       expect(result.allowedKeys.has("anthropic/claude-sonnet-4-6")).toBe(false);
       expect(result.allowedKeys.has("google/gemini-3.1-pro-preview")).toBe(false);
-      expect(result.automaticFallbackKeys).toEqual(new Set(["anthropic/claude-sonnet-4-6"]));
       expect(result.allowAny).toBe(false);
     });
   });
@@ -2230,6 +2341,29 @@ describe("model-selection", () => {
       });
     });
 
+    it("prefers an agent-configured OpenRouter free model over the global default", () => {
+      const cfg = {
+        agents: {
+          defaults: {
+            model: { primary: "openrouter:free" },
+            models: { "openrouter/global/default:free": {} },
+          },
+          entries: {
+            worker: { models: { "openrouter/agent/preferred:free": {} } },
+          },
+        },
+      } as OpenClawConfig;
+
+      expect(
+        resolveConfiguredModelRef({
+          cfg,
+          agentId: "worker",
+          defaultProvider: "openai",
+          defaultModel: "gpt-5.4",
+        }),
+      ).toEqual({ provider: "openrouter", model: "agent/preferred:free" });
+    });
+
     it("resolves openrouter:free from configured OpenRouter provider models when needed", () => {
       const cfg = {
         agents: {
@@ -2587,6 +2721,26 @@ describe("resolveDefaultModelForAgent", () => {
       model: "gpt-5.5",
     });
   });
+
+  it("uses agent model metadata to resolve an inherited bare default", () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "claude-sonnet-4-6" },
+        entries: {
+          worker: {
+            models: {
+              "anthropic/claude-sonnet-4-6": { alias: "worker-sonnet" },
+            },
+          },
+        },
+      },
+    } as OpenClawConfig;
+
+    expect(resolveDefaultModelForAgent({ cfg, agentId: "worker" })).toEqual({
+      provider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
+  });
 });
 
 describe("normalizeModelSelection", () => {
@@ -2711,6 +2865,21 @@ describe("resolveSubagentSpawnModelSelection", () => {
       agentId: "main",
       modelOverride: undefined,
       expected: "openai/gpt-5.4",
+    },
+    {
+      name: "resolves an alias configured only on the target agent",
+      config: {
+        modelEntries: { "openai/gpt-5.4": { alias: "global-gpt" } },
+        agents: [
+          {
+            id: "research",
+            models: { "anthropic/claude-opus-4-6": { alias: "research-opus" } },
+          },
+        ],
+      },
+      agentId: "research",
+      modelOverride: "research-opus",
+      expected: "anthropic/claude-opus-4-6",
     },
     {
       name: "passes through already-qualified provider/model refs unchanged",

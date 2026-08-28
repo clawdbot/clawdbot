@@ -20,6 +20,7 @@ import {
   notifyDiscordActiveTurnThreadCreated,
   notifyDiscordActiveTurnThreadReplyDelivered,
 } from "../active-turn-thread-route.js";
+import { coerceDiscordComponentParam } from "../components.js";
 import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import {
   DISCORD_PRESENTATION_CAPABILITIES,
@@ -75,6 +76,7 @@ export async function handleDiscordMessageAction(
     | "sessionKey"
     | "inboundEventKind"
     | "conversationReadOrigin"
+    | "reply"
   >,
 ): Promise<AgentToolResult<unknown>> {
   const { action, params, cfg } = ctx;
@@ -102,6 +104,7 @@ export async function handleDiscordMessageAction(
     mediaAccess: ctx.mediaAccess,
     mediaLocalRoots: ctx.mediaLocalRoots,
     mediaReadFile: ctx.mediaReadFile,
+    ...(ctx.reply ? { reply: ctx.reply } : {}),
     ...readPolicyOptions,
   } as const;
   const notifyVisibleOutbound = (
@@ -191,8 +194,9 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "filePath", { trim: false });
     const requestedContent = readStringParam(params, "message", { allowEmpty: true });
+    const explicitComponents = coerceDiscordComponentParam(params.components);
     const presentation =
-      params.components == null ? normalizeMessagePresentation(params.presentation) : undefined;
+      explicitComponents == null ? normalizeMessagePresentation(params.presentation) : undefined;
     const adaptedPresentation = presentation
       ? adaptMessagePresentationForChannel({
           presentation,
@@ -214,28 +218,28 @@ export async function handleDiscordMessageAction(
     );
     const rawComponents = presentationFellBack
       ? undefined
-      : (params.components ??
+      : (explicitComponents ??
         presentationComponents ??
         buildDiscordInteractiveComponents(normalizeLegacyInteractiveReply(params.interactive)));
     const hasComponents =
       Boolean(rawComponents) &&
       (typeof rawComponents === "function" || typeof rawComponents === "object");
     const components = hasComponents ? rawComponents : undefined;
+    const rawEmbeds = params.embeds;
+    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const content = readStringParam(params, "message", {
-      required: !asVoice && !hasComponents && !mediaUrl && !presentationFellBack,
+      required: !asVoice && !hasComponents && !embeds?.length && !mediaUrl && !presentationFellBack,
       allowEmpty: true,
     });
     const deliveryContent =
-      presentationFellBack && adaptedPresentation
+      presentationFellBack && presentation
         ? renderMessagePresentationFallbackText({
             text: content,
-            presentation: adaptedPresentation,
+            presentation,
           })
         : content;
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
-    const rawEmbeds = params.embeds;
-    const embeds = Array.isArray(rawEmbeds) ? rawEmbeds : undefined;
     const silent = readBooleanParam(params, "silent") === true;
     const suppressEmbeds = readBooleanParam(params, "suppressEmbeds");
     const sessionKey = readStringParam(params, "__sessionKey");
@@ -273,11 +277,21 @@ export async function handleDiscordMessageAction(
       readStringParam(params, "path", { trim: false }) ??
       readStringParam(params, "media", { trim: false });
     if (!mediaUrl) {
+      // Buffer attachments are send-only; upload-file covers existing file/media sources.
+      if (readStringParam(params, "buffer", { trim: false })) {
+        throw new Error(
+          'Use action: "send" for base64 buffer attachments; upload-file requires filePath, path, or media.',
+        );
+      }
       throw new Error("upload-file requires filePath, path, or media.");
     }
     const content =
       readStringParam(params, "message", { allowEmpty: true }) ??
-      readStringParam(params, "content", { allowEmpty: true });
+      readStringParam(params, "content", { allowEmpty: true }) ??
+      // `media` is accepted as an alias for the file, so a send-shaped call
+      // arrives with its text in `caption`; without this alias that text is
+      // silently dropped instead of becoming the uploaded message's content.
+      readStringParam(params, "caption", { allowEmpty: true });
     const filename = readStringParam(params, "filename");
     const replyTo = readStringParam(params, "replyTo");
     const silent = readBooleanParam(params, "silent") === true;
@@ -303,32 +317,6 @@ export async function handleDiscordMessageAction(
     );
     notifyVisibleOutbound(result, to, sessionKey);
     return withAdoptedThreadReplyRoute(result, to, sessionKey);
-  }
-
-  if (action === "poll") {
-    const to = readStringParam(params, "to", { required: true });
-    const question = readStringParam(params, "pollQuestion", {
-      required: true,
-    });
-    const answers = readStringArrayParam(params, "pollOption", { required: true });
-    const allowMultiselect = readBooleanParam(params, "pollMulti");
-    const durationHours = readPositiveIntegerParam(params, "pollDurationHours");
-    const result = await handleDiscordAction(
-      {
-        action: "poll",
-        accountId: accountId ?? undefined,
-        to,
-        question,
-        answers,
-        allowMultiselect,
-        durationHours: durationHours ?? undefined,
-        content: readStringParam(params, "message"),
-      },
-      cfg,
-      actionOptions,
-    );
-    notifyVisibleOutbound(result, to);
-    return result;
   }
 
   if (action === "react") {
@@ -497,6 +485,7 @@ export async function handleDiscordMessageAction(
         to,
         stickerIds,
         content: readStringParam(params, "message"),
+        ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
       },
       cfg,
       actionOptions,

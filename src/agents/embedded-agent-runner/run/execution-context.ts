@@ -11,11 +11,13 @@ import { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
 
 export type PreparedEmbeddedRunInput = {
   runParams: RunEmbeddedAgentParamsWithSessionFile;
+  contextEngineAgentId?: string;
   provider: string;
   modelId: string;
   agentDir: string;
   workspaceResolution: ReturnType<typeof resolveRunWorkspaceDir>;
   workspaceDir: string;
+  bootstrapWorkspaceDir?: string;
   isCanonicalWorkspace: boolean;
   globalLane: string;
   hookRunner: ReturnType<typeof getGlobalHookRunner>;

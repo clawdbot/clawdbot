@@ -27,7 +27,7 @@ describe("chat pane read markers", () => {
     expect(patch).toHaveBeenCalledWith(
       "agent:main:current",
       { unread: false },
-      { agentId: "main" },
+      { agentId: "main", expectedMarkedUnreadAt: null },
     );
   });
 
@@ -50,7 +50,7 @@ describe("chat pane read markers", () => {
     expect(patch).toHaveBeenCalledWith(
       "agent:main:current",
       { unread: false },
-      { agentId: "main" },
+      { agentId: "main", expectedMarkedUnreadAt: null },
     );
   });
 
@@ -88,5 +88,128 @@ describe("chat pane read markers", () => {
     expect(patch).not.toHaveBeenCalled();
     expect(state.chatError).toBeNull();
     expect(state.lastError).toBeNull();
+  });
+
+  it("retries the read patch after a null (unsent) resolution", async () => {
+    // sessions.patch resolves null without a request when the connection
+    // scope is lost; the guard must unlatch like a failure or the badge
+    // stays lit until navigation.
+    const patch = vi.fn().mockResolvedValue(null);
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+    const row = {
+      key: "agent:main:current",
+      kind: "direct" as const,
+      label: "Unread",
+      updatedAt: 20,
+      unread: true,
+    };
+
+    pane.markSessionRead(row);
+    await Promise.resolve();
+    pane.markSessionRead(row);
+
+    expect(patch).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not clear unread from a hidden retained pane", () => {
+    const patch = vi.fn().mockResolvedValue(null);
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+    const sessionsState = (presented: boolean) => {
+      pane.presented = presented;
+      pane.applySessionsState({
+        result: {
+          sessions: [
+            {
+              key: "agent:main:current",
+              kind: "direct",
+              label: "Background activity",
+              updatedAt: 20,
+              unread: true,
+            },
+          ],
+        },
+        agentId: "main",
+        loading: false,
+        error: null,
+        deletedSessions: [],
+      } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+    };
+
+    // Hidden retained panes keep the subscription alive but must not mark
+    // the session read — the user is not looking at it.
+    sessionsState(false);
+    expect(patch).not.toHaveBeenCalled();
+
+    sessionsState(true);
+    expect(patch).toHaveBeenCalledWith(
+      "agent:main:current",
+      { unread: false },
+      { agentId: "main", expectedMarkedUnreadAt: null },
+    );
+  });
+
+  it("preserves a manual unread marker received after activation", () => {
+    const patch = vi.fn().mockResolvedValue(null);
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+
+    pane.markSessionRead({
+      key: "agent:main:current",
+      kind: "direct",
+      updatedAt: 10,
+      unread: false,
+    });
+    pane.markSessionRead({
+      key: "agent:main:current",
+      kind: "direct",
+      markedUnreadAt: 20,
+      updatedAt: 20,
+      unread: true,
+    });
+
+    expect(patch).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges a manual unread marker when a retained pane is presented again", () => {
+    const patch = vi.fn().mockResolvedValue({});
+    const { pane } = createTestChatPane({
+      client: {} as GatewayBrowserClient,
+      sessions: { patch } as unknown as SessionCapability,
+    });
+    const row = {
+      key: "agent:main:current",
+      kind: "direct" as const,
+      markedUnreadAt: 20,
+      updatedAt: 20,
+      unread: true,
+    };
+
+    pane.markSessionRead({ ...row, markedUnreadAt: undefined, unread: false });
+    pane.markSessionRead(row);
+    expect(patch).not.toHaveBeenCalled();
+
+    pane.presented = false;
+    pane.applySessionsState({
+      result: { sessions: [row] },
+      agentId: "main",
+      loading: false,
+      error: null,
+      deletedSessions: [],
+    } as unknown as Parameters<typeof pane.applySessionsState>[0]);
+    pane.presented = true;
+
+    expect(patch).toHaveBeenCalledWith(
+      "agent:main:current",
+      { unread: false },
+      { agentId: "main", expectedMarkedUnreadAt: 20 },
+    );
   });
 });

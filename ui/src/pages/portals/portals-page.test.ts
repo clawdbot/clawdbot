@@ -4,9 +4,12 @@ import type { PortalListResult, PortalSummary } from "@openclaw/gateway-protocol
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolvePortalUrl } from "./portal-url.ts";
 
-const probePortalReachable = vi.hoisted(() => vi.fn<() => Promise<boolean>>());
+const probePortalReachable = vi.hoisted(() =>
+  vi.fn<() => Promise<"reachable" | "unreachable" | "blocked">>(),
+);
 
 vi.mock("./portal-reachability.ts", () => ({ probePortalReachable }));
 
@@ -41,7 +44,7 @@ function createContext(
     phase: "connected",
     offlineStable: false,
     canvasPluginSurfaceUrl: null,
-    hello: { features: { methods } } as ApplicationGatewaySnapshot["hello"],
+    hello: gatewayHelloForMethods(methods, ["operator.write"]),
     assistantAgentId: null,
     sessionKey: "main",
     lastError: null,
@@ -87,7 +90,7 @@ afterEach(() => {
 });
 
 beforeEach(() => {
-  probePortalReachable.mockReset().mockResolvedValue(true);
+  probePortalReachable.mockReset().mockResolvedValue("reachable");
 });
 
 describe("PortalsPage", () => {
@@ -144,7 +147,7 @@ describe("PortalsPage", () => {
   });
 
   it("shows an unreachable notice without mounting the iframe and retries", async () => {
-    probePortalReachable.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    probePortalReachable.mockResolvedValueOnce("unreachable").mockResolvedValueOnce("reachable");
     const source = createContext(["portal.list", "portal.close"], async (method) => {
       if (method === "portal.list") {
         return { portals: [portal] } satisfies PortalListResult;
@@ -171,6 +174,19 @@ describe("PortalsPage", () => {
 
     await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBeNull());
     expect(probePortalReachable).toHaveBeenCalledTimes(2);
+  });
+
+  it("still mounts the preview when policy blocks the probe", async () => {
+    // A CSP-refused probe never reached the network, so it must not be reported
+    // as an unreachable portal: frames obey frame-src and can still load.
+    probePortalReachable.mockResolvedValue("blocked");
+    const source = createContext(["portal.list", "portal.close"], async () => ({
+      portals: [portal],
+    }));
+    const page = await mountPage(source.context);
+
+    await vi.waitFor(() => expect(page.querySelector("iframe")).not.toBeNull());
+    expect(page.textContent).not.toContain("Portal not reachable from this browser");
   });
 
   it("shows the empty prompts and an unsupported note without calling the method", async () => {

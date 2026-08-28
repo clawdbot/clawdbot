@@ -9,6 +9,7 @@ import type { ChatCommandDefinition } from "../../auto-reply/commands-registry.t
 const mockSkillCommands = [
   {
     skillName: "code-review",
+    displayName: "Code Review",
     name: "code_review",
     description: "Run code review",
     modelVisible: true,
@@ -368,6 +369,7 @@ describe("commands.list handler", () => {
     const commands = listCommands();
     const skill = commands.find((c) => c.name === "code_review");
     expect(skill?.source).toBe("skill");
+    expect(skill?.skillDisplayName).toBe("Code Review");
     expect(skill?.skillModelVisible).toBe(true);
     expect(skill?.category).toBe("tools");
   });

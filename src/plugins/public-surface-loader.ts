@@ -10,6 +10,7 @@ import { resolveBundledPluginsDir } from "./bundled-dir.js";
 import { shouldRejectHardlinkedPluginFiles } from "./hardlink-policy.js";
 import { registerPluginMetadataProcessMemoLifecycleClear } from "./plugin-metadata-lifecycle.js";
 import {
+  clearPluginModuleLoaderLifecycleCache,
   createPluginModuleLoaderCache,
   getCachedPluginModuleLoader,
   type PluginModuleLoaderCache,
@@ -33,9 +34,13 @@ type PublicSurfaceLocation = {
 };
 const publicSurfaceLocationCache = new Map<string, PublicSurfaceLocation>();
 const moduleLoaders: PluginModuleLoaderCache = createPluginModuleLoaderCache();
+const publicSurfaceModuleRoots = new Map<string, string>();
 
+// Replaced plugin artifacts retain executable exports in both loader closures and native require.
 registerPluginMetadataProcessMemoLifecycleClear(() => {
   publicSurfaceLocationCache.clear();
+  publicSurfaceModuleCache.clear();
+  clearPluginModuleLoaderLifecycleCache({ moduleLoaders, moduleRoots: publicSurfaceModuleRoots });
 });
 
 function isSourceArtifactPath(modulePath: string): boolean {
@@ -162,6 +167,7 @@ function loadValidatedPublicSurfaceModule(params: {
   publicSurfaceModuleCache.set(validatedPath, sentinel);
   try {
     const loaded = loadPublicSurfaceModule(validatedPath) as object;
+    publicSurfaceModuleRoots.set(validatedPath, params.boundaryRoot);
     Object.assign(sentinel, loaded);
     return sentinel;
   } catch (error) {

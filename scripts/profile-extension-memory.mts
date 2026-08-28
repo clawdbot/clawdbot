@@ -2,17 +2,25 @@
 
 // Profiles peak RSS for built bundled plugin entrypoints and emits a JSON
 // report suitable for extension memory budget review.
-import { spawn, type ChildProcessByStdio } from "node:child_process";
+import {
+  spawn,
+  type ChildProcessByStdio,
+  type SpawnOptionsWithStdioTuple,
+} from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { Readable } from "node:stream";
 import { pathToFileURL } from "node:url";
 import pMap from "p-map";
-import { ensureExtensionMemoryBuild } from "./ensure-extension-memory-build.mts";
+import {
+  ensureExtensionMemoryBuild,
+  findBuiltExtensionMemoryEntries,
+} from "./ensure-extension-memory-build.mts";
 import { stripLeadingPackageManagerSeparator } from "./lib/arg-utils.mts";
 import { formatErrorMessage } from "./lib/error-format.mts";
+import { parsePositiveInt } from "./lib/numeric-options.mjs";
 
 const DEFAULT_CONCURRENCY = 6;
 const DEFAULT_TIMEOUT_MS = 90_000;
@@ -34,7 +42,6 @@ type RunCaseResult = {
   stdout: string;
   timedOut: boolean;
 };
-type ExtensionEntry = { dir: string; file: string };
 type CaseChild = ChildProcessByStdio<null, Readable, Readable>;
 
 const PARENT_SIGNAL_EXIT_CODES = new Map<ParentSignal, number>([
@@ -78,18 +85,6 @@ Examples:
 `);
 }
 
-function parsePositiveInt(raw: unknown, flagName: string): number {
-  const text = typeof raw === "string" || typeof raw === "number" ? String(raw).trim() : "";
-  if (!/^\d+$/u.test(text)) {
-    throw new Error(`${flagName} must be a positive integer`);
-  }
-  const parsed = Number(text);
-  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
-    throw new Error(`${flagName} must be a positive integer`);
-  }
-  return parsed;
-}
-
 /**
  * Parses extension memory profiler options after pnpm's optional separator.
  */
@@ -129,19 +124,19 @@ export function parseArgs(argv: string[]): {
         break;
       }
       case "--concurrency":
-        options.concurrency = parsePositiveInt(args[index + 1], arg);
+        options.concurrency = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
       case "--timeout-ms":
-        options.timeoutMs = parsePositiveInt(args[index + 1], arg);
+        options.timeoutMs = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
       case "--combined-timeout-ms":
-        options.combinedTimeoutMs = parsePositiveInt(args[index + 1], arg);
+        options.combinedTimeoutMs = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
       case "--top":
-        options.top = parsePositiveInt(args[index + 1], arg);
+        options.top = parsePositiveInt(args[index + 1] ?? "", arg);
         index += 1;
         break;
       case "--json": {
@@ -243,7 +238,11 @@ export async function runCase({
   body: string;
   timeoutMs: number;
   shutdownGraceMs?: number | undefined;
-  spawnImpl?: typeof spawn | undefined;
+  spawnImpl?: (
+    command: string,
+    args: string[],
+    options: SpawnOptionsWithStdioTuple<"ignore", "pipe", "pipe">,
+  ) => CaseChild;
 }): Promise<RunCaseResult> {
   return await new Promise<RunCaseResult>((resolve) => {
     const child = spawnImpl(
@@ -444,23 +443,6 @@ function buildImportBody(entryFiles: string[], label: string): string {
   return `${imports}\nconsole.log(${JSON.stringify(label)});\nprocess.exit(0);\n`;
 }
 
-function findExtensionEntries(repoRoot: string): ExtensionEntry[] {
-  const extensionsDir = path.join(repoRoot, "dist", "extensions");
-  if (!existsSync(extensionsDir)) {
-    throw new Error("dist/extensions not found. Run pnpm build first.");
-  }
-
-  const entries = readdirSync(extensionsDir)
-    .map((dir) => ({ dir, file: path.join(extensionsDir, dir, "index.js") }))
-    .filter((entry) => existsSync(entry.file))
-    .toSorted((a, b) => a.dir.localeCompare(b.dir));
-
-  if (entries.length === 0) {
-    throw new Error("No built bundled plugin entrypoints found in the dist plugin tree");
-  }
-  return entries;
-}
-
 async function main(): Promise<void> {
   const options = parseArgs(process.argv.slice(2));
   const repoRoot = process.cwd();
@@ -468,7 +450,12 @@ async function main(): Promise<void> {
     rootDir: repoRoot,
     requiredExtensionIds: options.extensions,
   });
-  const allEntries = findExtensionEntries(repoRoot);
+  const allEntries = findBuiltExtensionMemoryEntries(repoRoot);
+  if (allEntries.length === 0) {
+    throw new Error(
+      "No built plugin entrypoints found in root or package-local output. Run pnpm build or build the plugin package first.",
+    );
+  }
   const selectedEntries =
     options.extensions.length === 0
       ? allEntries

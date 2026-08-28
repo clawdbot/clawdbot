@@ -1,4 +1,4 @@
-import { isEmbeddedAgentRunInProgress } from "../../agents/embedded-agent-runner/runs.js";
+import { resolveEmbeddedAgentRunProgressState } from "../../agents/embedded-agent-runner/runs.js";
 import {
   hasProjectedAgentRunForSession,
   type ProjectedAgentRunIndex,
@@ -13,17 +13,34 @@ type TrackedActiveSessionRun = {
   sessionKey?: string;
   sessionId?: string;
   agentId?: string;
+  executionStarted: boolean;
+  terminalPersistence?: boolean;
+};
+
+type VisibleActiveSessionRunState = {
+  active: boolean;
+  /** Complete exact active set. Omitted when another active owner exposes only liveness. */
+  runIds?: string[];
+  status?: "queued";
 };
 
 export function collectTrackedActiveSessionRuns(
   context: Partial<Pick<GatewayRequestContext, "chatAbortControllers">>,
+  includeTerminalPersistence = false,
 ): TrackedActiveSessionRun[] {
   const runs: TrackedActiveSessionRun[] = [];
   if (!(context.chatAbortControllers instanceof Map)) {
     return runs;
   }
   for (const [runId, active] of context.chatAbortControllers) {
-    if (active.projectSessionActive !== false && active.controlUiVisible !== false) {
+    const terminalPersistence =
+      includeTerminalPersistence &&
+      active.projectSessionActive === false &&
+      active.projectSessionTerminalPending === true;
+    if (
+      (active.projectSessionActive !== false || terminalPersistence) &&
+      active.controlUiVisible !== false
+    ) {
       const sessionKey = active.sessionKey?.trim();
       const sessionId = active.sessionId?.trim();
       if (!sessionKey && !sessionId) {
@@ -34,6 +51,9 @@ export function collectTrackedActiveSessionRuns(
         ...(sessionKey ? { sessionKey } : {}),
         ...(sessionId ? { sessionId } : {}),
         agentId: typeof active.agentId === "string" ? normalizeAgentId(active.agentId) : undefined,
+        // Entries created before this state existed are already executing.
+        executionStarted: active.executionStarted !== false,
+        ...(terminalPersistence ? { terminalPersistence: true } : {}),
       });
     }
   }
@@ -146,35 +166,40 @@ export function resolveVisibleActiveSessionRunState(params: {
   defaultAgentId?: string;
   trackedActiveRuns?: readonly TrackedActiveSessionRun[];
   projectedAgentRunIndex?: ProjectedAgentRunIndex;
-}): { active: boolean; runIds: string[] } {
+  includeTerminalPersistence?: boolean;
+}): VisibleActiveSessionRunState {
   const sessionId = params.sessionId?.trim();
   const resolvedAgentId =
     params.agentId ??
     parseAgentSessionKey(params.canonicalKey)?.agentId ??
     parseAgentSessionKey(params.requestedKey)?.agentId;
-  const runIds = (params.trackedActiveRuns ?? collectTrackedActiveSessionRuns(params.context))
-    .filter(
-      (active) =>
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.canonicalKey,
-          resolvedAgentId,
-          params.defaultAgentId,
-        ) ||
-        isTrackedActiveSessionRunForKey(
-          active,
-          params.requestedKey,
-          resolvedAgentId,
-          params.defaultAgentId,
-        ) ||
-        (sessionId !== undefined &&
-          isTrackedActiveSessionRunForSessionId(
-            active,
-            sessionId,
-            resolvedAgentId,
-            params.defaultAgentId,
-          )),
-    )
+  const matchesRequestedSession = (active: TrackedActiveSessionRun) =>
+    isTrackedActiveSessionRunForKey(
+      active,
+      params.canonicalKey,
+      resolvedAgentId,
+      params.defaultAgentId,
+    ) ||
+    isTrackedActiveSessionRunForKey(
+      active,
+      params.requestedKey,
+      resolvedAgentId,
+      params.defaultAgentId,
+    ) ||
+    (sessionId !== undefined &&
+      isTrackedActiveSessionRunForSessionId(
+        active,
+        sessionId,
+        resolvedAgentId,
+        params.defaultAgentId,
+      ));
+  const matchingTrackedRuns = (
+    params.trackedActiveRuns ??
+    collectTrackedActiveSessionRuns(params.context, params.includeTerminalPersistence)
+  ).filter(matchesRequestedSession);
+  const hasTerminalPersistence = matchingTrackedRuns.some((active) => active.terminalPersistence);
+  const runIds = matchingTrackedRuns
+    .filter((active) => !active.terminalPersistence)
     .map((active) => active.runId)
     .toSorted();
   const hasProjectedRun = hasProjectedAgentRunForSession({
@@ -184,11 +209,22 @@ export function resolveVisibleActiveSessionRunState(params: {
     ...(params.defaultAgentId ? { defaultAgentId: params.defaultAgentId } : {}),
     ...(params.projectedAgentRunIndex ? { index: params.projectedAgentRunIndex } : {}),
   });
-  const embeddedRunInProgress = sessionId !== undefined && isEmbeddedAgentRunInProgress(sessionId);
+  const embeddedRunState =
+    sessionId === undefined ? undefined : resolveEmbeddedAgentRunProgressState(sessionId);
   // Connection, worker-lifecycle, and embedded registries are independent owners.
   // Settlement in one must not hide live work owned by another.
+  const running =
+    matchingTrackedRuns.some((active) => active.executionStarted) ||
+    hasProjectedRun ||
+    embeddedRunState === "running";
+  const active = running || matchingTrackedRuns.length > 0 || embeddedRunState === "queued";
+  // Terminal persistence is history visibility, not operational run identity.
+  // Omit the exact set until the persisted terminal projection releases it.
+  const identitiesComplete =
+    !hasProjectedRun && embeddedRunState === undefined && !hasTerminalPersistence;
   return {
-    active: runIds.length > 0 || hasProjectedRun || embeddedRunInProgress,
-    runIds,
+    active,
+    ...(identitiesComplete ? { runIds } : {}),
+    ...(active && !running ? { status: "queued" as const } : {}),
   };
 }

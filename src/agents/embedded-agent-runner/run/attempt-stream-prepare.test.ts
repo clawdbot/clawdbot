@@ -73,6 +73,7 @@ function prepareCatalogExecutor(
     hookRunner: undefined as never,
     hookAgentId: "main",
     diagnosticTrace: {} as never,
+    diagnosticOwner: {} as never,
     clientToolCallSlots: [],
     toolSearchTargetTranscriptProjections: projections,
     isReplaySafeTool: () => false,
@@ -102,10 +103,36 @@ describe("prepareEmbeddedAttemptStream", () => {
     vi.clearAllMocks();
     mocks.subscribe.mockReturnValue({
       toolMetas: [],
-      runToolLifecycle: vi.fn(async ({ execute }) => await execute()),
+      runToolLifecycle: vi.fn(async ({ execute }) => await execute(() => undefined)),
       isCompacting: vi.fn(() => false),
     });
     mocks.runBeforeFinalizeHook.mockResolvedValue({ action: "continue" });
+  });
+
+  it("retains exact heartbeat preemption on the embedded queue handle", () => {
+    const operation = createReplyOperation({
+      sessionKey: "agent:main:main",
+      sessionId: "session-output-schema",
+      turnKind: "heartbeat",
+      resetTriggered: false,
+    });
+    try {
+      const prepared = prepareCatalogExecutor([], { replyOperation: operation });
+
+      expect(prepared.queueHandle.preemptByVisibleTurn?.()).toBe(true);
+      expect(operation.result).toEqual({
+        kind: "aborted",
+        code: "aborted_for_supersession",
+      });
+      expect(mocks.setActiveRun).toHaveBeenCalledWith(
+        "session-output-schema",
+        expect.objectContaining({ preemptByVisibleTurn: expect.any(Function) }),
+        "agent:main:main",
+        undefined,
+      );
+    } finally {
+      operation.complete();
+    }
   });
 
   it("uses the persisted assistant entry id and closes steering during revision settlement", async () => {
@@ -133,6 +160,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
       clientToolCallSlots: [],
       toolSearchTargetTranscriptProjections: [],
       isReplaySafeTool: () => false,
@@ -211,6 +239,7 @@ describe("prepareEmbeddedAttemptStream", () => {
       hookRunner: { hasHooks: (name: string) => name === "before_agent_finalize" } as never,
       hookAgentId: "main",
       diagnosticTrace: {} as never,
+      diagnosticOwner: {} as never,
       clientToolCallSlots: [],
       toolSearchTargetTranscriptProjections: [],
       isReplaySafeTool: () => false,

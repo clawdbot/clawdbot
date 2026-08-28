@@ -1,7 +1,7 @@
 // Channel setup status helpers format channel setup progress and docs links.
 import { formatDocsLink } from "../../packages/terminal-core/src/links.js";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
-import { resolveAgentWorkspaceDir, resolveDefaultAgentId } from "../agents/agent-scope.js";
+import { resolveAgentWorkspaceDir, resolveAmbientOwnerAgentId } from "../agents/agent-scope.js";
 import { listChatChannels } from "../channels/chat-meta.js";
 import type { ChannelPluginCatalogEntry } from "../channels/plugins/catalog.js";
 import { listChannelSetupPlugins } from "../channels/plugins/setup-registry.js";
@@ -14,8 +14,10 @@ import type {
 import type { ChannelMeta } from "../channels/plugins/types.core.js";
 import { formatChannelPrimerLine, formatChannelSelectionLine } from "../channels/registry.js";
 import { formatCliCommand } from "../cli/command-format.js";
-import { resolveChannelSetupEntries } from "../commands/channel-setup/discovery.js";
-import { shouldShowChannelInSetup } from "../commands/channel-setup/discovery.js";
+import {
+  resolveChannelSetupEntries,
+  shouldShowChannelInSetup,
+} from "../commands/channel-setup/discovery.js";
 import { resolveChannelSetupWizardAdapterForPlugin } from "../commands/channel-setup/registry.js";
 import type { ChannelChoice } from "../commands/onboard-types.js";
 import { isChannelConfigured } from "../config/channel-configured.js";
@@ -54,6 +56,14 @@ type ChannelSetupSelectionEntry = {
     exposure?: { setup?: boolean };
   };
 };
+
+export function resolveChannelSetupWorkspaceDir(cfg: OpenClawConfig): string {
+  const agentId = resolveAmbientOwnerAgentId(cfg, undefined, {
+    surface: "channel setup",
+    hint: "Set agents.defaults.systemAgent.agentId before configuring channels.",
+  });
+  return resolveAgentWorkspaceDir(cfg, agentId);
+}
 
 const CHANNEL_PRIMER_BLURB_KEYS: Record<string, string> = {
   clickclack: "wizard.channelsPrimer.blurbs.clickclack",
@@ -143,19 +153,23 @@ function formatSetupDisplayList(values: readonly string[] | undefined): string[]
 }
 
 function formatSetupDisplayMeta(meta: ChannelMeta): ChannelMeta {
+  const { selectionDocsPrefix, ...displayMeta } = meta;
   const safeId = formatSetupDisplayText(meta.id, "<invalid channel>");
   const safeLabel = formatSetupDisplayText(meta.label, safeId);
-  const safeSelectionDocsPrefix = formatSetupOptionalDisplayText(meta.selectionDocsPrefix);
+  const safeSelectionDocsPrefix =
+    selectionDocsPrefix === "" ? "" : formatSetupOptionalDisplayText(selectionDocsPrefix?.trim());
   const safeSelectionExtras = formatSetupDisplayList(meta.selectionExtras);
   return {
-    ...meta,
+    ...displayMeta,
     id: safeId,
     label: safeLabel,
     selectionLabel: formatSetupDisplayText(meta.selectionLabel, safeLabel),
     docsPath: formatSetupDisplayText(meta.docsPath, "/"),
     ...(meta.docsLabel ? { docsLabel: formatSetupDisplayText(meta.docsLabel, safeId) } : {}),
     blurb: formatSetupFreeText(meta.blurb),
-    ...(safeSelectionDocsPrefix ? { selectionDocsPrefix: safeSelectionDocsPrefix } : {}),
+    ...(safeSelectionDocsPrefix !== undefined
+      ? { selectionDocsPrefix: safeSelectionDocsPrefix }
+      : {}),
     ...(safeSelectionExtras ? { selectionExtras: safeSelectionExtras } : {}),
   };
 }
@@ -170,11 +184,12 @@ function formatChannelPrimerBlurb(channel: { id: string; blurb: string }): strin
 }
 
 function formatChannelSelectionMeta(meta: ChannelMeta): ChannelMeta {
-  return formatSetupDisplayMeta({
+  const formatted = formatSetupDisplayMeta({
     ...meta,
     blurb: formatChannelPrimerBlurb(meta),
-    selectionDocsPrefix: meta.selectionDocsPrefix ?? t("common.docs"),
   });
+  formatted.selectionDocsPrefix ??= t("common.docs");
+  return formatted;
 }
 
 function localizeChannelStatusLabel(label: string): string {
@@ -343,7 +358,7 @@ export async function collectChannelStatus(params: {
   resolveAdapter?: (channel: ChannelChoice) => ChannelSetupWizardAdapter | undefined;
 }): Promise<ChannelStatusSummary> {
   const installedPlugins = params.installedPlugins ?? listChannelSetupPlugins();
-  const workspaceDir = resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg));
+  const workspaceDir = resolveChannelSetupWorkspaceDir(params.cfg);
   const { installedCatalogEntries, installableCatalogEntries } = resolveChannelSetupEntries({
     cfg: params.cfg,
     installedPlugins,
@@ -534,7 +549,7 @@ export function resolveChannelSelectionNoteLines(params: {
   const { entries } = resolveChannelSetupEntries({
     cfg: params.cfg,
     installedPlugins: params.installedPlugins,
-    workspaceDir: resolveAgentWorkspaceDir(params.cfg, resolveDefaultAgentId(params.cfg)),
+    workspaceDir: resolveChannelSetupWorkspaceDir(params.cfg),
   });
   const selectionNotes = new Map<string, string>();
   for (const entry of entries) {

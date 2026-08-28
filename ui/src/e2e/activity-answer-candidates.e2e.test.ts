@@ -47,7 +47,7 @@ suite.define(() => {
       async ({ page }) => {
         const gateway = await installMockGateway(page, { sessionKey: "main" });
 
-        await page.goto(`${suite.server.baseUrl}activity`);
+        await page.goto(`${suite.server.baseUrl}activity?view=live`);
         await page.getByText("No activity yet.", { exact: true }).waitFor();
         await screenshot(page, "01-before-empty-activity.png");
 
@@ -84,7 +84,7 @@ suite.define(() => {
         await expect
           .poll(() => page.getByText("Authoritative bounded answer.", { exact: true }).count())
           .toBe(0);
-        await page.goto(`${suite.server.baseUrl}activity`);
+        await page.goto(`${suite.server.baseUrl}activity?view=live`);
         await page.getByText("No activity yet.", { exact: true }).waitFor();
       },
     );

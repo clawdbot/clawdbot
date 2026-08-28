@@ -30,7 +30,6 @@ import {
   getFollowupQueueDepth,
   type FollowupRun,
 } from "./queue.js";
-import { testing as queueCleanupTesting } from "./queue/cleanup.test-support.js";
 import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
 import { testing as replyRunRegistryTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -346,10 +345,6 @@ describe("abort detection", () => {
       listSubagentRunsForController: subagentRegistryDeps.listSubagentRunsForRequester,
       killControlledSubagentRun: killControlledSubagentRunForTest as never,
     });
-    queueCleanupTesting.setDepsForTests({
-      resolveEmbeddedSessionLane: (key) => `session:${key.trim() || "main"}`,
-      clearCommandLane: commandQueueMocks.clearCommandLane,
-    });
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
   });
 
@@ -360,7 +355,6 @@ describe("abort detection", () => {
     trackedAbortMemoryKeys.clear();
     abortTesting.resetDepsForTests();
     acpResetTargetTesting.setDepsForTest();
-    queueCleanupTesting.resetDepsForTests();
     replyRunRegistryTesting.resetReplyRunRegistry();
     commandQueueMocks.clearCommandLane.mockClear().mockReturnValue(1);
     acpManagerMocks.resolveSession.mockReset().mockReturnValue({ kind: "none" });
@@ -450,6 +444,27 @@ describe("abort detection", () => {
     expect(isAbortRequestText(" توقف ")).toBe(true);
     expect(isAbortRequestText("/stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
     expect(isAbortRequestText("/Stop@openclaw_bot", { botUsername: "openclaw_bot" })).toBe(true);
+    expect(
+      isAbortRequestText("/stop@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(true);
+    expect(
+      isAbortRequestText("/stop@unresolved_bot!", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(true);
+    expect(
+      isAbortRequestText("/queue@unresolved_bot", {
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(false);
+    expect(
+      isAbortRequestText("/stop@some_other_bot", {
+        botUsername: "openclaw_bot",
+        targetedCommandMode: "pre-identity",
+      }),
+    ).toBe(false);
 
     expect(isAbortRequestText("/status")).toBe(false);
     expect(isAbortRequestText("wait")).toBe(false);

@@ -124,11 +124,6 @@ function setCachedDirEntries(dirPath: string, entry: DirEntryCacheEntry): void {
   DIR_ENTRY_CACHE.set(dirPath, entry);
 }
 
-export function clearSkillScanCacheForTest(): void {
-  FILE_SCAN_CACHE.clear();
-  DIR_ENTRY_CACHE.clear();
-}
-
 // ---------------------------------------------------------------------------
 // Rule definitions
 // ---------------------------------------------------------------------------

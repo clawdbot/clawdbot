@@ -24,7 +24,9 @@ function loaderOptions(): RouteLoaderOptions {
 
 describe("model setup route", () => {
   it("keys loader data by the first-run query", () => {
-    const context = {} as ApplicationContext;
+    const context = {
+      agentSelection: { state: { selectedId: "main" } },
+    } as ApplicationContext;
 
     expect(page.loaderDeps?.(context, location)).toBe("");
     expect(page.loaderDeps?.(context, { ...location, search: "?firstRun=1" })).toBe("?firstRun=1");
@@ -65,7 +67,10 @@ describe("model setup route", () => {
         hello: firstHello,
       } as ApplicationGatewaySnapshot,
     };
-    const context = { gateway } as unknown as ApplicationContext;
+    const context = {
+      gateway,
+      agentSelection: { state: { selectedId: "research" } },
+    } as unknown as ApplicationContext;
     const pending = page.loader?.(context, loaderOptions());
 
     expect(request).toHaveBeenCalledOnce();
@@ -76,9 +81,31 @@ describe("model setup route", () => {
 
     await expect(pending).resolves.toEqual({
       state: { phase: "ready", result: current },
-      connection: { client, hello: currentHello },
+      connection: { client, hello: currentHello, agentId: "research" },
       firstRun: false,
     });
     expect(request).toHaveBeenCalledTimes(2);
+  });
+
+  it("redacts secrets in initial detection failures", async () => {
+    const request = vi.fn().mockRejectedValue(new Error("OPENAI_API_KEY=sk-1234567890abcdef"));
+    const client = { request } as unknown as GatewayBrowserClient;
+    const hello = {
+      type: "hello-ok" as const,
+      protocol: 1,
+      auth: { role: "operator", scopes: ["operator.admin"] },
+      features: { methods: ["openclaw.setup.detect"] },
+    };
+    const context = {
+      gateway: { snapshot: { client, phase: "connected", hello } },
+      agentSelection: { state: { selectedId: "main" } },
+    } as unknown as ApplicationContext;
+
+    await expect(page.loader?.(context, loaderOptions())).resolves.toMatchObject({
+      state: {
+        phase: "detect-error",
+        message: "OPENAI_API_KEY=sk-123...cdef",
+      },
+    });
   });
 });

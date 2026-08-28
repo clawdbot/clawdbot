@@ -1,6 +1,7 @@
 // Builds the stable JSON payload for `openclaw status --json`.
 // Optional deep fields are included only when their upstream probes actually ran.
 
+import type { BestEffortConfigSnapshot } from "../config/io.js";
 import { resolveStatusUpdateChannelInfo } from "./status-all/format.js";
 import {
   buildStatusGatewayJsonPayloadFromSurface,
@@ -15,6 +16,7 @@ export function buildStatusJsonPayload(params: {
   memory: unknown;
   memoryPlugin: unknown;
   agents: unknown;
+  configDiagnostics: BestEffortConfigSnapshot["configDiagnostics"];
   secretDiagnostics: string[];
   securityAudit?: unknown;
   health?: unknown;
@@ -38,6 +40,7 @@ export function buildStatusJsonPayload(params: {
     gatewayService: params.surface.gatewayService,
     nodeService: params.surface.nodeService,
     agents: params.agents,
+    ...(params.configDiagnostics ? { configDiagnostics: params.configDiagnostics } : {}),
     secretDiagnostics: params.secretDiagnostics,
     ...(params.securityAudit ? { securityAudit: params.securityAudit } : {}),
     ...(params.pluginCompatibility

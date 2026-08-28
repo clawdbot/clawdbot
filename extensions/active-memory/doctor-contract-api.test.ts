@@ -65,7 +65,47 @@ describe("active-memory doctor state migration", () => {
 
   afterEach(async () => {
     vi.useRealTimers();
+    resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
+  });
+
+  it("preserves oversized legacy opt-outs without writing or archiving on repeated repairs", async () => {
+    const sourcePath = path.join(stateDir, "plugins", "active-memory", "session-toggles.json");
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    const source = JSON.stringify({
+      sessions: Object.fromEntries(
+        Array.from({ length: 10_001 }, (_, index) => [
+          `session-${index}`,
+          { disabled: true, updatedAt: index + 1 },
+        ]),
+      ),
+    });
+    await fs.writeFile(sourcePath, source);
+    const migration = expectDefined(stateMigrations[0], "active-memory state migration");
+    const params = {
+      config: {},
+      env,
+      stateDir,
+      oauthDir: path.join(stateDir, "oauth"),
+      context: createDoctorContext(env),
+    };
+
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(migration.migrateLegacyState(params)).resolves.toEqual({
+        changes: [],
+        warnings: [
+          "Skipped Active Memory session toggle migration because plugin state has room for 10000 of 10001 missing entries; left legacy source in place",
+        ],
+      });
+      await expect(
+        params.context
+          .openPluginStateKeyedStore({ namespace: "session-toggles", maxEntries: 10_000 })
+          .entries(),
+      ).resolves.toEqual([]);
+      await expect(fs.readFile(sourcePath, "utf8")).resolves.toBe(source);
+      await expect(fs.access(`${sourcePath}.migrated`)).rejects.toThrow();
+      await expect(migration.detectLegacyState(params)).resolves.not.toBeNull();
+    }
   });
 
   it("imports legacy session opt-outs into plugin state", async () => {

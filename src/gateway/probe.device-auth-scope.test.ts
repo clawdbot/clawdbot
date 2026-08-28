@@ -77,6 +77,7 @@ vi.mock("ws", () => ({ WebSocket: ProbeWebSocket }));
 const { probeGateway } = await import("./probe.js");
 
 type ConnectFrame = {
+  id?: string;
   params?: {
     auth?: { token?: string; deviceToken?: string; password?: string };
     device?: { id?: string };
@@ -122,8 +123,20 @@ async function captureProbeConnectFrame(params: {
     throw new Error("missing probe connect frame");
   }
   const connect = JSON.parse(rawConnect) as ConnectFrame;
-  socket.emitClose(1008, "test complete");
+  socket.emitMessage(
+    JSON.stringify({
+      type: "res",
+      id: connect.id,
+      ok: true,
+      payload: {
+        type: "hello-ok",
+        auth: { role: "operator", scopes: ["operator.read"] },
+        server: { connId: "probe-scope-test", version: "test" },
+      },
+    }),
+  );
   await probePromise;
+  expect(socket.readyState).toBe(ProbeWebSocket.CLOSED);
   return connect;
 }
 

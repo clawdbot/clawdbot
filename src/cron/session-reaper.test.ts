@@ -33,9 +33,9 @@ const taskStatusMocks = vi.hoisted(() => ({
 }));
 
 function sweepCronRunSessions(
-  params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId" | "defaultAgentId">,
+  params: Omit<Parameters<typeof sweepCronRunSessionsImpl>[0], "agentId">,
 ) {
-  return sweepCronRunSessionsImpl({ ...params, agentId: "main", defaultAgentId: "main" });
+  return sweepCronRunSessionsImpl({ ...params, agentId: "main" });
 }
 
 vi.mock("../tasks/task-status-access.js", () => ({
@@ -282,7 +282,6 @@ describe("sweepCronRunSessions", () => {
     expect(
       await sweepCronRunSessionsImpl({
         agentId: "main",
-        defaultAgentId: "main",
         sessionStorePath: exactStorePath,
         nowMs: now,
         log,
@@ -290,7 +289,6 @@ describe("sweepCronRunSessions", () => {
     ).toEqual({ swept: true, pruned: 0 });
     const result = await sweepCronRunSessionsImpl({
       agentId: "ops",
-      defaultAgentId: "main",
       sessionStorePath: exactStorePath,
       nowMs: now,
       log,
@@ -636,7 +634,6 @@ describe("sweepCronRunSessions", () => {
     expect(
       await sweepCronRunSessionsImpl({
         agentId: "main",
-        defaultAgentId: "main",
         sessionStorePath: storePath,
         nowMs: now,
         log,
@@ -646,7 +643,6 @@ describe("sweepCronRunSessions", () => {
     expect(
       await sweepCronRunSessionsImpl({
         agentId: "MAIN",
-        defaultAgentId: "main",
         sessionStorePath: `${tmpDir}${path.sep}.${path.sep}sessions.json`,
         nowMs: now + 1_000,
         log,

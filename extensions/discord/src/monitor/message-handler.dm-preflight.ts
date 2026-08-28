@@ -1,3 +1,4 @@
+import type { ChannelIngressContextBinding } from "openclaw/plugin-sdk/channel-ingress-runtime";
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 // Discord plugin module implements message handlerm preflight behavior.
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
@@ -28,7 +29,15 @@ export async function resolveDiscordDmPreflightAccess(params: {
   dmPolicy: DiscordDmPolicy;
   resolvedAccountId: string;
   allowNameMatching: boolean;
-}): Promise<{ commandAuthorized: boolean } | null> {
+  conversationId: string;
+}): Promise<{
+  commandAuthorized: boolean;
+  channelIngress: Awaited<ReturnType<typeof resolveDiscordDmCommandAccess>>;
+  resolveChannelIngress: (
+    contextBinding: ChannelIngressContextBinding,
+    conversation?: { parentId?: string; threadId?: string },
+  ) => ReturnType<typeof resolveDiscordDmCommandAccess>;
+} | null> {
   if (params.dmPolicy === "disabled") {
     logVerbose("discord: drop dm (dmPolicy: disabled)");
     return null;
@@ -46,31 +55,41 @@ export async function resolveDiscordDmPreflightAccess(params: {
       accountId: params.preflight.accountId,
       conversationId: directBindingConversationId,
     });
-  const dmAccess = await resolveDiscordDmCommandAccess({
-    accountId: params.resolvedAccountId,
-    dmPolicy: params.dmPolicy,
-    configuredAllowFrom: params.preflight.allowFrom ?? [],
-    sender: {
-      id: params.sender.id,
-      name: params.sender.name,
-      tag: params.sender.tag,
-    },
-    allowNameMatching: params.allowNameMatching,
-    cfg: params.preflight.cfg,
-    token: params.preflight.token,
-    rest: params.preflight.client.rest,
-  });
+  const resolveChannelIngress = async (
+    contextBinding?: ChannelIngressContextBinding,
+    conversation?: { parentId?: string; threadId?: string },
+  ) =>
+    await resolveDiscordDmCommandAccess({
+      accountId: params.resolvedAccountId,
+      dmPolicy: params.dmPolicy,
+      configuredAllowFrom: params.preflight.allowFrom ?? [],
+      sender: {
+        id: params.sender.id,
+        name: params.sender.name,
+        tag: params.sender.tag,
+        isPluralKit: params.sender.isPluralKit,
+      },
+      allowNameMatching: params.allowNameMatching,
+      cfg: params.preflight.cfg,
+      token: params.preflight.token,
+      rest: params.preflight.client.rest,
+      conversationId: params.conversationId,
+      conversationParentId: conversation?.parentId,
+      conversationThreadId: conversation?.threadId,
+      ...(contextBinding ? { contextBinding } : {}),
+    });
+  const dmAccess = await resolveChannelIngress();
   const commandAuthorized =
     (dmAccess.senderAccess.allowed && dmAccess.commandAccess.authorized) ||
     directBindingRecord != null;
   if (dmAccess.senderAccess.decision === "allow") {
-    return { commandAuthorized };
+    return { commandAuthorized, channelIngress: dmAccess, resolveChannelIngress };
   }
   if (directBindingRecord) {
     logVerbose(
       `discord: allow bound DM conversation ${directBindingConversationId} despite dmPolicy=${params.dmPolicy}`,
     );
-    return { commandAuthorized };
+    return { commandAuthorized, channelIngress: dmAccess, resolveChannelIngress };
   }
 
   await handleDiscordDmCommandDecision({

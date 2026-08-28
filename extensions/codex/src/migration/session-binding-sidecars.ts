@@ -6,18 +6,19 @@ import {
   resolveAgentDir,
   resolveSessionAgentIds,
 } from "openclaw/plugin-sdk/agent-scope-runtime";
+import {
+  canonicalPathFromExistingAncestor,
+  isPathInside,
+} from "openclaw/plugin-sdk/file-access-runtime";
 import { withFileLock, type FileLockOptions } from "openclaw/plugin-sdk/file-lock";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import {
   archiveLegacyStateSource,
   legacyStateFileExists,
   type PluginDoctorStateMigration,
 } from "openclaw/plugin-sdk/runtime-doctor-migrations";
-import {
-  canonicalPathFromExistingAncestor,
-  isPathInside,
-  pathExists,
-} from "openclaw/plugin-sdk/security-runtime";
+import { pathExists } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   CODEX_APP_SERVER_BINDING_MAX_ENTRIES,
@@ -101,7 +102,12 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
   const { resolveStorePath } = await import("openclaw/plugin-sdk/session-store-runtime");
   const surfaces = new Map<string, SessionSurface>();
   const stateRoot = await canonicalPathFromExistingAncestor(params.stateDir);
-  const add = async (root: string, storePath: string, agentId: string, scan: boolean) => {
+  const add = async (
+    root: string,
+    storePath: string,
+    agentId: string | undefined,
+    scan: boolean,
+  ) => {
     const canonicalRoot = await canonicalPathFromExistingAncestor(root);
     const surface = surfaces.get(canonicalRoot) ?? {
       root: canonicalRoot,
@@ -113,7 +119,9 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
     // A store's configured path defines how relative sessionFile locators are
     // resolved. Keep it intact; canonicalize only when deduplicating aliases.
     surface.storePaths.add(path.resolve(storePath));
-    surface.agentIds.add(agentId);
+    if (agentId) {
+      surface.agentIds.add(agentId);
+    }
     surfaces.set(canonicalRoot, surface);
   };
 
@@ -147,8 +155,11 @@ async function collectSessionSurfaces(params: MigrationEnvironment): Promise<Ses
   }
 
   const legacyRoot = path.join(params.stateDir, "sessions");
-  const defaultAgentId = resolveSessionAgentIds({ config: params.config }).defaultAgentId;
-  await add(legacyRoot, path.join(legacyRoot, "sessions.json"), defaultAgentId, true);
+  const legacyOwner = tryResolveLegacyBindingOwnerAgentId({
+    sessionKey: "",
+    config: params.config,
+  });
+  await add(legacyRoot, path.join(legacyRoot, "sessions.json"), legacyOwner, true);
   return [...surfaces.values()].toSorted((a, b) => a.root.localeCompare(b.root));
 }
 
@@ -336,11 +347,15 @@ async function collectBindingOwners(
     const sessionsDir = path.dirname(storePath);
     for (const { sessionKey, entry } of index.entries) {
       const sessionId = entry.sessionId;
-      const agentId = resolveLegacyBindingOwnerAgentId({
+      const agentId = tryResolveLegacyBindingOwnerAgentId({
         sessionKey,
         config: params.config,
         storeAgentIds: storeAgentIds.get(storePath),
       });
+      if (!agentId) {
+        failures.push(`session index ${storePath} has an ambiguous owner for ${sessionKey}`);
+        continue;
+      }
       let legacyTranscriptPath: string;
       let canonicalLegacyTranscriptPath: string;
       try {
@@ -409,11 +424,11 @@ async function resolveLegacySessionFileLocator(
   return candidate;
 }
 
-function resolveLegacyBindingOwnerAgentId(params: {
+function tryResolveLegacyBindingOwnerAgentId(params: {
   sessionKey: string;
   config: MigrationEnvironment["config"];
   storeAgentIds?: Set<string>;
-}): string {
+}): string | undefined {
   if (params.sessionKey.trim().toLowerCase().startsWith("agent:")) {
     return resolveSessionAgentIds({
       sessionKey: params.sessionKey,
@@ -421,11 +436,27 @@ function resolveLegacyBindingOwnerAgentId(params: {
     }).sessionAgentId;
   }
   const storeAgentId = params.storeAgentIds?.size === 1 ? [...params.storeAgentIds][0] : undefined;
-  return resolveSessionAgentIds({
-    sessionKey: params.sessionKey,
-    config: params.config,
-    ...(storeAgentId ? { agentId: storeAgentId } : {}),
-  }).sessionAgentId;
+  const configuredAgentId = params.config.agents?.defaults?.systemAgent?.agentId?.trim();
+  const systemAgentId =
+    !storeAgentId && configuredAgentId ? normalizeAgentId(configuredAgentId) : undefined;
+  const fallbackAgentIds =
+    systemAgentId && listAgentIds(params.config).includes(systemAgentId)
+      ? [undefined, systemAgentId]
+      : [undefined];
+  for (const fallbackAgentId of fallbackAgentIds) {
+    try {
+      return resolveSessionAgentIds({
+        sessionKey: params.sessionKey,
+        config: params.config,
+        ...(storeAgentId ? { agentId: storeAgentId } : fallbackAgentId ? { fallbackAgentId } : {}),
+      }).sessionAgentId;
+    } catch (error) {
+      if ((error as { code?: unknown }).code !== "AGENT_SELECTION_REQUIRED") {
+        throw error;
+      }
+    }
+  }
+  return undefined;
 }
 
 function copyBindingForSession(stored: MigratedBindingRow, sessionId: string): MigratedBindingRow {

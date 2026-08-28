@@ -24,7 +24,9 @@ const externalAuthorityAdmission: ChatSendExternalAuthorityAdmission = {
       turnKind: params.turnKind,
       isDirectExternalUser: true,
     });
-    return authority ? createCronCreatorAuthorityCapability(authority.runId) : undefined;
+    return authority
+      ? createCronCreatorAuthorityCapability(authority.runId, authority.callerOrigin)
+      : undefined;
   },
   run: (capability, run, signal) => runWithCronCreatorAuthorityCapability(capability, run, signal),
 };
