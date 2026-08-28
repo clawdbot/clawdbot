@@ -52,25 +52,30 @@ export function createInfoCard(title: string, body: string, footer?: string): Fl
             } as FlexText,
           ],
         } as FlexBox,
-        // Body text in subtle container
-        {
-          type: "box",
-          layout: "vertical",
-          contents: [
-            {
-              type: "text",
-              text: body,
-              size: "md",
-              color: "#444444",
-              wrap: true,
-              lineSpacing: "6px",
-            } as FlexText,
-          ],
-          margin: "xl",
-          paddingAll: "lg",
-          backgroundColor: "#F8F9FA",
-          cornerRadius: "lg",
-        } as FlexBox,
+        // Body text in subtle container, only when there is a body to show:
+        // LINE rejects the whole push when a Flex text is blank.
+        ...(body
+          ? [
+              {
+                type: "box",
+                layout: "vertical",
+                contents: [
+                  {
+                    type: "text",
+                    text: body,
+                    size: "md",
+                    color: "#444444",
+                    wrap: true,
+                    lineSpacing: "6px",
+                  } as FlexText,
+                ],
+                margin: "xl",
+                paddingAll: "lg",
+                backgroundColor: "#F8F9FA",
+                cornerRadius: "lg",
+              } as FlexBox,
+            ]
+          : []),
       ],
       paddingAll: "xl",
       backgroundColor: "#FFFFFF",
@@ -266,14 +271,18 @@ export function createActionCard(
           size: "xl",
           wrap: true,
         } as FlexText,
-        {
-          type: "text",
-          text: body,
-          size: "md",
-          wrap: true,
-          margin: "md",
-          color: "#666666",
-        } as FlexText,
+        ...(body
+          ? [
+              {
+                type: "text",
+                text: body,
+                size: "md",
+                wrap: true,
+                margin: "md",
+                color: "#666666",
+              } as FlexText,
+            ]
+          : []),
       ],
       paddingAll: "lg",
     },
