@@ -390,7 +390,7 @@ describe("deliverMatrixReplies", () => {
   it("delivers explicit reasoning payloads as Matrix notices", async () => {
     await deliverMatrixReplies({
       cfg,
-      replies: [{ text: "Reasoning:\nCheck the tool result", isReasoning: true }],
+      replies: [{ text: "Reasoning:\nCheck the tool result and @room", isReasoning: true }],
       roomId: "room:reasoning",
       client: {} as MatrixClient,
       runtime: runtimeEnv,
@@ -400,23 +400,9 @@ describe("deliverMatrixReplies", () => {
 
     expect(sendMessageMatrixMock).toHaveBeenCalledTimes(1);
     expect(sendCall(0)[0]).toBe("room:reasoning");
-    expect(sendCall(0)[1]).toBe("Thinking\n\n_Check the tool result_");
+    expect(sendCall(0)[1]).toBe("Thinking\n\n_Check the tool result and @room_");
     expect(sendOptions(0).msgtype).toBe("m.notice");
     expect(sendOptions(0).disableMentions).toBe(true);
-  });
-
-  it("disables Matrix mentions for explicit reasoning notices", async () => {
-    await deliverMatrixReplies({
-      cfg,
-      replies: [{ text: "Reasoning:\nCheck @room and @alice:example.org", isReasoning: true }],
-      roomId: "room:reasoning",
-      client: {} as MatrixClient,
-      runtime: runtimeEnv,
-      textLimit: 4000,
-      replyToMode: "off",
-    });
-
-    expect(sendOptions(0)).toMatchObject({ msgtype: "m.notice", disableMentions: true });
   });
 
   it("delivers literal reasoning tags inside Markdown code", async () => {

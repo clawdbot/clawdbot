@@ -172,10 +172,6 @@ function withMatrixExtraContentFields<T extends Record<string, unknown>>(
   return { ...content, ...extraContent };
 }
 
-function suppressMatrixMentions<T extends Record<string, unknown>>(content: T): T {
-  return { ...content, "m.mentions": {} };
-}
-
 async function resolvePreviousEditMentions(params: {
   client: MatrixClient;
   content: Record<string, unknown> | undefined;
@@ -250,7 +246,7 @@ export async function sendMessageMatrix(
           const enrichedContent = withMatrixExtraContentFields(content, pendingExtraContent);
           events.push({
             content: opts.disableMentions
-              ? suppressMatrixMentions(enrichedContent)
+              ? { ...enrichedContent, "m.mentions": {} }
               : enrichedContent,
             receiptKind,
           });

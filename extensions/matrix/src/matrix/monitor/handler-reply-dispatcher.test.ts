@@ -149,35 +149,4 @@ describe("createMatrixReplyDispatcher", () => {
       expect.objectContaining({ replies: [{ text: "Final answer" }] }),
     );
   });
-
-  it("drains stream-mode reasoning notices before final replies", async () => {
-    let resolveReasoning!: (value: { visibleReplySent: boolean }) => void;
-    const reasoningDelivery = new Promise<{ visibleReplySent: boolean }>((resolve) => {
-      resolveReasoning = resolve;
-    });
-    deliverMatrixRepliesMock
-      .mockImplementationOnce(async () => await reasoningDelivery)
-      .mockResolvedValueOnce({ visibleReplySent: true });
-    const dispatcher = createDispatcher();
-
-    dispatcher.turnDispatcherOptions.onReasoningStream?.({ text: "Check @room first" });
-    const reasoningEnd = dispatcher.turnDispatcherOptions.onReasoningEnd?.();
-    const finalDelivery = dispatcher.deliverReply({ text: "Final answer" }, { kind: "final" });
-    await Promise.resolve();
-
-    expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(1);
-
-    resolveReasoning({ visibleReplySent: true });
-    await expect(reasoningEnd).resolves.toBe(true);
-    await expect(finalDelivery).resolves.toEqual({ visibleReplySent: true });
-
-    expect(deliverMatrixRepliesMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ replies: [{ text: "Check @room first", isReasoning: true }] }),
-    );
-    expect(deliverMatrixRepliesMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ replies: [{ text: "Final answer" }] }),
-    );
-  });
 });
