@@ -16,7 +16,7 @@ import {
 
 const repository = "openclaw/openclaw";
 const workflowSha = "a".repeat(40);
-const baseSha = workflowSha;
+const baseSha = "c".repeat(40);
 const headSha = "b".repeat(40);
 const bootstrapSha256 = createHash("sha256")
   .update(readFileSync("scripts/crabbox-untrusted-bootstrap.sh"))
@@ -154,6 +154,17 @@ function pullRequest(overrides: Record<string, unknown> = {}) {
   };
 }
 
+function baseAncestry(overrides: Record<string, unknown> = {}) {
+  return {
+    ahead_by: 4,
+    base_commit: { sha: baseSha },
+    behind_by: 0,
+    merge_base_commit: { sha: baseSha },
+    status: "ahead",
+    ...overrides,
+  };
+}
+
 describe("Crabbox gate request validation", () => {
   it("accepts only the exact protected-main inputs", () => {
     expect(context()).toMatchObject({
@@ -187,8 +198,8 @@ describe("Crabbox gate request validation", () => {
     },
     {
       inputEnv: env(),
-      inputEvent: event({ base_sha: "c".repeat(40) }),
-      label: "mismatched base",
+      inputEvent: event({ base_sha: "not-a-sha" }),
+      label: "malformed base",
     },
     {
       inputEnv: env({ GITHUB_TRIGGERING_ACTOR: "other" }),
@@ -220,6 +231,24 @@ describe("Crabbox immutable broker proof", () => {
     ["owner", { owner: "github:7" }, brokerEvents(), retainedLog()],
     ["truncation", { logTruncated: true }, brokerEvents(), retainedLog()],
     ["malformed command", { command: ["pnpm", "test"] }, brokerEvents(), retainedLog()],
+    [
+      "obsolete pre-dispatch workflow binding",
+      {
+        command: [
+          "--script",
+          ".local/crabbox-untrusted-bootstrap.sh",
+          headSha,
+          "/bin/bash",
+          "-lc",
+          buildCrabboxGateCommand(gatePlan(), bootstrapSha256).replace(
+            `'OPENCLAW_CRABBOX_GATE_HEAD=${headSha}'`,
+            `'OPENCLAW_CRABBOX_GATE_HEAD=${headSha}' 'OPENCLAW_CRABBOX_GATE_WORKFLOW=${workflowSha}'`,
+          ),
+        ],
+      },
+      brokerEvents(),
+      retainedLog(),
+    ],
     [
       "bootstrap upload",
       {},
@@ -339,7 +368,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
     expect(github.request).not.toHaveBeenCalled();
   });
 
-  it("accepts an open draft and revalidates before publishing the exact check", async () => {
+  it("accepts main advancing during proof and revalidates before publishing the exact check", async () => {
     const calls: Array<{ body?: unknown; method: string; path: string }> = [];
     const orderedCalls: string[] = [];
     const github = {
@@ -351,6 +380,9 @@ describe("Crabbox gate publisher mutation boundary", () => {
         }
         if (path === "/repos/openclaw/openclaw/git/ref/heads/main") {
           return { object: { sha: workflowSha }, ref: "refs/heads/main" };
+        }
+        if (path === `/repos/openclaw/openclaw/compare/${baseSha}...${workflowSha}`) {
+          return baseAncestry();
         }
         if (path === "/users/maintainer") {
           return { id: 42, login: "maintainer" };
@@ -409,6 +441,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
     expect(organization.request).toHaveBeenCalledTimes(2);
     expect(calls.filter((call) => call.path.includes("/pulls/"))).toHaveLength(2);
     expect(calls.filter((call) => call.path.endsWith("/git/ref/heads/main"))).toHaveLength(2);
+    expect(calls.filter((call) => call.path.includes("/compare/"))).toHaveLength(1);
     expect(orderedCalls[0]).toBe("organization:GET:/orgs/openclaw/memberships/maintainer");
     expect(orderedCalls.slice(-3)).toEqual([
       "organization:GET:/orgs/openclaw/memberships/maintainer",
@@ -429,6 +462,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
             planDigest: crabboxGatePlanDigest(gatePlan()),
             runId,
             targetCount: 1,
+            workflowSha,
           }),
         },
         status: "completed",
@@ -470,8 +504,8 @@ describe("Crabbox gate publisher mutation boundary", () => {
     expect(broker.request).not.toHaveBeenCalled();
   });
 
-  it.each(["protected main", "pull request base"] as const)(
-    "rejects %s moving after broker validation",
+  it.each(["protected main", "pull request base", "non-ancestor base"] as const)(
+    "rejects %s drift",
     async (drift) => {
       let mainReads = 0;
       let pullReads = 0;
@@ -481,7 +515,7 @@ describe("Crabbox gate publisher mutation boundary", () => {
             pullReads += 1;
             return pullRequest(
               drift === "pull request base" && pullReads === 2
-                ? { base: { ref: "main", repo: { full_name: repository }, sha: "c".repeat(40) } }
+                ? { base: { ref: "main", repo: { full_name: repository }, sha: "e".repeat(40) } }
                 : {},
             );
           }
@@ -493,6 +527,16 @@ describe("Crabbox gate publisher mutation boundary", () => {
               },
               ref: "refs/heads/main",
             };
+          }
+          if (path === `/repos/openclaw/openclaw/compare/${baseSha}...${workflowSha}`) {
+            return drift === "non-ancestor base"
+              ? baseAncestry({
+                  base_commit: { sha: "d".repeat(40) },
+                  behind_by: 2,
+                  merge_base_commit: { sha: "d".repeat(40) },
+                  status: "diverged",
+                })
+              : baseAncestry();
           }
           if (path === "/users/maintainer") {
             return { id: 42, login: "maintainer" };
@@ -535,12 +579,17 @@ describe("Crabbox gate publisher mutation boundary", () => {
           organization,
           resolvePlan: async () => gatePlan(),
         }),
-      ).rejects.toThrow(/trusted main moved|exact base, head, or head repository does not match/u);
+      ).rejects.toThrow(
+        /trusted main moved|exact base, head, or head repository does not match|base is not an ancestor/u,
+      );
       expect(github.request).not.toHaveBeenCalledWith(
         "POST",
         "/repos/openclaw/openclaw/check-runs",
         expect.anything(),
       );
+      if (drift === "non-ancestor base") {
+        expect(broker.request).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -552,6 +601,9 @@ describe("Crabbox gate publisher mutation boundary", () => {
         }
         if (path === "/repos/openclaw/openclaw/git/ref/heads/main") {
           return { object: { sha: workflowSha }, ref: "refs/heads/main" };
+        }
+        if (path === `/repos/openclaw/openclaw/compare/${baseSha}...${workflowSha}`) {
+          return baseAncestry();
         }
         if (path === "/users/maintainer") {
           return { id: 42, login: "maintainer" };

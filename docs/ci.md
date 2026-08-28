@@ -885,9 +885,9 @@ every executable changed path independently and must resolve each one to
 concrete matched test files; broad fallback, skipped paths, config targets,
 deleted executable paths, and partial plans are refused. Explicit docs and
 `AGENTS.md`/`CLAUDE.md` instruction surfaces may produce a zero-test plan.
-The exact base SHA, head SHA, and deterministic plan digest are bound into the
-broker command and published check summary. The AWS lease uses a 90-minute
-idle timeout and 240-minute TTL before dispatching the protected-main
+The exact PR base SHA, head SHA, bootstrap hash, and deterministic plan digest
+are bound into the broker command. The AWS lease uses a 90-minute idle timeout
+and 240-minute TTL before dispatching the protected-main
 `pr-crabbox-gate-publisher.yml` workflow. That workflow accepts an open draft
 because proof runs during prepare-push, then rereads the live same-repository
 PR and the exact active organization-admin membership object using the repo-native
@@ -895,7 +895,10 @@ GitHub App token with `Members(read)` (the repository-scoped workflow token is
 not treated as org authority), validates the authenticated immutable broker
 run, ordered complete events, canonical command and bootstrap upload hash, and
 publishes the distinct `openclaw/crabbox-gate` only for the exact proven
-base/head/plan binding.
+base/head/plan binding. The publisher also proves that the PR base is the merge
+base of its exact protected-main workflow SHA and adds that workflow SHA to the
+strict check summary. Main may therefore advance during the remote run without
+invalidating otherwise immutable proof.
 Retained broker logs are validated when non-empty but are optional because
 released Crabbox v0.46 can report zero retained log bytes after a successful
 run. The local `.local/gates.env` provider/run/lease/URL fields are recovery
@@ -904,7 +907,8 @@ metadata, not publication authority.
 The fallback never replaces or republishes `openclaw/ci-gate`. Native merge
 verification still rejects draft PRs and permits the server ruleset bypass only
 when the Crabbox check is
-completed successfully by GitHub Actions on the prepared SHA, the authenticated
+completed successfully by GitHub Actions on the prepared SHA, its bound workflow
+SHA equals a final live protected-main read, the authenticated
 actor is still an active organization admin, and the sole unsatisfied required
 check is the normal CI gate with a recognized hosted-runner infrastructure
 failure represented by GitHub-owned job metadata with no executed workflow
@@ -913,8 +917,15 @@ code controls their text. Missing or mismatched checks, cancellation,
 action-required or stale conclusions, an assigned runner, any failed or executed
 workflow step, unknown runner backends, pending contexts, and additional
 required-check failures remain blocking. Only workflow `startup_failure` or an
-unacquired zero-step hosted job with `failure`/`timed_out` qualifies. The pinned
-squash merge still uses the exact prepared head.
+unacquired zero-step hosted job with `failure`/`timed_out` qualifies. The native
+flow repeats the full bypass verification immediately before the admin squash
+request and pins the prepared head with `--match-head-commit`. GitHub exposes
+no expected-base-OID merge precondition, so the final main read minimizes but
+cannot atomically eliminate a base movement race. Landing proof must compare
+the squash parent with that last observed main SHA. The Crabbox merge path
+stores this comparison in `.local/merge-crabbox-parent-audit.json`, includes it
+in the completion comment, and reports any intervening authorized main advance
+after the already-completed merge without claiming atomic prevention.
 
 Agents do not pre-warm for anticipated work. Acquire a Testbox lazily when the
 first environment-sensitive command is ready, reuse the returned `tbx_...` id

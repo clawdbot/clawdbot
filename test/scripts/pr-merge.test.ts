@@ -10,6 +10,7 @@ const commonScript = join(process.cwd(), "scripts/pr-lib/common.sh");
 const mergeScript = join(process.cwd(), "scripts/pr-lib/merge.sh");
 const headSha = "0123456789abcdef0123456789abcdef01234567";
 const baseSha = "1111111111111111111111111111111111111111";
+const workflowSha = "2222222222222222222222222222222222222222";
 const landedSha = "fedcba9876543210fedcba9876543210fedcba98";
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
@@ -22,7 +23,10 @@ type MergeScenario = {
   cleanupMetadataError?: string;
   commentEmpty?: boolean;
   commentFailures?: number;
+  crabboxAuditSerializationFailure?: boolean;
+  crabboxParentDrift?: boolean;
   existingAutoMethod?: "" | "MERGE" | "REBASE" | "SQUASH";
+  mainDriftOnLateRead?: boolean;
   mergeStateStatus?: string;
   mergeable?: string;
   recommendation?: "ready" | "needs_work";
@@ -53,6 +57,9 @@ function runMerge(scenario: MergeScenario = {}) {
   const commentAttempts = join(root, "comment-attempts");
   const commentBody = join(root, "comment-body");
   const lifecycle = join(root, "lifecycle.log");
+  const landedCommitEvidence = join(localDir, "merge-crabbox-landed-commit.json");
+  const mainRefReads = join(root, "main-ref-reads");
+  const parentAudit = join(localDir, "merge-crabbox-parent-audit.json");
   const rgCalls = join(root, "rg-calls.log");
   const mergeBody = join(root, "consumed-merge-body");
   const sourceRepo = join(root, "source");
@@ -217,6 +224,7 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
                   planDigest: "c".repeat(64),
                   runId: "run_abc123",
                   targetCount: 8,
+                  workflowSha,
                 }),
               },
               status: "completed",
@@ -236,7 +244,7 @@ process.exit(new RegExp(pattern, flags).test(readFileSync(file, "utf8")) ? 0 : 1
     conclusion: "success",
     event: "workflow_dispatch",
     head_branch: "main",
-    head_sha: baseSha,
+    head_sha: workflowSha,
     id: 8001,
     path: ".github/workflows/pr-crabbox-gate-publisher.yml",
     status: "completed",
@@ -275,6 +283,14 @@ set -euo pipefail
 script_parent_dir="$OPENCLAW_TEST_SCRIPTS_DIR"
 source "$OPENCLAW_TEST_COMMON_SCRIPT"
 source "$OPENCLAW_TEST_MERGE_SCRIPT"
+jq() {
+  if [ "$OPENCLAW_TEST_CRABBOX_AUDIT_SERIALIZATION_FAILURE" = "true" ] && [ "\${1-}" = "-n" ]; then
+    printf '{"status":'
+    echo 'fixture jq serialization failure' >&2
+    return 1
+  fi
+  command jq "$@"
+}
 enter_worktree() { :; }
 require_artifact() { :; }
 validate_review_artifact_data() {
@@ -420,7 +436,7 @@ gh_route() {
         case "$api_arg" in
           repos/*/*/commits/*)
             case "$api_arg" in
-              *"/check-runs?"*) ;;
+              *"/check-runs?"*|*"/commits/$OPENCLAW_TEST_LANDED_SHA") ;;
               *)
                 echo 'unexpected repository commit-resolution API probe' >&2
                 return 1
@@ -450,8 +466,28 @@ gh_route() {
         *"repos/"*"/pulls/123"*)
           printf '%s\\n' '{"number":123,"state":"open","draft":false,"head":{"sha":"${headSha}","repo":{"full_name":"openclaw/openclaw"}},"base":{"sha":"${baseSha}","ref":"main","repo":{"full_name":"openclaw/openclaw"}}}'
           ;;
+        *"git/ref/heads/main"*)
+          local main_reads=0
+          if [ -e "$OPENCLAW_TEST_MAIN_REF_READS" ]; then
+            main_reads=$(cat "$OPENCLAW_TEST_MAIN_REF_READS")
+          fi
+          main_reads=$((main_reads + 1))
+          printf '%s\\n' "$main_reads" > "$OPENCLAW_TEST_MAIN_REF_READS"
+          if [ "$OPENCLAW_TEST_MAIN_DRIFT_ON_LATE_READ" = "true" ] && [ "$main_reads" -gt 1 ]; then
+            printf '%s\\n' '{"ref":"refs/heads/main","object":{"sha":"3333333333333333333333333333333333333333"}}'
+          else
+            printf '%s\\n' '{"ref":"refs/heads/main","object":{"sha":"${workflowSha}"}}'
+          fi
+          ;;
         *"/commits/${headSha}/check-runs"*)
           printf '[%s]\\n' "$OPENCLAW_TEST_CHECK_RUNS_JSON"
+          ;;
+        *"/commits/${landedSha}"*)
+          if [ "$OPENCLAW_TEST_CRABBOX_PARENT_DRIFT" = "true" ]; then
+            printf '%s\\n' '{"sha":"${landedSha}","parents":[{"sha":"3333333333333333333333333333333333333333"}]}'
+          else
+            printf '%s\\n' '{"sha":"${landedSha}","parents":[{"sha":"${workflowSha}"}]}'
+          fi
           ;;
         *"/actions/runs/7001/jobs"*)
           printf '[%s]\\n' "$OPENCLAW_TEST_WORKFLOW_JOBS_JSON"
@@ -549,11 +585,17 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       OPENCLAW_TEST_COMMENT_EMPTY: scenario.commentEmpty ? "true" : "false",
       OPENCLAW_TEST_COMMENT_FAILURES: String(scenario.commentFailures ?? 0),
       OPENCLAW_TEST_COMMON_SCRIPT: commonScript,
+      OPENCLAW_TEST_CRABBOX_AUDIT_SERIALIZATION_FAILURE: scenario.crabboxAuditSerializationFailure
+        ? "true"
+        : "false",
       OPENCLAW_TEST_CRABBOX_BYPASS: scenario.crabboxBypass ?? "",
+      OPENCLAW_TEST_CRABBOX_PARENT_DRIFT: scenario.crabboxParentDrift ? "true" : "false",
       OPENCLAW_TEST_DISABLED_AUTO_META: disabledAutoMeta,
       OPENCLAW_TEST_GH_CALLS: calls,
       OPENCLAW_TEST_LANDED_SHA: landedSha,
       OPENCLAW_TEST_LIFECYCLE: lifecycle,
+      OPENCLAW_TEST_MAIN_DRIFT_ON_LATE_READ: scenario.mainDriftOnLateRead ? "true" : "false",
+      OPENCLAW_TEST_MAIN_REF_READS: mainRefReads,
       OPENCLAW_TEST_MERGE_SCRIPT: mergeScript,
       OPENCLAW_TEST_MERGE_BODY: mergeBody,
       OPENCLAW_TEST_SOURCE_REPO: sourceRepo,
@@ -598,7 +640,13 @@ merge_run 123 "$OPENCLAW_TEST_AUTO_REQUESTED"
       ? Number(readFileSync(commentAttempts, "utf8").trim())
       : 0,
     commentBody: existsSync(commentBody) ? readFileSync(commentBody, "utf8") : "",
+    landedCommitEvidence: existsSync(landedCommitEvidence)
+      ? readFileSync(landedCommitEvidence, "utf8")
+      : "",
     lifecycle: existsSync(lifecycle) ? readFileSync(lifecycle, "utf8") : "",
+    parentAudit: existsSync(parentAudit)
+      ? JSON.parse(readFileSync(parentAudit, "utf8"))
+      : undefined,
     rgCalls: existsSync(rgCalls) ? readFileSync(rgCalls, "utf8") : "",
     mergeBody: existsSync(mergeBody) ? readFileSync(mergeBody, "utf8") : null,
     trailerCommandCalled: existsSync(trailerMarker),
@@ -775,7 +823,89 @@ describePosix("scripts/pr merge-run", () => {
     expect(result.calls.match(/orgs\/openclaw\/memberships\/maintainer/gmu)).toHaveLength(2);
     expect(result.stdout).toContain("Crabbox admin merge bypass verified");
     expect(result.calls).toContain("openclaw/crabbox-gate");
+    expect(result.calls).toContain("git/ref/heads/main");
     expect(result.calls).toContain("Hosted CI infrastructure failure");
+    const finalMainRead = result.calls.lastIndexOf("git/ref/heads/main");
+    const mergeMutation = result.calls.indexOf("plain pr merge 123 --admin");
+    expect(finalMainRead).toBeGreaterThan(-1);
+    expect(mergeMutation).toBeGreaterThan(finalMainRead);
+    expect(result.calls.slice(finalMainRead, mergeMutation)).not.toContain("plain api");
+    expect(result.stdout).toContain(
+      `Crabbox landing parent audit matched: landed=${landedSha} parent=${workflowSha}`,
+    );
+    expect(result.parentAudit).toEqual({
+      actualParentSha: workflowSha,
+      expectedParentSha: workflowSha,
+      landedSha,
+      status: "match",
+    });
+    expect(result.calls).toContain(
+      `Landing parent audit: match (expected \`${workflowSha}\`, actual \`${workflowSha}\`)`,
+    );
+  });
+
+  it("rejects protected main moving at the final pre-merge read", () => {
+    const result = runMerge({
+      crabboxBypass: "valid",
+      mainDriftOnLateRead: true,
+      mergeStateStatus: "CLEAN",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.calls).not.toContain("plain pr merge 123 --admin");
+    expect(`${result.stdout}\n${result.stderr}`).toContain(
+      "Crabbox merge bypass evidence is not sufficient",
+    );
+  });
+
+  it("reports protected main moving after the final read without pretending to prevent the completed merge", () => {
+    const result = runMerge({
+      crabboxBypass: "valid",
+      crabboxParentDrift: true,
+      mergeStateStatus: "CLEAN",
+    });
+
+    expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
+    expect(result.calls).toContain(
+      `plain pr merge 123 --admin --squash --match-head-commit ${headSha}`,
+    );
+    expect(result.stdout).toContain(
+      `Crabbox landing parent audit drift: landed=${landedSha} expected_parent=${workflowSha} actual_parent=${"3".repeat(40)}`,
+    );
+    expect(result.stdout).toContain(
+      "The merge already completed after an intervening authorized main advance",
+    );
+    expect(result.parentAudit).toEqual({
+      actualParentSha: "3".repeat(40),
+      expectedParentSha: workflowSha,
+      landedSha,
+      status: "drift",
+    });
+    expect(result.calls).toContain(
+      `Landing parent audit: drift after an intervening authorized main advance; merge already completed (expected \`${workflowSha}\`, actual \`${"3".repeat(40)}\`)`,
+    );
+  });
+
+  it("fails after merge without a false audit or completion comment when audit serialization fails", () => {
+    const result = runMerge({
+      crabboxAuditSerializationFailure: true,
+      crabboxBypass: "valid",
+      mergeStateStatus: "CLEAN",
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.calls).toContain(
+      `plain pr merge 123 --admin --squash --match-head-commit ${headSha}`,
+    );
+    expect(result.calls).toContain(`plain api repos/{owner}/{repo}/commits/${landedSha}`);
+    expect(result.landedCommitEvidence).toContain(`"sha":"${landedSha}"`);
+    expect(result.parentAudit).toBeUndefined();
+    expect(result.commentAttempts).toBe(0);
+    expect(result.commentBody).toBe("");
+    expect(result.stdout).not.toContain("Crabbox landing parent audit matched");
+    expect(result.stderr).toContain(
+      "merge completed; post-merge audit failed: unable to serialize landing parent evidence.",
+    );
   });
 
   it.each([

@@ -33,6 +33,64 @@ auto_merge_unavailable_error() {
     "$log_file"
 }
 
+record_crabbox_landing_parent_audit() {
+  local landed_sha="$1"
+  local expected_parent_sha="$2"
+  local commit_file=".local/merge-crabbox-landed-commit.json"
+  local audit_file=".local/merge-crabbox-parent-audit.json"
+  local audit_tmp
+  if ! rm -f "$audit_file" ||
+    ! audit_tmp=$(mktemp .local/merge-crabbox-parent-audit.XXXXXX); then
+    echo "merge completed; post-merge audit failed: unable to prepare the landing parent artifact." >&2
+    return 1
+  fi
+  if ! gh_plain api "repos/{owner}/{repo}/commits/$landed_sha" >"$commit_file"; then
+    rm -f "$audit_tmp"
+    echo "Crabbox landing parent audit failed after merge: unable to read landed commit $landed_sha." >&2
+    return 1
+  fi
+
+  local actual_parent_sha
+  actual_parent_sha=$(jq -er '
+    .parents
+    | select(type == "array" and length > 0)
+    | .[0].sha
+    | select(type == "string" and test("^[0-9a-f]{40}$"))
+  ' "$commit_file") || {
+    rm -f "$audit_tmp"
+    echo "Crabbox landing parent audit failed after merge: landed commit has no valid first parent." >&2
+    return 1
+  }
+
+  local status="match"
+  if [ "$actual_parent_sha" != "$expected_parent_sha" ]; then
+    status="drift"
+  fi
+  if ! jq -n \
+    --arg actualParentSha "$actual_parent_sha" \
+    --arg expectedParentSha "$expected_parent_sha" \
+    --arg landedSha "$landed_sha" \
+    --arg status "$status" \
+    '{status: $status, landedSha: $landedSha, expectedParentSha: $expectedParentSha, actualParentSha: $actualParentSha}' \
+    >"$audit_tmp"; then
+    rm -f "$audit_tmp"
+    echo "merge completed; post-merge audit failed: unable to serialize landing parent evidence." >&2
+    return 1
+  fi
+  if ! mv "$audit_tmp" "$audit_file"; then
+    rm -f "$audit_tmp"
+    echo "merge completed; post-merge audit failed: unable to publish the landing parent artifact." >&2
+    return 1
+  fi
+
+  if [ "$status" = "match" ]; then
+    echo "Crabbox landing parent audit matched: landed=$landed_sha parent=$actual_parent_sha"
+  else
+    echo "Crabbox landing parent audit drift: landed=$landed_sha expected_parent=$expected_parent_sha actual_parent=$actual_parent_sha"
+    echo "The merge already completed after an intervening authorized main advance; this audit reports the residual non-atomic race."
+  fi
+}
+
 # shellcheck source=scripts/pr-lib/crabbox-merge-bypass.sh
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/crabbox-merge-bypass.sh"
 
@@ -407,6 +465,7 @@ merge_run() {
     [ -z "$merge_body_file" ] || merge_args+=(--body-file "$merge_body_file")
   fi
 
+  local crabbox_final_main_sha=""
   local merge_submitted=false
   local state=""
   # Auto-merge is only a post-verification landing strategy. Keep every
@@ -521,6 +580,13 @@ merge_run() {
         echo "Crabbox merge bypass evidence is not sufficient." >&2
         exit 1
       fi
+      crabbox_final_main_sha=$(jq -er '
+        .workflowSha
+        | select(type == "string" and test("^[0-9a-f]{40}$"))
+      ' .local/merge-crabbox-bypass.json) || {
+        echo "Crabbox merge bypass did not preserve the final protected-main SHA." >&2
+        exit 1
+      }
       merge_label="admin squash with trusted Crabbox infrastructure proof"
       if ! gh_plain pr merge "$pr" \
         --admin \
@@ -569,6 +635,9 @@ merge_run() {
     echo "Landed commit SHA missing."
     exit 1
   fi
+  if [ "$MERGE_USE_CRABBOX_ADMIN_BYPASS" = "true" ]; then
+    record_crabbox_landing_parent_audit "$landed_sha" "$crabbox_final_main_sha" || exit 1
+  fi
   local repo_nwo
   repo_nwo=$(gh repo view --json nameWithOwner --jq .nameWithOwner)
 
@@ -590,10 +659,13 @@ merge_run() {
     crabbox_check_url=$(jq -r .crabboxCheckUrl .local/merge-crabbox-bypass.json)
     ci_gate_url=$(jq -r .ciGateUrl .local/merge-crabbox-bypass.json)
     printf -v comment_body \
-      '%s\n- Alternate gate: [openclaw/crabbox-gate](%s)\n- Hosted CI infrastructure failure: [openclaw/ci-gate](%s)' \
+      '%s\n- Alternate gate: [openclaw/crabbox-gate](%s)\n- Hosted CI infrastructure failure: [openclaw/ci-gate](%s)\n- Landing parent audit: %s (expected `%s`, actual `%s`)' \
       "$comment_body" \
       "$crabbox_check_url" \
-      "$ci_gate_url"
+      "$ci_gate_url" \
+      "$(jq -r 'if .status == "match" then "match" else "drift after an intervening authorized main advance; merge already completed" end' .local/merge-crabbox-parent-audit.json)" \
+      "$(jq -r .expectedParentSha .local/merge-crabbox-parent-audit.json)" \
+      "$(jq -r .actualParentSha .local/merge-crabbox-parent-audit.json)"
   fi
   local comment_url=""
   local comment_err_file
