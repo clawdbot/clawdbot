@@ -1,9 +1,6 @@
 // Resolves public model catalogs without exposing runtime-only provider params.
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import type {
-  ModelCatalogProviderOutcome,
-  ModelChoice,
-} from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
+import type { ModelChoice } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
 import type { PreparedAgentCredentialModes } from "../../agents/agent-auth-credential-modes.js";
 import {
   resolveAgentDir,
@@ -63,6 +60,7 @@ import {
 import { prepareModelsListHarnessCatalog } from "./models-list-harness-catalog.js";
 import {
   buildPublicModelProjection,
+  projectProviderCatalogOutcomes,
   resolveModelChoiceAgentRuntime,
 } from "./models-list-public-projection.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -74,7 +72,7 @@ type ApiKeyProviderCapabilities = {
 };
 type ModelsListResult = {
   models: ModelsListEntryWithCapabilities[];
-  providerOutcomes?: readonly ModelCatalogProviderOutcome[];
+  providerOutcomes?: ReturnType<typeof projectProviderCatalogOutcomes>;
 };
 type PreparedModelsListResult = {
   read: () => ModelsListResult;
@@ -555,14 +553,9 @@ export async function prepareModelsListResult(
   // so account publication/revocation never repeats host preparation or discovery.
   const isCurrent = () => params.context.getRuntimeConfig() === initialConfig;
   const { routeVariants, providerOutcomes } = snapshot;
-  const outcomeProjection = providerOutcomes?.length
-    ? {
-        providerOutcomes: providerOutcomes.map(({ provider, profileId, status }) => ({
-          provider,
-          ...(profileId ? { profileId } : {}),
-          status,
-        })),
-      }
+  const publicProviderOutcomes = projectProviderCatalogOutcomes(providerOutcomes);
+  const outcomeProjection = publicProviderOutcomes?.length
+    ? { providerOutcomes: publicProviderOutcomes }
     : {};
   const preparedRuntimeAuthModes = preparedProjectionOwner?.authModes;
   const preparedRuntimeAuthMaterializations = preparedProjectionOwner?.authMaterializations;
