@@ -376,6 +376,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   const convergence = await runPostCorePluginConvergence({
     cfg: pluginConfig,
     env: process.env,
+    compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
     ...capabilityConsent,
   });

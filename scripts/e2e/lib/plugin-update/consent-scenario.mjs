@@ -11,9 +11,11 @@ import { fixtureCapabilityConsentArgs } from "../package-compat.mjs";
 
 export async function runConsentScenario(entry, coreTarball) {
   assert(entry && coreTarball, "expected installed entry and canonical core tarball");
-  const coreTarballSha256 = execFileSync("sha256sum", [coreTarball], { encoding: "utf8" }).split(
-    /\s+/,
-  )[0];
+  const coreHash = createHash("sha256");
+  for await (const chunk of fs.createReadStream(coreTarball)) {
+    coreHash.update(chunk);
+  }
+  const coreTarballSha256 = coreHash.digest("hex");
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-update-consent-"));
   const pluginId = "update-consent-fixture";
   const packageName = `@acme/${pluginId}`;

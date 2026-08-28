@@ -2029,6 +2029,7 @@ describe("update-cli", () => {
           opts: {},
           pluginInstallRecords: {},
           updateStartedAtMs: 123,
+          timeoutMs: 30_000,
         });
 
         const env = spawnCall()?.[2]?.env;
@@ -2745,6 +2746,10 @@ describe("update-cli", () => {
           after: { sha: "new-sha", version: "2026.4.27" },
         }),
     });
+    vi.mocked(runExec).mockResolvedValueOnce({
+      stdout: new Command("update").option("--accept-capabilities").helpInformation(),
+      stderr: "",
+    });
 
     await updateCommand({ acceptCapabilities: true, yes: true, restart: false });
 
@@ -2755,6 +2760,73 @@ describe("update-cli", () => {
       "--yes",
       "--accept-capabilities",
     ]);
+  });
+
+  it.each([
+    { acceptCapabilities: true, supported: true, resumed: true },
+    { acceptCapabilities: true, supported: false, resumed: false },
+    { acceptCapabilities: false, supported: false, resumed: true },
+  ])(
+    "checks target consent support before handoff (explicit=$acceptCapabilities, supported=$supported)",
+    async ({ acceptCapabilities, supported, resumed }) => {
+      const { root, entrypoints } = setupUpdatedRootRefresh();
+      readPackageVersion.mockResolvedValue(VERSION);
+      const targetCommand = new Command("update");
+      if (supported) {
+        targetCommand.option("--accept-capabilities");
+      }
+      vi.mocked(runExec).mockResolvedValue({ stdout: targetCommand.helpInformation(), stderr: "" });
+
+      const result = await continuePostCoreUpdateInFreshProcess({
+        root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { acceptCapabilities, restart: false },
+        pluginInstallRecords: {},
+        updateStartedAtMs: Date.now(),
+        timeoutMs: 30_000,
+      });
+
+      expect(result).toEqual({ resumed });
+      if (acceptCapabilities) {
+        expect(runExec).toHaveBeenCalledWith(
+          expect.any(String),
+          [entrypoints[0], "update", "--help"],
+          expect.objectContaining({ timeoutMs: 30_000, logOutput: false }),
+        );
+      } else {
+        expect(runExec).not.toHaveBeenCalled();
+      }
+      if (resumed) {
+        expect(spawnCall()?.[1]).toEqual([
+          entrypoints[0],
+          "update",
+          "--no-restart",
+          ...(acceptCapabilities ? ["--accept-capabilities"] : []),
+        ]);
+      } else {
+        expect(spawn).not.toHaveBeenCalled();
+      }
+    },
+  );
+
+  it("does not treat failed target consent help as an unsupported option", async () => {
+    const { root } = setupUpdatedRootRefresh();
+    const failure = new Error("target help failed");
+    vi.mocked(runExec).mockRejectedValueOnce(failure);
+
+    await expect(
+      continuePostCoreUpdateInFreshProcess({
+        root,
+        channel: "stable",
+        requestedChannel: null,
+        opts: { acceptCapabilities: true },
+        pluginInstallRecords: {},
+        updateStartedAtMs: Date.now(),
+        timeoutMs: 30_000,
+      }),
+    ).rejects.toBe(failure);
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it("keeps downgrade post-update work in the current process", async () => {
@@ -2854,6 +2926,9 @@ describe("update-cli", () => {
       // still-running old VERSION, so incompatible newer plugins are disabled
       // before restart.
       expect(hostVersionDuringPluginUpdate).toBe("2026.4.10");
+      expect(runPostCorePluginConvergenceSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ compatibilityHostVersion: "2026.4.10" }),
+      );
       // The override is scoped to the plugin convergence and restored afterward.
       expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBeUndefined();
     } finally {
