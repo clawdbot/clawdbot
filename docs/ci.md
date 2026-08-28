@@ -117,6 +117,12 @@ reviewers inspect the code, tests, and CI to assess correctness.
 
 When the check fails, update the PR body instead of pushing another code commit.
 
+## Platform checkout ownership
+
+The shared Windows, macOS, and iOS checkout bounds each candidate fetch to 90 seconds, with at most three attempts. The workflow-harness fetch uses the same process owner and deadline, without additional retries. Candidate and harness revisions remain separately pinned.
+
+Checkout owns a POSIX process group or a Windows Job Object before Git starts. Timeout, cancellation, and leader exit all drain descendants before another Git command can reuse the checkout. If cleanup cannot be verified, the step fails without retrying. The bootstrap uses the runner's Python standard library because repository helpers are not available before checkout. A fetch timeout alone does not explain why transport stalled.
+
 ## Scope and routing
 
 Scope logic lives in `scripts/ci-changed-scope.mjs` and is covered by unit tests in `src/scripts/ci-changed-scope.test.ts`. Ordinary manual dispatch skips changed-scope detection and makes the preflight manifest act as if every scoped area changed. The exact-head `release_gate` exception evaluates the fetched pull request merge tree and retains its macOS, iOS-build, screenshot-risk, and generated-native-locale decisions while still verifying native sources.

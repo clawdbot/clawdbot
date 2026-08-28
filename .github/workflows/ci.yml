@@ -3576,56 +3576,255 @@ jobs:
           WORKFLOW_SHA: ${{ github.workflow_sha }}
         run: |
           set -euo pipefail
-          git init "$GITHUB_WORKSPACE"
-          git -C "$GITHUB_WORKSPACE" config gc.auto 0
-          git -C "$GITHUB_WORKSPACE" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          fetch_timeout_seconds=90
-          fetch_checkout_ref_once() {
-            git -C "$GITHUB_WORKSPACE" \
-              -c protocol.version=2 \
-              fetch --no-tags --prune --no-recurse-submodules --depth=1 origin \
-              "+${CHECKOUT_SHA}:refs/remotes/origin/checkout" &
-            local fetch_pid="$!"
-            local elapsed=0
-            while kill -0 "$fetch_pid" 2>/dev/null; do
-              if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then
-                kill -TERM "$fetch_pid" 2>/dev/null || true
-                sleep 10
-                kill -KILL "$fetch_pid" 2>/dev/null || true
-                wait "$fetch_pid" || true
-                return 124
-              fi
-              sleep 1
-              elapsed=$((elapsed + 1))
-            done
-            wait "$fetch_pid"
-          }
-          fetch_checkout_ref() {
-            local fetch_status
-            for attempt in 1 2 3; do
-              fetch_checkout_ref_once && return 0
-              fetch_status="$?"
-              if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then
-                return "$fetch_status"
-              fi
-              if [ "$attempt" = "3" ]; then
-                return "$fetch_status"
-              fi
-              echo "::warning::checkout fetch for '$CHECKOUT_SHA' timed out on attempt $attempt; retrying"
-              sleep 5
-            done
-          }
-          fetch_checkout_ref
-          git -C "$GITHUB_WORKSPACE" checkout --detach refs/remotes/origin/checkout
-          harness_dir="$GITHUB_WORKSPACE/.ci-harness"
-          git init "$harness_dir"
-          git -C "$harness_dir" remote add origin "https://github.com/${CHECKOUT_REPO}.git"
-          git -C "$harness_dir" -c protocol.version=2 fetch \
-            --no-tags --no-recurse-submodules --depth=1 origin \
-            "+${WORKFLOW_SHA}:refs/remotes/origin/ci-harness"
-          git -C "$harness_dir" sparse-checkout set .github/actions
-          git -C "$harness_dir" checkout --force --detach "$WORKFLOW_SHA"
-          test -f "$harness_dir/.github/actions/setup-node-env/action.yml"
+          python_command=python3
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python_command=python
+          fi
+          exec "$python_command" -I -S - <<'PYTHON'
+          import os
+          import shutil
+          import signal
+          import subprocess
+          import sys
+          import time
+
+          fetch_timeout_seconds = 90
+          cleanup_seconds = 10
+          cancelled = 0
+
+
+          def cancel(signum, _frame):
+              global cancelled
+              cancelled = signum
+
+
+          for signame in ("SIGINT", "SIGTERM", "SIGHUP", "SIGBREAK"):
+              if hasattr(signal, signame):
+                  signal.signal(getattr(signal, signame), cancel)
+
+
+          def check_cancelled():
+              if cancelled:
+                  raise SystemExit(128 + cancelled)
+
+
+          # The bootstrap inherits only this Job handle and stdio, joins before spawning Git,
+          # then closes its copy. Even owner death before assignment kills it on that close.
+          windows_api = '''
+          import ctypes as c
+          from ctypes import wintypes as w
+          import os, subprocess, sys
+          kernel = c.WinDLL("kernel32", use_last_error=True)
+          def checked(value, function, arguments):
+              if not value:
+                  raise c.WinError(c.get_last_error())
+              return value
+          def bind(name, result, *arguments):
+              function = getattr(kernel, name)
+              function.restype, function.argtypes = result, arguments
+              function.errcheck = checked
+              return function
+          close_handle = bind("CloseHandle", w.BOOL, w.HANDLE)
+          '''
+          if os.name == "nt":
+              exec(windows_api)
+
+              class BasicLimits(c.Structure):
+                  _fields_ = [
+                      ("PerProcessUserTimeLimit", c.c_int64), ("PerJobUserTimeLimit", c.c_int64),
+                      ("LimitFlags", w.DWORD), ("MinimumWorkingSetSize", c.c_size_t),
+                      ("MaximumWorkingSetSize", c.c_size_t), ("ActiveProcessLimit", w.DWORD),
+                      ("Affinity", c.c_size_t), ("PriorityClass", w.DWORD), ("SchedulingClass", w.DWORD),
+                  ]
+
+              class IoCounters(c.Structure):
+                  _fields_ = [(name, c.c_uint64) for name in (
+                      "ReadOperationCount", "WriteOperationCount", "OtherOperationCount",
+                      "ReadTransferCount", "WriteTransferCount", "OtherTransferCount",
+                  )]
+
+              class ExtendedLimits(c.Structure):
+                  _fields_ = [("BasicLimitInformation", BasicLimits), ("IoInfo", IoCounters)] + [
+                      (name, c.c_size_t) for name in (
+                          "ProcessMemoryLimit", "JobMemoryLimit", "PeakProcessMemoryUsed", "PeakJobMemoryUsed",
+                      )
+                  ]
+
+              class Accounting(c.Structure):
+                  _fields_ = [(name, c.c_int64) for name in (
+                      "TotalUserTime", "TotalKernelTime", "ThisPeriodTotalUserTime", "ThisPeriodTotalKernelTime",
+                  )] + [(name, w.DWORD) for name in (
+                      "TotalPageFaultCount", "TotalProcesses", "ActiveProcesses", "TotalTerminatedProcesses",
+                  )]
+
+              if (c.sizeof(BasicLimits), c.sizeof(ExtendedLimits), c.sizeof(Accounting), Accounting.ActiveProcesses.offset) != (64, 144, 48, 40):
+                  raise RuntimeError("Unsupported Windows Job structure layout")
+
+              create_job = bind("CreateJobObjectW", w.HANDLE, c.c_void_p, w.LPCWSTR)
+              set_job = bind("SetInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD)
+              query_job = bind("QueryInformationJobObject", w.BOOL, w.HANDLE, c.c_int, c.c_void_p, w.DWORD, c.c_void_p)
+              terminate_job = bind("TerminateJobObject", w.BOOL, w.HANDLE, w.UINT)
+              bootstrap = windows_api + '''
+          job = int(sys.argv[1])
+          assign = bind("AssignProcessToJobObject", w.BOOL, w.HANDLE, w.HANDLE)
+          current = bind("GetCurrentProcess", w.HANDLE)
+          assign(job, current())
+          close_handle(job)
+          sys.exit(subprocess.call(sys.argv[2:], stdin=subprocess.DEVNULL))
+          '''
+
+
+          def group_signal(pgid, signum):
+              try:
+                  os.killpg(pgid, signum)
+              except ProcessLookupError:
+                  pass
+
+
+          def group_alive(pgid, deadline):
+              try:
+                  os.killpg(pgid, 0)
+              except ProcessLookupError:
+                  return False
+              # Linux containers may not reap orphan zombies. They are terminated, not writers.
+              # A failed/ambiguous inspection never authorizes checkout reuse.
+              result = subprocess.run(
+                  ["ps", "-axo", "pgid=,stat="], stdin=subprocess.DEVNULL,
+                  stdout=subprocess.PIPE, text=True, check=True,
+                  timeout=max(0.001, deadline - time.monotonic()),
+              )
+              return any(int(group) == pgid and not state.startswith("Z")
+                         for group, state in (line.split() for line in result.stdout.splitlines()))
+
+
+          def drain(child, job):
+              deadline = time.monotonic() + cleanup_seconds
+              if os.name == "nt":
+                  # Stop/join even a pre-assignment bootstrap before terminating the Job:
+                  # an empty Job alone cannot prove that no Git will start afterwards.
+                  child.kill()
+                  child.wait(timeout=max(0.001, deadline - time.monotonic()))
+                  terminate_job(job, 1)
+                  accounting = Accounting()
+                  while True:
+                      query_job(job, 1, c.byref(accounting), c.sizeof(accounting), None)
+                      if accounting.ActiveProcesses == 0:
+                          return
+                      if time.monotonic() >= deadline:
+                          raise RuntimeError("Job cleanup did not complete")
+                      time.sleep(0.05)
+              else:
+                  # The group remains ours after leader exit. Reserve half the existing
+                  # cleanup allowance for KILL and extinction verification after TERM.
+                  try:
+                      group_signal(child.pid, signal.SIGTERM)
+                      kill_at = deadline - cleanup_seconds / 2
+                      while True:
+                          child.poll()
+                          if not group_alive(child.pid, deadline):
+                              child.wait(timeout=max(0.001, deadline - time.monotonic()))
+                              return
+                          if time.monotonic() >= kill_at:
+                              group_signal(child.pid, signal.SIGKILL)
+                          if time.monotonic() >= deadline:
+                              raise RuntimeError("Process group cleanup did not complete")
+                          time.sleep(0.05)
+                  except Exception:
+                      group_signal(child.pid, signal.SIGKILL)
+                      child.wait(timeout=max(0.001, deadline - time.monotonic()))
+                      raise
+
+
+          class FetchTimeout(Exception):
+              pass
+
+
+          def run_git(directory, *arguments, timeout=None):
+              check_cancelled()
+              command = [git, "-C", directory, *arguments]
+              job = None
+              child = None
+              deadline = time.monotonic() + timeout if timeout is not None else None
+              try:
+                  options = {"stdin": subprocess.DEVNULL}
+                  if os.name == "nt":
+                      job = create_job(None, None)
+                      limits = ExtendedLimits()
+                      limits.BasicLimitInformation.LimitFlags = 0x2000  # KILL_ON_JOB_CLOSE; no breakaway.
+                      set_job(job, 9, c.byref(limits), c.sizeof(limits))
+                      os.set_handle_inheritable(job, True)
+                      startup = subprocess.STARTUPINFO()
+                      startup.lpAttributeList = {"handle_list": [job]}
+                      options.update(startupinfo=startup, close_fds=True)
+                      # The selected checkout must not inject Python startup code into its owner.
+                      command = [sys.executable, "-I", "-S", "-c", bootstrap, str(job), *command]
+                  else:
+                      options["start_new_session"] = True
+                  # Signal handlers only latch cancellation, so Popen cannot lose ownership
+                  # between process creation and saving its handle/group for cleanup.
+                  child = subprocess.Popen(command, **options)
+                  if job is not None:
+                      os.set_handle_inheritable(job, False)
+                  while child.poll() is None and not cancelled:
+                      if deadline is not None and time.monotonic() >= deadline:
+                          raise FetchTimeout()
+                      time.sleep(0.05)
+              finally:
+                  try:
+                      if child is not None:
+                          drain(child, job)
+                  finally:
+                      if job is not None:
+                          close_handle(job)
+              check_cancelled()
+              if child.returncode:
+                  raise SystemExit(child.returncode if child.returncode > 0 else 128 - child.returncode)
+
+
+          def fetch(directory, sha, ref, prune=False, max_attempts=3):
+              for attempt in range(1, max_attempts + 1):
+                  try:
+                      run_git(directory, "-c", "protocol.version=2", "fetch", "--no-tags",
+                              *(["--prune"] if prune else []), "--no-recurse-submodules", "--depth=1",
+                              "origin", f"+{sha}:refs/remotes/origin/{ref}", timeout=fetch_timeout_seconds)
+                      return
+                  except FetchTimeout:
+                      check_cancelled()
+                      if attempt == max_attempts:
+                          raise SystemExit(124)
+                      print(f"::warning::checkout fetch for '{sha}' timed out on attempt {attempt}; retrying", flush=True)
+                      retry_at = time.monotonic() + 5
+                      while time.monotonic() < retry_at:
+                          check_cancelled()
+                          time.sleep(0.05)
+
+
+          try:
+              git = shutil.which("git")
+              if git is None:
+                  raise RuntimeError("Git unavailable")
+              workspace = os.environ["GITHUB_WORKSPACE"]
+              remote = f"https://github.com/{os.environ['CHECKOUT_REPO']}.git"
+              run_git(workspace, "init", workspace)
+              run_git(workspace, "config", "gc.auto", "0")
+              run_git(workspace, "remote", "add", "origin", remote)
+              fetch(workspace, os.environ["CHECKOUT_SHA"], "checkout", prune=True)
+              run_git(workspace, "checkout", "--detach", "refs/remotes/origin/checkout")
+              harness = os.path.join(workspace, ".ci-harness")
+              os.makedirs(harness, exist_ok=True)
+              run_git(harness, "init", harness)
+              run_git(harness, "remote", "add", "origin", remote)
+              fetch(harness, os.environ["WORKFLOW_SHA"], "ci-harness", max_attempts=1)
+              run_git(harness, "sparse-checkout", "set", ".github/actions")
+              run_git(harness, "checkout", "--force", "--detach", os.environ["WORKFLOW_SHA"])
+              if not os.path.isfile(os.path.join(harness, ".github/actions/setup-node-env/action.yml")):
+                  raise SystemExit(1)
+              check_cancelled()
+          except Exception as error:
+              # Do not print command arguments or environment: Git may carry credentials.
+              print(f"::error::checkout ownership/setup failed ({type(error).__name__}); refusing reuse or retry", file=sys.stderr)
+              raise SystemExit(125)
+          PYTHON
 
       - name: Try to exclude workspace from Windows Defender (best-effort)
         shell: pwsh

@@ -6401,45 +6401,27 @@ server.listen(0, "127.0.0.1", () => {
     ).toBe("pnpm plugin-sdk:surface:check");
   });
 
-  it("bounds platform checkout fetches without GNU timeout", () => {
+  it("shares the owned checkout step across Windows and Apple jobs", () => {
     const source = readFileSync(".github/workflows/ci.yml", "utf8");
     const workflow = readCiWorkflow();
+    const shared = workflow.jobs["checks-windows"].steps.find(
+      (step: WorkflowStep) => step.name === "Checkout",
+    );
 
     expect(source.match(/&platform_checkout_step/gu) ?? []).toHaveLength(1);
     expect(source.match(/\*platform_checkout_step/gu) ?? []).toHaveLength(4);
-    expect(source.match(/fetch_checkout_ref_once\(\)/gu) ?? []).toHaveLength(1);
-
-    for (const jobName of [
-      "checks-windows",
-      "macos-node",
-      "macos-swift",
-      "ios-build",
-      "ios-screenshot-shard",
-    ]) {
+    // Lifecycle behavior is executed by ci-platform-checkout.test.ts; this guard
+    // protects the YAML alias and revision wiring used by every platform caller.
+    expect(shared.env).toMatchObject({
+      CHECKOUT_REPO: "${{ github.repository }}",
+      CHECKOUT_SHA: "${{ needs.preflight.outputs.checkout_revision }}",
+      WORKFLOW_SHA: "${{ github.workflow_sha }}",
+    });
+    for (const jobName of ["macos-node", "macos-swift", "ios-build", "ios-screenshot-shard"]) {
       const checkoutStep = workflow.jobs[jobName].steps.find(
         (step: WorkflowStep) => step.name === "Checkout",
       );
-
-      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref()");
-      expect(checkoutStep.run, jobName).toContain("fetch_checkout_ref_once()");
-      expect(checkoutStep.run, jobName).toContain("for attempt in 1 2 3");
-      expect(checkoutStep.run, jobName).toContain("fetch_timeout_seconds=90");
-      expect(checkoutStep.run, jobName).toContain("-c protocol.version=2");
-      expect(checkoutStep.run, jobName).toContain(
-        "fetch --no-tags --prune --no-recurse-submodules --depth=1 origin",
-      );
-      expect(checkoutStep.run, jobName).toContain(
-        'if [ "$elapsed" -ge "$fetch_timeout_seconds" ]; then',
-      );
-      expect(checkoutStep.run, jobName).toContain('kill -TERM "$fetch_pid"');
-      expect(checkoutStep.run, jobName).toContain('kill -KILL "$fetch_pid"');
-      expect(checkoutStep.run, jobName).toContain(
-        'if [ "$fetch_status" != "124" ] && [ "$fetch_status" != "137" ]; then',
-      );
-      expect(checkoutStep.run, jobName).toContain("timed out on attempt $attempt; retrying");
-      expect(checkoutStep.run, jobName).not.toContain(
-        'git -C "$GITHUB_WORKSPACE" fetch --no-tags --depth=1',
-      );
+      expect(checkoutStep, jobName).toEqual(shared);
     }
 
     const macosNodeSetup = workflow.jobs["macos-node"].steps.find(
