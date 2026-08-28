@@ -34,7 +34,6 @@ import type { ResolvedLineAccount } from "./types.js";
 type EventSource = webhook.Source | undefined;
 type MessageEvent = webhook.MessageEvent;
 type PostbackEvent = webhook.PostbackEvent;
-type PostbackContent = PostbackEvent["postback"];
 type StickerEventMessage = webhook.StickerMessageContent;
 
 interface MediaRef {
@@ -207,29 +206,6 @@ function describeStickerKeywords(sticker: StickerEventMessage): string {
   }
 
   return "";
-}
-
-function describeLineDeviceAction(data: string): string {
-  const searchParams = new URLSearchParams(data);
-  const action = searchParams.get("line.action") ?? "";
-  const device = searchParams.get("line.device");
-  return device ? `line action ${action} device ${device}` : `line action ${action}`;
-}
-
-// postback.data is only the opaque token the bot sent; LINE returns what the user
-// actually chose in postback.params (a datetime picker's date/time/datetime, a rich
-// menu switch's alias and status), sorted here so one selection is always the same
-// prompt bytes. Without it a completed pick reaches the agent as a bare token.
-function describeLinePostback(postback: PostbackContent, data: string): string {
-  const described = data.includes("line.action=") ? describeLineDeviceAction(data) : data;
-  const selection = Object.entries(postback.params ?? {})
-    .toSorted(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
-    .flatMap(([key, value]) => {
-      const picked = normalizeOptionalString(value);
-      return picked ? [`${key}=${picked}`] : [];
-    })
-    .join(" ");
-  return selection ? `${described} ${selection}` : described;
 }
 
 function extractMessageText(message: MessageEvent["message"]): string {
@@ -553,13 +529,27 @@ export async function buildLinePostbackContext(params: {
   });
 
   const timestamp = event.timestamp;
-  // parseLineWebhookBody casts JSON straight to the SDK type, so keep reading the
-  // payload defensively even though PostbackContent declares data as required.
   const rawBody = event.postback?.data?.trim() ?? "";
   if (!rawBody) {
     return null;
   }
-  const agentBody = describeLinePostback(event.postback, rawBody);
+  let agentBody = rawBody;
+  if (rawBody.includes("line.action=")) {
+    const searchParams = new URLSearchParams(rawBody);
+    const action = searchParams.get("line.action") ?? "";
+    const device = searchParams.get("line.device");
+    agentBody = device ? `line action ${action} device ${device}` : `line action ${action}`;
+  }
+  // LINE returns picker and rich-menu choices separately from callback data.
+  // Sort them for stable prompt bytes, but keep rawBody unchanged for command auth.
+  for (const [key, value] of Object.entries(event.postback.params ?? {}).toSorted(
+    ([left], [right]) => (left < right ? -1 : left > right ? 1 : 0),
+  )) {
+    const picked = normalizeOptionalString(value);
+    if (picked) {
+      agentBody += ` ${key}=${picked}`;
+    }
+  }
 
   const messageSid = event.replyToken ? `postback:${event.replyToken}` : `postback:${timestamp}`;
   const finalized = await finalizeLineInboundContext({
