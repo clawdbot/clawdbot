@@ -7,46 +7,38 @@ import { replaceConfigFile } from "../../../config/config.js";
 import { stampConfigWriteMetadata } from "../../../config/io.meta.js";
 import { containsConfigIncludeDirective } from "../../../config/io.read-helpers.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
-import { validateConfigObjectRaw } from "../../../config/validation.js";
+import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
+import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { findDoctorLegacyConfigIssues } from "./legacy-config-issues.js";
 
-// Stable 2026.7.1-2 authored these keys immediately before main retired them. Keep this
-// compatibility set exact: widening it would turn Gateway startup into a general doctor repair.
-const AUTOMATIC_UPGRADE_CONFIG_UNSET_PATHS: string[][] = [
-  ["meta", "lastTouchedAt"],
-  ["agents", "defaults", "heartbeat", "skipWhenBusy"],
-];
-
-const AUTOMATIC_UPGRADE_CONFIG_ISSUE_PATHS = new Set(["meta", "agents.defaults.heartbeat"]);
-
-type UpgradeConfigRepairPlan = {
+type StartupConfigRepairPlan = {
   config: OpenClawConfig;
   snapshot: ConfigFileSnapshot;
-  unsetPaths: string[][];
+  changes: string[];
 };
 
-/** Plans the one tagged stable-to-main config repair that is safe before full validation. */
-export function planUpgradeConfigRepair(
+/** Admits only complete, deterministic single-file legacy migrations for startup. */
+export function planStartupConfigRepair(
   snapshot: ConfigFileSnapshot,
-): UpgradeConfigRepairPlan | null {
+): StartupConfigRepairPlan | null {
   if (
     snapshot.valid ||
     !snapshot.exists ||
     snapshot.raw === null ||
-    snapshot.issues.length === 0 ||
-    snapshot.issues.some((issue) => !AUTOMATIC_UPGRADE_CONFIG_ISSUE_PATHS.has(issue.path)) ||
-    snapshot.legacyIssues.some((issue) => issue.path !== "") ||
     (snapshot.includedPaths?.length ?? 0) > 0 ||
     containsConfigIncludeDirective(snapshot.parsed)
   ) {
     return null;
   }
 
-  const unsetPaths = AUTOMATIC_UPGRADE_CONFIG_UNSET_PATHS;
-  const config = applyUnsetPathsForWrite(snapshot.sourceConfig, unsetPaths);
+  const { next: config, changes } = applyLegacyDoctorMigrations(snapshot.sourceConfig, {
+    authoredRaw: snapshot.parsed,
+    resolvedRaw: snapshot.sourceConfig,
+  });
   if (
+    !config ||
     isDeepStrictEqual(config, snapshot.sourceConfig) ||
-    !validateConfigObjectRaw(config).ok ||
+    !validateConfigObjectWithPlugins(config).ok ||
     findDoctorLegacyConfigIssues(config, config).length > 0
   ) {
     return null;
@@ -54,7 +46,7 @@ export function planUpgradeConfigRepair(
 
   return {
     config,
-    unsetPaths,
+    changes,
     snapshot: {
       ...snapshot,
       sourceConfig: config,
@@ -68,19 +60,19 @@ export function planUpgradeConfigRepair(
   };
 }
 
-export function resolveUpgradeConfigSnapshot(snapshot: ConfigFileSnapshot) {
-  return snapshot.valid ? snapshot : planUpgradeConfigRepair(snapshot)?.snapshot;
+export function resolveStartupConfigSnapshot(snapshot: ConfigFileSnapshot) {
+  return snapshot.valid ? snapshot : planStartupConfigRepair(snapshot)?.snapshot;
 }
 
-/** Matches only the canonical writer result for a previously admitted upgrade repair. */
-export function isUpgradeConfigRepairResult(
+/** Matches only the canonical writer result for a previously admitted startup repair. */
+export function isStartupConfigRepairResult(
   before: ConfigFileSnapshot,
   after: ConfigFileSnapshot,
 ): boolean {
-  const plan = planUpgradeConfigRepair(before);
+  const plan = planStartupConfigRepair(before);
   const expected = plan
     ? stampConfigWriteMetadata(
-        applyUnsetPathsForWrite(plan.config, resolveManagedUnsetPathsForWrite(plan.unsetPaths)),
+        applyUnsetPathsForWrite(plan.config, resolveManagedUnsetPathsForWrite(undefined)),
         undefined,
         undefined,
         before.parsed,
@@ -95,8 +87,8 @@ export function isUpgradeConfigRepairResult(
 }
 
 /** Commits a planned repair against the exact snapshot admitted under the startup lease. */
-export async function commitUpgradeConfigRepair(
-  plan: UpgradeConfigRepairPlan,
+export async function commitStartupConfigRepair(
+  plan: StartupConfigRepairPlan,
   snapshot: ConfigFileSnapshot,
 ): Promise<void> {
   await replaceConfigFile({
@@ -105,7 +97,6 @@ export async function commitUpgradeConfigRepair(
     afterWrite: { mode: "none", reason: "startup migration" },
     writeOptions: {
       auditOrigin: "doctor",
-      unsetPaths: plan.unsetPaths,
       skipOutputLogs: true,
       skipRuntimeSnapshotRefresh: true,
     },

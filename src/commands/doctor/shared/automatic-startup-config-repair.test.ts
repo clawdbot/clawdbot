@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.js";
+import { validateConfigObjectWithPlugins } from "../../../config/validation.js";
+import { VERSION } from "../../../version.js";
 import {
-  isUpgradeConfigRepairResult,
-  planUpgradeConfigRepair,
-} from "./automatic-upgrade-config-repair.js";
+  isStartupConfigRepairResult,
+  planStartupConfigRepair,
+} from "./automatic-startup-config-repair.js";
 
 function invalidSnapshot(params: {
   config: OpenClawConfig;
@@ -27,7 +29,21 @@ function invalidSnapshot(params: {
   };
 }
 
-describe("automatic upgrade config repair", () => {
+describe("automatic startup config repair", () => {
+  it("plans a deterministic, fully valid migration of retired session keys", () => {
+    const snapshot = invalidSnapshot({
+      config: { session: { idleMinutes: 45 } } as OpenClawConfig,
+      issuePaths: ["session.idleMinutes"],
+    });
+
+    const plan = planStartupConfigRepair(snapshot);
+
+    expect(plan?.config.session).toEqual({ reset: { mode: "idle", idleMinutes: 45 } });
+    expect(validateConfigObjectWithPlugins(plan?.config).ok).toBe(true);
+    expect(planStartupConfigRepair(snapshot)?.config).toEqual(plan?.config);
+    expect(snapshot.sourceConfig.session).toEqual({ idleMinutes: 45 });
+  });
+
   it("plans removal of the stable-authored retired keys without changing other config", () => {
     const snapshot = invalidSnapshot({
       config: {
@@ -44,7 +60,7 @@ describe("automatic upgrade config repair", () => {
       issuePaths: ["meta", "agents.defaults.heartbeat"],
     });
 
-    const plan = planUpgradeConfigRepair(snapshot);
+    const plan = planStartupConfigRepair(snapshot);
 
     expect(plan?.config).toEqual({
       meta: { lastTouchedVersion: "2026.7.1-2" },
@@ -73,7 +89,7 @@ describe("automatic upgrade config repair", () => {
     });
     const repaired = {
       meta: {
-        lastTouchedVersion: "2026.8.1",
+        lastTouchedVersion: VERSION,
         migrations: { modelPolicyAllowlist: true },
       },
       agents: { defaults: { workspace: "/tmp/workspace" }, entries: { main: {} } },
@@ -92,43 +108,55 @@ describe("automatic upgrade config repair", () => {
       legacyIssues: [],
     };
 
-    expect(isUpgradeConfigRepairResult(before, after)).toBe(true);
+    expect(isStartupConfigRepairResult(before, after)).toBe(true);
+    expect(isStartupConfigRepairResult(before, { ...after, path: "/tmp/other.json" })).toBe(false);
+    expect(
+      isStartupConfigRepairResult(before, {
+        ...after,
+        sourceConfig: { ...repaired, gateway: { mode: "remote" } },
+      }),
+    ).toBe(false);
+    expect(
+      isStartupConfigRepairResult(before, {
+        ...after,
+        sourceConfig: { ...repaired, session: { reset: { mode: "idle" } } },
+      }),
+    ).toBe(false);
   });
 
   it.each([
+    { name: "a non-legacy type error", config: { gateway: { port: "not-a-number" } } },
     {
-      name: "an unrelated validation failure",
-      issuePaths: ["meta", "gateway"],
-      includedPaths: [],
+      name: "a migration with a remaining type error",
+      config: { session: { idleMinutes: 45 }, gateway: { port: "not-a-number" } },
     },
     {
       name: "an included config source",
-      issuePaths: ["meta"],
+      config: { session: { idleMinutes: 45 } },
       includedPaths: ["/tmp/included.json"],
     },
-  ])("refuses $name", ({ issuePaths, includedPaths }) => {
-    const snapshot = invalidSnapshot({
+    {
+      name: "an include directive without recorded include paths",
+      config: { $include: "included.json", session: { idleMinutes: 45 } },
+    },
+    {
+      name: "an unresolved plugin validation failure",
       config: {
-        meta: { lastTouchedAt: "2026-08-01T00:00:00.000Z" },
-      } as OpenClawConfig,
-      issuePaths,
+        session: { idleMinutes: 45 },
+        plugins: { load: { paths: ["/nonexistent-startup-plugin"] } },
+      },
+    },
+    {
+      name: "another invalid key at a retired key's schema parent",
+      config: { meta: { lastTouchedAt: "2026-08-01T00:00:00.000Z", unrelatedRetiredKey: true } },
+    },
+  ])("refuses $name", ({ config, includedPaths }) => {
+    const snapshot = invalidSnapshot({
+      config: config as OpenClawConfig,
+      issuePaths: [],
       includedPaths,
     });
 
-    expect(planUpgradeConfigRepair(snapshot)).toBeNull();
-  });
-
-  it("refuses another invalid key reported at the same schema parent", () => {
-    const snapshot = invalidSnapshot({
-      config: {
-        meta: {
-          lastTouchedAt: "2026-08-01T00:00:00.000Z",
-          unrelatedRetiredKey: true,
-        },
-      } as OpenClawConfig,
-      issuePaths: ["meta"],
-    });
-
-    expect(planUpgradeConfigRepair(snapshot)).toBeNull();
+    expect(planStartupConfigRepair(snapshot)).toBeNull();
   });
 });
