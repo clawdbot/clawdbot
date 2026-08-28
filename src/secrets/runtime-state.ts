@@ -1218,16 +1218,19 @@ export function restoreSecretsRuntimeSourceSnapshotIfLineageCurrent(params: {
 // Hot-path readers only need the config pair for availability decisions.
 // Return the active references and keep full snapshot clone isolation on
 // getActiveSecretsRuntimeSnapshot() for callers that need mutable data.
-export function getActiveSecretsRuntimeConfigSnapshot(): Pick<
-  PreparedSecretsRuntimeSnapshot,
-  "config" | "sourceConfig"
-> | null {
+export function getActiveSecretsRuntimeConfigSnapshot():
+  | (Pick<PreparedSecretsRuntimeSnapshot, "config" | "sourceConfig"> & {
+      configRefsPrepared: boolean;
+    })
+  | null {
   if (!activeSnapshot) {
     return null;
   }
   return {
     config: activeSnapshot.config,
     sourceConfig: activeSnapshot.sourceConfig,
+    // Auth-only snapshots carry config bytes, but never classified their SecretRef owners.
+    configRefsPrepared: activeRefreshContext?.includeConfigRefs === true,
   };
 }
 

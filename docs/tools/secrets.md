@@ -109,6 +109,12 @@ because answering provides a value rather than reading one.
 
 ## Using a stored credential
 
+In Gateway-backed sessions, a missing credential for an unrelated provider does
+not block a turn on a healthy provider. The agent can use that healthy model to
+request the missing entry. Selecting the unavailable provider still fails until
+its SecretRef resolves; OpenClaw does not silently substitute an environment or
+auth-profile credential.
+
 A stored entry is a regular shared-store entry (see
 [Secrets management](/gateway/secrets)):
 

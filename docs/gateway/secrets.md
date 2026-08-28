@@ -808,6 +808,10 @@ Command paths can opt into supported SecretRef resolution via a gateway snapshot
   </Tab>
 </Tabs>
 
+Agent turns using the matching prepared Gateway snapshot do not re-resolve every model and tool credential at turn startup. A configured-unavailable provider therefore does not block a turn using a healthy provider. Selecting the unavailable provider still fails closed before environment or auth-profile fallback, and explicitly targeted channel/account credentials remain strict.
+
+Standalone agent commands without config-ref preparation and calls with a different config retain strict command-scoped resolution. A local non-delivery agent command does not resolve unrelated channel or Gateway credentials.
+
 Other notes:
 
 - Snapshot refresh after backend secret rotation is handled by `openclaw secrets reload`.
