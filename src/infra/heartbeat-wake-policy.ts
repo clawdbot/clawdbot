@@ -78,6 +78,8 @@ export function isTargetedUnscheduledWake(params: TargetedUnscheduledWakeParams)
       return params.intent === "immediate" && (reason?.startsWith("hook:") ?? false);
     case "exec-event":
       return params.intent === "event" && reason === "exec-event";
+    case "restart-sentinel":
+      return params.intent === "immediate" && hasSessionTarget && reason === "wake";
     case "background-task":
     case "background-task-blocked":
       return params.intent === "immediate";
