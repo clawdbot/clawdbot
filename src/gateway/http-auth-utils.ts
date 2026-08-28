@@ -192,7 +192,7 @@ function resolveHttpProfile(profileId: string, updatedAt: number, cfg: OpenClawC
   };
 }
 
-function applyHttpOperatorRoleScopeCeiling<Scope extends string>(
+export function applyHttpOperatorRoleScopeCeiling<Scope extends string>(
   scopes: Scope[],
   auth: Pick<AuthorizedGatewayHttpRequest, "operatorRolePolicy"> | undefined,
 ): Scope[] {

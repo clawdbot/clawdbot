@@ -155,6 +155,10 @@ The ceiling uses the normal scope implications: `operator.admin` permits every
 operator scope, and `operator.write` permits `operator.read` and `operator.talk`.
 It only filters existing grants; it cannot add scopes the connection did not
 already receive.
+This includes plugin HTTP requests and WebSocket upgrades: without a scope
+header, ordinary Gateway-authenticated plugin routes start with only
+`operator.write`, then apply the role ceiling. Read-only and empty roles
+therefore receive no runtime scopes on that default path.
 Control UI plugin grants carry the authenticated profile inside a signed
 cookie; plugin HTTP requests reapply the profile's current role ceiling and
 reject grants without a matching durable identity when roles are enabled.
