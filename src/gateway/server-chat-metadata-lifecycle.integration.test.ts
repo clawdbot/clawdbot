@@ -79,7 +79,7 @@ beforeEach(() => {
 
 function configureAuthFixture(
   kind: "secret-ref" | "external-oauth" | "unresolved-secret-ref",
-  options: { catalogAuthRejected?: boolean } = {},
+  catalogAuthRejected = false,
 ) {
   if (kind === "external-oauth") {
     return;
@@ -88,14 +88,10 @@ function configureAuthFixture(
   mocks.buildPreparedModelCatalogSnapshot.mockResolvedValue({
     entries: [apiKeyModel],
     routeVariants: [apiKeyModel],
-    ...(options.catalogAuthRejected
+    ...(catalogAuthRejected
       ? {
           providerOutcomes: [
-            {
-              provider: "openai",
-              profileId: "openai:default",
-              status: "auth-rejected",
-            },
+            { provider: "openai", profileId: "openai:default", status: "auth-rejected" },
           ],
         }
       : {}),
@@ -652,12 +648,21 @@ describe("gateway chat metadata lifecycle composition", () => {
     const orderedConfig = {
       ...config,
       auth: { order: { openai: ["openai:default"] } },
-    } satisfies OpenClawConfig;
+      models: {
+        providers: {
+          openai: {
+            baseUrl: "https://api.openai.com/v1",
+            headers: { "x-test-route": "configured" },
+            models: [],
+          },
+        },
+      },
+    } as unknown as OpenClawConfig;
     const orderedContext = {
       ...context,
       getRuntimeConfig: () => orderedConfig,
     } as GatewayRequestContext;
-    configureAuthFixture("unresolved-secret-ref", { catalogAuthRejected: true });
+    configureAuthFixture("secret-ref", true);
     await publishOwner(orderedConfig);
     const lifecycle = await createLifecycle(() => orderedConfig);
     await lifecycle.attachContext(orderedContext, sidecars);
