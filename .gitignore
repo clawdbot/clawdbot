@@ -132,24 +132,6 @@ USER.md
 
 # Keep repository skills visible to Git-aware syncs; local-only skill ignores
 # belong in .git/info/exclude.
-!/.agents/
-/.agents/*
-!/.agents/skills/
-!/.agents/skills/*/
-!/.agents/skills/*/SKILL.md
-!/.agents/skills/telegram-e2e-userbot/
-/.agents/skills/telegram-e2e-userbot/*
-!/.agents/skills/telegram-e2e-userbot/SKILL.md
-!/.agents/skills/telegram-e2e-userbot/agents/
-/.agents/skills/telegram-e2e-userbot/agents/*
-!/.agents/skills/telegram-e2e-userbot/agents/openai.yaml
-!/.agents/skills/telegram-e2e-userbot/features/
-/.agents/skills/telegram-e2e-userbot/features/*
-!/.agents/skills/telegram-e2e-userbot/features/*.md
-!/.agents/skills/telegram-e2e-userbot/scripts/
-/.agents/skills/telegram-e2e-userbot/scripts/*
-!/.agents/skills/telegram-e2e-userbot/scripts/*.mjs
-!/.agents/skills/telegram-e2e-userbot/scripts/*.py
 .agents/skills/**/*.orig
 .agents/skills/**/__pycache__/
 .agents/skills/**/*.py[cod]
