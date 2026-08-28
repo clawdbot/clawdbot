@@ -40,7 +40,7 @@ Perplexity's Agent API runs its own server-side built-in tools. To use it as an 
 `tools.web.search.enabled: false` is a Gateway-wide setting. It disables the managed `web_search` tool for every agent on this Gateway, not just for the agent using Perplexity's Agent API. If other agents on the same Gateway rely on managed `web_search`, scope the disable per-agent with `agents.entries.<name>.tools.deny: ["web_search"]` on the Perplexity agent instead, or run Perplexity's Agent API on a separate Gateway profile.
 </Warning>
 
-Perplexity's server-side `web_search` runs from inside the model's response at $0.0025 per call and returns grounded results with citations. To force it on for a specific request, add `{ type: "web_search" }` to that request's `tools` array as a built-in tool rather than a function.
+Perplexity's server-side `web_search` runs from inside the model's response at $0.0025 per call and returns grounded results with citations.
 
 ### Reserved tool names
 
