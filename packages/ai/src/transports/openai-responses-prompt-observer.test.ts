@@ -10,6 +10,7 @@ import {
   streamOpenAICodexResponses,
   streamSimpleOpenAICodexResponses,
 } from "../providers/openai-chatgpt-responses.js";
+import { cleanupSessionResources } from "../session-resources.js";
 import { SYSTEM_PROMPT_CACHE_BOUNDARY } from "../utils/system-prompt-cache-boundary.js";
 import {
   buildOpenAIResponsesReasoningReplayMetadata,
@@ -272,6 +273,13 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  // A native OpenAI model here is store:true-eligible for HTTP continuation
+  // (see explicitStore in openai-responses-payload-policy.ts), so any test
+  // whose transport claims a continuation entry leaves it in the module-level
+  // httpContinuationEntries map. it.each cases in this file commonly reuse
+  // the same sessionId across iterations, so a stale entry from an earlier
+  // iteration would otherwise be claimed by a later, unrelated one.
+  cleanupSessionResources();
   closeOpenAICodexWebSocketSessions();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
