@@ -66,22 +66,26 @@ function renderSessionSection(params: {
   const collapsed = section.renderHeader && host.collapsedSessionSections.has(section.id);
   const label = personOwner
     ? personOwner.label || personOwner.id
-    : section.groups
-      ? t("chat.sidebar.groups")
-      : section.work
-        ? t("chat.sidebar.coding")
-        : group
-          ? group
-          : t("chat.sidebar.otherSessions");
+    : section.project
+      ? section.project.name
+      : section.groups
+        ? t("chat.sidebar.groups")
+        : section.work
+          ? t("chat.sidebar.coding")
+          : group
+            ? group
+            : t("chat.sidebar.otherSessions");
   const zone = personOwner
     ? "person"
-    : section.groups
-      ? "groups"
-      : section.work
-        ? "coding"
-        : group
-          ? "category"
-          : "threads";
+    : section.project
+      ? "project"
+      : section.groups
+        ? "groups"
+        : section.work
+          ? "coding"
+          : group
+            ? "category"
+            : "threads";
   // Collapsed Coding still signals live runs so background work stays visible.
   const collapsedRunningDot =
     collapsed &&
@@ -95,7 +99,10 @@ function renderSessionSection(params: {
     method: "sessions.groups.put",
     requiredScope: "operator.write",
   });
-  const sectionDropEnabled = groupWriteAccess.allowed && !personOwner;
+  // Person/project sections are derived, not stored: dropping a session on
+  // them cannot persist anything, so they take no drags at all.
+  const derivedSection = Boolean(personOwner || section.project);
+  const sectionDropEnabled = groupWriteAccess.allowed && !derivedSection;
   const sectionClass = [
     "sidebar-recent-sessions__group",
     `sidebar-recent-sessions__group--zone-${zone}`,
@@ -130,7 +137,7 @@ function renderSessionSection(params: {
       ${section.renderHeader
         ? renderSidebarSessionSectionHeader({
             sectionId: section.id,
-            draggable: !personOwner,
+            draggable: !derivedSection,
             disabledReason: groupWriteAccess.allowed ? undefined : groupWriteAccess.reason,
             onStartDrag: (sectionId) => host.startSidebarSectionDrag(sectionId),
             onFinishDrag: () => host.finishSidebarSectionDrag(),
@@ -146,6 +153,7 @@ function renderSessionSection(params: {
                 class="sidebar-session-group-toggle"
                 aria-expanded=${String(!collapsed)}
                 aria-label=${label}
+                title=${section.project?.path ?? nothing}
                 @click=${() => host.toggleSection(section.id)}
               >
                 <span class="sidebar-session-group-toggle__lead" aria-hidden="true">

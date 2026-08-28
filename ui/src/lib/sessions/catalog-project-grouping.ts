@@ -6,6 +6,20 @@ export function normalizeCatalogProjectGrouping(raw: unknown): CatalogProjectGro
   return raw === "none" || raw === "person" ? raw : "project";
 }
 
+// Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
+// folds into the origin repo; the lazy prefix picks the outermost repo root.
+// Returns null for a filesystem-root worktree parent, which is not a real
+// project root.
+export function foldWorktreeCheckoutPath(path: string): string | null {
+  const match = path.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
+  return match ? match[1] || null : path;
+}
+
+/** Basename shown for a checkout path in project sections. */
+export function checkoutDisplayName(path: string): string {
+  return path.split(/[\\/]/).findLast(Boolean) ?? path;
+}
+
 type CatalogProjectGroup = {
   kind: "custom" | "project" | "person";
   key: string;
@@ -52,15 +66,8 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
     }
     // Accepted tradeoff: filesystem-root cwds ("/", "C:\") are not real harness
     // session roots; after trimming they fall to the ungrouped flat tail by design.
-    let projectPath = session.cwd?.trim().replace(/[\\/]+$/, "");
-    if (!projectPath) {
-      ungrouped.push(session);
-      continue;
-    }
-    // Mirror Claude Code desktop: any cwd at or under `.claude/worktrees/<name>`
-    // folds into the origin repo; the lazy prefix picks the outermost repo root.
-    const worktreeMatch = projectPath.match(/^(.*?)[\\/]\.claude[\\/]worktrees[\\/][^\\/]/);
-    projectPath = worktreeMatch?.[1] ?? projectPath;
+    const trimmedPath = session.cwd?.trim().replace(/[\\/]+$/, "");
+    const projectPath = trimmedPath ? foldWorktreeCheckoutPath(trimmedPath) : null;
     if (!projectPath) {
       ungrouped.push(session);
       continue;
@@ -71,7 +78,7 @@ export function groupCatalogSessionsByProject(sessions: readonly SessionCatalogS
         kind: "project",
         key: `project:${projectPath}`,
         legacySectionKey: projectPath,
-        label: projectPath.split(/[\\/]/).at(-1) || projectPath,
+        label: checkoutDisplayName(projectPath),
         title: projectPath,
         sessions: [],
       };
