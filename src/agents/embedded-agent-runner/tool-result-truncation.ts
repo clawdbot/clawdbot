@@ -891,9 +891,11 @@ function projectToolResultBranch(params: {
       return {
         ...entry,
         message,
-        // Frozen bytes are immutable even when a stored replacement merges to the
-        // current message; eliding them would rewrite provider-sent prompt bytes.
-        aggregateEligible: !key || !frozen,
+        // Frozen bytes are immutable on dispatch projections; eliding them would
+        // rewrite provider-sent prompt bytes. Recovery projections (frozenOnly)
+        // run after a provider context failure, so the cached prefix is already
+        // forfeit and frozen history must stay reducible.
+        aggregateEligible: params.frozenOnly || !key || !frozen,
       };
     }),
   };

@@ -1792,6 +1792,59 @@ describe("truncateOversizedToolResultsInSession", () => {
     expect(originalEvent?.message).toEqual(original);
   });
 
+  it("reduces aggregate-only frozen history on the recovery branch", async () => {
+    const dir = await createTmpDir();
+    const storePath = path.join(dir, "sessions.json");
+    const sessionId = "runtime-sqlite-frozen-aggregate-recovery";
+    const sessionKey = "agent:main:frozen-aggregate-recovery";
+    const sessionFile = formatSqliteSessionFileMarker({
+      agentId: "main",
+      sessionId,
+      storePath,
+    });
+    const scope = { agentId: "main", sessionId, sessionKey, storePath };
+    await replaceSessionEntry({ sessionKey, storePath }, {
+      sessionFile,
+      sessionId,
+      updatedAt: 10,
+    } as SessionStoreEntry);
+    await appendTranscriptMessage(scope, { message: makeUserMessage("run tools") });
+    // Each result stays under the per-result cap; only the aggregate is over.
+    const frozenResults = [
+      makeToolResult("a".repeat(6_000), "frozen_agg_1"),
+      makeToolResult("b".repeat(6_000), "frozen_agg_2"),
+      makeToolResult("c".repeat(6_000), "frozen_agg_3"),
+    ];
+    for (const message of frozenResults) {
+      await appendTranscriptMessage(scope, { message });
+    }
+    const projectionState = createPromptProjectionStateForTest();
+    // Dispatch under a loose budget freezes every result at full text.
+    truncateOversizedToolResultsInMessages(frozenResults, 128_000, 8_000, 48_000, projectionState);
+    expect(projectionState.frozen.size).toBe(3);
+
+    // A provider context failure then demands recovery under a tighter budget:
+    // frozen history is the only reducible mass and must still shrink.
+    const result = await truncateOversizedToolResultsInActiveTarget({
+      scope: { ...scope, sessionFile },
+      contextWindowTokens: 128_000,
+      maxCharsOverride: 8_000,
+      aggregateMaxCharsOverride: 6_000,
+      projectionState,
+    });
+
+    expect(result.truncated).toBe(true);
+    const recovered = SessionManager.open(scope)
+      .getBranch()
+      .filter((entry) => entry.type === "message" && entry.message.role === "toolResult")
+      .map((entry) => (entry.type === "message" ? entry.message : undefined));
+    const totalChars = recovered.reduce(
+      (sum, message) => sum + (message ? getToolResultTextLength(message) : 0),
+      0,
+    );
+    expect(totalChars).toBeLessThan(18_000);
+  });
+
   it("honors SQLite leaf controls when truncating runtime transcripts", async () => {
     const dir = await createTmpDir();
     const storePath = path.join(dir, "sessions.json");
