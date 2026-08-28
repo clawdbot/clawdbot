@@ -99,6 +99,8 @@ describe("copyBundledPluginMetadata", () => {
       "# ACP Router\n",
       "utf8",
     );
+    fs.mkdirSync(path.join(pluginDir, "assets"), { recursive: true });
+    fs.writeFileSync(path.join(pluginDir, "assets", "icon.png"), Buffer.from("package icon"));
 
     copyBundledPluginMetadata({ repoRoot });
 
@@ -112,6 +114,9 @@ describe("copyBundledPluginMetadata", () => {
       ),
     ).toContain("ACP Router");
     expectBundledSkills(repoRoot, "acpx", ["./skills"]);
+    expect(
+      fs.readFileSync(path.join(repoRoot, "dist", "extensions", "acpx", "assets", "icon.png")),
+    ).toEqual(Buffer.from("package icon"));
     const packageJson = readBundledPackageJson(repoRoot, "acpx");
     expect(packageJson.openclaw?.extensions).toEqual(["./index.js"]);
   });
