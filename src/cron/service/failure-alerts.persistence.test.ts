@@ -9,6 +9,7 @@ import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { markCronJobActive } from "../active-jobs.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import { cronStoreKey } from "../store/key.js";
+import { readCronTaskRunHistoryPage } from "../task-run-history.js";
 import type { CronJob, CronRunStatus } from "../types.js";
 import { createCronServiceState } from "./state.js";
 import { finalizeCompletedCronRunOutcomes } from "./timer-outcome-finalization.js";
@@ -41,16 +42,17 @@ function createAlertJob(params: { id: string; dueAt: number; includeSkipped?: bo
 function createAlertState(params: {
   storePath: string;
   nowMs: () => number;
-  sendCronFailureAlert: SendCronFailureAlert;
+  sendCronFailureAlert?: SendCronFailureAlert;
+  enqueueSystemEvent?: ReturnType<typeof vi.fn>;
 }) {
   return createCronServiceState({
     cronEnabled: true,
     storePath: params.storePath,
     log: noopLogger,
     nowMs: params.nowMs,
-    enqueueSystemEvent: vi.fn(),
+    enqueueSystemEvent: params.enqueueSystemEvent ?? vi.fn(),
     requestHeartbeat: vi.fn(),
-    sendCronFailureAlert: params.sendCronFailureAlert,
+    ...(params.sendCronFailureAlert ? { sendCronFailureAlert: params.sendCronFailureAlert } : {}),
     runIsolatedAgentJob: vi.fn(),
   });
 }
@@ -260,6 +262,128 @@ describe("cron failure alert persistence", () => {
     } finally {
       database.exec("DROP TRIGGER IF EXISTS reject_failure_alert_terminal_write");
     }
+  });
+
+  it("writes the settled success outcome back to job state and run history", async () => {
+    const store = fixtures.makeStorePath();
+    const dueAt = Date.parse("2026-08-01T15:00:00.000Z");
+    const job = createAlertJob({ id: "failure-alert-outcome-success", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => dueAt + 10,
+      sendCronFailureAlert: async () => undefined,
+    });
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "provider unavailable",
+      startedAt: dueAt,
+      endedAt: dueAt + 10,
+    });
+
+    await vi.waitFor(() =>
+      expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe("delivered"),
+    );
+    const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(persisted?.lastFailureNotificationDelivered).toBe(true);
+    expect(persisted?.lastFailureNotificationDeliveryStatus).toBe("delivered");
+    expect(persisted?.lastFailureNotificationDeliveryError).toBeUndefined();
+
+    const history = readCronTaskRunHistoryPage({
+      storeKey: cronStoreKey(store.storePath),
+      jobId: job.id,
+      limit: 5,
+    });
+    expect(history.entries[0]?.failureNotificationDelivery).toEqual({
+      delivered: true,
+      status: "delivered",
+    });
+  });
+
+  it("writes the settled failure outcome with its error back to job state and run history", async () => {
+    const store = fixtures.makeStorePath();
+    const dueAt = Date.parse("2026-08-01T15:01:00.000Z");
+    const job = createAlertJob({ id: "failure-alert-outcome-failure", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const enqueueSystemEvent = vi.fn();
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => dueAt + 10,
+      sendCronFailureAlert: async () => {
+        throw new Error("webhook unreachable");
+      },
+      enqueueSystemEvent,
+    });
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "provider unavailable",
+      startedAt: dueAt,
+      endedAt: dueAt + 10,
+    });
+
+    await vi.waitFor(() =>
+      expect(state.store?.jobs[0]?.state.lastFailureNotificationDeliveryStatus).toBe(
+        "not-delivered",
+      ),
+    );
+    const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(persisted?.lastFailureNotificationDelivered).toBe(false);
+    expect(persisted?.lastFailureNotificationDeliveryStatus).toBe("not-delivered");
+    expect(persisted?.lastFailureNotificationDeliveryError).toContain("webhook unreachable");
+
+    const history = readCronTaskRunHistoryPage({
+      storeKey: cronStoreKey(store.storePath),
+      jobId: job.id,
+      limit: 5,
+    });
+    expect(history.entries[0]?.failureNotificationDelivery).toEqual({
+      delivered: false,
+      status: "not-delivered",
+      error: expect.stringContaining("webhook unreachable"),
+    });
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("failed 1 times"),
+      expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
+    );
+  });
+
+  it("records the fallback outcome when no failure-alert transport is available", async () => {
+    const store = fixtures.makeStorePath();
+    const dueAt = Date.parse("2026-08-01T15:02:00.000Z");
+    const job = createAlertJob({ id: "failure-alert-outcome-no-transport", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const enqueueSystemEvent = vi.fn();
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => dueAt + 10,
+      enqueueSystemEvent,
+    });
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "provider unavailable",
+      startedAt: dueAt,
+      endedAt: dueAt + 10,
+    });
+
+    const persisted = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(persisted?.lastFailureNotificationDelivered).toBe(false);
+    expect(persisted?.lastFailureNotificationDeliveryStatus).toBe("not-delivered");
+    expect(persisted?.lastFailureNotificationDeliveryError).toBe(
+      "failure alert transport unavailable",
+    );
+    expect(enqueueSystemEvent).toHaveBeenCalledWith(
+      expect.stringContaining("failed 1 times"),
+      expect.objectContaining({ contextKey: `cron:${job.id}:failure-alert` }),
+    );
   });
 
   it("persists the cooldown atomically and suppresses a second alert", async () => {

@@ -19,7 +19,7 @@ import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqli
 import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import {
   bindTaskRunExecution,
-  listTaskRecordsByRuntimeSourceIdFromSqlite,
+  listTaskRegistryRecordsByRuntimeSourceIdFromSqlite,
   listTaskRecordsByRuntimeSourceIdInDatabase,
 } from "../../tasks/task-registry.store.sqlite.js";
 import type { JsonValue, TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
@@ -66,7 +66,7 @@ export function tryRecordCronFailureNotificationDeliveryOutcome(
 ): void {
   try {
     const storeKey = cronStoreKey(state.deps.storePath);
-    const pending = listTaskRecordsByRuntimeSourceIdFromSqlite({
+    const pending = listTaskRegistryRecordsByRuntimeSourceIdFromSqlite({
       runtime: "cron",
       sourceId: params.jobId,
     })
