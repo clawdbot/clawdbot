@@ -84,7 +84,6 @@ describe("run-indexed agent event listeners", () => {
       const subscribe = (listener: () => void) =>
         scope === "global" ? onAgentEvent(listener) : onAgentEventForRun("run-live", listener);
       const replaced = () => order.push("re-added");
-      let stopReplaced: () => void;
       onAgentEventForRun("run-live", () => {
         order.push("first");
         stopReplaced();
@@ -92,7 +91,7 @@ describe("run-indexed agent event listeners", () => {
           subscribe(replaced);
         }
       });
-      stopReplaced = subscribe(replaced);
+      const stopReplaced = subscribe(replaced);
       onAgentEvent(() => order.push("middle"));
       emitAgentEvent({ runId: "run-live", stream: "assistant", data: {} });
       expect(order).toEqual(readd ? ["first", "middle", "re-added"] : ["first", "middle"]);

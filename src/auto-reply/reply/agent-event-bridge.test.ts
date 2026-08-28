@@ -28,7 +28,7 @@ describe("agent event delivery bridge", () => {
       const bridges = Array.from({ length: runs }, (_, runIndex) => {
         const runId = `run-${runIndex}`;
         registerAgentRunContext(runId, { sessionKey: `session-${runIndex}` });
-        return Array.from({ length: 8 }, (_, bridgeIndex) => {
+        return Array.from({ length: 8 }, (_bridge, bridgeIndex) => {
           const delivered: string[] = [];
           const bridge = createAgentEventBridge<string>({
             get runId() {

@@ -356,7 +356,7 @@ function* iterateAgentEventListeners(
       runId = currentRunId;
       pending = [...state.listeners, ...(state.runListeners.get(runId) ?? [])]
         .filter(([, id]) => id > lastId)
-        .sort(([, left], [, right]) => left - right);
+        .toSorted(([, left], [, right]) => left - right);
       index = 0;
     }
     const next = pending[index++];
