@@ -1,9 +1,18 @@
 ---
-summary: "Security considerations and threat model for running an AI gateway with shell access"
+summary: "Trust model, safe defaults, and hardening guidance for running OpenClaw"
 read_when:
   - Adding features that widen access or automation
+  - Reviewing OpenClaw security posture or hardening a deployment
 title: "Security"
 ---
+
+OpenClaw ships with conservative defaults: the Gateway binds to loopback, unknown DM senders only ever receive a pairing code, and groups are allowlisted and mention-gated. If you run OpenClaw for yourself or with your team and keep those defaults, you are already in good shape - and one command tells you if you have drifted:
+
+```bash
+openclaw security audit
+```
+
+The rest of this page is the deep end: the trust model, what the audit checks, and how to harden further as you expose more surface.
 
 <Note>
   **One trust boundary per gateway.** This guidance assumes one trusted

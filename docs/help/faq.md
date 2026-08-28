@@ -1416,12 +1416,12 @@ Model Q&A - defaults, selection, aliases, switching, failover, auth profiles - l
 
 <AccordionGroup>
   <Accordion title="Is it safe to expose OpenClaw to inbound DMs?">
-    Treat inbound DMs as untrusted input. Defaults reduce risk:
+    Yes - the defaults are built for this. A stranger who DMs your bot never reaches the model:
 
     - Default behavior on DM-capable channels is **pairing**: unknown senders receive a pairing code and their message is not processed. Approve with `openclaw pairing approve --channel <channel> [--account <id>] <code>`. Pending requests are capped at **3 per channel**; check `openclaw pairing list --channel <channel> [--account <id>]` if a code did not arrive.
     - Opening DMs publicly requires explicit opt-in (`dmPolicy: "open"` and allowlist `"*"`).
 
-    Run `openclaw doctor` to surface risky DM policies.
+    Run `openclaw doctor` to confirm your DM policies look the way you expect.
 
   </Accordion>
 
