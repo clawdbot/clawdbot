@@ -153,7 +153,7 @@ function decodeSingleNativeResponse(frame: Buffer): Record<string, unknown> {
 }
 
 describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
-  async function testBootstrap(navigationMode: "all" | "selected") {
+  it("pre-registers before the first native call, auto-pairs, and revokes a paused tab", async () => {
     const diagnostic = createBootstrapDiagnostic();
     cleanups.push(async () => {
       diagnostic.dispose();
@@ -221,7 +221,7 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
           nativeHostPath,
         };
         const gatewayServer = http.createServer((req, res) => {
-          if (req.url === "/browser-owner-proof") {
+          if (req.url?.split("?")[0] === "/browser-owner-proof") {
             diagnostic.mark("http.request", true);
             res.once("finish", () => diagnostic.mark("http.finish", res.statusCode));
             res.writeHead(200, { "content-type": "text/html" });
@@ -538,108 +538,106 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         await expect
           .poll(() => relay.bridge.accessibleTabs().some((tab) => tab.url === distractingUrl))
           .toBe(true);
-        if (navigationMode === "selected") {
-          await extensionPage.evaluate(
-            async (urls) => {
-              const tabs = await chrome.tabs.query({});
-              const tabIds = tabs
-                .filter((tab) => urls.includes(tab.url ?? ""))
-                .map((tab) => tab.id);
-              const groupId = await chrome.tabs.group({ tabIds });
-              await chrome.tabGroups.update(groupId, { title: "OpenClaw" });
-              await chrome.runtime.sendMessage({ type: "setAccessMode", accessMode: "selected" });
-            },
-            [controlled.url(), distractingUrl],
-          );
-        }
-        const liveTabsResponse = await dispatcher.dispatch({
-          method: "GET",
-          path: "/tabs",
-          query: { profile: "e2e" },
-        });
-        const liveTabs = (
-          liveTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
-        ).tabs;
-        const selectedTab = liveTabs?.find((tab) => tab.url === controlled.url());
-        const unrelatedTab = liveTabs?.find((tab) => tab.url === distractingUrl);
-        if (!selectedTab?.targetId || !unrelatedTab?.targetId) {
-          throw new Error(`Extension navigation proof tabs missing: ${JSON.stringify(liveTabs)}`);
-        }
-        expect(selectedTab.targetId).not.toBe(unrelatedTab.targetId);
-        const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
-        browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
-        const extensionCdpUrl = routeContext.forProfile("e2e").profile.cdpUrl;
-        const proofUrl = `http://127.0.0.1:${gatewayPort}/browser-owner-proof`;
-        diagnostic.arm(selectedTab.targetId, unrelatedTab.targetId);
-        diagnostic.mark("relay.clients", relay.bridge.cdpClientCount);
-        for (const session of [...chromeMcpSessions.values()].slice(0, 8)) {
-          diagnostic.peer(session.client.getServerVersion());
-        }
-        const stopPageObservation = diagnostic.watchPage(controlled, proofUrl);
-        const selectedOwner = relay.bridge.captureOperationTarget(selectedTab.targetId);
-        const unrelatedOwner = relay.bridge.captureOperationTarget(unrelatedTab.targetId);
-        const actedPage = await getPageForTargetId({
-          cdpUrl: extensionCdpUrl,
-          targetId: selectedTab.targetId,
-          ssrfPolicy: browserState.resolved.ssrfPolicy,
-        });
-        const detachedNavigation = vi.spyOn(actedPage, "goto").mockImplementationOnce(() => {
-          diagnostic.mark("injection.used", true);
-          return Promise.reject(new Error("page.goto: Frame has been detached"));
-        });
-        const worker = context
-          .serviceWorkers()
-          .find((entry) => entry.url().startsWith(`chrome-extension://${extensionId}/`));
-        if (!worker) {
-          throw new Error("Extension service worker missing");
-        }
-        const finishNavigationProbe = await holdNavigationAccessCheck(
-          worker,
-          `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
-        );
-        try {
-          const navigationResponse = await dispatcher.dispatch({
-            method: "POST",
-            path: "/navigate",
+        for (const navigationMode of ["all", "selected"] as const) {
+          const proofUrl = `http://127.0.0.1:${gatewayPort}/browser-owner-proof?mode=${navigationMode}`;
+          if (navigationMode === "selected") {
+            await extensionPage.evaluate(
+              async (urls) => {
+                const tabs = await chrome.tabs.query({});
+                const tabIds = tabs
+                  .filter((tab) => urls.includes(tab.url ?? ""))
+                  .map((tab) => tab.id);
+                const groupId = await chrome.tabs.group({ tabIds });
+                await chrome.tabGroups.update(groupId, { title: "OpenClaw" });
+                await chrome.runtime.sendMessage({ type: "setAccessMode", accessMode: "selected" });
+              },
+              [controlled.url(), distractingUrl],
+            );
+          }
+          const liveTabsResponse = await dispatcher.dispatch({
+            method: "GET",
+            path: "/tabs",
             query: { profile: "e2e" },
-            body: {
-              targetId: selectedTab.targetId,
-              url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
-            },
           });
-          diagnostic.mark("navigate.status", navigationResponse.status);
-          expect(navigationResponse.status, JSON.stringify(navigationResponse.body)).toBe(200);
-          expect(navigationResponse.body).toMatchObject({
-            ok: true,
-            targetId: selectedTab.targetId,
-            url: `http://127.0.0.1:${gatewayPort}/browser-owner-proof`,
-          });
-          expect(detachedNavigation).toHaveBeenCalledTimes(1);
-          const recoveredPage = await getPageForTargetId({
+          const liveTabs = (
+            liveTabsResponse.body as { tabs?: Array<{ targetId?: string; url?: string }> }
+          ).tabs;
+          const selectedTab = liveTabs?.find((tab) => tab.url === controlled.url());
+          const unrelatedTab = liveTabs?.find((tab) => tab.url === distractingUrl);
+          if (!selectedTab?.targetId || !unrelatedTab?.targetId) {
+            throw new Error(`Extension navigation proof tabs missing: ${JSON.stringify(liveTabs)}`);
+          }
+          expect(selectedTab.targetId).not.toBe(unrelatedTab.targetId);
+          const previousSsrfPolicy = browserState.resolved.ssrfPolicy;
+          browserState.resolved.ssrfPolicy = { allowPrivateNetwork: true };
+          const extensionCdpUrl = routeContext.forProfile("e2e").profile.cdpUrl;
+          diagnostic.arm(selectedTab.targetId, unrelatedTab.targetId);
+          diagnostic.mark("relay.clients", relay.bridge.cdpClientCount);
+          for (const session of [...chromeMcpSessions.values()].slice(0, 8)) {
+            diagnostic.peer(session.client.getServerVersion());
+          }
+          const stopPageObservation = diagnostic.watchPage(controlled, proofUrl);
+          const selectedOwner = relay.bridge.captureOperationTarget(selectedTab.targetId);
+          const unrelatedOwner = relay.bridge.captureOperationTarget(unrelatedTab.targetId);
+          const actedPage = await getPageForTargetId({
             cdpUrl: extensionCdpUrl,
             targetId: selectedTab.targetId,
             ssrfPolicy: browserState.resolved.ssrfPolicy,
           });
-          diagnostic.mark("adapter.fresh", recoveredPage !== actedPage);
-          expect(recoveredPage).not.toBe(actedPage);
-          expect(distractingPage.url()).toBe(distractingUrl);
-          process.stderr.write(
-            "[browser-extension-e2e] injected-detach=1 production-reconnect=1 owner-target-preserved=1 unrelated-tab-unchanged=1 status=200\n",
-          );
-        } finally {
-          diagnostic.mark("injection.calls", detachedNavigation.mock.calls.length);
-          diagnostic.mark("owner.selected", selectedOwner?.() === selectedTab.targetId);
-          diagnostic.mark("owner.unrelated", unrelatedOwner?.() === unrelatedTab.targetId);
-          diagnostic.mark("direct.url", controlled.url() === proofUrl);
-          diagnostic.mark("unrelated.url", distractingPage.url() === distractingUrl);
-          diagnostic.mark("relay.clients", relay.bridge.cdpClientCount);
-          stopPageObservation();
-          diagnostic.flush();
-          detachedNavigation.mockRestore();
-          browserState.resolved.ssrfPolicy = previousSsrfPolicy;
-          const probe = await finishNavigationProbe();
-          expect(probe.heldReads).toBeGreaterThan(0);
-          expect(probe.sawLoad).toBe(true);
+          const detachedNavigation = vi.spyOn(actedPage, "goto").mockImplementationOnce(() => {
+            diagnostic.mark("injection.used", true);
+            return Promise.reject(new Error("page.goto: Frame has been detached"));
+          });
+          const worker = context
+            .serviceWorkers()
+            .find((entry) => entry.url().startsWith(`chrome-extension://${extensionId}/`));
+          if (!worker) {
+            throw new Error("Extension service worker missing");
+          }
+          const finishNavigationProbe = await holdNavigationAccessCheck(worker, proofUrl);
+          try {
+            const navigationResponse = await dispatcher.dispatch({
+              method: "POST",
+              path: "/navigate",
+              query: { profile: "e2e" },
+              body: {
+                targetId: selectedTab.targetId,
+                url: proofUrl,
+              },
+            });
+            diagnostic.mark("navigate.status", navigationResponse.status);
+            expect(navigationResponse.status, JSON.stringify(navigationResponse.body)).toBe(200);
+            expect(navigationResponse.body).toMatchObject({
+              ok: true,
+              targetId: selectedTab.targetId,
+              url: proofUrl,
+            });
+            expect(detachedNavigation).toHaveBeenCalledTimes(1);
+            const recoveredPage = await getPageForTargetId({
+              cdpUrl: extensionCdpUrl,
+              targetId: selectedTab.targetId,
+              ssrfPolicy: browserState.resolved.ssrfPolicy,
+            });
+            diagnostic.mark("adapter.fresh", recoveredPage !== actedPage);
+            expect(recoveredPage).not.toBe(actedPage);
+            expect(distractingPage.url()).toBe(distractingUrl);
+            process.stderr.write(
+              `[browser-extension-e2e] mode=${navigationMode} injected-detach=1 production-reconnect=1 owner-target-preserved=1 unrelated-tab-unchanged=1 status=200\n`,
+            );
+          } finally {
+            diagnostic.mark("injection.calls", detachedNavigation.mock.calls.length);
+            diagnostic.mark("owner.selected", selectedOwner?.() === selectedTab.targetId);
+            diagnostic.mark("owner.unrelated", unrelatedOwner?.() === unrelatedTab.targetId);
+            diagnostic.mark("direct.url", controlled.url() === proofUrl);
+            diagnostic.mark("unrelated.url", distractingPage.url() === distractingUrl);
+            diagnostic.mark("relay.clients", relay.bridge.cdpClientCount);
+            stopPageObservation();
+            detachedNavigation.mockRestore();
+            browserState.resolved.ssrfPolicy = previousSsrfPolicy;
+            const probe = await finishNavigationProbe();
+            expect(probe.heldReads).toBeGreaterThan(0);
+            expect(probe.sawLoad).toBe(true);
+          }
         }
 
         await extensionPage.evaluate(
@@ -790,11 +788,5 @@ describe.runIf(runE2E)("Chrome native bootstrap Chromium E2E", () => {
         expect(context.pages()).toHaveLength(pageCountBeforeUnavailableSelection);
       },
     );
-  }
-
-  it.each(["all", "selected"] as const)(
-    "pre-registers, auto-pairs, navigates in %s mode, and revokes a paused tab",
-    testBootstrap,
-    120_000,
-  );
+  }, 120_000);
 });

@@ -57,9 +57,12 @@ export async function holdNavigationAccessCheck(worker: Worker, url: string) {
     };
     self.navigationProbe = probe;
     chrome.tabs.get = async (id) => {
-      const tab = await originalGet.call(chrome.tabs, id);
-      if (id === tabId && !probe.sawLoad) {
+      const waitForLoad = id === tabId && !probe.sawLoad;
+      if (waitForLoad) {
         probe.heldReads += 1;
+      }
+      const tab = await originalGet.call(chrome.tabs, id);
+      if (waitForLoad) {
         await loaded;
       }
       return tab;
