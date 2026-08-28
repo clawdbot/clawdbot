@@ -5,6 +5,7 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
+import type { ChatGoalAction, ChatGoalDraft } from "../../lib/chat/chat-types.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
@@ -15,13 +16,6 @@ import { setChatError } from "./chat-send-queue-state.ts";
 import type { ChatSendSubmitOptions } from "./chat-send-submit.ts";
 import { refreshChatSessionListForTarget } from "./chat-session.ts";
 import { adoptStartedChatRun } from "./run-lifecycle.ts";
-
-export type ChatGoalDraft = { sessionId?: string } & (
-  | { action: "start"; objective: string }
-  | { action: "edit"; goalId: string; objective: string }
-);
-
-export type ChatGoalAction = "pause" | "resume" | "clear";
 
 type ChatGoalHost = ChatHost & {
   handleSendChat: (

@@ -4,11 +4,15 @@ import type { GatewayBrowserClient } from "../../../api/gateway.ts";
 import type { ModelCatalogEntry, SessionsListResult } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
-import type { ChatGoalDraftMode, ChatQueueItem } from "../../../lib/chat/chat-types.ts";
+import type {
+  ChatGoalAction,
+  ChatGoalDraft,
+  ChatGoalDraftMode,
+  ChatQueueItem,
+} from "../../../lib/chat/chat-types.ts";
 import type { ControlUiFollowUpMode } from "../../../lib/chat/follow-up-mode.ts";
 import type { ProviderUsageDisplayProps } from "../../../lib/provider-quota-summary.ts";
 import type { SessionToolOverrides } from "../../../lib/sessions/patch.ts";
-import type { ChatGoalAction, ChatGoalDraft } from "../chat-goals.ts";
 import type { ComposerDictationController } from "../composer-dictation.ts";
 import type { ComposerMicrophonePicker } from "../composer-microphone-picker.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "../input-history.ts";

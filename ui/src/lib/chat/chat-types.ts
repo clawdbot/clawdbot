@@ -39,6 +39,13 @@ export type ChatGoalDraftMode = { sessionId?: string } & (
   | { action: "edit"; goalId: string; previousDraft: string }
 );
 
+export type ChatGoalDraft = { sessionId?: string } & (
+  | { action: "start"; objective: string }
+  | { action: "edit"; goalId: string; objective: string }
+);
+
+export type ChatGoalAction = "pause" | "resume" | "clear";
+
 export type ChatComposerMemoryFallback = {
   goalMode?: ChatGoalDraftMode;
   message: string;

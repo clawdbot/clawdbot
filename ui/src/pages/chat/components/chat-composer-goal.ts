@@ -4,6 +4,7 @@ import type { SessionGoal } from "../../../api/types.ts";
 import { strokeIcon } from "../../../components/icons-tools.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
+import type { ChatGoalAction } from "../../../lib/chat/chat-types.ts";
 import {
   formatGoalDetail,
   formatGoalElapsed,
@@ -11,7 +12,6 @@ import {
   formatGoalUsage,
   goalElapsedMs,
 } from "../../../lib/session-goal.ts";
-import type { ChatGoalAction } from "../chat-goals.ts";
 import type { ChatComposerState } from "./chat-composer-types.ts";
 
 const goalElapsedTimers = new Map<HTMLElement, ReturnType<typeof setInterval>>();
