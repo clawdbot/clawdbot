@@ -89,6 +89,10 @@ export function syncTypefaceStylesheets(faces: TypefacePair): void {
   }
   loadTypefaceStylesheet(faces.ui);
   loadTypefaceStylesheet(faces.chat);
+  // base.css --mono names JetBrains Mono for every theme's code spans, but only
+  // the @font-face declaration here makes that true; the woff2 itself downloads
+  // lazily on the first rendered code glyph, so this costs one small stylesheet.
+  loadTypefaceStylesheet("jetbrains-mono");
 }
 
 export function loadTypefaceSpecimens(): void {
