@@ -415,7 +415,7 @@ describe("cli session history", () => {
     });
   });
 
-  it("records internal_system provenance for harness-injected user turns only", async () => {
+  it("omits isMeta rows and records visible harness context provenance", async () => {
     await withClaudeProjectsDir(async ({ homeDir, sessionId, filePath }) => {
       await fs.writeFile(
         filePath,
@@ -470,20 +470,17 @@ describe("cli session history", () => {
 
       const messages = readClaudeCliSessionMessages({ cliSessionId: sessionId, homeDir });
 
-      expect(messages).toHaveLength(4);
+      expect(messages).toHaveLength(3);
+      expect(JSON.stringify(messages)).not.toContain("Base directory for this skill");
       // The operator-authored turn stays free of injected provenance.
       expectFields(messages[0], { role: "user" });
       expect(readRecord(messages[0]).provenance).toBeUndefined();
-      // Harness-written turns carry the provenance recorded by the CLI flags.
+      // Compact summaries and transcript-only rows stay visible as internal context.
       expectFields(readRecord(messages[1]).provenance, {
         kind: "internal_system",
         sourceTool: "cli_harness_context",
       });
       expectFields(readRecord(messages[2]).provenance, {
-        kind: "internal_system",
-        sourceTool: "cli_harness_context",
-      });
-      expectFields(readRecord(messages[3]).provenance, {
         kind: "internal_system",
         sourceTool: "cli_harness_context",
       });

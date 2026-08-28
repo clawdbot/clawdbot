@@ -5208,7 +5208,7 @@ describe("gateway server chat", () => {
         }>(ws, "chat.history", makeMainSessionParams({ limit: 100 }));
         expect(history.ok).toBe(true);
         const messages = history.payload?.messages ?? [];
-        expect(messages).toHaveLength(108);
+        expect(messages).toHaveLength(107);
         const userMessage = expectDefined(messages[0], "oldest imported user message") as {
           role?: string;
           content?: string;
@@ -5218,17 +5218,9 @@ describe("gateway server chat", () => {
         expect(userMessage.content).toBe("hi");
         // The operator-authored turn carries no injected provenance.
         expect(userMessage.provenance).toBeUndefined();
-        const injectedMessage = expectDefined(
-          messages[1],
-          "harness-injected imported user message",
-        ) as { role?: string; provenance?: unknown };
-        expect(injectedMessage.role).toBe("user");
-        expect(injectedMessage.provenance).toMatchObject({
-          kind: "internal_system",
-          sourceTool: "cli_harness_context",
-        });
+        expect(JSON.stringify(messages)).not.toContain("Base directory for this skill");
         const assistantMessage = expectDefined(
-          messages[2],
+          messages[1],
           "oldest imported assistant message",
         ) as { role?: string; provider?: string };
         expect(assistantMessage.role).toBe("assistant");
@@ -5236,9 +5228,9 @@ describe("gateway server chat", () => {
         expect(JSON.stringify(messages)).toContain("imported message 105");
         expect(history.payload?.hasMore).toBe(false);
         expect(history.payload?.nextOffset).toBeUndefined();
-        expect(history.payload?.totalMessages).toBe(108);
+        expect(history.payload?.totalMessages).toBe(107);
         expect(history.payload?.completeSnapshot).toBe(true);
-        expect(new Set(messages.map((message) => message["__openclaw"]?.id)).size).toBe(108);
+        expect(new Set(messages.map((message) => message["__openclaw"]?.id)).size).toBe(107);
       } finally {
         homeEnvSnapshot.restore();
       }
