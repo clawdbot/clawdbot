@@ -36,6 +36,7 @@ export function createEmptyPluginRegistry(): PluginRegistry {
     detachedTaskRuntimes: [],
     legacyInternalHooks: [],
     memoryCapabilities: [],
+    browserNodeDelegations: [],
     memoryCorpusSupplements: [],
     memoryPromptPreparations: [],
     memoryPromptSupplements: [],

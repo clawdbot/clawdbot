@@ -359,6 +359,14 @@ function sanitizeDiagnosticEvent(event: DiagnosticEventPayload): DiagnosticStabi
       }
       assignReasonCode(record, event.outcomeReason ?? event.reason);
       break;
+    case "session_steward.boundary_decision":
+    case "session_steward.boundary_rejected":
+      record.surface = event.surface;
+      record.action = event.action;
+      record.outcome = event.outcome;
+      record.level = event.type === "session_steward.boundary_rejected" ? "warning" : "info";
+      assignReasonCode(record, event.reason);
+      break;
     case "session.turn.created":
       record.source = event.agentId;
       record.channel = event.channel;

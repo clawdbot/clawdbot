@@ -15,6 +15,7 @@ import type { ModelCatalogEntry } from "../../agents/model-catalog.types.js";
 import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { CliDeps } from "../../cli/deps.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { AgentRunDelegatedAuthority } from "../../infra/agent-run-registry.js";
 import type {
   PluginApprovalRequest,
   PluginApprovalRequestPayload,
@@ -145,6 +146,10 @@ export type GatewayClient = {
     cronRunContinuation?: boolean;
     agentRuntimeIdentity?: AgentRuntimeIdentity;
     pluginRuntimeOwnerId?: string;
+    /** Host-issued Browser compatibility authority; never accepted from wire params. */
+    browserRequestCompatibility?: true;
+    /** Internal plugin lifecycle authority rechecked immediately before effects. */
+    pluginRuntimeAuthority?: () => boolean;
     /** Plugin-owned in-process invoke hooks; never accepted from Gateway wire params. */
     nodeInvokeStream?: GatewayNodeInvokeStream;
     agentRunTracking?: GatewayAgentRunTaskOwner;
@@ -408,6 +413,11 @@ type GatewayResidentBridgeContext = {
   workerPlacementRunnerAvailabilityReader?: WorkerPlacementRunnerAvailabilityReader;
   /** Use-time approval authority validation over the live run/worker owners. */
   validateAgentRuntimeApprovalAuthority?: AgentRuntimeApprovalAuthorityValidator;
+  /** Internal bridge that aborts work when the exact originating run authority closes. */
+  registerAgentRuntimeAuthorityClosed?: (
+    authority: AgentRunDelegatedAuthority,
+    onClosed: () => void,
+  ) => () => void;
   /** One-way local-to-worker dispatch; absent when cloud workers are disabled. */
   workerPlacementDispatchService?: WorkerPlacementDispatchContract;
   githubPublicationService?: import("../github-publication.js").GitHubPublicationCoordinator;

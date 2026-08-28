@@ -19,6 +19,37 @@ import type {
   EmbeddingProviderIndexIdentity,
   EmbeddingProviderRuntime,
 } from "./embedding-provider-types.js";
+import type { PluginOrigin } from "./plugin-origin.types.js";
+import type { PluginRecord } from "./plugin-record.types.js";
+
+/** A narrow, in-process Browser-owned request surface for approved plugin consumers. */
+export type BrowserNodeDelegationRequest = {
+  method: "GET" | "POST" | "DELETE";
+  path: string;
+  body?: unknown;
+  timeoutMs: number;
+  nodeId: string;
+};
+
+/** Browser registers this capability; the registry exposes it only to named consumers. */
+export type BrowserNodeDelegation = {
+  consumerPluginIds: readonly string[];
+  request: (
+    params: BrowserNodeDelegationRequest & { consumerPluginId: string },
+  ) => Promise<unknown>;
+};
+
+export type PluginBrowserNodeDelegationRegistration = {
+  pluginId: string;
+  providerRecord: PluginRecord;
+  provider: {
+    origin: PluginOrigin;
+    source: string;
+    rootDir?: string;
+    trustedOfficialInstall?: boolean;
+  };
+  delegation: BrowserNodeDelegation;
+};
 
 export type ContextEngineFactoryContext = {
   config?: OpenClawConfig;

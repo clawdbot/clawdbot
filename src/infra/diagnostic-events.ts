@@ -151,6 +151,19 @@ export type DiagnosticSecurityEventInput = Omit<
   eventId?: string;
 };
 
+type DiagnosticSessionStewardBoundaryEvent = DiagnosticBaseEvent & {
+  type: "session_steward.boundary_decision" | "session_steward.boundary_rejected";
+  surface: string;
+  action?: string;
+  outcome: "allow" | "reject";
+  boundaryKind: "agent" | "global" | "unscoped" | "unknown" | "malformed";
+  agentRelation: "same_agent" | "cross_agent" | "unbound";
+  affectedSession: string;
+  ownerAgentId: string;
+  requestedAgentId: string;
+  reason?: string;
+};
+
 export type DiagnosticWebhookReceivedEvent = DiagnosticBaseEvent & {
   type: "webhook.received";
   channel: string;
@@ -849,6 +862,7 @@ export type DiagnosticEventPayload =
   | DiagnosticPayloadLargeEvent
   | DiagnosticLogRecordEvent
   | DiagnosticSecurityEvent
+  | DiagnosticSessionStewardBoundaryEvent
   | DiagnosticTelemetryExporterEvent
   | DiagnosticAsyncQueueDroppedEvent
   | DiagnosticFailoverEvent;

@@ -200,6 +200,31 @@ describe("agent runtime identity token", () => {
     });
   });
 
+  it("round-trips an opaque operation proof without exposing its request material", async () => {
+    useTempHome();
+    const runtimeToken = await importRuntimeTokenModule();
+    const token = await runtimeToken.mintAgentRuntimeIdentityToken({
+      agentId: "browser-session-credential-steward",
+      sessionKey: "agent:browser-session-credential-steward:direct:opaque",
+      ...operationalRun(),
+      gatewayToolOperationApproval: {
+        owner: "browser",
+        authorityId: "authority-1",
+        requestFingerprint: "fingerprint-1",
+        expiresAtMs: Date.now() + 30_000,
+      },
+    });
+
+    const identity = await runtimeToken.verifyAgentRuntimeIdentityToken(token);
+    expect(identity?.gatewayToolOperationApproval).toEqual({
+      owner: "browser",
+      authorityId: "authority-1",
+      requestFingerprint: "fingerprint-1",
+      expiresAtMs: expect.any(Number),
+    });
+    expect(token).not.toContain("opaque");
+  });
+
   it("round-trips explicit local turn provenance without inferring it from the session key", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();

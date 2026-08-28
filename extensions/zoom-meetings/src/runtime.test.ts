@@ -1,4 +1,6 @@
+import type { BrowserNodeDelegationRequest } from "openclaw/plugin-sdk/browser-node-delegation-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { attachBrowserNodeDelegationForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { zoomMeetingsConfig } from "./config.js";
 import { ZoomMeetingsRuntime } from "./runtime.js";
@@ -101,13 +103,16 @@ function runtimeHarness(options?: RuntimeHarnessOptions) {
     }
     throw new Error(`unexpected browser request ${String(params.method)} ${String(params.path)}`);
   });
-  return {
-    gatewayRequest,
-    runtime: {
-      gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
-    } as unknown as PluginRuntime,
-    state,
+  const browser = {
+    request: async (params: BrowserNodeDelegationRequest) =>
+      await gatewayRequest("browser.request", params),
   };
+  const runtime = {
+    gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
+    browser,
+  } as unknown as PluginRuntime;
+  attachBrowserNodeDelegationForTest(runtime, browser);
+  return { gatewayRequest, runtime, state };
 }
 
 type RuntimeInstance = InstanceType<typeof ZoomMeetingsRuntime>;
@@ -223,7 +228,6 @@ describe("Zoom meeting session flow", () => {
     expect(harness.gatewayRequest).toHaveBeenCalledWith(
       "browser.request",
       expect.objectContaining({ path: "/tabs/open" }),
-      expect.objectContaining({ scopes: ["operator.admin"] }),
     );
   });
 
@@ -278,7 +282,6 @@ describe("Zoom meeting session flow", () => {
     expect(harness.gatewayRequest).not.toHaveBeenCalledWith(
       "browser.request",
       expect.objectContaining({ path: "/tabs/open" }),
-      expect.anything(),
     );
     expect(await runtime.leave(joined.session.id)).toMatchObject({
       browserLeft: true,
@@ -330,7 +333,6 @@ describe("Zoom meeting session flow", () => {
         path: "/act",
         body: expect.objectContaining({ targetId: "zoom-tab" }),
       }),
-      expect.objectContaining({ scopes: ["operator.admin"] }),
     );
   });
 

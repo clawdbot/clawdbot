@@ -13,6 +13,7 @@ import { AX_REF_PATTERN, normalizeCdpWsUrl } from "./cdp.js";
 import {
   withBrowserNavigationPolicy,
   assertBrowserNavigationAllowed,
+  redactBrowserNavigationUrl,
   type BrowserNavigationPolicyOptions,
 } from "./navigation-guard.js";
 import {
@@ -352,7 +353,7 @@ async function readPagesViaPlaywright(
             page: {
               targetId: targetInfo.targetId,
               title: targetInfo.title,
-              url,
+              url: redactBrowserNavigationUrl(url),
               type: "page" as const,
             },
           };
@@ -523,7 +524,7 @@ export async function createPageViaPlaywright(
   return {
     targetId: tid,
     title: await page.title().catch(() => ""),
-    url: page.url(),
+    url: redactBrowserNavigationUrl(page.url()),
     type: "page",
   };
 }

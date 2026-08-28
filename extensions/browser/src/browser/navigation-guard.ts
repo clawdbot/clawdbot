@@ -12,15 +12,141 @@ import {
   type SsrFPolicy,
 } from "../infra/net/ssrf.js";
 import { matchesHostnameAllowlist, normalizeHostname } from "../sdk-security-runtime.js";
+import {
+  BROWSER_OAUTH_CALLBACK_PATH_RE,
+  BROWSER_OAUTH_CREDENTIAL_QUERY_KEYS,
+  BROWSER_OPAQUE_CREDENTIAL_PATH_RE,
+  getBrowserUrlParameterSets,
+  hasBrowserOAuthContext,
+  isBrowserGenericCredentialQueryKey,
+  isBrowserCredentialQueryKey,
+} from "./browser-url-credentials.js";
 
 const NETWORK_NAVIGATION_PROTOCOLS = new Set(["http:", "https:"]);
 const SAFE_NON_NETWORK_URLS = new Set(["about:blank"]);
+const NAVIGATION_BLOCKED_QUERY_KEYS = new Set([
+  ...BROWSER_OAUTH_CREDENTIAL_QUERY_KEYS,
+  "client_secret",
+]);
 const BROWSER_NAVIGATION_CREDENTIALS_BLOCKED_MESSAGE =
   "Navigation blocked: URL-embedded credentials are not supported for page navigation. Set HTTP Basic auth with `openclaw browser set credentials <username> <password>` or use an authenticated browser profile.";
+const BROWSER_OPAQUE_CREDENTIAL_PATH_GLOBAL_RE = new RegExp(
+  BROWSER_OPAQUE_CREDENTIAL_PATH_RE.source,
+  "giu",
+);
 
 function isAllowedNonNetworkNavigationUrl(parsed: URL): boolean {
   // Keep non-network navigation explicit; about:blank is the only allowed bootstrap URL.
   return SAFE_NON_NETWORK_URLS.has(parsed.href);
+}
+
+function hasNavigationCredentialQuery(parsed: URL): boolean {
+  const parameterSets = getBrowserUrlParameterSets(parsed);
+  return parameterSets.some((params) =>
+    [...params].some(([key, value]) => {
+      const normalizedKey = key.toLowerCase();
+      return (
+        value.trim().length > 0 &&
+        (NAVIGATION_BLOCKED_QUERY_KEYS.has(normalizedKey) ||
+          isBrowserGenericCredentialQueryKey(key))
+      );
+    }),
+  );
+}
+
+function getNavigationHashParts(hash: string): {
+  route: string;
+  rawQuery?: string;
+  hasQueryDelimiter: boolean;
+  params?: URLSearchParams;
+} {
+  const fragment = hash.startsWith("#") ? hash.slice(1) : hash;
+  const queryIndex = fragment.indexOf("?");
+  const route =
+    queryIndex >= 0
+      ? fragment.slice(0, queryIndex)
+      : fragment.startsWith("/") || !fragment.includes("=")
+        ? fragment
+        : "";
+  const hasQueryDelimiter = queryIndex >= 0;
+  const query = queryIndex >= 0 ? fragment.slice(queryIndex + 1) : route ? "" : fragment;
+  return {
+    route,
+    ...(queryIndex >= 0 || !route ? { rawQuery: query } : {}),
+    hasQueryDelimiter,
+    ...(query.includes("=") ? { params: new URLSearchParams(query) } : {}),
+  };
+}
+
+function redactNavigationParameterSet(
+  params: URLSearchParams,
+  oauthContext: boolean,
+): { value: string; changed: boolean } {
+  const redacted = new URLSearchParams();
+  let changed = false;
+  for (const [key, value] of params) {
+    const shouldRedact = isBrowserCredentialQueryKey(key, oauthContext);
+    const redactedValue = shouldRedact ? "REDACTED" : value;
+    changed ||= redactedValue !== value;
+    redacted.append(key, redactedValue);
+  }
+  return { value: redacted.toString(), changed };
+}
+
+function redactOpaqueCredentialPath(value: string): { value: string; changed: boolean } {
+  const redacted = value.replace(BROWSER_OPAQUE_CREDENTIAL_PATH_GLOBAL_RE, "$1REDACTED");
+  return { value: redacted, changed: redacted !== value };
+}
+
+/** Redact URL credentials while preserving safe navigation context for output. */
+export function redactBrowserNavigationUrl(url: string): string {
+  const rawUrl = url.trim();
+  if (!rawUrl) {
+    return rawUrl;
+  }
+  try {
+    const parsed = new URL(rawUrl);
+    const originalUsername = parsed.username;
+    const originalPassword = parsed.password;
+    const originalPathname = parsed.pathname;
+    const originalSearch = parsed.search;
+    const originalHash = parsed.hash;
+    parsed.username = "";
+    parsed.password = "";
+    const hashParts = getNavigationHashParts(parsed.hash);
+    const parameterSets = getBrowserUrlParameterSets(parsed);
+    const hashRoute = hashParts.route;
+    const oauthContext =
+      hasBrowserOAuthContext(parsed, parameterSets) ||
+      BROWSER_OAUTH_CALLBACK_PATH_RE.test(hashRoute);
+    const redactedPathname = redactOpaqueCredentialPath(parsed.pathname);
+    if (redactedPathname.changed) {
+      parsed.pathname = redactedPathname.value;
+    }
+    const redactedSearch = redactNavigationParameterSet(parsed.searchParams, oauthContext);
+    if (redactedSearch.changed) {
+      parsed.search = `?${redactedSearch.value}`;
+    }
+    const redactedHashRoute = redactOpaqueCredentialPath(hashParts.route);
+    const redactedHash = hashParts.params
+      ? redactNavigationParameterSet(hashParts.params, oauthContext)
+      : undefined;
+    if (redactedHashRoute.changed || redactedHash?.changed) {
+      const route = redactedHashRoute.value;
+      const query = redactedHash?.value ?? hashParts.rawQuery;
+      const querySeparator = hashParts.hasQueryDelimiter ? "?" : "";
+      parsed.hash = `#${route}${query !== undefined ? `${querySeparator}${query}` : ""}`;
+    }
+    return originalUsername === parsed.username &&
+      originalPassword === parsed.password &&
+      originalPathname === parsed.pathname &&
+      originalSearch === parsed.search &&
+      originalHash === parsed.hash
+      ? rawUrl
+      : parsed.toString();
+  } catch {
+    return "[redacted invalid browser URL]";
+  }
 }
 
 /** Raised when a browser navigation URL fails syntax or policy validation. */
@@ -46,7 +172,7 @@ export function parseBrowserNavigationUrl(url: string): URL {
     throw new InvalidBrowserNavigationUrlError(`Invalid URL: ${diagnostic}`);
   }
 
-  if (parsed.username || parsed.password) {
+  if (parsed.username || parsed.password || hasNavigationCredentialQuery(parsed)) {
     throw new InvalidBrowserNavigationUrlError(BROWSER_NAVIGATION_CREDENTIALS_BLOCKED_MESSAGE);
   }
   return parsed;

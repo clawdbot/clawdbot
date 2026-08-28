@@ -4,7 +4,6 @@ import type { GatewayMethodDescriptor } from "../gateway/methods/descriptor.js";
 import type { GatewayRequestHandlers } from "../gateway/server-methods/types.js";
 import type { InternalHookHandler } from "../hooks/internal-hook-types.js";
 import type { HookEntry } from "../hooks/types.js";
-import type { JsonSchemaObject } from "../shared/json-schema.types.js";
 import type { DetachedTaskLifecycleRuntimeRegistration } from "../tasks/detached-task-runtime-contract.js";
 import type {
   AgentToolResultMiddleware,
@@ -13,8 +12,6 @@ import type {
 } from "./agent-tool-result-middleware-types.js";
 import type { PluginBoardWidgetContentKind } from "./board-widget-content-kind.types.js";
 import type { CodexAppServerExtensionFactory } from "./codex-app-server-extension-types.js";
-import type { PluginCompatCode } from "./compat/registry.js";
-import type { PluginActivationSource } from "./config-state.js";
 import type { EmbeddingProviderAdapter } from "./embedding-provider-types.js";
 import type {
   PluginAgentEventSubscriptionRegistration,
@@ -27,21 +24,14 @@ import type {
   PluginTrustedToolPolicyRegistration,
 } from "./host-hooks.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
+import type { PluginDiagnostic } from "./manifest-types.js";
 import type {
-  PluginBundleFormat,
-  PluginConfigUiHint,
-  PluginDiagnostic,
-  PluginFormat,
-} from "./manifest-types.js";
-import type {
-  PluginManifestContracts,
-  PluginManifestDashboard,
   PluginManifestDashboardActionVerb,
   PluginManifestDashboardDataBinding,
-  PluginManifestMcpServer,
 } from "./manifest.js";
-import type { PluginKind } from "./plugin-kind.types.js";
+import type { PluginRecord } from "./plugin-record.types.js";
 import type {
+  PluginBrowserNodeDelegationRegistration,
   ContextEngineRegistration,
   MemoryCorpusSupplementRegistration,
   MemoryPluginCapabilityRegistration,
@@ -53,12 +43,12 @@ import type {
 } from "./registry-contribution-types.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { SessionCatalogProvider } from "./session-catalog.js";
-import type { PluginDependencyStatus } from "./status-dependencies-core.js";
 import type {
   OpenClawPluginHttpRouteAuth,
   OpenClawPluginHttpRouteUpgradeHandler,
 } from "./types.js";
 import type { PluginMcpServerConnectionResolverRegistration } from "./types.mcp-connection.js";
+export type { PluginRecord } from "./plugin-record.types.js";
 type ChannelPlugin = import("../channels/plugins/types.plugin.js").ChannelPlugin;
 type CliBackendPlugin = import("./types.js").CliBackendPlugin;
 type ImageGenerationProviderPlugin = import("./types.js").ImageGenerationProviderPlugin;
@@ -460,71 +450,6 @@ type PluginConversationBindingResolvedHandlerRegistration = {
   rootDir?: string;
 };
 
-export type PluginRecord = {
-  id: string;
-  name: string;
-  packageVersion?: string;
-  version?: string;
-  builtWithOpenClawVersion?: string;
-  packageName?: string;
-  description?: string;
-  format?: PluginFormat;
-  bundleFormat?: PluginBundleFormat;
-  bundleCapabilities?: string[];
-  kind?: PluginKind | PluginKind[];
-  source: string;
-  rootDir?: string;
-  origin: PluginOrigin;
-  workspaceDir?: string;
-  trustedOfficialInstall?: boolean;
-  enabled: boolean;
-  explicitlyEnabled?: boolean;
-  activated?: boolean;
-  imported?: boolean;
-  compat?: readonly PluginCompatCode[];
-  activationSource?: PluginActivationSource;
-  activationReason?: string;
-  status: "loaded" | "disabled" | "error";
-  error?: string;
-  failedAt?: Date;
-  failurePhase?: "validation" | "load" | "register";
-  toolNames: string[];
-  hookNames: string[];
-  channelIds: string[];
-  cliBackendIds: string[];
-  providerIds: string[];
-  syntheticAuthRefs?: string[];
-  embeddingProviderIds: string[];
-  speechProviderIds: string[];
-  realtimeTranscriptionProviderIds: string[];
-  realtimeVoiceProviderIds: string[];
-  mediaUnderstandingProviderIds: string[];
-  transcriptSourceProviderIds: string[];
-  imageGenerationProviderIds: string[];
-  videoGenerationProviderIds: string[];
-  musicGenerationProviderIds: string[];
-  webFetchProviderIds: string[];
-  webSearchProviderIds: string[];
-  migrationProviderIds: string[];
-  contextEngineIds?: string[];
-  agentHarnessIds: string[];
-  cliCommands: string[];
-  services: string[];
-  gatewayDiscoveryServiceIds: string[];
-  commands: string[];
-  commandAliases?: PluginManifestRecord["commandAliases"];
-  httpRoutes: number;
-  hookCount: number;
-  configSchema: boolean;
-  configUiHints?: Record<string, PluginConfigUiHint>;
-  configJsonSchema?: JsonSchemaObject;
-  contracts?: PluginManifestContracts;
-  dashboard?: PluginManifestDashboard;
-  mcpServers?: Record<string, PluginManifestMcpServer>;
-  memorySlotSelected?: boolean;
-  dependencyStatus?: PluginDependencyStatus;
-};
-
 export type PluginRegistry = {
   plugins: PluginRecord[];
   tools: PluginToolRegistration[];
@@ -559,6 +484,7 @@ export type PluginRegistry = {
   detachedTaskRuntimes: DetachedTaskLifecycleRuntimeRegistration[];
   legacyInternalHooks: PluginLegacyInternalHookRegistration[];
   memoryCapabilities: MemoryPluginCapabilityRegistration[];
+  browserNodeDelegations: PluginBrowserNodeDelegationRegistration[];
   memoryCorpusSupplements: MemoryCorpusSupplementRegistration[];
   memoryPromptPreparations: MemoryPromptPreparationRegistration[];
   memoryPromptSupplements: MemoryPromptSupplementRegistration[];

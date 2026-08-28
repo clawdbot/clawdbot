@@ -57,6 +57,8 @@
     "!dist/plugin-sdk/approval-reference-runtime.d.ts",
     "!dist/plugin-sdk/async-lock-runtime.d.ts",
     "!dist/plugin-sdk/browser-config.d.ts",
+    "!dist/plugin-sdk/browser-node-delegation-runtime.d.ts",
+    "!dist/plugin-sdk/browser-steward-runtime.d.ts",
     "!dist/plugin-sdk/bundled-channel-config-schema.d.ts",
     "!dist/plugin-sdk/channel-activity-runtime.d.ts",
     "!dist/plugin-sdk/channel-config-ui-hints.d.ts",
@@ -912,6 +914,12 @@
     },
     "./plugin-sdk/browser-config": {
       "default": "./dist/plugin-sdk/browser-config.js"
+    },
+    "./plugin-sdk/browser-node-delegation-runtime": {
+      "default": "./dist/plugin-sdk/browser-node-delegation-runtime.js"
+    },
+    "./plugin-sdk/browser-steward-runtime": {
+      "default": "./dist/plugin-sdk/browser-steward-runtime.js"
     },
     "./plugin-sdk/boolean-param": {
       "types": "./dist/plugin-sdk/boolean-param.d.ts",
@@ -2034,7 +2042,9 @@
     "android:i18n:check": "node --import ./scripts/tsx.mjs scripts/android-app-i18n.ts check",
     "apple:i18n:check": "node --import ./scripts/tsx.mjs scripts/apple-app-i18n.ts check",
     "ui:install": "node scripts/ui.js install",
-    "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts"
+    "verify": "node --import ./scripts/tsx.mjs scripts/verify.mts",
+    "agents:eval": "node scripts/agent-role-eval.mjs",
+    "agents:eval:contracts": "node scripts/agent-role-eval.mjs --contracts-only"
   },
   "dependencies": {
     "@agentclientprotocol/sdk": "1.4.0",

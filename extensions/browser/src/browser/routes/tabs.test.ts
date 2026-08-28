@@ -9,6 +9,7 @@ const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationResultAllowed: vi.fn(
     async (_opts?: { url: string; ssrfPolicy?: unknown }) => {},
   ),
+  redactBrowserNavigationUrl: vi.fn((url: string) => url),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
@@ -281,10 +282,39 @@ describe("browser tab routes", () => {
   beforeEach(() => {
     navigationGuardMocks.assertBrowserNavigationAllowed.mockReset();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockReset();
+    navigationGuardMocks.redactBrowserNavigationUrl.mockReset();
     navigationGuardMocks.withBrowserNavigationPolicy.mockReset();
+    navigationGuardMocks.redactBrowserNavigationUrl.mockImplementation((url: string) => url);
     navigationGuardMocks.withBrowserNavigationPolicy.mockImplementation((ssrfPolicy?: unknown) =>
       ssrfPolicy ? { ssrfPolicy } : {},
     );
+  });
+
+  it("redacts OAuth callback codes from tab-open responses", async () => {
+    const rawOAuthCode = "raw-oauth-code-123456";
+    navigationGuardMocks.redactBrowserNavigationUrl.mockImplementation((url: string) =>
+      url.replace(`code=${rawOAuthCode}`, "code=REDACTED"),
+    );
+    const profileCtx = createProfileContext({
+      openTab: vi.fn(async () => ({
+        targetId: "OAUTH-TAB",
+        title: "OAuth callback",
+        url: `https://auth.example/callback?code=${rawOAuthCode}`,
+        type: "page" as const,
+      })),
+    });
+
+    const response = await callTabsRoute({
+      method: "post",
+      path: "/tabs/open",
+      body: { url: `https://auth.example/callback?code=${rawOAuthCode}` },
+      profileCtx,
+    });
+
+    expect(response.body).toMatchObject({
+      url: "https://auth.example/callback?code=REDACTED",
+    });
+    expect(JSON.stringify(response.body)).not.toContain(rawOAuthCode);
   });
 
   it("validates tab-open input before resolving or leasing a profile", async () => {

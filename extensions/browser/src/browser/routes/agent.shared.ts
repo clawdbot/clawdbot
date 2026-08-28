@@ -10,6 +10,7 @@ import { redactCdpErrorText } from "../cdp.helpers.js";
 import { toBrowserErrorResponse } from "../errors.js";
 import {
   assertBrowserNavigationResultAllowed,
+  redactBrowserNavigationUrl,
   withBrowserNavigationPolicy,
 } from "../navigation-guard.js";
 import type { PwAiModule } from "../pw-ai-module.js";
@@ -230,7 +231,7 @@ export async function resolveSafeRouteTabUrl(params: {
       url: candidateUrl,
       ...browserNavigationPolicyForProfile(params.ctx, params.profileCtx),
     });
-    return candidateUrl;
+    return redactBrowserNavigationUrl(candidateUrl);
   } catch {
     return undefined;
   }

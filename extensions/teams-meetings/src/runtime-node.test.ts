@@ -1,4 +1,6 @@
+import type { BrowserNodeDelegationRequest } from "openclaw/plugin-sdk/browser-node-delegation-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { attachBrowserNodeDelegationForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { teamsMeetingsConfig } from "./config.js";
 
@@ -111,6 +113,28 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
       }
       return { payload: { ok: true } };
     });
+    const browserRequest = async (params: BrowserNodeDelegationRequest) => {
+      const response = await invoke({ command: "browser.proxy", params });
+      return (response.payload as { result?: unknown }).result;
+    };
+    const browser = { request: browserRequest };
+    const pluginRuntime = {
+      nodes: {
+        invoke,
+        list: vi.fn(async () => ({
+          nodes: [
+            {
+              caps: ["browser"],
+              commands: ["browser.proxy", "teamsmeetings.chrome"],
+              connected: true,
+              nodeId: "node-1",
+            },
+          ],
+        })),
+      },
+      browser,
+    } as unknown as PluginRuntime;
+    attachBrowserNodeDelegationForTest(pluginRuntime, browser);
     const runtime = new TeamsMeetingsRuntime({
       config: resolveTeamsMeetingsConfig({
         chrome: { waitForInCallMs: 1 },
@@ -118,21 +142,7 @@ describe("Microsoft Teams meetings node realtime recovery", () => {
       }),
       fullConfig: {},
       logger: { debug: vi.fn(), error: vi.fn(), info: vi.fn(), warn: vi.fn() },
-      runtime: {
-        nodes: {
-          invoke,
-          list: vi.fn(async () => ({
-            nodes: [
-              {
-                caps: ["browser"],
-                commands: ["browser.proxy", "teamsmeetings.chrome"],
-                connected: true,
-                nodeId: "node-1",
-              },
-            ],
-          })),
-        },
-      } as unknown as PluginRuntime,
+      runtime: pluginRuntime,
     });
 
     const joined = await runtime.join({

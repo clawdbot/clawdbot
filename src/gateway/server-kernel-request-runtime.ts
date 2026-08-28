@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { registerAgentRunDelegatedAuthorityClosedHandler } from "../infra/agent-run-registry.js";
 import type { createSubsystemLogger } from "../logging/subsystem.js";
 import { createGatewayChatMetadataLifecycle } from "./server-chat-metadata-lifecycle.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
@@ -189,6 +190,18 @@ export async function prepareGatewayKernelRequestRuntime(params: {
         : {}),
       ...(githubPublicationService ? { githubPublicationService } : {}),
       validateAgentRuntimeApprovalAuthority,
+      registerAgentRuntimeAuthorityClosed: (authority, onClosed) =>
+        registerAgentRunDelegatedAuthorityClosedHandler((closedAuthority) => {
+          if (
+            closedAuthority.claimId === authority.claimId &&
+            closedAuthority.lifecycleGeneration === authority.lifecycleGeneration &&
+            closedAuthority.operationalRunInstance.instanceId ===
+              authority.operationalRunInstance.instanceId &&
+            closedAuthority.operationalRunInstance.runId === authority.operationalRunInstance.runId
+          ) {
+            onClosed();
+          }
+        }),
       terminalSessions,
       agentRunSeq,
       chatAbortControllers,

@@ -12,6 +12,10 @@ import type { runBeforeToolCallHook as runBeforeToolCallHookType } from "../agen
 import type { ExecSessionDefaults } from "../agents/exec-defaults.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  onTrustedInternalDiagnosticEvent,
+  type DiagnosticEventPayload,
+} from "../infra/diagnostic-events.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -1460,6 +1464,30 @@ describe("tools.invoke Gateway RPC", () => {
     expect(lastCreateOpenClawToolsContext?.conversationReadOrigin).toBe("delegated");
   });
 
+  it("keeps caller action text out of Session Steward diagnostics", async () => {
+    allowAgentsListForMain();
+    const rawAction = "Bearer raw-diagnostic-token";
+    const events: DiagnosticEventPayload[] = [];
+    const stop = onTrustedInternalDiagnosticEvent((event) => events.push(event));
+    const response = await invokeToolAuthed({
+      tool: "agents_list",
+      action: rawAction,
+      args: {},
+      sessionKey: "main",
+    });
+    stop();
+
+    expect(response.status).toBe(200);
+    expect((await response.json()).ok).toBe(true);
+    const serializedEvents = JSON.stringify(events);
+    expect(serializedEvents).not.toContain(rawAction);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "session_steward.boundary_decision", action: "invoke" }),
+      ]),
+    );
+  });
+
   it("limits terminal controls and execution denial to the current persisted session generation", async () => {
     setMainAllowedTools({ allow: ["terminal"], gatewayAllow: ["terminal"] });
     cfg = { ...cfg, tools: { exec: { mode: "deny" } } };
@@ -1677,6 +1705,27 @@ describe("tools.invoke Gateway RPC", () => {
     const error = call?.[1]?.error as { code?: string; message?: string } | undefined;
     expect(error?.code).toBe("validation_error");
     expect(error?.message).toBe('agent "other" does not match session key agent "main"');
+  });
+
+  it("rejects agent session keys without a session tail before tool resolution", async () => {
+    cfg = {
+      agents: {
+        list: [{ id: "main", default: true, tools: { allow: ["agents_list"] } }],
+      },
+    };
+
+    const call = await invokeToolsRpc({
+      name: "agents_list",
+      sessionKey: "agent:main",
+    });
+
+    expect(call?.[0]).toBe(true);
+    expect(call?.[1]).toMatchObject({
+      ok: false,
+      toolName: "agents_list",
+      error: { message: "malformed session boundary" },
+    });
+    expect(JSON.stringify(call)).not.toContain("agent:main");
   });
 
   it("rejects malformed params at the RPC boundary", async () => {

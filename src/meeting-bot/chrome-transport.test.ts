@@ -143,6 +143,46 @@ describe.each(cases)("$name Chrome transport parity", (testCase) => {
     vi.restoreAllMocks();
   });
 
+  it("uses the Browser-owned route for an explicitly opted-in bundled transport", async () => {
+    const transport = createMeetingChromeTransport<
+      TestConfig,
+      TestMode,
+      MeetingBrowserHealth,
+      MeetingTranscriptSnapshot
+    >({
+      browserNodeAdapter: platform,
+      browserRouting: "browser-steward",
+      isRealtimeRouteReady: () => false,
+      isTalkBackMode: () => false,
+      meetingLabel: "Bundled meeting",
+      nodeCommandName: platform.nodeCommandName,
+      platform,
+      preserveTrackedBrowserOnEngineFailure: false,
+      runtime: {
+        createBindings: vi.fn() as unknown as typeof createMeetingRealtimeEngineBindings,
+        createLocalAudioTransport:
+          vi.fn() as unknown as typeof createLocalMeetingRealtimeAudioTransport,
+        createNodeAudioTransport:
+          vi.fn() as unknown as typeof createNodeMeetingRealtimeAudioTransport,
+        startAgentRealtimeEngine: vi.fn() as unknown as typeof startMeetingAgentRealtimeEngine,
+        startRealtimeEngine: vi.fn() as unknown as typeof startMeetingRealtimeEngine,
+      },
+    });
+
+    await transport.launchInChrome({
+      config,
+      fullConfig: { transcripts: { enabled: false } } as OpenClawConfig,
+      logger,
+      meetingSessionId: "session-1",
+      mode: "agent",
+      runtime: {} as PluginRuntime,
+      url: "https://example.test/meeting",
+    });
+
+    expect(browserMocks.resolveLocal).toHaveBeenCalledWith({}, "browser-steward");
+    expect(browserMocks.open).toHaveBeenCalledOnce();
+  });
+
   it("preserves the platform rollback ownership rule for tracked calls", async () => {
     const dispose = vi.fn(async () => {});
     const transport = createMeetingChromeTransport<

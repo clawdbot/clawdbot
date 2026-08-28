@@ -4,6 +4,7 @@ import { createExecutionIdentityAdmissionToken } from "../../audit/execution-ide
 import { withAgentRuntimeExecutionLineage } from "../../gateway/agent-runtime-execution-lineage.js";
 import {
   createAgentRuntimeApprovalAuthorityValidator,
+  type GatewayToolOperationApproval,
   verifyAgentRuntimeIdentityToken,
 } from "../../gateway/agent-runtime-identity-token.js";
 import { resolveExecutionIdentitySpawnFacts } from "../../gateway/agent-turn/agent-run-execution-lineage.js";
@@ -103,6 +104,36 @@ describe("gateway tool runtime identity", () => {
       expect(capturedGatewayCall().agentRuntimeIdentityToken).toEqual(expect.any(String));
     },
   );
+
+  it("carries an exact Browser Steward operation proof in a fresh local runtime token", async () => {
+    mocks.callGateway.mockResolvedValueOnce({ ok: true });
+    const operationApproval: GatewayToolOperationApproval = {
+      owner: "browser",
+      authorityId: "authority-1",
+      requestFingerprint: "fingerprint-1",
+      expiresAtMs: Date.now() + 30_000,
+    };
+
+    await withActiveGatewayToolCallerIdentity(
+      {
+        agentId: "browser-session-credential-steward",
+        sessionKey: "agent:browser-session-credential-steward:direct:opaque",
+        operationalRunInstance: createOperationalRunInstanceRef("run-browser-proof"),
+        gatewayToolOperationApproval: operationApproval,
+      },
+      async () =>
+        await callGatewayTool(
+          "browser.request",
+          {},
+          { method: "POST", path: "/tabs/open" },
+          { requireAgentRuntimeIdentity: true },
+        ),
+    );
+
+    await expect(
+      verifyAgentRuntimeIdentityToken(capturedGatewayCall().agentRuntimeIdentityToken),
+    ).resolves.toMatchObject({ gatewayToolOperationApproval: operationApproval });
+  });
 
   it("scopes signed session-spawn authority to its Gateway call", async () => {
     mocks.callGateway.mockResolvedValueOnce({ key: "agent:ops:dashboard:child" });

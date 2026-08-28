@@ -1,0 +1,326 @@
+[
+  {
+    "name": "blank key",
+    "sessionKey": "   ",
+    "expected": {
+      "kind": "unknown",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    },
+    "browserExpected": {
+      "kind": "unknown",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "UNKNOWN"
+    }
+  },
+  {
+    "name": "global key",
+    "sessionKey": "global",
+    "expected": {
+      "kind": "global",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "GLOBAL"
+    },
+    "browserExpected": {
+      "kind": "global",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "GLOBAL"
+    }
+  },
+  {
+    "name": "agent key without session tail",
+    "sessionKey": "agent:main",
+    "expected": {
+      "kind": "malformed",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "configuredAgentIds": [
+      "main"
+    ]
+  },
+  {
+    "name": "agent main session",
+    "sessionKey": "agent:main:main",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "main",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "configuredAgentIds": [
+      "main"
+    ]
+  },
+  {
+    "name": "agent direct peer session",
+    "sessionKey": "agent:ops:direct:person-123",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "ops",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "agent:ops:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "rawMustNotContain": [
+      "person-123"
+    ],
+    "configuredAgentIds": [
+      "ops"
+    ]
+  },
+  {
+    "name": "mixed case agent ids",
+    "sessionKey": "Agent:Ops:Direct:PERSON-123",
+    "requestedAgentId": "OPS",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "ops",
+      "requestedAgentId": "ops",
+      "agentRelation": "same_agent",
+      "affectedSession": "agent:ops:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "rawMustNotContain": [
+      "PERSON-123"
+    ],
+    "configuredAgentIds": [
+      "ops"
+    ]
+  },
+  {
+    "name": "configured legacy agent id",
+    "sessionKey": "agent:Team Ops:main",
+    "requestedAgentId": "Team Ops",
+    "configuredAgentIds": [
+      "Team Ops"
+    ],
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "team-ops",
+      "requestedAgentId": "team-ops",
+      "agentRelation": "same_agent",
+      "affectedSession": "agent:team-ops:REDACTED"
+    }
+  },
+  {
+    "name": "unconfigured token-shaped agent id",
+    "sessionKey": "agent:xoxb-fake-token-123456:main",
+    "requestedAgentId": "xoxb-fake-token-123456",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "same_agent",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "rawMustNotContain": [
+      "xoxb-fake-token-123456"
+    ]
+  },
+  {
+    "name": "empty agent owner",
+    "sessionKey": "agent::main",
+    "expected": {
+      "kind": "malformed",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    }
+  },
+  {
+    "name": "empty agent tail",
+    "sessionKey": "agent:main:",
+    "expected": {
+      "kind": "malformed",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    }
+  },
+  {
+    "name": "credential-shaped agent owner",
+    "sessionKey": "agent:sk-abcdefghijk:main",
+    "requestedAgentId": "sk-abcdefghijk",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "same_agent",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "rawMustNotContain": [
+      "sk-abcdefghijk"
+    ]
+  },
+  {
+    "name": "invalid agent owner",
+    "sessionKey": "agent:secret=raw-owner-value:main",
+    "expected": {
+      "kind": "malformed",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    },
+    "browserExpected": {
+      "kind": "unknown",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "UNKNOWN"
+    },
+    "rawMustNotContain": [
+      "raw-owner-value"
+    ]
+  },
+  {
+    "name": "invalid requested agent id",
+    "sessionKey": "agent:main:direct:person-123",
+    "requestedAgentId": "secret=raw-requested-value",
+    "expected": {
+      "kind": "malformed",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNKNOWN"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "rawMustNotContain": [
+      "person-123",
+      "raw-requested-value"
+    ],
+    "configuredAgentIds": [
+      "main"
+    ]
+  },
+  {
+    "name": "unscoped hook key",
+    "sessionKey": "hook:gmail:abc",
+    "expected": {
+      "kind": "unscoped",
+      "ownerAgentId": "UNKNOWN",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "UNSCOPED"
+    },
+    "browserExpected": {
+      "kind": "unscoped",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "UNSCOPED"
+    },
+    "rawMustNotContain": [
+      "gmail",
+      "abc"
+    ]
+  },
+  {
+    "name": "same agent relation",
+    "sessionKey": "agent:main:direct:user-1",
+    "requestedAgentId": "main",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "main",
+      "requestedAgentId": "main",
+      "agentRelation": "same_agent",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "rawMustNotContain": [
+      "user-1"
+    ],
+    "configuredAgentIds": [
+      "main"
+    ]
+  },
+  {
+    "name": "cross agent relation",
+    "sessionKey": "agent:main:direct:user-1",
+    "requestedAgentId": "worker",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "main",
+      "requestedAgentId": "worker",
+      "agentRelation": "cross_agent",
+      "affectedSession": "agent:main:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "other_agent",
+      "ownerAgentId": "UNKNOWN",
+      "affectedSession": "agent:UNKNOWN:REDACTED"
+    },
+    "rawMustNotContain": [
+      "user-1"
+    ],
+    "configuredAgentIds": [
+      "main",
+      "worker"
+    ]
+  },
+  {
+    "name": "browser steward owner",
+    "sessionKey": "agent:browser-session-credential-steward:runtime-check",
+    "expected": {
+      "kind": "agent",
+      "ownerAgentId": "browser-session-credential-steward",
+      "requestedAgentId": "UNKNOWN",
+      "agentRelation": "unbound",
+      "affectedSession": "agent:browser-session-credential-steward:REDACTED"
+    },
+    "browserExpected": {
+      "kind": "browser_steward",
+      "ownerAgentId": "browser-session-credential-steward",
+      "affectedSession": "agent:browser-session-credential-steward:REDACTED"
+    },
+    "rawMustNotContain": [
+      "runtime-check"
+    ],
+    "configuredAgentIds": [
+      "browser-session-credential-steward"
+    ]
+  }
+]

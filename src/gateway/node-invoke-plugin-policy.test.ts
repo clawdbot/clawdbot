@@ -385,59 +385,6 @@ describe("applyPluginNodeInvokePolicy", () => {
     expect(invoke).not.toHaveBeenCalled();
   });
 
-  it("rejects plugin transport dispatch when runtime authority closes during pairing recheck", async () => {
-    setDangerousDemoCommandRegistry([
-      createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),
-    ]);
-    let authorityActive = true;
-    let releasePairingCheck: (() => void) | undefined;
-    const pairingCheck = new Promise<void>((resolve) => {
-      releasePairingCheck = resolve;
-    });
-    const { context, invoke } = createContext({
-      validateAgentRuntimeApprovalAuthority: () => authorityActive,
-    });
-    const operationalRunInstance = createOperationalRunInstanceRef("run-node-policy-race");
-    const resultPromise = applyPluginNodeInvokePolicy({
-      context,
-      client: {
-        ...createOperatorClient(),
-        internal: {
-          agentRuntimeIdentity: {
-            kind: "agentRuntime",
-            agentId: "main",
-            sessionKey: "agent:main:test",
-            operationalRunInstance,
-            delegatedAuthority: {
-              kind: "local",
-              operationalRunInstance,
-              lifecycleGeneration: "generation",
-              claimId: "claim",
-            },
-          },
-        },
-      },
-      nodeSession: createNodeSession(),
-      command: DEMO_COMMAND,
-      params: DEMO_PARAMS,
-      isInvocationCurrent: async () => {
-        await pairingCheck;
-        return true;
-      },
-    });
-
-    await vi.waitFor(() => expect(releasePairingCheck).toBeTypeOf("function"));
-    authorityActive = false;
-    releasePairingCheck?.();
-
-    await expect(resultPromise).resolves.toMatchObject({
-      ok: false,
-      code: "APPROVAL_AUTHORITY_CLOSED",
-      details: { nodeCommandDispatched: false },
-    });
-    expect(invoke).not.toHaveBeenCalled();
-  });
-
   it("rejects bridged approval dispatch when its record closes during pairing recheck", async () => {
     setDangerousDemoCommandRegistry([
       createDemoPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode()),

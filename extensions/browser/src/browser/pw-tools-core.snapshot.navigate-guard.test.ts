@@ -152,6 +152,36 @@ describe("pw-tools-core.snapshot navigate guard", () => {
     });
   });
 
+  it("redacts OAuth callback codes from nested download metadata", async () => {
+    const rawOAuthCode = "raw-oauth-code-123456";
+    const download = {
+      url: `https://auth.example/callback?code=${rawOAuthCode}`,
+      suggestedFilename: "oauth-response.bin",
+      path: "/tmp/openclaw/downloads/oauth-response.bin",
+    };
+    setPwToolsCoreDownloadCapture({
+      armed: true,
+      promise: Promise.resolve(download),
+      cancel: vi.fn(),
+    });
+    setPwToolsCoreCurrentPage({
+      goto: vi.fn(async () => {
+        throw new Error("page.goto: Download is starting");
+      }),
+      url: vi.fn(() => "https://auth.example/start"),
+    });
+
+    const result = await mod.navigateViaPlaywright({
+      cdpUrl: "http://127.0.0.1:18792",
+      targetId: "tab-1",
+      url: "https://auth.example/callback",
+      ssrfPolicy: { allowPrivateNetwork: true },
+    });
+
+    expect(result.download?.url).toBe("https://auth.example/callback?code=REDACTED");
+    expect(JSON.stringify(result)).not.toContain(rawOAuthCode);
+  });
+
   it("returns managed download metadata for matching ERR_ABORTED attachment navigations", async () => {
     const download = {
       url: "http://127.0.0.1:3333/download",

@@ -19,7 +19,6 @@ import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot
 import { getPluginModuleLoaderStats } from "../plugins/plugin-module-loader-cache.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginRegistryParams } from "../plugins/registry-types.js";
-import { getActivePluginRegistry } from "../plugins/runtime.js";
 import {
   bindGatewayContextResolver,
   getPluginRuntimeGatewayRequestScope,
@@ -51,6 +50,10 @@ import {
   dispatchGatewayMethodInProcessRaw,
   getInProcessGatewayRequestContext,
 } from "./server-plugin-in-process-dispatch.js";
+import {
+  canTrustedOfficialPluginRequestScopes,
+  normalizeTrustedPluginBrowserRequest,
+} from "./server-plugin-request-policy.js";
 import { resolvePluginSubagentToolsAlsoAllow } from "./server-plugin-runtime-client.js";
 import {
   normalizePluginSubagentAllowedModelRef,
@@ -185,22 +188,6 @@ function canClientUseModelOverride(client: GatewayRequestOptions["client"]): boo
   return hasAdminScope(client) || client?.internal?.allowModelOverride === true;
 }
 
-function canTrustedOfficialPluginRequestScopes(params: {
-  pluginId?: string;
-  pluginOrigin?: PluginOrigin;
-  pluginTrustedOfficialInstall?: boolean;
-}): boolean {
-  if (!params.pluginId) {
-    return false;
-  }
-  if (params.pluginOrigin === "bundled" || params.pluginTrustedOfficialInstall === true) {
-    return true;
-  }
-  const registry = getActivePluginRegistry();
-  const record = registry?.plugins.find((entry) => entry.id === params.pluginId);
-  return record?.origin === "bundled" || record?.trustedOfficialInstall === true;
-}
-
 function resolveRuntimeNodeInvokeSyntheticScopes(params: {
   pluginId?: string;
   pluginOrigin?: PluginOrigin;
@@ -220,17 +207,21 @@ export async function dispatchTrustedPluginGatewayMethod<T>(
   resolveGatewayContext?: GatewayContextResolver,
 ): Promise<T> {
   const scope = getPluginRuntimeGatewayRequestScope();
-  const pluginId = scope?.pluginId?.trim();
   if (!canTrustedOfficialPluginRequestScopes(scope ?? {})) {
     throw new Error("Gateway requests are only available to bundled or trusted official plugins.");
   }
-  const syntheticScopes = normalizeOperatorScopeList(options?.scopes);
-  return await dispatchGatewayMethodInProcess<T>(method, params, {
+  const browserRequest = normalizeTrustedPluginBrowserRequest({
+    method,
+    params,
+    scopes: options?.scopes,
+  });
+  return await dispatchGatewayMethodInProcess<T>(method, browserRequest.params, {
     forceSyntheticClient: true,
-    pluginRuntimeOwnerId: pluginId,
+    pluginRuntimeOwnerId: scope?.pluginId?.trim(),
+    ...browserRequest.dispatchOptions,
+    pluginRuntimeAuthority: scope?.pluginRuntimeAuthority,
     resolveGatewayContext,
     ...(!scope?.client ? { operatorRoleActor: { kind: "system" as const } } : {}),
-    ...(syntheticScopes ? { syntheticScopes } : {}),
     ...(options?.timeoutMs !== undefined ? { timeoutMs: options.timeoutMs } : {}),
   });
 }

@@ -1,5 +1,6 @@
 // Gateway node registry.
 // Tracks connected node clients, invoke requests, broadcasts, and system.run approvals.
+import { randomUUID } from "node:crypto";
 import {
   addTimerTimeoutGraceMs,
   isFutureDateTimestampMs,
@@ -101,6 +102,18 @@ type PairingLeaseResolution =
   | { status: "current"; session: PairingBoundNodeSession }
   | { status: "stale"; presenceInvalidated: boolean }
   | { status: "unavailable" };
+
+type BrowserNodeSessionLease = {
+  nodeId: string;
+  connId: string;
+  pairingGeneration: string;
+  expiresAtMs: number;
+};
+
+// The pre-approval lease is short-lived. Approved Browser Steward actions get
+// a separately renewed lease for the bounded session-tab cleanup window.
+const BROWSER_NODE_SESSION_LEASE_APPROVAL_TTL_MS = 5 * 60_000;
+const BROWSER_NODE_SESSION_LEASE_LIFECYCLE_TTL_MS = 2 * 60 * 60_000 + 5 * 60_000;
 
 /** Authorized system.run event window bound to one node connection. */
 type AuthorizedSystemRunEvent = PendingSystemRunEvent & {
@@ -292,6 +305,7 @@ export class NodeRegistry {
   });
   private authorizedSystemRunEvents = new Map<string, AuthorizedSystemRunEvent>();
   private pairingGenerationEventChains = new Map<string, Promise<void>>();
+  private browserNodeSessionLeases = new Map<string, BrowserNodeSessionLease>();
 
   constructor(private readonly options: NodeRegistryOptions = {}) {
     registerNodeRegistryPrivateRuntime(this, {
@@ -584,6 +598,11 @@ export class NodeRegistry {
     if (!nodeId) {
       return null;
     }
+    for (const [leaseId, lease] of this.browserNodeSessionLeases) {
+      if (lease.nodeId === nodeId && lease.connId === connId) {
+        this.browserNodeSessionLeases.delete(leaseId);
+      }
+    }
     this.nodesByConn.delete(connId);
     this.eventTransportsByConn.delete(connId);
     forgetNodeRunnerInventory(this, connId);
@@ -685,6 +704,11 @@ export class NodeRegistry {
     }
     node.client.invalidated = true;
     node.client.invalidatedReason ??= reason;
+    for (const [leaseId, lease] of this.browserNodeSessionLeases) {
+      if (lease.nodeId === node.nodeId && lease.connId === node.connId) {
+        this.browserNodeSessionLeases.delete(leaseId);
+      }
+    }
     forgetNodeRunnerInventory(this, node.connId);
     removeConnectedNodePluginTools(node.nodeId);
     this.invokeStreams.handleDisconnect(node.connId);
@@ -715,6 +739,70 @@ export class NodeRegistry {
   /** Return a connected node session by node id. */
   get(nodeId: string): NodeSession | undefined {
     return this.getRegisteredSession(nodeId);
+  }
+
+  /** Issue an opaque, short-lived lease for one exact paired browser-node session. */
+  createBrowserNodeSessionLease(nodeId: string, nowMs = Date.now()): string | undefined {
+    for (const [leaseId, lease] of this.browserNodeSessionLeases) {
+      if (lease.expiresAtMs <= nowMs) {
+        this.browserNodeSessionLeases.delete(leaseId);
+      }
+    }
+    const node = this.getRegisteredSession(nodeId);
+    if (!node?.pairingGeneration) {
+      return undefined;
+    }
+    const leaseId = randomUUID();
+    this.browserNodeSessionLeases.set(leaseId, {
+      nodeId,
+      connId: node.connId,
+      pairingGeneration: node.pairingGeneration,
+      expiresAtMs: nowMs + BROWSER_NODE_SESSION_LEASE_APPROVAL_TTL_MS,
+    });
+    return leaseId;
+  }
+
+  /** Renew an unexpired lease after approval, retaining its exact session binding. */
+  renewBrowserNodeSessionLease(
+    nodeId: string,
+    leaseId: string,
+    nowMs = Date.now(),
+  ): NodeSession | undefined {
+    const node = this.resolveBrowserNodeSessionLease(nodeId, leaseId, nowMs);
+    if (!node) {
+      return undefined;
+    }
+    const lease = this.browserNodeSessionLeases.get(leaseId);
+    if (!lease) {
+      return undefined;
+    }
+    lease.expiresAtMs = nowMs + BROWSER_NODE_SESSION_LEASE_LIFECYCLE_TTL_MS;
+    return node;
+  }
+
+  /** Resolve a lease only while the same node connection and pairing generation remain current. */
+  resolveBrowserNodeSessionLease(
+    nodeId: string,
+    leaseId: string,
+    nowMs = Date.now(),
+  ): NodeSession | undefined {
+    const lease = this.browserNodeSessionLeases.get(leaseId);
+    if (!lease || lease.expiresAtMs <= nowMs || lease.nodeId !== nodeId) {
+      if (lease) {
+        this.browserNodeSessionLeases.delete(leaseId);
+      }
+      return undefined;
+    }
+    const node = this.getRegisteredSession(nodeId);
+    if (
+      !node ||
+      node.connId !== lease.connId ||
+      node.pairingGeneration !== lease.pairingGeneration
+    ) {
+      this.browserNodeSessionLeases.delete(leaseId);
+      return undefined;
+    }
+    return node;
   }
 
   private getRegisteredSession(nodeId: string): PairingBoundNodeSession | undefined {

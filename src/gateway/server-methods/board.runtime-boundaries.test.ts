@@ -551,6 +551,7 @@ describe("board gateway runtime boundaries", () => {
       context: {
         broadcast: vi.fn(),
         getSessionEventSubscriberConnIds: () => new Set<string>(),
+        getRuntimeConfig: () => ({}),
       } as unknown as GatewayRequestContext,
     });
     expect(respond.mock.calls[0]?.[0]).toBe(true);

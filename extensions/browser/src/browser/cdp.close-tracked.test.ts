@@ -44,6 +44,61 @@ afterEach(async () => {
 });
 
 describe("closeTrackedCdpTarget", () => {
+  it("cancels before close when Browser Steward approval is revoked during lookup", async () => {
+    let allowClose = true;
+    let closeCommandCount = 0;
+    const wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    servers.push(wsServer);
+    await listen(wsServer);
+    wsServer.on("connection", (socket) => {
+      socket.on("message", (data) => {
+        const message = JSON.parse(rawDataToString(data)) as { id?: number; method?: string };
+        if (message.method === "Target.getTargets") {
+          allowClose = false;
+          socket.send(
+            JSON.stringify({
+              id: message.id,
+              result: { targetInfos: [{ targetId: "OWNED", type: "page" }] },
+            }),
+          );
+        } else if (message.method === "Target.closeTarget") {
+          closeCommandCount += 1;
+          socket.send(JSON.stringify({ id: message.id, result: { success: true } }));
+        }
+      });
+    });
+
+    const browserWebSocketUrl = `ws://127.0.0.1:${(wsServer.address() as AddressInfo).port}/devtools/browser/TEST`;
+    const httpServer = createServer((_, response) => {
+      response.setHeader("content-type", "application/json");
+      response.end(JSON.stringify({ webSocketDebuggerUrl: browserWebSocketUrl }));
+    });
+    servers.push(httpServer);
+    httpServer.listen(0, "127.0.0.1");
+    await listen(httpServer);
+    const cdpUrl = `http://127.0.0.1:${(httpServer.address() as AddressInfo).port}`;
+    const ownership = await resolveCdpTabOwnership({
+      profileName: "remote",
+      cdpUrl,
+      nativeTargetId: "OWNED",
+    });
+    if (ownership.status !== "durable") {
+      throw new Error("expected durable ownership");
+    }
+
+    await expect(
+      closeTrackedCdpTarget({
+        profileName: "remote",
+        cdpUrl,
+        nativeTargetId: "OWNED",
+        expectedProfileFingerprint: ownership.profileFingerprint,
+        expectedBrowserInstanceFingerprint: ownership.browserInstanceFingerprint,
+        shouldClose: () => allowClose,
+      }),
+    ).resolves.toEqual({ status: "cancelled" });
+    expect(closeCommandCount).toBe(0);
+  });
+
   it("keeps ownership retryable when CDP declines the close", async () => {
     const wsServer = new WebSocketServer({ port: 0, host: "127.0.0.1" });
     servers.push(wsServer);

@@ -105,6 +105,7 @@ export function createPluginApiFactory(
     registerSessionSchedulerJob,
     registerSessionAction,
     registerTypedHook,
+    registerBrowserNodeDelegation,
     registerMemoryCapability,
     registerMemoryPromptSupplement,
     registerMemoryPromptPreparation,
@@ -145,7 +146,10 @@ export function createPluginApiFactory(
   ): OpenClawPluginApi => {
     const registrationMode = params.registrationMode ?? "full";
     const registrationCapabilities = resolvePluginRegistrationCapabilities(registrationMode);
-    setPluginRuntimeRecord(record);
+    // Setup-only registration describes metadata and must not displace a live runtime record.
+    if (registrationMode !== "setup-only") {
+      setPluginRuntimeRecord(record);
+    }
     const sideEffectGuard = createPluginSideEffectGuard(record.id);
     const isLoadedRecordInRegistry = () =>
       registry.plugins.some((plugin) => plugin.id === record.id && plugin.status === "loaded");
@@ -174,9 +178,12 @@ export function createPluginApiFactory(
       registrationMode,
       config: params.config,
       pluginConfig: params.pluginConfig,
-      runtime: resolvePluginRuntime(record.id),
+      runtime: resolvePluginRuntime(record),
       logger: normalizeLogger(registryParams.logger),
       resolvePath: (input: string) => resolvePluginPath(input, record.rootDir),
+      browserNodeDelegationRegistrar: registrationCapabilities.capabilityHandlers
+        ? (delegation) => registerBrowserNodeDelegation(record, delegation)
+        : undefined,
       handlers: {
         ...(registrationCapabilities.capabilityHandlers
           ? {

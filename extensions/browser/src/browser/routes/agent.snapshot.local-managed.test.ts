@@ -41,6 +41,7 @@ const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationResultAllowed: vi.fn(async (): Promise<void> => {
     throw new Error("browser navigation blocked by policy");
   }),
+  redactBrowserNavigationUrl: vi.fn((url: string) => url),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
@@ -61,6 +62,7 @@ vi.mock("../chrome-mcp.js", () => ({
 vi.mock("../navigation-guard.js", () => ({
   assertBrowserNavigationAllowed: navigationGuardMocks.assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed: navigationGuardMocks.assertBrowserNavigationResultAllowed,
+  redactBrowserNavigationUrl: navigationGuardMocks.redactBrowserNavigationUrl,
   withBrowserNavigationPolicy: navigationGuardMocks.withBrowserNavigationPolicy,
 }));
 
@@ -127,6 +129,9 @@ describe("local-managed browser snapshot routes", () => {
     cdpMocks.snapshotRoleViaCdp.mockClear();
     tabLookup.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
+    navigationGuardMocks.redactBrowserNavigationUrl
+      .mockReset()
+      .mockImplementation((url: string) => url);
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
   });
 
@@ -179,6 +184,28 @@ describe("local-managed browser snapshot routes", () => {
     expect(cdpMocks.snapshotRoleViaCdp).toHaveBeenCalledWith(
       expect.objectContaining({ maxChars: 123 }),
     );
+  });
+
+  it("redacts OAuth callback codes from the returned tab URL", async () => {
+    const rawOAuthCode = "raw-oauth-code-123456";
+    routeState.profileCtx.ensureTabAvailable.mockResolvedValueOnce({
+      targetId: "7",
+      url: `https://auth.example/callback?code=${rawOAuthCode}`,
+      wsUrl: "ws://127.0.0.1/devtools/page/7",
+      wsLookup: tabLookup,
+    });
+    navigationGuardMocks.assertBrowserNavigationResultAllowed.mockResolvedValue(undefined);
+    navigationGuardMocks.redactBrowserNavigationUrl.mockImplementation((url: string) =>
+      url.replace(`code=${rawOAuthCode}`, "code=REDACTED"),
+    );
+    const handler = getSnapshotGetHandler();
+    const response = createBrowserRouteResponse();
+
+    await handler?.({ params: {}, query: { format: "aria" } }, response.res);
+
+    expect(response.statusCode).toBe(200);
+    expect(response.body).toMatchObject({ url: "https://auth.example/callback?code=REDACTED" });
+    expect(JSON.stringify(response.body)).not.toContain(rawOAuthCode);
   });
 
   it("rejects a snapshot when the main-frame loader changes during capture", async () => {

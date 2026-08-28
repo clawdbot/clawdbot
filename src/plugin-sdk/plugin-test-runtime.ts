@@ -6,6 +6,11 @@ import {
 } from "../agents/admitted-run-context.js";
 import type { EmbeddedRunAttemptParams } from "../agents/embedded-agent-runner/run/types.js";
 import { createAgentHarnessHostCapabilities } from "../agents/harness/host-capability.js";
+import {
+  attachBrowserNodeDelegationResolver,
+  type BrowserNodeDelegationRuntime,
+} from "../plugins/runtime/browser-node-delegation.js";
+import type { PluginRuntime } from "../plugins/runtime/types.js";
 
 type AgentHarnessHostTestAttempt = Omit<
   EmbeddedRunAttemptParams,
@@ -103,6 +108,14 @@ export {
   type RegisteredEmbeddingProvider,
 } from "../plugins/embedding-providers.js";
 export type { PluginRuntime } from "../plugins/runtime/types.js";
+
+/** Installs the private Browser capability on a hand-built plugin test runtime. */
+export function attachBrowserNodeDelegationForTest(
+  runtime: PluginRuntime,
+  browser: BrowserNodeDelegationRuntime,
+): void {
+  attachBrowserNodeDelegationResolver(runtime, () => browser);
+}
 export type { PluginHookRegistration } from "../plugins/hook-types.js";
 export type { RuntimeEnv } from "../runtime.js";
 export type { MockFn } from "../test-utils/vitest-mock-fn.js";

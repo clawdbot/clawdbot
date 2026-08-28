@@ -26,6 +26,15 @@ import {
   ensureBrowserProxyUploadCleanup,
   stageBrowserProxyUploadRequest,
 } from "../browser-proxy-upload.js";
+import {
+  consumeBrowserStewardGatewayApprovalAuthority,
+  type BrowserStewardGatewayApprovalAuthority,
+} from "../browser/browser-steward-approval.js";
+import {
+  assertBrowserStewardRuntimeAllowed,
+  resolveBrowserStewardProxyAction,
+  shouldApplyBrowserStewardRuntimeGuard,
+} from "../browser/browser-steward-runtime-guard.js";
 import { resolveCdpControlPolicy } from "../browser/cdp-reachability-policy.js";
 import { closeTrackedCdpTarget, redactCdpUrl } from "../browser/cdp.helpers.js";
 import { loadBrowserConfigForRuntimeRefresh } from "../browser/config-refresh-source.js";
@@ -54,6 +63,15 @@ type BrowserProxyParams = {
   profile?: string;
   errorEnvelope?: unknown;
   upload?: BrowserProxyUploadV1;
+  agentSessionKey?: string;
+  agentId?: string;
+  browserStewardApproval?: unknown;
+};
+
+type BrowserStewardNodeInvocationContext = {
+  nodeId: string;
+  invocationId: string;
+  pairingGeneration: string;
 };
 
 function readOwnedTabCloseRequest(value: unknown) {
@@ -278,6 +296,7 @@ export async function runBrowserProxyCommand(
   paramsJSON?: string | null,
   command = BROWSER_PROXY_COMMAND,
   invocationSignal?: AbortSignal,
+  invocationContext?: BrowserStewardNodeInvocationContext,
 ): Promise<string> {
   invocationSignal?.throwIfAborted();
   void ensureBrowserProxyUploadCleanup();
@@ -300,8 +319,6 @@ export async function runBrowserProxyCommand(
     throw new Error("UNAVAILABLE: node browser proxy disabled");
   }
 
-  await ensureBrowserControlService();
-  invocationSignal?.throwIfAborted();
   const cfg = loadBrowserConfigForRuntimeRefresh();
   const resolved = resolveBrowserConfig(cfg.browser, cfg);
   const method = typeof params.method === "string" ? params.method.toUpperCase() : "GET";
@@ -314,6 +331,47 @@ export async function runBrowserProxyCommand(
       profile: params.profile,
     }) ?? "";
   const effectiveProfile = path === "/profiles" ? "" : requestedProfile || resolved.defaultProfile;
+  let browserStewardNodeAuthority: BrowserStewardGatewayApprovalAuthority | undefined;
+  const assertBrowserStewardNodeAuthority = () => {
+    invocationSignal?.throwIfAborted();
+    if (browserStewardNodeAuthority && !browserStewardNodeAuthority.isActive()) {
+      throw new Error("approval_required: Browser Steward approval is no longer active");
+    }
+  };
+  if (
+    shouldApplyBrowserStewardRuntimeGuard({
+      sessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+    })
+  ) {
+    const browserStewardApprovalAuthority = consumeBrowserStewardGatewayApprovalAuthority({
+      approval: params.browserStewardApproval,
+      command,
+      method,
+      path,
+      query: params.query,
+      body,
+      upload: params.upload,
+      profile: effectiveProfile,
+      agentSessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+      ...(invocationContext ? { nodeId: invocationContext.nodeId } : {}),
+      ...(invocationContext ? { pairingGeneration: invocationContext.pairingGeneration } : {}),
+      ...(invocationContext ? { invocationId: invocationContext.invocationId } : {}),
+    });
+    assertBrowserStewardRuntimeAllowed({
+      action: resolveBrowserStewardProxyAction({ method, path, body }),
+      profile: effectiveProfile,
+      agentSessionKey: params.agentSessionKey,
+      agentId: params.agentId,
+      approved: browserStewardApprovalAuthority !== undefined,
+      request: body,
+    });
+    browserStewardNodeAuthority = browserStewardApprovalAuthority;
+  }
+  assertBrowserStewardNodeAuthority();
+  await ensureBrowserControlService();
+  assertBrowserStewardNodeAuthority();
   const effectiveResolvedProfile = effectiveProfile
     ? resolveProfile(resolved, effectiveProfile)
     : null;
@@ -364,6 +422,7 @@ export async function runBrowserProxyCommand(
 
   if (path === BROWSER_PROXY_OWNED_TAB_CLOSE_PATH) {
     const request = readOwnedTabCloseRequest(body);
+    assertBrowserStewardNodeAuthority();
     const liveResolved = getBrowserControlState()?.resolved ?? resolved;
     const profile = resolveProfile(liveResolved, effectiveProfile);
     const result =
@@ -377,6 +436,7 @@ export async function runBrowserProxyCommand(
             timeoutMs: liveResolved.remoteCdpTimeoutMs,
             ssrfPolicy: resolveCdpControlPolicy(profile, liveResolved.ssrfPolicy),
             signal: invocationSignal,
+            shouldClose: browserStewardNodeAuthority?.isActive,
           })
         : { status: "ownership-mismatch" as const };
     return JSON.stringify({
@@ -387,6 +447,7 @@ export async function runBrowserProxyCommand(
   const dispatcher = createBrowserRouteDispatcher(createBrowserControlContext());
   let stagedUpload;
   try {
+    assertBrowserStewardNodeAuthority();
     stagedUpload = await withTimeout(
       (timeoutSignal) =>
         stageBrowserProxyUploadRequest({
@@ -399,6 +460,7 @@ export async function runBrowserProxyCommand(
       timeoutMs,
       "browser proxy request",
     );
+    assertBrowserStewardNodeAuthority();
   } catch (err) {
     if (!isBrowserProxyTimeoutError(err)) {
       throw err;
@@ -432,6 +494,7 @@ export async function runBrowserProxyCommand(
   }
   let response;
   try {
+    assertBrowserStewardNodeAuthority();
     response = await withTimeout(
       (timeoutSignal) =>
         dispatcher.dispatch({
@@ -449,6 +512,8 @@ export async function runBrowserProxyCommand(
       throw err;
     }
     const profileForStatus = requestedProfile || resolved.defaultProfile;
+    // Dispatch has started under an active authority; recover status without
+    // converting an unknown completed effect into a retryable approval error.
     const status = await readBrowserProxyStatus({
       dispatcher,
       profile: path === "/profiles" ? undefined : profileForStatus,
@@ -495,6 +560,8 @@ export async function runBrowserProxyCommand(
     });
   }
 
+  // Once the browser effect has started under an active authority, preserve a
+  // completed result instead of turning lease expiry into a retryable failure.
   const paths = collectBrowserProxyPaths(result);
   const files = paths.length > 0 ? await readBrowserProxyFiles(paths) : undefined;
 

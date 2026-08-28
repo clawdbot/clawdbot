@@ -4,18 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type BrowserNodeRequest = {
   nodeId: string;
-  command: string;
   timeoutMs: number;
-  idempotencyKey: string;
-  params: {
-    method: string;
-    path: string;
-    timeoutMs: number;
-    profile?: string;
-    errorEnvelope: string;
-    body?: unknown;
-    upload?: unknown;
-  };
+  method: string;
+  path: string;
+  browserProxyTimeoutMs: number;
+  profile?: string;
+  allowAutomaticHostFallback: boolean;
+  includeRoute: boolean;
+  body?: unknown;
+  upload?: unknown;
 };
 
 type BrowserNodeResponse = {
@@ -26,7 +23,7 @@ type BrowserGatewayCall = (
   method: string,
   options: { timeoutMs: number },
   request: BrowserNodeRequest,
-  extra: { scopes: string[]; signal?: AbortSignal },
+  extra: { scopes: string[]; requireAgentRuntimeIdentity?: boolean; signal?: AbortSignal },
 ) => Promise<BrowserNodeResponse>;
 
 const runtimeMocks = vi.hoisted(() => ({
@@ -49,7 +46,10 @@ const uploadMocks = vi.hoisted(() => ({
 vi.mock("./browser-tool.runtime.js", () => runtimeMocks);
 vi.mock("./browser-proxy-upload.js", () => uploadMocks);
 
-import { createBrowserNodeProxyRequest } from "./browser-node-proxy.js";
+import {
+  createBrowserNodeProxyRequest,
+  createBrowserNodeSessionTabRoute,
+} from "./browser-node-proxy.js";
 import { BrowserServiceError } from "./browser/client-fetch.js";
 
 function createSessionProxy() {
@@ -117,6 +117,79 @@ describe("Browser node proxy nested watchdogs", () => {
     });
   });
 
+  it("uses the Browser-owned lifecycle path for retained tab cleanup", async () => {
+    const browserOwnedGatewayRequest = vi.fn(async () => ({ status: "closed" }));
+    const route = createBrowserNodeSessionTabRoute({
+      nodeTarget: { nodeId: "node-1" },
+      browserNodeSessionLease: "lease-1",
+      browserOwnedGatewayRequest,
+    });
+
+    await expect(
+      route.closeTarget({ targetId: "opaque target/1", profile: "work" }),
+    ).resolves.toEqual({ status: "closed" });
+
+    expect(browserOwnedGatewayRequest).toHaveBeenCalledWith({
+      method: "DELETE",
+      path: "/tabs/opaque%20target%2F1",
+      query: { targetIdMode: "raw" },
+      profile: "work",
+      nodeId: "node-1",
+      browserNodeSessionLease: "lease-1",
+      timeoutMs: 20_000,
+    });
+    expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("binds durable retained-tab cleanup to the exact ownership body", async () => {
+    const browserOwnedGatewayRequest = vi.fn(async () => ({ status: "closed" }));
+    const route = createBrowserNodeSessionTabRoute({
+      nodeTarget: { nodeId: "node-1" },
+      browserNodeSessionLease: "lease-1",
+      browserOwnedGatewayRequest,
+    });
+    const ownership = {
+      status: "durable" as const,
+      nativeTargetId: "native-1",
+      profileFingerprint: "profile-fingerprint",
+      browserInstanceFingerprint: "browser-fingerprint",
+    };
+
+    await expect(
+      route.closeTarget({ targetId: "opaque-1", profile: "work", ownership }),
+    ).resolves.toEqual({
+      status: "closed",
+    });
+
+    expect(browserOwnedGatewayRequest).toHaveBeenCalledWith({
+      method: "POST",
+      path: "/__openclaw/session-tab/close-owned",
+      body: { ownership },
+      profile: "work",
+      nodeId: "node-1",
+      browserNodeSessionLease: "lease-1",
+      timeoutMs: 20_000,
+    });
+    expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("does not fall back when the retained Browser-owned route is revoked", async () => {
+    const browserOwnedGatewayRequest = vi
+      .fn()
+      .mockRejectedValue(new Error("browser node route lease is stale"));
+    const route = createBrowserNodeSessionTabRoute({
+      nodeTarget: { nodeId: "node-1" },
+      browserNodeSessionLease: "lease-1",
+      browserOwnedGatewayRequest,
+    });
+
+    await expect(route.closeTarget({ targetId: "tab-1" })).rejects.toThrow(
+      "browser node route lease is stale",
+    );
+    expect(runtimeMocks.callGatewayTool).not.toHaveBeenCalled();
+    expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
+  });
+
   it("keeps a requested action inside separate node and Gateway watchdogs", async () => {
     const signal = new AbortController().signal;
 
@@ -129,13 +202,13 @@ describe("Browser node proxy nested watchdogs", () => {
     });
 
     const { method, gateway, node, extra } = readGatewayCall();
-    expect(method).toBe("node.invoke");
+    expect(method).toBe("browser.request");
     expect(node.nodeId).toBe("node-1");
-    expect(node.command).toBe("browser.proxy");
-    expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
+    expect([node.browserProxyTimeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
       7_777, 12_777, 17_777,
     ]);
-    expect(node.params.errorEnvelope).toBe("browser-v1");
+    expect(node.allowAutomaticHostFallback).toBe(false);
+    expect(node.includeRoute).toBe(true);
     expect(extra).toEqual({ scopes: ["operator.admin"], signal });
     expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
   });
@@ -190,6 +263,61 @@ describe("Browser node proxy nested watchdogs", () => {
     expect(runtimeMocks.fetchBrowserJson).toHaveBeenCalledWith(
       "/snapshot",
       expect.objectContaining({ method: "GET", signal }),
+    );
+  });
+
+  it("requires trusted runtime identity when carrying a Browser Steward operation proof", async () => {
+    const browserStewardGatewayApproval = vi.fn(() => ({
+      authorityId: "authority-1",
+      requestFingerprint: "fingerprint-1",
+      expiresAtMs: Date.now() + 30_000,
+    }));
+    const proxy = createBrowserNodeProxyRequest({
+      nodeTarget: { nodeId: "node-1" },
+      allowAutomaticHostFallback: false,
+      browserStewardGatewayApproval,
+    });
+
+    await proxy({ method: "POST", path: "/tabs/open", body: { url: "https://example.com" } });
+
+    expect(browserStewardGatewayApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: "browser.proxy",
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+      }),
+    );
+    expect(readGatewayCall().extra).toEqual({
+      scopes: ["operator.admin"],
+      requireAgentRuntimeIdentity: true,
+    });
+  });
+
+  it("records Gateway-host fallback envelopes before tracking later tabs", async () => {
+    runtimeMocks.callGatewayTool.mockResolvedValueOnce({
+      payload: {
+        result: { ok: true, source: "gateway-host" },
+        route: { status: "host-fallback" },
+      },
+    } as unknown as BrowserNodeResponse);
+    runtimeMocks.fetchBrowserJson.mockResolvedValueOnce({ ok: true, source: "gateway-host" });
+    const proxy = createBrowserNodeProxyRequest({
+      nodeTarget: { nodeId: "node-1" },
+      allowAutomaticHostFallback: true,
+    });
+
+    await expect(proxy({ method: "GET", path: "/snapshot" })).resolves.toEqual({
+      ok: true,
+      source: "gateway-host",
+    });
+    expect(proxy.isHostFallbackActive()).toBe(true);
+
+    await proxy({ method: "GET", path: "/tabs" });
+    expect(runtimeMocks.callGatewayTool).toHaveBeenCalledOnce();
+    expect(runtimeMocks.fetchBrowserJson).toHaveBeenCalledWith(
+      "/tabs",
+      expect.objectContaining({ method: "GET" }),
     );
   });
 
@@ -252,12 +380,11 @@ describe("Browser node proxy nested watchdogs", () => {
       body: originalBody,
     });
 
-    expect(readGatewayCall().node.params).toMatchObject({
+    expect(readGatewayCall().node).toMatchObject({
       body: { ref: "e12" },
       upload,
     });
-    expect(readGatewayCall().node.command).toBe("browser.proxy.upload.v1");
-    expect(readGatewayCall().node.params.body).not.toHaveProperty("paths");
+    expect(readGatewayCall().node.body).not.toHaveProperty("paths");
   });
 
   it("uses the original Gateway paths when an auto-selected old node lacks upload support", async () => {
@@ -344,7 +471,7 @@ describe("Browser node proxy nested watchdogs", () => {
     await createSessionProxy()({ method: "GET", path: "/snapshot" });
 
     const { gateway, node } = readGatewayCall();
-    expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
+    expect([node.browserProxyTimeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
       20_000, 25_000, 30_000,
     ]);
   });
@@ -363,7 +490,7 @@ describe("Browser node proxy nested watchdogs", () => {
 
     const actionTimeoutMs = Math.min(timeoutMs, MAX_TIMER_TIMEOUT_MS - 10_000);
     const { gateway, node } = readGatewayCall();
-    expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
+    expect([node.browserProxyTimeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
       actionTimeoutMs,
       actionTimeoutMs + 5_000,
       actionTimeoutMs + 10_000,
@@ -378,7 +505,7 @@ describe("Browser node proxy nested watchdogs", () => {
     });
     runtimeMocks.callGatewayTool.mockImplementation(async (_method, _gateway, node) => {
       await barrier;
-      return { payload: { result: { ok: true, profile: node.params.profile } } };
+      return { payload: { result: { ok: true, profile: node.profile } } };
     });
 
     const sessions = Array.from({ length: 10 }, (_, index) => ({
@@ -400,25 +527,19 @@ describe("Browser node proxy nested watchdogs", () => {
       });
       expect(completed.size).toBe(0);
       expect(runtimeMocks.persistBrowserProxyResultFiles).not.toHaveBeenCalled();
-      const invocationIds = new Set<string>();
-
       sessions.forEach(({ profile, timeoutMs, signal }, index) => {
         const { method, gateway, node, extra } = readGatewayCall(index);
-        expect(method).toBe("node.invoke");
+        expect(method).toBe("browser.request");
         expect(node.nodeId).toBe("node-1");
-        expect(node.command).toBe("browser.proxy");
-        expect(node.params.profile).toBe(profile);
-        expect(node.params.errorEnvelope).toBe("browser-v1");
-        expect([node.params.timeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
+        expect(node.profile).toBe(profile);
+        expect([node.browserProxyTimeoutMs, node.timeoutMs, gateway.timeoutMs]).toEqual([
           timeoutMs,
           timeoutMs + 5_000,
           timeoutMs + 10_000,
         ]);
         expect(extra).toEqual({ scopes: ["operator.admin"], signal });
-        invocationIds.add(node.idempotencyKey);
       });
 
-      expect(invocationIds.size).toBe(10);
       expect(runtimeMocks.fetchBrowserJson).not.toHaveBeenCalled();
     } finally {
       release();
@@ -453,7 +574,7 @@ describe("Browser node proxy nested watchdogs", () => {
           void barrier.then(() => {
             extra.signal?.removeEventListener("abort", onAbort);
             if (!extra.signal?.aborted) {
-              resolve({ payload: { result: { ok: true, profile: node.params.profile } } });
+              resolve({ payload: { result: { ok: true, profile: node.profile } } });
             }
           });
         }),

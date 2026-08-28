@@ -89,6 +89,7 @@ type GatewayRequestContextParams = {
   workerPlacementDispatchService?: GatewayRequestContext["workerPlacementDispatchService"];
   githubPublicationService?: GatewayRequestContext["githubPublicationService"];
   validateAgentRuntimeApprovalAuthority: GatewayRequestContext["validateAgentRuntimeApprovalAuthority"];
+  registerAgentRuntimeAuthorityClosed?: GatewayRequestContext["registerAgentRuntimeAuthorityClosed"];
   terminalSessions?: GatewayRequestContext["terminalSessions"];
   agentRunSeq: GatewayRequestContext["agentRunSeq"];
   chatAbortControllers: GatewayRequestContext["chatAbortControllers"];
@@ -402,6 +403,9 @@ export function createGatewayRequestContext(
       ? { workerPlacementRunnerAvailabilityReader: params.workerPlacementRunnerAvailabilityReader }
       : {}),
     validateAgentRuntimeApprovalAuthority: params.validateAgentRuntimeApprovalAuthority,
+    ...(params.registerAgentRuntimeAuthorityClosed
+      ? { registerAgentRuntimeAuthorityClosed: params.registerAgentRuntimeAuthorityClosed }
+      : {}),
     ...(params.workerPlacementDispatchService
       ? { workerPlacementDispatchService: params.workerPlacementDispatchService }
       : {}),

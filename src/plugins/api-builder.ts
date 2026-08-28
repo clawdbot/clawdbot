@@ -1,5 +1,9 @@
 // Builds plugin API objects from config, registries, and runtime helpers.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  attachBrowserNodeDelegationRegistrar,
+  type BrowserNodeDelegationRegistrar,
+} from "../plugin-sdk/browser-node-delegation-runtime.js";
 import { attachPluginApiFacades, type OpenClawPluginApiWithoutFacades } from "./api-facades.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import type { OpenClawPluginApi, PluginLogger } from "./types.js";
@@ -17,6 +21,7 @@ type BuildPluginApiParams = {
   runtime: PluginRuntime;
   logger: PluginLogger;
   resolvePath: (input: string) => string;
+  browserNodeDelegationRegistrar?: BrowserNodeDelegationRegistrar;
   handlers?: Partial<
     Pick<
       OpenClawPluginApi,
@@ -322,5 +327,8 @@ export function buildPluginApi(params: BuildPluginApiParams): OpenClawPluginApi 
     resolvePath: params.resolvePath,
     on: handlers.on ?? noopOn,
   };
+  if (params.browserNodeDelegationRegistrar) {
+    attachBrowserNodeDelegationRegistrar(api, params.browserNodeDelegationRegistrar);
+  }
   return attachPluginApiFacades(api);
 }

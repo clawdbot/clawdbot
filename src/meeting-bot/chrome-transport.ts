@@ -82,6 +82,8 @@ export type MeetingChromeTransportOptions<
   isTalkBackMode(mode: Mode): boolean;
   meetingLabel: string;
   nodeCommandName: string;
+  /** Bundled meeting plugins opt into the Browser-owned route explicitly. */
+  browserRouting?: "legacy" | "browser-steward";
   platform: MeetingPlatformAdapter<MeetingBrowserJoinSession<Mode>, Mode, Health, Transcript> &
     MeetingPlatformRuntimeMetadata;
   preserveTrackedBrowserOnEngineFailure: boolean;
@@ -304,7 +306,10 @@ export function createMeetingChromeTransport<
           timeoutMs: Math.min(params.config.chrome.joinTimeoutMs, 10_000),
         })
       : undefined;
-    const callBrowser = await resolveLocalMeetingBrowserRequest(params.runtime);
+    const callBrowser = await resolveLocalMeetingBrowserRequest(
+      params.runtime,
+      options.browserRouting,
+    );
     const result = await openOrRecoverMeeting({
       callBrowser,
       config: params.config,
@@ -360,6 +365,7 @@ export function createMeetingChromeTransport<
     return await callMeetingBrowserProxyOnNode({
       ...params,
       adapter: options.browserNodeAdapter,
+      browserRouting: options.browserRouting,
     });
   }
 
@@ -618,7 +624,7 @@ export function createMeetingChromeTransport<
                 body: request.body,
                 timeoutMs: request.timeoutMs,
               })
-          : await resolveLocalMeetingBrowserRequest(params.runtime),
+          : await resolveLocalMeetingBrowserRequest(params.runtime, options.browserRouting),
         captureCaptions:
           params.mode === "transcribe" ||
           resolveTranscriptsConfig(params.fullConfig?.transcripts).enabled,
@@ -656,7 +662,7 @@ export function createMeetingChromeTransport<
               body: request.body,
               timeoutMs: request.timeoutMs,
             })
-        : await resolveLocalMeetingBrowserRequest(params.runtime),
+        : await resolveLocalMeetingBrowserRequest(params.runtime, options.browserRouting),
       launch: params.config.chrome.launch || !params.tab.openedByPlugin,
       meetingSessionId: params.meetingSessionId,
       meetingUrl: params.meetingUrl,
@@ -687,7 +693,7 @@ export function createMeetingChromeTransport<
               body: request.body,
               timeoutMs: request.timeoutMs,
             })
-        : await resolveLocalMeetingBrowserRequest(params.runtime),
+        : await resolveLocalMeetingBrowserRequest(params.runtime, options.browserRouting),
       finalize: params.finalize === true,
       meetingUrl: params.meetingUrl,
       meetingSessionId: params.meetingSessionId,

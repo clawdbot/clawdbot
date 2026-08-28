@@ -47,6 +47,7 @@ These commands drive the gateway-owned `node.pair.*` store, separate from device
   - ordinary node commands: `operator.pairing` + `operator.write`
   - admin-sensitive commands (`system.run`, `system.run.prepare`, `system.which`, `browser.proxy`, `browser.proxy.upload.v1`, `fs.listDir`, and `system.execApprovals.get/set`): `operator.pairing` + `operator.admin`
 - These requirements classify node commands relayed through `node.invoke`. The top-level Gateway `fs.listDir` RPC needs `operator.write` for workspace-contained host browsing and `operator.admin` when `nodeId` is present.
+- Browser proxy commands are not a generic plugin surface. Operator-admin `openclaw nodes invoke --command browser.proxy` and `browser.proxy.upload.v1` calls remain supported through Browser Steward approval; the Browser CLI (for example, `openclaw browser status` or `openclaw browser open <url>`) and the `browser.request` Gateway method are preferred. All supported paths preserve Browser Steward routing, approval, and live runtime-authority checks.
 - `remove` scope: `operator.pairing` can remove non-operator node rows; a device-token caller revoking its own node role on a mixed-role device additionally needs `operator.admin`.
 
 ## Invoke

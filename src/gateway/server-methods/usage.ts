@@ -25,6 +25,7 @@ import {
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
+import { assertGatewaySessionStewardBoundary } from "../session-steward-boundary.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
 import { loadUsageStatusStaleWhileRevalidate } from "./models-auth-status-usage-cache.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
@@ -201,6 +202,19 @@ export const usageHandlers: GatewayRequestHandlers = {
         ),
       );
       return;
+    }
+    if (specificKey) {
+      const sessionBoundary = assertGatewaySessionStewardBoundary({
+        sessionKey: specificKey,
+        requestedAgentId,
+        config,
+        surface: "sessions.usage",
+        action: "usage",
+      });
+      if (!sessionBoundary.ok) {
+        respond(false, undefined, sessionBoundary.error);
+        return;
+      }
     }
     const specificSessionOwner = specificKey
       ? resolveRequestedSessionAgentId(config, specificKey, requestedAgentId)

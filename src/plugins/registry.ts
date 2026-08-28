@@ -162,6 +162,7 @@ export function createPluginRegistry(registryParams: PluginRegistryParams) {
     registerAgentEventSubscription: registrars.registerAgentEventSubscription,
     registerSessionSchedulerJob: registrars.registerSessionSchedulerJob,
     registerSessionAction: registrars.registerSessionAction,
+    registerBrowserNodeDelegation: registrars.registerBrowserNodeDelegation,
     registerHook: registrars.registerHook,
     registerTypedHook: registrars.registerTypedHook,
   };

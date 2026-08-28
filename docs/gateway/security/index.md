@@ -33,7 +33,7 @@ The rest of this page is the deep end: the trust model, what the audit checks, a
 - Everyone who can message a tool-enabled agent shares that agent's delegated tool authority. That is fine for teammates who already trust each other; it is why adversarial users cannot share an agent.
 - If someone can modify Gateway host state/config (`~/.openclaw`, including `openclaw.json`), treat them as a trusted operator.
 - Inside one Gateway, authenticated operator access is a trusted control-plane role, not a per-user tenant role. [Named operator roles](/gateway/operator-scopes#named-operator-roles) bound what each teammate's connections can do; they are collaboration guardrails, not tenant isolation.
-- `sessionKey` (session IDs, labels) is a routing selector, not an authorization token.
+- `sessionKey` (session IDs, labels) is a routing selector, not an authorization token. See [Session boundaries](/gateway/session-boundaries).
 
 Hosting multiple users or organizations? Run one isolated Gateway cell per tenant instead of sharing a Gateway. See [Multi-tenant hosting](/gateway/multi-tenant-hosting).
 

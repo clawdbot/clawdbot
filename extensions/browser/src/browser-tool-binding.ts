@@ -1,6 +1,6 @@
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 
-type BrowserTabToolBinding = {
+export type BrowserTabToolBinding = {
   kind: "tab";
   tabId: number;
   target: "host" | "node";
@@ -103,11 +103,31 @@ export function applyBrowserTabToolBinding(
     bound.request && typeof bound.request === "object" && !Array.isArray(bound.request)
       ? bindTargetId(bound.request as Record<string, unknown>, binding.targetId)
       : bound.request;
-  return {
+  const result = {
     ...bound,
     target: binding.target,
     ...(binding.node ? { node: binding.node } : {}),
     profile: binding.profile,
     ...(request ? { request } : {}),
   };
+  // Preserve the private approval marker when the trusted tab route is reapplied.
+  for (const symbol of Object.getOwnPropertySymbols(input)) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, symbol);
+    if (descriptor) {
+      Object.defineProperty(result, symbol, descriptor);
+    }
+  }
+  return result;
+}
+
+/** Apply a trusted tab binding before approval so the approved shape is executable. */
+export function applyBrowserTabToolBindingToParams(
+  input: unknown,
+  binding: BrowserTabToolBinding,
+): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return input;
+  }
+  // SAFETY: the guard above excludes arrays and proves an object-shaped tool input.
+  return applyBrowserTabToolBinding(input as Record<string, unknown>, binding);
 }

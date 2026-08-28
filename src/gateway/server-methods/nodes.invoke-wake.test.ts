@@ -976,7 +976,7 @@ describe("node.invoke APNs wake path", () => {
   });
 
   it.each(["browser.proxy", "browser.proxy.upload.v1"])(
-    "allows %s for admin-scoped plugin runtime callers",
+    "rejects %s for generic admin-scoped plugin runtime callers",
     async (command) => {
       const nodeRegistry = {
         get: vi.fn(() => ({
@@ -1003,13 +1003,12 @@ describe("node.invoke APNs wake path", () => {
       });
 
       const call = firstRespondCall(respond);
-      expect(call[0]).toBe(true);
-      expect(nodeRegistry.invoke).toHaveBeenCalledTimes(1);
-      expectRecordFields(mockArg(nodeRegistry.invoke, 0, 0), "node invoke payload", {
-        nodeId: "browser-node",
-        command,
-        params: { method: "GET", path: "/profiles" },
+      expect(call[0]).toBe(false);
+      expect(call[2]).toMatchObject({
+        code: "INVALID_REQUEST",
+        message: "browser node control requires an active Browser Steward policy",
       });
+      expect(nodeRegistry.invoke).not.toHaveBeenCalled();
     },
   );
 

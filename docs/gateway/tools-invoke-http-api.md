@@ -70,6 +70,10 @@ Fields:
 - `idempotencyKey` (string, optional): used to derive a stable tool-call id for the invocation.
 - `dryRun` (boolean, optional): reserved for future use; currently ignored.
 
+Session Steward evaluates `sessionKey` and `agentId` before tool resolution and
+execution. A malformed agent-scoped key or cross-agent mismatch is rejected as
+`INVALID_REQUEST` before the tool runs.
+
 ## Policy + routing behavior
 
 Tool availability is filtered through the same policy chain used by Gateway agents:

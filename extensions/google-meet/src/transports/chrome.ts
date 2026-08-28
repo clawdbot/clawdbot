@@ -218,7 +218,7 @@ export async function launchChromeMeet(params: {
       adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
       allowSessionAdoption: true,
       autoJoin: params.config.chrome.autoJoin,
-      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime, "browser-steward"),
       captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
       config: params.config.chrome,
       locationLabel: "in local Chrome",
@@ -242,7 +242,7 @@ export async function launchChromeMeet(params: {
 
   const result = await openMeetingWithBrowser({
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+    callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime, "browser-steward"),
     config: params.config.chrome,
     session: {
       captureCaptions: shouldCaptureCaptions(params.mode, params.fullConfig),
@@ -291,7 +291,7 @@ export async function leaveChromeMeet(params: {
 }): Promise<{ left: boolean; note: string }> {
   return await leaveMeetingWithBrowser({
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+    callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime, "browser-steward"),
     launch: params.config.chrome.launch,
     meetingSessionId: params.meetingSessionId,
     meetingUrl: params.meetingUrl,
@@ -310,7 +310,7 @@ export async function readChromeMeetTranscript(params: {
 }): Promise<GoogleMeetTranscriptSnapshot> {
   return await readMeetingTranscriptWithBrowser({
     adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-    callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+    callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime, "browser-steward"),
     finalize: params.finalize === true,
     meetingUrl: params.meetingUrl,
     meetingSessionId: params.meetingSessionId,
@@ -461,7 +461,7 @@ export async function recoverCurrentMeetTab(params: {
     transport: "chrome",
     ...(await recoverMeetingBrowserTab({
       adapter: GOOGLE_MEET_PLATFORM_ADAPTER,
-      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime),
+      callBrowser: await resolveLocalMeetingBrowserRequest(params.runtime, "browser-steward"),
       captureCaptions: shouldCaptureCaptions(params.mode ?? "bidi", params.fullConfig),
       config: params.config.chrome,
       locationLabel: "in local Chrome",

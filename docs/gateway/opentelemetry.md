@@ -258,6 +258,7 @@ Raw model/tool content is **not** exported by default. Spans carry bounded
 identifiers (channel, provider, model, error category, hash-only request ids,
 tool source, tool owner, skill name/source) and never include prompt text,
 response text, tool inputs, tool outputs, skill file paths, or session keys.
+Session Steward diagnostics likewise contain only redacted boundary metadata.
 Values that look like scoped agent session keys (for example starting with
 `agent:`) are replaced with `unknown` on low-cardinality attributes. OTLP log
 records keep severity, logger, code location, trusted trace context, and

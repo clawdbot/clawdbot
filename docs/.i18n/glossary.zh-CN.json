@@ -180,6 +180,10 @@
     "target": "会话"
   },
   {
+    "source": "Session boundaries",
+    "target": "会话边界"
+  },
+  {
     "source": "Session permission modes",
     "target": "会话权限模式"
   },

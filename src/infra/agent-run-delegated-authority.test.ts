@@ -46,6 +46,30 @@ test("delegated authority closes exactly once on replacement, exact close, and l
   }
 });
 
+test("notifies multiple delegated-authority closure observers", () => {
+  const first: string[] = [];
+  const second: string[] = [];
+  const unregisterFirst = registerAgentRunDelegatedAuthorityClosedHandler((authority) => {
+    first.push(authority.claimId);
+  });
+  const unregisterSecond = registerAgentRunDelegatedAuthorityClosedHandler((authority) => {
+    second.push(authority.claimId);
+  });
+  try {
+    const authority = claimAgentRunDelegatedAuthority({
+      instanceId: "multi-observer-instance",
+      runId: "multi-observer-run",
+    });
+
+    expect(releaseAgentRunDelegatedAuthority(authority)).toBe(true);
+    expect(first).toEqual([authority.claimId]);
+    expect(second).toEqual([authority.claimId]);
+  } finally {
+    unregisterSecond();
+    unregisterFirst();
+  }
+});
+
 test("stale projection sweeping cannot retire a live delegated authority claim", () => {
   const clock = vi.spyOn(Date, "now").mockReturnValue(100);
   const authority = claimAgentRunDelegatedAuthority({

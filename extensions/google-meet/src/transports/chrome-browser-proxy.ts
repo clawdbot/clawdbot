@@ -43,6 +43,7 @@ export async function callBrowserProxyOnNode(params: {
   return await callMeetingBrowserProxyOnNode({
     ...params,
     adapter: GOOGLE_MEET_BROWSER_NODE_ADAPTER,
+    browserRouting: "browser-steward",
   });
 }
 

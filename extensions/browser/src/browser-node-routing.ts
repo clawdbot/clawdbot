@@ -4,6 +4,7 @@ import { resolveNodeIdFromList } from "./sdk-setup-tools.js";
 
 export type BrowserNodeTarget = {
   nodeId: string;
+  pairingGeneration?: string;
   displayName?: string;
   label?: string;
   connected?: boolean;

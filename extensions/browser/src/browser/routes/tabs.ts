@@ -13,6 +13,7 @@ import {
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
+  redactBrowserNavigationUrl,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import type { BrowserRouteContext, ProfileContext } from "../server-context.js";
@@ -117,18 +118,16 @@ async function redactBlockedTabUrls(params: {
   tabs: Awaited<ReturnType<ProfileContext["listTabs"]>>;
   navigationPolicy: ReturnType<typeof browserNavigationPolicyForProfile>;
 }): Promise<Awaited<ReturnType<ProfileContext["listTabs"]>>> {
-  if (!params.navigationPolicy.ssrfPolicy) {
-    return params.tabs;
-  }
-
   const redactedTabs: Awaited<ReturnType<ProfileContext["listTabs"]>> = [];
   for (const tab of params.tabs) {
     try {
-      await assertBrowserNavigationResultAllowed({
-        url: tab.url,
-        ...params.navigationPolicy,
-      });
-      redactedTabs.push(tab);
+      if (params.navigationPolicy.ssrfPolicy) {
+        await assertBrowserNavigationResultAllowed({
+          url: tab.url,
+          ...params.navigationPolicy,
+        });
+      }
+      redactedTabs.push({ ...tab, url: redactBrowserNavigationUrl(tab.url) });
     } catch {
       // Hide blocked URLs while preserving tab identity for safe operations.
       redactedTabs.push({
@@ -262,7 +261,11 @@ export function registerBrowserTabRoutes(app: BrowserRouteRegistrar, ctx: Browse
         });
         await profileCtx.ensureBrowserAvailable({ signal });
         const opened = await profileCtx.openTab(url, { label });
-        return { ...opened, resolvedProfile: profileCtx.profile.name };
+        return {
+          ...opened,
+          url: redactBrowserNavigationUrl(opened.url),
+          resolvedProfile: profileCtx.profile.name,
+        };
       },
     });
     if (result) {

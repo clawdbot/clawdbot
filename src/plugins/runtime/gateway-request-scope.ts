@@ -38,6 +38,8 @@ type PluginRuntimeGatewayRequestScope = {
   pluginOrigin?: PluginOrigin;
   pluginTrustedOfficialInstall?: boolean;
   gatewayMethodDispatchAllowed?: boolean;
+  /** Lifecycle authority rechecked at the final effect boundary. */
+  pluginRuntimeAuthority?: () => boolean;
   pluginRegistry?: PluginRegistry;
 };
 
@@ -95,6 +97,32 @@ export function withPluginRuntimeGatewayRequestScope<T>(
   run: () => T,
 ): T {
   return pluginRuntimeGatewayRequestScope.run(scope, run);
+}
+
+/** Keeps a plugin-owned effect bound to the consumer lifecycle that authorized it. */
+export function withPluginRuntimeGatewayRequestAuthority<T>(
+  authority: () => boolean,
+  run: () => T,
+): T {
+  const current = pluginRuntimeGatewayRequestScope.getStore();
+  const currentAuthority = current?.pluginRuntimeAuthority;
+  const combinedAuthority = currentAuthority
+    ? () => {
+        try {
+          return currentAuthority() && authority();
+        } catch {
+          return false;
+        }
+      }
+    : authority;
+  return pluginRuntimeGatewayRequestScope.run(
+    {
+      ...current,
+      isWebchatConnect: current?.isWebchatConnect ?? (() => false),
+      pluginRuntimeAuthority: combinedAuthority,
+    },
+    run,
+  );
 }
 
 /** Runs detached plugin work against one lifecycle-fenced Gateway instance. */

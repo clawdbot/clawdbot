@@ -965,7 +965,22 @@ describe("sessions.abort agent scope", () => {
     );
 
     expect(chatAbortMock).not.toHaveBeenCalled();
-    expectRespondErrorMessage(respond, "session key agent does not match agentId");
+    expect(respond).toHaveBeenCalledWith(
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: 'agent "main" does not match session key agent "beta"',
+        details: {
+          sessionBoundary: expect.objectContaining({
+            affectedSession: "agent:beta:REDACTED",
+            ownerAgentId: "beta",
+            requestedAgentId: "main",
+            agentRelation: "cross_agent",
+          }),
+        },
+      }),
+    );
   });
 
   it("rejects explicit agentId mismatches before session mutations", async () => {

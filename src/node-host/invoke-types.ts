@@ -16,6 +16,8 @@ export type NodeInvokeRequestPayload = {
   timeoutMs?: number | null;
   idempotencyKey?: string | null;
   sessionKey?: string | null;
+  /** Gateway-authenticated pairing generation for node-bound privileged commands. */
+  pairingGeneration?: string | null;
 };
 
 /** Input payload for a node-host system.run invocation. */

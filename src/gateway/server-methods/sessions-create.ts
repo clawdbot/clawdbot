@@ -34,6 +34,7 @@ import {
 } from "../session-create-service.js";
 import type { PreparedGatewaySessionLifecycle } from "../session-lifecycle-preparation.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import { assertGatewaySessionStewardBoundary } from "../session-steward-boundary.js";
 import { readSessionMessageCountAsync } from "../session-transcript-readers.js";
 import {
   loadGatewaySessionEntryReadOnly,
@@ -109,6 +110,17 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
       (explicitlyRequestedAgentId
         ? `agent:${normalizeAgentId(explicitlyRequestedAgentId)}:main`
         : "main");
+    const sessionBoundary = assertGatewaySessionStewardBoundary({
+      sessionKey: agentSelectionKey,
+      requestedAgentId: explicitlyRequestedAgentId,
+      config: cfg,
+      surface: "sessions.create",
+      action: "create",
+    });
+    if (!sessionBoundary.ok) {
+      respond(false, undefined, sessionBoundary.error);
+      return;
+    }
     const explicitlyRequestedAgent = resolveRequestedGlobalAgentId(
       cfg,
       agentSelectionKey,

@@ -24,6 +24,14 @@
       "types": "./dist/src/plugin-sdk/browser-config.d.ts",
       "default": "./src/browser-config.ts"
     },
+    "./browser-node-delegation-runtime": {
+      "types": "./dist/src/plugin-sdk/browser-node-delegation-runtime.d.ts",
+      "default": "./src/browser-node-delegation-runtime.ts"
+    },
+    "./browser-steward-runtime": {
+      "types": "./dist/src/plugin-sdk/browser-steward-runtime.d.ts",
+      "default": "./src/browser-steward-runtime.ts"
+    },
     "./channel-activity-runtime": {
       "types": "./dist/src/plugin-sdk/channel-activity-runtime.d.ts",
       "default": "./src/channel-activity-runtime.ts"

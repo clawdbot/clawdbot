@@ -234,7 +234,10 @@ const AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
   "secrets.store.delete",
 ]);
 
-const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>(["node.invoke"]);
+const OPTIONAL_LOCAL_AGENT_RUNTIME_IDENTITY_METHODS = new Set<string>([
+  "browser.request",
+  "node.invoke",
+]);
 
 function resolveApprovalRuntimeTokenForGatewayTool(params: {
   method: string;
@@ -380,7 +383,7 @@ async function resolveAgentRuntimeIdentityTokenForGatewayTool(params: {
     }
     throw new Error("agent gateway calls require the trusted local gateway context");
   }
-  if (identity.signedAgentRuntimeIdentityToken) {
+  if (identity.signedAgentRuntimeIdentityToken && !identity.gatewayToolOperationApproval) {
     return identity.signedAgentRuntimeIdentityToken;
   }
   if (!identity.operationalRunInstance) {

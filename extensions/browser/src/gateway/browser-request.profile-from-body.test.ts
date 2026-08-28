@@ -1,6 +1,10 @@
 // Browser tests cover browser request.profile from body plugin behavior.
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  consumeBrowserStewardGatewayApprovalAuthority,
+  createBrowserStewardGatewayApprovalClaim,
+} from "../browser/browser-steward-approval.js";
 
 const {
   loadConfigMock,
@@ -69,12 +73,14 @@ vi.mock("../sdk-node-runtime.js", async () => {
   };
 });
 
+import type { GatewayRequestHandlers } from "../sdk-node-runtime.js";
 import { browserHandlers } from "./browser-request.js";
 
 type RespondCall = [boolean, unknown?, { code: string; message: string; details?: unknown }?];
 
 type TestNode = {
   nodeId: string;
+  pairingGeneration?: string;
   displayName?: string;
   caps?: string[];
   commands?: string[];
@@ -82,24 +88,44 @@ type TestNode = {
   platform?: string;
 };
 
-function createContext(invokeResult?: unknown, connectedNodes?: TestNode[]) {
-  const invoke = vi.fn(async () =>
-    invokeResult === undefined ? { ok: true, payload: { result: { ok: true } } } : invokeResult,
-  );
+function createContext(
+  invokeResult?: unknown,
+  connectedNodes?: TestNode[],
+  leaseIsCurrent = true,
+  validateAgentRuntimeApprovalAuthority: (identity: unknown) => boolean = () => true,
+) {
+  const invoke = vi.fn(async (_request: unknown) => {
+    if (typeof invokeResult === "function") {
+      return await invokeResult();
+    }
+    return invokeResult === undefined
+      ? { ok: true, payload: { result: { ok: true } } }
+      : invokeResult;
+  });
   const listConnected = vi.fn(
     () =>
       connectedNodes ?? [
         {
           nodeId: "node-1",
+          pairingGeneration: "pairing-1",
           caps: ["browser"],
           commands: ["browser.proxy", "browser.proxy.upload.v1"],
           platform: "linux",
         },
       ],
   );
+  const createBrowserNodeSessionLease = vi.fn(() => "lease-1");
+  const renewBrowserNodeSessionLease = vi.fn(() => listConnected()[0]);
+  const resolveBrowserNodeSessionLease = vi.fn(() =>
+    leaseIsCurrent ? listConnected()[0] : undefined,
+  );
   return {
     invoke,
     listConnected,
+    createBrowserNodeSessionLease,
+    renewBrowserNodeSessionLease,
+    resolveBrowserNodeSessionLease,
+    validateAgentRuntimeApprovalAuthority,
   };
 }
 
@@ -107,17 +133,33 @@ async function runBrowserRequest(
   params: Record<string, unknown>,
   invokeResult?: unknown,
   connectedNodes?: TestNode[],
+  client?: {
+    connect?: { scopes?: string[] };
+    internal?: {
+      agentRuntimeIdentity?: unknown;
+      pluginRuntimeOwnerId?: string;
+      browserRequestCompatibility?: true;
+      pluginRuntimeAuthority?: () => boolean;
+    };
+  } | null,
+  leaseIsCurrent = true,
+  validateAgentRuntimeApprovalAuthority: (identity: unknown) => boolean = () => true,
 ) {
   const respond = vi.fn();
-  const nodeRegistry = createContext(invokeResult, connectedNodes);
+  const nodeRegistry = createContext(
+    invokeResult,
+    connectedNodes,
+    leaseIsCurrent,
+    validateAgentRuntimeApprovalAuthority,
+  );
   await expectDefined(
     browserHandlers["browser.request"],
     "browser request handler",
   )({
     params,
     respond: respond as never,
-    context: { nodeRegistry } as never,
-    client: null,
+    context: { nodeRegistry, validateAgentRuntimeApprovalAuthority } as never,
+    client: (client ?? null) as Parameters<GatewayRequestHandlers["browser.request"]>[0]["client"],
     req: { type: "req", id: "req-1", method: "browser.request" },
     isWebchatConnect: () => false,
   });
@@ -157,6 +199,75 @@ describe("browser.request profile selection", () => {
       .mockImplementation(async ({ body }: { body: unknown }) => ({ body }));
   });
 
+  it("issues an opaque route lease for an exact connected browser node", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      { routeOnly: true, nodeId: "node-1" },
+      undefined,
+      undefined,
+      { connect: { scopes: ["operator.admin"] } },
+    );
+
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { browserNodeSessionLease: "lease-1", nodeId: "node-1" },
+      undefined,
+    ]);
+    expect(nodeRegistry.createBrowserNodeSessionLease).toHaveBeenCalledWith("node-1");
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("renews the same route lease only for an exact approved node route", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        routeOnly: true,
+        nodeId: "node-1",
+        browserNodeSessionLease: "lease-1",
+        renewBrowserNodeSessionLease: true,
+      },
+      undefined,
+      undefined,
+      { connect: { scopes: ["operator.admin"] } },
+    );
+
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { browserNodeSessionLease: "lease-1", nodeId: "node-1" },
+      undefined,
+    ]);
+    expect(nodeRegistry.renewBrowserNodeSessionLease).toHaveBeenCalledWith("node-1", "lease-1");
+    expect(nodeRegistry.createBrowserNodeSessionLease).not.toHaveBeenCalled();
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("rejects a Browser Steward request after its node route lease becomes stale", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "POST",
+        path: "/act",
+        nodeId: "node-1",
+        browserNodeSessionLease: "lease-1",
+        body: { request: { kind: "click", ref: "button" } },
+        agentSessionKey: "agent:browser-session-credential-steward:node:opaque",
+        agentId: "browser-session-credential-steward",
+      },
+      undefined,
+      undefined,
+      { connect: { scopes: ["operator.admin"] } },
+      false,
+    );
+
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toMatchObject({
+      code: "INVALID_REQUEST",
+      message: "browser node route lease is stale; request approval again",
+    });
+    expect(JSON.stringify(error)).not.toContain("opaque");
+    expect(nodeRegistry.resolveBrowserNodeSessionLease).toHaveBeenCalledWith("node-1", "lease-1");
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
   it("forces system-profile import host-local even when a browser node is connected", async () => {
     const { respond, nodeRegistry } = await runBrowserRequest({
       method: "POST",
@@ -186,6 +297,84 @@ describe("browser.request profile selection", () => {
     expect(invoke.params?.profile).toBe("work");
     expect(invoke.params?.errorEnvelope).toBe("browser-v1");
     expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("rejects generic plugin browser requests before node routing", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "GET",
+        path: "/profiles",
+        agentSessionKey: "agent:google-meet:direct:private-thread",
+        legacyMeetingRuntime: true,
+      },
+      undefined,
+      undefined,
+      {
+        connect: { scopes: ["operator.admin"] },
+        internal: { pluginRuntimeOwnerId: "google-meet" },
+      },
+    );
+
+    const [ok, payload, error] = firstRespondCall(respond);
+    expect(ok).toBe(false);
+    expect(payload).toBeUndefined();
+    expect(error).toEqual({
+      code: "INVALID_REQUEST",
+      message: "browser control requires a Browser-owned capability",
+    });
+    expect(JSON.stringify(error)).not.toContain("private-thread");
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+  });
+
+  it("accepts only the host-issued legacy meeting compatibility authority", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "GET",
+        path: "/profiles",
+      },
+      undefined,
+      undefined,
+      {
+        connect: { scopes: ["operator.admin"] },
+        internal: {
+          pluginRuntimeOwnerId: "google-meet",
+          browserRequestCompatibility: true,
+        },
+      },
+    );
+
+    expect(invokeParams(nodeRegistry).nodeId).toBe("node-1");
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
+  it("carries a redacted admin approval envelope to the browser node", async () => {
+    const rawSecret = "raw-browser-secret-user-123";
+    const { nodeRegistry } = await runBrowserRequest(
+      {
+        method: "POST",
+        path: "/act",
+        body: { profile: "work", request: { kind: "type", text: rawSecret } },
+        agentSessionKey: "agent:browser-session-credential-steward:node:user-123",
+        agentId: "browser-session-credential-steward",
+      },
+      undefined,
+      undefined,
+      { connect: { scopes: ["operator.admin"] } },
+    );
+
+    const approval = invokeParams(nodeRegistry).params?.browserStewardApproval;
+    expect(approval).toMatchObject({
+      issuer: "gateway.operator.admin",
+      command: "browser.proxy",
+      action: "act",
+      profile: "work",
+      sessionBoundary: {
+        kind: "browser_steward",
+        affectedSession: "agent:browser-session-credential-steward:REDACTED",
+      },
+    });
+    expect(JSON.stringify(approval)).not.toContain(rawSecret);
+    expect(JSON.stringify(approval)).not.toContain("user-123");
   });
 
   it("prefers query profile over body profile when both are present", async () => {
@@ -327,6 +516,47 @@ describe("browser.request profile selection", () => {
     expect(firstRespondCall(respond)[0]).toBe(true);
   });
 
+  it("uses one canonical empty profile for an approved normalized profile route", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "GET",
+        path: "/profiles/",
+        agentSessionKey: "agent:browser-session-credential-steward:profiles",
+        agentId: "browser-session-credential-steward",
+      },
+      undefined,
+      undefined,
+      { connect: { scopes: ["operator.admin"] } },
+    );
+
+    const invocation = nodeRegistry.invoke.mock.calls[0]?.[0] as {
+      nodeId: string;
+      command: string;
+      idempotencyKey: string;
+      expectedPairingGeneration: string;
+      params: Record<string, unknown>;
+    };
+    expect(invocation.params.profile).toBe("");
+    expect(
+      consumeBrowserStewardGatewayApprovalAuthority({
+        approval: invocation.params.browserStewardApproval,
+        command: invocation.command,
+        method: invocation.params.method as string,
+        path: invocation.params.path as string,
+        query: invocation.params.query,
+        body: invocation.params.body,
+        upload: invocation.params.upload,
+        profile: invocation.params.profile as string,
+        agentSessionKey: invocation.params.agentSessionKey as string,
+        agentId: invocation.params.agentId as string,
+        nodeId: invocation.nodeId,
+        pairingGeneration: invocation.expectedPairingGeneration,
+        invocationId: invocation.idempotencyKey,
+      }),
+    ).toBeDefined();
+    expect(firstRespondCall(respond)[0]).toBe(true);
+  });
+
   it("falls back to host dispatch when an auto-selected node has no browser host", async () => {
     const { respond, nodeRegistry } = await runBrowserRequest(
       { method: "GET", path: "/" },
@@ -344,151 +574,46 @@ describe("browser.request profile selection", () => {
     expect(firstRespondCall(respond)[2]?.message).toBe("browser control is disabled");
   });
 
-  it("sends Gateway-owned upload bytes without forwarding source paths", async () => {
-    const upload = {
-      envelope: "browser-upload-v1",
-      files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-    };
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
-      body: { ref: "e12" },
-      upload,
-    });
-
-    const { respond, nodeRegistry } = await runBrowserRequest({
-      method: "POST",
-      path: "/hooks/file-chooser",
-      body: {
-        paths: ["/tmp/openclaw/uploads/report.txt"],
-        ref: "e12",
-      },
-    });
-
-    expect(invokeParams(nodeRegistry).params).toMatchObject({
-      body: { ref: "e12" },
-      upload,
-    });
-    expect(invokeParams(nodeRegistry).command).toBe("browser.proxy.upload.v1");
-    expect(invokeParams(nodeRegistry).params?.body).not.toHaveProperty("paths");
-    expect(firstRespondCall(respond)[0]).toBe(true);
-  });
-
-  it("uses the original Gateway paths when an auto-selected old node lacks upload support", async () => {
-    const originalBody = {
-      paths: ["/tmp/openclaw/uploads/report.txt"],
-      ref: "e12",
-    };
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
-      body: { ref: "e12" },
-      upload: {
-        envelope: "browser-upload-v1",
-        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-      },
-    });
+  it("keeps automatic host fallback for direct operator requests", async () => {
     startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
-    dispatchBrowserRouteMock.mockResolvedValueOnce({ status: 200, body: { ok: true } });
-
+    dispatchBrowserRouteMock.mockResolvedValueOnce({
+      status: 200,
+      body: { targetId: "gateway-host-tab" },
+    });
     const { respond, nodeRegistry } = await runBrowserRequest(
       {
         method: "POST",
-        path: "/hooks/file-chooser",
-        body: originalBody,
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+        includeRoute: true,
       },
-      undefined,
-      [
-        {
-          nodeId: "node-1",
-          caps: ["browser"],
-          commands: ["browser.proxy"],
-          platform: "linux",
-        },
-      ],
-    );
-
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(dispatchBrowserRouteMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: originalBody,
-      }),
-    );
-    expect(firstRespondCall(respond)).toEqual([true, { ok: true }]);
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
-  });
-
-  it("rejects a configured old node upload before node dispatch", async () => {
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
-    });
-    uploadMocks.prepareBrowserProxyUploadRequest.mockResolvedValueOnce({
-      body: { ref: "e12" },
-      upload: {
-        envelope: "browser-upload-v1",
-        files: [{ name: "report.txt", contentBase64: "aGVsbG8=" }],
-      },
-    });
-
-    const { respond, nodeRegistry } = await runBrowserRequest(
       {
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Browser control host is not reachable on 127.0.0.1:18791.",
+        },
       },
       undefined,
-      [
-        {
-          nodeId: "node-1",
-          caps: ["browser"],
-          commands: ["browser.proxy"],
-          platform: "linux",
-        },
-      ],
+      { connect: { scopes: ["operator.admin"] } },
     );
 
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)[2]?.message).toContain(
-      "browser node does not support remote upload transfer",
-    );
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
+    expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
+    expect(dispatchBrowserRouteMock).toHaveBeenCalledOnce();
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { result: { targetId: "gateway-host-tab" }, route: { status: "host-fallback" } },
+    ]);
   });
 
-  it("explains when configured-node upload support is awaiting approval", async () => {
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
-    });
-
-    const { respond, nodeRegistry } = await runBrowserRequest(
-      {
-        method: "POST",
-        path: "/hooks/file-chooser",
-        body: { paths: ["/tmp/openclaw/uploads/report.txt"], ref: "e12" },
-      },
-      undefined,
-      [
-        {
-          nodeId: "node-1",
-          caps: ["browser"],
-          commands: ["browser.proxy"],
-          declaredCommands: ["browser.proxy", "browser.proxy.upload.v1"],
-          platform: "linux",
-        },
-      ],
-    );
-
-    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)[2]?.message).toContain(
-      "remote upload transfer is pending approval",
-    );
-    expect(uploadMocks.prepareBrowserProxyUploadRequest).not.toHaveBeenCalled();
-  });
-
-  it("preserves a configured node failure instead of falling back to the host", async () => {
-    loadConfigMock.mockReturnValue({
-      gateway: { nodes: { browser: { mode: "auto", node: "node-1" } } },
+  it("returns a host-fallback envelope for internal routed callers", async () => {
+    startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
+    dispatchBrowserRouteMock.mockResolvedValueOnce({
+      status: 200,
+      body: { targetId: "gateway-host-tab" },
     });
     const { respond } = await runBrowserRequest(
-      { method: "GET", path: "/" },
+      { method: "POST", path: "/tabs/open", includeRoute: true },
       {
         ok: false,
         error: {
@@ -498,90 +623,217 @@ describe("browser.request profile selection", () => {
       },
     );
 
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { result: { targetId: "gateway-host-tab" }, route: { status: "host-fallback" } },
+    ]);
+  });
+
+  it("falls back when an auto-selected node is passed through as an internal node id", async () => {
+    startBrowserControlServiceFromConfigMock.mockResolvedValueOnce(true);
+    dispatchBrowserRouteMock.mockResolvedValueOnce({
+      status: 200,
+      body: { targetId: "gateway-host-tab" },
+    });
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+        nodeId: "node-1",
+        allowAutomaticHostFallback: true,
+        includeRoute: true,
+      },
+      {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Browser control host is not reachable on 127.0.0.1:18791.",
+        },
+      },
+    );
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
+    expect(dispatchBrowserRouteMock).toHaveBeenCalledOnce();
+    expect(firstRespondCall(respond)).toEqual([
+      true,
+      { result: { targetId: "gateway-host-tab" }, route: { status: "host-fallback" } },
+    ]);
+  });
+
+  it("does not host-fallback an approved Browser-owned route", async () => {
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      {
+        method: "GET",
+        path: "/",
+        nodeId: "node-1",
+        allowAutomaticHostFallback: true,
+      },
+      {
+        ok: false,
+        error: {
+          code: "UNAVAILABLE",
+          message: "Browser control host is not reachable on 127.0.0.1:18791.",
+        },
+      },
+      undefined,
+      {
+        connect: { scopes: ["operator.admin"] },
+        internal: { pluginRuntimeOwnerId: "browser" },
+      },
+    );
+
+    expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
     expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
     expect(firstRespondCall(respond)[2]?.message).toContain(
       "Browser control host is not reachable",
     );
   });
 
-  it("preserves ambiguous auto-selected node failures", async () => {
-    const { respond } = await runBrowserRequest(
-      { method: "GET", path: "/" },
+  it("does not dispatch after Browser runtime authority is revoked during preparation", async () => {
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    uploadMocks.prepareBrowserProxyUploadRequest.mockImplementationOnce(async ({ body }) => {
+      await preparation;
+      return { body };
+    });
+    const operationClaim = createBrowserStewardGatewayApprovalClaim({
+      command: "browser.proxy",
+      method: "POST",
+      path: "/tabs/open",
+      body: { url: "https://example.com" },
+      agentId: "browser-session-credential-steward",
+      agentSessionKey: "agent:browser-session-credential-steward:node:opaque",
+      nodeId: "node-1",
+      allowAutomaticHostFallback: false,
+    });
+    let authorityActive = true;
+    const request = runBrowserRequest(
+      {
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+        nodeId: "node-1",
+        allowAutomaticHostFallback: false,
+        agentSessionKey: "agent:browser-session-credential-steward:node:opaque",
+        agentId: "browser-session-credential-steward",
+      },
+      undefined,
+      undefined,
+      {
+        connect: { scopes: ["operator.admin"] },
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "browser-session-credential-steward",
+            sessionKey: "agent:browser-session-credential-steward:node:opaque",
+            gatewayToolOperationApproval: { owner: "browser", ...operationClaim },
+          },
+        },
+      } as never,
+      true,
+      () => authorityActive,
+    );
+    await vi.waitFor(() => expect(uploadMocks.prepareBrowserProxyUploadRequest).toHaveBeenCalled());
+    authorityActive = false;
+    releasePreparation();
+
+    const { respond, nodeRegistry } = await request;
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "agent runtime authority is no longer active",
+      }),
+    ]);
+  });
+
+  it("does not dispatch or fall back after Browser plugin lifecycle authority is revoked", async () => {
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    uploadMocks.prepareBrowserProxyUploadRequest.mockImplementationOnce(async ({ body }) => {
+      await preparation;
+      return { body };
+    });
+    let authorityActive = true;
+    const request = runBrowserRequest(
+      {
+        method: "POST",
+        path: "/tabs/open",
+        body: { url: "https://example.com" },
+      },
       {
         ok: false,
-        error: { code: "UNAVAILABLE", message: "node invoke timed out" },
+        error: {
+          code: "UNAVAILABLE",
+          message: "Browser control host is not reachable on 127.0.0.1:18791.",
+        },
       },
-    );
-
-    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
-    expect(firstRespondCall(respond)[2]?.message).toBe("UNAVAILABLE: node invoke timed out");
-  });
-
-  it("maps validated node-proxy route failures like local route failures", async () => {
-    const errorBody = {
-      error: "headed mode needs a display",
-      reason: "no_display_for_headed_profile",
-      details: {
-        profile: "openclaw",
-        requestedHeadless: false,
-        headlessSource: "config",
-        displayPresent: false,
-      },
-    };
-    const { respond } = await runBrowserRequest(
-      { method: "POST", path: "/start" },
-      { ok: true, payload: { error: { status: 409, body: errorBody } } },
-    );
-
-    const [ok, payload, error] = firstRespondCall(respond);
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    expect(error).toMatchObject({
-      code: "INVALID_REQUEST",
-      message: "headed mode needs a display",
-      details: errorBody,
-    });
-  });
-
-  it.each([
-    {
-      name: "recognized action code",
-      body: { error: "evaluation disabled", code: "ACT_EVALUATE_DISABLED" },
-      details: { error: "evaluation disabled", code: "ACT_EVALUATE_DISABLED" },
-    },
-    {
-      name: "unrecognized action code",
-      body: { error: "evaluation disabled", code: "ACT_FUTURE_CODE" },
-      details: { error: "evaluation disabled", unrecognizedCode: true },
-    },
-  ])("preserves bounded $name state through the node proxy", async ({ body, details }) => {
-    const { respond } = await runBrowserRequest(
-      { method: "POST", path: "/act" },
-      { ok: true, payload: { error: { status: 403, body } } },
-    );
-
-    expect(firstRespondCall(respond)[2]).toEqual({
-      code: "INVALID_REQUEST",
-      message: "evaluation disabled",
-      details,
-    });
-  });
-
-  it("returns UNAVAILABLE for an incomplete node file envelope", async () => {
-    const { respond } = await runBrowserRequest(
-      { method: "POST", path: "/screenshot" },
+      undefined,
       {
-        ok: true,
-        payload: { result: { path: "/node/browser/screenshot.png" } },
+        connect: { scopes: ["operator.admin"] },
+        internal: {
+          pluginRuntimeOwnerId: "browser",
+          pluginRuntimeAuthority: () => authorityActive,
+        },
+      },
+    );
+    await vi.waitFor(() => expect(uploadMocks.prepareBrowserProxyUploadRequest).toHaveBeenCalled());
+    authorityActive = false;
+    releasePreparation();
+
+    const { respond, nodeRegistry } = await request;
+    expect(nodeRegistry.invoke).not.toHaveBeenCalled();
+    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "agent runtime authority is no longer active",
+      }),
+    ]);
+  });
+
+  it("blocks host fallback when Browser plugin lifecycle authority is revoked after node I/O", async () => {
+    let authorityActive = true;
+    const { respond, nodeRegistry } = await runBrowserRequest(
+      { method: "GET", path: "/" },
+      () => {
+        authorityActive = false;
+        return {
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: "Browser control host is not reachable on 127.0.0.1:18791.",
+          },
+        };
+      },
+      undefined,
+      {
+        connect: { scopes: ["operator.admin"] },
+        internal: {
+          pluginRuntimeOwnerId: "browser",
+          pluginRuntimeAuthority: () => authorityActive,
+        },
       },
     );
 
-    const [ok, payload, error] = firstRespondCall(respond);
-    expect(ok).toBe(false);
-    expect(payload).toBeUndefined();
-    expect(error).toMatchObject({
-      code: "UNAVAILABLE",
-      message: "browser proxy file transfer failed",
-    });
+    expect(nodeRegistry.invoke).toHaveBeenCalledOnce();
+    expect(startBrowserControlServiceFromConfigMock).not.toHaveBeenCalled();
+    expect(firstRespondCall(respond)).toEqual([
+      false,
+      undefined,
+      expect.objectContaining({
+        code: "INVALID_REQUEST",
+        message: "agent runtime authority is no longer active",
+      }),
+    ]);
   });
 });

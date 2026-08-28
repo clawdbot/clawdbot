@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { applyBrowserTabToolBinding, parseBrowserTabToolBinding } from "./browser-tool-binding.js";
+import {
+  approveBrowserStewardRuntimeParams,
+  isBrowserStewardRuntimeApproved,
+  prepareBrowserStewardRuntimeParams,
+} from "./browser/browser-steward-approval.js";
 
 const binding = {
   kind: "tab" as const,
@@ -37,6 +42,18 @@ describe("browser tab tool binding", () => {
       profile: "chrome",
       targetId: "target-a",
     });
+  });
+
+  it("preserves the private Browser Steward approval marker when rebinding a tab", () => {
+    const approved = prepareBrowserStewardRuntimeParams(
+      applyBrowserTabToolBinding({ action: "snapshot" }, binding),
+      { backend: { kind: "node", identity: "desktop" } },
+    ) as Record<string, unknown>;
+    approveBrowserStewardRuntimeParams(approved);
+
+    const rebound = applyBrowserTabToolBinding(approved, binding);
+
+    expect(isBrowserStewardRuntimeApproved(rebound)).toBe(true);
   });
 
   it("rejects page snapshot route escapes", () => {

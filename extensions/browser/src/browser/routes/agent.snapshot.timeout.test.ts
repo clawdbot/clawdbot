@@ -54,6 +54,7 @@ vi.mock("../chrome-mcp.js", () => ({
 vi.mock("../navigation-guard.js", () => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  redactBrowserNavigationUrl: vi.fn((url: string) => url),
   withBrowserNavigationPolicy: vi.fn(() => ({})),
 }));
 

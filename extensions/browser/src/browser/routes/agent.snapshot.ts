@@ -31,6 +31,7 @@ import { DEFAULT_BROWSER_SCREENSHOT_TIMEOUT_MS } from "../constants.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
+  redactBrowserNavigationUrl,
 } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
 import { finalizeRoleSnapshot, type RoleRefMap } from "../pw-role-snapshot.js";
@@ -114,8 +115,11 @@ async function collectChromeMcpSnapshotUrls(
             typeof (entry as { url?: unknown }).url === "string",
         )
         .map((entry) => {
-          entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
-          return entry;
+          const url = redactBrowserNavigationUrl(entry.url);
+          return {
+            text: truncateUtf16Safe(entry.text, 120) || url,
+            url,
+          };
         })
     : [];
 }
@@ -371,7 +375,12 @@ export function registerBrowserAgentSnapshotRoutes(
             signal,
           });
           await assertBrowserNavigationResultAllowed({ url: result.url, ...ssrfPolicyOpts });
-          return res.json({ ok: true, targetId: tab.targetId, ...result });
+          return res.json({
+            ok: true,
+            targetId: tab.targetId,
+            ...result,
+            url: redactBrowserNavigationUrl(result.url),
+          });
         }
         const pw = await requirePwAi(res, "navigate");
         if (!pw) {
@@ -429,7 +438,7 @@ export function registerBrowserAgentSnapshotRoutes(
           contentType: "application/pdf",
           maxBytes: pdf.buffer.byteLength,
           targetId: tab.targetId,
-          url: tab.url,
+          url: redactBrowserNavigationUrl(tab.url),
         });
       },
     });
@@ -506,7 +515,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 buffer,
                 type,
                 targetId: tab.targetId,
-                url: tab.url,
+                url: redactBrowserNavigationUrl(tab.url),
                 labels: true,
                 labelsCount: labelResult.labels,
                 labelsSkipped: labelResult.skipped,
@@ -528,7 +537,7 @@ export function registerBrowserAgentSnapshotRoutes(
             buffer,
             type,
             targetId: tab.targetId,
-            url: tab.url,
+            url: redactBrowserNavigationUrl(tab.url),
           });
           return;
         }
@@ -568,7 +577,7 @@ export function registerBrowserAgentSnapshotRoutes(
               buffer: labeled.buffer,
               type,
               targetId: tab.targetId,
-              url: tab.url,
+              url: redactBrowserNavigationUrl(tab.url),
               labels: true,
               labelsCount: labeled.labels,
               labelsSkipped: labeled.skipped,
@@ -603,7 +612,7 @@ export function registerBrowserAgentSnapshotRoutes(
           buffer,
           type,
           targetId: tab.targetId,
-          url: tab.url,
+          url: redactBrowserNavigationUrl(tab.url),
         });
       },
     });
@@ -712,7 +721,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 ok: true,
                 format: "aria",
                 targetId: tab.targetId,
-                url: tab.url,
+                url: redactBrowserNavigationUrl(tab.url),
                 ...flattened,
               });
             }
@@ -770,7 +779,7 @@ export function registerBrowserAgentSnapshotRoutes(
                   ok: true,
                   format: "ai",
                   targetId: tab.targetId,
-                  url: tab.url,
+                  url: redactBrowserNavigationUrl(tab.url),
                   labels: true,
                   labelsCount: labelResult.labels,
                   labelsSkipped: labelResult.skipped,
@@ -787,7 +796,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ok: true,
               format: "ai",
               targetId: tab.targetId,
-              url: tab.url,
+              url: redactBrowserNavigationUrl(tab.url),
               ...finalized,
             });
           }
@@ -808,7 +817,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ok: true,
               format: plan.format,
               targetId: tab.targetId,
-              url: tab.url,
+              url: redactBrowserNavigationUrl(tab.url),
               blockedByDialog: true,
               ...browserStateResponseFields(observedBrowserState),
               ...(plan.format === "aria" ? { nodes: [] } : { snapshot: "", refs: {} }),
@@ -954,7 +963,7 @@ export function registerBrowserAgentSnapshotRoutes(
                 ok: true,
                 format: plan.format,
                 targetId: tab.targetId,
-                url: tab.url,
+                url: redactBrowserNavigationUrl(tab.url),
                 ...browserStateResponseFields(observedBrowserState),
                 labels: true,
                 labelsCount: labeled.labels,
@@ -974,7 +983,7 @@ export function registerBrowserAgentSnapshotRoutes(
               ok: true,
               format: plan.format,
               targetId: tab.targetId,
-              url: tab.url,
+              url: redactBrowserNavigationUrl(tab.url),
               ...browserStateResponseFields(observedBrowserState),
               ...snap,
             });
@@ -1023,7 +1032,7 @@ export function registerBrowserAgentSnapshotRoutes(
             ok: true,
             format: plan.format,
             targetId: tab.targetId,
-            url: tab.url,
+            url: redactBrowserNavigationUrl(tab.url),
             ...browserStateResponseFields(observedBrowserState),
             ...resolved,
           });

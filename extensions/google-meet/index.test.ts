@@ -16,6 +16,7 @@ import {
   startMeetingRealtimeEngine,
   type MeetingRealtimeAudioTransport,
 } from "openclaw/plugin-sdk/meeting-runtime";
+import { attachBrowserNodeDelegationForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { RealtimeTranscriptionProviderPlugin } from "openclaw/plugin-sdk/realtime-transcription";
 import type {
   RealtimeVoiceBridge,
@@ -831,15 +832,22 @@ function mockLocalMeetBrowserRequest(
 function createCapturedBrowserRuntime(
   request: (params: Record<string, unknown>) => Promise<unknown>,
 ) {
-  return {
+  const browser = {
+    request: async (params: { body?: unknown; path: string }) =>
+      await request({ path: params.path, body: params.body }),
+  };
+  const runtime = {
     gateway: {
       isAvailable: async () => true,
       request: async (_method: string, params: Record<string, unknown>) => await request(params),
     },
+    browser,
     system: {
       runCommandWithTimeout: async () => ({ code: 0, stdout: "BlackHole 2ch", stderr: "" }),
     },
   } as never;
+  attachBrowserNodeDelegationForTest(runtime, browser);
+  return runtime;
 }
 
 async function captureMeetStatusScript(params: {

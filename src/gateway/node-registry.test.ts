@@ -1051,6 +1051,55 @@ describe("gateway/node-registry", () => {
     expect(frames).toEqual([]);
   });
 
+  it("keeps route leases bounded across approval and tab cleanup lifecycles", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-lease", "node-lease");
+    const session = registerNodeSession(registry, client, {
+      pairingGeneration: "generation-lease",
+    });
+
+    const lease = registry.createBrowserNodeSessionLease("node-lease", 0);
+    expect(lease).toEqual(expect.any(String));
+    expect(registry.resolveBrowserNodeSessionLease("node-lease", lease ?? "", 5 * 60_000 - 1)).toBe(
+      session,
+    );
+    expect(registry.resolveBrowserNodeSessionLease("node-lease", lease ?? "", 5 * 60_000 + 1)).toBe(
+      undefined,
+    );
+
+    const renewedLease = registry.createBrowserNodeSessionLease("node-lease", 0);
+    expect(renewedLease).toEqual(expect.any(String));
+    expect(
+      registry.renewBrowserNodeSessionLease("node-lease", renewedLease ?? "", 4 * 60_000),
+    ).toBe(session);
+    expect(
+      registry.resolveBrowserNodeSessionLease(
+        "node-lease",
+        renewedLease ?? "",
+        4 * 60_000 + 2 * 60 * 60_000 + 5 * 60_000 - 1,
+      ),
+    ).toBe(session);
+    expect(
+      registry.resolveBrowserNodeSessionLease(
+        "node-lease",
+        renewedLease ?? "",
+        4 * 60_000 + 2 * 60 * 60_000 + 5 * 60_000 + 1,
+      ),
+    ).toBeUndefined();
+  });
+
+  it("revokes browser route leases when their node connection is retired", () => {
+    const registry = new NodeRegistry();
+    const client = makeClient("conn-lease-revoke", "node-lease-revoke");
+    registerNodeSession(registry, client, { pairingGeneration: "generation-lease" });
+    const lease = registry.createBrowserNodeSessionLease("node-lease-revoke");
+
+    expect(registry.unregister("conn-lease-revoke")).toBe("node-lease-revoke");
+    expect(
+      registry.resolveBrowserNodeSessionLease("node-lease-revoke", lease ?? ""),
+    ).toBeUndefined();
+  });
+
   it("does not let a stale operation invalidate the valid replacement generation", () => {
     const registry = new NodeRegistry();
     const frames: string[] = [];

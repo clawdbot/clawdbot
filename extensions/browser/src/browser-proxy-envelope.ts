@@ -63,7 +63,8 @@ export type BrowserProxyRoute =
       profile: string;
       driver: ResolvedBrowserProfile["driver"];
     }
-  | { status: "unavailable" };
+  | { status: "unavailable" }
+  | { status: "host-fallback" };
 
 /** Visit the route-owned file paths that may cross the Browser node boundary. */
 export function visitBrowserProxyFilePaths(
@@ -155,6 +156,9 @@ export function parseBrowserProxyRoute(value: unknown): BrowserProxyRoute | unde
   }
   if (route.status === "unavailable") {
     return { status: "unavailable" };
+  }
+  if (route.status === "host-fallback") {
+    return { status: "host-fallback" };
   }
   if (
     route.status !== "resolved" ||

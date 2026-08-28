@@ -30,6 +30,12 @@ export type OpenClawPluginNodeWorkspace = {
 export type OpenClawPluginNodeHostCommandContext = {
   /** Emit one node-owned event through the active Gateway connection. */
   sendNodeEvent(event: string, payload: unknown): Promise<unknown>;
+  /** Authenticated node identity for this invocation. */
+  nodeId?: string;
+  /** Gateway invocation identity bound to this invocation. */
+  invocationId?: string;
+  /** Gateway-authenticated pairing generation bound to this invocation. */
+  pairingGeneration?: string;
   /** Agent session that owns this invocation, when the caller supplied one. */
   sessionKey?: string;
   /** Aborts when the Gateway cancels this specific node-host invocation. */

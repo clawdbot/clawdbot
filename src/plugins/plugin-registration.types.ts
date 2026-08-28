@@ -241,6 +241,11 @@ export type OpenClawPluginNodeInvokePolicyContext = {
   nodeId: string;
   command: string;
   params: unknown;
+  /** Trusted caller identity, when this invocation came from an admitted agent runtime. */
+  agentId?: string;
+  sessionKey?: string;
+  /** Trusted in-process plugin owner, when this invocation came from plugin runtime scope. */
+  pluginRuntimeOwnerId?: string;
   timeoutMs?: number;
   idempotencyKey?: string;
   config: OpenClawConfig;
@@ -251,6 +256,7 @@ export type OpenClawPluginNodeInvokePolicyContext = {
     platform?: string;
     deviceFamily?: string;
     commands?: string[];
+    pairingGeneration?: string;
   };
   client?: {
     connId?: string;

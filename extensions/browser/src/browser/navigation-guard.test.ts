@@ -6,6 +6,7 @@ import {
   assertBrowserNavigationRedirectChainAllowed,
   assertBrowserNavigationResultAllowed,
   InvalidBrowserNavigationUrlError,
+  redactBrowserNavigationUrl,
 } from "./navigation-guard.js";
 
 function createLookupFn(address: string): LookupFn {
@@ -260,6 +261,138 @@ describe("browser navigation guard", () => {
     await expect(result).rejects.toThrow("URL-embedded credentials are not supported");
     await expect(result).rejects.toThrow("openclaw browser set credentials");
     await expect(result).rejects.not.toThrow("secret");
+    expect(lookupFn).not.toHaveBeenCalled();
+  });
+
+  it("allows OAuth authorization codes while redacting them from output", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://auth.example/callback?code=raw-oauth-code-123456",
+        lookupFn,
+      }),
+    ).resolves.toBeUndefined();
+    expect(lookupFn).toHaveBeenCalledWith("auth.example", { all: true });
+    const redacted = redactBrowserNavigationUrl(
+      "https://auth.example/callback?code=raw-oauth-code-123456",
+    );
+    expect(redacted).toBe("https://auth.example/callback?code=REDACTED");
+    expect(redacted).not.toContain("raw-oauth-code-123456");
+  });
+
+  it("allows ordinary code query parameters", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    await expect(
+      assertBrowserNavigationAllowed({
+        url: "https://shop.example/redeem?code=SUMMER",
+        lookupFn,
+      }),
+    ).resolves.toBeUndefined();
+    expect(lookupFn).toHaveBeenCalledWith("shop.example", { all: true });
+  });
+
+  it("preserves opaque hash routes while redacting hash-route OAuth codes", () => {
+    expect(redactBrowserNavigationUrl("https://app.example/#section")).toBe(
+      "https://app.example/#section",
+    );
+    expect(redactBrowserNavigationUrl("https://app.example/#/dashboard")).toBe(
+      "https://app.example/#/dashboard",
+    );
+    expect(
+      redactBrowserNavigationUrl("https://app.example/#/callback?code=raw-oauth-code-123456"),
+    ).toBe("https://app.example/#/callback?code=REDACTED");
+    expect(
+      redactBrowserNavigationUrl(
+        "https://app.example/#access_token=raw-fragment-token-123456&id_token=raw-id-token",
+      ),
+    ).toBe("https://app.example/#access_token=REDACTED&id_token=REDACTED");
+  });
+
+  it("redacts signed URLs and opaque bearer paths from output", () => {
+    const signedUrl = redactBrowserNavigationUrl(
+      "https://storage.example/blob.txt?sv=2024-01-01&sig=raw-signature-123456",
+    );
+    expect(signedUrl).toBe("https://storage.example/blob.txt?sv=REDACTED&sig=REDACTED");
+    expect(signedUrl).not.toContain("raw-signature-123456");
+
+    const opaquePath = redactBrowserNavigationUrl(
+      "https://accounts.example/password-reset/raw-reset-token-123456/confirm",
+    );
+    expect(opaquePath).toBe("https://accounts.example/password-reset/REDACTED/confirm");
+    expect(opaquePath).not.toContain("raw-reset-token-123456");
+
+    const opaqueHashRoute = redactBrowserNavigationUrl(
+      "https://app.example/#/magic-login/raw-magic-token-123456",
+    );
+    expect(opaqueHashRoute).toBe("https://app.example/#/magic-login/REDACTED");
+    expect(opaqueHashRoute).not.toContain("raw-magic-token-123456");
+  });
+
+  it("redacts every opaque bearer path in a URL", () => {
+    const redacted = redactBrowserNavigationUrl(
+      "https://accounts.example/password-reset/raw-reset-token-123456/invite/raw-invite-token-654321/confirm",
+    );
+    expect(redacted).toBe(
+      "https://accounts.example/password-reset/REDACTED/invite/REDACTED/confirm",
+    );
+    expect(redacted).not.toContain("raw-reset-token-123456");
+    expect(redacted).not.toContain("raw-invite-token-654321");
+  });
+
+  it.each([
+    ["token", "raw-token-123456"],
+    ["password", "raw-password-123456"],
+    ["api_key", "raw-api-key-123456"],
+    ["authorization", "raw-authorization-123456"],
+    ["cookie", "raw-cookie-123456"],
+  ])("redacts generic credential query key %s", (key, rawValue) => {
+    const redacted = redactBrowserNavigationUrl(
+      `https://example.test/callback?${key}=${rawValue}&next=keep`,
+    );
+    expect(redacted).toBe(`https://example.test/callback?${key}=REDACTED&next=keep`);
+    expect(redacted).not.toContain(rawValue);
+  });
+
+  it.each(["token", "password", "api_key", "authorization", "cookie"])(
+    "blocks generic credential query key %s before lookup",
+    async (key) => {
+      const lookupFn = createLookupFn("93.184.216.34");
+      const rawValue = `raw-${key}-123456`;
+      const result = assertBrowserNavigationAllowed({
+        url: `https://example.test/redeem?${key}=${rawValue}`,
+        lookupFn,
+      });
+      await expect(result).rejects.toThrow("URL-embedded credentials are not supported");
+      await expect(result).rejects.not.toThrow(rawValue);
+      expect(lookupFn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["page_token", "continuation_token", "wallet"])(
+    "allows ordinary non-credential query key %s",
+    async (key) => {
+      const lookupFn = createLookupFn("93.184.216.34");
+      await expect(
+        assertBrowserNavigationAllowed({
+          url: `https://example.test/redeem?${key}=public-value`,
+          lookupFn,
+        }),
+      ).resolves.toBeUndefined();
+      expect(lookupFn).toHaveBeenCalledWith("example.test", { all: true });
+      expect(redactBrowserNavigationUrl(`https://example.test/redeem?${key}=public-value`)).toBe(
+        `https://example.test/redeem?${key}=public-value`,
+      );
+    },
+  );
+
+  it("blocks OAuth bearer tokens in URL fragments before lookup", async () => {
+    const lookupFn = createLookupFn("93.184.216.34");
+    const result = assertBrowserNavigationAllowed({
+      url: "https://app.example/callback#access_token=raw-fragment-token-123456&id_token=raw-id-token",
+      lookupFn,
+    });
+    await expect(result).rejects.toThrow("URL-embedded credentials are not supported");
+    await expect(result).rejects.not.toThrow("raw-fragment-token-123456");
     expect(lookupFn).not.toHaveBeenCalled();
   });
 

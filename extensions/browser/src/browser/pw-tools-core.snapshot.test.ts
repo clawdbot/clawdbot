@@ -1,4 +1,5 @@
 // Browser tests cover pw tools core.snapshot plugin behavior.
+import { runInNewContext } from "node:vm";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const getPageForTargetId = vi.fn();
@@ -171,6 +172,48 @@ describe("pw-tools-core aria snapshot storage", () => {
     });
 
     expect(ariaSnapshotMock).toHaveBeenCalledWith({ mode: "ai", timeout: 8888 });
+  });
+
+  it("collects page links in the browser and redacts them in Node", async () => {
+    class FakeAnchor {
+      constructor(
+        readonly href: string,
+        readonly textContent: string,
+      ) {}
+
+      getAttribute(name: string): string | null {
+        return name === "aria-label" ? null : null;
+      }
+    }
+
+    const rawOAuthCode = "test-oauth-code-123456";
+    const rawHref = `https://auth.example/callback?code=${rawOAuthCode}`;
+    const anchor = new FakeAnchor(rawHref, "Continue");
+    const evaluate = vi.fn(async (fn: () => unknown) =>
+      runInNewContext(`(${fn.toString()})()`, {
+        document: { querySelectorAll: () => [anchor] },
+        HTMLAnchorElement: FakeAnchor,
+      }),
+    );
+    const page = {
+      locator: vi.fn(() => ({ ariaSnapshot: vi.fn(async () => '- link "Continue"') })),
+      mainFrame: () => ({ id: "main-frame" }),
+      on: vi.fn(),
+      off: vi.fn(),
+      evaluate,
+    };
+    getPageForTargetId.mockResolvedValue(page);
+
+    const mod = await import("./pw-tools-core.snapshot.js");
+    const result = await mod.snapshotRoleViaPlaywright({
+      cdpUrl: "http://127.0.0.1:9222",
+      targetId: "tab-1",
+      urls: true,
+    });
+
+    expect(result.snapshot).toContain("Continue -> https://auth.example/callback?code=REDACTED");
+    expect(result.snapshot).not.toContain(rawOAuthCode);
+    expect(evaluate).toHaveBeenCalledTimes(1);
   });
 
   it("uses the default snapshot timeout for non-finite role-aria timeouts", async () => {

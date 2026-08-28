@@ -1,4 +1,7 @@
-import crypto from "node:crypto";
+import {
+  withBrowserStewardGatewayApproval,
+  type BrowserStewardGatewayApprovalClaim,
+} from "openclaw/plugin-sdk/browser-steward-runtime";
 import {
   addTimerTimeoutGraceMs,
   MAX_TIMER_TIMEOUT_MS,
@@ -7,14 +10,12 @@ import {
 import { createSubsystemLogger } from "openclaw/plugin-sdk/runtime-env";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
-  BROWSER_PROXY_COMMAND,
   BROWSER_PROXY_UPLOAD_COMMAND,
   browserProxyUploadUnavailableMessage,
 } from "./browser-node-commands.js";
 import { isBrowserControlHostUnavailableError } from "./browser-node-fallback.js";
 import type { BrowserNodeTarget } from "./browser-node-routing.js";
 import {
-  BROWSER_PROXY_ERROR_ENVELOPE,
   BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
   parseBrowserProxyFailure,
   parseBrowserProxyRoute,
@@ -54,11 +55,45 @@ export type BrowserProxyRequest = ((params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  agentSessionKey?: string;
+  agentId?: string;
+  browserNodeSessionLease?: string;
+  browserStewardGatewayApproval?: BrowserStewardGatewayApprovalFactory;
   signal?: AbortSignal;
 }) => Promise<unknown>) & {
   isHostFallbackActive: () => boolean;
   route: () => BrowserProxyRoute | undefined;
 };
+
+/**
+ * Browser-owned Gateway path for retained node-tab cleanup. It is deliberately
+ * narrower than a general Gateway client and is never exposed to model input.
+ */
+export type BrowserOwnedGatewayRequest = (params: {
+  method: "GET" | "POST" | "DELETE";
+  path: string;
+  query?: Record<string, string | number | boolean | undefined>;
+  body?: unknown;
+  profile?: string;
+  nodeId: string;
+  browserNodeSessionLease?: string;
+  timeoutMs: number;
+}) => Promise<unknown>;
+
+type BrowserStewardGatewayApprovalFactory = (params: {
+  command: string;
+  method: string;
+  path: string;
+  query?: Record<string, string | number | boolean | undefined>;
+  body?: unknown;
+  upload?: unknown;
+  profile?: string;
+  agentSessionKey?: string;
+  agentId?: string;
+  nodeId?: string;
+  browserNodeSessionLease?: string;
+  allowAutomaticHostFallback?: boolean;
+}) => BrowserStewardGatewayApprovalClaim;
 
 function unwrapBrowserProxyPayload(
   payload: { payload?: unknown; payloadJSON?: unknown } | null,
@@ -88,6 +123,10 @@ async function callBrowserProxy(params: {
   body?: unknown;
   timeoutMs?: number;
   profile?: string;
+  agentSessionKey?: string;
+  agentId?: string;
+  browserNodeSessionLease?: string;
+  browserStewardGatewayApproval?: BrowserStewardGatewayApprovalFactory;
   signal?: AbortSignal;
 }): Promise<BrowserProxyEnvelope> {
   // Reserve both watchdog windows before clamping so timer saturation cannot
@@ -116,35 +155,53 @@ async function callBrowserProxy(params: {
     body: params.body,
     signal: params.signal,
   });
-  const command = preparedUpload.upload ? BROWSER_PROXY_UPLOAD_COMMAND : BROWSER_PROXY_COMMAND;
   let payload: { payload?: unknown; payloadJSON?: unknown } | null;
-  try {
-    payload = await callGatewayTool<{ payload?: unknown; payloadJSON?: unknown }>(
-      "node.invoke",
+  const browserStewardGatewayApproval = params.browserStewardGatewayApproval?.({
+    command: preparedUpload.upload ? BROWSER_PROXY_UPLOAD_COMMAND : "browser.proxy",
+    method: params.method,
+    path: params.path,
+    query: params.query,
+    body: preparedUpload.body,
+    upload: preparedUpload.upload,
+    profile: params.profile,
+    agentSessionKey: params.agentSessionKey,
+    agentId: params.agentId,
+    nodeId: params.nodeId,
+    browserNodeSessionLease: params.browserNodeSessionLease,
+    allowAutomaticHostFallback: params.allowAutomaticHostFallback,
+  });
+  const call = () =>
+    callGatewayTool<{ payload?: unknown; payloadJSON?: unknown }>(
+      "browser.request",
       { timeoutMs: gatewayTimeoutMs },
       {
         nodeId: params.nodeId,
-        command,
-        // Keep the browser action, node watchdog, and Gateway RPC on distinct
-        // budgets so a detailed node timeout can cross both outer boundaries.
+        allowAutomaticHostFallback: params.allowAutomaticHostFallback,
+        includeRoute: true,
+        // Keep the browser action and Gateway RPC on distinct budgets so a
+        // detailed node timeout can cross the outer Gateway boundary.
         timeoutMs: nodeInvokeTimeoutMs,
-        params: {
-          method: params.method,
-          path: params.path,
-          query: params.query,
-          body: preparedUpload.body,
-          upload: preparedUpload.upload,
-          timeoutMs: proxyTimeoutMs,
-          profile: params.profile,
-          errorEnvelope: BROWSER_PROXY_ERROR_ENVELOPE,
-        },
-        idempotencyKey: crypto.randomUUID(),
+        method: params.method,
+        path: params.path,
+        query: params.query,
+        body: preparedUpload.body,
+        upload: preparedUpload.upload,
+        profile: params.profile,
+        agentSessionKey: params.agentSessionKey,
+        agentId: params.agentId,
+        browserNodeSessionLease: params.browserNodeSessionLease,
+        browserProxyTimeoutMs: proxyTimeoutMs,
       },
       {
         scopes: ["operator.admin"],
+        ...(browserStewardGatewayApproval ? { requireAgentRuntimeIdentity: true } : {}),
         ...(params.signal ? { signal: params.signal } : {}),
       },
     );
+  try {
+    payload = browserStewardGatewayApproval
+      ? await withBrowserStewardGatewayApproval(browserStewardGatewayApproval, call)
+      : await call();
   } catch (error) {
     if (params.allowAutomaticHostFallback && isBrowserControlHostUnavailableError(error)) {
       throw new BrowserNodeSafeFallbackError("browser node control host unavailable", error);
@@ -186,6 +243,10 @@ async function callLocalBrowserControl(params: Parameters<BrowserProxyRequest>[0
 export function createBrowserNodeProxyRequest(params: {
   nodeTarget: BrowserNodeTarget;
   allowAutomaticHostFallback: boolean;
+  agentSessionKey?: string;
+  agentId?: string;
+  browserNodeSessionLease?: string;
+  browserStewardGatewayApproval?: BrowserStewardGatewayApprovalFactory;
   signal?: AbortSignal;
 }): BrowserProxyRequest {
   let hostFallbackActive = false;
@@ -207,9 +268,16 @@ export function createBrowserNodeProxyRequest(params: {
         declaredCommands: params.nodeTarget.commands ?? [],
         pendingDeclaredCommands: params.nodeTarget.pendingDeclaredCommands ?? [],
         allowAutomaticHostFallback: params.allowAutomaticHostFallback,
+        agentSessionKey: params.agentSessionKey,
+        agentId: params.agentId,
+        browserNodeSessionLease: params.browserNodeSessionLease,
         ...requestWithSignal,
+        browserStewardGatewayApproval: params.browserStewardGatewayApproval,
       });
       route = parseBrowserProxyRoute(proxy);
+      if (route?.status === "host-fallback") {
+        hostFallbackActive = true;
+      }
       const failure = parseBrowserProxyFailure(proxy);
       if (failure) {
         const { status, body } = failure.error;
@@ -239,16 +307,59 @@ export function createBrowserNodeProxyRequest(params: {
   });
 }
 
-export function createBrowserNodeSessionTabRoute(
-  nodeTarget: BrowserNodeTarget,
-): Extract<BrowserSessionTabRoute, { kind: "node-proxy" }> {
+export function createBrowserNodeSessionTabRoute(params: {
+  nodeTarget: BrowserNodeTarget;
+  agentSessionKey?: string;
+  agentId?: string;
+  browserNodeSessionLease?: string;
+  browserStewardGatewayApproval?: BrowserStewardGatewayApprovalFactory;
+  browserOwnedGatewayRequest?: BrowserOwnedGatewayRequest;
+}): Extract<BrowserSessionTabRoute, { kind: "node-proxy" }> {
   return {
     kind: "node-proxy",
-    nodeId: nodeTarget.nodeId,
+    nodeId: params.nodeTarget.nodeId,
     closeTarget: async (tab) => {
+      // Session cleanup commonly runs after the originating agent turn, when
+      // no ambient signed identity remains. Keep this effect on the Browser
+      // plugin's lifecycle-owned Gateway path and bind it to the retained
+      // node, lease, and exact tab-close request instead of reconstructing a
+      // model/agent operation proof.
+      if (params.browserOwnedGatewayRequest) {
+        if (tab.ownership?.status === "durable") {
+          return parseBrowserSessionTabCloseResult(
+            await params.browserOwnedGatewayRequest({
+              method: "POST",
+              path: BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
+              body: { ownership: tab.ownership },
+              profile: tab.profile,
+              nodeId: params.nodeTarget.nodeId,
+              ...(params.browserNodeSessionLease
+                ? { browserNodeSessionLease: params.browserNodeSessionLease }
+                : {}),
+              timeoutMs: DEFAULT_BROWSER_PROXY_TIMEOUT_MS,
+            }),
+          );
+        }
+        await params.browserOwnedGatewayRequest({
+          method: "DELETE",
+          path: `/tabs/${encodeURIComponent(tab.targetId)}`,
+          query: { targetIdMode: "raw" },
+          profile: tab.profile,
+          nodeId: params.nodeTarget.nodeId,
+          ...(params.browserNodeSessionLease
+            ? { browserNodeSessionLease: params.browserNodeSessionLease }
+            : {}),
+          timeoutMs: DEFAULT_BROWSER_PROXY_TIMEOUT_MS,
+        });
+        return { status: "closed" };
+      }
       const cleanupProxy = createBrowserNodeProxyRequest({
-        nodeTarget,
+        nodeTarget: params.nodeTarget,
         allowAutomaticHostFallback: false,
+        agentSessionKey: params.agentSessionKey,
+        agentId: params.agentId,
+        browserNodeSessionLease: params.browserNodeSessionLease,
+        browserStewardGatewayApproval: params.browserStewardGatewayApproval,
       });
       if (tab.ownership?.status === "durable") {
         return parseBrowserSessionTabCloseResult(

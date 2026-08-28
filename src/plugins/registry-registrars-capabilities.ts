@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { registerContextEngineInRegistry } from "../context-engine/registry.js";
 import { registerPluginInteractiveHandlerInRegistry } from "./interactive-registry.js";
+import type { BrowserNodeDelegation } from "./registry-contribution-types.js";
 import type { PluginRegistryState } from "./registry-state.js";
 import type { PluginRecord } from "./registry-types.js";
 import { defaultSlotIdForKey } from "./slots.js";
@@ -8,6 +9,65 @@ import type { OpenClawPluginApi, PluginRegistrationMode } from "./types.js";
 
 export function createCapabilityRegistrars(state: PluginRegistryState) {
   const { registry, pushDiagnostic } = state;
+
+  const isTrustedBrowserPluginRecord = (record: PluginRecord) =>
+    record.origin === "bundled" || record.trustedOfficialInstall === true;
+
+  const registerBrowserNodeDelegation = (
+    record: PluginRecord,
+    delegation: BrowserNodeDelegation,
+  ) => {
+    if (record.id !== "browser") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "browser node delegation may only be registered by the browser plugin",
+      });
+      return;
+    }
+    if (!isTrustedBrowserPluginRecord(record)) {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "browser node delegation requires a trusted Browser plugin record",
+      });
+      return;
+    }
+    const consumerPluginIds = delegation.consumerPluginIds
+      .filter((pluginId): pluginId is string => typeof pluginId === "string")
+      .map((pluginId) => pluginId.trim())
+      .filter(Boolean);
+    if (consumerPluginIds.length === 0 || typeof delegation.request !== "function") {
+      pushDiagnostic({
+        level: "error",
+        pluginId: record.id,
+        source: record.source,
+        message: "browser node delegation requires consumers and a request handler",
+      });
+      return;
+    }
+    registry.browserNodeDelegations = [
+      ...registry.browserNodeDelegations.filter((entry) => entry.pluginId !== record.id),
+      {
+        pluginId: record.id,
+        providerRecord: record,
+        provider: {
+          origin: record.origin,
+          source: record.source,
+          ...(record.rootDir ? { rootDir: record.rootDir } : {}),
+          ...(record.trustedOfficialInstall !== undefined
+            ? { trustedOfficialInstall: record.trustedOfficialInstall }
+            : {}),
+        },
+        delegation: {
+          consumerPluginIds: [...new Set(consumerPluginIds)],
+          request: delegation.request,
+        },
+      },
+    ];
+  };
 
   const registerDetachedTaskRuntime = (
     record: PluginRecord,
@@ -148,6 +208,7 @@ export function createCapabilityRegistrars(state: PluginRegistryState) {
   };
 
   return {
+    registerBrowserNodeDelegation,
     registerDetachedTaskRuntime,
     registerInteractiveHandler,
     registerContextEngine,

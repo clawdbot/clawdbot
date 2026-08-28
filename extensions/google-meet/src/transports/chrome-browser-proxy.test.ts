@@ -1,7 +1,7 @@
 import { runInNewContext } from "node:vm";
 // Google Meet tests cover chrome browser proxy plugin behavior.
-import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
+import { attachBrowserNodeDelegationForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { callBrowserProxyOnNode } from "./chrome-browser-proxy.js";
 import { meetLeaveScript } from "./google-meet-page-scripts.js";
@@ -81,16 +81,17 @@ describe("meetLeaveScript", () => {
 });
 
 describe("Google Meet Chrome browser proxy", () => {
-  it("reports malformed node proxy payloadJSON with an owned error", async () => {
-    const invoke = vi.fn(async () => ({
-      ok: true,
-      payloadJSON: "{not json",
-    }));
+  it("uses the Browser-owned gateway request path instead of raw node proxy", async () => {
+    const request = vi.fn(async () => ({ tabs: [] }));
+    const invoke = vi.fn();
+    const browser = { request };
     const runtime = {
+      browser,
       nodes: {
         invoke,
       },
     } as unknown as PluginRuntime;
+    attachBrowserNodeDelegationForTest(runtime, browser);
 
     await expect(
       callBrowserProxyOnNode({
@@ -100,32 +101,27 @@ describe("Google Meet Chrome browser proxy", () => {
         path: "/tabs",
         timeoutMs: 100,
       }),
-    ).rejects.toThrow("Google Meet browser proxy returned malformed payloadJSON.");
+    ).resolves.toEqual({ tabs: [] });
 
-    expect(invoke).toHaveBeenCalledWith({
+    expect(request).toHaveBeenCalledWith({
+      method: "GET",
+      path: "/tabs",
+      timeoutMs: 100,
       nodeId: "node-1",
-      command: "browser.proxy",
-      params: {
-        method: "GET",
-        path: "/tabs",
-        body: undefined,
-        timeoutMs: 100,
-      },
-      timeoutMs: 5_100,
-      scopes: ["operator.admin"],
     });
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it("caps oversized node proxy gateway timeouts", async () => {
-    const invoke = vi.fn(async () => ({
-      ok: true,
-      payloadJSON: JSON.stringify({ result: { ok: true } }),
-    }));
+    const request = vi.fn(async () => ({ ok: true }));
+    const browser = { request };
     const runtime = {
+      browser,
       nodes: {
-        invoke,
+        invoke: vi.fn(),
       },
     } as unknown as PluginRuntime;
+    attachBrowserNodeDelegationForTest(runtime, browser);
 
     await callBrowserProxyOnNode({
       runtime,
@@ -135,10 +131,8 @@ describe("Google Meet Chrome browser proxy", () => {
       timeoutMs: Number.MAX_SAFE_INTEGER,
     });
 
-    expect(invoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        timeoutMs: MAX_TIMER_TIMEOUT_MS,
-      }),
+    expect(request).toHaveBeenCalledWith(
+      expect.objectContaining({ timeoutMs: Number.MAX_SAFE_INTEGER }),
     );
   });
 });

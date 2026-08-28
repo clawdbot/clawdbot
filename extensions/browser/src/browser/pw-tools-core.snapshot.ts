@@ -17,6 +17,7 @@ import { BrowserTabNotFoundError } from "./errors.js";
 import {
   assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed,
+  redactBrowserNavigationUrl,
   type BrowserNavigationPolicyOptions,
   withBrowserNavigationPolicy,
 } from "./navigation-guard.js";
@@ -70,19 +71,18 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
   const urls = await page
     .evaluate(() => {
       const seen = new Set<string>();
-      const out: SnapshotUrlEntry[] = [];
+      const out: Array<{ text: string; href: string }> = [];
       for (const anchor of Array.from(document.querySelectorAll("a[href]"))) {
         const href = anchor instanceof HTMLAnchorElement ? anchor.href : "";
         if (!href || seen.has(href)) {
           continue;
         }
-        const text =
-          (anchor.textContent || anchor.getAttribute("aria-label") || "")
-            .replace(/\s+/g, " ")
-            .trim()
-            .slice(0, 121) || href;
+        const text = (anchor.textContent || anchor.getAttribute("aria-label") || "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 121);
         seen.add(href);
-        out.push({ text, url: href });
+        out.push({ text, href });
         if (out.length >= 100) {
           break;
         }
@@ -92,8 +92,9 @@ async function collectSnapshotUrls(page: Page): Promise<SnapshotUrlEntry[]> {
     .catch(() => []);
   return Array.isArray(urls)
     ? urls.map((entry) => {
-        entry.text = truncateUtf16Safe(entry.text, 120) || entry.url;
-        return entry;
+        const safeUrl = redactBrowserNavigationUrl(entry.href);
+        const text = truncateUtf16Safe(entry.text, 120) || safeUrl;
+        return { text, url: safeUrl };
       })
     : [];
 }
@@ -626,12 +627,18 @@ export async function navigateViaPlaywright(opts: {
     }
     throw err;
   }
-  const finalUrl = navigationResult.download?.url || page.url();
+  const download = navigationResult.download
+    ? {
+        ...navigationResult.download,
+        url: redactBrowserNavigationUrl(navigationResult.download.url),
+      }
+    : undefined;
+  const finalUrl = download?.url || page.url();
   const targetId = (await pageTargetInfo(page).catch(() => null))?.targetId;
   return {
-    url: finalUrl,
+    url: redactBrowserNavigationUrl(finalUrl),
     ...(targetId ? { targetId } : {}),
-    ...(navigationResult.download ? { download: navigationResult.download } : {}),
+    ...(download ? { download } : {}),
   };
 }
 

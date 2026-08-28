@@ -1715,6 +1715,7 @@
                       "gateway/security/audit-checks",
                       "gateway/security/rate-limiting",
                       "gateway/operator-scopes",
+                      "gateway/session-boundaries",
                       "gateway/sandboxing",
                       "gateway/openshell",
                       "gateway/sandbox-vs-tool-policy-vs-elevated",

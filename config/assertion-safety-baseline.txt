@@ -54,7 +54,6 @@ extensions/browser/src/browser-tool-binding.ts	3
 extensions/browser/src/browser-tool-session-tabs.ts	3
 extensions/browser/src/browser-tool.actions.ts	14
 extensions/browser/src/browser-tool.snapshot.ts	2
-extensions/browser/src/browser-tool.ts	14
 extensions/browser/src/browser/bridge-server.ts	3
 extensions/browser/src/browser/cdp-page-session.ts	3
 extensions/browser/src/browser/cdp-proxy-bypass.ts	1
@@ -3360,7 +3359,6 @@ src/media/store.remote.runtime.ts	1
 src/media/store.ts	2
 src/media/web-media.ts	2
 src/meeting-bot/browser-controller.ts	5
-src/meeting-bot/browser-node.ts	2
 src/meeting-bot/browser-request.ts	3
 src/meeting-bot/browser-session-control.ts	1
 src/meeting-bot/chrome-node-result.ts	2

@@ -1417,6 +1417,29 @@ describe("loadGatewayPlugins", () => {
     expect(getLastDispatchedClientInternal().pluginRuntimeOwnerId).toBe("google-meet");
   });
 
+  test("converts the legacy meeting marker into host-issued Browser authority", async () => {
+    loadOpenClawPlugins.mockReturnValue(addLoadedPlugin(createRegistry([]), { id: "google-meet" }));
+    loadGatewayStartupPluginsForTest();
+    serverPluginsModule.setFallbackGatewayContext(createTestContext("plugin-gateway-legacy"));
+    const runtime = createRuntimeFromLastGatewayLoad();
+
+    await gatewayRequestScopeModule.withPluginRuntimePluginScope(
+      { pluginId: "google-meet", pluginOrigin: "bundled" },
+      () =>
+        runtime.gateway.request("browser.request", {
+          method: "GET",
+          path: "/tabs",
+          legacyMeetingRuntime: true,
+        }),
+    );
+
+    expect(getLastDispatchedParams()).toEqual({ method: "GET", path: "/tabs" });
+    expect(getLastDispatchedClientInternal()).toMatchObject({
+      browserRequestCompatibility: true,
+      pluginRuntimeOwnerId: "google-meet",
+    });
+  });
+
   test("reports whether trusted in-process Gateway dispatch is available", async () => {
     loadOpenClawPlugins.mockReturnValue(createRegistry([]));
     loadGatewayStartupPluginsForTest();

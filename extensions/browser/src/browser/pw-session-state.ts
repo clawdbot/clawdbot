@@ -2,6 +2,7 @@ import { resolveExpiresAtMsFromDurationMs } from "openclaw/plugin-sdk/number-run
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ConsoleMessage, Dialog, Frame, Page, Request, Response } from "playwright-core";
+import { redactBrowserNavigationUrl } from "./navigation-guard.js";
 import { saveBrowserDownload, type BrowserDownloadCaptureOptions } from "./pw-download-capture.js";
 import {
   MAX_CONSOLE_MESSAGES,
@@ -243,7 +244,10 @@ export function ensurePageState(page: Page): PageState {
         type: truncateObservedPageText(msg.type()),
         text: truncateObservedPageText(msg.text()),
         timestamp: new Date().toISOString(),
-        location: { ...location, url: truncateObservedPageText(location.url) },
+        location: {
+          ...location,
+          url: truncateObservedPageText(redactBrowserNavigationUrl(location.url)),
+        },
       };
       state.console.push(entry);
       if (state.console.length > MAX_CONSOLE_MESSAGES) {
@@ -269,7 +273,7 @@ export function ensurePageState(page: Page): PageState {
         id,
         timestamp: new Date().toISOString(),
         method: req.method(),
-        url: truncateObservedPageText(req.url()),
+        url: truncateObservedPageText(redactBrowserNavigationUrl(req.url())),
         resourceType: req.resourceType(),
       });
       if (state.requests.length > MAX_NETWORK_REQUESTS) {

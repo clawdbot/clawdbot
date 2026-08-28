@@ -27,6 +27,7 @@ import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isPathInside } from "../../infra/path-guards.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import { assertGatewaySessionStewardBoundary } from "../session-steward-boundary.js";
 import {
   readSessionTranscriptVisibleMessageDeltaCore,
   resolveTranscriptReadTarget,
@@ -863,8 +864,20 @@ function requireSessionFilesAgentId(params: {
   cfg: OpenClawConfig;
   sessionKey: string;
   agentId?: string;
+  surface: string;
   respond: RespondFn;
 }): string | undefined {
+  const boundary = assertGatewaySessionStewardBoundary({
+    sessionKey: params.sessionKey,
+    requestedAgentId: params.agentId,
+    config: params.cfg,
+    surface: params.surface,
+    action: "resolve",
+  });
+  if (!boundary.ok) {
+    params.respond(false, undefined, boundary.error);
+    return undefined;
+  }
   const requestedAgent = resolveRequestedSessionAgentId(
     params.cfg,
     params.sessionKey,
@@ -889,6 +902,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       cfg: context.getRuntimeConfig(),
       sessionKey: params.sessionKey,
       agentId: params.agentId,
+      surface: "sessions.files.list",
       respond,
     });
     if (!agentId) {
@@ -908,6 +922,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       cfg: context.getRuntimeConfig(),
       sessionKey: params.sessionKey,
       agentId: params.agentId,
+      surface: "sessions.files.get",
       respond,
     });
     if (!agentId) {
@@ -935,6 +950,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       cfg: context.getRuntimeConfig(),
       sessionKey: params.sessionKey,
       agentId: params.agentId,
+      surface: "sessions.files.set",
       respond,
     });
     if (!agentId) {
@@ -1053,6 +1069,7 @@ export const sessionsFilesHandlers: GatewayRequestHandlers = {
       cfg: context.getRuntimeConfig(),
       sessionKey: params.key,
       agentId: params.agentId,
+      surface: "sessions.files.reveal",
       respond,
     });
     if (!agentId) {

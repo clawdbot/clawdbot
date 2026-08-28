@@ -103,6 +103,36 @@ describe("gateway request scope", () => {
     await expectPluginIdScopedGatewayScope("voice-call");
   });
 
+  it("composes nested runtime authorities and fails closed when one is revoked", async () => {
+    const runtimeScope = await importGatewayRequestScopeModule();
+    let consumerActive = true;
+    let providerActive = true;
+
+    await runtimeScope.withPluginRuntimeGatewayRequestScope(
+      {
+        ...TEST_SCOPE,
+        pluginRuntimeAuthority: () => consumerActive,
+      },
+      async () => {
+        await runtimeScope.withPluginRuntimeGatewayRequestAuthority(
+          () => providerActive,
+          async () => {
+            const authority =
+              runtimeScope.getPluginRuntimeGatewayRequestScope()?.pluginRuntimeAuthority;
+            expect(authority?.()).toBe(true);
+
+            consumerActive = false;
+            expect(authority?.()).toBe(false);
+
+            consumerActive = true;
+            providerActive = false;
+            expect(authority?.()).toBe(false);
+          },
+        );
+      },
+    );
+  });
+
   it("resolves the owned registry while preserving gateway request facts", async () => {
     const activeRegistry = createEmptyPluginRegistry();
     const requestRegistry = createEmptyPluginRegistry();

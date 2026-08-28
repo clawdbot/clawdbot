@@ -1,6 +1,9 @@
+import type { BrowserNodeDelegationRequest } from "openclaw/plugin-sdk/browser-node-delegation-runtime";
 import { ErrorCodes } from "openclaw/plugin-sdk/gateway-runtime";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
+import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { attachBrowserNodeDelegationForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import type { TranscriptSourceProvider } from "openclaw/plugin-sdk/transcripts";
 import { describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
@@ -61,6 +64,15 @@ function authorizationHarness(options?: { browserError?: Error }) {
     }
     throw new Error(`unexpected browser request ${String(params.path)}`);
   });
+  const browser = {
+    request: async (params: BrowserNodeDelegationRequest) =>
+      await gatewayRequest("browser.request", params),
+  };
+  const runtime = {
+    gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
+    browser,
+  } as unknown as PluginRuntime;
+  attachBrowserNodeDelegationForTest(runtime, browser);
   const api = createTestPluginApi({
     id: "zoom-meetings",
     name: "Zoom meetings",
@@ -69,9 +81,7 @@ function authorizationHarness(options?: { browserError?: Error }) {
     source: "test",
     config: {},
     pluginConfig: { defaultMode: "transcribe", chrome: { waitForInCallMs: 1 } },
-    runtime: {
-      gateway: { isAvailable: vi.fn(async () => true), request: gatewayRequest },
-    } as unknown as OpenClawPluginApi["runtime"],
+    runtime: runtime as OpenClawPluginApi["runtime"],
     logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() },
     registerGatewayMethod: (method: string, handler: unknown) =>
       methods.set(method, handler as GatewayHandler),

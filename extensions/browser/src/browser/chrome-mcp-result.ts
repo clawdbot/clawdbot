@@ -21,6 +21,7 @@ import {
   redactChromeMcpProfileLabelForDiagnostic,
 } from "./chrome-mcp-diagnostics.js";
 import type { ChromeMcpSnapshotNode } from "./chrome-mcp.snapshot.js";
+import { redactBrowserNavigationUrl } from "./navigation-guard.js";
 
 function asPages(value: unknown): ChromeMcpStructuredPage[] {
   if (!Array.isArray(value)) {
@@ -34,7 +35,7 @@ function asPages(value: unknown): ChromeMcpStructuredPage[] {
     }
     out.push({
       id: record.id,
-      url: readStringValue(record.url),
+      url: redactBrowserNavigationUrl(readStringValue(record.url) ?? ""),
       selected: record.selected === true,
     });
   }
@@ -65,7 +66,7 @@ function extractTextPages(result: ChromeMcpToolResult): ChromeMcpStructuredPage[
       }
       pages.push({
         id: Number.parseInt(match[1] ?? "", 10),
-        url: normalizeOptionalString(match[2]),
+        url: redactBrowserNavigationUrl(normalizeOptionalString(match[2]) ?? ""),
         selected: Boolean(match[3]),
       });
     }

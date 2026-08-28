@@ -16,12 +16,7 @@ import { isNodeCommandAllowed, resolveNodeCommandAllowlist } from "../node-comma
 import { applyPluginNodeInvokePolicy } from "../node-invoke-plugin-policy.js";
 import { sanitizeNodeInvokeParamsForForwarding } from "../node-invoke-sanitize.js";
 import { enqueuePendingNodeAction, removePendingNodeAction } from "../node-runtime-state.js";
-import {
-  captureNodeWakeLifecycle,
-  NODE_WAKE_RECONNECT_RETRY_WAIT_MS,
-  NODE_WAKE_RECONNECT_WAIT_MS,
-  releaseNodeWakeLifecycle,
-} from "../node-wake-state.js";
+import { captureNodeWakeLifecycle, releaseNodeWakeLifecycle } from "../node-wake-state.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
 import { buildNodeCommandRejectionHint } from "./node-command-rejection-hint.js";
 import { nodeInvokePolicy } from "./nodes-policy.js";
@@ -42,17 +37,14 @@ import {
 } from "./nodes.invoke-deadline.js";
 import { shouldQueueAsPendingForegroundAction } from "./nodes.invoke-foreground.js";
 import { emitTalkPttNodeEvent } from "./nodes.invoke-talk-events.js";
+import { resolveNodeSessionAfterWake } from "./nodes.invoke-wake.js";
 import { toPendingParamsJSON } from "./nodes.pending.js";
 import {
   isNodePairingWorkCurrent,
   resolveDispatchableNodeSession,
   respondPairingChanged,
 } from "./nodes.shared.js";
-import {
-  maybeSendNodeWakeNudge,
-  maybeWakeNodeWithApns,
-  waitForNodeReconnect,
-} from "./nodes.wake.js";
+import { maybeWakeNodeWithApns } from "./nodes.wake.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -64,7 +56,11 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
     const p = params;
     const nodeId = normalizeOptionalString(p.nodeId) ?? "";
     const command = normalizeOptionalString(p.command) ?? "";
-    const sessionKey = normalizeOptionalString(p.sessionKey);
+    const trustedAgentRuntime = client?.internal?.agentRuntimeIdentity;
+    const trustedPluginRuntimeOwner = client?.internal?.pluginRuntimeOwnerId;
+    const trustedSessionKey = normalizeOptionalString(trustedAgentRuntime?.sessionKey);
+    const sessionKey = trustedSessionKey ?? normalizeOptionalString(p.sessionKey);
+    const agentId = normalizeOptionalString(trustedAgentRuntime?.agentId);
     const nodeInvokeStream =
       client?.internal?.syntheticClient === true && client.internal.pluginRuntimeOwnerId
         ? client.internal.nodeInvokeStream
@@ -110,6 +106,22 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           ErrorCodes.INVALID_REQUEST,
           `node.invoke cannot mutate persistent browser profiles via ${command}`,
           { details: { command } },
+        ),
+      );
+      return;
+    }
+    if (
+      isBrowserProxyNodeInvokeCommand(command) &&
+      !trustedAgentRuntime &&
+      !trustedPluginRuntimeOwner &&
+      !nodeInvokePolicy.clientHasOperatorAdminScope(client)
+    ) {
+      respond(
+        false,
+        undefined,
+        errorShape(
+          ErrorCodes.INVALID_REQUEST,
+          "browser node control requires a trusted Browser Steward session runtime authority",
         ),
       );
       return;
@@ -188,161 +200,22 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
         );
         if (!nodeSession) {
-          const wakeReqId = req.id;
-          const wakeFlowStartedAtMs = Date.now();
-          context.logGateway.info(
-            `node wake start node=${nodeId} req=${wakeReqId} command=${command}`,
-          );
-
-          // Wake attempts can be shared; expire this caller without aborting a
-          // push that another live invocation still owns.
-          const wake = await awaitNodeInvokeWithinDeadline(
-            () =>
-              maybeWakeNodeWithApns(nodeId, {
-                cfg,
-                lifecycle: wakeLifecycle,
-                generation,
-              }),
+          nodeSession = await resolveNodeSessionAfterWake({
+            nodeId,
+            command,
+            requestId: req.id,
+            cfg,
+            context,
+            respond,
+            generation,
+            lifecycle: wakeLifecycle,
             invokeDeadlineAtMs,
-          );
-          if (wake === NODE_INVOKE_DEADLINE_EXPIRED) {
-            respondIfInvokeExpired();
-            return;
-          }
-          context.logGateway.info(
-            `node wake stage=wake1 node=${nodeId} req=${wakeReqId} ` +
-              `available=${wake.available} throttled=${wake.throttled} ` +
-              `path=${wake.path} durationMs=${wake.durationMs} ` +
-              `apnsStatus=${wake.apnsStatus ?? -1} apnsReason=${wake.apnsReason ?? "-"}`,
-          );
-          if (respondIfInvokeExpired()) {
-            return;
-          }
-          if (wake.available) {
-            const waitStartedAtMs = Date.now();
-            const remainingTimeoutMs = resolveRemainingInvokeTimeoutMs();
-            const waitTimeoutMs =
-              invokeDeadlineAtMs === undefined
-                ? NODE_WAKE_RECONNECT_WAIT_MS
-                : Math.min(NODE_WAKE_RECONNECT_WAIT_MS, remainingTimeoutMs ?? 0);
-            const reconnected = await waitForNodeReconnect({
-              nodeId,
-              context,
-              timeoutMs: waitTimeoutMs,
-              lifecycle: wakeLifecycle,
-              pairingGeneration: generation.key,
-            });
-            const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
-            context.logGateway.info(
-              `node wake stage=wait1 node=${nodeId} req=${wakeReqId} ` +
-                `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
-            );
-          }
-          if (!(await continuePairingWork()) || respondIfInvokeExpired()) {
-            return;
-          }
-          nodeSession = resolveDispatchableNodeSession(
-            context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
-          );
-          if (!nodeSession && wake.available) {
-            const retryWake = await awaitNodeInvokeWithinDeadline(
-              () =>
-                maybeWakeNodeWithApns(nodeId, {
-                  force: true,
-                  cfg,
-                  lifecycle: wakeLifecycle,
-                  generation,
-                }),
-              invokeDeadlineAtMs,
-            );
-            if (retryWake === NODE_INVOKE_DEADLINE_EXPIRED) {
-              respondIfInvokeExpired();
-              return;
-            }
-            context.logGateway.info(
-              `node wake stage=wake2 node=${nodeId} req=${wakeReqId} force=true ` +
-                `available=${retryWake.available} throttled=${retryWake.throttled} ` +
-                `path=${retryWake.path} durationMs=${retryWake.durationMs} ` +
-                `apnsStatus=${retryWake.apnsStatus ?? -1} apnsReason=${retryWake.apnsReason ?? "-"}`,
-            );
-            if (respondIfInvokeExpired()) {
-              return;
-            }
-            if (retryWake.available) {
-              const waitStartedAtMs = Date.now();
-              const remainingTimeoutMs = resolveRemainingInvokeTimeoutMs();
-              const waitTimeoutMs =
-                invokeDeadlineAtMs === undefined
-                  ? NODE_WAKE_RECONNECT_RETRY_WAIT_MS
-                  : Math.min(NODE_WAKE_RECONNECT_RETRY_WAIT_MS, remainingTimeoutMs ?? 0);
-              const reconnected = await waitForNodeReconnect({
-                nodeId,
-                context,
-                timeoutMs: waitTimeoutMs,
-                lifecycle: wakeLifecycle,
-                pairingGeneration: generation.key,
-              });
-              const waitDurationMs = Math.max(0, Date.now() - waitStartedAtMs);
-              context.logGateway.info(
-                `node wake stage=wait2 node=${nodeId} req=${wakeReqId} ` +
-                  `reconnected=${reconnected} timeoutMs=${waitTimeoutMs} durationMs=${waitDurationMs}`,
-              );
-            }
-            if (!(await continuePairingWork()) || respondIfInvokeExpired()) {
-              return;
-            }
-            nodeSession = resolveDispatchableNodeSession(
-              context.nodeRegistry.getForPairingGeneration(nodeId, generation.key),
-            );
-          }
+            resolveRemainingInvokeTimeoutMs,
+            respondIfInvokeExpired,
+          });
           if (!nodeSession) {
-            if (respondIfInvokeExpired()) {
-              return;
-            }
-            const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
-            const nudge = await awaitNodeInvokeWithinDeadline(
-              () =>
-                maybeSendNodeWakeNudge(nodeId, {
-                  cfg,
-                  lifecycle: wakeLifecycle,
-                  generation,
-                }),
-              invokeDeadlineAtMs,
-            );
-            if (nudge === NODE_INVOKE_DEADLINE_EXPIRED) {
-              respondIfInvokeExpired();
-              return;
-            }
-            if (!(await continuePairingWork())) {
-              return;
-            }
-            context.logGateway.info(
-              `node wake nudge node=${nodeId} req=${wakeReqId} sent=${nudge.sent} ` +
-                `throttled=${nudge.throttled} reason=${nudge.reason} durationMs=${nudge.durationMs} ` +
-                `apnsStatus=${nudge.apnsStatus ?? -1} apnsReason=${nudge.apnsReason ?? "-"}`,
-            );
-            context.logGateway.warn(
-              `node wake done node=${nodeId} req=${wakeReqId} connected=false ` +
-                `reason=not_connected totalMs=${totalDurationMs}`,
-            );
-            respond(
-              false,
-              undefined,
-              errorShape(ErrorCodes.UNAVAILABLE, "node not connected", {
-                details: {
-                  code: "NOT_CONNECTED",
-                  nodeError: { code: "NOT_CONNECTED", message: "node not connected" },
-                  nodeCommandDispatched: false,
-                },
-              }),
-            );
             return;
           }
-
-          const totalDurationMs = Math.max(0, Date.now() - wakeFlowStartedAtMs);
-          context.logGateway.info(
-            `node wake done node=${nodeId} req=${wakeReqId} connected=true totalMs=${totalDurationMs}`,
-          );
         }
         // A reload may revoke authority for an in-flight request, but it must not
         // retroactively grant one that was denied when admitted before node wake.
@@ -424,7 +297,8 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
               nodeSession,
               command,
               params: forwardedParams.params,
-              ...(sessionKey ? { sessionKey } : {}),
+              ...(agentId ? { agentId } : {}),
+              ...(trustedSessionKey ? { sessionKey: trustedSessionKey } : {}),
               turnSource: {
                 channel: p.turnSourceChannel,
                 to: p.turnSourceTo,
@@ -452,6 +326,17 @@ export const nodeInvokeHandlers: GatewayRequestHandlers = {
           return;
         }
         if (!(await continuePairingWork())) {
+          return;
+        }
+        if (isBrowserProxyNodeInvokeCommand(command) && !policyResult) {
+          respond(
+            false,
+            undefined,
+            errorShape(
+              ErrorCodes.INVALID_REQUEST,
+              "browser node control requires an active Browser Steward policy",
+            ),
+          );
           return;
         }
         if (policyResult) {

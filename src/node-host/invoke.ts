@@ -818,9 +818,13 @@ async function dispatchInvoke(
     const acquireManagedWorkspace = context?.acquireManagedWorkspace;
     let pluginInvocationActive = true;
     const invokeContext =
-      context && (frame.sessionKey || runtime.signal || acquireManagedWorkspace)
+      context &&
+      (frame.nodeId || frame.id || frame.sessionKey || runtime.signal || acquireManagedWorkspace)
         ? {
             ...context,
+            ...(frame.nodeId ? { nodeId: frame.nodeId } : {}),
+            invocationId: frame.idempotencyKey || frame.id,
+            ...(frame.pairingGeneration ? { pairingGeneration: frame.pairingGeneration } : {}),
             ...(frame.sessionKey ? { sessionKey: frame.sessionKey } : {}),
             ...(runtime.signal ? { signal: runtime.signal } : {}),
             ...(acquireManagedWorkspace

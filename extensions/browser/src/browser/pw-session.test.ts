@@ -818,6 +818,28 @@ describe("pw-session ensurePageState", () => {
     expect(request?.resourceType).toBe("xhr");
     expect(request?.status).toBe(500);
     expect(request?.ok).toBe(false);
+
+    const rawOAuthCode = "raw-oauth-code-123456";
+    const oauthRequest = {
+      method: () => "GET",
+      url: () => `https://auth.example/callback?code=${rawOAuthCode}`,
+      resourceType: () => "document",
+      failure: () => null,
+    } as unknown as import("playwright-core").Request;
+    const oauthConsoleMessage = {
+      type: () => "info",
+      text: () => "OAuth callback completed",
+      location: () => ({
+        url: `https://auth.example/callback?code=${rawOAuthCode}`,
+        lineNumber: 1,
+        columnNumber: 2,
+      }),
+    } as unknown as import("playwright-core").ConsoleMessage;
+    handlers.get("request")?.[0]?.(oauthRequest);
+    handlers.get("console")?.[0]?.(oauthConsoleMessage);
+    expect(state.requests.at(-1)?.url).toBe("https://auth.example/callback?code=REDACTED");
+    expect(state.console.at(-1)?.location?.url).toBe("https://auth.example/callback?code=REDACTED");
+    expect(JSON.stringify(state)).not.toContain(rawOAuthCode);
   });
 
   it("drops state on page close", () => {

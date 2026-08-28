@@ -1,6 +1,7 @@
 // Browser tests cover index plugin behavior.
 import fs from "node:fs";
 import path from "node:path";
+import { attachBrowserNodeDelegationRegistrar } from "openclaw/plugin-sdk/browser-node-delegation-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -12,16 +13,26 @@ import {
 import type { OpenClawPluginApi } from "./runtime-api.js";
 import setupPlugin from "./setup-api.js";
 import { BrowserToolOutputSchema } from "./src/browser-tool.schema.js";
+import {
+  finalizeBrowserStewardRuntimeParams,
+  isBrowserStewardRuntimeApproved,
+  prepareBrowserStewardRuntimeParams,
+  type BrowserStewardRuntimeApprovalAuthority,
+} from "./src/browser/browser-steward-approval.js";
 
 type BrowserAutoEnableProbe = Parameters<OpenClawPluginApi["registerAutoEnableProbe"]>[0];
+type BrowserToolMockOptions = {
+  approvalAuthority?: BrowserStewardRuntimeApprovalAuthority;
+};
 
 const runtimeApiMocks = vi.hoisted(() => ({
   createBrowserPluginService: vi.fn(() => ({ id: "browser-control", start: vi.fn() })),
-  createBrowserTool: vi.fn(() => ({
+  createBrowserTool: vi.fn((opts: BrowserToolMockOptions = {}) => ({
     name: "browser",
     description: "browser",
     parameters: { type: "object", properties: {} },
     execute: vi.fn(async () => ({ type: "json", value: { ok: true } })),
+    approvalAuthority: opts.approvalAuthority,
   })),
   collectBrowserSecurityAuditFindings: vi.fn(() => []),
   handleBrowserGatewayRequest: vi.fn(),
@@ -66,6 +77,9 @@ afterEach(() => {
 function createApi() {
   const registerCli = vi.fn();
   const registerGatewayMethod = vi.fn();
+  const registerTrustedToolPolicy = vi.fn();
+  const registerNodeInvokePolicy = vi.fn();
+  const registerBrowserNodeDelegation = vi.fn();
   const registerService = vi.fn();
   const registerTool = vi.fn();
   const openKeyedStore = vi.fn(() => ({
@@ -97,15 +111,21 @@ function createApi() {
     } as unknown as OpenClawPluginApi["runtime"],
     registerCli,
     registerGatewayMethod,
+    registerTrustedToolPolicy,
+    registerNodeInvokePolicy,
     registerService,
     registerTool,
   });
+  attachBrowserNodeDelegationRegistrar(api, registerBrowserNodeDelegation);
   return {
     api,
     openKeyedStore,
     openSyncKeyedStore,
     registerCli,
     registerGatewayMethod,
+    registerTrustedToolPolicy,
+    registerNodeInvokePolicy,
+    registerBrowserNodeDelegation,
     registerService,
     registerTool,
   };
@@ -156,6 +176,331 @@ describe("browser plugin", () => {
       overflowPolicy: "reject-new",
     });
     expect(runtimeApiMocks.createBrowserPluginService).not.toHaveBeenCalled();
+  });
+
+  it("registers Browser-owned node delegation only for supported meeting plugins", () => {
+    const { api, registerBrowserNodeDelegation } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(registerBrowserNodeDelegation).toHaveBeenCalledOnce();
+    expect(registerBrowserNodeDelegation).toHaveBeenCalledWith(
+      expect.objectContaining({
+        consumerPluginIds: ["google-meet", "teams-meetings", "zoom-meetings"],
+        request: expect.any(Function),
+      }),
+    );
+  });
+
+  it("routes direct admin node control through Browser Steward approval", async () => {
+    const { api, registerNodeInvokePolicy } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(registerNodeInvokePolicy).toHaveBeenCalledOnce();
+    const policy = registerNodeInvokePolicy.mock.calls[0]?.[0] as {
+      commands: string[];
+      handle: (context: unknown) => Promise<unknown>;
+    };
+    expect(policy.commands).toEqual(["browser.proxy", "browser.proxy.upload.v1"]);
+
+    const invokeNode = vi.fn(async (_request: unknown) => ({
+      ok: true,
+      payload: { result: { ok: true } },
+    }));
+    const params = {
+      method: "POST",
+      path: "/tabs/open",
+      body: { url: "https://example.com" },
+      profile: "openclaw",
+      browserProxyTimeoutMs: 12_345,
+    };
+    const allowed = await policy.handle({
+      nodeId: "node-1",
+      command: "browser.proxy",
+      params,
+      idempotencyKey: "invoke-1",
+      node: { nodeId: "node-1", pairingGeneration: "pairing-1" },
+      client: { scopes: ["operator.admin"] },
+      invokeNode,
+    });
+
+    expect(allowed).toMatchObject({ ok: true });
+    const forwarded = invokeNode.mock.calls[0]?.[0] as {
+      params?: Record<string, unknown>;
+    };
+    expect(forwarded.params?.agentId).toBe("browser-session-credential-steward");
+    expect(forwarded.params?.agentSessionKey).toBeUndefined();
+    expect(forwarded.params?.timeoutMs).toBe(12_345);
+    expect(forwarded.params?.browserProxyTimeoutMs).toBeUndefined();
+    expect(forwarded.params?.browserStewardApproval).toBeDefined();
+    invokeNode.mockClear();
+
+    const pluginParams = { method: "GET", path: "/profiles" };
+    const pluginResult = await policy.handle({
+      nodeId: "node-1",
+      command: "browser.proxy",
+      params: pluginParams,
+      idempotencyKey: "plugin-invoke-1",
+      pluginRuntimeOwnerId: "google-meet",
+      node: { nodeId: "node-1", pairingGeneration: "pairing-1" },
+      client: { scopes: ["operator.admin"] },
+      invokeNode,
+    });
+
+    expect(pluginResult).toEqual({
+      ok: false,
+      code: "BROWSER_STEWARD_APPROVAL_REQUIRED",
+      message: "browser node control requires the Browser-owned capability",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+
+    const denied = await policy.handle({
+      command: "browser.proxy",
+      params,
+      client: { scopes: ["operator.write"] },
+      invokeNode,
+    });
+    expect(denied).toEqual({
+      ok: false,
+      code: "BROWSER_STEWARD_APPROVAL_REQUIRED",
+      message: "browser node control requires operator admin authority",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("rejects non-Browser agent runtimes before issuing a Browser Steward approval", async () => {
+    const { api, registerNodeInvokePolicy } = createApi();
+    registerBrowserPlugin(api);
+    const policy = registerNodeInvokePolicy.mock.calls[0]?.[0] as {
+      handle: (context: unknown) => Promise<unknown>;
+    };
+    const invokeNode = vi.fn();
+
+    await expect(
+      policy.handle({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: { method: "GET", path: "/profiles" },
+        agentId: "main",
+        sessionKey: "agent:main:direct:opaque",
+        idempotencyKey: "agent-invoke-1",
+        node: { nodeId: "node-1", pairingGeneration: "pairing-1" },
+        client: { scopes: ["operator.admin"] },
+        invokeNode,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "BROWSER_STEWARD_APPROVAL_REQUIRED",
+      message: "browser node control requires an approved Browser tool operation",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("rejects Browser Steward agent runtimes without a Browser tool operation proof", async () => {
+    const { api, registerNodeInvokePolicy } = createApi();
+    registerBrowserPlugin(api);
+    const policy = registerNodeInvokePolicy.mock.calls[0]?.[0] as {
+      handle: (context: unknown) => Promise<unknown>;
+    };
+    const invokeNode = vi.fn();
+
+    await expect(
+      policy.handle({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: { method: "POST", path: "/tabs/open", body: { url: "https://example.com" } },
+        agentId: "browser-session-credential-steward",
+        sessionKey: "agent:browser-session-credential-steward:direct:opaque",
+        idempotencyKey: "agent-invoke-2",
+        node: { nodeId: "node-1", pairingGeneration: "pairing-1" },
+        client: { scopes: ["operator.admin"] },
+        invokeNode,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "BROWSER_STEWARD_APPROVAL_REQUIRED",
+      message: "browser node control requires an approved Browser tool operation",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("generates an invocation id for direct operator control when omitted", async () => {
+    const { api, registerNodeInvokePolicy } = createApi();
+    registerBrowserPlugin(api);
+    const policy = registerNodeInvokePolicy.mock.calls[0]?.[0] as {
+      handle: (context: unknown) => Promise<unknown>;
+    };
+    const invokeNode = vi.fn(async (_request: unknown) => ({
+      ok: true,
+      payload: { result: { ok: true } },
+    }));
+
+    await expect(
+      policy.handle({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: { method: "GET", path: "/profiles" },
+        node: { nodeId: "node-1", pairingGeneration: "pairing-1" },
+        client: { scopes: ["operator.admin"] },
+        invokeNode,
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    const forwarded = invokeNode.mock.calls[0]?.[0] as {
+      idempotencyKey?: string;
+      params?: { browserStewardApproval?: { invocationId?: string } };
+    };
+    expect(forwarded.idempotencyKey).toEqual(expect.any(String));
+    expect(forwarded.idempotencyKey).not.toBe("");
+    expect(forwarded.params?.browserStewardApproval?.invocationId).toBe(forwarded.idempotencyKey);
+  });
+
+  it("rejects plugin-owned raw node.invoke browser control", async () => {
+    const { api, registerNodeInvokePolicy } = createApi();
+    registerBrowserPlugin(api);
+    const policy = registerNodeInvokePolicy.mock.calls[0]?.[0] as {
+      handle: (context: unknown) => Promise<unknown>;
+    };
+    const invokeNode = vi.fn();
+
+    await expect(
+      policy.handle({
+        nodeId: "node-1",
+        command: "browser.proxy",
+        params: {
+          method: "POST",
+          path: "/tabs/open",
+          body: { url: "https://example.com" },
+        },
+        idempotencyKey: "raw-invoke-1",
+        node: { nodeId: "node-1", pairingGeneration: "pairing-1" },
+        pluginRuntimeOwnerId: "google-meet",
+        client: { scopes: ["operator.admin"] },
+        invokeNode,
+      }),
+    ).resolves.toEqual({
+      ok: false,
+      code: "BROWSER_STEWARD_APPROVAL_REQUIRED",
+      message: "browser node control requires the Browser-owned capability",
+    });
+    expect(invokeNode).not.toHaveBeenCalled();
+  });
+
+  it("registers an exact one-shot approval policy for Browser Steward mutations", async () => {
+    const { api, registerTool, registerTrustedToolPolicy } = createApi();
+    registerBrowserPlugin(api);
+
+    expect(registerTrustedToolPolicy).toHaveBeenCalledOnce();
+    const policy = registerTrustedToolPolicy.mock.calls[0]?.[0] as {
+      matcher: readonly string[];
+      evaluate: (event: unknown, context: unknown) => unknown;
+    };
+    expect(policy.matcher).toEqual(["browser"]);
+
+    const rawProfile = "Bearer prepared-token";
+    const params = { action: "navigate", targetUrl: "https://example.com", profile: rawProfile };
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const tool = factory({
+      agentId: "browser-session-credential-steward",
+      sessionKey: "agent:browser-session-credential-steward:owner-run",
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+    await tool.execute("capture-authority", { action: "status" });
+    const createBrowserToolCall = runtimeApiMocks.createBrowserTool.mock.calls.at(-1);
+    if (!createBrowserToolCall) {
+      throw new Error("expected Browser tool creation call");
+    }
+    const approvalAuthority = createBrowserToolCall[0]?.approvalAuthority;
+    if (!approvalAuthority) {
+      throw new Error("expected Browser-owned approval authority");
+    }
+    const prepared = prepareBrowserStewardRuntimeParams(
+      params,
+      {
+        backend: { kind: "node", identity: "node-1" },
+        profile: rawProfile,
+      },
+      approvalAuthority,
+    ) as Record<string, unknown>;
+    const decision = policy.evaluate(
+      { toolName: "browser", params: prepared },
+      {
+        agentId: "browser-session-credential-steward",
+        sessionKey: "agent:browser-session-credential-steward:owner-run",
+      },
+    ) as {
+      requireApproval?: {
+        description?: string;
+        onResolution?: (resolution: string) => void;
+      };
+    };
+
+    expect(decision.requireApproval).toBeDefined();
+    expect(decision.requireApproval?.description).toContain("backend=node=node-1");
+    expect(decision.requireApproval?.description).toContain("profile=REDACTED");
+    expect(decision.requireApproval?.description).toContain("origin=https://example.com");
+    expect(decision.requireApproval?.description).not.toContain(rawProfile);
+    expect(JSON.stringify(decision)).not.toContain("owner-run");
+    decision.requireApproval?.onResolution?.("allow-once");
+
+    const finalized = finalizeBrowserStewardRuntimeParams(
+      structuredClone(prepared),
+      prepared,
+      approvalAuthority,
+    ) as Record<string, unknown>;
+    expect(isBrowserStewardRuntimeApproved(finalized, approvalAuthority)).toBe(true);
+  });
+
+  it("sanitizes approval destination text before rendering it", async () => {
+    const rawProfile = "work\n\u001b[31m\u202Eprofile";
+    const { api, registerTool, registerTrustedToolPolicy } = createApi();
+    registerBrowserPlugin(api);
+    const policy = registerTrustedToolPolicy.mock.calls[0]?.[0] as {
+      evaluate: (event: unknown, context: unknown) => unknown;
+    };
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const tool = factory({
+      agentId: "browser-session-credential-steward",
+      sessionKey: "agent:browser-session-credential-steward:display-safe",
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+    await tool.execute("capture-authority", { action: "status" });
+    const createBrowserToolCall = runtimeApiMocks.createBrowserTool.mock.calls.at(-1);
+    if (!createBrowserToolCall) {
+      throw new Error("expected Browser tool creation call");
+    }
+    const approvalAuthority = createBrowserToolCall[0]?.approvalAuthority;
+    if (!approvalAuthority) {
+      throw new Error("expected Browser-owned approval authority");
+    }
+    const prepared = prepareBrowserStewardRuntimeParams(
+      { action: "navigate", targetUrl: "https://example.com", profile: rawProfile },
+      { backend: { kind: "host" }, profile: rawProfile },
+      approvalAuthority,
+    );
+    const decision = policy.evaluate(
+      { toolName: "browser", params: prepared },
+      {
+        agentId: "browser-session-credential-steward",
+        sessionKey: "agent:browser-session-credential-steward:display-safe",
+      },
+    ) as { requireApproval?: { description?: string } };
+    const description = decision.requireApproval?.description ?? "";
+
+    expect(description).not.toContain("\r");
+    expect(description).not.toContain("\n");
+    expect(description).not.toContain("\u001b");
+    expect(description).not.toContain("\u202E");
+    expect(description).toContain("profile=work\\nprofile");
   });
 
   it("exposes static browser metadata on the plugin definition", () => {
@@ -241,6 +586,8 @@ describe("browser plugin", () => {
         sessionKey: "agent:main:webchat:direct:123",
         chatType: "direct",
       },
+      approvalAuthority: expect.any(Object),
+      browserOwnedGatewayRequest: expect.any(Function),
       toolCapabilities: expect.any(Object),
     });
   });
@@ -278,8 +625,34 @@ describe("browser plugin", () => {
         channel: "telegram",
         chatType: "direct",
       },
+      approvalAuthority: expect.any(Object),
+      browserOwnedGatewayRequest: expect.any(Function),
       toolCapabilities: expect.any(Object),
     });
+  });
+
+  it("passes trusted sender ownership into the Browser tool context", async () => {
+    const { api, registerTool } = createApi();
+    registerBrowserPlugin(api);
+    const factory = mockCallArg(registerTool);
+    if (typeof factory !== "function") {
+      throw new Error("expected browser plugin to register a tool factory");
+    }
+    const tool = factory({
+      sessionKey: "agent:browser-session-credential-steward:owner-run",
+      senderIsOwner: true,
+    });
+    if (!tool || Array.isArray(tool)) {
+      throw new Error("expected browser plugin to return a single tool");
+    }
+
+    await tool.execute("call-1", { action: "status" });
+    expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith(
+      expect.objectContaining({
+        agentSessionKey: "agent:browser-session-credential-steward:owner-run",
+        senderIsOwner: true,
+      }),
+    );
   });
 
   it("passes the browser-owned run binding into the tool layer", async () => {
@@ -304,6 +677,8 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "snapshot" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       runToolBinding: binding,
+      approvalAuthority: expect.any(Object),
+      browserOwnedGatewayRequest: expect.any(Function),
       toolCapabilities: expect.any(Object),
     });
   });
@@ -367,6 +742,8 @@ describe("browser plugin", () => {
     await tool.execute("call-1", { action: "snapshot" });
     expect(runtimeApiMocks.createBrowserTool).toHaveBeenCalledWith({
       runToolBinding: expect.objectContaining({ profile: "chrome", targetId: "target-7" }),
+      approvalAuthority: expect.any(Object),
+      browserOwnedGatewayRequest: expect.any(Function),
       toolCapabilities: expect.objectContaining({
         tabBound: true,
       }),
@@ -458,6 +835,8 @@ describe("browser plugin", () => {
         channel: "telegram",
         chatType: "group",
       },
+      approvalAuthority: expect.any(Object),
+      browserOwnedGatewayRequest: expect.any(Function),
       toolCapabilities: expect.any(Object),
     });
   });
@@ -521,12 +900,14 @@ describe("browser plugin", () => {
       "{}",
       "browser.proxy",
       undefined,
+      undefined,
     );
     expect(runtimeApiMocks.runBrowserProxyCommand).toHaveBeenNthCalledWith(
       2,
       "{}",
       "browser.proxy.upload.v1",
       abortController.signal,
+      undefined,
     );
 
     await expect(browserSecurityAuditCollectors[0]?.({} as never)).resolves.toStrictEqual([]);

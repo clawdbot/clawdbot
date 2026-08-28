@@ -180,7 +180,7 @@ const nodesUtilsMocks = vi.hoisted(() => ({
 
 const gatewayMocks = vi.hoisted(() => ({
   callGatewayTool: vi.fn(
-    async (): Promise<Record<string, unknown>> => ({
+    async (..._args: unknown[]): Promise<Record<string, unknown>> => ({
       ok: true,
       payload: { result: { ok: true, running: true } },
     }),
@@ -360,8 +360,12 @@ vi.mock("./browser-tool.runtime.js", async () => {
   };
 });
 
-import { createBrowserTool } from "./browser-tool.js";
+import { createBrowserTool, prepareBrowserStewardToolParams } from "./browser-tool.js";
 import { resolveBrowserToolCapabilities } from "./browser-tool.schema.js";
+import {
+  approveBrowserStewardRuntimeParams,
+  prepareBrowserStewardRuntimeParams,
+} from "./browser/browser-steward-approval.js";
 import { DEFAULT_AI_SNAPSHOT_MAX_CHARS } from "./browser/constants.js";
 
 function mockSingleBrowserProxyNode() {
@@ -505,18 +509,16 @@ function nodeInvokeCall(callIndex: number): {
   options: { timeoutMs?: number };
   request: {
     nodeId?: string;
-    command?: string;
     timeoutMs?: number;
-    idempotencyKey?: string;
-    params?: {
-      method?: string;
-      path?: string;
-      profile?: string;
-      timeoutMs?: number;
-      errorEnvelope?: string;
-      query?: { refs?: string };
-      body?: Record<string, unknown>;
-    };
+    browserProxyTimeoutMs?: number;
+    method?: string;
+    path?: string;
+    profile?: string;
+    query?: { refs?: string };
+    body?: Record<string, unknown>;
+    upload?: unknown;
+    allowAutomaticHostFallback?: boolean;
+    includeRoute?: boolean;
   };
   extra?: { scopes?: string[]; signal?: AbortSignal };
 } {
@@ -524,24 +526,23 @@ function nodeInvokeCall(callIndex: number): {
   const options = mockCallArg<{ timeoutMs?: number }>(gatewayMocks.callGatewayTool, callIndex, 1);
   const request = mockCallArg<{
     nodeId?: string;
-    command?: string;
     timeoutMs?: number;
-    idempotencyKey?: string;
-    params?: {
-      method?: string;
-      path?: string;
-      profile?: string;
-      timeoutMs?: number;
-      query?: { refs?: string };
-      body?: Record<string, unknown>;
-    };
+    browserProxyTimeoutMs?: number;
+    method?: string;
+    path?: string;
+    profile?: string;
+    query?: { refs?: string };
+    body?: Record<string, unknown>;
+    upload?: unknown;
+    allowAutomaticHostFallback?: boolean;
+    includeRoute?: boolean;
   }>(gatewayMocks.callGatewayTool, callIndex, 2);
   const extra = mockCallArg<{ scopes?: string[]; signal?: AbortSignal } | undefined>(
     gatewayMocks.callGatewayTool,
     callIndex,
     3,
   );
-  expect(toolName).toBe("node.invoke");
+  expect(toolName).toBe("browser.request");
   return { options, request, extra };
 }
 
@@ -579,7 +580,7 @@ function blockBrowserNodeGateway(count = 1): () => void {
                   result: {
                     ok: true,
                     running: true,
-                    profile: request.params?.profile,
+                    profile: request.profile,
                     path: "/tmp/test.png",
                   },
                 },
@@ -724,9 +725,9 @@ describe("browser tool download actions", () => {
 
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(45_000);
-    expect(request.params?.path).toBe("/wait/download");
-    expect(request.params?.timeoutMs).toBe(35_000);
-    expect(request.params?.body).toEqual({
+    expect(request.path).toBe("/wait/download");
+    expect(request.browserProxyTimeoutMs).toBe(35_000);
+    expect(request.body).toEqual({
       path: "export.csv",
       targetId: "tab-1",
       timeoutMs: 30_000,
@@ -756,9 +757,9 @@ describe("browser tool download actions", () => {
 
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(135_000);
-    expect(request.params?.timeoutMs).toBe(125_000);
-    expect(request.params?.path).toBe("/download");
-    expect(request.params?.body).toMatchObject({ ref: "e12", path: "report.pdf" });
+    expect(request.browserProxyTimeoutMs).toBe(125_000);
+    expect(request.path).toBe("/download");
+    expect(request.body).toMatchObject({ ref: "e12", path: "report.pdf" });
   });
 
   it.each([
@@ -918,10 +919,10 @@ describe("browser tool snapshot maxChars", () => {
 
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(55_000);
-    expect(request.params?.method).toBe("GET");
-    expect(request.params?.path).toBe("/");
-    expect(request.params?.profile).toBe("user");
-    expect(request.params?.timeoutMs).toBe(45_000);
+    expect(request.method).toBe("GET");
+    expect(request.path).toBe("/");
+    expect(request.profile).toBe("user");
+    expect(request.browserProxyTimeoutMs).toBe(45_000);
   });
 
   it("passes top-level timeoutMs through to existing-session open", async () => {
@@ -1077,18 +1078,19 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
-      "node.invoke",
+      "browser.request",
       // The Gateway watchdog must also outlive the separate node watchdog.
       expect.objectContaining({ timeoutMs: 7777 + 10_000 }),
       expect.objectContaining({
-        command: "browser.proxy",
-        params: expect.objectContaining({
-          method: "GET",
-          path: "/snapshot",
-          profile: "user",
-          query: expect.objectContaining({ timeoutMs: 7777 }),
-          timeoutMs: 7777,
-        }),
+        nodeId: "node-1",
+        method: "GET",
+        path: "/snapshot",
+        profile: "user",
+        query: expect.objectContaining({ timeoutMs: 7777 }),
+        timeoutMs: 7777 + 5_000,
+        browserProxyTimeoutMs: 7777,
+        allowAutomaticHostFallback: false,
+        includeRoute: true,
       }),
       { scopes: ["operator.admin"] },
     );
@@ -1203,9 +1205,11 @@ describe("browser tool snapshot maxChars", () => {
     expect(options.timeoutMs).toBe(30_000);
     expect(extra?.scopes).toEqual(["operator.admin"]);
     expect(request.nodeId).toBe("node-1");
-    expect(request.command).toBe("browser.proxy");
-    expect(request.params?.timeoutMs).toBe(20_000);
-    expect(request.params?.errorEnvelope).toBe("browser-v1");
+    expect(request.method).toBe("GET");
+    expect(request.path).toBe("/");
+    expect(request.browserProxyTimeoutMs).toBe(20_000);
+    expect(request.allowAutomaticHostFallback).toBe(false);
+    expect(request.includeRoute).toBe(true);
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
@@ -1226,7 +1230,7 @@ describe("browser tool snapshot maxChars", () => {
     try {
       await vi.waitFor(() => expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(1));
       const { request, extra } = lastNodeInvokeCall();
-      expect(request.params?.path).toBe(path);
+      expect(request.path).toBe(path);
       expect(extra?.signal).toBe(controller.signal);
       controller.abort(abortError);
       await expect(pending).rejects.toBe(abortError);
@@ -1267,17 +1271,12 @@ describe("browser tool snapshot maxChars", () => {
     try {
       await vi.waitFor(() => expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(10));
       expect(completed.size).toBe(0);
-      const invocationIds = new Set<string>();
       sessions.forEach(({ profile, controller }, index) => {
         const { request, extra } = nodeInvokeCall(index);
-        expect(request.params?.path).toBe("/");
-        expect(request.params?.profile).toBe(profile);
+        expect(request.path).toBe("/");
+        expect(request.profile).toBe(profile);
         expect(extra?.signal).toBe(controller.signal);
-        if (request.idempotencyKey) {
-          invocationIds.add(request.idempotencyKey);
-        }
       });
-      expect(invocationIds.size).toBe(10);
       cancelledSession.controller.abort(abortError);
       await expect(cancelledRun).rejects.toBe(abortError);
       expect(completed.size).toBe(0);
@@ -1625,10 +1624,9 @@ describe("browser tool snapshot maxChars", () => {
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(30_000);
     expect(request.nodeId).toBe("node-1");
-    expect(request.command).toBe("browser.proxy");
-    expect(request.params?.method).toBe("GET");
-    expect(request.params?.path).toBe("/doctor");
-    expect(request.params?.timeoutMs).toBe(20_000);
+    expect(request.method).toBe("GET");
+    expect(request.path).toBe("/doctor");
+    expect(request.browserProxyTimeoutMs).toBe(20_000);
     expect(browserClientMocks.browserDoctor).not.toHaveBeenCalled();
   });
 
@@ -2012,11 +2010,11 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    const body = request.params?.body as { targetId?: string; timeoutMs?: number } | undefined;
+    const body = request.body as { targetId?: string; timeoutMs?: number } | undefined;
     expect(options.timeoutMs).toBe(22_345);
-    expect(request.params?.method).toBe("POST");
-    expect(request.params?.path).toBe("/screenshot");
-    expect(request.params?.timeoutMs).toBe(12_345);
+    expect(request.method).toBe("POST");
+    expect(request.path).toBe("/screenshot");
+    expect(request.browserProxyTimeoutMs).toBe(12_345);
     expect(body?.targetId).toBe("tab-1");
     expect(body?.timeoutMs).toBe(12_345);
   });
@@ -2037,9 +2035,9 @@ describe("browser tool snapshot maxChars", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    const body = request.params?.body as { timeoutMs?: number } | undefined;
+    const body = request.body as { timeoutMs?: number } | undefined;
     expect(options.timeoutMs).toBe(30_000);
-    expect(request.params?.timeoutMs).toBe(20_000);
+    expect(request.browserProxyTimeoutMs).toBe(20_000);
     expect(body?.timeoutMs).toBe(20_000);
   });
 
@@ -2075,12 +2073,12 @@ describe("browser tool snapshot maxChars", () => {
     expect((result?.details as { refsFallback?: string } | undefined)?.refsFallback).toBe("role");
     const firstCall = nodeInvokeCall(0);
     expect(firstCall.options.timeoutMs).toBe(30_000);
-    expect(firstCall.request.params?.path).toBe("/snapshot");
-    expect(firstCall.request.params?.query?.refs).toBe("aria");
+    expect(firstCall.request.path).toBe("/snapshot");
+    expect(firstCall.request.query?.refs).toBe("aria");
     const secondCall = nodeInvokeCall(1);
     expect(secondCall.options.timeoutMs).toBe(30_000);
-    expect(secondCall.request.params?.path).toBe("/snapshot");
-    expect(secondCall.request.params?.query?.refs).toBe("role");
+    expect(secondCall.request.path).toBe("/snapshot");
+    expect(secondCall.request.query?.refs).toBe("role");
   });
 
   it("gives node.invoke extra slack beyond the default proxy timeout", async () => {
@@ -2100,7 +2098,7 @@ describe("browser tool snapshot maxChars", () => {
 
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(30_000);
-    expect(request.params?.timeoutMs).toBe(20_000);
+    expect(request.browserProxyTimeoutMs).toBe(20_000);
   });
 
   it("keeps sandbox bridge url when node proxy is available", async () => {
@@ -2126,11 +2124,10 @@ describe("browser tool snapshot maxChars", () => {
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(55_000);
     expect(request.nodeId).toBe("node-1");
-    expect(request.command).toBe("browser.proxy");
-    expect(request.params?.profile).toBe("user");
-    expect(request.params?.path).toBe("/");
-    expect(request.params?.method).toBe("GET");
-    expect(request.params?.timeoutMs).toBe(45_000);
+    expect(request.profile).toBe("user");
+    expect(request.path).toBe("/");
+    expect(request.method).toBe("GET");
+    expect(request.browserProxyTimeoutMs).toBe(45_000);
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
@@ -2143,7 +2140,7 @@ describe("browser tool snapshot maxChars", () => {
 
     await createBrowserTool().execute?.("call-1", { action: "status", target: "node" });
 
-    expect(lastNodeInvokeCall().request.params?.profile).toBeUndefined();
+    expect(lastNodeInvokeCall().request.profile).toBeUndefined();
   });
 
   it("does not inject Gateway-managed act semantics into an omitted node profile", async () => {
@@ -2161,11 +2158,11 @@ describe("browser tool snapshot maxChars", () => {
       request: { kind: "type", targetId: "node-tab", ref: "field", text: "hello" },
     });
 
-    expect(lastNodeInvokeCall().request.params).toMatchObject({
+    expect(lastNodeInvokeCall().request).toMatchObject({
       profile: undefined,
       body: { kind: "type", targetId: "node-tab", ref: "field", text: "hello" },
     });
-    expect(lastNodeInvokeCall().request.params?.body).not.toHaveProperty("timeoutMs");
+    expect(lastNodeInvokeCall().request.body).not.toHaveProperty("timeoutMs");
   });
 
   it.each([
@@ -2273,11 +2270,10 @@ describe("browser tool snapshot maxChars", () => {
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(55_000);
     expect(request.nodeId).toBe("node-1");
-    expect(request.command).toBe("browser.proxy");
-    expect(request.params?.profile).toBe("user");
-    expect(request.params?.path).toBe("/");
-    expect(request.params?.method).toBe("GET");
-    expect(request.params?.timeoutMs).toBe(45_000);
+    expect(request.profile).toBe("user");
+    expect(request.path).toBe("/");
+    expect(request.method).toBe("GET");
+    expect(request.browserProxyTimeoutMs).toBe(45_000);
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
@@ -2292,11 +2288,10 @@ describe("browser tool snapshot maxChars", () => {
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(55_000);
     expect(request.nodeId).toBe("node-1");
-    expect(request.command).toBe("browser.proxy");
-    expect(request.params?.profile).toBe("user");
-    expect(request.params?.path).toBe("/");
-    expect(request.params?.method).toBe("GET");
-    expect(request.params?.timeoutMs).toBe(45_000);
+    expect(request.profile).toBe("user");
+    expect(request.path).toBe("/");
+    expect(request.method).toBe("GET");
+    expect(request.browserProxyTimeoutMs).toBe(45_000);
     expect(browserClientMocks.browserStatus).not.toHaveBeenCalled();
   });
 
@@ -2343,6 +2338,119 @@ describe("browser tool url alias support", () => {
 
     expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
     expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("blocks Browser Steward mutations until an in-process approval marker exists", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:runtime-check",
+    });
+
+    await expect(
+      tool.execute?.("call-1", { action: "open", url: "https://example.com" }),
+    ).rejects.toThrow(/approval_required/);
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("does not treat owner identity as Browser Steward operation approval", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:owner-run",
+      senderIsOwner: true,
+    });
+
+    await expect(
+      tool.execute?.("call-1", { action: "open", url: "https://example.com" }),
+    ).rejects.toThrow(/approval_required/);
+    expect(browserClientMocks.browserOpenTab).not.toHaveBeenCalled();
+    expect(gatewayMocks.callGatewayTool).not.toHaveBeenCalled();
+  });
+
+  it("allows Browser Steward non-secret status reads", async () => {
+    const tool = createBrowserTool({
+      agentSessionKey: "Agent:Browser-Session-Credential-Steward:Main",
+    });
+
+    await expect(tool.execute?.("call-1", { action: "status" })).resolves.toBeDefined();
+    expect(browserClientMocks.browserStatus).toHaveBeenCalled();
+  });
+
+  it("executes an explicitly approved Browser Steward mutation", async () => {
+    browserClientMocks.browserOpenTab.mockResolvedValueOnce({
+      targetId: "approved-tab",
+      url: "https://example.com",
+    });
+    const approvedParams = prepareBrowserStewardRuntimeParams(
+      { action: "open", url: "https://example.com" },
+      { backend: { kind: "host" } },
+    ) as Record<string, unknown>;
+    approveBrowserStewardRuntimeParams(approvedParams);
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:approved",
+    });
+
+    await expect(tool.execute?.("call-1", approvedParams)).resolves.toBeDefined();
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalled();
+  });
+
+  it("consumes a Browser Steward allow-once approval after one execution", async () => {
+    browserClientMocks.browserOpenTab.mockResolvedValue({
+      targetId: "one-shot-tab",
+      url: "https://example.com",
+    });
+    const approvedParams = prepareBrowserStewardRuntimeParams(
+      { action: "open", url: "https://example.com" },
+      { backend: { kind: "host" } },
+    ) as Record<string, unknown>;
+    approveBrowserStewardRuntimeParams(approvedParams);
+    const tool = createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:one-shot",
+    });
+
+    await expect(tool.execute?.("call-1", approvedParams)).resolves.toBeDefined();
+    await expect(tool.execute?.("call-2", approvedParams)).rejects.toThrow(/approval_required/);
+    expect(browserClientMocks.browserOpenTab).toHaveBeenCalledTimes(1);
+  });
+
+  it("carries the Gateway route lease from approval into the Browser node request", async () => {
+    mockSingleBrowserProxyNode();
+    gatewayMocks.callGatewayTool.mockImplementation(
+      async (_method: unknown, _options: unknown, request: unknown) => {
+        if ((request as { routeOnly?: boolean }).routeOnly) {
+          return {
+            payload: { browserNodeSessionLease: "lease-1", nodeId: "node-1" },
+          };
+        }
+        return {
+          payload: {
+            route: { status: "resolved", profile: "openclaw", driver: "openclaw" },
+            result: { ok: true, targetId: "approved-node-tab" },
+          },
+        };
+      },
+    );
+    const pending = await prepareBrowserStewardToolParams({
+      input: { action: "open", target: "node", url: "https://example.com" },
+      agentSessionKey: "agent:browser-session-credential-steward:lease-check",
+    });
+    approveBrowserStewardRuntimeParams(pending);
+
+    await createBrowserTool({
+      agentSessionKey: "agent:browser-session-credential-steward:lease-check",
+    }).execute?.("call-1", pending as Record<string, unknown>);
+
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(3);
+    const renewalRequest = gatewayMocks.callGatewayTool.mock.calls[1]?.[2] as {
+      browserNodeSessionLease?: string;
+      renewBrowserNodeSessionLease?: boolean;
+    };
+    expect(renewalRequest.browserNodeSessionLease).toBe("lease-1");
+    expect(renewalRequest.renewBrowserNodeSessionLease).toBe(true);
+    const actualRequest = gatewayMocks.callGatewayTool.mock.calls[2]?.[2] as {
+      browserNodeSessionLease?: string;
+      allowAutomaticHostFallback?: boolean;
+    };
+    expect(actualRequest.browserNodeSessionLease).toBe("lease-1");
+    expect(actualRequest.allowAutomaticHostFallback).toBe(false);
   });
 
   it("tracks opened tabs when session context is available", async () => {
@@ -2707,13 +2815,13 @@ describe("browser tool url alias support", () => {
       ownership,
     });
 
-    expect(nodeInvokeCall(1).request.params).toMatchObject({
+    expect(nodeInvokeCall(1).request).toMatchObject({
       method: "POST",
       path: "/__openclaw/session-tab/close-owned",
       profile: "user",
       body: { ownership },
     });
-    expect(JSON.stringify(nodeInvokeCall(1).request.params)).not.toContain('"targetIdMode":"raw"');
+    expect(JSON.stringify(nodeInvokeCall(1).request)).not.toContain('"targetIdMode":"raw"');
   });
 
   it("closes a tracked node route without the completed turn signal or host fallback", async () => {
@@ -2749,7 +2857,7 @@ describe("browser tool url alias support", () => {
     await tracked.route?.closeTarget({ targetId: "node-tab-raw", profile: "user" });
 
     const cleanupCall = nodeInvokeCall(1);
-    expect(cleanupCall.request.params).toMatchObject({
+    expect(cleanupCall.request).toMatchObject({
       method: "DELETE",
       path: "/tabs/node-tab-raw",
       query: { targetIdMode: "raw" },
@@ -2935,8 +3043,8 @@ describe("browser tool url alias support", () => {
     const { options, request } = nodeInvokeCall(0);
     expect(options.timeoutMs).toBe(55_000);
     expect(request.timeoutMs).toBe(50_000);
-    expect(request.params?.timeoutMs).toBe(45_000);
-    expect(request.params?.body).toEqual({
+    expect(request.browserProxyTimeoutMs).toBe(45_000);
+    expect(request.body).toEqual({
       url: "https://example.com/slow",
       targetId: "tab-1",
       timeoutMs: 45_000,
@@ -2982,8 +3090,8 @@ describe("browser tool url alias support", () => {
       const { options, request } = nodeInvokeCall(0);
       expect(options.timeoutMs).toBe(expectedTimeoutMs + 10_000);
       expect(request.timeoutMs).toBe(expectedTimeoutMs + 5_000);
-      expect(request.params?.timeoutMs).toBe(expectedTimeoutMs);
-      expect(request.params?.body).toEqual({
+      expect(request.browserProxyTimeoutMs).toBe(expectedTimeoutMs);
+      expect(request.body).toEqual({
         url: "https://example.com/slow",
         targetId: "tab-1",
         timeoutMs: expectedTimeoutMs,
@@ -3526,14 +3634,14 @@ describe("browser tool act compatibility", () => {
 
     const { options, request } = lastNodeInvokeCall();
     expect(options.timeoutMs).toBe(80_000);
-    expect(request.params?.path).toBe("/act");
-    expect(request.params?.body).toEqual({
+    expect(request.path).toBe("/act");
+    expect(request.body).toEqual({
       kind: "wait",
       timeMs: "20000",
       text: "ready",
       timeoutMs: "45000",
     });
-    expect(request.params?.timeoutMs).toBe(70_000);
+    expect(request.browserProxyTimeoutMs).toBe(70_000);
   });
 
   it("sizes node proxy calls for recursively nested batch execution", async () => {
@@ -3559,7 +3667,7 @@ describe("browser tool act compatibility", () => {
     });
 
     const { options, request } = lastNodeInvokeCall();
-    expect(request.params?.timeoutMs).toBe(95_000);
+    expect(request.browserProxyTimeoutMs).toBe(95_000);
     expect(request.timeoutMs).toBe(100_000);
     expect(options.timeoutMs).toBe(105_000);
   });
@@ -4390,12 +4498,12 @@ describe("browser tool act stale target recovery", () => {
     });
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(3);
-    expect(nodeInvokeCall(0).request.params).toMatchObject({
+    expect(nodeInvokeCall(0).request).toMatchObject({
       path: "/act",
       body: { kind: "wait", targetId: "stale-tab", timeMs: 1 },
     });
-    expect(nodeInvokeCall(1).request.params?.path).toBe("/tabs");
-    expect(nodeInvokeCall(2).request.params).toMatchObject({
+    expect(nodeInvokeCall(1).request.path).toBe("/tabs");
+    expect(nodeInvokeCall(2).request).toMatchObject({
       path: "/act",
       body: { kind: "wait", targetId: "only-tab", timeMs: 1 },
     });
@@ -4431,9 +4539,9 @@ describe("browser tool act stale target recovery", () => {
     });
 
     expect(gatewayMocks.callGatewayTool).toHaveBeenCalledTimes(3);
-    expect(nodeInvokeCall(0).request.params?.profile).toBeUndefined();
-    expect(nodeInvokeCall(1).request.params?.path).toBe("/tabs");
-    expect(nodeInvokeCall(2).request.params).toMatchObject({
+    expect(nodeInvokeCall(0).request.profile).toBeUndefined();
+    expect(nodeInvokeCall(1).request.path).toBe("/tabs");
+    expect(nodeInvokeCall(2).request).toMatchObject({
       profile: undefined,
       body: { kind: "wait", targetId: "only-tab", timeMs: 1 },
     });
@@ -4639,7 +4747,7 @@ describe("browser observation actions and tab previews", () => {
       browserTab: { targetId: "canonical", url: payload.url },
     });
     if (target === "node") {
-      expect(nodeInvokeCall(0).request.params).toMatchObject({
+      expect(nodeInvokeCall(0).request).toMatchObject({
         method: "GET",
         path: "/requests",
         query: { filter: "fetch", clear: true },
@@ -4713,7 +4821,7 @@ describe("browser observation actions and tab previews", () => {
     });
     expect(result.details).not.toHaveProperty("errors");
     if (target === "node") {
-      expect(nodeInvokeCall(0).request.params).toMatchObject({
+      expect(nodeInvokeCall(0).request).toMatchObject({
         method: "GET",
         path: "/errors",
         profile: "openclaw",
@@ -4775,7 +4883,7 @@ describe("browser observation actions and tab previews", () => {
       browserTab: { targetId: "canonical", url: payload.url },
     });
     if (target === "node") {
-      expect(nodeInvokeCall(0).request.params).toMatchObject({
+      expect(nodeInvokeCall(0).request).toMatchObject({
         method: "GET",
         path: "/text",
         query: { selector: "article", maxChars: DEFAULT_AI_SNAPSHOT_MAX_CHARS },
@@ -4884,7 +4992,7 @@ describe("browser observation actions and tab previews", () => {
       ] as const;
       expected.forEach(([setting, body], index) => {
         if (target === "node") {
-          expect(nodeInvokeCall(index).request.params).toMatchObject({
+          expect(nodeInvokeCall(index).request).toMatchObject({
             method: "POST",
             path: `/set/${setting}`,
             body,

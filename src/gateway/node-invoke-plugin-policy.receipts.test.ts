@@ -30,7 +30,7 @@ function createNode(commands = [COMMAND]): NodeSession {
   };
 }
 
-function createClient(runId: string): GatewayClient {
+function createClient(runId: string, pluginRuntimeAuthority?: () => boolean): GatewayClient {
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
   return {
     connId: "caller-conn",
@@ -53,6 +53,9 @@ function createClient(runId: string): GatewayClient {
           now: 100,
         }),
       },
+      ...(pluginRuntimeAuthority
+        ? { pluginRuntimeOwnerId: PLUGIN_ID, pluginRuntimeAuthority }
+        : {}),
     },
   } as unknown as GatewayClient;
 }
@@ -156,6 +159,38 @@ describe("plugin node action receipts", () => {
         enforcement: { coverageState: "enforced" },
       },
     ]);
+  });
+
+  it("rejects plugin dispatch when lifecycle authority closes during pairing recheck", async () => {
+    registerPolicy((ctx: OpenClawPluginNodeInvokePolicyContext) => ctx.invokeNode());
+    const node = createNode();
+    const { context, invoke } = createContext(node);
+    let authorityActive = true;
+    let releasePairingCheck!: () => void;
+    const pairingCheck = new Promise<void>((resolve) => {
+      releasePairingCheck = resolve;
+    });
+    const resultPromise = applyPluginNodeInvokePolicy({
+      context,
+      client: createClient("run-node-plugin-authority", () => authorityActive),
+      nodeSession: node,
+      command: COMMAND,
+      params: { private: "arguments" },
+      isInvocationCurrent: async () => {
+        await pairingCheck;
+        return true;
+      },
+    });
+    await Promise.resolve();
+    authorityActive = false;
+    releasePairingCheck();
+
+    await expect(resultPromise).resolves.toMatchObject({
+      ok: false,
+      code: "APPROVAL_AUTHORITY_CLOSED",
+      details: { nodeCommandDispatched: false },
+    });
+    expect(invoke).not.toHaveBeenCalled();
   });
 
   it.each(["allowed", "denied", "throws"] as const)(

@@ -7,6 +7,18 @@ type ForwardedNodeInvokeApprovalAuthority = {
   decision: Extract<ExecApprovalDecision, "allow-once" | "allow-always">;
 };
 
+export function isPluginRuntimeAuthorityActive(client: GatewayClient | null): boolean {
+  const authority = client?.internal?.pluginRuntimeAuthority;
+  if (!authority) {
+    return true;
+  }
+  try {
+    return authority();
+  } catch {
+    return false;
+  }
+}
+
 export function isForwardedNodeInvokeApprovalAuthorityActive(params: {
   manager?: Pick<ExecApprovalManager, "projectDecisionIfActive">;
   authority?: ForwardedNodeInvokeApprovalAuthority;
@@ -28,6 +40,9 @@ export function resolveNodeInvokeRuntimeAuthorityError(params: {
   approvalAuthority?: ForwardedNodeInvokeApprovalAuthority;
 }): string | undefined {
   const callerIdentity = params.client?.internal?.agentRuntimeIdentity;
+  if (!isPluginRuntimeAuthorityActive(params.client)) {
+    return "plugin runtime authority closed before node dispatch";
+  }
   if (
     callerIdentity &&
     params.context.validateAgentRuntimeApprovalAuthority?.(callerIdentity) !== true

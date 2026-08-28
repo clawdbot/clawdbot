@@ -4,6 +4,7 @@
  */
 import { normalizeOptionalLowercaseString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { getRuntimeConfig } from "../config/config.js";
+import type { BrowserStewardRuntimeDecision } from "./browser-steward-runtime-guard.js";
 import { resolveCdpControlPolicy } from "./cdp-reachability-policy.js";
 import { closeTrackedCdpTarget, type CloseTrackedCdpTargetResult } from "./cdp.helpers.js";
 import { browserCloseTabByRawTargetId } from "./client.js";
@@ -75,6 +76,7 @@ type SessionTabParams = {
   profileAliases?: Array<string | undefined>;
   ownership?: BrowserTabOwnership;
   aliases?: Array<string | undefined>;
+  browserStewardRuntimeDecision?: BrowserStewardRuntimeDecision;
 };
 
 type DurableRecord = BrowserSessionTabRecord;

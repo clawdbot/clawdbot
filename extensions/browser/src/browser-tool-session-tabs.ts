@@ -2,6 +2,7 @@
  * Session tracking for tabs created through the browser tool.
  */
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import type { BrowserStewardRuntimeDecision } from "./browser/browser-steward-runtime-guard.js";
 import type { BrowserTabOwnership } from "./browser/client.types.js";
 import type { BrowserSessionTabRoute } from "./browser/session-tab-route.js";
 
@@ -13,6 +14,7 @@ type SessionTabParams = {
   profileAliases?: Array<string | undefined>;
   ownership?: BrowserTabOwnership;
   aliases?: Array<string | undefined>;
+  browserStewardRuntimeDecision?: BrowserStewardRuntimeDecision;
 };
 
 type SessionTabRegistry = {
@@ -68,6 +70,7 @@ async function trackOpenedBrowserTab(params: {
   route: BrowserSessionTabRoute;
   track: SessionTabRegistry["trackSessionBrowserTab"];
   closeTab: (targetId: string, profile?: string) => Promise<void>;
+  browserStewardRuntimeDecision?: BrowserStewardRuntimeDecision;
 }): Promise<void> {
   const opened = readOpenedTab(params.result);
   const profile = opened.profile ?? params.fallbackProfile;
@@ -87,6 +90,9 @@ async function trackOpenedBrowserTab(params: {
           ? undefined
           : opened.ownership,
       aliases: opened.aliases,
+      ...(params.browserStewardRuntimeDecision
+        ? { browserStewardRuntimeDecision: params.browserStewardRuntimeDecision }
+        : {}),
     });
   } catch (trackingError) {
     if (!opened.targetId) {
@@ -118,6 +124,7 @@ export function createBrowserToolSessionTabs(params: {
   routeProfile?: () => string | undefined;
   isHostFallbackActive?: () => boolean;
   registry: SessionTabRegistry;
+  browserStewardRuntimeDecision?: BrowserStewardRuntimeDecision;
 }) {
   const trackedRoute = (): BrowserSessionTabRoute =>
     params.nodeRoute && !params.isHostFallbackActive?.()
@@ -136,6 +143,9 @@ export function createBrowserToolSessionTabs(params: {
       targetId,
       route,
       profile: trackedProfile(route),
+      ...(params.browserStewardRuntimeDecision
+        ? { browserStewardRuntimeDecision: params.browserStewardRuntimeDecision }
+        : {}),
     };
   };
   return {
@@ -162,6 +172,9 @@ export function createBrowserToolSessionTabs(params: {
         route,
         track: params.registry.trackSessionBrowserTab,
         closeTab,
+        ...(params.browserStewardRuntimeDecision
+          ? { browserStewardRuntimeDecision: params.browserStewardRuntimeDecision }
+          : {}),
       });
     },
   };

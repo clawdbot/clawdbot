@@ -72,6 +72,25 @@ test("sessions.abort rejects an unknown agent without provisioning its store", a
   );
 });
 
+test.each(["agent:main:", "agent::main"])(
+  "sessions.abort rejects malformed explicit keys before target resolution (%s)",
+  async (key) => {
+    const activeRun = createActiveRun("agent:main:main");
+    const { getRuntimeConfig: _getRuntimeConfig, ...abortContext } = createChatAbortContext({
+      chatAbortControllers: new Map([["run-main", activeRun]]),
+    });
+
+    const result = await directSessionReq("sessions.abort", { key }, { context: abortContext });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_REQUEST", message: "malformed session boundary" },
+    });
+    expect(JSON.stringify(result)).not.toContain(key);
+    expect(activeRun.controller.signal.aborted).toBe(false);
+  },
+);
+
 test("sessions.abort aborts a pre-existing session after its agent is removed from config", async () => {
   const agentId = "retired";
   const sessionKey = `agent:${agentId}:existing`;

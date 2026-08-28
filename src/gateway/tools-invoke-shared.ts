@@ -38,6 +38,7 @@ import {
   authorizeResolvedSessionMutation,
   resolveSessionSharingTarget,
 } from "./session-sharing.js";
+import { assertGatewaySessionStewardBoundary } from "./session-steward-boundary.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils.js";
 import { resolveGatewayScopedTools } from "./tool-resolution.js";
@@ -207,6 +208,24 @@ async function invokeGatewayToolWithSignal(
       status: 400,
       toolName: "",
       error: { type: "invalid_request", message: "tools.invoke requires name" },
+    };
+  }
+
+  const sessionBoundary = assertGatewaySessionStewardBoundary({
+    sessionKey: normalizeOptionalString(params.input.sessionKey) ?? "main",
+    requestedAgentId: normalizeOptionalString(params.input.agentId),
+    config: params.cfg,
+    surface: "tools.invoke",
+    // Diagnostic action is a fixed surface label; request action text may be
+    // arbitrary tool data and must never enter the trusted event stream.
+    action: "invoke",
+  });
+  if (!sessionBoundary.ok) {
+    return {
+      ok: false,
+      status: 400,
+      toolName,
+      error: { type: "invalid_request", message: sessionBoundary.error.message },
     };
   }
 

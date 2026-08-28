@@ -36,6 +36,7 @@ const chromeMcpMocks = vi.hoisted(() => ({
 const navigationGuardMocks = vi.hoisted(() => ({
   assertBrowserNavigationAllowed: vi.fn(async () => {}),
   assertBrowserNavigationResultAllowed: vi.fn(async () => {}),
+  redactBrowserNavigationUrl: vi.fn((url: string) => url),
   withBrowserNavigationPolicy: vi.fn((ssrfPolicy?: unknown) => (ssrfPolicy ? { ssrfPolicy } : {})),
 }));
 
@@ -65,6 +66,7 @@ vi.mock("../cdp.js", () => ({
 vi.mock("../navigation-guard.js", () => ({
   assertBrowserNavigationAllowed: navigationGuardMocks.assertBrowserNavigationAllowed,
   assertBrowserNavigationResultAllowed: navigationGuardMocks.assertBrowserNavigationResultAllowed,
+  redactBrowserNavigationUrl: navigationGuardMocks.redactBrowserNavigationUrl,
   withBrowserNavigationPolicy: navigationGuardMocks.withBrowserNavigationPolicy,
 }));
 
@@ -160,6 +162,7 @@ describe("existing-session browser routes", () => {
     chromeMcpMocks.withChromeMcpDocument.mockClear();
     navigationGuardMocks.assertBrowserNavigationAllowed.mockClear();
     navigationGuardMocks.assertBrowserNavigationResultAllowed.mockClear();
+    navigationGuardMocks.redactBrowserNavigationUrl.mockClear();
     navigationGuardMocks.withBrowserNavigationPolicy.mockClear();
     chromeMcpMocks.evaluateChromeMcpScript
       .mockResolvedValueOnce({ labels: 1, skipped: 0 } as never)
