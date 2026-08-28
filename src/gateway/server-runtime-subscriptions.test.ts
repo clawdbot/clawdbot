@@ -13,9 +13,15 @@ import { tryFinishCronTaskRunWithoutHistory } from "../cron/service/task-runs.js
 import {
   emitAgentAuditEvent,
   emitAgentEvent,
+  emitAgentEventForOwner,
   getAgentEventLifecycleGeneration,
   resetAgentEventsForTest,
 } from "../infra/agent-events.js";
+import {
+  claimAgentRunContext,
+  getAgentRunContextOwnerStatus as ownerStatus,
+  releaseAgentRunContext,
+} from "../infra/agent-run-registry.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
 import {
@@ -41,7 +47,6 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import type { AgentEventHandlerOptions } from "./server-chat.js";
 import type { TaskEventPayload } from "./server-methods/task-summary.js";
 import { TerminalSessionManager } from "./terminal/session-manager.js";
 import {
@@ -84,6 +89,8 @@ const auditTestState = vi.hoisted(() => ({
 }));
 const agentEventHandlerMocks = vi.hoisted(() => ({
   create: vi.fn(),
+  persistLifecycle: vi.fn(async () => {}),
+  resolveSessionKey: vi.fn(() => "agent:main:main"),
 }));
 const transcriptBroadcastMocks = vi.hoisted(() => ({
   useActualHandler: false,
@@ -129,8 +136,12 @@ vi.mock("./server-chat.js", () => ({
   createAgentEventHandler: (...args: unknown[]) => agentEventHandlerMocks.create(...args),
 }));
 
+vi.mock("./session-lifecycle-state.js", () => ({
+  persistGatewaySessionLifecycleEvent: agentEventHandlerMocks.persistLifecycle,
+}));
+
 vi.mock("./server-session-key.js", () => ({
-  resolveSessionKeyForRun: () => "agent:main:main",
+  resolveSessionKeyForRun: agentEventHandlerMocks.resolveSessionKey,
 }));
 
 vi.mock("./session-transcript-readers.js", async (importOriginal) => {
@@ -173,13 +184,6 @@ function readTaskUpserts(broadcast: Mock<SubscriptionParams["broadcast"]>) {
     return taskEvent.action === "upserted" ? [taskEvent] : [];
   });
 }
-
-type LifecycleOwnerCallbacks = Required<
-  Pick<
-    AgentEventHandlerOptions,
-    "clearTrackedActiveRun" | "settleTrackedTerminal" | "trackTrackedRunTerminalPersistence"
-  >
->;
 type LifecycleTransition = { state: string; lifecycle?: ReturnType<typeof readLifecycleState> };
 
 function readLifecycleState(entry: ChatAbortControllerEntry) {
@@ -208,24 +212,6 @@ function lifecycleState(
     projectSessionTerminalPersistence,
     projectSessionTerminalPersisted,
     registrationCleanupRequested,
-  };
-}
-
-function requireLifecycleOwnerCallbacks(): LifecycleOwnerCallbacks {
-  const options = agentEventHandlerMocks.create.mock.calls[0]?.[0] as
-    | AgentEventHandlerOptions
-    | undefined;
-  if (
-    !options?.clearTrackedActiveRun ||
-    !options.settleTrackedTerminal ||
-    !options.trackTrackedRunTerminalPersistence
-  ) {
-    throw new Error("expected lifecycle owner callbacks");
-  }
-  return {
-    clearTrackedActiveRun: options.clearTrackedActiveRun,
-    settleTrackedTerminal: options.settleTrackedTerminal,
-    trackTrackedRunTerminalPersistence: options.trackTrackedRunTerminalPersistence,
   };
 }
 
@@ -264,6 +250,8 @@ describe("startGatewayEventSubscriptions", () => {
     transcriptBroadcastMocks.useActualHandler = false;
     transcriptBroadcastMocks.readMessageById.mockReset();
     runtimeConfigState.value = {};
+    agentEventHandlerMocks.persistLifecycle.mockReset().mockResolvedValue(undefined);
+    agentEventHandlerMocks.resolveSessionKey.mockClear();
     agentEventHandlerMocks.create.mockReset().mockImplementation(() => {
       throw new Error("server-chat lazy load failure");
     });
@@ -354,19 +342,47 @@ describe("startGatewayEventSubscriptions", () => {
   });
 
   it("logs lazy agent event handler failures", async () => {
+    const runId = "run-claimed-terminal";
+    const lifecycleGeneration = getAgentEventLifecycleGeneration();
+    const claimId = claimAgentRunContext(
+      runId,
+      {
+        lifecycleGeneration,
+        sessionId: "session-1",
+      },
+      { exclusive: true, ownsContext: true, trackOwner: true },
+    );
+    if (!claimId) {
+      throw new Error("expected terminal event claim");
+    }
+    agentEventHandlerMocks.persistLifecycle.mockRejectedValue(new Error("terminal write rejected"));
     unsubs = startGatewayEventSubscriptions(createParams());
 
-    emitAgentEvent({
-      runId: "run-1",
-      stream: "lifecycle",
-      data: { phase: "start", startedAt: 1_000 },
-    });
+    emitAgentEventForOwner(
+      {
+        runId,
+        sessionId: "session-1",
+        stream: "lifecycle",
+        data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+      },
+      claimId,
+    );
 
-    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(1));
+    await waitForFast(() => expect(warn).toHaveBeenCalledTimes(2));
+    expect(agentEventHandlerMocks.persistLifecycle).toHaveBeenCalledWith(
+      expect.objectContaining({ assertCommitAllowed: expect.any(Function) }),
+    );
+    expect(agentEventHandlerMocks.resolveSessionKey).toHaveBeenCalledWith(runId, undefined);
     expect(warn).toHaveBeenCalledWith(
       "Agent event dispatch failed",
-      expect.objectContaining({ runId: "run-1", stream: "lifecycle" }),
+      expect.objectContaining({ runId, stream: "lifecycle" }),
     );
+    expect(warn).toHaveBeenCalledWith(
+      "Terminal session persistence failed",
+      expect.objectContaining({ runId }),
+    );
+    expect(ownerStatus(runId, claimId, lifecycleGeneration)).toBe("clear-requested");
+    releaseAgentRunContext(runId, claimId);
   });
 
   it("disposes a loaded agent event handler on unsubscribe", async () => {
@@ -452,7 +468,23 @@ describe("startGatewayEventSubscriptions", () => {
     });
     transitions.push({ state: "Start-normalized", lifecycle: readLifecycleState(entry) });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
-    const callbacks = requireLifecycleOwnerCallbacks();
+
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "error", error: "retryable provider failure", endedAt: 2_000 },
+    });
+    emitAgentEvent({
+      runId,
+      lifecycleGeneration,
+      stream: "lifecycle",
+      data: { phase: "start", startedAt: 2_500 },
+    });
+    expect(agentEventHandlerMocks.persistLifecycle).not.toHaveBeenCalled();
+
+    const terminalPersistence = createDeferred();
+    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
 
     emitAgentEvent({
       runId,
@@ -460,25 +492,10 @@ describe("startGatewayEventSubscriptions", () => {
       stream: "lifecycle",
       data: { phase: "end", endedAt: 3_000 },
     });
-    transitions.push({ state: "Terminal-observed", lifecycle: readLifecycleState(entry) });
-
-    callbacks.clearTrackedActiveRun({ runId, clientRunId: runId, sessionKey });
-    transitions.push({ state: "Projection-cleared", lifecycle: readLifecycleState(entry) });
-
-    const terminalPersistence = createDeferred();
-    callbacks.trackTrackedRunTerminalPersistence({
-      runId,
-      clientRunId: runId,
-      sessionKey,
-      sessionId: entry.sessionId,
-      observedAt: 3_001,
-      persistence: terminalPersistence.promise,
-    });
     transitions.push({ state: "Persisting", lifecycle: readLifecycleState(entry) });
 
     terminalPersistence.resolve();
-    await terminalPersistence.promise;
-    callbacks.settleTrackedTerminal({ runId, clientRunId: runId, sessionKey });
+    await waitForFast(() => expect(entry.projectSessionTerminalPersisted).toBe(true));
     transitions.push({ state: "Persisted", lifecycle: readLifecycleState(entry) });
 
     registration.cleanup();
@@ -487,11 +504,6 @@ describe("startGatewayEventSubscriptions", () => {
     expect(transitions).toEqual([
       { state: "Registered", lifecycle: lifecycleState(true) },
       { state: "Start-normalized", lifecycle: lifecycleState(true, false) },
-      { state: "Terminal-observed", lifecycle: lifecycleState(true, true, 3_000) },
-      {
-        state: "Projection-cleared",
-        lifecycle: lifecycleState(false, true, 3_000, undefined, false),
-      },
       {
         state: "Persisting",
         lifecycle: lifecycleState(false, true, 3_000, terminalPersistence.promise, false),
@@ -560,7 +572,8 @@ describe("startGatewayEventSubscriptions", () => {
       data: { phase: "start", startedAt: 1_000 },
     });
     await waitForFast(() => expect(agentEventHandlerMocks.create).toHaveBeenCalledOnce());
-    const callbacks = requireLifecycleOwnerCallbacks();
+    const terminalPersistence = createDeferred();
+    agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminalPersistence.promise);
 
     expect(
       abortChatRunById(
@@ -581,20 +594,6 @@ describe("startGatewayEventSubscriptions", () => {
       projectSessionTerminalPending: true,
       projectSessionTerminalObservedAt: expect.any(Number),
       registrationCleanupRequested: true,
-    });
-
-    callbacks.clearTrackedActiveRun({ runId, clientRunId: runId, sessionKey });
-    const terminalPersistence = createDeferred();
-    callbacks.trackTrackedRunTerminalPersistence({
-      runId,
-      clientRunId: runId,
-      sessionKey,
-      sessionId: entry.sessionId,
-      observedAt: entry.projectSessionTerminalObservedAt ?? 0,
-      persistence: terminalPersistence.promise,
-    });
-    void terminalPersistence.promise.then(() => {
-      callbacks.settleTrackedTerminal({ runId, clientRunId: runId, sessionKey });
     });
 
     await Promise.resolve();

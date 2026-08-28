@@ -15,7 +15,7 @@ import {
   projectMainSessionRecoveryLifecycle,
 } from "../agents/main-session-recovery/main-session-recovery-lifecycle.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
-import { updateSessionEntry } from "../config/sessions/session-accessor.js";
+import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { getAgentEventLifecycleGeneration, type AgentEventPayload } from "../infra/agent-events.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseCronRunScopeSuffix } from "../sessions/session-key-utils.js";
@@ -27,6 +27,7 @@ const restartRecoveryLog = createSubsystemLogger("main-session-restart-recovery"
 type LifecyclePhase = "start" | "end" | "error";
 
 type LifecycleEventLike = Pick<AgentEventPayload, "ts" | "sessionId"> & {
+  contextClaimId?: string;
   runId?: string;
   clientRunId?: string;
   lifecycleGeneration?: string;
@@ -338,6 +339,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
   sessionKey: string;
   agentId?: string;
   event: LifecycleEventLike;
+  assertCommitAllowed?: () => void;
 }): Promise<void> {
   const phase = resolveLifecyclePhase(params.event);
   if (!phase) {
@@ -358,7 +360,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
 
   const exactCronRun = parseCronRunScopeSuffix(sessionEntry.canonicalKey).runId !== undefined;
   let terminalRecovery: { runId: string; outcome: AgentRunTerminalOutcome } | undefined;
-  const persisted = await updateSessionEntry(
+  const persisted = await patchSessionEntryCore(
     {
       storePath: sessionEntry.storePath,
       sessionKey: sessionEntry.canonicalKey,
@@ -411,6 +413,7 @@ export async function persistGatewaySessionLifecycleEvent(params: {
       skipMaintenance: true,
       takeCacheOwnership: true,
       requireWriteSuccess: true,
+      ...(params.assertCommitAllowed ? { assertCommitAllowed: params.assertCommitAllowed } : {}),
     },
   );
   if (persisted && terminalRecovery) {

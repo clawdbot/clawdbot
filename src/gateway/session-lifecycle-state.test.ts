@@ -17,7 +17,7 @@ const loggerMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
-  updateSessionEntry: persistenceMocks.updateSessionEntry,
+  patchSessionEntryCore: persistenceMocks.updateSessionEntry,
 }));
 
 vi.mock("./session-utils.js", () => ({
@@ -34,7 +34,7 @@ import {
 } from "./session-lifecycle-state.js";
 
 type UpdateSessionEntry =
-  typeof import("../config/sessions/session-accessor.js").updateSessionEntry;
+  typeof import("../config/sessions/session-accessor.js").patchSessionEntryCore;
 type LifecycleEvent = Parameters<typeof persistGatewaySessionLifecycleEvent>[0]["event"];
 
 const exactCronSessionKey = "agent:main:cron:job-1:run:cron-run-1";
@@ -70,7 +70,9 @@ async function persistExactCronLifecycle(options: {
     .mockReset()
     .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
       const [, update] = args;
-      const patch = await update(structuredClone(currentEntry));
+      const patch = await update(structuredClone(currentEntry), {
+        existingEntry: structuredClone(currentEntry),
+      });
       if (patch) {
         currentEntry = { ...currentEntry, ...patch };
       }
@@ -99,7 +101,9 @@ async function persistLifecycle(entry: SessionEntry, event: LifecycleEvent): Pro
     .mockReset()
     .mockImplementation(async (...args: Parameters<UpdateSessionEntry>) => {
       const [, update] = args;
-      const patch = await update(structuredClone(currentEntry));
+      const patch = await update(structuredClone(currentEntry), {
+        existingEntry: structuredClone(currentEntry),
+      });
       if (patch) {
         currentEntry = { ...currentEntry, ...patch };
       }
@@ -815,5 +819,50 @@ describe("session lifecycle state", () => {
     expect(persistenceMocks.updateSessionEntry.mock.calls[0]?.[2]).toMatchObject({
       requireWriteSuccess: true,
     });
+  });
+
+  it("checks terminal authority before committing the session patch", async () => {
+    const entry: SessionEntry = {
+      sessionId: "terminal-authority-session",
+      updatedAt: 1_000,
+      startedAt: 1_000,
+      status: "running",
+      lifecycleRunId: "terminal-authority-run",
+    };
+    let storedEntry = structuredClone(entry);
+    persistenceMocks.loadSessionEntry.mockReturnValue({
+      storePath: "/tmp/sessions.json",
+      canonicalKey: "agent:main:terminal-authority",
+      entry,
+    });
+    persistenceMocks.updateSessionEntry.mockImplementation(
+      async (...args: Parameters<UpdateSessionEntry>) => {
+        const [, update, options] = args;
+        const patch = await update(structuredClone(storedEntry), {
+          existingEntry: structuredClone(storedEntry),
+        });
+        options?.assertCommitAllowed?.();
+        if (patch) {
+          storedEntry = { ...storedEntry, ...patch };
+        }
+        return storedEntry;
+      },
+    );
+
+    await expect(
+      persistGatewaySessionLifecycleEvent({
+        sessionKey: "agent:main:terminal-authority",
+        event: {
+          runId: "terminal-authority-run",
+          sessionId: entry.sessionId,
+          ts: 2_000,
+          data: { phase: "end", startedAt: 1_000, endedAt: 2_000 },
+        },
+        assertCommitAllowed: () => {
+          throw new Error("terminal authority retired");
+        },
+      }),
+    ).rejects.toThrow("terminal authority retired");
+    expect(storedEntry.status).toBe("running");
   });
 });
