@@ -268,20 +268,11 @@ export async function finalizeChatSendNonAgentReplies(params: {
   const ttsSupplementMarker = finalPayloads
     .map((payload) => buildMediaOnlyTtsSupplementTranscriptMarker(payload))
     .find((marker): marker is GatewayInjectedTtsSupplementMarker => Boolean(marker));
+  const persistableAssistantContent = hasSensitiveMedia
+    ? assistantContent?.filter((block) => block.sensitive !== true)
+    : assistantContent;
   const persistedAssistantContent = replaceAssistantContentTextBlocks(
-    hasSensitiveMedia
-      ? await buildAssistantDisplayContentFromReplyPayloads({
-          sessionKey: transcriptSessionKey,
-          agentId: transcriptAgentId,
-          payloads: finalPayloads,
-          managedMediaLocalRoots: mediaLocalRoots,
-          includeSensitiveMedia: false,
-          onManagedMediaPrepareError: (message) => {
-            managedMediaPrepareFailed = true;
-            context.logGateway.warn(`webchat media embedding skipped attachment: ${message}`);
-          },
-        })
-      : assistantContent,
+    persistableAssistantContent,
     mediaMessage,
   );
   const persistedContentForAppend = hasAssistantDisplayMediaContent(persistedAssistantContent)
@@ -321,10 +312,10 @@ export async function finalizeChatSendNonAgentReplies(params: {
       cfg,
     });
     if (appended.ok) {
-      if (appended.messageId && assistantContent?.length) {
+      if (appended.messageId && persistedContentForAppend?.length) {
         attachManagedOutgoingMediaToMessage({
           messageId: appended.messageId,
-          blocks: assistantContent,
+          blocks: persistedContentForAppend,
         });
       }
       message = broadcastAssistantContent?.length

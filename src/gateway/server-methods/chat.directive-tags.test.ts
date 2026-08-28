@@ -59,6 +59,8 @@ import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.pa
 import { withEnvAsync } from "../../test-utils/env.js";
 import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { consumeCronCreatorAuthorityGrant } from "../cron-creator-authority-grant.js";
+import { parseManagedOutgoingArtifactId } from "../managed-image-attachments.js";
+import { listManagedImageRecordEntries } from "../managed-image-record-store.js";
 import { createChatRunState } from "../server-chat-state.js";
 import { STALE_WORKER_BUILD_REASON } from "../worker-environments/admission.js";
 import { handleChatSend, handleChatSendWithRuntimeTools } from "./chat-send-handler.js";
@@ -4414,6 +4416,89 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(serializedTranscript).not.toContain("data:image/png");
     expect(serializedTranscript).not.toContain("terminalText");
     expect(serializedTranscript).not.toContain(setupCode);
+  });
+
+  it("reuses public managed media identity when excluding sensitive pairing QR content", async () => {
+    await withTranscriptFixtureState(
+      "openclaw-chat-send-command-public-media-pair-qr-",
+      async (dir) => {
+        const audioPath = path.join(dir, "public.mp3");
+        fs.writeFileSync(audioPath, Buffer.from("managed public audio"));
+        const setupCode = "openclaw-test-mixed-public-media-pairing-code";
+        const recordsBefore = new Set(
+          listManagedImageRecordEntries({ stateDir: suiteFixtureRoot }).map(
+            ({ record }) => record.attachmentId,
+          ),
+        );
+        mockState.dispatchedReplies = [
+          {
+            kind: "block",
+            payload: {
+              text: "Public audio is ready.",
+              mediaUrl: audioPath,
+              mediaUrls: [audioPath],
+              trustedLocalMedia: true,
+            },
+          },
+          {
+            kind: "final",
+            payload: {
+              text: "Scan to continue:",
+              channelData: {
+                openclawPairingQr: {
+                  setupCode,
+                  expiresAtMs: Date.now() + 10 * 60_000,
+                },
+              },
+              sensitiveMedia: true,
+            },
+          },
+        ];
+        const { send } = createChatRequestFixture();
+
+        const payload = await send({
+          idempotencyKey: "idem-command-public-media-pair-qr",
+          message: "/pair qr",
+        });
+
+        const broadcastContent = getMessageContent(payload);
+        const broadcastAudio = managedAudioBlocks(broadcastContent);
+        expect(broadcastAudio).toHaveLength(1);
+        expectManagedAudioBlock(broadcastAudio[0], "public.mp3");
+        expect(broadcastContent).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ type: "openclaw_pairing_qr", sensitive: true }),
+          ]),
+        );
+
+        const transcriptMessages = await readActiveAssistantTranscriptMessages();
+        const transcriptMessage = transcriptMessages.at(-1);
+        const transcriptContent = Array.isArray(transcriptMessage?.content)
+          ? (transcriptMessage.content as Array<Record<string, unknown>>)
+          : [];
+        const transcriptAudio = managedAudioBlocks(transcriptContent);
+        expect(transcriptAudio).toHaveLength(1);
+        expect(transcriptAudio[0]?.artifactId).toBe(broadcastAudio[0]?.artifactId);
+        const serializedTranscript = JSON.stringify(transcriptMessages);
+        expect(serializedTranscript).not.toContain("openclaw_pairing_qr");
+        expect(serializedTranscript).not.toContain("terminalText");
+        expect(serializedTranscript).not.toContain(setupCode);
+
+        const artifactId = String(transcriptAudio[0]?.artifactId);
+        const parsedArtifact = parseManagedOutgoingArtifactId(artifactId);
+        expect(parsedArtifact).not.toBeNull();
+        const createdRecords = listManagedImageRecordEntries({ stateDir: suiteFixtureRoot }).filter(
+          ({ record }) => !recordsBefore.has(record.attachmentId),
+        );
+        expect(createdRecords).toHaveLength(1);
+        expect(createdRecords[0]?.record).toMatchObject({
+          attachmentId: parsedArtifact?.attachmentId,
+          sessionKey: "agent:main:main",
+          messageId: findAssistantTranscriptUpdates().at(-1)?.messageId,
+          original: { filename: "public.mp3" },
+        });
+      },
+    );
   });
 
   it("keeps visible slash-command finals alongside earlier block text", async () => {
