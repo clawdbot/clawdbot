@@ -8,4 +8,4 @@ package_root="$(openclaw_e2e_package_root /tmp/consent-prefix)"
 entry="$(openclaw_e2e_package_entrypoint "$package_root")"
 export PATH="/tmp/consent-prefix/bin:$PATH"
 export NPM_CONFIG_PREFIX=/tmp/consent-prefix
-node scripts/e2e/lib/plugin-update/consent-scenario.mjs "$entry" "$OPENCLAW_CURRENT_PACKAGE_TGZ"
+node scripts/e2e/lib/plugin-update/probe.mjs consent "$entry" "$OPENCLAW_CURRENT_PACKAGE_TGZ"
