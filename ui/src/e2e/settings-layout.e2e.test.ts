@@ -202,11 +202,12 @@ suite.define(() => {
       expect(Math.abs(spacing.belowTabs - spacing.aboveTabs)).toBeLessThanOrEqual(1);
 
       const advanced = page.locator("details.config-advanced-disclosure");
+      // Scope to the disclosure's own summary; expanded advanced content can
+      // add nested collapsible-object summaries a bare locator would match.
+      const advancedSummary = advanced.locator(":scope > summary");
       await expect.poll(() => advanced.count()).toBe(1);
       await expect.poll(() => advanced.getAttribute("open")).toBeNull();
-      await expect
-        .poll(() => advanced.locator("summary").textContent())
-        .toContain("Advanced settings");
+      await expect.poll(() => advancedSummary.textContent()).toContain("Advanced settings");
       if (proofEnabled) {
         await mkdir(proofDir, { recursive: true });
         await page.screenshot({
@@ -216,7 +217,7 @@ suite.define(() => {
         });
       }
 
-      await advanced.locator("summary").click();
+      await advancedSummary.click();
       await expect.poll(() => advanced.getAttribute("open")).not.toBeNull();
       await expect.poll(() => page.getByText("Response prefix", { exact: true }).count()).toBe(1);
       if (proofEnabled) {
