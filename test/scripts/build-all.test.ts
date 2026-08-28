@@ -965,6 +965,36 @@ describe("build-all timing output", () => {
 });
 
 describe("resolveBuildAllStepCacheState", () => {
+  it.each([
+    "scripts/lib/declaration-source-index.mts",
+    "scripts/lib/direct-run.mjs",
+    "scripts/lib/local-build-metadata-paths.mts",
+    "scripts/lib/official-external-plugin-catalog.json",
+    "node-version.d.mts",
+    "test/helpers/provider-http.ts",
+  ])("invalidates self-built SDK declarations when %s changes", (relativePath) => {
+    withBuildCacheFixture(({ rootDir }) => {
+      const step = expectDefined(
+        resolveBuildAllSteps("ciArtifacts").find(
+          (entry) => entry.label === "write-plugin-sdk-entry-dts",
+        ),
+        "self-built declarations step",
+      );
+      const input = path.join(rootDir, relativePath);
+      const output = path.join(rootDir, "dist/plugin-sdk/core.d.ts");
+      fs.mkdirSync(path.dirname(input), { recursive: true });
+      fs.mkdirSync(path.dirname(output), { recursive: true });
+      fs.writeFileSync(input, "before");
+      fs.writeFileSync(output, "export {};");
+      const state = resolveBuildAllStepCacheState(step, { rootDir });
+      writeBuildAllStepCacheStamp(step, state, { rootDir });
+      expect(resolveBuildAllStepCacheState(step, { rootDir }).fresh).toBe(true);
+
+      fs.writeFileSync(input, "after");
+      expect(resolveBuildAllStepCacheState(step, { rootDir }).fresh).toBe(false);
+    });
+  });
+
   it("restores exact declaration snapshots across checkout roots", () => {
     const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-shared-build-cache-"));
     const firstRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-build-cache-source-"));
