@@ -1011,8 +1011,9 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(freshResult?.role).toBe("toolResult");
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
-    expect(freshResult && getFirstToolResultText(freshResult)).toBe("");
-    expect(totalChars).toBeLessThanOrEqual(32_000);
+    // Tiny fresh output fits inside the retained elision-notice floor.
+    expect(freshResult && getFirstToolResultText(freshResult)).toBe("ABC");
+    expect(totalChars).toBeLessThanOrEqual(32_100);
   });
 
   it("recovers from a fresh tool result before frozen history through a runtime carrier", () => {
@@ -1075,10 +1076,12 @@ describe("truncateOversizedToolResultsInMessages", () => {
       0,
     );
     expect(historicalResults).toEqual(firstHistoricalResults);
-    expect(freshResult && getFirstToolResultText(freshResult)).toBe("");
+    const freshNotice = freshResult ? getFirstToolResultText(freshResult) : "";
+    expect(freshNotice).not.toBe("");
+    expect(freshNotice).toContain("truncated");
     expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
     expect(second.aggregatePressureEngaged).toBe(true);
-    expect(totalChars).toBeLessThanOrEqual(32_000);
+    expect(totalChars).toBeLessThanOrEqual(32_100);
   });
 
   it("recovers from multiple fresh tool results before frozen history and queued steering", () => {
@@ -1128,10 +1131,13 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
 
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
-    expect(freshResults.map(getFirstToolResultText)).toEqual(["", ""]);
+    for (const notice of freshResults.map(getFirstToolResultText)) {
+      expect(notice).not.toBe("");
+      expect(notice).toContain("truncated");
+    }
     expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
     expect(second.aggregatePressureEngaged).toBe(true);
-    expect(totalChars).toBeLessThanOrEqual(32_000);
+    expect(totalChars).toBeLessThanOrEqual(32_200);
   });
 
   it("allows aggregate overflow rather than rewriting frozen history", () => {
@@ -1187,7 +1193,8 @@ describe("truncateOversizedToolResultsInMessages", () => {
         (message) => message.role === "toolResult" && message.toolCallId.startsWith("history_"),
       ),
     ).toEqual(first.messages.filter((message) => message.role === "toolResult"));
-    expect(freshText).toBe("");
+    expect(freshText).not.toBe("");
+    expect(freshText).toContain("truncated");
     expect(second.aggregateTruncatedCount).toBeGreaterThan(0);
     expect(second.aggregatePressureEngaged).toBe(true);
     expect(totalChars).toBeGreaterThan(100);
@@ -1236,8 +1243,9 @@ describe("truncateOversizedToolResultsInMessages", () => {
     );
     expect(freshResult?.role).toBe("toolResult");
     expect(second.messages.slice(0, history.length)).toEqual(first.messages);
-    expect(freshText).toBe("");
-    expect(totalChars).toBeLessThanOrEqual(32_000);
+    expect(freshText).not.toBe("");
+    expect(freshText).toContain("truncated");
+    expect(totalChars).toBeLessThanOrEqual(32_100);
   });
 
   it("leaves fresh trailing batches intact when only they exceed the aggregate budget", () => {

@@ -974,9 +974,14 @@ function buildAggregateToolResultReplacements(params: {
       const spillMarkers = resolveAggregateElisionMarkers(candidate.spillSourceMessage);
       let message: AgentMessage;
       if (clear) {
+        // Cleared fresh results keep a visible elision notice on projection
+        // paths; an empty tool result reads as failure and loses rerun guidance.
+        const noticeFloor = params.protectedEntryIds
+          ? estimateToolResultTextChars(spillMarkers?.compact ?? AGGREGATE_ELISION_MARKER)
+          : 0;
         message = clearToolResultText(
           candidate.message,
-          Math.max(0, baseTextLength - remainingReduction),
+          Math.max(noticeFloor, baseTextLength - remainingReduction),
           spillMarkers,
         );
       } else {
