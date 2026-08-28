@@ -1737,6 +1737,38 @@ describe("assertRequiredParams", () => {
     );
   });
 
+  it("allows empty and whitespace-only write content", async () => {
+    const execute = vi.fn(async (_id, args) => args);
+    const tool = wrapToolParamValidation(
+      {
+        name: "write",
+        label: "write",
+        description: "test",
+        parameters: {},
+        execute,
+      },
+      REQUIRED_PARAM_GROUPS.write,
+    );
+
+    await tool.execute("tool-empty", { path: "empty.txt", content: "" });
+    await tool.execute("tool-whitespace", { path: "whitespace.txt", content: "   " });
+
+    expect(execute).toHaveBeenNthCalledWith(
+      1,
+      "tool-empty",
+      { path: "empty.txt", content: "" },
+      undefined,
+      undefined,
+    );
+    expect(execute).toHaveBeenNthCalledWith(
+      2,
+      "tool-whitespace",
+      { path: "whitespace.txt", content: "   " },
+      undefined,
+      undefined,
+    );
+  });
+
   it("excludes null and undefined values from received hint", () => {
     expect(() =>
       assertRequiredParams(
