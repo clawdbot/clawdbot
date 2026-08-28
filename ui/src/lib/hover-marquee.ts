@@ -9,6 +9,10 @@ const MARQUEE_HOVER_DELAY_MS = 500;
 const pendingMarquees = new WeakMap<HTMLElement, number>();
 let marqueeResizeObserver: ResizeObserver | undefined;
 
+function isMarqueeHostActive(host: HTMLElement): boolean {
+  return host.matches(":hover") || host.matches(":focus-within");
+}
+
 function findMarqueeLabel(host: HTMLElement): HTMLElement | null {
   return host.classList.contains("hover-marquee")
     ? host
@@ -35,7 +39,7 @@ function observeMarquee(label: HTMLElement): void {
         }
         const resizedLabel = entry.target;
         const host = resizedLabel.closest<HTMLElement>(".session-row-host");
-        if (!host?.matches(":hover")) {
+        if (!host || !isMarqueeHostActive(host)) {
           marqueeResizeObserver?.unobserve(resizedLabel);
           continue;
         }
@@ -112,14 +116,25 @@ export function stopHoverMarqueeFromEvent(event: Event): void {
   }
 }
 
-export function restartHoverMarqueeIfHovered(element: Element | undefined): void {
+function restartHoverMarqueeWhen(
+  element: Element | undefined,
+  isActive: (host: HTMLElement) => boolean,
+): void {
   if (!(element instanceof HTMLElement)) {
     return;
   }
   queueMicrotask(() => {
     const host = element.isConnected ? element.closest<HTMLElement>(".session-row-host") : null;
-    if (host?.matches(":hover")) {
+    if (host && isActive(host)) {
       startHoverMarquee(host);
     }
   });
+}
+
+export function restartHoverMarqueeIfHovered(element: Element | undefined): void {
+  restartHoverMarqueeWhen(element, (host) => host.matches(":hover"));
+}
+
+export function restartHoverMarqueeIfActive(element: Element | undefined): void {
+  restartHoverMarqueeWhen(element, isMarqueeHostActive);
 }

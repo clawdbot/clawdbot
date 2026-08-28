@@ -1144,6 +1144,21 @@ openclaw-session-progress-hovercard-provider {
   mask-image: linear-gradient(to right, black calc(100% - 18px), transparent 100%);
 }
 
+@media (hover: none), (pointer: coarse), (prefers-reduced-motion: reduce) {
+  .person-activity-card__session-name.hover-marquee {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    overflow-wrap: anywhere;
+    white-space: normal;
+    text-indent: 0;
+    transition: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+}
+
 .person-activity-card__session-age {
   justify-self: end;
   font-size: calc(11px * var(--control-ui-text-scale));

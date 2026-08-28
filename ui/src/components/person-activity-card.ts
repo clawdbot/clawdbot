@@ -1,8 +1,14 @@
 import { html, nothing } from "lit";
+import { keyed } from "lit/directives/keyed.js";
+import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { i18n, t } from "../i18n/index.ts";
-import { startHoverMarqueeFromEvent, stopHoverMarqueeFromEvent } from "../lib/hover-marquee.ts";
+import {
+  restartHoverMarqueeIfActive,
+  startHoverMarqueeFromEvent,
+  stopHoverMarqueeFromEvent,
+} from "../lib/hover-marquee.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import type { PresenceViewer } from "../lib/presence-users.ts";
 import { resolveSessionDisplayName } from "../lib/session-display.ts";
@@ -152,6 +158,16 @@ function renderSessions(
             sessions.slice(0, 3),
             ({ row, agentId }) => sessionIdentity(row.key, agentId, input),
             ({ row, agentId }) => {
+              const displayName = resolveSessionDisplayName(row.key, row);
+              const name = html`<span
+                ${recent ? ref(restartHoverMarqueeIfActive) : nothing}
+                class="person-activity-card__session-name ${recent
+                  ? "hover-marquee"
+                  : "person-activity-card__session-name--multiline"}"
+                data-hover-marquee-delay=${recent ? "250" : nothing}
+                data-hover-marquee-extra-shift=${recent ? "18" : nothing}
+                >${displayName}</span
+              >`;
               const target = sessionNavigationTarget({
                 face: resolveSessionPreferredFace(row),
                 sessionKey: row.key,
@@ -165,6 +181,8 @@ function renderSessions(
                 href=${target.href}
                 @mouseenter=${startHoverMarqueeFromEvent}
                 @mouseleave=${stopHoverMarqueeFromEvent}
+                @focusin=${startHoverMarqueeFromEvent}
+                @focusout=${stopHoverMarqueeFromEvent}
                 @click=${(event: MouseEvent) => {
                   if (!shouldHandleNavigationClick(event)) {
                     return;
@@ -176,14 +194,7 @@ function renderSessions(
                   >${icons.messageSquare}</span
                 >
                 <span class="person-activity-card__session-copy"
-                  ><span
-                    class="person-activity-card__session-name ${recent
-                      ? "hover-marquee"
-                      : "person-activity-card__session-name--multiline"}"
-                    data-hover-marquee-delay=${recent ? "250" : nothing}
-                    data-hover-marquee-extra-shift=${recent ? "18" : nothing}
-                    >${resolveSessionDisplayName(row.key, row)}</span
-                  >
+                  >${recent ? keyed(displayName, name) : name}
                   ${row.updatedAt != null
                     ? html`<span class="person-activity-card__session-age"
                         >${elapsed(row.updatedAt, "single-unit")}</span
