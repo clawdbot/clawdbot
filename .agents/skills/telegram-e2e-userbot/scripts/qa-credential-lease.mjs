@@ -38,6 +38,7 @@ function brokerConfig(env = process.env) {
   const loopback =
     parsed.hostname === "localhost" ||
     parsed.hostname === "::1" ||
+    parsed.hostname === "[::1]" ||
     /^127(?:\.\d{1,3}){3}$/u.test(parsed.hostname);
   const allowLoopbackHttp = /^(?:1|true|yes)$/iu.test(
     env.OPENCLAW_QA_ALLOW_INSECURE_HTTP?.trim() ?? "",
