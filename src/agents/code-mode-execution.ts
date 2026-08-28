@@ -574,6 +574,16 @@ async function settleCodeModeResult(params: {
   return finalized;
 }
 
+/**
+ * Rejection for the `wait` entry point, which accepts an arbitrary caller-supplied
+ * runId. Naming the process poll route is load-bearing here: `exec` hands back a
+ * background sessionId but owns no poll action, so without it the model retries the
+ * wrong surface or reads this as lost work and abandons a command still running.
+ * Lifecycle-internal misses keep the plain text; they can only be real Code Mode runs.
+ */
+const CODE_MODE_WAIT_RUN_UNAVAILABLE_MESSAGE =
+  'code mode run is unavailable or expired. This id must be a runId from a suspended code mode run; a background shell sessionId from exec is polled with process (action "poll").';
+
 export async function runWait(params: {
   toolCallId: string;
   ctx: ToolSearchToolContext;
@@ -585,7 +595,7 @@ export async function runWait(params: {
   removeExpiredRuns();
   const state = activeRuns.get(params.runId);
   if (!state) {
-    throw new ToolInputError("code mode run is unavailable or expired.");
+    throw new ToolInputError(CODE_MODE_WAIT_RUN_UNAVAILABLE_MESSAGE);
   }
   if (state.ctx.runId && state.ctx.runId !== params.ctx.runId) {
     throw new ToolInputError("code mode run belongs to a different agent run.");
