@@ -52,17 +52,12 @@ function renderNoteStep(step: ChannelWizardStep, props: ChannelWizardViewProps) 
     `;
   }
   const looksLikeCode = message.includes("{") || message.includes("  ");
+  const outputClass = `channels-wizard__output${looksLikeCode ? " channels-wizard__output--code" : ""}`;
   const copyLabel = t("channels.setup.copyText");
   const onCopy = (event: Event) => void handleCopyButton(event, message, copyLabel);
   return html`
     ${step.title ? html`<div class="channels-wizard__message">${step.title}</div>` : nothing}
-    ${message
-      ? html`<div
-          class="channels-wizard__note ${looksLikeCode ? "channels-wizard__note--code" : ""}"
-        >
-          ${message}
-        </div>`
-      : nothing}
+    ${message ? html`<div class=${outputClass}>${message}</div>` : nothing}
     ${message
       ? html`
           <div class="channels-wizard__links">

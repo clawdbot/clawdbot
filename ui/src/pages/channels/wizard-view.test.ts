@@ -198,6 +198,48 @@ describe("renderChannelWizard", () => {
     expect(document.querySelector("textarea")).toBeNull();
   });
 
+  it("renders informational setup output as unpadded plain text", () => {
+    const container = document.createElement("div");
+    document.body.append(container);
+    render(
+      renderChannelWizard({
+        wizard: {
+          phase: "step",
+          channel: "imessage",
+          step: {
+            id: "selected-channels",
+            type: "note",
+            title: "Selected channels",
+            message: "iMessage — Local iMessage/SMS through the imsg bridge.",
+          },
+          stepIndex: 1,
+          busy: false,
+          validationError: null,
+        },
+        channelLabel: () => "iMessage",
+        multiselectValues: [],
+        onToggleMultiselect: vi.fn(),
+        textValue: "",
+        secretVisible: false,
+        onTextInput: vi.fn(),
+        onToggleSecretVisibility: vi.fn(),
+        onAnswer: vi.fn(),
+        onClose: vi.fn(),
+        whatsappQrDataUrl: null,
+        whatsappMessage: null,
+        whatsappConnected: null,
+        whatsappBusy: false,
+        onWhatsAppStart: vi.fn(),
+        onWhatsAppWait: vi.fn(),
+      }),
+      container,
+    );
+
+    const output = container.querySelector(".channels-wizard__output");
+    expect(output?.textContent).toBe("iMessage — Local iMessage/SMS through the imsg bridge.");
+    expect(container.querySelector(".channels-wizard__note")).toBeNull();
+  });
+
   it("links channel docs from the setup subtitle without static helper links", () => {
     const container = document.createElement("div");
     document.body.append(container);

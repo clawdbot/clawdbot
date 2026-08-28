@@ -295,6 +295,19 @@
   font-size: var(--control-ui-text-xs);
 }
 
+.channels-wizard__output {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: var(--control-ui-text-sm);
+  line-height: 1.5;
+}
+
+.channels-wizard__output--code {
+  font-family: var(--mono);
+  font-size: var(--control-ui-text-xs);
+}
+
 .channels-wizard__message {
   color: var(--text-strong);
   font-weight: 620;
