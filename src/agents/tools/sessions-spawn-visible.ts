@@ -53,6 +53,12 @@ export const VISIBLE_SESSIONS_SPAWN_SCHEMA = {
         "Custom sidebar group for a visible session; a new name creates the group. Omit or pass an empty string to leave it ungrouped.",
     }),
   ),
+  inheritParentGroup: Type.Optional(
+    Type.Boolean({
+      description:
+        "Copy the parent session's sidebar group once when creating a visible session with group omitted; an explicit group, including blank, wins, and later parent and child group changes are independent.",
+    }),
+  ),
   worktree: Type.Optional(Type.Boolean({ description: "Visible session worktree" })),
   worktreeName: Type.Optional(Type.String({ description: "Worktree name" })),
   worktreeBaseRef: Type.Optional(Type.String({ description: "Worktree base ref" })),
@@ -103,9 +109,12 @@ export async function maybeSpawnVisibleSession(params: {
   const worktreeName = readToolStringParam(params.raw, "worktreeName");
   const worktreeBaseRef = readToolStringParam(params.raw, "worktreeBaseRef");
   const group = readToolStringParam(params.raw, "group");
+  const inheritParentGroup = params.raw.inheritParentGroup === true;
+  const shouldInheritParentGroup = inheritParentGroup && !Object.hasOwn(params.raw, "group");
   if (params.raw.visible !== true) {
     const visibleOnlyParams = [
       ["group", group],
+      ["inheritParentGroup", inheritParentGroup],
       ["worktree", worktree],
       ["worktreeName", worktreeName],
       ["worktreeBaseRef", worktreeBaseRef],
@@ -330,6 +339,7 @@ export async function maybeSpawnVisibleSession(params: {
         ...(params.label ? { label: params.label } : {}),
         // sessions.create persists the group under the legacy wire field `category`.
         ...(group ? { category: group } : {}),
+        ...(shouldInheritParentGroup ? { inheritParentGroup: true } : {}),
         model: resolvedModel,
         task: params.task,
         parentSessionKey: requesterKey,
