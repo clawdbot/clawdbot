@@ -1407,6 +1407,7 @@ extension AppState {
             self.remoteTokenUnsupported = priorRemoteTokenUnsupported
             self.dirtyGatewayConfigFields.formUnion(fields)
             self.conflictedGatewayConfigFields.formUnion(fields)
+            self.setGatewayConfigSyncState(.failed(.conflict))
             return false
         }
         return true
@@ -1423,6 +1424,7 @@ extension AppState {
               self.dirtyGatewayConfigFields.isDisjoint(with: fields)
         else {
             self.conflictedGatewayConfigFields.formUnion(fields)
+            self.setGatewayConfigSyncState(.failed(.conflict))
             return false
         }
         return true

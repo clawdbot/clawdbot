@@ -417,7 +417,7 @@ struct AppStateRemoteConfigTests {
             var saveAttempts = 0
             let state = AppState(preview: true, gatewayConfigSaver: { _ in
                 saveAttempts += 1
-                return false
+                return .failure(.rejected)
             })
             state._testEnableGatewayConfigSync()
             let adapter = DashboardPrimaryGatewayAdapter(state: state)
