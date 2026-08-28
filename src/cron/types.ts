@@ -476,6 +476,8 @@ export type CronJobState = {
   lastFailureNotificationDeliveryStatus?: CronDeliveryStatus;
   /** Delivery-specific error for the last failed run's failure notification. */
   lastFailureNotificationDeliveryError?: string;
+  /** Unique identity of the failure-alert attempt that currently owns the delivery fields. */
+  lastFailureNotificationAttemptId?: string;
 };
 
 type CronTrigger = {

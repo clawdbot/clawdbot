@@ -47,7 +47,13 @@ function createOutcomeState(
   return state;
 }
 
-function emitFailureAlert(state: CronServiceState, job: CronJob): void {
+/** Mirrors the production order: request/persist first, dispatch the notify later. */
+async function requestAndDispatchFailureAlert(
+  state: CronServiceState,
+  storePath: string,
+  job: CronJob,
+): Promise<void> {
+  const deferred: Array<() => void> = [];
   maybeEmitFailureAlert(state, {
     job,
     alertConfig: {
@@ -61,7 +67,14 @@ function emitFailureAlert(state: CronServiceState, job: CronJob): void {
     status: "error",
     error: "job failed",
     consecutiveCount: 1,
+    deferredNotifications: deferred,
   });
+  // The finalization pipeline persists the requested alert state before the
+  // deferred notification dispatches the detached send.
+  await saveCronStore(storePath, { version: 1, jobs: [job] });
+  for (const notify of deferred) {
+    notify();
+  }
 }
 
 async function readStoredJob(storePath: string): Promise<CronJob | undefined> {
@@ -76,8 +89,7 @@ describe("cron failure alert delivery outcome persistence", () => {
     const state = createOutcomeState(store.storePath, job, async (params) => {
       params.onDeliveryAttempt?.(true);
     });
-
-    emitFailureAlert(state, job);
+    await requestAndDispatchFailureAlert(state, store.storePath, job);
 
     await vi.waitFor(async () => {
       expect((await readStoredJob(store.storePath))?.state).toMatchObject({
@@ -100,8 +112,7 @@ describe("cron failure alert delivery outcome persistence", () => {
     const state = createOutcomeState(store.storePath, job, async () => {
       throw new Error("send failed");
     });
-
-    emitFailureAlert(state, job);
+    await requestAndDispatchFailureAlert(state, store.storePath, job);
 
     await vi.waitFor(async () => {
       expect((await readStoredJob(store.storePath))?.state).toMatchObject({
@@ -120,8 +131,7 @@ describe("cron failure alert delivery outcome persistence", () => {
       params.onDeliveryAttempt?.(true);
       throw new Error("transport died after admission");
     });
-
-    emitFailureAlert(state, job);
+    await requestAndDispatchFailureAlert(state, store.storePath, job);
 
     await vi.waitFor(async () => {
       expect((await readStoredJob(store.storePath))?.state).toMatchObject({
@@ -138,8 +148,7 @@ describe("cron failure alert delivery outcome persistence", () => {
     const state = createOutcomeState(store.storePath, job, async (params) => {
       params.onDeliveryAttempt?.(false);
     });
-
-    emitFailureAlert(state, job);
+    await requestAndDispatchFailureAlert(state, store.storePath, job);
 
     await vi.waitFor(async () => {
       expect((await readStoredJob(store.storePath))?.state).toMatchObject({
@@ -157,8 +166,7 @@ describe("cron failure alert delivery outcome persistence", () => {
     const job = makeFailureAlertJob("outcome-no-transport");
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
     const state = createOutcomeState(store.storePath, job);
-
-    emitFailureAlert(state, job);
+    await requestAndDispatchFailureAlert(state, store.storePath, job);
 
     await vi.waitFor(async () => {
       expect((await readStoredJob(store.storePath))?.state).toMatchObject({
@@ -168,7 +176,7 @@ describe("cron failure alert delivery outcome persistence", () => {
     });
   });
 
-  it("does not overwrite the audit record once a newer alert superseded it", async () => {
+  it("does not overwrite the audit record once a newer alert attempt superseded it", async () => {
     const store = fixtures.makeStorePath();
     const job = makeFailureAlertJob("outcome-superseded");
     await saveCronStore(store.storePath, { version: 1, jobs: [job] });
@@ -182,23 +190,92 @@ describe("cron failure alert delivery outcome persistence", () => {
         }),
     );
 
-    emitFailureAlert(state, job);
-    expect(settleSend).toBeTypeOf("function");
-    // A newer alert for the same job replaces the pending outcome before the
-    // old send settles.
-    const supersedingJob = structuredClone(job);
-    supersedingJob.state.lastFailureAlertAtMs = (job.state.lastFailureAlertAtMs ?? 0) + 5_000;
-    supersedingJob.state.lastFailureNotificationDeliveryStatus = "unknown";
-    await saveCronStore(store.storePath, { version: 1, jobs: [supersedingJob] });
+    const deferred: Array<() => void> = [];
+    maybeEmitFailureAlert(state, {
+      job,
+      alertConfig: {
+        after: 1,
+        cooldownMs: 60_000,
+        channel: "last",
+        mode: "announce",
+        includeSkipped: false,
+        alternateRoute: false,
+      },
+      status: "error",
+      error: "job failed",
+      consecutiveCount: 1,
+      deferredNotifications: deferred,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    // A newer alert attempt replaces the pending outcome before the old send settles.
+    const newerAttempt = structuredClone(job);
+    newerAttempt.state.lastFailureAlertAtMs = (job.state.lastFailureAlertAtMs ?? 0) + 5_000;
+    newerAttempt.state.lastFailureNotificationAttemptId = "newer-attempt";
+    newerAttempt.state.lastFailureNotificationDeliveryStatus = "unknown";
+    await saveCronStore(store.storePath, { version: 1, jobs: [newerAttempt] });
 
+    for (const notify of deferred) {
+      notify();
+    }
     settleSend?.();
-    // Let the settled send's microtask chain (the outcome commit) run.
     await Promise.resolve();
     await Promise.resolve();
 
     expect((await readStoredJob(store.storePath))?.state).toMatchObject({
-      lastFailureAlertAtMs: supersedingJob.state.lastFailureAlertAtMs,
+      lastFailureAlertAtMs: newerAttempt.state.lastFailureAlertAtMs,
+      lastFailureNotificationAttemptId: "newer-attempt",
       lastFailureNotificationDeliveryStatus: "unknown",
+    });
+  });
+
+  it("does not overwrite fields reset by a later cooldown-suppressed run", async () => {
+    const store = fixtures.makeStorePath();
+    const job = makeFailureAlertJob("outcome-suppressed-reset");
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    let settleSend: (() => void) | undefined;
+    const state = createOutcomeState(
+      store.storePath,
+      job,
+      () =>
+        new Promise<void>((resolve) => {
+          settleSend = resolve;
+        }),
+    );
+
+    const deferred: Array<() => void> = [];
+    maybeEmitFailureAlert(state, {
+      job,
+      alertConfig: {
+        after: 1,
+        cooldownMs: 60_000,
+        channel: "last",
+        mode: "announce",
+        includeSkipped: false,
+        alternateRoute: false,
+      },
+      status: "error",
+      error: "job failed",
+      consecutiveCount: 1,
+      deferredNotifications: deferred,
+    });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+    // A later failed run inside the cooldown window resets the notification
+    // fields without dispatching a new alert.
+    const suppressed = structuredClone(job);
+    suppressed.state.lastFailureNotificationDelivered = undefined;
+    suppressed.state.lastFailureNotificationDeliveryStatus = "not-requested";
+    suppressed.state.lastFailureNotificationDeliveryError = undefined;
+    await saveCronStore(store.storePath, { version: 1, jobs: [suppressed] });
+
+    for (const notify of deferred) {
+      notify();
+    }
+    settleSend?.();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect((await readStoredJob(store.storePath))?.state).toMatchObject({
+      lastFailureNotificationDeliveryStatus: "not-requested",
     });
   });
 });

@@ -1,4 +1,5 @@
 /** Resolves and emits cron failure-alert notifications. */
+import { randomUUID } from "node:crypto";
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -205,6 +206,7 @@ function recordFailureNotificationDeliveryOutcome(
   params: {
     jobId: string;
     alertAtMs: number | undefined;
+    attemptId: string | undefined;
     delivered: boolean;
     error?: string;
   },
@@ -216,18 +218,21 @@ function recordFailureNotificationDeliveryOutcome(
       operationLabel: "cron.failure-alert-outcome",
       mutate: ({ jobs }) => {
         const job = jobs.get(params.jobId);
-        const authoritativeAlertAtMs = job?.state.lastFailureAlertAtMs;
-        if (
-          !job ||
-          (authoritativeAlertAtMs !== undefined &&
-            params.alertAtMs !== undefined &&
-            authoritativeAlertAtMs > params.alertAtMs)
-        ) {
-          // A newer alert already replaced the pending outcome this completion belongs to.
+        if (!job) {
           return { value: undefined };
         }
-        if (job.state.lastFailureNotificationDelivered === true) {
+        const rowAttemptId = job.state.lastFailureNotificationAttemptId;
+        const staleRow =
+          // A later cooldown-suppressed run reset the fields to not-requested.
+          job.state.lastFailureNotificationDeliveryStatus === "not-requested" ||
           // An earlier settled attempt of this alert already reached the recipient.
+          job.state.lastFailureNotificationDelivered === true ||
+          // A newer alert attempt owns the delivery fields now.
+          (rowAttemptId !== undefined && rowAttemptId !== params.attemptId) ||
+          // Legacy row written before this attempt identity was persisted: only
+          // trust a completion while the alert timestamp still matches exactly.
+          (rowAttemptId === undefined && job.state.lastFailureAlertAtMs !== params.alertAtMs);
+        if (staleRow) {
           return { value: undefined };
         }
         job.state.lastFailureNotificationDelivered = params.delivered;
@@ -259,6 +264,7 @@ function transportFailureAlert(
   },
 ): void {
   const alertAtMs = params.job.state.lastFailureAlertAtMs;
+  const attemptId = params.job.state.lastFailureNotificationAttemptId;
   let pendingFallback = true;
   let reachedRecipient = false;
   const fallback = (reached = false) => {
@@ -272,6 +278,7 @@ function transportFailureAlert(
     recordFailureNotificationDeliveryOutcome(state, {
       jobId: params.job.id,
       alertAtMs,
+      attemptId,
       delivered: false,
     });
     return;
@@ -298,6 +305,7 @@ function transportFailureAlert(
       recordFailureNotificationDeliveryOutcome(state, {
         jobId: params.job.id,
         alertAtMs,
+        attemptId,
         delivered: reachedRecipient,
       });
     })
@@ -312,6 +320,7 @@ function transportFailureAlert(
       recordFailureNotificationDeliveryOutcome(state, {
         jobId: params.job.id,
         alertAtMs,
+        attemptId,
         delivered: reachedRecipient,
         ...(reachedRecipient ? {} : { error: err instanceof Error ? err.message : String(err) }),
       });
@@ -388,6 +397,7 @@ function requestFailureNotification(
   job.state.lastFailureNotificationDelivered = undefined;
   job.state.lastFailureNotificationDeliveryStatus = "unknown";
   job.state.lastFailureNotificationDeliveryError = undefined;
+  job.state.lastFailureNotificationAttemptId = randomUUID();
   job.state.lastFailureAlertAtMs = now;
   return true;
 }
