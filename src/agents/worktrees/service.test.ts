@@ -442,23 +442,61 @@ describe("ManagedWorktreeService", () => {
     expect(await fs.readFile(path.join(created.path, "README.md"), "utf8")).toBe("base\n");
   });
 
-  it("retries worktree add from local HEAD when the resolved remote base is stale", async () => {
-    await addRemote(root, repo);
-    const blob = await git(repo, "rev-parse", "HEAD:README.md");
-    const tooLongForCheckout = "x".repeat(300);
-    const tree = await gitWithInput(
-      repo,
-      ["mktree"],
-      `100644 blob ${blob}\t${tooLongForCheckout}\n`,
-    );
-    const remoteCommit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "bad remote");
-    await git(repo, "push", "--force", "origin", `${remoteCommit}:refs/heads/main`);
-    const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
-    const created = await service.create({ repoRoot: repo, name: "stale-remote" });
-    expect(created.baseRef).toBe("HEAD");
-    expect(await git(created.path, "rev-parse", "HEAD")).toBe(await git(repo, "rev-parse", "HEAD"));
-    expectCheckoutTimeouts(commandSpy, ["origin/main", "HEAD"]);
-  });
+  it.each(["active", "aborted", "closed"] as const)(
+    "handles stale remote checkout with %s admission",
+    async (admission) => {
+      await addRemote(root, repo);
+      const blob = await git(repo, "rev-parse", "HEAD:README.md");
+      const tooLongForCheckout = "x".repeat(300);
+      const tree = await gitWithInput(
+        repo,
+        ["mktree"],
+        `100644 blob ${blob}\t${tooLongForCheckout}\n`,
+      );
+      const remoteCommit = await git(repo, "commit-tree", tree, "-p", "HEAD", "-m", "bad remote");
+      await git(repo, "push", "--force", "origin", `${remoteCommit}:refs/heads/main`);
+      const runCommand = commandRunner.runCommandWithTimeout;
+      const commandSpy = vi.spyOn(commandRunner, "runCommandWithTimeout");
+      const controller = new AbortController();
+      const closed = new Error("admission closed");
+      let authorityClosed = false;
+      commandSpy.mockImplementation(async (...args) => {
+        const result = await runCommand(...args);
+        if (args[0][3] === "worktree" && args[0][4] === "add" && result.code !== 0) {
+          if (admission === "aborted") {
+            controller.abort(closed);
+          }
+          authorityClosed = admission === "closed";
+        }
+        return result;
+      });
+      const creation = service.create({
+        repoRoot: repo,
+        name: "stale-remote",
+        signal: controller.signal,
+        commitGuard: () => {
+          if (authorityClosed) {
+            throw closed;
+          }
+        },
+      });
+      if (admission !== "active") {
+        await expect(creation).rejects.toMatchObject(
+          admission === "aborted" ? { code: "OPENCLAW_STATE_LEASE_ABORTED" } : closed,
+        );
+        expectCheckoutTimeouts(commandSpy, ["origin/main"]);
+        expect(await git(repo, "worktree", "list", "--porcelain")).not.toContain("stale-remote");
+        expect(await git(repo, "branch", "--list", "openclaw/stale-remote")).toBe("");
+        return;
+      }
+      const created = await creation;
+      expect(created.baseRef).toBe("HEAD");
+      expect(await git(created.path, "rev-parse", "HEAD")).toBe(
+        await git(repo, "rev-parse", "HEAD"),
+      );
+      expectCheckoutTimeouts(commandSpy, ["origin/main", "HEAD"]);
+    },
+  );
 
   it("preserves a pre-existing branch when a managed name collides", async () => {
     await addRemote(root, repo);
@@ -476,7 +514,8 @@ describe("ManagedWorktreeService", () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "cache/\nlinked\nlinked-dir/\n");
     await fs.writeFile(path.join(repo, ".worktreeinclude"), "cache/*.txt\nlinked\nlinked-dir/**\n");
     await fs.mkdir(path.join(repo, "cache"));
-    await fs.writeFile(path.join(repo, "cache", "keep.txt"), "keep\n", { mode: 0o744 });
+    await fs.writeFile(path.join(repo, "cache", "keep.txt"), "keep\n");
+    await fs.chmod(path.join(repo, "cache", "keep.txt"), 0o744);
     await fs.writeFile(path.join(repo, "cache", "skip.bin"), "skip\n");
     const outside = path.join(root, "outside.txt");
     await fs.writeFile(outside, "outside\n");

@@ -770,6 +770,8 @@ export class ManagedWorktreeService {
         throw commandError("git worktree add", added);
       }
       await resetFailedWorktreeAdd(repository.repoRoot, worktreePath, branch);
+      params.signal?.throwIfAborted();
+      params.commitGuard?.();
       gitBase = "HEAD";
       recordBase = "HEAD";
       added = await runGit(repository.repoRoot, worktreeAddArgs(), {
