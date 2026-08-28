@@ -10796,12 +10796,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(workflow).toContain(
       'if grep -Eq "$network_codeql_contract_pattern" "$changed_files" ||',
     );
-    expect(workflow).toContain(
-      '| select(.filename != "extensions/codex/src/app-server/transport-websocket.ts")',
-    );
     expect(workflow).not.toContain('grep -Fv "$codex_transport: " "$added_lines"');
-    // Raw-socket exclusions are filename-structural. A monitored package line may
-    // contain the transport path as data without disappearing from the scan.
     expect(workflow).toContain("packages/net-policy/src/");
     expect(workflow).toContain(
       "grep -En 'HTTP_PROXY|HTTPS_PROXY|NO_PROXY|GLOBAL_AGENT_|OPENCLAW_PROXY_' \"$added_lines\"",

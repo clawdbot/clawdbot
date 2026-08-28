@@ -31,7 +31,7 @@ function runStep(name: string, root: string, env: Record<string, string>) {
 }
 
 function scan(
-  files: { filename: string; patch?: string }[],
+  files: { filename: string; patch?: string | null }[],
   failCall = 0,
   response?: string,
   step = "network-diff-scan",
@@ -48,14 +48,19 @@ function scan(
     path.join(bin, "gh"),
     `#!/usr/bin/env bash
 set -euo pipefail
-[[ "$#" == 5 && "$1" == api && "$2" == --paginate && "$3" == repos/openclaw/openclaw/pulls/123/files && "$4" == --jq ]]
+[[ "$1" == api && "$2" == --paginate && "$3" == repos/openclaw/openclaw/pulls/123/files ]]
 call=$(( $(cat calls) + 1 ))
 echo "$call" > calls
 if [[ "$call" == "$FAIL_CALL" ]]; then
   echo "synthetic GitHub fetch failure" >&2
   exit 7
 fi
-exec jq -r "$5" files.json
+if [[ "$#" == 3 ]]; then
+  cat files.json
+else
+  [[ "$#" == 5 && "$4" == --jq ]]
+  exec jq -r "$5" files.json
+fi
 `,
     { mode: 0o755 },
   );
@@ -67,7 +72,11 @@ exec jq -r "$5" files.json
     FAIL_CALL: String(failCall),
     EVENT_NAME: "pull_request",
   });
-  return { result, output: readFileSync(output, "utf8") };
+  return {
+    result,
+    output: readFileSync(output, "utf8"),
+    calls: Number(readFileSync(path.join(root, "calls"), "utf8")),
+  };
 }
 
 describe("network CodeQL PR routing", () => {
@@ -126,6 +135,31 @@ describe("network CodeQL PR routing", () => {
     expect(output.trim()).toBe(`full_codeql=${fullCodeql}`);
   });
 
+  it.each([undefined, null])("routes unavailable patches (%s) by source scope", (patch) => {
+    for (const [filename, fullCodeql] of [
+      [qaOwner, true],
+      ["packages/net-policy/src/client.ts", true],
+      ["src/infra/net/client.ts", true],
+      ["extensions/qa-lab/src/example.e2e.test.tsx", false],
+      ["src/infra/net/client.test.ts", false],
+      ["src/example.ts", false],
+    ] as const) {
+      const { result, output } = scan([{ filename, ...(patch === undefined ? {} : { patch }) }]);
+      expect(result.status, result.stderr).toBe(0);
+      expect(output.trim(), filename).toBe(`full_codeql=${fullCodeql}`);
+    }
+  });
+
+  it.each(["network-diff-scan", "detect"])("consumes one paginated snapshot in %s", (step) => {
+    const response = `${JSON.stringify([{ filename: "src/example.ts", patch: "+const ok = true;" }])}\n${JSON.stringify([{ filename: qaOwner, patch: null }])}`;
+    const { result, output, calls } = scan([], 0, response, step);
+    expect(result.status, result.stderr).toBe(0);
+    expect(calls).toBe(1);
+    expect(output.split("\n")).toContain(
+      step === "detect" ? "network_runtime=true" : "full_codeql=true",
+    );
+  });
+
   it.each([
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -160,18 +194,23 @@ describe("network CodeQL PR routing", () => {
     expect(output.trim()).toBe("full_codeql=true");
   });
 
-  it.each([1, 2, 3])("fails closed when GitHub request %i fails", (failCall) => {
-    const { result, output } = scan(
-      [{ filename: qaOwner, patch: "+const ready = true;" }],
-      failCall,
-    );
-    expect(result.status).toBe(7);
-    expect(result.stderr).toContain("synthetic GitHub fetch failure");
-    expect(output).toBe("");
-  });
+  it.each(["network-diff-scan", "detect"])(
+    "fails closed when GitHub metadata fails in %s",
+    (step) => {
+      const { result, output } = scan(
+        [{ filename: qaOwner, patch: "+const ready = true;" }],
+        1,
+        undefined,
+        step,
+      );
+      expect(result.status).toBe(7);
+      expect(result.stderr).toContain("synthetic GitHub fetch failure");
+      expect(output).toBe("");
+    },
+  );
 
-  it("fails closed when the GitHub response cannot be parsed", () => {
-    const { result, output } = scan([], 0, "{");
+  it.each(["network-diff-scan", "detect"])("fails closed on malformed metadata in %s", (step) => {
+    const { result, output } = scan([], 0, "{", step);
     expect(result.status).not.toBe(0);
     expect(result.stderr).toContain("parse error");
     expect(output).toBe("");
