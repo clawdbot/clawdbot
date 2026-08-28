@@ -3752,8 +3752,9 @@ describe("package artifact reuse", () => {
     const producerIdentity = workflowStepById(producer, "producer_identity");
     const request = workflowStep(producer, "Build full release candidate request");
     const legacyTuple = workflowStep(producer, "Emit immutable release candidate tuple");
-    const evidence = workflowStep(binder, "Create full release candidate evidence");
-    const upload = workflowStep(binder, "Upload full release candidate evidence");
+    const workflowRevision = workflowStepById(binder, "workflow");
+    const evidence = workflowStepById(binder, "candidate_evidence");
+    const upload = workflowStepById(binder, "upload_candidate_evidence");
     const binding = workflowStep(binder, "Bind full release candidate evidence");
     const pluginDispatch = workflowStep(
       workflowJob(FULL_RELEASE_VALIDATION_WORKFLOW, "plugin_prerelease"),
@@ -3849,11 +3850,15 @@ describe("package artifact reuse", () => {
     });
     const checkoutAction = "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1";
     const producerSteps = producer.steps ?? [];
+    const binderSteps = binder.steps ?? [];
     const producerCheckouts = producerSteps.filter((step) =>
       step.uses?.startsWith("actions/checkout@"),
     );
-    const binderCheckouts = (binder.steps ?? []).filter((step) =>
+    const binderCheckouts = binderSteps.filter((step) =>
       step.uses?.startsWith("actions/checkout@"),
+    );
+    const binderSetup = binderSteps.find(
+      (step) => step.uses === "./.release-harness/.github/actions/setup-release-harness",
     );
     expect(producerCheckouts.map(({ uses, with: inputs }) => ({ inputs, uses }))).toEqual([
       {
@@ -3878,8 +3883,8 @@ describe("package artifact reuse", () => {
     expect(binderCheckouts.map(({ uses, with: inputs }) => ({ inputs, uses }))).toEqual([
       {
         inputs: {
-          repository: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",
-          ref: "${{ needs.validate_selected_ref.outputs.workflow_sha }}",
+          repository: "openclaw/openclaw",
+          ref: "main",
           "fetch-depth": 1,
           path: ".release-harness",
           "persist-credentials": false,
@@ -3890,6 +3895,20 @@ describe("package artifact reuse", () => {
     expect(producerSteps.indexOf(producerIdentity)).toBeLessThan(
       producerSteps.indexOf(producerCheckouts[0]!),
     );
+    expect(workflowRevision.env).toEqual({
+      EXPECTED_WORKFLOW_REPOSITORY: "${{ github.repository }}",
+      HARNESS_PATH: ".release-harness",
+      JOB_CONTEXT: "${{ toJSON(job) }}",
+    });
+    expect(workflowRevision.run).toContain('repository !== "openclaw/openclaw"');
+    expect(workflowRevision.run).toContain("job.workflow_repository !== repository");
+    expect(workflowRevision.run).toContain("job.workflow_sha");
+    expect(workflowRevision.run).toContain('"fetch"');
+    expect(workflowRevision.run).toContain('"checkout", "--detach", job.workflow_sha');
+    expect(binderSetup).toBeDefined();
+    expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(binderSteps.indexOf(binderSetup!));
+    expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(binderSteps.indexOf(evidence));
+    expect(binderSteps.indexOf(workflowRevision)).toBeLessThan(binderSteps.indexOf(upload));
     expect(producerIdentity.env).toMatchObject({
       JOB_CONTEXT: "${{ toJSON(job) }}",
       TOOLING_REPOSITORY: "${{ needs.validate_selected_ref.outputs.workflow_repository }}",

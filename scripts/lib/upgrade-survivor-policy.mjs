@@ -1,4 +1,4 @@
-export const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
+const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
   "base",
   "acpx-openclaw-tools-bridge",
   "feishu-channel",

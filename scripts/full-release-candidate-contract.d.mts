@@ -82,25 +82,8 @@ export interface FullReleaseCandidateBinding extends Omit<FullReleaseCandidateMa
   schema: "openclaw.full-release-candidate-binding/v1";
 }
 
-export const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA: "openclaw.full-release-candidate-request/v1";
-export const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA: "openclaw.full-release-candidate/v1";
-export const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA: "openclaw.full-release-candidate-binding/v1";
-export const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX: "full-release-candidate-v1-";
-
 export function buildFullReleaseCandidateRequest(
   input: FullReleaseCandidateRecord,
 ): FullReleaseCandidateRequest;
 export function validateFullReleaseCandidateRequest(value: unknown): FullReleaseCandidateRequest;
-export function canonicalFullReleaseCandidateRequestJson(value: unknown): string;
-export function candidateRequestSha256(value: unknown): string;
-export function buildFullReleaseCandidateManifest(
-  input: FullReleaseCandidateRecord,
-): FullReleaseCandidateManifest;
-export function validateFullReleaseCandidateManifest(value: unknown): FullReleaseCandidateManifest;
-export function canonicalFullReleaseCandidateManifestJson(value: unknown): string;
-export function fullReleaseCandidateManifestSha256(value: unknown): string;
-export function buildFullReleaseCandidateBinding(input: {
-  artifact: unknown;
-  manifest: unknown;
-}): FullReleaseCandidateBinding;
 export function validateFullReleaseCandidateBinding(value: unknown): FullReleaseCandidateBinding;

@@ -3,96 +3,28 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
-  buildFullReleaseCandidateBinding,
-  buildFullReleaseCandidateManifest,
   buildFullReleaseCandidateRequest,
-  candidateRequestSha256,
-  canonicalFullReleaseCandidateManifestJson,
-  canonicalFullReleaseCandidateRequestJson,
-  fullReleaseCandidateManifestSha256,
   validateFullReleaseCandidateBinding,
-  validateFullReleaseCandidateManifest,
   validateFullReleaseCandidateRequest,
 } from "../../scripts/full-release-candidate-contract.mjs";
+import {
+  canonicalTestJson,
+  canonicalTestSha256,
+  fullReleaseCandidateArtifact,
+  fullReleaseCandidateBindingFixture,
+  fullReleaseCandidateManifestFixture,
+  fullReleaseCandidateRequestInput,
+} from "../helpers/full-release-candidate.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const SCRIPT = resolve("scripts/full-release-candidate-contract.mjs");
-const TARGET_SHA = "a".repeat(40);
-const TOOLING_SHA = "b".repeat(40);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function requestInput(overrides: Record<string, unknown> = {}) {
-  return {
-    repository: "openclaw/openclaw",
-    targetSha: TARGET_SHA,
-    toolingSha: TOOLING_SHA,
-    releaseProfile: "stable",
-    releaseSoak: true,
-    upgradeSurvivorBaseline: "latest",
-    upgradeSurvivorBaselines: "",
-    upgradeSurvivorScenarios: "reported-issues",
-    allowFrozenTargetScenarioOmissions: false,
-    allowUnreleasedChangelog: false,
-    sharedImagePolicy: "no-push-artifact",
-    ...overrides,
-  };
-}
-
-function artifact(name: string, overrides: Record<string, unknown> = {}) {
-  return {
-    name,
-    id: "101",
-    digest: "c".repeat(64),
-    expiresAt: "2026-09-04T12:00:00Z",
-    runId: "77",
-    runAttempt: "1",
-    ...overrides,
-  };
-}
-
 function manifest(overrides: Record<string, unknown> = {}) {
-  const request = buildFullReleaseCandidateRequest(requestInput());
-  return buildFullReleaseCandidateManifest({
-    request,
-    requestSha256: candidateRequestSha256(request),
-    producer: {
-      repository: "openclaw/openclaw",
-      workflowPath: ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
-      workflowSha: TOOLING_SHA,
-      runId: "77",
-      runAttempt: "1",
-      jobId: "201",
-      jobName: "Prepare shared release candidate / Prepare shared Docker E2E image",
-    },
-    preparation: {
-      planSha256: "d".repeat(64),
-      requiredPrepublishPluginPackages: ["@openclaw/codex"],
-    },
-    package: {
-      artifact: artifact("docker-e2e-package-77-1"),
-      fileName: "openclaw-current.tgz",
-      sourceSha: TARGET_SHA,
-      packageSha256: "e".repeat(64),
-      version: "2026.8.28-beta.1",
-    },
-    prepublishPluginRegistry: {
-      artifact: artifact("docker-e2e-prepublish-plugin-registry-77-1", {
-        id: "102",
-        digest: "f".repeat(64),
-      }),
-      manifestSha256: "1".repeat(64),
-      sourceSha: TARGET_SHA,
-    },
-    sharedImage: {
-      artifact: artifact("docker-e2e-shared-images-full-release-aaaaaaaaaaaa-77-1", {
-        id: "103",
-        digest: "2".repeat(64),
-      }),
-      archiveSha256: "3".repeat(64),
-      packageSha256: "e".repeat(64),
-    },
+  return {
+    ...fullReleaseCandidateManifestFixture(),
     ...overrides,
-  });
+  };
 }
 
 function runContract(args: string[]) {
@@ -102,10 +34,20 @@ function runContract(args: string[]) {
   });
 }
 
+function runManifestContract(value: unknown) {
+  const root = tempDirs.make("full-release-candidate-manifest-");
+  const input = join(root, "input.json");
+  const output = join(root, "output.json");
+  writeFileSync(input, JSON.stringify(value));
+  return runContract(["manifest", "--input", input, "--output", output]);
+}
+
 describe("full release candidate contract", () => {
   it("canonicalizes equivalent request inputs and expands effective policy", () => {
-    const request = buildFullReleaseCandidateRequest(requestInput());
-    const reordered = Object.fromEntries(Object.entries(requestInput()).toReversed());
+    const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
+    const reordered = Object.fromEntries(
+      Object.entries(fullReleaseCandidateRequestInput()).toReversed(),
+    );
     const reorderedRequest = buildFullReleaseCandidateRequest(reordered);
 
     expect(request).toEqual(reorderedRequest);
@@ -113,31 +55,29 @@ describe("full release candidate contract", () => {
     expect(request.upgradeSurvivorScenarios).toContain("acpx-openclaw-tools-bridge");
     expect(request.upgradeSurvivorScenarios).not.toContain("prerelease-plugin-registry");
     expect(request.upgradeSurvivorScenarios).not.toContain("sqlite-volume");
-    expect(canonicalFullReleaseCandidateRequestJson(request)).toBe(
-      canonicalFullReleaseCandidateRequestJson(reorderedRequest),
-    );
-    expect(candidateRequestSha256(request)).toBe(candidateRequestSha256(reorderedRequest));
-    expect(candidateRequestSha256(request)).toBe(
+    expect(canonicalTestJson(request)).toBe(canonicalTestJson(reorderedRequest));
+    expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reorderedRequest));
+    expect(canonicalTestSha256(request)).toBe(
       "9431d1fddd030c460f27294665f526838c7df69c826e59e5c6cf045b4d6a90a0",
     );
   });
 
   it("canonicalizes equivalent baseline and scenario set ordering", () => {
     const request = buildFullReleaseCandidateRequest(
-      requestInput({
+      fullReleaseCandidateRequestInput({
         upgradeSurvivorBaselines: "beta latest",
         upgradeSurvivorScenarios: "base feishu-channel",
       }),
     );
     const reordered = buildFullReleaseCandidateRequest(
-      requestInput({
+      fullReleaseCandidateRequestInput({
         upgradeSurvivorBaselines: "latest,beta",
         upgradeSurvivorScenarios: "feishu-channel,base",
       }),
     );
 
     expect(request).toEqual(reordered);
-    expect(candidateRequestSha256(request)).toBe(candidateRequestSha256(reordered));
+    expect(canonicalTestSha256(request)).toBe(canonicalTestSha256(reordered));
   });
 
   it.each([
@@ -152,13 +92,13 @@ describe("full release candidate contract", () => {
     ["changelog policy", { allowUnreleasedChangelog: true }],
     ["shared image policy", { sharedImagePolicy: "existing-only" }],
   ])("changes the request digest when %s changes", (_label, overrides) => {
-    const baseline = buildFullReleaseCandidateRequest(requestInput());
-    const changed = buildFullReleaseCandidateRequest(requestInput(overrides));
-    expect(candidateRequestSha256(changed)).not.toBe(candidateRequestSha256(baseline));
+    const baseline = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
+    const changed = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput(overrides));
+    expect(canonicalTestSha256(changed)).not.toBe(canonicalTestSha256(baseline));
   });
 
   it("rejects malformed or noncanonical request policy", () => {
-    const request = buildFullReleaseCandidateRequest(requestInput());
+    const request = buildFullReleaseCandidateRequest(fullReleaseCandidateRequestInput());
     expect(() => validateFullReleaseCandidateRequest({ ...request, ignored: true })).toThrow(
       "keys must be exactly",
     );
@@ -188,32 +128,19 @@ describe("full release candidate contract", () => {
     ).toThrow("contract versions are invalid");
   });
 
-  it("binds one canonical manifest to the request, plan, producer, and artifacts", () => {
+  it("validates one canonical binding across the request, plan, producer, and artifacts", () => {
     const value = manifest();
-    const json = canonicalFullReleaseCandidateManifestJson(value);
-    expect(json.endsWith("\n")).toBe(true);
-    expect(validateFullReleaseCandidateManifest(JSON.parse(json))).toEqual(value);
-    expect(fullReleaseCandidateManifestSha256(JSON.parse(json))).toBe(
-      fullReleaseCandidateManifestSha256(value),
-    );
-
-    const binding = buildFullReleaseCandidateBinding({
-      manifest: value,
-      artifact: artifact(`full-release-candidate-v1-${value.requestSha256 as string}`, {
-        id: "104",
-        digest: "4".repeat(64),
-      }),
-    });
+    const binding = fullReleaseCandidateBindingFixture();
     expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
     expect(binding.request).toEqual(value.request);
-    expect(binding.manifestSha256).toBe(fullReleaseCandidateManifestSha256(value));
+    expect(binding.manifestSha256).toBe(canonicalTestSha256(value));
   });
 
   it("runs request, manifest, and binding commands through their subprocess boundary", () => {
     const root = tempDirs.make("full-release-candidate-cli-");
     const requestInputPath = join(root, "request-input.json");
     const requestOutputPath = join(root, "request.json");
-    writeFileSync(requestInputPath, JSON.stringify(requestInput()));
+    writeFileSync(requestInputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
     const requestResult = runContract([
       "request",
       "--input",
@@ -224,8 +151,8 @@ describe("full release candidate contract", () => {
     expect(requestResult.status, requestResult.stderr).toBe(0);
     const requestValue = JSON.parse(readFileSync(requestOutputPath, "utf8"));
     expect(JSON.parse(requestResult.stdout)).toEqual({
-      requestJson: canonicalFullReleaseCandidateRequestJson(requestValue).trimEnd(),
-      requestSha256: candidateRequestSha256(requestValue),
+      requestJson: canonicalTestJson(requestValue).trimEnd(),
+      requestSha256: "9431d1fddd030c460f27294665f526838c7df69c826e59e5c6cf045b4d6a90a0",
     });
 
     const manifestInputPath = join(root, "manifest-input.json");
@@ -241,11 +168,11 @@ describe("full release candidate contract", () => {
     expect(manifestResult.status, manifestResult.stderr).toBe(0);
     const manifestValue = JSON.parse(readFileSync(manifestOutputPath, "utf8"));
     expect(JSON.parse(manifestResult.stdout)).toEqual({
-      manifestSha256: fullReleaseCandidateManifestSha256(manifestValue),
+      manifestSha256: canonicalTestSha256(manifestValue),
       requestSha256: manifestValue.requestSha256,
     });
 
-    const evidenceArtifact = artifact(
+    const evidenceArtifact = fullReleaseCandidateArtifact(
       `full-release-candidate-v1-${manifestValue.requestSha256 as string}`,
       {
         id: "104",
@@ -270,12 +197,9 @@ describe("full release candidate contract", () => {
       evidenceArtifact.runAttempt as string,
     ]);
     expect(bindingResult.status, bindingResult.stderr).toBe(0);
-    expect(JSON.parse(bindingResult.stdout)).toEqual(
-      buildFullReleaseCandidateBinding({
-        artifact: evidenceArtifact,
-        manifest: manifestValue,
-      }),
-    );
+    const binding = JSON.parse(bindingResult.stdout);
+    expect(validateFullReleaseCandidateBinding(binding)).toEqual(binding);
+    expect(binding).toEqual(fullReleaseCandidateBindingFixture());
   });
 
   it("returns nonzero for invalid request, manifest, and binding CLI inputs", () => {
@@ -283,9 +207,9 @@ describe("full release candidate contract", () => {
     const requestInputPath = join(root, "request-input.json");
     const invalidManifestPath = join(root, "invalid-manifest.json");
     const manifestOutputPath = join(root, "manifest.json");
-    writeFileSync(requestInputPath, JSON.stringify(requestInput()));
+    writeFileSync(requestInputPath, JSON.stringify(fullReleaseCandidateRequestInput()));
     writeFileSync(invalidManifestPath, "{");
-    writeFileSync(manifestOutputPath, canonicalFullReleaseCandidateManifestJson(manifest()));
+    writeFileSync(manifestOutputPath, canonicalTestJson(manifest()));
 
     const missingRequestOutput = runContract(["request", "--input", requestInputPath]);
     expect(missingRequestOutput.status).toBe(1);
@@ -324,60 +248,105 @@ describe("full release candidate contract", () => {
 
   it("fails closed on cross-request, cross-package, and cross-attempt evidence", () => {
     const value = manifest();
-    expect(() =>
-      validateFullReleaseCandidateManifest({
+    expect(
+      runManifestContract({
         ...value,
         requestSha256: "9".repeat(64),
-      }),
-    ).toThrow("does not match the request");
-    expect(() =>
-      validateFullReleaseCandidateManifest({
+      }).stderr,
+    ).toContain("does not match the request");
+    expect(
+      runManifestContract({
         ...value,
         sharedImage: { ...value.sharedImage, packageSha256: "8".repeat(64) },
-      }),
-    ).toThrow("does not match the package");
-    expect(() =>
-      validateFullReleaseCandidateManifest({
+      }).stderr,
+    ).toContain("does not match the package");
+    expect(
+      runManifestContract({
         ...value,
         package: {
           ...value.package,
           artifact: { ...value.package.artifact, runAttempt: "2" },
         },
-      }),
-    ).toThrow("was not produced by the declared attempt");
-    expect(() =>
-      validateFullReleaseCandidateManifest({
+      }).stderr,
+    ).toContain("was not produced by the declared attempt");
+    expect(
+      runManifestContract({
         ...value,
         producer: { ...value.producer, jobId: "prepare_docker_e2e_image" },
-      }),
-    ).toThrow("positive decimal string");
-    expect(() =>
-      buildFullReleaseCandidateBinding({
-        manifest: value,
-        artifact: artifact("full-release-candidate-v1-deadbeef", {
-          id: "104",
-          digest: "4".repeat(64),
-        }),
-      }),
-    ).toThrow("does not match its manifest");
+      }).stderr,
+    ).toContain("positive decimal string");
   });
 
-  it("binds every serialized field to the manifest digest and caps binding size", () => {
-    const value = manifest();
-    const binding = buildFullReleaseCandidateBinding({
-      manifest: value,
-      artifact: artifact(`full-release-candidate-v1-${value.requestSha256 as string}`, {
-        id: "104",
-        digest: "4".repeat(64),
-      }),
-    });
+  it.each([
+    ["producer job id", (binding) => void (binding.producer.jobId = "202")],
+    ["producer job name", (binding) => void (binding.producer.jobName = "different producer job")],
+    [
+      "producer workflow path",
+      (binding) => void (binding.producer.workflowPath = ".github/workflows/ci.yml"),
+    ],
+    ["preparation plan", (binding) => void (binding.preparation.planSha256 = "5".repeat(64))],
+    ["package artifact id", (binding) => void (binding.package.artifact.id = "105")],
+    [
+      "package artifact digest",
+      (binding) => void (binding.package.artifact.digest = "5".repeat(64)),
+    ],
+    [
+      "package artifact expiry",
+      (binding) => void (binding.package.artifact.expiresAt = "2026-09-05T12:00:00Z"),
+    ],
+    ["package artifact name", (binding) => void (binding.package.artifact.name = "other-package")],
+    ["package file name", (binding) => void (binding.package.fileName = "other.tgz")],
+    ["package version", (binding) => void (binding.package.version = "2026.8.28-beta.2")],
+    [
+      "registry artifact id",
+      (binding) => void (binding.prepublishPluginRegistry.artifact.id = "106"),
+    ],
+    [
+      "registry artifact digest",
+      (binding) => void (binding.prepublishPluginRegistry.artifact.digest = "6".repeat(64)),
+    ],
+    [
+      "registry artifact expiry",
+      (binding) =>
+        void (binding.prepublishPluginRegistry.artifact.expiresAt = "2026-09-05T12:00:00Z"),
+    ],
+    [
+      "registry artifact name",
+      (binding) => void (binding.prepublishPluginRegistry.artifact.name = "other-registry"),
+    ],
+    [
+      "registry manifest",
+      (binding) => void (binding.prepublishPluginRegistry.manifestSha256 = "6".repeat(64)),
+    ],
+    ["shared image artifact id", (binding) => void (binding.sharedImage.artifact.id = "107")],
+    [
+      "shared image artifact digest",
+      (binding) => void (binding.sharedImage.artifact.digest = "7".repeat(64)),
+    ],
+    [
+      "shared image artifact expiry",
+      (binding) => void (binding.sharedImage.artifact.expiresAt = "2026-09-05T12:00:00Z"),
+    ],
+    [
+      "shared image artifact name",
+      (binding) => void (binding.sharedImage.artifact.name = "other-shared-image"),
+    ],
+    [
+      "shared image archive",
+      (binding) => void (binding.sharedImage.archiveSha256 = "7".repeat(64)),
+    ],
+  ] satisfies Array<
+    [string, (binding: ReturnType<typeof fullReleaseCandidateBindingFixture>) => void]
+  >)("binds the %s to the manifest digest", (_label, mutate) => {
+    const binding = structuredClone(fullReleaseCandidateBindingFixture());
+    mutate(binding);
+    expect(() => validateFullReleaseCandidateBinding(binding)).toThrow(
+      "manifestSha256 does not match its manifest fields",
+    );
+  });
 
-    expect(() =>
-      validateFullReleaseCandidateBinding({
-        ...binding,
-        producer: { ...binding.producer, jobName: "different producer job" },
-      }),
-    ).toThrow("manifestSha256 does not match its manifest fields");
+  it("caps binding size independently of manifest digest coverage", () => {
+    const binding = fullReleaseCandidateBindingFixture();
     expect(() =>
       validateFullReleaseCandidateBinding({
         ...binding,
@@ -398,30 +367,30 @@ describe("full release candidate contract", () => {
       },
     });
     expect(Buffer.byteLength(JSON.stringify(value))).toBeGreaterThan(32 * 1024);
-    expect(() => canonicalFullReleaseCandidateManifestJson(value)).toThrow(
+    expect(runManifestContract(value).stderr).toContain(
       "full release candidate manifest exceeds 32768 bytes",
     );
   });
 
   it("rejects unsorted or empty producer package evidence", () => {
     const value = manifest();
-    expect(() =>
-      validateFullReleaseCandidateManifest({
+    expect(
+      runManifestContract({
         ...value,
         preparation: {
           ...value.preparation,
           requiredPrepublishPluginPackages: ["openclaw", "@openclaw/codex"],
         },
-      }),
-    ).toThrow("ascending ASCII order");
-    expect(() =>
-      validateFullReleaseCandidateManifest({
+      }).stderr,
+    ).toContain("ascending ASCII order");
+    expect(
+      runManifestContract({
         ...value,
         preparation: {
           ...value.preparation,
           requiredPrepublishPluginPackages: [],
         },
-      }),
-    ).toThrow("does not match the request");
+      }).stderr,
+    ).toContain("does not match the request");
   });
 });

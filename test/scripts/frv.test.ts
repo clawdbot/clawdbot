@@ -95,27 +95,6 @@ function executionPlanArtifact() {
     workflowRef: SOURCE_REF,
     workflowSha: SHA,
   });
-  return buildReleaseExecutionPlanArtifact({
-    attemptEvidenceVersion: 1,
-    children: built.children,
-    evidenceReuse: { requested: false },
-    expected: {
-      parentRunAttempt: 1,
-      parentRunId: "77",
-      repository: REPOSITORY,
-      targetSha: TARGET_SHA,
-      workflowRef: SOURCE_REF,
-      workflowSha: SHA,
-    },
-    gates: built.gates,
-    releaseProfile: "beta",
-    rerunGroup: "all",
-    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: SHA },
-  });
-}
-
-function currentV2ExecutionPlanArtifact() {
-  const priorV1 = executionPlanArtifact();
   const candidateRequest = buildFullReleaseCandidateRequest({
     repository: REPOSITORY,
     targetSha: TARGET_SHA,
@@ -132,8 +111,8 @@ function currentV2ExecutionPlanArtifact() {
   return buildReleaseExecutionPlanArtifact({
     attemptEvidenceVersion: 2,
     candidate: null,
-    children: priorV1.children,
-    evidenceReuse: priorV1.evidenceReuse,
+    children: built.children,
+    evidenceReuse: { requested: false },
     expected: {
       candidateRequest,
       parentRunAttempt: 1,
@@ -143,16 +122,19 @@ function currentV2ExecutionPlanArtifact() {
       workflowRef: SOURCE_REF,
       workflowSha: SHA,
     },
-    gates: priorV1.gates,
+    gates: built.gates,
     releaseProfile: "beta",
     rerunGroup: "all",
-    trustedWorkflow: priorV1.trustedWorkflow,
+    trustedWorkflow: { fullRef: "refs/heads/main", ref: "main", sha: SHA },
   });
 }
 
 function historicalExecutionPlanArtifact() {
   const artifact = structuredClone(executionPlanArtifact());
   delete artifact.attemptEvidenceVersion;
+  delete artifact.candidate;
+  delete artifact.candidateRequest;
+  delete artifact.repository;
   for (const entry of artifact.children) {
     delete entry.sourceParentAttempt;
   }
@@ -269,29 +251,9 @@ function controllerClient(
 }
 
 describe("FRV immutable plan eligibility", () => {
-  it("keeps digest-valid prior-v1 plans eligible for continuation", async () => {
-    const priorV1 = executionPlanArtifact();
-    expect(priorV1.sha256).toBe("391b70ff928e90c190cd7f3c324660de536afe8cfc8a11be11ef0939a1693ea2");
-    expect(validateReleaseExecutionPlanArtifact(priorV1)).toMatchObject({
-      attemptEvidenceVersion: 1,
-      parentRunId: "77",
-      rerunGroup: "all",
-    });
-    expect(priorV1).not.toHaveProperty("candidate");
-    await expect(
-      loadPlan({ repository: REPOSITORY, runId: "77" }, async () => priorV1),
-    ).resolves.toMatchObject({
-      attemptEvidenceVersion: 1,
-      parentRunId: "77",
-      rerunGroup: "all",
-    });
-  });
-
   it("accepts current v2 all-group plans", async () => {
     await expect(
-      loadPlan({ repository: REPOSITORY, runId: "77" }, async () =>
-        currentV2ExecutionPlanArtifact(),
-      ),
+      loadPlan({ repository: REPOSITORY, runId: "77" }, async () => executionPlanArtifact()),
     ).resolves.toMatchObject({
       attemptEvidenceVersion: 2,
       parentRunId: "77",

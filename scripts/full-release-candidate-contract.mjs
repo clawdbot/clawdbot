@@ -10,10 +10,10 @@ import {
   parseUpgradeSurvivorScenarios,
 } from "./lib/upgrade-survivor-policy.mjs";
 
-export const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v1";
-export const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v1";
-export const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v1";
-export const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX = "full-release-candidate-v1-";
+const FULL_RELEASE_CANDIDATE_REQUEST_SCHEMA = "openclaw.full-release-candidate-request/v1";
+const FULL_RELEASE_CANDIDATE_MANIFEST_SCHEMA = "openclaw.full-release-candidate/v1";
+const FULL_RELEASE_CANDIDATE_BINDING_SCHEMA = "openclaw.full-release-candidate-binding/v1";
+const FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX = "full-release-candidate-v1-";
 
 const MANIFEST_MAX_BYTES = 32 * 1024;
 const BINDING_MAX_BYTES = 40 * 1024;
@@ -264,11 +264,11 @@ export function validateFullReleaseCandidateRequest(value) {
   };
 }
 
-export function canonicalFullReleaseCandidateRequestJson(value) {
+function canonicalFullReleaseCandidateRequestJson(value) {
   return canonicalAsciiJson(validateFullReleaseCandidateRequest(value));
 }
 
-export function candidateRequestSha256(value) {
+function candidateRequestSha256(value) {
   return createHash("sha256").update(canonicalFullReleaseCandidateRequestJson(value)).digest("hex");
 }
 
@@ -367,7 +367,7 @@ function assertProducedInSameAttempt(manifest) {
   }
 }
 
-export function validateFullReleaseCandidateManifest(value) {
+function validateFullReleaseCandidateManifest(value) {
   exactKeys(
     value,
     [
@@ -447,7 +447,7 @@ export function validateFullReleaseCandidateManifest(value) {
   return manifest;
 }
 
-export function buildFullReleaseCandidateManifest(input) {
+function buildFullReleaseCandidateManifest(input) {
   if (!isRecord(input)) {
     fail("full release candidate manifest input must be an object");
   }
@@ -457,7 +457,7 @@ export function buildFullReleaseCandidateManifest(input) {
   });
 }
 
-export function canonicalFullReleaseCandidateManifestJson(value) {
+function canonicalFullReleaseCandidateManifestJson(value) {
   const json = canonicalAsciiJson(validateFullReleaseCandidateManifest(value));
   if (Buffer.byteLength(json) > MANIFEST_MAX_BYTES) {
     fail(`full release candidate manifest exceeds ${MANIFEST_MAX_BYTES} bytes`);
@@ -465,13 +465,13 @@ export function canonicalFullReleaseCandidateManifestJson(value) {
   return json;
 }
 
-export function fullReleaseCandidateManifestSha256(value) {
+function fullReleaseCandidateManifestSha256(value) {
   return createHash("sha256")
     .update(canonicalFullReleaseCandidateManifestJson(value))
     .digest("hex");
 }
 
-export function buildFullReleaseCandidateBinding({ artifact, manifest }) {
+function buildFullReleaseCandidateBinding({ artifact, manifest }) {
   const validatedManifest = validateFullReleaseCandidateManifest(manifest);
   const evidenceArtifact = artifactIdentity(artifact, "full release candidate evidence artifact");
   const expectedName = `${FULL_RELEASE_CANDIDATE_ARTIFACT_PREFIX}${validatedManifest.requestSha256}`;

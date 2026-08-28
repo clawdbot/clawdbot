@@ -3,12 +3,7 @@ import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import {
-  buildFullReleaseCandidateBinding,
-  buildFullReleaseCandidateManifest,
-  buildFullReleaseCandidateRequest,
-  candidateRequestSha256,
-} from "../../scripts/full-release-candidate-contract.mjs";
+import { buildFullReleaseCandidateRequest } from "../../scripts/full-release-candidate-contract.mjs";
 import {
   composeReleaseAttemptJobs,
   isReleaseGhArtifactMissingError,
@@ -30,6 +25,7 @@ import {
   validateReleaseStateArtifact,
   verifyReleaseStateArtifacts,
 } from "../../scripts/full-release-validation-state.mjs";
+import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
 import { waitForChildClose, waitForFile } from "../helpers/process-wait.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
@@ -38,17 +34,6 @@ const SHA = "a".repeat(40);
 const TARGET_SHA = "b".repeat(40);
 const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function candidateArtifact(name: string, id: string, digest: string) {
-  return {
-    name,
-    id,
-    digest,
-    expiresAt: "2026-09-04T12:00:00Z",
-    runId: "77",
-    runAttempt: "1",
-  };
-}
 
 function candidateRequestInput(overrides: Record<string, unknown> = {}) {
   return {
@@ -81,56 +66,9 @@ function candidateRequestEnvironment(overrides: Record<string, string> = {}) {
 }
 
 function candidateBinding(requestOverrides: Record<string, unknown> = {}) {
-  const request = buildFullReleaseCandidateRequest(candidateRequestInput(requestOverrides));
-  const manifest = buildFullReleaseCandidateManifest({
-    request,
-    requestSha256: candidateRequestSha256(request),
-    producer: {
-      repository: request.repository,
-      workflowPath: ".github/workflows/openclaw-live-and-e2e-checks-reusable.yml",
-      workflowSha: request.toolingSha,
-      runId: "77",
-      runAttempt: "1",
-      jobId: "201",
-      jobName: "Prepare shared release candidate / Prepare shared Docker E2E image",
-    },
-    preparation: {
-      planSha256: "c".repeat(64),
-      requiredPrepublishPluginPackages: ["@openclaw/codex"],
-    },
-    package: {
-      artifact: candidateArtifact("docker-e2e-package-77-1", "101", "d".repeat(64)),
-      fileName: "openclaw-current.tgz",
-      sourceSha: request.targetSha,
-      packageSha256: "e".repeat(64),
-      version: "2026.8.28-beta.1",
-    },
-    prepublishPluginRegistry: {
-      artifact: candidateArtifact(
-        "docker-e2e-prepublish-plugin-registry-77-1",
-        "102",
-        "f".repeat(64),
-      ),
-      manifestSha256: "1".repeat(64),
-      sourceSha: request.targetSha,
-    },
-    sharedImage: {
-      artifact: candidateArtifact(
-        "docker-e2e-shared-images-full-release-bbbbbbbbbbbb-77-1",
-        "103",
-        "2".repeat(64),
-      ),
-      archiveSha256: "3".repeat(64),
-      packageSha256: "e".repeat(64),
-    },
-  });
-  return buildFullReleaseCandidateBinding({
-    manifest,
-    artifact: candidateArtifact(
-      `full-release-candidate-v1-${manifest.requestSha256 as string}`,
-      "104",
-      "4".repeat(64),
-    ),
+  return fullReleaseCandidateBindingFixture({
+    ...candidateRequestInput(requestOverrides),
+    ...requestOverrides,
   });
 }
 
@@ -349,13 +287,8 @@ describe("full release execution plan", () => {
     expect(first.sha256).not.toBe(second.sha256);
   });
 
-  it("keeps historical and prior-v1 plans candidate-free", () => {
+  it("keeps historical plans candidate-free", () => {
     expect(executionPlan()).not.toHaveProperty("candidate");
-    const priorV1 = executionPlan({}, { attemptEvidenceVersion: 1 });
-    expect(priorV1).not.toHaveProperty("candidate");
-    expect(validateReleaseExecutionPlanArtifact(priorV1)).toMatchObject({
-      attemptEvidenceVersion: 1,
-    });
   });
 
   it.each([
