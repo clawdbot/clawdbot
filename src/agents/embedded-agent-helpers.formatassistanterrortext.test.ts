@@ -211,7 +211,7 @@ describe("formatAssistantErrorText", () => {
 
     const userFacing = formatUserFacingAssistantErrorText(msg);
     expect(userFacing).toBe(
-      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
     );
     expect(userFacing).not.toContain("deepseek-v4-flash:0731");
   });
@@ -233,7 +233,7 @@ describe("formatAssistantErrorText", () => {
 
     const userFacing = formatUserFacingAssistantErrorText(msg);
     expect(userFacing).toBe(
-      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
     );
     expect(userFacing).not.toContain("deepseek-v4-flash:0731");
   });
@@ -244,10 +244,10 @@ describe("formatAssistantErrorText", () => {
     );
 
     expect(formatAssistantErrorText(msg)).toBe(
-      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
     );
     expect(formatUserFacingAssistantErrorText(msg)).toBe(
-      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
     );
   });
   it("sanitizes Codex error-prefixed JSON payloads", () => {

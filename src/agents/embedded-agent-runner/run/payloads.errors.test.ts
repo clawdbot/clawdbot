@@ -299,7 +299,7 @@ describe("buildEmbeddedRunPayloads", () => {
     });
 
     expectSinglePayloadSummary(payloads, {
-      text: "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.",
+      text: "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.",
       isError: true,
     });
     expectNoPayloadTextContaining(payloads, "deepseek-v4-flash:0731");

@@ -98,8 +98,7 @@ export function renderFormatErrorCopy(raw: string): string {
   if (!parameter || !value || !maximum) {
     return PROVIDER_SCHEMA_REJECTION_USER_TEXT;
   }
-  const normalizedParameter = parameter.toLowerCase();
-  return `LLM request rejected: ${normalizedParameter} is ${value}, above the provider maximum of ${maximum}. Lower ${normalizedParameter} and try again.`;
+  return `LLM request rejected: configured maxTokens is ${value}, above the provider maximum of ${maximum}. Lower maxTokens and try again.`;
 }
 
 function extractProviderRateLimitMessage(raw: string): string | undefined {

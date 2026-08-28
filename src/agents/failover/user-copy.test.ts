@@ -31,7 +31,7 @@ describe("failover user copy", () => {
 
   it("surfaces token limits through common Error HTTP wrappers", () => {
     const expected =
-      "LLM request rejected: max_tokens is 384000, above the provider maximum of 65536. Lower max_tokens and try again.";
+      "LLM request rejected: configured maxTokens is 384000, above the provider maximum of 65536. Lower maxTokens and try again.";
     expect(
       renderFormatErrorCopy(
         "Error: 400 max_tokens (384000) exceeds model's maximum output tokens (65536)",
