@@ -280,7 +280,9 @@ describe("openshell backend exec workdir validation", () => {
     const validations = [0, 1].map(async () => {
       const result = await backend.validateWorkdir?.("/sandbox");
       completed.push(result);
-      if (cleaningUp) backend.discardPreparedWorkdir?.("/sandbox");
+      if (cleaningUp) {
+        backend.discardPreparedWorkdir?.("/sandbox");
+      }
     });
     try {
       await vi.waitFor(() => expect(completed).toEqual(["/sandbox", "/sandbox"]));
@@ -347,10 +349,13 @@ describe("openshell backend exec workdir validation", () => {
     const workspaceDir = await createWorkspace();
     const agentWorkspaceDir = await createWorkspace("agent");
     const skillsWorkspaceDir = await createWorkspace("skills");
-    for (const root of [workspaceDir, agentWorkspaceDir]) await fs.mkdir(path.join(root, "nested"));
+    for (const root of [workspaceDir, agentWorkspaceDir]) {
+      await fs.mkdir(path.join(root, "nested"));
+    }
     await fs.writeFile(path.join(workspaceDir, "file.txt"), "not a directory");
-    for (const excluded of [".git", "hooks", "git-hooks"])
+    for (const excluded of [".git", "hooks", "git-hooks"]) {
       await fs.mkdir(path.join(workspaceDir, excluded, "nested"), { recursive: true });
+    }
     await fs.symlink(workspaceDir, path.join(workspaceDir, "link"), "junction");
     await fs.mkdir(path.join(skillsWorkspaceDir, "skills", "demo"), { recursive: true });
     if (scenario.sourceLink) {
