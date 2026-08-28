@@ -516,13 +516,14 @@ describe("memory session update sync", () => {
     );
     expect(privateHashes.size).toBe(2);
 
-    const writeFile = fs.writeFile.bind(fs);
+    const open = fs.open.bind(fs);
     const memoryTempPrefix = `${memoryPath}.forget.`;
-    const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      await writeFile(...args);
-      if (args[0] === memoryPath || String(args[0]).startsWith(memoryTempPrefix)) {
+    const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target === "string" && target.startsWith(memoryTempPrefix)) {
         throw new Error("interrupted after memory rewrite");
       }
+      return await open(...args);
     });
     try {
       await expect(

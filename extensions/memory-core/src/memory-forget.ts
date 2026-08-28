@@ -77,6 +77,7 @@ type MemoryRewrite = {
   relativePath: string;
   content: string;
   remove: boolean;
+  expectedContent: string;
 };
 type ForgetIndexPlan = {
   chunks: Array<ForgetDatabase["memory_index_chunks"]>;
@@ -432,6 +433,7 @@ async function forgetWorkspaceMemory(
         relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
         content: rewritten,
         remove: rewritten.trim().length === 0,
+        expectedContent: content,
       });
     }
   }
@@ -469,6 +471,7 @@ async function forgetWorkspaceMemory(
         relativePath: path.relative(workspaceDir, absolutePath).replaceAll("\\", "/"),
         content: scrubbed.content,
         remove: false,
+        expectedContent: content,
       });
       removedMemoryEntries += scrubbed.removedEntries;
       removedMemoryLines += scrubbed.removedLines;

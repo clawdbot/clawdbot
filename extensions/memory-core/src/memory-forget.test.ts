@@ -203,15 +203,21 @@ describe("memory forget", () => {
       archiveTranscript: true,
     });
 
-    // The rewrite runs out of disk halfway through the write.
-    const writeFile = fs.writeFile.bind(fs);
-    const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-      if (String(args[0]).startsWith(`${memoryPath}.forget.`)) {
-        const text = String(args[1]);
-        await writeFile(args[0], text.slice(0, Math.ceil(text.length / 2)), args[2]);
+    // The rewrite runs out of disk halfway through the write. fs-safe writes
+    // the temp blob through fs.open + FileHandle.writeFile, so the fault hooks
+    // the temp-file open and leaves a half-written blob behind, exactly like a
+    // mid-write ENOSPC.
+    const open = fs.open.bind(fs);
+    const tempPrefix = `${memoryPath}.forget.`;
+    const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const target = args[0];
+      if (typeof target === "string" && target.startsWith(tempPrefix)) {
+        const handle = await open(...args);
+        await handle.writeFile("Curated ope");
+        await handle.close();
         throw Object.assign(new Error("no space left on device"), { code: "ENOSPC" });
       }
-      return await writeFile(...args);
+      return await open(...args);
     });
     try {
       await expect(
@@ -750,15 +756,16 @@ describe("memory forget", () => {
       if (failure !== "none") {
         const failureMessage = `synthetic ${failure} storage failure`;
         if (failure === "memory" || failure === "corpus") {
-          const writeFile = fs.writeFile.bind(fs);
+          const open = fs.open.bind(fs);
           const failedPath =
             failure === "memory" ? path.join(workspaceDir, "MEMORY.md") : mixedCorpusPath;
           const failedTempPrefix = `${failedPath}.forget.`;
-          const fault = vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
-            await writeFile(...args);
-            if (args[0] === failedPath || String(args[0]).startsWith(failedTempPrefix)) {
+          const fault = vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+            const target = args[0];
+            if (typeof target === "string" && target.startsWith(failedTempPrefix)) {
               throw new Error(failureMessage);
             }
+            return await open(...args);
           });
           try {
             await expect(

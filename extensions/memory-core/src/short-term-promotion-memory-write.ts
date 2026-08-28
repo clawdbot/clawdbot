@@ -15,8 +15,8 @@ export function extractPromotionKeys(content: string): string[] {
 }
 
 export class MemoryWriteConflictError extends Error {
-  constructor() {
-    super("MEMORY.md changed before the dreaming write could commit");
+  constructor(message = "MEMORY.md changed before the dreaming write could commit") {
+    super(message);
     this.name = "MemoryWriteConflictError";
   }
 }
@@ -70,13 +70,14 @@ export function isAtomicReplacePermissionError(error: unknown): boolean {
   return code === "EACCES" || code === "EPERM" || code === "EEXIST" || code === "EROFS";
 }
 
-async function writeExistingMemoryInPlace(params: {
+export async function writeExistingMemoryInPlace(params: {
   filePath: string;
   expectedContent: string;
   content: string;
+  conflictMessage?: string;
 }): Promise<boolean> {
   if ((await readMemoryContent(params.filePath)) !== params.expectedContent) {
-    throw new MemoryWriteConflictError();
+    throw new MemoryWriteConflictError(params.conflictMessage);
   }
   let handle: Awaited<ReturnType<typeof fs.open>>;
   try {
