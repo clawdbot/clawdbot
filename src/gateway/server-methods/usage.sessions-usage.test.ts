@@ -960,6 +960,9 @@ describe("sessions.usage", () => {
       storeKeys: ["global"],
       storePath: "/tmp/shared-sessions.sqlite",
     });
+    vi.mocked(resolveExistingUsageSessionFile).mockReturnValueOnce(
+      "sqlite:ops:s-ops:/tmp/shared-sessions.sqlite",
+    );
 
     const respond = await runSessionsUsageTimeseries({ key: "global" }, config);
 

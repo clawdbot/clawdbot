@@ -37,6 +37,7 @@ import {
   readConfigMachineStateWithMetadata,
 } from "./config-machine-state.js";
 import { DELEGATE_ARTIFACTS_SCHEMA_SQL } from "./delegate-artifacts-schema.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
 import { listOpenClawRegisteredAgentDatabases } from "./openclaw-agent-db-registry.js";
 import {
   FIRST_USE_STATE_TABLES,
@@ -1750,7 +1751,7 @@ describe("openclaw state database", () => {
     const insert = legacy.prepare(
       `INSERT INTO agent_databases (
          agent_id, path, schema_version, last_seen_at, size_bytes
-       ) VALUES (?, ?, 17, 1, NULL)`,
+       ) VALUES (?, ?, ${OPENCLAW_AGENT_SCHEMA_VERSION}, 1, NULL)`,
     );
     insert.run("main", inRootPath);
     insert.run("dual", dualInRootPath);
