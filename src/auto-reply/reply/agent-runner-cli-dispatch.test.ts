@@ -163,6 +163,21 @@ describe("runCliAgentWithLifecycle", () => {
       emitAgentEvent({
         runId: params.runId,
         stream: "assistant",
+        data: { text: "First answer", delta: "First answer" },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "tool",
+        data: { phase: "start", name: "search", toolCallId: "tool-1", args: {} },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "thinking",
+        data: { text: "Second window", delta: "Second window", isReasoningSnapshot: true },
+      });
+      emitAgentEvent({
+        runId: params.runId,
+        stream: "assistant",
         data: { text: "Visible answer", delta: "Visible answer" },
       });
       return { payloads: [{ text: "Visible answer" }], meta: { durationMs: 1 } };
@@ -177,8 +192,8 @@ describe("runCliAgentWithLifecycle", () => {
       callbackOrder.push("reasoning:end");
       throw new Error("reasoning notice failed");
     });
-    const onAssistantText = vi.fn(async () => {
-      callbackOrder.push("assistant");
+    const onAssistantText = vi.fn(async (text: string) => {
+      callbackOrder.push(`assistant:${text}`);
     });
 
     const result = await runCliAgentWithLifecycle({
@@ -201,19 +216,23 @@ describe("runCliAgentWithLifecycle", () => {
       },
     });
 
-    expect(onReasoningText).toHaveBeenCalledTimes(2);
+    expect(onReasoningText).toHaveBeenCalledTimes(3);
     expect(onReasoningText.mock.calls.map((call) => call[0])).toEqual([
       { text: "Thinking", isReasoningSnapshot: true },
       { text: "Thinking more", isReasoningSnapshot: true },
+      { text: "Second window", isReasoningSnapshot: true },
     ]);
     expect(callbackOrder).toEqual([
       "reasoning:Thinking",
       "reasoning:Thinking more",
       "reasoning:end",
-      "assistant",
+      "reasoning:Second window",
+      "assistant:First answer",
+      "reasoning:end",
+      "assistant:Visible answer",
     ]);
     expect(result.payloads).toEqual([
-      { text: "Thinking more", isReasoning: true },
+      { text: "Second window", isReasoning: true },
       { text: "Visible answer" },
     ]);
   });

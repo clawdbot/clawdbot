@@ -589,6 +589,7 @@ async function runCliAgentWithLifecycleInternal(
     suppressed: params.suppressAssistantBridge,
     startOrder: progressStartOrder,
     deliver: async (payload: ReasoningTextPayload) => {
+      reasoningEnded = false;
       finalReasoningText = normalizeOptionalString(payload.text);
       await params.onReasoningText?.(payload);
     },
