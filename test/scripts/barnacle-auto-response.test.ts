@@ -242,6 +242,33 @@ function managedLabelDescription(label: string): string {
 }
 
 describe("barnacle-auto-response", () => {
+  it.each(["edited", "ready_for_review"])(
+    "recomputes candidate labels after PR %s events",
+    async (action) => {
+      const { calls, github } = barnacleGithub([file("src/gateway/server.ts")]);
+
+      await runBarnacleAutoResponse({
+        github,
+        context: barnacleContext(
+          {
+            title: "Fix gateway status reporting",
+            body: prContextBody("node scripts/run-vitest.mjs test/gateway.test.ts passed."),
+          },
+          [candidateLabels.blankTemplate, candidateLabels.lowSignalDocs],
+          { action },
+        ),
+      });
+
+      expect(calls.removeLabel).toEqual([
+        expectedRemoveLabel(123, candidateLabels.blankTemplate),
+        expectedRemoveLabel(123, candidateLabels.lowSignalDocs),
+      ]);
+      expect(calls.addLabels).toStrictEqual([]);
+      expect(calls.createComment).toStrictEqual([]);
+      expect(calls.update).toStrictEqual([]);
+    },
+  );
+
   it("keeps Barnacle-owned labels documented and ClawHub spelled correctly", () => {
     expect(managedLabelDescription("r: skill")).toContain("ClawHub");
     expect(managedLabelDescription("r: skill")).not.toContain("Clawdhub");

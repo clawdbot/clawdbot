@@ -774,7 +774,14 @@ function isClawSweeperOwnedLabel(label) {
   return label === "clawsweeper" || label.startsWith("clawsweeper:");
 }
 
-async function applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet) {
+async function applyPullRequestCandidateLabels(
+  github,
+  context,
+  core,
+  pullRequest,
+  labelSet,
+  removeAllStale,
+) {
   const files = await listPullRequestFiles(github, context, pullRequest);
   const candidateLabelsToApply = classifyPullRequestCandidateLabels(
     {
@@ -783,7 +790,10 @@ async function applyPullRequestCandidateLabels(github, context, core, pullReques
     },
     files,
   );
-  const staleContextLabels = structuralContextLabelValues.filter(
+  const staleLabelValues = removeAllStale
+    ? candidateLabelValues
+    : structuralContextLabelValues;
+  const staleContextLabels = staleLabelValues.filter(
     (label) => labelSet.has(label) && !candidateLabelsToApply.includes(label),
   );
   await removeLabels(github, context, pullRequest.number, staleContextLabels, labelSet);
@@ -1020,9 +1030,15 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
   const isLabelEvent = context.payload.action === "labeled";
   const isPrCandidateEvent =
     pullRequest &&
-    ["opened", "edited", "synchronize", "reopened", "labeled", "unlabeled"].includes(
-      context.payload.action,
-    );
+    [
+      "opened",
+      "edited",
+      "synchronize",
+      "reopened",
+      "ready_for_review",
+      "labeled",
+      "unlabeled",
+    ].includes(context.payload.action);
   if (!hasTriggerLabel && !isLabelEvent && !isPrCandidateEvent) {
     return;
   }
@@ -1085,7 +1101,14 @@ export async function runBarnacleAutoResponse({ github, context, core = console 
       core.info(`Skipping active PR limit for GitHub App-authored PR #${pullRequest.number}.`);
     }
 
-    await applyPullRequestCandidateLabels(github, context, core, pullRequest, labelSet);
+    await applyPullRequestCandidateLabels(
+      github,
+      context,
+      core,
+      pullRequest,
+      labelSet,
+      !hasTriggerLabel && !isLabelEvent,
+    );
 
     if (labelSet.has(dirtyLabel)) {
       await github.rest.issues.createComment({
