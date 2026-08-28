@@ -3,10 +3,7 @@ import type { AgentRunTerminalOutcome } from "../agents/agent-run-terminal-outco
 /** Public option types for reply generation callbacks, streaming, and delivery policy. */
 import type { ExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { AgentPlanStep } from "../channels/streaming.js";
-import type {
-  SessionTranscriptRuntimeTarget,
-  TranscriptMessageAppendResult,
-} from "../config/sessions/session-accessor.types.js";
+import type { TranscriptEntryAnchor } from "../config/sessions/transcript-entry-anchor.js";
 import type { ImageContent } from "../llm/types.js";
 import type { MediaFact } from "../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
@@ -18,8 +15,14 @@ import type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types
 export type { SourceReplyDeliveryMode } from "./source-reply-delivery-mode.types.js";
 
 /** A successful runtime append, independent of optional active-path projection anchors. */
-export type ReplyDispatchAssistantTranscript = SessionTranscriptRuntimeTarget &
-  Pick<TranscriptMessageAppendResult<unknown>, "messageId" | "anchor"> & { idempotencyKey: string };
+export type ReplyDispatchAssistantTranscript = Pick<
+  TranscriptEntryAnchor,
+  "agentId" | "sessionId" | "sessionKey" | "storePath"
+> & {
+  messageId: string;
+  anchor?: TranscriptEntryAnchor;
+  idempotencyKey: string;
+};
 
 export type ReplyDispatchRun = {
   completionSource: "reply-dispatch";

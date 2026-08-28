@@ -1,12 +1,15 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { AcpRuntimeEvent } from "@openclaw/acp-core/runtime/types";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { AcpRuntimeError } from "../acp/runtime/errors.js";
-import type { AcpRuntimeEvent } from "../acp/runtime/types.js";
 import { withReplyDispatcher } from "../auto-reply/dispatch-dispatcher.js";
+import type { dispatchInboundMessage } from "../auto-reply/dispatch.js";
+import { finalizeInboundContext } from "../auto-reply/reply/inbound-context.js";
 import { createAcpSessionMeta } from "../auto-reply/reply/test-fixtures/acp-runtime.js";
 import type { ReplyPayload } from "../auto-reply/types.js";
 import {
@@ -68,6 +71,14 @@ installConnectedControlUiServerSuite((started) => {
   ws = started.ws;
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+function readTranscriptMessages(scope: Parameters<typeof loadTranscriptEventsSync>[0]) {
+  return loadTranscriptEventsSync(scope).flatMap((event) => {
+    const entry = asOptionalRecord(event);
+    const message = asOptionalRecord(entry?.message);
+    return entry?.type === "message" && message ? [message] : [];
+  });
+}
 
 describe("Gateway ACP completion ownership", () => {
   afterEach(() => {
@@ -195,8 +206,13 @@ describe("Gateway ACP completion ownership", () => {
       },
     );
     runtime.rejectTranscript = scenario.persistFail === true;
-    dispatchInboundMessageMock.mockImplementation(async ({ ctx, cfg, dispatcher, replyOptions }) =>
-      withReplyDispatcher({
+    dispatchInboundMessageMock.mockImplementation(async (input: unknown) => {
+      // SAFETY: The Gateway mock adapter forwards the real dispatchInboundMessage parameters.
+      const { ctx, cfg, dispatcher, replyOptions } = input as Parameters<
+        typeof dispatchInboundMessage
+      >[0];
+      const finalized = finalizeInboundContext(ctx);
+      return withReplyDispatcher({
         dispatcher,
         run: async () => {
           if (scenario.media) {
@@ -210,7 +226,7 @@ describe("Gateway ACP completion ownership", () => {
           }
           const result = await tryDispatchAcpReplyHook(
             {
-              ctx,
+              ctx: finalized,
               runId: replyOptions?.runId,
               sessionKey: targetSessionKey,
               inboundAudio: false,
@@ -236,8 +252,8 @@ describe("Gateway ACP completion ownership", () => {
           );
           return result ?? { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
         },
-      }),
-    );
+      });
+    });
     const frames: Array<{
       event?: string;
       payload?: {
@@ -366,17 +382,15 @@ describe("Gateway ACP completion ownership", () => {
             ),
           )
           .toEqual([]);
-        const messages = loadTranscriptEventsSync({
+        const messages = readTranscriptMessages({
           agentId: "main",
           sessionId: scenario.rebound ? `${sessionId}-replaced-${index + 1}` : sessionId,
           sessionKey: targetSessionKey,
           storePath,
-        }).filter(
-          (event) => event.type === "message" && ["user", "assistant"].includes(event.message.role),
-        );
+        }).filter((message) => message.role === "user" || message.role === "assistant");
         expect
           .soft(
-            messages.map((event) => event.message.role),
+            messages.map((message) => message.role),
             temperature,
           )
           .toEqual(
@@ -387,23 +401,26 @@ describe("Gateway ACP completion ownership", () => {
                 ).flat(),
           );
         if (scenario.media) {
-          const assistant = messages.findLast((event) => event.message.role === "assistant");
+          const assistant = messages.findLast((message) => message.role === "assistant");
           expect
             .soft(
-              Array.isArray(assistant?.message.content) &&
-                assistant.message.content.some((block: { type: string }) => block.type !== "text"),
+              Array.isArray(assistant?.content) &&
+                assistant.content.some((block: unknown) => {
+                  const content = asOptionalRecord(block);
+                  return content !== undefined && content.type !== "text";
+                }),
             )
             .toBe(true);
         }
         if (scenario.bound) {
           expect
             .soft(
-              loadTranscriptEventsSync({
+              readTranscriptMessages({
                 agentId: "main",
                 sessionId: `source-${sessionId}`,
                 sessionKey,
                 storePath,
-              }).filter((event) => event.type === "message"),
+              }),
             )
             .toEqual([]);
         }
