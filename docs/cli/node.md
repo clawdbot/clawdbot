@@ -161,9 +161,9 @@ connection arguments; it must launch OpenClaw and forward those arguments.
 
 If installation reports a runtime probe failure, check the executable and
 working directory named in the error. For example, when switching users with
-`runuser`, first change to a directory that the target user can access, such as
-`/tmp`. A failed probe does not mean that the installed Node version is
-unsupported; upgrade advice is reserved for missing or unsupported runtimes.
+`runuser`, first change to a directory that the target user can read. A failed
+probe does not mean that the installed Node version is unsupported; upgrade
+advice is reserved for missing or unsupported runtimes.
 
 > **Linux (systemd user service):** Run `sudo loginctl enable-linger <user>` after
 > install. Without lingering, `systemd --user` tears down the node service when
