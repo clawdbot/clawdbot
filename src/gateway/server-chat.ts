@@ -94,6 +94,9 @@ const RESTART_RECOVERY_LIFECYCLE_PHASES = new Set(["start", "end", "error"]);
 function readChatRunStartupPhase(value: unknown): ChatRunStartupPhase | undefined {
   switch (value) {
     case "preparing_workspace":
+    case "naming_worktree":
+    case "creating_worktree":
+    case "running_setup":
     case "provisioning_environment":
     case "preparing_context":
     case "starting_model":

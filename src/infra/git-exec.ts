@@ -7,13 +7,19 @@ export const GIT_TIMEOUT_MS = 120_000;
 export async function executeGitCommand(
   cwd: string,
   args: string[],
-  options: { env?: NodeJS.ProcessEnv; input?: string | Uint8Array; timeoutMs?: number } = {},
+  options: {
+    env?: NodeJS.ProcessEnv;
+    input?: string | Uint8Array;
+    timeoutMs?: number;
+    signal?: AbortSignal;
+  } = {},
 ): Promise<SpawnResult & { timeoutMs: number }> {
   const timeoutMs = options.timeoutMs ?? GIT_TIMEOUT_MS;
   const result = await runCommandWithTimeout(["git", "-C", cwd, ...args], {
     timeoutMs,
     env: options.env,
     input: options.input,
+    signal: options.signal,
   });
   return { ...result, timeoutMs };
 }

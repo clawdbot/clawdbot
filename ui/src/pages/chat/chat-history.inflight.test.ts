@@ -203,15 +203,23 @@ describe("chat history in-flight assistant recovery", () => {
   it.each([
     {
       name: "restores workspace preparation before visible activity",
+      phase: "preparing_workspace",
       text: "",
       startup: { state: "status", runId: "run-live", phase: "preparing_workspace" },
     },
+    ...["naming_worktree", "creating_worktree", "running_setup"].map((phase) => ({
+      name: `restores ${phase} before visible activity`,
+      phase,
+      text: "",
+      startup: { state: "status", runId: "run-live", phase },
+    })),
     {
       name: "keeps actual assistant activity ahead of an older startup status",
+      phase: "preparing_workspace",
       text: "The assistant already started responding.",
       startup: { state: "activity", runId: "run-live" },
     },
-  ])("$name", async ({ text, startup }) => {
+  ])("$name", async ({ phase, text, startup }) => {
     const history = activeHistory("run-live");
     history.inFlightRun!.text = text;
     history.inFlightRun!.events = [
@@ -221,7 +229,7 @@ describe("chat history in-flight assistant recovery", () => {
         stream: "run_status",
         ts: 900,
         sessionKey: "main",
-        data: { phase: "preparing_workspace" },
+        data: { phase },
       },
     ];
     const state = createState(history);

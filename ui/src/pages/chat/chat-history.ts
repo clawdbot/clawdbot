@@ -573,6 +573,9 @@ function applyHistoryRunSnapshot(params: {
   const startupPhase = run.events?.findLast((event) => event.stream === "run_status")?.data.phase;
   const hasStartupStatus =
     startupPhase === "preparing_workspace" ||
+    startupPhase === "naming_worktree" ||
+    startupPhase === "creating_worktree" ||
+    startupPhase === "running_setup" ||
     startupPhase === "provisioning_environment" ||
     startupPhase === "preparing_context" ||
     startupPhase === "starting_model";

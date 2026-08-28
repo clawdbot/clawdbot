@@ -5252,6 +5252,9 @@ export const en: TranslationMap = {
     waitingForApproval: "Waiting for approval…",
     startupStatus: {
       preparingWorkspace: "Preparing workspace…",
+      namingWorktree: "Naming worktree…",
+      creatingWorktree: "Creating worktree…",
+      runningSetup: "Running setup…",
       provisioningEnvironment: "Provisioning environment…",
       preparingContext: "Preparing this turn…",
       startingModel: "Waiting for a response…",

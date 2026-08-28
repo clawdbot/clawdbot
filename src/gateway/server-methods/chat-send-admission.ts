@@ -277,7 +277,9 @@ export async function admitChatSend(params: {
       }
       return;
     }
-    const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry);
+    const archivedError = resolveSessionWorkStartError(sessionKey, latestEntry, {
+      allowPendingWorkspace: true,
+    });
     if (archivedError) {
       throw new Error(archivedError);
     }

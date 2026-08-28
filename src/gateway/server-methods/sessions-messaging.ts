@@ -192,7 +192,9 @@ async function handleSessionSend(params: {
     }
     await expectDefined(chatHandlers["chat.send"], "chat.send handler")(options);
   };
-  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry);
+  const archivedSessionError = resolveSessionWorkStartError(canonicalKey, entry, {
+    allowPendingWorkspace: true,
+  });
   if (archivedSessionError) {
     // An explicit retry may already have a terminal chat.send result. Let the
     // owning handler replay that result before it applies the archive guard.
