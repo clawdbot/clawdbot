@@ -28,8 +28,12 @@ describe("subagent Gateway context binding", () => {
       const second = createSubagentRunRecord({ runId: "run-second" });
       const firstContext = { owner: "gateway-a" } as never;
       const secondContext = { owner: "gateway-b" } as never;
-      if (mode !== "first-unbound") bindGatewayContextResolver(first, () => firstContext);
-      if (mode !== "second-unbound") bindGatewayContextResolver(second, () => secondContext);
+      if (mode !== "first-unbound") {
+        bindGatewayContextResolver(first, () => firstContext);
+      }
+      if (mode !== "second-unbound") {
+        bindGatewayContextResolver(second, () => secondContext);
+      }
 
       const shared = getSharedGatewayContextResolver([first, second]);
       expect(shared).toBeTypeOf("function");
