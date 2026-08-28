@@ -425,8 +425,8 @@ Custom images used with the OpenClaw filesystem bridge must provide:
 
 - `/bin/sh`
 - `sleep` for the persistent sandbox main process on current OpenShell releases
-- `python3` or `python` for pinned write, edit, rename, and remove operations
-- GNU-compatible `stat` and `find`
+- `python3` for pinned remote filesystem reads and mutations
+- GNU-compatible `stat` (`-c`), `readlink` (`-f`), and `find`
 - standard `mkdir`, `mv`, `rm`, and `rmdir` utilities
 
 When the agent workspace differs from the sandbox workspace, the sandbox user
