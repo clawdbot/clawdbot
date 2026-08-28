@@ -56,9 +56,9 @@ export function ensureValidConfigSnapshotForCli(
   snapshot: ConfigFileSnapshot,
   runtime: RuntimeEnv,
   options: { json?: boolean } = {},
-): boolean {
+): void {
   if (snapshot.valid) {
-    return true;
+    return;
   }
   if (options.json) {
     writeRuntimeJson(runtime, {

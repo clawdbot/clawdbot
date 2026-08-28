@@ -120,9 +120,7 @@ export async function runConfigGet(opts: { path: string; json?: boolean; runtime
     const parsedPath = parseConfigSetPath(opts.path);
     const read = await readConfigFileSnapshotWithPluginMetadata({ observe: false });
     const { snapshot, pluginMetadataSnapshot } = read;
-    if (!ensureValidConfigSnapshotForCli(snapshot, runtime, { json: opts.json })) {
-      return;
-    }
+    ensureValidConfigSnapshotForCli(snapshot, runtime, { json: opts.json });
     if (!pluginMetadataSnapshot) {
       throw new Error("Config plugin metadata unavailable; refusing to display config values.");
     }
