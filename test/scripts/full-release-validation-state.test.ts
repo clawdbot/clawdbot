@@ -1039,6 +1039,34 @@ describe("release state artifacts", () => {
     };
   }
 
+  function compositeArtifact(status = "completed"): Record<string, any> {
+    const composite = composeReleaseAttemptJobs(
+      [
+        {
+          jobs: ["qa smoke ci", "QA Smoke CI"].map((name) => ({
+            conclusion: "success",
+            name,
+            status: "completed",
+          })),
+          runAttempt: 1,
+        },
+      ],
+      { effectiveRunAttempt: 1, plannedRunAttempt: 1 },
+    );
+    return artifact("decision", 2, executionPlan({ rerunGroup: "ci" }), {
+      compositeJobsSha256: composite.sha256,
+      conclusion: status === "completed" ? "success" : "",
+      dispatchActor: "github-actions[bot]",
+      jobs: composite.jobs,
+      observedRunAttempts: [1],
+      plannedRunAttempt: 1,
+      repository: "openclaw/openclaw",
+      runAttempt: 1,
+      status,
+      triggeringActor: "github-actions[bot]",
+    });
+  }
+
   function selectPair(
     sealedPlan: Record<string, any>,
     decision: Record<string, any>,
@@ -1061,6 +1089,43 @@ describe("release state artifacts", () => {
         { ...stateExpected(), parentRunAttempt: 2 },
       ),
     ).toMatchObject({ decision: { state: "passed" }, drain: { state: "passed" } });
+  });
+
+  it("round-trips mixed-case composite jobs through state validation", () => {
+    const payload = compositeArtifact();
+    expect(payload.children.normalCi.timing.jobs.map((job: { name: string }) => job.name)).toEqual([
+      "QA Smoke CI",
+      "qa smoke ci",
+    ]);
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).not.toThrow();
+  });
+
+  it("rejects noncanonical composite job ordering", () => {
+    const payload = compositeArtifact();
+    payload.children.normalCi.timing.jobs.reverse();
+    expect(() => validateReleaseStateArtifact(payload, stateExpected(), "decision")).toThrow(
+      "release state child composite jobs are invalid: normalCi",
+    );
+  });
+
+  it("accepts a queued run snapshot after its jobs have progressed", () => {
+    expect(
+      validateReleaseStateArtifact(compositeArtifact("queued"), stateExpected(), "decision"),
+    ).toMatchObject({
+      activeRunIds: ["101"],
+      children: {
+        normalCi: {
+          status: "queued",
+          timing: {
+            jobs: [
+              { name: "QA Smoke CI", status: "completed" },
+              { name: "qa smoke ci", status: "completed" },
+            ],
+          },
+        },
+      },
+      state: "qualifying",
+    });
   });
 
   it("requires Decision and Drain to carry identical accepted attempt evidence", () => {
