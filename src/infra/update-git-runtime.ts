@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 
 // The Git updater passes the canonical checkout and its successfully built HEAD.
@@ -7,8 +8,8 @@ export type GitRuntimeIdentity = { root: string; sha: string | null };
 
 async function readHead(filePath: string, field: "commit" | "head"): Promise<string | null> {
   try {
-    const value = JSON.parse(await fs.readFile(filePath, "utf8")) as Record<string, unknown>;
-    return typeof value[field] === "string" ? value[field] : null;
+    const value = asNullableRecord(JSON.parse(await fs.readFile(filePath, "utf8")))?.[field];
+    return typeof value === "string" ? value : null;
   } catch {
     return null;
   }

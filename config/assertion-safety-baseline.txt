@@ -3294,7 +3294,6 @@ src/infra/update-check-package-target.ts	3
 src/infra/update-doctor-result.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
-src/infra/update-runner-git-recovery.ts	1
 src/infra/update-runner-install-surface.ts	1
 src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4
