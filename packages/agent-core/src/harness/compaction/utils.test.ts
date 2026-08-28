@@ -142,23 +142,47 @@ describe("serializeConversation", () => {
           type: "image",
           data: "IMAGE_PAYLOAD_SENTINEL",
           mimeType: "PRIVATE_MIME_SENTINEL",
+          text: "IMAGE_TEXT_SENTINEL",
         })),
         ...Array.from({ length: 1_000 }, (_, i) => ({
-          type: `other-media-${i}`,
+          type: `other-media-${i}-${"x".repeat(1_000)}`,
           data: "OTHER_PAYLOAD_SENTINEL",
+          text: "OTHER_TEXT_SENTINEL",
+          content: "OTHER_CONTENT_SENTINEL",
+          thinking: "PRIVATE_REASONING_SENTINEL",
         })),
         { type: "text", text: toolText },
       ];
       const serialized = serializeConversation([{ role, content }] as unknown as Message[]);
+      const textOnly = serializeConversation([
+        { role, content: content.filter((block) => block.type === "text") },
+      ] as unknown as Message[]);
+      const label = `[${role === "user" ? "User" : "Tool result"}]: `;
+      const markers =
+        "[image data removed - already processed by model]\n" +
+        "[non-text data removed - already processed by model]\n";
 
-      expect(serialized.split("[image data removed - already processed by model]")).toHaveLength(2);
-      expect(serialized.split("[non-text data removed - already processed by model]")).toHaveLength(
-        2,
-      );
+      expect(serialized).toBe(`${label}${markers}${textOnly.slice(label.length)}`);
+      expect(serialized.length - textOnly.length).toBe(103);
       expect(serialized).toContain("start ");
       expect(serialized).toContain("ERROR: terminal failure");
       expect(serialized).not.toMatch(/SENTINEL|other-media-/);
-      expect(serialized.length).toBeLessThan(role === "user" ? toolText.length + 120 : 2_200);
+    },
+  );
+
+  it.each(["user", "toolResult"] as const)(
+    "keeps non-text-only %s messages distinct from empty messages",
+    (role) => {
+      const message = {
+        role,
+        content: [{ type: "audio", data: "AUDIO_PAYLOAD_SENTINEL" }],
+      } as unknown as Message;
+      const empty = { role, content: [{ type: "text", text: "" }] } as Message;
+      const expected = `[${role === "user" ? "User" : "Tool result"}]: [non-text data removed - already processed by model]`;
+
+      expect(serializeConversation([empty, message, empty, message])).toBe(
+        `${expected}\n\n${expected}`,
+      );
     },
   );
 
