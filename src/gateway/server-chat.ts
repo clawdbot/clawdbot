@@ -312,12 +312,9 @@ function resolveBroadcastDelta(params: {
   text: string;
   previousBroadcastText: string | undefined;
 }): BroadcastDelta | undefined {
-  if (!params.text) {
-    return undefined;
-  }
   const previous = params.previousBroadcastText;
   if (previous === undefined) {
-    return { deltaText: params.text };
+    return params.text ? { deltaText: params.text } : undefined;
   }
   if (!params.text.startsWith(previous)) {
     return { deltaText: params.text, replace: true };
@@ -964,23 +961,32 @@ export function createAgentEventHandler({
     clientRunId: string,
     sourceRunId: string,
     seq: number,
-    text: string,
-    delta?: unknown,
+    input: NonNullable<ReturnType<typeof resolveAssistantLiveChatInput>>,
     opts?: { controlUiVisible?: boolean },
   ) => {
     const run = chatRunState.getOrCreate(clientRunId);
     const previousRawText = run.rawBuffer ?? "";
+    if (!input.itemId) {
+      delete run.assistantScope;
+    } else if (run.assistantScope?.itemId !== input.itemId) {
+      run.assistantScope = { itemId: input.itemId, prefix: previousRawText };
+    }
     const mergedRawText = resolveMergedAssistantText({
       previousText: previousRawText,
-      nextText: text,
-      nextDelta: typeof delta === "string" ? delta : "",
+      nextText: input.text,
+      nextDelta: input.delta,
+      scope: run.assistantScope,
     });
-    if (!mergedRawText) {
+    if (!mergedRawText && !previousRawText) {
       return;
     }
     const now = Date.now();
     run.rawBuffer = mergedRawText;
     run.bufferUpdatedAt = now;
+    if (!mergedRawText) {
+      broadcastChatDelta(sessionKey, agentId, clientRunId, sourceRunId, seq, "", opts);
+      return;
+    }
     const waitedMs = now - (run.deltaSentAt ?? 0);
     if (waitedMs < LIVE_TEXT_PACING_MS) {
       scheduleChatDeltaFlush(
@@ -1647,10 +1653,11 @@ export function createAgentEventHandler({
       }
       const assistantLiveChatInput =
         evt.stream === "assistant" ? resolveAssistantLiveChatInput(evt.data) : undefined;
+      const suppressAssistant = shouldSuppressAssistantEventForLiveChat(evt.data);
       if (
         !isAborted &&
         assistantLiveChatInput &&
-        !shouldSuppressAssistantEventForLiveChat(evt.data)
+        (!suppressAssistant || assistantLiveChatInput.itemId)
       ) {
         emitChatDelta(
           sessionKey,
@@ -1658,8 +1665,9 @@ export function createAgentEventHandler({
           clientRunId,
           evt.runId,
           evt.seq,
-          assistantLiveChatInput.text,
-          assistantLiveChatInput.delta,
+          suppressAssistant
+            ? { ...assistantLiveChatInput, text: "", delta: "" }
+            : assistantLiveChatInput,
           {
             controlUiVisible: isControlUiVisible,
           },
