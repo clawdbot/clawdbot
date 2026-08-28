@@ -71,7 +71,9 @@ describeLive("deepgram live", () => {
       baseUrl: DEEPGRAM_BASE_URL,
       timeoutMs: 20000,
     });
-    expect(result.text.trim().length).toBeGreaterThan(0);
+    expect(result.text.toLowerCase().replaceAll(/[^a-z0-9]/gu, "")).toContain(
+      "lifemovesprettyfast",
+    );
   }, 30000);
 
   it("streams realtime STT through the registered transcription provider", async () => {

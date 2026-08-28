@@ -148,6 +148,9 @@ importers:
       hosted-git-info:
         specifier: 10.1.1
         version: 10.1.1
+      https-proxy-agent:
+        specifier: 7.0.6
+        version: 7.0.6(supports-color@10.2.2)
       iconv-lite:
         specifier: 0.7.3
         version: 0.7.3

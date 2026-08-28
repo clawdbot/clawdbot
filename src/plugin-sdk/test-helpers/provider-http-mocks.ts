@@ -328,11 +328,25 @@ vi.mock("openclaw/plugin-sdk/provider-http", async (importActual) => ({
   pollProviderOperationJson: providerHttpMocks.pollProviderOperationJsonMock,
   postJsonRequest: providerHttpMocks.postJsonRequestMock,
   postMultipartRequest: providerHttpMocks.postMultipartRequestMock,
+  postTranscriptionRequest: (
+    await importActual<typeof import("openclaw/plugin-sdk/provider-http")>()
+  ).postTranscriptionRequest,
   providerOperationRetryConfig: (_stage: string) => true,
   readProviderJsonResponse: providerHttpMocks.readProviderJsonResponseMock,
+  readProviderJsonObjectResponse: (
+    await importActual<typeof import("openclaw/plugin-sdk/provider-http")>()
+  ).readProviderJsonObjectResponse,
+  requireTranscriptionText: (
+    await importActual<typeof import("openclaw/plugin-sdk/provider-http")>()
+  ).requireTranscriptionText,
   resolveProviderOperationTimeoutMs: ({ defaultTimeoutMs }: { defaultTimeoutMs: number }) =>
     defaultTimeoutMs,
   resolveProviderHttpRequestConfig: providerHttpMocks.resolveProviderHttpRequestConfigMock,
+  resolveProviderHttpRequestConfigWithOriginTrust: (
+    await importActual<typeof import("openclaw/plugin-sdk/provider-http")>()
+  ).resolveProviderHttpRequestConfigWithOriginTrust,
+  openProviderWebSocket: (await importActual<typeof import("openclaw/plugin-sdk/provider-http")>())
+    .openProviderWebSocket,
   resolveProviderRequestHeaders: providerHttpMocks.resolveProviderRequestHeadersMock,
   [providerHttpMockKeys.sanitizeConfiguredModelProviderRequest]:
     providerHttpMocks.sanitizeConfiguredModelProviderRequestMock,
