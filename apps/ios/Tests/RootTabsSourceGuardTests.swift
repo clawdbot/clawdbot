@@ -322,7 +322,8 @@ struct RootTabsSourceGuardTests {
         let projectSource = try String(contentsOf: Self.xcodeProjectSourceURL(), encoding: .utf8)
 
         #expect(activitySource.contains("struct IPadActivityScreen: View"))
-        #expect(activitySource.contains("self.appModel.makeChatTransport()"))
+        #expect(activitySource.contains("self.appModel.loadChatSessionRoster("))
+        #expect(!activitySource.contains("self.appModel.makeChatTransport()"))
         #expect(appModelSource.contains("return IOSGatewayChatTransport("))
         #expect(appModelSource.contains("globalAgentId: self.chatDeliveryAgentId"))
         #expect(!appModelSource.contains("defaultAgentId: self.gatewayDefaultAgentId"))
