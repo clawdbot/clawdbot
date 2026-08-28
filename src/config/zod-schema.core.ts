@@ -321,7 +321,11 @@ const ModelCompatSchema = z
   .object({
     supportsStore: z.boolean().optional(),
     supportsPromptCacheKey: z.boolean().optional(),
-    responsesContinuationIdleMinutes: z.number().positive().optional(),
+    // Converted to ms and passed straight to setTimeout, whose delay argument
+    // overflows above 2^31-1 ms (~35791.39 minutes) and fires almost
+    // immediately instead of after the configured wait -- reject values that
+    // would silently defeat the TTL they're supposed to set.
+    responsesContinuationIdleMinutes: z.number().positive().max(35_791).optional(),
     supportsDeveloperRole: z.boolean().optional(),
     supportsReasoningEffort: z.boolean().optional(),
     supportsTemperature: z.boolean().optional(),
