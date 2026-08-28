@@ -142,7 +142,6 @@ type CreateMattermostConnectOnceOpts = {
   healthCheckIntervalMs?: number;
   pingIntervalMs?: number;
   pongTimeoutMs?: number;
-  authTimeoutMs?: number;
 };
 
 const defaultMattermostWebSocketFactory: MattermostWebSocketFactory = (url, options) => {
@@ -160,7 +159,6 @@ export function createMattermostConnectOnce(
   const healthCheckIntervalMs = opts.healthCheckIntervalMs ?? 30_000;
   const pingIntervalMs = opts.pingIntervalMs ?? 30_000;
   const pongTimeoutMs = opts.pongTimeoutMs ?? 10_000;
-  const authTimeoutMs = opts.authTimeoutMs ?? MATTERMOST_WEBSOCKET_AUTH_TIMEOUT_MS;
   return async () => {
     const flowId = randomUUID();
     const ws = webSocketFactory(opts.wsUrl, {
@@ -348,7 +346,7 @@ export function createMattermostConnectOnce(
             opts.runtime.error?.("mattermost websocket authentication timed out — reconnecting");
             stopHealthChecks();
             ws.terminate();
-          }, authTimeoutMs);
+          }, MATTERMOST_WEBSOCKET_AUTH_TIMEOUT_MS);
           scheduleProtocolPing();
 
           // Periodically check if the bot account was modified (e.g. disable/enable).

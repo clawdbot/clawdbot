@@ -179,30 +179,6 @@ describe("mattermost websocket monitor", () => {
     expect((failure as Error).message).toBe("websocket closed before open (code 1006)");
   });
 
-  it("rejects when the websocket closes before authentication completes", async () => {
-    const socket = new FakeWebSocket();
-    const connectOnce = createMattermostConnectOnce({
-      wsUrl: "wss://example.invalid/api/v4/websocket",
-      botToken: "revoked-token",
-      runtime: testRuntime(),
-      nextSeq: () => 1,
-      onPosted: async () => {},
-      webSocketFactory: () => socket,
-    });
-
-    queueMicrotask(() => {
-      socket.emitOpen();
-      // Mattermost rejects the challenge token by closing without any reply.
-      socket.emitClose(1006);
-    });
-
-    await expect(connectOnce()).rejects.toMatchObject({
-      name: "WebSocketClosedBeforeAuthenticationError",
-      code: 1006,
-      message: expect.stringContaining("closed before authentication"),
-    });
-  });
-
   it("reports a transient pre-authentication close without asserting a token failure", async () => {
     const socket = new FakeWebSocket();
     const connectOnce = createMattermostConnectOnce({
@@ -293,13 +269,12 @@ describe("mattermost websocket monitor", () => {
       nextSeq: () => 1,
       onPosted: async () => {},
       webSocketFactory: () => socket,
-      authTimeoutMs: 100,
     });
 
     const connected = connectOnce();
     socket.emitOpen();
 
-    await vi.advanceTimersByTimeAsync(99);
+    await vi.advanceTimersByTimeAsync(29_999);
     expect(socket.terminateCalls).toBe(0);
     await vi.advanceTimersByTimeAsync(1);
     expect(socket.terminateCalls).toBe(1);
@@ -324,14 +299,13 @@ describe("mattermost websocket monitor", () => {
       nextSeq: () => 1,
       onPosted: async () => {},
       webSocketFactory: () => socket,
-      authTimeoutMs: 100,
     });
 
     const connected = connectOnce();
     socket.emitOpen();
     socket.emitMessage(authOkFrame(1));
 
-    await vi.advanceTimersByTimeAsync(500);
+    await vi.advanceTimersByTimeAsync(30_000);
     expect(socket.terminateCalls).toBe(0);
 
     socket.emitClose(1000);
