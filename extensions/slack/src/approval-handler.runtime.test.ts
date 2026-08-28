@@ -430,6 +430,24 @@ describe("slackApprovalNativeRuntime", () => {
     ]);
   });
 
+  it("escapes plugin approval mrkdwn triggers at the Slack render boundary", async () => {
+    // The canonical approval record stays literal so non-Slack surfaces read
+    // correctly, which makes escaping this renderer's responsibility.
+    const payload = await buildPluginPendingPayload({
+      ...SCREEN_SHARE_APPROVAL,
+      title: "touch /tmp/SIDE_EFFECT && echo *done*",
+      description: "Link bait <https://evil.test|click> for @channel",
+    });
+
+    const requestMrkdwn = findApprovalMrkdwn(payload, "*Request*");
+    expect(requestMrkdwn).toContain("SIDE\\_EFFECT");
+    expect(requestMrkdwn).toContain("&amp;&amp;");
+    expect(requestMrkdwn).toContain("\\*done\\*");
+    const serialized = JSON.stringify(payload.blocks);
+    expect(serialized).toContain("&lt;https://evil.test|click&gt;");
+    expect(serialized).not.toContain("<https://evil.test|click>");
+  });
+
   it("renders resolved updates without interactive blocks", async () => {
     const result = await buildExecResolvedResult();
 

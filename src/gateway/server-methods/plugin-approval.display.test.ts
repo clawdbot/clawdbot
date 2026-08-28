@@ -44,7 +44,7 @@ describe("createPluginApprovalHandlers display bounds", () => {
     await handlerPromise;
   });
 
-  it("accepts ampersand-heavy titles that expand during channel sanitization", async () => {
+  it("stores ampersand-heavy titles literally instead of channel-encoding them", async () => {
     const handlers = createPluginApprovalHandlers(manager);
     const respond = vi.fn();
     const title = `deploy ${"&".repeat(35)} now`;
@@ -63,8 +63,8 @@ describe("createPluginApprovalHandlers display bounds", () => {
     )(opts);
     const approvalId = await waitForAcceptedApproval(respond);
     const stored = manager.getSnapshot(approvalId)?.request;
-    expect(stored?.title).toContain("&amp;");
-    expect(stored?.title).not.toContain("&amp;amp;");
+    expect(stored?.title).toBe(title);
+    expect(stored?.title).not.toContain("&amp;");
     manager.resolve(approvalId, "deny");
     await handlerPromise;
   });

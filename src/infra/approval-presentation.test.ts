@@ -162,7 +162,7 @@ describe("buildApprovalPresentation", () => {
     expect(Array.from(truncatedDescription.description)).toHaveLength(512);
   });
 
-  it("does not double-escape channel entities when re-projecting stored plugin copy", () => {
+  it("leaves channel entities in stored plugin copy untouched", () => {
     const storedTitle = "deploy &amp; ship";
     const presentation = buildPluginPresentation({
       title: storedTitle,
@@ -172,12 +172,14 @@ describe("buildApprovalPresentation", () => {
     expect(presentation).toMatchObject({
       kind: "plugin",
       title: storedTitle,
-      description: expect.stringContaining("&amp;&amp;"),
+      description: expect.stringContaining("foo && bar"),
     });
     expect(JSON.stringify(presentation)).not.toContain("&amp;amp;");
   });
 
-  it("escapes Slack mrkdwn and mention triggers in plugin presentation text", () => {
+  it("keeps plugin presentation text renderer-neutral for non-Slack surfaces", () => {
+    // Control UI, Teams, and Discord render this projection verbatim, so shell
+    // punctuation must survive. Slack escapes mrkdwn in its own renderer.
     const presentation = buildPluginPresentation({
       title: "*Run* @channel",
       description: "ACP tool kind: execute. Command: `rm -rf /` <https://evil.test|click>",
@@ -185,13 +187,12 @@ describe("buildApprovalPresentation", () => {
 
     expect(presentation).toMatchObject({
       kind: "plugin",
-      title: "\u2217Run\u2217 \uff20channel",
-      description: expect.not.stringContaining("@channel"),
+      title: "*Run* @channel",
+      description: expect.stringContaining("`rm -rf /`"),
     });
     const serialized = JSON.stringify(presentation);
-    expect(serialized).not.toContain("*Run*");
-    expect(serialized).not.toContain("@channel");
-    expect(serialized).not.toContain("<https://evil.test|click>");
+    expect(serialized).not.toContain("\u2217Run\u2217");
+    expect(serialized).not.toContain("\uff20channel");
   });
 
   it("truncates oversized plugin detail without invalidating the presentation", () => {

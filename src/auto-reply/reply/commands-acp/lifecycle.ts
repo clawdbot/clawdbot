@@ -14,6 +14,7 @@ import {
   resolveAcpDispatchPolicyError,
   resolveAcpDispatchPolicyMessage,
 } from "../../../acp/policy.js";
+import { resolveAcpRuntimeApprovalOwnerPluginId } from "../../../acp/runtime/registry.js";
 import { resolveSessionStorePathForAcp } from "../../../acp/runtime/session-meta.js";
 import {
   closeAdmittedRunDelegatedAuthority,
@@ -427,8 +428,19 @@ async function runAcpSteer(params: {
 
   let closeAcpHostCapabilities: (() => void) | undefined;
   try {
+    // Approval ownership follows the backend serving this session so a
+    // non-ACPX ACP backend cannot raise approvals under ACPX authority.
+    const steerResolution = acpManager.resolveSession({
+      cfg: params.cfg,
+      sessionKey: params.sessionKey,
+    });
+    const steerBackendId =
+      steerResolution?.kind === "ready"
+        ? normalizeOptionalString(steerResolution.meta?.backend)
+        : undefined;
+    const approvalOwnerPluginId = resolveAcpRuntimeApprovalOwnerPluginId(steerBackendId);
     const host = createAgentHarnessHostCapabilities({
-      pluginId: "acpx",
+      pluginId: approvalOwnerPluginId ?? steerBackendId ?? "acp",
       attempt: {
         admittedRunContext,
         runId: params.requestId,
@@ -444,9 +456,11 @@ async function runAcpSteer(params: {
       },
     });
     closeAcpHostCapabilities = host.close;
-    const onPermissionRequest = createAcpPermissionHandler({
-      host: host.capabilities,
-    });
+    const onPermissionRequest = approvalOwnerPluginId
+      ? createAcpPermissionHandler({
+          host: host.capabilities,
+        })
+      : undefined;
     await acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,

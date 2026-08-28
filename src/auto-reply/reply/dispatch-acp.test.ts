@@ -156,6 +156,15 @@ const hostCapabilityMocks = vi.hoisted(() => ({
   permissionHandler: vi.fn(),
 }));
 
+const acpRegistryMocks = vi.hoisted(() => ({
+  resolveApprovalOwner: vi.fn((backendId?: string) => (backendId === "acpx" ? "acpx" : null)),
+}));
+
+vi.mock("../../acp/runtime/registry.js", () => ({
+  resolveAcpRuntimeApprovalOwnerPluginId: (backendId?: string) =>
+    acpRegistryMocks.resolveApprovalOwner(backendId),
+}));
+
 const bindingServiceMocks = vi.hoisted(() => ({
   listBySession: vi.fn<(sessionKey: string) => SessionBindingRecord[]>(() => []),
   unbind: vi.fn<(input: unknown) => Promise<SessionBindingRecord[]>>(async () => []),

@@ -16,6 +16,7 @@ import {
   formatAcpRuntimeErrorText,
   toAcpRuntimeError,
 } from "../../acp/runtime/errors.js";
+import { resolveAcpRuntimeApprovalOwnerPluginId } from "../../acp/runtime/registry.js";
 import {
   closeAdmittedRunDelegatedAuthority,
   createOperationalRunInstanceRef,
@@ -923,8 +924,15 @@ export async function tryDispatchAcpReplyCore(params: {
     const sourceThreadId =
       routedThreadId == null ? undefined : normalizeOptionalString(String(routedThreadId));
     const { createAgentHarnessHostCapabilities } = await loadDispatchAcpHostCapability();
+    // Approval ownership follows the backend serving this session, not a fixed
+    // plugin id: the Gateway trusts it for approval policy and audit.
+    const acpBackendId =
+      acpResolution.kind === "ready"
+        ? normalizeOptionalString(acpResolution.meta.backend)
+        : undefined;
+    const approvalOwnerPluginId = resolveAcpRuntimeApprovalOwnerPluginId(acpBackendId);
     const host = createAgentHarnessHostCapabilities({
-      pluginId: "acpx",
+      pluginId: approvalOwnerPluginId ?? acpBackendId ?? "acp",
       attempt: {
         admittedRunContext,
         runId: requestId,
@@ -949,13 +957,17 @@ export async function tryDispatchAcpReplyCore(params: {
     });
     closeAcpHostCapabilities = host.close;
     const { createAcpPermissionHandler } = await loadDispatchAcpPermissionHandler();
-    const onPermissionRequest = createAcpPermissionHandler({
-      host: host.capabilities,
-      cwd:
-        acpResolution.kind === "ready"
-          ? normalizeOptionalString(acpResolution.meta.cwd)
-          : undefined,
-    });
+    // Fail closed when the backend declared no approval owner rather than
+    // raising approvals under another plugin's authority.
+    const onPermissionRequest = approvalOwnerPluginId
+      ? createAcpPermissionHandler({
+          host: host.capabilities,
+          cwd:
+            acpResolution.kind === "ready"
+              ? normalizeOptionalString(acpResolution.meta.cwd)
+              : undefined,
+        })
+      : undefined;
     const elicitationParams = {
       sourceSessionKey: sessionKey,
       targetSessionKey: canonicalSessionKey,

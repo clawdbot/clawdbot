@@ -11,8 +11,7 @@ import { sanitizeApprovalScope, type ApprovalScope } from "../../infra/approval-
 import type { ExecApprovalForwarder } from "../../infra/exec-approval-forwarder.js";
 import {
   sanitizeExecApprovalDisplayText,
-  sanitizePluginApprovalChannelDisplayText,
-  sanitizePluginApprovalChannelWarningText,
+  sanitizeExecApprovalWarningText,
 } from "../../infra/exec-approval-text-sanitize.js";
 import { resolveCanonicalPluginApprovalRequestAllowedDecisions } from "../../infra/plugin-approval-canonical-decisions.js";
 import type {
@@ -161,15 +160,16 @@ export function createPluginApprovalHandlers(
 
       // Sanitize once at the creation boundary, like exec command text: the
       // raw record otherwise reaches channel messages, iOS push, and the web
-      // modal unescaped (bidi/invisible spoofing). Channel escaping can expand
-      // entities (for example `&` -> `&amp;`), so cap by code point after
-      // sanitization instead of rejecting near-limit operator commands.
+      // modal unescaped (bidi/invisible spoofing). Redaction and invisible-char
+      // escaping are renderer-neutral; channel markup escaping belongs to the
+      // renderer that owns the markup dialect, so the stored copy stays literal
+      // for the Control UI, Teams, and Discord.
       const sanitizedTitle = truncatePluginApprovalDisplayField(
-        sanitizePluginApprovalChannelDisplayText(p.title),
+        sanitizeExecApprovalDisplayText(p.title),
         PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
       );
       const sanitizedDescription = truncatePluginApprovalDisplayField(
-        sanitizePluginApprovalChannelWarningText(p.description),
+        sanitizeExecApprovalWarningText(p.description),
         PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
       );
       const rawDetail = normalizeTrimmedString(p.detail);
@@ -188,7 +188,7 @@ export function createPluginApprovalHandlers(
         detail:
           rawDetail === null
             ? null
-            : truncatePluginApprovalDetail(sanitizePluginApprovalChannelWarningText(rawDetail)),
+            : truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail)),
         severity: (p.severity as PluginApprovalRequestPayload["severity"]) ?? null,
         toolName: sanitizeMeta(p.toolName),
         toolCallId: p.toolCallId ?? null,

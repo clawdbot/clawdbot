@@ -4,7 +4,6 @@ import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-displ
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-  sanitizePluginApprovalChannelDisplayText,
 } from "./exec-approval-text-sanitize.js";
 
 function hasLoneSurrogate(value: string): boolean {
@@ -230,23 +229,13 @@ describe("sanitizeExecApprovalDisplayText", () => {
     expect(result).toContain("safe=1");
   });
 
-  it("escapes channel markup and mention triggers for plugin approval display surfaces", () => {
-    const result = sanitizePluginApprovalChannelDisplayText(
-      "*bold* _italic_ `code` ~strike~ <https://evil.test|click> @channel <!here>",
-    );
-    expect(result).not.toContain("*bold*");
-    expect(result).not.toContain("_italic_");
-    expect(result).not.toContain("`code`");
-    expect(result).not.toContain("@channel");
-    expect(result).not.toContain("<https://evil.test|click>");
-    expect(result).toContain("\u2217bold\u2217");
-    expect(result).toContain("\uff20channel");
-  });
-
-  it("keeps channel entity escaping idempotent for stored gateway copy", () => {
-    const once = sanitizePluginApprovalChannelDisplayText("a && b");
-    expect(once).toBe("a &amp;&amp; b");
-    expect(sanitizePluginApprovalChannelDisplayText(once)).toBe(once);
+  it("keeps canonical approval text renderer-neutral so non-Slack surfaces read literally", () => {
+    // Channel markup escaping belongs to the renderer that owns the dialect.
+    // Control UI, Teams, and Discord render this copy verbatim, so shell
+    // punctuation must survive unchanged instead of becoming mrkdwn escapes or
+    // fullwidth lookalikes.
+    const command = "touch /tmp/SIDE_EFFECT_HAPPENED && echo *done* @team";
+    expect(sanitizeExecApprovalDisplayText(command)).toBe(command);
   });
 });
 

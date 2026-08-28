@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { resolveAcpRuntimeApprovalOwnerPluginId } from "../../acp/runtime/registry.js";
 import { createLazyAcpElicitationHandler } from "../../auto-reply/reply/acp-elicitation-handler-lazy.js";
 import { createAcpPermissionHandler } from "../../auto-reply/reply/acp-permission-handler.js";
 import { resolveInlineAgentImageAttachments } from "../../auto-reply/reply/agent-turn-attachments.js";
@@ -160,8 +161,15 @@ export async function runAcpAgentCommand(params: {
       opts: params.opts,
       sessionAgentId: params.sessionAgentId,
     });
+    // The Gateway trusts this id as the approval owner for policy and audit, so
+    // it must come from the backend that actually serves the session. Any plugin
+    // can register an ACP backend, and attributing its approvals to ACPX would
+    // cross plugin ownership boundaries.
+    const approvalOwnerPluginId = resolveAcpRuntimeApprovalOwnerPluginId(
+      params.acpResolution.meta.backend,
+    );
     const host = createAgentHarnessHostCapabilities({
-      pluginId: "acpx",
+      pluginId: approvalOwnerPluginId ?? params.acpResolution.meta.backend,
       attempt: {
         admittedRunContext,
         runId: params.runId,
@@ -179,10 +187,15 @@ export async function runAcpAgentCommand(params: {
       },
     });
     closeAcpHostCapabilities = host.close;
-    const onPermissionRequest = createAcpPermissionHandler({
-      host: host.capabilities,
-      cwd: normalizeOptionalString(params.acpResolution.meta.cwd) ?? params.workspaceDir,
-    });
+    // A backend that declared no approval owner cannot raise plugin approvals;
+    // its permission requests fall back to the non-interactive policy instead of
+    // borrowing another plugin's approval authority.
+    const onPermissionRequest = approvalOwnerPluginId
+      ? createAcpPermissionHandler({
+          host: host.capabilities,
+          cwd: normalizeOptionalString(params.acpResolution.meta.cwd) ?? params.workspaceDir,
+        })
+      : undefined;
     await params.acpManager.runTurn({
       admittedRunContext,
       cfg: params.cfg,

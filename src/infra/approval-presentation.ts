@@ -12,8 +12,6 @@ import { resolveExecApprovalCommandDisplay } from "./exec-approval-command-displ
 import {
   sanitizeExecApprovalDisplayText,
   sanitizeExecApprovalWarningText,
-  sanitizePluginApprovalChannelDisplayText,
-  sanitizePluginApprovalChannelWarningText,
 } from "./exec-approval-text-sanitize.js";
 import type { ExecApprovalRequestPayload } from "./exec-approvals.js";
 import {
@@ -88,12 +86,14 @@ function buildPluginApprovalPresentation(params: {
   }
   // Plugin text crosses every reviewer surface. Apply the same redaction and
   // spoof-resistant escaping as exec prompts before enforcing wire-size limits.
+  // Markup escaping stays with the renderer so this canonical copy reads
+  // literally on surfaces that are not Slack mrkdwn.
   const title = truncatePluginApprovalDisplayField(
-    sanitizePluginApprovalChannelDisplayText(rawTitle),
+    sanitizeExecApprovalDisplayText(rawTitle),
     PLUGIN_APPROVAL_TITLE_MAX_LENGTH,
   );
   const description = truncatePluginApprovalDisplayField(
-    sanitizePluginApprovalChannelWarningText(rawDescription),
+    sanitizeExecApprovalWarningText(rawDescription),
     PLUGIN_APPROVAL_DESCRIPTION_MAX_LENGTH,
   );
   const severity =
@@ -102,7 +102,7 @@ function buildPluginApprovalPresentation(params: {
       : "warning";
   const rawDetail = normalizeOptionalString(request.detail);
   const detail = rawDetail
-    ? truncatePluginApprovalDetail(sanitizePluginApprovalChannelWarningText(rawDetail))
+    ? truncatePluginApprovalDetail(sanitizeExecApprovalWarningText(rawDetail))
     : null;
   const scope = request.scope ? sanitizeApprovalScope(request.scope) : null;
   return {

@@ -19,6 +19,15 @@ const admissionMocks = vi.hoisted(() => ({
   close: vi.fn(),
 }));
 
+const registryMocks = vi.hoisted(() => ({
+  resolveApprovalOwner: vi.fn(),
+}));
+
+vi.mock("../../../acp/runtime/registry.js", () => ({
+  resolveAcpRuntimeApprovalOwnerPluginId: (backendId?: string) =>
+    registryMocks.resolveApprovalOwner(backendId),
+}));
+
 vi.mock("../../../acp/control-plane/manager.js", () => ({
   getAcpSessionManager: () => managerMocks,
 }));
@@ -69,7 +78,12 @@ vi.mock("../../../acp/control-plane/manager.utils.js", () => ({
 describe("handleAcpSteerAction permission bridge", () => {
   beforeEach(() => {
     managerMocks.resolveSession.mockReset();
-    managerMocks.resolveSession.mockReturnValue({ kind: "ready" });
+    managerMocks.resolveSession.mockReturnValue({ kind: "ready", meta: { backend: "acpx" } });
+    registryMocks.resolveApprovalOwner.mockReset();
+    // Only a backend that declared an approval owner gets one back.
+    registryMocks.resolveApprovalOwner.mockImplementation((backendId?: string) =>
+      backendId === "acpx" ? "acpx" : null,
+    );
     managerMocks.runTurn.mockReset();
     managerMocks.runTurn.mockResolvedValue(undefined);
     admissionMocks.admit.mockReset();
@@ -135,6 +149,40 @@ describe("handleAcpSteerAction permission bridge", () => {
     );
     expect(hostCapabilityMocks.close).toHaveBeenCalledOnce();
     expect(admissionMocks.close).toHaveBeenCalledOnce();
+  });
+
+  it("does not attribute a non-ACPX backend's steer approvals to ACPX", async () => {
+    // Any plugin can register an ACP backend. One that declared no approval
+    // owner must not borrow ACPX's approval policy and audit identity, so the
+    // permission bridge stays closed instead of falling back to a fixed id.
+    managerMocks.resolveSession.mockReturnValue({
+      kind: "ready",
+      meta: { backend: "rogue-backend" },
+    });
+
+    const { handleAcpSteerAction } = await import("./lifecycle.js");
+    const params = buildCommandTestParams(" /acp steer child run ls", {} as OpenClawConfig, {
+      Provider: "slack",
+      Surface: "slack",
+      OriginatingChannel: "slack",
+      OriginatingTo: "channel:C123",
+      To: "channel:C123",
+      AccountId: "workspace-1",
+    });
+    params.sessionKey = "agent:main:slack:channel:C123";
+
+    await handleAcpSteerAction(params, ["--session", "child", "run", "ls"]);
+
+    expect(hostCapabilityMocks.create).toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "rogue-backend" }),
+    );
+    expect(hostCapabilityMocks.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ pluginId: "acpx" }),
+    );
+    expect(hostCapabilityMocks.createPermissionHandler).not.toHaveBeenCalled();
+    expect(managerMocks.runTurn).toHaveBeenCalledWith(
+      expect.objectContaining({ onPermissionRequest: undefined }),
+    );
   });
 
   it("forwards the command abort signal so a cancelled steer cannot honor a later approval", async () => {
