@@ -10,6 +10,7 @@ import { BROWSER_PANEL_TOGGLE_EVENT } from "../../../components/panel-toggle-con
 import { t } from "../../../i18n/index.ts";
 import { loadBrowserTabThumbnail } from "../../../lib/chat/browser-tab-preview.ts";
 import type { ToolPreview } from "../../../lib/chat/tool-cards.ts";
+import { openExternalUrlSafe } from "../../../lib/open-external-url.ts";
 import { OpenClawLitElement } from "../../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../../lit/subscriptions-controller.ts";
 
@@ -271,7 +272,7 @@ class OpenClawBrowserTabCard extends OpenClawLitElement {
     const url = this.preview?.url;
     this.menuOpen = false;
     if (url) {
-      window.open(url, "_blank", "noopener");
+      openExternalUrlSafe(url);
     }
   };
 
