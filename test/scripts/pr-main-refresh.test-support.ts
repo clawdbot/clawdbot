@@ -10,8 +10,8 @@ import {
 } from "node:fs";
 import { delimiter, join } from "node:path";
 
-// Keep the complete wrapper/lock/entry/gate owners. Only Git transport faults
-// and GitHub responses are synthetic; no functions are replaced in the wrapper.
+// Keep the complete wrapper/lock/entry/gate owners. Command resolution, Git
+// transport faults, and GitHub responses are synthetic; rg invocation is forbidden.
 export function createMainRefreshFixture(directory: string) {
   const root = realpathSync(directory);
   const canonical = join(root, "canonical");
@@ -34,7 +34,9 @@ export function createMainRefreshFixture(directory: string) {
   const realGit = spawnSync("which", ["git"], { encoding: "utf8" }).stdout.trim();
   function git(cwd: string, ...args: string[]) {
     const result = spawnSync(realGit, args, { cwd, env, encoding: "utf8" });
-    if (result.status !== 0) throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+    if (result.status !== 0) {
+      throw new Error(`git ${args.join(" ")}: ${result.stderr}`);
+    }
     return result.stdout.trim();
   }
   git(root, "init", "--bare", "-b", "main", origin);
@@ -378,9 +380,18 @@ if (jqIndex >= 0) {
   process.exit(result.status ?? 1);
 }
 console.log(JSON.stringify(value));
+    `,
+  );
+  writeFileSync(
+    join(bin, "rg"),
+    `#!/bin/sh
+echo "unexpected rg invocation in main-refresh fixture" >&2
+exit 99
 `,
   );
-  for (const command of ["git", "gh"]) chmodSync(join(bin, command), 0o755);
+  for (const command of ["git", "gh", "rg"]) {
+    chmodSync(join(bin, command), 0o755);
+  }
   env.PATH = `${bin}${delimiter}${env.PATH ?? ""}`;
   env.OPENCLAW_GH_BIN = join(bin, "gh");
   env.OPENCLAW_TESTBOX = "1";
