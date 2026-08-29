@@ -149,7 +149,7 @@ describe("memory forget", () => {
   });
 
   it("leaves the original memory file intact when a rewrite fails mid-write", async () => {
-    await seedSession("archived");
+    await seedMemoryForgetSession("archived");
     recordMemoryEntryOrigins({
       agentId: "main",
       origins: [
