@@ -208,6 +208,37 @@ function resolveClaudeAgentSdkOptions(
         toolUseId: request.toolUseID,
       }),
     hooks: {
+      UserPromptSubmit: [
+        {
+          hooks: [
+            async (input, _toolUseId, request) => {
+              const turn = currentTurn();
+              if (
+                input.hook_event_name !== "UserPromptSubmit" ||
+                !turn ||
+                request.signal.aborted ||
+                turn.controller.signal.aborted
+              ) {
+                return {};
+              }
+              const additionalContext = [
+                turn.context.promptContext?.prependContext,
+                turn.context.promptContext?.appendContext,
+              ]
+                .filter(Boolean)
+                .join("\n\n");
+              if (!additionalContext) {
+                return {};
+              }
+              // Native may rerun hooks after rewriting a prompt and commits only the final pass.
+              // Return this admitted turn's context on each pass; native owns attachment persistence.
+              return {
+                hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext },
+              };
+            },
+          ],
+        },
+      ],
       PreToolUse: [
         {
           hooks: [

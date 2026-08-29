@@ -14,14 +14,11 @@ import type { FailoverError } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
-import {
-  createCliAbortError,
-  executeNodeClaudeRun,
-  type resolveNodeClaudeTarget,
-} from "./execute-node-claude.js";
+import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
 import { appendCliOutputTail } from "./execute-output-buffer.js";
 import { executePluginOwnedProcess } from "./execute-plugin.js";
 import type { CliToolTracking } from "./execute-tool-tracking.js";
+import type { NodeClaudePlacement } from "./execution-target.js";
 import { createCliExitFailoverError, createCliFailoverError } from "./exit-error.js";
 import { buildCliSupervisorScopeKey } from "./helpers.js";
 import { cliBackendLog, formatCliBackendOutputDigest } from "./log.js";
@@ -70,7 +67,7 @@ export async function executeCliProcess(params: {
   events: CliEventHandlers;
   toolTracking: CliToolTracking;
   diagnostics: ReturnType<typeof createClaudeCliModelCallDiagnostics>;
-  nodePlacement: ReturnType<typeof resolveNodeClaudeTarget>;
+  nodePlacement: NodeClaudePlacement | null;
   nodeSystemPrompt?: string;
   nodeEnv?: Record<string, string>;
   nodeClearEnv?: string[];
@@ -85,6 +82,7 @@ export async function executeCliProcess(params: {
   executionArgs: string[];
   env: Record<string, string>;
   prompt: string;
+  promptContext?: PreparedCliRunContext["promptContext"];
   argsPrompt?: string;
   stdin?: string;
   noOutputTimeoutMs: number;
@@ -193,14 +191,15 @@ export async function executeCliProcess(params: {
     result = nodeRun.result;
     nodeRunAbortSignal = nodeRun.nodeRunAbortSignal;
     nodeRunTruncated = nodeRun.nodeRunTruncated;
-  } else if (params.usePluginOwnedExecution && context.preparedBackend.execute) {
+  } else if (context.executionTarget.kind === "plugin") {
     result = await executePluginOwnedProcess({
       context,
-      execute: context.preparedBackend.execute,
+      execute: context.executionTarget.execute,
       executionCommand: params.executionCommand,
       executionArgs: params.executionArgs,
       env: params.env,
       prompt: params.prompt,
+      ...(params.promptContext ? { promptContext: params.promptContext } : {}),
       useResume: params.useResume,
       forceNewSession:
         params.cliSessionIdToUse === undefined && context.openClawHistoryPrompt !== undefined,

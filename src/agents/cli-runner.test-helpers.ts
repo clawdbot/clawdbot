@@ -239,6 +239,7 @@ export function buildPreparedCliRunContext(
         (provider === "google-gemini-cli" ? "prepare-execution" : "execution-args"),
       runtimeArtifact: overrides.runtimeArtifact,
     },
+    executionTarget: { kind: "process" },
     preparedBackend: {
       backend,
       env: overrides.preparedEnv ?? {},

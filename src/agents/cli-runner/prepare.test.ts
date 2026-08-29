@@ -1994,42 +1994,64 @@ describe("prepareCliRunContext", () => {
     expect(hookContext?.channelId).toBe("telegram");
   });
 
-  it("prepends current-turn context after prompt-build hooks without changing hook or transcript prompt", async () => {
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
-      runBeforePromptBuild: vi.fn(async () => ({
-        prependContext: "trusted hook context",
-        appendContext: "trusted hook tail",
-      })),
-    };
-    mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
+  it.each([false, true])(
+    "preserves prompt privacy and order with plugin execution %s",
+    async (pluginExecution) => {
+      if (pluginExecution) {
+        setCliBackendForPrepareTest({
+          id: "test-cli",
+          bundleMcp: false,
+          prepareExecution: () => ({
+            async *execute() {
+              yield { type: "result" };
+            },
+          }),
+        });
+      }
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "before_prompt_build"),
+        runBeforePromptBuild: vi.fn(async () => ({
+          prependContext: "trusted hook context",
+          appendContext: "trusted hook tail",
+        })),
+      };
+      mockGetGlobalHookRunner.mockReturnValue(hookRunner as never);
 
-    // Current inbound metadata is untrusted channel context. It should shape
-    // the CLI prompt without contaminating transcript or hook inputs.
-    const context = await fixture.prepare({
-      sessionKey: "agent:main:test",
-      agentId: "main",
-      trigger: "user",
-      transcriptPrompt: "latest ask",
-      currentInboundContext: {
-        text: "Sender: ⟦openclaw:ctx⟧\nsender_id=U123",
-        promptJoiner: " ",
-      },
-      runId: "run-test-context",
-    });
+      // Current inbound metadata is untrusted channel context. It should shape
+      // the CLI prompt without contaminating transcript or hook inputs.
+      const context = await fixture.prepare({
+        sessionKey: "agent:main:test",
+        agentId: "main",
+        trigger: "user",
+        transcriptPrompt: "latest ask",
+        currentInboundContext: {
+          text: "Sender: ⟦openclaw:ctx⟧\nsender_id=U123",
+          promptJoiner: " ",
+        },
+        runId: "run-test-context",
+      });
 
-    expect(context.params.prompt).toBe(
-      "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail",
-    );
-    expect(context.params.transcriptPrompt).toBe("latest ask");
-    expect(context.contextEngineTurnPrompt).toBe("latest ask");
-    expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
-    const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
-      [unknown, unknown]
-    >;
-    const promptBuildParams = beforePromptBuildCalls[0]?.[0] as { prompt?: string } | undefined;
-    expect(promptBuildParams?.prompt).toBe("latest ask");
-  });
+      const logicalPrompt =
+        "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 trusted hook context\n\nlatest ask\n\ntrusted hook tail";
+      expect(context.params.prompt).toBe(
+        pluginExecution ? "Sender: ⟦openclaw:ctx⟧\nsender_id=U123 latest ask" : logicalPrompt,
+      );
+      expect(context.promptContext).toEqual(
+        pluginExecution
+          ? { prependContext: "trusted hook context", appendContext: "trusted hook tail" }
+          : undefined,
+      );
+      expect(context.promptForHooks).toBe(pluginExecution ? logicalPrompt : undefined);
+      expect(context.params.transcriptPrompt).toBe("latest ask");
+      expect(context.contextEngineTurnPrompt).toBe("latest ask");
+      expect(hookRunner.runBeforePromptBuild).toHaveBeenCalledTimes(1);
+      const beforePromptBuildCalls = hookRunner.runBeforePromptBuild.mock.calls as unknown as Array<
+        [unknown, unknown]
+      >;
+      const promptBuildParams = beforePromptBuildCalls[0]?.[0] as { prompt?: string } | undefined;
+      expect(promptBuildParams?.prompt).toBe("latest ask");
+    },
+  );
 
   it("uses compact current-turn context when a room event resumes a CLI session", async () => {
     fixture.appendTranscript({
