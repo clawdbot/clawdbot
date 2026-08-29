@@ -228,6 +228,8 @@ describe("runWorkspaceInventoryCommandToFile", () => {
       ".ruff_cache/state",
       "node_modules/pkg/index.js",
       ".DS_Store",
+      "openclaw-inbound-12345678-1234-1234-1234-123456789abc/report.pdf",
+      "nested/openclaw-inbound-12345678-1234-1234-1234-123456789abc/photo.png",
     ];
     const temporaryDirectory = path.join(root, "..", `${path.basename(root)}-transfer`);
     const initOutputPath = path.join(root, "..", `${path.basename(root)}-git-init-output`);

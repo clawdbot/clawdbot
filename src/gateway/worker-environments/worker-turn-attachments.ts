@@ -10,6 +10,7 @@ import { readMediaBuffer } from "../../media/store.js";
 import { resolveChatAttachmentMaxBytes } from "../chat-attachment-policy.js";
 import { MAX_PAYLOAD_BYTES } from "../server-constants.js";
 import type { WorkerWorkspaceTunnelHandle } from "./tunnel-contract.js";
+import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
 
 const MAX_TURN_ATTACHMENTS = 16;
 // Base64 expansion stays below the node workspace command's 128 KiB stdin cap.
@@ -29,7 +30,7 @@ function enter(candidate, expected) {
   if (identity(fs.statSync(".")) !== identity(before)) throw Error("attachment directory changed");
 }
 try {
-  if (!/^openclaw-inbound-[a-f0-9-]{36}$/.test(directory)) throw Error("invalid attachment directory");
+  if (!/^${WORKER_ATTACHMENT_DIRECTORY_PREFIX}[a-f0-9-]{36}$/.test(directory)) throw Error("invalid attachment directory");
   enter(workspace);
   if (operation === "init") fs.mkdirSync(directory, {mode: 0o700});
   enter(directory, directoryIdentity);
@@ -152,7 +153,7 @@ export async function prepareWorkerTurnAttachments(params: {
   if (!files.length) {
     return undefined;
   }
-  const directory = `openclaw-inbound-${randomUUID()}`;
+  const directory = `${WORKER_ATTACHMENT_DIRECTORY_PREFIX}${randomUUID()}`;
   const deadline = Date.now() + turn.timeoutMs;
   const execute = async (args: string[], input?: string, cleanup = false): Promise<string> => {
     const assertDispatchCurrent = cleanup ? assertCurrent : check;

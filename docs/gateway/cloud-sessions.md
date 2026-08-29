@@ -62,7 +62,7 @@ Suspension never interrupts work: sessions with an active turn, queued messages,
 
 Attach images and PDFs through the normal chat composer, including on later turns in an existing cloud session. The Gateway prepares image input, including rendered pages from scanned PDFs, before sending it to an OpenClaw worker. Codex receives image input through its Gateway-side app-server.
 
-Original attachments are copied into the placed session's remote workspace before execution. The turn includes the remote paths so file tools can inspect the originals without using Gateway-local filenames. Attachment transfer does not replace the remote workspace or overwrite existing work. Model credentials remain on the Gateway.
+Original attachments are copied into the placed session's remote workspace before execution. The turn includes the remote paths so file tools can inspect the originals without using Gateway-local filenames. These managed input copies stay readable on the worker but are excluded from workspace synchronization; they do not become project edits. Attachment transfer does not replace the remote workspace or overwrite existing work. Model credentials remain on the Gateway.
 
 ## What stays with the Gateway
 

@@ -671,6 +671,8 @@ process.kill = function(pid, signal) {
       ".ruff_cache/state",
       "node_modules/pkg/index.js",
       ".DS_Store",
+      "openclaw-inbound-12345678-1234-1234-1234-123456789abc/report.pdf",
+      "nested/openclaw-inbound-12345678-1234-1234-1234-123456789abc/photo.png",
     ];
     await Promise.all([fs.mkdir(home), fs.mkdir(workspace)]);
     await Promise.all(

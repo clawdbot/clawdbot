@@ -29,17 +29,25 @@ import {
   turn,
   unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
+import { parseWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import { applyStagedWorkerWorkspace, readActualWorkspaceManifest } from "./workspace-reconcile.js";
+import { REMOTE_WORKSPACE_MANIFEST_JS } from "./workspace-sync-scripts.js";
 
 describe("current attachments in an active remote placement", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
 
   it.each(["worker-turn", "remote-exec"] as const)(
-    "makes later image and PDF originals readable before %s inference",
+    "keeps later image and PDF originals readable without reconciling them as %s output",
     async (executionMode) => {
       const remote = path.join(await realpath(root), "remote");
-      await mkdir(remote);
-      await writeFile(path.join(remote, "remote-edits.txt"), "preserve me");
+      const local = path.join(await realpath(root), "local");
+      const remoteHome = path.join(await realpath(root), "remote-home");
+      await Promise.all([mkdir(remote), mkdir(local), mkdir(remoteHome)]);
+      for (const directory of [remote, local]) {
+        await writeFile(path.join(directory, "remote-edits.txt"), "preserve me");
+      }
+      const base = await readActualWorkspaceManifest({ root: local, baseCommit: null });
       seedActivePlacement(executionMode, remote);
       // These arrive after placement: the initial workspace snapshot cannot include them.
       const pdf = Buffer.concat([Buffer.from("%PDF-1.7\n"), Buffer.alloc(220_000, 65)]);
@@ -71,10 +79,14 @@ describe("current attachments in an active remote placement", () => {
       });
       const input = {
         ...turn(),
+        workspaceDir: local,
         prompt: "Read both attachments",
         media: [media[0]!],
         userTurnTranscriptRecorder: recorder,
       };
+      const originalFiles = new Map<string, Buffer>();
+      let workerManifestPaths: string[] = [];
+      let acceptedManifestPaths: string[] = [];
       const verifyFiles = async (prompt: string) => {
         const files: Buffer[] = [];
         for (const entry of await readdir(remote, { recursive: true, withFileTypes: true })) {
@@ -82,7 +94,9 @@ describe("current attachments in an active remote placement", () => {
             continue;
           }
           const file = path.join(entry.parentPath, entry.name);
-          files.push(await readFile(file));
+          const bytes = await readFile(file);
+          files.push(bytes);
+          originalFiles.set(file, bytes);
           expect(prompt).toContain(
             path.relative(remote, path.dirname(file)).split(path.sep).join("/"),
           );
@@ -91,6 +105,8 @@ describe("current attachments in an active remote placement", () => {
         expect(files.some((bytes) => bytes.equals(pdf))).toBe(true);
         expect(files.some((bytes) => bytes.equals(image))).toBe(true);
         expect(await readFile(path.join(remote, "remote-edits.txt"), "utf8")).toBe("preserve me");
+        await writeFile(path.join(remote, "remote-edits.txt"), "worker edit");
+        await writeFile(path.join(remote, "report.txt"), "Read both attachments");
       };
       const tunnel: WorkerTunnelHandle = {
         environmentId: ENVIRONMENT_ID,
@@ -152,12 +168,34 @@ describe("current attachments in an active remote placement", () => {
           resume: async () => {},
         })),
         reconcileWorkspace: vi.fn(async (request) => {
-          request.journal.commit(MANIFEST_REF);
+          const capture = await runCommandWithTimeout(
+            [process.execPath, "-e", REMOTE_WORKSPACE_MANIFEST_JS, remote],
+            { timeoutMs: 10_000, baseEnv: { ...process.env, HOME: remoteHome } },
+          );
+          expect(capture.code, capture.stderr).toBe(0);
+          const manifestRef = capture.stdout.trim();
+          const raw = await readFile(
+            path.join(remoteHome, ".openclaw-worker", "manifests", `${manifestRef.slice(7)}.json`),
+            "utf8",
+          );
+          const current = parseWorkerWorkspaceManifest(raw, manifestRef);
+          const result = await applyStagedWorkerWorkspace({
+            root: local,
+            stagingRoot: remote,
+            baseManifestRef: MANIFEST_REF,
+            currentManifestRef: manifestRef,
+            base: base.manifest,
+            current,
+            journal: request.journal,
+          });
+          workerManifestPaths = JSON.parse(raw).entries.map(
+            (entry: { path: string }) => entry.path,
+          );
+          acceptedManifestPaths = result.manifest.entries.map((entry) => entry.path);
           return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
+            ...result,
+            changed: true,
             verifyStable: async () => {},
-            verifyLocalStable: async () => {},
           };
         }),
         syncWorkspace: vi.fn(),
@@ -165,6 +203,7 @@ describe("current attachments in an active remote placement", () => {
       };
       const provider = createWorkerSessionTurnPlacementProvider({
         placements,
+        resolveWorkspacePath: async () => local,
         environments: {
           ...unusedEnvironments(),
           get: () => attachedEnvironment(),
@@ -182,6 +221,15 @@ describe("current attachments in an active remote placement", () => {
         },
       );
       expect(tunnel.syncWorkspace).not.toHaveBeenCalled();
+      expect(tunnel.reconcileWorkspace).toHaveBeenCalledOnce();
+      expect(workerManifestPaths).toEqual(["remote-edits.txt", "report.txt"]);
+      expect(acceptedManifestPaths).toEqual(["remote-edits.txt", "report.txt"]);
+      expect(await readdir(local)).toEqual(["remote-edits.txt", "report.txt"]);
+      expect(await readFile(path.join(local, "remote-edits.txt"), "utf8")).toBe("worker edit");
+      expect(await readFile(path.join(local, "report.txt"), "utf8")).toBe("Read both attachments");
+      for (const [file, bytes] of originalFiles) {
+        expect(await readFile(file)).toEqual(bytes);
+      }
       expect(input.prompt).toBe("Read both attachments");
     },
   );
