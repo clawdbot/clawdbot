@@ -104,6 +104,22 @@ describe("meta provider", () => {
     });
   });
 
+  it("registers the Meta muse-image image-generation provider on the same entry", () => {
+    const captured = capturePluginRegistration(plugin);
+    const [imageProvider] = captured.imageGenerationProviders;
+    if (!imageProvider) {
+      throw new Error("Expected Meta image-generation provider");
+    }
+    expect(imageProvider).toMatchObject({
+      id: "meta",
+      label: "Meta",
+      defaultModel: "muse-image-1.0",
+    });
+    expect(imageProvider.models).toContain("muse-image-1.0");
+    // muse-image supports single-reference edits via /v1/images/edits.
+    expect(imageProvider.capabilities.edit?.enabled).toBe(true);
+  });
+
   it("does not wrap projected non-Responses Meta models for either stream hook", () => {
     const captured = capturePluginRegistration(plugin);
     const [provider] = captured.providers;

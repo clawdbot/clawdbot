@@ -179,5 +179,19 @@
     "type": "object",
     "additionalProperties": false,
     "properties": {}
+  },
+  "contracts": {
+    "imageGenerationProviders": [
+      "meta"
+    ]
+  },
+  "imageGenerationProviderMetadata": {
+    "meta": {
+      "authSignals": [
+        {
+          "provider": "meta"
+        }
+      ]
+    }
   }
 }
