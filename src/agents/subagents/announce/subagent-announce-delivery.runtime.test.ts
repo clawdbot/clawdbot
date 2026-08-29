@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { createInternalAgentTurnFacade } from "../../../gateway/agent-turn/internal-facade.js";
 import { WRITE_SCOPE } from "../../../gateway/method-scopes.js";
 import { createGatewayMethodRegistry } from "../../../gateway/methods/registry.js";
 import type {
@@ -10,7 +11,7 @@ import { withPluginRuntimeGatewayContextResolver } from "../../../plugins/runtim
 import { dispatchSubagentAnnounceAgent } from "./subagent-announce-delivery.runtime.js";
 
 function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext {
-  return {
+  const context = {
     deps: {},
     getRuntimeConfig: () => ({}),
     getGatewayMethodRegistry: () => createRegistry(handlers),
@@ -22,6 +23,13 @@ function createContext(handlers: GatewayRequestHandlers): GatewayRequestContext 
     chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
+  context.createAgentTurnFacade = (principal) =>
+    createInternalAgentTurnFacade({
+      ...principal,
+      getContext: () => context,
+      getMethodRegistry: () => createRegistry(handlers),
+    });
+  return context;
 }
 
 function createRegistry(handlers: GatewayRequestHandlers) {
