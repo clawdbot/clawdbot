@@ -1564,6 +1564,7 @@ function rewriteMappedAuthProfileRefs(
 function canonicalizeOpenAIAuthOrder(
   auth: Record<string, unknown>,
   profileIdMap: Map<string, string>,
+  options?: { preserveUnmappedLegacyIds?: boolean },
 ): boolean {
   if (!isRecord(auth.order)) {
     return false;
@@ -1576,7 +1577,17 @@ function canonicalizeOpenAIAuthOrder(
   const legacyOrder = Array.isArray(order[LEGACY_OPENAI_CODEX_PROVIDER_ID])
     ? (order[LEGACY_OPENAI_CODEX_PROVIDER_ID] as unknown[])
     : [];
-  const canonicalOrder = [...legacyOrder, ...existingCanonicalOrder];
+  const unresolvedLegacyOrder = options?.preserveUnmappedLegacyIds
+    ? legacyOrder.filter(
+        (entry) =>
+          typeof entry !== "string" ||
+          (isLegacyOpenAICodexProfileId(entry) && !profileIdMap.has(entry)),
+      )
+    : [];
+  const canonicalOrder = [
+    ...legacyOrder.filter((entry) => !unresolvedLegacyOrder.includes(entry)),
+    ...existingCanonicalOrder,
+  ];
   const occupiedProfileIds = new Set(
     canonicalOrder.filter(
       (entry): entry is string => typeof entry === "string" && !isLegacyOpenAICodexProfileId(entry),
@@ -1586,8 +1597,12 @@ function canonicalizeOpenAIAuthOrder(
     occupiedProfileIds.add(profileId);
   }
 
-  if (legacyOrder.length > 0) {
-    delete order[LEGACY_OPENAI_CODEX_PROVIDER_ID];
+  if (legacyOrder.length > unresolvedLegacyOrder.length) {
+    if (unresolvedLegacyOrder.length > 0) {
+      order[LEGACY_OPENAI_CODEX_PROVIDER_ID] = unresolvedLegacyOrder;
+    } else {
+      delete order[LEGACY_OPENAI_CODEX_PROVIDER_ID];
+    }
     changed = true;
   }
 
@@ -1601,6 +1616,9 @@ function canonicalizeOpenAIAuthOrder(
         return mapped;
       }
       if (!isLegacyOpenAICodexProfileId(entry)) {
+        return entry;
+      }
+      if (options?.preserveUnmappedLegacyIds) {
         return entry;
       }
       const canonicalProfileId = allocateOpenAIProfileId(entry, occupiedProfileIds);
@@ -1638,15 +1656,21 @@ function renameMappedProfileIdKeys(
 function canonicalizeOpenAILastGood(
   record: Record<string, unknown>,
   profileIdMap: Map<string, string>,
+  options?: { preserveUnmappedLegacyIds?: boolean },
 ): boolean {
   let changed = false;
   const legacyValue = record[LEGACY_OPENAI_CODEX_PROVIDER_ID];
   const canonicalValue = record[OPENAI_PROVIDER_ID];
-  if (legacyValue !== undefined) {
+  const mappedLegacyValue =
+    typeof legacyValue === "string" ? profileIdMap.get(legacyValue) : undefined;
+  if (
+    legacyValue !== undefined &&
+    (!options?.preserveUnmappedLegacyIds || mappedLegacyValue !== undefined)
+  ) {
     delete record[LEGACY_OPENAI_CODEX_PROVIDER_ID];
     changed = true;
     if (canonicalValue === undefined && typeof legacyValue === "string") {
-      record[OPENAI_PROVIDER_ID] = profileIdMap.get(legacyValue) ?? legacyValue;
+      record[OPENAI_PROVIDER_ID] = mappedLegacyValue ?? legacyValue;
     }
   }
   if (typeof record[OPENAI_PROVIDER_ID] === "string") {
@@ -1730,12 +1754,15 @@ function canonicalizeOpenAIAuthRotationState(
   auth: Record<string, unknown>,
   profileIdMap: Map<string, string>,
 ): boolean {
-  const orderChanged = canonicalizeOpenAIAuthOrder(auth, profileIdMap);
+  // Rotation state has no credential identity of its own. Keep unpaired legacy references
+  // unresolved instead of associating them with a canonical credential that shares the suffix.
+  const options = { preserveUnmappedLegacyIds: true };
+  const orderChanged = canonicalizeOpenAIAuthOrder(auth, profileIdMap, options);
   const usageChanged = isRecord(auth.usageStats)
     ? renameMappedProfileIdKeys(auth.usageStats, profileIdMap)
     : false;
   const lastGoodChanged = isRecord(auth.lastGood)
-    ? canonicalizeOpenAILastGood(auth.lastGood, profileIdMap)
+    ? canonicalizeOpenAILastGood(auth.lastGood, profileIdMap, options)
     : false;
   return orderChanged || usageChanged || lastGoodChanged;
 }

@@ -4,7 +4,10 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { assertAuthProfileMigrationReady } from "../agents/auth-profiles/legacy-source-diagnostic.js";
-import { resolveAuthProfileEligibility } from "../agents/auth-profiles/order.js";
+import {
+  resolveAuthProfileEligibility,
+  resolveAuthProfileOrder,
+} from "../agents/auth-profiles/order.js";
 import {
   loadPersistedAuthProfileStore,
   loadPersistedSharedAuthProfileStore,
@@ -810,6 +813,64 @@ describe("maybeMigrateAuthProfileJsonStoresToSqlite", () => {
       usageStats: { "openai:alpha": { lastUsed: 123 } },
     });
     expect(loaded?.order?.["openai-codex"]).toBeUndefined();
+    expect(fs.existsSync(statePath)).toBe(false);
+    expectMigratedArchive(statePath);
+  });
+
+  it("keeps unpaired standalone rotation state from selecting a same-suffix credential", async () => {
+    const state = await makeTestState();
+    await state.writeAuthProfiles({
+      version: 1,
+      profiles: {
+        "openai:alpha": {
+          type: "api_key",
+          provider: "openai",
+          key: "unrelated-key",
+        },
+        "openai:default": {
+          type: "api_key",
+          provider: "openai",
+          key: "configured-key",
+        },
+      },
+    });
+    const statePath = await state.writeText(
+      "agents/main/agent/auth-state.json",
+      `${JSON.stringify({
+        version: 1,
+        order: { "openai-codex": ["openai-codex:alpha"] },
+        lastGood: { "openai-codex": "openai-codex:alpha" },
+        usageStats: { "openai-codex:alpha": { lastUsed: 123 } },
+      })}\n`,
+    );
+    const cfg = {
+      auth: {
+        profiles: {
+          "openai:alpha": { provider: "openai", mode: "api_key" },
+          "openai:default": { provider: "openai", mode: "api_key" },
+        },
+        order: { openai: ["openai:default"] },
+      },
+    } satisfies OpenClawConfig;
+
+    await maybeMigrateAuthProfileJsonStoresToSqlite({
+      cfg,
+      prompter: makePrompter(true),
+      env: state.env,
+    });
+
+    const loaded = loadPersistedAuthProfileStore(state.agentDir());
+    expect(loaded).toMatchObject({
+      order: { "openai-codex": ["openai-codex:alpha"] },
+      lastGood: { "openai-codex": "openai-codex:alpha" },
+      usageStats: { "openai-codex:alpha": { lastUsed: 123 } },
+    });
+    expect(loaded?.order?.openai).toBeUndefined();
+    expect(loaded?.lastGood?.openai).toBeUndefined();
+    expect(loaded?.usageStats?.["openai:alpha"]).toBeUndefined();
+    expect(resolveAuthProfileOrder({ cfg, store: loaded!, provider: "openai" })).toEqual([
+      "openai:default",
+    ]);
     expect(fs.existsSync(statePath)).toBe(false);
     expectMigratedArchive(statePath);
   });
