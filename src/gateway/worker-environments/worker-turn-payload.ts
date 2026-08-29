@@ -33,6 +33,7 @@ import {
   type WorkerReplayMessageWindowUnavailable,
 } from "../../worker/replay-message-window.js";
 import {
+  cloneImageContent,
   toWorkerTranscriptMessage,
   type WorkerProviderReplayUnavailable,
 } from "../../worker/transcript-message.js";
@@ -76,7 +77,8 @@ export async function prepareWorkerTurnImages(
       `Cloud worker could not load ${result.failedMediaCount} image attachment(s). Resend the attachments and retry.`,
     );
   }
-  return result.images;
+  // Ingress metadata such as sourceIndex stays on the Gateway, outside the closed wire shape.
+  return result.images.map(cloneImageContent);
 }
 
 type WorkerInitialMessagePlan =

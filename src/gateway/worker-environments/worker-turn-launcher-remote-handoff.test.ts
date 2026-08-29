@@ -359,6 +359,10 @@ describe("worker turn launcher remote handoff", () => {
       data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==",
       mimeType: "image/png",
     };
+    const inlineImages = [
+      { ...image, sourceIndex: 0 },
+      { ...image, sourceIndex: 2 },
+    ];
     const savedImage = await saveMediaBuffer(
       Buffer.from(image.data, "base64"),
       "image/png",
@@ -498,7 +502,7 @@ describe("worker turn launcher remote handoff", () => {
         },
         toolsAllow: ["browser"],
         suppressNextUserMessagePersistence: true,
-        images: [image, image],
+        images: inlineImages,
         imageOrder: ["inline", "offloaded", "inline"],
         media: [{ path: imagePath, contentType: "image/png", kind: "image" }],
       },
@@ -508,7 +512,7 @@ describe("worker turn launcher remote handoff", () => {
     expect(descriptor?.assignment.prompt).toContain(
       "Inspect this workspace\n\nCurrent attachment originals",
     );
-    expect(descriptor?.assignment).toMatchObject({ images: [image, image, image] });
+    expect(descriptor?.assignment.images).toEqual([image, image, image]);
     const verifiedRuntimeIdentity = await verifyAgentRuntimeIdentityToken(
       descriptor?.assignment.agentRuntimeIdentityToken,
     );
