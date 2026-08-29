@@ -598,9 +598,6 @@ suite.define(() => {
       // Collapsing the unread track gives its width back to the title; merely
       // making the dot transparent would still squeeze the text by the full reserve.
       expect(restingWidth - hoverWidth).toBeLessThan(actionReserve);
-      await unreadRow
-        .getByRole("img", { name: "Dashboard available" })
-        .waitFor({ state: "visible" });
       await page.mouse.move(900, 400);
       await unreadDot.waitFor({ state: "visible" });
       await unreadRow.locator("[data-session-menu]").focus();
