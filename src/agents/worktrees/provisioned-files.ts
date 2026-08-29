@@ -90,11 +90,7 @@ async function copyProvisionedFile(params: {
   return true;
 }
 
-/** Copies the current manifest matches and returns only paths this call actually created. */
-export async function provisionIncludedFiles(
-  repoRoot: string,
-  worktreePath: string,
-): Promise<string[]> {
+async function includedFilePaths(repoRoot: string): Promise<string[]> {
   const includePath = path.join(repoRoot, ".worktreeinclude");
   if (!(await worktreePathExists(includePath))) {
     return [];
@@ -114,11 +110,31 @@ export async function provisionIncludedFiles(
     "-z",
   ]);
   const included = new Set(includedRaw.split("\0").filter(Boolean));
-  const provisioned: string[] = [];
-  for (const relativePath of candidatesRaw.split("\0").filter(Boolean)) {
-    if (!included.has(relativePath)) {
+  return candidatesRaw.split("\0").filter((relativePath) => included.has(relativePath));
+}
+
+export async function estimateProvisionedFileBytes(repoRoot: string): Promise<number> {
+  let bytes = 0;
+  for (const relativePath of await includedFilePaths(repoRoot)) {
+    const normalized = normalizeRelativePath(relativePath);
+    if (!normalized || !(await hasSafeParentDirectories(repoRoot, normalized))) {
       continue;
     }
+    const stat = await lstatIfExists(resolveGitPath(repoRoot, normalized));
+    if (stat?.isFile()) {
+      bytes += Math.max(4096, stat.size);
+    }
+  }
+  return bytes;
+}
+
+/** Copies the current manifest matches and returns only paths this call actually created. */
+export async function provisionIncludedFiles(
+  repoRoot: string,
+  worktreePath: string,
+): Promise<string[]> {
+  const provisioned: string[] = [];
+  for (const relativePath of await includedFilePaths(repoRoot)) {
     const normalized = normalizeRelativePath(relativePath);
     if (
       normalized &&
@@ -142,7 +158,7 @@ type DirectoryIdentity = {
   ino: number;
 };
 
-const SNAPSHOT_CHUNK_BYTES = 1024 * 1024;
+export const SNAPSHOT_CHUNK_BYTES = 1024 * 1024;
 
 async function captureParentDirectoryIdentities(
   root: string,
@@ -235,6 +251,7 @@ export async function snapshotProvisionedFiles(
   worktreeId: string,
   worktreePath: string,
   provisionedPaths: readonly string[] | undefined,
+  commitGuard?: () => void,
 ): Promise<ProvisionedFileState[]> {
   const files = await inspectProvisionedFiles(worktreePath, provisionedPaths);
   if (files === undefined) {
@@ -262,6 +279,7 @@ export async function snapshotProvisionedFiles(
       .split("\0")
       .filter(Boolean),
   );
+  commitGuard?.();
   clearRegistryWorktreeProvisionedChunks(env, worktreeId);
   const states: ProvisionedFileState[] = [];
   try {
@@ -300,6 +318,7 @@ export async function snapshotProvisionedFiles(
           if (bytesRead === 0) {
             throw new Error(`provisioned file changed while snapshotting: ${file.path}`);
           }
+          commitGuard?.();
           insertRegistryWorktreeProvisionedChunk(env, {
             worktreeId,
             path: file.path,

@@ -7,7 +7,6 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { isInternalSessionEffectsKey } from "../../config/sessions/internal-session-key.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
 import {
   applySessionEntryCanonicalReplacements,
   type SessionEntryCanonicalReplacement,
@@ -23,7 +22,6 @@ import { ensureSessionGroupRegistered } from "../session-groups.js";
 import { triggerSessionPatchHook } from "../session-patch-hooks.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
-import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { projectSessionPatchResult } from "../session-utils-model.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
@@ -38,9 +36,16 @@ import { resolveOperatorSessionCreation } from "./session-creation-provenance.js
 import * as sessionUnreadAck from "./session-unread-ack.js";
 import {
   prepareSessionPatchArchive,
+  prepareSessionPatchWorktreeArchive,
   type SessionPatchArchivePreparation,
+  type SessionPatchArchiveTarget,
   validateSessionPatchArchiveProjection,
 } from "./sessions-patch-archive.js";
+import {
+  createCommitGuard,
+  sessionChangedError,
+  unexpectedPatchError,
+} from "./sessions-patch-errors.js";
 import { persistSessionPatchModelSelection } from "./sessions-patch-model-selection.js";
 import { resolveSessionWorkerPlacementPatchError, sessionLog } from "./sessions-shared.js";
 import type {
@@ -56,18 +61,9 @@ type MutationTarget = PatchTargetIdentity & {
   commitGuard: () => ErrorShape | undefined;
 };
 
-type PreparedPatchTarget = {
-  archiveActor: ReturnType<typeof gatewayClientSessionCreator>;
+type PreparedPatchTarget = SessionPatchArchiveTarget & {
   archivePreparation?: SessionPatchArchivePreparation;
-  canonicalKey: string;
-  fullPatch: SessionsPatchParams;
   index: number;
-  initialEntry?: SessionEntry;
-  initialStoreKeys: string[];
-  key: string;
-  lifecycleIdentities: Array<string | undefined>;
-  requestedAgentId?: string;
-  storePath: string;
   targetAgentId: string;
 };
 
@@ -87,18 +83,6 @@ type MutationCoreResult =
       modelCatalogByAgent: Map<string, Promise<ModelCatalog>>;
     };
 
-function unexpectedPatchError(key: string, error: unknown): ErrorShape {
-  sessionLog.warn(`sessions.patch: target failed for ${key}: ${formatErrorMessage(error)}`);
-  const message = "Session patch failed unexpectedly. Retry the request.";
-  return errorShape(ErrorCodes.UNAVAILABLE, message, { retryable: true });
-}
-
-function sessionChangedError(key: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
-    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-  });
-}
-
 function pluginOwnershipError(
   client: GatewayClient | null,
   entry: SessionEntry | undefined,
@@ -110,19 +94,6 @@ function pluginOwnershipError(
     key,
     pluginOwnerId: client?.internal?.pluginRuntimeOwnerId,
   });
-}
-
-function createCommitGuard(key: string, assertCurrent: (() => void) | undefined) {
-  return (): ErrorShape | undefined => {
-    try {
-      assertCurrent?.();
-      return undefined;
-    } catch (error) {
-      return error instanceof SessionMutationAuthorizationChangedError
-        ? error.error
-        : unexpectedPatchError(key, error);
-    }
-  };
 }
 
 async function executeSessionPatchMutations(params: {
@@ -346,7 +317,13 @@ async function executeSessionPatchMutations(params: {
                         new Set([first.key, first.canonicalKey, ...first.initialStoreKeys]),
                       )
                     : undefined;
+                const worktreeCommitGuards: Array<() => void> = [];
                 const groupOutcomes = await applySessionEntryCanonicalReplacements({
+                  assertCommitAllowed: () => {
+                    for (const guard of worktreeCommitGuards) {
+                      guard();
+                    }
+                  },
                   agentId: first.targetAgentId,
                   ...(selectedSessionKeys ? { sessionKeys: selectedSessionKeys } : {}),
                   storePath: first.storePath,
@@ -500,6 +477,24 @@ async function executeSessionPatchMutations(params: {
                         if (authorizationFailure) {
                           projectedOutcomes.push({ ok: false, error: authorizationFailure });
                           continue;
+                        }
+                        if (
+                          existingEntry?.worktree &&
+                          typeof target.fullPatch.archived === "boolean"
+                        ) {
+                          const worktreeGuard = await prepareSessionPatchWorktreeArchive({
+                            archived: target.fullPatch.archived,
+                            entry: existingEntry,
+                            context: params.context,
+                            scope: {
+                              agentId: target.targetAgentId,
+                              sessionKey: primaryKey,
+                              storePath: target.storePath,
+                            },
+                            authorize: params.targets[target.index]!.commitGuard,
+                            preparation: target.archivePreparation,
+                          });
+                          worktreeCommitGuards.push(worktreeGuard);
                         }
                         const previousSessionKeys = candidateKeys.filter(
                           (sessionKey) => sessionKey !== primaryKey && workingStore[sessionKey],

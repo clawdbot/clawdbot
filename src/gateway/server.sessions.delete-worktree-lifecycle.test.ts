@@ -4,7 +4,7 @@ import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { expect, test, vi } from "vitest";
+import { expect, onTestFinished, test, vi } from "vitest";
 import type { SessionsDeleteResult } from "../../packages/gateway-protocol/src/index.js";
 import {
   getRegistryWorktree,
@@ -14,8 +14,16 @@ import {
   acquireWorktreeRunLease,
   resolveWorktreeIdForPath,
 } from "../agents/worktrees/run-lease.js";
-import { managedWorktrees, WorktreeSnapshotError } from "../agents/worktrees/service.js";
-import { loadSessionEntry } from "../config/sessions/session-accessor.js";
+import {
+  managedWorktrees,
+  ManagedWorktreeService,
+  WorktreeSnapshotError,
+} from "../agents/worktrees/service.js";
+import {
+  applySessionEntryLifecycleMutation,
+  loadSessionEntry,
+  patchSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { isSessionLifecycleMutationActive } from "../sessions/session-lifecycle-admission.js";
 import { listSessionStateEventsSince } from "../sessions/session-state-events.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -23,6 +31,8 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq,
+  loadSeededTranscriptEvents,
+  seedLinearSessionTranscript,
   sessionStoreEntry,
   setupGatewaySessionsHandlerTestHarness,
   threadBindingMocks,
@@ -52,6 +62,364 @@ async function initializeRemoteBackedGitWorkspace(root: string): Promise<string>
   await execFileAsync("git", ["-C", workspace, "push", "-u", "origin", "main"]);
   return await fs.realpath(workspace);
 }
+
+async function createArchiveWorktreeFixture() {
+  const state = await createOpenClawTestState({
+    layout: "state-only",
+    prefix: "openclaw-archive-worktree-",
+  });
+  const workspace = await initializeRemoteBackedGitWorkspace(state.root);
+  closeOpenClawStateDatabaseForTest();
+  testState.agentConfig = { workspace };
+  const { storePath } = await createSessionStoreDir();
+  const created = await directSessionReq<{
+    key: string;
+    sessionId: string;
+    worktree: { id: string; path: string; branch: string };
+  }>(
+    "sessions.create",
+    { agentId: "main", worktree: true },
+    { client: { connect: { scopes: ["operator.admin"] } } as never },
+  );
+  const worktreeId = created.payload?.worktree.id;
+  onTestFinished(async () => {
+    const record = worktreeId ? getRegistryWorktree(process.env, worktreeId) : undefined;
+    if (record && record.removedAt === undefined) {
+      await managedWorktrees.remove({
+        id: record.id,
+        reason: "test-cleanup",
+        allowSnapshotLoss: true,
+      });
+    }
+    closeOpenClawStateDatabaseForTest();
+    testState.agentConfig = undefined;
+    await state.cleanup();
+  });
+  expect(created.ok).toBe(true);
+  const { key, sessionId, worktree } = created.payload!;
+  const transcriptScope = { storePath, sessionKey: key, sessionId };
+  await seedLinearSessionTranscript({
+    ...transcriptScope,
+    contents: ["Preserve this conversation."],
+  });
+  return { key, sessionId, storePath, transcriptScope, worktree, workspace };
+}
+
+test.each([
+  ["sessions.patch", false],
+  ["sessions.patchMany", false],
+  ["sessions.patch", true],
+] as const)(
+  "%s archives the checkout and restores dirty work without deleting the conversation (already archived=%s)",
+  async (method, alreadyArchived) => {
+    const fixture = await createArchiveWorktreeFixture();
+    const { key, sessionId, storePath, worktree, workspace } = fixture;
+    await fs.writeFile(path.join(worktree.path, "committed.txt"), "unpushed work\n");
+    await execFileAsync("git", ["-C", worktree.path, "add", "committed.txt"]);
+    await execFileAsync("git", ["-C", worktree.path, "commit", "-m", "session work"]);
+    const originalHead = (await execFileAsync("git", ["-C", worktree.path, "rev-parse", "HEAD"]))
+      .stdout;
+    await fs.writeFile(path.join(worktree.path, "README.md"), "tracked changes\n");
+    await fs.writeFile(path.join(worktree.path, "draft.txt"), "untracked changes\n");
+    const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+    if (alreadyArchived) {
+      await patchSessionEntryCore({ storePath, sessionKey: key }, () => ({ archivedAt: 1 }), {
+        skipMaintenance: true,
+      });
+    }
+    const patch = (archived: boolean) =>
+      directSessionReq(
+        method,
+        method === "sessions.patch"
+          ? { key, expectedSessionId: sessionId, archived }
+          : { targets: [{ key, expectedSessionId: sessionId }], patch: { archived } },
+      );
+
+    expect(await patch(true)).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ storePath, sessionKey: key })).toMatchObject({
+      sessionId,
+      archivedAt: expect.any(Number),
+      worktree: { id: worktree.id },
+    });
+    await expect(fs.access(worktree.path)).rejects.toThrow();
+    expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
+      removedAt: expect.any(Number),
+      snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+    });
+    expect(
+      (await execFileAsync("git", ["-C", workspace, "worktree", "list", "--porcelain"])).stdout,
+    ).not.toContain(worktree.path);
+    await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+
+    expect(await patch(false)).toMatchObject({ ok: true });
+    expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+    expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
+    await expect(fs.readFile(path.join(worktree.path, "README.md"), "utf8")).resolves.toBe(
+      "tracked changes\n",
+    );
+    await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
+      "untracked changes\n",
+    );
+    expect((await execFileAsync("git", ["-C", worktree.path, "rev-parse", "HEAD"])).stdout).toBe(
+      originalHead,
+    );
+    await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+    const lease = await acquireWorktreeRunLease(worktree.id);
+    await lease.release();
+  },
+);
+
+test.each(["busy", "snapshot-failed"] as const)(
+  "sessions.patch leaves the session and checkout available when archive cleanup is %s",
+  async (failure) => {
+    const fixture = await createArchiveWorktreeFixture();
+    const { key, sessionId, storePath, worktree } = fixture;
+    const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+    const lease = failure === "busy" ? await acquireWorktreeRunLease(worktree.id) : undefined;
+    const remove =
+      failure === "snapshot-failed"
+        ? vi
+            .spyOn(managedWorktrees, "remove")
+            .mockRejectedValueOnce(new WorktreeSnapshotError("snapshot unavailable"))
+        : undefined;
+    try {
+      const archived = await directSessionReq("sessions.patch", {
+        key,
+        expectedSessionId: sessionId,
+        archived: true,
+      });
+      expect(archived).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", retryable: true },
+      });
+      expect(archived.error?.message).toContain("worktree");
+      expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+      expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
+      await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+      await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
+        transcript,
+      );
+    } finally {
+      remove?.mockRestore();
+      await lease?.release();
+    }
+  },
+);
+
+test("automatic session archive snapshots the checkout after committing metadata and keeps its transcript", async () => {
+  const fixture = await createArchiveWorktreeFixture();
+  const { key, sessionId, storePath, worktree } = fixture;
+  const old = Date.now() - 31 * 24 * 60 * 60 * 1000;
+  await patchSessionEntryCore(
+    { storePath, sessionKey: key },
+    (entry) => ({
+      ...entry!,
+      updatedAt: old,
+      lastInteractionAt: old,
+      lastActivityAt: old,
+      sessionStartedAt: old,
+    }),
+    { skipMaintenance: true },
+  );
+  const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+  await fs.writeFile(path.join(worktree.path, "draft.txt"), "automatic archive keeps work\n");
+
+  const result = await applySessionEntryLifecycleMutation({
+    agentId: "main",
+    storePath,
+    removals: [],
+    maintenanceOverride: { mode: "enforce", archiveDashboardAfterMs: 1 },
+  });
+
+  expect(result.archived).toBe(1);
+  expect(loadSessionEntry({ storePath, sessionKey: key })).toMatchObject({
+    sessionId,
+    archivedAt: expect.any(Number),
+    worktree: { id: worktree.id },
+  });
+  await expect(fs.access(worktree.path)).rejects.toThrow();
+  expect(getRegistryWorktree(process.env, worktree.id)).toMatchObject({
+    removedAt: expect.any(Number),
+    snapshotRef: expect.stringMatching(/^refs\/openclaw\/snapshots\//),
+  });
+  await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(transcript);
+});
+
+test.each(["unarchived", "rearchived"] as const)(
+  "automatic archive preserves a checkout whose owner was %s while cleanup awaited",
+  async (change) => {
+    const fixture = await createArchiveWorktreeFixture();
+    const { key, storePath, worktree } = fixture;
+    const old = Date.now() - 31 * 24 * 60 * 60 * 1000;
+    await patchSessionEntryCore(
+      { storePath, sessionKey: key },
+      (entry) => ({
+        ...entry!,
+        updatedAt: old,
+        lastInteractionAt: old,
+        lastActivityAt: old,
+        sessionStartedAt: old,
+      }),
+      { skipMaintenance: true },
+    );
+    const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+    const successorArchive = change === "rearchived" ? Date.now() + 1000 : undefined;
+    const originalRemove = ManagedWorktreeService.prototype.remove;
+    const remove = vi
+      .spyOn(ManagedWorktreeService.prototype, "remove")
+      .mockImplementationOnce(async function (this: ManagedWorktreeService, params) {
+        await patchSessionEntryCore(
+          { storePath, sessionKey: key },
+          () => ({ archivedAt: successorArchive }),
+          { skipMaintenance: true },
+        );
+        return await originalRemove.call(this, params);
+      });
+    try {
+      await applySessionEntryLifecycleMutation({
+        agentId: "main",
+        storePath,
+        removals: [],
+        maintenanceOverride: { mode: "enforce", archiveDashboardAfterMs: 1 },
+      });
+      expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(successorArchive);
+      expect(getRegistryWorktree(process.env, worktree.id)?.removedAt).toBeUndefined();
+      await expect(fs.access(worktree.path)).resolves.toBeUndefined();
+      await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
+        transcript,
+      );
+    } finally {
+      remove.mockRestore();
+    }
+  },
+);
+
+test.each(["checkout-failed", "expired", "source-missing"] as const)(
+  "sessions.patch keeps an archived conversation when its worktree cannot be restored (%s)",
+  async (failure) => {
+    const fixture = await createArchiveWorktreeFixture();
+    const { key, sessionId, storePath, worktree, workspace } = fixture;
+    const transcript = await loadSeededTranscriptEvents(fixture.transcriptScope);
+    await managedWorktrees.remove({ id: worktree.id, reason: "session-archive" });
+    await patchSessionEntryCore(
+      { storePath, sessionKey: key },
+      (entry) => ({
+        ...entry!,
+        archivedAt: 1,
+      }),
+      { skipMaintenance: true },
+    );
+    if (failure === "expired") {
+      await new ManagedWorktreeService({ now: () => Date.now() + 31 * 24 * 60 * 60 * 1000 }).gc();
+    } else if (failure === "source-missing") {
+      await fs.rename(workspace, `${workspace}-offline`);
+    }
+    const restore =
+      failure === "checkout-failed"
+        ? vi
+            .spyOn(managedWorktrees, "restore")
+            .mockRejectedValueOnce(new Error("checkout unavailable"))
+        : undefined;
+    try {
+      const restored = await directSessionReq("sessions.patch", {
+        key,
+        expectedSessionId: sessionId,
+        archived: false,
+      });
+      expect(restored).toMatchObject({
+        ok: false,
+        error: { code: "UNAVAILABLE", retryable: true },
+      });
+      expect(restored.error?.message).toContain("worktree");
+      expect(restored.error?.message).toContain(
+        failure === "checkout-failed" ? "Free disk space" : "new worktree task",
+      );
+      if (failure === "expired") {
+        expect(restored.error?.message).toContain("expired");
+      }
+      if (failure === "source-missing") {
+        expect(restored.error?.message).toContain("source repository is missing");
+      }
+      await expect(loadSeededTranscriptEvents(fixture.transcriptScope)).resolves.toEqual(
+        transcript,
+      );
+      expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
+      await expect(fs.access(worktree.path)).rejects.toThrow();
+    } finally {
+      restore?.mockRestore();
+    }
+  },
+);
+
+test.each([false, true])(
+  "inbound admission restores the archived worktree before opening its session (failure=%s)",
+  async (failure) => {
+    const fixture = await createArchiveWorktreeFixture();
+    const { key, sessionId, storePath, worktree, workspace } = fixture;
+    await fs.writeFile(path.join(worktree.path, "draft.txt"), "inbound restore keeps work\n");
+    await managedWorktrees.remove({ id: worktree.id, reason: "session-archive" });
+    await patchSessionEntryCore(
+      { storePath, sessionKey: key },
+      (entry) => ({
+        ...entry!,
+        archivedAt: 1,
+      }),
+      { skipMaintenance: true },
+    );
+    const [
+      { createDispatchReplyOperationCoordinator },
+      { createReplyDispatcher },
+      { buildTestCtx },
+    ] = await Promise.all([
+      import("../auto-reply/reply/dispatch-from-config.lifecycle.js"),
+      import("../auto-reply/reply/reply-dispatcher.js"),
+      import("../auto-reply/reply/test-ctx.js"),
+    ]);
+    const coordinator = createDispatchReplyOperationCoordinator({
+      agentId: "main",
+      cfg: { agents: { defaults: { workspace } } },
+      ctx: buildTestCtx({
+        SessionKey: key,
+        Body: "Continue this task",
+        CommandSource: undefined,
+        InboundAccessAuthorized: true,
+        InboundEventKind: "user_request",
+        InputProvenance: { kind: "external_user", sourceChannel: "discord" },
+      }),
+      dispatcher: createReplyDispatcher({ deliver: async () => {} }),
+      dispatchOperationSessionKey: key,
+      operationSessionStoreEntry: {
+        storePath,
+        entry: loadSessionEntry({ storePath, sessionKey: key }),
+      },
+      sessionWorkerPlacementContext: {},
+      resolveOperationExpectedSessionId: () => sessionId,
+    });
+    const restore = failure
+      ? vi
+          .spyOn(managedWorktrees, "restore")
+          .mockRejectedValueOnce(new Error("worktree checkout unavailable"))
+      : undefined;
+    try {
+      const admission = coordinator.ensureDispatchReplyOperation("pre_dispatch");
+      if (failure) {
+        await expect(admission).rejects.toThrow(/worktree/i);
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBe(1);
+        await expect(fs.access(worktree.path)).rejects.toThrow();
+      } else {
+        await expect(admission).resolves.toEqual({ status: "ready" });
+        await expect(fs.readFile(path.join(worktree.path, "draft.txt"), "utf8")).resolves.toBe(
+          "inbound restore keeps work\n",
+        );
+        expect(loadSessionEntry({ storePath, sessionKey: key })?.archivedAt).toBeUndefined();
+      }
+    } finally {
+      restore?.mockRestore();
+      coordinator.completeDispatchReplyOperation();
+      await coordinator.releasePreDispatchLifecycleAdmission();
+    }
+  },
+);
 
 test("sessions.create only allocates worktrees for lifecycle-manageable agent owners", async () => {
   const openClawState = await createOpenClawTestState({

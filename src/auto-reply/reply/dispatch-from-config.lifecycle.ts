@@ -9,11 +9,15 @@ import { isRecoverableTerminalSessionStatus } from "../../config/sessions/termin
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
+  prepareSessionWorkerPlacementMutationCheck,
   resolveWorkerPlacementArchiveRestoreError,
   type SessionWorkerPlacementContext,
 } from "../../gateway/worker-environments/session-placement-lifecycle.js";
 import { logVerbose } from "../../globals.js";
-import type { SessionWorkAdmissionLease } from "../../sessions/session-lifecycle-admission.js";
+import {
+  runExclusiveSessionLifecycleMutation,
+  type SessionWorkAdmissionLease,
+} from "../../sessions/session-lifecycle-admission.js";
 import { classifySessionStateActor } from "../../sessions/session-state-events.js";
 import {
   isNativeCommandTurn,
@@ -86,36 +90,58 @@ async function restoreArchivedDispatchSession(params: {
   const snapshotSessionId = entry.sessionId;
   const snapshotArchivedAt = entry.archivedAt;
   // Admission must see the current owner: a rebound, re-archive, or unsafe placement stays untouched.
-  return (
-    (await updateSessionEntry({ sessionKey, storePath }, (currentEntry) => {
-      if (
-        currentEntry.sessionId !== snapshotSessionId ||
-        currentEntry.archivedAt !== snapshotArchivedAt ||
-        isRestartRecoveryTombstone(currentEntry)
-      ) {
-        return null;
-      }
-      try {
-        const placement = currentEntry.sessionId
-          ? placementContext.workerSessionPlacementService
-              ?.getMany([currentEntry.sessionId])
-              .get(currentEntry.sessionId)
-          : undefined;
-        if (
-          resolveWorkerPlacementArchiveRestoreError({
-            context: placementContext,
-            key: sessionKey,
-            placement,
-          })
-        ) {
-          return null;
-        }
-      } catch {
-        return null;
-      }
-      return { archivedAt: undefined, archivedBy: undefined };
-    })) ?? undefined
-  );
+  let assertCommitAllowed: (() => void) | undefined;
+  return await runExclusiveSessionLifecycleMutation({
+    scope: storePath,
+    identities: [sessionKey, snapshotSessionId],
+    run: async () =>
+      (await updateSessionEntry(
+        { sessionKey, storePath },
+        async (currentEntry) => {
+          if (
+            currentEntry.sessionId !== snapshotSessionId ||
+            currentEntry.archivedAt !== snapshotArchivedAt ||
+            isRestartRecoveryTombstone(currentEntry)
+          ) {
+            return null;
+          }
+          try {
+            const placement = currentEntry.sessionId
+              ? placementContext.workerSessionPlacementService
+                  ?.getMany([currentEntry.sessionId])
+                  .get(currentEntry.sessionId)
+              : undefined;
+            if (
+              resolveWorkerPlacementArchiveRestoreError({
+                context: placementContext,
+                key: sessionKey,
+                placement,
+              })
+            ) {
+              return null;
+            }
+          } catch {
+            return null;
+          }
+          if (currentEntry.worktree) {
+            const { synchronizeSessionWorktreeArchive } =
+              await import("../../sessions/session-worktree-lifecycle.js");
+            assertCommitAllowed = prepareSessionWorkerPlacementMutationCheck({
+              context: placementContext,
+              sessionId: currentEntry.sessionId,
+            });
+            await synchronizeSessionWorktreeArchive({
+              archived: false,
+              entry: currentEntry,
+              scope: { sessionKey, storePath },
+              commitGuard: assertCommitAllowed,
+            });
+          }
+          return { archivedAt: undefined, archivedBy: undefined };
+        },
+        { assertCommitAllowed: () => assertCommitAllowed?.() },
+      )) ?? undefined,
+  });
 }
 
 function resolveDispatchResetAdmission(params: {

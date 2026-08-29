@@ -8,21 +8,28 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import type { SessionEntry } from "../../config/sessions.js";
-import { SESSION_LIFECYCLE_CHANGED_ERROR_REASON } from "../../config/sessions/lifecycle.js";
+import type { SessionAccessScope } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { resolveMissingAgentHarnessSessionError } from "../../sessions/agent-harness-session-key.js";
+import {
+  SessionWorktreeLifecycleError,
+  synchronizeSessionWorktreeArchive,
+} from "../../sessions/session-worktree-lifecycle.js";
 import { resolvePluginSessionOwnershipError } from "../session-plugin-ownership.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "../session-request-agent.js";
+import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import {
   resolveCanonicalGatewaySessionStoreKey,
   resolveGatewaySessionStoreTargetWithStore,
 } from "../session-utils.js";
 import { projectSessionsPatchEntry } from "../sessions-patch.js";
+import { prepareSessionWorkerPlacementMutationCheck } from "../worker-environments/session-placement-lifecycle.js";
 import {
   prepareSessionLifecycleDrain,
   type SessionLifecycleDrain,
 } from "./sessions-lifecycle-drain.js";
+import { sessionChangedError as archiveChangedError } from "./sessions-patch-errors.js";
 import {
   isAgentMainSessionKey,
   resolveSessionWorkerPlacementPatchError,
@@ -36,7 +43,7 @@ export type SessionPatchArchivePreparation = {
   entry?: SessionEntry;
 };
 
-type SessionPatchArchiveTarget = {
+export type SessionPatchArchiveTarget = {
   archiveActor: SessionCreatedActor | undefined;
   canonicalKey: string;
   fullPatch: SessionsPatchParams;
@@ -47,12 +54,6 @@ type SessionPatchArchiveTarget = {
   requestedAgentId?: string;
   storePath: string;
 };
-
-function archiveChangedError(key: string): ErrorShape {
-  return errorShape(ErrorCodes.INVALID_REQUEST, `Session ${key} changed before patch. Retry.`, {
-    details: { reason: SESSION_LIFECYCLE_CHANGED_ERROR_REASON },
-  });
-}
 
 function archiveUnavailableError(key: string, message: "active" | "stopping"): ErrorShape {
   return errorShape(
@@ -267,4 +268,39 @@ export function validateSessionPatchArchiveProjection(params: {
       pluginOwnerId: params.pluginOwnerId,
     })
   );
+}
+
+/** Prepare filesystem effects before the SQLite commit while session admission remains fenced. */
+export async function prepareSessionPatchWorktreeArchive(params: {
+  archived: boolean;
+  entry: SessionEntry;
+  context: GatewayRequestContext;
+  scope: SessionAccessScope;
+  authorize: () => ErrorShape | undefined;
+  preparation?: SessionPatchArchivePreparation;
+}): Promise<() => void> {
+  const assertPlacementCurrent = prepareSessionWorkerPlacementMutationCheck({
+    context: params.context,
+    sessionId: params.entry.sessionId,
+  });
+  const commitGuard = () => {
+    const authorizationError = params.authorize();
+    if (authorizationError) {
+      throw new SessionMutationAuthorizationChangedError(authorizationError);
+    }
+    assertPlacementCurrent();
+    if (params.preparation?.drain.hasAuthoritativeWork()) {
+      throw new SessionWorktreeLifecycleError(
+        "Session worktree is still active; retry the archive after work settles.",
+        "busy",
+      );
+    }
+  };
+  await synchronizeSessionWorktreeArchive({
+    archived: params.archived,
+    entry: params.entry,
+    scope: params.scope,
+    commitGuard,
+  });
+  return commitGuard;
 }
