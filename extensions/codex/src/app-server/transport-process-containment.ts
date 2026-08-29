@@ -62,7 +62,9 @@ export async function terminateCodexAppServerOrphan(
       if (!contained) {
         return false;
       }
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      await new Promise((resolve) => {
+        setTimeout(resolve, 20);
+      });
     }
     return false;
   } finally {
